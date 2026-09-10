@@ -87,7 +87,7 @@ const WARNING_STAGES = [
 const NFT_FATAL_STAGE = "gitdata_nftables_metadata";
 
 function scopeResource(src: string, name: string): string {
-  // BOTH types. This file holds 28 `sentry_alert` rules and 2
+  // BOTH types. This file holds 29 `sentry_alert` rules and 2
   // `sentry_issue_alert` ones. This suite no longer spans the boundary —
   // `git_data_boot_fatal` migrated in #7650 Phase 2 and `git_data_boot_warning`
   // in Phase 3.4 (#7985) — but the helper stays type-agnostic because the two
