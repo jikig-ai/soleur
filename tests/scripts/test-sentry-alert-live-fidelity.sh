@@ -21,7 +21,10 @@ PROBE="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
 # it tests compares 28 — the suite would go red for the fixture, not the code.
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 pass=0; fail=0
-EXPECTED_TESTS=13
+# Must equal the number of `t_*` invocations in the call block at the foot of
+# this file. Exact equality, not a floor: a floor cannot see a row that stopped
+# being invoked.
+EXPECTED_TESTS=18
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -280,6 +283,99 @@ t_survivors_out_of_scope() {
   fi
 }
 
+# ── Transport confinement + destination pinning (#7997). ───────────────────
+# These four rows run NON-FIXTURE on purpose. `fetch_rules()` short-circuits on
+# SENTRY_FIXTURE_RULES *before* it reads SENTRY_API_HOST, so a fixture-mode row
+# asserts exactly nothing about the host adjudication — it would pass against a
+# script with no adjudication at all. The stub `curl` on PATH is what makes a
+# live-path run hermetic.
+_stub_curl_dir() {
+  local d="$TMPD/stub.$1"
+  mkdir -p "$d"
+  cat > "$d/curl" <<'STUB'
+#!/usr/bin/env bash
+: > "$STUB_ARGV"
+for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
+printf '%s\n' "${SSLKEYLOGFILE-<unset>}" > "$STUB_ENV"
+printf '[]'
+STUB
+  chmod +x "$d/curl"
+  printf '%s' "$d"
+}
+
+# _run_live <name> [env assignments...] -> _rc, _out, and $_argv / $_envf paths.
+_run_live() {
+  local name="$1"; shift
+  local d; d=$(_stub_curl_dir "$name")
+  _argv="$TMPD/$name.argv"; _envf="$TMPD/$name.env"
+  : > "$_argv"; : > "$_envf"
+  _rc=0
+  _out=$(env -u SENTRY_FIXTURE_RULES \
+           PATH="$d:$PATH" STUB_ARGV="$_argv" STUB_ENV="$_envf" \
+           SENTRY_AUTH_TOKEN=fixture \
+           "$@" bash "$PROBE" 2>&1) || _rc=$?
+}
+
+t_hostile_host_refused() {
+  _run_live hostilehost SENTRY_ORG=jikigai-eu SENTRY_API_HOST=attacker.tld
+  if [[ "$_rc" -eq 2 ]] && grep -q 'refusing destination host' <<<"$_out" \
+     && [[ ! -s "$_argv" ]]; then
+    _report "F14 an attacker-settable SENTRY_API_HOST is REFUSED before any request" ok
+  else
+    _report "F14 hostile SENTRY_API_HOST is refused" fail \
+      "rc=$_rc (want 2); argv-bytes=$(wc -c <"$_argv") (want 0); output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+t_hostile_org_refused() {
+  _run_live hostileorg SENTRY_ORG='@evil.tld/x' SENTRY_API_HOST=jikigai-eu.sentry.io
+  if [[ "$_rc" -eq 2 ]] && grep -q 'refusing org' <<<"$_out" && [[ ! -s "$_argv" ]]; then
+    _report "F15 an org slug that is not an RFC 1035 label is REFUSED before any request" ok
+  else
+    _report "F15 hostile SENTRY_ORG is refused" fail \
+      "rc=$_rc (want 2); argv-bytes=$(wc -c <"$_argv") (want 0); output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
+t_transport_flags_first() {
+  _run_live flags SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  # Position is the whole property: --disable aborts ~/.curlrc parsing and is a
+  # no-op anywhere but first.
+  local a1 a2 a3 a4
+  a1=$(sed -n '1p' "$_argv"); a2=$(sed -n '2p' "$_argv")
+  a3=$(sed -n '3p' "$_argv"); a4=$(sed -n '4p' "$_argv")
+  if [[ "$a1" == "--disable" && "$a2" == "--noproxy" && "$a3" == '*' \
+        && "$a4" == "--proto" ]] && grep -qx -- '=https' "$_argv" && grep -qx -- '-g' "$_argv"; then
+    _report "F16 the credentialed curl is transport-confined, flags FIRST" ok
+  else
+    _report "F16 transport flags are first" fail \
+      "argv[1..4]=[$a1 $a2 $a3 $a4]; want [--disable --noproxy * --proto]. Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+
+t_resolver_env_scrubbed() {
+  _run_live scrub SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io \
+    SSLKEYLOGFILE=/tmp/should-not-survive
+  # --noproxy and a host pin do not touch the resolver or the trust anchor;
+  # the prologue is what closes them, and only the child can testify.
+  if grep -qx '<unset>' "$_envf"; then
+    _report "F17 resolver / trust-anchor / keylog env is scrubbed before the request" ok
+  else
+    _report "F17 resolver env is scrubbed" fail \
+      "the child saw SSLKEYLOGFILE=$(cat "$_envf") — the unset prologue did not run"
+  fi
+}
+
+t_fixture_mode_still_passes() {
+  # The guards must not break the path the other 13 rows exercise.
+  _run "$CAPTURE"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'all 28 in-scope rules match' <<<"$_out"; then
+    _report "F18 fixture mode still PASSES with the guards in place" ok
+  else
+    _report "F18 fixture mode still passes" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
 t_identity_passes
 t_live_api_shape
 t_deleted
@@ -293,6 +389,11 @@ t_comparison_interval_drift
 t_unmanaged_new_rule
 t_empty_capture_refuses
 t_survivors_out_of_scope
+t_hostile_host_refused
+t_hostile_org_refused
+t_transport_flags_first
+t_resolver_env_scrubbed
+t_fixture_mode_still_passes
 
 echo "=== $pass passed, $fail failed ==="
 

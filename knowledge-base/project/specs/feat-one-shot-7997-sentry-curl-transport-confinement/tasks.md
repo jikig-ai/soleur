@@ -17,20 +17,20 @@ Every shape below is the one measured in **M20/M25** — do not paraphrase it.
 
 ## 1. `scripts/sentry-alert-live-fidelity.sh`
 
-- [ ] 1.1 RED first: add rows **F14-F18** to `tests/scripts/test-sentry-alert-live-fidelity.sh` and watch them fail. F14/F15/F16/F17 use a **PATH-shimmed `curl` with `SENTRY_FIXTURE_RULES` unset** — the fixture short-circuit precedes the host adjudication, so a fixture-mode row asserts nothing about it. F18 keeps fixture mode and asserts the 13 pre-existing rows still pass.
-- [ ] 1.2 Set `EXPECTED_TESTS` to **18** (13 today + 5). It is an exact-equality harness, not a floor. Add the invariant next to it: "must equal the number of `t_*` invocations in the call block at the foot of the file."
-- [ ] 1.3 Immediately after anchor `: "${SENTRY_ORG:?SENTRY_ORG must be set}"`, in this order:
+- [x] 1.1 RED first: add rows **F14-F18** to `tests/scripts/test-sentry-alert-live-fidelity.sh` and watch them fail. F14/F15/F16/F17 use a **PATH-shimmed `curl` with `SENTRY_FIXTURE_RULES` unset** — the fixture short-circuit precedes the host adjudication, so a fixture-mode row asserts nothing about it. F18 keeps fixture mode and asserts the 13 pre-existing rows still pass.
+- [x] 1.2 Set `EXPECTED_TESTS` to **18** (13 today + 5). It is an exact-equality harness, not a floor. Add the invariant next to it: "must equal the number of `t_*` invocations in the call block at the foot of the file."
+- [x] 1.3 Immediately after anchor `: "${SENTRY_ORG:?SENTRY_ORG must be set}"`, in this order:
       (a) `unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS`;
       (b) `_safe() { printf '%s' "${1//[[:cntrl:]]/}" | cut -b1-120; }` — **defined before its first call**; `-b`, not `-c` (M26);
       (c) `( LC_ALL=C; [[ "$SENTRY_ORG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ) || { printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2; }` — the subshell is mandatory: `LC_ALL=C [[ … ]]` is a parse error (M22), and without the scoping the range admits 1,162 non-ASCII characters under `en_US.UTF-8` (M23). `{0,62}` = 63 octets, RFC 1035 §2.3.4;
       (d) `readonly SENTRY_ORG`.
       The test must name `$SENTRY_ORG` **literally** inside the `[[ … =~ … ]]` — a `_org_ok "$1"` helper leaves the lint red (M28).
-- [ ] 1.4 Host adjudication **inside `fetch_rules()`**, immediately after anchor `: "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"`:
+- [x] 1.4 Host adjudication **inside `fetch_rules()`**, immediately after anchor `: "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"`:
       `case "$SENTRY_API_HOST" in "${SENTRY_ORG}.sentry.io") ;; *) printf 'ERROR: refusing destination host %s\n' "$(_safe "$SENTRY_API_HOST")" >&2; exit 2 ;; esac`.
       Singleton — this file's only endpoint is org-scoped and ADR-031 permits only the org subdomain there. Arm **double-quoted** (an unquoted arm is a glob: M27). Do not rewrite it into a `$`-free literal; `_pin_re`'s `case` branch needs only one literal character (M20), and a `$`-free arm would red production.
-- [ ] 1.5 `--disable --noproxy '*' --proto '=https' -g` as the first four arguments at anchor `curl -fsS --max-time 15 \`.
-- [ ] 1.6 Adapt the header prose from `scripts/supabase-logs-query.sh`'s `# HOST PIN — NO ENV OVERRIDE` block, extended to name the resolver/trust-anchor vector (M21). **Update the exit-code contract** at anchors `Exit 0 = every in-scope rule matches the capture.` / `Exit 1 = a divergence, …` to add exit 2.
-- [ ] 1.7 `bash -n`; F14-F18 green; all 13 pre-existing rows green.
+- [x] 1.5 `--disable --noproxy '*' --proto '=https' -g` as the first four arguments at anchor `curl -fsS --max-time 15 \`.
+- [x] 1.6 Adapt the header prose from `scripts/supabase-logs-query.sh`'s `# HOST PIN — NO ENV OVERRIDE` block, extended to name the resolver/trust-anchor vector (M21). **Update the exit-code contract** at anchors `Exit 0 = every in-scope rule matches the capture.` / `Exit 1 = a divergence, …` to add exit 2.
+- [x] 1.7 `bash -n`; F14-F18 green; all 13 pre-existing rows green.
 
 ## 2. `apps/web-platform/scripts/sentry-monitors-audit.sh`
 
