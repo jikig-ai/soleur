@@ -23,7 +23,8 @@ supersedes: ADR-NNN     # only when this ADR replaces another
 
 ADRs come in two shapes. Pick at create-time based on the rubric below — do not mix sections from the two shapes.
 
-- **Terse (3 sections)** — Context, Decision, Consequences. Matches Michael Nygard's original 2011 ADR pattern. Optimized for read-speed and ease of authoring; readable in under 60 seconds. Use for narrow, one-decision records. Exemplar: [ADR-006 (Terraform remote backend R2)](../../../../knowledge-base/engineering/architecture/decisions/ADR-006-terraform-remote-backend-r2.md).
+- **Terse (3 sections)** — Context, Decision, Consequences. Matches Michael Nygard's original 2011 ADR pattern. Optimized for read-speed and ease of authoring; readable in under 60 seconds. Use for narrow, one-decision records. Exemplar: [ADR-007 (Doppler secrets management)](../../../../knowledge-base/engineering/architecture/decisions/ADR-007-doppler-secrets-management.md) — 19 lines, three sections, no amendment.
+  > ADR-006 was this exemplar until 2026-09-09. It still has the terse *standing* shape — Context, Decision, Consequences — but #7836 appended a long dated `## Amendment` audit record to it, so it no longer reads as a 60-second example of the form. An amendment is a fourth *record*, not a fourth standing section; the shape rubric below is unchanged by it.
 - **Rich (8 sections)** — Context, Considered Options, Decision, Consequences, Cost Impacts, NFR Impacts, Principle Alignment, Diagram. Matches the MADR (Markdown Architectural Decision Records) 3.0 "full" template, extended with Soleur-specific Cost Impacts, NFR Impacts, and Principle Alignment sections. Optimized for audit-trail on cross-cutting decisions. Exemplar: [ADR-021 (KB binary-serving pattern)](../../../../knowledge-base/engineering/architecture/decisions/ADR-021-kb-binary-serving-pattern.md).
 
 ### Rubric — pick rich when any one trigger is true
