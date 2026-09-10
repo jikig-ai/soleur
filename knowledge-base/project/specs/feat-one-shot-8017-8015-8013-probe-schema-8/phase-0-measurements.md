@@ -30,6 +30,9 @@ between "no such event" and "the query is broken". Two positive controls (an unf
 a broad `--grep SOLEUR` 6h query) each returned rows, and all three `BETTERSTACK_QUERY_*` secrets
 resolved from `soleur/prd_terraform`, so the instrument is healthy and the zero is real.
 
+> **RETRACTED 2026-09-10, same session, by measurement.** Everything from here to the end of this
+> subsection was WRONG, and the error was mine, not the warehouse's. See the Addendum below.
+
 **The zero is real because the marker is wrong, and that is a finding in its own right.** The live
 host reports `vector_active=inactive`, so the probe does NOT reach the warehouse via the `logger`
 line at `inngest-bootstrap.sh:891`. It arrives through the `inngest-boot-phone-home.sh` fallback at
@@ -177,3 +180,46 @@ sequencing consequence, not a new one.
 
 **Conclusion: merging this PR replaces nothing and opens no shell on any host.** Delivery happens
 only through a later, separately-approved replace.
+
+
+## Addendum — 2026-09-10: §0.4's delivery conclusion was an artifact of my own flag
+
+**What I claimed:** that `vector_active=inactive` on the live host meant the `logger` line never
+reaches Better Stack, and that the probe row arrives only through the `inngest-boot-phone-home.sh`
+fallback under a different marker.
+
+**What is true, measured:** the `logger` line is the primary live channel and it works.
+
+| Query (36h window, source 2457081) | Rows |
+|---|---|
+| `--grep SOLEUR_INNGEST_SERVER_PROBE` | **57** |
+| the same query **plus `--raw-only`** | **0** |
+| host-isolated (`host=soleur-inngest ∧ host_name=soleur-inngest-prd`) | **31**, every one `shipper=vector` |
+| ↳ `vector_active=active` | 26, newest at `uptime_s=36285` — vector had been up ~10 hours |
+| ↳ `vector_active=inactive` | 5, at `uptime_s` 64/65/69/76/192, each on a DISTINCT `boot_id` |
+
+**The cause.** `scripts/betterstack-query.sh` implements `--raw-only` as
+`raw NOT LIKE '%SYSLOG_IDENTIFIER%'`, which excludes **every journald row by construction** — and
+Vector ships journald rows. I passed `--raw-only`, got zero, and read the zero as a fact about the
+host instead of a fact about my query.
+
+**`vector_active=inactive` is a ~70-second BOOT RACE, not a host state.** All five instances sit at
+low `uptime_s` on distinct boots: the probe's first fire beats `vector.service` up. The
+phone-home fallback exists for exactly that window, which is why the only rows `--raw-only` CAN
+return are the handful from it — and that is what made the artifact look like corroboration.
+
+**Why my instrument check did not catch it.** §0.4 above records two positive controls. Both used
+`--raw-only`, so both could only ever return non-journald rows. An instrument that has never been
+shown to produce a positive **for the class under test** has not returned a negative about it. The
+controls proved the transport worked; they could not detect a filter biased against the one
+channel the question was about.
+
+**What this invalidates, and what it does not.**
+
+- INVALID: "the host does not reach the warehouse via the logger line"; the `discoverability_test`
+  command's first *and* second forms, both of which keep `--raw-only` and are therefore
+  structurally blind to the field's actual channel. Corrected in the plan.
+- STILL VALID: `data_mount_src=/dev/sdb` on the live host (so G14's by-id arm really was
+  unreachable), and the live `redis_key_patterns` carrying a 26-char ULID (so #8013's premise is
+  confirmed against live data). Both were read off row content, not off row counts, and both
+  reproduce on the corrected query.

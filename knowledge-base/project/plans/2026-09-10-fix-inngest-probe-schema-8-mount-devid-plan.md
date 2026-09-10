@@ -1052,16 +1052,30 @@ logs:
   where: Better Stack Telemetry (ClickHouse warehouse), source soleur-inngest-vector-prd (id 2457081)
   retention: hot window ~40 minutes via remote(), plus the s3Cluster archive — betterstack-query.sh unions both
 discoverability_test:
-  # CORRECTED 2026-09-10 AFTER MEASURING IT. The first form greppped SOLEUR_INNGEST_SERVER_PROBE
-  # and returned ZERO rows over 36h against the live host -- rc=0, empty stderr, which is
-  # indistinguishable from "the host is dark". The instrument was verified first (two positive
-  # controls returned rows; all three BETTERSTACK_QUERY_* resolved), so the zero was real: the
-  # host reports vector_active=inactive, so the probe does NOT reach the warehouse via the
-  # logger line. It arrives through the inngest-boot-phone-home.sh fallback, wrapped as
-  # marker=SOLEUR_INNGEST_BOOT_STAGE with stage=inngest-server-probe-vector-down. Grep the STAGE.
-  # This matters more than a normal typo: credentials_required below makes preflight Check 10
-  # SKIP WITHOUT EXECUTING, so nothing but a human running it would ever have caught it.
-  command: bash -c 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 36h --raw-only --limit 200 --grep inngest-server-probe | jq -R -r "fromjson? | .raw? // empty" | grep -oE "probe_schema=8 [^\"]*"'
+  # CORRECTED TWICE, and the second correction retracts the first. Recorded because the failure
+  # mode is the interesting part, not the command.
+  #
+  # v1 grepped SOLEUR_INNGEST_SERVER_PROBE with --raw-only and returned ZERO rows. I read that
+  # zero as a fact about the HOST ("vector is inactive, so the logger line never delivers") and
+  # rewrote the command to chase the phone-home fallback instead. That was wrong.
+  #
+  # `betterstack-query.sh` implements --raw-only as `raw NOT LIKE '%SYSLOG_IDENTIFIER%'`, which
+  # excludes EVERY journald row by construction -- and Vector ships journald rows. Measured: the
+  # same query returns 57 rows without the flag and 0 with it; host-isolated, 31 rows, every one
+  # shipper=vector, 26 of them vector_active=active with the newest at uptime_s=36285. The five
+  # `inactive` rows sit at uptime_s 64-192 on distinct boot_ids: a ~70-second BOOT RACE where the
+  # probe's first fire beats vector.service up, which is precisely what the phone-home fallback
+  # exists for -- and why the only rows --raw-only CAN return are from it, which made the artifact
+  # look like corroboration.
+  #
+  # Both positive controls I ran to "verify the instrument" also used --raw-only, so neither could
+  # detect a filter biased against the one channel in question. An instrument never shown to
+  # produce a positive FOR THE CLASS UNDER TEST has not returned a negative about it.
+  #
+  # This matters more than a normal typo: credentials_required below makes preflight Check 10 SKIP
+  # WITHOUT EXECUTING, so nothing but a human running this command would ever have caught either
+  # version.
+  command: bash -c 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 36h --limit 500 --grep SOLEUR_INNGEST_SERVER_PROBE | jq -R -r "fromjson? | .raw? | fromjson? | select(.host == \"soleur-inngest\" and .host_name == \"soleur-inngest-prd\") | .message? // empty" | grep -F probe_schema=8'
   expected_output: |
     whole matched rows, not per-field fragments, each carrying probe_schema=8 …
     data_mount_devid=scsi-0HC_Volume_106261946 … registry_fns=<an integer; 0 while
