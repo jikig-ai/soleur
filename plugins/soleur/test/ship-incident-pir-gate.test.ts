@@ -15,6 +15,8 @@
 import { describe, test, expect } from "bun:test";
 import { resolve } from "path";
 import { spawnSync } from "child_process";
+import { gitFixtureEnv } from "./lib/git-fixture-env";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const GATE = resolve(REPO_ROOT, "scripts/ship-incident-pir-gate.sh");
@@ -23,6 +25,7 @@ const FIX = resolve(REPO_ROOT, "plugins/soleur/test/fixtures/ship-incident-pir-g
 /** Run the shipped gate against a fixture; returns true iff it signalled. */
 function signals(fixture: string): boolean {
   const res = spawnSync("bash", [GATE], {
+    env: gitCleanEnv(),
     input: require("fs").readFileSync(resolve(FIX, fixture), "utf8"),
     encoding: "utf8",
   });
@@ -44,7 +47,7 @@ function signals(fixture: string): boolean {
  * template at runtime rather than snapshot it.
  */
 function signalsText(text: string): boolean {
-  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8" });
+  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8", env: gitCleanEnv() });
   if (res.status === 0) {
     expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
     return true;
@@ -169,7 +172,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).
   test("a no-signal run exits 1 cleanly with no stdout", () => {
-    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
   });
@@ -281,6 +284,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
   // ship/SKILL.md now tells the reader this note exists — so the claim needs something behind it.
   test("suppressing an outage line inside the paragraph emits a stderr note", () => {
     const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
       input: require("fs").readFileSync(
         resolve(FIX, "real-outage-inside-paragraph-without-actuality-idiom.md"), "utf8"),
       encoding: "utf8",
@@ -331,6 +335,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
     fs.writeFileSync(stub, "#!/bin/sh\nexit 2\n");
     fs.chmodSync(stub, 0o755);
     const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
       input: "nothing to see here\n",
       encoding: "utf8",
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
@@ -354,7 +359,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
     ["whitespace only", "\n\n"],
     ["every line filtered", "If this lands broken\n"],
   ])("a %s haystack is a clean no-signal, not a pipeline failure", (_label, input) => {
-    const res = spawnSync("bash", [GATE], { input, encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input, encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
   });
@@ -368,5 +373,157 @@ describe("ship Incident-PIR gate (#6813)", () => {
     const planText =
       "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.";
     expect(signalsText(`${prText}\n${planText}`)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `--pr` corpus construction (#7987).
+//
+// The corpus used to be assembled by PROSE in ship/SKILL.md: grep a plan path out
+// of the PR body, `cat` it, concatenate. When the body cites no plan the second
+// half is the empty string and the gate reports "no incident signal" having read
+// zero bytes of plan — a mandatory gate silently plan-blind (it still fired on body-only outage vocabulary; it could not see the plan, and did not say so), whose output is
+// byte-identical to a real all-clear.
+//
+// The pin below is the exact PR #7987 shape and is a MATCHED PAIR: the SAME plan
+// sits on disk in both cases, and only the LINK in the body differs. Case 1 alone
+// would also pass if the gate had simply become more eager; case 2 alone would
+// also pass if it had stopped reading plans entirely.
+describe("--pr corpus construction", () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, chmodSync } = require("fs");
+  const { tmpdir } = require("os");
+
+  /** A throwaway git repo with a plan on disk and a `gh` stub that returns `body`. */
+  function sandbox(body: string, planText: string) {
+    const dir = mkdtempSync(resolve(tmpdir(), "pirgate-"));
+    // gitFixtureEnv, not a bare spawn. This helper runs `git init`, and an inherited
+    // GIT_DIR/GIT_WORK_TREE beats both the cwd AND the path operand -- so without the
+    // scrub this fixture initialises nothing and any later write lands in the caller's
+    // repository. That is the #7835 incident, and this suite acquired the exposure in
+    // the same PR that fixes the gates guarding against it: `fixture-env-adoption`
+    // caught it in CI as a difference-set member accounted for by neither the waiver
+    // nor the deferred list. Adopted rather than waived.
+    spawnSync("git", ["init", "-q", "-b", "feat-fixture", dir], { env: gitFixtureEnv(dir) });
+    mkdirSync(resolve(dir, "knowledge-base/project/plans"), { recursive: true });
+    writeFileSync(resolve(dir, "knowledge-base/project/plans/fixture-plan.md"), planText);
+    mkdirSync(resolve(dir, "bin"), { recursive: true });
+    // The stub validates argv rather than answering unconditionally: a fake that
+    // dispatches on nothing cannot detect the gate querying the wrong thing.
+    writeFileSync(
+      resolve(dir, "bin/gh"),
+      `#!/usr/bin/env bash\n` +
+        `case "$*" in\n` +
+        `  *"pr view"*--json*title,body*) cat <<'EOF'\n${body}\nEOF\n    ;;\n` +
+        `  *) echo "gh-stub: unexpected: $*" >&2; exit 64 ;;\n` +
+        `esac\n`,
+    );
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    return dir;
+  }
+
+  function runPr(dir: string, pr = "7987") {
+    return spawnSync("bash", [GATE, "--pr", pr], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...gitFixtureEnv(dir), PATH: `${resolve(dir, "bin")}:${process.env.PATH}` },
+    });
+  }
+
+  // The plan reports a real production outage; the body alone says nothing.
+  const OUTAGE_PLAN =
+    "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.\n";
+  // REAL newlines, not a literal backslash-n. The stub heredoc previously emitted
+  // one physical line, which made the paragraph strip, the blank-line boundary, the
+  // heading boundary and the fence strip all INERT against every fixture — so
+  // flattening newlines in the corpus builder left the whole suite green while a
+  // real multi-line incident report shipped a silent all-clear.
+  const BODY_WITH_LINK =
+    "fix(apex): restore the origin\n\nSee knowledge-base/project/plans/fixture-plan.md for detail.";
+  const BODY_NO_LINK = "fix(apex): restore the origin\n\nNo plan is linked from this body.";
+
+  test("body LINKS the plan → the plan is read and the outage signals", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS —");
+  });
+
+  test("body OMITS the link → no signal, but the gate SAYS it read the body alone", () => {
+    const res = runPr(sandbox(BODY_NO_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(1);
+    // The defect was not the verdict — it was that this verdict was
+    // indistinguishable from having scanned everything.
+    expect(res.stderr).toContain("PIR-CORPUS-BODY-ONLY");
+  });
+
+  test("an unreadable PR fails TOWARD the PIR rather than reporting all-clear", () => {
+    const dir = sandbox(BODY_WITH_LINK, OUTAGE_PLAN);
+    writeFileSync(resolve(dir, "bin/gh"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    const res = runPr(dir);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS-UNREADABLE");
+  });
+
+  // MATCHED PAIR, and the first half must cite a file that EXISTS. The earlier
+  // fixture cited `…/plans/../../../../etc/passwd.md`, which does not exist, so
+  // `realpath -e` failed one step BEFORE the allowlist and the test passed without
+  // ever exercising the boundary: widening the case arm to `"$root"/*` left the
+  // whole suite green. The second half is what stops the fix being "refuse
+  // everything".
+  test("a REAL file outside the plans dir is refused by the allowlist, not read", () => {
+    const dir = sandbox(
+      // THREE `..`: from knowledge-base/project/plans/ that is the repo root, which is
+    // where OUTSIDE.md is written. With two the path resolved to
+    // knowledge-base/OUTSIDE.md — a file that does not exist — so `realpath -e`
+    // failed one step before the allowlist and this test was vacuous a SECOND time,
+    // in the commit fixing exactly that. Mutation-proven: widening the case arm to
+    // `"$root"/*` now reds this case.
+    "fix: x\n\nknowledge-base/project/plans/../../../OUTSIDE.md",
+      OUTAGE_PLAN,
+    );
+    // A readable file that resolves INSIDE the repo but OUTSIDE plans/specs.
+    writeFileSync(resolve(dir, "OUTSIDE.md"), OUTAGE_PLAN);
+    const res = runPr(dir);
+    expect(res.stderr).toContain("refusing to read it");
+    expect(res.status).toBe(1);
+  });
+
+  test("a real file INSIDE the plans dir is still read (the guard narrows, not disables)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.stderr).toContain("PIR-CORPUS —");
+    expect(res.status).toBe(0);
+  });
+
+  test("a plan path quoted inside a FENCED block does not shadow the real link", () => {
+    const dir = sandbox(
+      "fix: x\n\nUsage:\n\n```\nknowledge-base/project/plans/decoy-plan.md\n```\n\nPlan: knowledge-base/project/plans/fixture-plan.md",
+      OUTAGE_PLAN,
+    );
+    writeFileSync(
+      resolve(dir, "knowledge-base/project/plans/decoy-plan.md"),
+      "# decoy\n\nnothing notable here.\n",
+    );
+    const res = runPr(dir);
+    expect(res.stderr).toContain("fixture-plan.md");
+    expect(res.stderr).not.toContain("decoy-plan.md");
+    expect(res.status).toBe(0);
+  });
+
+  test("--pr with an EMPTY value exits 2 (a usage error is not an all-clear)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "");
+    expect(res.status).toBe(2);
+  });
+
+  test("--pr rejects a non-numeric argument", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "7987; rm -rf /");
+    expect(res.status).toBe(2);
+  });
+
+  test("stdin mode is unchanged when --pr is absent", () => {
+    const res = spawnSync("bash", [GATE], { input: OUTAGE_PLAN, encoding: "utf8", env: gitCleanEnv() });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
   });
 });
