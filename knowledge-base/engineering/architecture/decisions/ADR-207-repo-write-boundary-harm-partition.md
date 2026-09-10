@@ -126,7 +126,7 @@ each request looks locally reasonable, and only the list makes the cumulative po
 | 3 | `refs`: a non-own, non-tag ref DELETED | #7702 | `cleanup_merged_worktrees()` deletes merged branches |
 | 4 | `refs`: `refs/heads/<default>` MOVED | #7702 | the sibling `git pull` shape |
 | 5 | `refs`: a non-own, non-default, non-tag ref CREATED or MOVED | #7702 | `worktree add -b`; sibling branch work |
-| 6 | `refs`: a collision-free `refs/tags/*` **CREATED** | #7795 | measured live: a `git fetch` auto-follows tags, and `worktree-manager.sh` runs one inside `cleanup_merged_worktrees()`, which `/work` Phase 0 runs at the START of every session. **Bounded by `scripts/battery-tag-authorship.test.sh`** (#7917) — see §5 |
+| 6 | `refs`: a collision-free `refs/tags/*` **CREATED** | #7795 | measured live at #7795: a `git fetch` auto-follows tags, and any sibling worktree or operator shell sharing the ref store can create one with no attributable author. The witness cited when this row was written — `worktree-manager.sh`'s fetch inside `cleanup_merged_worktrees()`, which `/work` Phase 0 runs at session start — was CLOSED by #7917: every fetch and pull in that file now carries `--no-tags`, so a reader who greps the old witness finds the opposite of what it claimed. The cell rests on the general shape, never on that one caller. **Bounded by `scripts/battery-tag-authorship.test.sh`** (#7917) — see §5 |
 
 **Counting note, stated because a wrong count here is worse than none.** Cells 1-5 all landed in
 a single commit with the `REPORT` class itself (`git log -S'shared_store' -- scripts/lib/repo-write-boundary.sh`
@@ -187,11 +187,19 @@ independent static adjudications of this exact question reached OPPOSITE answers
 `worktree-manager.sh` as a live author and one concluding the set was already empty. A third
 adjudication would have been a third opinion.
 
-**It asserts a decidable property instead.** Every tag-authoring command in the closure of
-executables reachable from `scripts/test-all.sh` either suppresses tag creation ON ITS OWN COMMAND
-LINE, or carries a `repo-boundary-tag-exempt:` marker in the two preceding lines AND a matching
-entry in the guard's ledger. That is checkable, and it degrades toward a false OFFENDER — a
-declaration is demanded where none was needed — rather than toward a false green.
+**It asserts a decidable property instead.** Every tag-authoring command the guard SEES in the
+closure of executables reachable from `scripts/test-all.sh` either suppresses tag creation ON ITS
+OWN COMMAND, or carries a `repo-boundary-tag-exempt:` marker within the two lines preceding it or
+on the command's own line, AND a matching entry in the guard's ledger. That is checkable.
+
+Note the two hedges, because an earlier revision of this paragraph omitted both and was wrong as a
+result. "SEES" is doing real work — the guard's reach is bounded, and the bound is enumerated below
+rather than implied. And the grading unit is the COMMAND, not the line: an earlier cut evaluated
+every predicate against the whole line, so `git fetch --no-tags origin && git tag evil` graded
+SUPPRESSED and `git push origin main && git tag evil` was dismissed as out-of-class. Both were
+measured false GREENs, both are now closed, and both are the reason this ADR no longer claims the
+guard "degrades toward a false OFFENDER … rather than toward a false green". It does BOTH, in
+enumerable places.
 
 **Its verb set is the cell's verb set, not `git fetch`.** This row says a tag CREATED, by anything.
 A fetch-scoped guard would be literally true about fetches while green over `git pull`, over a
@@ -208,15 +216,50 @@ an ORPHAN and reddens; the check is a bijection in both directions, because a on
 is where offenders go to be forgotten.
 
 **Ceiling governance, and its single home.** The exemption ledger's ceiling is **12**. That number
-lives HERE and nowhere else; the guard asserts its own constant equals this line, so the two cannot
-drift. Raising it is an edit to this ADR — deliberately, because a ceiling raised locally to make a
-run green is not a ceiling. A ceiling paired with the bijection can be loose; without the bijection
+is the one AUTHORITY; the guard asserts its own constant equals this line, so the two cannot drift.
+Raising it is an edit to this ADR AND to the two `LEDGER_CEILING=12` sed patterns in
+`scripts/battery-tag-authorship-mutations.test.sh` (rows R7/R8), which would otherwise stop
+matching. That second half is fail-CLOSED — a mutation that does not land is scored as a failed
+row, never as a pass — but it is a four-place edit and calling it a one-place edit understates it.
+The point stands: a ceiling raised locally to make a run green is not a ceiling. A ceiling paired with the bijection can be loose; without the bijection
 it is satisfied equally by an empty ledger and by a ledger full of ghosts.
 
-**What this does NOT establish.** The guard reads tracked source. It cannot see a tag authored by an
-untracked file, by a heredoc body it declined to parse, or by a command constructed at runtime from
-a variable. Those are declared in its header as approximations rather than left implicit. Cell 6 is
-bounded, not closed.
+**What this does NOT establish.** The guard's closure is a FILESYSTEM walk, not a tracked-file walk:
+membership is an `-f` test, so an untracked file named by a closure member joins it while a tracked
+file absent from the working tree does not. (An earlier revision of this line said "the guard reads
+tracked source"; that was false, and the guard's own header said the opposite two screens away.)
+
+Within that closure, these are the places it can go green while seeing less. They are
+UNDER-approximations — they fail toward a false GREEN — and they are what bounds this guard:
+
+- **Reach.** A suite executed through a runtime glob rather than a path literal never enters the
+  root set; `.github/scripts/test/run-all.sh` collects its 11 siblings that way, and 9 of them are
+  outside the closure today. The `npm run test:ci` out-of-class entry waves through the vitest
+  suites under `apps/web-platform`, of which only a handful are closure members.
+- **Spelling of the callee.** The closure regex recognises four variable prefixes and five
+  extensions; `"$ROOT/x.sh"`, `node scripts/x.js`, and `find … -exec bash {} \;` are invisible.
+- **Spelling of the command.** `VERB_RE` requires a literal lowercase `git` followed by one of three
+  enumerated global-option shapes. `$GIT tag`, a wrapper function or alias, `git --no-pager tag`,
+  `git-tag`, and a verb held in a variable are all missed — as are `git fast-import`,
+  `git symbolic-ref refs/tags/…`, `git filter-branch --tag-name-filter`, a `git push` to a LOCAL
+  path (which writes a sibling's ref store, not a remote), and a direct write to `.git/refs/tags/`
+  or `packed-refs`, which authors a tag with no `git` token at all.
+- **Construction.** A command assembled at runtime from a variable, and a heredoc body — the guard
+  applies NO heredoc exclusion, so those lines are counted, which is the safe direction.
+
+The guard's header carries this same list under the name it deserves. Cell 6 is bounded, not
+closed, and the bound is one-sided: the reach and spelling gaps above are the ones that stay quiet.
+
+**Why the bound is acceptable anyway, and what would close it.** AP-025 says a hazard that is a
+property of runtime STATE should be enforced by a self-refusal the artifact CARRIES, not by a
+boundary check that must enumerate the ways to REACH that state — and a verb set plus a closure
+plus a grep is exactly such an enumeration. The register-aligned instrument exists: git's
+`reference-transaction` hook fires on EVERY ref write, including a tag a fetch auto-follows, and
+can refuse `refs/tags/*` creation for the duration of a battery run. It is complete by
+construction and needs no verb set, no closure, and no ledger. It is also blind to WHERE the
+offending command lives, which is what a reviewer needs at review time; the two are complements.
+The static census ships here because it names the site; the state predicate is tracked separately
+as the thing that would actually close the cell.
 
 ## Consequences
 

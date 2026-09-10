@@ -42,26 +42,61 @@
 # unsatisfiable BY CONSTRUCTION and the only reachable verdicts are EXEMPT or OFFENDER. That is
 # stated here rather than leaving a reader to discover an arm that can never fire.
 #
-# DECLARED APPROXIMATIONS (AC33). This guard over-approximates; every approximation below fails
-# toward a FALSE OFFENDER, which reddens and is closed by a declaration — never toward a false
-# green:
-#   1. Comment exclusion drops FULL-LINE comments only. A trailing comment after code is not
-#      excluded.
-#   2. Heredoc exclusion is best-effort. Reliably excluding a heredoc body needs a real shell
-#      parser; no grep-shaped rule is correct in general.
-#   3. The closure is over TRACKED files only, and any tracked executable path literal appearing
-#      in a closure member joins the closure. An unresolvable reference JOINS the closure rather
-#      than leaving it.
-#   4. `bun test <dir>/` is expanded by a glob over the directory, which approximates what bun
-#      itself would collect.
+# DECLARED APPROXIMATIONS (AC33), in TWO groups, because an earlier revision of this block put
+# them in one and claimed every one of them "fails toward a FALSE OFFENDER … never toward a false
+# green". That claim was refuted twice under review, by demonstration, so the split is the point:
 #
-# ENVIRONMENT DELTA, measured 2026-09-09, so a reader comparing a local census against a CI one
-# does not misread it as drift. Under CI the relevance gate's bypass is an unconditional early
-# return, so a decline is unreachable and `skip_suite` is never invoked — those registrations
-# arrive as real commands instead. Measured: roots 452 (local) vs 455 (CI=1), and unclassified
-# 1 vs 2 (the second inline `bash -c` registration is a decline locally). The CLASSIFICATION is
-# environment-independent — occurrences=49 and offenders=39 in both — because the extra roots
-# carry no tag-authoring command. MIN_ROOTS is set below the lower of the two.
+# OVER-approximations — they demand a declaration where none was needed. They REDDEN, and a red
+# guard is closed by declaring the site. These are the safe ones:
+#   1. Comment exclusion drops FULL-LINE comments only. A trailing comment after code is stripped
+#      per COMMAND before grading (see _split_commands) but is not excluded from the scan.
+#   2. There is NO heredoc exclusion. A verb in a heredoc body is counted like any other line.
+#      (The previous wording said "heredoc exclusion is best-effort", which told a reader a filter
+#      existed. `grep -c 'eredoc'` over this file returned exactly one hit: that comment.)
+#   3. Closure membership is a FILESYSTEM test (`-f`), so an UNTRACKED file named by a closure
+#      member joins the closure. The previous wording said "TRACKED files only" AND said an
+#      unresolvable reference "JOINS the closure"; the code drops it. Both halves were wrong, in
+#      opposite directions.
+#
+# UNDER-approximations — the guard goes GREEN while seeing less. These are what BOUNDS it, they
+# are the reason ADR-207 §5 says cell 6 is bounded rather than closed, and they are enumerated
+# here rather than left implicit:
+#   4. `bun test <dir>/` is expanded by a glob narrower than bun's own collection (`*_test.*`,
+#      `*_spec.*`, `.jsx`, `.cjs` are missed).
+#   5. REACH. A suite executed via a runtime glob rather than a path literal never enters the root
+#      set — `.github/scripts/test/run-all.sh` collects its siblings that way, and 9 of the 11 are
+#      outside the closure. The `npm run test:ci` out-of-class entry likewise waves through the
+#      vitest suites under apps/web-platform, of which only a handful are closure members.
+#   6. CALLEE SPELLING. The closure regex knows four variable prefixes and five extensions;
+#      `"$ROOT/x.sh"`, `node scripts/x.js` and `find … -exec bash {} \;` are invisible.
+#   7. COMMAND SPELLING. VERB_RE needs a literal lowercase `git` plus one of three enumerated
+#      global-option shapes. Missed: `$GIT tag`, a wrapper function or alias, `git --no-pager tag`,
+#      `git-tag`, a verb held in a variable, `git fast-import`, `git symbolic-ref refs/tags/…`,
+#      `git filter-branch --tag-name-filter`, a `git push` to a LOCAL path (which writes a
+#      sibling's ref store, not a remote), and a direct write to `.git/refs/tags/` or
+#      `packed-refs` — which authors a tag carrying no `git` token at all.
+#   8. A command CONSTRUCTED at runtime from a variable.
+#
+# The string-literal skip (_in_string_literal) was a ninth, undeclared, under-approximating arm:
+# it counted each quote character independently, so a lone apostrophe earlier on a line
+# (`[[ "$x" == *"don't"* ]] && git fetch origin`) hid a live command. It now tracks WHICH quote is
+# open, and grading is per COMMAND rather than per line, so that class is closed rather than
+# declared. Both false greens were demonstrated end-to-end before being fixed.
+#
+# ENVIRONMENT DELTA, re-measured 2026-09-10. Under CI the relevance gate's bypass is an
+# unconditional early return, so a decline is unreachable and `skip_suite` is never invoked —
+# those registrations arrive as real commands instead. Measured: roots 457 (local) vs 460 (CI=1),
+# and OUT-OF-CLASS 1 vs 2 (the two `bash -c '… npm run test:ci …'` registrations, the second a
+# decline locally). `unclassified` is 0 in BOTH, and that distinction matters: the inline-script
+# arm logs INLINE_SCRIPT and returns 1, then the OUT_OF_CLASS ledger claims it — so the counter
+# that moves with the environment is out-of-class, never unclassified. The previous wording said
+# "unclassified 1 vs 2" and quoted occurrences=49 / offenders=39; those were the pre-remediation
+# numbers, left behind when Phase 4 closed all 39.
+#
+# The CLASSIFICATION is environment-independent, and stronger than a count: occurrences=41 and
+# offenders=0 in both. MIN_ROOTS is set below the lower of the two. No assertion depends on these
+# figures, which is exactly why they must be RE-MEASURED when this block is touched rather than
+# carried forward — carrying them forward is how they got to be wrong.
 #
 # SEAM. BATTERY_TAG_REPO_ROOT / BATTERY_TAG_RUNNER let the mutation battery point this exact
 # program at a sandbox copy. The seam lives HERE, in the guard, so the program that produces the
@@ -106,9 +141,15 @@ passes=$_st_p; fails=$_st_f; asserted=$_st_a
 
 # --- exclusions (two arrays, separately size-asserted) --------------------------------------
 SELF_EXCLUSION=("scripts/battery-tag-authorship.test.sh")
-FIXTURE_EXCLUSION=("scripts/battery-tag-authorship-mutations.test.sh")
+# Three fixture files, ONE entry each, and the separation is load-bearing rather than tidy:
+# FIXTURE_EXCLUSION is keyed by PATH, so two fixtures sharing a file become visible together and
+# a mutation row that needs one of them visible would redden on the other — measured, when all
+# three briefly lived in the mutations file. A row therefore hides the two it is not testing by
+# pointing their slots at an absent path, which keeps the array's SIZE constant so the assertion
+# below still binds.
+FIXTURE_EXCLUSION=("scripts/battery-tag-authorship-mutations.test.sh" "tests/scripts/fixtures/battery-tag-bare-fetch.sh" "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh")
 (( ${#SELF_EXCLUSION[@]} == 1 )) || { printf 'ERROR: SELF_EXCLUSION must hold exactly 1 entry\n' >&2; exit 2; }
-(( ${#FIXTURE_EXCLUSION[@]} == 1 )) || { printf 'ERROR: FIXTURE_EXCLUSION must hold exactly 1 entry\n' >&2; exit 2; }
+(( ${#FIXTURE_EXCLUSION[@]} == 3 )) || { printf 'ERROR: FIXTURE_EXCLUSION must hold exactly 3 entries\n' >&2; exit 2; }
 
 _excluded() {
   local p="$1" e
@@ -173,7 +214,7 @@ OUT_OF_CLASS=(
 ROOTS_RAW="$(mktemp -t battery-tag-roots.XXXXXXXX)"
 UNCLASSIFIED_LOG="$(mktemp -t battery-tag-unclassified.XXXXXXXX)"
 CENSUS="$(mktemp -t battery-tag-census.XXXXXXXX)"
-trap 'rm -f "$ROOTS_RAW" "$UNCLASSIFIED_LOG" "$CENSUS"' EXIT
+
 
 enum_rc=0
 timeout 120 env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
@@ -182,10 +223,38 @@ if (( enum_rc != 0 )); then
   printf 'ERROR: --enumerate-commands exited %d — refusing to classify against an empty root set\n' "$enum_rc" >&2
   exit 1
 fi
-records=$({ grep -c '^SUITE_COMMAND' "$ROOTS_RAW" || true; })
+# Anchored on the TAB: a bare `^SUITE_COMMAND` also counts SUITE_COMMAND_DECLINED lines, so a
+# declines-only stream satisfied a check whose message says "refusing to fall through to an
+# empty root set".
+records=$({ grep -c $'^SUITE_COMMAND\t' "$ROOTS_RAW" || true; })
 if (( records == 0 )); then
   printf 'ERROR: --enumerate-commands produced zero records — refusing to fall through to an empty root set\n' >&2
   exit 1
+fi
+
+# --- Stage A': record-stream TOTALITY --------------------------------------------------------
+# The plan specified this and the first cut did not ship it, which left the runner/guard contract
+# as PROSE. `--enumerate-commands` is additive over `--enumerate`, so every registration must
+# appear in BOTH streams. Without this, a new registration function added beside run_suite /
+# skip_suite emits no SUITE_COMMAND record: its suites never enter the root set, their closure is
+# never walked, and `root_count` goes UP or sideways — so MIN_ROOTS cannot see it and the guard
+# reports green while scanning less. This is the one assertion that fails when the runner grows a
+# registration path the guard does not know about.
+labels_rc=0
+LABELS_RAW="$(mktemp -t battery-tag-labels.XXXXXXXX)"
+trap 'rm -f "$ROOTS_RAW" "$UNCLASSIFIED_LOG" "$CENSUS" "$LABELS_RAW"' EXIT INT TERM
+timeout 120 env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate all > "$LABELS_RAW" 2>/dev/null || labels_rc=$?
+if (( labels_rc != 0 )); then
+  printf 'ERROR: --enumerate exited %d — cannot establish record-stream totality\n' "$labels_rc" >&2
+  exit 1
+fi
+label_records=$({ grep -c '^SUITE_REGISTRATION' "$LABELS_RAW" || true; })
+declined_records=$({ grep -c '^SUITE_COMMAND_DECLINED' "$ROOTS_RAW" || true; })
+ck; if (( label_records > 0 && records + declined_records == label_records )); then
+  pass "record-stream totality: SUITE_COMMAND($records) + DECLINED($declined_records) == SUITE_REGISTRATION($label_records)"
+else
+  fail "record-stream totality BROKEN: SUITE_COMMAND($records) + DECLINED($declined_records) != SUITE_REGISTRATION($label_records) — a registration reaches one enumerate mode and not the other, so the root set is not the full battery"
 fi
 
 declare -A ROOTS=()
@@ -207,7 +276,7 @@ _resolve_command() {
     case "${a[$i]}" in
       *=*) i=$((i + 1)) ;;
       env|sudo|timeout) i=$((i + 1)) ;;
-      [0-9]*s) i=$((i + 1)) ;;   # timeout's duration operand
+      [0-9]*s|[0-9]*) i=$((i + 1)) ;;   # timeout's duration operand
       *) break ;;
     esac
   done
@@ -259,8 +328,7 @@ MIN_INFRA_DERIVED=1
 
 while IFS= read -r line; do
   [[ "$line" == SUITE_COMMAND$'\t'* ]] || continue
-  IFS=$'\t' read -r _rt _label rest <<<"$line"
-  IFS=$'\t' read -r -a argv <<<"$(printf '%s' "${line#*$'\t'*$'\t'}")"
+  IFS=$'\t' read -r -a argv <<<"${line#*$'\t'*$'\t'}"
   # Nested runners are a second chokepoint: delegate rather than re-derive.
   nested=""
   for nr in "${NESTED_RUNNERS[@]}"; do
@@ -313,6 +381,26 @@ while (( depth < DEPTH_BOUND )); do
       cand="${cand#./}"
       [[ -n "$cand" ]] || continue
       [[ -n "${CLOSURE[$cand]:-}" ]] && continue
+      # `-f` bounds EXISTENCE, not CONTAINMENT. A literal like `../../scripts/test-all.sh`
+      # (there is one, in this runner's own operator prose) resolves THROUGH `..` into a
+      # DIFFERENT checkout — measured: five such members, one of them the operator's main
+      # worktree at a different commit. The verdict would then depend on a file outside the
+      # tree being graded, and under the sandbox seam on whatever sits above a mktemp dir.
+      #
+      # Normalise rather than reject. A reference is written relative to its OWN file
+      # (`$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/frontmatter-strip/strip.sh` in
+      # `.claude/hooks/session-rules-loader.sh`), and the regex captures the literal without
+      # that base — so a flat rejection drops a real, in-tree closure member. Measured: it
+      # dropped exactly that one. Collapse interior `x/..` pairs, strip leading `../`, and
+      # keep the result ONLY if it resolves inside REPO_ROOT; anything whose sole resolution
+      # is outside stays out.
+      # Each iteration removes exactly three characters, so this terminates. An interior
+      # `x/../y` is NOT collapsed — it is rejected below along with anything else still
+      # carrying `..`, because collapsing it correctly needs the reference's own base
+      # directory, which the captured literal does not carry.
+      while [[ "$cand" == ../* ]]; do cand="${cand#../}"; done
+      case "$cand" in *..*) continue ;; esac
+      [[ -n "${CLOSURE[$cand]:-}" ]] && continue
       [[ -f "$REPO_ROOT/$cand" ]] || continue
       CLOSURE["$cand"]=1; added=$((added + 1))
     done < <(
@@ -323,15 +411,39 @@ while (( depth < DEPTH_BOUND )); do
       # tag author outside the listed dirs was invisible. The plan's design is explicit that any
       # tracked executable path literal joins the closure, so the allowlist is the defect. The
       # `-f` test below is what bounds this; a prose mention of a non-existent path is dropped.
-      { grep -oE '(\$\{CLAUDE_PLUGIN_ROOT:-[^}]*\}/|"\$REPO_ROOT"/|\$REPO_ROOT/|"\$GIT_ROOT"/)?[A-Za-z0-9._][A-Za-z0-9._/-]*\.(sh|py|ts|mjs|cjs)' \
+      # `-a`: GNU grep suppresses matching lines in a file containing NUL, so a NUL byte
+      # would make a real tag author invisible to BOTH stages with rc=1 — indistinguishable
+      # from a clean file once `|| true` swallows it.
+      { grep -aoE '(\$\{CLAUDE_PLUGIN_ROOT:-[^}]*\}/|"\$REPO_ROOT"/|\$REPO_ROOT/|"\$GIT_ROOT"/)?[A-Za-z0-9._][A-Za-z0-9._/-]*\.(sh|py|ts|mjs|cjs)' \
         "$REPO_ROOT/$f" || true; } \
       | sed -E 's#^.*\}/##; s#^"?\$[A-Za-z_]+"?/##'
     )
   done
-  (( added == 0 )) && break
+  (( added == 0 )) && { converged=1; break; }
   depth=$((depth + 1))
 done
 closure_count=${#CLOSURE[@]}
+
+# A bound is a NON-TERMINATION backstop; it is not a budget. Exiting on the bound means the
+# closure was TRUNCATED, and a truncated closure is a smaller scan surface reported as a clean
+# one. Measured: `DEPTH_BOUND=1` drops 83 files and the guard still printed 12 passed / 0
+# failed / rc 0. The fixpoint converges at depth 4 here (added 269 -> 69 -> 11 -> 3 -> 0), so
+# the bound is not binding today — which is exactly when a silent truncation would go unnoticed.
+ck; if (( ${converged:-0} == 1 )); then
+  pass "closure reached a FIXPOINT (converged at depth $depth, $closure_count members)"
+else
+  fail "closure hit DEPTH_BOUND=$DEPTH_BOUND without converging — the scan surface is TRUNCATED, not complete"
+fi
+
+# MIN_ROOTS floors the ROOTS; nothing floored the CLOSURE, and the closure is what Stage C
+# actually walks. Set below the measured 809 for the same reason MIN_ROOTS sits below the
+# measured root count: this detects collapse, it does not pin a census.
+MIN_CLOSURE=700
+ck; if (( closure_count >= MIN_CLOSURE )); then
+  pass "closure population at or above the collapse floor ($closure_count >= $MIN_CLOSURE)"
+else
+  fail "closure collapsed to $closure_count (< MIN_CLOSURE=$MIN_CLOSURE) — the scan surface shrank"
+fi
 
 # --- Stage C: classify ----------------------------------------------------------------------
 # Spelling axis: `git` may carry any interleaving of -c k=v, -C path, --git-dir= before the verb.
@@ -353,14 +465,31 @@ declare -A EXEMPT_SEEN=()
 # blanket parity rule would silently stop detecting it. Measured: 6 of 39 first-run offenders
 # were this class, and the array-form site is not one of them.
 _in_string_literal() {
-  local line="$1" verb="$2" prefix dq sq
+  # Tracks WHICH quote is open instead of counting each quote character independently.
+  # Independent parity counts are wrong whenever one quote style appears inside the other:
+  # `[[ "$x" == *"don't"* ]] && git fetch origin` has an odd number of apostrophes, so the
+  # counting form declared a LIVE `git fetch` to be inside a string literal and dropped it.
+  # That is a false GREEN, the direction this file claims never to fail in.
+  local line="$1" verb="$2" prefix i c in_s="" in_d=""
   prefix="${line%%$verb*}"
   [[ "$prefix" == "$line" ]] && return 1
-  prefix="${prefix//\\\"/}"
-  prefix="${prefix//\\\'/}"
-  dq="${prefix//[!\"]/}"
-  sq="${prefix//[!\']/}"
-  (( ${#dq} % 2 == 1 || ${#sq} % 2 == 1 )) && return 0
+  for (( i=0; i<${#prefix}; i++ )); do
+    c="${prefix:i:1}"
+    if [[ -n "$in_s" ]]; then
+      [[ "$c" == "'" ]] && in_s=""
+    elif [[ -n "$in_d" ]]; then
+      if [[ "$c" == "\\" ]]; then (( i++ ))
+      elif [[ "$c" == '"' ]]; then in_d=""
+      fi
+    else
+      case "$c" in
+        "\\") (( i++ )) ;;
+        "'")  in_s=1 ;;
+        '"')  in_d=1 ;;
+      esac
+    fi
+  done
+  [[ -n "$in_s$in_d" ]] && return 0
   return 1
 }
 
@@ -397,6 +526,69 @@ _suppresses() {
   return 0
 }
 
+# Emit each COMMAND of a line, one per output line, splitting only at separators that are
+# NOT inside a quote, and dropping a trailing unquoted `# comment`.
+#
+# WHY THIS EXISTS. Every predicate below (`_is_in_class`, `_suppresses`, and the string-literal
+# skip) used to be evaluated against the whole LINE, and a line is not a command. Three false
+# GREENs followed, each measured before this was written:
+#   `git push origin main >/dev/null 2>&1 && git tag evil`  -> the `push` term declared the
+#       WHOLE line out of class, so the tag author was never counted.
+#   `git fetch --no-tags origin && git tag evil`            -> `_suppresses` found `--no-tags`
+#       and a `fetch` token somewhere on the line and graded the tag author SUPPRESSED.
+#   `git tag evil  # unlike git fetch --no-tags above`      -> the trailing COMMENT supplied
+#       both suppression tokens.
+# Splitting is quote-aware because a naive split would cut `echo "a && b"` in half and leave an
+# unbalanced quote, which the string-literal skip would then read as "inside a string" — a new
+# false green in place of the old one. Only `&&` separates; a lone `&` is a redirect target
+# (`2>&1`) or a background operator.
+_split_commands() {
+  local line="$1" i c in_s="" in_d="" cur="" n=${#1}
+  for (( i=0; i<n; i++ )); do
+    c="${line:i:1}"
+    if [[ -n "$in_s" ]]; then
+      [[ "$c" == "'" ]] && in_s=""
+      cur+="$c"; continue
+    fi
+    if [[ -n "$in_d" ]]; then
+      if [[ "$c" == "\\" ]]; then cur+="$c${line:i+1:1}"; (( i++ )); continue; fi
+      [[ "$c" == '"' ]] && in_d=""
+      cur+="$c"; continue
+    fi
+    case "$c" in
+      "\\") cur+="$c${line:i+1:1}"; (( i++ )); continue ;;
+      "'")  in_s=1; cur+="$c"; continue ;;
+      '"')  in_d=1; cur+="$c"; continue ;;
+      '#')  break ;;
+      '&')
+        if [[ "${line:i+1:1}" == "&" ]]; then
+          printf '%s\n' "$cur"; cur=""; (( i++ ))
+        else
+          cur+="$c"
+        fi
+        continue ;;
+      '|')
+        # Only `||` separates. A LONE `|` is a pipe — and, more importantly, it is this guard's
+        # own ledger key separator (`path|command`) and a common data delimiter. Splitting on it
+        # tore `'nonexistent/file.sh|git fetch origin ghost'` out of its enclosing quotes, so the
+        # fragment lost the string-literal protection that had covered it and graded OFFENDER.
+        # Measured: it reddened the tree. No laundering shape needs a lone-pipe split.
+        if [[ "${line:i+1:1}" == "|" ]]; then
+          printf '%s\n' "$cur"; cur=""; (( i++ ))
+        else
+          cur+="$c"
+        fi
+        continue ;;
+      ';')
+        printf '%s\n' "$cur"; cur=""
+        continue ;;
+    esac
+    cur+="$c"
+  done
+  [[ -n "$cur" ]] && printf '%s\n' "$cur"
+  return 0
+}
+
 for f in $(printf '%s\n' "${!CLOSURE[@]}" | LC_ALL=C sort); do
   _excluded "$f" && continue
   [[ -f "$REPO_ROOT/$f" ]] || continue
@@ -406,15 +598,21 @@ for f in $(printf '%s\n' "${!CLOSURE[@]}" | LC_ALL=C sort); do
     code="${hit#*:}"
     # DECLARED APPROXIMATION 1: full-line comments only.
     [[ "$code" =~ ^[[:space:]]*# ]] && continue
-    _is_in_class "$code" || continue
+    # The LEDGER key stays derived from the whole LINE, deliberately: re-keying it to the
+    # segment would orphan every existing entry at once. Two commands on one line therefore
+    # share a key, which the ledger already tolerates.
+    cmd_key="$(printf '%s' "$code" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+    ctx="$({ grep -n -B2 -E "$VERB_RE|$ARRAY_RE" "$REPO_ROOT/$f" || true; } | awk -v L="$ln" -F'[-:]' '$1>=L-2 && $1<=L')"
+    while IFS= read -r seg; do
+    [[ -n "$seg" ]] || continue
+    [[ "$seg" =~ $VERB_RE || "$seg" =~ $ARRAY_RE ]] || continue
+    _is_in_class "$seg" || continue
     # Array form is inside quotes by construction — never parity-skipped.
-    if ! [[ "$code" =~ $ARRAY_RE ]]; then
-      _in_string_literal "$code" "git" && continue
+    if ! [[ "$seg" =~ $ARRAY_RE ]]; then
+      _in_string_literal "$seg" "git" && continue
     fi
     occurrences=$((occurrences + 1))
-    ctx="$({ grep -n -B2 -E "$VERB_RE|$ARRAY_RE" "$REPO_ROOT/$f" || true; } | awk -v L="$ln" -F'[-:]' '$1>=L-2 && $1<=L')"
-    cmd_key="$(printf '%s' "$code" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
-    if _suppresses "$code"; then
+    if _suppresses "$seg"; then
       verdict=SUPPRESSED; suppressed=$((suppressed + 1))
     elif [[ "$ctx" =~ repo-boundary-tag-exempt: ]]; then
       key="$f|$cmd_key"
@@ -429,7 +627,8 @@ for f in $(printf '%s\n' "${!CLOSURE[@]}" | LC_ALL=C sort); do
       verdict=OFFENDER; offenders=$((offenders + 1))
     fi
     printf '%s:%s\t%s\t%s\t%s\n' "$f" "$ln" "$verdict" "battery-reachable" "$cmd_key" >> "$CENSUS"
-  done < <( { grep -nE "$VERB_RE|$ARRAY_RE" "$REPO_ROOT/$f" || true; } )
+    done < <(_split_commands "$code")
+  done < <( { grep -anE "$VERB_RE|$ARRAY_RE" "$REPO_ROOT/$f" || true; } )
 done
 
 # --- assertions -----------------------------------------------------------------------------
@@ -533,7 +732,7 @@ printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed
 # the binding, dies at an unbound variable under `set -u` before reaching the floor, and is
 # scored CONSTRUCTION — an UNCOVERED floor, which is the opposite of what this floor is for.
 # Measured: the earlier layout put this suite in that file's construction-failure set.
-BATTERY_TAG_MIN_ASSERTIONS=12
+BATTERY_TAG_MIN_ASSERTIONS=15
 if (( asserted < BATTERY_TAG_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_TAG_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_TAG_MIN_ASSERTIONS" >&2
   exit 1

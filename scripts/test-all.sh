@@ -177,14 +177,23 @@ if [[ "${1:-}" == "--enumerate" ]]; then
   shift
 elif [[ "${1:-}" == "--enumerate-commands" ]]; then
   # --enumerate-commands publishes the COMMAND each registration would run, not just its
-  # label. It raises the enumerate flag as WELL as its own, deliberately: nine sites in this
-  # file gate on `_ENUMERATE`, and one of them is the entire "takes no lock" property
-  # (tc_acquire is skipped, so this path cannot deadlock a gate run that already holds the
-  # lock). A mode that set only its own flag would re-acquire the lock and reintroduce the
-  # deadlock `--enumerate` exists to avoid, so the two flags are not independent and must not
-  # be made so.
+  # label. It raises the enumerate flag as WELL as its own, deliberately: SEVEN conditionals in
+  # this file gate on `_ENUMERATE` (an earlier revision of this comment said nine — it counted
+  # three assignments and itself), and one of them is the entire "takes no lock" property.
+  # The mechanism is worth stating precisely, because the obvious reading is wrong: `tc_acquire`
+  # is NOT skipped. It is called unconditionally; the gated line sets
+  # SOLEUR_DISABLE_SESSION_STATE=1, and `scripts/lib/test-contention.sh` returns early on that
+  # without serialising. The OUTCOME — this path cannot deadlock a gate run that already holds
+  # the lock — is what matters and is unchanged. A mode that set only its own flag would take
+  # the lock and reintroduce the deadlock `--enumerate` exists to avoid, so the two flags are
+  # not independent and must not be made so.
   #
-  # RECORD CONTRACT. Two record types, both TAB-delimited, one per line:
+  # RECORD CONTRACT. This mode emits two record types, both TAB-delimited, one per line. It does
+  # NOT own the whole stream: unrelated preamble lines reach stdout too (measured — the orphan
+  # reaper's `ORPHAN_SCAN valid=1 …` line, space-delimited, emitted before any registration). A
+  # consumer MUST select by record prefix rather than assume every line is a record; the guard
+  # does exactly that. An earlier revision of this comment said "two record types, one per line"
+  # full stop, which would have misled the next consumer into a strict parse.
   #   SUITE_COMMAND\t<label>\t<argv0>\t<argv1>...   — from run_suite; fields 3..N are the
   #                                                    exact argv the runner would exec.
   #   SUITE_COMMAND_DECLINED\t<label>\t<rerun>       — from skip_suite; field 3 is a HUMAN
@@ -750,8 +759,15 @@ _shard_enumerate_command_emit() {
   local a
   for a in "$label" "$@"; do
     case "$a" in
-      *"$(printf '\t')"* | *"
-"*)
+      # `$'\t'` and `$'\n'`, NOT `"$(printf '\t')"`: the command-substitution form forks once per
+      # argv element per registration. Measured END TO END from a valid repo root, three runs per
+      # arm, two trials: 9.48s/9.29s before vs 6.20s/5.70s after, i.e. ~3.1s -> ~2.0s per
+      # enumeration. (A micro-benchmark of the `case` alone shows 1.364s vs 0.009s per 2000
+      # iterations; that ratio does NOT carry to the whole mode, which is why the figure quoted
+      # here is the measured one. An earlier draft of this comment quoted the micro-benchmark and
+      # implied ~18s per battery run.) The guard enumerates twice per invocation and the mutation
+      # battery invokes it 21 times.
+      *$'\t'* | *$'\n'*)
         printf 'ERROR: --enumerate-commands cannot encode an argv element containing a TAB or NEWLINE (label=%s)\n' "$label" >&2
         exit 2
         ;;
