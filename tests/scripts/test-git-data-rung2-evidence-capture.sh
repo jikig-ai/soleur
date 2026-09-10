@@ -493,8 +493,42 @@ fi
 # The queries are RECORDED from a live run rather than re-parsed out of the SUT's source: a
 # re-parsed copy is a second pin on the same value, and a second pin goes stale silently and
 # fails GREEN — the defect class this arm exists to close.
+#
+# (#7898 §6) THE HOST IS NOW VENDOR-SHAPED AND `curl` IS SHIMMED ON PATH, and the two changes
+# are one change. betterstack-query.sh refuses any BETTERSTACK_QUERY_HOST outside
+# `*.betterstackdata.com` before it examines the SQL, so this arm's previous
+# `BETTERSTACK_QUERY_HOST=127.0.0.1` would now exit 2 at the host check — ABOVE the flag
+# parsing and archive derivation that produce the 64 this arm discriminates on. `_rejected`
+# would stay empty and the loop would pass VACUOUSLY while claiming every query is admitted;
+# only the verify-the-verifier row below would go red. So the host has to become one the pin
+# admits, and the moment it does, the loopback-refuses-fast property that kept this arm offline
+# is gone: a vendor-shaped host with real `curl` would perform a genuine outbound TLS handshake
+# at Better Stack's production endpoint carrying fabricated Basic-auth credentials.
+#
+# The shim closes that. Precedent: scripts/compound-promote.test.sh › make_mock_curl(), which
+# writes the request to a capture file. curl is betterstack-query.sh's sole egress site, so
+# shimming it means no packet leaves AND the capture file is the evidence that the admitted
+# queries actually reached the boundary — which is what makes "admitted" an observation rather
+# than an inference. That third assertion is the Guard 2 row pinning that the destination
+# refusal must not swallow the exit-64 discrimination.
 _real_q="${ROOT}/scripts/betterstack-query.sh"
 _seen="$TMP/sql-seen"; mkdir -p "$_seen"
+_shim_dir="$TMP/curl-shim"; mkdir -p "$_shim_dir"
+_curl_calls="$TMP/curl-invocations.log"
+: > "$_curl_calls"
+cat > "$_shim_dir/curl" <<SHIM
+#!/usr/bin/env bash
+# Records the destination of every invocation and emits nothing. Exit 0: this arm asks whether
+# the query is ADMITTED, not what the warehouse would answer.
+for _a in "\$@"; do
+  case "\$_a" in http://*|https://*) printf '%s\n' "\$_a" >> "$_curl_calls" ;; esac
+done
+exit 0
+SHIM
+chmod +x "$_shim_dir/curl"
+# Synthetic; satisfies the allowlist, is never resolved, and is never dialled (the shim is
+# first on PATH). NOT a seam in the script under test — the script has no host-override seam.
+_ADM_HOST="stub.betterstackdata.com"
 _adm_rows="$TMP/rows-adm.jsonl"
 row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$_adm_rows"
 cat > "$TMP/bs-record.sh" <<RECSTUB
@@ -519,8 +553,9 @@ else
   for _q in "$_seen"/*.sql; do
     # `timeout` because an ADMITTED query proceeds to curl; rejection is decided before any
     # connection, so 64 still arrives instantly. rc 124 means admitted-then-timed-out, not 64.
-    timeout 20 env BETTERSTACK_QUERY_HOST=127.0.0.1 BETTERSTACK_QUERY_USERNAME=u \
-      BETTERSTACK_QUERY_PASSWORD=p bash "$_real_q" "$(cat "$_q")" >/dev/null 2>&1
+    timeout 20 env PATH="${_shim_dir}:$PATH" BETTERSTACK_QUERY_HOST="$_ADM_HOST" \
+      BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+      bash "$_real_q" "$(cat "$_q")" >/dev/null 2>&1
     [[ $? -eq 64 ]] && _rejected="${_rejected} $(head -c 50 "$_q" | tr '\n' ' ')"
   done
   if [[ -z "$_rejected" ]]; then
@@ -531,14 +566,27 @@ else
   fi
   # Verify-the-verifier: the same check MUST reject the leading-comment shape, or the arm above
   # would pass against any implementation and pin nothing.
-  timeout 20 env BETTERSTACK_QUERY_HOST=127.0.0.1 BETTERSTACK_QUERY_USERNAME=u \
-    BETTERSTACK_QUERY_PASSWORD=p bash "$_real_q" "
+  timeout 20 env PATH="${_shim_dir}:$PATH" BETTERSTACK_QUERY_HOST="$_ADM_HOST" \
+    BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p bash "$_real_q" "
   /* __ANCHOR__ leading-comment shape */
   SELECT 1" >/dev/null 2>&1
   if [[ $? -eq 64 ]]; then
     pass "the leading-comment shape IS rejected (64) — this arm can tell the two apart"
   else
     fail "the leading-comment shape was NOT rejected — this arm cannot fail and pins nothing" "n/a" ""
+  fi
+  # (#7898 §6) THE DESTINATION REFUSAL MUST NOT SWALLOW THE EXIT-64 DISCRIMINATION. The host
+  # check sits ABOVE flag parsing, so a host the allowlist rejects makes every query exit 2 and
+  # the "all N admitted" row above pass on nothing. An admitted query proceeds to curl; a
+  # refused one never does. So a non-zero shim invocation count is the proof that the queries
+  # were admitted rather than pre-empted — assert it, or a future tightening of the pin
+  # re-breaks exactly this coupling silently.
+  _hits="$(wc -l < "$_curl_calls" | tr -d ' ')"
+  if [[ "$_hits" -ge "$_nq" ]]; then
+    pass "the admitted queries reached the egress boundary (${_hits} curl invocations) — the host pin did not pre-empt the Mode-1 check"
+  else
+    fail "only ${_hits} of ${_nq} queries reached curl: the destination refusal pre-empts the exit-64 check, so the admissibility row above passed vacuously" \
+      ">=${_nq}" "$_hits"
   fi
 fi
 
@@ -1245,7 +1293,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=74  # 73 + the instrument self-test above
+_FLOOR=75  # 73 + the instrument self-test + the #7898 §6 egress-reachability row
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
