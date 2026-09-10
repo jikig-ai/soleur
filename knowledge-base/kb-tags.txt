@@ -1144,6 +1144,7 @@ design-tooling
 design-tooling/mcp-tools
 design-tools
 desktop-support
+destroy-gate
 destroy-guard
 destructive-branch
 destructive-migration
@@ -2760,6 +2761,7 @@ primitive
 prior-art
 prior-art-discovery
 prior-decision-recovery
+privacy
 private-documents
 private-network
 private_key

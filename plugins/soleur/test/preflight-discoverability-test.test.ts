@@ -2266,7 +2266,35 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //
   // The 10 that remains is #7873's and #7829's, untouched by this PR.
   //
-  const BASELINE_DECLARED_PROBES = 10;
+  // 10 -> 11 on 2026-09-10 (#8017/#8015/#8013). ELEVENTH reviewable diff line.
+  //
+  // Declaring plan: `2026-09-10-fix-inngest-probe-schema-8-mount-devid-plan.md`.
+  // Confirmed intentional on the gate's own three counts:
+  //   1. PLACEMENT - a correctly-indented two-space child of the `discoverability_test:`
+  //      sub-block, verified by reading the block rather than by grep (a bare grep also hits
+  //      the prose in the plan that INTRODUCED the field, which declares nothing).
+  //   2. TRUTH - the probe reads the Better Stack Logs ClickHouse warehouse via
+  //      `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh`, needing
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. Not asserted: the query was EXECUTED
+  //      during this PR and returned the live row (it is what established that #8013's ULID
+  //      is currently in the warehouse). A warehouse query, not a host login, so
+  //      hr-no-ssh-fallback-in-runbooks is satisfied.
+  //   3. NO SUBSTITUTE - the dedicated inngest host (10.0.1.40) is deny-all-public by policy,
+  //      and the property under test is "THIS host emitted a row carrying probe_schema=8 with
+  //      data_mount_devid and registry_fns". That is unverifiable from outside the warehouse;
+  //      an unauthenticated probe could at most show the host is up, a different claim.
+  //
+  // AND THE WAIVER'S OWN HAZARD FIRED HERE, which is worth recording rather than just
+  // baselining past. Declaring this field makes preflight Check 10 SKIP WITHOUT EXECUTING, so
+  // the command is grimly unverified by construction - and the plan's first version grepped
+  // `SOLEUR_INNGEST_SERVER_PROBE`, which returns ZERO rows against the live host, because that
+  // host reports vector_active=inactive and its probe reaches the warehouse through the
+  // phone-home fallback under a DIFFERENT marker. rc=0, empty stderr, indistinguishable from
+  // "the host is dark". It was caught only by running it. The command was corrected to grep
+  // the stage (`inngest-server-probe`) and re-measured. This is the #7873 shape the comment
+  // above describes: a `credentials_required` that is TRUE and still lets a wrong command
+  // through, because the waiver removes the only thing that would have executed it.
+  const BASELINE_DECLARED_PROBES = 11;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
