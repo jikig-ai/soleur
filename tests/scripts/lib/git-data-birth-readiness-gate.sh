@@ -596,6 +596,24 @@ git_data_rung2_user_data_sha256() {
 # and anything outside this list refuses. The list is CLOSED — an unrecognised name refuses
 # too, because a typo'd or newly-introduced var is exactly where "not on a deny list" and
 # "safe" come apart.
+#
+# THE THREE PUBKEYS ARE NOT AN IDENTITY DIVERGENCE — THEY ARE A CAPABILITY ONE (#8009).
+#
+# The other five members name WHICH host, WHICH volume, WHICH credential — they select an
+# instance and say nothing about what the host is authorized to do. git_transport_pubkey,
+# git_provision_pubkey and git_remove_pubkey are different in kind: together they ARE the
+# host's SSH authorization map, deciding which identity may invoke the Article 17 erasure
+# path. Their presence here is still correct — rung2-rehearsal/rehearsal.tf sets all three
+# to one tls_private_key, so the rehearsal genuinely does diverge on them and the evidence
+# must declare it — but the reason is not the reason the other five are here.
+#
+# The consequence is what matters, and it is why this list ALONE is not enough. Because the
+# rehearsal collapses the three deliberately, a production edit that collapses them is a
+# NO-OP there: boot_complete still emits, no fatal appears, the evidence still records PASS,
+# and RUNG2_TEMPLATE_SHA256 moves so the file even looks freshly re-rehearsed. Allowing the
+# divergence is correct; inferring from it that the divergence is harmless is not. That
+# inference is closed by git_data_authorization_map_gate, a STATIC assertion over the
+# production root which needs no rehearsal to run — see the head of this file.
 GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey"
 
 # Usage:  git_data_rung2_rehearsal_gate <cloud-init-git-data.yml> [evidence-file]
@@ -754,7 +772,7 @@ HOLD
       [[ "$_tok" == "$_a" ]] && { _allowed=1; break; }
     done
     if [[ "$_allowed" -eq 0 ]]; then
-      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not an identity-shaped render var. The evidence hash binds the template and the nine payloads; it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
+      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not a declared-divergent render var. The permitted set is not homogeneous: five members are identity-shaped (they name WHICH host, volume or credential), while the three pubkeys are a CAPABILITY divergence — they are the host's SSH authorization map, and the rehearsal collapses them onto one key by design (#8009). The evidence hash binds the template and the nine payloads; it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
       return 1
     fi
   done
