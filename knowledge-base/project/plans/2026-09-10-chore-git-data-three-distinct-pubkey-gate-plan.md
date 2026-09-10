@@ -13,6 +13,48 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-10
+**Reviewers:** CTO, CLO, correctness, simplicity, spec-flow, architecture, test-design, security
+**Halt gates passed:** User-Brand Impact (4.6), Observability (4.7), PAT-shaped variable (4.8),
+UI-wireframe (4.9, skipped — no UI surface), Encryption Posture (4.10, skipped — no new store),
+Guard Contract (4.11, lint green)
+
+### Key improvements over the first draft
+
+1. **The assembly grew from four links to five.** The private-half `doppler_secret` distribution — the
+   half the application actually holds — was absent. A one-line edit there inverts the authorization
+   map while every enumerated link stays byte-canonical and green. The first draft would have shipped
+   a guard certifying something other than what its own HOLD message claims: the exact defect class
+   #8009 exists to fix, reproduced inside the fix for #8009.
+2. **The unit changed from one file to the Terraform root directory.** `locals`, `resource` and
+   `module` blocks merge across every `.tf` in a root, so a single-file gate is defeated by adding a
+   sibling file. Two further structural bypasses were added to the matrix: `*override.tf` merging, and
+   a second module instantiation.
+3. **Cardinality became exact.** Every mutation in the first draft was a substitution; none was a
+   deletion. Deleting one `command=` line leaves two slots holding two distinct keys — a
+   distinctness-only guard goes green on a host that lost a forced-command boundary.
+4. **The disclosure moved out of the gated job.** An environment-gated job is held before its first
+   step runs, so the in-job step executed *after* the approval click. It now runs in a preceding
+   un-gated job, so it renders on the run page while the gated job waits.
+5. **The gate gained the `git-data-host-replace` path.** After birth, a replace is the *only* route by
+   which a re-rendered `authorized_keys` block reaches the host — and that job has no human approver.
+6. **~40% of the assembly was cut as ceremony.** Five independent per-link assertions collapsed to one
+   resolution walk; a rehearsal counter-assertion was cut entirely, taking a second suite, a second
+   anti-vacuity convention, two ACs and a sharp edge with it.
+
+### Claims the review falsified, corrected in place rather than quietly patched
+
+- The justification phrase appears at **one** site in the gate library, not two — and its most
+  explicit copy lives in a **hash-bound** file that must not be touched (tracked as F6).
+- The suite's existing `_a_tree` / `_a_abort` fixture has none of links 3–5 and is hardwired to a
+  different gate function; a new fixture and helper pair are required, and that is the real cost of
+  Phase 1.
+- `c4-count-parity.test.sh` lives under `plugins/soleur/test/`, not `apps/web-platform/test/` — which
+  also falsified a premise row claiming all cited paths had been checked. The row is now scope-narrowed
+  and the correction recorded.
+
 ## Overview
 
 Two conditions gate the git-data host birth dispatch, and both must land in one PR.
@@ -511,36 +553,56 @@ legible at the moment of approval is a disclosure change, not a posture change.
 
 ```yaml
 liveness_signal:
-  what: the birth dispatch job's distinctness-gate step, and the suite arm count in CI
-  cadence: on every dispatch of git-data-host-create, and on every CI run of scripts/test-all.sh
-  alert_target: the dispatch job fails closed and the GitHub Actions run goes red
-  configured_in: .github/workflows/apply-web-platform-infra.yml, scripts/test-all.sh (the `run_suite "tests/scripts/git-data-birth-readiness-gate"` line)
+  what: the authorization-map gate's verdict — as a suite arm on every PR, and as an interlock step on
+    both the birth and replace dispatch paths
+  cadence: every pull request (ci.yml runs scripts/test-all.sh scripts, unfiltered), plus every
+    dispatch of git-data-host-create and git-data-host-replace
+  alert_target: the GitHub Actions run goes red; on a dispatch the job fails closed before terraform init
+  configured_in: .github/workflows/ci.yml (the `bash scripts/test-all.sh scripts` step),
+    scripts/test-all.sh (the `run_suite "tests/scripts/git-data-birth-readiness-gate"` line), and
+    .github/workflows/apply-web-platform-infra.yml (both dispatch jobs)
 error_reporting:
-  destination: GitHub Actions annotation (::error::) on the dispatch path; suite failure text plus a
+  destination: GitHub Actions annotation (::error::) on the dispatch paths; suite failure text plus a
     non-zero exit on the CI path
   fail_loud: true — the gate returns non-zero and the job stops before terraform init; the suite exits
     non-zero on any recorded failure and separately on the anti-vacuity floor
 failure_modes:
   - mode: the three forced-command slots collapse onto fewer than three distinct keys
-    detection: git_data_pubkey_distinctness_gate refuses at dispatch, naming the link and the pair
-    alert_route: the dispatch job fails; nothing is planned or created
-  - mode: the guard is present but vacuous (extraction yields zero pairs)
-    detection: the gate ABORTs on a zero-pair extraction (M7); the suite pins that arm
+    detection: git_data_authorization_map_distinct_gate HOLDs, naming the link that collapsed
+    alert_route: PR red at review; on a dispatch the job fails and nothing is planned or created
+  - mode: the private halves are misrouted — a doppler_secret publishes the wrong key (links 1-4 stay
+      byte-canonical, so this is invisible to every public-half check)
+    detection: the link-5 bijection predicate HOLDs (M12/M13)
+    alert_route: PR red at review; dispatch refuses
+  - mode: a collapse arrives via git-data-host-replace, the only path a re-render can travel after
+      birth, and the one with no human approver
+    detection: the same gate wired as an interlock in that job (D9)
+    alert_route: the replace job fails closed
+  - mode: the guard is present but vacuous — extraction yields zero or fewer pairs than slots
+    detection: the gate ABORTs rather than reporting agreement (M7, and the partial-extraction row)
     alert_route: CI red on the suite; dispatch refuses
+  - mode: the guard is bypassed structurally — an *override.tf, a second module instantiation, or a
+      pubkey local moved to a sibling .tf in the same root
+    detection: the override ABORT (M14), the single-module assertion (M15), and root-directory
+      scoping rather than single-file scoping
+    alert_route: CI red; dispatch refuses
   - mode: arms are deleted or the suite exits early
-    detection: the anti-vacuity floor, raised to match the new arm count
+    detection: the anti-vacuity floor, raised by exactly the number of new verdicts
     alert_route: CI red, naming the floor and the observed count
-  - mode: the production root becomes unreadable or moves
-    detection: the gate ABORTs rather than skipping (M8)
-    alert_route: the dispatch job fails closed
+logs:
+  where: GitHub Actions run logs — the suite's per-arm ok/FAIL lines on the CI path, and the
+    interlock step's ::error:: annotation plus the gate's own HOLD/ABORT text on the dispatch paths.
+    No host-side logging surface exists or is needed: the gate is static and never contacts a host.
+  retention: GitHub's default Actions log retention (90 days); the verdict is also reproducible on
+    demand from any checkout by running the suite, so the log is a convenience rather than the record
 discoverability_test:
   command: bash tests/scripts/test-git-data-birth-readiness-gate.sh
   expected_output: a final "=== N passed, 0 failed ===" line with N equal to the raised floor, and an
     "ok   anti-vacuity floor" line naming that same floor
 ```
 
-No credentials are required: every arm is static and runs against copied trees in a temp directory.
-There is no SSH anywhere in the verification path.
+No credentials are required: every arm is static, runs against copied trees in a temp directory or the
+committed production root, and there is no SSH anywhere in the verification path.
 
 ## Decisions
 
@@ -1219,6 +1281,25 @@ Beyond the mutation matrix, the end-to-end scenarios worth naming:
 | Adding checklist item 10 silently blocks #7025 | Medium | Its disposition row lands in the same amendment (AC29) |
 | AC26 and AC27 contradict each other on `-target=` | Medium | AC27b uses `-U0` and a path scope |
 | Sibling worktrees contend on `/var/tmp`; `test-all.sh` rc=4 | Low | Report skipped-for-contention; never force |
+
+### Precedent Diff (deepen-plan Phase 4.4)
+
+Every pattern-bound shape this plan prescribes has a sibling precedent in the repo. None is novel, and
+each is adopted rather than reinvented:
+
+| Shape prescribed | Precedent adopted | Divergence, and why |
+|---|---|---|
+| A fail-closed gate function sourced by a dispatch job | `git_data_birth_readiness_gate` and `git_data_rung2_rehearsal_gate` in the same library | None. Same ABORT-on-missing-arg contract, same `dirname`-derived sibling paths, same one-interlock-one-function shape the dispatch job's own comment argues for |
+| Predicate assertions over `git-data.tf` | `git-data-luks.test.sh`'s `assert_holds` / `assert_mutation` | **Diverges:** those take one file and one sed; this gate reads a root directory plus a template and a module, so the helper needs a copy-then-sed tree wrapper. Recorded because the divergence is real work, not a detail |
+| A live-tree arm in a fixtures-only suite | Arm A1, which calls `git_data_birth_readiness_gate` on the real template and makes a missing live file a loud failure | None. The suite header rule is amended with a stated justification exactly as A1's was |
+| An itemised anti-vacuity floor raise | The `69 -> 77` and `77 -> 80` blocks in the same suite | None. Same itemised form; rows sum to the delta, counted in verdicts |
+| A third interlock step in the dispatch job | The rung-2 interlock step, whose comment states the separate-step-separate-function principle verbatim | None |
+| An un-gated job preceding an environment-gated one | The `apply` job's `needs: preflight`, where `preflight` declares no `environment:` | None. Same mechanism, same file |
+| ADR checklist amendment by append | ADR-149 item 9, annotated "added by #6982" | None, plus a disposition row so #7025 is not silently blocked |
+
+**No scheduled work is introduced**, so the Inngest-vs-GitHub-Actions cron precedent (ADR-033) does not
+apply. **No new Terraform resource is introduced**, so the `-target=` allow-list precedent does not
+apply — and the plan asserts that positively (AC27a).
 
 ## Sharp Edges
 
