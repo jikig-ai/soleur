@@ -18,6 +18,13 @@ concurrency:
   group: scheduled-machinery-drain
   cancel-in-progress: false
 
+# THE SINGLE NAMED CONSTANT. The floor and its waiver are both computed from
+# this one value, and `plugins/soleur/test/machinery-drain-floor.test.sh`
+# DERIVES it from this file rather than restating it -- a second copy would be a
+# second pin on one fact, which is the drift class this PR exists to remove.
+env:
+  MACHINERY_DRAIN_CLOSING_FLOOR: 20
+
 jobs:
   measure-and-drain:
     runs-on: ubuntu-latest
@@ -42,6 +49,57 @@ jobs:
             echo 'SOLEUR_EOF_REPORT'
           } >> "$GITHUB_OUTPUT"
           exit "$rc"
+
+      # Count the candidate pool BEFORE the drain. `closed` is derived as a
+      # delta rather than self-reported by the agent: a runner that reports its
+      # own success is the shape this PR exists to remove.
+      - name: Count machinery candidates (pre-drain)
+        id: pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          echo "candidates=$n" >> "$GITHUB_OUTPUT"
+          echo "candidate pool: $n"
+
+      - name: Drain the machinery ledger
+        id: drain
+        continue-on-error: true
+        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: '/soleur:drain-labeled-backlog --label meta/machinery'
+          # Explicit model pin (ADR-053) -- an unpinned model drifts with action
+          # releases, which is an unbounded per-run spend surface on a weekly cron.
+          claude_args: '--model claude-sonnet-5'
+
+      # THE FLOOR, and it is gated on candidate SUPPLY. Without that arm the
+      # floor is unsatisfiable-by-construction the moment the backlog is
+      # actually drained -- a scheduled monitor whose steady state on success is
+      # RED, which trains the operator to ignore it. That is the exact failure
+      # this PR exists to remove, so reproducing it inside the fix would be
+      # self-defeating. The waiver is REPORTED, never silent.
+      - name: Enforce the closing floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ steps.pre.outputs.candidates }}
+          FLOOR: ${{ env.MACHINERY_DRAIN_CLOSING_FLOOR }}
+        run: |
+          set -euo pipefail
+          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          closed=$(( BEFORE - after ))
+          [ "$closed" -lt 0 ] && closed=0
+          echo "before=$BEFORE after=$after closed=$closed floor=$FLOOR"
+          if [ "$BEFORE" -lt "$FLOOR" ]; then
+            echo "closed=$closed of $BEFORE candidates (floor waived: pool < floor)"
+            exit 0
+          fi
+          if [ "$closed" -lt "$FLOOR" ]; then
+            echo "::error::machinery drain closed $closed, below the floor of $FLOOR (pool was $BEFORE). Per-PR net-zero holds the backlog at its current size; this cadence is the only lever that reduces it."
+            exit 1
+          fi
+          echo "closed=$closed (>= floor $FLOOR)"
 
       # FIND-OR-UPDATE exactly one standing issue. A measurement that files a
       # fresh issue every week is the defect reproducing itself inside its own

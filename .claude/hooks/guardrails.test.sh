@@ -657,6 +657,33 @@ Fix-Size: 900 lines / 40 files\" $MS"
 cp "$TAXO_BAK" "$TAXO"
 rm -f "$TAXO_BAK"
 
+# --- Escape rows (found by feeding the PRISTINE guard corpora it must refuse).
+# Neither of these is reachable by mutating the guard: it was working exactly as
+# written, so every mutation row stayed green. They took an escape corpus.
+
+# E1 — the machinery exit must read a REAL --label token. Merely NAMING the flag
+# inside a quoted --body previously satisfied the free exit.
+assert "filing-justification: --label named in PROSE does not open the machinery exit" "deny" \
+  "gh issue create --title t --body \"we should use --label meta/machinery here\" $MS"
+
+# E1 control — a genuine flag still opens it, so the fix did not just deny more.
+assert "filing-justification: a REAL --label token still opens the machinery exit" "<none>" \
+  "gh issue create --title t --body \"b\" --label meta/machinery $MS"
+
+# E3 — two Fix-Size lines is MALFORMED. bash =~ binds the FIRST match, so a large
+# size first and the honest small size second evaded the threshold refusal.
+assert "filing-justification: two Fix-Size lines denies (large first, small last)" "deny" \
+  "gh issue create --title t --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 900 lines / 40 files
+Fix-Size: 19 lines / 1 file\" $MS"
+
+# E3 control — the small-first ordering still denies, and a single large size
+# still passes, so the fix discriminates rather than blanket-denying.
+assert "filing-justification: two Fix-Size lines denies (small first, large last)" "deny" \
+  "gh issue create --title t --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 19 lines / 1 file
+Fix-Size: 900 lines / 40 files\" $MS"
+
 # Row H2 — the restore actually happened. Without this, H1 could leave the
 # taxonomy empty and every later row would deny for the wrong reason while
 # still reporting the colour the matrix expects.
@@ -675,9 +702,9 @@ Fix-Size: 900 lines / 40 files\" $MS"
 # rather than through the pass/fail helpers it exists to backstop -- a floor
 # that calls fail() is disarmed by the same edit that disarms fail().
 # Derived, not guessed: 65 rows on main at the merge base + 19 added by this
-# change = 84. Stated as the sum so a sibling PR that adds a row makes this
+# change + 4 escape rows found at review = 88. Stated as the sum so a sibling PR that adds a row makes this
 # stale LOUDLY (the floor trips) rather than silently.
-MIN_ASSERTIONS=84
+MIN_ASSERTIONS=88
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

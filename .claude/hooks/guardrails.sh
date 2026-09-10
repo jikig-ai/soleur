@@ -523,9 +523,28 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
     # EXIT 1 — the machinery ledger. A finding about Soleur own guards, gates,
     # ledgers or probes does not need a user-visible consequence, because by
     # construction it has none. Free, always available, honest.
-    if grep -qE -- '--label[=[:space:]]+["'"'"']?meta/machinery' <<<"$COMMAND"; then
-      _fj_pass=1
-    fi
+    #
+    # READ A REAL FLAG TOKEN, NOT $COMMAND PROSE. An earlier form grepped the
+    # whole command for `--label[= ]meta/machinery`, which is satisfied by the
+    # string appearing inside a quoted --body -- so merely MENTIONING the flag
+    # in prose opened the free exit. That is the bare-token class
+    # (cq-assert-anchor-not-bare-token) inside the gate built to enforce it, and
+    # no mutation of the guard can surface it because the guard was working
+    # exactly as written; it took an escape corpus. Reuse the quote-aware
+    # `_repo_toks` tokenizer already computed above: `xargs -n1` honours shell
+    # quoting, so a --label inside a quoted value stays inside ONE token and is
+    # never mistaken for a flag.
+    _fj_li=0
+    while (( _fj_li < ${#_repo_toks[@]} )); do
+      _fj_t="${_repo_toks[$_fj_li]}"; _fj_v=""
+      case "$_fj_t" in
+        --label|-l) _fj_v="${_repo_toks[$((_fj_li + 1))]:-}" ;;
+        --label=*)  _fj_v="${_fj_t#--label=}" ;;
+        -l=*)       _fj_v="${_fj_t#-l=}" ;;
+      esac
+      [[ "$_fj_v" == "meta/machinery" ]] && _fj_pass=1
+      _fj_li=$((_fj_li + 1))
+    done
 
     # EXIT 3 — a rule MANDATES this filing. Same closed, human-gated vocabulary
     # ADR-155 established, which is what makes the mandating gate and this
@@ -547,7 +566,16 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
     _fj_n=""; _fj_m=""
     if [[ "$_fj_pass" == 0 ]]; then
       [[ "$COMMAND" =~ User-Impact:[[:space:]]*([^$'\n']+) ]] && _fj_ui="${BASH_REMATCH[1]}"
-      if [[ "$COMMAND" =~ Fix-Size:[[:space:]]*([0-9]+)[[:space:]]*lines?[[:space:]]*/[[:space:]]*([0-9]+)[[:space:]]*files? ]]; then
+      # EXACTLY ONE Fix-Size, or the filing is malformed. bash `=~` binds the
+      # FIRST match, so with two Fix-Size lines the author chooses which one the
+      # gate reads: a large size first and the honest small size second evaded
+      # the inline-threshold refusal entirely, while small-first correctly
+      # denied -- which is precisely why it survived every fixture. Rather than
+      # picking a side (last-wins is equally arbitrary and equally gameable),
+      # refuse the ambiguity: one measured size, or none.
+      _fj_fs_count="$(grep -cE 'Fix-Size:[[:space:]]*[0-9]+[[:space:]]*lines?[[:space:]]*/[[:space:]]*[0-9]+[[:space:]]*files?' <<<"$COMMAND" || true)"
+      if [[ "$_fj_fs_count" == "1" ]] \
+         && [[ "$COMMAND" =~ Fix-Size:[[:space:]]*([0-9]+)[[:space:]]*lines?[[:space:]]*/[[:space:]]*([0-9]+)[[:space:]]*files? ]]; then
         _fj_n="${BASH_REMATCH[1]}"; _fj_m="${BASH_REMATCH[2]}"
       fi
       if [[ -n "$_fj_ui" ]] && grep -qiE -- "\\b(${_fj_re})\\b" <<<"$_fj_ui" \
