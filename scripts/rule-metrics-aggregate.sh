@@ -34,12 +34,50 @@ source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
 REPO_ROOT="${INCIDENTS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 AGENTS_MD="$REPO_ROOT/AGENTS.md"
-INCIDENTS="$REPO_ROOT/.claude/.rule-incidents.jsonl"
 OUT="$REPO_ROOT/knowledge-base/project/rule-metrics.json"
+
+# Incidents live in the SHARED `.claude/` beside the git COMMON dir, never in a
+# worktree: `.claude/.rule-incidents*` is gitignored (.gitignore:37), so a
+# worktree copy CANNOT exist, while compound -- the authoritative local producer
+# (ADR-091) -- runs from a feature worktree BY DESIGN (its branch-safety gate
+# forbids main). Resolving this from $REPO_ROOT therefore read an absent file on
+# every real run and reported EVERY rule unused, which is how
+# `rules_unused_over_8w` reached 105/105 on origin/main with 0 rules at hits>0.
+#
+# The fallback is gated on INCIDENTS_REPO_ROOT being UNSET so it cannot reach
+# past a caller-supplied root: every test seeds that variable with a temp root,
+# and a test exercising the empty-log path must keep seeing an empty log.
+INCIDENTS_DIR="$REPO_ROOT/.claude"
+if [[ -z "${INCIDENTS_REPO_ROOT:-}" && ! -f "$INCIDENTS_DIR/.rule-incidents.jsonl" ]]; then
+  _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$_common_dir" ]]; then
+    case "$_common_dir" in /*) : ;; *) _common_dir="$REPO_ROOT/$_common_dir" ;; esac
+    _shared_root="$(cd "$_common_dir/.." 2>/dev/null && pwd || true)"
+    if [[ -n "$_shared_root" && -f "$_shared_root/.claude/.rule-incidents.jsonl" ]]; then
+      INCIDENTS_DIR="$_shared_root/.claude"
+    fi
+  fi
+fi
+INCIDENTS="$INCIDENTS_DIR/.rule-incidents.jsonl"
+
+# Absence must be LOUD. A missing log and a log recording zero hits produce the
+# same all-unused summary, and the silent one reads as a finding ("prune these
+# 105 rules") rather than as the null measurement it is.
+if [[ ! -f "$INCIDENTS" ]]; then
+  echo "SOLEUR_RULE_METRICS_NO_INCIDENTS dir=$INCIDENTS_DIR reason=absent — summary is a NULL reading, not evidence that rules are unused" >&2
+fi
 
 [[ -f "$AGENTS_MD" ]] || { echo "ERROR: $AGENTS_MD not found" >&2; exit 2; }
 mkdir -p "$(dirname "$OUT")"
 
+# READING `rules_unused_over_8w` (load-bearing caveat). The incidents log records
+# ENFORCEMENT events -- warn / deny / bypass / applied / degraded. A rule that is
+# simply OBEYED emits nothing, and a rule with no hook and no explicit
+# SOLEUR_RULE_APPLIED emit can never register a hit at all. So a zero count means
+# "no enforcement event in the window", NOT "unused" and NOT "safe to retire".
+# Retiring on this number alone would prune the best-obeyed rules first. Treat it
+# as a shortlist to INVESTIGATE, never as evidence of disuse (#6794).
+#
 # Threshold: rules with no hits in N weeks considered "unused" (default 8).
 UNUSED_WEEKS=$UNUSED_WEEKS_DEFAULT
 UNUSED_CUTOFF_EPOCH=$(( $(date -u +%s) - UNUSED_WEEKS * 7 * 86400 ))
@@ -95,7 +133,7 @@ fi
 INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
 : > "$INCIDENTS_MERGED"
 [[ -s "$INCIDENTS" ]] && cat "$INCIDENTS" >> "$INCIDENTS_MERGED"
-for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
+for _gz in "$INCIDENTS_DIR"/.rule-incidents-*.jsonl.gz; do
   [[ -e "$_gz" ]] || continue
   zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
 done
@@ -265,11 +303,25 @@ jq empty < "$stage_enriched_file" >/dev/null 2>&1 || { echo "ERROR: stage B (enr
 # $drops and $cutoff and $schema stay on argv: drops is keyed by a closed error
 # enum (a handful of keys) and the other two are scalars — none can approach
 # MAX_ARG_STRLEN. $enriched and $counts are the ones that scale with the rule set.
+# Retired rule ids are NOT orphans. An incident logged while a rule was active
+# keeps that rule_id forever, so every retirement would otherwise fail the gate
+# retroactively — and the retired ids are precisely the ones a long log is most
+# likely to carry. Sourced from the file that already owns the list, so this
+# stays correct as rules retire (cq-rule-ids-are-immutable).
+retired_file="$_tmpdir/retired-ids.json"
+if [[ -f "$REPO_ROOT/scripts/retired-rule-ids.txt" ]]; then
+  grep -oE '^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+' "$REPO_ROOT/scripts/retired-rule-ids.txt" 2>/dev/null \
+    | jq -R . | jq -s . > "$retired_file" 2>/dev/null || echo '[]' > "$retired_file"
+else
+  echo '[]' > "$retired_file"
+fi
+
 report=$(jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg generated_at "$GENERATED_AT" \
   --rawfile enriched_json "$stage_enriched_file" \
   --rawfile counts_json "$counts_file" \
+  --rawfile retired_json "$retired_file" \
   --argjson drops "$drops_counts_json" \
   --argjson cutoff "$UNUSED_CUTOFF_EPOCH" '
     ($enriched_json | fromjson) as $enriched
@@ -355,7 +407,37 @@ report=$(jq -n \
         # LOAD-BEARING PAIR: this exclusion alone would DELETE the only surface
         # a counts-only rule_id has (orphan_rule_ids). summary.hook_input_fault_count
         # below is the replacement surface and must not be removed independently.
-        | map(select(startswith("hook-input-") | not))) as $orphan_ids
+        | map(select(startswith("hook-input-") | not))
+        # A retired rule id is not an orphan -- see $retired_json above. This is
+        # generic on purpose: an incident logged while a rule was active keeps
+        # that rule_id forever, so without this EVERY retirement would fail the
+        # gate retroactively. It does not widen the gate -- a live-but-untagged
+        # id still surfaces.
+        | map(select(. as $id | (($retired_json | fromjson) | index($id)) | not))
+        # Hook-canonical emitter families (tier-gated OUT of AGENTS.md: the rule
+        # body lives in each hook header, and B_ALWAYS has no room for a core
+        # tag per cq-agents-md-tier-gate). Declared EXPLICITLY rather than via a
+        # blanket "not an hr|wg|cq|rf|pdr|cm- prefix" backstop, because tests
+        # T21/T25 pin that an unrecognised id MUST still fail the run -- the
+        # broad gate is the deliberate no-silent-data-loss design.
+        #
+        # This batch was invisible until the incidents-path fix above: the log
+        # was being read from a worktree, where `.claude/.rule-incidents*` is
+        # gitignored and can never exist, so the gate had nothing to judge and
+        # 24 emitter families queued up behind the silence.
+        | map(select(startswith("guardrails-") | not))
+        | map(select(startswith("prod-write-defer-") | not))
+        | map(select(
+            . != "adr-033-inngest-cron-canonical"
+            and . != "brand-hex-commit-gate"
+            and . != "durable-reminder-prefer-inngest"
+            and . != "encryption-posture-design-time-default"
+            and . != "git-commit-secret-scan"
+            and . != "kb-domain-allowlist-guard"
+            and . != "post-dispatch-watch-gate"
+            and . != "pre-ask-technical-fork-gate"
+            and . != "pre-merge-auto-close-scan"
+            and . != "skill-security-scan"))) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.
