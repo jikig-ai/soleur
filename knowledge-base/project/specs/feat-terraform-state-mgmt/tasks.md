@@ -8,7 +8,7 @@
 
 - [x] 1.1 Fix wrangler auth — created new R2-scoped API token via Playwright
 - [x] 1.2 Create R2 bucket via Cloudflare API (R2 subscription activated first)
-- [x] 1.3 Enable bucket versioning — deferred (R2 versioning API TBD)
+- [x] 1.3 ~~Enable bucket versioning~~ — **closed 2026-09-09 (#7836): not possible, not merely deferred.** R2 does not implement the S3 object-versioning API (`list-object-versions` rc=254 `NotImplemented`; control `list-objects-v2` rc=0). This was marked done for work that was never done and could not be done. Corresponding FR2 withdrawn in `spec.md`; capability tracked at #7992.
 - [x] 1.4 Create scoped R2 Account API token (Object Read & Write on `soleur-terraform-state`)
 - [x] 1.5 Store R2 credentials in Doppler `prd_terraform` config (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
 
