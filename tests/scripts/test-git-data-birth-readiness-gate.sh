@@ -1161,6 +1161,37 @@ _am() {
   fi
 }
 
+
+# ── awk-portability arm: every DYNAMIC awk regex must survive gawk ───────────────────
+# `_git_data_hcl_block` passes its 2nd argument to awk as `$0 ~ open_re`. The two awk
+# implementations disagree about `\(`: mawk keeps it as a literal paren, gawk STRIPS the
+# backslash and then cannot compile the bare `(` (fatal: Unmatched `(`). Ubuntu ships mawk,
+# GitHub runners ship gawk -- so this class is invisible locally and ABORTs the gate on every
+# CI run, including the birth-dispatch interlock, which could then never RELEASE.
+#
+# Emulate gawk rather than trust a spelling: strip the backslash exactly as gawk does, then
+# require the result to still COMPILE. `grep -E` exits 2 on an invalid regex and 1 on a valid
+# regex that simply does not match, so the exit code separates the two.
+_awk_portability_arm() {
+  local _pat _stripped _rc _checked=0
+  while IFS= read -r _pat; do
+    [[ -n "$_pat" ]] || continue
+    _checked=$((_checked + 1))
+    _stripped="${_pat//\\(/(}"; _stripped="${_stripped//\\)/)}"
+    grep -E "$_stripped" /dev/null >/dev/null 2>&1; _rc=$?
+    if [[ "$_rc" -eq 2 ]]; then
+      fail "awk-portability: '$_pat' is fatal under gawk (strips to '$_stripped', which will not compile). Use a bracket expression such as [(] instead of \\(." "$_rc" ""
+    else
+      pass "awk-portability: '$_pat' compiles after gawk strips its backslashes"
+    fi
+  done < <(grep -oE "_git_data_hcl_block \"[^\"]*\" '[^']*'" "$GATE" | sed "s/.*'\\(.*\\)'/\\1/")
+  if [[ "$_checked" -eq 0 ]]; then
+    printf '  FAIL awk-portability arm found NO _git_data_hcl_block call sites — the extractor is broken, not the gate clean.\n'
+    exit 1
+  fi
+}
+_awk_portability_arm
+
 _am_self_test
 
 # ── B1 — THE CONTROL. Every arm below is void without it. ────────────────────────────
@@ -1455,7 +1486,7 @@ _am "B36: a base64 authorized_keys ABORTS — the extractor must not latch onto 
 #   ----
 #    23
 #
-# RAISED 103 -> 116 (#8009 review), ITEMISED — every row a MEASURED rc=0 escape before it
+# RAISED 103 -> 116 (#8009 review) -> 118 (the awk-portability arm), ITEMISED — every row a MEASURED rc=0 escape before it
 # was closed, plus the helper self-test. The first battery had 26 rows and killed all 26
 # and could see NONE of these: it perturbed the SUT toward obviously-broken spellings,
 # while every row here is an innocuous-looking SIBLING declaration masking a real defect.
@@ -1469,20 +1500,23 @@ _am "B36: a base64 authorized_keys ABORTS — the extractor must not latch onto 
 #     3  B29/B30/B31 scope: the server block, its existence, and the rendered template
 #     3  B32/B33/B34 population growth: a 2nd server, a stray publisher, a *.tf.json
 #     2  B35/B36   the template: runcmd as a second writer, and a non-literal content form
+#     2  awk-portability: one arm per _git_data_hcl_block call site, asserting the
+#                     pattern still COMPILES after gawk strips its backslashes (the
+#                     mawk-vs-gawk split that made this gate ABORT on every CI run)
 #   ----
-#    13
+#    15
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 116 ]]; then
+if [[ "$_ran" -lt 118 ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 116")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 116. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 118")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 118. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 116)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 118)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

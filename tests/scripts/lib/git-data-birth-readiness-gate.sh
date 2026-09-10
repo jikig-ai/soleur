@@ -1073,7 +1073,14 @@ git_data_authorization_map_gate() {
   fi
 
   local _tf_map
-  _tf_map="$(_git_data_hcl_block "$_mod_src" 'templatefile\(')"
+  # `[(]`, NOT `\(`. This pattern is a DYNAMIC awk regex (`$0 ~ open_re`), and the two awk
+  # implementations disagree about a backslash-escaped paren: mawk treats `\(` as a literal
+  # paren, while gawk STRIPS the backslash and then cannot compile the bare `(` —
+  # `fatal: invalid regexp: Unmatched ( or \(`. Ubuntu ships mawk, GitHub runners ship gawk,
+  # so `\(` passes every local run and makes the gate ABORT on every CI run: it could never
+  # RELEASE, which also means the birth-dispatch interlock could never pass. A bracket
+  # expression is literal in both engines. Pinned by the gawk-hostile-escape arm in the suite.
+  _tf_map="$(_git_data_hcl_block "$_mod_src" 'templatefile[(]')"
   if [[ -z "$_tf_map" ]]; then
     echo "git_data_authorization_map_gate: ABORT — no templatefile( call found in ${module_tf}. The render module is where the argument map lives; extraction yielded nothing, which is a broken instrument, not an empty map. Fail-closed."
     return 2
