@@ -42,3 +42,28 @@ listed the plan file and nothing else, so the plan-only mandate held.
 - soleur:plan (via general-purpose planning subagent)
 - soleur:deepen-plan (plan carries deepened sections: Research Insights, Guard
   Contract, Observability, Domain Review, Test Scenarios, Alternative Approaches)
+
+
+## Compound Phase
+
+- Learning: `knowledge-base/project/learnings/2026-09-10-every-escape-my-mutations-could-not-reach.md`
+- Rule budget at compound: `[WARN] B_ALWAYS=45836` against the 46000 ratchet —
+  164 bytes headroom, 105 rules, longest rule at the 600-byte cap. The placement
+  gate therefore applied: every insight from this session is domain-scoped and
+  routed to a skill, and NO rule was added to AGENTS.rules.md.
+- Routed: one bullet to `plugins/soleur/skills/review/SKILL.md` — escape rows
+  answer what mutation rows structurally cannot.
+
+### Archival DEFERRED to post-merge, deliberately
+
+`archive-kb.sh` would move both the plan and the whole spec directory. Two of
+those artifacts must not move yet:
+
+- `measurement-baseline.md` is cited BY PATH from the accepted ADR-216, and it is
+  the artifact AC25/AC26 are checked against on 2026-10-08. Archiving it breaks
+  an accepted ADR's citation and moves the thing the success criterion reads.
+- the plan is still the reviewer's reference while the PR is open.
+
+Recorded here rather than skipped silently, because compound's own guidance warns
+that a hand-driven phase run is exactly where Step E gets dropped without a
+prompt to surface it. Archive after merge, specs included.
