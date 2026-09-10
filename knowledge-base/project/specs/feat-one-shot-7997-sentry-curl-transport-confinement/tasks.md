@@ -59,15 +59,15 @@ Every shape below is the one measured in **M20/M25** — do not paraphrase it.
 
 ## 4. Baseline drawdown
 
-- [ ] 4.1 Delete exactly the lines `apps/web-platform/scripts/sentry-monitors-audit.sh` and `scripts/sentry-alert-live-fidelity.sh` from `scripts/lint-shell-trace-credential-refusal-d.baseline.txt`. **Do not** run `--write-baseline-d`.
-- [ ] 4.2 `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide, no flags) — exit 0, `80 baselined (D)`.
-- [ ] 4.3 `grep -c 'sentry-alert-live-fidelity\|sentry-monitors-audit' …-d.baseline.txt` = `0`; `grep -vc '^#'` = `80`. This, not 4.2, is what proves the drawdown happened.
+- [x] 4.1 Delete exactly the lines `apps/web-platform/scripts/sentry-monitors-audit.sh` and `scripts/sentry-alert-live-fidelity.sh` from `scripts/lint-shell-trace-credential-refusal-d.baseline.txt`. **Do not** run `--write-baseline-d`.
+- [x] 4.2 `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide, no flags) — exit 0, `80 baselined (D)`.
+- [x] 4.3 `grep -c 'sentry-alert-live-fidelity\|sentry-monitors-audit' …-d.baseline.txt` = `0`; `grep -vc '^#'` = `80`. This, not 4.2, is what proves the drawdown happened.
 
 ## 5. ADR amendments
 
-- [ ] 5.1 Read, then amend `knowledge-base/engineering/architecture/decisions/ADR-202-enforce-runtime-state-hazards-with-a-carried-self-refusal.md` — **`## Consequences` and `### Named residual holes` only; leave `## Decision` untouched.** Add the Rule D contract and its three residuals: (a) a wrapper-*function* invocation is out of reach even under a recogniser widening (M18); (b) a post-request or classification-only adjudication satisfies `_pin_re` while confining nothing; (c) the rule says nothing about the resolver, trust anchor, TLS keylog or the binary — all measured caller-settable with a compliant call site (M21/M24).
-- [ ] 5.2 Read, then amend `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` — correct the line at anchor `The canonical EU API base_url is therefore` (it names `https://eu.sentry.io/api/`, contradicted by the same file's host-glossary MUST and by `apps/web-platform/infra/sentry/main.tf`'s `base_url = "https://${var.sentry_org}.sentry.io/api/"`), and add one sentence recording that the audit script's `/users/me/` discovery probe is that file's only slug-less credentialed call. **Do not** word it as "`SENTRY_HOST_CANDIDATES` is the single source of truth". Edit by full filename — ordinal 031 is duplicated in this repo.
-- [ ] 5.3 Run the ADR gates `scripts/test-all.sh` registers, including `scripts/check-adr-ordinals.sh`; confirm the duplicate 031 is tolerated today rather than assuming it.
+- [x] 5.1 Read, then amend `knowledge-base/engineering/architecture/decisions/ADR-202-enforce-runtime-state-hazards-with-a-carried-self-refusal.md` — **`## Consequences` and `### Named residual holes` only; leave `## Decision` untouched.** Add the Rule D contract and its three residuals: (a) a wrapper-*function* invocation is out of reach even under a recogniser widening (M18); (b) a post-request or classification-only adjudication satisfies `_pin_re` while confining nothing; (c) the rule says nothing about the resolver, trust anchor, TLS keylog or the binary — all measured caller-settable with a compliant call site (M21/M24).
+- [x] 5.2 Read, then amend `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` — correct the line at anchor `The canonical EU API base_url is therefore` (it names `https://eu.sentry.io/api/`, contradicted by the same file's host-glossary MUST and by `apps/web-platform/infra/sentry/main.tf`'s `base_url = "https://${var.sentry_org}.sentry.io/api/"`), and add one sentence recording that the audit script's `/users/me/` discovery probe is that file's only slug-less credentialed call. **Do not** word it as "`SENTRY_HOST_CANDIDATES` is the single source of truth". Edit by full filename — ordinal 031 is duplicated in this repo.
+- [x] 5.3 Run the ADR gates `scripts/test-all.sh` registers, including `scripts/check-adr-ordinals.sh`; confirm the duplicate 031 is tolerated today rather than assuming it.
 
 ## 6. Verification
 
