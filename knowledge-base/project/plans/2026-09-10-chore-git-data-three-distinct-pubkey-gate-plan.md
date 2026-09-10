@@ -16,7 +16,10 @@ requires_cpo_signoff: true
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-10
-**Reviewers:** CTO, CLO, correctness, simplicity, spec-flow, architecture, test-design, security
+**Reviewers reported and incorporated:** CTO, CLO, correctness, simplicity, spec-flow, architecture
+**Reviewers dispatched, not yet reported:** test-design (mutation-matrix completeness), security
+(authorization-map threat model). Their findings are not reflected below; `/work` Phase 0 should
+re-read this plan for any late-landing amendment before starting.
 **Halt gates passed:** User-Brand Impact (4.6), Observability (4.7), PAT-shaped variable (4.8),
 UI-wireframe (4.9, skipped — no UI surface), Encryption Posture (4.10, skipped — no new store),
 Guard Contract (4.11, lint green)
