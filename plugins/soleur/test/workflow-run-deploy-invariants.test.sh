@@ -700,15 +700,38 @@ for st in (d['jobs']['deploy'].get('steps') or []):
     out.append({'name': name, 'gated': 'superseded' in cond, 'cond': cond})
 print(json.dumps(out))
 ")
-# ACTING = it can change production, or assert that production changed. Matched
-# on the step's own name, so a NEW one is caught by shape rather than by a list.
+# ACTING IS DECIDED BY POSITION, NOT BY NAME. A name regex is a guess about what
+# a future step will be called — "Cut over to the new image" matches no keyword I
+# would have thought to list, and that is exactly the step that must not slip
+# through. The real semantic is ordering: the guard runs at some step index, and
+# everything AFTER it that can execute on a successful run must consult it.
+#
+# The only exemption is a step that cannot act on success at all — a `failure()`
+# / `cancelled()` handler. Those must NOT be gated: a superseded run has no
+# failure, so gating the failure-email would be harmless, but demanding it would
+# be wrong for the opposite reason (it would suppress a real failure notice).
 _ungated=$(printf '%s' "$_deploy_steps" | python3 -c "
 import json, sys, re
-ACTING = re.compile(r'deploy via|webhook|verify deploy|swap|roll ?out|live.?verify', re.I)
-bad = [s['name'] for s in json.load(sys.stdin)
-       if ACTING.search(s['name'] or '') and not s['gated']]
-print('; '.join(bad))
+steps = json.load(sys.stdin)
+guard_at = next((i for i, s in enumerate(steps)
+                 if re.search(r'ordering guard|version regression', s['name'] or '', re.I)), None)
+if guard_at is None:
+    print('THE ORDERING GUARD STEP IS GONE')
+else:
+    bad = []
+    for s in steps[guard_at + 1:]:
+        if s['gated']:
+            continue
+        cond = s['cond'] or ''
+        if re.search(r'failure\(\)|cancelled\(\)', cond):
+            continue                      # cannot act on a successful run
+        bad.append(s['name'] or '(unnamed)')
+    print('; '.join(bad))
 ")
+case "$_ungated" in
+  *"ORDERING GUARD STEP IS GONE"*)
+    fail "G13 the ordering-guard step was not found in the deploy job — ADR-215 Decision 5's replacement for the FIFO property part 1 deleted is missing, and the rows below cannot locate what they bound" ;;
+esac
 _n_gated=$(printf '%s' "$_deploy_steps" | python3 -c "
 import json,sys; print(sum(1 for s in json.load(sys.stdin) if s['gated']))")
 if [ "$_n_gated" -ge 3 ]; then pass; else
