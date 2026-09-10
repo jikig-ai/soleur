@@ -45,8 +45,12 @@ if [[ "$detect" == "success" && ( "$suite" == "success" || "$suite" == "skipped"
 fi
 
 # Eviction arm (#7055) -- DIAGNOSTIC ONLY, the verdict is unchanged. The heavy
-# `tenant-integration` job holds a PER-BRANCH job-level `dev-supabase-<ref>`
-# mutex (repo-wide was tried in #7986 and reverted in #8028 -- it starved). GitHub keeps at most ONE pending entry per concurrency group: a third
+# `tenant-integration` job holds a PER-REF job-level `dev-supabase-<ref>` mutex.
+# Repo-wide was tried in #7986 and reverted in #8048 -- it starved the queue.
+# Per-ref means per-PR on pull_request (refs/pull/<n>/merge), and all of
+# main's merges sharing one entry on push (refs/heads/main).
+#
+# GitHub keeps at most ONE pending entry per concurrency group: a third
 # arrival cancels the pending one, and `cancel-in-progress: false` does not
 # prevent that. So `cancelled` here is most often an EVICTION, not a red suite.
 # It still FAILS CLOSED, because detect-changes said this tree touches the
@@ -57,7 +61,7 @@ fi
 # reach this arm: it would cancel this aggregator job too, so this line would
 # never execute.
 if [[ "$detect" == "success" && "$suite" == "cancelled" ]]; then
-  echo "::error::tenant-integration gate FAILED closed: the heavy dev-Supabase suite was CANCELLED before it could report (detect-changes=success, tenant-integration=cancelled). OBSERVED, not diagnosed -- this gate receives two job results and cannot tell WHY the suite was cancelled. One cause that produces exactly this state is concurrency EVICTION: the job holds a per-branch 'dev-supabase-<ref>' mutex, GitHub keeps at most one PENDING job per group, and a third isolation-surface run ON THIS BRANCH displaces the one waiting. A manual cancel and a runner failure look identical here -- check the run timeline to tell them apart. Either way nothing was verified against this tree, so the gate cannot pass. 'Re-run failed jobs' clears the eviction case; if it recurs on every attempt, something other than eviction is cancelling the suite and the run timeline is where to look." >&2
+  echo "::error::tenant-integration gate FAILED closed: the heavy dev-Supabase suite was CANCELLED before it could report (detect-changes=success, tenant-integration=cancelled). OBSERVED, not diagnosed -- this gate receives two job results and cannot tell WHY the suite was cancelled. One cause that produces exactly this state is concurrency EVICTION: the job holds a per-ref 'dev-supabase-<ref>' mutex, GitHub keeps at most one PENDING job per group, and a third isolation-surface run on this ref (this PR, or main) displaces the one waiting. A manual cancel and a runner failure look identical here -- check the run timeline to tell them apart. Either way nothing was verified against this tree, so the gate cannot pass. 'Re-run failed jobs' clears the eviction case; if it recurs on every attempt, something other than eviction is cancelling the suite and the run timeline is where to look." >&2
   exit 1
 fi
 
