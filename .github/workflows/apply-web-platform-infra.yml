@@ -243,10 +243,16 @@ on:
           OCI image and reaches the host through the digest literal in user_data, so a replace on
           an unbumped pin re-delivers the same bytes (#7695; ADR-199 amendment 2026-09-07).
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. HELD BY TWO MECHANICAL GATES: the sentinel
-          interlock released as of #6982 (the host now has an off-host emitter), but the
-          rung-2 rehearsal interlock REFUSES until committed boot evidence for the current
-          template lands under #7025. A dispatch today exits 1 before planning. Read
+          needs `confirm=BIRTH-GIT-DATA`. THREE MECHANICAL INTERLOCKS, ALL CURRENTLY
+          RELEASING: the sentinel interlock (#6982, the host has an off-host emitter), the
+          rung-2 rehearsal interlock (released once the boot evidence for the current
+          template landed), and the authorization-map interlock (#8009). An earlier version
+          of this text said a dispatch exits 1 before planning; that stopped being true when
+          the evidence merged. What holds the route now is the runbook banner and the
+          environment approval -- and that approval reports prevent_self_review:false with a
+          single reviewer, so the dispatcher can approve their own deployment. (That attribute
+          is declared nowhere in this repo's Terraform, so false is the provider default, not
+          a choice; every gated environment here reads the same way.) Read
           knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
@@ -4116,6 +4122,31 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
+      - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          # THE CAPTURE IS `rc=0; cmd || rc=$?`, NEVER `cmd; rc=$?`. Actions runs this block
+          # under `-eo pipefail`, so an unguarded call aborts the step AT the call and every
+          # line below it -- including the branch that reports which verdict came back.
+          rc=0
+          git_data_authorization_map_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml" || rc=$?
+          # ABORT (2) IS NOT HOLD (1), AND THE ANNOTATION MUST NOT SAY OTHERWISE. This gate is
+          # the only tri-state function in its library and its own header says that reporting
+          # could-not-measure as a verdict is the exact defect class it exists to close. The
+          # previous single branch asserted the HOLD claim on all ten ABORT paths -- a verdict
+          # about the key map on paths where the instrument never read it. The annotation panel
+          # has no "message above", so each branch restates its own cause.
+          if [[ "$rc" -eq 2 ]]; then
+            echo "::error::git-data-host-replace is HELD because the authorization-map gate COULD NOT MEASURE the SSH key map. This is an instrument failure, not a verdict about the map: the gate could not parse or resolve the Terraform root (an unreadable file, a *.tf.json, an *override.tf, an ambiguous expression, a walk that broke at one of the five links, or an extraction that yielded nothing). Its message in the step log names which. Nothing has been planned or created."
+            exit 1
+          fi
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: git_data_host_replace has no environment: and therefore no deployment_branch_policy, so workflow_dispatch runs the SELECTED REF - this gate is supplied by the branch it polices. It holds against an accidental collapse merged and dispatched from main. It does NOT hold against a deliberate actor with repository write access."
+            exit 1
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
         # satisfies var.ssh_key_path (never consumed by the scoped git-data replace — the host is
@@ -5622,6 +5653,128 @@ jobs:
   # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
   # the default job token is contents:read only, so `gh issue comment` would
   # silently fail without the elevated permission + App auth).
+  # ── CPO condition C2 (#8009): what a green boot does NOT mean ────────────────────────
+  #
+  # THIS JOB HAS NO `environment:` AND THAT IS THE ENTIRE POINT (D6).
+  #
+  # The approver approves BLIND. `git_data_host_create` carries the environment gate, so it
+  # sits in `Waiting` and renders NOTHING until someone clicks Approve — which means every
+  # word of disclosure written inside that job arrives AFTER the decision it was supposed to
+  # inform. A PR body has a readership of one review; the runbook is read by whoever thinks
+  # to open it. At the moment of approval the operator sees a bare "Approve deployment"
+  # button and nothing else.
+  #
+  # So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
+  # the run summary page already carries these three statements. Without it the approval is
+  # ceremonial and "one human clicking twice" is the real control.
+  git_data_birth_disclosure:
+    name: What a green git-data boot does NOT mean (read before approving)
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
+    # PINNED, TIMED AND SCOPED BECAUSE git_data_host_create `needs:` THIS JOB.
+    #
+    # A `needs:` edge makes this job's every failure mode a hold on the birth -- and GitHub
+    # evaluates protection rules only once a job becomes eligible, so a failure here means the
+    # operator sees a red run and NO Approve button at all. That is a legible outcome and
+    # nothing is planned or created, which is what makes the fail-closed trade defensible. What
+    # is NOT defensible is leaving the job easier to break than it needs to be:
+    #   - `ubuntu-latest` was the ONLY floating runner label in a file with 20 `ubuntu-24.04`
+    #     pins, i.e. a runner-image rollout could block the route ADR-149 already describes as
+    #     the hardest to reach;
+    #   - with no `timeout-minutes` a hung job holds the birth for the 360-minute default;
+    #   - `permissions:` is declared explicitly, matching the in-file precedent for a
+    #     precondition job another job needs (`registry_pull_path_gate`).
+    # This job checks out nothing and calls no API, so read-only contents is all it needs.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Write the three limits to the run summary
+        run: |
+          set -euo pipefail
+          # A SECOND TRANSPORT. The summary is one channel and it can fail to render; tee puts
+          # an independent copy in the step log so the disclosure survives that.
+          tee -a "$GITHUB_STEP_SUMMARY" <<'MD' || { echo "::error::The git-data birth disclosure could not be written. git-data-host-create is BLOCKED by needs: rather than approved blind. Nothing has been planned or created."; exit 1; }
+          ## Before you approve: three things a green boot does NOT mean
+
+          The `BIRTH-GIT-DATA` token you typed is a **typo guard, not an authorization**. The
+          authorization is this approval. Read these three first — each is measured, and each
+          is a limit on what any green result downstream can tell you.
+
+          ### 1. Repositories are NOT encrypted at rest before the cutover
+
+          `luks_mounted` is about the **device**, not the repositories. `git-data-bootstrap.sh`
+          pins that wording itself, under AC30:
+
+          > `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being
+          > encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the
+          > cutover.
+
+          A green boot is fully compatible with every repository sitting on plaintext storage.
+
+          ### 2. This approval is NOT two-party
+
+          **Measured 2026-09-10, not by this job.** `web-platform-infra-apply` reported
+          `prevent_self_review: false` with a single reviewer. This step prints a recorded
+          reading rather than a live one -- it deliberately makes no API call, because it is a
+          hard `needs:` dependency of the birth and adding a network dependency to it would
+          give a transient API failure the power to block the route. Re-measure before relying
+          on it:
+
+          ```bash
+          gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
+            --jq '.protection_rules[] | select(.type=="required_reviewers")
+                  | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}'
+          ```
+
+          If it still reads `false` with one reviewer: **the person who dispatched this run can
+          approve it.** That is one human clicking twice, not a two-party control. If you
+          dispatched it, nobody else has looked at it.
+
+          **And the environment reports a second fact this section used to omit:
+          `can_admins_bypass: true`.** A repository admin can skip the approval entirely rather
+          than merely self-approve it. So the control is weaker than "one human clicking twice"
+          — it is "one human clicking twice, unless they choose not to click at all".
+
+          Two things about that reading. It comes from the live API — and `prevent_self_review`
+          is declared **nowhere in this repository's Terraform**, so `false` is the provider
+          default rather than a setting anyone chose. Every environment here that has required
+          reviewers reads the same way, with the same single reviewer: **no approval gate in
+          this repo is two-party.**
+
+          ### 3. The rehearsal evidence attests a STAGE WAS REACHED, not four measurements
+
+          `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded literals**
+          at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction. What
+          their presence proves is that execution REACHED the emit, which is not free: each has
+          a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, which is not a gate), so a failure aborts
+          before the emit rather than emitting `no`. Read them as "no gate fired", never as
+          "four invariants were measured".
+
+          Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just
+          above the emit by grepping the live nftables chain
+          (`nft list chain inet soleur_git_data output` for `169.254.169.254`). It read `yes`.
+          It is **not** recorded in `git-data-rung2-boot-evidence.env` — that file records the
+          queries, and the capture projects only the four hardcoded booleans — so it was read
+          directly from Better Stack and pasted into the evidence PR's body.
+
+          ---
+
+          The authorization-map interlock that runs next is a **static** assertion over
+          Terraform source: it proves what the production root RENDERS, not what a live host
+          HONOURS. No live host is probed, because none exists yet.
+          MD
+          # MEASURE THE WRITE; DO NOT ASSERT IT. The summary is RENDERED after this step and
+          # outside its control, so "the write succeeded" is not "the approver can read it" --
+          # and a green job here tells `needs:` that consent was informed. A zero-byte summary
+          # with a cheerful log line is the approve-blind case this job exists to prevent.
+          bytes=$(wc -c < "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo 0)
+          if [[ "${bytes:-0}" -le 0 ]]; then
+            echo "::error::The git-data birth disclosure wrote 0 bytes to the run summary. The approver would have approved blind, so this job FAILS rather than passing quietly. git-data-host-create is blocked by needs:, and nothing has been planned or created."
+            exit 1
+          fi
+          echo "Disclosure written to the run summary (${bytes} bytes)."
+
   git_data_host_create:
     # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
     #
@@ -5643,7 +5796,15 @@ jobs:
     # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
     # one, so for this path the sourced birth gate is the ONLY check.
     #
-    # THIS JOB IS STILL HELD, BY TWO GATES, AND BOTH ARE MECHANICAL.
+    # THIS JOB CARRIES THREE MECHANICAL INTERLOCKS. ALL THREE CURRENTLY RELEASE.
+    #
+    # An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
+    # moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
+    # a live verdict invites -- so it now states what the gates ARE rather than what they
+    # currently answer. What holds the route today is the runbook's DO-NOT-DISPATCH banner
+    # and the environment approval; the banner may be the only prose hold, and the approval
+    # reports prevent_self_review:false with a single reviewer (declared nowhere in this
+    # repo's Terraform, so that is the provider default rather than a chosen setting).
     #
     # (1) The birth-readiness (sentinel) interlock RELEASED as of #6982. It held because
     # cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path failed
@@ -5680,12 +5841,17 @@ jobs:
     #     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
     #     why the gate's reboot arm is a backstop here rather than live coverage.
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
+    # (#8009 C2, D6) The disclosure job runs FIRST and carries no environment:, so
+    # the three limits are already on the run summary page while this job sits in
+    # `Waiting`. Anything written inside THIS job arrives after the approval it was
+    # meant to inform, which is what made the approval ceremonial.
+    needs: [git_data_birth_disclosure]
     runs-on: ubuntu-24.04
     # The sole HUMAN authorization on this path. REUSED, never re-declared: the
     # environment is managed at infra/web-host-birth-environment.tf with a non-empty
     # reviewer set (DP-11 F8 — a zero-reviewer environment auto-approves) and a
     # main-only deployment_branch_policy. The branch pin is load-bearing here because
-    # both gates are sourced from ${GITHUB_WORKSPACE}: without it, a branch dispatch
+    # all three gates are sourced from ${GITHUB_WORKSPACE}: without it, a branch dispatch
     # could source a neutered gate and approve itself.
     #
     # The approver approves BEFORE any step runs, so they cannot verify a plan — what
@@ -5757,7 +5923,9 @@ jobs:
       # restores a mechanical hold for the one precondition that is about the HOST BOOTING:
       # rung-2 evidence, hash-bound to the template being dispatched so it self-invalidates
       # the moment cloud-init-git-data.yml is edited again. #7025 carries rung 2 and lands
-      # the evidence file; until then this step HOLDS by design.
+      # the evidence file. That evidence has since landed, so this step RELEASES today -- the
+    # sentence above described the state at authoring time and is kept for the reasoning,
+    # not as a live verdict.
       - name: Rung-2 rehearsal interlock (refuses while the template has never really booted)
         run: |
           set -euo pipefail
@@ -5765,6 +5933,31 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
             echo "::error::git-data-host-create is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. #6982 reached rung 1 only (a container harness that never boots the rendered template), so the first real boot of this template would be the production host holding every user's source. The gate's message above says exactly what to commit to release it. Carried by #7025. Nothing has been planned or created."
+            exit 1
+          fi
+
+      - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          # THE CAPTURE IS `rc=0; cmd || rc=$?`, NEVER `cmd; rc=$?`. Actions runs this block
+          # under `-eo pipefail`, so an unguarded call aborts the step AT the call and every
+          # line below it -- including the branch that reports which verdict came back.
+          rc=0
+          git_data_authorization_map_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml" || rc=$?
+          # ABORT (2) IS NOT HOLD (1), AND THE ANNOTATION MUST NOT SAY OTHERWISE. This gate is
+          # the only tri-state function in its library and its own header says that reporting
+          # could-not-measure as a verdict is the exact defect class it exists to close. The
+          # previous single branch asserted the HOLD claim on all ten ABORT paths -- a verdict
+          # about the key map on paths where the instrument never read it. The annotation panel
+          # has no "message above", so each branch restates its own cause.
+          if [[ "$rc" -eq 2 ]]; then
+            echo "::error::git-data-host-create is HELD because the authorization-map gate COULD NOT MEASURE the SSH key map. This is an instrument failure, not a verdict about the map: the gate could not parse or resolve the Terraform root (an unreadable file, a *.tf.json, an *override.tf, an ambiguous expression, a walk that broke at one of the five links, or an extraction that yielded nothing). Its message in the step log names which. Nothing has been planned or created."
+            exit 1
+          fi
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::git-data-host-create is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message in the step log names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created."
             exit 1
           fi
 

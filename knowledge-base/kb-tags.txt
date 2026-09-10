@@ -1507,6 +1507,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-population
 fixture-redaction
 fixture-safety
 fixture-seam
@@ -3533,6 +3534,7 @@ srp
 ssg
 ssh
 ssh-agent
+ssh-authorization
 ssh-hypothesis-gate
 ssh-provisioner
 ssl
