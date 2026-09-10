@@ -63,6 +63,11 @@ case "$-" in
     fi
     ;;
 esac
+# The sibling probe (scripts/betterstack-ingest-probe.sh) does this immediately after its own
+# prologue and this script did not. It does not affect the apex match below, but the
+# `*[[:cntrl:]]*` arm's character-class membership is LOCALE-DEFINED, so the shape check's
+# refusal set was a function of the caller's locale. Pin it.
+export LC_ALL=C
 
 # (#7873) Same argument as scripts/zot-inventory.sh's prologue, applied to the
 # credential the plan calls its headline: `--disable` closes ~/.curlrc and
@@ -132,28 +137,60 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # silently ignored, and the caller gets rows from the DEFAULT archive with no error, because
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
-# (#7873) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
-# carries Basic auth, so a value containing userinfo or a path re-points the
-# credential: `real.host@evil.example` resolves to evil.example, and
-# `evil.example/x?` puts the query on an attacker path. The non-empty check above
-# is not a destination validation.
+# (#7873, #7898 §6) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
+# run_sql attaches Basic auth with `curl -u`, which sends the credential PREEMPTIVELY on the
+# first request with no challenge. The value IS the destination of a live secret, so it is
+# validated in two steps before run_sql is ever reachable.
 #
-# This is a SHAPE check, not an equality pin, and deliberately so: ~12 suites
-# drive this script through a `BETTERSTACK_QUERY_HOST=` seam (measured values:
-# stub, h, x, dummy-host, synthetic.example.invalid, 127.0.0.1, empty) and
-# pinning the vendor host would send synthetic credentials at the real warehouse
-# from CI. A bare hostname (optionally with a port) is what the vendor connection
-# is; a URL is not.
+# STEP 1 — the SHAPE arm (cheap, first refusal). It rejects the userinfo/path/scheme family:
+# `real.host@evil.example` resolves to evil.example, and `evil.example/x?` puts the query on
+# an attacker path. On its own it is NOT a destination validation — a substituted BARE host
+# (`attacker.example`) passes every one of its arms, which is precisely the gap #7898 §6
+# reported. It is kept because it is cheaper and because its refusal message is more useful
+# for the malformed-value case.
 #
-# READ THE RESIDUAL PLAINLY, because a shape check is easy to mis-read as a pin:
-# a BARE hostname that is not the vendor's still passes every arm above.
-# `BETTERSTACK_QUERY_HOST=attacker.example` is accepted, and run_sql then sends
-# Basic auth to it preemptively on the first request. What this check closes is
-# the userinfo/path/scheme family (`real.host@evil.example`, `evil.example/x?`);
-# what it does NOT close is a substituted bare host. Closing that needs a
-# `*.betterstackdata.com` allowlist plus an explicit opt-in seam in each of those
-# ~12 suites -- a 13-file change with its own verification, tracked on #7898
-# rather than folded into the PR that added this check.
+# STEP 2 — the ALLOWLIST arm, and this is the pin. Extract the authority, then match the
+# ISOLATED host against `*.betterstackdata.com`.
+#
+# WHY AUTHORITY EXTRACTION RATHER THAN A GLOB OVER THE WHOLE VALUE: #7855, measured on the
+# sibling credential. `case "$URL" in *betterstackdata.com*)` accepted
+# `https://evil.com/?x=.betterstackdata.com/`, because a shell glob's `*` crosses `/` and `?`
+# — the leading wildcard swallowed the entire authority and the vendor name only had to appear
+# SOMEWHERE later in the string. Every wildcard below is confined to a string that cannot
+# contain a path, a query or a fragment.
+#
+# This follows scripts/betterstack-ingest-probe.sh's STRUCTURE, with four deliberate
+# differences from its text — each one a value that works today and that a line-for-line copy
+# would refuse:
+#   - NO SCHEME STRIP. The probe opens with `_bs_rest="${URL#https://}"` and refuses if
+#     nothing was removed, because ITS input is a URL. This input is a BARE host. That arm
+#     copied verbatim refuses every legitimate value; made optional it is dead code, because
+#     the shape arm above already rejects `/`. We begin at the path strip.
+#   - CASE-FOLD FIRST. DNS is case-insensitive; a bash `case` glob is not, and LC_ALL does not
+#     change that. `EU-CENTRAL-1A-CONNECT.BETTERSTACKDATA.COM` is a working value today, and an
+#     unfolded pin would refuse it — breaking every consumer at once.
+#   - STRIP ONE TRAILING DOT. `eu-central-1a-connect.betterstackdata.com.` is a valid absolute
+#     FQDN, passes every shape arm, and resolves correctly. An unstripped pin refuses it.
+#   - THE LEADING DOT IN THE PATTERN IS LOAD-BEARING. Without it `notbetterstackdata.com` — a
+#     registrable lookalike — satisfies a bare suffix match.
+#
+# READ THE RESIDUAL PLAINLY, because an allowlist is easy to mis-read as a boundary.
+# `*.betterstackdata.com` accepts EVERY BETTER STACK TENANT, not our endpoint: the vendor mints
+# per-team ClickHouse connection hosts under that apex, so anyone who can sign up gets a
+# hostname this pattern takes. The pin narrows the adversary set from *anyone* to *any Better
+# Stack customer*; it does not close it (ADR-052 — a hostname pin is not automatically a
+# boundary). Both known live values end `-connect.betterstackdata.com`, so a tighter
+# `*-connect.betterstackdata.com`, or a two-value equality, is available. The wider apex is
+# chosen deliberately: query connections are region-scoped and re-mintable, and a two-value pin
+# would break every consumer the day one is re-minted in another region.
+#
+# HOW A TEST EXERCISES THE EGRESS PATH: SHIM `curl`. run_sql is the sole egress site and the
+# sole curl in this file, so shadowing curl as a shell function (or shipping a shim on PATH)
+# intercepts the boundary itself and proves no request escaped — see
+# tests/scripts/test-betterstack-query-archive.sh and
+# tests/scripts/test-git-data-rung2-evidence-capture.sh, which do exactly that with a
+# vendor-shaped synthetic host. There is deliberately NO env-declared host-override seam: a
+# seam an actor can set is the seam this pin exists to close.
 case "$BETTERSTACK_QUERY_HOST" in
   *[[:cntrl:]]*|*@*|*/*|*\?*|*\#*|*:*:*|"")
     printf 'betterstack-query.sh: refusing to send credentials to a malformed BETTERSTACK_QUERY_HOST (expected a bare host[:port], got %s characters of something else)\n' \
@@ -162,9 +199,72 @@ case "$BETTERSTACK_QUERY_HOST" in
     ;;
 esac
 
+_bs_auth="${BETTERSTACK_QUERY_HOST%%/*}"   # path
+_bs_auth="${_bs_auth%%\?*}"                # query on an authority-only value
+_bs_auth="${_bs_auth%%#*}"                 # fragment
+_bs_auth="${_bs_auth##*@}"                 # userinfo: the real host is what follows the LAST @
+_bs_host="${_bs_auth%%:*}"                 # explicit port
+_bs_host="${_bs_host%.}"                   # ONE trailing dot: `host.` is a valid absolute FQDN
+_bs_host="${_bs_host,,}"                   # DNS is case-insensitive; a `case` glob is not
+# (The first four are no-ops against a value the shape arm above already accepted. They are
+# kept because the pin must not depend on that arm's arms staying exactly as they are — the
+# allowlist has to be sound on its own input.)
+case "$_bs_host" in
+  *.betterstackdata.com) : ;;
+  *)
+    printf "betterstack-query.sh: refusing to send credentials to '%s' — BETTERSTACK_QUERY_HOST must be a Better Stack query endpoint matching *.betterstackdata.com (#7898). This allowlist is not a seam: a synthetic destination for a test is provided by shimming curl, not by overriding the host.\n" \
+      "$_bs_host" >&2
+    exit 2
+    ;;
+esac
+
+# (#7898 §6, step 1.1b) THE HOST IS NOT THE ONLY DESTINATION-SHAPED INPUT IN THE REQUEST.
+# BS_TABLE and BS_TABLE_S3 are env-settable AND flag-settable (`--table` / `--table-s3`), and
+# they interpolate UNQUOTED into ClickHouse's `remote(...)` and `s3Cluster(primary, ...)` table
+# functions — whose leading argument positions are an ADDRESS expression and a URL. The flag
+# loop that reads them runs BELOW this point, so before this validation nothing checked them at
+# any point, and the same actor the host pin defends against sets them in the same breath. The
+# credential does not travel via remote(), and the vendor's server-side handling of these
+# functions is not verified here — so this is not asserted as an exploit. It is closed because
+# "the destination is pinned" is this change's headline claim and an unvalidated
+# destination-shaped argument in every mode-2 request would leave that claim broader than what
+# ships. Identifiers only; refuse rather than quote, because the correct value is always a bare
+# ClickHouse table identifier (`t<team>_<name>_logs` / `_s3`).
+require_table_identifier() {  # $1 = variable name (for the message), $2 = value
+  case "$2" in
+    *[!A-Za-z0-9_]*|"")
+      printf "betterstack-query.sh: refusing %s='%s' — table identifiers must match ^[A-Za-z0-9_]+\$. These interpolate into remote() and s3Cluster(), whose leading arguments are an address and a URL, so a non-identifier value re-points the query the way an unpinned host re-points the credential (#7898).\n" \
+        "$1" "$2" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# ClickHouse string literals honour C-STYLE BACKSLASH escapes in addition to ''
+# doubling, so doubling alone does NOT close the literal (#7898 review). A value
+# ending in a backslash escapes the quote that doubling just added:
+#
+#   --until "x\' OR 1=1 -- "   ->   dt <= 'x\'' OR 1=1 -- '
+#
+# ClickHouse reads 'x\'' as the literal x' and the rest is live SQL, which reaches
+# url()/s3()/remote() and therefore egress. Escape the BACKSLASH FIRST, then the
+# quote -- order is load-bearing: doubling first would then have its own backslashes
+# escaped and the value would be corrupted.
+sql_quote() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\'/\'\'}"
+  printf '%s' "$v"
+}
+
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
 export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
+
+# Env-seeded values, validated before mode 1 — which runs its query and exits without ever
+# reaching the flag loop.
+require_table_identifier BS_TABLE "$BS_TABLE"
+require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
 
 run_sql() {
   # $1 = SQL. Credentials via Basic auth; never echoed.
@@ -235,6 +335,19 @@ EOF
 fi
 export BS_TABLE_S3
 
+# Re-validate: --table / --table-s3 are parsed BELOW the host check, and the archive name is
+# re-derived above, so the env-time validation does not cover either.
+require_table_identifier BS_TABLE "$BS_TABLE"
+# The one legitimate empty value: --no-archive on a non-_logs table has no archive to name.
+[[ -n "$BS_TABLE_S3" ]] && require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
+
+# --limit interpolates raw into `LIMIT ${LIMIT}`. 64 (usage error), not 2: this is a
+# caller-typo shape, not a redirected destination.
+if [[ ! "$LIMIT" =~ ^[0-9]+$ ]]; then
+  printf 'betterstack-query.sh: --limit must be a non-negative integer, got %s\n' "$LIMIT" >&2
+  exit 64
+fi
+
 # Build the WHERE clause. `dt` is the ClickHouse event-time column.
 # --since accepts Nh / Nm / Nd (relative) or a literal 'YYYY-MM-DD HH:MM:SS'.
 if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
@@ -242,9 +355,11 @@ if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
   case "$unit" in h) ivl="HOUR";; m) ivl="MINUTE";; d) ivl="DAY";; esac
   WHERE="dt >= now() - INTERVAL ${BASH_REMATCH[1]} ${ivl}"
 else
-  WHERE="dt >= '${SINCE}'"
+  # --grep was the only input that got quote-escaping; --since and --until land in the same
+  # single-quoted SQL literal position and got none. Same escape, same reason.
+  WHERE="dt >= '$(sql_quote "$SINCE")'"
 fi
-[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '${UNTIL}'"
+[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '$(sql_quote "$UNTIL")'"
 
 if (( RAW_ONLY )); then
   # Exclude Vector host-metrics and journald supervisor noise — leaves app logs.
@@ -255,7 +370,7 @@ if (( ${#GREPS[@]} > 0 )); then
   ORS=""
   for g in "${GREPS[@]}"; do
     # Escape single quotes in the grep term for SQL.
-    esc="${g//\'/\'\'}"
+    esc="$(sql_quote "$g")"
     ORS="${ORS}${ORS:+ OR }raw LIKE '%${esc}%'"
   done
   WHERE="${WHERE} AND (${ORS})"

@@ -314,6 +314,7 @@
 9	scripts/lint-legal-registers.test.sh
 77	scripts/lint-legal-scope-block-placement.test.sh
 1	scripts/lint-orphan-test-suites.test.sh
+1	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
 8	scripts/markdown-lint.test.sh
