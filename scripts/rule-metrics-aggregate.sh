@@ -329,23 +329,11 @@ jq empty < "$stage_enriched_file" >/dev/null 2>&1 || { echo "ERROR: stage B (enr
 # $drops and $cutoff and $schema stay on argv: drops is keyed by a closed error
 # enum (a handful of keys) and the other two are scalars — none can approach
 # MAX_ARG_STRLEN. $enriched and $counts are the ones that scale with the rule set.
-# Retired rule ids are NOT orphans. An incident logged while a rule was active
-# keeps that rule_id forever, so every retirement would otherwise fail the gate
-# retroactively. Sourced from the file that already owns the list.
-retired_file="$_tmpdir/retired-ids.json"
-if [[ -f "$REPO_ROOT/scripts/retired-rule-ids.txt" ]]; then
-  grep -oE '^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]+' "$REPO_ROOT/scripts/retired-rule-ids.txt" 2>/dev/null \
-    | jq -R . | jq -s . > "$retired_file" 2>/dev/null || echo '[]' > "$retired_file"
-else
-  echo '[]' > "$retired_file"
-fi
-
 report=$(jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg generated_at "$GENERATED_AT" \
   --rawfile enriched_json "$stage_enriched_file" \
   --rawfile counts_json "$counts_file" \
-  --rawfile retired_json "$retired_file" \
   --argjson drops "$drops_counts_json" \
   --argjson cutoff "$UNUSED_CUTOFF_EPOCH" \
   --rawfile retired_txt "$retired_ids_file" '
@@ -410,29 +398,7 @@ report=$(jq -n \
         # NOTE: no apostrophes in this block. It is inside a single-quoted jq
         # program; one of them ends the program and bash parses the rest as shell.
         | map(select(. != "cq-pencil-collapse-auto-recover"))
-        # A retired rule id is not an orphan -- see $retired_json above. Generic
-        # on purpose: an incident keeps its rule_id forever, so without this
-        # EVERY retirement fails the gate retroactively.
-        | map(select(. as $id | (($retired_json | fromjson) | index($id)) | not))
-        # Hook-canonical emitter families (tier-gated OUT of AGENTS.md per
-        # cq-agents-md-tier-gate). Declared EXPLICITLY, not via a blanket
-        # non-AGENTS-prefix backstop: tests T21/T25 pin that an unrecognised id
-        # MUST still fail the run. This batch was invisible until the
-        # incidents-path fix above -- the log was read from a worktree where it
-        # cannot exist, so the gate had nothing to judge.
-        | map(select(startswith("guardrails-") | not))
-        | map(select(startswith("prod-write-defer-") | not))
-        | map(select(
-            . != "adr-033-inngest-cron-canonical"
-            and . != "brand-hex-commit-gate"
-            and . != "durable-reminder-prefer-inngest"
-            and . != "encryption-posture-design-time-default"
-            and . != "git-commit-secret-scan"
-            and . != "kb-domain-allowlist-guard"
-            and . != "post-dispatch-watch-gate"
-            and . != "pre-ask-technical-fork-gate"
-            and . != "pre-merge-auto-close-scan"
-            and . != "skill-security-scan"))) as $orphan_ids
+) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.

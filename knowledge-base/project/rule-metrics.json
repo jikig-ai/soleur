@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-10T09:53:15Z",
+  "generated_at": "2026-09-10T10:02:12Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1164,11 +1164,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 5,
+      "applied_count": 7,
       "warn_count": 0,
-      "fire_count": 5,
+      "fire_count": 7,
       "prevented_errors": 0,
-      "last_hit": "2026-09-08T16:56:37Z",
+      "last_hit": "2026-09-10T09:56:11Z",
       "first_seen": "2026-08-13T19:20:21Z",
       "rule_text_prefix": ""
     },
@@ -1395,6 +1395,7 @@
       "net-issue-flow-body-attributed": 14,
       "guardrails-block-rm-rf-worktrees": 23,
       "guardrails-block-conflict-markers": 3,
+      "prod-write-defer-git-push-main": 6,
       "guardrails-worktree-write-guard": 254,
       "prod-write-defer-terraform-apply": 95,
       "prod-write-defer-doppler-prd-secrets": 6,
@@ -1402,7 +1403,6 @@
       "adr-033-inngest-cron-canonical": 13,
       "durable-reminder-prefer-inngest": 2,
       "brand-hex-commit-gate": 6,
-      "prod-write-defer-git-push-main": 5,
       "encryption-posture-design-time-default": 1
     },
     "gate_exemptions": [
