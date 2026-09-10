@@ -254,12 +254,20 @@ closed, and the bound is one-sided: the reach and spelling gaps above are the on
 property of runtime STATE should be enforced by a self-refusal the artifact CARRIES, not by a
 boundary check that must enumerate the ways to REACH that state — and a verb set plus a closure
 plus a grep is exactly such an enumeration. The register-aligned instrument exists: git's
-`reference-transaction` hook fires on EVERY ref write, including a tag a fetch auto-follows, and
-can refuse `refs/tags/*` creation for the duration of a battery run. It is complete by
-construction and needs no verb set, no closure, and no ledger. It is also blind to WHERE the
-offending command lives, which is what a reviewer needs at review time; the two are complements.
-The static census ships here because it names the site; the state predicate is tracked separately
-as the thing that would actually close the cell.
+`reference-transaction` hook fires on every ref write that goes through git's ref machinery,
+including a tag a fetch auto-follows, and can refuse `refs/tags/*` creation for the duration of a
+battery run. It needs no verb set, no closure and no ledger, and it is armed per-process-tree via
+`GIT_CONFIG_COUNT`/`core.hooksPath`, so there is nothing to install and nothing to tear down.
+
+It is NOT, however, "complete by construction" — an earlier revision of this paragraph said so and
+that was measured false the same week. `printf '%s' "$(git rev-parse HEAD)" > .git/refs/tags/x`
+produces a tag `git tag -l` lists and the hook never sees, and a `packed-refs` append does the
+same. Those are two of the spellings enumerated above, and they are exactly the two that carry no
+git invocation at all. The hook closes the other ~29; it does not close the cell.
+
+It is also blind to WHERE the offending command lives, which is what a reviewer needs at review
+time. The static census ships here because it names the site; the two are complements, and
+neither alone is the whole answer.
 
 ## Consequences
 
