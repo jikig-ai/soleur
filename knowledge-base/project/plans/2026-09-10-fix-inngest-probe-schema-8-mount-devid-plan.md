@@ -964,7 +964,7 @@ Inngest-internal estate ULID. This plan reduces that surface; the new `registry_
 count, and `data_mount_devid` is a device alias — neither can carry a key name or a payload. No
 new value in the row is influenced by anything writing to Redis.
 
-**Brand-survival threshold:** none.
+- **Brand-survival threshold:** none.
 
 *Threshold `none` scope-out, required because `cloud-init.*\.ya?ml` is a sensitive path:*
 `threshold: none, reason: the change narrows the redis_key_patterns identifier surface and adds
