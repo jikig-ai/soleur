@@ -8,23 +8,39 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 pass=0; fail=0
 
-# Per-session test isolation:
-# - Any fixture running `git init` inside $WORK escapes to the parent
-#   worktree unless GIT_{DIR,INDEX_FILE,WORK_TREE} are unset AND
-#   GIT_CEILING_DIRECTORIES is set to $WORK. See learning
-#   2026-03-24-git-ceiling-directories-test-isolation.md.
-# - HOME / GIT_CONFIG_{GLOBAL,SYSTEM} neutralized so a local user's
-#   ~/.gitconfig (e.g. `[init] defaultBranch = master`) doesn't break
-#   the `git init -b main` fixture.
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+# Per-session test isolation, through the shell fixture chokepoint (#7849).
+#
+# What stood here was `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE` plus hand-spelled
+# GIT_CEILING_DIRECTORIES / GIT_CONFIG_{GLOBAL,SYSTEM} exports. That unset covered three of
+# the NINE variables that redirect where git reads and writes, and a partial scrub greps
+# identically to a full one -- which is precisely why the six-variable gap survived. Sourcing
+# the chokepoint ARMS the fail-loud tripwire instead: an inherited git-location environment
+# now ABORTS naming this file, rather than being half-cleaned in silence. `git_fixture_env`
+# supplies the ceiling, the config hermeticity and a synthesized identity from one list.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 
 # Isolate the jsonl file per run so we don't contaminate dev telemetry.
 WORK=$(mktemp -d)
-export GIT_CEILING_DIRECTORIES="$WORK"
+# HOME carries no GIT_ prefix, so the chokepoint's sweep leaves it alone. It stays neutralized
+# here because the hooks under test read it for non-git purposes too.
 export HOME="$WORK"
-export GIT_CONFIG_GLOBAL=/dev/null
-export GIT_CONFIG_SYSTEM=/dev/null
 trap 'rm -rf "$WORK"' EXIT
+
+# $WORK is itself a fixture -- the mirrored repo layout below is what the copied hooks resolve
+# against -- so it gets the same constructed environment every other fixture here gets.
+git_fixture_env "$WORK" || {
+  echo "FATAL: test_hook_emissions: git_fixture_env refused the run root $WORK" >&2
+  exit 1
+}
+
+# LEDGER RECONCILIATION (#7853), paired with the conversion above and NOT separable from it.
+# Sourcing the chokepoint brings this suite inside the incident-sandbox redirect, so the rows
+# its hooks emit stop landing under $WORK. This suite ASSERTS on those rows, so it reads them
+# back from the sandbox the helper exports. Sourced AFTER the trap above so the helper COMPOSES
+# with it rather than being clobbered by it.
+# shellcheck source=../../.claude/hooks/lib/test-incident-sandbox.sh
+source "$REPO_ROOT/.claude/hooks/lib/test-incident-sandbox.sh"
 # Mirror the repo layout so BASH_SOURCE resolution inside the hooks lands
 # in $WORK instead of the real repo.
 mkdir -p "$WORK/.claude/hooks/lib" "$WORK/scripts/lib"
@@ -42,7 +58,8 @@ cp "$REPO_ROOT/.claude/hooks/worktree-write-guard.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/scripts/lib/rule-metrics-constants.sh" "$WORK/scripts/lib/"
 chmod +x "$WORK/.claude/hooks/"*.sh
 
-FILE="$WORK/.claude/.rule-incidents.jsonl"
+# The sink is the sandbox, not the mirrored layout: see the reconciliation note above.
+FILE="$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl"
 
 _check() {
   local label="$1" rid="$2"
@@ -101,13 +118,22 @@ _check_deny_payload() {
 
 # Build a fake git repo we can point commands at via .cwd. Committed on
 # branch `main` so commit-on-main cases fire. All commits inside $WORK.
+#
+# It no longer ECHOES the path, and callers no longer wrap it in `$( )`. `git_fixture_env`
+# exports into the shell that calls it, and a command substitution runs in a subshell -- the
+# fixture would have been built correctly while every later `git -C "$path"` in the parent ran
+# outside the constructed environment. Called as a plain function, the exports land where the
+# rest of the suite can see them.
 _build_fake_main_repo() {
   local path="$1"
   : "${path:?fixture dir is empty; git -C <empty> would retarget this write}"
   mkdir -p "$path"
+  git_fixture_env "$path" || {
+    echo "FATAL: test_hook_emissions: git_fixture_env refused fixture $path" >&2
+    exit 1
+  }
   git -C "$path" init -q -b main
   git -C "$path" -c user.email=t@test -c user.name=t commit --allow-empty -q -m init
-  echo "$path"
 }
 
 # --- guardrails: block-stash-in-worktrees (unconditional — CWD is irrelevant)
@@ -217,7 +243,8 @@ _check "guardrails: require-milestone" "guardrails-require-milestone"
 # --- guardrails: block-commit-on-main (direct, via .cwd) ------------------
 # Regression guard for resolve_command_cwd helper (proves the guard still
 # fires when the only CWD signal is the hook input's .cwd field).
-MAIN_REPO=$(_build_fake_main_repo "$WORK/main-repo-direct")
+MAIN_REPO="$WORK/main-repo-direct"
+_build_fake_main_repo "$MAIN_REPO"
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"},"cwd":"'"$MAIN_REPO"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: block-commit-on-main (direct)" "guardrails-block-commit-on-main"
@@ -234,7 +261,8 @@ _check "guardrails: block-commit-on-main (chained)" "guardrails-block-commit-on-
 # Prove the guard does NOT fire when HEAD is a feature branch. A bug that
 # degenerated to "always emit on git commit" would pass the two positive
 # cases above; this case fails it.
-FEAT_REPO=$(_build_fake_main_repo "$WORK/feat-repo")
+FEAT_REPO="$WORK/feat-repo"
+_build_fake_main_repo "$FEAT_REPO"
 : "${FEAT_REPO:?fixture dir is empty; git -C <empty> would retarget this write}"
 git -C "$FEAT_REPO" checkout -q -b feat/foo
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"},"cwd":"'"$FEAT_REPO"'"}' \
@@ -245,7 +273,8 @@ _check_silent "guardrails: block-commit-on-main (feature branch)" "guardrails-bl
 # Stage a file with conflict markers. Use printf instead of a heredoc so
 # the literal markers in the test source don't themselves trip any local
 # pre-commit grep. The guard inspects `git diff --cached`.
-CONFLICT_REPO=$(_build_fake_main_repo "$WORK/main-repo-conflict")
+CONFLICT_REPO="$WORK/main-repo-conflict"
+_build_fake_main_repo "$CONFLICT_REPO"
 : "${CONFLICT_REPO:?fixture dir is empty; git -C <empty> would retarget this write}"
 # Move to a feature branch so commit-on-main doesn't fire first.
 git -C "$CONFLICT_REPO" checkout -q -b feat/conflict
@@ -295,7 +324,8 @@ PATH="$STUB_BIN_ONE:$PATH" \
 _check_silent "guardrails: block-delete-branch (single worktree)" "guardrails-block-delete-branch"
 
 # --- pencil-open-guard (untracked .pen) -----------------------------------
-PEN_REPO=$(_build_fake_main_repo "$WORK/pen-repo")
+PEN_REPO="$WORK/pen-repo"
+_build_fake_main_repo "$PEN_REPO"
 echo "stub" > "$PEN_REPO/foo.pen"  # untracked
 echo '{"tool_input":{"filePath":"'"$PEN_REPO/foo.pen"'"}}' \
   | bash "$WORK/.claude/hooks/pencil-open-guard.sh" >/dev/null 2>&1 || true
@@ -306,7 +336,8 @@ _check "pencil-open-guard: untracked .pen" "cq-before-calling-mcp-pencil-open-do
 # and checks for `.worktrees/<anything>` presence via ls -A. We run the
 # hook from inside a repo under $WORK that contains a populated
 # .worktrees/ directory.
-WTG_REPO=$(_build_fake_main_repo "$WORK/wtg-repo")
+WTG_REPO="$WORK/wtg-repo"
+_build_fake_main_repo "$WTG_REPO"
 mkdir -p "$WTG_REPO/.worktrees/active/stuff"
 ( cd "$WTG_REPO" \
   && echo '{"tool_input":{"file_path":"'"$WTG_REPO/file.txt"'"}}' \

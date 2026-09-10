@@ -41,6 +41,83 @@
 # that one member died.
 set -uo pipefail
 
+# Entry-point git-location scrub (#7833 / #7849). This runner is an ENTRY POINT: it invokes fixture
+# suites that create git repositories, and under lefthook git exports GIT_DIR and GIT_INDEX_FILE as
+# ABSOLUTE paths that override both a subprocess working directory and `git -C`. A suite reached
+# from here would then initialise nothing and commit onto the caller live branch.
+#
+# The scrub belongs at the entry point rather than in each suite: the tripwire in
+# plugins/soleur/test/lib/git-fixture-env.sh deliberately ABORTS instead of scrubbing, so that a
+# missing scrub names the runner that lacked it rather than being silently absorbed.
+#
+# Kept in lockstep with the tripwire refuse-set by plugins/soleur/test/git-env-list-parity.test.sh,
+# which asserts that every entry point unsets everything the tripwire refuses.
+# ONE physical line, matching the other three entry points. The parity test extracts this with a
+# line-oriented grep, so a backslash continuation would hide every name after the break and the
+# guard would report a scrub gap that does not exist.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
+
+# Incident-telemetry sandbox belt (#7853). The five chokepoints already export this; a runner is
+# the outer boundary, so it sets a default for anything they do not reach -- a suite invoked from a
+# third cwd, or one whose runtime loads no preload.
+#
+# Fail-loud, and both conditions matter. An UNSET root is not a degraded sandbox: `_incidents_repo_root()`
+# walks up to the operator real .claude/.rule-incidents.jsonl. An EMPTY value reads as unset to that
+# same function while still looking "set" to any static check for the variable name, which is the
+# shape that let two previous per-call-site sweeps report clean while they leaked.
+# Validate an INHERITED root too, not only one we mint. `[ -z ]` alone lets a NON-ABSOLUTE value
+# through, and `_incidents_repo_root()` returns any non-empty value verbatim -- so
+# `INCIDENTS_REPO_ROOT=.` resolves against the HOOK's cwd, i.e. the operator's real ledger for any
+# hook spawned at the checkout root, while every static check for the variable's name reports it
+# set. The TS and Python siblings both require an absolute path; these shell arms did not.
+case "${INCIDENTS_REPO_ROOT:-}" in
+  /?*) : ;;
+  "")  _soleur_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>&1)" || {
+         printf "FATAL: could not create an incident-telemetry sandbox: %s\n" "${_soleur_sb}" >&2
+         printf "  Refusing to run: an unset INCIDENTS_REPO_ROOT points test telemetry at the\n" >&2
+         printf "  operator real .claude/.rule-incidents.jsonl.\n" >&2
+         exit 1
+       }
+       case "${_soleur_sb:-}" in
+         /?*) : ;;
+         *)   printf "FATAL: mktemp produced a non-absolute sandbox path: %s\n" \
+                "${_soleur_sb:-<empty>}" >&2; exit 1 ;;
+       esac
+       # FAIL LOUD, not `|| true`: emit_incident drops a row WITHOUT a sentinel when its parent dir
+       # is missing, so on a full tmpfs every emit is silently discarded.
+       mkdir -p "$_soleur_sb/.claude" || {
+         printf "FATAL: could not create %s/.claude\n" "$_soleur_sb" >&2; exit 1
+       }
+       export INCIDENTS_REPO_ROOT="$_soleur_sb"
+       export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
+       #
+       # Unescaped with PARAMETER EXPANSION, never `eval`. `trap -p` emits the body single-quoted
+       # with a literal quote as the four-character sequence '\'' ; stripping the outer quotes and
+       # re-wrapping in double quotes leaves those unbalanced and makes the composed trap a SYNTAX
+       # ERROR, which then never runs and leaks the sandbox. `eval` would round-trip it, but
+       # ADR-156 forbids eval under .claude/hooks and the sibling copy of this block lives there —
+       # one pattern across all three sites beats two spellings of the same fix.
+       _soleur_prior_body=""
+       _soleur_prior_raw="$(trap -p EXIT)"
+       if [ -n "$_soleur_prior_raw" ]; then
+         _soleur_s="${_soleur_prior_raw#trap -- }"
+         _soleur_s="${_soleur_s% EXIT}"
+         _soleur_s="${_soleur_s#\'}"
+         _soleur_s="${_soleur_s%\'}"
+         _soleur_prior_body="${_soleur_s//\'\\\'\'/\'}"
+       fi
+       _SOLEUR_SB_OWNED="$_soleur_sb"
+       _soleur_sb_cleanup() { [ -n "${_SOLEUR_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_SB_OWNED"; return 0; }
+       # shellcheck disable=SC2064
+       trap "${_soleur_prior_body:+$_soleur_prior_body; }_soleur_sb_cleanup" EXIT
+       unset _soleur_prior_raw _soleur_s _soleur_prior_body _soleur_sb ;;
+  *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
+         "$INCIDENTS_REPO_ROOT" >&2
+       printf "  A relative root resolves against each hook's cwd.\n" >&2
+       exit 1 ;;
+esac
+
 DIR=$(cd "$(dirname "$0")" && pwd)
 FAIL=0
 RAN=0

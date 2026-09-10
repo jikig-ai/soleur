@@ -37,6 +37,10 @@ vi.hoisted(() => {
 });
 
 import { TARGET_ALLOW_RE } from "@/server/inngest/functions/cron-compound-promote";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 function repoRoot(): string {
   let d = dirname(fileURLToPath(import.meta.url));
@@ -96,14 +100,18 @@ describe("rule-body gate recursion invariant (ADR-092, AC8)", () => {
     ].join("\n");
 
     const git = (...args: string[]) =>
-      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env: gitFixtureEnv(repo) });
     const write = () =>
-      execFileSync("python3", [GATE, "--root", repo, "--write"], { encoding: "utf8" });
+      execFileSync("python3", [GATE, "--root", repo, "--write"], {
+        encoding: "utf8",
+        env: gitFixtureEnv(repo),
+      });
 
     /** Run --check against the pinned baseline commit; return {code, stderr}. */
     const check = (): { code: number; stderr: string } => {
       try {
         execFileSync("python3", [GATE, "--root", repo, "--check", "--base", baseSha], {
+          env: gitFixtureEnv(repo),
           encoding: "utf8",
         });
         return { code: 0, stderr: "" };
