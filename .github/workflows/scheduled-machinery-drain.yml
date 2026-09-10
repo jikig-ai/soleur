@@ -1,0 +1,77 @@
+# Weekly net-negative drain + issue-flow measurement.
+#
+# NO `schedule:`/`cron:` KEY, DELIBERATELY. ADR-033 makes Inngest the single
+# scheduling substrate, and `.claude/hooks/new-scheduled-cron-prefer-inngest.sh`
+# DENIES a new scheduled-*.yml carrying a cron block. Scheduling lives in
+# `cron-machinery-drain.ts`, which dispatches this workflow. That is the pattern
+# nine sibling crons already use; the hook's override hatch is not reached for.
+name: scheduled-machinery-drain
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: scheduled-machinery-drain
+  cancel-in-progress: false
+
+jobs:
+  measure-and-drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The measurement is DETERMINISTIC and runs first, so a failure in the
+      # agent-driven drain below never costs us the week's numbers.
+      - name: Measure issue flow
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          bash scripts/issue-flow-measure.sh > measure.txt 2>&1 || rc=$?
+          echo "RC=$rc"
+          cat measure.txt
+          {
+            echo 'report<<SOLEUR_EOF_REPORT'
+            cat measure.txt
+            echo 'SOLEUR_EOF_REPORT'
+          } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      # FIND-OR-UPDATE exactly one standing issue. A measurement that files a
+      # fresh issue every week is the defect reproducing itself inside its own
+      # instrument, so this never calls `create` when a match exists.
+      - name: Update the standing measurement issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.measure.outputs.report }}
+        run: |
+          set -euo pipefail
+          TITLE="issue-flow: weekly measurement"
+          # `--search` is NOT combined with `--label` here: measured 2026-09-10,
+          # gh issue list silently discards --search when --label is present.
+          existing="$(gh issue list --state open --limit 100 \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          # Tilde fences, not backticks. A backtick inside a single-quoted
+          # string trips shellcheck SC2016 (actionlint exits non-zero on it, and
+          # CI runs actionlint), while a backtick inside a DOUBLE-quoted string
+          # or an unquoted heredoc would command-substitute and silently eat the
+          # report. `~~~` is valid GFM and carries no shell meaning at all, so
+          # it removes the hazard class rather than escaping around it.
+          body="$(printf '%s\n\n~~~\n%s\n~~~\n' \
+            'Standing weekly issue-flow measurement. Updated in place, never re-filed.' \
+            "$REPORT")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "updated standing issue #$existing"
+          else
+            gh issue create --title "$TITLE" --body "$body" \
+              --label meta/machinery --milestone "Post-MVP / Later"
+            echo "created the standing issue (first run only)"
+          fi

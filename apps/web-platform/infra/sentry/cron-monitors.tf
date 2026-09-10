@@ -1352,3 +1352,29 @@ resource "sentry_cron_monitor" "scheduled_sentry_alert_drift" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Weekly machinery drain + issue-flow measurement, Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-machinery-drain.ts`. The
+# handler only DISPATCHES a workflow_dispatch-only GHA workflow (ADR-033 keeps
+# Inngest as the single scheduling substrate), so the monitored work is the
+# dispatch itself: a pure-TS mint-token-and-POST, which is the small-cron
+# cohort's shape. 30-min margin per the Inngest-fired precedent
+# (scheduled_stale_deferred_scope_outs above); 10-min max_runtime for the same
+# reason -- no claude-eval spawn happens inside the Inngest runtime.
+#
+# failure_issue_threshold = 1 IS the verification. A missed weekly fire means
+# the issue-flow measurement did not run that week, and the measurement is the
+# only thing that can tell the operator whether the filing rate actually fell.
+# Per hr-no-dashboard-eyeball-pull-data-yourself this monitor pages on its own
+# rather than relying on anyone noticing a number is missing.
+resource "sentry_cron_monitor" "scheduled_machinery_drain" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-machinery-drain"
+  schedule                = { crontab = "0 9 * * 1" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
