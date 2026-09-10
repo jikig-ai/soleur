@@ -35,6 +35,15 @@ api_count() { # $1 = query suffix
 }
 
 FILED="$(api_count "is:issue+created:>=${SINCE}")"
+# THE COVERED POPULATION. The filing gate is a PreToolUse hook plus the cron
+# allowlist hook: it reaches agent-authored filings, not workflow-authored ones
+# (`.github/workflows/*.yml` shelling `gh issue create` never traverses a hook).
+# Counting all filings against the baseline hides an irreducible automation
+# floor, so if the rate plateaus above it the backstop reads "the gate is being
+# gamed" when the correct reading is "the gate never covered that traffic."
+# Reported as its own line rather than subtracted, so the headline stays a pure
+# count and the floor is visible instead of inferred.
+FILED_AUTOMATION="$(api_count "is:issue+created:>=${SINCE}+author:app/github-actions")"
 OPEN_TOTAL="$(api_count "is:issue+is:open")"
 
 # Expiry closes are attributable via the sweeper's own stable COMMENT_MARKER,
@@ -59,33 +68,32 @@ OVERRIDES="$(gh api "search/issues?q=repo:${REPO}+is:pr+is:merged+merged:>=${SIN
 
 FILED_PER_WEEK=$(( FILED / WEEKS ))
 
-# BASELINES ARE WINDOW-MATCHED, and that is load-bearing.
+# THE BASELINE IS DERIVED, WINDOW-MATCHED BY CONSTRUCTION.
 #
-# Measured pre-merge on 2026-09-10, the trailing rate is NOT flat across window
-# lengths: 4 weeks gives 338/4 = 84 per week, 8 weeks gives 977/8 = 122. So
-# comparing a 4-week post-merge figure against a baseline derived from 8 weeks
-# would declare success at 84 -- exactly the rate the repo was ALREADY running
-# before this change. That is the second time the same error appeared in this
-# work: the first was the write-up's 142 vs the live 122, and it is recorded
-# here because a criterion its own starting state already satisfies measures
-# nothing at all.
-#
-# Refusing an unmatched window is deliberate. A default would be silently wrong.
-case "$WEEKS" in
-  4) BASELINE_FILED_PER_WEEK=84 ;;
-  8) BASELINE_FILED_PER_WEEK=122 ;;
-  *)
-    echo "FATAL: no pre-merge baseline recorded for a ${WEEKS}-week window." >&2
-    echo "Baselines are window-matched (4w=84/wk, 8w=122/wk measured 2026-09-10)." >&2
-    echo "Comparing across window lengths silently declares success at an" >&2
-    echo "unchanged rate. Re-derive the baseline for this window first." >&2
-    exit 2
-    ;;
-esac
+# It used to be two hardcoded constants (4w=84, 8w=122) plus a refusal for any
+# other window. The refusal was a correct guard on a hazard the constants
+# themselves created: measured pre-merge the trailing rate is NOT flat across
+# window lengths, so comparing a 4-week figure against an 8-week baseline would
+# have declared success at 84 -- exactly the rate the repo was already running.
+# Deriving it over the SAME window length, anchored to a fixed pre-merge date,
+# removes the hazard class rather than guarding it: the window can never mismatch
+# because both sides use $WEEKS, it works at any window, and it is deterministic
+# because the anchor window is closed history.
+BASELINE_ANCHOR="2026-09-10"
+_bl_since="$(date -u -d "${BASELINE_ANCHOR} - ${WEEKS} weeks" +%Y-%m-%d)"
+BASELINE_FILED="$(api_count "is:issue+created:${_bl_since}..${BASELINE_ANCHOR}")"
+if [[ ! "$BASELINE_FILED" =~ ^[0-9]+$ ]]; then
+  echo "FATAL: could not derive the pre-merge baseline for a ${WEEKS}-week window." >&2
+  echo "Refusing to emit a verdict against a baseline that did not resolve -- an" >&2
+  echo "empty baseline compares every rate favourably." >&2
+  exit 2
+fi
+BASELINE_FILED_PER_WEEK=$(( BASELINE_FILED / WEEKS ))
 BASELINE_OPEN_TOTAL=1455
 
 echo "SOLEUR_ISSUE_FLOW_MEASURE window_weeks=${WEEKS} since=${SINCE}"
-echo "1. filed=${FILED} filed_per_week=${FILED_PER_WEEK} baseline_per_week=${BASELINE_FILED_PER_WEEK}"
+echo "1. filed=${FILED} filed_per_week=${FILED_PER_WEEK} baseline_per_week=${BASELINE_FILED_PER_WEEK} (baseline derived over the same ${WEEKS}w window ending ${BASELINE_ANCHOR})"
+echo "1b. of which workflow-authored (OUTSIDE the gate's reach)=${FILED_AUTOMATION} — the irreducible floor under metric 1"
 echo "2. expiry_closes=${EXPIRY_CLOSED} reopened_after_expiry=${REOPENED}"
 echo "3. net_issue_flow_overrides=${OVERRIDES}"
 # The fail-open marker (`net-issue-flow fail-open:`) is emitted into the

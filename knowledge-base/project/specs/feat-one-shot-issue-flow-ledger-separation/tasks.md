@@ -55,8 +55,13 @@ AGENTS-class fail-hard rule in work Phase 0.5. Now 0 behind.
 
 ## Phase 3 — L3: extend the existing sweeper (stock cleanup only)
 
-- [x] **3.0** Real safety properties (tranches, `MAX_CLOSES_PER_RUN`,
-      `MACHINERY_SWEEP_NOT_BEFORE`, empirical `updated_at` probe).
+- [x] **3.0** Real safety properties: per-label `MAX_CLOSES_PER_LABEL` caps and
+      `MACHINERY_SWEEP_NOT_BEFORE`. **The tranche strategy was CUT at review**:
+      it claimed to stagger eligibility, a failure mode the close caps already
+      bound, and it existed only as prose — an unenforced human cadence, which
+      is the exact class this change exists to replace with a gate. The
+      `updated_at` probe is likewise not a code deliverable; the date gate makes
+      the answer moot for the first 30 days either way.
 - [x] **3.1** Target set — **one** comma-joined `label:` qualifier (multiple
       qualifiers AND and would match zero, indistinguishably from a clean run).
 - [x] **3.2** Kill switch widened + never-touch guards; **3.2a** comment fetch

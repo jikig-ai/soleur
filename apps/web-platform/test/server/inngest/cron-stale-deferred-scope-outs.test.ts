@@ -866,3 +866,39 @@ describe("cron-stale-deferred-scope-outs — never-close guards", () => {
     expect(notBefore > "2026-09-10").toBe(true);
   });
 });
+
+// --------------------------------------------------------------------------
+// (i) Per-label close caps.
+//
+// buildSearchQuery emits ONE `sort:updated-asc` query, and from
+// MACHINERY_SWEEP_NOT_BEFORE the backfilled machinery cohort dominates
+// oldest-first ordering (57% of the backlog is already past the window). A
+// single shared cap would hand the whole budget to machinery every day and
+// starve `deferred-scope-out` -- this function's original and only job until
+// now -- and the starvation would be INVISIBLE behind one integer and one
+// Sentry monitor covering both arms.
+// --------------------------------------------------------------------------
+describe("cron-stale-deferred-scope-outs — per-label close caps", () => {
+  it("caps each arm separately, and the arms sum to no more than the overall cap", async () => {
+    const mod = await importModule();
+    const perLabel = mod.__TESTING__.MAX_CLOSES_PER_LABEL as Record<string, number>;
+    const overall = mod.__TESTING__.MAX_CLOSES_PER_RUN as number;
+
+    // Every target label has its OWN budget: a missing entry would silently
+    // fall back to the shared cap, which is the starvation shape.
+    for (const label of mod.__TESTING__.TARGET_LABELS) {
+      expect(perLabel[label]).toBeGreaterThan(0);
+    }
+    const sum = Object.values(perLabel).reduce((a, b) => a + b, 0);
+    expect(sum).toBeLessThanOrEqual(overall);
+  });
+
+  it("reserves a non-trivial share for the arm the cron was originally built for", async () => {
+    const mod = await importModule();
+    const perLabel = mod.__TESTING__.MAX_CLOSES_PER_LABEL as Record<string, number>;
+    // The point of the split is that machinery cannot consume everything.
+    expect(perLabel["deferred-scope-out"]).toBeGreaterThanOrEqual(
+      perLabel["meta/machinery"],
+    );
+  });
+});

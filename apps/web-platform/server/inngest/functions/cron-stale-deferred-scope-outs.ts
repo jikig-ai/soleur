@@ -91,6 +91,20 @@ const PRODUCT_FACING_LABELS = [
 // than silently dropped.
 const MAX_CLOSES_PER_RUN = 25;
 
+// PER-LABEL, not one shared budget. buildSearchQuery emits a single
+// `sort:updated-asc` query, and from MACHINERY_SWEEP_NOT_BEFORE the backfilled
+// machinery cohort dominates oldest-first ordering -- 57% of the backlog is
+// already past the 90-day window -- so a single shared cap would hand the whole
+// 25/run budget to machinery every day and starve `deferred-scope-out`, this
+// function's original and only job until now. The starvation would also be
+// INVISIBLE: `deferred` was one integer with no per-label breakdown, and one
+// Sentry monitor covers both arms, so a starved arm and a healthy one look the
+// same. Splitting the cap costs one Record and makes the split observable.
+const MAX_CLOSES_PER_LABEL: Record<string, number> = {
+  "deferred-scope-out": 15,
+  "meta/machinery": 10,
+};
+
 // The machinery arm cannot fire before this date.
 //
 // An earlier draft argued the first live sweep was safe "because the
@@ -164,8 +178,12 @@ interface SweepResult {
   total: number;
   closed: number;
   skipped: number;
+  /** Per-arm close counts, so a starved arm is visible rather than inferred. */
+  closedByLabel: Record<string, number>;
+  /** Per-arm deferrals, same reason. */
+  deferredByLabel: Record<string, number>;
   /**
-   * Candidates left unswept because MAX_CLOSES_PER_RUN was reached. Returned
+   * Candidates left unswept because a close cap was reached. Returned
    * rather than dropped so a capped run is visible in the log instead of
    * reading like a run that simply found less work.
    */
@@ -331,6 +349,8 @@ export async function sweepStaleScopeOuts(args: {
   }
 
   let deferred = 0;
+  const closedByLabel: Record<string, number> = {};
+  const deferredByLabel: Record<string, number> = {};
   let closed = 0;
   let skipped = 0;
 
@@ -366,9 +386,13 @@ export async function sweepStaleScopeOuts(args: {
       continue;
     }
 
-    // Close cap. Checked BEFORE any write so the cap bounds writes, not reads.
-    if (closed >= MAX_CLOSES_PER_RUN) {
+    // Close cap, PER LABEL and checked BEFORE any write so it bounds writes
+    // rather than reads. The overall cap still applies as a backstop.
+    const arm = names.includes(MACHINERY_LABEL) ? MACHINERY_LABEL : "deferred-scope-out";
+    const armCap = MAX_CLOSES_PER_LABEL[arm] ?? MAX_CLOSES_PER_RUN;
+    if (closed >= MAX_CLOSES_PER_RUN || (closedByLabel[arm] ?? 0) >= armCap) {
       deferred += 1;
+      deferredByLabel[arm] = (deferredByLabel[arm] ?? 0) + 1;
       continue;
     }
 
@@ -535,6 +559,7 @@ export async function sweepStaleScopeOuts(args: {
         }),
       );
       closed += 1;
+      closedByLabel[arm] = (closedByLabel[arm] ?? 0) + 1;
     } catch (err) {
       // Discriminate the issues:write-missing 403 so the operator can
       // alert-route on it directly (see #4189). Same blind spot as the
@@ -563,6 +588,8 @@ export async function sweepStaleScopeOuts(args: {
     closed,
     skipped,
     deferred,
+    closedByLabel,
+    deferredByLabel,
     dryRun,
   };
 }
@@ -598,6 +625,8 @@ export async function cronStaleDeferredScopeOutsHandler({
     closed: 0,
     skipped: 0,
     deferred: 0,
+    closedByLabel: {},
+    deferredByLabel: {},
     dryRun,
   };
   let sweepFailed = false;
@@ -687,7 +716,7 @@ export async function cronStaleDeferredScopeOutsHandler({
       fn: "cron-stale-deferred-scope-outs",
       ...result,
     },
-    `Auto-closed ${result.closed} stale issues across [${TARGET_LABELS.join(", ")}] (${result.skipped} skipped, ${result.deferred} deferred past the ${MAX_CLOSES_PER_RUN}-close cap)`,
+    `Auto-closed ${result.closed} stale issues (${TARGET_LABELS.map((l) => `${l}=${result.closedByLabel[l] ?? 0}`).join(" ")}); ${result.skipped} skipped, ${result.deferred} deferred (${TARGET_LABELS.map((l) => `${l}=${result.deferredByLabel[l] ?? 0}`).join(" ")})`,
   );
 
   return result;
@@ -725,6 +754,7 @@ export const __TESTING__ = {
   KILLSWITCH_LABELS,
   PRODUCT_FACING_LABELS,
   MAX_CLOSES_PER_RUN,
+  MAX_CLOSES_PER_LABEL,
   MACHINERY_SWEEP_NOT_BEFORE,
   MACHINERY_LABEL,
   buildSearchQuery,

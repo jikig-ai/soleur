@@ -39,15 +39,39 @@ Both are labelled "the last 8 weeks"; they anchor that window differently. The
 live figures were re-derived on 2026-09-10 with `date -u -d '8 weeks ago'`
 = `2026-07-16`.
 
-**AC25's baseline of record is 122 filed/week, not 142.**
+**AC25's baseline of record is DERIVED, not a constant — and this section is
+kept because it records why.**
+
+`scripts/issue-flow-measure.sh` now derives the baseline over the SAME window
+length as the measurement, anchored at `2026-09-10`. An earlier revision
+hardcoded two constants (4w=84, 8w=122) and REFUSED any other window; that
+refusal was a correct guard on a hazard the constants themselves created, and
+deriving removes the class rather than guarding it. The window can no longer
+mismatch, because both sides use `$WEEKS`.
+
+The reason the guard existed at all is the finding worth keeping:
 
 This is load-bearing and is the reason the disagreement is recorded rather than
 averaged. AC25 declares success when the post-merge filed-per-week figure is
 *below* the baseline. Taking 142 would have declared success at any rate under
 142 — including the current, unimproved 122. A criterion that its own starting
-state already satisfies measures nothing. The conservative reading is therefore
-the baseline, and the generous one is recorded only to explain why it was not
-used.
+state already satisfies measures nothing. That is why the baseline is derived rather than
+asserted: any hand-carried figure is a claim about a window, and the two
+readings above differ by 20 filings/week on the same repo in the same hour.
+
+**Verified after the change**: a 4-week run reports `85 >= 85` and a 6-week run
+`107 >= 107` — both correctly NOT below baseline today, so the criterion can
+still fail. A criterion its own starting state already satisfies measures
+nothing, and this one does not.
+
+**The metric carries an irreducible automation floor, reported separately.**
+The gate is a PreToolUse hook plus the cron allowlist hook, so it reaches
+agent-authored filings but not workflow-authored ones — `.github/workflows/*.yml`
+shelling `gh issue create` never traverses a hook. Measured over the same 4-week
+window: **27 of 342** filings are authored by `app/github-actions`, structurally
+outside the gate's reach. Line `1b` of the report names that floor, so a rate
+that plateaus above it is read as "the gate never covered that traffic" rather
+than "the gate is being gamed".
 
 The ratio is unchanged either way: **976/478 = 2.04 filed per closed**, against
 the write-up's 1,134/563 = 2.01. The diagnosis does not depend on the window.
