@@ -24,7 +24,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$HERE/inngest-host-not-serving-7674.sh"
 fails=0
 checks=0
-pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
+passes=0
+# `passes` is tracked SEPARATELY and is what the floor reads. A floor keyed on `checks` is
+# FAILURE-INCLUSIVE: both helpers bump it, so a `fail()` rewritten to skip its own counter keeps
+# the floor satisfied while the verdict silently inverts. Measured on the first cut of this file:
+# one token (`fail() { checks=$((checks + 1)); }`) turned "7 passed, 7 failed / rc 1" into
+# "14 passed, 0 failed / rc 0" with a real regression live in the probe.
+pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); passes=$((passes + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
 
 [[ -f "$PROBE" ]] || { echo "FATAL: probe not found at $PROBE" >&2; exit 1; }
@@ -80,16 +86,19 @@ echo "== inngest-host-not-serving-7674.sh exit-code harness =="
 # --- H1 the harness itself can FAIL --------------------------------------------------------
 # A suite whose wrapper cannot go red certifies nothing. Drive a case that MUST fail and confirm
 # the counter moved, then roll it back -- the instrument self-test the wrapper otherwise lacks.
-_h_f0="$fails"; _h_c0="$checks"
+_h_f0="$fails"; _h_c0="$checks"; _h_p0="$passes"
 RC=99; OUT="nothing like the expected text"
 # stderr is muted for this ONE call: the failure is deliberate, and an un-muted line reading
 # "FAIL: SELFTEST" in the output of a green suite is indistinguishable from a real regression to
 # anyone reading CI logs.
 expect "SELFTEST (must fail)" 0 "this substring cannot appear" 2>/dev/null
 if [[ "$fails" -eq $((_h_f0 + 1)) ]]; then
-  fails="$_h_f0"; checks="$_h_c0"; pass "INSTRUMENT: expect() reports a genuine mismatch as a failure"
+  fails="$_h_f0"; checks="$_h_c0"; passes="$_h_p0"; pass "INSTRUMENT: expect() reports a genuine mismatch as a failure"
 else
-  fails="$_h_f0"; checks="$_h_c0"; fail "INSTRUMENT: expect() did NOT fail on a guaranteed mismatch — every case below is decorative"
+  # printf + exit DIRECTLY: routing this through fail() would make the self-test that certifies the
+  # helpers depend on the helpers, which is precisely the state it exists to detect.
+  printf '  FAIL INSTRUMENT: expect() did NOT fail on a guaranteed mismatch — every case below is decorative.\n' >&2
+  exit 1
 fi
 
 # --- H2 the stub rejects a malformed query, so argv drift cannot pass silently --------------
@@ -163,12 +172,22 @@ fi
 # Equal to the count, so deleting any case reds the suite. Reported with printf + exit, never
 # through the helpers it backstops (ADR-193): a floor that calls fail() is disarmed by the same
 # edit that disarms fail().
-# Equal to the count measured after the self-test rolls its own counter back.
+# Equal to the count measured after the self-test rolls its own counter back. Keyed on `passes`,
+# NOT `checks` -- see the note on the helpers above. Reported with printf + exit directly, never
+# through the helpers it backstops (a floor dispatched through `fail()` is disarmed by the same
+# one-line edit that disarms every assertion it protects).
 FLOOR=14
-if [[ "$checks" -lt "$FLOOR" ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s checks ran, floor is %s — cases were deleted or skipped.\n' "$checks" "$FLOOR" >&2
+if [[ "$passes" -lt "$FLOOR" ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s PASSES recorded, floor is %s — cases were deleted, skipped, or a helper stopped counting.\n' "$passes" "$FLOOR" >&2
+  exit 1
+fi
+# CONSERVATION: the two counters must reconcile. A helper that bumps one and not the other -- the
+# exact mutation this file's own floor could not previously see -- breaks this even when both the
+# floor and the failure count look healthy.
+if [[ "$((passes + fails))" -ne "$checks" ]]; then
+  printf '  FAIL INSTRUMENT: passes(%s) + fails(%s) != checks(%s) — a verdict helper is not counting.\n' "$passes" "$fails" "$checks" >&2
   exit 1
 fi
 
-printf '\ninngest-host-not-serving-7674: %s passed, %s failed\n' "$((checks - fails))" "$fails"
+printf '\ninngest-host-not-serving-7674: %s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]] || exit 1

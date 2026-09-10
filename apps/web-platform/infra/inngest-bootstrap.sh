@@ -711,12 +711,40 @@ dedicated)
     # `-nsdo NAME` plus a first-non-empty read: that inverts the rule and yields the dm node or the
     # partition instead of the base disk, which resolves to __NOMATCH__ and refuses forever. The
     # `-d` measurement recorded in this branch's phase-0 notes is about that OTHER form.
+    # COUNT THE LEAVES, do not assume one. `lsblk -s` on md/RAID or multipath emits a FORKED
+    # inverse tree -- two ancestors at the SAME depth -- and a last-non-empty read picks one
+    # ARBITRARILY. Measured against the real probe body with `md0` over `sdb`+`sdc`, each carrying
+    # its own Hetzner alias: the emitter reported base=sdc and devid=scsi-0HC_Volume_777777777,
+    # a confident pin naming a volume the mount is NOT on. G14 then compares that against the
+    # dispatch's expected id, so an arbitrarily-picked leaf that happens to match would clear a
+    # destructive recut against the wrong physical device.
+    #
+    # This is the by-id half's own discipline applied to the other side of the same function: that
+    # half already COUNTS (`_devid_hits` -> __AMBIGUOUS__) rather than asserting single-valuedness.
+    # No current topology forks (cloud-init builds one volume, no partition table, no md) -- but
+    # "does not arise today" describes one layout, and this block already handles the partition
+    # case for exactly that reason.
+    #
+    # Depth = leading bytes before the first alphanumeric (lsblk's tree prefix). Only RELATIVE
+    # depth is compared, so a byte-oriented awk and a multibyte-aware one agree.
     data_mount_base="$(timeout 5 lsblk -nso NAME "$data_mount_src" 2>/dev/null \
-      | awk 'NF{l=$1} END{if(l!=""){gsub(/^[^[:alnum:]]+/,"",l); print l}}' || true)"
+      | awk '''NF {
+             p = match($0, /[[:alnum:]]/)
+             if (p > 0) {
+               d = p - 1; nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
+               if (cnt == 0 || d > maxd) { maxd = d; cnt = 1; base = nm }
+               else if (d == maxd) { cnt++ }
+             }
+           }
+           END { if (cnt > 1) print "__AMBIGUOUS__"; else if (base != "") print base }''' || true)"
     case "$data_mount_base" in
+    __AMBIGUOUS__) : ;;
     '' | *[!A-Za-z0-9_.-]*) data_mount_base=__UNREADABLE__ ;;
     esac
     case "$data_mount_base" in
+    # A forked tree is not a readability failure -- it is a measured multiplicity, and it carries
+    # its own name so the operator is not sent at the wrong remedy.
+    __AMBIGUOUS__) data_mount_devid=__AMBIGUOUS__ ;;
     __UNREADABLE__) data_mount_devid=__UNREADABLE__ ;;
     *)
       # Reverse-map inside the HETZNER NAMESPACE ONLY. Measured: a whole-by-id walk returns

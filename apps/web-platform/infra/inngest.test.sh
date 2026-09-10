@@ -1249,6 +1249,26 @@ S8_BLANK="$(s8_run blanks)"
 assert "#8017 interior and trailing BLANK lines do not defeat the base-device read" \
   "grep -qE 'data_mount_base=sdb( |\$)' '$S8_BLANK'"
 
+# --- shape 5: a FORKED inverse tree (md/RAID, multipath) ------------------------------------
+# THE ONLY FINDING IN THIS PR WITH A DESTRUCTIVE BLAST RADIUS. `lsblk -s` on a multi-parent stack
+# emits two ancestors at the SAME depth, and a last-non-empty read picks one ARBITRARILY. Measured
+# before the fix: base=sdc, devid=scsi-0HC_Volume_777777777 -- a confident pin naming a volume the
+# mount is NOT on. G14 compares that against the dispatch's expected id, so an arbitrarily-picked
+# leaf that happened to match would clear a destructive recut against the wrong physical device.
+# Every other shape in this arm is a CHAIN, which is why no fixture could see it.
+: > "$PROBE_S8_DEV/sdc"
+ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'md0\n\0342\0224\0234\0342\0224\0200sdb\n\0342\0224\0224\0342\0224\0200sdc\n\n'
+S8_FORK="$(s8_run fork)"
+assert "#8017 a FORKED tree (two ancestors at one depth) => __AMBIGUOUS__, never an arbitrary leaf" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 ...and devid refuses with it rather than pinning the arbitrarily-picked leaf" \
+  "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 a forked tree NEVER emits the other volume's alias (the destructive wrong pin)" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK'"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'sdb\n\n'
+
 # --- __NOMATCH__: the mount is real, but not from a Hetzner volume --------------------------
 ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
 s8_lsblk 'sdb\n\n'
@@ -2415,7 +2435,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=400
+INNGEST_MIN_ASSERTIONS=403
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
