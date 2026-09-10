@@ -627,6 +627,15 @@ Inputs-Derived: ten successful main workflow runs\" $MS"
 assert "filing-justification: meta/machinery in prose only still denies" "deny" \
   "gh issue create --title \"t\" --body \"this is arguably meta/machinery work\" $MS"
 
+# DOCUMENTED RESIDUAL, pinned so it is a known state rather than a surprise: a
+# mid-sentence Mandated-By passes HERE and is refused at the merge boundary,
+# which anchors it whole-line over the issue body. A whole-line anchor here is
+# unmatchable (this hook's corpus for an inline --body is the one-line $COMMAND),
+# so the remediation TEXT carries the fix instead. If this row ever flips to
+# deny, the corpus changed and the residual is closed -- update the deny text.
+assert "filing-justification: mid-sentence Mandated-By still passes the hook (known residual)" "<none>" \
+  "gh issue create --title t --body \"this is Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps per the rule\" $MS"
+
 # Mandated-By must carry a WELL-FORMED rule id, not any text.
 assert "filing-justification: malformed Mandated-By denies" "deny" \
   "gh issue create --title \"t\" --body \"Mandated-By: because I said so\" $MS"
@@ -641,6 +650,32 @@ assert "filing-justification: external repo stays exempt" "<none>" \
 # heredocs/quotes stripped, so this must not deny.
 assert "filing-justification: commit body documenting gh issue create allows" "<none>" \
   'git commit -m "docs: explain that gh issue create needs a justification"'
+
+# --- The PRESCRIBED --body-file form (P1, found at review).
+# review/SKILL.md says "Use `gh issue create --body-file <path>` -- never
+# `--body \"$VAR\"`". Reading only $COMMAND made exits 2 and 3 structurally
+# unreachable for that shape, so every correctly-formed user-facing filing was
+# denied unless it took exit 1 -- which would have pushed real product issues
+# onto the machinery ledger and corrupted the separation this gate creates.
+# The guard must accept the command shape the guard itself prescribes.
+BF_OK="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'User-Impact: the /dashboard route 500s for org owners\nFix-Size: 240 lines / 9 files\n' > "$BF_OK"
+BF_MAND="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps\n' > "$BF_MAND"
+BF_SMALL="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'User-Impact: the /settings page mislabels the plan\nFix-Size: 19 lines / 1 file\n' > "$BF_SMALL"
+
+assert "filing-justification: --body-file reaches exit 2" "<none>" \
+  "gh issue create --title t --body-file $BF_OK $MS"
+assert "filing-justification: --body-file reaches exit 3" "<none>" \
+  "gh issue create --title t --body-file $BF_MAND $MS"
+assert "filing-justification: --body-file still refuses inside the inline threshold" "deny" \
+  "gh issue create --title t --body-file $BF_SMALL $MS"
+assert "filing-justification: unreadable --body-file fails TOWARD gating" "deny" \
+  "gh issue create --title t --body-file /nonexistent/soleur-no-such-body.md $MS"
+assert "filing-justification: an EMPTY body-file still denies (no vacuous pass)" "deny" \
+  "gh issue create --title t --body-file /dev/null $MS"
+rm -f "$BF_OK" "$BF_MAND" "$BF_SMALL"
 
 # --- Harness rows: the guard's OWN failure modes ---
 #
@@ -702,9 +737,9 @@ Fix-Size: 900 lines / 40 files\" $MS"
 # rather than through the pass/fail helpers it exists to backstop -- a floor
 # that calls fail() is disarmed by the same edit that disarms fail().
 # Derived, not guessed: 65 rows on main at the merge base + 19 added by this
-# change + 4 escape rows found at review = 88. Stated as the sum so a sibling PR that adds a row makes this
+# change + 4 escape rows + 1 residual row + 5 body-file rows found at review = 94. Stated as the sum so a sibling PR that adds a row makes this
 # stale LOUDLY (the floor trips) rather than silently.
-MIN_ASSERTIONS=88
+MIN_ASSERTIONS=94
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

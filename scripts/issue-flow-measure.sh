@@ -44,7 +44,14 @@ OPEN_TOTAL="$(api_count "is:issue+is:open")"
 # unimplementable against it. It is not attributable either: a human closing a
 # machinery issue wontfix produces the identical value.
 EXPIRY_CLOSED="$(api_count "is:issue+is:closed+label:%22meta/machinery%22+closed:>=${SINCE}")"
-REOPENED="$(api_count "is:issue+is:open+label:%22meta/machinery%22+updated:>=${SINCE}")"
+# REOPENS, not "touched". The previous query counted every OPEN machinery issue
+# updated in the window -- comments, label edits, the backfill itself -- so the
+# one signal that the sweeper closed something legitimate read permanently at
+# ceiling. The header above argues correctly that stateReason cannot detect a
+# reopen and that COMMENT_MARKER is the attributable signal, then did not use it.
+# An issue is a reopen iff it carries the sweeper's marker AND is open now.
+SWEEP_MARKER="soleur:auto-close-stale-scope-out"
+REOPENED="$(gh api "search/issues?q=repo:${REPO}+is:issue+is:open+label:%22meta/machinery%22+%22${SWEEP_MARKER}%22+in:comments" --jq '.total_count' 2>/dev/null || echo "unavailable")"
 
 # net-issue-flow visibility. A gate that fails open, and a gate that was
 # overridden, must each be distinguishable from a gate that passed.

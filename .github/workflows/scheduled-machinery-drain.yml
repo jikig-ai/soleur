@@ -104,7 +104,14 @@ jobs:
       # FIND-OR-UPDATE exactly one standing issue. A measurement that files a
       # fresh issue every week is the defect reproducing itself inside its own
       # instrument, so this never calls `create` when a match exists.
+      #
+      # `if: always()` because the floor step above can exit 1, and the week the
+      # drain UNDERPERFORMS is precisely the week the operator needs the numbers.
+      # Without it the enforcing step silently suppresses the evidence it exists
+      # to act on -- and this workflow's own preamble promises the measurement
+      # runs first so a drain failure never costs the week's numbers.
       - name: Update the standing measurement issue
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           REPORT: ${{ steps.measure.outputs.report }}
@@ -133,3 +140,21 @@ jobs:
               --label meta/machinery --milestone "Post-MVP / Later"
             echo "created the standing issue (first run only)"
           fi
+
+      # THE MONITOR NEEDS AN EMITTER. sentry_cron_monitor.scheduled_machinery_drain
+      # declares failure_issue_threshold = 1, so without a check-in it pages every
+      # Monday forever on a cron that ran fine -- a check that cannot PASS, which is
+      # the inverse of the vacuity class this change exists to remove, and it would
+      # have landed inside the PR whose thesis is that unreadable machinery signals
+      # are the root cause. `if: always()` is load-bearing: a floor breach must
+      # still check in, or a red drain is indistinguishable from a dead scheduler.
+      - name: Sentry heartbeat
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-machinery-drain
+          status: ${{ job.status == 'success' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

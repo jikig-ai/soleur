@@ -546,6 +546,51 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
       _fj_li=$((_fj_li + 1))
     done
 
+    # THE BODY CORPUS. Read `--body-file` when present, because that is the form
+    # this repo PRESCRIBES (`review/SKILL.md`: "Use `gh issue create --body-file
+    # <path>` -- never `--body \"$VAR\"`", and work/SKILL.md's operator-step gate
+    # says the same). Reading only $COMMAND made exits 2 and 3 structurally
+    # unreachable for the prescribed shape: every correctly-formed user-facing
+    # filing was denied unless it took exit 1, which would have pushed real
+    # product issues onto the machinery ledger and corrupted the very separation
+    # this gate exists to create. The guard must accept the command shape the
+    # guard itself prescribes.
+    #
+    # Declared-but-unreadable FAILS TOWARD GATING and names the path: we cannot
+    # verify a justification we cannot read, and a silent pass here would make
+    # the gate trivially bypassable by pointing at a nonexistent file.
+    # The corpus is the BODY VALUE, whichever way it is supplied -- not the raw
+    # command line. Anchoring whole-line against $COMMAND can never match an
+    # inline --body, because the whole invocation is one physical line; the
+    # tokenizer gives us the value with its quoting resolved and its embedded
+    # newlines intact, which is what both gates actually reason about.
+    _fj_body="$COMMAND"
+    _fj_bf=""
+    _fj_bi=0
+    while (( _fj_bi < ${#_repo_toks[@]} )); do
+      _fj_bt="${_repo_toks[$_fj_bi]}"
+      case "$_fj_bt" in
+        --body-file|-F) _fj_bf="${_repo_toks[$((_fj_bi + 1))]:-}" ;;
+        --body-file=*)  _fj_bf="${_fj_bt#--body-file=}" ;;
+      esac
+      _fj_bi=$((_fj_bi + 1))
+    done
+    if [[ -n "$_fj_bf" ]]; then
+      if [[ "$_fj_bf" != "-" && -r "$_fj_bf" ]]; then
+        _fj_body="$(cat -- "$_fj_bf" 2>/dev/null || true)"
+      else
+        emit_incident "wg-defer-only-after-inline-triage" "deny" \
+          "--body-file unreadable at ${_fj_bf}" "$COMMAND"
+        jq -n --arg f "$_fj_bf" '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse", permissionDecision: "deny",
+            permissionDecisionReason: ("BLOCKED: --body-file names " + $f + ", which this gate cannot read, so the filing justification cannot be verified. Write the body file first (a separate step), then run gh issue create. Reading from stdin (-F -) is not supported here for the same reason.")
+          }
+        }'
+        exit 0
+      fi
+    fi
+
     # EXIT 3 — a rule MANDATES this filing. Same closed, human-gated vocabulary
     # ADR-155 established, which is what makes the mandating gate and this
     # restricting gate ONE gate rather than two that disagree. This hook does not
@@ -553,11 +598,26 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
     # merge-base corpus. It accepts a well-formed claim and lets the merge
     # boundary adjudicate it. Two gates, one vocabulary, no second pin.
     if [[ "$_fj_pass" == 0 ]] \
-       && grep -qE '(^|[^A-Za-z0-9_-])Mandated-By:[[:space:]]*(hr|wg)-[a-z0-9-]+' <<<"$COMMAND"; then
+       && grep -qE '(^|[^A-Za-z0-9_-])Mandated-By:[[:space:]]*(hr|wg)-[a-z0-9-]+' <<<"$_fj_body"; then
       # The leading class is [^A-Za-z0-9_-], NOT [[:space:]]: in a real command the
       # field sits immediately after `--body "`, so a whitespace-or-start anchor
-      # never fires on the shape that actually reaches this hook. Caught by the
-      # exit-3 matrix row, which denied where it must allow.
+      # never fires on the shape that actually reaches this hook.
+      #
+      # KNOWN RESIDUAL, stated rather than papered over: the two gates share a
+      # vocabulary but not a GRAMMAR. net-issue-flow.sh anchors the same claim
+      # whole-line (`^[ \t\r]*[Mm]andated-[Bb]y:[ \t\r]*[A-Za-z0-9-]+[ \t\r]*$`)
+      # over the issue BODY. A claim written mid-sentence, or in the --title,
+      # previously passed HERE and was rejected THERE as "no Mandated-By claim" --
+      # a remediation loop where the agent satisfies one gate and is refused by
+      # the other with no message explaining the difference. That is the
+      # `Tracks:` vs `Tracks #N` shape net-issue-flow.sh already documents as
+      # measured. A whole-line anchor HERE is not the fix: this hook's corpus for
+      # an inline `--body` is the one-line $COMMAND (xargs cannot preserve a
+      # multi-line body value), so `^...$` would be unmatchable and would deny
+      # three legitimate shapes -- measured, it broke exit 2, the 100/5 boundary
+      # and the Inputs-Derived case. The actionable half is the REMEDIATION TEXT,
+      # which now tells the filer the claim must be on its own line, so the loop
+      # resolves on the first refusal instead of silently at merge.
       _fj_pass=1
     fi
 
@@ -565,7 +625,7 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
     _fj_ui=""
     _fj_n=""; _fj_m=""
     if [[ "$_fj_pass" == 0 ]]; then
-      [[ "$COMMAND" =~ User-Impact:[[:space:]]*([^$'\n']+) ]] && _fj_ui="${BASH_REMATCH[1]}"
+      [[ "$_fj_body" =~ User-Impact:[[:space:]]*([^$'\n']+) ]] && _fj_ui="${BASH_REMATCH[1]}"
       # EXACTLY ONE Fix-Size, or the filing is malformed. bash `=~` binds the
       # FIRST match, so with two Fix-Size lines the author chooses which one the
       # gate reads: a large size first and the honest small size second evaded
@@ -573,9 +633,9 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
       # denied -- which is precisely why it survived every fixture. Rather than
       # picking a side (last-wins is equally arbitrary and equally gameable),
       # refuse the ambiguity: one measured size, or none.
-      _fj_fs_count="$(grep -cE 'Fix-Size:[[:space:]]*[0-9]+[[:space:]]*lines?[[:space:]]*/[[:space:]]*[0-9]+[[:space:]]*files?' <<<"$COMMAND" || true)"
+      _fj_fs_count="$(grep -cE 'Fix-Size:[[:space:]]*[0-9]+[[:space:]]*lines?[[:space:]]*/[[:space:]]*[0-9]+[[:space:]]*files?' <<<"$_fj_body" || true)"
       if [[ "$_fj_fs_count" == "1" ]] \
-         && [[ "$COMMAND" =~ Fix-Size:[[:space:]]*([0-9]+)[[:space:]]*lines?[[:space:]]*/[[:space:]]*([0-9]+)[[:space:]]*files? ]]; then
+         && [[ "$_fj_body" =~ Fix-Size:[[:space:]]*([0-9]+)[[:space:]]*lines?[[:space:]]*/[[:space:]]*([0-9]+)[[:space:]]*files? ]]; then
         _fj_n="${BASH_REMATCH[1]}"; _fj_m="${BASH_REMATCH[2]}"
       fi
       if [[ -n "$_fj_ui" ]] && grep -qiE -- "\\b(${_fj_re})\\b" <<<"$_fj_ui" \
@@ -604,8 +664,8 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
     # itself the trigger, and requiring a concrete SOURCE CLASS rather than free
     # text, is strictly stronger while removing a field from the contract.
     if [[ "$_fj_pass" == 1 ]] \
-       && grep -qiE 'would have to choose|we lack|lack the numbers|no numbers|unknown values|do not have the numbers|lacking the numbers' <<<"$COMMAND"; then
-      if ! grep -qiE 'Inputs-Derived:[[:space:]]*.*(workflow run|ci run|run [0-9]|log|telemetry|marker|measurement|probe|prior pr|pr [0-9]|dashboard|query)' <<<"$COMMAND"; then
+       && grep -qiE 'would have to choose|we lack|lack the numbers|no numbers|unknown values|do not have the numbers|lacking the numbers' <<<"$_fj_body"; then
+      if ! grep -qiE 'Inputs-Derived:[[:space:]]*.*(workflow run|ci run|run [0-9]|log|telemetry|marker|measurement|probe|prior pr|pr [0-9]|dashboard|query)' <<<"$_fj_body"; then
         emit_incident "wg-defer-only-after-inline-triage" "deny" \
           "claims a missing-numbers blocker with no derivable-inputs source" "$COMMAND"
         jq -n '{
@@ -624,7 +684,7 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
       jq -n '{
         hookSpecificOutput: {
           hookEventName: "PreToolUse", permissionDecision: "deny",
-          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>`. \"The guard is imperfect\" is exit 1, not exit 2."
+          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>` ON ITS OWN LINE in the body (the merge-boundary gate anchors it whole-line, so a claim written mid-sentence or in the title passes here and is refused there). \"The guard is imperfect\" is exit 1, not exit 2."
         }
       }'
       exit 0
