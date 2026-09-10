@@ -1093,13 +1093,21 @@ Enforces the operator's standing rule — **every detected incident gets a post-
 3. **Incident-signal scan.** The PR title/body or linked plan matches (case-insensitive) an outage signal AND a production signal:
 
    ```bash
-   PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
-   PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
-   PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
+   # The gate builds its OWN corpus now (`--pr`, #7987). It previously came from
+   # four lines of prose here that grepped a plan path out of the PR body and
+   # `cat`-ed it; when the body cited no plan, PLAN_TEXT was the EMPTY STRING and
+   # the gate reported "no incident signal" having read zero bytes of plan —
+   # byte-identical output to a real all-clear. Measured on PR #7987: 19 KB of body
+   # with no `knowledge-base/` path anywhere, verdict "no signal"; adding the link
+   # and re-running the same gate on the same commit returned INCIDENT-SIGNAL: yes.
+   # The regexes were split out of this prose in #6813 for exactly this reason; the
+   # INPUT stayed behind, and an input assembled by prose is as unpinned as a
+   # pattern was. Do NOT re-inline it. The script emits a `PIR-CORPUS…` line on
+   # stderr saying what it actually read.
    # The gate owns the regexes + strips (scripts/ship-incident-pir-gate.sh, #6813);
    # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal.
    # Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
-   if printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT" | bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh"; then
+   if bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"; then
      echo "gate: incident signal — a PIR is required (see below)."
    else
      echo "gate: no incident signal."
@@ -1337,12 +1345,49 @@ gh pr view --json body --jq .body | awk '
   END { if (in_fence) exit 2 }' > "$COMBINED" \
   || gh pr view --json body --jq .body > "$COMBINED"   # fail-closed: unstripped
 PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$COMBINED" | head -1 || true)
-[[ -n "$PLAN" && -f "$PLAN" ]] && cat "$PLAN" >> "$COMBINED"
+# Strip fenced blocks from the PLAN TOO. The body is stripped above precisely so a
+# quoted example cannot read as a live declaration; appending the plan raw stopped
+# that protection halfway through one corpus, and plans are where worked examples
+# and sample PR bodies actually live. Measured over 1905 plans: removes at least one
+# Ref/Tracks in 8 (the quoted-example class), recall unchanged at 36/42.
+# Indent-tolerant (518 of 1905 plans indent a fence inside a list item) and
+# fail-closed on an unbalanced fence, matching the hook byte-for-byte.
+if [[ -n "$PLAN" && -f "$PLAN" ]]; then
+  _ps=$(mktemp)
+  if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' "$PLAN" > "$_ps" 2>/dev/null
+  then cat "$_ps" >> "$COMBINED"
+  else echo "SOAK-CORPUS-PLAN-UNSTRIPPED: unbalanced fence in $PLAN; appending unstripped" >&2; cat "$PLAN" >> "$COMBINED"
+  fi
+  rm -f "$_ps"
+fi
+# Say so when no plan resolved: every verdict below then comes from the body alone,
+# which is NOT the same fact as "read the plan and found no soak". Both used to exit
+# in silence, so a half-blind pass was indistinguishable from a clean one.
+[[ -n "$PLAN" && -f "$PLAN" ]] || echo "SOAK-CORPUS-BODY-ONLY: no readable plan/spec path in the PR body; scanned the body alone" >&2
+
+# Drop NEGATED soak vocabulary first — a sentence declaring that NO soak exists is
+# not a soak declaration. The negation window stops at a clause boundary so a
+# negation of something else ("(NOT `Closes`) — closure is gated on the post-deploy
+# soak") cannot silence a real declaration beside it. The unit is the LINE, not the
+# sentence: the target shape is a markdown table row whose label and disposition sit
+# in adjacent cells, and splitting on `.` shreds ordinals like `2.9.1`.
+awk '{ u = tolower($0) }
+     u ~ /(^|[^a-z])(no|not|nothing|none|never|n\/a|skip|skipped|without)[^a-z][^.|]{0,60}soak/ && u !~ /(ref|tracks)[[:space:]]*#[0-9]+/ { next }
+     u ~ /soak[^.|]{0,40}(: *(skip|none)|not applicable|n\/a|does not apply)/ && u !~ /(ref|tracks)[[:space:]]*#[0-9]+/ { next }
+     { print }' "$COMBINED" > "$COMBINED.f" \
+  && mv "$COMBINED.f" "$COMBINED" \
+  || echo "SOAK-NEGATION-STRIP-FAILED: awk exited non-zero; scanning the unfiltered corpus" >&2
 
 # Soak signal: post-deploy time-gated close criteria expressed in prose.
 SOAK_RE='soak|stays? (at )?(~?0|zero)|[0-9]+[- ]day[s]?( post-deploy| soak)|post-deploy (soak|verif|observ)|adopting[[:space:]]*(→|->|to)[[:space:]]*accepted|status[[:space:]]+flip'
 SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5 || true)
 ```
+
+**The negation pre-pass, and why the bare `soak` alternative could not simply be deleted.** `SOAK_RE` offers a bare `soak`, so it matched any mention — including a sentence asserting the section did not apply. The hook's CLOSES-extraction comment — anchor `**Why:** PR #7426`, not the file header — already recorded the cause ("the regex is negation-blind") while fixing only the closing-target half beside it; it fired again on PR #7987, whose ONLY match across the entire corpus was the plan row `| 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is time-gated; nothing here closes on a soak. |`. A gate that fires on the sentence exempting it trains its readers to reach for `SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE=1`.
+
+Deleting the bare alternative was measured and REJECTED: 174 of the 1905 tracked plans match through it alone, and real declarations live in prose forms the other alternatives miss ("across a soak window ≥ ~2h post-deploy"). Stripping negations instead was measured in both directions — 275 plans fired before, 209 after (66 false positives removed, 24%), with recall UNCHANGED at 36/42 across the plans carrying a real `<!-- soleur:followthrough script=` enrollment directive (anchored on the HTML-comment opener so a prose mention of the literal — this very sentence — cannot join the ground-truth set). Zero recall regression. Both halves are pinned by a matched pair in [ship-soak-followthrough-gate.test.sh](../../../../.claude/hooks/ship-soak-followthrough-gate.test.sh) (`soaknegated` must allow, `soaknegscoped` must still deny) — keep them together, because the allow case alone also passes if the strip eats everything.
+
+Note this block still lacks the hook's `Closes`/`Fixes` exclusion (#7278 / PR #7426). That drift predates this change and is not addressed here.
 
 If `$SOAK_HIT` is empty → **SKIP** silently (no soak-gated close criterion). If a soak signal fires, extract every tracker ref and verify enrollment:
 
