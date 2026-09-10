@@ -110,6 +110,33 @@ workflow and check B9 were green on it, B9 by a 2-minute margin on a phantom.
 **When a mechanism is replaced, every quantity it was measured in is suspect.**
 Re-derive from the new mechanism's semantics rather than porting the constant.
 
+## Where this knowledge lives (and why not in AGENTS.md)
+
+I first added two AGENTS.md rules for the above. Both were wrong placements, for
+different reasons, and the repo's own gates said so:
+
+- **The CI-evidence rule was redundant.** `ship/SKILL.md` Phase 6.5 already
+  documents the conflicting-PR trap in full — including the remedy I "discovered"
+  (assert the checks you expect are PRESENT, not merely non-failing) and the issue
+  that produced it (#6536). I hit the trap because I was reading checks ad hoc
+  mid-review rather than running that phase, which is a process gap, not a
+  missing rule. **Adding a rule for something already written down is how a
+  corpus gets to the size where nobody reads it.**
+- **The mutation-battery rule did not fit the budget, and the budget is the
+  point.** `B_ALWAYS` sits at 45,999 of 46,000 bytes — one byte of headroom —
+  and each of my two bodies was over the 600 B per-rule cap (1024 and 814). The
+  gate rejected both. Re-reading `cq-agents-md-tier-gate`: tests and CI are
+  **domain-scoped**, which routes to the owning artifact, never AGENTS.md. I had
+  claimed "cross-cutting" partly to justify the placement I wanted.
+
+So the mutation-battery contract lives here, in this file, next to the evidence
+for it — which is what the tier gate means by moving context to a learning file.
+The one-line version, for anyone extending a battery:
+
+> A mutation battery must re-apply the suite's OWN assertions, not a paraphrase,
+> and must prove two things before its verdict is readable: the kill predicate is
+> EMPTY on the unmutated file, and a null mutant is reported SURVIVING.
+
 ## See also
 
 - [[2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran]] — the same family, one level out: wrappers that could not distinguish clean from never-ran

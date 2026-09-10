@@ -653,7 +653,7 @@ warning, and the four Guard 2 rows that existed only to police a table.
 
 C.1 Bind `TEST_TIMING_LOG` on each `test-scripts` leg and upload it with
 `actions/upload-artifact`, one artifact per shard. `scripts/test-all.sh`'s `run_suite` already
-writes `label 	 elapsed_ms` on every `[ok]` suite; no workflow binds it, so CI currently discards
+writes `label <TAB> elapsed_ms` on every `[ok]` suite; no workflow binds it, so CI currently discards
 per-suite timings it already knows how to produce. This is the only behavioural change in Phase C.
 
 C.2 Record in the deferral issue (§Deferrals) what the collected artifacts are *for*: choosing
@@ -1014,6 +1014,12 @@ Each post-merge AC is a `gh api` query executed by the pipeline, not a dashboard
 
 ## Guard Contract
 
+> **Format note (2026-09-10).** These matrices shipped as numbered lists and are now
+> tables, which is the shape `scripts/lint-guard-contract.py` counts. The `Shipped as`
+> column records what the implemented suite actually does, so this plan doubles as the
+> record: rows that changed during implementation say so rather than being quietly
+> restated.
+
 ### Guard 1 — the concurrency key is per-SHA on non-PR events
 
 **Property.** No two `main` pushes share a CI concurrency group.
@@ -1025,19 +1031,28 @@ assembly is **every `concurrency:` mapping in the file**, discovered by structur
 (`awk` over `^concurrency:` and `^    concurrency:`), never by a fixed list.
 
 **Mutation matrix.**
-1. Revert `group` to `${{ github.workflow }}-${{ github.ref }}` → RED.
-2. Change the ternary so `push` takes the `github.ref` arm → RED.
-3. Flip `cancel-in-progress` to unconditional `true` → RED (it would cancel `main` runs, changing
-   the audit-trail property this change claims to preserve).
-4. Add a **second**, job-level `concurrency:` keyed on `github.ref` to any job → RED. *(The
-   second-member row: a check that stops at the first `concurrency:` mapping is the defect class.)*
-5. Delete the `concurrency:` block entirely → RED, not "0 checked, exit 0".
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 1 | Revert `group` to `${{ github.workflow }}-${{ github.ref }}` | RED | mutant 1 |
+| 2 | Change the ternary so `push` takes the `github.ref` arm | RED | mutant 2 |
+| 3 | Flip `cancel-in-progress` to unconditional `true` (would cancel `main` runs) | RED | mutant 3 |
+| 4 | Add a **second**, job-level `concurrency:` keyed on `github.ref` | RED | mutant 4 |
+| 5 | Delete the `concurrency:` block entirely | RED, not "0 checked, exit 0" | mutant 5 |
+| 6 | **Added at review:** invert `cancel-in-progress` to `!= 'pull_request'` | RED | mutant 6 — this SURVIVED the original battery; P4 used substring containment, which the inversion satisfies |
+| 7 | **Added at review:** a job-level **constant** group | RED | mutant 7 — survived; P5 keyed on the literal `github.ref`, so the worse defect passed |
+| 8 | **Added at review:** a constant group via the `concurrency: <string>` shorthand | RED | mutant 8 — survived; no fixture instantiated that code path |
 
 **Harness rows.** (a) Delete the guard's own comparison → the suite must RED. (b) A must-PASS
 non-canonical input: the same key with different whitespace and a reordered but semantically
 identical ternary must PASS.
 
-### Guard 2 — WITHDRAWN with the LPT deferral
+### Withdrawn — the LPT totality guard (was Guard 2)
+
+> Not a guard entry: LPT is deferred to #8006, so there is no property to state and
+> no assembly to enumerate. `plugins/soleur/test/scripts-shard-totality.test.sh` is
+> unchanged and still binds — it derives its reference set independently of the
+> partition, so it is agnostic to how legs are chosen.
 
 Guard 2's four proposed mutation rows (absent label, phantom label, empty table, second unknown
 label) existed **only** to police `scripts/suite-durations.tsv`. Decision 3 defers LPT, so there is
@@ -1063,15 +1078,14 @@ discovered by extraction over the file, intersected with the set of jobs reachab
 list of the 9 current sites, which would go stale on the next added job.
 
 **Mutation matrix.**
-10. Reintroduce `EXPECTED_SHA: ${{ github.sha }}` → RED.
-11. Add a **new** job on the `workflow_run` arm using `${{ github.sha }}` → RED. *(Second-member
-    row: a guard scoped to the 9 known sites cannot see this.)*
-12. Restore `live-verify`'s `if: github.event_name == 'push'` → RED (it would skip forever).
-13. Delete the guard's job-reachability computation so it checks zero jobs → RED.
-13b. **Reconstruct `needs.release.result` from "a release object exists for this SHA" instead of
-    from the `release` job's conclusion** → RED. A release published by a run whose `release` job
-    later concluded `failure` — the zot-mirror-gate-blocked case — must not deploy. This is the
-    equal-strength row; without it the plan's own P0 is reachable again.
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 10 | Reintroduce `EXPECTED_SHA: ${{ github.sha }}` | RED | G3-10 |
+| 11 | Add a **new** job on the `workflow_run` arm using `${{ github.sha }}` (second-member row) | RED | G3-11 |
+| 12 | Restore `live-verify`'s `if: github.event_name == 'push'` (would skip forever) | RED | G3-12 |
+| 13 | Delete the job-reachability computation so it checks zero jobs | RED | analyser self-test |
+| 13b | Reconstruct `needs.release.result` from "a release object exists" rather than the `release` job's conclusion | RED — the equal-strength row | G3-13b, re-anchored at review on the call form against a comment-stripped haystack: the token form was satisfied by the comment explaining it |
 
 **Harness rows.** (a) Replace the extraction with a hardcoded 9-path list → the suite must RED on
 mutation 11, proving the list form is insufficient. (b) Must-PASS: `github.sha` used inside a job
@@ -1087,10 +1101,13 @@ it — discovered by grepping `workflow_run:` across `.github/workflows/`, not b
 `post-merge-monitor.yml` already depends on the same string and must be covered.
 
 **Mutation matrix.**
-14. Change `ci.yml`'s `name:` → RED (both consumers desync).
-15. Change `web-platform-release.yml`'s `workflows:` entry → RED.
-16. Change `post-merge-monitor.yml`'s `workflows:` entry → RED. *(Second-consumer row.)*
-17. Remove every `workflow_run:` block so the guard has nothing to check → RED, not vacuous pass.
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 14 | Change `ci.yml`'s `name:` (both consumers desync) | RED | G4 desync row |
+| 15 | Change `web-platform-release.yml`'s `workflows:` entry | RED | G4-15 — this was a SURVIVING mutant until review: the battery's predicate never re-applied the `CI_NAME` comparison, and the row scored KILLED on an unrelated baseline term |
+| 16 | Change `post-merge-monitor.yml`'s `workflows:` entry (second-consumer row) | RED | G4 desync row, per consumer |
+| 17 | Remove every `workflow_run:` block so the guard has nothing to check | RED, not vacuous pass | G4-17 |
 
 **Harness rows.** (a) Delete the guard's `name:` read → RED. (b) Must-PASS: quoting variation
 (`["CI"]` vs `[ CI ]`) is permitted.
@@ -1114,11 +1131,14 @@ the `70 <= 72` headroom from a coincidence into an asserted invariant (B9's cons
 where the detector can see it).
 
 **Mutation matrix.**
-18. Replace either derivation with a literal → RED (I3's successor).
-19. Change the `0.7` factor so the warning fires at or above its reference → RED (I3b's successor).
-20. Remove the warning's downstream consumer → RED (I4's successor).
-21. Change any one of the four input ceilings and assert the derived value **moves** → RED if it
-    does not. *(The "did the guard actually read the input" row.)*
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 18 | Replace either derivation with a literal | RED | G5-18 |
+| 19 | Change the `0.7` factor so the warning fires at or above its reference | RED | G5-19 |
+| 20 | Remove the warning's downstream consumer | RED | G5-20 |
+| 21 | Change any one input ceiling and assert the derived value **moves** | RED if it does not | G5-21, re-anchored at review on the **call form**: `grep -qF test` matched inside `test-scripts`, and all names also appear in the step's own error prose |
+| 21b | **Added at review:** the extraction crosses a job boundary | RED | extractor-scope self-test — the budget step is its job's LAST step, so the old `awk` ran into `migrate` and captured 251 lines across two jobs |
 
 **Harness rows.** (a) Delete the derivation comparison → RED. (b) Must-PASS: an editorial change to
 a comment adjacent to a ceiling must not flip the guard (the existing comment-only negative control,
@@ -1135,16 +1155,15 @@ published, and the elapsed reconcile time. Discovered from the job body, not fro
 expected states.
 
 **Mutation matrix.**
-26. Collapse "no run exists" into the fail-closed arm → RED (a docs-only push would redden).
-27. Collapse "`release` failed" into a clean skip → RED (the failure this arm exists to catch is
-    swallowed).
-28. Remove the "`release` published no release (`check_changed` no-op)" arm so it falls through to
-    fail-closed → RED. *(The second clean-skip state: an implementation that handles only the
-    first is the defect class.)*
-29. Make the reconcile unbounded (drop `RELEASE_WAIT_S`) → RED — this reintroduces exactly the
-    held-runner property #5806 exists to remove.
-30. Make the state resolution return a fixed value so it examines none of its four inputs → RED,
-    not vacuous pass.
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 26 | Collapse "no run exists" into the fail-closed arm (a docs-only push would redden) | RED | G7 clean-skip row |
+| 27 | Collapse "`release` failed" into a clean skip (swallows the failure) | RED | G7 fail-closed row, re-anchored at review: the two conjuncts were unrelated greps satisfied anywhere in the block |
+| 28 | Remove the "published no release" arm so it falls through to fail-closed (second clean-skip state) | RED | G7 state-coverage row |
+| 29 | Make the reconcile unbounded | RED | superseded — the liveness poll is bounded by the release run's own timeout AND unreachable under the shared concurrency group; recorded in the workflow rather than guarded |
+| 30 | Make the state resolution return a fixed value so it examines none of its inputs | RED, not vacuous pass | G7 input rows |
+| 30b | **Added at review:** a `skip_reason` emitted by the producer and handled by no consumer | RED | Guard 9 set-parity — found `release_outputs_incomplete` named by two consumer arms with no producer |
 
 **Harness rows.** (a) Delete the battery's state-coverage assertion → RED. (b) Must-PASS: a
 docs-only-push fixture (CI green on `main`, no `Web Platform Release` run for the SHA) resolves to
@@ -1171,10 +1190,14 @@ push-arm runs with no such job, halving the #5463 dark-launch lookback), and
 `scheduled-prod-version-drift.yml`'s remediation text.
 
 **Mutation matrix.**
-31. Remove the `--event` (or job-presence) filter from any known consumer → RED.
-32. Add a **new** consumer with an undisambiguated `--limit 1` → RED. *(Second-member row: a guard
-    scoped to the three known call sites cannot see this.)*
-33. Delete the guard's call-site extraction so it checks zero consumers → RED, not vacuous pass.
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 31 | Remove the `--event` (or job-presence) filter from any known consumer | RED | G8 disambiguation row |
+| 32 | Add a **new** consumer with an undisambiguated `--limit 1` (second-member row) | RED | G8 discovery row |
+| 33 | Delete the call-site extraction so it checks zero consumers | RED, not vacuous pass | G8 non-vacuity floor (>= 5 consumers) |
+| 33b | **Added at review:** a consumer written in a spelling the discovery grep does not match | RED | the original discovery found 2 of ~10 sites — it grepped one literal and missed the space form, the variable form, the `gh api .../workflows/<f>/runs` form, and everything under `knowledge-base/` |
+| 33c | **Added at review:** a consumer whose arm is named on an adjacent line | must PASS | the predicate now evaluates the enclosing command window, not one grep line |
 
 **Harness rows.** (a) Replace the extraction with a hardcoded three-path list → the suite must RED
 on mutation 32. (b) Must-PASS: a consumer that disambiguates by job presence rather than by `event`
@@ -1190,16 +1213,15 @@ together with the three `needs.*.result` values in its `env:`. No separate scrip
 checkout: the discriminator is a shape comparison over data the job already holds.
 
 **Mutation matrix.**
-22. Remove the `TIMED OUT` branch → RED.
-23. Remove the UNKNOWN fallback so an unclassified `cancelled` produces no line → RED.
-24. Make any non-success leg stop setting `fail=1`, so the job exits 0 → RED. *(Swallowing is the
-    failure mode, and it is the row with independent value.)*
-24b. Emit `SUPERSEDED` on a **`push`-event** fixture → RED. Under Phase D's per-SHA key nothing on
-    `main` is cancelled by supersession, so a confident `SUPERSEDED` there names the one cause that
-    has become impossible — the exact error class `ci.yml`'s own twice-retracted dispatch note
-    exists to prevent, reintroduced by part 1 into part 2.
-25. Make the loop `break` after the first failing leg → RED. *(Second-member row: two legs fail,
-    only one is named.)*
+
+| # | Edit | Expected | Shipped as |
+|---|---|---|---|
+| 22 | Remove the `TIMED OUT` branch | RED | mutant 22 |
+| 23 | Remove the UNKNOWN fallback so an unclassified `cancelled` produces no line | RED | mutant 23 |
+| 24 | Make any non-success leg stop setting `fail=1`, so the job exits 0 | RED — swallowing is the failure mode | mutant 24 |
+| 24b | Emit `SUPERSEDED` on a **`push`-event** fixture | RED — after part 1 nothing on `main` is cancelled by supersession | mutant 24b, extended at review to `merge_group` and `workflow_dispatch` (rows E1): `ci.yml` declares four events and only two were fixtured |
+| 25 | Make the loop `break` after the first failing leg (second-member row) | RED | mutant 25 |
+| 25b | **Added at review:** point the step's `env:` at the wrong shard, or drop a shard from the `test` job's `needs:` | RED | rows W1/W2 — every other row is handed the three values by the harness, so the workflow's own wiring was unasserted |
 
 **Harness rows.** (a) Delete the battery's exit-code assertion → RED. (b) Must-PASS: an all-success
 run emits `All three shards green.` and exits 0.
