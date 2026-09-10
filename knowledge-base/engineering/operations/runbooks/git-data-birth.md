@@ -139,6 +139,56 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
+### Three things a green boot does NOT mean
+
+The same three statements are written to the **run summary page** by an un-gated job that
+runs before the approval prompt, so you do not have to have read this file to see them
+(#8009, CPO condition C2). They are repeated here because the runbook is where you are
+standing when you decide to dispatch at all.
+
+`confirm=BIRTH-GIT-DATA` is a **typo guard, not an authorization**. The authorization is the
+environment approval.
+
+**1 — Repositories are NOT encrypted at rest before the cutover.** `luks_mounted` is about
+the **device**, not the repositories. `git-data-bootstrap.sh` pins that wording itself, under
+AC30:
+
+> `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being encrypted
+> at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the cutover.
+
+A green boot is fully compatible with every repository sitting on plaintext storage.
+
+**2 — The approval is NOT two-party.** `web-platform-infra-apply` is measured
+`prevent_self_review: false` with a single reviewer, so **the person who dispatches can
+approve it**. Re-measure rather than trusting this line:
+
+```bash
+gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
+  --jq '.protection_rules[] | select(.type=="required_reviewers")
+        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}'
+```
+
+One human clicking twice is the real control. Treat it as **one** control, not two.
+
+**3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
+measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
+literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
+That is not nothing: each has a named upstream `FATAL: …; exit 1` gate (20 in that script),
+so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
+fired", never as "four invariants were measured".
+
+Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
+emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
+`169.254.169.254`), anchored on the metadata address rather than the table name so a table
+whose rule was flushed reads `no`. It read `yes`. It is **not** in
+`git-data-rung2-boot-evidence.env` — that file records the queries, and the capture projects
+only the four hardcoded booleans — so it was read directly from Better Stack and recorded in
+the evidence PR's body.
+
+Finally: the authorization-map interlock is a **static** assertion over Terraform source. It
+proves what the production root *renders*, not what a live host *honours*. No live host is
+probed, because none exists until this dispatch creates one.
+
 ## Dispatch
 
 ```bash
@@ -158,13 +208,24 @@ approval: the interlock, the birth gate, and the stock preflight.
 
 ## What the job does, in order
 
+0. **The disclosure job** — un-gated, runs first, and writes the three limits above to the
+   run summary so they are on screen before the approval prompt, not after it.
 1. **Validates `confirm`** — before anything reads a secret or contacts a provider.
 2. **Birth-readiness interlock** — refuses while the host would boot dark.
-3. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
+3. **Rung-2 rehearsal interlock** — refuses unless committed boot evidence exists for the
+   CURRENT template, hash-bound so it re-holds on any later edit to `cloud-init-git-data.yml`.
+   (This step was missing from this list; it has run since #6982.)
+4. **Authorization-map interlock** — refuses unless the three SSH forced-command slots
+   resolve to three distinct keys AND each authority's private half is published under the
+   matching Doppler name. Static, so it needs no rehearsal. The rung-2 rehearsal is
+   structurally incapable of catching this class: `rung2-rehearsal/rehearsal.tf` sets all
+   three pubkeys to one `tls_private_key` by design, so a production collapse is a **no-op**
+   there and the evidence still records PASS.
+5. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
    cloud-init-only and never receives it).
-4. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
+6. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
    messages, because they have different remedies.
-5. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
+7. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
    number here:
 
    ```
@@ -174,12 +235,12 @@ approval: the interlock, the birth gate, and the stock preflight.
         END{print n}' .github/workflows/apply-web-platform-infra.yml    # => 20
    ```
 
-6. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
+8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
    which arm refused.
-7. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
+9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
-8. **`terraform apply`**.
+10. **`terraform apply`**.
 
 ## What a green run gives you — and what it does not
 

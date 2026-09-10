@@ -243,10 +243,14 @@ on:
           OCI image and reaches the host through the digest literal in user_data, so a replace on
           an unbumped pin re-delivers the same bytes (#7695; ADR-199 amendment 2026-09-07).
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
-          needs `confirm=BIRTH-GIT-DATA`. HELD BY TWO MECHANICAL GATES: the sentinel
-          interlock released as of #6982 (the host now has an off-host emitter), but the
-          rung-2 rehearsal interlock REFUSES until committed boot evidence for the current
-          template lands under #7025. A dispatch today exits 1 before planning. Read
+          needs `confirm=BIRTH-GIT-DATA`. THREE MECHANICAL INTERLOCKS, ALL CURRENTLY
+          RELEASING: the sentinel interlock (#6982, the host has an off-host emitter), the
+          rung-2 rehearsal interlock (released once the boot evidence for the current
+          template landed), and the authorization-map interlock (#8009). An earlier version
+          of this text said a dispatch exits 1 before planning; that stopped being true when
+          the evidence merged. What holds the route now is the runbook banner and the
+          environment approval -- and that approval is measured prevent_self_review:false
+          with a single reviewer, so the dispatcher can approve their own deployment. Read
           knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
@@ -5632,6 +5636,77 @@ jobs:
   # issues:write via a GitHub App installation token (hr-github-app-auth-not-pat;
   # the default job token is contents:read only, so `gh issue comment` would
   # silently fail without the elevated permission + App auth).
+  # ── CPO condition C2 (#8009): what a green boot does NOT mean ────────────────────────
+  #
+  # THIS JOB HAS NO `environment:` AND THAT IS THE ENTIRE POINT (D6).
+  #
+  # The approver approves BLIND. `git_data_host_create` carries the environment gate, so it
+  # sits in `Waiting` and renders NOTHING until someone clicks Approve — which means every
+  # word of disclosure written inside that job arrives AFTER the decision it was supposed to
+  # inform. A PR body has a readership of one review; the runbook is read by whoever thinks
+  # to open it. At the moment of approval the operator sees a bare "Approve deployment"
+  # button and nothing else.
+  #
+  # So the disclosure runs in a PRECEDING, UN-GATED job. By the time the approval is pending,
+  # the run summary page already carries these three statements. Without it the approval is
+  # ceremonial and "one human clicking twice" is the real control.
+  git_data_birth_disclosure:
+    name: What a green git-data boot does NOT mean (read before approving)
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the three limits to the run summary
+        run: |
+          set -euo pipefail
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MD'
+          ## Before you approve: three things a green boot does NOT mean
+
+          The `BIRTH-GIT-DATA` token you typed is a **typo guard, not an authorization**. The
+          authorization is this approval. Read these three first — each is measured, and each
+          is a limit on what any green result downstream can tell you.
+
+          ### 1. Repositories are NOT encrypted at rest before the cutover
+
+          `luks_mounted` is about the **device**, not the repositories. `git-data-bootstrap.sh`
+          pins that wording itself, under AC30:
+
+          > `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being
+          > encrypted at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the
+          > cutover.
+
+          A green boot is fully compatible with every repository sitting on plaintext storage.
+
+          ### 2. This approval is NOT two-party
+
+          `web-platform-infra-apply` is measured `prevent_self_review: false` with a single
+          reviewer. **The person who dispatched this run can approve it.** That is one human
+          clicking twice, not a two-party control. If you dispatched it, nobody else has
+          looked at it.
+
+          ### 3. The rehearsal evidence attests a STAGE WAS REACHED, not four measurements
+
+          `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded literals**
+          at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction. What
+          their presence proves is that execution REACHED the emit, which is not free: each has
+          a named upstream `FATAL: …; exit 1` gate (20 in that script), so a failure aborts
+          before the emit rather than emitting `no`. Read them as "no gate fired", never as
+          "four invariants were measured".
+
+          Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just
+          above the emit by grepping the live nftables chain
+          (`nft list chain inet soleur_git_data output` for `169.254.169.254`). It read `yes`.
+          It is **not** recorded in `git-data-rung2-boot-evidence.env` — that file records the
+          queries, and the capture projects only the four hardcoded booleans — so it was read
+          directly from Better Stack and pasted into the evidence PR's body.
+
+          ---
+
+          The authorization-map interlock that runs next is a **static** assertion over
+          Terraform source: it proves what the production root RENDERS, not what a live host
+          HONOURS. No live host is probed, because none exists yet.
+          MD
+          echo "Disclosure written to the run summary."
+
   git_data_host_create:
     # ── #6977 — the git-data BIRTH path ───────────────────────────────────────────────
     #
@@ -5653,7 +5728,14 @@ jobs:
     # a separate inline copy in the `apply` job whose `if:` is mutually exclusive with this
     # one, so for this path the sourced birth gate is the ONLY check.
     #
-    # THIS JOB IS STILL HELD, BY TWO GATES, AND BOTH ARE MECHANICAL.
+    # THIS JOB CARRIES THREE MECHANICAL INTERLOCKS. ALL THREE CURRENTLY RELEASE.
+    #
+    # An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
+    # moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
+    # a live verdict invites -- so it now states what the gates ARE rather than what they
+    # currently answer. What holds the route today is the runbook's DO-NOT-DISPATCH banner
+    # and the environment approval; the banner may be the only prose hold, and the approval
+    # is measured prevent_self_review:false with a single reviewer.
     #
     # (1) The birth-readiness (sentinel) interlock RELEASED as of #6982. It held because
     # cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path failed
@@ -5690,6 +5772,11 @@ jobs:
     #     fleet's for-loop. No other hcloud_server can enter this plan's closure, which is
     #     why the gate's reboot arm is a backstop here rather than live coverage.
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'git-data-host-create'
+    # (#8009 C2, D6) The disclosure job runs FIRST and carries no environment:, so
+    # the three limits are already on the run summary page while this job sits in
+    # `Waiting`. Anything written inside THIS job arrives after the approval it was
+    # meant to inform, which is what made the approval ceremonial.
+    needs: [git_data_birth_disclosure]
     runs-on: ubuntu-24.04
     # The sole HUMAN authorization on this path. REUSED, never re-declared: the
     # environment is managed at infra/web-host-birth-environment.tf with a non-empty
