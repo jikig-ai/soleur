@@ -28,9 +28,13 @@ from pathlib import Path
 # Fire the tripwire on import. `python3 -m unittest` does not load conftest.py, so registering
 # it there alone would leave the arm scripts/test-all.sh actually drives unprotected. Every
 # python suite that spawns git imports THIS module, which makes it the real chokepoint.
-from tests.conftest import assert_no_inherited_git_location
+from tests.conftest import assert_no_inherited_git_location, ensure_incident_sandbox
 
 assert_no_inherited_git_location("python")
+# Redirect incident telemetry at the same chokepoint (#7853). The IMPORT is the chokepoint under
+# `python3 -m unittest`, which loads no conftest -- so this line, not a conftest hook, is what
+# reaches the python suites that spawn a hook or a gate script.
+ensure_incident_sandbox()
 
 #: The variables that redirect WHERE git reads and writes, or that make ``git init`` copy
 #: executable content into the fixture.
@@ -116,4 +120,17 @@ def git_fixture_env(fixture_dir: str | os.PathLike[str]) -> dict[str, str]:
     env["GIT_AUTHOR_EMAIL"] = "fixture@example.com"
     env["GIT_COMMITTER_NAME"] = "Soleur Fixture"
     env["GIT_COMMITTER_EMAIL"] = "fixture@example.com"
+    # Signing, as a config OVERRIDE rather than a global replacement. GIT_CONFIG_GLOBAL=os.devnull
+    # and GIT_CONFIG_NOSYSTEM=1 above do NOT reach a REPO-LOCAL `commit.gpgsign=true`, so a fixture
+    # carrying one fails `gpg failed to sign the data`. GIT_CONFIG_COUNT entries are applied as
+    # command-line `-c` overrides, which outrank repo-local config.
+    #
+    # This arm was MISSING while its TS and shell siblings both carried it — and the python fixtures
+    # do commit (~15 commits under `env=git_fixture_env(repo)` in test_lint_rule_bodies.py), so a
+    # developer with a repo-local commit.gpgsign=true failed those tests. The parity test pins the
+    # constant LIST; nothing pinned the BUILT ENVIRONMENT, which is how three languages diverged
+    # silently. See the built-env parity assertion added alongside this fix.
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "commit.gpgsign"
+    env["GIT_CONFIG_VALUE_0"] = "false"
     return env

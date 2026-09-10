@@ -54,6 +54,11 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 HELPERS="$SCRIPT_DIR/test-helpers.sh"
+# Since #7849 the tripwire's variable list and its `exit 97` live in the chokepoint that
+# test-helpers.sh SOURCES, not inline in test-helpers.sh itself. This suite derives both rather
+# than transcribing them (which is right), so the derivations follow the source of truth to its
+# new home. `source "$HELPERS"` below is unchanged — that is still the entry point.
+FIXTURE_ENV_LIB="$SCRIPT_DIR/lib/git-fixture-env.sh"
 RUNNER_SRC="$REPO_ROOT/scripts/test-all.sh"
 
 # The tripwire's abort code. Bound once rather than inlined, mirroring git-tripwire.test.sh:26.
@@ -153,17 +158,20 @@ HOSTILE_INDEX="$VICTIM/.git/index"
 [[ "$VICTIM" != "$REPO_ROOT" && "$VICTIM" != "$REPO_ROOT"/* ]] \
   || die "victim '$VICTIM' resolves inside the repository at '$REPO_ROOT' — a breach would hit real work"
 [[ -f "$HELPERS" ]] || die "missing $HELPERS"
+[[ -f "$FIXTURE_ENV_LIB" ]] || die "missing $FIXTURE_ENV_LIB"
 
 # --- The nine, DERIVED from test-helpers.sh's own loop rather than transcribed. ------------------
 # The first revision asserted only that the derived line named GIT_INDEX_FILE. Measured: deleting
 # six of the nine from scripts/test-all.sh left this suite 12/12 green, and deleting ONLY
 # GIT_OBJECT_DIRECTORY also left it green — while this suite's own control proves that variable is
 # a live breach vector its oracle can see. Demonstrated, then undefended.
-TRIPWIRE_VARS=$(awk '/for _v in GIT_DIR/,/; do/' "$HELPERS" \
-  | tr ' \\;' '\n\n\n' | grep -E '^GIT_[A-Z_]+$' | LC_ALL=C sort -u)
-[[ -n "$TRIPWIRE_VARS" ]] || die "could not derive the tripwire variable list from $HELPERS"
+# `grep -v '^readonly '` drops the declaration line: the array is NAMED GIT_LOCATION_VARS, so a
+# bare GIT_ extraction counts the container as one of its own members and reports ten for nine.
+TRIPWIRE_VARS=$(sed -n '/^readonly GIT_LOCATION_VARS=(/,/^)/p' "$FIXTURE_ENV_LIB" \
+  | grep -vE '^readonly ' | grep -oE '\bGIT_[A-Z_]+\b' | LC_ALL=C sort -u)
+[[ -n "$TRIPWIRE_VARS" ]] || die "could not derive the tripwire variable list from $FIXTURE_ENV_LIB"
 TRIPWIRE_VAR_COUNT=$(printf '%s\n' "$TRIPWIRE_VARS" | grep -c .)
-(( TRIPWIRE_VAR_COUNT >= 9 )) || die "derived only $TRIPWIRE_VAR_COUNT tripwire variables from $HELPERS; expected at least 9"
+(( TRIPWIRE_VAR_COUNT >= 9 )) || die "derived only $TRIPWIRE_VAR_COUNT tripwire variables from $FIXTURE_ENV_LIB; expected at least 9"
 
 # The self-scrub must actually have worked. Checked AFTER the derivation so the list is the
 # authority, and before any git write.
@@ -210,7 +218,7 @@ build_victim
 assert_victim_is_a_repo "initial build"
 
 ck
-if grep -qE '^[[:space:]]*exit '"$TRIPWIRE_RC"'$' "$HELPERS"; then
+if grep -qE '^[[:space:]]*exit '"$TRIPWIRE_RC"'$' "$FIXTURE_ENV_LIB"; then
   pass "test-helpers.sh carries the exit ${TRIPWIRE_RC} tripwire"
 else
   fail "test-helpers.sh has no exit ${TRIPWIRE_RC} — the refusal arm is meaningless"

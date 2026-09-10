@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-10T14:15:11Z",
+  "generated_at": "2026-09-10T14:24:20Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1373,6 +1373,10 @@
     "rules_unused_over_8w": 102,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
+    "non_corpus_counts": {
+      "gdpr-gate-staleness": 40,
+      "gdpr-gate-cron-binding": 0
+    },
     "gate_exemptions": [],
     "gate_override_count": 0,
     "gate_timeout_warn_count": 0,

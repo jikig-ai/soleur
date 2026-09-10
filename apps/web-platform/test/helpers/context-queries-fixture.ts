@@ -12,6 +12,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
 
 /**
  * The deployed-plugin-root the hook's `skillsDir` must resolve to for a fixture
@@ -40,7 +44,8 @@ export function gitAvailable(): boolean {
 }
 
 function git(root: string, args: string[]): void {
-  execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+  execFileSync("git", ["-C", root, ...args], {
+    env: gitFixtureEnv(root),
     stdio: "ignore",
   });
 }
@@ -128,5 +133,16 @@ export function buildFixture(): string {
 }
 
 export function cleanupFixture(root: string): void {
-  rmSync(root, { recursive: true, force: true });
+  // maxRetries is Node's documented remedy for exactly the errno this hit in
+  // CI: `rmSync` retries on EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with a linear
+  // backoff. The fixture builds a real git repo, so a git process still
+  // releasing a handle under `.git/` races the teardown and the whole test FILE
+  // fails after every one of its assertions passed — 1431/1431 tests green, one
+  // file red, on a required check.
+  //
+  // Scoped to this ONE site deliberately. 69 `rmSync(..., {recursive, force})`
+  // calls in test/ share the pattern; sweeping them belongs in its own change,
+  // not in a PR about a hook guard. This one is fixed here only because it
+  // blocks that required check.
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
