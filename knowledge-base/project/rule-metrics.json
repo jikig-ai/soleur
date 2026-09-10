@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-10T08:28:37Z",
+  "generated_at": "2026-09-10T08:44:00Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1108,19 +1108,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-04T14:10:29Z",
-      "first_seen": "2026-09-04T14:10:29Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-observability-as-plan-quality-gate",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1144,6 +1131,19 @@
       "prevented_errors": 0,
       "last_hit": "2026-08-20T14:21:31Z",
       "first_seen": "2026-08-19T17:31:09Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 4,
+      "warn_count": 0,
+      "fire_count": 4,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-10T08:29:53Z",
+      "first_seen": "2026-09-04T14:10:29Z",
       "rule_text_prefix": ""
     },
     {

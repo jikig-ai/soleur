@@ -855,6 +855,101 @@ t23_grep_rewrite_disarm_zero_is_silent
 t24_monitor_supersede_prefix_not_orphan
 t25_monitor_supersede_plus_orphan_isolates_real_orphan
 
+# --- T26: incidents are merged across worktree AND shared checkout ---------
+# Regression for the null-reading bug. Hooks write into $CWD/.claude, so logs
+# land in BOTH a worktree and the shared checkout; gitignored means untracked,
+# NOT absent. Reading only one root (or preferring the worktree copy when it
+# exists) reports nearly every rule unused. Uses a real git worktree because the
+# resolution path under test is `git rev-parse --git-common-dir`.
+t26_incidents_merged_across_worktree_and_shared() {
+  command -v git >/dev/null 2>&1 || { echo "SKIP: T26 needs git"; return; }
+  local base shared wt
+  base=$(mktemp -d); shared="$base/shared"; wt="$base/wt"
+  mkdir -p "$shared"
+  git -C "$shared" init -q 2>/dev/null
+  git -C "$shared" config user.email t@t.t; git -C "$shared" config user.name t
+  echo seed > "$shared/seed.txt"; git -C "$shared" add -A >/dev/null
+  git -C "$shared" commit -qm seed >/dev/null
+  git -C "$shared" worktree add -q -b t26branch "$wt" >/dev/null 2>&1 || { echo "SKIP: T26 worktree add failed"; return; }
+
+  # The script resolves REPO_ROOT as SCRIPT_DIR/.., so it must live in the worktree.
+  mkdir -p "$wt/scripts/lib" "$wt/.claude" "$shared/.claude" "$wt/knowledge-base/project"
+  cp "$AGGREGATOR" "$wt/scripts/"
+  cp "$SCRIPT_DIR/lib/rule-metrics-constants.sh" "$wt/scripts/lib/"
+  cat > "$wt/AGENTS.md" <<'EOF'
+# Agent Instructions
+
+## Hard Rules
+
+- Rule A synthetic fixture bullet for aggregator tests [id: hr-rule-a-synthetic-test].
+- Rule B synthetic fixture bullet for aggregator tests [id: hr-rule-b-synthetic-test].
+EOF
+  local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-a-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$wt/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-b-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$shared/.claude/.rule-incidents.jsonl"
+
+  # INCIDENTS_REPO_ROOT deliberately UNSET: that is the real-world path.
+  ( cd "$wt" && env -u INCIDENTS_REPO_ROOT bash "$wt/scripts/rule-metrics-aggregate.sh" >/dev/null 2>&1 ) || true
+  local out="$wt/knowledge-base/project/rule-metrics.json"
+  local a b
+  a=$(jq -r '.rules[] | select(.id=="hr-rule-a-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  b=$(jq -r '.rules[] | select(.id=="hr-rule-b-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  assert_eq "T26 worktree-local incident counted" "1" "$a"
+  assert_eq "T26 shared-checkout incident ALSO counted (merge, not pick-one)" "1" "$b"
+  rm -rf "$base"
+}
+
+# --- T27: absence of EVERY root is loud -----------------------------------
+t27_no_incidents_anywhere_is_loud() {
+  local root err
+  root=$(make_fixture_repo)
+  rm -f "$root/.claude/.rule-incidents.jsonl"
+  err=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null || true)
+  if printf '%s' "$err" | grep -q 'SOLEUR_RULE_METRICS_NO_INCIDENTS'; then
+    echo "PASS: T27 absent log emits SOLEUR_RULE_METRICS_NO_INCIDENTS"; PASS=$((PASS+1))
+  else
+    echo "FAIL: T27 absent log was SILENT — a null reading is indistinguishable from zero hits"; FAIL=$((FAIL+1))
+  fi
+  TOTAL=$((TOTAL+1))
+  rm -rf "$root"
+}
+
+# --- T28: a RETIRED rule id is not an orphan ------------------------------
+# An incident keeps its rule_id forever, so without this every retirement fails
+# the gate retroactively.
+t28_retired_rule_id_is_not_orphan() {
+  local root exit_code=0
+  root=$(make_fixture_repo)
+  mkdir -p "$root/scripts"
+  printf 'hr-rule-retired-synthetic | 2026-01-01 | #1 | synthetic fixture\n' \
+    > "$root/scripts/retired-rule-ids.txt"
+  write_event "$root" hr-rule-retired-synthetic deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T28 retired rule id does not fail the orphan gate" "0" "$exit_code"
+  rm -rf "$root"
+}
+
+# --- T29: declared hook emitter families are not orphans ------------------
+t29_hook_emitter_families_not_orphan() {
+  local root exit_code=0 orphans
+  root=$(make_fixture_repo)
+  write_event "$root" guardrails-block-commit-on-main deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_event "$root" prod-write-defer-git-push-main deny "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_event "$root" skill-security-scan warn "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T29 hook emitter families do not fail the run" "0" "$exit_code"
+  orphans=$(jq -r '.summary.orphan_rule_ids | length' "$root/knowledge-base/project/rule-metrics.json" 2>/dev/null || echo missing)
+  assert_eq "T29 orphan_rule_ids empty" "0" "$orphans"
+  rm -rf "$root"
+}
+
+t26_incidents_merged_across_worktree_and_shared
+t27_no_incidents_anywhere_is_loud
+t28_retired_rule_id_is_not_orphan
+t29_hook_emitter_families_not_orphan
+
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 [[ "$FAIL" -eq 0 ]] || exit 1
