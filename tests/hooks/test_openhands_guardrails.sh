@@ -18,6 +18,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HOOK="$REPO_ROOT/.openhands/hooks/guardrails.sh"
 FREEZE_HELPER="$REPO_ROOT/.claude/hooks/lib/freeze-lock.sh"
 
+# The shell fixture chokepoint (#7849). Sourcing it ARMS the fail-loud git-location tripwire --
+# this suite had no scrub of any kind, so an inherited GIT_DIR would have sent the two `git init`
+# fixtures below into the developer's live checkout -- and provides `git_fixture_env`, which each
+# git fixture calls for its own ceiling. The non-git fixtures ($FZ, $ADHOME) deliberately do NOT
+# call it: each call re-points GIT_CEILING_DIRECTORIES, so widening it for a directory that holds
+# no repo would only loosen the ceiling protecting the repo actually under test.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 pass=0; fail=0
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 
@@ -39,7 +48,12 @@ check() {
   else fail=$((fail+1)); echo "[FAIL] $label — want $want got $got" >&2; fi
 }
 
-AD="$(mktemp -d)"; git init -q "$AD/repo"; mkdir -p "$AD/repo/node_modules" "$AD/other/.git"
+AD="$(mktemp -d)"
+git_fixture_env "$AD/repo" || {
+  echo "FATAL: test_openhands_guardrails: git_fixture_env refused the delete/terminal fixture $AD/repo" >&2
+  exit 1
+}
+git init -q "$AD/repo"; mkdir -p "$AD/repo/node_modules" "$AD/other/.git"
 ADHOME="$(mktemp -d)"
 
 # Delete guard — protected targets deny (exit 2), non-protected allow (exit 0).
@@ -106,6 +120,10 @@ WWG_TMP="$(mktemp -d)"
 # fixture repo into /tmp, a machine-global tmpfs shared with sibling worktrees.
 trap 'rm -rf "$WWG_TMP"' EXIT
 WWG_REPO="$WWG_TMP/repo"
+git_fixture_env "$WWG_REPO" || {
+  echo "FATAL: test_openhands_guardrails: git_fixture_env refused the worktree-write-guard fixture $WWG_REPO" >&2
+  exit 1
+}
 git init -q "$WWG_REPO"
 git -C "$WWG_REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 mkdir -p "$WWG_REPO/.worktrees/feat-fixture"

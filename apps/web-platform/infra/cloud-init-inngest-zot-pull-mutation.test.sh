@@ -56,6 +56,15 @@ SANDBOX_ROOT="$WORK/repo"
 INFRA_REL="apps/web-platform/infra"
 PRISTINE="$SANDBOX_ROOT/$INFRA_REL"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)" || die "could not resolve repo root"
+
+# #7849: fixture git spawns go through the shared builder, not the ambient environment. Without
+# it, an inherited GIT_DIR retargets `git init`/`add`/`commit`/`tag` below at the caller's real
+# repository — cwd does not win that fight, and this file's fixture is built with a bare `cd`.
+GIT_FIXTURE_ENV_LIB="$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+[ -f "$GIT_FIXTURE_ENV_LIB" ] && [ -r "$GIT_FIXTURE_ENV_LIB" ] \
+  || die "fixture-env helper missing or unreadable at $GIT_FIXTURE_ENV_LIB"
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$GIT_FIXTURE_ENV_LIB"
 mkdir -p "$PRISTINE" "$SANDBOX_ROOT/.github/workflows" "$SANDBOX_ROOT/.github/scripts" \
   || die "could not create sandbox tree"
 # EXCLUDE `.terraform` (162 MB of provider plugins) rather than copying it and deleting it
@@ -89,6 +98,9 @@ _pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTI
 (
   set -e
   cd "$SANDBOX_ROOT"
+  # Return checked: git_fixture_env exports NOTHING when it refuses, so an unchecked call would
+  # proceed with the caller's own environment while reading exactly like protection.
+  git_fixture_env "$SANDBOX_ROOT" || exit 64
   git init -q
   git config user.email sandbox@example.invalid
   git config user.name "sandbox"

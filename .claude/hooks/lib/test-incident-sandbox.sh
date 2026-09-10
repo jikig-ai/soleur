@@ -32,10 +32,32 @@
 # back the rows its hook emitted (assert on telemetry) without knowing this
 # file's internals.
 
+# FAIL LOUD, never open (#7853 / AC7). Both setup steps below used to `return 0` on failure, which
+# left INCIDENTS_REPO_ROOT unset -- and an unset root is not a degraded sandbox, it is the
+# OPERATOR'S REAL LEDGER. The failure direction of a write-boundary guard must be refusal, not
+# silent restoration of the thing it guards. `mktemp` failing is also not hypothetical here: /tmp is
+# a machine-global 4 GiB tmpfs shared by every parallel worktree.
+#
+# The empty-value case is called out separately because it is the one that reads as safe: an empty
+# INCIDENTS_REPO_ROOT is indistinguishable from unset to `_incidents_repo_root()`, so exporting one
+# would restore the real sink while every static check for the variable's NAME reported clean.
 _soleur_test_incident_sandbox_init() {
   local d
-  d=$(mktemp -d -t soleur-inc-XXXXXX) || return 0
-  mkdir -p "$d/.claude" 2>/dev/null || return 0
+  if ! d=$(mktemp -d -t soleur-inc-XXXXXX) || [ -z "$d" ]; then
+    printf 'FATAL: test-incident-sandbox could not create a sandbox (mktemp failed or returned empty).\n' >&2
+    printf '  Refusing to continue: an unset INCIDENTS_REPO_ROOT points telemetry at the\n' >&2
+    printf '  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\n' "${TMPDIR:-/tmp}" >&2
+    exit 1
+  fi
+  if [ "${d#/}" = "$d" ]; then
+    printf 'FATAL: test-incident-sandbox got a non-absolute sandbox path: %s\n' "$d" >&2
+    exit 1
+  fi
+  if ! mkdir -p "$d/.claude" 2>/dev/null; then
+    printf 'FATAL: test-incident-sandbox could not create %s/.claude\n' "$d" >&2
+    printf '  Refusing to continue rather than falling back to the operator real ledger.\n' >&2
+    exit 1
+  fi
   export INCIDENTS_REPO_ROOT="$d"
   export SOLEUR_TEST_INCIDENT_ROOT="$d"
 
@@ -43,14 +65,33 @@ _soleur_test_incident_sandbox_init() {
   # clobbering it. A suite that installs its own trap AFTER sourcing this will
   # still win — that only leaks one small tmpdir, never a real-ledger write,
   # so the failure direction is tidiness rather than correctness.
-  local prior
-  prior=$(trap -p EXIT | sed -E "s/^trap -- '(.*)' EXIT$/\1/")
-  if [ -n "$prior" ] && [ "$prior" != "$(trap -p EXIT)" ]; then
-    # shellcheck disable=SC2064
-    trap "$prior; rm -rf '$d'" EXIT
-  else
-    # shellcheck disable=SC2064
-    trap "rm -rf '$d'" EXIT
+  # `trap -p` prints a RE-EXECUTABLE command whose body carries bash's OWN quoting: the body is
+  # single-quoted, and a literal single quote inside it is emitted as the four-character sequence
+  # '\'' . The previous form stripped the outer quotes with sed and re-wrapped the remainder in
+  # double quotes, which leaves those escapes unbalanced and makes the composed trap a SYNTAX
+  # ERROR. A trap that fails to parse never runs, so the sandbox this function exists to remove is
+  # leaked.
+  #
+  # UNESCAPED WITH PARAMETER EXPANSION, NOT `eval`. ADR-156 forbids `eval` anywhere under
+  # .claude/hooks — hook stdin is untrusted and hook-input-contract.test.sh arm A1 enforces it
+  # across the whole tree, this lib included. An earlier revision of this fix used `eval` to
+  # round-trip the quoting and A1 caught it (2 offenders). The allow-list there covers exactly one
+  # fd-close idiom in session-state.sh and widening it for convenience would be the wrong trade.
+  #
+  # `trap "<text>"` is still how the composed trap is installed, which is what the ORIGINAL code
+  # did and what keeps `$VAR` inside the prior body expanding at FIRE time rather than now.
+  local prior_raw prior_body="" s
+  prior_raw="$(trap -p EXIT)"
+  if [ -n "$prior_raw" ]; then
+    s="${prior_raw#trap -- }"
+    s="${s% EXIT}"
+    s="${s#\'}"
+    s="${s%\'}"
+    prior_body="${s//\'\\\'\'/\'}"
   fi
+  _SOLEUR_INC_SB_OWNED="$d"
+  _soleur_inc_sb_cleanup() { [ -n "${_SOLEUR_INC_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_INC_SB_OWNED"; return 0; }
+  # shellcheck disable=SC2064
+  trap "${prior_body:+$prior_body; }_soleur_inc_sb_cleanup" EXIT
 }
 _soleur_test_incident_sandbox_init

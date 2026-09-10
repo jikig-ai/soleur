@@ -29,6 +29,20 @@ GATE_REL=".github/scripts/test/test-infra-suite-registration.sh"
 WF_REL=".github/workflows/infra-validation.yml"
 INFRA_PREFIX="apps/web-platform/infra"
 
+# The shell fixture chokepoint (#7849). Sourcing it here keeps the #6454 CONTRACT above intact:
+# it is a bash file already in the checkout, so it adds no terraform, no apt and no
+# package-mirror dependency to a REQUIRED, path-filter-free merge-queue check.
+#
+# Sourcing ARMS the fail-loud git-location tripwire, which this file had no equivalent of. The
+# sandbox below is a real `git init` + `git add -A` over ~100 stub paths; under an inherited
+# GIT_INDEX_FILE those `add -A` calls would have staged the CALLER's repository, and M10 (which
+# `mv`s a whole directory and re-adds) would have done it destructively.
+#
+# `git_fixture_env` is called LATER, after the `git -C "$REPO_ROOT" ls-files` enumeration below:
+# that read is of the REAL repo and deliberately runs outside the constructed environment.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 SB=$(mktemp -d -t infra-reg-mut.XXXXXXXX) || { echo "SETUP: mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$SB"' EXIT
 
@@ -71,6 +85,8 @@ for s in "${REAL_SUITES[@]}"; do
   : > "$SB/$s" || setup_die "stub $s"
 done
 
+# The real-repo enumeration above is done; from here every git call is sandbox-scoped.
+git_fixture_env "$SB" || setup_die "git_fixture_env refused the mutation sandbox $SB"
 git -C "$SB" init -q                >/dev/null 2>&1 || setup_die "git init"
 git -C "$SB" add -A                 >/dev/null 2>&1 || setup_die "git add"
 
