@@ -16,6 +16,28 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (the Flagsmith management key, and the
+# soleur/prd SUPABASE_SERVICE_ROLE_KEY the audit helper binds) is acquired by
+# `doppler secrets get` BELOW this point, so a conditional arm would test an empty
+# variable at guard time, open, and then trace the acquisition itself. The refusal
+# prints on STDOUT because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of these credentials works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
@@ -138,7 +160,7 @@ TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --
 
 # --- helpers ----------------------------------------------------------------
 fs_api() {
-  curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"
 }
 
 resolve_feature_id() {
@@ -365,7 +387,12 @@ print(json.dumps({
   ],
   'transient': True,
 }))")
-  resp=$(curl -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
+  # --disable/--noproxy here too (#7898 review). env_key is the PUBLIC client-side
+  # Flagsmith key, so the leak value is low -- but the linter missed this call only
+  # because X-Environment-Key is absent from CURL_AUTH_HEADER, not because it is
+  # exempt, and "every credentialed curl in these files is confined" should be true
+  # as written rather than true-with-an-asterisk.
+  resp=$(curl --disable --noproxy '*' -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
     -H "X-Environment-Key: ${env_key}" -H "Content-Type: application/json" \
     -d "$body") || { echo "eval request failed (curl transport) for org $org" >&2; return 3; }
   code=$(printf '%s' "$resp" | tail -n1)

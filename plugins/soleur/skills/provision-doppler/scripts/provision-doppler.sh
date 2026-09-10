@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL, and DELIBERATELY not
+# the conditional DOPPLER_TOKEN non-emptiness arm the linter offers for this file
+# — that arm is vacuous by construction here. This script acquires the operator's
+# workplace-scoped Doppler personal token with `read -rs -p "Doppler personal
+# token: "` BELOW this point, so the variable is still empty at guard time, the
+# arm opens, and `bash -x` goes on to print `Authorization: Bearer dp.pt.…` at
+# every API call site. The linter cannot see that: its ACQUIRES set knows
+# `doppler secrets get` / `gh auth token` / `_TOKEN="$(`, not `read -rs`.
+# Stdout, not stderr, because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the workplace-scoped personal token works with every other guard intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 SLUG=""
 TENANT_ORG=""
 TENANT_REPO=""
@@ -156,7 +180,10 @@ if $DRY_RUN; then
   echo "  unset TF_VAR_doppler_bootstrap_token"
   echo ""
   echo "--- OIDC service-account commands (run after TF apply) ---"
-  echo "curl -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts' \\"
+  # These printed recipes carry a live bearer, so they must TEACH the confined
+  # form: `--disable` literally first (it aborts ~/.curlrc parsing, and later is
+  # too late) and `--noproxy '*'` (#7873).
+  echo "curl --disable --noproxy '*' -sS -X POST 'https://api.doppler.com/v3/workplace/service_accounts' \\"
   echo "  -H 'Authorization: Bearer \$DOPPLER_TOKEN' \\"
   echo "  -H 'Content-Type: application/json' \\"
   echo "  -d '{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}'"
@@ -164,7 +191,7 @@ if $DRY_RUN; then
   echo "# Then configure OIDC trust with two-claim binding + grant project access"
   echo ""
   echo "--- Smoke-test ---"
-  echo "curl -sS -H 'Authorization: Bearer \$DOPPLER_TOKEN' 'https://api.doppler.com/v3/workplace/service_accounts' | jq '.service_accounts[] | select(.name == \"${SLUG}-deploy\")'"
+  echo "curl --disable --noproxy '*' -sS -H 'Authorization: Bearer \$DOPPLER_TOKEN' 'https://api.doppler.com/v3/workplace/service_accounts' | jq '.service_accounts[] | select(.name == \"${SLUG}-deploy\")'"
   echo ""
   echo "--- Teardown ---"
   echo "  doppler projects delete '${SLUG}' --yes"
@@ -221,11 +248,19 @@ echo ""
 (
   export DOPPLER_TOKEN
 
+  # Payloads are HOISTED into variables rather than written inline. Each curl here
+  # sends a credential, and a multi-line `-d "{…}"` literal makes the invocation
+  # multi-shaped, which is what the destination-confinement linter mis-parses as an
+  # env-settable destination (#7873). The destinations are literal URLs — SA_SLUG
+  # comes from the previous response — so there is nothing to pin; hoisting removes
+  # the parse artifact by making every invocation single-shaped.
+  SA_PAYLOAD="{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}"
+
   SA_RESPONSE=$(
-    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
+    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts" \
       -H "Authorization: Bearer $DOPPLER_TOKEN" \
       -H "Content-Type: application/json" \
-      -d "{\"name\": \"${SLUG}-deploy\", \"workplace_role\": {\"identifier\": \"viewer\"}}"
+      -d "$SA_PAYLOAD"
   )
 
   SA_SLUG=$(echo "$SA_RESPONSE" | grep -o '"slug":"[^"]*"' | head -1 | cut -d'"' -f4)
@@ -239,21 +274,20 @@ echo ""
 
   # --- Configure OIDC trust binding ---
 
+  # Hoisted for the same reason as SA_PAYLOAD above: the two-claim binding is the
+  # payload that made this invocation multi-shaped.
+  TRUST_PAYLOAD="{\"type\": \"oidc\", \"oidc_identity\": {"
+  TRUST_PAYLOAD="${TRUST_PAYLOAD}\"issuer\": \"https://token.actions.githubusercontent.com\","
+  TRUST_PAYLOAD="${TRUST_PAYLOAD}\"subject_claims\": {"
+  TRUST_PAYLOAD="${TRUST_PAYLOAD}\"repository_owner\": \"${TENANT_ORG}\","
+  TRUST_PAYLOAD="${TRUST_PAYLOAD}\"repository\": \"${TENANT_ORG}/${TENANT_REPO}\","
+  TRUST_PAYLOAD="${TRUST_PAYLOAD}\"environment\": \"production\"}}}"
+
   TRUST_RESPONSE=$(
-    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
+    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/identity" \
       -H "Authorization: Bearer $DOPPLER_TOKEN" \
       -H "Content-Type: application/json" \
-      -d "{
-        \"type\": \"oidc\",
-        \"oidc_identity\": {
-          \"issuer\": \"https://token.actions.githubusercontent.com\",
-          \"subject_claims\": {
-            \"repository_owner\": \"${TENANT_ORG}\",
-            \"repository\": \"${TENANT_ORG}/${TENANT_REPO}\",
-            \"environment\": \"production\"
-          }
-        }
-      }"
+      -d "$TRUST_PAYLOAD"
   )
 
   if echo "$TRUST_RESPONSE" | grep -q '"success"'; then
@@ -266,11 +300,13 @@ echo ""
 
   # --- Grant project access ---
 
+  GRANT_PAYLOAD="{\"project\": \"${SLUG}\", \"role\": \"viewer\"}"
+
   GRANT_RESPONSE=$(
-    curl -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
+    curl --disable --noproxy '*' -sS -X POST "https://api.doppler.com/v3/workplace/service_accounts/${SA_SLUG}/projects" \
       -H "Authorization: Bearer $DOPPLER_TOKEN" \
       -H "Content-Type: application/json" \
-      -d "{\"project\": \"${SLUG}\", \"role\": \"viewer\"}"
+      -d "$GRANT_PAYLOAD"
   )
 
   if echo "$GRANT_RESPONSE" | grep -q '"success"'; then
@@ -286,7 +322,7 @@ echo ""
   echo "--- Smoke-test ---"
 
   SA_CHECK=$(
-    curl -sS -H "Authorization: Bearer $DOPPLER_TOKEN" \
+    curl --disable --noproxy '*' -sS -H "Authorization: Bearer $DOPPLER_TOKEN" \
       "https://api.doppler.com/v3/workplace/service_accounts" \
     | grep -o "\"name\":\"${SLUG}-deploy\""
   )
