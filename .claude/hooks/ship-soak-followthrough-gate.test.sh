@@ -89,17 +89,86 @@ if [[ "$1" == "issue" ]]; then
   exit 0
 fi
 
+# `pr view` is read as `--json body --jq .body`, so the stub must emit the
+# PROJECTED body, exactly as the issue branch above does. Emitting the `{"body":...}`
+# envelope instead put the JSON wrapper into the corpus and collapsed the body onto
+# ONE line, which silently changed what any line-scoped analysis could see.
 case "${MODE:-nopr}" in
   nopr)   exit 1 ;;                                            # no PR readable
-  nosoak) printf '%s\n' '{"body":"ordinary PR body with no soak signal"}' ;;
+  nosoak) printf '%s\n' 'ordinary PR body with no soak signal' ;;
   # Soak signal + the SAME issue named as both the closing target and a `Ref`.
   # This is PR #7426's shape: the plan discussed `Ref #7409` inside a rejected
   # counterfactual while the PR closes #7409.
-  soakcloses) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak: none. Ref #7409 would apply only under the split we rejected."}' ;;
+  # NOTE: this body previously read "Post-deploy soak: none." — a NEGATED soak.
+  # Once the gate learned to drop negations that case would have passed because
+  # there was NO SIGNAL AT ALL, making this #7426 closing-target regression test
+  # vacuous. It carries a real soak declaration so the CLOSES filter stays under test.
+  soakcloses) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds at 0 for 7 days. Ref #7409 would apply only under the split we rejected.' ;;
   # Control: a genuine third-party tracker alongside the closing target. The
   # closing target drops out; #9999 must NOT, or the fix has disabled the gate
   # rather than narrowed it.
-  soakother) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak holds. Ref #9999 tracks the soak."}' ;;
+  soakother) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds. Ref #9999 tracks the soak.' ;;
+  # Only NEGATED soak vocabulary -- a plan declaring that NO soak exists -- beside a
+  # genuine third-party ref. The gate must NOT fire: there is no soak to enrol.
+  # PR #7987's real shape: the refs sit on their OWN lines (a `Ref #N` line carries
+  # no soak vocabulary), and the only soak match in the whole corpus is the plan
+  # template row that says the section does not apply.
+  soaknegated) printf '%s\n' 'Closes #7409
+
+Ref #9999
+
+| 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is time-gated; nothing here closes on a soak. |
+No soak-gated status flip.' ;;
+  # ACCEPTED RESIDUAL, pinned so it is a decision rather than a surprise: a negation
+  # that shares ONE LINE with a tracker reference is KEPT and therefore DENIES. That
+  # is the safe direction (the gate asks for enrollment on a ref the author put
+  # there) and it is the price of using the tracker as the discriminator instead of
+  # a punctuation window -- which was a live bypass on five house-style spellings.
+  # THE BYPASS SHAPE. Soleur house style for a soak-gated closure is
+  # `Ref #N` / NOT `Closes`, and the clause-boundary window that preceded the
+  # tracker discriminator DROPPED this line -- a live merge-gate bypass. Verbatim
+  # from knowledge-base/project/plans/2026-06-30-fix-agent-readiness-*.md.
+  soakhousestyle) printf '%s\n' 'Closes #7409
+
+- PR body: `Ref #9999`, never `Closes` (closure gated on the 7-day soak).' ;;
+  soaknegsameline) printf '%s\n' 'Closes #7409
+
+No soak-gated status flip. Ref #9999 tracks the residue.' ;;
+  # The negation must be SCOPED: here `NOT` negates `Closes`, not the soak, and the
+  # sentence IS a real soak declaration. Must still DENY.
+  # Body cites a plan on disk; the soak declaration and the refs live in the PLAN.
+  soakplan) printf '%s\n' 'Closes #7409
+
+See knowledge-base/project/plans/fixture-soak-plan.md for the detail.' ;;
+  # FAR SIDE. Every fixture above asserts the strip removes ENOUGH; these assert it
+  # does not remove TOO MUCH. Without them, widening the negation window
+  # ({0,60}->{0,600}), loosening the second rule ('not applicable'->'not'), or
+  # making either fence strip greedier all left the suite byte-identical green
+  # while silently disabling the gate on a real declaration.
+  soakwindow) printf '%s\n' 'Closes #7409
+
+No acceptance criterion is time-gated here and the release plan is otherwise unremarkable, but the post-deploy soak holds at 0 for 7 days. Ref #9999 tracks it.' ;;
+  soakafter) printf '%s\n' 'Closes #7409
+
+The post-deploy soak is not yet enrolled. Ref #9999 tracks it.' ;;
+  # An UNBALANCED fence in the PR body. The body strip is fail-closed
+  # (END{if(in_fence) exit 2} -> write the body unstripped), so the live Ref past
+  # the unclosed fence must still be seen. Deleting that END clause flipped this
+  # to allow while the suite stayed green.
+  soakbodyfence) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds at 0 for 7 days.
+
+```
+unclosed fence
+Ref #9999 tracks the soak.' ;;
+  soaknegscoped) printf '%s\n' 'Closes #7409
+
+- [ ] AC9: PR body uses **`Ref #9999`** (NOT `Closes`) -- closure is gated on the post-deploy soak below.' ;;
   *)      echo "gh-stub: unknown MODE=${MODE:-}" >&2; exit 64 ;;
 esac
 STUB
@@ -148,6 +217,93 @@ check "closing target named by BOTH Closes and Ref → allows" "<none>" \
 check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" "deny" \
   "$(decision_of 'gh pr ready' "$REPO" soakother)"
 
+# --- negated soak vocabulary is not a soak declaration ----------------------
+# The gate matched a bare `soak` anywhere in the corpus, so a plan row saying the
+# section does NOT apply fired it: "| 2.9.1 Soak follow-through | **Skip.** No
+# acceptance criterion is time-gated; nothing here closes on a soak. |" was the
+# ONLY match in the entire corpus of PR #7987, and it demanded enrollment for two
+# trackers that close on no timer at all. The hook's CLOSES-extraction comment (anchor: `**Why:** PR #7426`) already recorded the
+# cause -- "the regex is negation-blind" (PR #7426) -- while fixing only the
+# closing-target half beside it.
+#
+# These two are a MATCHED PAIR and must stay one: the first alone also passes if
+# the drop pass eats everything, which would disable the gate rather than narrow it.
+check "negated soak vocabulary only -> allows (negation-blindness, #7426)" "<none>" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegated)"
+check "ACCEPTED RESIDUAL: a negation sharing a line with a tracker still DENIES (safe direction)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegsameline)"
+check "house-style 'Ref #N, never Closes (closure gated on the soak)' still DENIES" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakhousestyle)"
+check "negation scoped to its own clause: 'NOT Closes' still DENIES" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegscoped)"
+
+check "a long negation-free clause before a real soak still DENIES (window length)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakwindow)"
+check "a negation AFTER 'soak' does not silence the declaration" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakafter)"
+check "an unbalanced fence in the BODY is fail-closed, so the live Ref is still seen" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakbodyfence)"
+
+# --- the PLAN half gets the same fenced-block strip as the PR body -----------
+# The body is stripped so a quoted example cannot read as a live declaration;
+# the plan was then appended RAW, so the protection stopped halfway through one
+# corpus. Plans are where worked examples and sample PR bodies actually live.
+# Matched pair: fenced ref must be invisible, unfenced ref must still deny.
+# Byte-exact copy of test-helpers.sh's assert_fixture_dir. Inlined rather than
+# sourced, matching the six sibling hook suites that do the same
+# (cla-signed-author-gate, context-reviewed-gate, pre-merge-rebase{,-headless,-parity},
+# ship-unpushed-commits-gate): `.claude/hooks/` suites do not pull in
+# plugins/soleur/test/test-helpers.sh. It is the ONLY guard the P1b scanner
+# recognises, and only as an executed statement -- see
+# fixture-relative-assert.baseline.txt, "WHAT A GUARD HAS TO PROVE". Keep byte-exact:
+# fixture-dir-operand-assert.test.sh drift-checks every copy in the repo.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+mk_plan() { # <repo> <ref-line-placement: fenced|unfenced>
+  local d="$1" where="$2" f
+  # Guard the redirect operand at the ENCLOSING FUNCTION HEAD, which is where the
+  # P1a guard window starts. Without it `} > "$f"` below is an unprovable operand:
+  # an empty $1 makes the path relative and the heredoc lands in the CALLER's
+  # working tree. This is the fixture-relative-assert ratchet's own finding on this
+  # very edit -- guarded rather than passed through its `--write-baseline` remedy,
+  # which would have recorded a real site as accepted.
+  : "${1:?mk_plan needs a repo dir; an empty operand would write into the caller cwd}"
+  assert_fixture_dir "$1"
+  f="$1/knowledge-base/project/plans/fixture-soak-plan.md"
+  assert_fixture_dir "$f"
+  mkdir -p "$1/knowledge-base/project/plans"
+  {
+    echo "# fixture plan"
+    echo
+    echo "Post-deploy soak holds at 0 for 7 days before the tracker closes."
+    echo
+    if [[ "$where" == fenced ]]; then
+      echo '```'
+      echo "AC9: PR body uses Ref #9999 (NOT Closes) — quoted illustration only."
+      echo '```'
+    else
+      echo "Ref #9999 tracks the soak."
+    fi
+  } > "$f"
+}
+
+mk_plan "$REPO" fenced
+check "ref inside a FENCED block in the plan is not a tracker → allows" "<none>" \
+  "$(decision_of 'gh pr ready' "$REPO" soakplan)"
+mk_plan "$REPO" unfenced
+check "same ref UNFENCED in the plan still DENIES (strip narrows, not disables)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakplan)"
+rm -f "$REPO/knowledge-base/project/plans/fixture-soak-plan.md"
+
 # --- #7164 envelope contract ------------------------------------------------
 # An ARRAY tool_input.command rendered across lines, matched the trigger regex
 # nowhere, and slipped the gate. This hook is not the designated ask responder,
@@ -165,6 +321,30 @@ else
 fi
 
 rm -rf "$REPO"
+
+# --- instrument self-test + assertion floor ------------------------------------
+# Both emit with printf + exit 1 DIRECTLY. Routing either through check() would
+# let the single edit that disarms check() disarm its own backstop.
+#
+# Measured before this existed: `check() { : }` reported "1 passed, 0 failed",
+# exit 0 — thirteen of fourteen assertions gone, CI green. And a check() that
+# always counts a PASS produced a BYTE-IDENTICAL headline.
+_c_pass=$PASS _c_fail=$FAIL
+check "instrument self-test: check() records a PASS" "x" "x"
+check "instrument self-test: check() records a FAIL (expected, unwound below)" "x" "y"
+if [[ "$PASS" -ne $((_c_pass + 1)) || "$FAIL" -ne $((_c_fail + 1)) ]]; then
+  printf 'FATAL: check() did not move both counters (pass %s->%s, fail %s->%s)\n' \
+    "$_c_pass" "$PASS" "$_c_fail" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_c_pass FAIL=$_c_fail   # unwind the self-test
+
+MIN_ASSERTIONS=19
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: only %s assertions passed, floor is %s — the suite is vacuous\n' \
+    "$PASS" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo
 echo "=== ship-soak-followthrough-gate: $PASS passed, $FAIL failed ==="
