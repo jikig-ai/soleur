@@ -1351,6 +1351,7 @@ error-handling
 error-mapping
 esbuild
 escape-hatch
+escape-rows
 escape-testing
 escaping
 eslint
@@ -1938,6 +1939,7 @@ issue-body-drift
 issue-body-staleness
 issue-deduplication
 issue-filing
+issue-flow
 issue-hygiene
 issue-tracking
 issue-triage

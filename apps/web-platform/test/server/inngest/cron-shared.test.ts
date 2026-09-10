@@ -164,6 +164,17 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-gh-pages-cert-reissue")).toBe(false);
   });
 
+  // cron-machinery-drain is a dispatch-hybrid (mint token + workflow_dispatch to
+  // scheduled-machinery-drain.yml); the measurement and drain run in the
+  // ephemeral GHA executor, so the Node side holds no git and opens no PR. Never
+  // Tier-2 deferred: a deferred week is a week with no issue-flow measurement,
+  // and that measurement is the only thing that can tell the operator whether
+  // the filing rate actually fell. Asserted here so the sibling-set sweep sees
+  // this dependent when EXPECTED_CRON_FUNCTIONS grows. See ADR-216.
+  it("machinery-drain (dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-machinery-drain")).toBe(false);
+  });
+
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
   // allow) unblocks the two audit crons whose only denied construct was the
   // Task catch-all.

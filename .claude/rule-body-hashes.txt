@@ -9,6 +9,7 @@ b143af2cc16aaee9d41f7021767431186736297be1878a4d8d0ca17e7324f3e8  hr-autonomous-
 27235260447146e8eba515c8208abd0f83a04b430b50c8544e6f9d81e54a5b76  hr-before-shipping-ship-phase-5-5-runs
 95c858983479e2ecbe39c5c86f87bbfd6a7414b35889b63e5fe0956de50caaa3  hr-bulk-delete-per-item-live-infra-role-check
 e43cb51eda7fc3abf1bd044403148da4263f24be7bf821268174c404b866b3a5  hr-dev-prd-distinct-supabase-projects
+35c3a36ccf61c9125290a6f6e30a9413e554aa8ed3cdb81430997107ea8934b5  hr-dispatch-async-must-arm-watch
 aa44e52436fbbfe85cc0908b0d6a85baf0826a3498824cc42c56483ab1b9ccdf  hr-every-new-terraform-root-must-include-an
 f986fe104836beadb13264dfdf5223c2a13cac35b29e54a9d5226d1cf8144a7b  hr-exhaust-all-automated-options-before
 9649997fd4baf1e8a00cfa20942565948f3135c45ceec27b0c450f1b462d53de  hr-fresh-host-provisioning-reachable-from-terraform-apply
@@ -35,6 +36,7 @@ cc3b752f99ec2d39e31fbb886178f5a2b530e2db7cce008512e3ccad8539001b  hr-prod-host-c
 8888957e6cb050d24c89378c6ad0abd36eb6a877c7cac2c407af4d25c82eb76c  hr-ship-message-no-operator-checklist
 2b23364feefbf97b8b4831fd7adfab30b3b50e206759a08503903910a28f2797  hr-ssh-diagnosis-verify-firewall
 2fdcf6b8ba9126c55e5b40e389d5150e220a7f4dae6ba1c782f7329c8972cc96  hr-tagged-build-workflow-needs-initial-tag-push
+b0a7be3e0167890fc8043b8ef46f0e86673fcd2ac03c2faa7a088045026cff9c  hr-technical-fork-is-not-an-operator-question
 4e310304ef732019a1c7a73c165050620836531841c71f6f563698dc49e9bbbd  hr-tf-variable-no-operator-mint-default
 4bd7a42bd6270f2e0cb0faa133108cb6d6dc2c1946dd1cfdbeb7218935d1f628  hr-the-bash-tool-runs-in-a-non-interactive
 47a5830a16399e9cef30bc6dca3f1d34796ad7069288f8bffbe1026d69bf2048  hr-the-host-terminal-is-warp
@@ -57,7 +59,7 @@ eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-
 c171187443a446c1020bc06932c93b6b36a44344ec038ed211b6c87d8caacdcc  wg-block-pr-ready-on-undeferred-operator-steps
 bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-author-before-merge
 0c66ba0b8543f78224a5e8c3725bd7be5916846c6df4e05942b899e76c66d987  wg-dark-launch-deploy-gates
-4990d616fe22452d68ebd2fcfbeb671959008348bbfed1883de429182a562d13  wg-defer-only-after-inline-triage
+bd1b19b00bbbcf9d553041722d3da0b29ed782b1167764d170c15486c76c4255  wg-defer-only-after-inline-triage
 e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work-emit-resume-prompt
 695ee8e150a170130d85bfcd007faa8a1cb65944148cbd649f3aa31936178e79  wg-every-feature-listed-in-a-roadmap-phase
 5371eb922a7d2402648dbf68dbe902abf582e97d36e3f9e8f04942ed69443cea  wg-every-session-error-must-produce-either
