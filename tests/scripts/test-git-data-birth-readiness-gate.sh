@@ -74,7 +74,15 @@ fail() {
 }
 
 # shellcheck source=/dev/null
-source "$GATE"
+# GUARDED. This suite runs `set -uo pipefail` WITHOUT `-e`, so a failed `source` is
+# non-fatal: every arm below would then call an undefined function, and the gate's own
+# `command not found` (rc=127) would be reported as a gate VERDICT rather than as the
+# instrument never having loaded. Fail closed and name the path instead.
+source "$GATE" || { printf 'FATAL: could not source the gate library at %s\n' "$GATE" >&2; exit 2; }
+if ! declare -F git_data_authorization_map_gate >/dev/null 2>&1; then
+  printf 'FATAL: %s sourced but git_data_authorization_map_gate is not defined\n' "$GATE" >&2
+  exit 2
+fi
 
 check() {
   local name="$1" want_rc="$2" needle="$3" file="$4"
@@ -1112,6 +1120,13 @@ _am_self_test() {
   # FAIL line, and a FAIL line on screen next to a green verdict is the exact shape this
   # repo treats as a broken instrument -- it would train a reader (and any log grep) to
   # discount real ones. Only this function's own ok/FAIL line is user-visible.
+  # Capture the probe's OWN view of the gate before running it through _am. The failure
+  # branches below previously printed "vacuous" and nothing else, which names a conclusion
+  # without the measurement behind it -- unactionable on a surface (CI) where nobody can
+  # re-run it by hand, and the exact instrument-without-evidence shape this suite exists to
+  # reject. Costs one extra gate call (~1s) on a path that runs once.
+  local _probe_out _probe_rc
+  _probe_out="$(git_data_authorization_map_gate "$_d/cloud-init-git-data.yml" 2>&1)"; _probe_rc=$?
   _am "selftest-must-pass" 0 "pairwise-distinct" "$_d" >/dev/null 2>&1
   local _after_pass="$passes"
   _am "selftest-must-fail" 99 "a needle that cannot appear anywhere" "$_d" >/dev/null 2>&1
@@ -1119,6 +1134,13 @@ _am_self_test() {
   passes="$_p"; fails="$_f"; FAILURES=("${FAILURES[@]:0:$_n}")
   if [[ "$_after_pass" -ne $((_p + 1)) ]]; then
     printf '  FAIL _am SELF-TEST: the accept branch did not record a pass — every _am arm is vacuous.\n'
+    printf '       probe: rc=%s (want 0), needle="pairwise-distinct"\n' "$_probe_rc"
+    printf '       probe output was:\n'
+    printf '%s\n' "$_probe_out" | sed 's/^/         | /'
+    printf '       fixture files under %s:\n' "$_d"
+    find "$_d" -type f 2>/dev/null | sed 's/^/         | /'
+    printf '       env: bash=%s awk=%s LC_ALL=%s TMPDIR=%s\n' \
+      "$BASH_VERSION" "$(awk -W version 2>&1 | head -1)" "${LC_ALL:-unset}" "${TMPDIR:-unset}"
     exit 1
   fi
   if [[ "$_after_fail" -ne $((_f + 1)) ]]; then
