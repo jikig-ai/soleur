@@ -15,6 +15,8 @@
 import { describe, test, expect } from "bun:test";
 import { resolve } from "path";
 import { spawnSync } from "child_process";
+import { gitFixtureEnv } from "./lib/git-fixture-env";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const GATE = resolve(REPO_ROOT, "scripts/ship-incident-pir-gate.sh");
@@ -23,6 +25,7 @@ const FIX = resolve(REPO_ROOT, "plugins/soleur/test/fixtures/ship-incident-pir-g
 /** Run the shipped gate against a fixture; returns true iff it signalled. */
 function signals(fixture: string): boolean {
   const res = spawnSync("bash", [GATE], {
+    env: gitCleanEnv(),
     input: require("fs").readFileSync(resolve(FIX, fixture), "utf8"),
     encoding: "utf8",
   });
@@ -44,7 +47,7 @@ function signals(fixture: string): boolean {
  * template at runtime rather than snapshot it.
  */
 function signalsText(text: string): boolean {
-  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8" });
+  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8", env: gitCleanEnv() });
   if (res.status === 0) {
     expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
     return true;
@@ -169,7 +172,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).
   test("a no-signal run exits 1 cleanly with no stdout", () => {
-    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
   });
@@ -281,6 +284,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
   // ship/SKILL.md now tells the reader this note exists — so the claim needs something behind it.
   test("suppressing an outage line inside the paragraph emits a stderr note", () => {
     const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
       input: require("fs").readFileSync(
         resolve(FIX, "real-outage-inside-paragraph-without-actuality-idiom.md"), "utf8"),
       encoding: "utf8",
@@ -331,6 +335,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
     fs.writeFileSync(stub, "#!/bin/sh\nexit 2\n");
     fs.chmodSync(stub, 0o755);
     const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
       input: "nothing to see here\n",
       encoding: "utf8",
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
@@ -354,7 +359,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
     ["whitespace only", "\n\n"],
     ["every line filtered", "If this lands broken\n"],
   ])("a %s haystack is a clean no-signal, not a pipeline failure", (_label, input) => {
-    const res = spawnSync("bash", [GATE], { input, encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input, encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
   });
@@ -391,7 +396,14 @@ describe("--pr corpus construction", () => {
   /** A throwaway git repo with a plan on disk and a `gh` stub that returns `body`. */
   function sandbox(body: string, planText: string) {
     const dir = mkdtempSync(resolve(tmpdir(), "pirgate-"));
-    spawnSync("git", ["init", "-q", "-b", "feat-fixture", dir]);
+    // gitFixtureEnv, not a bare spawn. This helper runs `git init`, and an inherited
+    // GIT_DIR/GIT_WORK_TREE beats both the cwd AND the path operand -- so without the
+    // scrub this fixture initialises nothing and any later write lands in the caller's
+    // repository. That is the #7835 incident, and this suite acquired the exposure in
+    // the same PR that fixes the gates guarding against it: `fixture-env-adoption`
+    // caught it in CI as a difference-set member accounted for by neither the waiver
+    // nor the deferred list. Adopted rather than waived.
+    spawnSync("git", ["init", "-q", "-b", "feat-fixture", dir], { env: gitFixtureEnv(dir) });
     mkdirSync(resolve(dir, "knowledge-base/project/plans"), { recursive: true });
     writeFileSync(resolve(dir, "knowledge-base/project/plans/fixture-plan.md"), planText);
     mkdirSync(resolve(dir, "bin"), { recursive: true });
@@ -413,7 +425,7 @@ describe("--pr corpus construction", () => {
     return spawnSync("bash", [GATE, "--pr", pr], {
       cwd: dir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${resolve(dir, "bin")}:${process.env.PATH}` },
+      env: { ...gitFixtureEnv(dir), PATH: `${resolve(dir, "bin")}:${process.env.PATH}` },
     });
   }
 
@@ -510,7 +522,7 @@ describe("--pr corpus construction", () => {
   });
 
   test("stdin mode is unchanged when --pr is absent", () => {
-    const res = spawnSync("bash", [GATE], { input: OUTAGE_PLAN, encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input: OUTAGE_PLAN, encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
   });
