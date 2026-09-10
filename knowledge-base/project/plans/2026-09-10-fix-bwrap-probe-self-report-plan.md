@@ -46,6 +46,15 @@ scoped strong-model consult and a mechanical verify-the-negative sweep.
    follow-through tracker.
 9. **Two acceptance criteria could not be satisfied by the implementation they gated**, one used the
    `grep -c` idiom the repo keeps a linter for, and two had no runnable form. Rewritten as executable.
+10. **A harness row was written from reasoning and measured false.** "Two consecutive suite runs
+    produce byte-identical output" fails on the *untouched* tree — `ci-deploy.test.sh:3558` crosses a
+    `date +%s` boundary — so the row would have redded at baseline and been read as a catch. Deleted
+    and replaced; every harness row is now calibrated against the pristine tree first.
+11. **`ms` was decorative and `err_chars`'s provenance was undefended.** Every mock fixture returned
+    instantly, so the sole P2e discriminator had one value across the whole set and a hardcoded
+    `ms=0` would have passed the suite. Added a duration fixture (bounded, never exact) and three
+    mutation rows covering the two axes the battery never touched — extractor uniqueness and field
+    order — both guarding assertions this plan argued for at length and then never proved.
 
 ### Premises falsified at plan time
 
