@@ -16,6 +16,7 @@
 #   guardrails:block-delete-branch — constitution.md "Never use --delete-branch with gh pr merge"
 #   guardrails:block-conflict-markers — constitution.md "grep staged content for conflict markers"
 #   guardrails:require-milestone — constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
+#   guardrails:require-filing-justification — AGENTS.md wg-defer-only-after-inline-triage "a filing must name a user-visible consequence, a measured fix size, or the machinery ledger"
 #   guardrails:block-stash-in-worktrees — AGENTS.md "Never git stash in worktrees"
 
 set -euo pipefail
@@ -459,6 +460,147 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
       }
     }'
     exit 0
+  fi
+
+  # guardrails:require-filing-justification — a filing must name who it is for.
+  #
+  # Corresponding prose rule: wg-defer-only-after-inline-triage.
+  # The full triple test lives HERE, not in the rule body, per
+  # cq-agents-md-tier-gate: a rule that becomes [hook-enforced:] keeps its id,
+  # its tag and a one-line pointer, and the enforcing artifact carries the prose.
+  #
+  #   (1) INLINE-FIRST. Measure the fix. If it lands as <=100 changed lines AND
+  #       <=4 files, fix it inline -- do not file. The threshold is NOT invented
+  #       here: ADR-131 records it moving from <=30 lines/<=2 files to <=100/<=4
+  #       "with instrumentation", and ship-net-issue-flow-gate.sh quotes the same
+  #       pair as "the cost-of-filing auto-flip" in its remediation text. A
+  #       refusal naming a threshold nobody can trace is how the override reflex
+  #       gets trained, so the citation is part of the gate.
+  #       This is a SIZE test. If the blocker is AUTHORITY (an operator-only
+  #       credential, a production decision) inline does not apply however small
+  #       the diff would be -- such a filing takes the Mandated-By: exit.
+  #   (2) CONCRETE TRIGGER. An observable signal saying "do this now": a date, a
+  #       metric, a user report. If there is none, document it in place.
+  #   (3) PLAUSIBLE IN ~6 MONTHS. Will that trigger fire within six months at
+  #       current scale? If not, document it in place.
+  #
+  # WHY AT THE FILING SITE AND NOT THE MERGE BOUNDARY. net-issue-flow is per-PR
+  # net-ZERO: perfectly enforced it holds the backlog at its CURRENT size
+  # forever. Measured 2026-09-10 the repo ran ~2 filed per 1 closed every week
+  # without exception, 1,455 open. Only a check at the moment of filing moves the
+  # rate. See knowledge-base/project/learnings/workflow-patterns/
+  # 2026-05-29-net-issue-flow-gate-at-filing-site-not-just-ship.md, where the
+  # ship-side surfacing was bypassed precisely because filings happen in /work.
+  #
+  # THREE EXITS, ONE GATE, AND DELIBERATELY NO FOURTH. Exit 1 is free and always
+  # available, so a purpose-named bypass marker would buy nothing an honest
+  # `--label meta/machinery` does not, while reproducing the reflexive-override
+  # pathology ADR-155 documents (net-issue-flow has been overridden 98 times).
+  if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]]; then
+    _fj_pass=0
+
+    # The taxonomy is shared with the backfill classifier so the two cannot
+    # drift. Unreadable => FAIL TOWARD GATING: a gate that silently stops
+    # matching is indistinguishable from a gate that passed, which is the exact
+    # empty-telemetry-is-not-absence class this PR exists to remove.
+    _fj_tax="${BASH_SOURCE[0]%/*}/lib/user-surface-taxonomy.txt"
+    _fj_re=""
+    if [[ -r "$_fj_tax" ]]; then
+      _fj_re="$(grep -vE '^[[:space:]]*(#|$)' "$_fj_tax" | paste -sd'|' - || true)"
+    fi
+    if [[ -z "$_fj_re" ]]; then
+      emit_incident "wg-defer-only-after-inline-triage" "deny" \
+        "user-surface taxonomy unreadable at ${_fj_tax}" "$COMMAND"
+      jq -n --arg p "$_fj_tax" '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: ("BLOCKED: the user-surface taxonomy could not be read at " + $p + ". Failing toward gating rather than allowing an unchecked filing.")
+        }
+      }'
+      exit 0
+    fi
+
+    # EXIT 1 — the machinery ledger. A finding about Soleur own guards, gates,
+    # ledgers or probes does not need a user-visible consequence, because by
+    # construction it has none. Free, always available, honest.
+    if grep -qE -- '--label[=[:space:]]+["'"'"']?meta/machinery' <<<"$COMMAND"; then
+      _fj_pass=1
+    fi
+
+    # EXIT 3 — a rule MANDATES this filing. Same closed, human-gated vocabulary
+    # ADR-155 established, which is what makes the mandating gate and this
+    # restricting gate ONE gate rather than two that disagree. This hook does not
+    # re-derive the tagged set -- that is net-issue-flow.sh job, from the
+    # merge-base corpus. It accepts a well-formed claim and lets the merge
+    # boundary adjudicate it. Two gates, one vocabulary, no second pin.
+    if [[ "$_fj_pass" == 0 ]] \
+       && grep -qE '(^|[^A-Za-z0-9_-])Mandated-By:[[:space:]]*(hr|wg)-[a-z0-9-]+' <<<"$COMMAND"; then
+      # The leading class is [^A-Za-z0-9_-], NOT [[:space:]]: in a real command the
+      # field sits immediately after `--body "`, so a whitespace-or-start anchor
+      # never fires on the shape that actually reaches this hook. Caught by the
+      # exit-3 matrix row, which denied where it must allow.
+      _fj_pass=1
+    fi
+
+    # EXIT 2 — a NAMED user-visible consequence AND a MEASURED fix size.
+    _fj_ui=""
+    _fj_n=""; _fj_m=""
+    if [[ "$_fj_pass" == 0 ]]; then
+      [[ "$COMMAND" =~ User-Impact:[[:space:]]*([^$'\n']+) ]] && _fj_ui="${BASH_REMATCH[1]}"
+      if [[ "$COMMAND" =~ Fix-Size:[[:space:]]*([0-9]+)[[:space:]]*lines?[[:space:]]*/[[:space:]]*([0-9]+)[[:space:]]*files? ]]; then
+        _fj_n="${BASH_REMATCH[1]}"; _fj_m="${BASH_REMATCH[2]}"
+      fi
+      if [[ -n "$_fj_ui" ]] && grep -qiE -- "\\b(${_fj_re})\\b" <<<"$_fj_ui" \
+         && [[ -n "$_fj_n" && -n "$_fj_m" ]]; then
+        # Inside the inline threshold => REFUSE. This is the check that catches
+        # the 19-lines-in-1-file deferral: the size is not an adjective, so it
+        # cannot be talked past.
+        if (( _fj_n <= 100 && _fj_m <= 4 )); then
+          emit_incident "wg-defer-only-after-inline-triage" "deny" \
+            "fix-size ${_fj_n} lines / ${_fj_m} files is inside the inline threshold" "$COMMAND"
+          jq -n --arg n "$_fj_n" --arg m "$_fj_m" '{
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse", permissionDecision: "deny",
+              permissionDecisionReason: ("BLOCKED: Fix-Size: " + $n + " lines / " + $m + " files is INSIDE the inline threshold (<=100 lines AND <=4 files, per ADR-131 which records it moving from <=30/<=2 to <=100/<=4). Fix it inline in this PR instead of filing. If the blocker is AUTHORITY rather than size -- an operator-only credential or a production decision -- say so with a Mandated-By: <rule-id> line, which is a different exit.")
+            }
+          }'
+          exit 0
+        fi
+        _fj_pass=1
+      fi
+    fi
+
+    # DERIVABLE-INPUTS is a DENY PREDICATE, not a third field. A free-text field
+    # that any single token satisfies enforces nothing -- the agent that wrote
+    # "we lack the numbers" would proceed by appending a word. Making the CLAIM
+    # itself the trigger, and requiring a concrete SOURCE CLASS rather than free
+    # text, is strictly stronger while removing a field from the contract.
+    if [[ "$_fj_pass" == 1 ]] \
+       && grep -qiE 'would have to choose|we lack|lack the numbers|no numbers|unknown values|do not have the numbers|lacking the numbers' <<<"$COMMAND"; then
+      if ! grep -qiE 'Inputs-Derived:[[:space:]]*.*(workflow run|ci run|run [0-9]|log|telemetry|marker|measurement|probe|prior pr|pr [0-9]|dashboard|query)' <<<"$COMMAND"; then
+        emit_incident "wg-defer-only-after-inline-triage" "deny" \
+          "claims a missing-numbers blocker with no derivable-inputs source" "$COMMAND"
+        jq -n '{
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse", permissionDecision: "deny",
+            permissionDecisionReason: "BLOCKED: this body claims the blocker is that the numbers are unknown. Before that becomes a filing, try to DERIVE them: add an Inputs-Derived: line naming a concrete source -- a workflow run, a log query, a telemetry marker, a measurement, or a prior PR. Measured precedent: a deferral blocked on choosing 19 timeout values was resolved in ~2 minutes from ten existing main runs."
+          }
+        }'
+        exit 0
+      fi
+    fi
+
+    if [[ "$_fj_pass" == 0 ]]; then
+      emit_incident "wg-defer-only-after-inline-triage" "deny" \
+        "gh issue create names no user-visible consequence" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: this filing names no user-visible consequence. Take ONE of three exits. (1) It is a finding about Soleur own verification machinery -- add --label meta/machinery. That ledger is excluded from the operator digest and from user-facing drains, and is the honest home for a guard/gate/ledger/probe finding. (2) It affects something a user receives -- add two lines to the body: `User-Impact: <named route, page, component, CLI command, email or document>` and `Fix-Size: <N> lines / <M> files` measured, not estimated. (3) A rule mandates the filing -- add `Mandated-By: <rule-id>`. \"The guard is imperfect\" is exit 1, not exit 2."
+        }
+      }'
+      exit 0
+    fi
   fi
 fi
 
