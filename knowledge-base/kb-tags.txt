@@ -942,6 +942,7 @@ cost-of-filing
 cost-of-filing-gate
 cost-slo
 count-mismatch
+counting
 counts
 coupling-test
 coverage
@@ -1390,6 +1391,7 @@ external-api-shape
 external-format
 external-product-evaluation
 external-services
+external-tool-eval
 extract
 extract-to-sourceable
 extractfunctionbody
@@ -1447,6 +1449,7 @@ false-red
 false-success
 false-verdict
 falsifiable-test
+falsification
 falsification-gate
 fan-out-pattern
 faqpage
@@ -1890,6 +1893,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-validation
 instrument-verification
 instrumentation
 instruments
