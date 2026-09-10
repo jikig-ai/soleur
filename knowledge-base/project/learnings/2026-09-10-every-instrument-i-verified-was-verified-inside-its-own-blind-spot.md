@@ -148,3 +148,16 @@ the run's conclusion.
 **Forwarded from session-state.md** (planning phase): a `replace_section` substring-index splice
 fired twice; an acceptance-criteria renumber mangled by first-occurrence replace; the
 `plugin:github:github` MCP server failed to connect (reads went through `gh`).
+
+**19. The Incident-PIR gate fired on the word `outage` inside compound nouns naming a *gate* and a
+design *window*** — Recovery: read all four matches (`network-outage gate`, `### Network-Outage
+Deep-Dive`, and twice `the cron-outage window is ADR-100's known cost`) and all three issues; none
+reports an event, and #8013's own body records "not customer PII … Real but low severity". No PIR
+owed. Prevention: `scripts/ship-incident-pir-gate.sh` already boundary-guards `incident` (vs
+`incidental`), `prod` (vs `produced`/`producer`) and `live` (vs `delivery`) for exactly this
+substring class, and its header explains why each was needed — `outage` is the same class left
+unfixed one line below them. The discriminator is not a boundary, though: `network outage` is
+legitimate outage vocabulary, so a `\b`-style guard would delete a true positive. What separates
+these four hits is that the noun they modify is a *gate*, a *deep-dive* section heading, or a
+*window* — a mechanism, not an event. Anyone touching that regex should treat "the token names a
+mechanism" as the case to exclude, and fixture it in both directions before believing the change.
