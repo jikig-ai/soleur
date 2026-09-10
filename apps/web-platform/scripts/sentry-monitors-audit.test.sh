@@ -1716,6 +1716,24 @@ else
   fail "T34 a valid candidate was refused: rc=$rc34 requests=$n34 :: $(head -c 200 <<<"$out34")"
 fi
 
+echo "T35: the PRODUCTION pairing is accepted (must-PASS, not a refusal row)"
+# Every CI caller passes SENTRY_ORG=jikigai-eu / SENTRY_API_HOST=jikigai-eu.sentry.io
+# (apply-sentry-infra.yml, sentry-audit-gate.yml, reusable-release.yml, and the
+# operator runbook via Doppler soleur/prd). Before this row the suite contained
+# ZERO occurrences of that pairing: every new row was a REFUSAL, so an
+# over-aggressive guard that rejected production would have shipped green.
+T35=$(mktemp -d); mk_curl_stub "$T35" >/dev/null
+set +e
+out35=$(run_sut_stubbed "$T35" SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io 2>&1); rc35=$?
+set -e
+n35=$(wc -l < "$T35/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc35" -ne 2 ]] && ! grep -qE '^ERROR: refusing (org|destination host|curl-binary) ' <<<"$out35" \
+   && [[ "$n35" -gt 0 ]]; then
+  pass "T35 production pairing accepted: no refusal, $n35 request(s) made"
+else
+  fail "T35 the production pairing was REFUSED: rc=$rc35 requests=$n35 :: $(grep -oE '^ERROR: refusing.*' <<<"$out35" | head -1)"
+fi
+
 # ------------------------------------------------------------------------
 echo
 echo "Results: $PASS passed, $FAIL failed"

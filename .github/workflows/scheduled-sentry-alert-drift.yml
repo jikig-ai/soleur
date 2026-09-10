@@ -255,12 +255,28 @@ jobs:
             # only the run log -- so the issue named a verdict nobody could act
             # on. Guarded on existence: the run may have aborted before the probe
             # step wrote anything, which is itself one of the states below.
+            # THIS BODY IS PUBLIC (jikig-ai/soleur is a public repo), and a
+            # `gh issue create --body-file` is an API request body, which Actions
+            # secret-masking does NOT cover -- it masks the log stream only.
+            #
+            # probe.txt is the probe's whole 2>&1. On the unavailable path it can
+            # carry 500 raw bytes of the Sentry workflows payload (alert-routing
+            # targets: Slack channel + user ids, PagerDuty/email target ids) and
+            # refusal lines echoing the literal secrets.SENTRY_API_HOST. So emit
+            # the refusal CLASS, which is what makes the issue actionable, and
+            # leave every value in the run log.
+            printf '### What the probe refused on\n\n'
             if [[ -s "${RUNNER_TEMP}/probe.txt" ]]; then
-              printf '### What the probe printed\n\n```\n'
-              cat "${RUNNER_TEMP}/probe.txt"
-              printf '```\n\n'
+              classes=$(grep -oE '^ERROR: refusing (org|destination host|curl-binary)' \
+                          "${RUNNER_TEMP}/probe.txt" 2>/dev/null | sort -u || true)
+              if [[ -n "$classes" ]]; then
+                printf '%s\n' "$classes" | sed 's/^ERROR: /- `/; s/$/`/'
+                printf '\nValues are deliberately not reproduced here — read them in the run log above.\n\n'
+              else
+                printf '_No #7997 refusal anchor present; the probe stopped for another reason. See the run log._\n\n'
+              fi
             else
-              printf '### What the probe printed\n\n_Nothing — the run aborted before the probe step produced output._\n\n'
+              printf '_Nothing — the run aborted before the probe step produced output._\n\n'
             fi
             printf '### What to check, in order\n\n'
             printf -- '1. **A cleared or expired secret.** The run refuses loudly if `SENTRY_IAC_AUTH_TOKEN`, `SENTRY_ORG` or `SENTRY_API_HOST` is empty; the first step names which.\n'

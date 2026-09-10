@@ -513,6 +513,11 @@ done
 [[ "$_host_ok" -eq 1 ]] || {
   printf 'ERROR: refusing destination host %s\n' "$(_safe "$api_host")" >&2; exit 2; }
 
+# The pin above is a one-time predicate; five later call sites re-read this
+# variable. SENTRY_ORG and SENTRY_HOST_CANDIDATES are already readonly -- this
+# closes the last mutable operand, so the guard is structural, not temporal.
+readonly api_host
+
 # --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
 # Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
 # token can both READ and WRITE against the target org+project, and that the

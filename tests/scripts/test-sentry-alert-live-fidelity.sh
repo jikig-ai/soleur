@@ -24,7 +24,7 @@ pass=0; fail=0
 # Must equal the number of `t_*` invocations in the call block at the foot of
 # this file. Exact equality, not a floor: a floor cannot see a row that stopped
 # being invoked.
-EXPECTED_TESTS=18
+EXPECTED_TESTS=20
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -317,13 +317,64 @@ _run_live() {
 }
 
 t_hostile_host_refused() {
-  _run_live hostilehost SENTRY_ORG=jikigai-eu SENTRY_API_HOST=attacker.tld
-  if [[ "$_rc" -eq 2 ]] && grep -q 'refusing destination host' <<<"$_out" \
-     && [[ ! -s "$_argv" ]]; then
-    _report "F14 an attacker-settable SENTRY_API_HOST is REFUSED before any request" ok
+  # Table-driven over all four hosts. attacker.tld is the obvious arm; the three
+  # NEAR-MISSES are the ones that matter, because they authenticate and then
+  # silently grade a different tenant -- ADR-031 records eu.sentry.io rewriting
+  # slugs ending in `-eu`. A single-arm row would pass against an implementation
+  # that only rejects unknown TLDs.
+  local h bad=0 detail=""
+  for h in attacker.tld eu.sentry.io de.sentry.io sentry.io; do
+    _run_live "hostilehost.${h//./_}" SENTRY_ORG=jikigai-eu SENTRY_API_HOST="$h"
+    if [[ "$_rc" -ne 2 ]] || ! grep -q 'refusing destination host' <<<"$_out" \
+       || [[ -s "$_argv" ]]; then
+      bad=$((bad + 1))
+      detail+=" [$h rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F14 all four non-pinned hosts REFUSED before any request (incl. the 3 near-misses)" ok
   else
     _report "F14 hostile SENTRY_API_HOST is refused" fail \
-      "rc=$_rc (want 2); argv-bytes=$(wc -c <"$_argv") (want 0); output: $(head -c 300 <<<"$_out")"
+      "$bad of 4 arms wrong:$detail"
+  fi
+}
+
+# --- F19/F20: the plan required these and they were not written. ---
+t_org_locale_independent() {
+  # M23 measured that without the subshell LC_ALL=C pin the a-z0-9 ranges admit
+  # ~1,162 non-ASCII characters under a UTF-8 locale -- i.e. the guard is weaker
+  # on the operator's laptop than in CI. Assert BOTH locales refuse.
+  local lc bad=0 detail=""
+  for lc in C en_US.UTF-8; do
+    _run_live "loc.${lc//./_}" LC_ALL="$lc" LANG="$lc" \
+      SENTRY_ORG='jikigaí' SENTRY_API_HOST=jikigai-eu.sentry.io
+    if [[ "$_rc" -ne 2 ]] || ! grep -q 'refusing org' <<<"$_out"; then
+      bad=$((bad + 1)); detail+=" [LC_ALL=$lc rc=$_rc]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F19 a non-ASCII org is refused under BOTH LC_ALL=C and en_US.UTF-8" ok
+  else
+    _report "F19 org refusal is locale-independent" fail "$bad of 2 locales wrong:$detail"
+  fi
+}
+
+t_org_length_boundary() {
+  # RFC 1035 sec 2.3.4: 63 octets. The regex is ^[a-z0-9][a-z0-9-]{0,62}$ -- one
+  # leading char plus 62 = 63. Pin both sides of the boundary; an off-by-one here
+  # either rejects a legitimate org or admits an over-long label.
+  local ok63 rej64
+  _run_live len63 SENTRY_ORG="a$(printf 'b%.0s' $(seq 62))" SENTRY_API_HOST=x.sentry.io
+  ok63=$_rc; local out63="$_out"
+  _run_live len64 SENTRY_ORG="a$(printf 'b%.0s' $(seq 63))" SENTRY_API_HOST=x.sentry.io
+  rej64=$_rc
+  # 63 must pass the ORG gate (it then fails the HOST gate, which is fine --
+  # what matters is that it did not fail for being too long).
+  if ! grep -q 'refusing org' <<<"$out63" && [[ "$rej64" -eq 2 ]]; then
+    _report "F20 a 63-octet org slug passes the shape gate and a 64-octet one is refused" ok
+  else
+    _report "F20 org length boundary is 63/64" fail \
+      "63-char refused-as-org=$(grep -c 'refusing org' <<<"$out63"); 64-char rc=$rej64 (want 2)"
   fi
 }
 
@@ -394,6 +445,8 @@ t_hostile_org_refused
 t_transport_flags_first
 t_resolver_env_scrubbed
 t_fixture_mode_still_passes
+t_org_locale_independent
+t_org_length_boundary
 
 echo "=== $pass passed, $fail failed ==="
 
