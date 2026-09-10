@@ -875,7 +875,7 @@ jobs:
     # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
     # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
     #
-    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 391 at time of writing; see the STALE stanza) — slowest-leg
+    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 392 at time of writing; see the STALE stanza) — slowest-leg
     # minutes, group total 35.25 min:
     #
     #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
@@ -893,11 +893,11 @@ jobs:
     # suite set invalidates this table — RE-SIMULATE before touching K.
     #
     # STALE BY SEVENTEEN SUITES (re-measured 2026-09-10). The table above was simulated on a
-    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` returns 391 at this
+    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` returns 392 at this
     # commit — this PR added 2 (ci-concurrency-key, ci-test-aggregator-diagnosis) and renamed
     # 1; the rest arrived on `main` while this branch was open.
     #
-    # DO NOT TRUST THE LITERAL ABOVE EITHER. It read 389 two hours before this line was
+    # DO NOT TRUST THE LITERAL ABOVE EITHER. It read 389, then 391, within hours of when this line was
     # written and 391 after one rebase. The count is not a fact about the repo, it is a
     # fact about a commit, and the only safe use of it is to re-run the enumeration.
     # THE COUNT IS A MOVING TARGET AND EVERY NUMBER BELOW IS KEYED TO A SUPERSEDED ORDER:
@@ -1101,7 +1101,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run the whole group (391 suites at this commit) and all report green. Guard 1 reads ci.yml's
+      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
