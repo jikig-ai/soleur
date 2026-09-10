@@ -9,8 +9,9 @@ pr: 7986
 
 # Six of my session errors were the defect class I was reviewing for
 
-> Eight, by the end: the class recurred twice more AFTER this file was written — see errors
-> 14 and 16. Error 16 was caught by CI, not by me, on a RED I had already read past.
+> Nine, by the end: the class recurred three times more AFTER this file was written — see
+> errors 14, 16 and 17. Error 16 was caught by CI, not by me, on a RED I had already read
+> past; error 17 is the same defect in the instrument I built to watch for it.
 
 ## Problem
 
@@ -163,3 +164,25 @@ Specifically:
     asserting X" (errors 6 and 15). The fix removed the literal rather than widening the
     allowlist — and doing so also repaired a false claim, since the comment asserted it
     "matches the line in `scripts/betterstack-query.sh`", which uses no literal path at all.
+17. **My own merge poll exited on a field it never verified.** I wrote a Monitor whose `DIRTY`
+    arm stopped the poll, because that is what ship's own arm does. GitHub reported `DIRTY` four
+    times on this PR and **three were stale cache** — `git merge-tree --write-tree` returned rc=0
+    and `origin/main` matched the remote SHA exactly, so the branch was merely BEHIND. The poll
+    halted on noise, and the canonical recovery tool `sync-pr-behind.sh` no-ops on that state
+    (it keys strictly on `BEHIND`), so the documented path stalls exactly when a fast-moving
+    `main` is the reason you reached for it. Fixed by verifying with `merge-tree` before acting:
+    rc=0 → treat as BEHIND and sync; rc≠0 → real conflict. The verified arm then auto-recovered
+    the next two occurrences unattended. Filed on #7472, which owns this property.
+    **Prevention:** `mergeStateStatus` is a cache, not a measurement. Before branching on any
+    remote status field, ask what local command decides the same question, and run that. The
+    generalisation of errors 6, 9 and 16: prefer the instrument that EXECUTES over the one that
+    REPORTS.
+
+    Worth stating plainly, because it is the session's actual through-line: of the four times I
+    suspected a claim and measured it, **three times the claim was right and my instrument was
+    wrong** — a skill count of five that was six (I had excluded `*test*`, and the sixth skill is
+    named `test-browser`), a file count of eighteen that was seventeen (I had not excluded
+    `knowledge-base/`), and a `DIRTY` that was clean. Had I "corrected" any of them I would have
+    written a false statement into a security document while believing I was fixing one. The
+    rule that survives: when a measurement contradicts a written claim, suspect the measurement
+    first — it is younger, and it was written in a hurry.
