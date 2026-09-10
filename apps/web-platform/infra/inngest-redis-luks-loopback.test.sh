@@ -302,16 +302,30 @@ if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis
 # THE PIPELINE IS EXTRACTED FROM THE EMITTER, not retyped. A retyped copy proves that some
 # pipeline works, never that the SHIPPED one does -- and drifts the moment the emitter changes.
 LB_EMITTER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inngest-bootstrap.sh"
-LB_AWK="$(sed -n 's/.*| awk \x27\(NF{l=\$1}[^\x27]*\)\x27.*/\1/p' "$LB_EMITTER" | head -1)"
-if [ -n "$LB_AWK" ]; then
-  ok "ARM2b the base-device awk was EXTRACTED from the emitter (this arm cannot drift from it)"
+# EXTRACT BY DELIMITER, NEVER BY THE PROGRAM'S OWN TEXT. The previous form anchored on the awk's
+# first rule (`NF{l=$1}`), so it silently stopped matching the moment that rule changed -- which is
+# exactly what an extract-from-source arm exists to survive. It was already broken by the time this
+# ran in CI: the emitter had moved to a leaf-counting program and the sed still asked for the
+# original last-non-empty one. Anchor on the SHELL delimiters instead, which are the stable part.
+LB_AWK="$(awk "/[|] awk '''/{f=1; sub(/.*[|] awk '''/, \"\")} f{ if (/''' [|][|] true\)\"/) { sub(/''' [|][|] true\)\".*/, \"\"); print; exit } print }" "$LB_EMITTER")"
+if [ -n "$LB_AWK" ] && printf '%s\n' "" | awk "$LB_AWK" >/dev/null 2>&1; then
+  ok "ARM2b the base-device awk was EXTRACTED from the emitter and PARSES (this arm cannot drift from it)"
 else
-  no "ARM2b could not extract the base-device awk from the emitter — this arm would be testing a retyped copy"
+  no "ARM2b could not extract a parseable base-device awk from the emitter"
+  # HARD STOP, no fallback. The previous revision fell back to a RETYPED copy of the old program
+  # (`awk "${LB_AWK:-NF{l=$1} ...}"`), so an extraction failure did not stop the arm -- it quietly
+  # re-pointed every assertion below at stale text while the header still claimed the arm "cannot
+  # drift from" the emitter. A guard whose failure mode is to test something else and keep going is
+  # the vacuity class this whole file exists to close.
+  printf '[FATAL] ARM2b cannot proceed: the emitter awk did not extract. Refusing to test a retyped copy.\n' >&2
+  exit 1
 fi
 
 # What does the kernel actually report for a mapper over a loop device?
 LB_SRC="$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)"
-LB_BASE="$(timeout 5 lsblk -nso NAME "$LB_SRC" 2>/dev/null | awk "${LB_AWK:-NF{l=\$1} END{if(l!=\"\"){gsub(/^[^[:alnum:]]+/,\"\",l); print l}}}")"
+# -inso, not -nso: the emitter asks lsblk for ASCII so byte depth tracks logical depth, and an arm
+# that drives a DIFFERENT invocation is not exercising the shipped path.
+LB_BASE="$(timeout 5 lsblk -inso NAME "$LB_SRC" 2>/dev/null | awk "$LB_AWK")"
 LB_WANT="$(basename "$L_RAW")"
 if [ "$LB_BASE" = "$LB_WANT" ]; then
   ok "ARM2b lsblk -s walks the REAL mapper to its REAL backing device ($LB_SRC -> $LB_BASE)"
