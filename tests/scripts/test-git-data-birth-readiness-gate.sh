@@ -987,6 +987,239 @@ _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_
 # MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
 # `exit`, a helper that silently stopped being called, or a fixture-setup failure would
 # otherwise report "0 failed" — the vacuous green every guard in this file exists to reject.
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# git_data_authorization_map_gate — CPO condition C1 / #8009.
+#
+# SYNTHESIZED FIXTURES, per this file's header rule. `_authmap_root` builds a MINIMAL but
+# COMPLETE five-link root: a cloud-init template with the three forced-command slots, a
+# render module carrying the templatefile argument map, and a git-data.tf carrying the
+# module call, the locals, the three tls_private_key resources and the three doppler_secret
+# blocks that publish the private halves.
+#
+# The one live-tree arm (B14) is deliberate and is the D8 decision: it asserts the gate
+# RELEASES on the tree as committed. Unlike the countdown-timer shape this file's header
+# warns about, its green does not depend on any work being unfinished — the production root
+# has always had three distinct keys, and the day it does not is the day this gate is
+# supposed to go red.
+# ══════════════════════════════════════════════════════════════════════════════════════
+
+printf '\n=== git_data_authorization_map_gate (#8009) ===\n\n'
+
+# Builds a canonical root at $1. Callers mutate one link, then assert.
+_authmap_root() {
+  local d="$1"
+  mkdir -p "$d/modules/git-data-userdata"
+  cat > "$d/cloud-init-git-data.yml" <<'YML'
+#cloud-config
+write_files:
+  - path: /home/git/.ssh/authorized_keys
+    content: |
+      command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
+      command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
+      command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
+    owner: git:git
+    permissions: '0600'
+YML
+  cat > "$d/modules/git-data-userdata/main.tf" <<'TF'
+locals {
+  rendered = templatefile("${path.module}/../../cloud-init-git-data.yml", {
+    git_transport_pubkey = var.git_transport_pubkey
+    git_provision_pubkey = var.git_provision_pubkey
+    git_remove_pubkey    = var.git_remove_pubkey
+  })
+}
+TF
+  cat > "$d/git-data.tf" <<'TF'
+resource "tls_private_key" "git_transport" {
+  algorithm = "ED25519"
+}
+resource "tls_private_key" "git_provision" {
+  algorithm = "ED25519"
+}
+resource "tls_private_key" "git_remove" {
+  algorithm = "ED25519"
+}
+locals {
+  git_transport_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)
+  git_provision_pubkey = trimspace(tls_private_key.git_provision.public_key_openssh)
+  git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)
+}
+module "git_data_userdata" {
+  source                 = "./modules/git-data-userdata"
+  git_transport_pubkey   = local.git_transport_pubkey
+  git_provision_pubkey   = local.git_provision_pubkey
+  git_remove_pubkey      = local.git_remove_pubkey
+}
+resource "hcloud_server" "git_data" {
+  name      = "soleur-git-data"
+  user_data = base64gzip(module.git_data_userdata.rendered)
+}
+resource "doppler_secret" "git_transport_ssh_private_key" {
+  name       = "GIT_TRANSPORT_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_transport.private_key_openssh
+}
+resource "doppler_secret" "git_provision_ssh_private_key" {
+  name       = "GIT_PROVISION_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_provision.private_key_openssh
+}
+resource "doppler_secret" "git_remove_ssh_private_key" {
+  name       = "GIT_REMOVE_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_remove.private_key_openssh
+}
+TF
+}
+
+# _am <name> <want_rc> <needle> <root-dir>
+_am() {
+  local name="$1" want="$2" needle="$3" d="$4" out rc
+  out="$(git_data_authorization_map_gate "$d/cloud-init-git-data.yml" 2>&1)"; rc=$?
+  if [[ "$rc" -eq "$want" && "$out" == *"$needle"* ]]; then
+    pass "$name"
+  else
+    fail "$name (want rc=$want containing '$needle')" "$rc" "$out"
+  fi
+}
+
+# ── B1 — THE CONTROL. Every arm below is void without it. ────────────────────────────
+B="$TMP/am-canonical"; _authmap_root "$B"
+_am "B1: a canonical five-link root RELEASES" 0 "pairwise-distinct tls_private_key resources" "$B"
+
+# ── The headline collapse, and its near boundary ─────────────────────────────────────
+B="$TMP/am-m1"; _authmap_root "$B"
+sed -i 's/${git_provision_pubkey}/${git_transport_pubkey}/; s/${git_remove_pubkey}/${git_transport_pubkey}/' "$B/cloud-init-git-data.yml"
+_am "B2: all three slots on ONE variable HOLDs (the headline collapse)" 1 "resolve to only 1 distinct key" "$B"
+
+B="$TMP/am-m2"; _authmap_root "$B"
+sed -i 's/${git_remove_pubkey}/${git_provision_pubkey}/' "$B/cloud-init-git-data.yml"
+_am "B3: TWO of three collapsed still HOLDs (the near boundary, 2 distinct vs 3)" 1 "resolve to only 2 distinct key" "$B"
+
+# ── The rows that separate an ORDERED composition from a cardinality check ───────────
+# Both of these are three-distinct, all-resources-present and perfectly bijective. Every
+# cardinality predicate passes. Only the per-authority join catches them, and without these
+# arms the suite could not tell the shipped gate from the one the plan rejected.
+B="$TMP/am-m17"; _authmap_root "$B"
+python3 - "$B/cloud-init-git-data.yml" <<'PYX'
+import io,sys
+p=sys.argv[1]; s=io.open(p,encoding='utf-8').read()
+s=s.replace('git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}','git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}')
+s=s.replace('git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}','git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}')
+io.open(p,'w',encoding='utf-8').write(s)
+PYX
+_am "B4: a 2-SWAP at link 1 HOLDs — bijective, three-distinct, wrong authorities" 1 "PERMUTED" "$B"
+
+B="$TMP/am-m18"; _authmap_root "$B"
+python3 - "$B/git-data.tf" <<'PYX'
+import io,re,sys
+p=sys.argv[1]; s=io.open(p,encoding='utf-8').read()
+s=re.sub(r'("git_transport_ssh_private_key".*?value      = )tls_private_key\.\w+', r'\1tls_private_key.git_provision', s, flags=re.S)
+s=re.sub(r'("git_provision_ssh_private_key".*?value      = )tls_private_key\.\w+', r'\1tls_private_key.git_remove', s, flags=re.S)
+s=re.sub(r'("git_remove_ssh_private_key".*?value      = )tls_private_key\.\w+', r'\1tls_private_key.git_transport', s, flags=re.S)
+io.open(p,'w',encoding='utf-8').write(s)
+PYX
+_am "B5: a 3-CYCLE at link 5 HOLDs — this is the arm that proves predicate 4 is ORDERED" 1 "PERMUTED" "$B"
+
+# ── Link 5: the half with no prior coverage anywhere ─────────────────────────────────
+B="$TMP/am-m12"; _authmap_root "$B"
+sed -i 's/^  value      = tls_private_key.git_transport.private_key_openssh/  value      = tls_private_key.git_remove.private_key_openssh/' "$B/git-data.tf"
+_am "B6: the app's TRANSPORT secret publishing the ERASE key HOLDs" 1 "PERMUTED" "$B"
+
+# ── Attribute predicates: address-distinct, bijective, and still catastrophic ─────────
+B="$TMP/am-m19"; _authmap_root "$B"
+sed -i 's/git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)/git_remove_pubkey    = trimspace(tls_private_key.git_remove.private_key_openssh)/' "$B/git-data.tf"
+_am "B7: a PRIVATE key rendered into user_data HOLDs (Hetzner stores it as metadata)" 1 "bakes the private half into user_data" "$B"
+
+B="$TMP/am-m20"; _authmap_root "$B"
+sed -i 's/^  value      = tls_private_key.git_remove.private_key_openssh/  value      = tls_private_key.git_remove.public_key_openssh/' "$B/git-data.tf"
+_am "B8: a doppler_secret publishing a PUBLIC key HOLDs" 1 "authenticates with private_key_openssh" "$B"
+
+# ── The slot-shape rows. B9 is the one a script-name assertion cannot see at all. ─────
+B="$TMP/am-m26"; _authmap_root "$B"
+sed -i 's|^\(      command="/usr/local/bin/git-data-remove.sh".*\)$|\1\n      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEX nobody@example|' "$B/cloud-init-git-data.yml"
+_am "B9: a FOURTH key with no forced command at all HOLDs (raw git-shell fall-through)" 1 "ADR-068 pins exactly 3" "$B"
+
+B="$TMP/am-m27"; _authmap_root "$B"
+sed -i 's|git-data-remove.sh",no-port-forwarding|git-data-remove.sh",environment="GIT_DATA_REPO_ROOT=/srv",no-port-forwarding|' "$B/cloud-init-git-data.yml"
+_am "B10: an EXTRA forced-command option HOLDs (environment= + PermitUserEnvironment)" 1 "not the canonical" "$B"
+
+B="$TMP/am-m21"; _authmap_root "$B"
+sed -i '/git-data-remove.sh/d' "$B/cloud-init-git-data.yml"
+_am "B11: a DELETED slot HOLDs (two slots, two distinct keys, one missing authority)" 1 "ADR-068 pins exactly 3" "$B"
+
+# ── Root-scope and merge-order rows ──────────────────────────────────────────────────
+B="$TMP/am-m23"; _authmap_root "$B"
+python3 - "$B/git-data.tf" "$B/git-data-keys.tf" <<'PYX'
+import io,sys
+p,q=sys.argv[1],sys.argv[2]; s=io.open(p,encoding='utf-8').read()
+s=s.replace('  git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)\n','')
+io.open(p,'w',encoding='utf-8').write(s)
+io.open(q,'w',encoding='utf-8').write('locals {\n  git_remove_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)\n}\n')
+PYX
+_am "B12: a local moved to a SIBLING .tf and re-pointed HOLDs (root-scoped, not file-scoped)" 1 "resolve to only 2 distinct key" "$B"
+
+B="$TMP/am-m14"; _authmap_root "$B"
+printf 'locals {\n  git_remove_pubkey = trimspace(tls_private_key.git_transport.public_key_openssh)\n}\n' > "$B/locals_override.tf"
+_am "B13: an *override.tf present ABORTS — Terraform would merge it and the gate cannot see it" 2 "override file is present" "$B"
+
+B="$TMP/am-m15"; _authmap_root "$B"
+cat >> "$B/git-data.tf" <<'TFX'
+module "git_data_userdata_v2" {
+  source                 = "./modules/git-data-userdata"
+  git_transport_pubkey   = local.git_transport_pubkey
+  git_provision_pubkey   = local.git_transport_pubkey
+  git_remove_pubkey      = local.git_transport_pubkey
+}
+TFX
+_am "B14: a SECOND render module HOLDs (a second module is a second authorization map)" 1 "declare source" "$B"
+
+# ── Premise, dangling-alias and instrument rows ──────────────────────────────────────
+B="$TMP/am-m25"; _authmap_root "$B"
+sed -i 's/^resource "hcloud_server" "git_data" {/resource "hcloud_server" "git_data" {\n  lifecycle {\n    ignore_changes = [user_data]\n  }/' "$B/git-data.tf"
+_am "B15: ignore_changes on user_data HOLDs — it deletes this gate's OWN premise" 1 "ONLY route" "$B"
+
+B="$TMP/am-m11"; _authmap_root "$B"
+sed -i 's/^resource "tls_private_key" "git_remove" {/resource "tls_private_key" "git_remove_RENAMED" {/' "$B/git-data.tf"
+_am "B16: three DANGLING aliases HOLD — pairwise distinct and creating nothing" 1 "no such resource block exists" "$B"
+
+B="$TMP/am-m10"; _authmap_root "$B"
+sed -i 's/git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)/git_remove_pubkey    = var.git_remove_pubkey_default/' "$B/git-data.tf"
+_am "B17: a NON-RESOURCE terminal HOLDs (a variable default can hold any key at all)" 1 "NON-RESOURCE terminal" "$B"
+
+B="$TMP/am-m22"; _authmap_root "$B"
+sed -i 's/git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)/git_remove_pubkey    = trimspace(local.some_intermediate)/' "$B/git-data.tf"
+_am "B18: resolving 2 of 3 slots ABORTS — partial extraction is a broken instrument" 2 "broken instrument" "$B"
+
+B="$TMP/am-m7"; _authmap_root "$B"
+sed -i 's|  - path: /home/git/.ssh/authorized_keys|  - path: /home/git/.ssh/authorized_keys_RENAMED|' "$B/cloud-init-git-data.yml"
+_am "B19: extracting ZERO slots ABORTS — zero is a broken instrument, never a pass" 2 "broken instrument" "$B"
+
+# ── The stripper's two arms. B21 is the one that keeps this gate from being BORN RED. ─
+B="$TMP/am-slashes"; _authmap_root "$B"
+printf 'locals {\n  # a comment quoting a URL: https://example.com/x and a glob a//b\n  irrelevant = "https://soleur.ai/api/webhooks/github"\n}\n' > "$B/urls.tf"
+_am "B20: // inside a STRING and inside a # comment does NOT abort (81 such live, none a comment)" 0 "pairwise-distinct" "$B"
+
+B="$TMP/am-hclcomment"; _authmap_root "$B"
+printf 'locals {\n  irrelevant = "x" // a genuine HCL line comment outside any string\n}\n' > "$B/comment.tf"
+_am "B21: a GENUINE // comment outside a string ABORTS rather than being mis-parsed" 2 "outside a string" "$B"
+
+# ── Fail-closed, and the live tree ───────────────────────────────────────────────────
+_out="$(git_data_authorization_map_gate 2>&1)"; _rc=$?
+if [[ "$_rc" -eq 2 && "$_out" == *"ABORT"* ]]; then
+  pass "B22: a bare call with no argument ABORTS — the instrument refuses, fail-closed"
+else
+  fail "B22: a bare call with no argument ABORTS" "$_rc" "$_out"
+fi
+
+# B23 — THE LIVE-TREE ARM (D8). This is what buys PR-time coverage without a new workflow
+# step: any pull request that collapses, permutes or re-points the production authorization
+# map reddens this suite in CI, at review time, before merge.
+_out="$(git_data_authorization_map_gate "${ROOT}/apps/web-platform/infra/cloud-init-git-data.yml" 2>&1)"; _rc=$?
+if [[ "$_rc" -eq 0 ]]; then
+  pass "B23: the LIVE production root releases — three authorities, three distinct keys"
+else
+  fail "B23: the LIVE production root releases (rc=$_rc). If this is an ABORT the gate could not PARSE the root; if a HOLD the authorization map itself is wrong. The message distinguishes them." "$_rc" "$_out"
+fi
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -1006,12 +1239,29 @@ _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_
 # RAISED 77 -> 80 (#7481 review, V9), ITEMISED — A12b/A13b/A15b pin the site-LISTING half
 # of A12/A13/A15, which was asserted by their names and by nothing else.
 #     3
+#
+# RAISED 80 -> 103 (#8009), ITEMISED — git_data_authorization_map_gate, CPO condition C1:
+#     1  B1        the canonical five-link control (every arm below is void without it)
+#     2  B2/B3     the headline collapse and its near boundary (1 and 2 distinct vs 3)
+#     2  B4/B5     2-swap at link 1, 3-cycle at link 5 — the ORDERED-vs-bijection arms
+#     1  B6        the transport secret publishing the erase key (link 5, no prior coverage)
+#     2  B7/B8     attribute predicates: private into user_data, public as auth material
+#     3  B9/B10/B11 slot shape: unfenced 4th key, extra option, deleted slot
+#     2  B12/B13   sibling-file relocation (root scope) and *override.tf (merge order)
+#     1  B14       a second render module
+#     2  B15/B16   the ignore_changes premise, and dangling aliases
+#     3  B17/B18/B19 non-resource terminal, partial extraction, zero extraction
+#     2  B20/B21   the stripper: // in a string/# comment vs a genuine // comment
+#     1  B22       fail-closed on a bare call
+#     1  B23       the live production root (D8 — this is the PR-time coverage)
+#   ----
+#    23
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 80 ]]; then
+if [[ "$_ran" -lt 103 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 80. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 103. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 80)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 103)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is
