@@ -1052,7 +1052,16 @@ logs:
   where: Better Stack Telemetry (ClickHouse warehouse), source soleur-inngest-vector-prd (id 2457081)
   retention: hot window ~40 minutes via remote(), plus the s3Cluster archive — betterstack-query.sh unions both
 discoverability_test:
-  command: bash -c 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 90m --raw-only --limit 500 --grep SOLEUR_INNGEST_SERVER_PROBE | jq -R -r 'fromjson? | .raw? | fromjson? | select(.host == "soleur-inngest" and .host_name == "soleur-inngest-prd") | .message? // empty' | grep -F SOLEUR_INNGEST_SERVER_PROBE | grep -oE "probe_schema=[0-9]+ .*"'
+  # CORRECTED 2026-09-10 AFTER MEASURING IT. The first form greppped SOLEUR_INNGEST_SERVER_PROBE
+  # and returned ZERO rows over 36h against the live host -- rc=0, empty stderr, which is
+  # indistinguishable from "the host is dark". The instrument was verified first (two positive
+  # controls returned rows; all three BETTERSTACK_QUERY_* resolved), so the zero was real: the
+  # host reports vector_active=inactive, so the probe does NOT reach the warehouse via the
+  # logger line. It arrives through the inngest-boot-phone-home.sh fallback, wrapped as
+  # marker=SOLEUR_INNGEST_BOOT_STAGE with stage=inngest-server-probe-vector-down. Grep the STAGE.
+  # This matters more than a normal typo: credentials_required below makes preflight Check 10
+  # SKIP WITHOUT EXECUTING, so nothing but a human running it would ever have caught it.
+  command: bash -c 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 36h --raw-only --limit 200 --grep inngest-server-probe | jq -R -r "fromjson? | .raw? // empty" | grep -oE "probe_schema=8 [^\"]*"'
   expected_output: |
     whole matched rows, not per-field fragments, each carrying probe_schema=8 …
     data_mount_devid=scsi-0HC_Volume_106261946 … registry_fns=<an integer; 0 while
