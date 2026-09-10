@@ -13,6 +13,54 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-10 · **Halt gates:** 4.6 / 4.7 / 4.8 / 4.10 / 4.11 pass, 4.9 skipped (no UI
+surface) · **Reviewers:** DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer,
+observability-coverage, security-sentinel, test-design, CTO, CPO, GDPR gate, C4/ADR gate, plus a
+scoped strong-model consult and a mechanical verify-the-negative sweep.
+
+### What review changed, in order of severity
+
+1. **The capture form was wrong twice, and both wrong forms were prescribed to me.** `$?` after
+   `if ! cmd` is the *negated* status (measured `A_RC=0`), and a bare assignment aborts under
+   `set -e` (measured `SCRIPT_EXIT=125`). Only `VAR="$(…)" || RC=$?` is both safe and rc-preserving.
+2. **The sanitizer was fail-open at the new call site.** `VAR="$(f)" || rescue` suspends errexit for
+   the whole function body, so a mid-pipeline `sed` death emits a *partially sanitized* value and
+   returns 0 — the rescue never fires. This plan's own Sharp Edges stated the mechanism three
+   sections earlier and an earlier draft applied it to a different function.
+3. **The producer corpus was not a closed negative.** `--env-file` secrets live in `Config.Env` and
+   are re-injected into **every** `docker exec`, and runc formats offending env entries into its
+   errors. The sanitizer is therefore the load-bearing control, not belt-and-braces — which reopened
+   a scope-lock and added four shape-anchored redaction rules.
+4. **The change created a third sink and guarded two.** The Sentry POST bypasses Vector's scrubbers
+   entirely. Closed vocabulary now crosses it; purity is asserted on all three sinks.
+5. **The field set did not discriminate what the plan claimed.** At `rc=1` with an empty message —
+   the observed signature — H1 and H2 tied. `cstate`, captured *before* teardown, breaks it.
+6. **`$SECONDS` could not express the distinction it was added for.** The whole H3-vs-H4 window is
+   sub-second; switched to `date +%s%3N`.
+7. **The delivery leg was missing entirely.** The non-blocking canary pages Sentry; the blocking gate
+   — the one that stops the founder shipping — did not.
+8. **`closes: 8016` contradicted the closure arms**, and `/ship`'s soak gate would have passed
+   silently because it excludes `Closes` targets by design. Split into `Closes` + a `Ref`-linked
+   follow-through tracker.
+9. **Two acceptance criteria could not be satisfied by the implementation they gated**, one used the
+   `grep -c` idiom the repo keeps a linter for, and two had no runnable form. Rewritten as executable.
+
+### Premises falsified at plan time
+
+Seven, from three artifacts a reader would ordinarily trust: the issue's headline claim, a
+domain-agent advisory's load-bearing fact (bwrap's exit codes — falsified against upstream across all
+717 commits), and **an ADR's status line** (ADR-079 still says `#5889` is open; it closed
+2026-07-06 with a promote verdict that was never acted on). That last one became adjacent finding 4.
+
+### Verification performed
+
+15/15 negative claims confirmed against implementation files, zero contradictions · all 6 rule IDs
+active · all 20 issue/PR citations resolved live, one cross-repo ambiguity caught and qualified · all
+knowledge-base and script paths resolve · `origin/main` re-fetched (advanced 2 commits, none touching
+the target files) · suite baseline 216/216 · c4-count-parity 10/10 · guard-contract lint green.
+
 ## Overview
 
 The web-platform deploy gate runs a blocking bwrap probe inside the canary container. When it
@@ -62,9 +110,14 @@ changed the plan. Issue status was re-derived from `gh`, not inherited from an A
 - **P2a** — A reader without host access can distinguish "the probe spoke" from "it was silent".
 - **P2b** — When the probe is silent, the event still names *how* it terminated.
 - **P2c** — A reader can tell a truncated diagnostic from a complete one.
-- **P2e** — A reader can tell an immediate refusal (milliseconds) from a killed hung probe
-  (seconds). `rc` alone cannot: a signal at 40 ms and a signal at 30 s carry the same code and the
-  same empty output. This is the H3-vs-H4 discriminator.
+- **P2e** — A reader can tell an immediate refusal from a killed hung probe. `rc` alone cannot: a
+  signal at 40 ms and a signal at 30 s carry the same code and the same empty output. Measured in
+  **milliseconds**, not seconds — the whole evidentiary window is sub-second (the 2026-09-09 canary
+  had 2.852 s of total life), so integer seconds would collapse the distinction the field exists for.
+- **P2h** — When `rc=1` comes back with an empty message, a reader can still separate bwrap's own
+  failure from docker's "no such container"/"not running", which share that code. The message is
+  what normally separates them and the message is empty on the observed signature, so the canary
+  container's state at probe time is the discriminator.
 - **P2f** — The emit path is proven by a **green** deploy, not only by a failure.
 - **P2g** — A person is **told**, not merely able to query. Capture without delivery fixes nothing.
 - **P3** — A regression that drops any of the above reddens the suite.
@@ -143,6 +196,45 @@ adds no rule to the corpus**. `#8016` body SHA-256 at plan time:
 `c3aea158b8443b13ad7aad0284c5a98add3369dbd694564cd44f67e7697a75b4` (recorded so AC16 has something
 to compare against).
 
+### Verify-the-negative sweep (deepen-plan Phase 4.45)
+
+Every negative and absolute claim in this plan was grepped against the implementation file it names.
+**15 of 15 CONFIRMS, zero CONTRADICTS.** The load-bearing ones, with their citations:
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| The bwrap argv occurs exactly once | CONFIRMS | `ci-deploy.sh:2948`, `grep -c` = 1 |
+| `final_write_state 1 "canary_sandbox_failed"` occurs exactly once | CONFIRMS | `ci-deploy.sh:2954`, `grep -c` = 1 |
+| A **second** `DEPLOY_ROLLBACK` emitter exists (so the guard must not select on that token alone) | CONFIRMS | `ci-deploy.sh:2950` and `:3134` — the second is `DEPLOY_ROLLBACK: canary failed for $IMAGE:$TAG (reason=$CANARY_FAIL_REASON)` |
+| No consumer parses `reason` as an enum | CONFIRMS | `web-platform-release.yml:800` reads it with `jq -r`; the `case` at `:802` switches on `EXIT_CODE`, **not** `REASON`; targeted greps for `case "$REASON"` / `[[ "$REASON"` / `REASON.*==` return zero |
+| `ci-deploy` is allowlisted and `host_scripts_journald` has NO PRIORITY filter | CONFIRMS | `vector.toml:173-178`; every PRIORITY mention inside that block is a comment about other sources |
+| `kernel`/`dockerd`/`docker`/`systemd`/`containerd` are in **no** allowlist | CONFIRMS | zero matches as quoted allowlist tokens anywhere in `vector.toml` — this is what makes H3 untestable |
+| `_cred_err_tail` is top-level | CONFIRMS | `ci-deploy.sh:1211`, column 0 |
+| `SANDBOX_PROBE_OK`, `blocking_probe_sentry_event`, `MOCK_BWRAP_FAIL_STDERR`, `MOCK_BWRAP_FAIL_RC` do not yet exist | CONFIRMS | zero matches each — all four are net-new, no collision |
+| `assert_bwrap_canary_failure_rollback` is a second consumer of `MOCK_DOCKER_MODE=bwrap-fail` | CONFIRMS | `ci-deploy.test.sh:2027` and `:2351`, exactly two sites — which is why the mock parameterisation must default byte-identically |
+| `T-7095-3` and `F14` already pin `_cred_err_tail`'s bounds | CONFIRMS | `ci-deploy.test.sh:5516-5518` ("≤200 bytes, control-characters stripped, any `dp.st.`-prefixed substring redacted") and `:5467`/`:5485` (redaction provably precedes truncation) — the decline to re-pin is safe |
+| Four later scenarios depend on `MOCK_LOGGER_CAPTURE_FILE` | CONFIRMS | `ci-deploy.test.sh:4337`, `:4868`, `:5327`, `:5722` after the first at `:3743` — the subshell-scoping constraint in Phase 1.1 is load-bearing |
+| `ci-deploy-sentry-post-fail-6475.sh` carries both contamination byte-forms | CONFIRMS | `:100` server-side, `:101` client-side |
+| All three `BETTERSTACK_QUERY_*` secrets are wired | CONFIRMS | `scheduled-followthrough-sweeper.yml:103-105` — no workflow change needed |
+
+### Citation verification (deepen-plan quality gate)
+
+- **Rule IDs.** All six cited (`cq-assert-anchor-not-bare-token`, `cq-test-fixtures-synthesized-only`,
+  `hr-before-asserting-github-issue-status`, `hr-observability-layer-citation`,
+  `hr-verify-repo-capability-claim-before-assert`, `wg-ui-feature-requires-pen-wireframe`) resolve to
+  active `[id: …]` entries in `AGENTS.md`. None appears in `scripts/retired-rule-ids.txt`.
+- **Issues and PRs.** All 20 cited numbers resolved live via `gh`, and each state matches the role
+  the plan gives it — including the two that changed the plan: `#5889` CLOSED/COMPLETED and `#6560`
+  OPEN. `#7278` / PR `#7343` were checked against the `ship/SKILL.md` comment that cites them and are
+  verbatim.
+- **Cross-repo ambiguity caught.** `#701` was cited bare for the upstream bubblewrap issue; in this
+  repository `#701` resolves to a **closed Soleur legal-docs issue**. Qualified to
+  `containers/bubblewrap#701` (verified OPEN, title matches).
+- **Paths.** Every `knowledge-base/**.md`, script and workflow path in the plan resolves on disk.
+- **`origin/main` re-fetched** at deepen time (`35cb10d19`): it advanced 2 commits since the plan's
+  baseline, and **none touched** `ci-deploy.sh`, `ci-deploy.test.sh` or `vector.toml`, so every
+  content anchor still holds. AC1's argv extraction was run against it and returns exactly one line.
+
 ### Community / functional discovery
 
 Three registries queried. No Tier 1/2 candidate overlaps shell stderr/exit-code capture.
@@ -166,8 +258,11 @@ bwrap's half is settled upstream; docker's half is **undocumented** and is measu
 `usage(EXIT_FAILURE, stderr)`, which is 1 on glibc. The `execvp` path at the end of `main()` funnels
 ENOENT and EACCES to `die_with_error`. Decisive: `git log -S125`, `-S126`, `-S127` over all files and
 all 717 commits return **zero commits each** — those codes have never existed in the tree, in any
-release from v0.1.0 to v0.12.0. Upstream issue **#701, "Have a specific exit code for when sandboxing
-is not possible", is still OPEN**, precisely because bwrap returns a generic 1.
+release from v0.1.0 to v0.12.0. Upstream issue **`containers/bubblewrap#701`, "Have a specific exit code
+for when sandboxing is not possible", is still OPEN** (verified live), precisely because bwrap
+returns a generic 1. The repo qualifier is load-bearing: a bare `#701` in this repository resolves
+to a closed Soleur legal-docs issue, so an unqualified citation reads as provenance for a claim it
+has nothing to do with.
 
 **Where the advisory's claim came from.** bwrap *does* borrow one shell convention and says so in a
 bash-citing comment in `propagate_exit_status()`: **128+n for signal deaths**. It borrows bash's
@@ -195,7 +290,7 @@ code or logs may carry a verdict.
 | H1 | bwrap could not set up the sandbox (userns / AppArmor / seccomp drift) | `rc=1` **and** a non-empty message — every bwrap self-failure returns 1 and its `die_with_error` path prints `bwrap: …` first. The measured message is empty, which weakens H1 but does not refute it: a process killed before it writes prints nothing. `rc=1` is shared with docker's "no such container", so the message is what separates them. | **UNKNOWN** |
 | H2 | `docker exec` infra failure | `rc` in 126/127, or `rc=1` with docker's own text, or `rc=128`. Zero bytes argues against, since docker does print. | **UNKNOWN** |
 | H3 | The exec'd child was killed by a signal (OOM / SIGKILL) | `rc` in the `128+n` band. Consistent with **every** measured datum — a signalled process writes nothing. Currently untestable: `kernel` is in **no** Vector allowlist and `system_journald` cuts at `PRIORITY 0-2`, so an OOM-killer line cannot reach Better Stack; and `ci-deploy`'s own `oom_killed:false` describes the **container's main process**, not an exec'd child. | **UNKNOWN** |
-| H4 | Container not fully settled when the probe ran | Measured: the canary's first log line was 22:31:54.598 and the rollback marker 22:31:57.450 — **2.852 s of total container life**, health loop breaking on its first iteration. `secs=` is what will separate this from H3. | **UNKNOWN** |
+| H4 | Container not fully settled when the probe ran | Measured: the canary's first log line was 22:31:54.598 and the rollback marker 22:31:57.450 — **2.852 s of total container life**, health loop breaking on its first iteration. `ms=` is what will separate this from H3. | **UNKNOWN** |
 | H5 | A timeout wrapper killed the exec | The probe argv contains no timeout wrapper. Discriminator visible in source. | **REFUTED** |
 
 Both occurrences are byte-for-byte identical in shape: canary healthy, probe invoked, zero output,
@@ -211,12 +306,23 @@ re-release, roughly one release cycle. The change is on the **failure path only*
 exercises it — which is what the success-path twin and the Sentry leg exist to blunt.
 
 **If this leaks, the user's operational data is exposed via:** free text captured inside the canary —
-potentially embedding host paths, container ids, overlay digests or internal IPs — reaching journald
-tag `ci-deploy`, which `vector.toml` ships to Better Stack. The channel is pre-existing (the same
-sink already receives `docker logs soleur-web-platform-canary --tail 30` **unsanitized**), so this is
-a new payload class on an existing channel, not a new channel — and per byte it is a strict
-*reduction* in what is unsanitized. Mitigation is `_cred_err_tail` plus a leak-canary assertion over
-**both** sinks.
+potentially embedding host paths, container ids, overlay digests, internal IPs, or (per the corrected
+producer-corpus finding) an env entry formatted into a runc error. Three sinks, not two:
+
+1. **journald `ci-deploy` → Vector → Better Stack.** Pre-existing channel — the same sink already
+   receives `docker logs soleur-web-platform-canary --tail 30`. Scrubbed by `_cred_err_tail` at the
+   producer **and** by Vector's `pii_scrub_string` regex backstop on the leg. (An earlier draft
+   repeated the helper's own header claim that this sink is "UNSCRUBBED"; that is stale — the
+   backstop does apply to these non-JSON lines. Conservative error, corrected for accuracy.)
+2. **journald `webhook` → Better Stack**, via the guarded `printf`. Same scrubbing.
+3. **Sentry, via the new `blocking_probe_sentry_event`.** This **is a new channel for this payload
+   class** — an earlier draft's "not a new channel" declaration was true of Better Stack and false
+   of Sentry, and the CPO sign-off was obtained on that incorrect statement. It also has **no
+   backstop**: the POST bypasses Vector entirely, and Sentry's server-side scrubbers key on field
+   *names*, not free-text values. That is why only closed vocabulary crosses it.
+
+Mitigation is `_cred_err_tail` (now fail-closed, with four shape-anchored rules added), closed
+vocabulary on the Sentry leg, and a leak-canary assertion over **all three** sinks.
 
 **Brand-survival threshold:** single-user incident.
 
@@ -228,7 +334,7 @@ declaration (pre-existing channel), both reflected above. `user-impact-reviewer`
 
 | Path | Change |
 |---|---|
-| `apps/web-platform/infra/ci-deploy.sh` | The probe's capture, the `DEPLOY_ROLLBACK` line, the success-path twin, a new `blocking_probe_sentry_event`, and one sentence in `_cred_err_tail`'s header. The NOTE block above the probe and the bwrap argv are **not touched**. |
+| `apps/web-platform/infra/ci-deploy.sh` | The probe's capture, the `DEPLOY_ROLLBACK` line, the success-path twin, a new `blocking_probe_sentry_event`, `_cred_err_tail`'s **body** (fail-closed pipeline check + four shape-anchored redaction rules) and header, and `write_state`'s optional appended-fields hook. The NOTE block above the probe and the bwrap argv are **not touched**. |
 | `apps/web-platform/infra/ci-deploy.test.sh` | Parameterise the `bwrap-fail)` mock; extend `assert_canary_sandbox_failed_state`; add the purity, success-path and Sentry assertions. |
 | `knowledge-base/legal/article-30-register.md` | One additive dated bracket on PA-8 §(g). Contested by one reviewer — see `## Decision challenges`. |
 
@@ -239,6 +345,7 @@ declaration (pre-existing channel), both reflected above. `user-impact-reviewer`
 | `knowledge-base/project/specs/feat-one-shot-8016-bwrap-probe-self-report/tasks.md` | Task breakdown. The directory exists and is empty, so this is a create. |
 | `scripts/followthroughs/bwrap-probe-selfreport-<N>.sh` | The follow-through probe. `<N>` is the new tracker's number, assigned at filing. |
 | `scripts/followthroughs/bwrap-probe-selfreport-<N>.test.sh` | Pins the probe's exit-code contract — the convention is explicit that "an exit-code contract nothing drives is a comment". |
+| `scripts/followthroughs/bwrap-probe-selfreport-check.sh` | The `--dry-run` marker-resolution check named by `discoverability_test.command`. **preflight Check 10 executes that command**, so this file must exist in the same PR or the check fails on a missing script. Deliberately issue-number-free in its filename: the probe above is numbered because the sweeper binds it to a tracker, but this one is a static shape check with no tracker. |
 
 `blocking_probe_sentry_event` is a new **function** inside `ci-deploy.sh`, not a new file, modelled
 line-for-line on `sandbox_canary_sentry_event` with `op: "blocking-sandbox-probe"`. No new secret: it
@@ -260,7 +367,12 @@ through `jq --arg path … contains($path)` returns zero matches for both target
     Expected `rc=137 len=0`.
 0.4 Measure `docker exec`'s exit-code stamping against the **pinned host Docker version** (the
     2026-09-09 rows report `docker_ver=29.3.0`) — undocumented and daemon-stamped. Do **not** measure
-    bwrap's codes; cite upstream, which is settled across every release.
+    bwrap's codes; cite upstream, which is settled across every release. **In the same run, close the
+    env-echo question**: start a throwaway container with a sentinel env var, force each failure in
+    the `## What rc will say` table, capture merged output, and grep for the sentinel. That converts
+    the corrected producer-corpus paragraph's remaining assumption into a measurement on the exact
+    daemon/runc pair in production — the same discipline that overturned the bwrap exit-code claim
+    and the `$?`-after-`if !` claim, both times against the plan's own prior belief.
 0.5 Baseline: `bash apps/web-platform/infra/ci-deploy.test.sh` reports `216/216 passed, 0 failed`.
 0.6 Run the live Better Stack query with both contamination byte-forms **now, at /work** — see
     `## Querying without contaminating the answer`. It is the only check that surfaces the JSON
@@ -325,14 +437,20 @@ call it per scenario, rather than growing one assert body to cover several signa
       BWRAP_RC=0
       BWRAP_ERR=""
       BWRAP_ERR_SAN=""
-      BWRAP_T0=$SECONDS
+      CSTATE="unknown"
+      # Milliseconds, not $SECONDS. The H3-vs-H4 split lives entirely in the sub-second region —
+      # the 2026-09-09 canary had 2.852 s of TOTAL life — so integer seconds would render a 40 ms
+      # refusal and a 900 ms kill identically as 0. `date +%s%3N` is the established idiom in this
+      # directory (inngest-enumerate-reminders.sh, inngest-inventory.sh); $SECONDS appears nowhere
+      # in this file.
+      BWRAP_T0="$(date +%s%3N)"
       # `VAR="$(cmd)" || RC=$?` is the ONLY form that is both errexit-safe and rc-preserving.
       # A bare `VAR="$(cmd)"; RC=$?` aborts under `set -e` before RC is read (measured: the script
       # exits with the command's own code and the next line never runs). And `if ! VAR=$(cmd)` is
       # errexit-safe but `$?` inside the branch is the NEGATED status — measured 0 — so the field
       # would read rc=0 on every single failure.
       BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
-      PROBE_SECS=$(( SECONDS - BWRAP_T0 ))
+      PROBE_MS=$(( $(date +%s%3N) - BWRAP_T0 ))
       # Safe under errexit only because `_cred_err_tail` terminates on a successful `printf`. That
       # is an invariant of ANOTHER function — its sibling `_doppler_get_observed` ends on a `[[ ]]`
       # test, which WOULD make this an abort vector — so the rescue is explicit rather than
@@ -349,22 +467,86 @@ call it per scenario, rather than growing one assert body to cover several signa
       if [[ -n "$BWRAP_ERR_SAN" ]]; then printf '%s\n' "$BWRAP_ERR_SAN"; fi
       if [[ "$BWRAP_RC" -ne 0 ]]; then
         echo "Canary sandbox check failed, rolling back..."
-        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC secs=$PROBE_SECS err_chars=${#BWRAP_ERR} err=\"${BWRAP_ERR_SAN:-<empty>}\""
+        # BEFORE the teardown below, or the answer is destroyed by our own cleanup. `rc=1` is
+        # shared between bwrap's own failure and docker's "no such container"/"not running", and
+        # on the observed signature the message that would separate them is EMPTY — so without
+        # this field H1 and H2 tie on exactly the case this PR exists to diagnose.
+        CSTATE="$(docker inspect -f '{{.State.Status}}' soleur-web-platform-canary 2>/dev/null)" || CSTATE="absent"
+        [[ -n "$CSTATE" ]] || CSTATE="absent"
+        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$PROBE_MS cstate=$CSTATE err_chars=${#BWRAP_ERR} err=\"${BWRAP_ERR_SAN:-<empty>}\""
         # DELIVERY, not just capture. The NON-blocking faithful canary already pages Sentry on a
         # FAIL via `sandbox_canary_sentry_event` ("loud, no-SSH page … never journald-only"). The
-        # BLOCKING gate — the one that actually stops the founder shipping — did not.
-        blocking_probe_sentry_event "$BWRAP_RC" "$PROBE_SECS" "$BWRAP_ERR_SAN" || true
+        # BLOCKING gate — the one that actually stops the founder shipping — did not. This emitter
+        # self-reports its own disposition on the credential-independent journald plane, because
+        # the SENTRY_* env guard has been false in production before (this file's own comments
+        # record "the beacon was silent in precisely the incident it was written to report").
+        blocking_probe_sentry_event "$BWRAP_RC" "$PROBE_MS" "$CSTATE" "${#BWRAP_ERR}" || true
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        # Sibling KEYS on the state payload — the `reason` STRING stays frozen. The cut list
+        # rejected changing the string; it never evaluated additional keys, which break neither
+        # the exact-equality test nor the release workflow's `jq -r '.reason'`. This is the
+        # SYNCHRONOUS leg: `web-platform-release.yml` already runs `echo "$BODY" | jq .` on the
+        # failure branch, so these surface in the failing run with ZERO workflow change — which is
+        # the only plane the founder is already looking at. Closed vocabulary only: this payload is
+        # echoed into a repo-readable run log, a wider audience than either async sink, so the free
+        # text stays on journald.
+        PROBE_STATE_FIELDS="probe_rc=$BWRAP_RC probe_ms=$PROBE_MS probe_cstate=$CSTATE probe_err_chars=${#BWRAP_ERR}"
         final_write_state 1 "canary_sandbox_failed"
         exit 1
       fi
       # Success-path twin, closed-vocabulary only. This is what makes the FIRST post-merge deploy
       # prove the field format end-to-end instead of proving only that the probe still passes, and
-      # it accumulates the duration baseline that gives `secs=` meaning when a failure lands.
-      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: rc=0 secs=$PROBE_SECS"
+      # it accumulates the duration baseline that gives `ms=` meaning when a failure lands.
+      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: rc=0 ms=$PROBE_MS"
       echo "Sandbox OK"
 ```
+
+`blocking_probe_sentry_event` mirrors `sandbox_canary_sentry_event`'s env-guard / best-effort /
+fail-open shape, with three corrections the sibling does not have:
+
+```bash
+blocking_probe_sentry_event() {
+  local rc="$1" ms="$2" cstate="$3" err_chars="$4" payload code disp="guard_absent"
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    payload="$(jq -n --arg rc "$rc" --arg ms "$ms" --arg cs "$cstate" --arg ec "$err_chars" \
+      '{message: ("blocking bwrap probe failed (rc " + $rc + ", " + $cs + ")"),
+        level: "error", platform: "other", logger: "ci-deploy",
+        tags: {feature: "agent-sandbox", op: "blocking-sandbox-probe", cstate: $cs},
+        extra: {rc: $rc, ms: $ms, err_chars: $ec}}' 2>/dev/null)" \
+      || { logger -t "$LOG_TAG" "BLOCKING_PROBE: disposition=payload_failed"; return 0; }
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST \
+      "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+      -H "Content-Type: application/json" \
+      -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+      -d "$payload" 2>/dev/null)" || code="000"
+    disp="posted"
+    [[ "$code" == "000" ]] && logger -t "$LOG_TAG" "BLOCKING_PROBE: Sentry POST failed"
+  fi
+  logger -t "$LOG_TAG" "BLOCKING_PROBE: disposition=$disp sentry_http=${code:-000}"
+}
+```
+
+Three deliberate divergences from the sibling, each closing a hole the review found:
+
+1. **`disposition=` is emitted unconditionally**, on the credential-independent journald plane. The
+   `SENTRY_*` guard has been false in production — this file's own comments record that it "blanked
+   all seven `[[ -n $SENTRY_INGEST_DOMAIN && … ]]` guards and took the host Sentry-dark … 341 unit
+   failures over 5.7h paged nobody" — and one of the two blocked releases had a degraded credential
+   path (adjacent finding 1). Without this field a reader cannot distinguish "no event was posted"
+   from "an event exists and I have not found it".
+2. **`sentry_http=` records the status code.** `curl` without `-f` exits **0** on 4xx/5xx, so the
+   sibling's `|| logger "… POST failed"` cannot fire on a 429 or a 401 — the dominant rejection
+   class. `zot_gate_degraded_event` already carries a `login_http` field in this same file for
+   exactly this reason.
+3. **A `jq` failure logs before returning 0.** The sibling's `2>/dev/null) || return 0` goes silent.
+
+**Closed vocabulary crosses the Sentry boundary; the free text does not.** The journald leg
+additionally traverses Vector's `pii_scrub_string` backstop (email, bearer/basic, OAuth params,
+`requirepass`, `scheme://user:pass@`); **the Sentry POST traverses none of it**. `ci-deploy.sh`
+already states this policy at `zot_gate_degraded_event` — "ONLY the enum + status code + the
+closed-vocabulary hatch cross this boundary — never the raw stderr". `err` therefore stays on the
+plane that has the second scrubber.
 
 Field vocabulary (`rc=`, `err_chars=`, `err="…"` last-on-line) is the house convention from
 `_login_hatch` and `SOLEUR_DEPLOY_CRED_FAIL`; `${…:-<empty>}` is precedented at
@@ -428,12 +610,12 @@ page. `observability-coverage-reviewer` applies.
 
 ```yaml
 liveness_signal:
-  what: "SANDBOX_PROBE_OK: rc=0 secs= on every passing deploy, and the DEPLOY_ROLLBACK line carrying rc= secs= err_chars= err= on every failing one"
+  what: "SANDBOX_PROBE_OK: rc=0 secs= on every passing deploy, and the DEPLOY_ROLLBACK line carrying rc= ms= cstate= err_chars= err= on every failing one"
   cadence: "once per release — 83 probe attempts in the 28 days to 2026-09-10"
   alert_target: "Sentry for the event a person receives; Better Stack Logs (source soleur-inngest-vector-prd) for the queryable record. Naming a log sink alone would be naming a destination, not an alert target."
   configured_in: "apps/web-platform/infra/vector.toml (host_scripts_journald includes ci-deploy); Sentry via the existing SENTRY_* env guard in ci-deploy.sh"
 error_reporting:
-  destination: "TWO planes. (1) journald tag ci-deploy -> Vector -> Better Stack, the queryable record. (2) Sentry, via blocking_probe_sentry_event modelled on the in-file sandbox_canary_sentry_event, tags {feature: agent-sandbox, op: blocking-sandbox-probe}, extra {rc, secs, err}."
+  destination: "TWO planes. (1) journald tag ci-deploy -> Vector -> Better Stack, the queryable record. (2) Sentry, via blocking_probe_sentry_event modelled on the in-file sandbox_canary_sentry_event, tags {feature: agent-sandbox, op: blocking-sandbox-probe}, extra {rc, ms, err_chars}."
   fail_loud: false
   rationale: "fail_loud refers to the EMITTER, not the audience: a telemetry failure must never abort a deploy, the contract both _login_hatch and sandbox_canary_sentry_event state. It is NOT a reason to leave the founder untold — plane 2 answers that. The gate's own verdict is still carried by final_write_state, untouched."
 failure_modes:
@@ -479,10 +661,17 @@ of this script's own journald output pulled this session) and drift-guarded by
 
 Every `detection` names an **in-surface** signal — a field emitted from the probe's own exec, not a
 host-side inference. The field set discriminates all four competing root-cause hypotheses in **one
-event**: `rc` separates own-failure / infra / signal, `secs` separates a fast kill from a slow one,
-and `err_chars` separates truncated from complete. A single boolean would not; neither would `err`
-alone, which was the intake brief's proposal and which the measured evidence shows would have
-rendered `<empty>` and named nothing.
+event**: `rc` separates own-failure / infra / signal, `cstate` breaks the `rc=1` tie between bwrap's
+own failure and docker's "no such container", `ms` separates a fast kill from a slow one, and
+`err_chars` separates truncated from complete.
+
+**`cstate` is not decoration — without it the claim above is false**, and the plan's own `## Hypotheses`
+H1 row says why: "`rc=1` is shared with docker's 'no such container', so **the message is what
+separates them**." The observed signature has `err_chars=0`. So on precisely the case this PR exists
+to diagnose, an `rc=1` result would have returned a tie between H1 and H2 and the instrument would
+have named nothing — the same failure the intake brief's `err`-only proposal would have had. The
+discriminator was one `docker inspect` away, and it has to run **before** the teardown or our own
+cleanup destroys the answer.
 
 ## Guard Contract
 
@@ -513,7 +702,8 @@ plausibly do for an unrelated reason.
 | 3 | Drop the `:-<empty>` sentinel, under the silent scenario | Renders `err=""`. The distinction the issue asked for is gone. |
 | 4 | Replace `_cred_err_tail "$BWRAP_ERR"` with the raw `$BWRAP_ERR`, under the purity scenario | `SENTINEL_LEAK_CANARY` and the raw CR reach the logger line **and** stdout; purity must red on both sinks. |
 | 5 | Move the guarded `printf` from before the branch to inside the failure arm | A probe that PASSES while writing to stderr is silently swallowed — 97.6% of runs, and the early signal that would precede the next rollback. A delete-only battery cannot see this; only the pass-with-chatter scenario can. |
-| 6 | Make `_cred_err_tail` return non-zero on its last statement | The rescue `\|\| BWRAP_ERR_SAN="<sanitize_failed>"` must be what keeps the script alive. Without it the abort vector is real and inherited from another function's internals. |
+| 6 | Stub `sed` to exit non-zero **mid-pipeline** inside `_cred_err_tail`, under the purity scenario | Must red with `err="<sanitize_failed>"` and with the `dp.st.` token absent from all three sinks. An earlier row mutated the helper to `return 1` on its last statement — a mutation nobody would ever make for an unrelated reason, which this matrix's own criterion rejects. The real failure is a mid-pipeline tool death, which under the `\|\|`-suspended errexit lets the helper emit a **partially sanitized** value and return 0. |
+| 7 | Pass `$BWRAP_ERR` instead of `${#BWRAP_ERR}` to `blocking_probe_sentry_event` | The raw text crosses the one sink with no Vector backstop. Must red on AC7's POST-body assertion — an assertion scoped to the logger file alone would stay green. |
 
 **Harness rows.**
 
@@ -527,6 +717,15 @@ plausibly do for an unrelated reason.
 **Anchor discipline** (`cq-assert-anchor-not-bare-token`): every assertion selects the single line
 containing `DEPLOY_ROLLBACK: bwrap sandbox non-functional` and then tests fields **on that selected
 line**. A bare `grep -q err_chars` over the whole capture would pass on any line anywhere.
+
+**Consumer contract for the free-text field.** Neither sink can be broken out of — the value sits in
+a double-quoted bash word with every `"` mapped to `'` and every control byte collapsed to a space,
+so no second journald record can be forged; and the Sentry payload is built with `jq --arg`, which
+escapes opaquely. But the value may legitimately *contain* spaces and `=`, so it is forgeable by
+substring: a probe output containing the literal `rc=0 ms=0` will appear inside the quoted field.
+`err` is therefore the only free-text field and is **last on the line by construction**; every
+consumer must anchor on `err="[^"]*"$` and must never substring-match `k=v` tokens across the line.
+This is what the ADR-115 trusted-region convention buys, stated explicitly for the next reader.
 
 ## Acceptance Criteria
 
@@ -568,10 +767,17 @@ had no runnable form, and one used the exact `grep -c` idiom the repo keeps a li
   (not the diff, which legitimately adds test-side line selection) introduces no new
   `tr -dc`/`cut -c`/`head -1` sanitizer.
 - **AC6** — The deploy-state contract is frozen: no change to `final_write_state 1 "canary_sandbox_failed"`.
-- **AC7** — Purity, on **both** sinks. Under the purity scenario the full `$MOCK_LOGGER_CAPTURE_FILE`
-  **and** the captured `$output` contain neither `SENTINEL_LEAK_CANARY`, nor a raw CR, nor an
-  unredacted `dp.st.` token. Two sinks because the guarded `printf` writes to stdout, which this
-  plan's own measurements show also reaches Better Stack.
+- **AC7** — Purity, on **all three** sinks. Under the purity scenario, the full
+  `$MOCK_LOGGER_CAPTURE_FILE`, the captured `$output`, **and the captured Sentry POST body** each
+  contain none of: `SENTINEL_LEAK_CANARY`, a raw CR, an unredacted `dp.st.` token, an `sk_live_`
+  key, a `eyJ…` JWT, or a `whsec_`/`re_`/`gh?_` token. Three sinks, not two: the guarded `printf`
+  writes to stdout (which reaches Better Stack under the `webhook` tag), and the Sentry POST is a
+  sink this PR *creates*. Capture the POST body by stubbing `curl` in the mock, the way
+  `ci-deploy-sentry-post-fail-6475.sh`'s scenario does. An AC scoped to the logger file alone would
+  go green on a diff that passed the raw variable to Sentry — the "guard's assertion and guard's
+  property drift apart" failure this plan cites as its own driving learning.
+- **AC7b** — The raw variable never reaches the Sentry call site:
+  `! grep -n 'blocking_probe_sentry_event' apps/web-platform/infra/ci-deploy.sh | grep -q 'BWRAP_ERR[^_]'`.
 - **AC8** — Silent path: `rc=137`, `err_chars=0`, `err="<empty>"`. The observed production signature,
   untested today.
 - **AC9** — Spoken path: `rc=1`, `err_chars` greater than 0, non-empty `err="…"`, anchored on
@@ -583,34 +789,99 @@ had no runnable form, and one used the exact `grep -c` idiom the repo keeps a li
   the sanitized text is still re-emitted to `$output`. This is the 97.6% branch.
 - **AC12** — The gate is still asserted, not replaced: `reason` equals `canary_sandbox_failed`,
   `exit_code` equals `1`, and the canary `docker stop`/`docker rm` ran.
-- **AC13** — The success-path twin exists: exactly one `SANDBOX_PROBE_OK: rc=0 secs=` logger line
+- **AC13** — The success-path twin exists: exactly one `SANDBOX_PROBE_OK: rc=0 ms=` logger line
   carrying **no** free-text field, asserted by a green-path scenario. Count via
   `n="$(grep -c 'SANDBOX_PROBE_OK' apps/web-platform/infra/ci-deploy.sh || true)"; [[ "$n" == "1" ]]`
   — the `|| true` is load-bearing, because `grep -c` prints `0` **and exits 1** on no match, which is
   the exact class `scripts/lint-shell-capture-exit.py` exists to prevent.
 - **AC14** — `blocking_probe_sentry_event` exists, is env-guarded on the same three `SENTRY_*`
-  variables as `sandbox_canary_sentry_event`, is invoked with `|| true`, and carries `rc`, `secs` and
-  `err`. A scenario asserts the POST is attempted when the DSN components are present and is inert
-  when they are absent — mirroring the existing `#7103 R1` assertions for that sibling.
-- **AC15** — Every mutation row 1-6 and harness row H1 observed RED; H2, H3 and H4 observed PASS.
+  variables as `sandbox_canary_sentry_event`, is invoked with `|| true`, and carries **only** the
+  closed vocabulary `rc`, `ms`, `cstate`, `err_chars` — never `err`. A scenario asserts the POST is
+  attempted when the DSN components are present and is inert when they are absent, mirroring the
+  existing `#7103 R1` assertions for that sibling. Additionally:
+  - the `message` field is built from closed vocabulary only. The sibling interpolates its free-text
+    arg into `message`, and a faithful copy would too — which makes every distinct bwrap error a
+    separate Sentry issue (fingerprinting degrades exactly when it is needed) and puts the payload
+    in the issue **title**, i.e. into notification emails and Slack, a wider distribution than the
+    event body.
+  - it emits `BLOCKING_PROBE: disposition=posted|guard_absent|payload_failed sentry_http=<code>` on
+    the credential-independent journald plane, **unconditionally**, plus a `BLOCKING_PROBE`-tagged
+    `|| logger "… Sentry POST failed"` fallback.
+  - `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh`'s header enumerates **seven**
+    fail-open Sentry sites; this makes eight. Update that count and name the new tag, or the soak's
+    own inventory silently drifts.
+- **AC15** — Every mutation row 1-7 and harness row H1 observed RED; H2, H3 and H4 observed PASS.
   Results recorded in the PR body. `bash apps/web-platform/infra/ci-deploy.test.sh` exits 0 with a
   total strictly greater than the 216 baseline and `0 failed`.
-- **AC16** — `_cred_err_tail`'s header records its second producer **and its 200-byte clamp** in one
-  sentence naming the bwrap probe call site. The clamp matters at the new site: a reader seeing
-  `err_chars=340` beside a 200-character field has no local explanation otherwise. This is the GDPR
-  gate's Art. 32 remediation — the only control that makes a future Doppler-scoped tightening of the
-  helper a visible decision rather than an invisible regression.
+- **AC16** — `_cred_err_tail`'s header records its second producer, its new fail-closed contract, and
+  its bound — worded as "**bounded to the last 200 characters, which equals 200 bytes only because
+  step 1 collapses the input to ASCII under `LC_ALL=C`**". The transitivity is the point: `${#_e}`
+  and `${_e:offset}` count characters in the caller's locale, and `ci-deploy.sh` deliberately does
+  not export `LC_ALL`, so a future edit that relaxes step 1's `tr` to preserve UTF-8 — a plausible
+  edit, since collapsing every non-ASCII byte to a space mangles a non-English diagnostic — silently
+  converts a 200-byte bound into a 200-character one, up to 800 bytes, while a header saying
+  "200-byte clamp" would still read as true. The clamp also matters at the new call site: a reader
+  seeing `err_chars=340` beside a 200-character field has no local explanation otherwise.
+- **AC16b** — The deploy-state payload carries the closed-vocabulary sibling keys `probe_rc`,
+  `probe_ms`, `probe_cstate`, `probe_err_chars` alongside the **frozen** `reason` string. Verified:
+  `ci-deploy.test.sh`'s exact-equality `reason` assertion still passes, `cat-deploy-state.sh`
+  tolerates the additions, and no whole-JSON equality assertion breaks. `err` is deliberately
+  **absent** here — this payload is echoed into a repo-readable run log by
+  `web-platform-release.yml`'s existing `jq .`, a wider audience than either async sink.
 - **AC17** — The #8016 comment exists; the issue **body is unedited**, verified against the SHA-256
   recorded in `## Research Insights`
   (`gh issue view 8016 --json body -q .body | sha256sum` equals `c3aea158b8443b13ad7aad0284c5a98add3369dbd694564cd44f67e7697a75b4`);
   and the comment does not assert that the probe's stderr is discarded because only `logger` lines
   reach journald.
 
-**Deliberately not an AC.** A previous draft carried five sub-assertions re-pinning
-`_cred_err_tail`'s internals. Those are already pinned, with a positive control, by `T-7095-3`
-(anchor `# T-7095-3 — the err tail's THREE bounds`) and `F14` (anchor
-`# --- #7095 R3 (F14): redaction MUST precede truncation`), and this PR does not modify the helper's
-body. AC5 plus AC7 is the whole obligation at this call site.
+**The `_cred_err_tail` scope-lock is deliberately REOPENED, and why.** An earlier draft declined to
+touch the helper, citing `T-7095-3` and `F14` as existing coverage. That lock was set when the
+helper's only producer was `doppler secrets get` stderr, whose corpus genuinely is Doppler-shaped.
+Adding a second producer whose corpus is **the full prd secret set** (see the corrected
+producer-corpus paragraph in `## Domain Review`) is exactly the event that should reopen it. Both
+existing suites stay green — the changes below are additive.
+
+Two defects the security review found in the helper as applied to the new call site:
+
+1. **Fail-open partial sanitization.** `BWRAP_ERR_SAN="$(_cred_err_tail …)" || BWRAP_ERR_SAN=…`
+   places the function inside a `||` list, which **suspends errexit for its entire body**. If `sed`
+   dies mid-pipeline (PATH damage, fork failure under memory pressure — the conditions this
+   instrument exists to diagnose), the assignment fails, execution continues, and the final
+   `printf` emits the value of the *last successful stage*: control-stripped and quote-swapped but
+   **not redacted**. `printf` succeeds, the function returns 0, the rescue never fires, and a
+   partially-sanitized 200-byte tail ships to every sink. This plan's own `## Sharp Edges` states
+   the mechanism — "`run_faithful_sandbox_canary` uses this pattern safely **only** because it is
+   invoked as `… || true`, which suspends errexit for the whole function body" — and an earlier
+   draft applied that reasoning to one function and not to the one guarding the credential boundary.
+   Fix: an explicit pipeline-status check inside the helper, so it is fail-closed regardless of
+   caller context. The existing call site's behaviour is unchanged (it aborted before; it now
+   returns 1 into a bare assignment, which still aborts).
+2. **One vendor prefix is not a ruleset.** `sed -E 's/dp\.[a-z]{2,}\.…/dp.REDACTED/g'` is the
+   helper's entire value-shaped ruleset. None of `SUPABASE_SERVICE_ROLE_KEY` (a `eyJ…` JWT),
+   `STRIPE_SECRET_KEY` (`sk_live_…`), `STRIPE_WEBHOOK_SECRET` (`whsec_…`), `RESEND_API_KEY` (`re_…`),
+   `SENTRY_AUTH_TOKEN` or any GitHub/Cloudflare/Hetzner token carries a `dp.` prefix. Vector's
+   `pii_scrub_string` backstop catches none of them either — it is anchored on `userid=` k=v pairs,
+   OAuth query params, emails, `Authorization:` framing, `requirepass`, and `scheme://user:pass@`
+   DSN userinfo. Every credential above is a **bare high-entropy token** with none of that framing.
+   Add four shape-anchored rules, sited so they inherit the existing redaction-before-truncation
+   order (each anchors on a vendor-published, self-identifying prefix, so the false-positive surface
+   over `bwrap:` / `OCI runtime exec failed` / `Error response from daemon` text is nil):
+
+```bash
+    | sed -E 's/\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{8,}/[redacted-key]/g' \
+    | sed -E 's/\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/[redacted-jwt]/g' \
+    | sed -E 's/\b(gh[pousr]|sbp|dop_v1|re|whsec|xox[baprs])_[A-Za-z0-9_-]{16,}/[redacted-token]/g'
+```
+
+Mirroring these into `vector.toml`'s `pii_scrub_string` would cover the Better Stack leg for **every**
+producer on that source, not just this one — but that carries its own independent justification
+(`pull_failure_event`'s recorded Authorization-header concern) and a different blast radius, so it is
+**adjacent finding 5**, not this PR.
+
+**`err_chars` is a pre-redaction length oracle — accepted, on the record.** It reports the true
+length of the unredacted output on sinks that leave the box. Given the corpus the signal is
+negligible and the truncation-discrimination value is high (P2c depends on it), so this is a
+decision rather than an omission.
 
 ### Post-merge (fully automated — no separate apply step)
 
@@ -619,7 +890,7 @@ body. AC5 plus AC7 is the whole obligation at this call site.
 - **AC19** — The first post-merge release is triaged by the table below, and the follow-through
   probe's window starts at the merge date so no step depends on memory.
 - **AC20** — Within 24h of that release, a field-isolated Better Stack read returns at least one
-  `SANDBOX_PROBE_OK` row carrying `rc=0 secs=`. This is what the success-path twin exists for. An
+  `SANDBOX_PROBE_OK` row carrying `rc=0 ms=`. This is what the success-path twin exists for. An
   earlier draft grepped `Verifying bwrap sandbox`, which rides the `webhook` tag and is emitted
   **identically by the pre-change script** — a positive control that passes whether or not the change
   deployed, which is the #7220 failure verbatim.
@@ -659,7 +930,7 @@ This plan sat exactly in that blind spot — the soak tracker and the closes tar
 
 **Arm 1 — the next occurrence names a cause. Primary.** At roughly 3 releases/day and 2.4%, expected
 within about two weeks. `rc=1` with a message → H1, and the message names which; `rc` in 126/127 or
-`rc=128` → H2; `rc` in the `128+n` band → H3, and `secs=` then splits an immediate refusal from a
+`rc=128` → H2; `rc` in the `128+n` band → H3, and `ms=` then splits an immediate refusal from a
 killed hung probe. The kernel OOM channel must be opened before a signal verdict can be confirmed —
 adjacent finding 3.
 
@@ -690,7 +961,7 @@ watches". Goes in the PR body as well as here.
 | Observed | Verdict |
 |---|---|
 | `reason=unhandled` | **This change broke it.** An errexit abort skipped the handler. Revert first, investigate second. |
-| `reason=canary_sandbox_failed` **with** `rc=`/`secs=`/`err=` on the line | Genuine, and now diagnosable. Read the fields. |
+| `reason=canary_sandbox_failed` **with** `rc=`/`ms=`/`err=` on the line | Genuine, and now diagnosable. Read the fields. |
 | `reason=canary_sandbox_failed` **without** those fields | The change did not reach the host. Check `apply-deploy-pipeline-fix.yml`. |
 
 ## Adjacent findings — file separately, do not bundle
@@ -729,8 +1000,27 @@ A discovered defect in a different subsystem stays its own issue.
    of this plan's own cited learning: a sweeper auto-closed on a PASS that certified the soak, not
    the promotion.
 
-**Net-issue-flow.** This PR closes 1 and files **5** — the four above plus the `follow-through`
-diagnosis tracker — so it is net **+4**. Use `<!-- gate-override: net-issue-flow -->` in the PR body
+5. **Two existing observability controls are blind in a way their own soak certifies as green.**
+   Consolidated into one tracker because they are the same class — a control whose success condition
+   cannot express its dominant failure.
+   (a) **All seven `*_sentry_event` emitters in `ci-deploy.sh` use `curl` without `-f`/`--fail`**, so
+   the shared `|| logger "… Sentry POST failed"` detector exits 0 on any HTTP 4xx/5xx. A Sentry 429
+   (rate-limit) or 401 (bad key) is indistinguishable from success: no logger line, no Better Stack
+   row. `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh` exists solely to soak those lines
+   and defines SOUND as "zero 'Sentry POST failed' lines from ci-deploy" — so it reports **green
+   vacuously for the entire HTTP-rejection class**. The remedy is the `%{http_code}` capture this PR
+   adds at its own new site; the seven existing sites need the same, plus a corrected SOUND
+   definition. In-repo precedent: `zot_gate_degraded_event` already carries a `login_http` field.
+   (b) **Vector's `pii_scrub_string` catches no bare high-entropy token shape.** It is anchored on
+   `userid=` k=v pairs, OAuth query params, emails, `Authorization:` framing, `requirepass`, and
+   `scheme://user:pass@` DSN userinfo — none of which frames an `sk_live_…`, `eyJ…` JWT, `whsec_…`,
+   `re_…` or `gh?_…` token. This PR adds four shape-anchored rules at one producer
+   (`_cred_err_tail`); mirroring them into the sink transform would cover **every** producer on that
+   source. Independently justified by `pull_failure_event`'s recorded finding that a 401/403 daemon
+   error can echo a registry Authorization header.
+
+**Net-issue-flow.** This PR closes 1 and files **6** — the five above plus the `follow-through`
+diagnosis tracker — so it is net **+5**. Use `<!-- gate-override: net-issue-flow -->` in the PR body
 with one justification line per filing; "a discovered defect in another subsystem that must stay its
 own issue" is an explicitly-blessed reason in
 `plugins/soleur/skills/ship/scripts/net-issue-flow.sh`. Findings 3 and 4 carry additional
@@ -832,17 +1122,37 @@ Invoked under Phase 2.7 trigger (b) — the `single-user incident` threshold —
 canonical path regex misses. Under the gate's own taxonomy **zero mandatory checks fire**. Two
 findings at **Suggestion**, deliberately not promoted.
 
-**Producer corpus — the recorded negative, not an inherited assumption.** Exactly three producers can
-write to the captured stream, and none has a channel to end-user personal data. **Docker
-client/daemon**: `Error response from daemon: Container <id> is not running` / `No such container`;
-`docker exec` does not re-serialise the target's environment, and the `ENV_FILE` was consumed by the
-daemon at `docker run` time. **runc**: `OCI runtime exec failed: …` or an AppArmor/seccomp denial
-naming `soleur-bwrap`; it echoes the argv it was handed, which is fixed and literal here, plus host
-paths and numeric uid/gid. **bwrap**: `bwrap: Creating new namespace failed: Operation not permitted`
-and similar; it fails **before** executing its payload, and the payload is `true`, which produces no
-output on any path. No request context, no database read, no HTTP header, no session, and the canary
-has never served a request. Operator/infrastructure diagnostic data, not personal data — so PA-8 §(c)
-does not change.
+**Producer corpus — CORRECTED. An earlier draft's "recorded negative" was not a closed one.**
+
+Three producers can write to the captured stream: the **docker client/daemon**
+(`Error response from daemon: Container <id> is not running` / `No such container`), **runc**
+(`OCI runtime exec failed: …`, AppArmor/seccomp denials naming `soleur-bwrap`), and **bwrap** itself
+(`bwrap: Creating new namespace failed: Operation not permitted`, which fails *before* executing its
+payload — and the payload is `true`, which produces no output on any path).
+
+On **end-user personal data** the negative holds: no request context, no database read, no HTTP
+header, no session, and the canary has never served a request. PA-8 §(c) does not change.
+
+On **operator credentials it does not hold**, and the earlier draft's reasoning was factually wrong.
+It claimed "the `ENV_FILE` was consumed by the daemon at `docker run` time". It was not. `--env-file`
+is parsed into `Container.Config.Env`, which the daemon **persists for the container's lifetime** and
+merges into the OCI process spec of **every subsequent `docker exec`**. So the probe's exec target
+runs with the full prd secret set live in its environment — `SUPABASE_SERVICE_ROLE_KEY`,
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BYOK_ENCRYPTION_KEY`, `SENTRY_AUTH_TOKEN`,
+`RESEND_API_KEY` and the rest. Nothing was consumed.
+
+That relocates the question from "can it be re-serialised?" to "does any producer in the corpus
+format an env entry into an error?" — and one does: runc's `populateProcessEnvironment` validates
+every entry in `process.env` and formats offending entries with Go's `%q`, including a `%q=%q`
+name/value form. The daemon returns runc's stderr verbatim, prefixed `OCI runtime exec failed: …`,
+and `2>&1` captures it. This shape has not been observed firing. The point is that the corpus is
+bounded by **observation, not by architecture**, which makes the sanitizer the **load-bearing
+control** rather than belt-and-braces — and is why the `_cred_err_tail` scope-lock is reopened above.
+This repo has already written the same finding down for the nearest-neighbour producer:
+`pull_failure_event`'s header records that "a 401/403 daemon error can echo the registry
+Authorization header", and its chosen remedy was to let **no** raw docker stderr reach a Sentry
+payload — only a four-value enum. That precedent, not `sandbox_canary_sentry_event`, is the right
+model for a docker-subprocess producer on that sink.
 
 **Finding 1 — `GDPR-Art-5(2)`, Suggestion.** Payload class on an existing channel changes from
 author-fixed strings to captured subprocess output; PA-8 has recorded this shape twice (#7440,

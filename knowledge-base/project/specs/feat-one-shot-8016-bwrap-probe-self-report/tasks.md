@@ -24,6 +24,9 @@ one-line changes whose *wrong* form was measured this session and looks correct.
       Expected `rc=137 len=0`. This is the line the whole PR turns on.
 - [ ] 0.4 Measure `docker exec`'s exit-code stamping against the pinned host Docker version
       (`docker_ver=29.3.0` in the 2026-09-09 rows). Do **not** measure bwrap's codes — cite upstream.
+- [ ] 0.4b In the same run, close the env-echo question: throwaway container with a sentinel env
+      var, force each failure in the plan's rc table, capture merged output, grep for the sentinel.
+      The canary's `--env-file` secrets live in `Config.Env` and are re-injected into every exec.
 - [ ] 0.5 Baseline `bash apps/web-platform/infra/ci-deploy.test.sh` → `216/216 passed, 0 failed`.
       A pre-existing red is a stop-and-report, not something to work around.
 - [ ] 0.6 Run the live Better Stack query with **both** contamination byte-forms
@@ -54,25 +57,43 @@ one-line changes whose *wrong* form was measured this session and looks correct.
 - [ ] 2.1 Replace the probe's condition with the errexit-safe, rc-preserving capture from the plan's
       Phase 2 block. `BWRAP_ERR="$(…)" || BWRAP_RC=$?` — not `if ! VAR=$(…)` (yields `rc=0`), not a
       bare assignment (aborts the script).
-- [ ] 2.2 Add `PROBE_SECS` from `$SECONDS` around the capture.
+- [ ] 2.2 Add `PROBE_MS` from `date +%s%3N` around the capture — milliseconds, not `$SECONDS`. The
+      whole H3-vs-H4 window is sub-second (2.852 s of total container life).
 - [ ] 2.3 Add the sanitizer call with its explicit rescue:
       `BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")" || BWRAP_ERR_SAN="<sanitize_failed>"`.
 - [ ] 2.4 Add the guarded re-emit **outside** the failure branch, carrying the sanitized value.
       An `if` block, not `[[ -n … ]] && printf …`.
-- [ ] 2.5 Extend the `DEPLOY_ROLLBACK` logger line with `rc=`, `secs=`, `err_chars=` and, last and
-      double-quoted, `err="…"`.
-- [ ] 2.6 Add `blocking_probe_sentry_event`, modelled line-for-line on `sandbox_canary_sentry_event`,
-      `op: "blocking-sandbox-probe"`, invoked with `|| true`.
+- [ ] 2.5 Extend the `DEPLOY_ROLLBACK` logger line with `rc=`, `ms=`, `cstate=`, `err_chars=` and,
+      last and double-quoted, `err="…"`.
+- [ ] 2.5b Capture `cstate` via `docker inspect -f '{{.State.Status}}'` **before** the teardown —
+      our own `docker stop`/`rm` destroys the answer. Without it H1 and H2 tie at `rc=1` with an
+      empty message, which is the observed signature.
+- [ ] 2.6 Add `blocking_probe_sentry_event`. Model the env-guard/fail-open shape on
+      `sandbox_canary_sentry_event`, but model the PAYLOAD on `pull_failure_event` — closed
+      vocabulary only (`rc`, `ms`, `cstate`, `err_chars`), never `err`, and never free text in
+      `message`. Capture `%{http_code}`; emit `BLOCKING_PROBE: disposition=… sentry_http=…`
+      unconditionally on journald; log before returning 0 on a `jq` failure.
 - [ ] 2.7 Add the success-path twin `SANDBOX_PROBE_OK: rc=0 secs=$PROBE_SECS`, closed-vocabulary only.
-- [ ] 2.8 Add one sentence to `_cred_err_tail`'s header recording the bwrap probe as its second
-      producer **and** naming its 200-byte clamp. Do not change its body.
+- [ ] 2.8 `_cred_err_tail` **body**: add an explicit pipeline-status check so it is fail-closed
+      regardless of caller context. Under `VAR="$(f)" || rescue` errexit is suspended for the whole
+      function body, so a mid-pipeline `sed` death currently emits a partially-sanitized value and
+      returns 0 — the rescue never fires.
+- [ ] 2.9 `_cred_err_tail` **body**: add the four shape-anchored redaction rules (stripe `sk|pk|rk_`,
+      JWT `eyJ…`, `gh?_|sbp_|dop_v1_|re_|whsec_|xox?_`), sited to inherit redaction-before-truncation.
+      `T-7095-3` and `F14` must stay green — these are additive.
+- [ ] 2.10 `_cred_err_tail` header: record the second producer, the fail-closed contract, and the
+      bound worded as "200 characters, which equals 200 bytes only because step 1 collapses to
+      ASCII under `LC_ALL=C`".
+- [ ] 2.11 `write_state`: add the optional appended-fields hook and emit `probe_rc`/`probe_ms`/
+      `probe_cstate`/`probe_err_chars` as sibling keys. The `reason` STRING stays frozen. Verify the
+      exact-equality assertion and `cat-deploy-state.sh` both still pass.
 - [ ] 2.9 Verify untouched: the bwrap argv, `final_write_state 1 "canary_sandbox_failed"`,
       `run_faithful_sandbox_canary`. `rc` must not influence the rollback branch.
 - [ ] 2.10 Run the suite to GREEN.
 
 ## Phase 3 — Mutation-prove the guard
 
-- [ ] 3.1 Run mutation rows 1-6 and harness row H1; each must drive the suite RED. Restore after each.
+- [ ] 3.1 Run mutation rows 1-7 and harness row H1; each must drive the suite RED. Restore after each.
 - [ ] 3.2 Run harness rows H2, H3, H4; each must PASS.
 - [ ] 3.3 Record the observed result per row for the PR body.
 
@@ -94,6 +115,9 @@ one-line changes whose *wrong* form was measured this session and looks correct.
 - [ ] 5.4 File adjacent finding 1 (ghcr login classifier discards 70 bytes of stderr; relate to #6560).
 - [ ] 5.5 File adjacent finding 2 (`IMAGE_VERIFY_FAIL result=cosign_absent mode=warn`).
 - [ ] 5.6 File adjacent finding 3 (Vector allowlist contradicts its own documentation, two places).
+- [ ] 5.7b File adjacent finding 5 (consolidated: the seven `curl`-without-`-f` Sentry emitters whose
+      soak is vacuous for the HTTP-rejection class, plus `pii_scrub_string` catching no bare-token
+      shape).
 - [ ] 5.7 File adjacent finding 4 (ADR-079 Deferral A orphaned; #5889 closed 2026-07-06 with a
       promote verdict that was never acted on; ADR-079 line 509 is factually wrong).
 - [ ] 5.8 Add `<!-- gate-override: net-issue-flow -->` to the PR body with one justification line per
