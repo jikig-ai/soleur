@@ -74,6 +74,10 @@ vi.mock("@/server/workspace-resolver", () => ({
 }));
 
 import { reprovisionWorkspaceOnDispatch } from "@/server/cc-reprovision";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const USER = "user-1";
 const ACTIVE = "ws-active-id";
@@ -100,7 +104,7 @@ function realWorkspace({ git }: { git: "valid" | "corrupt" | "none" }): string {
       // #5733 host `git rev-parse --is-inside-work-tree` confirm deterministically
       // returns "worktree" → the warm gate short-circuits "ok" (a synthetic
       // HEAD+objects-but-no-refs `.git` would be git-version-dependent).
-      execFileSync("git", ["-C", dir, "init", "-q"]);
+      execFileSync("git", ["-C", dir, "init", "-q"], { env: gitFixtureEnv(dir) });
     }
   }
   return dir;

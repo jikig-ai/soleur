@@ -72,6 +72,30 @@ for b in losetup cryptsetup mkfs.ext4 mount umount findmnt blkid mountpoint rsyn
 done
 [ -f "$CUTOVER" ] || unavailable "cutover script not found at $CUTOVER"
 
+# --- The shell fixture chokepoint (#7849), resolved defensively --------------------------------
+# By the time control reaches here this process is ROOT (it self-elevated above), so `source
+# <path>` is a code-execution primitive holding full privilege. The path is therefore computed
+# ONCE from BASH_SOURCE and asserted before it is used: an EMPTY repo root makes the statement
+# `source "/plugins/…"` or, worse, a bare relative word that bash resolves against $PWD and $PATH,
+# and a root of "/" means the `cd` collapsed and the file being sourced is not the one intended.
+# Both are refused, loudly, via the suite's own fail-closed exit rather than a skip.
+#
+# Sourcing ARMS the fail-loud git-location tripwire for the whole suite. That is the protection
+# that matters here: every mk_repo below is a bare `git init` with no scrub, and this process can
+# write anywhere on the host.
+LUKS_REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." 2>/dev/null && pwd)" || LUKS_REPO_ROOT=""
+case "$LUKS_REPO_ROOT" in
+  "")  unavailable "repo root resolved EMPTY from $SCRIPT_DIR — refusing to source the fixture-env helper as root" ;;
+  /)   unavailable "repo root resolved to '/' — refusing to source the fixture-env helper as root" ;;
+  /*)  : ;;
+  *)   unavailable "repo root '$LUKS_REPO_ROOT' is not absolute — refusing to source the fixture-env helper as root" ;;
+esac
+GIT_FIXTURE_ENV_LIB="$LUKS_REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+[ -f "$GIT_FIXTURE_ENV_LIB" ] && [ -r "$GIT_FIXTURE_ENV_LIB" ] \
+  || unavailable "fixture-env helper missing or unreadable at $GIT_FIXTURE_ENV_LIB"
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$GIT_FIXTURE_ENV_LIB"
+
 # --- Teardown ----------------------------------------------------------------
 CLEAN_MOUNTS=()
 CLEAN_MAPPERS=()
@@ -490,14 +514,34 @@ D_SRC="$SRC_DIR"
 D_DST="$STAGING_DIR"
 
 # mk_repo — a real git repo with one commit, then handed to uid 1001 (production ownership).
+#
+# The constructed fixture environment is CONFINED TO A SUBSHELL, and that is a deliberate
+# narrowing rather than an oversight. `git_fixture_env` exports GIT_CONFIG_NOSYSTEM=1 and
+# GIT_CONFIG_GLOBAL=/dev/null; leaking those into the rest of this file would silently rewrite
+# what several cases MEASURE. L6k-CAP reports the AMBIENT `safe.directory` (`git config
+# --show-origin --get-all`) as its diagnostic and would print `<none>` on a runner that ships
+# `safe.directory = *`, and L6k/L6k-CAP/L6m set GIT_CONFIG_SYSTEM/GLOBAL themselves, per command,
+# precisely because which probe runs neutralized is the thing under test. Every git call that
+# WRITES the fixture is inside the subshell; every later read is ambient on purpose.
+#
+# Exit 64 is the guard's own code, distinguishable from a git failure inside the subshell (which
+# surfaces as the commit's rc), so a refused ceiling cannot be misread as a broken fixture.
 mk_repo() {
-  local d="$1"
+  local d="$1" rc
   : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   mkdir -p "$d"
-  git init -q "$d" >/dev/null 2>&1
-  printf 'content\n' > "$d/f.txt"
-  git -C "$d" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
-  git -C "$d" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+  (
+    git_fixture_env "$d" || exit 64
+    git init -q "$d" >/dev/null 2>&1
+    printf 'content\n' > "$d/f.txt"
+    git -C "$d" -c user.email=t@t -c user.name=t add -A >/dev/null 2>&1
+    git -C "$d" -c user.email=t@t -c user.name=t commit -q -m init >/dev/null 2>&1
+  )
+  rc=$?
+  if [ "$rc" -eq 64 ]; then
+    echo "FATAL: workspaces-luks-loopback: git_fixture_env refused fixture $d" >&2
+    exit 1
+  fi
   chown -R 1001:1001 "$d" 2>/dev/null || true
 }
 

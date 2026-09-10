@@ -61,28 +61,65 @@ MIGRATED_FILE="$REPO_ROOT/scripts/migrated-rule-ids.txt"
 INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
 [[ -f "$INCIDENTS_LIB" ]] || exit 0
 
-# Synthetic rule-id prefixes, MIRRORING scripts/rule-metrics-aggregate.sh's orphan-gate
-# exemptions. A rule id accepted here but not exempt there would fail that gate; one
-# rejected here is simply never recorded. Keep the two lists in step — the companion
-# assertion in .claude/hooks/rule-incident-marker-capture.test.sh pins that.
+# Rule-id validation, MIRRORING scripts/rule-metrics-aggregate.sh (#7853). This used to be
+# a hand-maintained allowlist of synthetic prefixes (te-, gdpr-gate-, context-reviewed-,
+# net-issue-flow, cost-of-filing-, plus one exact id) copied from that aggregator, and the
+# two drifted whenever either side gained an emitter. Both now key on ONE fact instead:
+# does the id CLAIM to be an AGENTS.md rule?
+#
+#   - No section prefix  -> it never claimed corpus membership. The aggregator drops such
+#     ids from its orphan gate structurally, so accepting one here can never manufacture
+#     an orphan, and a new hook needs no edit on either side.
+#   - Section-prefixed    -> it claims to be a rule, so it must BE one: the closed-corpus
+#     grep against AGENTS.rules.md still governs, unchanged.
+#
+# The invariant this preserves is directional: an id accepted here must be one the
+# aggregator would not call an orphan. One rejected here is simply never recorded, which
+# is why the strict direction is safe (a retired id is exempt there and rejected here).
+#
+# SECURITY NOTE, stated rather than glossed. The marker is contributor-writable, so this
+# widening does enlarge what a hostile PR can land: previously an attacker-chosen id had
+# to sit under one of five reserved prefixes, now any shape-valid id with no section
+# prefix is accepted. The bound is unchanged in KIND — an unattributed telemetry row with
+# a sanitised, 160-char-capped note, which no rule-metrics consumer reads EXCEPT the three reserved analytics prefixes rejected above and which the
+# orphan gate ignores by construction. What the closed corpus still buys, and what case 2
+# of the companion suite fixtures, is that an attacker CANNOT forge a row attributed to a
+# rule: a `cq-`/`hr-`/`wg-`-prefixed id absent from AGENTS.rules.md is still rejected.
+#
+# The companion assertion in .claude/hooks/rule-incident-marker-capture.test.sh pins that
+# the section-prefix regex below is shared verbatim with the aggregator.
 _valid_rule() {
   local r="$1"
   [[ "$r" =~ ^[a-z0-9][a-z0-9-]{2,79}$ ]] || return 1
+  # SHARED SECTION-PREFIX REGEX — keep byte-identical with the test() call in
+  # scripts/rule-metrics-aggregate.sh; the companion suite greps for this literal.
+  # RESERVED ANALYTICS PREFIXES — rejected before the section-prefix test.
+  #
+  # These are the ids scripts/rule-metrics-aggregate.sh reads into NAMED SUMMARY FIELDS of the
+  # COMMITTED knowledge-base/project/rule-metrics.json (grep its `startswith(` calls). Accepting one
+  # from a contributor-writable marker lets that marker forge an attacker-chosen key into a tracked
+  # file AND fire a false ADR-156/157/162 alarm claiming the ugrep shim was not neutralised and a
+  # hook ran with guards disarmed. Demonstrated end-to-end on the `gh pr checkout` review path.
+  #
+  # This is the one gap in the widening's stated bound. The header's earlier claim that an accepted
+  # row is "read by no rule-metrics consumer" was FALSE for exactly these three prefixes, and the
+  # aggregator says so 200 lines away from where the claim was written.
   case "$r" in
-    te-*|gdpr-gate-*|context-reviewed-*|net-issue-flow*|cost-of-filing-*) return 0 ;;
-    encryption-posture-design-time-default) return 0 ;;
+    hook-input-*|grep-rewrite-*|net-issue-flow-mandated-filing--*) return 1 ;;
   esac
-  # Closed corpus: the id must be a real AGENTS.rules.md rule...
+  [[ "$r" =~ ^(hr|wg|cq|rf|pdr|cm)- ]] || return 0
+  # Closed corpus: an id that claims to be a rule must be a real AGENTS.rules.md rule...
   grep -qF "[id: ${r}]" "$RULES_FILE" 2>/dev/null && return 0
   # ...OR a rule that MIGRATED to a skill-local home. Migrated rules are ACTIVE:
   # they still emit SOLEUR_RULE_APPLIED from the phase that enforces them, they
-  # are simply no longer bodies in AGENTS.rules.md. Without this the closed
-  # corpus drops their markers at the `_valid_rule || continue` below with NO
-  # sentinel -- silent telemetry loss, which the producer/consumer parity
-  # assertion in this hook's test exists to catch.
+  # are simply no longer bodies in AGENTS.rules.md. They carry an AGENTS section
+  # prefix, so the check above applies to them and would drop their markers at
+  # `_valid_rule || continue` with NO sentinel -- silent telemetry loss, which
+  # this hook's producer/consumer parity assertion exists to catch.
   #
-  # Grammar is pinned to match scripts/rule-metrics-aggregate.sh exactly; the
-  # registry-parser parity test asserts both yield the same id set.
+  # Grammar is pinned to match scripts/rule-metrics-aggregate.sh; the
+  # registry-parser parity assertion in the companion suite proves both readers
+  # accept the same id set (and reject the same malformed row).
   [[ -f "$MIGRATED_FILE" ]] &&
     grep -qE "^${r}[[:space:]]*\|" "$MIGRATED_FILE" 2>/dev/null
 }

@@ -82,6 +82,26 @@ if [[ ! -s "$rules_tsv_file" ]]; then
   exit 3
 fi
 
+# --- Retired AGENTS.md rule ids -------------------------------------------
+# Clause 2 of the orphan discriminator (see the summary stage below). Same file
+# and same parse as scripts/rule-prune.sh `_load_retired_ids`: the id is column
+# 1 of `<id> | <date> | <PR #> | <breadcrumb>`, comment and blank lines skipped.
+# Read from $REPO_ROOT so a redirected root pairs its own AGENTS.md with its own
+# retirement record — the same pairing $RULE_METRICS_ROOT gives rule-prune.sh.
+# An absent file yields an empty list, which only makes the gate stricter.
+RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+retired_ids_file="$_tmpdir/retired-ids.txt"
+: > "$retired_ids_file"
+if [[ -f "$RETIRED_IDS_SRC" ]]; then
+  awk '/^[^#]/ {
+    sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "")
+    if ($0 == "") next
+    split($0, a, "[ \t]*\\|[ \t]*")
+    gsub(/[ \t]+/, "", a[1])
+    if (a[1] != "") print a[1]
+  }' "$RETIRED_IDS_SRC" > "$retired_ids_file"
+fi
+
 # --- Counts from jsonl ----------------------------------------------------
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
 # crash-mid-write or OOM does NOT abort the whole aggregation. Bad
@@ -265,119 +285,75 @@ jq empty < "$stage_enriched_file" >/dev/null 2>&1 || { echo "ERROR: stage B (enr
 # $drops and $cutoff and $schema stay on argv: drops is keyed by a closed error
 # enum (a handful of keys) and the other two are scalars — none can approach
 # MAX_ARG_STRLEN. $enriched and $counts are the ones that scale with the rule set.
-# Rules that MOVED to a skill-local home are ACTIVE, not orphans: they still
-# emit SOLEUR_RULE_APPLIED from the phase that enforces them, they are simply no
-# longer bodies in AGENTS.md. Without this the orphan gate exits 5 BEFORE jsonl
-# rotation, disarming the write path.
-#
-# Grammar MUST match _valid_rule in .claude/hooks/rule-incident-marker-capture.sh
-# exactly -- id, optional space, literal pipe. A looser form here would ACCEPT a
-# malformed entry the hook REJECTS: silent telemetry loss behind a green orphan
-# gate, the exact drift this shared registry exists to end. Parity is pinned by
-# that hook's registry-parser parity test.
-migrated_file="$_tmpdir/migrated-ids.json"
-if [[ -f "$REPO_ROOT/scripts/migrated-rule-ids.txt" ]]; then
-  grep -oE '^[a-z0-9][a-z0-9-]{2,79}[[:space:]]*\|' "$REPO_ROOT/scripts/migrated-rule-ids.txt" 2>/dev/null \
-    | sed -E 's/[[:space:]]*\|$//' \
-    | jq -R . | jq -s . > "$migrated_file" 2>/dev/null || echo '[]' > "$migrated_file"
-else
-  echo '[]' > "$migrated_file"
-fi
-
 report=$(jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg generated_at "$GENERATED_AT" \
   --rawfile enriched_json "$stage_enriched_file" \
   --rawfile counts_json "$counts_file" \
-  --rawfile migrated_json "$migrated_file" \
   --argjson drops "$drops_counts_json" \
-  --argjson cutoff "$UNUSED_CUTOFF_EPOCH" '
+  --argjson cutoff "$UNUSED_CUTOFF_EPOCH" \
+  --rawfile retired_txt "$retired_ids_file" '
     ($enriched_json | fromjson) as $enriched
     | ($counts_json | fromjson) as $counts
-    # Orphan events: rule_ids in the jsonl that don'"'"'t match any AGENTS.md id.
+    | ($retired_txt | split("\n") | map(select(length > 0))) as $retired_ids
+    # Orphan events: rule_ids in the jsonl that match no AGENTS.md id.
     # Surfacing these prevents silent data loss when a hook emits a rule_id
     # that was renamed / removed / never tagged (e.g., historical sentinel names).
+    #
+    # THE DISCRIMINATOR (#7853). This gate used to carry NINE hand-maintained
+    # exemption stanzas — te-, gdpr-gate-, context-reviewed-, net-issue-flow,
+    # cost-of-filing-, grep-rewrite-, monitor-supersede, hook-input-, plus two
+    # exact ids. Every one of them existed because the gate treated EVERY
+    # emitted identifier as a claim to be an AGENTS.md rule, when most emitters
+    # are hooks whose ids never claimed corpus membership at all. Each new hook
+    # cost another stanza, and until someone wrote it the gate exited 5 and, on
+    # the post-write path, short-circuited before jsonl rotation — so one hook
+    # could disarm rotation of the shared telemetry sink.
+    #
+    # Two clauses replace all nine. An id is an orphan when it:
+    #   1. CLAIMS CORPUS MEMBERSHIP — carries an AGENTS.md section prefix
+    #      (hr|wg|cq|rf|pdr|cm). Measured 2026-09-07: 0 of 105 AGENTS ids lack
+    #      one, so this clause cannot exempt a live corpus rule. Telemetry that
+    #      never claimed to be a rule is now structurally out, which is what
+    #      makes this gate stop needing maintenance; AND
+    #   2. IS NOT DELIBERATELY RETIRED — absent from scripts/retired-rule-ids.txt.
+    #      A retired rule whose emitter literal outlived it is telemetry
+    #      legitimately outside the corpus; that is what retirement means. And
+    #      cq-rule-ids-are-immutable makes reintroducing a retired id
+    #      linter-rejected, so renaming such an emitter back into AGENTS.md is
+    #      not an available repair.
+    #
+    # Anything surviving both clauses is a real orphan and still exits 5 —
+    # verified non-vacuous by injecting a section-prefixed, non-retired id.
+    #
+    # LOAD-BEARING PAIR, preserved: hook-input-* (ADR-156/ADR-157) and
+    # grep-rewrite-* (ADR-162) carry no section prefix, so clause 1 drops them
+    # here exactly as their explicit stanzas did. That leaves orphan_rule_ids
+    # as no surface at all for those counts-only ids, so
+    # summary.hook_input_fault_count and summary.grep_rewrite_fault_count below
+    # remain their replacement surfaces and must not be removed independently
+    # of this filter. The same holds for the net-issue-flow* attribution
+    # readouts (gate_exemptions and friends).
     | ($enriched | map(.id)) as $known_ids
     | ($counts | keys
         | map(select(. as $id | ($known_ids | index($id)) | not))
-        # LOAD-BEARING: te-* prefix reserved for token-efficiency telemetry
-        # (issue #3494, compound Phase 1.6). Removing this filter breaks the
-        # aggregation run — every Phase 1.6 outlier would fail orphan-gate.
-        # Tests T6/T7/T8 in scripts/rule-metrics-aggregate.test.sh cover this.
-        # AGENTS.md section prefixes are hr|wg|cq|rf|pdr|cm; te- cannot collide.
-        | map(select(startswith("te-") | not))
-        # gdpr-gate-* prefix reserved for gdpr-gate skill telemetry
-        # (gdpr-gate-staleness, gdpr-gate-touch, gdpr-gate-cron-binding —
-        # the last introduced by PR #3541). These are operational events
-        # tied to the skill, not rule_ids in the AGENTS.md taxonomy.
-        | map(select(startswith("gdpr-gate-") | not))
-        # context-reviewed-* prefix reserved for context-reviewed-gate.sh
-        # telemetry (context-reviewed-gate deny, context-reviewed-hook-self-fault
-        # warn — issue #5999, ADR-094). The freshness audit tripwire logs
-        # undeclared last_reviewed bumps; these are operational events tied to
-        # the hook, not rule_ids in the AGENTS.md taxonomy (the always-loaded
-        # B_ALWAYS budget has no room for a new core tag).
-        | map(select(startswith("context-reviewed-") | not))
-        # Hook-canonical Pencil rule_ids: per cq-agents-md-tier-gate, the rule
-        # body lives in the hook header + pencil-setup SKILL (a Pencil-domain
-        # rule is tier-gated OUT of AGENTS.md), so they legitimately never appear
-        # in $known_ids. cq-before-calling-mcp-pencil-open-document (retired,
-        # pencil-open-guard.sh) and cq-pencil-collapse-auto-recover (#4859,
-        # pencil-collapse-guard.sh) are emitted by their hooks by design.
-        | map(select(
-            . != "cq-before-calling-mcp-pencil-open-document"
-            and . != "cq-pencil-collapse-auto-recover"))
-        # net-issue-flow* reserved for the blocking net-issue-flow gate
-        # (ship/scripts/net-issue-flow.sh + .claude/hooks/ship-net-issue-flow-gate.sh,
-        # issue #6769). Same tier-gate rationale as context-reviewed-*: the rule
-        # body lives in the gate script header + ship/SKILL.md, and the
-        # always-loaded B_ALWAYS budget has no room for a new core tag.
-        # cost-of-filing-* is the review-disposition telemetry from
-        # review/SKILL.md; the disposition rides in the rule_id
-        # (cost-of-filing-flip-inline / cost-of-filing-file) because this
-        # aggregator keys every counter on rule_id and never reads .kind.
-        | map(select(startswith("net-issue-flow") | not))
-        | map(select(startswith("cost-of-filing-") | not))
-        # grep-rewrite-* is .claude/hooks/grep-rewrite.sh telemetry (issue
-        # #7165, ADR-162): `-would-rewrite` from the observe-only soak and
-        # `-disarm` when the envelope cannot be built. Same tier-gate rationale
-        # as cost-of-filing-* above — the rule body lives in the hook header and
-        # the hooks README, not in AGENTS.md, so the id has no core tag to
-        # match. Without this the orphan gate exits 5 and, on the post-write
-        # path, short-circuits before jsonl rotation.
-        | map(select(startswith("grep-rewrite-") | not))
-        # monitor-supersede is .claude/hooks/monitor-supersede-guard.sh telemetry
-        # (PR #7760). Same tier-gate rationale as grep-rewrite-* above: the rule
-        # body lives in the hook header and governs a TOOL LIFETIME rather than a
-        # workflow step, so the id has no core AGENTS.md tag to match. Without
-        # this the orphan gate exits 5 the first time the hook reports and, on
-        # the post-write path, short-circuits before jsonl rotation, so one hook
-        # disarms rotation of the shared telemetry sink.
+        | map(select(test("^(hr|wg|cq|rf|pdr|cm)-")))
+        | map(select(. as $id | ($retired_ids | index($id)) | not))
+        # The one residual exact exemption, and the only id in this corpus that
+        # both clauses let through. cq-pencil-collapse-auto-recover (#4859,
+        # .claude/hooks/pencil-collapse-guard.sh) is hook-canonical: per
+        # cq-agents-md-tier-gate a Pencil-domain rule is tier-gated OUT of
+        # AGENTS.md, so the rule body lives in the hook header plus the
+        # pencil-setup SKILL and the id never appears in $known_ids. Unlike the
+        # four other section-prefixed non-corpus ids measured in this ledger it
+        # was never retired, because it was never IN AGENTS.md to retire, so
+        # clause 2 does not reach it. The durable repair is to rename the
+        # emitter literal to an unprefixed id, which the immutability rule does
+        # permit for hook telemetry (it binds AGENTS.md [id: ...] tags only) —
+        # that lives in the guard hook, outside this change.
         # NOTE: no apostrophes in this block. It is inside a single-quoted jq
         # program; one of them ends the program and bash parses the rest as shell.
-        | map(select(startswith("monitor-supersede") | not))
-        # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
-        # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
-        # context-reviewed-*: the rule body lives in the helper header + the
-        # hooks README, and the always-loaded B_ALWAYS budget has no room for a
-        # new core tag. The reason rides IN the rule_id
-        # (hook-input-nonstring / -empty / -baddoc / -nonobject / -separator /
-        # -jq_missing / -internal) because this aggregator keys every counter on
-        # rule_id and never reads .kind — same convention as cost-of-filing-*.
-        #
-        # The selectors below match by PREFIX, so #7275 splitting -unparseable
-        # into -empty / -baddoc / -nonobject needed no change here; this roster
-        # is documentation and is listed for the reader, not read by the code.
-        # `internal:rc3` and `internal:count` reach this file as -internal:
-        # hook_input_report keys on ${reason%%:*}, so the detail never becomes
-        # an aggregation key.
-        #
-        # LOAD-BEARING PAIR: this exclusion alone would DELETE the only surface
-        # a counts-only rule_id has (orphan_rule_ids). summary.hook_input_fault_count
-        # below is the replacement surface and must not be removed independently.
-        | map(select(startswith("hook-input-") | not))
-        # Migrated-but-ACTIVE rules (scripts/migrated-rule-ids.txt).
-        | map(select(. as $id | (($migrated_json | fromjson) | index($id)) | not))) as $orphan_ids
+        | map(select(. != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.
@@ -415,6 +391,23 @@ report=$(jq -n \
             | map(select(.bypass_count > 0))
             | length),
           orphan_rule_ids: $orphan_ids,
+          # Every id the namespace rule EXEMPTS from the orphan gate, with its fire count.
+          #
+          # Without this the change traded a gate for a blind spot. Before #7853, a new hook
+          # telemetry id made this script exit 5, and that exit is where an author met the
+          # LOAD-BEARING PAIR warning above and added a replacement readout. The namespace predicate
+          # removes that forcing function, and an unprefixed id reaches NO other field of this file:
+          # `rules[]` is built from AGENTS.md only, so `monitor-supersede`, `cost-of-filing-*` and
+          # `net-issue-flow*` were measured appearing ZERO times in the committed artifact.
+          #
+          # So the exempt namespace is no longer GATED, but it is still VISIBLE — a flood or a new
+          # emitter shows up in the committed diff instead of being silently absorbed by a ledger
+          # that rotates at 5 MB.
+          non_corpus_counts: (
+            $counts
+            | with_entries(select(.key | test("^(hr|wg|cq|rf|pdr|cm)-") | not))
+            | with_entries(.value = (.value.fire_count // 0))
+          ),
           # Gate-exemption readout (ADR-156). The net-issue-flow mandated-filing
           # exemption is justified by ATTRIBUTION — being able to see which rule
           # is being cited, how often, and whether the citing PRs look like

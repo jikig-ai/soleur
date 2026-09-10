@@ -13,7 +13,13 @@
 // own aggregate exit code (1), which is why the Guard 3 driver had to assert "non-zero" rather
 // than 97. From globalSetup the real code propagates.
 import { assertNoInheritedGitLocation } from "../../../plugins/soleur/test/lib/git-tripwire";
+import { ensureIncidentSandbox } from "../../../plugins/soleur/test/lib/incident-sandbox";
 
 export default function setup(): void {
   assertNoInheritedGitLocation("vitest");
+  // Redirect incident telemetry at the same chokepoint (#7853). Measured for this runner rather
+  // than assumed: vitest forks its workers AFTER globalSetup, so a `process.env` write here is in
+  // the parent image the children inherit. Verified under both `pool: "forks"` and
+  // WEBPLAT_TEST_USE_THREADS=1 -- see measurements.md task 1.6.
+  ensureIncidentSandbox();
 }
