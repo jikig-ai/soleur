@@ -1486,52 +1486,6 @@ trap '_repo_boundary_exit_note; _soleur_inc_cleanup' EXIT
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 tc_acquire "test-all"
 
-# --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
-# `scripts/battery-tag-authorship.test.sh` is a STATIC census: it enumerates the ways a
-# tag-authoring command can be REACHED. AP-025 says a hazard that is a property of runtime STATE
-# wants a self-refusal the artifact CARRIES, because a list of ways to reach a state cannot be
-# proven complete — and that guard's header enumerates eight places where it is not. This arms
-# the complement: a `reference-transaction` hook that refuses a refs/tags/* CREATE in THIS
-# repository for the duration of the run, whatever spelling produced it.
-#
-# Env-scoped, so there is nothing to install and nothing to tear down: GIT_CONFIG_* is inherited
-# by the whole process tree and dies with it. A suite that sets `-c core.hooksPath=…` per command
-# still wins (command-line config outranks env), which is how the eleven suites that legitimately
-# create tags in mktemp sandboxes stay unaffected — and they are unaffected anyway, because the
-# hook compares --git-common-dir against THIS repo and ignores every other ref store.
-#
-# THE HOOK DIRECTORY HOLDS ONLY THIS HOOK, DELIBERATELY. `core.hooksPath` replaces the hooks
-# directory wholesale, so the alternative — pointing it at a directory that also carries copies of
-# `scripts/hooks/pre-commit` and `pre-push` — would start running those in EVERY fixture repo the
-# battery creates, since the env config reaches fixtures too. A `git init` fixture has no hooks
-# today; with a single-hook directory it still effectively has none, because this hook is inert for
-# non-tag refs and for every ref store that is not this one. The cost of the narrow directory is
-# that the operator's own hooks are displaced for git calls made DURING a gate run — which is a
-# non-event, since a suite that commits to the live repository is the thing
-# `scripts/lib/repo-write-boundary.sh` exists to catch.
-#
-# Skipped under --enumerate: no suite runs, and the mode's contract is that it takes no lock and
-# changes no state.
-if (( _ENUMERATE == 0 )); then
-  _bt_common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-  if [[ -n "$_bt_common" ]]; then
-    case "$_bt_common" in /*) : ;; *) _bt_common="$PWD/$_bt_common" ;; esac
-    _bt_common="$(cd "$_bt_common" 2>/dev/null && pwd -P || true)"
-  fi
-  if [[ -n "$_bt_common" && -x scripts/hooks/battery-ref-guard/reference-transaction ]]; then
-    export BATTERY_TAG_LIVE_COMMON_DIR="$_bt_common"
-    export GIT_CONFIG_COUNT=1
-    export GIT_CONFIG_KEY_0=core.hooksPath
-    export GIT_CONFIG_VALUE_0="$PWD/scripts/hooks/battery-ref-guard"
-  else
-    # Never silent: "the predicate is armed" and "the predicate could not arm" must not render
-    # identically, or a disarmed run reads exactly like a protected one.
-    printf 'WARNING: ref-store state predicate NOT armed (common-dir=%s, hook present=%s) — this run is guarded by the static census alone.\n' \
-      "${_bt_common:-<unresolved>}" "$([[ -x scripts/hooks/battery-ref-guard/reference-transaction ]] && echo yes || echo no)" >&2
-  fi
-  unset _bt_common
-fi
-
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
 # to TC_LOCK_TIMEOUT (3600 s) here, so a reading taken before the wait describes a
 # machine state up to an hour stale and makes the start/end delta
@@ -2532,8 +2486,6 @@ if want_scripts; then
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
-  run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
-  run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by
   # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop

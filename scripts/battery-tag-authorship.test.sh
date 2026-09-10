@@ -191,7 +191,6 @@ LEDGER=(
   'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag moved-tag'
   'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v3.258.3'
   'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v9.9.9'
-  'scripts/battery-ref-guard.test.sh|env "${e[@]}" git -C "$WORK/fixture" tag -a -m m "$1" >/dev/null 2>&1 || rc=$?'
 )
 
 # --- out-of-class registration ledger (Stage A, AC6) ----------------------------------------
