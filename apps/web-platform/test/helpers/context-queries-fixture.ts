@@ -12,6 +12,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
 
 /**
  * The deployed-plugin-root the hook's `skillsDir` must resolve to for a fixture
@@ -40,7 +44,8 @@ export function gitAvailable(): boolean {
 }
 
 function git(root: string, args: string[]): void {
-  execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+  execFileSync("git", ["-C", root, ...args], {
+    env: gitFixtureEnv(root),
     stdio: "ignore",
   });
 }

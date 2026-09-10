@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 #: Kept in lockstep with the other four copies; enforced by
 #: ``plugins/soleur/test/git-env-list-parity.test.sh``.
@@ -62,6 +63,42 @@ def assert_no_inherited_git_location(runner: str = "python") -> None:
     raise SystemExit(GIT_TRIPWIRE_EXIT_CODE)
 
 
+def ensure_incident_sandbox() -> str:
+    """Point incident telemetry at a scratch root, unless the caller already chose one (#7853).
+
+    The python sibling of ``plugins/soleur/test/lib/incident-sandbox.ts`` and of
+    ``.claude/hooks/lib/test-incident-sandbox.sh``. Registered at the same chokepoint as the
+    tripwire above, and for the same reason: a python suite that spawns a hook or a gate script
+    otherwise appends fabricated rows to the operator real
+    ``.claude/.rule-incidents.jsonl``.
+
+    Idempotent and non-destructive -- a root already chosen by an outer runner or by the suite
+    itself wins.
+
+    Raises:
+        RuntimeError: if no sandbox can be created. Refusal is the only safe direction. Leaving the
+            variable unset does not degrade to a lesser sandbox, it restores the operator real
+            ledger; and an EMPTY value is indistinguishable from unset to ``_incidents_repo_root()``
+            while still reading as "set" to a static check for the variable name.
+    """
+    existing = os.environ.get("INCIDENTS_REPO_ROOT", "")
+    if existing.startswith("/"):
+        return existing
+
+    root = tempfile.mkdtemp(prefix="soleur-inc-")
+    if not root.startswith("/"):
+        raise RuntimeError(f"incident-sandbox: refusing a non-absolute sandbox path {root!r}")
+    # Create the `.claude/` parent rather than relying on the emitter, matching the bash and TS
+    # siblings so all three spellings leave the same shape on disk.
+    os.makedirs(os.path.join(root, ".claude"), exist_ok=True)
+
+    os.environ["INCIDENTS_REPO_ROOT"] = root
+    # A second name a suite may read to find the rows its own emitter wrote, without knowing this
+    # module internals.
+    os.environ["SOLEUR_TEST_INCIDENT_ROOT"] = root
+    return root
+
+
 def pytest_configure() -> None:
     """pytest's own entry point.
 
@@ -71,3 +108,4 @@ def pytest_configure() -> None:
     unittest arm calls the function directly with its own label.
     """
     assert_no_inherited_git_location("pytest")
+    ensure_incident_sandbox()

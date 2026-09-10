@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-10T08:44:00Z",
+  "generated_at": "2026-09-10T09:53:15Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1292,13 +1292,13 @@
     {
       "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
-      "hit_count": 83,
+      "hit_count": 84,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 83,
-      "prevented_errors": 83,
-      "last_hit": "2026-09-10T08:00:58Z",
+      "fire_count": 84,
+      "prevented_errors": 84,
+      "last_hit": "2026-09-10T08:47:08Z",
       "first_seen": "2026-05-12T07:00:34Z",
       "rule_text_prefix": ""
     },
@@ -1344,13 +1344,13 @@
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 471,
+      "hit_count": 473,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 471,
-      "prevented_errors": 471,
-      "last_hit": "2026-09-09T23:03:44Z",
+      "fire_count": 473,
+      "prevented_errors": 473,
+      "last_hit": "2026-09-10T09:42:21Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1373,6 +1373,38 @@
     "rules_unused_over_8w": 85,
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
+    "non_corpus_counts": {
+      "gdpr-gate-staleness": 24,
+      "gdpr-gate-cron-binding": 0,
+      "skill-security-scan": 28,
+      "monitor-supersede": 99,
+      "net-issue-flow": 356,
+      "post-dispatch-watch-gate": 4328,
+      "guardrails-block-recursive-delete": 303,
+      "kb-domain-allowlist-guard": 162,
+      "guardrails-require-milestone": 493,
+      "context-reviewed-gate": 13,
+      "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 4,
+      "git-commit-secret-scan": 204,
+      "pre-ask-technical-fork-gate": 2,
+      "net-issue-flow-timeout": 45,
+      "guardrails-block-commit-on-main": 60,
+      "pre-merge-auto-close-scan": 56,
+      "net-issue-flow-mandated-filing--hr-never-git-stash-in-worktrees": 1,
+      "guardrails-block-delete-branch": 119,
+      "net-issue-flow-body-attributed": 14,
+      "guardrails-block-rm-rf-worktrees": 23,
+      "guardrails-block-conflict-markers": 3,
+      "guardrails-worktree-write-guard": 254,
+      "prod-write-defer-terraform-apply": 95,
+      "prod-write-defer-doppler-prd-secrets": 6,
+      "prod-write-defer-doppler-secrets-stdout": 22,
+      "adr-033-inngest-cron-canonical": 13,
+      "durable-reminder-prefer-inngest": 2,
+      "brand-hex-commit-gate": 6,
+      "prod-write-defer-git-push-main": 5,
+      "encryption-posture-design-time-default": 1
+    },
     "gate_exemptions": [
       {
         "rule": "hr-never-git-stash-in-worktrees",
@@ -1383,7 +1415,7 @@
         "bypass_count": 4
       }
     ],
-    "gate_override_count": 67,
+    "gate_override_count": 69,
     "gate_timeout_warn_count": 45,
     "gate_failopen_warn_count": 51,
     "gate_body_attributed_count": 14,

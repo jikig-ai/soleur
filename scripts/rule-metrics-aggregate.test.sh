@@ -41,6 +41,19 @@ make_fixture_repo() {
 - Rule C synthetic fixture bullet for aggregator tests [id: hr-rule-c-synthetic-test].
 - Rule D synthetic fixture bullet for aggregator tests [id: hr-rule-d-synthetic-test].
 EOF
+  # Clause 2 of the orphan discriminator (#7853) reads
+  # $INCIDENTS_REPO_ROOT/scripts/retired-rule-ids.txt, the same root-relative pairing
+  # rule-prune.sh gets from $RULE_METRICS_ROOT. Synthesized here, in the real file
+  # format (`<id> | <date> | <PR #> | <breadcrumb>`, comments and blanks skipped), so
+  # the fixture root carries its own retirement record rather than borrowing the
+  # operator repo. Absent, the list is empty and the gate is merely stricter.
+  mkdir -p "$root/scripts"
+  cat > "$root/scripts/retired-rule-ids.txt" <<'EOF'
+# Synthetic retirement record for aggregator fixtures.
+# Format: <rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>
+
+cq-retired-synthetic-fixture-rule | 2026-09-07 | #7853 | synthesized fixture retirement record
+EOF
   echo "$root"
 }
 
@@ -504,8 +517,18 @@ t15_dry_run_empty_still_prints_json() {
 # $known_ids. The orphan filter must exempt both the retired open-guard id and
 # the active collapse-guard id (#4859), or the first real .pen-open / collapse
 # event would fail the weekly cron.
+#
+# Both ids are section-prefixed, so clause 1 of the #7853 discriminator lets them
+# through and they are the two cases that show WHY clause 2 plus one residual
+# exact exemption are needed. They take different routes now:
+#   cq-before-calling-mcp-pencil-open-document — RETIRED, so clause 2 exempts it;
+#   cq-pencil-collapse-auto-recover            — never in AGENTS.md, so never
+#     retired, and it is the single exact exemption the aggregator still carries.
 t12_pencil_hook_ids_not_orphan() {
   local root; root=$(make_fixture_repo)
+  # The retirement record is per-root, so this fixture states its own.
+  echo "cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865 | .claude/hooks/pencil-open-guard.sh" \
+    >> "$root/scripts/retired-rule-ids.txt"
   write_event "$root" cq-before-calling-mcp-pencil-open-document deny "2026-06-11T10:00:00Z"
   write_event "$root" cq-pencil-collapse-auto-recover warn "2026-06-11T11:00:00Z"
 
@@ -662,26 +685,36 @@ t20_grep_rewrite_prefix_not_orphan() {
   rm -rf "$root"
 }
 
-# --- T21: the exclusion is a PREFIX rule, not a blanket amnesty -------------
+# --- T21: clause 1 is a MEMBERSHIP CLAIM test, not a blanket amnesty --------
 # Non-vacuity partner for T20, mirroring T7's shape. Without this, replacing the
 # orphan filter with `map(select(false))` would leave T20 green.
+#
+# The boundary this pins changed with #7853. It used to be a PREFIX boundary --
+# widening `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63
+# tests, so `grep-q-pipe-guard` (a real sibling hook rule_id shape) was added to
+# catch over-broad exemptions. There are no exemption prefixes left to widen; the
+# question is now whether an id CLAIMS corpus membership. So the row set below
+# states the new boundary directly: two hook ids with no section prefix are out
+# structurally, and one section-prefixed id with no AGENTS tag is the orphan.
 t21_grep_rewrite_plus_orphan_isolates_real_orphan() {
   local root exit_code=0 metrics
   root=$(make_fixture_repo)
   write_event "$root" "grep-rewrite-would-rewrite" "info" "2026-08-03T10:00:00Z"
-  write_event "$root" "totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
-  # PREFIX BOUNDARY. Without this row, widening the filter from
-  # `startswith("grep-rewrite-")` to `startswith("grep")` passed all 63 tests —
-  # T20/T21 pinned "the exclusion works" and "it is not blanket", but not
-  # "it is not OVER-broad". This id is a real sibling hook's rule_id shape.
+  # NOT an orphan any more, and deliberately kept: it is the sibling-hook shape
+  # that used to be one accidental character away from being exempted for the
+  # wrong reason. Under the discriminator it is out because it never claimed to
+  # be a rule -- P6 by construction, the same reason a brand-new hook needs no edit.
   write_event "$root" "grep-q-pipe-guard" "deny" "2026-08-03T10:00:02Z"
+  # THE ORPHAN. Section-prefixed, absent from the fixture AGENTS.md, absent from
+  # the fixture retirement record -- it claims to be a rule and is not one.
+  write_event "$root" "cq-totally-made-up-rule" "deny" "2026-08-03T10:00:01Z"
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
   assert_eq "T21 a real orphan alongside grep-rewrite-* still exits 5" "5" "$exit_code"
 
   metrics="$root/knowledge-base/project/rule-metrics.json"
-  assert_eq "T21 exclusion is prefix-scoped, not any-id-starting-with-grep" \
-    "grep-q-pipe-guard,totally-made-up-rule" \
+  assert_eq "T21 only the membership-claiming id is an orphan" \
+    "cq-totally-made-up-rule" \
     "$(jq -r '.summary.orphan_rule_ids | sort | join(",")' < "$metrics")"
   rm -rf "$root"
 }
@@ -753,7 +786,10 @@ t25_monitor_supersede_plus_orphan_isolates_real_orphan() {
   local root exit_code=0
   root=$(make_fixture_repo)
   write_event "$root" "monitor-supersede" "warn" "2026-09-03T10:00:00Z"
-  write_event "$root" "a-genuinely-unknown-id" "warn" "2026-09-03T10:00:01Z"
+  # Section-prefixed so it still CLAIMS corpus membership under the #7853
+  # discriminator; an unprefixed `a-genuinely-unknown-id` is now structurally
+  # out of scope and would make this partner vacuous.
+  write_event "$root" "hr-a-genuinely-unknown-id" "warn" "2026-09-03T10:00:01Z"
 
   INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
   assert_eq "T25 a real orphan still exits 5 alongside monitor-supersede" "5" "$exit_code"
@@ -827,6 +863,55 @@ t19_hook_input_zero_is_silent() {
   rm -rf "$root"
 }
 
+# --- T26: clause 2 -- a RETIRED id is exempt, and de-retiring it makes it an orphan ---
+# The load-bearing pair for the retirement clause (#7853). The exempt half alone is
+# satisfiable by a filter that exempts everything, so the same fixture is run twice:
+# once with the id in the retirement record, once with the record emptied. Also pins
+# the PARSE: the id must be read out of column 1 of `<id> | <date> | <PR> | <breadcrumb>`,
+# so a row carrying the full four fields is what the exempt half is driven with.
+t26_retired_id_exempt_and_deretired_id_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  # `cq-retired-synthetic-fixture-rule` is written by make_fixture_repo in the real
+  # four-column format; a parser that took the whole line would not match this event.
+  write_event "$root" "cq-retired-synthetic-fixture-rule" "deny" "2026-09-05T10:00:00Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T26 a retired rule id does not trip the orphan gate" "0" "$exit_code"
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T26 retired id absent from orphan_rule_ids" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+
+  # NON-VACUITY: strip the retirement record and the SAME id must now fail the gate.
+  # Without this half, `map(select(true))` for clause 2 leaves the case above green.
+  : > "$root/scripts/retired-rule-ids.txt"
+  exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T26 the same id de-retired exits 5" "5" "$exit_code"
+  assert_eq "T26 de-retired id is named in orphan_rule_ids" "cq-retired-synthetic-fixture-rule" \
+    "$(jq -r '.summary.orphan_rule_ids | join(",")' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T27: P6 by construction -- a NEW hook id needs no aggregator edit ------
+# The property the nine exemption stanzas existed to provide by hand. An id that
+# never claimed corpus membership must pass with no change to this script; if
+# clause 1 is ever narrowed back to an enumerated allowlist, this goes red the
+# way the weekly cron used to on the first event from any new hook.
+t27_novel_unprefixed_hook_id_needs_no_exemption() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "brand-new-hook-telemetry-2026" "warn" "2026-09-06T10:00:00Z"
+  write_event "$root" "another-new-guard-disarm" "warn" "2026-09-06T10:00:01Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T27 novel unprefixed hook ids exit 0 with no exemption stanza" "0" "$exit_code"
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T27 novel unprefixed hook ids are not orphans" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
 t1_mixed_events
 t2_unused_predicate_uses_fire_count
 t3_orphan_rule_id_exits_nonzero
@@ -854,6 +939,8 @@ t22_grep_rewrite_disarm_count_and_stderr
 t23_grep_rewrite_disarm_zero_is_silent
 t24_monitor_supersede_prefix_not_orphan
 t25_monitor_supersede_plus_orphan_isolates_real_orphan
+t26_retired_id_exempt_and_deretired_id_orphan
+t27_novel_unprefixed_hook_id_needs_no_exemption
 
 # --- T26: incidents are merged across worktree AND shared checkout ---------
 # Regression for the null-reading bug. Hooks write into $CWD/.claude, so logs
