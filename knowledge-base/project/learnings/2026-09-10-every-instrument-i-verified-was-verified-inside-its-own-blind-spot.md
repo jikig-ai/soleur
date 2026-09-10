@@ -191,3 +191,30 @@ scanned, so the illustration blocks every future commit that touches it.
 `git add && git commit` call was denied at the hook, so the `git add` never ran and the retry
 scanned a stale index — making a fixed file look unfixed. Prevention: never chain a staging step
 with a hook-gated step; stage in its own call so a deny cannot silently roll back the setup.
+
+**24. A commit's completion notification said "exit code 0" while the commit had failed** —
+Recovery: read the state, not the notification — HEAD had not moved, `MERGE_HEAD` was still set, and
+the recorded `MERGE_COMMIT_RC=1` was in the log. Prevention: the notification is authoritative for
+LIVENESS, never for VERDICT, and the mechanism here is the documented one — the reported status is
+the LAST command the shell ran, and mine ended with `git log` inside an `if`. This file already
+carried that rule (#8) for a pipe; it recurred for a trailing convenience command in a compound
+statement. The durable check for a git write is `HEAD` plus `MERGE_HEAD`, not any exit code.
+
+**25. ARM2b extracted the emitter's awk by the awk's own text, then fell back to a retyped copy** —
+Recovery: anchor the extractor on the shell DELIMITERS, assert the extraction parses, and delete the
+fallback so failure is a hard exit. Prevention: two distinct rules, and the second is the one that
+bites. (a) An extract-from-source guard must key on something that does NOT change when the source
+changes — anchoring on the program's first rule means the guard stops matching exactly when the
+thing it watches moves. (b) `${VAR:-<retyped copy>}` inside a guard converts "I could not measure"
+into "I measured this other thing and it was fine" — the arm printed its failure AND kept going, so
+the header's claim that it "cannot drift from the emitter" was false at the moment it mattered most.
+Grep guards for `:-` defaults whose fallback is a copy of the thing under test.
+
+**26. I predicted a red check's cause from its NAME and was wrong** — Recovery: read the failing
+STEP. `lint-bot-statuses` does download actionlint at a pinned checksum, which is the documented
+network-fetch exception, so "CDN outage, rerun once" was the locally obvious call; the actual failing
+step was `shell-trace credential refusal (#7797)`, a real violation my own edit had pulled into
+scope. Prevention: the repo's own rule already says the discriminator is the failing step's COMMAND
+and never the check's name — the trap is that a name-based guess is most persuasive when the name
+happens to describe something real that job also does. Reproduce locally before rerunning: it took
+one command here and would have cost two CI cycles otherwise.
