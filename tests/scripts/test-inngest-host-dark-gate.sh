@@ -360,8 +360,16 @@ mk_rows "$TMP/rows-g14m-other.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$
 expect "[G14M-other] data_mount_devid pins a DIFFERENT volume => mount_mismatch" mount_mismatch "$TMP/rows-g14m-other.json" "$FIN"
 mk_rows "$TMP/rows-g14m-amb.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__AMBIGUOUS__)")"
 expect "[G14M-amb] data_mount_devid=__AMBIGUOUS__ (>1 alias resolved to one device) => mount_mismatch" mount_mismatch "$TMP/rows-g14m-amb.json" "$FIN"
-mk_rows "$TMP/rows-g14m-unread.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__UNREADABLE__)")"
-expect "[G14M-unread] data_mount_devid=__UNREADABLE__ (resolution failed) => mount_mismatch" mount_mismatch "$TMP/rows-g14m-unread.json" "$FIN"
+# __UNREADABLE__ SPLITS ON data_mount_src, because the two producers are not the same claim.
+# (a) the mount is REAL and the lsblk/readlink resolution broke -> nothing was learned about the
+# backing device, so this is a readability failure and routes to `unreadable` like G12/G15/G16.
+mk_rows "$TMP/rows-g14m-unread.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__UNREADABLE__ data_mount_src=/dev/sdb)")"
+expect "[G14M-unread] devid=__UNREADABLE__ with a REAL mount (resolution broke) => unreadable, never a mismatch we did not measure" unreadable "$TMP/rows-g14m-unread.json" "$FIN"
+# (b) findmnt reported NO MOUNT at all. That IS a measurement -- it is the root-disk fallback this
+# predicate exists to catch -- so it stays mount_mismatch. Without this pair the gate would either
+# assert an unmeasured mismatch or excuse a genuinely unmounted store as merely unreadable.
+mk_rows "$TMP/rows-g14m-nomount.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__UNREADABLE__ data_mount_src=__UNREADABLE__)")"
+expect "[G14M-nomount] devid AND src both __UNREADABLE__ (nothing mounted) => mount_mismatch (a measured state)" mount_mismatch "$TMP/rows-g14m-nomount.json" "$FIN"
 # `n/a` is the WEB-arm sentinel. On a host_role=dedicated row it means the emitter took the wrong
 # arm, which must refuse rather than read as "not applicable".
 mk_rows "$TMP/rows-g14m-na.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=n/a)")"
@@ -709,7 +717,7 @@ else
     # Field names the REAL emitter writes, as `name=$var` pairs.
     EMITTED="$(printf '%s\n' "$EMIT_LINE" | grep -oE '[a-z_]+=\$[a-z_]+' | sed 's/=.*//' | sort -u)"
     _missing=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
       printf '%s\n' "$EMITTED" | grep -qx "$_f" || _missing="${_missing} ${_f}"
     done
     if [[ -z "$_missing" ]]; then pass; else fail "B12: the gate consumes field(s) the emitter does not write:${_missing}"; fi
@@ -721,7 +729,7 @@ else
       _real_msg+=" ${_f}=${PD[$_f]:-x}"
     done <<< "$EMITTED"
     _unresolved=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
       _ihdg_field "$_real_msg" "$_f" >/dev/null || _unresolved="${_unresolved} ${_f}"
     done
     if [[ -z "$_unresolved" ]]; then pass; else fail "B12: the gate's extractor did not resolve:${_unresolved} from a real-emitter-shaped line"; fi
@@ -1024,7 +1032,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=123
+_FLOOR=124
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

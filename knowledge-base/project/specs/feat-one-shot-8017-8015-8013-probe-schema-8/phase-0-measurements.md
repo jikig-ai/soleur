@@ -89,7 +89,13 @@ $ lsblk -nsdo SERIAL /dev/nvme0n1p3 | cat -A
 $
 ```
 
-Take the first NON-EMPTY value, never `NR==1`.
+Take the first NON-EMPTY value, never `NR==1` — **for the `-d` form measured here**.
+
+**The shipped emitter does NOT use `-d`.** It calls `lsblk -nso NAME`, which prints the full
+inverse tree child->parent, so the base device is the **LAST** non-empty row, not the first. The two
+rules are opposite and both are correct for their own command. Stated explicitly because acting on
+this measurement's rule against the shipped command yields the dm node or the partition instead of
+the base disk — a wrong device pin, which is the exact class #8017 exists to close.
 
 **(d) A whole-`by-id` walk is multi-valued** — three aliases resolved to one device here (an eui
 form and two model forms). This is what makes an unconstrained reverse map need an arbitrary

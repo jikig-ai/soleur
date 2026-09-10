@@ -100,7 +100,7 @@
 #     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
 #     G2  the row count is >= 1                                                -> silent
 #     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
-#     G4  probe_schema == "7", EXACT equality (not >=)                         -> stale_schema
+#     G4  probe_schema == "8", EXACT equality (not >=)                         -> stale_schema
 #     G14 redis_keys==0 implies redis_key_patterns==__NONE__ (coherence)        -> unreadable
 #   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
 #     G5  envelope host      == soleur-inngest                                 -> wrong_host
@@ -764,6 +764,25 @@ inngest_host_dark_gate() {
   # A stale `expected_dev` left by this rewrite, or a data_mount_devid/data_mount_dev_id typo,
   # would be [[ "" == "" ]] -> PASS in a lax harness and an abort in production.
   [[ -n "$data_mount_devid" && -n "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
+  # "COULD NOT MEASURE" IS NOT "MISMATCH", and the emitter already ships the field that separates
+  # them. `__UNREADABLE__` on devid has exactly two producers, and they are not the same claim:
+  #   - data_mount_src=__UNREADABLE__  -> findmnt reported NO MOUNT. That IS a measurement, and it
+  #     is the root-disk fallback this predicate exists to catch -> mount_mismatch.
+  #   - data_mount_src is a real path  -> the lsblk/readlink resolution itself broke. Nothing was
+  #     learned about the backing device -> `unreadable`, matching G12/G15/G16, which route every
+  #     readability failure there.
+  # Collapsing both into mount_mismatch asserts a mismatch that was never measured, and this file's
+  # own "WHY THIS IS NOT inngest-dedicated-host-classify.sh" section is several paragraphs on why
+  # that collapse is wrong: the two states have DIFFERENT remedies (fix the mount vs fix the device
+  # resolution), and a verdict token that conflates them sends the operator at the wrong one.
+  if [[ "$data_mount_devid" == "__UNREADABLE__" ]]; then
+    local _dmsrc
+    _dmsrc="$(_ihdg_field "$chosen_msg" data_mount_src)" || { _ihdg_verdict "unreadable"; return $?; }
+    if [[ "$_dmsrc" == "__UNREADABLE__" ]]; then
+      _ihdg_verdict "mount_mismatch"; return $?
+    fi
+    _ihdg_verdict "unreadable"; return $?
+  fi
   # THE RHS STAYS QUOTED. Measured on bash 5.3.9: [[ ]]'s right-hand side is a GLOB by default,
   # so with an unquoted RHS a dispatch of --expected-volume-id '*' matches ANY Hetzner volume
   # alias. G17 would still refuse today, but relying on a sibling predicate is exactly what

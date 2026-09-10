@@ -509,14 +509,24 @@ teardown_case
 # a third copy, so it is pinned byte-identical here AND in inngest-consumer-probe.test.sh.
 echo "TEST: #7228 the inlined GQL query matches inngest-registry-probe.sh byte-for-byte"
 REGISTRY_PROBE_SH="$SCRIPT_DIR/inngest-registry-probe.sh"
+# THREE copies now, not two (#8015). inngest-bootstrap.sh gained one when the probe started
+# reporting registry_fns, and it is placed at COLUMN ZERO inside its heredoc precisely so this
+# `^readonly` anchor can see it. Pinning only two while a comment in the third claimed all three
+# were pinned is worse than no pin: registry_fns feeds the #7674 discriminator, which gates the
+# irreversible recut, so a drifted bootstrap copy would measure a DIFFERENT question than the
+# cutover FSM's done-gate, silently, with both suites green.
+BOOTSTRAP_GQL_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
 fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | head -1 || true)
 probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | head -1 || true)
-if [[ -z "$fsm_q" || -z "$probe_q" ]]; then
-  fail "could not extract FUNCTIONS_GQL_QUERY from both files (fsm='$fsm_q' probe='$probe_q') — the drift pin is vacuous"
+boot_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$BOOTSTRAP_GQL_SH" | head -1 || true)
+if [[ -z "$fsm_q" || -z "$probe_q" || -z "$boot_q" ]]; then
+  fail "could not extract FUNCTIONS_GQL_QUERY from all three files (fsm='$fsm_q' probe='$probe_q' bootstrap='$boot_q') — the drift pin is vacuous"
 elif [[ "$fsm_q" != "$probe_q" ]]; then
   fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-registry-probe.sh has [$probe_q]"
+elif [[ "$fsm_q" != "$boot_q" ]]; then
+  fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-bootstrap.sh has [$boot_q]"
 else
-  pass "inlined GQL query is byte-identical to inngest-registry-probe.sh's"
+  pass "inlined GQL query is byte-identical across all THREE copies (FSM, registry probe, bootstrap)"
 fi
 
 # --- #7228: the verify window must DOMINATE the server's poll interval ----------------------

@@ -251,7 +251,7 @@ and logged like any other, and the sequencing is a property of the gates rather 
     2. apply_target=inngest-host-replace   new cloud-init goes live; the boot emits the
        schema the pinned image carries (probe_schema=8 since #8017; was 3 when this was written);
                                            ARM 1 mounts the existing ext4 volume plaintext
-    3. apply_target=inngest-volume-recut   Guard 2 can now read schema-3 rows; the volume is
+    3. apply_target=inngest-volume-recut   Guard 2 can now read the current schema's rows; the volume is
                                            replaced and born raw
     4. apply_target=inngest-host-replace   a fresh FIRST boot; ARM 3 luksFormats the raw device
 
