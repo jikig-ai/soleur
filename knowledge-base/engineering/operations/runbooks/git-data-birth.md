@@ -2,9 +2,13 @@
 
 > ## ⛔ DO NOT DISPATCH THIS YET
 >
-> **The route is held MECHANICALLY, by two gates. This banner is not the only thing
-> stopping you** — but do not dispatch anyway, because the thing the gates are waiting for
-> has not happened.
+> **Do not assume this banner is backed by a mechanical hold — as of PR #8002 it may not
+> be.** Both gates release once
+> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` is on `main`. From that moment
+> this banner is the ONLY prose hold, and the sole remaining control is the
+> `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
+> with a single reviewer, so **the dispatcher can approve their own deployment.** That is one
+> human clicking twice, not a two-party control. Do not dispatch.
 >
 > #6982 shipped the off-host emitter, so `git_data_birth_readiness_gate` no longer refuses —
 > the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is present. That
@@ -16,7 +20,20 @@
 > `apps/web-platform/infra/git-data-rung2-boot-evidence.env` exists and attests a rung-2 boot
 > rehearsal **of the current template** (the evidence carries a sha256 of
 > `cloud-init-git-data.yml`, so it self-invalidates the moment that file is edited again).
-> That file does not exist. **A dispatch today exits 1 before planning anything.**
+> **That was true until PR #8002.** Once its evidence file lands on `main` this gate
+> RELEASES and a dispatch no longer exits early. Check the live state rather than trusting
+> this paragraph:
+>
+> ```bash
+> git cat-file -e origin/main:apps/web-platform/infra/git-data-rung2-boot-evidence.env \
+>   && echo 'evidence IS on main — the rung-2 gate is RELEASED' \
+>   || echo 'evidence absent — the rung-2 gate still HOLDs'
+> ```
+>
+> Note what that gate does and does not check: it asserts that a well-formed, template-bound
+> assertion EXISTS. It strips comments before reading, never resolves the Actions run id, and
+> ignores `RUNG2_SENTRY_CROSSCHECK` entirely (#8010). The hash is a staleness detector, not an
+> authorship proof.
 >
 > ### What changed in #7025: the route to produce that evidence now EXISTS
 >
