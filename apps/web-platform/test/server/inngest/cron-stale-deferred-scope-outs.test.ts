@@ -161,8 +161,13 @@ describe("cronStaleDeferredScopeOuts — registration", () => {
   it("is exported by the registration barrel via importable name", async () => {
     const mod = await importModule();
     expect(typeof mod.cronStaleDeferredScopeOutsHandler).toBe("function");
-    expect(mod.__TESTING__.TARGET_LABEL).toBe("deferred-scope-out");
-    expect(mod.__TESTING__.KILLSWITCH_LABEL).toBe("do-not-autoclose");
+    // The sweep now targets a SET. The original single-label assertions are
+    // preserved as membership checks so this test still pins the pre-existing
+    // behaviour rather than merely being relaxed to accommodate the change.
+    expect(mod.__TESTING__.TARGET_LABELS).toContain("deferred-scope-out");
+    expect(mod.__TESTING__.KILLSWITCH_LABELS).toContain("do-not-autoclose");
+    expect(mod.__TESTING__.TARGET_LABELS).toContain("meta/machinery");
+    expect(mod.__TESTING__.KILLSWITCH_LABELS).toContain("keep-open");
   });
 });
 
@@ -760,3 +765,104 @@ describe("cronStaleDeferredScopeOuts — comment idempotency guard", () => {
   });
 });
 
+
+// --------------------------------------------------------------------------
+// (g) The search-query SHAPE.
+//
+// This asserts the STRING, not the sweep result, and that distinction is the
+// whole point. GitHub ANDs multiple `label:` qualifiers and ORs comma-separated
+// values inside one. The wrong form --
+//     label:"deferred-scope-out" label:"meta/machinery"
+// -- matches only issues carrying BOTH, i.e. zero, and the sweep then returns
+// {total: 0, closed: 0}, heartbeats `ok`, and logs "Auto-closed 0 stale
+// issues", which is byte-identical to a healthy run over a drained backlog.
+// No assertion on the RESULT can separate those two states. Only the query can.
+// --------------------------------------------------------------------------
+describe("cron-stale-deferred-scope-outs — search query shape", () => {
+  it("emits ONE comma-joined label qualifier (OR), never repeated qualifiers (AND)", async () => {
+    const mod = await importModule();
+    const q = mod.__TESTING__.buildSearchQuery({
+      owner: "jikig-ai",
+      repo: "soleur",
+      cutoffIso: "2026-06-12T00:00:00Z",
+      labels: ["deferred-scope-out", "meta/machinery"],
+    });
+
+    // The correct form, asserted literally.
+    expect(q).toContain('label:"deferred-scope-out","meta/machinery"');
+
+    // The ANDed form must NOT appear. Anchored on the repeated-qualifier shape
+    // rather than on a bare label name -- the label names legitimately appear
+    // in the correct form too, so a bare-token assertion could never fail.
+    expect(q).not.toMatch(/label:"[^"]+"\s+label:"/);
+
+    // Exactly one `label:` qualifier in the whole query.
+    expect(q.match(/label:/g) ?? []).toHaveLength(1);
+  });
+
+  it("still emits a single-label query correctly when the machinery arm is disarmed", async () => {
+    const mod = await importModule();
+    const q = mod.__TESTING__.buildSearchQuery({
+      owner: "jikig-ai",
+      repo: "soleur",
+      cutoffIso: "2026-06-12T00:00:00Z",
+      labels: ["deferred-scope-out"],
+    });
+    expect(q).toContain('label:"deferred-scope-out"');
+    expect(q).not.toContain("meta/machinery");
+    expect(q.match(/label:/g) ?? []).toHaveLength(1);
+  });
+
+  it("keeps sort:updated-asc and the is:open/is:issue scoping", async () => {
+    const mod = await importModule();
+    const q = mod.__TESTING__.buildSearchQuery({
+      owner: "jikig-ai",
+      repo: "soleur",
+      cutoffIso: "2026-06-12T00:00:00Z",
+      labels: ["deferred-scope-out", "meta/machinery"],
+    });
+    expect(q).toContain("is:issue");
+    expect(q).toContain("is:open");
+    expect(q).toContain("sort:updated-asc");
+    expect(q).toContain("updated:<2026-06-12T00:00:00Z");
+  });
+});
+
+// --------------------------------------------------------------------------
+// (h) The never-close guards, and the date gate on the machinery arm.
+// --------------------------------------------------------------------------
+describe("cron-stale-deferred-scope-outs — never-close guards", () => {
+  it("names every never-touch class as a distinct constant", async () => {
+    const mod = await importModule();
+    // keep-open is the one this sweeper previously ignored despite the label
+    // existing in the repo.
+    expect(mod.__TESTING__.KILLSWITCH_LABELS).toContain("keep-open");
+    for (const l of [
+      "domain/product",
+      "type/feature",
+      "action-required",
+      "priority/p0-critical",
+      "priority/p1-high",
+    ]) {
+      expect(mod.__TESTING__.PRODUCT_FACING_LABELS).toContain(l);
+    }
+  });
+
+  it("caps CLOSES separately from the candidate search cap", async () => {
+    const mod = await importModule();
+    // The 200-item search cap bounds candidates, not closes. A single named
+    // constant, asserted here so the runner and this test cannot drift.
+    expect(mod.__TESTING__.MAX_CLOSES_PER_RUN).toBeGreaterThan(0);
+    expect(mod.__TESTING__.MAX_CLOSES_PER_RUN).toBeLessThan(200);
+  });
+
+  it("gates the machinery arm on a DATE, because label novelty confers no age protection", async () => {
+    const mod = await importModule();
+    const notBefore = mod.__TESTING__.MACHINERY_SWEEP_NOT_BEFORE;
+    // Shape: an ISO date the runner compares lexically against
+    // now.toISOString().slice(0, 10).
+    expect(notBefore).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // It must be in the FUTURE relative to the merge window, or it buys nothing.
+    expect(notBefore > "2026-09-10").toBe(true);
+  });
+});
