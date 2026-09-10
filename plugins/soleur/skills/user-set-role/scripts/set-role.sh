@@ -6,6 +6,29 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (SUPABASE_SERVICE_ROLE_KEY for soleur/prd,
+# which bypasses RLS across every customer's rows, plus the Flagsmith management
+# key) is acquired by `doppler secrets get` BELOW this point, so a conditional arm
+# would test an empty variable at guard time, open, and then trace the acquisition
+# itself. The refusal prints on STDOUT because agent runtimes surface stdout and
+# swallow stderr (knowledge-base/project/constitution.md > Code Style); a swallowed
+# refusal leaves the operator with a bare exit 78 and no explanation.
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the service-role key works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
@@ -42,11 +65,11 @@ FLAGSMITH_TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c 
 [[ -z "$FLAGSMITH_TOKEN" ]] && { echo "missing FLAGSMITH_MANAGEMENT_API_KEY in soleur/cli_ops" >&2; exit 2; }
 
 supa() {
-  curl -sS -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" -H "Content-Type: application/json" "$@"
 }
 
 fs_api() {
-  curl -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
 }
 
 # --- resolve user ----------------------------------------------------------

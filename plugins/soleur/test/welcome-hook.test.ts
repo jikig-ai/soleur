@@ -2,7 +2,11 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { gitCleanEnv } from "./lib/git-clean-env";
+// #7849: the fixture environment comes from the fixture-env builder, not the bare sweep. The
+// sweep alone stops git being POINTED elsewhere; it does not stop git WALKING UP into an
+// enclosing repository from the fixture, neutralise the developer own config, or supply an
+// identity -- the three things a fixture that WRITES needs.
+import { gitFixtureEnv } from "./lib/git-fixture-env";
 
 const HOOK_PATH = join(import.meta.dir, "../hooks/welcome-hook.sh");
 
@@ -11,7 +15,7 @@ const HOOK_PATH = join(import.meta.dir, "../hooks/welcome-hook.sh");
 function createTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "welcome-hook-test-"));
   Bun.spawnSync(["git", "init", dir], {
-    env: gitCleanEnv(),
+    env: gitFixtureEnv(dir),
     stdout: "ignore",
     stderr: "ignore",
   });
@@ -21,7 +25,7 @@ function createTempGitRepo(): string {
 function runHook(cwd: string): { exitCode: number; stdout: string; stderr: string } {
   const result = Bun.spawnSync(["bash", HOOK_PATH], {
     cwd,
-    env: gitCleanEnv(),
+    env: gitFixtureEnv(cwd),
     stdout: "pipe",
     stderr: "pipe",
   });

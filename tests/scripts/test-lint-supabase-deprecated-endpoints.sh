@@ -29,6 +29,14 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GUARD="$REPO_ROOT/scripts/lint-supabase-deprecated-endpoints.sh"
 
+# The shell fixture chokepoint (#7849). This suite had no git-location scrub at all, and every
+# fixture below is a real `git init` + `git add -A`: an inherited GIT_DIR / GIT_INDEX_FILE would
+# have staged the CALLER's live repository, which is the same hazard `assert_fixture_dir` guards
+# against for an empty operand. Sourcing ARMS the fail-loud tripwire; `new_tree` then calls
+# `git_fixture_env` for the ceiling and the config hermeticity the guard's `git grep` runs under.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
@@ -54,12 +62,24 @@ cp "$GUARD" "$PRISTINE" || setup_die "cp guard -> pristine failed"
 # Each fixture tree is a real git repo, staged, so the guard runs its REAL `git grep` listing
 # path. There is deliberately no non-git fallback in the guard: a second listing path would be
 # the one this suite never exercises.
+#
+# It PUBLISHES the path in $NEW_TREE instead of printing it, and callers read that variable
+# instead of wrapping the call in `$( )`. The reason is not style: `git_fixture_env` exports into
+# the shell that calls it, and a command substitution runs in a subshell -- the tree would have
+# been created under the constructed environment while every later `seal`/`run_guard` in the
+# parent ran outside it, and, worse, the guard's `exit 1` would have killed only the subshell,
+# leaving the caller with an empty path and the run limping on.
 new_tree() {
   local d="$WORK/tree-$1"
   mkdir -p "$d" || setup_die "mkdir $d failed"
+  git_fixture_env "$d" || {
+    echo "FATAL: test-lint-supabase-deprecated-endpoints: git_fixture_env refused fixture $d" >&2
+    exit 1
+  }
   git -C "$d" init -q || setup_die "git init failed in $d"
-  printf '%s' "$d"
+  NEW_TREE="$d"
 }
+NEW_TREE=""
 # P1a fixture-dir operand rule (#7652). `seal` takes its tree as a POSITIONAL, and
 # `git -C "" add -A` would stage the CALLER's real repository. The body below is the
 # CANONICAL copy from plugins/soleur/test/test-helpers.sh, asserted byte-for-byte by
@@ -122,7 +142,8 @@ echo "=== lint-supabase-deprecated-endpoints.sh ==="
 # BASELINE FIXTURE — three deprecated call sites in the three shapes that occur live, plus
 # the two non-call shapes that a bare-token guard miscounts.
 # ════════════════════════════════════════════════════════════════════════════════════════
-T="$(new_tree base)"
+new_tree base
+T="$NEW_TREE"
 mkdir -p "$T/.github/workflows" "$T/scripts" || setup_die "mkdir fixture subdirs failed"
 
 # SHAPE 1 — host assigned at the top of a `run: |` block, deprecated call 30 lines below.
@@ -217,7 +238,8 @@ if [[ "$RC" -eq 1 && "$live_found" -eq "${live_waived:-0}" ]]; then pass; else
 fi
 
 # ── ROW 2 — a new caller of analytics/endpoints/logs.all → RED, no mutation needed ─────
-T2="$(new_tree logs)"
+new_tree logs
+T2="$NEW_TREE"
 mkdir -p "$T2/scripts" || setup_die "mkdir T2/scripts failed"
 cp "$T/scripts/scan.sh" "$T2/scripts/scan.sh" || setup_die "cp scan.sh -> T2 failed"
 fixture > "$T2/scripts/logs.sh" <<'FIX' || setup_die "write logs.sh failed"
@@ -240,7 +262,8 @@ fi
 # (default = the correct host) is easy; the EXFIL twin (default = an attacker host) is the one
 # a literal-keyed assembly never even enumerates.
 for variant in benign evil; do
-  T3="$(new_tree "hostspan-$variant")"
+  new_tree "hostspan-$variant"
+  T3="$NEW_TREE"
   mkdir -p "$T3/scripts" || setup_die "mkdir T3 failed"
   cp "$T/scripts/scan.sh" "$T3/scripts/scan.sh" || setup_die "cp scan.sh -> T3 failed"
   if [[ "$variant" == benign ]]; then host="$_SOFT"; else host="$_EVIL"; fi
@@ -264,7 +287,8 @@ done
 # ── ROW 4 — a SECOND non-compliant caller after a compliant one → RED, BOTH reported ───
 # A guard that stops at the first offender turns a batch cleanup into N sequential CI rounds,
 # and worse, makes "one finding" indistinguishable from "one remaining finding".
-T4="$(new_tree two-offenders)"
+new_tree two-offenders
+T4="$NEW_TREE"
 mkdir -p "$T4/scripts" || setup_die "mkdir T4 failed"
 cp "$T/scripts/scan.sh" "$T4/scripts/scan.sh" || setup_die "cp scan.sh -> T4 failed"
 fixture > "$T4/scripts/compliant.sh" <<'FIX' || setup_die "write compliant.sh failed"
@@ -296,7 +320,8 @@ if out_has 'compliant\.sh'; then
 else pass; fi
 
 # ── ROW 5 — delete a call site → census drops → RED via --check-highwater ──────────────
-T5="$(new_tree ratchet)"
+new_tree ratchet
+T5="$NEW_TREE"
 mkdir -p "$T5/scripts" || setup_die "mkdir T5 failed"
 fixture > "$T5/scripts/calls.sh" <<'FIX' || setup_die "write calls.sh failed"
 #!/usr/bin/env bash
@@ -338,7 +363,8 @@ fi
 # THE FALSE-POSITIVE CONTROL. The four existing per-script guards assert their whole `API=`
 # LINE is expansion-free, which is right for a bare assignment and wrong as an assembly rule:
 # a whole-line check reds ~8 correctly-pinned files, lib/supabase/service.ts among them.
-T6="$(new_tree path-interp)"
+new_tree path-interp
+T6="$NEW_TREE"
 mkdir -p "$T6/scripts" "$T6/lib" || setup_die "mkdir T6 failed"
 fixture > "$T6/scripts/pinned.sh" <<'FIX' || setup_die "write pinned.sh failed"
 #!/usr/bin/env bash
@@ -375,7 +401,8 @@ if [[ "$C6" == "3" ]]; then pass; else fail "row 6: expected 3 enumerated call s
 # the next TypeScript caller has, and a guard that reds on the compliant shape gets switched
 # off. Distinct from row 6's service.ts, which writes the host INLINE and so never exercises
 # the resolver at all.
-T6B="$(new_tree ts-const)"
+new_tree ts-const
+T6B="$NEW_TREE"
 mkdir -p "$T6B/lib" || setup_die "mkdir T6B failed"
 fixture > "$T6B/lib/client.ts" <<'FIX' || setup_die "write client.ts failed"
 const API = "@HOST@";
@@ -401,7 +428,8 @@ else pass; fi
 
 # ── ROW 7 — a fixture tree with zero deprecated paths → PASS ──────────────────────────
 # The must-PASS non-canonical input. A guard that rejects everything is not a guard.
-T7="$(new_tree clean)"
+new_tree clean
+T7="$NEW_TREE"
 mkdir -p "$T7/scripts" || setup_die "mkdir T7 failed"
 fixture > "$T7/scripts/clean.sh" <<'FIX' || setup_die "write clean.sh failed"
 #!/usr/bin/env bash
@@ -431,7 +459,8 @@ else pass; fi
 #       nothing. (Live instance: inngest.tf, whose only host literal is a `#` comment.)
 #   (b) the call-construct anchor demanded `/v1/projects/` WITH the trailing slash. `BASE`
 #       ends that segment on a quote, so the census scored zero for the file.
-T9="$(new_tree split-base)"
+new_tree split-base
+T9="$NEW_TREE"
 mkdir -p "$T9/scripts" || setup_die "mkdir T9 failed"
 {
   printf '#!/usr/bin/env bash\n'
@@ -471,7 +500,8 @@ fi
 # Sub-cause (b) isolated from arm 2 entirely. Coverage is the property under test: the anchor
 # fix must make this caller VISIBLE (census >= 1) without making it a violation. Asserting
 # only row 8 would let someone "fix" (b) by reddening every split base.
-T10="$(new_tree split-base-pinned)"
+new_tree split-base-pinned
+T10="$NEW_TREE"
 mkdir -p "$T10/scripts" || setup_die "mkdir T10 failed"
 {
   printf '#!/usr/bin/env bash\n'
@@ -510,7 +540,8 @@ STALE_REL='apps/web-platform/scripts/run-migrations.sh'
 if [[ "$(grep -cF -- "'${STALE_REL}|" "$GUARD" || true)" -gt 0 ]]; then pass; else
   setup_die "row 9 needs $STALE_REL on the guard's ALLOWLIST; it is not there, so this row would test nothing"
 fi
-T11="$(new_tree allowlist-stale)"
+new_tree allowlist-stale
+T11="$NEW_TREE"
 mkdir -p "$T11/$(dirname "$STALE_REL")" || setup_die "mkdir T11 failed"
 {
   printf '#!/usr/bin/env bash\n'
@@ -561,7 +592,8 @@ fi
 
 # ── Hard errors: the two ways this guard must refuse to certify anything ───────────────
 # 1. Scope loss. An empty assembly and a clean repo must not produce the same answer.
-T8="$(new_tree empty)"
+new_tree empty
+T8="$NEW_TREE"
 mkdir -p "$T8/scripts" || setup_die "mkdir T8 failed"
 printf '#!/usr/bin/env bash\necho hello\n' > "$T8/scripts/unrelated.sh" || setup_die "write unrelated.sh failed"
 seal "$T8"

@@ -33,6 +33,8 @@ Create the R2 bucket and credentials. This is a chicken-and-egg bootstrap step �
 wrangler r2 bucket create soleur-terraform-state
 ```
 
+> **Superseded 2026-09-09 (#7836):** R2 has never implemented the S3 object-versioning API (`list-object-versions` -> rc=254 `NotImplemented`, against a passing `list-objects-v2` control). The commands below cannot run and are preserved only as the record of what was believed on this document's date. The working recovery model is `infra/github/README.md` §"Phase 5 -- Rollback"; ADR-006 is amended; the capability gap is tracked at #7992.
+
 **1.3 Enable bucket versioning** (for state recovery) via S3-compatible API:
 
 ```bash
@@ -272,7 +274,7 @@ File separate issues for deferred work. These are valuable guardrails but not pr
 
 - [ ] `terraform plan` in both stacks shows "No changes" after import
 - [ ] State files exist in R2 at `telegram-bridge/terraform.tfstate` and `web-platform/terraform.tfstate`
-- [ ] R2 bucket has versioning enabled
+- [x] ~~R2 bucket has versioning enabled~~ — **not satisfiable; closed out 2026-09-09 (#7836).** R2 implements no object-versioning API.
 - [ ] AGENTS.md contains remote backend hard rule with template
 - [ ] `.terraform.lock.hcl` committed for both stacks
 - [ ] No `.tfstate` files in the repository

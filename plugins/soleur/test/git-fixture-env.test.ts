@@ -226,7 +226,13 @@ describe("Guard 1 — fixture git writes are contained under a hostile inherited
       "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
       "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
       "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
-      "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY0",
+      "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_CONFIG_COUNT",
+      // git spells these with an underscore before the index. `GIT_CONFIG_KEY0` is kept
+      // deliberately -- it is NOT a real git variable, so it only exercises the prefix sweep --
+      // but the two REAL keys must be injected under their real names, or the "the inherited
+      // value must not survive" loop below compares against a value that was never set and two
+      // of its three assertions pass vacuously.
+      "GIT_CONFIG_KEY0", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
       "GIT_CONFIG_PARAMETERS", "GIT_TRACE", "GIT_TRACE2", "GIT_TRACE_CURL", "GIT_ATTR_SOURCE",
       "GIT_ALLOW_PROTOCOL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE",
     ];
@@ -243,7 +249,22 @@ describe("Guard 1 — fixture git writes are contained under a hostile inherited
         // which a hook exports and which a deny-list silently kept — pinning every fixture commit
         // in a hook-mediated run to one identical timestamp.
         if (k.startsWith("GIT_AUTHOR_") || k.startsWith("GIT_COMMITTER_")) continue;
+        // The signing override (#7849) is set BY the builder, after the sweep, so these three keys
+        // are legitimately present. Asserting absence here would be asserting that the override
+        // does not work. The property that matters is unchanged and is asserted below: the
+        // INHERITED value must not survive.
+        if (k === "GIT_CONFIG_COUNT" || k === "GIT_CONFIG_KEY_0" || k === "GIT_CONFIG_VALUE_0") continue;
         expect(env[k]).toBeUndefined();
+      }
+
+      // The signing override, asserted positively AND against the hostile value it replaced. A
+      // bare `toBeDefined()` would pass on the inherited "/tmp/hostile-injected" — which is the
+      // failure mode this whole block exists to catch, one key over.
+      expect(env.GIT_CONFIG_COUNT).toBe("1");
+      expect(env.GIT_CONFIG_KEY_0).toBe("commit.gpgsign");
+      expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+      for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
+        expect(env[k]).not.toBe("/tmp/hostile-injected");
       }
       // SSH_ASKPASS carries no GIT_ prefix, so the sweep cannot reach it by shape.
       expect(env.SSH_ASKPASS).toBeUndefined();

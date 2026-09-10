@@ -42,6 +42,32 @@ Manual escape hatch: `gh workflow run apply-github-infra.yml -f reason='...'`
 for the first apply post-Phase-0 (when no `infra/github/*.tf` files have
 changed yet) or for re-runs after a transient failure.
 
+**Before any terminal-side state write, take a snapshot — there is no other
+way back.** R2 does not implement object versioning, so the backend keeps no
+history and a bad state write cannot be undone from it (ADR-006 as amended;
+gap tracked at #7992). On the auto-apply path above this is moot — nobody is
+present before the write, which is why §"Phase 5 -- Rollback" recovers by
+reverting config rather than by restoring state. But if you are about to run
+`terraform state push`, `state rm`, `state mv` or an `apply` from a terminal,
+capture the current state first. Run the whole block — the exports and `init`
+are part of it, because `state pull` talks to the R2 backend:
+
+```bash
+cd infra/github/
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+terraform init -input=false
+
+umask 077                                  # state holds credentials in plaintext
+SNAPDIR=$(mktemp -d)
+terraform state pull > "$SNAPDIR/tfstate.pre-$(date -u +%Y%m%dT%H%M%SZ).json"
+echo "snapshot: $SNAPDIR"                  # note this path; a new shell loses $SNAPDIR
+```
+
+Delete it when the operation closes (§5d has the removal step). A snapshot is
+worth nothing if it is taken after the write, and this is the last section you
+read before one.
+
 ## Merge queue (#5780)
 
 > **Status (2026-07-01): reverted; blocked by a GitHub platform limitation.** The
@@ -227,9 +253,20 @@ does not skip the CLA import. The CLA first apply is a **no-op reconcile**: the
 manually (mirrors the CI block below), run:
 
 ```bash
+cd infra/github/
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+terraform init -input=false
+
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository_ruleset.cla_required soleur:13304872
 ```
+
+The `AWS_*` exports sit **outside** `doppler run --name-transformer tf-var` deliberately: the
+transformer rewrites Doppler's own `AWS_ACCESS_KEY_ID` to `TF_VAR_aws_access_key_id`, so a
+command run entirely inside it reaches the R2 backend with no usable credentials. The
+transformer is still required — this root needs `TF_VAR_github_app_id` and
+`TF_VAR_github_app_private_key` — so the correct shape is two-layer, not one or the other.
 
 ### Adopting `jikig-ai/soleur-marketplace` (#7471)
 
@@ -244,6 +281,11 @@ with `gh repo create` as a one-time bootstrap and is adopted into state by
 Copying the ruleset's `owner:id` form fails at apply:
 
 ```bash
+cd infra/github/
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+terraform init -input=false
+
 doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository.soleur_marketplace soleur-marketplace
 ```
@@ -375,36 +417,209 @@ PR #4384 is obsolete.
 
 ## Phase 5 -- Rollback
 
-If a Terraform apply broke the ruleset:
+**R2 has no point-in-time recovery.** The bucket does not implement the S3 object-versioning
+API, so there is no "restore the previous state file" gesture here and never has been. This
+section used to open with one; it was inoperable from the day it was written. Measured
+2026-09-09: `list-object-versions` returns `NotImplemented` (rc=254) while the control
+`list-objects-v2` returns rc=0 on the same credential and endpoint, so this is a vendor
+capability gap and not a token-scope problem. ADR-006 is amended accordingly, and the
+automatic pre-apply snapshot that would close the gap is tracked at #7992.
 
-1. List prior state versions in R2:
+**What this root manages — check this first.** Four rulesets are live across the two repos and
+this root manages three of them:
 
-   ```bash
-   aws --endpoint-url=https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com \
-     s3api list-object-versions --bucket soleur-terraform-state \
-     --prefix github/terraform.tfstate
-   ```
+| Ruleset | Live id | Managed here? |
+|---|---|---|
+| CI Required (`jikig-ai/soleur`) | `14145388` | yes — `ruleset-ci-required.tf` |
+| CLA Required (`jikig-ai/soleur`) | `13304872` | yes — `ruleset-cla-required.tf` |
+| Marketplace PR Required (`jikig-ai/soleur-marketplace`) | `20802604` | yes — `ruleset-marketplace-pr-required.tf` |
+| Code Quality Copilot review (`jikig-ai/soleur`) | `19474295` | **no** — not Terraform-managed |
+| Force Push Prevention (`jikig-ai/soleur`) | `13044280` | **no** — not Terraform-managed |
 
-2. Restore the prior version (operator-attested):
+If the thing you lost is one of the last two, nothing in this section applies — none of it will
+recreate them and `scripts/create-ci-required-ruleset.sh` will exit early reporting that "CI
+Required" already exists.
 
-   ```bash
-   aws --endpoint-url=https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com \
-     s3api copy-object \
-     --copy-source soleur-terraform-state/github/terraform.tfstate?versionId=<prev> \
-     --bucket soleur-terraform-state --key github/terraform.tfstate
-   ```
+**Route by which failure you actually have.** State records what exists; it is not a lever on
+what exists. Restoring old state only makes Terraform *believe* the old set is live, and the
+next apply reconciles against the current config — rewriting the damage. So for the common
+case the recovery is a **config revert**, not a state operation.
 
-3. Apply the restored state with operator attestation (`apply` — NOT
-   `apply -refresh-only`; the latter pulls state FROM the API and would
-   reconcile the rollback away):
+| Failure | Recovery |
+|---|---|
+| Bad config applied, live ruleset wrong (**the common case**) | §5a — `git revert` and merge; auto-apply reconciles |
+| A ruleset was deleted outright | §5b — recreate, then re-import under its **new** id |
+| State lost or corrupted, resources intact | §5c — `terraform import` |
+| State corrupted **and** config bad | §5a, then §5c |
+| You took a snapshot before a terminal-side write and need it back | §5d — last resort |
 
-   ```bash
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-     terraform plan -out=tfplan-rollback.binary
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
-     terraform apply tfplan-rollback.binary
-   ```
+### 5a. Bad config applied (start here)
 
-For catastrophic ruleset corruption: emergency fallback is the GitHub UI at
-<https://github.com/jikig-ai/soleur/rules/14145388> -- operator can manually
-restore the 5 baseline checks; then re-import from clean state via Phase 2.
+`git revert` the commit that broke it and merge the revert. `apply-github-infra.yml` applies on
+merge, so the revert reconciles the live ruleset with no terminal access.
+
+**Two things will stop you, and neither is obvious at 3am.**
+
+**The destroy guard fails the apply closed.** Reverting a commit that *added* a required check
+removes a nested block, and the guard at `apply-github-infra.yml:360` counts nested deletes.
+The apply aborts unless the **merge commit message** contains a line that is exactly
+`[ack-destroy]`. Put it there when you open the revert, not after the apply has already failed.
+
+**If the bad apply self-locked `main`, no PR can merge at all** — including the revert. That
+happens when the apply added a required context nothing ever posts (the #5780 merge-queue
+deadlock three sections above is this exact shape). The way through is the ruleset's own
+bypass: `ruleset-ci-required.tf:73` grants `OrganizationAdmin` and `RepositoryRole 5` a
+`bypass_mode = "pull_request"` bypass, so an org admin can merge the revert through a live
+self-lock. Failing that, edit the rule directly at
+<https://github.com/jikig-ai/soleur/rules/14145388> and let the next apply reconcile.
+
+### 5b. A ruleset was deleted outright
+
+`scripts/create-ci-required-ruleset.sh` is the documented disaster-recovery restore path: it
+POSTs the full ruleset from the canonical JSON and exits early if one already exists. Run it
+rather than rebuilding rules by hand — the CI ruleset carries **23** required contexts
+(`grep -c 'context *=' infra/github/ruleset-ci-required.tf`), so hand-restoring a remembered
+subset silently under-protects `main`.
+
+> **The recreated ruleset gets a NEW id, and the old one is hardcoded in twelve places.**
+> The script POSTs (`gh api "repos/${REPO}/rulesets" -X POST`), and GitHub assigns a fresh id on
+> POST — it does not reuse `14145388`. The script prints the new id; write it down. Until every
+> site below is updated, `terraform import` 404s, the post-apply verify errors on a deleted id,
+> and the merge gate is orphaned:
+>
+> ```bash
+> git grep -n '14145388' -- '*.yml' '*.sh' '*.tf'
+> ```
+>
+> At minimum: `apply-github-infra.yml` (the `import_ruleset` line and the post-apply verify),
+> `scripts/update-ci-required-ruleset.sh`, and `scripts/audit-ruleset-bypass.sh`. Substitute the
+> new id there **before** running the import in §5c.
+
+### 5c. State lost or corrupted, resources intact
+
+Re-import. `apply-github-infra.yml` imports idempotently on every run, so merging any commit
+that touches `infra/github/*.tf` recovers **part** of the state with no terminal access — but
+only part, and the remainder fails loudly:
+
+| Resource | Live id | Recovered by |
+|---|---|---|
+| `github_repository_ruleset.ci_required` | `soleur:14145388` | auto-import on merge |
+| `github_repository_ruleset.cla_required` | `soleur:13304872` | auto-import on merge |
+| `github_repository.soleur_marketplace` | `soleur-marketplace` | auto-import on merge |
+| `github_repository_ruleset.marketplace_pr_required` | `soleur-marketplace:20802604` | **manual import — see below** |
+| `github_branch_default.soleur_marketplace` | — | re-apply |
+| `github_repository_file.marketplace_manifest` | — | re-apply (`overwrite_on_create = true`) |
+
+**`marketplace_pr_required` is the one that bites.** The workflow does not import it, so after
+a total state loss the plan computes a CREATE against a ruleset of that name that already
+exists live — a name collision, and the apply dies there, leaving state *partially* restored.
+Import it by hand first, then let the merge finish the rest.
+
+See **Phase 1** for the full first-apply sequence — Phase 2 has no import step.
+
+To do it from a terminal, run the whole sequence below as one block. The bare `AWS_*` exports
+must sit **outside** `doppler run --name-transformer tf-var`: that transformer rewrites
+`AWS_ACCESS_KEY_ID` to `TF_VAR_aws_access_key_id`, which the R2 backend cannot use. The
+transformer is still required for the `terraform` calls, because this root needs
+`TF_VAR_github_app_id` and `TF_VAR_github_app_private_key` — so the shape is two-layer.
+(`state list`, `state pull` and `state push` need only the backend credentials and evaluate no
+variables; only `plan`/`import`/`apply` need the `TF_VAR_*` layer.)
+
+```bash
+cd infra/github/
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+terraform init -input=false
+
+terraform state list | grep github_                      # what is already adopted
+
+# Import only what is missing. Re-importing an adopted resource errors
+# `Resource already managed by Terraform`. Substitute any id the DR script reissued (§5b).
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform import github_repository_ruleset.marketplace_pr_required soleur-marketplace:20802604
+
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform plan -out=tfplan-rollback.binary
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform apply tfplan-rollback.binary
+```
+
+Use `apply`, **not** `apply -refresh-only`. After an import the live resources are the truth and
+a refresh is harmless; the reason to avoid `-refresh-only` here is narrower — it only updates
+state from the API and applies no configuration, so it cannot converge the drift you are
+recovering from, and it will look like it succeeded.
+
+### 5d. Restoring a snapshot you took earlier
+
+There is no snapshot on the auto-apply path — no human is present before the write — so this
+applies only if you took one before a terminal-side operation (see §"Authorization model:
+apply-on-merge"). It is the last resort: prefer 5a–5c.
+
+Read all four before running anything.
+
+- **Try the push WITHOUT `-force` first.** Measured on Terraform v1.10.5: a snapshot whose
+  `serial` *equals* the remote's and whose `lineage` matches pushes cleanly, rc=0. That is the
+  common case when an apply failed *before* persisting — which is exactly what §"Authorization
+  model" tells you to snapshot for. Only a genuinely **lower** serial is refused, with
+  `cannot import state with serial N over newer state with serial M`. Reach for `-force` when
+  you see that message, not before.
+- **`-force` disables the wrong-root guard.** The bucket holds **six** state objects (five live
+  roots plus one orphan). With `-force` the `lineage` check is skipped, so pushing another
+  root's snapshot over `github/terraform.tfstate` **succeeds silently**.
+- **`state push` has no `-backup` flag** (unlike `state mv` and `state rm`), so the restore is
+  itself a one-way door. Pull the current bad state to a second file *first*.
+- **A snapshot restores the record, not the world.** Terraform persists state incrementally, so
+  a half-succeeded apply leaves real resources the restored state does not know about; the next
+  apply duplicates them or errors `already exists`. Reconcile with `terraform plan` plus
+  `import` / `state rm` before applying.
+
+```bash
+cd infra/github/
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+terraform init -input=false
+
+SNAP=/path/to/your/snapshot.json          # the file from the §Authorization-model block
+umask 077
+SNAPDIR=$(mktemp -d)
+
+# Keep a copy of the CURRENT (bad) state before overwriting it — state push has no -backup.
+terraform state pull > "$SNAPDIR/current-bad.json"
+
+# Identity check: lineage MUST match; note the two serials.
+jq -r '"snapshot lineage=\(.lineage) serial=\(.serial)"' "$SNAP"
+jq -r '"remote   lineage=\(.lineage) serial=\(.serial)"' "$SNAPDIR/current-bad.json"
+
+# Equal serial + matching lineage: this succeeds as-is.
+terraform state push "$SNAP"
+# Only if it refuses with "cannot import state with serial N over newer state with serial M",
+# and only after confirming the lineages above match:
+#   terraform state push -force "$SNAP"
+```
+
+Terraform state holds provider credentials in **plaintext**. Clean up when the incident closes:
+
+```bash
+[ -n "${SNAPDIR:-}" ] && rm -f "$SNAPDIR"/*.json && rmdir "$SNAPDIR"
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+```
+
+The `[ -n ... ]` guard matters: in a fresh shell `$SNAPDIR` is unset and `"$SNAPDIR"/*.json`
+expands to `/*.json`. `rm` is used rather than `shred` deliberately — `mktemp -d` lands in
+`/tmp`, which is tmpfs here, where `shred`'s overwrite guarantee does not hold; the file is
+removed, not securely erased, so treat any snapshot as a live credential until the volume is
+gone.
+
+**Concurrency hazard.** There is no state lock (`use_lockfile = false` — R2 has no S3
+conditional writes), and a terminal sits outside every GitHub Actions concurrency group by
+construction, so a terminal-side push races any in-flight CI apply with no mutual exclusion.
+`scheduled-terraform-drift.yml` runs in group `terraform-drift`, **disjoint** from
+`terraform-apply-github-infra`, so it is not serialized against the apply either. Check both,
+and keep the run handle so you can watch or cancel:
+
+```bash
+for wf in apply-github-infra.yml scheduled-terraform-drift.yml; do
+  gh run list --workflow="$wf" --json status,headBranch,databaseId,url \
+    --jq ".[] | select(.status != \"completed\") | \"$wf \(.databaseId) \(.status) \(.url)\""
+done
+```
