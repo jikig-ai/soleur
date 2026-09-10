@@ -15,6 +15,37 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# FLAGSMITH_MANAGEMENT_API_KEY is acquired by `doppler secrets get` BELOW this
+# point, so a conditional arm would test an empty variable at guard time, open,
+# and then trace the acquisition itself.
+#
+# STREAM CONTRACT: this script's stdout is a DATA channel — SKILL.md > Procedure
+# documents a `--json` array (fields name, env_var, flagsmith_id, …) and a
+# two-space-indented table render. A bare `[FATAL] …` line on stdout would be read
+# by that consumer as a row, and in `list.sh | consumer` the exit code belongs to
+# the consumer. So the refusal leads with a HALT marker in the repo's
+# `SOLEUR_<MODULE>_HALT reason=…` shape (exemplar: trigger-cron's
+# SOLEUR_TRIGGER_CRON_HALT): it is not valid JSON, so `--json` parsing fails hard
+# rather than silently gaining a row, and it does not match the table's indent.
+# Stdout, not stderr, because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf 'SOLEUR_FLAG_LIST_HALT reason=xtrace-credential-bound issue=7797\n'
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the Flagsmith management key works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # --- constants (mirror flag-create/scripts/create.sh + flip.sh) -------------
 readonly FLAGSMITH_PROJECT_ID=39082
 readonly FLAGSMITH_ENV_DEV_ID=90722
@@ -40,8 +71,8 @@ command -v doppler >/dev/null || { echo "missing: doppler" >&2; exit 2; }
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
 [[ -z "$TOKEN" ]] && { echo "FLAGSMITH_MANAGEMENT_API_KEY not in Doppler soleur/cli_ops" >&2; exit 2; }
 
-# fs_api — identical to create.sh:65 / flip.sh:131. Never echoes the token.
-fs_api() { curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
+# fs_api — identical to create.sh's / flip.sh's `fs_api()`. Never echoes the token.
+fs_api() { curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
 
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT

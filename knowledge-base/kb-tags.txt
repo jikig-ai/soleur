@@ -961,6 +961,7 @@ createportal
 creation
 credential
 credential-boundary
+credential-confinement
 credential-exfil
 credential-forwarding
 credential-handling
