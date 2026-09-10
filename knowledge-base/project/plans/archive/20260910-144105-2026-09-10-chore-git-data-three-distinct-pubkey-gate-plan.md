@@ -368,7 +368,7 @@ confidentiality leak but an integrity and availability one — Art. 17 machinery
 identity that should only be able to push and fetch. The blast radius is every connected user's
 repositories, and the operation is `rm -rf`, which has no undo.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 One user losing their source code to a transport key that was never supposed to hold erasure authority
 is a brand-ending event on its own. It does not need to aggregate.
@@ -714,8 +714,8 @@ logs:
     demand from any checkout by running the suite, so the log is a convenience rather than the record
 discoverability_test:
   command: bash tests/scripts/test-git-data-birth-readiness-gate.sh
-  expected_output: a final "=== N passed, 0 failed ===" line with N equal to the raised floor, and an
-    "ok   anti-vacuity floor" line naming that same floor
+  expected_output: "=== 116 passed, 0 failed ===" — the "ok   anti-vacuity floor" line reports the
+    same 116
 ```
 
 No credentials are required: every arm is static, runs against copied trees in a temp directory or the
