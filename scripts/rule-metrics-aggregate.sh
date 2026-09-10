@@ -265,11 +265,31 @@ jq empty < "$stage_enriched_file" >/dev/null 2>&1 || { echo "ERROR: stage B (enr
 # $drops and $cutoff and $schema stay on argv: drops is keyed by a closed error
 # enum (a handful of keys) and the other two are scalars — none can approach
 # MAX_ARG_STRLEN. $enriched and $counts are the ones that scale with the rule set.
+# Rules that MOVED to a skill-local home are ACTIVE, not orphans: they still
+# emit SOLEUR_RULE_APPLIED from the phase that enforces them, they are simply no
+# longer bodies in AGENTS.md. Without this the orphan gate exits 5 BEFORE jsonl
+# rotation, disarming the write path.
+#
+# Grammar MUST match _valid_rule in .claude/hooks/rule-incident-marker-capture.sh
+# exactly -- id, optional space, literal pipe. A looser form here would ACCEPT a
+# malformed entry the hook REJECTS: silent telemetry loss behind a green orphan
+# gate, the exact drift this shared registry exists to end. Parity is pinned by
+# that hook's registry-parser parity test.
+migrated_file="$_tmpdir/migrated-ids.json"
+if [[ -f "$REPO_ROOT/scripts/migrated-rule-ids.txt" ]]; then
+  grep -oE '^[a-z0-9][a-z0-9-]{2,79}[[:space:]]*\|' "$REPO_ROOT/scripts/migrated-rule-ids.txt" 2>/dev/null \
+    | sed -E 's/[[:space:]]*\|$//' \
+    | jq -R . | jq -s . > "$migrated_file" 2>/dev/null || echo '[]' > "$migrated_file"
+else
+  echo '[]' > "$migrated_file"
+fi
+
 report=$(jq -n \
   --argjson schema "$SCHEMA_VERSION" \
   --arg generated_at "$GENERATED_AT" \
   --rawfile enriched_json "$stage_enriched_file" \
   --rawfile counts_json "$counts_file" \
+  --rawfile migrated_json "$migrated_file" \
   --argjson drops "$drops_counts_json" \
   --argjson cutoff "$UNUSED_CUTOFF_EPOCH" '
     ($enriched_json | fromjson) as $enriched
@@ -355,7 +375,9 @@ report=$(jq -n \
         # LOAD-BEARING PAIR: this exclusion alone would DELETE the only surface
         # a counts-only rule_id has (orphan_rule_ids). summary.hook_input_fault_count
         # below is the replacement surface and must not be removed independently.
-        | map(select(startswith("hook-input-") | not))) as $orphan_ids
+        | map(select(startswith("hook-input-") | not))
+        # Migrated-but-ACTIVE rules (scripts/migrated-rule-ids.txt).
+        | map(select(. as $id | (($migrated_json | fromjson) | index($id)) | not))) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.

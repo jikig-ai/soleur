@@ -9,6 +9,7 @@ b143af2cc16aaee9d41f7021767431186736297be1878a4d8d0ca17e7324f3e8  hr-autonomous-
 27235260447146e8eba515c8208abd0f83a04b430b50c8544e6f9d81e54a5b76  hr-before-shipping-ship-phase-5-5-runs
 95c858983479e2ecbe39c5c86f87bbfd6a7414b35889b63e5fe0956de50caaa3  hr-bulk-delete-per-item-live-infra-role-check
 e43cb51eda7fc3abf1bd044403148da4263f24be7bf821268174c404b866b3a5  hr-dev-prd-distinct-supabase-projects
+35c3a36ccf61c9125290a6f6e30a9413e554aa8ed3cdb81430997107ea8934b5  hr-dispatch-async-must-arm-watch
 aa44e52436fbbfe85cc0908b0d6a85baf0826a3498824cc42c56483ab1b9ccdf  hr-every-new-terraform-root-must-include-an
 f986fe104836beadb13264dfdf5223c2a13cac35b29e54a9d5226d1cf8144a7b  hr-exhaust-all-automated-options-before
 9649997fd4baf1e8a00cfa20942565948f3135c45ceec27b0c450f1b462d53de  hr-fresh-host-provisioning-reachable-from-terraform-apply
@@ -35,6 +36,7 @@ cc3b752f99ec2d39e31fbb886178f5a2b530e2db7cce008512e3ccad8539001b  hr-prod-host-c
 8888957e6cb050d24c89378c6ad0abd36eb6a877c7cac2c407af4d25c82eb76c  hr-ship-message-no-operator-checklist
 2b23364feefbf97b8b4831fd7adfab30b3b50e206759a08503903910a28f2797  hr-ssh-diagnosis-verify-firewall
 2fdcf6b8ba9126c55e5b40e389d5150e220a7f4dae6ba1c782f7329c8972cc96  hr-tagged-build-workflow-needs-initial-tag-push
+b0a7be3e0167890fc8043b8ef46f0e86673fcd2ac03c2faa7a088045026cff9c  hr-technical-fork-is-not-an-operator-question
 4e310304ef732019a1c7a73c165050620836531841c71f6f563698dc49e9bbbd  hr-tf-variable-no-operator-mint-default
 4bd7a42bd6270f2e0cb0faa133108cb6d6dc2c1946dd1cfdbeb7218935d1f628  hr-the-bash-tool-runs-in-a-non-interactive
 47a5830a16399e9cef30bc6dca3f1d34796ad7069288f8bffbe1026d69bf2048  hr-the-host-terminal-is-warp
@@ -51,7 +53,6 @@ d49f75e348d514dd0ac018cc1593be8750e1ec4d2fc3deb5ca8d42158ba8b0a8  hr-when-triagi
 5fec24ab593f1ed130c5e663784bf126f66756a1142b6caa3c346a0af5dca83b  wg-after-a-pr-merges-to-main-verify-all
 996dc0695215e6fb6de2582dd7a786bd8eede2ae95ecde91e86e8fd2cf0e59be  wg-after-marking-a-pr-ready-run-gh-pr-merge
 e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-merging-a-pr-that-adds-or-modifies
-c110204548405e57c1cc7089a049768f1ab2706bd6c0b7ff44e09c1676845680  wg-architecture-decision-is-a-plan-deliverable
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
 eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur
 c171187443a446c1020bc06932c93b6b36a44344ec038ed211b6c87d8caacdcc  wg-block-pr-ready-on-undeferred-operator-steps
@@ -64,7 +65,6 @@ e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work
 2b511a98582e3841e92287f336522bcde6fb74b454f486c03d6e3edbcde8fe75  wg-never-bump-version-files-in-feature
 080278af90659f4df6abfbebee5c4d98313847557d72eacd5eeb1097234f3ff3  wg-plan-prescribed-skills-must-run-inline
 eff970196e3c179da0a1869e06bc537b74291551d82c5ec1679521bf55e2848e  wg-pm-class-followthrough-for-operator-dogfood
-21ab9039ee82bf0c43b917f3480d26fb03bb83154003395e2cea3708cebee828  wg-record-recurring-vendor-expense-before-ready
 a7d752df4f6a2f494ffec8dfc4efc74afe4d43d9034d0fba0e972517b18f2d7b  wg-ship-push-before-merge
 8b95ccde7d534ca9b2a25e7c65f9780fbd20facaf00a813a40bdc7933d33ea79  wg-ui-feature-requires-pen-wireframe
 ea8a5568d2b51e204dcb090c14e897b3d78a6d7b3664b9a643756df163230203  wg-use-closes-n-in-pr-body-not-title-to
@@ -74,6 +74,5 @@ c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-work
 f7664416f6cf7eb36ce7d2e5977f904069e1811c29928a9853f81df425634980  wg-when-an-audit-identifies-pre-existing
 b95ce4dcdabe6b01a67775263a97bff856aacd380ef7de07c8f9c552461291ae  wg-when-closing-a-phase-milestone-update
 0bd0bc73f6535aeb97e9d0f07812bad5631231473b62d6c704c39b1acd3d969b  wg-when-deferring-a-capability-create-a
-70897e40a0f3f0ebc33ad0310d528590c9f4fb602f0b2fcf51748a81417c6629  wg-when-fixing-a-workflow-gates-detection
 d0511fb43e953e962dc14188c9ad2d6d6d1d76cb78e0b1d7bde23d5220a58e92  wg-when-tests-fail-and-are-confirmed-pre
 5e963b1aecdd81004578ed7e100f2267a1e3b8f48cfda6a15477c731280a8846  wg-zero-agents-until-user-confirms
