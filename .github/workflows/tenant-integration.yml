@@ -154,29 +154,58 @@ jobs:
     # is `skipped` and never joins the group.
     #
     # THE RESIDUAL, NAMED -- EVICTION IS REDUCED, NOT ELIMINATED. If a THIRD
-    # isolation-surface run arrives while one is executing and one is pending, the
-    # pending job is cancelled. `needs.tenant-integration.result` is then
-    # `cancelled` and scripts/tenant-integration-gate-verdict.sh fails CLOSED via
-    # its eviction arm. That red is accepted, NOT greened: detect-changes said
-    # this tree touches the isolation surface and the suite never ran against it,
-    # so passing it would be a fail-open on a tenant-isolation gate. It is
-    # acceptable on a required check because (a) it needs three-way overlap inside
-    # one job's runtime, (b) the victim is by construction a run on this surface --
-    # the population #7055 already accepted would queue -- never an unrelated PR,
-    # and (c) the remedy is a one-click "Re-run failed jobs", named verbatim in
-    # the failure annotation. If the eviction proves worse than the flake, the
-    # revert is this block plus the verdict script's `cancelled` arm.
+    # isolation-surface run arrives on THIS BRANCH while one is executing and one
+    # is pending, the pending job is cancelled. `needs.tenant-integration.result`
+    # is then `cancelled` and scripts/tenant-integration-gate-verdict.sh fails
+    # CLOSED via its eviction arm. That red is accepted, NOT greened:
+    # detect-changes said this tree touches the isolation surface and the suite
+    # never ran against it, so passing it would be a fail-open on a
+    # tenant-isolation gate. The remedy is a one-click "Re-run failed jobs", named
+    # verbatim in the failure annotation.
+    #
+    # CORRECTED 2026-09-10 -- an earlier revision of this paragraph justified the
+    # accepted red on the grounds that eviction "needs three-way overlap inside
+    # one job's runtime" and so would be rare. That was true only while the group
+    # was per-branch. #7986 briefly made the group a single repo-wide literal,
+    # which put EVERY branch in one queue and made eviction the steady state
+    # rather than an edge (measurements in the block below). The rarity claim is
+    # restored by the per-branch key, not by the sentence: three runs must now
+    # overlap ON ONE BRANCH, which is the rapid-push case #5585 R3 already
+    # describes. Do not re-globalise this key without re-measuring arrival rate
+    # against the suite's ~26-minute serialized runtime.
+    #
+    # The eviction ARM in the verdict script stays either way. It is not an
+    # artifact of the global mutex: any `cancelled` suite means coverage was not
+    # obtained, and greening that is a fail-open regardless of which key evicted
+    # it. #7986's revert note paired the arm with the block; only the block is
+    # reverted here, deliberately.
     concurrency:
-      # Named for the contended RESOURCE, not for this workflow, so a future job
-      # that applies migrations to or runs a heavy suite against the dev project
-      # joins the same literal rather than minting a parallel mutex -- a mutex on
-      # one side of a race is not a mutex.
+      # PER-BRANCH, not global. A single repo-wide literal was tried in #7986 and
+      # MEASURED as unusable at this repo's load: the suite takes 14-30 min
+      # (median ~26) and is serialized, so the mutex serves ~2-3 runs/hour while
+      # arrivals ran ~22/hour -- ~8x oversubscribed. Within 90 minutes of that
+      # merge the queue reached 14 runs and was growing monotonically, with 15
+      # arrivals against 2 completions in a 40-minute window. Because only one
+      # run may be PENDING per group, each new arrival evicted the waiting one,
+      # every evicted run concluded `cancelled`, and the verdict script (rightly)
+      # failed the REQUIRED gate closed on it. That is not a rare edge; at this
+      # arrival rate it is the steady state, and it degraded every branch rather
+      # than the one PR that pushed. #7986's own comment named this exact abort
+      # condition -- "if the eviction proves worse than the flake, the revert is
+      # this block" -- and the measurement above is that condition being met.
+      #
+      # The global mutex existed to stop two branches perturbing each other's
+      # delegation rows on the shared dev project. #7986 ALSO landed the fix that
+      # removes that need: the byok-delegation suite now scopes its rows to a
+      # per-run unique grantee/invocation, so a concurrent writer cannot move
+      # another run's meter. With the outcomes partitioned, serializing the whole
+      # repo buys nothing and costs the queue above.
       #
       # cancel-in-progress: false (intentional, #5585 R3): a superseded run
-      # cancelled MID-FLIGHT would also conclude `cancelled` and fail the gate on
-      # the head SHA until a re-run; keeping false avoids that edge at the cost of
-      # a second full suite on rapid pushes to an isolation-touching PR (rare).
-      group: dev-supabase-exclusive
+      # cancelled MID-FLIGHT would conclude `cancelled` and fail the gate on the
+      # head SHA until a re-run; keeping false avoids that edge at the cost of a
+      # second full suite on rapid pushes to an isolation-touching PR (rare).
+      group: dev-supabase-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
