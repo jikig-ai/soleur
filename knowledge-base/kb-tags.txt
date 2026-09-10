@@ -310,6 +310,7 @@ arm-gate
 art-13-prior-disclosure
 art-17
 art-30
+art-30-register
 art-32
 art-33
 art-34
@@ -1222,6 +1223,7 @@ docs-trust
 docs/eleventy-templates
 documentation
 documentation-accuracy
+documentation-correction
 documentation-drift
 documentation-gap
 documentation-quality
@@ -3910,6 +3912,7 @@ union-widening
 units
 universal-negative
 universal-ssl
+unmeasured-claims
 unnecessary phases
 untracked-files
 untrusted-checkout-toctou
