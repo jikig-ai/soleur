@@ -51,7 +51,7 @@ Both Terraform stacks use the implicit local backend — no remote state, no loc
 ## Key Decisions
 
 1. **Cloudflare R2 as remote backend** — single bucket, per-app key paths (`telegram-bridge/terraform.tfstate`, `web-platform/terraform.tfstate`)
-2. **Enable R2 bucket versioning** — state recovery if corruption occurs
+2. ~~**Enable R2 bucket versioning** — state recovery if corruption occurs~~ — **superseded 2026-09-09 (#7836): R2 implements no object-versioning API; this was never available.**
 3. **Import all existing resources** — servers, volumes, firewalls, SSH keys, DNS records, tunnels
 4. **Three-layer guardrails:**
    - AGENTS.md hard rule: every new Terraform root must have R2 remote backend

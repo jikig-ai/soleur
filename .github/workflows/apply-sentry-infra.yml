@@ -974,11 +974,15 @@ jobs:
         #
         # Nor is R2 a restore path. `list-object-versions` against
         # soleur-terraform-state returns `NotImplemented` (measured 2026-09-04,
-        # rc=254, with a passing `list-objects-v2` control proving it is not an
-        # auth problem), so the point-in-time recovery that infra/github/README.md
-        # §"Phase 5 — Rollback" describes does not exist for ANY root on that
-        # bucket. Filed as #7836. That is why a forensic copy is worth taking —
-        # and why writing one back is not a supported gesture.
+        # re-measured 2026-09-09, rc=254 both times, with a passing
+        # `list-objects-v2` control proving it is not an auth problem), so
+        # point-in-time recovery does not exist for ANY root on that bucket.
+        # Filed as #7836 and corrected there: infra/github/README.md
+        # §"Phase 5 -- Rollback" used to document exactly that recovery and now
+        # routes by failure class instead, config-revert first. ADR-006 is
+        # amended to match; the capability gap is tracked at #7992. That is why a
+        # forensic copy is worth taking — and why writing one back is not a
+        # supported gesture.
         #
         # NEW EGRESS SURFACE, named as one in the plan's Encryption Posture. This
         # takes the WHOLE root's state out from behind the R2 credential boundary
