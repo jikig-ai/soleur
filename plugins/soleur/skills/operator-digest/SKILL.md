@@ -169,8 +169,11 @@ gh issue list -R jikig-ai/soleur --label action-required --state open \
 ```
 
 **Build the action list (de-pollute).** From the result, **EXCLUDE** any issue whose `labels`
-include `decision-challenge` or `content-publisher` — these are informational or structurally-dead
-per-piece chores that drown the genuine asks. **Do NOT exclude the bare `content` label** — a human
+include `decision-challenge`, `content-publisher`, or `meta/machinery` — the first two are
+informational or structurally-dead per-piece chores that drown the genuine asks, and
+`meta/machinery` is a finding about Soleur's own verification machinery rather than about
+anything you receive. Excluding it is what makes the genuine product asks visible at all:
+a 1,000-issue sample carried 626 `domain/engineering` against 39 `domain/product`. **Do NOT exclude the bare `content` label** — a human
 (or another workflow) can attach `content` to a genuine ops emergency (e.g. a content-*pipeline*
 outage), and excluding it would hide that emergency from your only comprehension surface while the
 SLA cron correctly keeps it open and escalates it (it classifies bare `content` as an ops ask, never
