@@ -677,6 +677,23 @@ assert "filing-justification: an EMPTY body-file still denies (no vacuous pass)"
   "gh issue create --title t --body-file /dev/null $MS"
 rm -f "$BF_OK" "$BF_MAND" "$BF_SMALL"
 
+# --- CLASS 4: `gh api .../issues -X POST` creates an issue with the word
+# "create" nowhere in it. This repo has a DOCUMENTED instance of an agent taking
+# that route after guardrails:require-milestone denied the create form.
+assert "filing-justification: gh api POST issues without justification denies" "deny" \
+  'gh api -X POST repos/jikig-ai/soleur/issues -f title=x -f body=y'
+assert "filing-justification: gh api --method POST form also denies" "deny" \
+  'gh api --method POST repos/jikig-ai/soleur/issues -f title=x'
+assert "filing-justification: gh api POST with the machinery label allows" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/issues -f title=x --label meta/machinery'
+
+# NARROWS ONLY. gh api takes no --milestone, so the milestone arm stays scoped
+# to the create form; a GET and a POST to another endpoint are untouched.
+assert "filing-justification: gh api GET issues is untouched" "<none>" \
+  'gh api repos/jikig-ai/soleur/issues --paginate'
+assert "filing-justification: gh api POST to another endpoint is untouched" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/labels -f name=x'
+
 # --- Harness rows: the guard's OWN failure modes ---
 #
 # Row H1 — FAIL TOWARD GATING when the shared taxonomy is unreadable. A gate
@@ -737,9 +754,9 @@ Fix-Size: 900 lines / 40 files\" $MS"
 # rather than through the pass/fail helpers it exists to backstop -- a floor
 # that calls fail() is disarmed by the same edit that disarms fail().
 # Derived, not guessed: 65 rows on main at the merge base + 19 added by this
-# change + 4 escape rows + 1 residual row + 5 body-file rows found at review = 94. Stated as the sum so a sibling PR that adds a row makes this
+# change + 4 escape rows + 1 residual row + 5 body-file rows + 5 class-4 rows found at review = 99. Stated as the sum so a sibling PR that adds a row makes this
 # stale LOUDLY (the floor trips) rather than silently.
-MIN_ASSERTIONS=94
+MIN_ASSERTIONS=99
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

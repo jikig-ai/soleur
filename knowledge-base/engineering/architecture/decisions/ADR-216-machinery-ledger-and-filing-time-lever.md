@@ -143,6 +143,41 @@ than left for a reader to notice, with three points:
 - If the operator adopts Proposal 1, this gate should be counted against the
   budget retroactively rather than grandfathered.
 
+### The filing surface, and which classes the gate actually covers
+
+A gate is only worth the population it reaches. The filing surface has five
+classes; this is what covers each, stated so the claim cannot be read wider than
+the mechanism supports.
+
+| # | Filing path | Covered by |
+|---|---|---|
+| 1 | Interactive / `/work` / `/review` Bash `gh issue create` | `guardrails:require-filing-justification` |
+| 2 | `.github/workflows/*.yml` | **Not covered, deliberately.** Machine-authored infra alerts (drift, health, advisor scans) never traverse a `PreToolUse` hook and are mandated by construction. |
+| 3 | Inngest cron agent substrate | `cron-bash-allowlist-hook.mjs` — the same three exits |
+| 4 | `gh api …/issues -X POST` | `guardrails:require-filing-justification` (trigger widened) |
+| 5 | Octokit / MCP `create_issue` | **Not covered.** `github-tools.ts` and `mutate-workstream-issue.ts` call Octokit directly, and the hook's matcher is `Bash`. |
+
+**Class 3 is the one that mattered and it is why this is not a single-hook
+change.** `buildCronEvalSettings` returns a per-spawn settings overlay whose only
+`PreToolUse` entry is `cron-bash-allowlist-hook.mjs`; the eight-deep chain in
+`.claude/settings.json`, `guardrails.sh` included, is never loaded. Ten
+scheduled agents carry `gh issue create` through
+`ISSUE_CREATOR_BASH_ALLOWLIST` and file discretionary, LLM-authored findings —
+precisely the audit-exhaust population behind the 626:39 skew. A gate covering
+class 1 alone would have gone green while missing the majority of what it names.
+
+The class-3 check runs AFTER the allowlist match, so it can only ever NARROW:
+a cron whose allowlist omits the verb is already denied and never reaches it.
+That property is contract-tested, not asserted.
+
+**Two constraints specific to the cron surface, recorded because they are not
+obvious.** The hook denies multiline commands as a pre-existing containment
+rule, so exit 2 there is reachable only via `--body-file` — which is the shape
+this repo prescribes anyway. And the shared taxonomy is resolved from the
+module's own location rather than the CWD: a CWD-relative read silently returns
+empty wherever the process did not start at the repo root, which degrades exit 2
+out of existence while looking like a clean run.
+
 ### This is a SHAPE check, not a semantic one
 
 The gate asserts that a filing *named* a surface and *measured* a size. It

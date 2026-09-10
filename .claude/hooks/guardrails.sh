@@ -421,7 +421,21 @@ fi
 # The --repo/--milestone flag checks below intentionally read $COMMAND: on a
 # real create those flags live OUTSIDE quotes and survive the strip, and on a
 # commit-body FP this `if` never fires so they are never reached.
-if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
+# CLASS 4 of the filing surface: `gh api .../issues -X POST` creates an issue
+# without the word `create` anywhere. This repo has a DOCUMENTED instance of an
+# agent routing around a block that way (see the 2026-06-11 posttooluse-hooks
+# learning, which records a filing made via `gh api` after
+# guardrails:require-milestone denied the `gh issue create` form). A blocking
+# gate trains that route faster than an advisory one did, so the trigger covers
+# both shapes. The MILESTONE arm below stays scoped to `gh issue create` --
+# `gh api` takes no --milestone flag, so requiring one there would deny every
+# legitimate API filing.
+_gh_create=0; _gh_api_issue=0
+grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN" && _gh_create=1
+grep -qE 'gh\s+api\b[^|]*\brepos/[^[:space:]]+/issues\b' <<<"$SCAN" \
+  && grep -qE '(-X|--method)[[:space:]]+POST|-f[[:space:]]+title=|--field[[:space:]]+title=' <<<"$SCAN" \
+  && _gh_api_issue=1
+if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
   # Exempt issue creation targeting an EXTERNAL repo (--repo owner/name where
   # owner is not our org). The constitution backlog-hygiene rule applies only to
   # OUR issues; external/vendor repos (e.g. upstream bug reports) have their own
@@ -451,7 +465,8 @@ if grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create' <<<"$SCAN"; then
   done
   # Gate only when no external target was named AND our own repo wasn't named
   # (our repo appearing anywhere wins, so an external token can't ungate it).
-  if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]] && ! grep -qF -- '--milestone' <<<"$COMMAND"; then
+  if [[ "$_gh_create" == 1 ]] \
+     && [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]] && ! grep -qF -- '--milestone' <<<"$COMMAND"; then
     emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {

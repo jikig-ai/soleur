@@ -4,6 +4,9 @@
 // panel surfaced (P0-A secret-read, P0-B argument injection, P1-F quoted-pipe)
 // has a case here. `decide()` is pure (JSON in → decision out), so no spawn.
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { decide, tokenize, splitSegments } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
 
 // roadmap-review-shaped allowlist (the Tier-1 lead cron).
@@ -50,10 +53,19 @@ describe("Bash — allowlisted commands", () => {
   it("allows git push to origin", () => {
     expect(verdict(bash("git push origin HEAD"))).toBe("allow");
   });
+  // MIGRATED (#8038): this test pins the PATH policy -- a --body-file to a
+  // non-secret temp path is not a secret-path read. It now carries
+  // `--label meta/machinery` so it still fails for a PATH reason if the path
+  // policy regresses, rather than passing/failing for a justification reason it
+  // was never written to test. The justification gate has its own tests below.
   it("allows --body-file to a non-secret temp path (the scope-out filing pattern)", () => {
-    expect(verdict(bash("gh issue create --title t --body-file /tmp/scopeout-body.md"))).toBe(
-      "allow",
-    );
+    expect(
+      verdict(
+        bash(
+          "gh issue create --title t --body-file /tmp/scopeout-body.md --label meta/machinery",
+        ),
+      ),
+    ).toBe("allow");
   });
   // #5199 review — the allowlist matcher requires a separator after the prefix:
   // exact-equal, a following space, OR the prefix ending in `/` (a path
@@ -480,8 +492,13 @@ describe("mcp-allow — file-driven per-cron Playwright relaxation (#5199)", () 
 
   // --- bash surface unaffected; directives are not bash prefixes ---
   it("still allows the issue-creator bash surface", () => {
+    // Carries the machinery label (#8038) so this keeps testing the ALLOWLIST
+    // surface rather than the justification gate, which has its own tests.
     expect(
-      decideWith(bash("gh issue create --title x --body-file /tmp/b.md"), UX_ALLOW),
+      decideWith(
+        bash("gh issue create --title x --body-file /tmp/b.md --label meta/machinery"),
+        UX_ALLOW,
+      ),
     ).toBe("allow");
     expect(
       decideWith(bash("gh issue list --label ux-audit --state all"), UX_ALLOW),
@@ -535,5 +552,112 @@ describe("secret-path read-deny — bot session state (#5199)", () => {
         UX_ALLOW,
       ),
     ).toBe("deny");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Filing justification (#8038) — CLASS 3 of the filing surface.
+//
+// `guardrails:require-filing-justification` covers interactive agents, but a
+// cron-spawned agent never loads that chain: buildCronEvalSettings() registers
+// THIS hook as the only PreToolUse entry under a `*` matcher. Ten scheduled
+// agents carry `gh issue create` via ISSUE_CREATOR_BASH_ALLOWLIST and file
+// discretionary LLM-authored findings — the audit-exhaust population behind the
+// measured 626:39 skew. Covering only the interactive path would have left the
+// primary deliverable missing its primary population.
+// ---------------------------------------------------------------------------
+describe("Bash — filing justification (class 3)", () => {
+  it("denies an allowlisted gh issue create with no justification", () => {
+    expect(verdict(bash("gh issue create --title t --body b"))).toBe("deny");
+    expect(reason(bash("gh issue create --title t --body b"))).toMatch(
+      /names no user-visible consequence/,
+    );
+  });
+
+  it("exit 1 — a real --label meta/machinery token allows", () => {
+    expect(
+      verdict(bash("gh issue create --title t --body b --label meta/machinery")),
+    ).toBe("allow");
+    expect(
+      verdict(bash("gh issue create --title t --body b --label=meta/machinery")),
+    ).toBe("allow");
+  });
+
+  it("exit 1 — the label NAMED in prose does NOT open the machinery exit", () => {
+    // The tokens are dequoted, so a --body that merely mentions the flag stays
+    // inside ONE token and cannot be mistaken for it. Same bare-token class the
+    // interactive gate had to fix.
+    expect(
+      verdict(bash("gh issue create --title t --body 'use --label meta/machinery'")),
+    ).toBe("deny");
+  });
+
+  it("exit 3 — a well-formed Mandated-By claim allows", () => {
+    expect(
+      verdict(
+        bash(
+          "gh issue create --title t --body 'Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("exit 3 — a malformed rule id does not", () => {
+    expect(
+      verdict(bash("gh issue create --title t --body 'Mandated-By: because I said so'")),
+    ).toBe("deny");
+  });
+
+  // Exit 2 needs TWO lines (User-Impact + Fix-Size), and the hook's pre-existing
+  // `metachar: multiline command` rule denies an inline multi-line --body before
+  // any of this runs. So for a cron the only route to exit 2 is --body-file --
+  // which is the shape review/SKILL.md prescribes anyway. Fixtured that way
+  // rather than with a body the sandbox would never permit.
+  const bodyFile = (contents: string) => {
+    const f = join(mkdtempSync(join(tmpdir(), "soleur-filing-")), "body.md");
+    writeFileSync(f, contents);
+    return f;
+  };
+
+  it("exit 2 — a named surface with a size ABOVE the inline threshold allows", () => {
+    const f = bodyFile(
+      "User-Impact: the /dashboard route 500s for org owners\nFix-Size: 240 lines / 9 files\n",
+    );
+    expect(verdict(bash(`gh issue create --title t --body-file ${f}`))).toBe("allow");
+  });
+
+  it("exit 2 — a size INSIDE the inline threshold is refused, naming ADR-131", () => {
+    const f = bodyFile(
+      "User-Impact: the /settings page mislabels the plan\nFix-Size: 19 lines / 1 file\n",
+    );
+    const cmd = bash(`gh issue create --title t --body-file ${f}`);
+    expect(verdict(cmd)).toBe("deny");
+    expect(reason(cmd)).toMatch(/inline threshold.*ADR-131/);
+  });
+
+  it("exit 2 — two Fix-Size lines is malformed, not first-wins", () => {
+    const f = bodyFile(
+      "User-Impact: the /dashboard route 500s\nFix-Size: 900 lines / 40 files\nFix-Size: 19 lines / 1 file\n",
+    );
+    expect(verdict(bash(`gh issue create --title t --body-file ${f}`))).toBe("deny");
+  });
+
+  // THE LOAD-BEARING PROPERTY: this check runs AFTER the allowlist match, so it
+  // can only ever NARROW. A cron whose allowlist omits `gh issue create` was
+  // already denied above and never reaches here; nothing else changes verdict.
+  it("narrows only — non-filing allowlisted commands are unaffected", () => {
+    expect(verdict(bash("gh issue list --limit 5"))).toBe("allow");
+    expect(verdict(bash("git commit -m x"))).toBe("allow");
+    expect(verdict(bash("gh issue comment 1 --body hi"))).toBe("allow");
+  });
+
+  it("narrows only — a cron without the verb is still denied by the ALLOWLIST", () => {
+    const noCreate = ALLOW.filter((p) => p !== "gh issue create");
+    const d = decide(bash("gh issue create --title t --label meta/machinery"), noCreate);
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(
+      (d.hookSpecificOutput as { permissionDecisionReason?: string })
+        .permissionDecisionReason,
+    ).toMatch(/not allowlisted/);
   });
 });

@@ -45,8 +45,97 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
+
+// --- Filing justification (#8038) ----------------------------------------
+// CLASS 3 OF THE FILING SURFACE. `guardrails:require-filing-justification` in
+// .claude/hooks/guardrails.sh covers interactive agents, but a cron-spawned
+// agent never loads that chain: buildCronEvalSettings() registers THIS hook as
+// the only PreToolUse entry under a `*` matcher. Ten scheduled agents carry
+// `gh issue create` via ISSUE_CREATOR_BASH_ALLOWLIST and file discretionary,
+// LLM-authored findings -- precisely the audit-exhaust population behind the
+// measured 626:39 engineering-to-product skew. Covering only the interactive
+// path would have left the primary deliverable missing its primary population.
+//
+// The three exits mirror guardrails.sh exactly, so an agent that learns the
+// contract on one surface does not have to relearn it on the other.
+//
+// This runs AFTER the allowlist match, so it only ever narrows: a cron whose
+// allowlist does not carry `gh issue create` is already denied above and never
+// reaches here. It cannot widen containment.
+// Resolved from THIS MODULE's location, never the CWD. A CWD-relative path
+// silently resolves to nothing wherever the process was not started at the repo
+// root -- measured: under vitest (cwd apps/web-platform) the read returned
+// empty, which degrades exit 2 out of existence while looking like a clean run.
+// The sandbox's CWD is not guaranteed either. Same class as guardrails.sh
+// resolving its copy via ${BASH_SOURCE[0]%/*}.
+const FILING_TAXONOMY_PATH = fileURLToPath(
+  new URL("../../../../.claude/hooks/lib/user-surface-taxonomy.txt", import.meta.url),
+);
+
+export function filingJustificationReason(tokens, readTaxonomy) {
+  // Only `gh issue create`. Anything else is not a filing.
+  if (!(tokens[0] === "gh" && tokens[1] === "issue" && tokens[2] === "create"))
+    return null;
+
+  // EXIT 1 — the machinery ledger. Read a REAL flag token, never prose: the
+  // tokens are already dequoted, so a --body that merely NAMES the flag stays
+  // inside one token and cannot be mistaken for it.
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if ((t === "--label" || t === "-l") && tokens[i + 1] === "meta/machinery") return null;
+    if (t === "--label=meta/machinery" || t === "-l=meta/machinery") return null;
+  }
+
+  // The body corpus: the dequoted --body value, or the --body-file contents.
+  let body = "";
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--body" || t === "-b") body = tokens[i + 1] || "";
+    else if (t.startsWith("--body=")) body = t.slice("--body=".length);
+    else if (t === "--body-file" || t === "-F") {
+      const f = tokens[i + 1] || "";
+      try { body = readTaxonomy ? readTaxonomy(f) : ""; } catch { body = ""; }
+    }
+  }
+
+  // EXIT 3 — a rule mandates the filing (ADR-155's closed vocabulary).
+  if (/(^|[^A-Za-z0-9_-])Mandated-By:\s*(hr|wg)-[a-z0-9-]+/.test(body)) return null;
+
+  // EXIT 2 — a NAMED user-visible surface AND a MEASURED size above the
+  // ADR-131 inline threshold. If the shared taxonomy cannot be read, exit 2
+  // simply does not apply -- exits 1 and 3 remain, so a degraded read narrows
+  // rather than breaking a cron that files honestly.
+  let surfaces = [];
+  try {
+    const raw = readTaxonomy ? readTaxonomy(FILING_TAXONOMY_PATH) : "";
+    surfaces = String(raw).split("\n").map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"));
+  } catch { surfaces = []; }
+
+  if (surfaces.length) {
+    const impact = /User-Impact:\s*([^\n]+)/.exec(body);
+    const sizes = body.match(/Fix-Size:\s*\d+\s*lines?\s*\/\s*\d+\s*files?/g) || [];
+    // Exactly one Fix-Size, or the filing is malformed: with two, whichever the
+    // regex binds first is the author's choice, which is not a measurement.
+    if (impact && sizes.length === 1) {
+      const named = surfaces.some((w) =>
+        new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(impact[1]));
+      const m = /Fix-Size:\s*(\d+)\s*lines?\s*\/\s*(\d+)\s*files?/.exec(sizes[0]);
+      if (named && m) {
+        const n = Number(m[1]);
+        const f = Number(m[2]);
+        if (n <= 100 && f <= 4)
+          return `filing inside the inline threshold (${n} lines / ${f} files, ADR-131 <=100/<=4) -- fix it inline instead of filing`;
+        return null;
+      }
+    }
+  }
+
+  return "filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>";
+}
 
 export function allowDecision() {
   return {
@@ -465,6 +554,11 @@ export function decide(input, allowPrefixes) {
         // the prefix match against `gh api repos/...` (AC4b single-quote fix).
         if (!segmentMatchesAllowlist(tokens.join(" "), bashPrefixes))
           return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
+        // Narrows only: an allowlisted `gh issue create` must still justify.
+        const filingReason = filingJustificationReason(tokens, (f) =>
+          readFileSync(f, "utf8"),
+        );
+        if (filingReason) return denyDecision(filingReason);
       }
       return allowDecision();
     }
