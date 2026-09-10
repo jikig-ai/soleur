@@ -209,7 +209,7 @@ is created. The gate reads only the command string already visible to the hook;
 the sweeper and the measurement read only issue metadata already visible to any
 repo collaborator. No new secret, store, or network egress is introduced.
 
-**Brand-survival threshold:** `aggregate pattern`
+- **Brand-survival threshold:** `aggregate pattern`
 
 The blast radius is a workflow-quality regression that compounds across many runs
 rather than a single-user incident: no credential, payment, personal data, or
@@ -975,13 +975,16 @@ logs:
 
 discoverability_test:
   command: bash .claude/hooks/guardrails.test.sh
-  expected_output: the suite's canonical all-pass summary line with a non-zero
-                   assertion count (a zero-assertion run is a failure, not a pass).
+  expected_output: "Fail: 0"
 ```
 
 The command's first token is `bash`, which is on preflight Check 10's probe-verb
 allowlist, and it contains no `ssh`. No credentials are required: the hook suite
-is fully local.
+is fully local. `Fail: 0` is matched as a substring of the suite's
+summary line; it is not on its own a guard against a vacuous run, because
+`Total: 0  Pass: 0  Fail: 0` would also contain it. What rules that out is the
+suite's own assertion-count floor, which exits non-zero below `MIN_ASSERTIONS`
+and so fails the probe on rc rather than on output.
 
 ## Domain Review
 
