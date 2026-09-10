@@ -25,7 +25,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || { printf 'ERROR: cannot cd to REPO_ROOT (%s)\n' "$REPO_ROOT" >&2; exit 2; }
 SUBJECT="$REPO_ROOT/scripts/battery-tag-authorship.test.sh"
 
 passes=0
