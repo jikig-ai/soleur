@@ -45,9 +45,13 @@ one-line changes whose *wrong* form was measured this session and looks correct.
 - [ ] 1.3 Parameterise the existing `bwrap-fail)` mock with `MOCK_BWRAP_FAIL_STDERR` and
       `MOCK_BWRAP_FAIL_RC`. Do not add new modes. `${VAR-default}` with **no colon** — an explicitly
       empty value must mean "silent", which `${VAR:-default}` would override.
-- [ ] 1.4 Write the five scenarios: spoken, silent (`rc=137`, empty), purity (leak canary + CR +
-      non-ASCII + `"` + `dp.st.` token), truncation (over-200, no redactable token), and
-      pass-with-chatter (`rc=0` with stderr). All fixtures synthesized.
+- [ ] 1.4 Write the six scenarios: spoken, silent (`rc=137`, empty), purity (leak canary + CR +
+      non-ASCII + `"` + `dp.st.` + `sk_live_`/`eyJ`/`whsec_` tokens), truncation (over-200, no
+      redactable token), pass-with-chatter (`rc=0` with stderr, asserting `actual_exit == 0`), and
+      **slow** (a duration knob invoking `/bin/sleep 1.1` directly so `create_mock_sleep`'s no-op
+      does not swallow it) asserting `ms >= 1000` while the fast scenarios assert `ms < 1000` —
+      bounded, never exact. Without the slow scenario `ms` has one value across the whole set and a
+      hardcoded `ms=0` passes everything. All fixtures synthesized.
 - [ ] 1.5 Write the Guard Contract assertions (plan `## Guard Contract`). They must fail against the
       current `ci-deploy.sh`.
 - [ ] 1.6 Record the RED output.
@@ -94,8 +98,9 @@ one-line changes whose *wrong* form was measured this session and looks correct.
 ## Phase 3 — Mutation-prove the guard
 
 - [ ] 3.1 Run mutation rows 1-7 and harness row H1; each must drive the suite RED. Restore after each.
-- [ ] 3.2 Run harness rows H2, H3, H4; each must PASS.
-- [ ] 3.3 Record the observed result per row for the PR body.
+- [ ] 3.2 Run harness row H5 (per-anchor sweep) — each single-anchor deletion must RED on its own.
+- [ ] 3.3 Run harness rows H2, H3, H4; each must PASS.
+- [ ] 3.4 Record the observed result per row for the PR body.
 
 ## Phase 4 — Correct #8016
 

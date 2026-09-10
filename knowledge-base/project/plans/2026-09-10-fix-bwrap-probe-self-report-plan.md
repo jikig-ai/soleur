@@ -399,9 +399,14 @@ through `jq --arg path … contains($path)` returns zero matches for both target
       for arg in "$@"; do
         if [[ "$arg" == *"bwrap"* ]]; then
           # Unparameterised default is byte-identical to today, so the OTHER consumer of this
-          # mode (assert_bwrap_canary_failure_rollback) is untouched. `${VAR-default}` uses NO
-          # colon on purpose: an explicitly EMPTY value must mean "the probe is silent" — the
-          # observed production signature — and `${VAR:-default}` would substitute the default.
+          # mode (assert_bwrap_canary_failure_rollback) is untouched. The colon asymmetry below is
+          # deliberate, and BOTH halves are load-bearing:
+          #   stderr uses `${VAR-default}` (NO colon) — an explicitly EMPTY value must mean "the
+          #     probe is silent", the observed production signature; `:-` would substitute the
+          #     default and make the silent fixture unreachable.
+          #   rc uses `${VAR:-1}` (WITH colon) — an empty value must fall back, because
+          #     `exit ""` fails with "numeric argument required".
+          # Documented together so the next reader does not "fix" the inconsistency.
           _e="${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}"
           if [[ -n "$_e" ]]; then printf '%s\n' "$_e" >&2; fi
           exit "${MOCK_BWRAP_FAIL_RC:-1}"
@@ -420,6 +425,18 @@ Four scenarios, zero new modes:
   also pin "exactly 200", because redaction precedes truncation and shrinks the string first, so a
   fixture with a redactable token lands below the clamp.
 - **truncation**: a plain over-200 input with **no** redactable token → field length exactly 200.
+  The split from the purity fixture is **not** because "a token-bearing input lands below the clamp" —
+  that is not generally true (`F14`'s own 340-char fixture with an ~80-char token lands at ~271, still
+  above 200). The durable reason: coupling the two makes the expected field length a function of the
+  redaction replacement's length, so changing `dp.REDACTED` silently changes what "exactly 200" means.
+- **slow**: a duration knob (`/bin/sleep 1.1`, invoked directly so `create_mock_sleep`'s no-op does
+  not swallow it) → asserted `ms >= 1000`, while every fast scenario asserts `ms < 1000`. **Bounded,
+  never exact** — `ms` is wall-clock-derived and an equality would flake exactly the way
+  `ci-deploy.test.sh:3558` was measured to. Without this scenario `ms` has ONE value across the whole
+  fixture set, a hardcoded `ms=0` passes the entire suite, and the sole discriminator for P2e is
+  decorative — the harness's own F11 lesson (`ci-deploy.test.sh:5497`: "the fixture set has to
+  instantiate more than one member of the … axis or the field is decorative") applied to a field this
+  plan cites that learning while introducing.
 - **pass-with-chatter**: `MOCK_BWRAP_FAIL_RC=0` with non-empty stderr → the probe succeeds and the
   text is still re-emitted (guards the success-path regression).
 
@@ -498,7 +515,7 @@ call it per scenario, rather than growing one assert body to cover several signa
       # Success-path twin, closed-vocabulary only. This is what makes the FIRST post-merge deploy
       # prove the field format end-to-end instead of proving only that the probe still passes, and
       # it accumulates the duration baseline that gives `ms=` meaning when a failure lands.
-      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: rc=0 ms=$PROBE_MS"
+      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: rc=0 ms=$PROBE_MS err_chars=${#BWRAP_ERR}"
       echo "Sandbox OK"
 ```
 
@@ -704,6 +721,9 @@ plausibly do for an unrelated reason.
 | 5 | Move the guarded `printf` from before the branch to inside the failure arm | A probe that PASSES while writing to stderr is silently swallowed — 97.6% of runs, and the early signal that would precede the next rollback. A delete-only battery cannot see this; only the pass-with-chatter scenario can. |
 | 6 | Stub `sed` to exit non-zero **mid-pipeline** inside `_cred_err_tail`, under the purity scenario | Must red with `err="<sanitize_failed>"` and with the `dp.st.` token absent from all three sinks. An earlier row mutated the helper to `return 1` on its last statement — a mutation nobody would ever make for an unrelated reason, which this matrix's own criterion rejects. The real failure is a mid-pipeline tool death, which under the `\|\|`-suspended errexit lets the helper emit a **partially sanitized** value and return 0. |
 | 7 | Pass `$BWRAP_ERR` instead of `${#BWRAP_ERR}` to `blocking_probe_sentry_event` | The raw text crosses the one sink with no Vector backstop. Must red on AC7's POST-body assertion — an assertion scoped to the logger file alone would stay green. |
+| 8 | Append a field **after** `err="…"` on the rollback line | The single likeliest unrelated future edit to this line, and the in-file sibling at `ci-deploy.sh:1013` invites it — that emitter runs `… kw=%s tok=%s docker_ver=%s`, i.e. the free-ish field with another `k=v` after it, and the production line in adjacent finding 1 carries a trailing `(registry=ghcr)` parenthetical too. Copying that shape silently destroys the ADR-115 trusted region. AC3's `$` anchor should catch it — this row is what proves the anchor is load-bearing rather than decorative. |
+| 9 | Emit the `DEPLOY_ROLLBACK` line **twice** | The assembly argues at length for "assert the count is exactly 1, never `head -1`". Nothing proved that count assertion discriminates. This is the extractor-uniqueness axis; every other row perturbs SUT content. |
+| 10 | Change `err_chars=${#BWRAP_ERR}` to `${#BWRAP_ERR_SAN}` | A tidy-up that reads as an improvement ("use the sanitized value consistently") and silently deletes P2c: post-sanitization the field reports 200 beside a 200-character value, making truncation permanently undetectable. One field's provenance carries the whole property. |
 
 **Harness rows.**
 
@@ -712,7 +732,8 @@ plausibly do for an unrelated reason.
 | H1 | Mutate the SUITE, not the script: delete the field anchors from the assertion so it asserts only that a line exists | A meta-check must RED. Without it a vacuous assertion passes forever. |
 | H2 | **Must-PASS, non-canonical:** the purity scenario emits a message nothing like the canonical `bwrap: No permissions to create new namespace` — multi-line, non-ASCII, over 200 chars | Must **PASS**. The contract permits any message; the assertion anchors on the field's *structure*, never on the one canonical string. |
 | H3 | **Must-PASS, non-canonical:** the silent scenario at rc=137, zero bytes | Must **PASS** with `rc=137 err_chars=0 err="<empty>"`. |
-| H4 | Assert `MOCK_LOGGER_CAPTURE_FILE` is unset after the scenario, and that two consecutive full-suite runs produce byte-identical output | Catches a hoisted export contaminating the four later scenarios that depend on the same variable. |
+| H4 | Assert `MOCK_LOGGER_CAPTURE_FILE`, `MOCK_BWRAP_FAIL_RC` and `MOCK_BWRAP_FAIL_STDERR` are all unset after the scenario | Catches a hoisted export contaminating the four later scenarios that depend on `MOCK_LOGGER_CAPTURE_FILE`, and the two knobs this PR introduces. **The byte-identical-output half of an earlier draft of this row is deleted: it was MEASURED to fail on an untouched worktree.** Two clean baseline runs differ at `ci-deploy.test.sh:3558` — `PASS: T3 no-cron deploy: zero-wait drain (0s…)` vs `(1s…)`, because `T3_WAIT` is a `date +%s` delta that can cross a second boundary. The row would have reported "a hoisted export contaminated four scenarios" when nothing was hoisted. A harness row that reds at baseline is indistinguishable from a catch. |
+| H5 | Per-anchor sweep: delete each field anchor from the assertion **one at a time** (`rc=`, `ms=`, `cstate=`, `err_chars=`, the `err="…"$` tail) | Each deletion must red on its own. H1 deletes them all at once, which cannot show that any individual anchor discriminates — an all-or-nothing meta-check passes while four of five anchors are decorative. |
 
 **Anchor discipline** (`cq-assert-anchor-not-bare-token`): every assertion selects the single line
 containing `DEPLOY_ROLLBACK: bwrap sandbox non-functional` and then tests fields **on that selected
@@ -762,6 +783,11 @@ had no runnable form, and one used the exact `grep -c` idiom the repo keeps a li
   ```
 
   One anchored regex verifies all four properties at once, including the ADR-115 trusted region.
+  **Run it against the PURITY scenario's line, not only the default one.** Under the canonical
+  fixture (no double quote in the message) the `[^"]*` class is vacuous with respect to the property
+  it exists for — and quote-flattening is the one `_cred_err_tail` behaviour AC3 structurally depends
+  on that *neither* `T-7095-3` nor `F14` exercises (both inject control bytes and a `dp.st.` token,
+  neither injects a `"`). Without a `"` in the input, the anchor proves nothing about breakout.
 - **AC4** — `BWRAP_ERR_SAN` is assigned with an errexit rescue (`|| BWRAP_ERR_SAN="<sanitize_failed>"`).
 - **AC5** — Sanitization routes through `_cred_err_tail "$BWRAP_ERR"`, and **`ci-deploy.sh` alone**
   (not the diff, which legitimately adds test-side line selection) introduces no new
@@ -786,14 +812,25 @@ had no runnable form, and one used the exact `grep -c` idiom the repo keeps a li
   and `err_chars` reports the pre-sanitization length. Separate fixture from AC7's, because redaction
   precedes truncation and shrinks a token-bearing input below the clamp.
 - **AC11** — Pass path: with `MOCK_BWRAP_FAIL_RC=0` and non-empty stderr, the probe succeeds **and**
-  the sanitized text is still re-emitted to `$output`. This is the 97.6% branch.
+  the sanitized text is still re-emitted to `$output`, **and `actual_exit == 0`**. The exit assertion
+  is not ceremony: this is the first time in the file's history that `bwrap-fail` mode drives a deploy
+  *past* the sandbox gate, through every downstream stage (`ps`, `inspect`, `logs`, zot, cosign). Without
+  it the scenario passes even if the deploy dies three stages later for an unrelated reason. This is
+  the 97.6% branch.
 - **AC12** — The gate is still asserted, not replaced: `reason` equals `canary_sandbox_failed`,
   `exit_code` equals `1`, and the canary `docker stop`/`docker rm` ran.
-- **AC13** — The success-path twin exists: exactly one `SANDBOX_PROBE_OK: rc=0 ms=` logger line
-  carrying **no** free-text field, asserted by a green-path scenario. Count via
-  `n="$(grep -c 'SANDBOX_PROBE_OK' apps/web-platform/infra/ci-deploy.sh || true)"; [[ "$n" == "1" ]]`
-  — the `|| true` is load-bearing, because `grep -c` prints `0` **and exits 1** on no match, which is
-  the exact class `scripts/lint-shell-capture-exit.py` exists to prevent.
+- **AC13** — The success-path twin exists and **executed**: under the green-path scenario,
+  `$MOCK_LOGGER_CAPTURE_FILE` contains exactly one line matching `SANDBOX_PROBE_OK: rc=0 ms=[0-9]+ err_chars=[0-9]+`
+  and that line carries no free-text field. Counted on the **capture file, not the source** — an
+  earlier draft counted `grep -c 'SANDBOX_PROBE_OK' ci-deploy.sh`, which is the same
+  grep-the-file-the-diff-just-edited tautology this plan condemns 120 lines earlier when rejecting it
+  as a discoverability test. A count on the capture means the line *ran*; a count on the source means
+  the text exists. (Where a source count is genuinely wanted, `|| true` remains load-bearing: `grep -c`
+  prints `0` **and exits 1** on no match — the class `scripts/lint-shell-capture-exit.py` exists for.)
+  `err_chars=` is on the twin deliberately: `${#BWRAP_ERR}` is computed identically on both paths and
+  an integer stays closed-vocabulary, so 83 green deploys per 28 days become a live positive control
+  that the capture variable is populated — instead of the field first executing for real during the
+  incident it exists to diagnose.
 - **AC14** — `blocking_probe_sentry_event` exists, is env-guarded on the same three `SENTRY_*`
   variables as `sandbox_canary_sentry_event`, is invoked with `|| true`, and carries **only** the
   closed vocabulary `rc`, `ms`, `cstate`, `err_chars` — never `err`. A scenario asserts the POST is
@@ -810,7 +847,10 @@ had no runnable form, and one used the exact `grep -c` idiom the repo keeps a li
   - `scripts/followthroughs/ci-deploy-sentry-post-fail-6475.sh`'s header enumerates **seven**
     fail-open Sentry sites; this makes eight. Update that count and name the new tag, or the soak's
     own inventory silently drifts.
-- **AC15** — Every mutation row 1-7 and harness row H1 observed RED; H2, H3 and H4 observed PASS.
+- **AC15** — Every mutation row 1-10 and harness rows H1/H5 observed RED; H2, H3 and H4 observed
+  PASS. **Every harness row was calibrated against the pristine tree first** — a row that reds at
+  baseline reports the baseline, not a catch (H4's earlier byte-identical form was measured to do
+  exactly that).
   Results recorded in the PR body. `bash apps/web-platform/infra/ci-deploy.test.sh` exits 0 with a
   total strictly greater than the 216 baseline and `0 failed`.
 - **AC16** — `_cred_err_tail`'s header records its second producer, its new fail-closed contract, and
@@ -1242,6 +1282,27 @@ none.
   redactable token.
 - **`${_e: -200}` does not clamp** — bash yields the EMPTY string for a negative offset larger than
   the string. `_cred_err_tail` documents this and uses an explicit length test.
+- **A determinism claim is an experiment, not a deduction — and this plan failed its own rule once.**
+  An earlier harness row asserted "two consecutive full-suite runs produce byte-identical output".
+  Measured on the untouched worktree, they do not: `ci-deploy.test.sh:3558` emits
+  `zero-wait drain (0s…)` or `(1s…)` depending on whether a `date +%s` delta crosses a second
+  boundary. The row would have redded at baseline and been read as a catch. **Calibrate every harness
+  row against the pristine tree before Phase 3 records a verdict** — a row that reds on a clean tree
+  reports the tree, and that is indistinguishable from finding a defect. The plan's own Sharp Edges
+  say "any plan turning on shell exit-code semantics must run the experiment rather than reason about
+  it"; determinism is the same class and an earlier draft reasoned instead.
+- **A field with one value across the whole fixture set is decorative, however well justified.** Under
+  the mock every probe returns instantly, so `ms` was 0 everywhere and a hardcoded `ms=0` would have
+  passed the entire suite — while `ms` is the *sole* discriminator for the H3-vs-H4 split it was added
+  for. The harness already records this lesson at `ci-deploy.test.sh:5497` ("the fixture set has to
+  instantiate more than one member of the … axis or the field is decorative") and this plan cited that
+  learning family while reproducing the defect on a new field. Bound the second value (`ms >= 1000`),
+  never pin it — wall-clock equality is how `:3558` flakes.
+- **A mutation battery can measure depth on one axis and report it as breadth.** Six rows perturbing
+  the emitted line's content is one axis explored six ways. The axes an earlier draft never touched
+  were **extractor uniqueness** (does the "exactly one match" count actually discriminate?) and
+  **field order** (is the `$` anchor load-bearing or decorative?) — both now rows 8 and 9, and both
+  guarding assertions the plan argued for at length and then never proved.
 - **A plan whose `## User-Brand Impact` is empty or omits the threshold fails `deepen-plan` Phase 4.6.**
 - **`/ship` Phase 3.7 WILL fire** because the diff touches `ci-deploy.sh`, and Phase 5.5 will surface
   the `deploy_pipeline_fix` auto-apply. Both correct and expected: a deploy-gate change cannot be
