@@ -543,10 +543,16 @@ cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
 # one-sided change is a silent no-op.
 LOG_TAG="inngest-server-probe"
 
-# DRIFT-PINNED (#8015). Byte-identical to inngest-registry-probe.sh's FUNCTIONS_GQL_QUERY and to
-# the copy inlined in inngest-cutover-flip.sh; inngest-cutover-flip.test.sh pins all three. At
-# COLUMN ZERO deliberately -- that pin greps `^readonly FUNCTIONS_GQL_QUERY=`, so an indented
-# copy inside this heredoc would be invisible to it and the pin would be vacuous for this file.
+# DRIFT-PINNED (#8015). Byte-identical to the registry probe's FUNCTIONS_GQL_QUERY and to the
+# copy inlined in inngest-cutover-flip.sh; inngest-cutover-flip.test.sh pins all three. At COLUMN
+# ZERO deliberately -- that pin greps `^readonly FUNCTIONS_GQL_QUERY=`, so an indented copy inside
+# this heredoc would be invisible to it and the pin would be vacuous for this file.
+#
+# THE PROBE SCRIPT IS NAMED NOWHERE IN THIS FILE, AND THAT IS AN INVARIANT, not an oversight.
+# cutover-inngest-workflow.test.sh enforces disjointness: that script is delivered to the WEB host
+# and must be ABSENT from every OCI bake surface, which is exactly why the query text is inlined
+# here rather than sourced. The guard is a `grep -qF` over this file, so writing the filename even
+# in a COMMENT trips it -- which it did, on the first draft of this block.
 readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
 
 # --- gather (never branch on the results before the emit below) ---
