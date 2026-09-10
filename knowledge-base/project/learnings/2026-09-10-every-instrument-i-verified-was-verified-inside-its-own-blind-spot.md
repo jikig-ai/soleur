@@ -161,3 +161,33 @@ legitimate outage vocabulary, so a `\b`-style guard would delete a true positive
 these four hits is that the noun they modify is a *gate*, a *deep-dive* section heading, or a
 *window* — a mechanism, not an event. Anyone touching that regex should treat "the token names a
 mechanism" as the case to exclude, and fixture it in both directions before believing the change.
+
+**20. The fork fix counted nodes at the maximum depth and called it counting leaves** — Recovery:
+found by the pre-ship completeness consult, reproduced two ways before fixing, then fixed by
+counting leaves (a row is a leaf when the next row is not deeper) and asking lsblk for ASCII with
+`-i`. Prevention: this is F-4 recurring inside its own fix, which makes the useful lesson the
+FIXTURE, not the code. Every fork fixture written for the first fix was depth-SYMMETRIC, so the
+whole fixture family shared one accidental property, and the property was the thing under test. A
+chain and a symmetric fork cannot distinguish "deepest node" from "leaf"; only an ASYMMETRIC fork
+can. When a fix turns a single-valued read into a multi-valued one, vary the dimension the new rule
+keys on — here depth — not just the count. Second half: the same tree returned a confident answer
+in UTF-8 and `__AMBIGUOUS__` in ASCII, because lsblk indents a non-last sibling 4 bytes and a last
+sibling 2. A byte-oriented rule over glyph-indented output is locale-dependent, and the probe unit
+sets no `LANG`.
+
+**21. I wrote an apostrophe into an awk comment again** — Recovery: caught by re-extracting the
+program and asserting zero apostrophes before executing it; `bash -n` passed over it, exactly as it
+did the first time this session. Prevention: the extract-and-execute harness is the control, and it
+only works if it runs on EVERY carrier edit, including one that only touches comments. A comment is
+not a safe edit inside a single-quoted program.
+
+**22. A secret-shaped literal in a comment blocked the commit** — Recovery: gitleaks flagged a
+`sk_live_`-shaped example I had written into the emitter to document what the allowlist does NOT
+catch; reworded to describe the shape without writing a scannable token. Prevention: when
+documenting what a redaction rule misses, describe the shape, never spell an instance — the file is
+scanned, so the illustration blocks every future commit that touches it.
+
+**23. A PreToolUse deny blocks the WHOLE Bash call, not the offending command** — Recovery: my
+`git add && git commit` call was denied at the hook, so the `git add` never ran and the retry
+scanned a stale index — making a fixed file look unfixed. Prevention: never chain a staging step
+with a hook-gated step; stage in its own call so a deny cannot silently roll back the setup.

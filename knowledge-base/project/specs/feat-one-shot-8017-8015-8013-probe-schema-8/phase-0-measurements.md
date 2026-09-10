@@ -100,6 +100,21 @@ rules are opposite and both are correct for their own command. Stated explicitly
 this measurement's rule against the shipped command yields the dm node or the partition instead of
 the base disk — a wrong device pin, which is the exact class #8017 exists to close.
 
+> **Superseded 2026-09-10 (#8017, pre-ship review).** Both halves of the sentence above are now
+> wrong, and the record is kept rather than edited because the second error was built on the first.
+>
+> The command is `lsblk -inso NAME` — `-i` was added because without it lsblk indents a NON-last
+> sibling with U+2502 + space (4 bytes) and a last sibling with two plain spaces (2 bytes), so a
+> byte-oriented depth stops tracking logical depth.
+>
+> And **"the LAST non-empty row" is not the rule.** It is right only for a CHAIN, which is every
+> tree measured on this page, because this host has no md/RAID or multipath device. On a FORK the
+> inverse tree has more than one terminal row and the last of them is an arbitrary pick — the
+> defect this line's own closing clause names. The rule is: take the LEAF SET (a row is a leaf when
+> the next row is not deeper than it), and refuse with `__AMBIGUOUS__` when it holds more than one
+> member. A single-leaf tree makes the two rules agree, which is why measuring only chains could
+> not tell them apart.
+
 **(d) A whole-`by-id` walk is multi-valued** — three aliases resolved to one device here (an eui
 form and two model forms). This is what makes an unconstrained reverse map need an arbitrary
 tiebreak, and why the glob is constrained to `scsi-0HC_Volume_*` with an `__AMBIGUOUS__` sentinel
