@@ -15,14 +15,39 @@ connection string that embeds it.
 ```bash
 scripts/rotate-supabase-db-credential.sh --config dev
 scripts/rotate-supabase-db-credential.sh --config prd --yes-rotate-prd
+scripts/rotate-supabase-db-credential.sh --config dev --leaked   # + session sweep
 ```
 
 That is the whole procedure. There is no dashboard step and no SSH. If you are
 reading this expecting a checklist of things to click, the script is the
 checklist — `hr-never-label-any-step-as-manual-without`.
 
-`prd` refuses to run without `--yes-rotate-prd` (exit 3): rotating it breaks
-every live connection until Doppler propagates, which is a production write.
+**The production gate is decided on the derived project ref, not the config
+name** (exit 3). The name is a label the caller chooses; the ref is what actually
+gets rotated. A config named `dev_anything` whose pooler URL points at the prd
+project still demands `--yes-rotate-prd`. An earlier version gated on
+`$CONFIG == prd*` while deriving the target from the secret — those are two
+different things, and the mismatch was a path to rotating production without an
+ack.
+
+## Rotation does NOT drop established sessions
+
+A session already authenticated with the leaked password **survives the
+rotation**. For leaked-credential response this is the step people miss.
+
+`--leaked` sweeps them, scoped to the **rotated role**:
+
+```sql
+select pg_terminate_backend(pid) from pg_stat_activity
+where usename = '<rotated role>' and pid <> pg_backend_pid();
+```
+
+Scoping matters. A blanket terminate also kills Supabase's own backends —
+`authenticator` (PostgREST), `supabase_admin` (pg_cron, pg_net,
+postgres_exporter), `pgbouncer` (Supavisor auth_query). On the 2026-09-10 dev
+rotation all 18 live sessions were exactly those, and **none** ran as `postgres`,
+the rotated role — so there was nothing to terminate and a blanket sweep would
+have been pure self-inflicted disruption. Check before you sweep.
 
 ## What it does
 
