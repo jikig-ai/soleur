@@ -664,7 +664,7 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
           jq -n --arg n "$_fj_n" --arg m "$_fj_m" '{
             hookSpecificOutput: {
               hookEventName: "PreToolUse", permissionDecision: "deny",
-              permissionDecisionReason: ("BLOCKED: Fix-Size: " + $n + " lines / " + $m + " files is INSIDE the inline threshold (<=100 lines AND <=4 files, per ADR-131 which records it moving from <=30/<=2 to <=100/<=4). Fix it inline in this PR instead of filing. If the blocker is AUTHORITY rather than size -- an operator-only credential or a production decision -- say so with a Mandated-By: <rule-id> line, which is a different exit.")
+              permissionDecisionReason: ("BLOCKED: Fix-Size: " + $n + (if $n == "1" then " line" else " lines" end) + " / " + $m + (if $m == "1" then " file" else " files" end) + " is INSIDE the inline threshold (<=100 lines AND <=4 files, per ADR-131 which records it moving from <=30/<=2 to <=100/<=4). Fix it inline in this PR instead of filing. If the blocker is AUTHORITY rather than size -- an operator-only credential or a production decision -- say so with a Mandated-By: <rule-id> line, which is a different exit.")
             }
           }'
           exit 0
