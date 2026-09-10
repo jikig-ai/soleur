@@ -2265,6 +2265,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // credential" but "is there no unauthenticated probe of the same property".
   //
   // The 10 that remains is #7873's and #7829's, untouched by this PR.
+  //
   const BASELINE_DECLARED_PROBES = 10;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {

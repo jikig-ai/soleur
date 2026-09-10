@@ -61,6 +61,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/plugin-root-anchoring.test.ts",
   "test/plugin-root-list-carveout-coupling.test.ts",
   "test/repo-wide-containment.test.ts",
+  "test/resend-sender-domain.test.ts",
   "test/safe-bash.test.ts",
   "test/safe-return-to.test.ts",
   "test/sandbox-relative-paths.test.ts",
