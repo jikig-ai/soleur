@@ -681,6 +681,43 @@ case "$_nopage" in
   *)  pass ;;
 esac
 
+# ═══ GUARD 13 — every deploy-ACTING step is gated on the ordering guard ═════
+# ADR-215 Decision 5. Part 1 removed the property that ordered deploys (ci.yml's
+# single `main` group made CI completions FIFO), so `workflow_run` guarantees
+# correct-SHA, not latest-SHA. The monotonic-version precondition is what
+# replaces it — and it is a STEP, so it protects only the steps that consult its
+# output. An added deploy-acting step without the gate deploys the OLDER version
+# and the run stays green, which is the same silent shape G11 covers for
+# release-outcome. (My own first version of this guard used a bare `exit 0`,
+# which would have let the webhook fire anyway; the output form is the fix.)
+_deploy_steps=$(python3 -c "
+import yaml, json
+d = yaml.safe_load(open('$REL'))
+out = []
+for st in (d['jobs']['deploy'].get('steps') or []):
+    name = (st.get('name') or st.get('uses') or '')
+    cond = str(st.get('if', ''))
+    out.append({'name': name, 'gated': 'superseded' in cond, 'cond': cond})
+print(json.dumps(out))
+")
+# ACTING = it can change production, or assert that production changed. Matched
+# on the step's own name, so a NEW one is caught by shape rather than by a list.
+_ungated=$(printf '%s' "$_deploy_steps" | python3 -c "
+import json, sys, re
+ACTING = re.compile(r'deploy via|webhook|verify deploy|swap|roll ?out|live.?verify', re.I)
+bad = [s['name'] for s in json.load(sys.stdin)
+       if ACTING.search(s['name'] or '') and not s['gated']]
+print('; '.join(bad))
+")
+_n_gated=$(printf '%s' "$_deploy_steps" | python3 -c "
+import json,sys; print(sum(1 for s in json.load(sys.stdin) if s['gated']))")
+if [ "$_n_gated" -ge 3 ]; then pass; else
+  fail "G13 only $_n_gated deploy steps are gated on steps.ordering.outputs.superseded — the ordering guard was the replacement for the FIFO property part 1 removed, and with fewer than the three acting steps gated it is not protecting the deploy"
+fi
+if [ -z "$_ungated" ]; then pass; else
+  fail "G13 deploy-acting step(s) NOT gated on the ordering guard: ${_ungated}. When a newer version is already live this step still acts, so an out-of-order completion deploys the OLDER build and the run stays GREEN (ADR-215 Decision 5)"
+fi
+
 # ═══ GUARD 10 — the artifact contract holds ACROSS the file boundary ════════
 # The artifact name, its schema number and its field set are stated in
 # reusable-release.yml (producer) and RESTATED in web-platform-release.yml
@@ -985,11 +1022,12 @@ TOTAL=$((passes + fails))
 # + 1 G11 release-outcome needs completeness + 1 Hc far-side closure
 # + 3 G12 arm-parity (extraction, emptiness, coherence)
 # + 1 G3-13b carried-value non-vacuity + 1 G9b ci_not_green arm
-# + 2 G3 DISPATCH_SHA read-scope (span located, no read outside it) = 65
+# + 2 G3 DISPATCH_SHA read-scope (span located, no read outside it)
+# + 2 G13 ordering-guard coverage (floor, and no ungated acting step) = 67
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=65
+MIN_ROWS=67
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
