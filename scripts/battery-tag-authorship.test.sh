@@ -83,9 +83,11 @@
 # open, and grading is per COMMAND rather than per line, so that class is closed rather than
 # declared. Both false greens were demonstrated end-to-end before being fixed.
 #
-# ENVIRONMENT DELTA, re-measured 2026-09-10. Under CI the relevance gate's bypass is an
+# ENVIRONMENT DELTA, re-measured 2026-09-10 (and again after merging origin/main the same day,
+# which moved roots 457/460 -> 459/462 and the closure 808 -> 833 — the drift this paragraph's
+# closing sentence predicts, arriving within the hour). Under CI the relevance gate's bypass is an
 # unconditional early return, so a decline is unreachable and `skip_suite` is never invoked —
-# those registrations arrive as real commands instead. Measured: roots 457 (local) vs 460 (CI=1),
+# those registrations arrive as real commands instead. Measured: roots 459 (local) vs 462 (CI=1),
 # and OUT-OF-CLASS 1 vs 2 (the two `bash -c '… npm run test:ci …'` registrations, the second a
 # decline locally). `unclassified` is 0 in BOTH, and that distinction matters: the inline-script
 # arm logs INLINE_SCRIPT and returns 1, then the OUT_OF_CLASS ledger claims it — so the counter
