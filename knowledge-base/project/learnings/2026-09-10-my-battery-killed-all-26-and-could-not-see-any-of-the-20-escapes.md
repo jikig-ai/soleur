@@ -180,6 +180,67 @@ overlap with the panel's.
     or write through a non-Bash surface. This is error 5's class a third time, from the other
     side: there my grep matched my own comment; here the repo's guard matched my own document.
 
+## The fifth escape: the gate could not run at all where it matters
+
+Everything above was measured on my machine. In CI the gate **ABORTed on every run**, from the
+first commit that carried it, and the PR never once passed the required `test` context.
+
+`_git_data_hcl_block` hands its pattern to awk as a DYNAMIC regex (`$0 ~ open_re`). The two awk
+implementations disagree about one character:
+
+| engine | `templatefile\(` | ships on |
+|---|---|---|
+| mawk | literal paren — matches | Ubuntu (and this workstation) |
+| gawk | strips the `\`, then cannot compile the bare `(` — **fatal** | GitHub runners |
+
+So the pattern was green locally and fatal in CI. The gate reported ABORT — correctly, and
+fail-closed — but the consequence is the part worth keeping: **the same library backs the
+birth-dispatch interlock, which runs on those same runners, so the interlock could never
+RELEASE.** The guard built to prevent a silent authorization collapse was itself unable to
+measure in the only environment that enforces it. Same defect class as the gate's own subject,
+one layer out, for the third time in this PR.
+
+**Prevention:** for any regex handed to awk as a *dynamic* string, use a bracket expression
+(`[(]`), never a backslash escape. The arm that pins it EMULATES gawk instead of banning a
+spelling — strip the backslashes as gawk does, then require the result to still compile
+(`grep -E` exits 2 on an invalid regex and 1 on a valid non-match, so the exit code separates
+them) — and it aborts if it finds zero call sites, so a broken extractor cannot read as clean.
+
+## Three ways I misread my own instruments, after the panel
+
+15. **I eliminated the correct hypothesis with a local measurement.** I ran
+    `readlink -f "$(command -v awk)"`, saw `mawk`, and wrote "mawk locally, mawk in CI — theory
+    out." Ubuntu's default is mawk; the GitHub runner ships gawk. One true fact about THIS
+    machine, asserted about a machine I had never inspected, and it cost about two CI cycles.
+    **Prevention:** never eliminate an environment hypothesis with a measurement taken in the
+    other environment. Make the instrument PRINT the environment fact (`awk --version`,
+    `BASH_VERSION`, `LC_ALL`) from inside the failing run — the diagnostic did this and
+    overturned the elimination in one cycle.
+16. **I read a `cancelled` shard as absence of information.** `test-scripts (3/3)` was cancelled
+    when a sibling shard failed first, so I recorded "the shard I fixed is green" and reported
+    the picture as clean. A cancelled job is UNRESOLVED, exactly like a reaped run — it is not
+    evidence of anything, and it hid a failure that had been present from the first commit.
+    **Prevention:** enumerate every shard's conclusion before claiming a check-set is
+    understood, and treat `cancelled` as a gap to be re-run, never as a pass or a non-event.
+17. **"Verified 116/0" was a local claim I repeated as though it were general.** It was true on
+    my machine and false in CI for the whole session, and the brief inherited the same
+    local-only claim from the session before it.
+    **Prevention:** say where a verification ran. "116/0 locally" and "116/0 in CI" are
+    different claims, and only the second one gates a merge.
+
+## The instrument that ended it
+
+The self-test that found this printed, for six hours, exactly one line: `the accept branch did
+not record a pass — every _am arm is vacuous`. A conclusion with none of the measurement behind
+it, on a surface where nobody can re-run it by hand. Adding the probe's rc, the gate's own
+output, the fixture listing and the environment resolved a cause that four rounds of local
+hypothesis-testing had not.
+
+**Prevention, and it generalises past this file:** an assertion that can only fire in CI must
+carry its evidence in the failure message. Ask of every such assertion: *if this fires on a
+machine I cannot log into, does the message contain enough to act on?* Proving that costs one
+deliberate red run — drive it, do not assume it.
+
 ## What shaped every decision
 
 A binding sha256 covers **13 files**; moving it voids the committed rung-2 boot evidence and
