@@ -442,7 +442,8 @@ r2check "no render module at all => ABORT" 1 "ABORT" "$R2M/ci.yml" "$R2/ok.env"
 # verifies the tarball it just chose and passes — the #6570 boot-brick class, rehearsed away.
 #
 # The gap is closed by DECLARATION: the rehearsal writes what it diverged on, and anything
-# outside the identity-shaped allowlist refuses.
+# outside the declared-divergence allowlist refuses. (Five of its eight members are
+# identity-shaped; the three pubkeys are a CAPABILITY divergence -- see the library.)
 r2_evidence "$R2/div-ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/2" "$R2_SHA" \
   "host_name,git_data_volume_id,git_data_luks_volume_id,doppler_token,doppler_config_name"
 r2check "divergence confined to identity-shaped vars => RELEASED" 0 "RELEASED" \
@@ -997,7 +998,7 @@ _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_
 # module call, the locals, the three tls_private_key resources and the three doppler_secret
 # blocks that publish the private halves.
 #
-# The one live-tree arm (B14) is deliberate and is the D8 decision: it asserts the gate
+# The one live-tree arm (B23) is deliberate and is the D8 decision: it asserts the gate
 # RELEASES on the tree as committed. Unlike the countdown-timer shape this file's header
 # warns about, its green does not depend on any work being unfinished — the production root
 # has always had three distinct keys, and the day it does not is the day this gate is
@@ -1056,18 +1057,58 @@ resource "hcloud_server" "git_data" {
   user_data = base64gzip(module.git_data_userdata.rendered)
 }
 resource "doppler_secret" "git_transport_ssh_private_key" {
+  project    = "soleur"
+  config     = "prd"
   name       = "GIT_TRANSPORT_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_transport.private_key_openssh
 }
 resource "doppler_secret" "git_provision_ssh_private_key" {
+  project    = "soleur"
+  config     = "prd"
   name       = "GIT_PROVISION_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_provision.private_key_openssh
 }
 resource "doppler_secret" "git_remove_ssh_private_key" {
+  project    = "soleur"
+  config     = "prd"
   name       = "GIT_REMOVE_SSH_PRIVATE_KEY"
   value      = tls_private_key.git_remove.private_key_openssh
 }
 TF
+}
+
+# _AM DECIDES ITS OWN VERDICT, SO IT NEEDS ITS OWN CONTROL.
+#
+# The ledger, the counter reconciliation and the assertion floor all watch pass()/fail().
+# None of them can see a helper that takes the WRONG BRANCH and then calls pass() — both
+# helpers behave perfectly and every counter reconciles. Measured on this file: replacing
+# _am's condition with `if true; then` reported `103 passed, 0 failed`, exit 0, with all 23
+# arms "running" and asserting nothing. The floor cannot help: the arms still ran.
+#
+# So _am is driven once in each direction with a known answer, and the counters are
+# snapshotted and unwound so the probe does not pollute the totals it is protecting. This
+# reports through printf + exit rather than through the helpers it backstops.
+_am_self_test() {
+  local _p="$passes" _f="$fails" _n="${#FAILURES[@]}"
+  local _d; _d="$TMP/am-selftest"; _authmap_root "$_d"
+  # The probes' own output is SUPPRESSED. The negative probe necessarily makes _am print a
+  # FAIL line, and a FAIL line on screen next to a green verdict is the exact shape this
+  # repo treats as a broken instrument -- it would train a reader (and any log grep) to
+  # discount real ones. Only this function's own ok/FAIL line is user-visible.
+  _am "selftest-must-pass" 0 "pairwise-distinct" "$_d" >/dev/null 2>&1
+  local _after_pass="$passes"
+  _am "selftest-must-fail" 99 "a needle that cannot appear anywhere" "$_d" >/dev/null 2>&1
+  local _after_fail="$fails"
+  passes="$_p"; fails="$_f"; FAILURES=("${FAILURES[@]:0:$_n}")
+  if [[ "$_after_pass" -ne $((_p + 1)) ]]; then
+    printf '  FAIL _am SELF-TEST: the accept branch did not record a pass — every _am arm is vacuous.\n'
+    exit 1
+  fi
+  if [[ "$_after_fail" -ne $((_f + 1)) ]]; then
+    printf '  FAIL _am SELF-TEST: _am did NOT reject an impossible expectation — its condition is disarmed and all 23 arms below assert nothing.\n'
+    exit 1
+  fi
+  printf '  ok   _am self-test: the helper both accepts and REJECTS (its 23 arms are live)\n'
 }
 
 # _am <name> <want_rc> <needle> <root-dir>
@@ -1080,6 +1121,8 @@ _am() {
     fail "$name (want rc=$want containing '$needle')" "$rc" "$out"
   fi
 }
+
+_am_self_test
 
 # ── B1 — THE CONTROL. Every arm below is void without it. ────────────────────────────
 B="$TMP/am-canonical"; _authmap_root "$B"
@@ -1220,6 +1263,122 @@ else
   fail "B23: the LIVE production root releases (rc=$_rc). If this is an ABORT the gate could not PARSE the root; if a HOLD the authorization map itself is wrong. The message distinguishes them." "$_rc" "$_out"
 fi
 
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+# B24-B36 — THE ESCAPES A SIX-AGENT REVIEW FOUND, EACH PINNED BY ITS OWN ARM.
+#
+# Every row below was MEASURED releasing (rc=0) against a copy of the live production root
+# before it was closed. They share one shape: a scan that was ROOT-wide where the property
+# is BLOCK-scoped, or a predicate applied at one site and not its twin. They are here
+# because a fix without a fixture is exactly as unpinned as the blind spot it closed --
+# and because the first battery, 26 rows and all killed, could not see any of them: every
+# row it had perturbed the SUT toward an obviously-broken spelling, and these are all
+# innocuous-looking SIBLING declarations that mask a real defect.
+# ══════════════════════════════════════════════════════════════════════════════════════
+
+# --- the two that mask the headline defects this gate exists to catch ------------------
+B="$TMP/am-b24"; _authmap_root "$B"
+sed -i 's|git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)|git_remove_pubkey    = trimspace(tls_private_key.git_transport.public_key_openssh)|' "$B/git-data.tf"
+cat > "$B/zz-outputs.tf" <<'TFX'
+output "git_data_key_fingerprints" {
+  value = {
+    git_remove_pubkey = tls_private_key.git_remove.public_key_openssh
+  }
+}
+TFX
+_am "B24: a collapse masked by an unrelated output block still HOLDs (link 4 is locals-scoped)" 1 "resolve to only" "$B"
+
+B="$TMP/am-b25"; _authmap_root "$B"
+sed -i 's|^  value      = tls_private_key.git_remove.private_key_openssh|  value      = tls_private_key.git_transport.private_key_openssh|' "$B/git-data.tf"
+cat > "$B/zz-dev.tf" <<'TFX'
+resource "doppler_secret" "git_remove_dev" {
+  project    = "soleur"
+  config     = "dev"
+  name       = "GIT_REMOVE_SSH_PRIVATE_KEY"
+  value      = tls_private_key.git_remove.private_key_openssh
+}
+TFX
+_am "B25: a permutation masked by a dev-config mirror still HOLDs (link 5 keys on config too)" 1 "PERMUTED" "$B"
+
+# --- ambiguity: the gate must not pick a winner it cannot evaluate --------------------
+B="$TMP/am-b26"; _authmap_root "$B"
+sed -i 's|git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)|git_remove_pubkey    = trimspace(var.x ? tls_private_key.git_remove.public_key_openssh : tls_private_key.git_transport.public_key_openssh)|' "$B/git-data.tf"
+_am "B26: a ternary naming two keys ABORTS — which renders is not statically decidable" 2 "references 2 tls_private_key" "$B"
+
+B="$TMP/am-b27"; _authmap_root "$B"
+sed -i 's|^  value      = tls_private_key.git_remove.private_key_openssh|  value      = try(tls_private_key.git_remove.private_key_openssh, tls_private_key.git_transport.private_key_openssh)|' "$B/git-data.tf"
+_am "B27: try() with a fallback key ABORTS at link 5 — the SAME rule as link 4, both sites" 2 "references 2 tls_private_key" "$B"
+
+B="$TMP/am-b28"; _authmap_root "$B"
+sed -i 's|git_remove_pubkey    = trimspace(tls_private_key.git_remove.public_key_openssh)|git_remove_pubkey    = trimspace(coalesce(tls_private_key.git_remove.public_key_openssh, var.emergency))|' "$B/git-data.tf"
+_am "B28: a var. fallback beside a valid terminal HOLDs (predicate 2 runs on EVERY rhs)" 1 "NON-RESOURCE terminal" "$B"
+
+# --- scope: the gate must read the right block, and the right file --------------------
+B="$TMP/am-b29"; _authmap_root "$B"
+sed -i 's|  user_data = base64gzip(module.git_data_userdata.rendered)|  user_data = base64gzip(local.v2)|' "$B/git-data.tf"
+printf 'locals {\n  decoy = base64gzip(module.git_data_userdata.rendered)\n}\n' > "$B/zz-decoy.tf"
+_am "B29: the user_data pin is scoped to the SERVER block, not grepped over the root" 1 "own user_data" "$B"
+
+B="$TMP/am-b30"; _authmap_root "$B"
+sed -i 's|^resource "hcloud_server" "git_data" {|resource "hcloud_server" "git_data_v2" {|' "$B/git-data.tf"
+_am "B30: renaming the server ABORTS — its absence made the ignore_changes arm vacuous" 2 "no resource" "$B"
+
+B="$TMP/am-b31"; _authmap_root "$B"
+sed -i 's|cloud-init-git-data.yml|cloud-init-git-data-v2.yml|' "$B/modules/git-data-userdata/main.tf"
+_am "B31: the module rendering a DIFFERENT template HOLDs — links 1 and 2 are now bound" 1 "never boots" "$B"
+
+# --- population growth: ADD a member rather than editing one --------------------------
+B="$TMP/am-b32"; _authmap_root "$B"
+cat >> "$B/git-data.tf" <<'TFX'
+module "git_data_userdata_b" {
+  source                 = "./modules/git-data-userdata-b"
+  git_transport_pubkey   = local.git_transport_pubkey
+  git_provision_pubkey   = local.git_transport_pubkey
+  git_remove_pubkey      = local.git_transport_pubkey
+}
+resource "hcloud_server" "git_data_b" {
+  name      = "soleur-git-data-b"
+  user_data = base64gzip(module.git_data_userdata_b.rendered)
+}
+TFX
+_am "B32: a SECOND rendering server HOLDs — a second host is a second unwalked map" 1 "render a module into user_data" "$B"
+
+B="$TMP/am-b33"; _authmap_root "$B"
+cat > "$B/zz-stray.tf" <<'TFX'
+resource "doppler_secret" "stray_copy" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "SOME_OTHER_NAME"
+  value      = tls_private_key.git_remove.private_key_openssh
+}
+TFX
+_am "B33: the erase key republished under ANOTHER name HOLDs (the loop visits 3 names only)" 1 "outside the three-authority map" "$B"
+
+B="$TMP/am-b34"; _authmap_root "$B"
+printf '{"module":{"b":{"source":"./modules/git-data-userdata"}}}\n' > "$B/extra.tf.json"
+_am "B34: a root *.tf.json ABORTS — Terraform loads it, this gate cannot parse it" 2 "tf.json" "$B"
+
+# --- the template: write_files is not the only writer ---------------------------------
+B="$TMP/am-b35"; _authmap_root "$B"
+printf 'runcmd:\n  - [ bash, -c, "echo ssh-ed25519 AAAAEVIL x@y >> /home/git/.ssh/authorized_keys" ]\n' >> "$B/cloud-init-git-data.yml"
+_am "B35: a runcmd appending a key HOLDs — runcmd runs AFTER write_files" 1 "outside its write_files" "$B"
+
+B="$TMP/am-b36"; _authmap_root "$B"
+python3 - "$B/cloud-init-git-data.yml" <<'PYX'
+import io,sys
+p=sys.argv[1]; s=io.open(p,encoding='utf-8').read()
+s=s.replace("""  - path: /home/git/.ssh/authorized_keys
+    content: |
+""","""  - path: /home/git/.ssh/authorized_keys
+    encoding: b64
+    content: ${authorized_keys_b64}
+  - path: /tmp/decoy
+    content: |
+""",1)
+io.open(p,'w',encoding='utf-8').write(s)
+PYX
+_am "B36: a base64 authorized_keys ABORTS — the extractor must not latch onto a later block" 2 "literal" "$B"
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -1256,12 +1415,35 @@ fi
 #     1  B23       the live production root (D8 — this is the PR-time coverage)
 #   ----
 #    23
+#
+# RAISED 103 -> 116 (#8009 review), ITEMISED — every row a MEASURED rc=0 escape before it
+# was closed, plus the helper self-test. The first battery had 26 rows and killed all 26
+# and could see NONE of these: it perturbed the SUT toward obviously-broken spellings,
+# while every row here is an innocuous-looking SIBLING declaration masking a real defect.
+#   (+0) _am self-test  the helper owns a verdict, so pass()/fail() controls cannot see it.
+#                     It contributes NOTHING to this count on purpose: it snapshots and
+#                     unwinds the counters, and reports with printf + exit rather than
+#                     through the helpers it backstops -- a floor dispatched through the
+#                     thing it guards is disarmed by the same edit that disarms the guard.
+#     2  B24/B25   a collapse and a permutation, each masked by a benign sibling block
+#     3  B26/B27/B28 ambiguous terminals (ternary, try, coalesce) at BOTH link 4 and link 5
+#     3  B29/B30/B31 scope: the server block, its existence, and the rendered template
+#     3  B32/B33/B34 population growth: a 2nd server, a stray publisher, a *.tf.json
+#     2  B35/B36   the template: runcmd as a second writer, and a non-literal content form
+#   ----
+#    13
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 103 ]]; then
+if [[ "$_ran" -lt 116 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 103. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
+  # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
+  # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
+  # hits it. It also means the natural fix for that false message (relaxing the
+  # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 116")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 116. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 103)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 116)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

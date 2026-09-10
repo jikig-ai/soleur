@@ -100,7 +100,7 @@
 > throwaway-host rung as **its own** precondition.
 >
 > **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
-> nine-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
+> ten-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
 > verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
 > the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
 > with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive
@@ -133,7 +133,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
-| **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 7's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
+| **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
 | The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
 
@@ -177,7 +177,7 @@ One human clicking twice is the real control. Treat it as **one** control, not t
 **3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
 measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
 literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
-That is not nothing: each has a named upstream `FATAL: …; exit 1` gate (20 in that script),
+That is not nothing: each has a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, not a gate),
 so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
 fired", never as "four invariants were measured".
 
@@ -193,20 +193,28 @@ Finally: the authorization-map interlock is a **static** assertion over Terrafor
 proves what the production root *renders*, not what a live host *honours*. No live host is
 probed, because none exists until this dispatch creates one.
 
+**And it is weaker on the replace path than on this one.** `git-data-host-replace` carries no
+`environment:`, therefore no `deployment_branch_policy`, so a `workflow_dispatch` there runs
+the **selected ref's** scripts — the gate is supplied by the branch it polices. It holds
+against an accidental collapse merged and dispatched from `main`; it does **not** hold against
+a deliberate actor with repository write. What compensates is that the same gate runs against
+the live production root on every pull request, so a collapse cannot reach `main` without
+first reddening the required `test` check.
+
 ### An undocumented invariant that Article 17 correctness currently rests on
 
 **`/mnt/git-data` must stay root-owned.** This is not a preference; it is the only thing
 making erasure fail closed today, and nothing asserts it.
 
 `git-data-remove.sh` derives `REPO_ROOT=/mnt/git-data/repositories`, then guards with
-`readlink -f`. **`readlink -f` succeeds on a path that does not exist** (verified: rc=0, and it
+`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified: rc=0, and it
 prints the path), so on a host where the volume failed to mount, both guards pass. The script
 then runs `mkdir -p "$REPO_ROOT"`, finds no repo, prints `not present (no-op)` and **exits 0** —
 reporting Article 17 erasure success over a store nobody looked at.
 
 What actually prevents that today: the forced command runs as `git`, cloud-init creates
-`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns only the *symlink*
-(`chown -h …/repositories`). So the `mkdir -p` takes EACCES and `set -euo pipefail`
+`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns `$REPO_ROOT` itself and the
+`repositories` symlink, but **never the mountpoint `/mnt/git-data`**. So the `mkdir -p` takes EACCES and `set -euo pipefail`
 (`git-data-remove.sh` line 28) aborts before the false success.
 
 That is an **accidental** invariant holding up a statutory guarantee. The moment anyone chowns

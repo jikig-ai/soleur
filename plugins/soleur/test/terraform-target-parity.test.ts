@@ -3344,8 +3344,20 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // tls_private_key by design -- so a production collapse is a NO-OP in the rehearsal and
     // the evidence still records PASS. This gate is the only mechanical check on that class.
     expect(jobBlock).toMatch(
-      /^\s*if ! git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+      /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,
     );
+    // `rc=0` BEFORE THE CALL, AND `|| rc=$?` ON IT. Actions runs the block under -eo
+    // pipefail, so the bare `cmd; rc=$?` form aborts AT the call and every reporting line
+    // below it never runs. Pinning the capture shape is pinning that the step can report.
+    expect(jobBlock).toMatch(/^\s*rc=0$/m);
+    // ABORT (2) MUST NOT BE REPORTED AS A VERDICT ABOUT THE KEY MAP. The gate is tri-state
+    // and its suite pins that; a single branch here asserted the HOLD claim on all ten
+    // could-not-measure paths, which is the defect class this gate exists to close, one
+    // layer up. Both branches must exist and the rc=2 one must name it as an INSTRUMENT
+    // failure.
+    expect(jobBlock).toMatch(/^\s*if \[\[ "\$rc" -eq 2 \]\]; then$/m);
+    expect(jobBlock).toMatch(/COULD NOT MEASURE/);
+    expect(jobBlock).toMatch(/^\s*if \[\[ "\$rc" -ne 0 \]\]; then$/m);
 
     // The interlocks are separate STEPS, so each can be disarmed without touching its body
     // at all. Pin the three ways for BOTH: a conditional, continue-on-error, or a missing
@@ -3492,11 +3504,14 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(planAt).toBeGreaterThan(-1);
     // The third interlock (#8009) is static -- it reads Terraform SOURCE, never a plan -- so
     // it can and must refuse before any provider is contacted, exactly like its two siblings.
-    const authmapAt = jobBlock.search(/^\s*if ! git_data_authorization_map_gate\b/m);
+    const authmapAt = jobBlock.search(/^\s*git_data_authorization_map_gate\b/m);
     expect(authmapAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);
     expect(authmapAt).toBeLessThan(planAt);
+    // A job-level continue-on-error would make all three interlocks non-blocking at once,
+    // outside every step body the per-step loop inspects.
+    expect(jobBlock).not.toMatch(/^\s{4}continue-on-error:/m);
   });
 
   test("git_data_host_replace ALSO carries the authorization-map interlock (#8009 D9)", () => {
@@ -3514,8 +3529,10 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // separately -- it is a fleet-wide policy call, not a local fix.
     const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
     expect(replaceBlock).toMatch(
-      /^\s*if ! git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+      /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,
     );
+    expect(replaceBlock).toMatch(/^\s*if \[\[ "\$rc" -eq 2 \]\]; then$/m);
+    expect(replaceBlock).toMatch(/COULD NOT MEASURE/);
     const step = /- name: Authorization-map interlock[\s\S]*?(?=\n      - name: )/.exec(
       replaceBlock,
     );
@@ -3526,6 +3543,32 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // The stated limitation is part of the contract, not decoration: a future edit that
     // silently drops it would leave the gate implying protection it does not have.
     expect(step![0]).toMatch(/does NOT hold against a deliberate actor/);
+
+    // ORDERING, NOT JUST PRESENCE. The birth job pins authmapAt < planAt; this job pinned
+    // only that the step EXISTS. Measured: moving the interlock below `Terraform apply
+    // (git-data-host -replace)` left this suite 194/0 green — so on the one path with no
+    // human approver, the gate could run after the host had already been replaced with the
+    // collapsed map. A gate that refuses after the fact is not a gate.
+    const rAuthmap = replaceBlock.search(/^\s*git_data_authorization_map_gate\b/m);
+    const rPlan = replaceBlock.search(/^\s*terraform plan -no-color/m);
+    const rApply = replaceBlock.search(/^\s*terraform apply -no-color/m);
+    expect(rAuthmap).toBeGreaterThan(-1);
+    expect(rPlan).toBeGreaterThan(-1);
+    expect(rApply).toBeGreaterThan(-1);
+    expect(rAuthmap).toBeLessThan(rPlan);
+    expect(rAuthmap).toBeLessThan(rApply);
+
+    // H2 — A JOB-LEVEL `continue-on-error` DISARMS ALL THREE INTERLOCKS AT ONCE, and it
+    // sits outside every step body the assertions above read. The step-level loop claims to
+    // pin "the three ways" a step can be disarmed; this is a fourth, one level up.
+    expect(replaceBlock).not.toMatch(/^\s{4}continue-on-error:/m);
+
+    // H3 — `exit 1` PRESENCE IS NOT REACHABILITY. A real `exit 1` parked in an unrelated
+    // later branch of the same step satisfies /^\s*exit 1$/m while the gate's own failure
+    // branch merely echoes. Pin that the non-zero exit is INSIDE the refusal branch.
+    expect(step![0]).toMatch(
+      /if \[\[ "\$rc" -ne 0 \]\]; then\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
+    );
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {

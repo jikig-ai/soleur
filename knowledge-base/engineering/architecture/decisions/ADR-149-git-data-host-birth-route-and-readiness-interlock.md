@@ -168,7 +168,9 @@ repository. An earlier draft said "impossible"; that overstated it.
    requires committed rung-2 boot evidence hash-bound to the template being dispatched, and
    re-holds automatically on any later edit to `cloud-init-git-data.yml`. #7025 carries rung 2
    and lands that evidence. *(Terminal: `git-data-birth.md`
-   instructs that it be cleared only when every item above is done.)*
+   instructs that it be cleared only when every OTHER item in this checklist is done. Read as
+   "above", this would exclude items 9 and 10, which sit below it and are both preconditions —
+   the disposition tables are authoritative on which are discharged.)*
 9. **Confirm the SIZING before the first birth** (added by #6982). The checklist had no
    sizing item and neither does the runbook's pre-dispatch table — step 7's stock preflight
    checks **orderability**, never **adequacy**. `user_data` is ForceNew and a `server_type`
@@ -179,6 +181,12 @@ repository. An earlier draft said "impossible"; that overstated it.
     authorities** (added by #8009, CPO condition C1). `cloud-init-git-data.yml` pins three
     DIFFERENT forced commands — the transport wrapper, the provisioner, and
     `git-data-remove.sh`, which is the Article 17 erasure path — to three DIFFERENT pubkey
+    variables. (Citation precision: ADR-068 designs the TRANSPORT and PROVISION authorities;
+    the ERASE authority is designed in `apps/web-platform/server/git-data-replication.ts`,
+    whose `removeGitDataRepo` calls it "a THIRD authority distinct from provision/transport",
+    and it appears as a payload in ADR-152. ADR-068 names `GIT_REMOVE_SSH_PRIVATE_KEY` exactly
+    once, inside a blast-radius argument, and `git-data-remove.sh` not at all — a false
+    citation propagates further than a missing one.) The three pubkey
     variables. `rung2-rehearsal/rehearsal.tf` sets all three to one `tls_private_key`.
     **That is not merely uncovered; it makes the defect invisible.** Because the three were
     ALREADY identical in the rehearsal, a production edit collapsing them is a **no-op**
@@ -201,7 +209,19 @@ repository. An earlier draft said "impossible"; that overstated it.
     `deployment_branch_policy`, so `workflow_dispatch` runs the selected ref and the gate is
     supplied by the branch it polices. It holds against an accidental collapse merged and
     dispatched from `main`; it does **not** hold against a deliberate actor with repository
-    write.
+    write. **The compensating control, which makes that narrower than it sounds:** the gate also
+    runs against the LIVE production root on every pull request, as arm B23 of
+    `tests/scripts/test-git-data-birth-readiness-gate.sh`, which `scripts/test-all.sh` registers —
+    so a collapse or permutation cannot reach `main` without first reddening the required `test`
+    context. The branch-supplied gate on the replace path is the second line of defence, not the
+    only one.
+    **One accepted deviation, recorded rather than left to be rediscovered:** principle AP-026
+    holds that a CI path whose job is to RECORD supplementary evidence must never gate on that
+    evidence. The `needs: [git_data_birth_disclosure]` edge is that shape. It is accepted because
+    AP-026 scopes to pull requests and merge authority, while this is an operator dispatch where
+    the veto costs one re-dispatch and produces a red run with no Approve button — a legible
+    refusal, not a silent one — and because the same disclosure also reaches the operator through
+    the `apply_target` input description, which GitHub renders before any job exists.
 
 ### Disposition — #8009 (2026-09-10)
 

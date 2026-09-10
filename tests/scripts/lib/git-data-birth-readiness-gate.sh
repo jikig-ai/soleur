@@ -772,7 +772,7 @@ HOLD
       [[ "$_tok" == "$_a" ]] && { _allowed=1; break; }
     done
     if [[ "$_allowed" -eq 0 ]]; then
-      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not a declared-divergent render var. The permitted set is not homogeneous: five members are identity-shaped (they name WHICH host, volume or credential), while the three pubkeys are a CAPABILITY divergence — they are the host's SSH authorization map, and the rehearsal collapses them onto one key by design (#8009). The evidence hash binds the template and the nine payloads; it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
+      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not a declared-divergent render var. The permitted set is not homogeneous: five members are identity-shaped (they name WHICH host, volume or credential), while the three pubkeys are a CAPABILITY divergence — they are the host's SSH authorization map, and the rehearsal collapses them onto one key by design (#8009). The evidence hash binds 13 files (the template, the render module's own .tf files, and the nine file()-bound payloads); it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
       return 1
     fi
   done
@@ -845,12 +845,20 @@ HOLD
 git_data_authorization_map_gate() {
   local cloud_init="${1:-}"
 
-  # THE THREE AUTHORITIES, HARDCODED FROM THE DESIGN (ADR-068) — never parsed back out of
+  # THE THREE AUTHORITIES, HARDCODED FROM THE DESIGN — never parsed back out of
   # the artifact under test. Deriving this set from the template would make the assertion
   # S == S. The forced-command script name and the Doppler secret name are anchored to a
   # THIRD artifact: apps/web-platform/server/git-data-replication.ts, whose header prose
   # documents GIT_PROVISION_SSH_PRIVATE_KEY -> git-data-provision.sh and the transport
   # equivalent. Neither file under test is the authority for this table.
+  #
+  # WHERE EACH AUTHORITY IS ACTUALLY DESIGNED, stated precisely because a false citation
+  # propagates further than a missing one: ADR-068 designs TRANSPORT and PROVISION (its
+  # CTO-ruling amendment introduces the provision key as "A SECOND ED25519 key"). It does NOT
+  # design the ERASE authority — it names GIT_REMOVE_SSH_PRIVATE_KEY exactly once, inside a
+  # blast-radius argument for the scoped Doppler token, and git-data-remove.sh not at all. The
+  # erase authority is designed in git-data-replication.ts's removeGitDataRepo, which is also
+  # the third artifact this table is anchored to, and ships as a payload per ADR-152.
   local -a _authorities=(
     "transport|git-data-transport-wrapper.sh|GIT_TRANSPORT_SSH_PRIVATE_KEY"
     "provision|git-data-provision.sh|GIT_PROVISION_SSH_PRIVATE_KEY"
@@ -888,6 +896,19 @@ git_data_authorization_map_gate() {
     return 2
   done
 
+  # A ROOT *.tf.json IS LOADED EXACTLY AS A *.tf, AND THIS GATE CANNOT PARSE JSON.
+  # Reading only *.tf here while git_data_rung2_user_data_sha256 — in this same file —
+  # globs both extensions is an asymmetry a second module can hide in: a `module` block
+  # declared in extra.tf.json is invisible to the single-instance check below while
+  # Terraform renders it happily. Refuse rather than release a verdict about a
+  # configuration this gate has only partly read.
+  local _json
+  for _json in "$root"/*.tf.json; do
+    [[ -e "$_json" ]] || continue
+    echo "git_data_authorization_map_gate: ABORT — the root contains $(basename "$_json"). Terraform loads *.tf.json exactly as it loads *.tf, and this gate parses HCL only — so the authorization map it can read is a strict subset of the one that would be applied. Fail-closed."
+    return 2
+  done
+
   # ── Link 1: the authorized_keys slots ───────────────────────────────────────────────
   #
   # Extracted as the CONTIGUOUS non-blank run inside the write_files entry for
@@ -897,7 +918,15 @@ git_data_authorization_map_gate() {
   # `git-shell -c "$SSH_ORIGINAL_COMMAND"` path the transport wrapper exists to replace.
   local _ak_block
   _ak_block="$(awk '
+    # `want` IS RESET BY THE NEXT LIST ITEM. Without that it latched forever, so an entry
+    # whose content is NOT a `content: |` literal — e.g. the `encoding: b64` +
+    # `content: ${...}` shape this same template already uses for its script payloads —
+    # made the extractor skip ahead and read the NEXT entry`s block instead. The gate then
+    # RELEASED, naming three distinct keys that were not on authorized_keys at all. Zero
+    # extraction was already an ABORT; extraction from the WRONG entry was not.
+    $0 ~ /^[[:space:]]*-[[:space:]]*path:/ { want=0 }
     $0 ~ /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/home\/git\/\.ssh\/authorized_keys[[:space:]]*$/ { want=1; next }
+    want && $0 ~ /^[[:space:]]*(encoding|content):[[:space:]]*[^|[:space:]]/ { print "__NOT_A_LITERAL_BLOCK__"; exit }
     want && $0 ~ /^[[:space:]]*content:[[:space:]]*\|[[:space:]]*$/ { inblock=1; next }
     inblock {
       # The block ends at the next YAML key at the entry indent level (owner:, permissions:)
@@ -908,9 +937,54 @@ git_data_authorization_map_gate() {
     }
   ' "$cloud_init")"
 
+  if [[ "$_ak_block" == "__NOT_A_LITERAL_BLOCK__" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — the /home/git/.ssh/authorized_keys entry in ${cloud_init} does not use a literal \`content: |\` block (it is base64, an interpolation, or another encoding). This gate reads the authorization map as text; it cannot see through an encoded payload, and releasing here would certify a map it never read. Fail-closed."
+    return 2
+  fi
   if [[ -z "$_ak_block" ]]; then
     echo "git_data_authorization_map_gate: ABORT — found no /home/git/.ssh/authorized_keys content block in ${cloud_init}. Extraction yielded nothing, which is a broken instrument, not an empty authorization map. Fail-closed."
     return 2
+  fi
+
+  # EXACTLY ONE write_files ENTRY MAY WRITE THAT PATH. The extractor above stops at the end
+  # of the FIRST matching entry, and cloud-init applies write_files IN ORDER — so a second
+  # entry for the same path later in the file is what actually lands on the host, and the
+  # gate would have certified the first one. Measured rc=0 with a second entry granting the
+  # transport key the erase command.
+  # NOTHING ELSE IN THE TEMPLATE MAY TOUCH THAT FILE. write_files is not the only statement
+  # that writes it: `runcmd` runs AFTER write_files, so one appended line there adds a key
+  # the gate's block-scoped read can never see. The property is "what this template puts on
+  # authorized_keys", not "what the first write_files entry says".
+  if grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init" \
+     | grep -vE ':[[:space:]]*-[[:space:]]*path:' | grep -qvE ':[[:space:]]*#'; then
+    echo "git_data_authorization_map_gate: HOLD — ${cloud_init} references /home/git/.ssh/authorized_keys outside its write_files path declaration (a runcmd, a bootcmd, or another statement). cloud-init runs runcmd AFTER write_files, so any such statement decides the final authorization map and this gate reads only the write_files block."
+    return 1
+  fi
+
+  local _n_ak
+  _n_ak="$(grep -cE '^[[:space:]]*-[[:space:]]*path:[[:space:]]*/home/git/\.ssh/authorized_keys[[:space:]]*$' "$cloud_init" || true)"
+  if [[ "${_n_ak:-0}" -ne 1 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${_n_ak} write_files entries target /home/git/.ssh/authorized_keys; exactly 1 is canonical. cloud-init applies write_files in order, so a later entry overwrites the map this gate read."
+    return 1
+  fi
+
+  # OWNER AND PERMISSIONS ARE PART OF THE MAP. The extractor terminates ON the `owner:` line,
+  # so neither was ever in the gate's view. A world-writable or group-writable authorized_keys
+  # is an authorization map anything on the host can rewrite; sshd's StrictModes refuses it at
+  # runtime, which is a backstop this gate neither knows about nor should depend on.
+  local _ak_meta
+  _ak_meta="$(awk '
+    $0 ~ /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/home\/git\/\.ssh\/authorized_keys[[:space:]]*$/ { want=1; next }
+    want && $0 ~ /^[[:space:]]*(owner|permissions):/ { print; n++ }
+    want && n >= 2 { exit }
+  ' "$cloud_init")"
+  if ! grep -qE "^[[:space:]]*owner:[[:space:]]*git:git[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry is not owned by git:git. The forced commands run as the git user; an authorization map owned by anyone else is either unreadable by sshd or writable by a second principal."
+    return 1
+  fi
+  if ! grep -qE "^[[:space:]]*permissions:[[:space:]]*'0600'[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry does not declare permissions '0600'. Any group- or world-writable mode makes the authorization map rewritable by a second principal on the host, and this gate proves nothing about a file that anything can edit."
+    return 1
   fi
 
   local _ak_lines
@@ -931,7 +1005,7 @@ git_data_authorization_map_gate() {
   # subset-match would forfeit M27 entirely.
   local _canon_opts='no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
   declare -A _slot_var=()          # script name -> template variable name
-  local _line _script _tvar _n_slots=0
+  local _line _script _tvar
   while IFS= read -r _line; do
     [[ -n "$_line" ]] || continue
     if [[ ! "$_line" =~ ^[[:space:]]*command=\"/usr/local/bin/([A-Za-z0-9._-]+)\",([^[:space:]]*)[[:space:]]+\$\{([A-Za-z0-9_]+)\}[[:space:]]*$ ]]; then
@@ -945,7 +1019,6 @@ git_data_authorization_map_gate() {
     fi
     _tvar="${BASH_REMATCH[3]}"
     _slot_var["$_script"]="$_tvar"
-    _n_slots=$((_n_slots + 1))
   done <<< "$_ak_block"
 
   # Every authority the design names must have a slot, and there must be no slot beyond them.
@@ -976,13 +1049,45 @@ git_data_authorization_map_gate() {
     return 2
   fi
 
+  # SCOPED TO THE templatefile() CALL, NOT TO main.tf. Scanning the whole module file for
+  # `X = var.Y` was last-wins, so a trailing `locals { git_remove_pubkey = var.git_remove_pubkey }`
+  # restored the identity binding AFTER the real map entry had been permuted, and the gate
+  # RELEASED with the render collapsed (measured). The map that renders is the one inside
+  # templatefile(); nothing else in the file participates.
+  # THE GATE MUST READ THE TEMPLATE THE MODULE ACTUALLY RENDERS. Nothing tied the file
+  # passed in to the path inside templatefile(), so link 1 and link 2 were joined by
+  # assumption: re-point the module at cloud-init-git-data-v2.yml and the gate happily
+  # certifies the map in the file it was handed while the host boots the other one. The
+  # sibling parity test already binds the READINESS gate's path this way; the binding was
+  # never extended to this gate.
+  local _tpl_ref _ci_base
+  _ci_base="$(basename "$cloud_init")"
+  _tpl_ref="$(grep -oE 'templatefile\("\$\{path\.module\}/[^"]+"' <<< "$_mod_src" | head -1 | sed 's|.*/||; s|"$||')"
+  if [[ -z "$_tpl_ref" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not resolve the template path from ${module_tf}'s templatefile( call, so the gate cannot confirm it is reading the file the module renders. Fail-closed."
+    return 2
+  fi
+  if [[ "$_tpl_ref" != "$_ci_base" ]]; then
+    echo "git_data_authorization_map_gate: HOLD — the render module renders '${_tpl_ref}', but this gate was pointed at '${_ci_base}'. It would have certified an authorization map in a file the host never boots."
+    return 1
+  fi
+
+  local _tf_map
+  _tf_map="$(_git_data_hcl_block "$_mod_src" 'templatefile\(')"
+  if [[ -z "$_tf_map" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — no templatefile( call found in ${module_tf}. The render module is where the argument map lives; extraction yielded nothing, which is a broken instrument, not an empty map. Fail-closed."
+    return 2
+  fi
   declare -A _tvar_modvar=()       # template variable -> module variable
-  local _k _v
   while IFS= read -r _line; do
     if [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*var\.([A-Za-z0-9_]+)[[:space:]]*$ ]]; then
+      if [[ -n "${_tvar_modvar[${BASH_REMATCH[1]}]:-}" ]]; then
+        echo "git_data_authorization_map_gate: ABORT — the templatefile argument map in ${module_tf} binds '${BASH_REMATCH[1]}' more than once. Terraform would reject a duplicate key, so this gate is reading something it does not understand rather than a map that could render. Fail-closed."
+        return 2
+      fi
       _tvar_modvar["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
     fi
-  done <<< "$_mod_src"
+  done <<< "$_tf_map"
 
   # ── Links 3, 4, 5: the root ─────────────────────────────────────────────────────────
   #
@@ -1048,8 +1153,31 @@ git_data_authorization_map_gate() {
   # representation of one string in the function and made every future `return` owe one of 18
   # cleanup calls with no trap to catch a miss — a standing correctness tax on a fail-closed
   # gate. One mechanism for one string.
-  if ! grep -qE "^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.${_mod_label}\.rendered\)[[:space:]]*$" <<< "$_root_src"; then
-    echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data's user_data is not exactly base64gzip(module.${_mod_label}.rendered). The gate resolves the authorization map through that module; if the server renders anything else, the map this gate proved is not the map that boots."
+  # EXTRACTED, NOT GREPPED. This predicate claims something about hcloud_server.git_data, and
+  # a root-wide grep mentions neither the resource type nor its label — so the canonical
+  # string parked in ANY unrelated block (an output, a locals, a null_resource trigger)
+  # satisfied it while the real server rendered something else entirely. Measured rc=0.
+  # Absence of the server is its own ABORT: a rename made the ignore_changes awk below
+  # silently vacuous while this grep still matched, and nothing noticed the resource the
+  # whole gate is about had ceased to exist.
+  local _server_block
+  _server_block="$(_git_data_hcl_block "$_root_src" '^resource[[:space:]]+"hcloud_server"[[:space:]]+"git_data"[[:space:]]*\{')"
+  if [[ -z "$_server_block" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — no resource \"hcloud_server\" \"git_data\" block found in ${root}. Every predicate below is about that server; with it absent or renamed the gate would be certifying a map for a host nothing creates. Fail-closed."
+    return 2
+  fi
+  if ! grep -qE "^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.${_mod_label}\.rendered\)[[:space:]]*$" <<< "$_server_block"; then
+    echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data's own user_data is not exactly base64gzip(module.${_mod_label}.rendered). The gate resolves the authorization map through that module; if the server renders anything else, the map this gate proved is not the map that boots."
+    return 1
+  fi
+
+  # EXACTLY ONE SERVER MAY RENDER A MODULE. A second hcloud_server fed by a second module —
+  # under any source path, so the single-instance check above cannot see it — is a second
+  # git-data host whose authorization map this gate never walks. Measured rc=0.
+  local _n_rendering
+  _n_rendering="$(grep -cE '^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.[A-Za-z0-9_]+\.rendered\)[[:space:]]*$' <<< "$_root_src" || true)"
+  if [[ "${_n_rendering:-0}" -ne 1 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${_n_rendering} resources in ${root} render a module into user_data; exactly 1 is canonical. A second rendering server is a second host with its own authorization map, and this gate walks only the one it was pointed at."
     return 1
   fi
 
@@ -1058,15 +1186,12 @@ git_data_authorization_map_gate() {
   # authorized_keys block reaches the host. An ignore_changes on user_data silently deletes
   # that premise: the map could then drift with no apply able to correct it, and every
   # interlock downstream of this one would be guarding a path nothing travels.
-  if awk '
-    /^resource[[:space:]]+"hcloud_server"[[:space:]]+"git_data"[[:space:]]*\{/ { inres=1; depth=0 }
-    inres {
-      n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
-      if ($0 ~ /ignore_changes/ && $0 ~ /user_data/) { found=1 }
-      if (depth<=0) inres=0
-    }
-    END { exit(found?0:1) }
-  ' <<< "$_root_src"; then
+  # THE LIST, NOT ONE LINE. Requiring `ignore_changes` and `user_data` on the same physical
+  # line missed the ordinary multi-line list form that `terraform fmt` preserves — and
+  # git-data.tf already carries `ignore_changes = [ssh_keys]`, so adding a second element is
+  # exactly the edit a person makes. Measured rc=0. This joins the whole extracted server
+  # block and matches across newlines instead.
+  if tr '\n' ' ' <<< "$_server_block" | grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b'; then
     echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data declares lifecycle.ignore_changes on user_data. That deletes this gate's own premise: user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so a replace is the ONLY route by which a corrected authorization map reaches the host. With it ignored, the map can drift with no apply able to correct it."
     return 1
   fi
@@ -1092,25 +1217,57 @@ git_data_authorization_map_gate() {
   # M23 (a pubkey local moved to a sibling .tf in the same root and re-pointed) visible:
   # Terraform merges locals across every file in the root, so a file-scoped gate would be
   # reading a subset of the configuration that actually applies.
+  # SCOPED TO `locals {}` BLOCKS. The previous scan read every line of the root regardless of
+  # its enclosing block and was last-wins, so an ordinary diagnostic `output` block naming the
+  # three keys silenced a genuine collapse of the real local — measured rc=0 on the headline
+  # collapse this gate exists to catch. Root-WIDE is still right (Terraform merges locals
+  # across every file in the root, which is what makes a sibling-file relocation visible);
+  # root-wide WITHOUT block-scoping is what was wrong.
   declare -A _local_terminal=()    # local name -> tls_private_key.<name>
   declare -A _local_attr=()        # local name -> attribute read
   declare -A _local_rhs=()         # local name -> raw RHS, for diagnostics
-  local _rhs _lname
+  local _locals_src _rhs _lname _nref
+  # More than one `locals` block is legal and common, so collect them all.
+  _locals_src="$(awk '
+    /^[[:space:]]*locals[[:space:]]*\{/ && depth == 0 { inb = 1 }
+    inb {
+      print
+      n = gsub(/\{/, "{"); m = gsub(/\}/, "}"); depth += n - m
+      if (depth <= 0) { inb = 0 }
+    }
+  ' <<< "$_root_src")"
   while IFS= read -r _line; do
     [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+_pubkey)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]] || continue
     _lname="${BASH_REMATCH[1]}"
     _rhs="${BASH_REMATCH[2]}"
-    # Skip the module-call hop (link 3), which shares this name shape. NOT var.* — the render
-    # module lives outside this non-recursive glob, so its `X = var.Y` identity lines are never
-    # in $_root_src, and skipping var.* here would route a root local re-pointed at a variable
-    # into the "walk broke" ABORT instead of predicate 2's HOLD, which names the real defect.
-    [[ "$_rhs" == local.* ]] && continue
+    if [[ -n "${_local_rhs[$_lname]:-}" ]]; then
+      echo "git_data_authorization_map_gate: ABORT — the root binds local '${_lname}' more than once (Terraform would reject that, so this gate is not reading a configuration that could apply). Fail-closed rather than picking a winner."
+      return 2
+    fi
     _local_rhs["$_lname"]="$_rhs"
+    # AMBIGUITY IS NOT A TERMINAL. A compound RHS — a ternary, a coalesce(), a try() — can
+    # name several keys, and taking the first match silently picked one at random while the
+    # OTHER branch is what renders under the default. Measured: a `var.x ? remove : transport`
+    # ternary released with the remove slot carrying the transport key. If the gate cannot say
+    # which key wins, it must not say the map is correct.
+    _nref="$(grep -o 'tls_private_key\.' <<< "$_rhs" | wc -l | tr -d ' ')"
+    if [[ "${_nref:-0}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — local.${_lname} references ${_nref} tls_private_key resources in one expression: ${_rhs}. Which key renders depends on a value this static gate cannot evaluate, so it cannot certify the map. Fail-closed."
+      return 2
+    fi
     if [[ "$_rhs" =~ tls_private_key\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+) ]]; then
       _local_terminal["$_lname"]="tls_private_key.${BASH_REMATCH[1]}"
       _local_attr["$_lname"]="${BASH_REMATCH[2]}"
     fi
-  done <<< "$_root_src"
+    # PREDICATE 2 RUNS ON EVERY RHS, NOT ONLY WHERE EXTRACTION FAILED. It used to live inside
+    # the "no terminal" branch, so any expression that mentioned a tls_private_key at all
+    # skipped it — and `coalesce(tls_private_key.git_remove.public_key_openssh, var.emergency)`
+    # therefore passed with a variable as a live fallback terminal.
+    if [[ "$_rhs" == *var.* || "$_rhs" == *data.* || "$_rhs" == *file\(* || "$_rhs" == *ssh-* ]]; then
+      echo "git_data_authorization_map_gate: HOLD — local.${_lname} mixes a NON-RESOURCE terminal into its expression: ${_rhs}. Every slot must terminate at a tls_private_key.<name> this root creates. A variable carrying a default, a data source, a file() or an inline literal can hold any key at all — including another slot's — and no address-distinctness predicate can see it."
+      return 1
+    fi
+  done <<< "$_locals_src"
 
   # Link 5 — the private-half distribution. This is the half the application actually holds:
   # git-data-replication.ts reads GIT_TRANSPORT_SSH_PRIVATE_KEY for ordinary push and fetch,
@@ -1118,26 +1275,77 @@ git_data_authorization_map_gate() {
   # is the ONLY edge in the whole map with zero pre-existing coverage: the app-side tests
   # vi.stubEnv the env NAMES with stub values, which proves the app reads the right variable
   # and is structurally incapable of seeing which Terraform resource fills it.
+  # KEYED ON (name, project, config) — NOT ON name ALONE, AND NOT LAST-WINS.
+  #
+  # Keying on the Doppler NAME across the whole root meant two blocks publishing one name
+  # collided and the last file in the lexical glob won. Measured: permuting the real `prd`
+  # secret to the transport key and adding an innocuous `config = "dev"` mirror of the same
+  # name RELEASED the gate — while the `prd` secret, the only one in the birth job's -target
+  # list, published the transport key as the app's Art. 17 erasure credential. That is
+  # verbatim the inversion link 5 exists to catch.
+  #
+  # The config matters on its own: the three secrets must land in `prd`, because that is the
+  # config the host and the app read. A secret retargeted at `dev` publishes nothing the
+  # production app will ever see, and the previous scan could not tell.
   declare -A _secret_terminal=()   # Doppler secret NAME -> tls_private_key.<name>
   declare -A _secret_attr=()
   declare -A _secret_rhs=()
-  local _sec_name _sec_val
-  while IFS= read -r _line; do
-    _sec_name="$(printf '%s' "$_line" | cut -d'|' -f1)"
-    _sec_val="$(printf '%s' "$_line" | cut -d'|' -f2-)"
+  declare -A _secret_seen=()       # NAME -> count of prd bindings, to refuse duplicates
+  local _sec_name _sec_cfg _sec_val _sec_label
+  while IFS='|' read -r _sec_label _sec_name _sec_cfg _sec_val; do
     [[ -n "$_sec_name" ]] || continue
+    # A stray publisher of any of the three PRIVATE halves under an unexpected name hands the
+    # key to whatever reads that name. The authority loop below only ever visits the three
+    # known names, so without this it is invisible.
+    if [[ "$_sec_val" =~ tls_private_key\.(git_transport|git_provision|git_remove)\.private_key_openssh ]]; then
+      case "$_sec_name" in
+        GIT_TRANSPORT_SSH_PRIVATE_KEY|GIT_PROVISION_SSH_PRIVATE_KEY|GIT_REMOVE_SSH_PRIVATE_KEY) ;;
+        *)
+          echo "git_data_authorization_map_gate: HOLD — doppler_secret.${_sec_label} publishes the PRIVATE half of tls_private_key.${BASH_REMATCH[1]} under the name '${_sec_name}', which is outside the three-authority map. Whatever consumer reads that name holds that authority, and no distinctness predicate over the three known names can see it."
+          return 1 ;;
+      esac
+    fi
+    case "$_sec_name" in
+      GIT_TRANSPORT_SSH_PRIVATE_KEY|GIT_PROVISION_SSH_PRIVATE_KEY|GIT_REMOVE_SSH_PRIVATE_KEY) ;;
+      *) continue ;;
+    esac
+    # ONLY THE prd BINDING IS THE MAP. A dev/staging mirror of the same name is legitimate,
+    # so it is SKIPPED rather than refused -- refusing it would be over-aggression, and it
+    # would also mask the real defect by short-circuiting before the prd binding is judged.
+    # A secret retargeted AWAY from prd needs no special case: its name then has no prd
+    # binding at all and the walk breaks at link 5 on its own.
+    [[ "$_sec_cfg" == "prd" ]] || continue
+    _secret_seen["$_sec_name"]=$(( ${_secret_seen[$_sec_name]:-0} + 1 ))
+    if [[ "${_secret_seen[$_sec_name]}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — ${_sec_name} is published by more than one doppler_secret in config prd. Which value Doppler ends up holding is apply-order dependent, so this gate cannot say which key the application would authenticate with. Fail-closed."
+      return 2
+    fi
+    # SAME AMBIGUITY RULE AS LINK 4. It was applied there and not here, and `try(remove,
+    # transport)` renders the FALLBACK on any error while reading as address-distinct and
+    # bijective to every other predicate. A rule stated once must be applied to every site
+    # whose precondition it names.
+    local _nsref
+    _nsref="$(grep -o 'tls_private_key\.' <<< "$_sec_val" | wc -l | tr -d ' ')"
+    if [[ "${_nsref:-0}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — doppler_secret.${_sec_label} references ${_nsref} tls_private_key resources in one expression: ${_sec_val}. Which private half is published depends on a value this static gate cannot evaluate. Fail-closed."
+      return 2
+    fi
     _secret_rhs["$_sec_name"]="$_sec_val"
     if [[ "$_sec_val" =~ tls_private_key\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+) ]]; then
       _secret_terminal["$_sec_name"]="tls_private_key.${BASH_REMATCH[1]}"
       _secret_attr["$_sec_name"]="${BASH_REMATCH[2]}"
     fi
   done < <(awk '
-    /^resource[[:space:]]+"doppler_secret"[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ { inres=1; depth=0; nm=""; val="" }
+    /^resource[[:space:]]+"doppler_secret"[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ {
+      inres=1; depth=0; nm=""; val=""; cfg=""; lbl=$0
+      sub(/^[^"]*"[^"]*"[[:space:]]+"/, "", lbl); sub(/".*$/, "", lbl)
+    }
     inres {
       n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
-      if ($0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/)  { nm=$0;  sub(/^[^"]*"/,"",nm);  sub(/".*$/,"",nm) }
-      if ($0 ~ /^[[:space:]]*value[[:space:]]*=/)              { val=$0; sub(/^[[:space:]]*value[[:space:]]*=[[:space:]]*/,"",val); sub(/[[:space:]]*$/,"",val) }
-      if (depth<=0) { if (nm != "" && val != "") print nm "|" val; inres=0 }
+      if ($0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/)   { nm=$0;  sub(/^[^"]*"/,"",nm);  sub(/".*$/,"",nm) }
+      if ($0 ~ /^[[:space:]]*config[[:space:]]*=[[:space:]]*"/) { cfg=$0; sub(/^[^"]*"/,"",cfg); sub(/".*$/,"",cfg) }
+      if ($0 ~ /^[[:space:]]*value[[:space:]]*=/)               { val=$0; sub(/^[[:space:]]*value[[:space:]]*=[[:space:]]*/,"",val); sub(/[[:space:]]*$/,"",val) }
+      if (depth<=0) { if (nm != "" && val != "") print lbl "|" nm "|" cfg "|" val; inres=0 }
     }
   ' <<< "$_root_src")
 
@@ -1257,6 +1465,27 @@ git_data_authorization_map_gate() {
   return 0
 }
 
+# _git_data_hcl_block <text> <awk-regex-for-the-opening-line> — emit the whole block,
+# brace-balanced, including its opening line. Emits nothing when the block is absent.
+#
+# WHY THIS EXISTS AS A SHARED PRIMITIVE. Every fail-open this gate has had was a scan that
+# was ROOT-wide where the property is BLOCK-scoped: a `locals` predicate satisfied by an
+# `output` block that merely mentions the same names, a `doppler_secret` map keyed on the
+# secret NAME across every file, a `user_data` pin satisfied by the canonical string parked
+# anywhere in the root. Root-scoping is right for FINDING declarations Terraform merges
+# across files; it is wrong for deciding what a particular resource is bound to. Both scans
+# are needed and they are not the same scan.
+_git_data_hcl_block() {
+  awk -v open_re="$2" '
+    $0 ~ open_re && depth == 0 { inb = 1 }
+    inb {
+      print
+      n = gsub(/\{/, "{"); m = gsub(/\}/, "}"); depth += n - m
+      if (depth <= 0) { inb = 0 }
+    }
+  ' <<< "$1"
+}
+
 # _git_data_hcl_nocomment <file> — strip `#` comments from HCL, QUOTE-AWARE.
 #
 # Returns 0 with the stripped text on stdout, or 9 if the file carries a `//` or `/*`
@@ -1280,6 +1509,23 @@ _git_data_hcl_nocomment() {
   local f="${1:-}"
   [[ -r "$f" ]] || return 9
   awk '
+    # HEREDOC BODIES ARE DATA, NOT HCL — pass them through untouched. Terraform heredocs
+    # (<<EOT / <<-EOT) carry arbitrary text, so applying comment rules to them is wrong in
+    # both directions: a body line containing a URL trips the `//` arm and ABORTs the whole
+    # interlock (fail-closed but spurious), and a body line with an odd unescaped quote
+    # leaves this per-line parser mid-string so a real trailing `#` comment survives into
+    # the text every predicate then scans. No heredoc exists in the root today; this exists
+    # so the first one to land does not silently change what the gate sees.
+    heredoc != "" {
+      if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) { heredoc = "" }
+      print ""
+      next
+    }
+    match($0, /<<[-~]?"?'"'"'?[A-Za-z_][A-Za-z0-9_]*/) {
+      tag = substr($0, RSTART, RLENGTH)
+      sub(/^<<[-~]?"?'"'"'?/, "", tag)
+      heredoc = tag
+    }
     {
       line = $0
       out = ""
