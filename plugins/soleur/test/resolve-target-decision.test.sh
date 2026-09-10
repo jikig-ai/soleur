@@ -254,6 +254,34 @@ expect "D3 dispatch, release published nothing -> CLEAN SKIP (arm parity)" false
 EVENT_NAME=workflow_dispatch D_VERSION="" D_TAG="" D_DOCKER_PUSHED=true run_resolve
 expect "D4 dispatch, incoherent release -> FAIL CLOSED (arm parity)" false release_outputs_incomplete 1
 
+# ── THE API-FAILURE PATH ─────────────────────────────────────────────────────
+# No fixture drove `gh` to FAIL, so every row above exercised only the happy
+# transport. Row A1 drives the whole path: the stub fails, the retries run, and
+# the step must fail CLOSED with a reason rather than die.
+#
+# WHAT THIS ROW DOES *NOT* COVER, stated so nobody assumes otherwise. The
+# errexit-capture idiom in gh_api() is guarded STATICALLY, by
+# scripts/lint-workflow-errexit-capture.py (ADR-170), not here — and that is
+# correct rather than a gap. A bare `_out=$(gh api ...)` followed by `_rc=$?` is
+# fragile in principle, but MEASURED, it is not fatal in this call shape: every
+# gh_api call site is inside `$( )`, and bash does not propagate errexit into a
+# command substitution there, so the read is reached and the behaviour is
+# identical. Writing a row that "kills" that mutation would mean asserting a
+# difference that does not exist — a fake kill, which is the defect class this
+# whole suite family exists to remove.
+#
+# The two instruments split the work honestly: the linter sees a fragile idiom
+# that would break the moment gh_api is called outside a substitution; A1 sees
+# the behaviour — retry, then fail closed with a reason.
+FIXDIR="$W/f-apifail"; mkfix "$FIXDIR" 777 success "$GOOD_ART"
+mv "$FIXDIR/runs.json" "$FIXDIR/runs.json.disabled"   # the stub exits 23 on a missing fixture
+run_resolve
+expect "A1 the GitHub API fails -> FAIL CLOSED with a reason, not a dead step" false github_api_unavailable 1
+# A1b — and it must have RETRIED rather than given up on the first error.
+if grep -qE 'retrying in' "$W/stdout.log"; then pass; else
+  fail "A1b gh_api did not retry before failing closed — the class is overwhelmingly transient, and one 5xx should not block a deploy. stdout: $(tr '\n' '|' <"$W/stdout.log" | head -c 200)"
+fi
+
 # ── THE OWN-RUN EXCLUSION (second-member row) ────────────────────────────────
 # Every fixture above puts ONE run in the list, so dropping
 # `select((.id|tostring) != $own)` changes nothing and the mutant SURVIVES —
@@ -283,14 +311,22 @@ if grep -qF 'release run: 777' "$W/stdout.log" 2>/dev/null; then pass; else
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────
-TOTAL=$((passes + fails))
 # DERIVED: 1 instrument + 1 extractor + 1 control + 5 green states
 # + 7 fault states + 5 dispatch (D1, D1b, D2, D3, D4)
-# + 2 own-run exclusion (X1 deploys anyway, X1b selected the push arm) = 22
-MIN_ROWS=22
+# + 2 own-run exclusion (X1 deploys anyway, X1b selected the push arm)
+# + 2 API-failure path (A1 fails closed with a reason, A1b retried first) = 24
+#
+# THE BINDINGS SIT DIRECTLY ABOVE THE CONDITIONAL, WITH NO COMMENT BETWEEN THEM.
+# scripts/guard-vacuity-floor.test.sh builds a mutant by walking BACK from the
+# `if` and collecting simple assignments, stopping at the first line that is not
+# one. A comment between `TOTAL=` and the `if` severs that walk, the mutant is
+# emitted with $TOTAL unbound, it dies under `set -u`, and the floor is counted
+# as UNCONSTRUCTIBLE — i.e. this suite's floor would be unguarded, which is the
+# exact vacuity this file family exists to prevent. Keep them adjacent.
+TOTAL=$((passes + fails))
+MIN_ROWS=24
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
-  printf 'FAIL: assertion floor — %d rows executed, at least %d required. A row was dropped or a fixture stopped running.\n' \
-    "$TOTAL" "$MIN_ROWS" >&2
+  printf 'FAIL: assertion floor — %d rows executed, at least %d required. A row was dropped or a fixture stopped running.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
 printf '%s: %d rows, %d passed, %d failed\n' "$(basename "${BASH_SOURCE[0]}")" "$TOTAL" "$passes" "$fails"

@@ -327,13 +327,20 @@ jobs:
           gh_api() {
             local _out _rc _try=0
             while :; do
-              # CAPTURE FIRST, THEN TEST. `if cmd; then ...; fi` leaves $? as the
-              # IF STATEMENT's status — 0 — when no branch runs, so reading $?
-              # after the fi reported rc=0 on every failure. The message then
-              # named a code it had not measured (AP-021), which is the defect
-              # this whole job exists to remove.
-              _out=$(gh api "$@" 2>"$RUNNER_TEMP/gh.err")
-              _rc=$?
+              # `|| _rc=$?` — BOTH halves matter, and each fixes a defect the
+              # other form had.
+              #   `if _out=$(gh api ...); then` is errexit-SAFE (a condition is
+              #     exempt) but leaves $? as the IF STATEMENT's status — 0 — so
+              #     the retry message reported rc=0 on every failure, naming a
+              #     code it had not measured (AP-021).
+              #   A bare `_out=$(...)` then `_rc=$?` captures the real code but
+              #     is errexit-FATAL under this step's `set -e`: the shell dies
+              #     AT the assignment, so the retry and the fail-closed path
+              #     below are unreachable. Caught by
+              #     scripts/lint-workflow-errexit-capture.py (ADR-170).
+              # `|| _rc=$?` protects the command AND captures the status.
+              _rc=0
+              _out=$(gh api "$@" 2>"$RUNNER_TEMP/gh.err") || _rc=$?
               if [ "$_rc" -eq 0 ]; then
                 printf '%s' "$_out"; return 0
               fi
