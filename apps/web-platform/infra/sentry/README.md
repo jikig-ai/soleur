@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **28 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (30 alert rules total)
+- **29 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (31 alert rules total)
   (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
   `ignore_changes = [environment]` only, real `trigger_conditions` and
   `action_filters`, read through the non-deprecated
@@ -78,12 +78,14 @@ terraform plan
 ## First-time import — COMPLETE, runbook retired (#7590)
 
 First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this root
-declares **28 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
+declares **29 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
 `sentry_issue_alert`) and plans clean against the full root.
 
 `git-data-boot-warning` WAS a third `sentry_issue_alert` — it landed after the
 Phase 2 adoption capture was taken and so was never in that migration's scope.
-Phase 3.4 (#7985) migrated it, which is why this paragraph now says 28 + 2.
+Phase 3.4 (#7985) migrated it, which took this paragraph to 28 + 2. It now
+says 29 + 2 because #7989 ADDED a rule (`ops_email_delivery_failure`) rather than
+migrating one — the only entry here whose +1 is a new rule, not a type change.
 The two survivors are blocked on upstream 950, which is fixed but unreleased.
 Historical note, kept because this count has been wrong twice: this paragraph
 said **2** until 2026-09-06 (#7826) while line 5 of this same file

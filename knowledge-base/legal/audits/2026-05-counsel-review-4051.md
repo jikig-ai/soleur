@@ -76,3 +76,15 @@ After all three rows are signed off:
 4. Auto-merge: `gh pr merge --squash --auto <PR-number>`.
 
 After merge, proceed with the post-merge operator runbook in PR body (Cloudflare token scope expansion, ruleset apply, LinkedIn Developer app URL update, K-bis appeal submission).
+
+> **[2026-09-09 CORRECTION (#7995 / PR #7989).** Two of the four limbs above are
+> WITHDRAWN as never operative, and this sentence is superseded to that extent.
+> The Cloudflare token-scope expansion and the ruleset apply targeted Terraform
+> resources that were never applied — the supporting Doppler variables were
+> never populated, so `terraform plan` failed before `apply`, and the `.tf` file
+> was later deleted with zero runtime impact. Article 30 PA-15 §(g)(4) and
+> §(g)(5) are withdrawn accordingly. The other two limbs are unaffected: the
+> LinkedIn app privacy-policy URL was never repointed and remains on soleur.ai,
+> and the K-bis appeal WAS carried out (PA-15 §(c) records the one-time
+> Microsoft Ireland transfer). The sign-off itself is not reopened — this
+> corrects a forward-looking instruction, not a finding.]

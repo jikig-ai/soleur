@@ -1144,6 +1144,7 @@ design-tooling
 design-tooling/mcp-tools
 design-tools
 desktop-support
+destroy-gate
 destroy-guard
 destructive-branch
 destructive-migration
@@ -1206,6 +1207,7 @@ distribution-strategy
 dkim
 dmarc
 dns
+dnssec
 doc-drift
 docker
 docker-build
@@ -1427,6 +1429,7 @@ fallback-insert
 fallback-path
 fallback-query
 fallback-strings
+false-all-clear
 false-assertions
 false-assumption
 false-boot-race
@@ -1506,6 +1509,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-population
 fixture-redaction
 fixture-safety
 fixture-seam
@@ -2759,6 +2763,7 @@ primitive
 prior-art
 prior-art-discovery
 prior-decision-recovery
+privacy
 private-documents
 private-network
 private_key
@@ -3533,6 +3538,7 @@ srp
 ssg
 ssh
 ssh-agent
+ssh-authorization
 ssh-hypothesis-gate
 ssh-provisioner
 ssl

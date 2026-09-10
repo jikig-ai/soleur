@@ -456,11 +456,28 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 
    Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
    image. It does NOT deploy.
-2. **Bump the cloud-init pin in lockstep** — `apps/web-platform/infra/cloud-init.yml`
-   (the 3 `soleur-inngest-bootstrap:vX.Y.Z` refs) → `v1.1.16` in a PR. AC6 of
+2. **Bump the cloud-init pin in lockstep** — there are **FOUR** pin sites across **TWO** files,
+   not three in one: `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init-inngest.yml`
+   (the dedicated host) and `IREF` and `ZIREF` in `apps/web-platform/infra/cloud-init.yml`
+   (the web host). CORRECTED 2026-09-10 (#8017) — the old count named one file and missed the
+   other entirely, which is exactly how a partial bump happens.
+   **Do NOT sweep with a directory-wide `sed`:**
+   `cloud-init-inngest-zot-pull-mutation.test.sh` carries a fifth ref pinned at `v1.1.24` as a
+   deliberately stale NEGATIVE CONTROL, and the only thing keeping it out of the drift guard's
+   population is that a `.test.sh` cannot match the `cloud-init*.yml` glob. Rewriting it turns a
+   guard red. AC6 of
    `cloud-init-inngest-bootstrap.test.sh` asserts pin == the semver-max published
    `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
-   fails AC6); pushing the tag without bumping turns `main` red until this PR merges.
+   fails AC6); pushing the tag without bumping turns `main` red until this PR merges —
+   and red **repo-wide**, on every concurrently open pull request that runs the suite, not just
+   on the bump branch. The build workflow has no failure notification of any kind, so nobody is
+   told the window has stayed open. Keep it to the length of one build run: do not push the tag
+   until the digest commit is ready to land.
+
+   **A stale-schema row is not a sick host.** `scheduled-inngest-health.yml` grades liveness and
+   will keep reporting the host HEALTHY on a row the recut gate refuses as `stale_schema` — the
+   two ask different questions, and that divergence is by design, not a monitoring gap. A host
+   running an older image is serving fine and simply cannot answer the recut gate's question.
 3. **Dispatch the deploy** (workflow_dispatch-only; the build never chains into it):
 
    ```

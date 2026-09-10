@@ -64,7 +64,13 @@ VOLID="106261946"          # soleur-inngest-redis-store — the pinned physical 
 OTHERID="105149570"
 HOSTV="soleur-inngest"
 HOSTNAMEV="soleur-inngest-prd"
-DEV="/dev/disk/by-id/scsi-0HC_Volume_${VOLID}"
+# data_mount_src is an AUDIT field since #8017, not the pin. It carries what findmnt actually
+# reports on a real host -- a KERNEL device name -- because a synthesized by-id string here was
+# exactly what let the unreachable comparison look tested (cq-assert-anchor-not-bare-token).
+DEV="/dev/sdb"
+DEVID="scsi-0HC_Volume_${VOLID}"       # the pin G14 now compares (#8017)
+OTHERDEVID="scsi-0HC_Volume_${OTHERID}"
+DEVBASE="sdb"
 
 # ── Fixture builders ──────────────────────────────────────────────────────────────
 # bs_line <dt> <host> <host_name> <message> — one betterstack-query.sh JSONEachRow row. `raw` is a
@@ -76,13 +82,16 @@ bs_line() {
 
 # The probe's field list at probe_schema=7, in emit order (pinned against the real emitter by the
 # emit/read contract arm near the bottom of this file).
+# probe_schema=8 (#8017/#8015). The three new fields go at the TAIL, after data_bytes, so they
+# sit downstream of the histogram's substr(out, 1, 400) cap and cannot displace an existing field.
 PROBE_FIELDS=(http_code server_active vector_active redis_active uptime_s boot_id image_ref
               instance_id cli_version cutover_flag probe_schema host_role flush_latched
-              redis_keys redis_expires redis_key_patterns data_mount_src data_bytes)
+              redis_keys redis_expires redis_key_patterns data_mount_src data_bytes
+              data_mount_base data_mount_devid registry_fns)
 declare -A PD=(
   [http_code]=000 [server_active]=inactive [vector_active]=active [redis_active]=active
   [uptime_s]=98765 [boot_id]=b0000000000000000000000000000001 [image_ref]=ghcr.io/example@sha256:aaa
-  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=7
+  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=8
   [host_role]=dedicated [flush_latched]=false [redis_keys]=0
   # __NONE__ is the COHERENT partner of redis_keys=0 (G14). A default of __UNREADABLE__ here
   # would make every unrelated case fail on the coherence guard instead of its own predicate.
@@ -90,8 +99,15 @@ declare -A PD=(
   # Coherent with redis_keys=0: an empty store has nothing carrying a TTL either.
   [redis_expires]=0
   [data_mount_src]="__DEV__" [data_bytes]=4096
+  # #8017: the DEFAULT must be the PASSING identity, so every unrelated case exercises its own
+  # predicate rather than collapsing on G14 -- the same reasoning the redis_key_patterns default
+  # above records. registry_fns defaults non-zero for the same reason (a 0 is the diagnostic-boot
+  # signature and would make unrelated rows fail #8015's discriminator instead of their own).
+  [data_mount_base]="__DEVBASE__" [data_mount_devid]="__DEVID__" [registry_fns]=7
 )
 PD[data_mount_src]="$DEV"
+PD[data_mount_base]="$DEVBASE"
+PD[data_mount_devid]="$DEVID"
 
 # msg <override>… — each override is `field=value`, or `-field` to DROP the field entirely.
 # Dropping is a DIFFERENT mutation from setting a bad value, and the plan's rows 12/14/15 are
@@ -255,8 +271,8 @@ mk_rows "$TMP/rows-g3d.json" "$(bs_line 'yesterday' "$HOSTV" "$HOSTNAMEV" "$(msg
 expect "[G3d] an unparseable dt => unreadable" unreadable "$TMP/rows-g3d.json" "$FIN" --now-epoch 1788430200
 
 # G4 — EXACT equality on the schema, not `>=`.
-mk_rows "$TMP/rows-g4.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg probe_schema=6)")"
-predicate G4 "probe_schema=6 (the PREVIOUS schema) => stale_schema" stale_schema "$TMP/rows-g4.json" "$FIN"
+mk_rows "$TMP/rows-g4.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg probe_schema=7)")"
+predicate G4 "probe_schema=7 (the PREVIOUS schema) => stale_schema" stale_schema "$TMP/rows-g4.json" "$FIN"
 
 # G14 — the two store fields must AGREE. `redis_keys` is the field the destroy is authorized
 # against; `redis_key_patterns` is derived from a --scan of the SAME keyspace, so a count of 0
@@ -325,14 +341,43 @@ predicate G12 "redis_keys=__UNREADABLE__ => unreadable (NOT coerced to 0)" unrea
 mk_rows "$TMP/rows-g13.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg redis_keys=3)")"
 predicate G13 "redis_keys=3 => store_populated" store_populated "$TMP/rows-g13.json" "$FIN"
 
-# G14 — the measured store is NOT on the device being destroyed. Today's mount is `mount … || true`
-# with `nofail`, so a failed mount leaves /mnt/data on the root disk and Redis reports empty WHILE
-# THE VOLUME HOLDS A POPULATED AOF.
-mk_rows "$TMP/rows-g14.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_src=/dev/sda1)")"
-predicate G14 "data_mount_src is the root disk => mount_mismatch" mount_mismatch "$TMP/rows-g14.json" "$FIN"
-# A DIFFERENT physical volume's by-id path is the same defect one digit over.
-mk_rows "$TMP/rows-g14b.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg "data_mount_src=/dev/disk/by-id/scsi-0HC_Volume_${OTHERID}")")"
-expect "[G14b] data_mount_src pins a DIFFERENT volume => mount_mismatch" mount_mismatch "$TMP/rows-g14b.json" "$FIN"
+# G14M — the measured store is ON THE DEVICE BEING DESTROYED (#8017).
+#
+# RELABELLED from G14 and renamed off rows-g14*.json. `G14` labelled TWO unrelated predicates --
+# the coherence guard above and this mount pin -- and both wrote the SAME rows-g14*.json
+# filenames, so a later insertion could silently repoint the mutation row at the wrong fixture
+# and still look green.
+#
+# The pin is now on data_mount_devid. The old predicate compared findmnt's KERNEL device name
+# against a by-id PATH, which mountinfo never reports, so it refused every possible input and
+# looked fully covered. EVERY value that is not the expected alias must still refuse -- the rows
+# below enumerate that set -- and the two must-PASS rows are what prove the pin is satisfiable
+# at all, which is the property the old form lacked.
+mk_rows "$TMP/rows-g14m.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__NOMATCH__)")"
+predicate G14M "data_mount_devid=__NOMATCH__ (mounted from a non-Hetzner device) => mount_mismatch" mount_mismatch "$TMP/rows-g14m.json" "$FIN"
+# A DIFFERENT physical volume's alias is the same defect one digit over.
+mk_rows "$TMP/rows-g14m-other.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg "data_mount_devid=${OTHERDEVID}")")"
+expect "[G14M-other] data_mount_devid pins a DIFFERENT volume => mount_mismatch" mount_mismatch "$TMP/rows-g14m-other.json" "$FIN"
+mk_rows "$TMP/rows-g14m-amb.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__AMBIGUOUS__)")"
+expect "[G14M-amb] data_mount_devid=__AMBIGUOUS__ (>1 alias resolved to one device) => mount_mismatch" mount_mismatch "$TMP/rows-g14m-amb.json" "$FIN"
+# __UNREADABLE__ SPLITS ON data_mount_src, because the two producers are not the same claim.
+# (a) the mount is REAL and the lsblk/readlink resolution broke -> nothing was learned about the
+# backing device, so this is a readability failure and routes to `unreadable` like G12/G15/G16.
+mk_rows "$TMP/rows-g14m-unread.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__UNREADABLE__ data_mount_src=/dev/sdb)")"
+expect "[G14M-unread] devid=__UNREADABLE__ with a REAL mount (resolution broke) => unreadable, never a mismatch we did not measure" unreadable "$TMP/rows-g14m-unread.json" "$FIN"
+# (b) findmnt reported NO MOUNT at all. That IS a measurement -- it is the root-disk fallback this
+# predicate exists to catch -- so it stays mount_mismatch. Without this pair the gate would either
+# assert an unmeasured mismatch or excuse a genuinely unmounted store as merely unreadable.
+mk_rows "$TMP/rows-g14m-nomount.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=__UNREADABLE__ data_mount_src=__UNREADABLE__)")"
+expect "[G14M-nomount] devid AND src both __UNREADABLE__ (nothing mounted) => mount_mismatch (a measured state)" mount_mismatch "$TMP/rows-g14m-nomount.json" "$FIN"
+# `n/a` is the WEB-arm sentinel. On a host_role=dedicated row it means the emitter took the wrong
+# arm, which must refuse rather than read as "not applicable".
+mk_rows "$TMP/rows-g14m-na.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_devid=n/a)")"
+expect "[G14M-na] data_mount_devid=n/a on a DEDICATED row => mount_mismatch" mount_mismatch "$TMP/rows-g14m-na.json" "$FIN"
+# THE MUST-PASS ROW. Without it every arm above is satisfied by a predicate that refuses
+# EVERYTHING -- exactly the failure this change exists to remove.
+mk_rows "$TMP/rows-g14m-pass.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg "data_mount_devid=${DEVID}" data_mount_src=/dev/sdb)")"
+expect "[G14M-pass] THE PIN IS SATISFIABLE: kernel name in data_mount_src, matching alias in data_mount_devid => dark" dark "$TMP/rows-g14m-pass.json" "$FIN"
 
 # G15 — readability only, no ceiling. A size threshold here would be a made-up number; the honest
 # guard is that the only surviving record of what is about to be destroyed was actually measured.
@@ -442,11 +487,21 @@ mk_rows "$TMP/rows-m1.json" \
   "$(bs_line '2026-09-03 09:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=active http_code=200 redis_keys=9999)")"
 expect "[M1] rows in REVERSE file order are still sorted by dt => dark" dark "$TMP/rows-m1.json" "$FIN"
 
-# M2 — G14 accepts EITHER the raw device or the mapper, "so the gate remains usable for a
+# M2 — the POST-RECUT shape must still clear the gate, "so the gate remains usable for a
 # re-dispatch after a partial apply". Nothing exercised the mapper side, so deleting that
 # alternative left the suite green while making the documented recovery path unreachable.
-mk_rows "$TMP/rows-m2.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_src=/dev/mapper/inngest-redis)")"
-expect "[M2] a POST-recut mount source (the mapper) still clears G14 => dark" dark "$TMP/rows-m2.json" "$FIN"
+#
+# SINCE #8017 THIS ROW IS STRICTLY STRONGER. The old G14 accepted `/dev/mapper/inngest-redis` as
+# a bare STRING, which any local `cryptsetup` could create -- the name proved nothing about which
+# volume was underneath. Now data_mount_src carries the mapper as an AUDIT field while
+# data_mount_devid independently pins the backing volume, so this row asserts the recovery path
+# stays open AND that it is a claim about the device rather than about a name.
+mk_rows "$TMP/rows-m2.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_src=/dev/mapper/inngest-redis "data_mount_devid=${DEVID}")")"
+expect "[M2] POST-recut: the mapper in data_mount_src with the alias still pinning the volume => dark" dark "$TMP/rows-m2.json" "$FIN"
+# ...and the mapper name ALONE is not enough. A mapper backed by the wrong volume must refuse --
+# the property the old bare-string arm could not express.
+mk_rows "$TMP/rows-m2b.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg data_mount_src=/dev/mapper/inngest-redis "data_mount_devid=${OTHERDEVID}")")"
+expect "[M2b] a mapper backed by the WRONG volume => mount_mismatch (a name is not a device)" mount_mismatch "$TMP/rows-m2b.json" "$FIN"
 
 # M3 — `_ihdg_finished_count`'s identity test is an OR by design ("we are looking for a REASON TO
 # REFUSE, so any single hint is enough"). Turning it into an AND left the suite green: no fixture
@@ -534,7 +589,7 @@ expect "[M7] a single-encoded raw envelope refuses (fail-closed on an encoding c
 # ` redis_keys=0 server_active=inactive http_code=000 ...` supplies every store and liveness
 # field BEFORE the genuine ones, so the gate read the injected copy and never saw the real state.
 mk_rows "$TMP/rows-i1.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
-  "SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} image_ref=x redis_keys=0 redis_expires=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=7 host_role=dedicated flush_latched=false data_bytes=4096 redis_keys=99999 server_active=active http_code=200")"
+  "SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} image_ref=x redis_keys=0 redis_expires=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=8 host_role=dedicated flush_latched=false data_bytes=4096 redis_keys=99999 server_active=active http_code=200")"
 expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unreadable "$TMP/rows-i1.json" "$FIN"
 
 # I2 — an EMBEDDED NEWLINE. `_ihdg_rows` renders `message` through `jq -r`, so one row becomes two
@@ -543,7 +598,7 @@ expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unread
 mk_rows "$TMP/rows-i2.json" "$(python3 -c "
 import json,sys
 serving='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_keys=99999'
-dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 redis_expires=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=7 host_role=dedicated flush_latched=false data_bytes=4096'
+dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 redis_expires=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=8 host_role=dedicated flush_latched=false data_bytes=4096'
 raw=json.dumps({'host':'$HOSTV','host_name':'$HOSTNAMEV','message':serving+chr(10)+dark})
 print(json.dumps({'dt':'2026-09-03 10:00:00','raw':raw}))")"
 expect "[I2] an EMBEDDED NEWLINE in one row => refused, never graded as its last line" unreadable "$TMP/rows-i2.json" "$FIN"
@@ -624,7 +679,7 @@ else
   # pinned clock: its fixture is dated 10:00 UTC, so the arm passed while the wall clock was near
   # 10:00 and began returning `stale_row` instead of `dark` a couple of hours later. Measured — it
   # was green in the morning and red in the afternoon with no edit in between.
-  _rc=0; _out="$(bash -c "source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
+  _rc=0; _out="$(bash -c "set -uo pipefail; source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
   if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | tail -1)" == "dark" ]]; then
     pass   # the mutation is detectable: the G13 arm above asserts `store_populated` and would redden
   else
@@ -662,7 +717,7 @@ else
     # Field names the REAL emitter writes, as `name=$var` pairs.
     EMITTED="$(printf '%s\n' "$EMIT_LINE" | grep -oE '[a-z_]+=\$[a-z_]+' | sed 's/=.*//' | sort -u)"
     _missing=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
       printf '%s\n' "$EMITTED" | grep -qx "$_f" || _missing="${_missing} ${_f}"
     done
     if [[ -z "$_missing" ]]; then pass; else fail "B12: the gate consumes field(s) the emitter does not write:${_missing}"; fi
@@ -674,7 +729,7 @@ else
       _real_msg+=" ${_f}=${PD[$_f]:-x}"
     done <<< "$EMITTED"
     _unresolved=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
       _ihdg_field "$_real_msg" "$_f" >/dev/null || _unresolved="${_unresolved} ${_f}"
     done
     if [[ -z "$_unresolved" ]]; then pass; else fail "B12: the gate's extractor did not resolve:${_unresolved} from a real-emitter-shaped line"; fi
@@ -891,7 +946,7 @@ mutate() {
   # a verdict that differs from the expected token, which is exactly what this row treats as
   # "the mutation changed the verdict". Every B10 row was therefore passing on the clock rather
   # than on the neutered check, and would have kept doing so.
-  out="$(bash -c "source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
+  out="$(bash -c "set -uo pipefail; source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
   got="$(printf '%s\n' "$out" | tail -1)"
   if [[ "$got" != "$tok" ]]; then
     pass
@@ -919,7 +974,7 @@ mutate G13 's|^  \[\[ "\$redis_keys" -eq 0 \]\].*|  :|'                         
 mutate G15 's|^  \[\[ "\$data_bytes" =~ \^\[0-9\]+\$ \]\].*|  :|'                    "$TMP/rows-g15.json" unreadable
 
 # G14's check is a multi-line `if`; neuter its condition rather than a single `[[ … ]]` line.
-mutate G14 's|^  if \[\[ "\$data_mount_src" != "\$expected_dev".*|  if false; then|' "$TMP/rows-g14.json" mount_mismatch
+mutate G14M 's|^  \[\[ "\$data_mount_devid" == "\$expected_devid" \]\].*|  :|' "$TMP/rows-g14m.json" mount_mismatch
 
 # G3's pin and G2's silence arm.
 NOWV=1788440400   mutate G3  's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|'      "$TMP/rows-g3.json"  stale_row --now-epoch 1788440400
@@ -956,13 +1011,19 @@ expect "OPERAND: an unknown flag must refuse, never fall through to a decision" 
 # TWO floors, and they measure different things. The predicate floor is the one AC B11 is about: a
 # battery keyed on verdict TOKENS needs only ~10 cases because several predicates share a token, so
 # a token-keyed battery silently under-covers and this floor is what makes that visible.
+# THE COMPARISON AND BOTH MESSAGES MUST CARRY THE SAME NUMBER, and they did not: the comparison
+# was `-lt 21`, the FAIL message said "floor is 20", and the ok message said "floor 21" -- three
+# numbers for one floor, so whichever a reader trusted was a coin flip. Defined ONCE here and
+# read by all three, the same discipline _FLOOR below already follows. Raised 21 -> 22 with #8017's
+# G14M, keeping the deliberate one of slack.
+_PRED_FLOOR=22
 _distinct=0; for _g in ${_seen_predicates:-}; do _distinct=$((_distinct + 1)); done
-if [[ "$_distinct" -lt 21 ]]; then
+if [[ "$_distinct" -lt "$_PRED_FLOOR" ]]; then
   fails=$((fails + 1))
-  printf '  FAIL DROP-ONE FLOOR: only %s DISTINCT predicates covered (%s cases ran), floor is 20 (G1..G20). Covered:%s\n' \
-    "$_distinct" "$predicate_cases" "${_seen_predicates:-}" >&2
+  printf '  FAIL DROP-ONE FLOOR: only %s DISTINCT predicates covered (%s cases ran), floor is %s. Covered:%s\n' \
+    "$_distinct" "$predicate_cases" "$_PRED_FLOOR" "${_seen_predicates:-}" >&2
 else
-  printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor 21)\n' "$_distinct" "$predicate_cases"
+  printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor %s)\n' "$_distinct" "$predicate_cases" "$_PRED_FLOOR"
 fi
 
 # The assertion floor is self-contained — bash builtins and this suite's own counters only. A floor
@@ -971,7 +1032,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=118
+_FLOOR=124
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
