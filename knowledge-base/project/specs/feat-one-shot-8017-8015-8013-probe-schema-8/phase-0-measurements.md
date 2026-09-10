@@ -141,3 +141,33 @@ model *of*. Branch touches 0 `.c4` files, and `plugins/soleur/test/c4-count-pari
 No new ADR either: the decision lands as an ADR-199 amendment (see that file's 2026-09-10 entry),
 because it changes HOW C1's stated conjunction is measured rather than taking a new architectural
 position. A new ordinal would also have created a renumber-sweep hazard against sibling branches.
+
+## Merge-safety: does this diff force a replace of anything targeted on merge?
+
+Checked because the plan warns that editing ANY infra file — *including a comment* — can
+destroy-and-recreate a `terraform_data` whose `triggers_replace` hashes it, and that if such a
+resource sits in the per-merge `-target=` allow-list, **merging root-SSHes the live serving host**.
+
+A first pass grepped the `.tf` files for my carriers' basenames and returned three hits, which read
+as a real finding. It was not: every hit in `server.tf` is a **comment**. Re-run with comment lines
+stripped, over each `resource "terraform_data"` block individually:
+
+| Check | Result |
+|---|---|
+| `terraform_data` blocks whose NON-COMMENT body references `inngest-bootstrap.sh`, `cloud-init-inngest.yml` or `cloud-init.yml` | **none** |
+| `terraform_data` resources in the workflow's `-target=` allow-list | 15 |
+| Intersection | **empty** |
+
+The one genuine executable use is `server.tf:311`,
+`user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", …))` on `hcloud_server.web` —
+which carries `ignore_changes = [user_data, …]` (stated again at `server.tf:1892`), so the web pin
+is a fresh-boot value and delivers nothing to the running host.
+
+`hcloud_server.inngest` deliberately carries NO such `ignore_changes`, so a cloud-init edit DOES
+force-replace it — but no `hcloud_server.*` appears in the `-target=` allow-list at all, so the
+merge apply cannot reach it. From merge onward, any `inngest-host` or `inngest-host-replace`
+dispatch — for any unrelated reason, by anyone — will deliver this change. That is the plan's stated
+sequencing consequence, not a new one.
+
+**Conclusion: merging this PR replaces nothing and opens no shell on any host.** Delivery happens
+only through a later, separately-approved replace.
