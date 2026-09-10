@@ -538,6 +538,17 @@ case "$mode" in
     ;;
   bwrap-fail)
     if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+    # #8016: answer the probe's own `docker inspect -f '{{.State.Status}}'`. Without this
+    # the mock fell through to a bare `exit 0` with no output, so cstate=unknown satisfied
+    # EVERY scenario and the field was decorative -- deleting its capture left the suite green.
+    if [[ "${1:-}" == "inspect" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"State.Status"* ]]; then
+          printf '%s\n' "${MOCK_BWRAP_CSTATE-unknown}"
+          exit 0
+        fi
+      done
+    fi
     if [[ "${1:-}" == "exec" ]]; then
       for arg in "$@"; do
         if [[ "$arg" == *"bwrap"* ]]; then
@@ -2429,6 +2440,7 @@ assert_blocking_probe_line() {
     export MOCK_BWRAP_FAIL_STDERR="$stderr_val"
     export MOCK_BWRAP_FAIL_RC="$rc_val"
     [[ -n "$sleep_val" ]] && export MOCK_BWRAP_FAIL_SLEEP="$sleep_val"
+    [[ -n "${MOCK_BWRAP_CSTATE:-}" ]] && export MOCK_BWRAP_CSTATE
     run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) || true
 
@@ -2466,21 +2478,53 @@ assert_blocking_probe_line() {
   rm -rf "$d"
 }
 
+# INSTRUMENT CONTROL -- run FIRST, because every scenario below is scored through this
+# helper. assert_blocking_probe_line decides its own pass/fail, which means it is disarmable
+# INDEPENDENTLY of pass()/fail() and of any assertion-count floor: flipping its `failed=1` to
+# `failed=0` silently voids every field anchor in four scenarios while TOTAL/PASS/FAIL still
+# reconcile exactly. Measured -- that mutant survived the whole suite. This drives the helper
+# with a pattern that CANNOT match and requires it to report failure.
+assert_probe_helper_positive_control() {
+  local _p0=$PASS _f0=$FAIL _t0=$TOTAL
+  # Output suppressed: the inner call is SUPPOSED to fail, and an unsuppressed `FAIL:` line
+  # here would be indistinguishable from a real failure to any log scanner.
+  assert_blocking_probe_line \
+    "(instrument control -- expected failure, unwound below)" \
+    "bwrap: No permissions to create new namespace" 1 "" \
+    'THIS_PATTERN_CANNOT_MATCH_ANY_ROLLBACK_LINE' >/dev/null 2>&1
+  local _fired=$(( FAIL - _f0 ))
+  # Unwind the control's own bookkeeping, then score the control itself.
+  PASS=$_p0; FAIL=$_f0; TOTAL=$_t0
+  TOTAL=$((TOTAL + 1))
+  if [[ "$_fired" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 instrument control: assert_blocking_probe_line can still FAIL"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 instrument control: the helper did NOT fail on an unmatchable pattern"
+    echo "        every #8016 field assertion below is therefore vacuous"
+  fi
+}
+assert_probe_helper_positive_control
+
 # Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
-assert_blocking_probe_line \
+MOCK_BWRAP_CSTATE=running assert_blocking_probe_line \
   "#8016 spoken: rc + message ride the rollback line" \
   "bwrap: No permissions to create new namespace" 1 "" \
-  'rc=1' 'ms=[0-9]+' 'cstate=' 'err_chars=[0-9]+' \
+  'rc=1' 'ms=[0-9]{1,3} ' 'cstate=running ' 'err_chars=[0-9]+' \
   'bwrap_err="[^"]*No permissions to create new namespace[^"]*"$'
 
 # Scenario 2 -- SILENT: the ACTUAL production shape. Zero bytes, signalled rc.
 # This is the scenario that makes the <empty> sentinel load-bearing: without it,
 # "bwrap failed silently" and "we discarded the message" render identically, and
 # that distinction IS the diagnosis.
-assert_blocking_probe_line \
+# cstate is asserted HERE specifically: rc=137 with zero bytes is the exact production
+# shape, and cstate is the only field that separates "the container died" from "bwrap
+# itself failed". Asserting it anywhere else would leave that discrimination unpinned.
+MOCK_BWRAP_CSTATE=exited assert_blocking_probe_line \
   "#8016 silent: rc=137 with zero output renders the <empty> sentinel" \
   "" 137 "" \
-  'rc=137' 'err_chars=0' 'bwrap_err="<empty>"$'
+  'rc=137' 'ms=[0-9]{1,3} ' 'cstate=exited ' 'err_chars=0' 'bwrap_err="<empty>"$'
 
 # Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr. 97.6% of runs.
 # The deploy must NOT roll back, so there must be NO rollback line at all.
@@ -2501,13 +2545,17 @@ assert_probe_pass_chatter_reemits() {
   local rb; rb=$(grep -cF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
   # The probe passed, so the deploy must not have rolled back for a sandbox reason,
   # and the chatter must still have been re-emitted rather than swallowed.
-  if [[ "$rb" == "0" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
+  # SANDBOX_PROBE_OK is the pass-path liveness marker: without it, "no bwrap line in
+  # journald" is ambiguous across five states, and a probe that silently stopped running is
+  # indistinguishable from a healthy fleet. Deleting it left the suite green.
+  local ok; ok=$(grep -cF 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
     PASS=$((PASS + 1))
     echo "  PASS: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
-    echo "        rollback_lines=$rb exit=$actual_exit"
+    echo "        rollback_lines=$rb probe_ok_markers=$ok exit=$actual_exit"
     echo "        output: $output"
   fi
   rm -rf "$d"
@@ -2536,7 +2584,10 @@ assert_probe_output_purity() {
   wh_tok="whsec_""AAAAAAAAAAAAAAAAAAAAAAAA"
   # CR (forges a second journald record), a double quote (breaks the quoted field),
   # a non-ASCII byte, and a leak canary that must never appear in any sink.
-  dirty="SENTINEL_LEAK_CANARY $(printf 'a\rb') \"quoted\" caf\xc3\xa9 $dp_tok $sk_tok $jwt_tok $wh_tok"
+  # $'...' is required for the non-ASCII leg: bash does NOT expand \x escapes inside
+  # "..." , so the previous form put the 12 literal ASCII chars `caf\xc3\xa9` in the
+  # fixture and that leg tested nothing.
+  dirty="SENTINEL_LEAK_CANARY $(printf 'a\rb') \"quoted\" "$'caf\xc3\xa9'" $dp_tok $sk_tok $jwt_tok $wh_tok"
 
   local output
   output=$(
@@ -2551,11 +2602,25 @@ assert_probe_output_purity() {
   local line problems=""
   line=$(grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
 
-  # Every raw token must be absent from BOTH sinks (journald capture and stdout).
+  # Every raw token must be absent from BOTH sinks. This loop used to test only
+  # $line while its comment claimed both -- and $output IS a sink: ci-deploy runs
+  # under adnanh/webhook -v, so this script's stdout is captured and re-logged to
+  # journald under SYSLOG_IDENTIFIER=webhook, which vector.toml allowlists. That
+  # gap is exactly what let an unsanitized re-emit ship; the assertion that would
+  # have caught it was the one asserting half of what it said.
   local t
   for t in "$dp_tok" "$sk_tok" "$jwt_tok" "$wh_tok"; do
-    if printf '%s' "$line" | grep -qF -- "$t"; then problems="$problems raw-token-in-journald"; fi
+    if printf '%s' "$line"   | grep -qF -- "$t"; then problems="$problems raw-token-in-journald"; fi
+    if printf '%s' "$output" | grep -qF -- "$t"; then problems="$problems raw-token-in-stdout"; fi
   done
+  # RETENTION, not absence. The canary is ordinary diagnostic text, and preserving
+  # ordinary text is the sanitizer's JOB -- asserting its absence would demand
+  # over-redaction. Every fixture here asserts a secret is REMOVED; without this
+  # arm nothing catches _cred_err_tail becoming too aggressive and destroying the
+  # diagnostic the whole change exists to produce. Direction axis, not content.
+  if ! printf '%s' "$line" | grep -qF -- 'SENTINEL_LEAK_CANARY'; then
+    problems="$problems diagnostic-text-destroyed-in-journald"
+  fi
   # A CR must not survive into the journald line -- it would forge a second record.
   if printf '%s' "$line" | grep -q $'\r'; then problems="$problems CR-survived"; fi
   # The field must remain parseable: bwrap_err is last, value carries no bare quote.
@@ -2579,16 +2644,24 @@ assert_probe_output_purity
 # computed from the sanitized value it would report 200 beside a 200-char value and
 # truncation would become permanently undetectable -- one field's provenance carries
 # the whole property.
+# The tail anchor is load-bearing twice over. `err_chars=4000` alone is computed from
+# ${#BWRAP_ERR} and so is satisfied whether truncation happened or not (raising the clamp to
+# 100000 passes) AND whether the helper keeps the head or the tail (the fixture is 4000
+# identical X, so head and tail are indistinguishable by construction). Pinning a distinct
+# TAILMARKER present + the head absent kills both mutants.
 assert_blocking_probe_line \
-  "#8016 truncation: err_chars reports pre-sanitization length" \
-  "$(printf 'X%.0s' $(seq 1 4000))" 1 "" \
-  'err_chars=4000'
+  "#8016 truncation: err_chars is pre-sanitization AND the TAIL is what survives" \
+  "HEADMARKER$(printf 'X%.0s' $(seq 1 4000))TAILMARKER" 1 "" \
+  'err_chars=402[0-9]' 'bwrap_err="[^"]{1,200}"$' 'bwrap_err="[^"]*TAILMARKER"$'
 
 # Scenario 6 -- SLOW: without this, ms has one value across the whole set and a
 # hardcoded ms=0 would satisfy every other scenario. Bounded, never exact.
+# 2.0s, not 1.1s: the fast scenarios now bound ms at <=3 digits (<1000), so the gap between
+# fast-max and slow-min is 2x rather than touching, and no single hardcoded constant can
+# satisfy both arms. A BOUND, never a pin -- pinning a wall-clock quantity would flake.
 assert_blocking_probe_line \
   "#8016 slow probe: ms reflects real elapsed time (>=1000)" \
-  "" 137 "1.1" \
+  "" 137 "2.0" \
   'ms=[1-9][0-9]{3,}'
 
 # H4 -- the knobs must not leak into later scenarios. A hoisted export would
@@ -5723,8 +5796,12 @@ fi
 # CONCATENATION -- a contiguous secret-shaped literal in this file trips GitHub Push
 # Protection even though the value is fake.
 _cet() {
+  # BOTH functions: _cred_err_tail calls _cred_redact_env_values, so extracting only the
+  # former leaves the value arm undefined and every value-based case silently measures the
+  # shape rules alone. (Measured: that is exactly what happened on the first run here.)
   # shellcheck disable=SC1090
   source /dev/stdin <<CETEOF
+$(sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT")
 $(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
 CETEOF
   _cred_err_tail "$1"
@@ -5740,6 +5817,68 @@ _assert_cet_redacts() {
     FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail redacts $desc"; echo "        got: $out"
   fi
 }
+
+# The alternation at the shape rule is SIX members, not one rule. Only two had cases, so
+# narrowing it to `(ghp|whsec)` leaked Supabase / Doppler-personal / Slack / GitHub-OAuth
+# tokens with the suite green. One case per member.
+_CET_A1="sbp_";    _assert_cet_redacts "a Supabase service key"      "${_CET_A1}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A2="dop_v1_"; _assert_cet_redacts "a Doppler personal token"    "${_CET_A2}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A3="xoxb_";   _assert_cet_redacts "a Slack bot token"           "${_CET_A3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A4="gho_";    _assert_cet_redacts "a GitHub OAuth token"        "${_CET_A4}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A5="sk_";     _assert_cet_redacts "a Stripe TEST key"           "${_CET_A5}test_AAAAAAAAAAAAAAAAAAAA"
+_CET_A6="pk_";     _assert_cet_redacts "a Stripe publishable key"    "${_CET_A6}live_AAAAAAAAAAAAAAAAAAAA"
+unset _CET_A1 _CET_A2 _CET_A3 _CET_A4 _CET_A5 _CET_A6
+
+# OVER-REDACTION, with the shapes over-redaction actually eats. SENTINEL_LEAK_CANARY has no
+# `.`, `:`, `/` or `ey`, so it is the shape LEAST exposed and cannot carry this alone. A
+# missing-shared-object error is one of the likeliest real causes of a failing bwrap exec --
+# an unanchored JWT rule ate `libkeyring.so.1` and destroyed exactly that diagnostic.
+_assert_cet_preserves() {
+  local desc="$1" text="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "$text")"
+  if [[ "$out" == *"$text"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail preserves $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail preserves $desc"
+    echo "        in : $text"; echo "        out: $out"
+  fi
+}
+_assert_cet_preserves "a shared-object path"  'bwrap: cannot open /usr/lib/x86_64-linux-gnu/libkeyring.so.1'
+_assert_cet_preserves "a dotted filename"     'error: /etc/keystore.p12.bak is unreadable'
+_assert_cet_preserves "an image digest"       'ref sha256:abcdef0123456789abcdef0123456789'
+_assert_cet_preserves "a host:port"           'dial tcp 10.0.1.30:5000 refused'
+_assert_cet_preserves "an underscore ident"   'ask_live_migrations failed'
+
+# THE VALUE-BASED ARM -- the most security-critical line added, and it had zero coverage.
+# Deleting its call left the suite green. Drives the real ENV_FILE format, both sides of the
+# 12-byte floor, and the <redacted:KEY> rendering.
+_assert_cet_env_value() {
+  local desc="$1" envline="$2" probe="$3" expect_redacted="$4"
+  TOTAL=$((TOTAL + 1))
+  local d out; d=$(mktemp -d); printf '%s\n' "$envline" > "$d/envfile"
+  out="$(ENV_FILE="$d/envfile" _cet "$probe")"
+  rm -rf "$d"
+  local redacted=no; [[ "$out" == *"<redacted:"* ]] && redacted=yes
+  if [[ "$redacted" == "$expect_redacted" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 value-arm $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 value-arm $desc (expected redacted=$expect_redacted)"
+    echo "        out: $out"
+  fi
+}
+# BYOK is the case the shape rules structurally cannot reach: 64 bare hex, no prefix.
+_assert_cet_env_value "redacts a bare-hex secret no shape rule can match" \
+  'BYOK_ENCRYPTION_KEY=9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' \
+  'invalid environment variable: 9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' yes
+_assert_cet_env_value "redacts a hyphenated vendor key (sk-ant-, misses rule 2)" \
+  'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+  'exec failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA rejected' yes
+# The floor is the boundary: 12 bytes redacts, 11 does not. Both sides, or the floor is unpinned.
+_assert_cet_env_value "redacts a value AT the 12-byte floor" \
+  'SOME_TOKEN=abcdefghijkl' 'saw abcdefghijkl here' yes
+_assert_cet_env_value "PRESERVES a value below the floor (no diagnostic shredding)" \
+  'NODE_ENV=production' 'NODE_ENV was production during the run' no
 
 _CET_P1="sk_"; _assert_cet_redacts "a Stripe-shaped live key"   "${_CET_P1}live_AAAAAAAAAAAAAAAAAAAA"
 _CET_P2="ey";  _assert_cet_redacts "a three-segment JWT"        "${_CET_P2}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
@@ -5770,12 +5909,20 @@ _CET_FC_TOKEN="dp.""st.SHOULDNEVERAPPEAR"
 # shadowed `sed`, which is what _cet's own extraction uses, so the function was never defined
 # and the case failed for a reason that had nothing to do with the property.
 _CET_FCSRC="$_CET_FCDIR/fn.sh"
-sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT" > "$_CET_FCSRC"
+{ sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT"
+  sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT"; } > "$_CET_FCSRC"
 _CET_FC_OUT=$(
   # shellcheck disable=SC1090
   source "$_CET_FCSRC"
+  # STATE the ambient option rather than inheriting it. This block sits downstream of a
+  # `set +e +o pipefail` ~2000 lines up; if a future edit re-enables pipefail before here,
+  # the mutant and the original become indistinguishable and this case silently returns to
+  # vacuity with no signal. Note the helper's own `set -o pipefail` is redundant on the
+  # deploy path (ci-deploy.sh line 2 sets it) -- what this pins is that the helper is
+  # self-sufficient when sourced into a shell that does NOT have it.
+  set +o pipefail
   PATH="$_CET_FCDIR:$PATH"
-  hash -r   # bash caches command paths; without this, sed may still resolve to the real binary
+  hash -r   # bash caches command paths; without this, tr may still resolve to the real binary
   _cred_err_tail "leak canary $_CET_FC_TOKEN"
 )
 if [[ "$_CET_FC_OUT" == "<sanitize_failed>" ]]; then

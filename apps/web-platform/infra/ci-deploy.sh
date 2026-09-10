@@ -1223,16 +1223,70 @@ _docker_login_http_status() {
 # mid-pipeline tool death propagates. Without it, a `sed` that dies after the control-strip but
 # before the redaction step lets the helper emit a PARTIALLY sanitized value and return 0 --
 # i.e. it leaks precisely when its own machinery is broken.
+# _cred_redact_env_values <VARNAME> -- substitute the LITERAL VALUES of the container's
+# own env file out of a diagnostic string, in place.
+#
+# WHY THIS EXISTS AND WHY IT IS NOT OPTIONAL. The shape rules above are a PREFIX list, and
+# a prefix list is the same claim as a name list -- "these are the vendors that exist" --
+# just spelled differently. It is already wrong for this estate's most valuable secret:
+# BYOK_ENCRYPTION_KEY is `openssl rand -hex 32`, i.e. 64 bare hex characters with no
+# marker of any kind, and losing it makes every customer's stored BYOK credential
+# permanently unrecoverable. ANTHROPIC_API_KEY (`sk-ant-…`, hyphens) misses rule 2 for the
+# same reason. PEM bodies survive because runc's %q collapses a key to ONE printable line.
+#
+# A value-based arm needs no prediction: it substitutes what is actually in scope. Precedent
+# is in this repo's own Art. 30 register at PA-8 (g) -- the #6982 git-data-emit bracket
+# records "a value-based arm additionally substitutes the LUKS passphrase, WHICH NO PATTERN
+# COULD MATCH". Same reasoning, same threat, different host.
+#
+# Bounded deliberately: values under 12 bytes are skipped, because short values are things
+# like `production` or `true` and substituting them would shred the diagnostic this whole
+# change exists to produce. Uses bash literal substitution (`${v//"$needle"/…}`), never a
+# regex, so no metacharacter in a secret can alter the pattern.
+#
+# Known limit, stated rather than implied: this runs AFTER the quote fold, so a value
+# containing a literal `"` will not match. Secrets in this estate do not, and the shape
+# rules remain as the backstop.
+#
+# ANCHORING, and why it is not `\b` and not bare. Measured both ways:
+#   - `\b` is defeated by ANY preceding word character (`ZZZZsk_live_…` does not match,
+#     because `Z`/`s` is word-to-word and yields no boundary);
+#   - no anchor at all OVER-redacts catastrophically: a bare `ey[…]{4,}\.` ate
+#     `libkeyring.so.1` -> `libkeyJ.REDACTED` and `/etc/keystore.p12.bak`, i.e. exactly the
+#     missing-shared-object diagnostics (the 126/127 class) this change exists to surface.
+# So: `(^|[^A-Za-z0-9])` for the prefix rules — stricter than `\b` (it admits `_` as a
+# boundary, so `FOO_sk_live_…` matches) while refusing mid-word matches; and the JWT rule
+# anchors on the literal `eyJ` with 8+ char segments, which is self-anchoring because `eyJ`
+# is base64 for `{"` and does not occur inside ordinary words the way `ey` does.
+#
+# Residual, on the record: a shape-matching token glued directly to alphanumerics
+# (`ZZZZsk_live_…`) still escapes the SHAPE rules. It does not escape the VALUE arm above
+# whenever the secret is in the container's env file, which is the threat this reopening is
+# actually about. `re_` (Resend) was deliberately DROPPED from the alternation: two chars is
+# too broad (it ate `re_exec`, `re_try`), and RESEND_API_KEY is covered by value.
+_cred_redact_env_values() {
+  local -n _target="$1"
+  [[ -n "${ENV_FILE:-}" && -r "${ENV_FILE:-}" ]] || return 0
+  local _k _v
+  while IFS='=' read -r _k _v; do
+    [[ -z "$_k" || "$_k" == \#* ]] && continue
+    (( ${#_v} < 12 )) && continue
+    _target="${_target//"$_v"/<redacted:$_k>}"
+  done < "$ENV_FILE"
+  return 0
+}
+
 _cred_err_tail() {
   local _e _rc=0
   _e="$(set -o pipefail; printf '%s' "${1:-}" \
     | LC_ALL=C tr -c '[:print:]' ' ' \
     | LC_ALL=C tr '"' "'" \
     | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g' \
-    | sed -E 's/\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]+/\1_\2_REDACTED/g' \
-    | sed -E 's/\bey[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/eyJ.REDACTED/g' \
-    | sed -E 's/\b(gh[pousr]|sbp|dop_v1|re|whsec|xox[baprs])_[A-Za-z0-9_-]+/\1_REDACTED/g')" || _rc=$?
+    | sed -E 's/(^|[^A-Za-z0-9])(sk|pk|rk)_(live|test)_[A-Za-z0-9]+/\1\2_\3_REDACTED/g' \
+    | sed -E 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/eyJ.REDACTED/g' \
+    | sed -E 's/(^|[^A-Za-z0-9])(gh[pousr]|sbp|dop_v1|whsec|xox[baprs])_[A-Za-z0-9_-]+/\1\2_REDACTED/g')" || _rc=$?
   if (( _rc != 0 )); then printf '%s' '<sanitize_failed>'; return 0; fi
+  _cred_redact_env_values _e
   # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
   # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
   # ci-deploy.test.sh pins). Hence the explicit length test rather than the idiomatic one-liner.
@@ -1248,14 +1302,22 @@ _cred_err_tail() {
 # under GNU. Differencing those silently produces a garbage duration on one of the two. Bash's
 # builtin has no such variance. It DOES honour LC_NUMERIC, so the separator class covers a
 # comma-decimal locale; the `date` arm is a bash-4 fallback only.
+# Prints ms, or NOTHING when it cannot measure. It never fabricates and never aborts.
+#
+# The old `date +%s * 1000` fallback rendered whole seconds into a field named `ms`, which
+# is indistinguishable from a real sub-second measurement -- and `ms` exists precisely to
+# separate "container not settled" from "child was signalled". `scripts/lib/test-contention.sh`
+# refuses the same thing in the same words ("a fabricated zero is indistinguishable from a
+# lock that was free on the first try"). Callers render the empty return as `ms=unknown`.
 _now_ms() {
   local _t="${EPOCHREALTIME:-}"
-  if [[ -n "$_t" ]]; then
-    _t="${_t/[.,]/}"
-    printf '%s' "$(( 10#${_t} / 1000 ))"
-  else
-    printf '%s' "$(( $(date +%s) * 1000 ))"
-  fi
+  [[ -n "$_t" ]] || return 0
+  _t="${_t/[.,]/}"
+  # Validate before arithmetic: a non-numeric operand inside $(( )) is a FATAL expansion
+  # error that exits the shell even under `|| true`, so an unvalidated read here could
+  # abort a deploy from the instrument that only exists to time it.
+  [[ "$_t" =~ ^[0-9]+$ ]] || return 0
+  printf '%s' "$(( 10#${_t} / 1000 ))"
 }
 
 # _doppler_get_observed <SECRET_NAME> <DEST_VAR> (#7095): read one prd secret and MEASURE the
@@ -2984,10 +3046,21 @@ case "$COMPONENT" in
       echo "Verifying bwrap sandbox..."
       # #8016: the probe must report its own diagnosis.
       #
-      # Until now the `2>&1` below sat inside an `if !`, which merged the probe's stderr into
-      # THIS SCRIPT's stdout -- a stream journald never sees. Only `logger -t "$LOG_TAG"` lines
-      # reach journald, so the 2026-09-09 v0.264.6 rollback emitted one bare line naming no
-      # cause and no exit code, and the deploy rolled back leaving zero evidence.
+      # Until now the `2>&1` below sat inside an `if !`, so the probe's stderr was merged into
+      # THIS SCRIPT's stdout and never reached the dedicated `ci-deploy` journald tag. The
+      # 2026-09-09 v0.264.6 rollback therefore emitted one bare line naming no cause and no
+      # exit code.
+      #
+      # NOTE, because the obvious version of that sentence is FALSE and was measured false:
+      # this script's stdout is NOT dark. `ci-deploy` runs under adnanh/webhook with `-verbose`,
+      # which captures the hook command's combined output and re-logs it, and `vector.toml`
+      # allowlists SYSLOG_IDENTIFIER="webhook" alongside "ci-deploy". Verified in production --
+      # `Verifying bwrap sandbox...` (a plain `echo` a few lines up) is queryable in Better Stack
+      # under the webhook tag. Two consequences, and both matter:
+      #   1. anything printed here egresses off-box, so the re-emit below MUST be sanitized;
+      #   2. the reason for the dedicated `logger` line is latency and structure, not darkness --
+      #      webhook buffers until the child exits, so its copy surfaces late, untagged, and
+      #      inside a request-id blob rather than as a greppable k=v record.
       #
       # `VAR="$(cmd)" || RC=$?` is the ONLY form that preserves the exit code. The intuitive
       # `if ! VAR=$(cmd); then` detects the failure but `!` CONSUMES the status, so `$?` inside
@@ -3007,27 +3080,44 @@ case "$COMPONENT" in
       BWRAP_RC=0
       BWRAP_T0="$(_now_ms)"
       BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
-      BWRAP_MS=$(( $(_now_ms) - BWRAP_T0 ))
+      BWRAP_T1="$(_now_ms)"
+      # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. That form sits BETWEEN the rc capture and
+      # the rollback branch, so any failure inside it aborts under `set -e` and takes the
+      # logger line, the canary teardown and final_write_state with it -- a failed probe would
+      # exit with reason=unhandled and no rollback record at all. The timing instrument must
+      # never be able to kill the gate it is timing.
+      if [[ "$BWRAP_T0" =~ ^[0-9]+$ && "$BWRAP_T1" =~ ^[0-9]+$ ]]; then
+        BWRAP_MS=$(( BWRAP_T1 - BWRAP_T0 ))
+      else
+        BWRAP_MS="unknown"
+      fi
       BWRAP_CSTATE="$(docker inspect -f '{{.State.Status}}' soleur-web-platform-canary 2>/dev/null || true)"
       BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
+      # Sanitize ONCE, up front: both sinks below egress to Better Stack.
+      BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
       # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
       # PASS that still wrote to stderr is the early signal that precedes the next rollback --
       # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
       # failure. Moving this into the failure arm would silently swallow it again.
-      if [[ -n "$BWRAP_ERR" ]]; then printf '%s\n' "$BWRAP_ERR"; fi
+      if [[ -n "$BWRAP_ERR_SAN" ]]; then printf '%s\n' "$BWRAP_ERR_SAN"; fi
       if (( BWRAP_RC != 0 )); then
         echo "Canary sandbox check failed, rolling back..."
         # err_chars is the PRE-sanitization length on purpose: it is the only discriminator
         # between a truncated diagnostic and a complete one. Computing it from the sanitized
         # value would report 200 beside a 200-character field and make truncation permanently
         # undetectable.
-        BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
         # bwrap_err is free text and is therefore LAST on the line by construction (ADR-115
         # trusted region): consumers anchor on bwrap_err="[^"]*"$ and must never substring-match
         # k=v tokens across the line. `:-` is correct here -- an empty value MUST become the
         # sentinel, because "bwrap failed silently" and "we discarded the message" are otherwise
         # indistinguishable, and that distinction is the diagnosis.
-        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
+        # `|| printf` and not a bare call: `logger` is a bare command under `set -e`, so if the
+        # journald socket is unavailable the script dies HERE and the three statements below --
+        # the canary teardown and final_write_state -- never run, turning a clean rollback into
+        # reason=unhandled with the canary still up. The fallback keeps the record on the
+        # webhook leg rather than losing it.
+        BWRAP_LINE="DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
+        logger -t "$LOG_TAG" "$BWRAP_LINE" || printf '%s\n' "$BWRAP_LINE"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.
@@ -3035,6 +3125,12 @@ case "$COMPONENT" in
         exit 1
       fi
       echo "Sandbox OK"
+      # Positive liveness marker on the PASS path. Without it, "no bwrap line in journald" is
+      # ambiguous across five states -- passed, never ran, aborted before the branch, logger
+      # died, or the health gate skipped the probe entirely -- and a probe that silently
+      # stopped running is indistinguishable from a healthy fleet. Same tag, so one query
+      # answers "did the gate run, and what did it measure".
+      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: bwrap sandbox verified in $IMAGE:$TAG rc=0 ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR}" || true
 
       # Faithful sandbox canary (#5875 / ADR-079) — NON-BLOCKING dark-launch.
       # Runs the SDK-captured split-unshare argv the legacy probe above does NOT
