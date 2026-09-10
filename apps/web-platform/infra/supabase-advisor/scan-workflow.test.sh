@@ -50,6 +50,21 @@ MONITORS_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
 APPLY_YML="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 MODEL_C4="$REPO_ROOT/knowledge-base/engineering/architecture/diagrams/model.c4"
 HOOK="$REPO_ROOT/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
+
+# Sandbox incident telemetry before that hook is ever driven (#7853).
+#
+# Case AC8 below pipes fixture workflow content through "$HOOK", which emits through
+# .claude/hooks/lib/incidents.sh. That library resolves its sink by walking up to the REAL
+# repository unless INCIDENTS_REPO_ROOT says otherwise, so without this the fixture's verdict lands
+# in the operator live .claude/.rule-incidents.jsonl -- where compound reads deny rows as deviation
+# evidence and rule-metrics-aggregate.sh rolls them into a COMMITTED artifact.
+#
+# This suite reaches an emitter through none of the five chokepoints: it is invoked directly by
+# infra-validation.yml, loads no bun preload and no vitest globalSetup, and does not source
+# test-helpers.sh. Found by incident-sandbox-coverage.test.sh, which printed it in the outside set
+# rather than letting it hide behind a count.
+# shellcheck source=../../../../.claude/hooks/lib/test-incident-sandbox.sh
+source "$REPO_ROOT/.claude/hooks/lib/test-incident-sandbox.sh"
 INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 TEST_ALL="$REPO_ROOT/scripts/test-all.sh"
 HARNESS="$REPO_ROOT/tests/scripts/test-supabase-advisor-scan.sh"
