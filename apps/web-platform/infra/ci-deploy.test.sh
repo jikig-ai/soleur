@@ -5716,6 +5716,78 @@ else
   echo "        got: $F14_OUT"
 fi
 
+# --- #8016: _cred_err_tail's added rules, driven ONE AT A TIME -----------------------
+# The probe purity scenario exercises all four added rules at once, so removing any single
+# rule would still be caught by *some* assertion but by none specifically. These drive each
+# rule alone, so a rule's removal reds its own case. Fixtures are synthesized and built by
+# CONCATENATION -- a contiguous secret-shaped literal in this file trips GitHub Push
+# Protection even though the value is fake.
+_cet() {
+  # shellcheck disable=SC1090
+  source /dev/stdin <<CETEOF
+$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
+CETEOF
+  _cred_err_tail "$1"
+}
+
+_assert_cet_redacts() {
+  local desc="$1" tok="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "prefix $tok suffix")"
+  if [[ -n "$out" ]] && ! grep -qF -- "$tok" <<<"$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail redacts $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail redacts $desc"; echo "        got: $out"
+  fi
+}
+
+_CET_P1="sk_"; _assert_cet_redacts "a Stripe-shaped live key"   "${_CET_P1}live_AAAAAAAAAAAAAAAAAAAA"
+_CET_P2="ey";  _assert_cet_redacts "a three-segment JWT"        "${_CET_P2}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+_CET_P3="whsec_"; _assert_cet_redacts "a webhook signing secret" "${_CET_P3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P4="ghp_";   _assert_cet_redacts "a GitHub PAT"             "${_CET_P4}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P5="dp.";    _assert_cet_redacts "a Doppler service token"  "${_CET_P5}st.AAAAAAAAAAAAAAAAAAAAAAAA"
+
+# FAIL CLOSED. A sanitizer that dies mid-pipeline must NOT emit a partially sanitized value.
+# Without pipefail the `||`-suspended errexit lets the helper return 0 carrying whatever the
+# surviving stages produced -- i.e. it leaks exactly when its own machinery is broken.
+#
+# The stub shadows `tr`, NOT `sed`, and that choice is the whole test. `sed` is the LAST stage
+# of the pipeline, so a failing `sed` sets the pipeline status with or without pipefail and the
+# case passes either way -- measured: it survived a `set -o pipefail` deletion, i.e. it was
+# vacuous. `tr` is stage 2, never last, so its death is observable ONLY through pipefail. That
+# is also the shape of the real failure being guarded: a MID-pipeline tool death that leaves
+# later stages returning 0 over partially sanitized bytes.
+TOTAL=$((TOTAL + 1))
+_CET_FCDIR=$(mktemp -d)
+cat > "$_CET_FCDIR/tr" <<'FCTR'
+#!/bin/bash
+exit 3
+FCTR
+chmod +x "$_CET_FCDIR/tr"
+_CET_FC_TOKEN="dp.""st.SHOULDNEVERAPPEAR"
+# Extract the function body with the REAL PATH first, then scope the shadow to the call.
+# The shadow must reach the function's own pipeline and nothing else -- an earlier revision
+# shadowed `sed`, which is what _cet's own extraction uses, so the function was never defined
+# and the case failed for a reason that had nothing to do with the property.
+_CET_FCSRC="$_CET_FCDIR/fn.sh"
+sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT" > "$_CET_FCSRC"
+_CET_FC_OUT=$(
+  # shellcheck disable=SC1090
+  source "$_CET_FCSRC"
+  PATH="$_CET_FCDIR:$PATH"
+  hash -r   # bash caches command paths; without this, sed may still resolve to the real binary
+  _cred_err_tail "leak canary $_CET_FC_TOKEN"
+)
+if [[ "$_CET_FC_OUT" == "<sanitize_failed>" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+  echo "        expected <sanitize_failed>, got: $_CET_FC_OUT"
+fi
+rm -rf "$_CET_FCDIR"
+unset _CET_P1 _CET_P2 _CET_P3 _CET_P4 _CET_P5 _CET_FCDIR _CET_FC_TOKEN _CET_FC_OUT _CET_FCSRC
+
 # T-7095-2c (#7095 R3, F11) — THE OTHER SIDE OF THE empty= TRANSFORM: non-zero rc WITH stdout.
 # Until this case existed, every fixture that reached the marker reported empty=1 (`empty` gives
 # rc=0/empty=1, `rc` gives rc=1/empty=1), so CRED_EMPTY was a one-valued constant and a hardcoded

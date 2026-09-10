@@ -8,8 +8,48 @@ never silently auto-applied. `/ship` renders these into the PR body and files th
 
 **Decision class:** taste. Two reviewers split on it, both with real arguments.
 
-**Current plan position:** retained. `knowledge-base/legal/article-30-register.md` is in
-`## Files to Edit` and Phase 6 appends one additive dated bracket to PA-8 §(g).
+**RESOLVED 2026-09-10 — CLO ruling (binding).** Routed to the `clo` agent rather than to the
+operator, per `hr-legal-decisions-route-to-clo`: this is legal posture, not product scope. The
+ruling **amends**, and it resolves the split by separating the two things the reviewers were
+actually arguing about — Kieran is right on the outcome, DHH is right on the mechanism, and both
+survive if the bracket ships as a *documentation obligation* rather than as a blocking acceptance
+criterion.
+
+Ruling, in the CLO's terms:
+
+- **Not a new category.** §(c) is undisturbed; the exec target is a canary that has served no
+  request, so no request context, header, session or DB read is reachable from this producer.
+  Captured container stderr is incidental technical log content already inside PA-8's category set.
+- **The obligation is at limb (g), not (c),** which is where the plan already put it. Art. 30(1)(g)
+  requires a description of the Art. 32(1) measures, and the `--env-file` →
+  `Container.Config.Env` finding is what makes `_cred_err_tail` **load-bearing** rather than
+  belt-and-braces. DHH's "strict reduction in unsanitized bytes" is factually true and orthogonal:
+  it argues the change is safe, not that the measure is described.
+- **The export leg needs no amendment.** §(d)/§(e) already cover it. One correction the CLO
+  verified against `vector.toml` rather than taking from the plan: unlike the git-data and registry
+  planes, this source *does* traverse the shared `pii_scrub_*` chain — it simply matches no bare
+  vendor secret in free text, which is why the emitter-side sanitizer is authoritative and the VRL
+  chain corroborating. Stated explicitly so a later reader concludes neither that Vector covers it
+  nor that Vector is absent.
+
+**Scope ruling on the DHH objection:** the bracket ships in this PR, but it is **not** an
+acceptance criterion and must not gate the deploy fix. It has no test, no CI gate and no code
+dependency. `knowledge-base/legal/article-30-register.md` stays in `## Files to Edit`; the Phase 6
+hard pre-merge AC is dropped. Nothing else moves: no `compliance-posture.md` row, no
+`docs/legal/**` lockstep (PA-8 is knowledge-base-only, so none of the five `docs/legal/**` CI gates
+fire), no DPIA, no breach row, no Art. 13 update.
+
+**Applied.** The bracket is appended inside the PA-8 §(g) cell. One implementation note the CLO
+could not have known: its drafted text carried **eight bare `|` characters** inside backticked
+regex alternations. GFM splits a table row on pipes *before* inline-code parsing, so backticks do
+not protect them — pasted verbatim, the row would have split into nine cells and everything past
+the second would have been **discarded at render while surviving in the raw file**. They were
+escaped to `\|`, matching the convention the zot bracket in this same cell already uses
+(`level:error\|fatal`). Verified: the row still carries exactly 3 structural pipes.
+
+The CLO's accuracy note was also discharged: it flagged that the bracket asserts `ci-deploy.test.sh`
+F14 pins redaction-before-truncation, and asked that this be re-confirmed after `_cred_err_tail`'s
+body was rewritten. F14 passes on the post-change tree.
 
 **Against (DHH).** The GDPR gate returned this at `Suggestion` severity and explicitly declined to
 promote it. The plan then put the remedy in `## Files to Edit`, gave it its own phase and made it a

@@ -2991,7 +2991,13 @@ case "$COMPONENT" in
       #
       # `VAR="$(cmd)" || RC=$?` is the ONLY form that preserves the exit code. The intuitive
       # `if ! VAR=$(cmd); then` detects the failure but `!` CONSUMES the status, so `$?` inside
-      # the branch reads 0 -- measured. The exit code is the deciding datum for every root-cause
+      # the branch reads 0 -- measured.
+      #
+      # BWRAP_RC now GATES THE ROLLBACK, so its correctness is a safety property and not just a
+      # diagnostic one. Reverting this capture to the `if !` form makes BWRAP_RC read 0 on a
+      # FAILING probe, the `(( BWRAP_RC != 0 ))` branch below never fires, and the gate stops
+      # gating -- it would fail OPEN and ship a broken sandbox to production. Measured under
+      # mutation: that revert emits ZERO rollback lines. Do not "simplify" it back. The exit code is the deciding datum for every root-cause
       # hypothesis (1 = bwrap's own failure or "no such container"; 126/127 = could not exec;
       # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
       # would leave the message alone -- and the message was EMPTY both times this fired.
