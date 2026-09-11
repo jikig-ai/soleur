@@ -1116,43 +1116,46 @@ Enforces the operator's standing rule — **every detected incident gets a post-
 
    The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
-**If triggered — require a PIR on the branch:**
+**If triggered — require a PIR on the branch.** The script owns the file selector, the shape
+check and the exit codes (#7941 plan; it was an inline block here until then, and the block
+checked only the FIRST modified PIR — the script checks every one). Do NOT
+re-inline it, for the same reason the signal scan above was not: a check that lives only in
+prose is executed by whoever reads it, and nothing tests it. It ships in the plugin
+(`plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`, suite
+`plugins/soleur/test/ship-pir-action-items-gate.test.sh`). Never redirect its stderr: bash's own
+`No such file` on 127 and the script's usage line on 2 are what make those two distinguishable
+in a transcript.
 
 ```bash
-git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/operations/post-mortems/.+-postmortem\.md$'
+# --branch enumerates `git diff origin/main...HEAD` itself and checks EVERY added/modified/renamed-to PIR.
+bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/ship-pir-action-items-gate.sh" --branch
+rc=$?
+case "$rc" in
+  0) echo "gate: every added/modified PIR passes the action-items shape check." ;;   # paste the [PASS] lines into the PR body gate record
+  1) echo "gate: [FAIL] — fix each listed PIR, then re-run." >&2 ;;                 # table rows: file the issue, record #NNNN; sentence/heading: fix the section
+  3) echo "gate: no PIR in the diff — the No-match arm applies." >&2 ;;
+  *) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=unavailable rc=$rc" >&2 ;;              # 2 = usage/git; 127 = script missing from the plugin snapshot
+esac
 ```
 
-- **Match (a PIR was added/modified on this branch):** Pass *only after* confirming BOTH (1) frontmatter and (2) issue-backed action items:
+- **Exit 0 — Match (every PIR added/modified on this branch passes the shape check):** the
+  script's `[PASS]` lines are the file list — read it from them, not from a re-run selector.
+  Pass *only after* also confirming, for each listed file:
   1. **Frontmatter** carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
-  2. The merged `## Action Items & Follow-ups` section is in exactly ONE of two valid shapes: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own. Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, or an empty section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection (table-and-first-cell-anchored; `[[:space:]]` not `\s` for ugrep/BusyBox portability):
+  2. The `## Action Items & Follow-ups` section shape the script just verified is exactly ONE of two valid forms: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own — `No action items — incident fully resolved in the source PR with no residual work.` — plain, or with an optional single leading `_` or `*` marker (the spellings shipped before the template dropped emphasis; the class is frozen in the script's comment). Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, a bold sentence, or an empty or missing section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection is table-and-first-cell-anchored and column-0-anchored for the sentence, so the template's own instructional prose (a backticked copy mid-sentence) cannot satisfy it.
 
-     ```bash
-     PIR=$(git diff --name-only origin/main...HEAD | grep -E 'post-mortems/.+-postmortem\.md$' | head -n1)
-     sec=$(awk '/^## Action Items & Follow-ups/{f=1;next} /^## /{f=0} f' "$PIR")
-     # Item rows = table rows minus the header (| Issue |) and the |---| divider.
-     rows=$(printf '%s\n' "$sec" | grep -E '^[[:space:]]*\|' \
-            | grep -vE '^[[:space:]]*\|[[:space:]]*Issue[[:space:]]*\|' \
-            | grep -vE '^[[:space:]]*\|[-:|[:space:]]+\|[[:space:]]*$')
-     rows=$(printf '%s\n' "$rows" | sed '/^[[:space:]]*$/d')
-     if [ -n "$rows" ]; then
-       # Shape (a): every item row MUST begin with a #NNNN Issue cell.
-       bad=$(printf '%s\n' "$rows" | grep -vE '^[[:space:]]*\|[[:space:]]*#[0-9]+[[:space:]]*\|')
-       if [ -n "$bad" ]; then
-         echo "[FAIL] PIR action-item rows without a #NNNN in the Issue cell:" >&2
-         echo "$bad" >&2
-       fi
-     else
-       # No table rows → Shape (b): the standalone no-item sentence is the ONLY
-       # valid form. Anchored to start-of-line so the template's instructional
-       # prose ("…write exactly `_No action items …`") cannot satisfy it.
-       if ! printf '%s\n' "$sec" | grep -qE '^_No action items — incident fully resolved'; then
-         echo "[FAIL] PIR Action Items & Follow-ups has no issue-backed table and no permitted no-item sentence." >&2
-       fi
-     fi
-     ```
-
-     If `bad` is non-empty: halt and require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when genuinely resolved. This applies in BOTH headless and interactive modes — file the issues, do not defer.
-- **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+- **Exit 1 — a listed PIR fails:** the `[FAIL] <path>: <reason>` line names the file and the
+  reason (`rows-without-issue`, `no-sentence`, `no-heading`). For `rows-without-issue`: halt and
+  require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and
+  its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when
+  genuinely resolved. For `no-sentence` / `no-heading`: fix the section. Then re-run the gate;
+  the loop ends only when it prints a per-file verdict and exits 0. This applies in BOTH headless
+  and interactive modes — file the issues, do not defer.
+- **Exit 2 or anything else — `SOLEUR_SHIP_PIR_GATE_HALT`:** the gate could not run (usage
+  drift, `origin/main` unresolvable in this repository, or the script absent from the plugin
+  snapshot — bash prints 127). Halt and name it; do not treat an unavailable gate as a pass or as
+  "no PIR".
+- **Exit 3 — No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
 
   **Meta-case — the PR's subject IS this gate.** Available in **both** modes. Proceed **without**
   a PIR only when ALL THREE hold:
@@ -1160,8 +1163,11 @@ git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/o
   1. `git diff --name-only origin/main...HEAD` touches
      [scripts/ship-incident-pir-gate.sh](../../../../scripts/ship-incident-pir-gate.sh),
      [scripts/ship-incident-pir-gate-mutation.test.sh](../../../../scripts/ship-incident-pir-gate-mutation.test.sh),
-     `plugins/soleur/test/ship-incident-pir-gate.test.ts`, or
-     `plugins/soleur/test/fixtures/ship-incident-pir-gate/`.
+     `plugins/soleur/test/ship-incident-pir-gate.test.ts`,
+     `plugins/soleur/test/fixtures/ship-incident-pir-gate/`,
+     `plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`,
+     `plugins/soleur/test/ship-pir-action-items-gate.test.sh`, or
+     `plugins/soleur/test/fixtures/ship-pir-action-items/`.
   2. **Every** changed path is one of those, or
      [scripts/test-all.sh](../../../../scripts/test-all.sh), or a
      `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact. If this file is also
