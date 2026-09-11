@@ -40,10 +40,7 @@ case "$-" in
     exit 78
     ;;
 esac
-# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
-# but neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys, the CA vars substitute the trust store, OPENSSL_CONF loads an
-# arbitrary provider .so, LD_PRELOAD applies to the curl child (#7898 §2).
+# (#7873/#7898 §2) TLS-env unset — rationale in disk-monitor.sh.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
       HOSTALIASES LOCALDOMAIN RES_OPTIONS \
       OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
@@ -129,9 +126,7 @@ resend_api() {
     echo "ERROR: resend_api path is outside the /domains|/webhooks allowlist — refusing to build a credentialed request from it" >&2
     exit 2
   fi
-  # (#7873) transport confinement, position load-bearing: `--disable` aborts
-  # ~/.curlrc parsing only when FIRST; `--noproxy '*'` ignores every proxy var;
-  # `--proto '=https'` refuses a scheme downgrade; `-g` disables URL globbing.
+  # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   if [[ -n "$body" ]]; then
     curl --disable --noproxy '*' --proto '=https' -g -sS -X "$method" "${RESEND_API}${path}" \
       --config <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY") \

@@ -28,10 +28,7 @@ case "$-" in
     exit 78
     ;;
 esac
-# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
-# but neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys, the CA vars substitute the trust store, OPENSSL_CONF loads an
-# arbitrary provider .so, LD_PRELOAD applies to the curl child (#7898 §2).
+# (#7873/#7898 §2) TLS-env unset — rationale in disk-monitor.sh.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
       HOSTALIASES LOCALDOMAIN RES_OPTIONS \
       OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
@@ -49,10 +46,8 @@ FAILED_UNIT="${1:-unknown-unit}"
 # reads `invalid-unit-name` rather than leaking through.
 [[ "$FAILED_UNIT" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*$ ]] || FAILED_UNIT=invalid-unit-name
 # Overridable so the exec harness can redirect the stamp into a tmpdir; the
-# production unit never sets it. Shape-pinned to an absolute path so a stray
-# value cannot silently disable the cooldown (a failed `touch` below is loud).
+# production unit never sets it (a failed `touch` below is loud).
 EMAIL_COOLDOWN_FILE="${EMAIL_COOLDOWN_FILE:-/run/cron-egress-alarm.last-email}"
-[[ "$EMAIL_COOLDOWN_FILE" == /* ]] || EMAIL_COOLDOWN_FILE="/run/cron-egress-alarm.last-email"
 EMAIL_COOLDOWN_SECS=1800
 
 log() { echo "[$LOG_TAG] $*"; }
@@ -76,21 +71,10 @@ emit_refusal() {
 # in both files, and `SENTRY_CHANNEL_NOTE` is read by Channel 2.
 SENTRY_CHANNEL_NOTE=""
 sentry_checkin() {
-  # (#7898 §2) The Sentry ingest triple arrives from the doppler-wrapped
-  # environment and is interpolated into the request URL (the public key sits in
-  # the PATH here), so each part is adjudicated before a credentialed byte moves.
-  # Host: case-fold and strip ONE trailing dot (DNS is case-insensitive and
-  # `host.` is a valid absolute FQDN), then a POSITIVE DNS-label grammar ending in
-  # ADR-031's two ingest apexes (`.ingest.de.sentry.io` / `.ingest.us.sentry.io`
-  # — the region is mandatory; the glossary lists no region-less apex) — it
-  # refuses `@ / ? # :`, `%2F`, an empty label and every non-DNS byte on its own.
-  # Project id / key regexes are `_cron-shared.ts`'s SENTRY_PROJECT_RE /
-  # SENTRY_PUBLIC_KEY_RE verbatim (one repo-wide definition of a valid triple).
-  # Residual (ADR-052): `*.ingest.de.sentry.io` admits every Sentry EU tenant's
-  # org host, not ours. All three vars are initialised BEFORE the `if` so the
-  # triple-unset path reads nothing unbound under set -u. The region is kept
-  # byte-identical to container-restart-monitor.sh › sentry_event() (a parity
-  # row in cron-egress-firewall.test.sh diffs the two regions verbatim).
+  # (#7898 §2) Sentry ingest-triple adjudication — rationale in
+  # container-restart-monitor.sh › sentry_event(); the region below is
+  # byte-identical there (a parity row in cron-egress-firewall.test.sh diffs
+  # the two verbatim). Here the public key sits in the URL PATH.
   # BEGIN sentry-dest-pin (#7898)
   sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
@@ -106,11 +90,9 @@ sentry_checkin() {
   fi
   # END sentry-dest-pin (#7898)
   if (( sentry_dest_ok )); then
-    # (#7873) transport confinement, position load-bearing: `--disable` aborts
-    # ~/.curlrc parsing only when FIRST; `--noproxy '*'` ignores every proxy var;
-    # `--proto '=https'` refuses a scheme downgrade; `-g` disables URL globbing.
-    # The URL interpolates the FOLDED host, never the raw env value; stderr stays
-    # closed because this URL embeds the key.
+    # (#7873) transport confinement, position load-bearing — rationale in
+    # disk-monitor.sh › send_alert(). The URL interpolates the FOLDED host, never
+    # the raw env value; stderr stays closed because this URL embeds the key.
     local code rc=0
     code="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST \
       "https://${_si_host}/api/${SENTRY_PROJECT_ID}/cron/${SENTRY_SLUG}/${SENTRY_PUBLIC_KEY}/?status=error" 2>/dev/null)" \
@@ -149,11 +131,7 @@ RESEND_SKIP_REASON=""
 if [[ -f "$EMAIL_COOLDOWN_FILE" ]]; then
   last="$(stat -c %Y "$EMAIL_COOLDOWN_FILE" 2>/dev/null || echo 0)"
   if (( $(date +%s) - last < EMAIL_COOLDOWN_SECS )); then
-    if (( sentry_dest_ok )); then
-      log "email cooldown active — skipping Resend channel (Sentry check-in still posted)"
-    else
-      log "email cooldown active — skipping Resend channel"
-    fi
+    log "email cooldown active — skipping Resend channel"
     RESEND_API_KEY=""
     [[ -n "$RESEND_SKIP_REASON" ]] || RESEND_SKIP_REASON="cooldown"
   fi

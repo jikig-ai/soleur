@@ -88,11 +88,7 @@ if [[ -f "$ENV_FILE" ]]; then
   # shellcheck source=/dev/null
   set -a; . "$ENV_FILE"; set +a
 fi
-# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
-# but neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys, the CA vars substitute the trust store, OPENSSL_CONF loads an
-# arbitrary provider .so, LD_PRELOAD applies to the curl child. Unset AFTER the
-# env-file source so nothing sourced can re-arm them (#7898 §2).
+# (#7873/#7898 §2) TLS-env unset, AFTER the env-file source — rationale in disk-monitor.sh.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
       HOSTALIASES LOCALDOMAIN RES_OPTIONS \
       OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
@@ -159,7 +155,7 @@ sentry_event() {
     emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=sentry reason=jq"
     return 0
   }
-  # (#7873) transport confinement, position load-bearing (see resend_email).
+  # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   # The URL interpolates the FOLDED host, never the raw env value.
   local code rc=0
   code="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST \
@@ -181,10 +177,8 @@ resend_email() {
   # alert BODY is built before sentry_event() runs, so an append at build time
   # would always see an empty note.
   local subject="$1" body="${2}${SENTRY_CHANNEL_NOTE:+$'\n\n'$SENTRY_CHANNEL_NOTE}"
-  local sentry_state="(Sentry still posted)"
-  [[ -z "${SENTRY_CHANNEL_NOTE:-}" ]] || sentry_state="(Sentry channel refused too)"
   if [[ -z "${RESEND_API_KEY:-}" ]]; then
-    log "WARN: RESEND_API_KEY unset — skipping email channel ${sentry_state}"
+    log "WARN: RESEND_API_KEY unset — skipping email channel"
     emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=unset"
     return 0
   fi
@@ -199,9 +193,7 @@ resend_email() {
     --arg subject "$subject" \
     --arg text "$body" \
     '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')"
-  # (#7873) transport confinement, position load-bearing: `--disable` aborts
-  # ~/.curlrc parsing only when FIRST; `--noproxy '*'` ignores every proxy var;
-  # `--proto '=https'` refuses a scheme downgrade; `-g` disables URL globbing.
+  # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   http="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 \
     -X POST "https://api.resend.com/emails" \
     -H "Authorization: Bearer ${RESEND_API_KEY}" \

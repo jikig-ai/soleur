@@ -39,11 +39,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 0
 fi
 set -a; . "$ENV_FILE"; set +a
-# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
-# but neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys, the CA vars substitute the trust store, OPENSSL_CONF loads an
-# arbitrary provider .so, LD_PRELOAD applies to the curl child. Unset AFTER the
-# env-file source so nothing sourced can re-arm them (#7898 §2).
+# (#7873/#7898 §2) TLS-env unset, AFTER the env-file source — rationale in disk-monitor.sh.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
       HOSTALIASES LOCALDOMAIN RES_OPTIONS \
       OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
@@ -138,9 +134,7 @@ send_alert() {
     --arg text "$body" \
     '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')
 
-  # (#7873) transport confinement, position load-bearing: `--disable` aborts
-  # ~/.curlrc parsing only when FIRST; `--noproxy '*'` ignores every proxy var;
-  # `--proto '=https'` refuses a scheme downgrade; `-g` disables URL globbing.
+  # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   # The loopback metrics curl in sample_active_sessions() is UNcredentialed and
   # plain http — it must NOT receive these flags.
   local HTTP_CODE rc=0

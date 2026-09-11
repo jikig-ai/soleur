@@ -21,7 +21,11 @@ Editing `disk-monitor.sh`, `resource-monitor.sh`, `container-restart-monitor.sh`
   `COPY`d into it (`apps/web-platform/Dockerfile`, `local.host_script_files`).
 
 `hcloud_server.web` is NOT recreated. This is the established IaC delivery path for running hosts,
-not a host-replacement window. Verified by outcome post-merge (plan AC17-20).
+not a host-replacement window. Verified by outcome post-merge (plan AC12-17). NOTE (review):
+every monitor provisioner is pinned to `hcloud_server.web["web-1"]`; a live `web-2` (cattle, no
+provisioners "until Phase 5") keeps the UNCONFINED copies until its next recreate, when the image
+bake delivers the fix — the dual-delivery gap the issue's §1 describes, restated here so it is not
+implied.
 
 ## 2. §1 blocker reasoning in #7898 (user-challenge — for the tracker author)
 
@@ -102,12 +106,24 @@ In-flight streams are cut, identical to every `apps/web-platform/**` merge. Stat
 
 ## 10. Record: the Rule D classifier cannot see the Sentry host pin (work-phase finding)
 
-**Class:** mechanical (fact record for the PR body; candidate follow-up in a different subsystem)
+**Class:** mechanical (fact record for the PR body; a discovered defect in a different subsystem)
 
 With the host limb of the `sentry-dest-pin` region deleted, `scripts/lint-shell-trace-credential-refusal.py`
-still passes both `container-restart-monitor.sh` and `cron-egress-alarm.sh`: the credentialed URL
-interpolates the DERIVED `_si_host`, and the classifier's env-settable test does not follow a
-derivation from the curl operand back to its env-settable source. The committed exec harness rows
-are the guard (every host-limb mutant is RED there). The classifier is untouched (forbidden by
-the ask). Upgrade trigger for the classifier, surfaced for `ship`: a destination operand DERIVED one
-hop from an env-settable variable should inherit its env-settability.
+still passes both `container-restart-monitor.sh` and `cron-egress-alarm.sh`. Three classifier gaps,
+all measured at review (structural-enumeration + architecture + test-design seats): (1) a
+destination operand DERIVED one hop from an env-settable variable (`_si_host` from
+`SENTRY_INGEST_DOMAIN`) is not treated as env-settable, so the pin is not required for it; (2)
+`_mask_cmdsubs()` masks every `var="$(curl …)"` site, so the destination limb never runs on a
+captured curl — which is the shape every `-w '%{http_code}'` site has; (3) a positional-parameter
+`local` is visible or invisible depending on line shape (`local a="$1" path="$2"` on one line →
+`path` reads as never-assigned → pin required; `local path="$2"` on its own line → pin not
+required). (A fourth claim — that `CURL_INVOKE` misses a path-qualified `/usr/bin/curl` — was
+measured FALSE at the simplicity gate: the transport limb fires on it; the earlier "linter OK"
+reading was gap (2), the captured-curl mask.) The committed exec harness rows + parity row are the
+guard for these member classes here (every host-limb, second-member and path-qualified mutant is
+RED in the harnesses). The classifier is untouched (forbidden by the ask); per the CONCUR ruling
+the three gaps are appended to the open tracker #7898 (which already holds the §3/§4 scope gaps of
+this class) with a concrete trigger — a classifier-only PR landing BEFORE the next #7898 drawdown —
+rather than filed as a new issue. The 14-name TLS-env `unset` list (a superset of the 8-name list in
+the fifteen §5 scripts and two `scripts/` sites, with no executable home anywhere) is appended to
+#7898 as a §5 amendment, dependent on that classifier PR.

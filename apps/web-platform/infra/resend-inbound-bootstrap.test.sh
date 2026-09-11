@@ -225,8 +225,9 @@ test_bare_call_sites() {
 test_bare_call_sites
 
 # (f) static shape: no credentialed curl follows redirects (a custom header is
-# forwarded cross-host on a 3xx) and none is path-qualified (a `/usr/bin/curl`
-# bypasses the PATH shim and the Rule D CURL_INVOKE regex).
+# forwarded cross-host on a 3xx; the Rule D linter has no -L limb) and none is
+# path-qualified (a `/usr/bin/curl` bypasses the PATH shim; the linter's
+# CURL_INVOKE does match it — belt-and-braces for the shim's chokepoint claim).
 test_static_curl_shape() {
   TOTAL=$((TOTAL + 1))
   local description="no resend_api curl follows redirects and none is path-qualified"

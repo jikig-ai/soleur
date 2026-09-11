@@ -694,8 +694,10 @@ t_curl_exit_7
 
 # Static rows over the script source (#7898 review): a credentialed curl must
 # never follow redirects (curl forwards a custom auth header cross-host on a
-# 3xx), and no invocation may be path-qualified (a `/usr/bin/curl` bypasses
-# this PATH stub AND the Rule D linter's CURL_INVOKE regex). Anchored on the
+# 3xx; the Rule D linter has no -L limb), and no invocation may be
+# path-qualified (a `/usr/bin/curl` bypasses this PATH stub — the exec rows'
+# `checked` floor would also catch it; the linter's CURL_INVOKE DOES match it,
+# so this is belt-and-braces for the stub's chokepoint claim). Anchored on the
 # call form so a comment cannot satisfy either.
 t_static_curl_shape() {
   TOTAL=$((TOTAL + 1))

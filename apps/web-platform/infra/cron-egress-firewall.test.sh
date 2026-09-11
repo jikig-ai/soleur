@@ -681,8 +681,9 @@ echo "-- alarm transport confinement + Sentry destination pin (#7898 §2) --"
 # Resend) must carry the four flags first, the positive ingest-apex grammar must
 # sit on the `if [[ "$_si_host" =~` call form exactly once, no bare `curl -s` may
 # remain, no credentialed curl may follow redirects (`-L` forwards a custom auth
-# header cross-host), and no invocation may be path-qualified (a `/usr/bin/curl`
-# bypasses every PATH stub and the Rule D CURL_INVOKE regex does not flag it).
+# header cross-host; the Rule D linter has no -L limb), and no invocation may be
+# path-qualified (a `/usr/bin/curl` bypasses every PATH stub; the linter's
+# CURL_INVOKE does match it — belt-and-braces for the stub chokepoint claim).
 CONFINED_CURLS="$(grep -cE "^[[:space:]]*([A-Za-z_]+=\"?\\\$\()?curl --disable --noproxy '\\*' --proto '=https' -g" "$ALARM" || true)"
 if [[ "$CONFINED_CURLS" -eq 2 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: both alarm curls are transport-confined (count=2)"
@@ -1101,4 +1102,11 @@ fi
 
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
+# Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
+# deleted row would vanish green. Reported directly, never through the
+# PASS/FAIL accounting this backstops. Ratchet when adding rows.
+if [[ $((PASS + FAIL)) -lt 236 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 236. A row was deleted.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1
