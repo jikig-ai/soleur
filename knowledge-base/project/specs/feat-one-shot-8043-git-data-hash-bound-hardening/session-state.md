@@ -31,3 +31,11 @@
 - Guard 4 tier corrected: birth-time arm inside git_data_rung2_rehearsal_gate (fetch-depth: 0) + advisory PR-range arm; residual to #8010.
 - Verify-the-negative sweep 13/14; two corrections (issue-alerts.tf removed+import pair; F10 is five AcceptEnv sites across three files).
 - Test-design findings folded; Guard 5 refusal pinned at exit 64 + stderr naming BS_TABLE.
+
+## Work Phase
+- Status: complete on HEAD 9a59e7d57 (8 commits over origin/main). Final RUNG2_TEMPLATE_SHA256 = 5dcaf695ae48da1b9d053016c6da6f54d68aa55470f42cb4ef5da4f176daed53 (was 3a2392fb…); evidence file DELETED, never edited.
+- Suites on final HEAD: remove 27/0, provision 22/0, transport 23/0, birth-gate 146/0, bs-archive 35/0, luks 133/0, emit 59/0, strip-parity 15/0, tmpl-strip 5/0, pre-receive 24/0, rung2-wf 83/0, c4 10/10, vacuity 23/0, fixture-relative 62/0, registered-derive 74/0, ownership static 17/0 (+10 runtime rows measured 27/0 earlier), op-contract 6/6. Rehearsal 92/92 (0 skipped) measured before the comment-only Unit D.
+- Touched-shard gate: REFUSED rc=4 (two sibling full-gate runs) — skipped-for-contention; not evidence. A full pre-commit battery (403 suites) ran earlier on the near-final tree: 6 failures — four mine (fixed in 5d9271e0a), one env-only (#8051: git-fixture-env-shell under a git hook), one the archive.ubuntu.com outage (rehearsal, re-run 92/92).
+- Byte budget: stored 14800 B (baseline 13748), headroom 17968.
+- FR18 done (#8043 body), FR19 done (roadmap L27; #7025 p3→p1), mapper gate commented on #5274.
+- Pending at Phase 4: FR17 filings after the CONCUR gate (tracker + inngest + app-boundary + web-host; net +3 against Closes #8043).
