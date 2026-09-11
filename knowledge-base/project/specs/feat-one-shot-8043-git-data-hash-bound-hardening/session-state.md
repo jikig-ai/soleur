@@ -38,4 +38,4 @@
 - Touched-shard gate: REFUSED rc=4 (two sibling full-gate runs) — skipped-for-contention; not evidence. A full pre-commit battery (403 suites) ran earlier on the near-final tree: 6 failures — four mine (fixed in 5d9271e0a), one env-only (#8051: git-fixture-env-shell under a git hook), one the archive.ubuntu.com outage (rehearsal, re-run 92/92).
 - Byte budget: stored 14800 B (baseline 13748), headroom 17968.
 - FR18 done (#8043 body), FR19 done (roadmap L27; #7025 p3→p1), mapper gate commented on #5274.
-- Pending at Phase 4: FR17 filings after the CONCUR gate (tracker + inngest + app-boundary + web-host; net +3 against Closes #8043).
+- FR17 filed after CONCUR (no dissent): #8093 tracker (4 deferrals), #8094 app-layer boundary, #8095 web-host retention window, #8096 inngest false attestation; mapper gate commented on #5274. Net: Closing 1 / Filing 4 / +3.
