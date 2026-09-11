@@ -823,13 +823,13 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
 
 ## Acceptance Criteria
 
-- [ ] **AC1** — `bash plugins/soleur/test/ship-pir-action-items-gate.test.sh` exits 0; its final
+- [x] **AC1** — `bash plugins/soleur/test/ship-pir-action-items-gate.test.sh` exits 0; its final
   line matches `=== N passed, 0 failed ===`; its corpus line matches
   `^PIR-ACTION-ITEMS: corpus selected=[0-9]+ examined=[0-9]+ skipped=[0-9]+ failed=0$` with
   `selected == examined + skipped` and `selected >= 50`; it reports the branch arm's three
   outcomes (exit 1 with verdicts for A/B/C-new, exit 3 on the no-PIR branch, exit 2 on the
   no-`origin/main` repo).
-- [ ] **AC2** — `for f in plugins/soleur/test/fixtures/ship-pir-action-items/*.md; do bash plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh "$f" >/dev/null 2>&1; rc=$?; echo "$(basename "$f") rc=$rc"; done`
+- [x] **AC2** — `for f in plugins/soleur/test/fixtures/ship-pir-action-items/*.md; do bash plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh "$f" >/dev/null 2>&1; rc=$?; echo "$(basename "$f") rc=$rc"; done`
   (amended at /work: the original `echo "… rc=$?"` reported `basename`'s status — the
   command-substitution trap `work/SKILL.md` names — and printed `rc=0` for every fixture)
   → every `pass-*` line ends `rc=0`, every `fail-*` line ends `rc=1`;
@@ -837,48 +837,50 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
   every `fail-*` run prints exactly one `[FAIL] <path>: ` line on stderr whose reason matches
   the fixture's first-line `expect:` token; `head -1 plugins/soleur/test/fixtures/ship-pir-action-items/*.md | grep -c 'expect: '` → 12;
   `grep -c '^set -uo pipefail$' plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh` → 1.
-- [ ] **AC3** — `grep -c 'write exactly `No action items — incident fully resolved in the source PR with no residual work.`' plugins/soleur/skills/incident/templates/pir.md`
+- [x] **AC3** — `grep -c 'write exactly `No action items — incident fully resolved in the source PR with no residual work.`' plugins/soleur/skills/incident/templates/pir.md`
   → 1; `grep -c '^No action items — incident fully resolved in the source PR with no residual work.$' plugins/soleur/skills/incident/scripts/dry-run.sh` → 1;
   `grep -c '`No action items — incident fully resolved in the source PR with no residual work.`' plugins/soleur/skills/incident/SKILL.md` → 1;
   `grep -rn '_No action items\|\*No action items' plugins/soleur/skills/` → no lines.
-- [ ] **AC4** — `grep -cE 'bash \$\{CLAUDE_PLUGIN_ROOT:-plugins/soleur\}/skills/ship/scripts/ship-pir-action-items-gate\.sh --branch' plugins/soleur/skills/ship/SKILL.md` → 1;
+- [x] **AC4** — `grep -cE 'bash \$\{CLAUDE_PLUGIN_ROOT:-plugins/soleur\}/skills/ship/scripts/ship-pir-action-items-gate\.sh --branch' plugins/soleur/skills/ship/SKILL.md` → 1;
   `grep -c 'ship-pir-action-items-gate.sh' plugins/soleur/skills/ship/SKILL.md` ≥ 2 (invocation + conjunct 1);
-  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 3;
+  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 4
+  (amended at /work from 3: the marker appears in the `case` arm AND in the prose bullet that maps
+  that arm onto the halt instruction — the suite's wiring arm asserts each construct individually);
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'postmortem\\.md\$'` → 0 (the selector lives in the script only);
   `grep -c "grep -qE '\^_No action items" plugins/soleur/skills/ship/SKILL.md` → 0;
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'head -n1'` → 0.
-- [ ] **AC5** — `bash scripts/lint-orphan-test-suites.sh` exits 0 and
+- [x] **AC5** — `bash scripts/lint-orphan-test-suites.sh` exits 0 and
   `git diff --name-only origin/main...HEAD | grep -c '^scripts/test-all.sh$'` → 0 (auto-globbed,
   not registered).
-- [ ] **AC6** — Phase 1 step 3's parity line (`selected=119 examined=103 skipped=16 failed=9`, nine paths
+- [x] **AC6** — Phase 1 step 3's parity line (`selected=119 examined=103 skipped=16 failed=9`, nine paths
   equal to the `grep -l '^\*No action items'` set) and step 4's (`failed=0`) are quoted in the PR
   body; the second is re-runnable on the merged tree as `--corpus`.
-- [ ] **AC7** — `grep -n 'adr-ordinals' plugins/soleur/skills/ship/SKILL.md plugins/soleur/skills/plan/SKILL.md`
+- [x] **AC7** — `grep -n 'adr-ordinals' plugins/soleur/skills/ship/SKILL.md plugins/soleur/skills/plan/SKILL.md`
   returns no line containing `not a required`, `non-required`, `not required`, `not yet required`
   or `until/unless that lands`; the Phase 7 explaining paragraph (the `:2083` neighbourhood)
   cites `scripts/required-checks.txt`.
-- [ ] **AC8** — `grep -c '#6480' plugins/soleur/skills/ship/SKILL.md` ≥ 1;
+- [x] **AC8** — `grep -c '#6480' plugins/soleur/skills/ship/SKILL.md` ≥ 1;
   `grep -c 'tracked separately' plugins/soleur/skills/ship/SKILL.md` → 0.
-- [ ] **AC9** — `grep -c 'all 22 contexts' plugins/soleur/skills/ship/SKILL.md` → 0, and the
+- [x] **AC9** — `grep -c 'all 22 contexts' plugins/soleur/skills/ship/SKILL.md` → 0, and the
   settle-then-admin-merge hatch's step 2 (same neighbourhood) says every required context must be
   present and green on the current SHA: `grep -c 'present and green' plugins/soleur/skills/ship/SKILL.md` ≥ 1.
-- [ ] **AC10** — `grep -c '#7941' knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md` → 1, inside the ordinal note.
-- [ ] **AC11** — `python3 -c 'import yaml,sys; d=yaml.safe_load(open("lefthook.yml")); c=d["pre-commit"]["commands"]; assert c["bun-test"]["skip"]==["merge"], c["bun-test"]; assert c["bun-test"]["glob"]=="*.{ts,tsx,js,jsx}"; assert [k for k,v in c.items() if isinstance(v,dict) and "skip" in v]==["bun-test"]; assert "skip" not in d["pre-commit"]; print("ok")'`
+- [x] **AC10** — `grep -c '#7941' knowledge-base/engineering/architecture/decisions/ADR-156-hook-stdin-is-model-controlled-and-untrusted.md` → 1, inside the ordinal note.
+- [x] **AC11** — `python3 -c 'import yaml,sys; d=yaml.safe_load(open("lefthook.yml")); c=d["pre-commit"]["commands"]; assert c["bun-test"]["skip"]==["merge"], c["bun-test"]; assert c["bun-test"]["glob"]=="*.{ts,tsx,js,jsx}"; assert [k for k,v in c.items() if isinstance(v,dict) and "skip" in v]==["bun-test"]; assert "skip" not in d["pre-commit"]; print("ok")'`
   prints `ok`; `git diff origin/main...HEAD -- lefthook.yml | grep -c '^[-+] *run:'` → 0
   (the `run:` line is untouched).
-- [ ] **AC12** — `bash plugins/soleur/test/fanout-suite-scope.test.sh` and
+- [x] **AC12** — `bash plugins/soleur/test/fanout-suite-scope.test.sh` and
   `bash plugins/soleur/test/hook-git-env-coverage.test.sh` both exit 0.
-- [ ] **AC13** — `grep -c 'skips merge commits' plugins/soleur/skills/ship/SKILL.md` ≥ 1 in the
+- [x] **AC13** — `grep -c 'skips merge commits' plugins/soleur/skills/ship/SKILL.md` ≥ 1 in the
   Phase 7 step-4 neighbourhood (`awk '/Stage resolved files and commit the merge/,/Push and re-verify/'`).
-- [ ] **AC14** — `bash scripts/markdown-lint.sh --repo-sweep` exits 0 (the edited skill files,
+- [x] **AC14** — `bash scripts/markdown-lint.sh --repo-sweep` exits 0 (the edited skill files,
   template and ADR are in scope; the fixtures are not).
-- [ ] **AC15** — `bash scripts/ship-incident-pir-gate.sh --pr <N>; echo $?` → `1`, with no
+- [x] **AC15** — `bash scripts/ship-incident-pir-gate.sh --pr <N>; echo $?` → `1`, with no
   `INCIDENT-SIGNAL` line on stdout; the PR body carries `Closes #7941`, the `#6480` statement,
   the Thread 3 decision paragraph, the five Phase 3 probe lines, the `[PASS]`-line convention
   note, and no `Filed:` line.
-- [ ] **AC16** — `bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh <PR>` → `Net: -1`
+- [x] **AC16** — `bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh <PR>` → `Net: -1`
   (or `0`), exit 0.
-- [ ] **AC17** — `! git diff --name-only origin/main...HEAD | grep -q '^knowledge-base/engineering/operations/'`
+- [x] **AC17** — `! git diff --name-only origin/main...HEAD | grep -q '^knowledge-base/engineering/operations/'`
   (no PIR is modified, so the Incident-PIR gate's Match arm has nothing to examine on this branch).
 
 ## Test Scenarios

@@ -15,3 +15,10 @@ None. Non-blocking: plan prose reworded twice to avoid tripping the Incident-PIR
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; learnings-researcher, advisor, dhh/kieran/simplicity reviewers, cto, git-history-analyzer, test-design-reviewer, architecture-strategist, spec-flow-analyzer, observability-coverage-reviewer, verify-the-negative sweep.
+
+## Work Phase
+- Status: complete (3 commits: Thread 1 425c6056d, Thread 2 7311eb896, Thread 3 13fb6472f)
+- Draft PR #8070; body drafted at /work (probe lines, parity lines, mutation observations); signal scan `--pr 8070` rc=1 no signal; net-issue-flow Net −1.
+- Shard gate `TEST_GROUP=scripts`: REFUSED rc=4 (five sibling full-gate runs on the host). Targeted suites all green; full battery deferred to ship Phase 4 (ADR-183).
+- AC2 and AC4 amended in the plan (rc-capture trap; marker count 4).
+- Extra site beyond the plan's five: ADR-164's ordinal note carried the same false claim — bracketed correction appended.
