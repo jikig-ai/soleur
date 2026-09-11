@@ -3,6 +3,10 @@ name: one-shot
 description: "This skill should be used when running the full autonomous engineering workflow from plan to merged PR."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/one-shot` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:one-shot`). Forbidden is executing a subset of these steps, not the Read.
+<!-- grok-harness-invoke:end -->
+
 Run these steps in order. Do not do anything else.
 
 <!-- one-shot-anti-bypass-protocol:start -->
@@ -13,7 +17,7 @@ You are the **pipeline runner** for this skill. Whether entered via `/go` → `/
 - **FORBIDDEN:** Cherry-picking steps (e.g. 0b worktree + inline implementation + push, then stopping).
 - **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
 - **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
-- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Do not read their SKILL.md and improvise.
+- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Read each child's SKILL.md in this process and run it to completion — do not improvise a subset.
 - **REQUIRED before `git push` (Grok Build):** Run `bash plugins/soleur/scripts/grok-pre-push-gate.sh` from repo root — local CI parity (`test-all.sh` + fast required checks + `grok-fidelity`) — this now includes `infra-validation`'s suites, because the gate calls `test-all.sh` with no `TEST_GROUP` and it runs `run-registered-suites.sh` as a nested suite when the diff touches `apps/web-platform/infra/`. Do NOT run that runner concurrently alongside the gate (shared `TMPDIR=/var/tmp` → false RED); read the epilogue and run it separately only if it reports `is NOT covered above`. Abort push on non-zero exit; inspect `EXIT=$rc` explicitly (no `| tail`).
 - **Merge → deploy:** YOU poll merge/release/deploy — never ask the operator to watch CI. Grok: **AwaitShell** + `pattern`; Claude: **Monitor tool**. See `harness.ts` `pollInstructions()`.
 - **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.
@@ -95,7 +99,7 @@ If running against a tight budget, run `/soleur:plan` instead and review the pla
 
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. If any match:
 
-1. Use the **Skill tool**: `skill: soleur:linear-fetch`, args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (markdown blob + image content blocks, streamed into THIS parent conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).
+1. **Claude:** Skill tool `skill: soleur:linear-fetch`. **Grok:** Read `plugins/soleur/skills/linear-fetch/SKILL.md` in this process (`/linear-fetch`), args: "$ARGUMENTS". The skill returns two artifacts: `agent_context` (markdown blob + image content blocks, streamed into THIS parent conversation only) and `persist_safe_summary` (the same text with every `uploads.linear.app/*` URL redacted to `[linear-image: REDACTED]`).
 2. For the remainder of this skill, **substitute `persist_safe_summary` for `$ARGUMENTS` whenever the value is passed to a Task subagent or to a child skill invocation** (e.g., the subagent prompt template's `ARGUMENTS:` line at the top of Steps 1-2, the subagent's `args: "$ARGUMENTS"` for `skill: soleur:plan`, and the fallback inline `args: "$ARGUMENTS"`). Do NOT pass `agent_context` or any Linear image URL into a subagent prompt — Task subagents inherit prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`); the parent retains the images for Steps 3-8 (work, review, ship). The original `$ARGUMENTS` placeholder remains the slugification source at Step 0b's worktree-name construction; only downstream prompt construction substitutes.
 
 3. **Absent-artifact halt contract (#7450).** If `linear-fetch` halted at its redaction gate, `persist_safe_summary` **does not exist**. STOP the pipeline and report the skill's halt message. Do **NOT** fall back to `agent_context`, and do NOT fall back to the raw `$ARGUMENTS` issue text fetched from Linear. `agent_context` carries the signed `uploads.linear.app` bearer URLs the redaction primitive exists to remove, so substituting it converts the gate's *refusal* into precisely the *leak* it refused — and rule 2 above makes that substitution the locally obvious repair, which is why the prohibition is stated rather than implied. A halted fetch is a hard stop, never a degraded continue.
@@ -172,8 +176,8 @@ ARGUMENTS: $ARGUMENTS
 
 STEPS:
 0. **CWD verification (first tool call):** run `cd <WORKING_DIRECTORY> && pwd`. The output MUST equal the WORKING DIRECTORY value above. If it does not, **retry at most 3 times** — and if `pwd` still mismatches after the third attempt, STOP and abort with an error in the Session Summary. Do NOT keep re-running the verification command in a loop (#5313: that loop hung a Concierge session; the runtime detector now surfaces a `worktree_enter_failed` status after 3 mismatched `cd … && pwd` commands, but do not rely on it — fail loud here too). Do NOT proceed; the plan will land in the bare-root synced mirror (gets clobbered on next sync) instead of the worktree. Bash CWD is per-agent and does NOT inherit from the parent's persistent `cd`.
-1. Use the Skill tool: skill: soleur:plan, args: "$ARGUMENTS"
-2. After plan is created, use the Skill tool: skill: soleur:deepen-plan, args: "<plan_file_path>"
+1. **Claude:** Skill tool `skill: soleur:plan`. **Grok:** Read `plugins/soleur/skills/plan/SKILL.md` in this process (`/plan`), args: "$ARGUMENTS"
+2. After plan is created, **Claude:** Skill tool `skill: soleur:deepen-plan`. **Grok:** Read `plugins/soleur/skills/deepen-plan/SKILL.md` in this process (`/deepen-plan`), args: "<plan_file_path>"
 
 RETURN CONTRACT:
 When both steps are done, output a summary in this exact format:
@@ -257,8 +261,8 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
    - **Present** — the subagent finished planning and only the Session Summary emission failed.
      Load it and continue from `/soleur:plan-review`. Note in session-state.md:
      `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).`
-   - **Absent (or no file at all)** — planning did not finish. Re-invoke `skill: soleur:plan` with
-     `args: "$ARGUMENTS"`, then `skill: soleur:deepen-plan` inline. `plan` finds its own checkpoint
+   - **Absent (or no file at all)** — planning did not finish. Re-invoke **Claude:** `skill: soleur:plan` / **Grok:** Read `plugins/soleur/skills/plan/SKILL.md` in this process (`/plan`) with
+     `args: "$ARGUMENTS"`, then **Claude:** `skill: soleur:deepen-plan` / **Grok:** Read `plugins/soleur/skills/deepen-plan/SKILL.md` in this process (`/deepen-plan`) inline. `plan` finds its own checkpoint
      via the same selector and continues in place, so the research already on disk is reused rather
      than re-spent.
 
@@ -285,11 +289,11 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Steps 3-8: Implementation, Review, and Ship**
 
-3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
+3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`/work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
 
-4. Use the **Skill tool**: `skill: soleur:review`
+4. **Claude:** Skill tool `skill: soleur:review`. **Grok:** Read `plugins/soleur/skills/review/SKILL.md` in this process (`/review`).
 
 > **CONTINUATION GATE**: When review outputs `## Code Review Complete` (or any review-summary heading, "Findings Summary", "Next Steps", etc.), that is a **status marker**, not a turn boundary. Do NOT end your turn. Do NOT treat the review summary as a deliverable — your deliverable is the merged PR at step 8. After the summary, immediately proceed to step 5 in the same response. If you find yourself wanting to write a wrap-up sentence, hand off to the user, or wait for confirmation, stop — that is the failure mode this gate exists to block. The same anti-stop rule applies between every subsequent step (5 → 5.5 → 6 → 7 → 8): each skill's exit summary is a checkpoint, never a stopping point.
 
@@ -309,12 +313,12 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    Do NOT end your turn after this step. Proceed to Step 5.5.
 
-5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
+5.5. **Claude:** Skill tool `skill: soleur:qa`. **Grok:** Read `plugins/soleur/skills/qa/SKILL.md` in this process (`/qa`), args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
 
    > **Diagnostic loops here are self-serve — never hand the operator a data-fetch.** When QA (or any review/verification step above) surfaces a failure on a server/cron/prod surface, self-pull the error: Better Stack `SOLEUR_*` markers via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>` and Sentry — never ask the operator to paste error output, run probes, or eyeball logs (the operator decides, doesn't fetch). If the needed signal is missing from telemetry, ADD a monitored stdout `SOLEUR_*` marker in the emitting code so it self-reports; do not escalate to the operator for it. Cite `hr-no-dashboard-eyeball-pull-data-yourself`. See `knowledge-base/project/learnings/workflow-patterns/2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch.md` (#5934).
 
-6. Use the **Skill tool**: `skill: soleur:compound`
-7. Use the **Skill tool**: `skill: soleur:ship` (Grok: `/ship`). Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, release-workflow polling, **postmerge verification (Step 3.8)**, and cleanup.
+6. **Claude:** Skill tool `skill: soleur:compound`. **Grok:** Read `plugins/soleur/skills/compound/SKILL.md` in this process (`/compound`).
+7. **Claude:** Skill tool `skill: soleur:ship`. **Grok:** Read `plugins/soleur/skills/ship/SKILL.md` in this process (`/ship`). Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, release-workflow polling, **postmerge verification (Step 3.8)**, and cleanup.
 
    **The merge → deploy wait is owned by ship — never hand-roll it and never ask the operator.** Do NOT skip invoking `soleur:ship`, do NOT issue `gh pr merge` yourself, and do NOT end the turn at MERGED. Ship Phase 7 polls merge + release workflows; Step 3.8 invokes `soleur:postmerge` before cleanup.
 

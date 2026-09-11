@@ -3,6 +3,10 @@ name: drain-prs
 description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-prs` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-prs`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Drain PRs
 
 Triage all open **remote** GitHub PRs and drain the mergeable ones in one operator-confirmed pass: enumerate → triage into tiers → **confirm scope** → fix each in-scope PR to green → merge. The PR-counterpart to `drain-labeled-backlog` (which drains labeled *issues*). Distilled from the 2026-06-30 drain session that merged 11 PRs across tiers.
@@ -75,7 +79,7 @@ gh pr merge <N> --squash
 ```
 
 - **Merge queue active on `main`** (the current default — adopted via the `merge_queue` Terraform ruleset): `gh pr merge --squash` **enqueues** the PR; the queue handles `update-branch` + serialization + the final merge automatically. Do not hand-roll update/wait loops.
-- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>`, then wait for CI to go green using the **Monitor tool** (NEVER a backgrounded poll loop — `hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
+- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>`, then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
 
 ### 5. Review delegation
 
@@ -114,7 +118,7 @@ If `$ARGUMENTS` contains a `RETURN CONTRACT` section (i.e., this skill is being 
 - **Drafts are always skipped.** A draft PR is author-owned WIP; merging it would ship incomplete work. No flag overrides this.
 - **`gh pr merge --squash` cannot bypass server-side required checks.** Branch protection enforces `CI Required` server-side, so a mis-triaged red PR fails *loudly* at merge time rather than silently landing — the triage is an optimization, not the safety boundary.
 - **The two `2026-06-30-*` learnings and ADR-033 §Registration checklist** referenced in the fix-recipes landed in PR #5808 — they are on `main`. If a future reorg moves them, update the paths here.
-- **Never poll CI from a backgrounded Bash loop.** Use the Monitor tool for the queue-inactive CI wait (`hr-monitor-not-run-in-background-for-polling`).
+- **Never poll CI from a backgrounded Bash loop.** Use the Monitor tool (Claude) or AwaitShell (Grok) for the queue-inactive CI wait (`hr-monitor-not-run-in-background-for-polling`).
 - **Lockfile drift reads as a *test* failure, not a lockfile error.** A red `test-webplat`/`e2e` shard on a deps PR is usually recipe (a), not a real regression — check the install step before assuming the bump broke something.
 
 ## Test

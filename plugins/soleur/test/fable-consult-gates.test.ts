@@ -19,7 +19,7 @@ const SKILLS_DIR = join(import.meta.dir, "..", "skills");
 /** The sanctioned ADR-083 consult gates. Changing this list is a model-policy change. */
 const SANCTIONED = ["plan", "ship"].sort();
 
-function skillsDeclaringFablePin(): string[] {
+function skillsDeclaringAdvisorPin(): string[] {
   const hits: string[] = [];
   for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -29,28 +29,30 @@ function skillsDeclaringFablePin(): string[] {
     } catch {
       continue; // not every skill dir has a SKILL.md
     }
-    // Anchor on the CALL FORM, not the token. A bare /`model: fable`/ also matches
-    // prose ABOUT the pin — `review/SKILL.md` explains why its consult is *not*
-    // pinned, and that sentence quotes the pin. The first draft of this test used
-    // the bare token and reported three gates where two exist, which is
-    // `cq-assert-anchor-not-bare-token` reproduced inside the guard written to
-    // enforce a model-policy bound. Both sanctioned gates spell the spawn
-    // "Spawn a **Task** subagent with `model: fable`".
-    if (/subagent with `model:\s*fable`/.test(body)) hits.push(entry.name);
+    // Anchor on the CALL FORM, not the token. A bare /advisor/ or /fable/ also
+    // matches prose ABOUT the pin — `review/SKILL.md` explains why its consult
+    // is *not* pinned. Both sanctioned gates spawn via resolveAdvisorTier()
+    // with semantic tier `advisor` (ADR-110).
+    if (
+      /resolveAdvisorTier\(\)/.test(body) &&
+      /semantic tier `advisor`/.test(body)
+    ) {
+      hits.push(entry.name);
+    }
   }
   return hits.sort();
 }
 
 describe("ADR-083 fable consult gates", () => {
-  test("`model: fable` is pinned at exactly the sanctioned gates", () => {
-    expect(skillsDeclaringFablePin()).toEqual(SANCTIONED);
+  test("`advisor` via resolveAdvisorTier() is pinned at exactly the sanctioned gates", () => {
+    expect(skillsDeclaringAdvisorPin()).toEqual(SANCTIONED);
   });
 
   test("the sanctioned set is non-empty and the probe actually matches something", () => {
     // Anti-vacuity: an equality assertion against a list is satisfied by a broken
     // matcher iff SANCTIONED is also empty. Pin that it is not.
     expect(SANCTIONED.length).toBeGreaterThan(0);
-    expect(skillsDeclaringFablePin().length).toBe(SANCTIONED.length);
+    expect(skillsDeclaringAdvisorPin().length).toBe(SANCTIONED.length);
   });
 
   test("every sanctioned gate still cites ADR-083 next to its pin", () => {
@@ -67,6 +69,6 @@ describe("ADR-083 fable consult gates", () => {
     // that quietly upgrades the spawn reds here rather than sliding in as prose.
     const body = readFileSync(join(SKILLS_DIR, "review", "SKILL.md"), "utf8");
     expect(body).toContain("Coverage consult (conditional, session model)");
-    expect(body).not.toMatch(/subagent with `model:\s*fable`/);
+    expect(body).not.toMatch(/resolveAdvisorTier\(\)/);
   });
 });

@@ -303,6 +303,35 @@ function budgetOk() {
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Load')
 // Read the plan ONCE via a lightweight agent so the threshold detection is a
 // real read of the file's `## User-Brand Impact` section, not a guess. The
@@ -324,7 +353,7 @@ const DETECT_SCHEMA = {
     devexSignal: { type: 'boolean', description: 'true iff the plan edits code/infra/tooling/build (developer or operator experience is affected).' },
   },
 }
-log('tier pins: detect-threshold→sonnet (mechanical step per ADR-053; reviewers + consolidate inherit the session model)')
+log('tier pins: detect-threshold→standard (mechanical step per ADR-053; reviewers + consolidate inherit the session model)')
 const detect = await agent(
   `Read the implementation plan at \`${safePlan}\` (use your Read tool), then return TWO independent judgments. Do NOT review the plan.
 
@@ -340,8 +369,8 @@ const detect = await agent(
    - devexSignal: code/infra/tooling/build edited (developer/operator experience affected)?
 
    Threshold bias: if you set thresholdDeclared=true, resolve any BORDERLINE relevance signal toward true (stakes are high — bias to surfacing a named lens rather than skipping it). Do NOT fabricate a signal with no basis in the plan — a pure-infra plan still activates only devex even at the threshold.`,
-  // Pinned 'sonnet': schema-constrained detection/scan is mechanical (ADR-053).
-  { label: 'detect-threshold', phase: 'Load', schema: DETECT_SCHEMA, model: 'sonnet' },
+  // Pinned 'standard': schema-constrained detection/scan is mechanical (ADR-053).
+  { label: 'detect-threshold', phase: 'Load', schema: DETECT_SCHEMA, model: 'standard' },
 )
 
 const thresholdFired = !!detect?.thresholdDeclared
