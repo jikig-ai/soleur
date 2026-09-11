@@ -21,14 +21,16 @@ Do not proceed until there is input from the user.
 Before the session-start preamble and before any routing, confirm a usable git repository exists. Run the readiness probe (it decides readiness AND, on failure, emits a `SOLEUR_GIT_REPO_DIAG` forensic line that the server-side telemetry hook mirrors to Better Stack — so a not-ready workspace is self-diagnosable without a manual probe):
 
 ```bash
-if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"; then
+ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
   # Identity is not freshness (#7474): a root that IS ours can still not carry
   # this probe, and the bare invocation would then die with an unattributed
   # interpreter error. The fallback below is already the right behaviour for
   # that case — only the reason differs, so it is reported separately.
-  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" ]; then
-    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
+  if [ -f "${ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" ]; then
+    bash "${ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
   else
     echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=absent-from-verified-root"
     git rev-parse --is-bare-repository 2>/dev/null || true
@@ -38,6 +40,8 @@ else
   # Distinct from a not-ready workspace: the PROBE could not run. Emitting the
   # same marker family keeps this visible to the telemetry hook instead of
   # silently degrading into two git calls that print `true` (#7442).
+  # Empty ROOT (neither GROK_PLUGIN_ROOT nor CLAUDE_PLUGIN_ROOT) stays
+  # plugin-root-unverified — never default to ./plugins/soleur (ADR-179 / #7442).
   echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified"
   git rev-parse --is-bare-repository 2>/dev/null || true
   git rev-parse --is-inside-work-tree 2>/dev/null || true
@@ -50,7 +54,11 @@ The `else` branch runs the bare inline probes when the plugin payload cannot be 
 
 If the output shows `SOLEUR_GIT_REPO_READY=false` (or, on the fallback, **neither** probe printed `true`), the workspace has no usable git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed (the CWD is then a repo-less `/workspaces/<id>`), OR the `.git` is present but git rejects it (a corrupt/masked config — the emitted `SOLEUR_GIT_REPO_DIAG config_parse_rc`/`err=` fields distinguish these). **Every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
 
-> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening: if your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
+> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment.
+
+**Claude / Concierge:** if this keeps happening and your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
+
+**Grok Build:** that Concierge settings path does not apply. Confirm `GROK_PLUGIN_ROOT` or `CLAUDE_PLUGIN_ROOT` points at the Soleur plugin (plugin.json name `soleur`) and that `grok inspect` lists it. Do not invent a Settings → Repository screen.
 
 This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge no-repo session hit.)
 
@@ -59,10 +67,11 @@ This gate is deterministic and fires on the first action, so a not-ready workspa
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
 
 ```bash
-if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
+ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+if [ -n "$ROOT" ] && [ -f "${ROOT}/.claude-plugin/plugin.json" ]; then
   # Identity is not freshness (#7474) — see the Step 0.0 probe above.
-  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
-    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
+  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
+    bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
       git worktree list && \
       git show main:.mcp.json > .mcp.json 2>/dev/null || true
   else
@@ -71,7 +80,7 @@ if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
 else
   # Do not let the session-start gate no-op invisibly: the previous form ended in
   # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json
-  # restore with no output at all (#7442).
+  # restore with no output at all (#7442). Empty ROOT stays plugin-root-unverified.
   echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
 fi
 ```

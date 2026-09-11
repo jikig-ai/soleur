@@ -14,8 +14,8 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 2: Plugin-root
 
-- [ ] 2.1 `go.md` Step 0.0/0: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` — no `:-` CWD default, no `sync.md` `:-`
-- [ ] 2.2 Empty root still emits `plugin-root-unverified`
+- [x] 2.1 `go.md` Step 0.0/0: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` — no `:-` CWD default, no `sync.md` `:-`
+- [x] 2.2 Empty root still emits `plugin-root-unverified`
 
 ## Phase 3: ADR-110 (in this PR)
 

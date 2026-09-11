@@ -406,6 +406,14 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(goMd).toMatch(IN_PROCESS_READ);
   });
 
+  test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
+    expect(goMd).toContain("plugin-root-unverified");
+    expect(goMd).not.toContain(":-./plugins/soleur");
+    expect(goMd).toContain("grok inspect");
+  });
+
   test("AGENTS.rules.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
     const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
