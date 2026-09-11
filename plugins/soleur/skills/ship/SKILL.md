@@ -1874,7 +1874,7 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
    - **Code conflicts**: Resolve based on intent of both changes
    - **Many files conflict with whole-function (not line-level) competing implementations**: a sibling PR may have shipped your feature mid-pipeline (the one-shot collision gate only probes at START and misses a sibling that implements the same feature under a *different* issue). Do NOT reflexively resolve to "mine." `git merge --abort`, read `origin/main`'s ACTUAL implementation (`git show origin/main:<file>`), and decide "is my PR still needed?" If main supersedes it, trace main end-to-end against the original bug for any residual gap, surface the collision + gap to the operator for a design call, then `git reset --hard origin/main` (salvage plan/spec to /tmp first — they live only on the branch) and rebuild ONLY the residual delta. **Why:** PR #4641 — #4638 shipped the same invite-redirect feature mid-one-shot; reset-and-rebuild turned a 6-file competing rewrite into a 2-file delta. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-dirty-conflict-during-ship-may-mean-sibling-shipped-your-feature.md`.
 
-4. Stage resolved files and commit the merge:
+4. Stage resolved files and commit the merge (the `bun-test` pre-commit hook skips merge commits by configuration — `skip: [merge]` in `lefthook.yml` — so no `--no-verify` is needed; the remaining seconds-long hooks still run, and the pushed head's CI is the battery for this commit):
 
    ```bash
    git add <resolved files>
