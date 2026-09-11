@@ -66,10 +66,14 @@ and apply labels. You must NOT write code, create PRs, or modify any files.
 
 ## Instructions
 
-1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not)))'${"`"}
+1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not) and (.labels | map(.name) | any(startswith("scheduled-")) | not)))'${"`"}
    The --jq filter excludes agent-authored issues (stream tag
-   "ux-audit" and any "agent:*" label).
-   Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md.
+   "ux-audit" and any "agent:*" label) and scheduled run-reports (any
+   "scheduled-*" label): a run-report is a liveness token and audit trail,
+   not a bug — triage labelled 21 daily digests priority/p1-high and hid the
+   one FAILED report among them (#8027, #8076).
+   Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+   (the scheduled-* clause is triage-specific and lives here only).
    Governance rationale: plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md.
 2. Filter: skip any issue that already has a label starting with "priority/".
    These have already been triaged.

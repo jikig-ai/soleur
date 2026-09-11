@@ -444,11 +444,52 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
   # substring embedded in a quoted --title/--body value is NOT mistaken for a
   # real flag (it stays inside one token), and a quoted `--repo "jikig-ai/soleur"`
   # is recognized correctly. Only a standalone --repo/-R/--repo=/-R= token counts.
-  # Fail toward GATING: if xargs errors (unbalanced quotes → empty tokens) or no
-  # external target is found, the milestone gate stays on. If our own repo appears
-  # in ANY --repo/-R flag, the gate stays on regardless of other tokens.
-  _repo_toks=(); _our_repo=0; _ext_repo=0
-  mapfile -t _repo_toks < <(printf '%s\n' "$COMMAND" | xargs -n1 2>/dev/null) || true
+  # Fail toward GATING: if no external target is found, the milestone gate stays
+  # on. If our own repo appears in ANY --repo/-R flag, the gate stays on
+  # regardless of other tokens.
+  #
+  # TOKENIZE THE HEREDOC-STRIPPED COMMAND, NOT THE RAW ONE. A heredoc BODY is
+  # prose, not shell: `cat > x.md <<'EOF' … Soleur's … EOF; gh issue create
+  # --label meta/machinery --body-file x.md` made xargs abort on the apostrophe
+  # (stderr suppressed), the --label token was never read, and the refusal told
+  # the filer to add the flag they had just passed (FR7; learning 2026-09-11
+  # §Session Errors 3a). strip_heredocs blanks ONLY heredoc bodies -- quoted
+  # spans survive because xargs needs them. Both the repo check below and the
+  # filing-justification gate read this ONE token list.
+  #
+  # IF IT STILL CANNOT BE TOKENIZED, DENY -- no whitespace-split fallback. A
+  # quoting-blind tokenizer over a corpus that still contains
+  # `--body "… --label meta/machinery …"` would reopen the bare-token escape the
+  # filing gate exists to close (2026-09-10-every-escape…), and could set
+  # _ext_repo=1 from a --repo inside a quoted value. Fail closed, and say what
+  # to do: an unbalanced quote outside a heredoc is almost always prose in an
+  # inline --body/--title, and --body-file is the form this repo prescribes.
+  #
+  # FOLD NEWLINES BEFORE xargs. GNU xargs cannot carry a quoted token across a
+  # line, so a multi-line inline `--body "User-Impact: …⏎Fix-Size: …"` (a
+  # legitimate shape, fixtured below) reads to it as an unmatched quote. The
+  # old `|| true` hid that: xargs stopped at the newline and a --label AFTER
+  # the body was never read (measured on main: denied). Newlines are plain
+  # whitespace to the tokenizer everywhere else -- outside quotes they separate
+  # tokens exactly as a space does, and a `\`-continuation folds to an escaped
+  # space -- and no token's VALUE is ever the body corpus (that is $COMMAND or
+  # the --body-file), so nothing loses its newlines.
+  _repo_toks=(); _our_repo=0; _ext_repo=0; _tok_rc=0
+  _tok_out="$(strip_heredocs "$COMMAND" | tr '\n' ' ' | xargs -n1 2>/dev/null)" || _tok_rc=$?
+  if [[ "$_tok_rc" != 0 ]]; then
+    emit_incident "wg-defer-only-after-inline-triage" "deny" \
+      "filing command could not be tokenized (unbalanced quoting)" "$COMMAND"
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse", permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: the command could not be tokenized (unbalanced quoting); write the body to a file and pass --body-file"
+      }
+    }'
+    exit 0
+  fi
+  if [[ -n "$_tok_out" ]]; then
+    mapfile -t _repo_toks < <(printf '%s\n' "$_tok_out")
+  fi
   _ri=0
   while (( _ri < ${#_repo_toks[@]} )); do
     _rt="${_repo_toks[$_ri]}"; _rv=""
@@ -597,6 +638,12 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     # Declared-but-unreadable FAILS TOWARD GATING and names the path: we cannot
     # verify a justification we cannot read, and a silent pass here would make
     # the gate trivially bypassable by pointing at a nonexistent file.
+    # ONLY WHEN THE BODY IS NEEDED. Exit 1 is decided from the flag tokens alone,
+    # so an exit-1 filing has nothing to verify in the body; refusing it for an
+    # unreadable --body-file (measured: the heredoc that WRITES the file is in
+    # the same Bash call, so the file does not exist when this hook runs) is a
+    # false deny -- FR7, learning 2026-09-11 §Session Errors 3b. Exits 2 and 3
+    # still read the corpus and keep the deny.
     # The corpus is the BODY VALUE, whichever way it is supplied -- not the raw
     # command line. Anchoring whole-line against $COMMAND can never match an
     # inline --body, because the whole invocation is one physical line; the
@@ -616,7 +663,7 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     if [[ -n "$_fj_bf" ]]; then
       if [[ "$_fj_bf" != "-" && -r "$_fj_bf" ]]; then
         _fj_body="$(cat -- "$_fj_bf" 2>/dev/null || true)"
-      else
+      elif [[ "$_fj_pass" == 0 ]]; then
         emit_incident "wg-defer-only-after-inline-triage" "deny" \
           "--body-file unreadable at ${_fj_bf}" "$COMMAND"
         jq -n --arg f "$_fj_bf" '{

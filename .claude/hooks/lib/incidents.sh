@@ -356,9 +356,30 @@ resolve_command_cwd() {
 # Fail-toward-firing: on perl failure (absent/error) returns the raw command
 # verbatim (`|| printf`) so the caller OVER-detects, never silently bypasses.
 # Reads $1 if given, else stdin.
+#
+# The heredoc substitution (step 1) is ONE shared perl fragment, consumed by
+# both strip_command_bodies and strip_heredocs below, so the two cannot drift.
+# shellcheck disable=SC2016  # $1$2$3$5 are perl backreferences, never shell expansions
+_incidents_heredoc_re='s/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs;'
 strip_command_bodies() {
   local cmd
   if [[ $# -gt 0 ]]; then cmd="$1"; else cmd="$(cat)"; fi
   printf '%s' "$cmd" | perl -0777 -pe \
-    's/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs; s/"(?:[^"\\]|\\.)*"/ /gs; s/'\''(?:[^'\''\\]|\\.)*'\''/ /gs;' 2>/dev/null || printf '%s' "$cmd"
+    "${_incidents_heredoc_re}"' s/"(?:[^"\\]|\\.)*"/ /gs; s/'\''(?:[^'\''\\]|\\.)*'\''/ /gs;' 2>/dev/null || printf '%s' "$cmd"
+}
+
+# --- strip_heredocs <command> ---------------------------------------------
+# Step 1 of strip_command_bodies ONLY: blank heredoc bodies, keep every quoted
+# span intact. For a caller that TOKENIZES the command afterwards (`xargs -n1`
+# in guardrails.sh) rather than phrase-grepping it: xargs honours shell
+# quoting, so the quotes must survive for `--milestone "Post-MVP / Later"` to
+# stay one token -- but a heredoc BODY is prose, not shell, and an apostrophe
+# in it ("Soleur's") aborts xargs on an unmatched quote before the real flags
+# are read (FR7, learning 2026-09-11 §Session Errors 3a).
+# Same fail-toward-firing contract as strip_command_bodies: on perl failure
+# the raw command is returned and the tokenizer decides (it fails closed).
+strip_heredocs() {
+  local cmd
+  if [[ $# -gt 0 ]]; then cmd="$1"; else cmd="$(cat)"; fi
+  printf '%s' "$cmd" | perl -0777 -pe "${_incidents_heredoc_re}" 2>/dev/null || printf '%s' "$cmd"
 }

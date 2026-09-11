@@ -117,6 +117,13 @@ else
       '[.[] | select([.labels[].name] | index($m) | not)]' <<<"$ISSUES_JSON")"
   fi
 fi
+# The kill-switch labels are excluded for EVERY --label, the machinery one
+# included: the standing weekly measurement issue is machinery AND `keep-open`,
+# so a machinery drain that honoured only the exclusion above would close its
+# own measurement surface. Applied after the fetch/fixture fork so the fixture
+# path exercises the same filter (ADR-216 addendum).
+ISSUES_JSON="$(jq -c \
+  '[.[] | select([.labels[].name] | (index("keep-open") or index("do-not-autoclose")) | not)]' <<<"$ISSUES_JSON")"
 
 # Single pure-jq pipeline: parse file paths from each issue body, pick the
 # "top" path per issue, derive its "area" (top two path segments). Ranking:

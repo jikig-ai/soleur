@@ -58,6 +58,34 @@ FILED="$(api_count "is:issue+created:>=${SINCE}")"
 # Reported as its own line rather than subtracted, so the headline stays a pure
 # count and the floor is visible instead of inferred.
 FILED_AUTOMATION="$(api_count "is:issue+created:>=${SINCE}+author:app/github-actions")"
+# THE SECOND FLOOR (ADR-216 addendum, "the fourth population"). Every cron whose
+# run completion is verified by its own scheduled issue MUST file exactly one
+# run-report per run; the gate reaches those filings (they traverse the cron
+# allowlist hook) but cannot reduce them -- a run without its report is a
+# heartbeat failure, not a saved filing. Counted by bot author + the OR-joined
+# `scheduled-*` labels (comma-joined `label:` is OR, as in buildSearchQuery).
+# Reported as its own line, never subtracted, for the same reason as 1b.
+# Mirrors RUN_REPORT_CRONS in apps/web-platform/server/inngest/functions/_cron-run-reports.ts (parity: plugins/soleur/test/issue-flow-measure.test.sh)
+RUN_REPORT_LABELS=(
+  scheduled-architecture-diagram-sync
+  scheduled-campaign-calendar
+  scheduled-community-monitor
+  scheduled-competitive-analysis
+  scheduled-content-generator
+  scheduled-growth-audit
+  scheduled-growth-execution
+  scheduled-legal-audit
+  scheduled-roadmap-review
+  scheduled-seo-aeo-audit
+)
+_rr_labels=""
+for _l in "${RUN_REPORT_LABELS[@]}"; do _rr_labels+="${_rr_labels:+,}%22${_l}%22"; done
+FILED_RUN_REPORTS="$(api_count "is:issue+created:>=${SINCE}+author:app/soleur-ai+label:${_rr_labels}")"
+# EXIT 1 TAKERS. Filings that named the machinery ledger. `-label:keep-open`
+# excludes the kill-switched standing measurement issue so the instrument never
+# counts itself. No author filter: exit 1 is taken by interactive filers AND
+# crons, and this line counts both.
+FILED_MACHINERY="$(api_count "is:issue+created:>=${SINCE}+label:%22meta/machinery%22+-label:keep-open")"
 OPEN_TOTAL="$(api_count "is:issue+is:open")"
 
 # Expiry closes are attributable via the sweeper's own stable COMMENT_MARKER,
@@ -108,6 +136,8 @@ BASELINE_OPEN_TOTAL=1455
 echo "SOLEUR_ISSUE_FLOW_MEASURE window_weeks=${WEEKS} since=${SINCE}"
 echo "1. filed=${FILED} filed_per_week=${FILED_PER_WEEK} baseline_per_week=${BASELINE_FILED_PER_WEEK} (baseline derived over the same ${WEEKS}w window ending ${BASELINE_ANCHOR})"
 echo "1b. of which workflow-authored (OUTSIDE the gate's reach)=${FILED_AUTOMATION} — the irreducible floor under metric 1"
+echo "1c. of which cron run-reports (RUN_REPORT_CRONS labels)=${FILED_RUN_REPORTS} — a second irreducible floor, INSIDE the gate's reach but not reducible by it"
+echo "1d. of which took exit 1 (meta/machinery)=${FILED_MACHINERY}"
 echo "2. expiry_closes=${EXPIRY_CLOSED} reopened_after_expiry=${REOPENED}"
 echo "3. net_issue_flow_overrides=${OVERRIDES}"
 # The fail-open marker (`net-issue-flow fail-open:`) is emitted into the

@@ -75,7 +75,27 @@ const FILING_TAXONOMY_PATH = fileURLToPath(
   new URL("../../../../.claude/hooks/lib/user-surface-taxonomy.txt", import.meta.url),
 );
 
-export function filingJustificationReason(tokens, readTaxonomy) {
+// Does any REAL label token in the (dequoted) segment carry `label`? Six
+// spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
+// bare `labels[]=v` field — comma-split and comma-anchored so `foo/<label>` and
+// `<label>x` do not match. Shared by exit 1 (meta/machinery) and exit 0 (the
+// run-report directive) so the two exits cannot drift on syntax.
+export function labelTokenEquals(tokens, label) {
+  const has = (v) => typeof v === "string" && `,${v},`.includes(`,${label},`);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if ((t === "--label" || t === "-l") && has(tokens[i + 1])) return true;
+    if (t.startsWith("--label=") && has(t.slice("--label=".length))) return true;
+    if (t.startsWith("-l=") && has(t.slice("-l=".length))) return true;
+    if (/^(-f|--field|--raw-field)$/.test(t) &&
+        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
+        has(tokens[i + 1].slice("labels[]=".length))) return true;
+    if (t.startsWith("labels[]=") && has(t.slice("labels[]=".length))) return true;
+  }
+  return false;
+}
+
+export function filingJustificationReason(tokens, readTaxonomy, runReportLabel = null) {
   // TWO CREATE SHAPES, because this chokepoint's whole reason for existing is
   // the cron population -- and one of the cron allowlists grants the prefix
   // `gh api repos/jikig-ai/soleur/` outright.
@@ -100,27 +120,23 @@ export function filingJustificationReason(tokens, readTaxonomy) {
     );
   if (!isCreate && !isApiIssue) return null;
 
+  // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
+  // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
+  // whose run completion is verified by that issue's existence; the agent can
+  // neither read nor write the file, so the exit is not narratable. Label only
+  // — no title shape (campaign-calendar's REQUIRED filings are
+  // `[Content] Overdue: …`). The file-and-vanish path a label-borrowing finding
+  // could take is closed by the sweeper, which closes only `[Scheduled]`-titled
+  // `app/soleur-ai` issues, and the residue is counted by measurement line 1c.
+  if (runReportLabel && labelTokenEquals(tokens, runReportLabel)) return null;
+
   // EXIT 1 — the machinery ledger. Read a REAL flag token, never prose: the
   // tokens are already dequoted, so a --body that merely NAMES the flag stays
-  // inside one token and cannot be mistaken for it.
-  //
-  // Two syntaxes and comma-joined values, for the same reasons guardrails.sh
-  // records: `--label` is a cobra StringSlice so `--label a,b` is ordinary gh
-  // syntax, and the api form has no --label flag at all -- it spells the same
-  // thing `-f 'labels[]=meta/machinery'`. Anchoring each element between commas
-  // keeps `foo/meta/machinery` and `meta/machineryX` non-matching.
-  const hasMachineryLabel = (v) =>
-    typeof v === "string" && `,${v},`.includes(",meta/machinery,");
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if ((t === "--label" || t === "-l") && hasMachineryLabel(tokens[i + 1])) return null;
-    if (t.startsWith("--label=") && hasMachineryLabel(t.slice("--label=".length))) return null;
-    if (t.startsWith("-l=") && hasMachineryLabel(t.slice("-l=".length))) return null;
-    if (/^(-f|--field|--raw-field)$/.test(t) &&
-        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
-        hasMachineryLabel(tokens[i + 1].slice("labels[]=".length))) return null;
-    if (t.startsWith("labels[]=") && hasMachineryLabel(t.slice("labels[]=".length))) return null;
-  }
+  // inside one token and cannot be mistaken for it. Same six spellings and
+  // comma anchoring as exit 0 (`labelTokenEquals`), for the reasons
+  // guardrails.sh records: `--label` is a cobra StringSlice so `--label a,b` is
+  // ordinary gh syntax, and the api form spells it `-f 'labels[]=…'`.
+  if (labelTokenEquals(tokens, "meta/machinery")) return null;
 
   // The body corpus: the dequoted --body value, or the --body-file contents.
   let body = "";
@@ -176,9 +192,12 @@ export function filingJustificationReason(tokens, readTaxonomy) {
     }
   }
 
+  const rrHint = runReportLabel
+    ? `, or this cron's own run-report label ${runReportLabel} on a real ${isApiIssue ? "-f 'labels[]='" : "--label"} token`
+    : "";
   return isApiIssue
-    ? "filing names no user-visible consequence: add -f 'labels[]=meta/machinery', or -f 'body=...' carrying User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>"
-    : "filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>";
+    ? `filing names no user-visible consequence: add -f 'labels[]=meta/machinery', or -f 'body=...' carrying User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>${rrHint}`
+    : `filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>${rrHint}`;
 }
 
 export function allowDecision() {
@@ -485,6 +504,12 @@ export function parseAllowlist(lines) {
   const bash = [];
   const mcpAllow = new Set();
   let navigateOrigin = null;
+  // #8076 / ADR-216 addendum — the third directive shape. Written by the
+  // substrate ONLY for the crons whose run completion is verified by their own
+  // scheduled issue (`resolveOutputAwareOk` callers + legal-audit). Last match
+  // wins, like navigate-origin. Absent for every other cron, so the run-report
+  // exit below is unreachable there.
+  let runReportLabel = null;
   for (const line of lines) {
     const mcpMatch = /^mcp-allow\s+(\S+)$/.exec(line);
     if (mcpMatch) {
@@ -496,9 +521,14 @@ export function parseAllowlist(lines) {
       navigateOrigin = originMatch[1];
       continue;
     }
+    const rrMatch = /^run-report-label\s+(\S+)$/.exec(line);
+    if (rrMatch) {
+      runReportLabel = rrMatch[1];
+      continue;
+    }
     bash.push(line);
   }
-  return { bash, mcpAllow, navigateOrigin };
+  return { bash, mcpAllow, navigateOrigin, runReportLabel };
 }
 
 // PREFIX-SHAPED token secrets that must never ride a same-origin URL to the
@@ -574,7 +604,7 @@ export function decide(input, allowPrefixes) {
 
   // Split the file into bash prefixes + the per-cron mcp policy (#5199). A file
   // with no directive lines yields an empty mcpAllow set → mcp__* stays denied.
-  const { bash: bashPrefixes, mcpAllow, navigateOrigin } =
+  const { bash: bashPrefixes, mcpAllow, navigateOrigin, runReportLabel } =
     parseAllowlist(allowPrefixes);
 
   switch (tool) {
@@ -599,8 +629,12 @@ export function decide(input, allowPrefixes) {
         if (!segmentMatchesAllowlist(tokens.join(" "), bashPrefixes))
           return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
         // Narrows only: an allowlisted `gh issue create` must still justify.
-        const filingReason = filingJustificationReason(tokens, (f) =>
-          readFileSync(f, "utf8"),
+        // The run-report directive (exit 0) is threaded from the parsed file,
+        // never from the command or the environment.
+        const filingReason = filingJustificationReason(
+          tokens,
+          (f) => readFileSync(f, "utf8"),
+          runReportLabel,
         );
         if (filingReason) return denyDecision(filingReason);
       }

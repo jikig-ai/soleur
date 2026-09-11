@@ -89,8 +89,12 @@ This ordering is binding and comes from the operator: *expiry drains the stock;
 only the filing-time gate touches the rate.* At ~2:1, a 90-day sweep buys a
 one-time drop and the curve then resumes its old slope.
 
-### Three exits, one gate, and deliberately no fourth
+### Three exits, one gate, and deliberately no fourth *narratable* exit
 
+0. `--label <run-report-label>` where the label equals the `run-report-label`
+   directive the substrate wrote into this spawn's `cron-allow.txt` — present
+   only for the run-report crons, unreadable and unwritable by the agent
+   (2026-09-11 addendum below)
 1. `--label meta/machinery`
 2. `User-Impact:` naming a surface from a shared closed taxonomy, **and**
    `Fix-Size: <N> lines / <M> files` measured — refused when inside the inline
@@ -101,7 +105,90 @@ An earlier draft added a purpose-named bypass marker. **It is cut.** Exit 1 is
 free and always available; name the filing that must bypass the gate, cannot be
 labelled machinery, and cannot name a user impact — there isn't one. A fourth
 exit on a gate that already has a universal one reproduces exactly the
-reflexive-override pathology this repo has measured 98 times.
+reflexive-override pathology this repo has measured 98 times. Exit 0 is not
+that exit: an agent cannot take it by writing anything, because the token it
+must match is issued by the substrate per spawn and the agent never sees it.
+The addendum below records why it exists and why it is not the cut marker.
+
+### Addendum 2026-09-11 — the fourth population
+
+**The population.** Every cron whose run completion is verified by its own
+scheduled issue. Mechanically: the nine `resolveOutputAwareOk` callers —
+architecture-diagram-sync, campaign-calendar, community-monitor,
+competitive-analysis, content-generator, growth-audit, growth-execution,
+roadmap-review, seo-aeo-audit — whose handlers call
+`verifyScheduledIssueCreated` and whose persistence handshake refuses to commit
+the run's artifacts until the issue is seen. Plus legal-audit, by operator
+decision (D1, plan review 2026-09-11): its issues are per-gap findings rather
+than reports, so it sits in the directive map and never in the sweep. The list
+lives in one leaf, `RUN_REPORT_CRONS` in `_cron-run-reports.ts`; the
+measurement script mirrors the label set and a parity test keeps the two in
+lockstep. The population key is "calls `resolveOutputAwareOk`", NOT the
+heartbeat's `TASK_INVENTORY` — the brainstorm keyed on that and was wrong by
+four.
+
+**First live contact: #8059.** Eleven hours after the gate merged,
+cron-community-monitor was denied on its prescribed filing and complied via
+exit 1 — a community digest relabelled `meta/machinery`. The gate did what it
+says; the population was mis-specified. For these crons the issue *is* the
+proof of output: a run that cannot file it is a heartbeat failure and a lost
+artifact, not a saved filing.
+
+**Why this is class-2 reasoning inside class 3.** The filing-surface table
+exempts workflow-YAML filings (class 2) because they are "mandated by
+construction" — a machine emits them on a schedule, no discretion is
+exercised, and the gate never reached them anyway. The run-report crons are
+mandated by construction in exactly that sense, but they file from inside the
+Inngest substrate (class 3), which the gate DOES reach. The three exits were
+designed for discretionary, LLM-authored findings; a filing whose absence fails
+the run is not one. So the exemption is the class-2 exemption, applied to the
+subset of class 3 that shares class 2's property, and to nothing else.
+
+**The fourth exit.** A directive line `run-report-label <label>` written by the
+substrate (`_cron-claude-eval-substrate.ts`) into the per-spawn
+`cron-allow.txt` — the ADR-058 grammar, the third directive shape — and
+honoured by the hook iff a REAL `--label` token (any of the six spellings,
+comma-anchored, dequoted) equals it. **Label only.** A `[Scheduled]`-prefixed
+title-half was considered and cut: campaign-calendar's REQUIRED filings are
+`[Content] Overdue: …`, so a title shape would have re-denied the one cron
+whose issue titles are not the report shape. The agent can neither read nor
+write `cron-allow.txt`, and the line is absent for every cron outside the map,
+so the exit is not narratable: nothing an interactive filer or an off-map cron
+can type reaches it. That is what makes it not the cut marker.
+
+**The file-and-vanish path is closed, not left open.** A finding that borrowed
+the label to pass the gate would still be a `scheduled-*` issue authored by
+`app/soleur-ai`. The sweeper closes only `[Scheduled]`-titled,
+`app/soleur-ai`-authored issues after `closeAfterDays`, so a label-borrowing
+finding with a non-report title is never swept and stays visible; and every
+filing under these labels is counted by measurement line 1c as a second
+irreducible floor — inside the gate's reach, not reducible by it — so a
+residue shows in the weekly numbers rather than vanishing.
+
+**Rejected alternatives, each with its mechanical reason.**
+
+- *Once-per-run marker* (allow the first filing, deny the rest): `PreToolUse`
+  fires on allow, not on success. A denied-then-retried or failed first
+  `gh issue create` would consume the run's one allowance and the real filing
+  would be denied.
+- *Handler-side filing* (the TypeScript handler files the issue, the agent
+  never does): the issue is the proof-of-output. Moving it out of the agent's
+  run makes the verify step attest to the handler's own action, which is the
+  self-reported-success shape this repo keeps removing.
+- *`cronName` in argv or env*: ADR-058 keys per-cron policy on directive lines
+  in the file precisely so the hook never trusts a name the spawn could carry.
+- *A new closer*: the sweeper already carries the human-triage, kill-switch,
+  `action-required` and FAILED-report guards; a second closer would be a second
+  pin on every one of them.
+- *A hook-written deny log* (`.jsonl` under `.claude/`): `permission_denials[]`
+  in the result event already carries every deny — measured 2026-09-11 — so
+  the substrate reads it there and emits `SOLEUR_CRON_FILING_DENY`; a second
+  log would be a second copy of the same fact on a surface no runner can read.
+
+**Where the operative text lives.** The hook header
+(`cron-bash-allowlist-hook.mjs`, the EXIT 0 block) is canonical. This addendum,
+ADR-058's consequence bullet, and the `wg-defer-only-after-inline-triage` body
+are pointers to it, not restatements.
 
 ### Reconciliation with ADR-155
 
@@ -153,7 +240,7 @@ the mechanism supports.
 |---|---|---|
 | 1 | Interactive / `/work` / `/review` Bash `gh issue create` | `guardrails:require-filing-justification` |
 | 2 | `.github/workflows/*.yml` | **Not covered, deliberately.** Machine-authored infra alerts (drift, health, advisor scans) never traverse a `PreToolUse` hook and are mandated by construction. |
-| 3 | Inngest cron agent substrate | `cron-bash-allowlist-hook.mjs` — the same three exits |
+| 3 | Inngest cron agent substrate | `cron-bash-allowlist-hook.mjs` — the same three exits, plus the substrate-issued `run-report-label` directive (exit 0) for the run-report crons only (2026-09-11 addendum) |
 | 4 | `gh api …/issues -X POST` | `guardrails:require-filing-justification` (trigger widened) |
 | 5 | Octokit / MCP `create_issue` | **Not covered.** `github-tools.ts` and `mutate-workstream-issue.ts` call Octokit directly, and the hook's matcher is `Bash`. |
 

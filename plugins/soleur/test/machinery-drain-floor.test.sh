@@ -77,6 +77,15 @@ ckc "a zero pool is reported as its own verdict, not as a supply waiver" \
 ckc "the zero-pool verdict says it is NOT evidence of a drained backlog" \
   'NOT evidence of a drained backlog' "$WF"
 
+# --- the standing measurement issue must never count itself ------------------
+# The standing issue is created with `meta/machinery` (it IS machinery) and is
+# therefore a drain candidate. It carries the `keep-open` kill-switch, and BOTH
+# pool queries exclude that label -- otherwise the instrument sits in its own
+# pool forever and reads as one undrained candidate every Monday.
+KEEP_OPEN_POOL_QUERIES="$(grep -cE 'is:open\+label:%22meta/machinery%22\+-label:keep-open' "$WF")"
+ck "both pool queries (pre-drain and post-drain) carry -label:keep-open" \
+  "$([[ "$KEEP_OPEN_POOL_QUERIES" -ge 2 ]] && echo 'ge2' || echo "$KEEP_OPEN_POOL_QUERIES")" "ge2"
+
 # --- the verdict must reach a DURABLE surface, not just the step log --------
 ckc "the floor step publishes its verdict as an output" \
   'verdict<<SOLEUR_EOF_VERDICT' "$WF"
@@ -86,7 +95,7 @@ ckc "a skipped floor step reads as UNKNOWN, not as clean" \
   'UNKNOWN, not clean' "$WF"
 
 # --- anti-vacuity: report DIRECTLY, never through the helpers being backstopped ---
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=$((14 + 1))  # 14 pre-existing + 1 keep-open pool-query row
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s.\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2
   exit 1
