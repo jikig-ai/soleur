@@ -761,12 +761,16 @@ logs:
     the S3 archive that `betterstack-query.sh` unions in by default.
   retention: "GitHub Actions run logs 90 days; Better Stack hot window ~40 minutes, archive per the source's retention"
 discoverability_test:
-  command: bash tests/scripts/test-inngest-host-dark-gate.sh
+  command: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
   expected_output: >-
-    The final line reads `inngest-host-dark-gate: <N> passed, 0 failed`, preceded by
-    `ok   drop-one floor: <D> distinct predicates covered across <C> cases (floor <F>)` and
-    `ok   anti-vacuity floor: <A> assertions ran (floor <B>)`. A non-zero failure count, or a
-    missing floor line, means the gate's own dispatch is not being exercised.
+    The final line reads `=== Results: <N> passed, 0 failed ===`. This suite renders the REAL
+    2.0 block of scripts/cutover-inngest.sh in a fresh bash process with the real gate lib
+    sourced and only the network (curl, doppler) stubbed, so a `0 failed` here means the
+    consumer's dispatch of the gate — the wiring this plan changes — is exercised end to end.
+    (Amended at /ship 2026-09-11: the first cut named tests/scripts/test-inngest-host-dark-gate.sh,
+    which grew to 282 assertions during review and now runs ~23 s inside preflight Check 10's
+    bwrap sandbox, past its 15 s cap; the wiring suite runs in ~4 s there and is the consumer-side
+    test. The gate suite remains AC1 and is run by the pre-merge battery, not by Check 10.)
 ```
 
 The `discoverability_test` runs locally with no credentials and no network, so no

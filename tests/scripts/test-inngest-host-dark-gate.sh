@@ -220,7 +220,11 @@ _gate_default_args() {
 gate() {
   local rows="$1" second="$2"; shift 2
   local -a args=()
-  mapfile -t args < <(_gate_default_args "$rows" "$second")
+  # Herestring, not process substitution: `< <(…)` needs /dev/fd, which a bwrap sandbox without
+  # `--proc /proc` (a nested user namespace, e.g. preflight Check 10 on the containerized path)
+  # does not provide — measured: every case graded `unreadable` with `/dev/fd/63: No such file`.
+  local _defaults; _defaults="$(_gate_default_args "$rows" "$second")"
+  mapfile -t args <<< "$_defaults"
   "${GATE_FN:-inngest_host_dark_gate}" "${args[@]}" "$@"
 }
 
@@ -1037,7 +1041,8 @@ mutate() {
     *)                      second="${SECOND:-$HB}" ;;
   esac
   local -a margs=()
-  mapfile -t margs < <(_gate_default_args "$rows" "$second")
+  local _mdefaults; _mdefaults="$(_gate_default_args "$rows" "$second")"
+  mapfile -t margs <<< "$_mdefaults"
   case "${GATE_FN:-inngest_host_dark_gate}" in
     inngest_host_dark_gate)
       margs+=(--live-attachment-id "${LIVEID:-$VOLID}" --followthrough-rc "${FTRC:-0}" \
