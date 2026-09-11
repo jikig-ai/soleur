@@ -617,11 +617,12 @@ mk_rows "$TMP/rows-m6c.json" \
   "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")"
 expect "[M6c] the SAME row delivered twice at one dt => dark" dark "$TMP/rows-m6c.json" "$FIN"
 
-# M7 — a single-encoded `raw` (an object, not a JSON string). Fail-closed today, but as `silent`:
-# "the host emits nothing" when what changed is the ENCODING. That is the false diagnosis the
-# G1-before-G2 ordering exists to prevent, one layer down. Recorded, not yet distinguished.
+# M7 — a single-encoded `raw` (an object, not a JSON string). Until #8054 this refused as `silent`:
+# "the host emits nothing" when what changed is the ENCODING — the false diagnosis the G1-before-G2
+# ordering exists to prevent, one layer down. E2 (bytes present, nothing decodes) now names it
+# `unreadable`, which is the diagnosis whose remedy is "look at the read path", not "replace the host".
 printf '%s\n' "{\"dt\":\"2026-09-03 10:00:00\",\"raw\":{\"host\":\"$HOSTV\",\"host_name\":\"$HOSTNAMEV\",\"message\":\"$(msg)\"}}" > "$TMP/rows-m7.json"
-expect "[M7] a single-encoded raw envelope refuses (fail-closed on an encoding change)" silent "$TMP/rows-m7.json" "$FIN"
+expect "[M7] a single-encoded raw envelope refuses as unreadable (an encoding change is not silence)" unreadable "$TMP/rows-m7.json" "$FIN"
 
 # ══ 2c. FIELD-INJECTION (constructed and executed; both returned `dark` rc 0) ═════
 # The gate grades a MESSAGE, and nothing validated that message's shape. Two variants reached
@@ -1035,9 +1036,9 @@ passes="$_w_p"; fails="$_w_f"
 if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: mutate() did not fail on a mutation that cannot land — the whole B10 harness is decorative"; fi
 
 mutate G4  's|^  \[\[ "\$schema" == "\$expected_schema" \]\].*|  :|'                 "$TMP/rows-g4.json"  stale_schema
-mutate G7  's|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
-mutate G8  's|^  \[\[ "\$server_active" == "inactive" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
-mutate G9  's|^  \[\[ "\$http_code" != "200" \]\].*|  :|'                            "$TMP/rows-g9.json"  host_serving
+mutate G7  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
+mutate G8  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$server_active" == "inactive" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
+mutate G9  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$http_code" != "200" \]\].*|  :|'                            "$TMP/rows-g9.json"  host_serving
 mutate G11 's|^  \[\[ "\$redis_active" == "active" \]\].*|  :|'                      "$TMP/rows-g11.json" redis_down
 mutate G12 's|^  \[\[ "\$redis_keys" =~ \^\[0-9\]{1,12}\$ \]\].*|  :|'              "$TMP/rows-g12.json" unreadable
 mutate G13 's|^  \[\[ "\$redis_keys" -eq 0 \]\].*|  :|'                              "$TMP/rows-g13.json" store_populated
@@ -1048,7 +1049,7 @@ mutate G14M 's|^  \[\[ "\$data_mount_devid" == "\$expected_devid" \]\].*|  :|' "
 
 # G3's pin and G2's silence arm.
 NOWV=1788440400   mutate G3  's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|'      "$TMP/rows-g3.json"  stale_row --now-epoch 1788440400
-mutate G2  's|^    _ihdg_verdict "silent"; return \$?|    :|'                        "$TMP/rows-empty.json" silent
+mutate G2  's|^    _ihdg_refuse silent; return 1$|    :|'                            "$TMP/rows-empty.json" silent
 
 # The dispatch-time predicates: same contract, driven through the extra gate args.
 LIVEID="$OTHERID" mutate G17 's|^  \[\[ "\$live_attachment_id" == "\$expected_volume_id" \]\].*|  :|' "$ROWS" id_pin_mismatch --live-attachment-id "$OTHERID"
@@ -1244,7 +1245,7 @@ predicate ERG-E10 "server_active ABSENT => unreadable" unreadable "$TMP/erg-e10d
 # {armed, flipping, flushed, done} names its own remedy; EVERYTHING ELSE — `unknown`, `rollback`
 # (in flight), empty, absent — is `flag_unreadable`. The G20 lesson: the empty string was once an
 # accepting value in this lib, and matrix row 3 mutates this to the negative form to prove it is not.
-for _f in armed flipping flushed done; do
+for _f in armed flipping flushed "done"; do
   erows "e11-$_f" '2026-09-03 10:00:00' "$(emsg cutover_flag=$_f)"
   predicate ERG-E11 "cutover_flag=$_f => flag_armed" flag_armed "$TMP/erg-e11-$_f.json" "$HB"
 done
@@ -1412,7 +1413,7 @@ _sel_inline="$(grep -c 'select(\$d.host == \$h and \$d.host_name == \$hn)' "$GAT
 [[ "$_sel_inline" -eq 1 ]] && pass || fail "[helper] the host conjunction appears ${_sel_inline}x in the lib; it must appear exactly once, inside _IHDG_SELECT"
 # The heartbeat's flag partition and E11's are ONE classifier, and the arm set it names is
 # SET-EQUAL to the P1-5 allowlist in inngest-server-flip-guard.sh's own `case` arm.
-_p15="$(grep -oE '^[[:space:]]*armed\|flipping\|flushed\|done\)' "$REPO_ROOT/apps/web-platform/infra/inngest-server-flip-guard.sh" | head -1 | tr -d ' )' | tr '|' '\n' | sort)"
+_p15="$(grep -E '^[[:space:]]*armed[[:space:]]*\|.*\)[[:space:]]*flag_ok=true' "$REPO_ROOT/apps/web-platform/infra/inngest-server-flip-guard.sh" | head -1 | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort)"
 _e11="$(awk '/^_erg_flag_class\(\) \{$/,/^}$/' "$GATE" | grep -oE "^[[:space:]]*[a-z|-]+\) printf 'armed'" | sed -E "s/\) printf 'armed'//; s/^[[:space:]]*//" | tr '|' '\n' | sort)"
 if [[ -n "$_p15" && "$_p15" == "$_e11" ]]; then pass; else fail "[E11] the gate's arm set is not set-equal to the P1-5 allowlist" 0 "p15=[$(printf '%s' "$_p15" | tr '\n' ',')] e11=[$(printf '%s' "$_e11" | tr '\n' ',')]"; fi
 
@@ -1427,7 +1428,7 @@ _S='/^inngest_execute_registry_gate() {$/,/^}$/'
 # mutate_both <gn> <sed> <sibling-rows> <sibling-tok> <erg-rows> <erg-tok> [erg extra args…]
 mutate_both() {
   local gn="$1" expr="$2" srows="$3" stok="$4" erows_="$5" etok="$6"; shift 6
-  GATE_FN=inngest_host_dark_gate mutate "${gn}-sib" "$expr" "$srows" "$stok"
+  GATE_FN=inngest_host_dark_gate        mutate "${gn}-sib" "$expr" "$srows"  "$stok" "$@"
   GATE_FN=inngest_execute_registry_gate mutate "${gn}-erg" "$expr" "$erows_" "$etok" "$@"
 }
 
@@ -1446,7 +1447,7 @@ mutate ERG-M1  "$_S s|^  \[\[ \"\$http_code\" != \"200\" \]\].*|  :|"           
 mutate ERG-M2  "$_S s|^  \[\[ \"\$server_active\" != \"active\" \]\].*|  :|"          "$TMP/erg-e10.json" host_serving
 mutate ERG-M4  "$_S s|^  \[\[ \"\$host_role\" == \"dedicated\" \]\].*|  :|"           "$TMP/erg-e8.json"  wrong_host
 mutate ERG-M5  "$_S s|^  \[\[ \"\$registry_fns\" == \"__UNREADABLE__\" \]\].*|  :|"  "$TMP/erg-e12.json" unreadable
-mutate ERG-M14 "$_S s|select(\$d._BOOT_ID == \$b)|select(true)|"                      "$EROWS" fsm_silent --hb-file "$TMP/erg-hb-oldboot.json"
+mutate ERG-M14 's|select(\$d._BOOT_ID == \$b)|select(true)|'                            "$EROWS" fsm_silent --hb-file "$TMP/erg-hb-oldboot.json"
 mutate ERG-M15 "$_S s|^  \[\[ \"\$hb_age\" -le \"\$hb_max_age\" \]\].*|  :|"          "$EROWS" fsm_silent --hb-file "$TMP/erg-hb-2h.json"
 # The flag classifier (matrix 3, 16, 20) — one definition serves E11 and E13, so one mutation
 # reaches both; the two fixtures prove each consumer reads it.
@@ -1482,8 +1483,8 @@ unset GATE_FN
 # was `-lt 21`, the FAIL message said "floor is 20", and the ok message said "floor 21" -- three
 # numbers for one floor, so whichever a reader trusted was a coin flip. Defined ONCE here and
 # read by all three, the same discipline _FLOOR below already follows. Raised 21 -> 22 with #8017's
-# G14M, keeping the deliberate one of slack.
-_PRED_FLOOR=22
+# G14M, keeping the deliberate one of slack; 22 -> 35 with #8054's thirteen `ERG-E*` predicates.
+_PRED_FLOOR=35
 _distinct=0; for _g in ${_seen_predicates:-}; do _distinct=$((_distinct + 1)); done
 if [[ "$_distinct" -lt "$_PRED_FLOOR" ]]; then
   fails=$((fails + 1))
@@ -1499,15 +1500,27 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=124
+#
+# EXACT (`-ne`) SINCE #8054, NOT `-lt`. A `-lt` floor is satisfied by delete-one-add-one, and the
+# slack it tolerates is attack budget: the one assertion of slack a sibling suite once carried
+# absorbed exactly the row a mutation had proven load-bearing. With two entry points sharing
+# helpers in this file, a helper row that quietly stops running for ONE consumer is the failure
+# mode, and only an exact count sees it. The cost is a one-number bump on every legitimate
+# addition — and the failure text below dictates the number, so the bump is mechanical.
+_FLOOR=246
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR" >&2
   printf 'inngest-host-dark-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
+elif [[ "$_ran" -ne "$_FLOOR" ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL STALE FLOOR: %s assertions ran, _FLOOR is %s — set _FLOOR=%s (the count is exact by design; an assertion was added without updating it).\n' "$_ran" "$_FLOOR" "$_ran" >&2
+  printf 'inngest-host-dark-gate: %s passed, %s failed\n' "$passes" "$fails"
+  exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
+  printf '  ok   anti-vacuity floor: exactly %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi
 
 echo ""

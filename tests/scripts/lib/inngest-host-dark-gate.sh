@@ -2,6 +2,12 @@
 # Guard 2 — inngest_host_dark_gate. The fifth authorization layer for the inngest-volume-recut
 # apply_target (#7695), and the only one that checks the WORLD rather than an intent.
 #
+# TWO ENTRY POINTS, TWO CONSUMERS — EDITING A SHARED HELPER EDITS BOTH:
+#   inngest_host_dark_gate         .github/workflows/apply-web-platform-infra.yml  (recut Guard 2)
+#   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0  (P0 cutover, #8054)
+# `_IHDG_IDENT` / `_IHDG_SELECT`, every `_ihdg_*` helper and `_ihdg_graded_row` (G1-G7 == E1-E7)
+# are shared. The execute gate is documented at the bottom of this file, E-table included.
+#
 # Layers 1-4 authorize by intent: a human approved the environment, a confirm literal was typed, a
 # volume id was pinned, a plan document matched a shape. Every one of them can be fully satisfied
 # while the host is serving live traffic and the store holds armed reminders. This gate is the one
@@ -172,11 +178,17 @@
 # `test("^SOLEUR_INNGEST_SERVER_PROBE ")`), which is exactly the drift this removes. One
 # definition means a future tightening cannot land on some readers and not others, and one
 # mutation of it reddens every consumer at once instead of only the ones with fixtures.
-_IHDG_SELECT='
+#
+# SPLIT IN TWO SINCE #8054. `_IHDG_IDENT` is the decode + host-identity conjunction — the part
+# every stream this lib reads shares, the heartbeat included — and `_IHDG_SELECT` is that plus the
+# probe marker. The heartbeat reader embeds `_IHDG_IDENT` and adds its own identifier test, so the
+# host conjunction is still written exactly once (the suite counts its occurrences).
+_IHDG_IDENT='
         | . as $outer
         | ((.raw? // empty) | fromjson?) as $d
         | select(($d | type) == "object")
-        | select($d.host == $h and $d.host_name == $hn)
+        | select($d.host == $h and $d.host_name == $hn)'
+_IHDG_SELECT="$_IHDG_IDENT"'
         | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))'
 
 # _ihdg_field <message> <field-name>
@@ -285,10 +297,7 @@ _ihdg_row_count() {
       [ inputs
         | fromjson?
         | select(type == "object")
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select($d.host == $h and $d.host_name == $hn)
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+'"$_IHDG_SELECT"'
       ] | length
     ' -r < "$rows_file" 2>/dev/null
 }
@@ -360,6 +369,267 @@ _ihdg_finished_lines() {
     ' < "$rows_file" 2>/dev/null
 }
 
+# _ihdg_refuse <token> — print a refusal token for the CALLER to dispatch, rc 1. Shared helpers
+# name the refusal; only the two entry points turn a token into an exit code (via _ihdg_verdict),
+# so policy cannot leak into a helper both of them trust. The test suite asserts no `_ihdg_*`
+# helper body calls _ihdg_verdict.
+_ihdg_refuse() {
+  printf '%s\n' "$1"
+  return 1
+}
+
+# _ihdg_epoch_from_dt <dt> — Better Stack's UTC `YYYY-MM-DD HH:MM:SS[.ffffff]` to epoch seconds.
+# Anything else is a shape this lib has not been taught to read, and `date` would happily coerce
+# several of them (`yesterday`, `now`, an RFC-2822 string with a timezone). Refuses with rc 1 and
+# prints nothing. ONE definition: the probe side (G3/E5) and the heartbeat side (E13) both go
+# through it, so the regex cannot drift between the two streams' freshness bounds.
+_ihdg_epoch_from_dt() {
+  local dt="$1" epoch
+  [[ "$dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?$ ]] || return 1
+  epoch="$(date -u -d "${dt} UTC" +%s 2>/dev/null)" || return 1
+  [[ "$epoch" =~ ^[0-9]{1,12}$ ]] || return 1
+  printf '%s' "$epoch"
+}
+
+# _ihdg_graded_row <rows-file> <query-rc> <host> <host_name> <expected_schema> <now_epoch> <max_row_age>
+#
+# THE ONE PLACE A PROBE ROW IS SELECTED AND GRADED FOR RECENCY, IDENTITY AND SHAPE. G1-G7 of the
+# recut gate and E1-E7 of the execute gate are the same seven predicates; until #8054 they were
+# ~110 lines inlined in `inngest_host_dark_gate` and the execute gate would have had to carry a
+# second copy — the exact "two readers that disagree" class this family of defects keeps producing.
+# Both entry points call this and then grade the CONTENT of the row they get back.
+#
+# On success prints TWO lines — the graded row's age in seconds, then its message — and returns
+# 0. On refusal prints the refusal token alone and returns 1; the caller dispatches it through
+# _ihdg_verdict. The message is guaranteed newline-free by the row/line count check below, so the
+# two-line split is exact.
+_ihdg_graded_row() {
+  local rows_file="$1" query_rc="$2" host="$3" host_name="$4" expected_schema="$5"
+  local now_epoch="$6" max_row_age="$7"
+
+  # ── G1 — the read path answered, and its result is countable ────────────────────
+  # EVALUATED FIRST, BEFORE G2. A 503 from the ClickHouse read path yields zero rows; refusing with
+  # `silent` there would be a true refusal and a false diagnosis. Measured 2026-09-03: the read
+  # path returned HTTP 503 {"exception":"This source is currently under maintenance."} for the whole
+  # session, and scripts/followthroughs/inngest-host-not-serving-7674.sh correctly returned
+  # TRANSIENT reason=query_failed rather than converting a broken read into a host verdict. That is
+  # the measured justification for this gate's `unreadable`-aborts posture — a gate that cannot see
+  # the host must never conclude the host is dark.
+  [[ "$query_rc" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
+  [[ "$query_rc" -eq 0 ]]       || { _ihdg_refuse unreadable; return 1; }
+  [[ -n "$rows_file" && -f "$rows_file" ]] || { _ihdg_refuse unreadable; return 1; }
+  # E2 — BYTES THAT DO NOT DECODE ARE NOT SILENCE. A gzipped, truncated or HTML error body is a
+  # file with lines and zero rows; refusing it as `silent` would send the operator to replace a
+  # host whose read path is what broke. Raw lines >= 1 and decoded rows == 0 is a decode failure.
+  # (`grep -c ''` counts a final unterminated line too, and prints 0 on an empty file — hence the
+  # `|| true` to keep the count under pipefail.)
+  local raw_lines decoded_rows
+  raw_lines="$(grep -c '' "$rows_file" 2>/dev/null || true)"
+  decoded_rows="$(_ihdg_finished_lines "$rows_file")"
+  [[ "$raw_lines" =~ ^[0-9]+$ && "$decoded_rows" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
+  if [[ "$raw_lines" -ge 1 && "$decoded_rows" -eq 0 ]]; then _ihdg_refuse unreadable; return 1; fi
+
+  local rows_tsv rows_count
+  rows_tsv="$(_ihdg_rows "$rows_file" "$host" "$host_name")" || { _ihdg_refuse unreadable; return 1; }
+  # `grep -c` over a file, never `printf | grep -c`: under `set -o pipefail` a producer that takes
+  # SIGPIPE turns a successful match into a non-zero pipeline. The count is derived, then validated
+  # by an explicit ^[0-9]+$ predicate — `[[ "" -gt 0 ]]` is FALSE under bash coercion, so an
+  # uncomputed count would silently satisfy every threshold.
+  if [[ -z "$rows_tsv" ]]; then rows_count=0; else rows_count="$(printf '%s\n' "$rows_tsv" | wc -l)"; fi
+  rows_count="${rows_count//[[:space:]]/}"
+  # A MESSAGE CARRYING A NEWLINE IS NOT ONE MESSAGE, and the split happens HERE, upstream of every
+  # predicate. `_ihdg_rows` renders `message` through `jq -r`, so one row containing a newline is
+  # emitted as two physical lines; the selection loop below then takes the LAST as `newest_msg`
+  # while `_ihdg_tied_newest` still counts ONE distinct message and passes. Constructed and
+  # executed: a single row whose message read `http_code=200 server_active=active redis_keys=99999`
+  # followed by a newline and a fully-dark second half returned `dark`, rc 0 — the serving half
+  # discarded, the forged half graded, on a gate authorizing an irreversible destroy.
+  #
+  # Comparing jq's ROW count to the physical LINE count is the detector: they are equal exactly
+  # when no message contains a newline.
+  local rows_rowcount
+  rows_rowcount="$(_ihdg_row_count "$rows_file" "$host" "$host_name")"
+  [[ "$rows_rowcount" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
+  [[ "$rows_rowcount" == "$rows_count" ]] || { _ihdg_refuse unreadable; return 1; }
+  [[ "$rows_count" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
+
+  # ── G5/G6 — envelope identity, COMPUTED BEFORE G2 SO THE ARM IS REACHABLE ───────
+  # inngest-bootstrap.sh is the SHARED renderer for the dedicated host AND the co-located web host,
+  # and apps/web-platform/infra/vector.toml multiplexes every host into ONE Logs source — so probe
+  # rows from the wrong host are the common case, not an edge one. _ihdg_rows already DROPS them
+  # via the two-field conjunction, which means by the time G2 runs they are indistinguishable from
+  # no rows at all.
+  #
+  # THAT PLACEMENT IS THE BUG THIS ORDER EXISTS TO AVOID. A `wrong_host` arm evaluated AFTER the
+  # silence check is unreachable for exactly the inputs it was written for: the filter has already
+  # turned "forty rows, all from web-1" into "zero rows", G2 fires `silent`, and the operator is
+  # told the dedicated host emits nothing when in fact their identity filter is wrong. The refusal
+  # would be correct and the diagnosis a lie. So the wrong-host population is measured here, and
+  # G2's zero-row branch chooses between the two tokens on evidence.
+  #
+  # (#6616 is OPEN: `host_name` has been observed lying — a web host self-labelling with the
+  # sed-rendered `soleur-inngest-prd` literal — which is why `host`, Vector's auto-derived OS
+  # hostname that a stale literal cannot forge, is required alongside it. G5 and G6 are separate
+  # predicates for that reason: either one alone is spoofable.)
+  local wrong_host_rows
+  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
+      [ inputs | fromjson? | select(type == "object")
+        | ((.raw? // empty) | fromjson?) as $d
+        | select(($d | type) == "object")
+        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+        | select(($d.host != $h) or ($d.host_name != $hn))
+      ] | length' < "$rows_file" 2>/dev/null)"
+  [[ "$wrong_host_rows" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
+
+  # ── G2 — the host is not silent ─────────────────────────────────────────────────
+  # SILENCE IS NOT EVIDENCE OF DARKNESS. A host emitting nothing is a host whose state is UNKNOWN,
+  # and this is the exact fail-open class the G3.7 pre-filter was found to carry.
+  if [[ "$rows_count" -lt 1 ]]; then
+    if [[ "$wrong_host_rows" -gt 0 ]]; then _ihdg_refuse wrong_host; return 1; fi
+    _ihdg_refuse silent; return 1
+  fi
+
+  # Row selection. `newest` is the last row by event time, full stop. `chosen` is the newest row
+  # that carries a `probe_schema=` field at all — with a FALLBACK to `newest` when no row does, so
+  # that a host emitting only pre-schema rows reports `stale_schema` (actionable: "replace the host
+  # first") rather than `stale_row` (which would name the wrong problem).
+  #
+  # ONE FIELD PER LINE, deliberately. An earlier shape emitted `<dt>\t<message>` and read it with
+  # `IFS=$'\t' read -r dt msg`. Tab is IFS-WHITESPACE, so bash COLLAPSES runs of it and drops an
+  # empty leading field: a row whose `dt` was empty would parse as `dt=<message> msg=`, shifting
+  # every field one position left and making the newest row invisible. jq has already sorted, so
+  # bash never needs the timestamp.
+  local newest_msg chosen_msg _msg
+  newest_msg=""; chosen_msg=""
+  while IFS= read -r _msg; do
+    [[ -n "${_msg:-}" ]] || continue
+    newest_msg="$_msg"
+    if [[ "$_msg" == *"probe_schema="* ]]; then chosen_msg="$_msg"; fi
+  done <<< "$rows_tsv"
+  [[ -n "$chosen_msg" ]] || chosen_msg="$newest_msg"
+  [[ -n "$newest_msg" ]] || { _ihdg_refuse unreadable; return 1; }
+
+  # ── A TIE ON `dt` IS NOT A WINNER ───────────────────────────────────────────
+  # `sort_by` is STABLE, so when two rows share the newest `dt` the one that survives is decided by
+  # whatever order the query happened to emit them in — and the two can disagree. Constructed:
+  # the same pair of rows, one dark and one reading `server_active=active redis_keys=9999`, gave
+  # `dark` in one file order and `host_serving` in the other. Low reachability (`dt` carries
+  # sub-second precision) but a verdict that depends on the caller's row order is not a
+  # measurement. Tied-and-identical is fine; tied-and-disagreeing is a refusal.
+  if [[ "$(_ihdg_tied_newest "$rows_file" "$host" "$host_name")" != "1" ]]; then
+    _ihdg_refuse unreadable; return 1
+  fi
+
+  # ── THE CHOSEN ROW MUST BE THE NEWEST ROW ───────────────────────────────────
+  # An earlier revision selected the newest row CARRYING `probe_schema=` and then bounded it with
+  # G3's boot_id comparison. That is not a recency bound: boot_id is CONSTANT across every row of
+  # one boot, so a schema-3 row from 90 minutes ago compared equal to a newest row emitted seconds
+  # ago, and all sixteen row-derived predicates were then read off the older one.
+  #
+  # THE FIELD ORDER MAKES THAT MAXIMALLY ADVERSE. The emitter writes `http_code` and
+  # `server_active` BEFORE `probe_schema`, and `redis_keys` after it — so a newest row truncated
+  # anywhere in between carries the live proof that the host is SERVING, satisfies the boot pin,
+  # and is then discarded in favour of a row that says the opposite. Constructed and executed
+  # during review: a newest row reading `http_code=200 server_active=active` with no
+  # `probe_schema=` returned `dark`, rc 0.
+  #
+  # So the chosen row is now required to BE the newest row. A newest row that cannot be graded is
+  # `unreadable` — "nothing was measured" — never a licence to reach further back. The
+  # no-schema-ANYWHERE case still falls through to G4's `stale_schema`, which is the actionable
+  # verdict for a host running the pre-schema-3 renderer.
+  if [[ "$chosen_msg" != "$newest_msg" ]]; then
+    # ONE ARM, because the other one was dead. `chosen_msg` is assigned only when the message
+    # carries `probe_schema=`, and otherwise falls back to `newest_msg` — which makes them EQUAL
+    # and skips this block entirely. Reaching here therefore implies `chosen_msg` carries a schema,
+    # the `if` always fired, and the `stale_schema` line beneath it was unreachable for every
+    # possible rows-file. Its justifying comment also contradicted the one eight lines above,
+    # which correctly states the no-schema-anywhere case falls through to G4. Measured both ways:
+    # an all-pre-schema window returns `stale_schema` (from G4); an older schema-3 row under a
+    # newer pre-schema row returns `unreadable` (from here).
+    _ihdg_refuse unreadable; return 1
+  fi
+
+  # ── G3 — the newest row is RECENT ───────────────────────────────────────────────
+  # THIS PREDICATE WAS A BOOT_ID COMPARISON AND IT WAS DEAD ON ARRIVAL — twice over. It compared
+  # the chosen row's boot_id with the newest row's, which (a) could never differ once the block
+  # above required the chosen row to BE the newest row, and (b) never bounded recency even before
+  # that, because boot_id is CONSTANT across every row of one boot: a row from 90 minutes ago and a
+  # row from ten seconds ago carry the same boot_id and compared equal. The check that reads like a
+  # staleness bound and is not one is worse than no check, because the argument in this file's
+  # header cites it as though it were.
+  #
+  # So G3 is now the wall-clock bound the header always assumed: the newest qualifying row must be
+  # no older than `max_row_age`. That is what makes "the store was empty" a claim about NOW rather
+  # than about some point in a query window the caller chose. Both the boot_id PRESENCE checks are
+  # kept — an unparseable or absent boot_id still means the row shape is not what this gate grades.
+  local chosen_boot
+  chosen_boot="$(_ihdg_field "$chosen_msg" boot_id)" || { _ihdg_refuse unreadable; return 1; }
+  [[ -n "$chosen_boot" ]]                            || { _ihdg_refuse unreadable; return 1; }
+  # E7 — AND IT IS THE /proc SHAPE. The emitter reads /proc/sys/kernel/random/boot_id (a hyphenated
+  # UUID) and falls back to the literal `unknown`; the execute gate strips the hyphens to form the
+  # journald `_BOOT_ID` join key (#8054). A degenerate value — `unknown`, an all-hyphen string that
+  # strips to "", the already-stripped form — must refuse HERE, in bash, before any jq program sees
+  # it as `$bid`: an empty or wrong-shaped join key is how "no matching row" becomes "a match".
+  [[ "$chosen_boot" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { _ihdg_refuse unreadable; return 1; }
+
+  [[ "$max_row_age" =~ ^[0-9]{1,9}$ ]] || { _ihdg_refuse unreadable; return 1; }
+  if [[ -z "$now_epoch" ]]; then now_epoch="$(date -u +%s 2>/dev/null)"; fi
+  [[ "$now_epoch" =~ ^[0-9]{1,12}$ ]]  || { _ihdg_refuse unreadable; return 1; }
+
+  local newest_dt newest_epoch row_age
+  newest_dt="$(_ihdg_newest_dt "$rows_file" "$host" "$host_name")"
+  [[ -n "$newest_dt" ]] || { _ihdg_refuse unreadable; return 1; }
+  # The `dt` -> epoch path is `_ihdg_epoch_from_dt`, shared with the heartbeat side of the execute
+  # gate so the shape regex and the UTC pin cannot be re-implemented differently there (#8054).
+  newest_epoch="$(_ihdg_epoch_from_dt "$newest_dt")" || { _ihdg_refuse unreadable; return 1; }
+
+  row_age=$(( now_epoch - newest_epoch ))
+  # A row from the FUTURE is not fresh, it is a clock or an ingestion problem — and it is the one
+  # sign shape that would sail through a `-le` bound on a signed difference.
+  [[ "$row_age" -ge 0 ]]              || { _ihdg_refuse stale_row; return 1; }
+  [[ "$row_age" -le "$max_row_age" ]] || { _ihdg_refuse stale_row; return 1; }
+  # HOW REACHABLE IS THIS, HONESTLY. The workflow queries `--since 90m` and this bound defaults to
+  # 5400s, so under the CURRENT wiring almost no row that arrives here can exceed it — a row older
+  # than the window is not returned at all, and the gate answers `silent` instead. Said plainly
+  # rather than left for a reader to assume this predicate is carrying independent weight, which is
+  # the mistake the boot_id version of G3 got away with for a whole merge.
+  #
+  # It is kept, and it is not decorative, for four reasons: the bound belongs to the GATE rather
+  # than to one caller (the same posture as sorting rows here instead of trusting the query);
+  # clock skew between the log service and the runner can push a returned row past the bound;
+  # the FUTURE arm above is reachable regardless of any window; and `--since` is a workflow literal
+  # that a later edit can widen — which is why Row 7 of the suite pins it at 90m on BOTH queries
+  # and counts them, so widening the window and leaving this bound behind reddens rather than
+  # silently making the emptiness claim older than the argument that justifies it.
+
+  # ── G4 — probe_schema is EXACTLY 7 ──────────────────────────────────────────────
+  # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
+  # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
+  # everything" shape one version forward. A schema bump must force a deliberate edit here.
+  #
+  # BUMPED 7 -> 8 (#8017/#8015/#8013, 2026-09-10) when the emitter gained `data_mount_devid`,
+  # `data_mount_base` and `registry_fns`, and the key histogram became identifier-aware. The
+  # earlier 3 -> 4 bump (#7695) added `redis_key_patterns`. The bump is
+  # the point: a bare `redis_keys` count cannot answer "is this residue or state someone needs?",
+  # which is the question the recut runbook's "confirm before emptying anything" actually asks. A
+  # host still on the schema-3 image emits no `redis_key_patterns`, and grading it here would
+  # authorize a destroy against evidence this gate cannot see. `stale_schema` is the correct and
+  # actionable verdict for such a host: deliver the new image first.
+  #
+  # `stale_schema` is the EXPECTED verdict for every dispatch until the host is replaced: the
+  # running host's boot_id has been unchanged for weeks, so it emits no probe_schema at all. That is
+  # intended and is the mechanical interlock making Phase 2 -> Phase 3 an ordering CONSTRAINT rather
+  # than operator discipline — before the new emitter is live the recut is unreachable by
+  # construction. It stays its own token precisely because it is actionable ("replace the host
+  # first") where `unreadable` is not.
+  local schema
+  schema="$(_ihdg_field "$chosen_msg" probe_schema)" || { _ihdg_refuse stale_schema; return 1; }
+  [[ "$schema" == "$expected_schema" ]]              || { _ihdg_refuse stale_schema; return 1; }
+
+  printf '%s\n%s\n' "$row_age" "$chosen_msg"
+  return 0
+}
+
 # _ihdg_verdict <token> — echo the token, rc 0 only for the literal `dark`.
 _ihdg_verdict() {
   printf '%s\n' "$1"
@@ -400,212 +670,14 @@ inngest_host_dark_gate() {
     esac
   done
 
-  # ── G1 — the read path answered, and its result is countable ────────────────────
-  # EVALUATED FIRST, BEFORE G2. A 503 from the ClickHouse read path yields zero rows; refusing with
-  # `silent` there would be a true refusal and a false diagnosis. Measured 2026-09-03: the read
-  # path returned HTTP 503 {"exception":"This source is currently under maintenance."} for the whole
-  # session, and scripts/followthroughs/inngest-host-not-serving-7674.sh correctly returned
-  # TRANSIENT reason=query_failed rather than converting a broken read into a host verdict. That is
-  # the measured justification for this gate's `unreadable`-aborts posture — a gate that cannot see
-  # the host must never conclude the host is dark.
-  [[ "$query_rc" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$query_rc" -eq 0 ]]       || { _ihdg_verdict "unreadable"; return $?; }
-  [[ -n "$rows_file" && -f "$rows_file" ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  local rows_tsv rows_count
-  rows_tsv="$(_ihdg_rows "$rows_file" "$host" "$host_name")" || { _ihdg_verdict "unreadable"; return $?; }
-  # `grep -c` over a file, never `printf | grep -c`: under `set -o pipefail` a producer that takes
-  # SIGPIPE turns a successful match into a non-zero pipeline. The count is derived, then validated
-  # by an explicit ^[0-9]+$ predicate — `[[ "" -gt 0 ]]` is FALSE under bash coercion, so an
-  # uncomputed count would silently satisfy every threshold.
-  if [[ -z "$rows_tsv" ]]; then rows_count=0; else rows_count="$(printf '%s\n' "$rows_tsv" | wc -l)"; fi
-  rows_count="${rows_count//[[:space:]]/}"
-  # A MESSAGE CARRYING A NEWLINE IS NOT ONE MESSAGE, and the split happens HERE, upstream of every
-  # predicate. `_ihdg_rows` renders `message` through `jq -r`, so one row containing a newline is
-  # emitted as two physical lines; the selection loop below then takes the LAST as `newest_msg`
-  # while `_ihdg_tied_newest` still counts ONE distinct message and passes. Constructed and
-  # executed: a single row whose message read `http_code=200 server_active=active redis_keys=99999`
-  # followed by a newline and a fully-dark second half returned `dark`, rc 0 — the serving half
-  # discarded, the forged half graded, on a gate authorizing an irreversible destroy.
-  #
-  # Comparing jq's ROW count to the physical LINE count is the detector: they are equal exactly
-  # when no message contains a newline.
-  local rows_rowcount
-  rows_rowcount="$(_ihdg_row_count "$rows_file" "$host" "$host_name")"
-  [[ "$rows_rowcount" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$rows_rowcount" == "$rows_count" ]] || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$rows_count" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── G5/G6 — envelope identity, COMPUTED BEFORE G2 SO THE ARM IS REACHABLE ───────
-  # inngest-bootstrap.sh is the SHARED renderer for the dedicated host AND the co-located web host,
-  # and apps/web-platform/infra/vector.toml multiplexes every host into ONE Logs source — so probe
-  # rows from the wrong host are the common case, not an edge one. _ihdg_rows already DROPS them
-  # via the two-field conjunction, which means by the time G2 runs they are indistinguishable from
-  # no rows at all.
-  #
-  # THAT PLACEMENT IS THE BUG THIS ORDER EXISTS TO AVOID. A `wrong_host` arm evaluated AFTER the
-  # silence check is unreachable for exactly the inputs it was written for: the filter has already
-  # turned "forty rows, all from web-1" into "zero rows", G2 fires `silent`, and the operator is
-  # told the dedicated host emits nothing when in fact their identity filter is wrong. The refusal
-  # would be correct and the diagnosis a lie. So the wrong-host population is measured here, and
-  # G2's zero-row branch chooses between the two tokens on evidence.
-  #
-  # (#6616 is OPEN: `host_name` has been observed lying — a web host self-labelling with the
-  # sed-rendered `soleur-inngest-prd` literal — which is why `host`, Vector's auto-derived OS
-  # hostname that a stale literal cannot forge, is required alongside it. G5 and G6 are separate
-  # predicates for that reason: either one alone is spoofable.)
-  local wrong_host_rows
-  wrong_host_rows="$(jq -Rn --arg h "$host" --arg hn "$host_name" '
-      [ inputs | fromjson? | select(type == "object")
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
-        | select(($d.host != $h) or ($d.host_name != $hn))
-      ] | length' < "$rows_file" 2>/dev/null)"
-  [[ "$wrong_host_rows" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── G2 — the host is not silent ─────────────────────────────────────────────────
-  # SILENCE IS NOT EVIDENCE OF DARKNESS. A host emitting nothing is a host whose state is UNKNOWN,
-  # and this is the exact fail-open class the G3.7 pre-filter was found to carry.
-  if [[ "$rows_count" -lt 1 ]]; then
-    if [[ "$wrong_host_rows" -gt 0 ]]; then _ihdg_verdict "wrong_host"; return $?; fi
-    _ihdg_verdict "silent"; return $?
-  fi
-
-  # Row selection. `newest` is the last row by event time, full stop. `chosen` is the newest row
-  # that carries a `probe_schema=` field at all — with a FALLBACK to `newest` when no row does, so
-  # that a host emitting only pre-schema rows reports `stale_schema` (actionable: "replace the host
-  # first") rather than `stale_row` (which would name the wrong problem).
-  #
-  # ONE FIELD PER LINE, deliberately. An earlier shape emitted `<dt>\t<message>` and read it with
-  # `IFS=$'\t' read -r dt msg`. Tab is IFS-WHITESPACE, so bash COLLAPSES runs of it and drops an
-  # empty leading field: a row whose `dt` was empty would parse as `dt=<message> msg=`, shifting
-  # every field one position left and making the newest row invisible. jq has already sorted, so
-  # bash never needs the timestamp.
-  local newest_msg chosen_msg _msg
-  newest_msg=""; chosen_msg=""
-  while IFS= read -r _msg; do
-    [[ -n "${_msg:-}" ]] || continue
-    newest_msg="$_msg"
-    if [[ "$_msg" == *"probe_schema="* ]]; then chosen_msg="$_msg"; fi
-  done <<< "$rows_tsv"
-  [[ -n "$chosen_msg" ]] || chosen_msg="$newest_msg"
-  [[ -n "$newest_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  # ── A TIE ON `dt` IS NOT A WINNER ───────────────────────────────────────────
-  # `sort_by` is STABLE, so when two rows share the newest `dt` the one that survives is decided by
-  # whatever order the query happened to emit them in — and the two can disagree. Constructed:
-  # the same pair of rows, one dark and one reading `server_active=active redis_keys=9999`, gave
-  # `dark` in one file order and `host_serving` in the other. Low reachability (`dt` carries
-  # sub-second precision) but a verdict that depends on the caller's row order is not a
-  # measurement. Tied-and-identical is fine; tied-and-disagreeing is a refusal.
-  if [[ "$(_ihdg_tied_newest "$rows_file" "$host" "$host_name")" != "1" ]]; then
-    _ihdg_verdict "unreadable"; return $?
-  fi
-
-  # ── THE CHOSEN ROW MUST BE THE NEWEST ROW ───────────────────────────────────
-  # An earlier revision selected the newest row CARRYING `probe_schema=` and then bounded it with
-  # G3's boot_id comparison. That is not a recency bound: boot_id is CONSTANT across every row of
-  # one boot, so a schema-3 row from 90 minutes ago compared equal to a newest row emitted seconds
-  # ago, and all sixteen row-derived predicates were then read off the older one.
-  #
-  # THE FIELD ORDER MAKES THAT MAXIMALLY ADVERSE. The emitter writes `http_code` and
-  # `server_active` BEFORE `probe_schema`, and `redis_keys` after it — so a newest row truncated
-  # anywhere in between carries the live proof that the host is SERVING, satisfies the boot pin,
-  # and is then discarded in favour of a row that says the opposite. Constructed and executed
-  # during review: a newest row reading `http_code=200 server_active=active` with no
-  # `probe_schema=` returned `dark`, rc 0.
-  #
-  # So the chosen row is now required to BE the newest row. A newest row that cannot be graded is
-  # `unreadable` — "nothing was measured" — never a licence to reach further back. The
-  # no-schema-ANYWHERE case still falls through to G4's `stale_schema`, which is the actionable
-  # verdict for a host running the pre-schema-3 renderer.
-  if [[ "$chosen_msg" != "$newest_msg" ]]; then
-    # ONE ARM, because the other one was dead. `chosen_msg` is assigned only when the message
-    # carries `probe_schema=`, and otherwise falls back to `newest_msg` — which makes them EQUAL
-    # and skips this block entirely. Reaching here therefore implies `chosen_msg` carries a schema,
-    # the `if` always fired, and the `stale_schema` line beneath it was unreachable for every
-    # possible rows-file. Its justifying comment also contradicted the one eight lines above,
-    # which correctly states the no-schema-anywhere case falls through to G4. Measured both ways:
-    # an all-pre-schema window returns `stale_schema` (from G4); an older schema-3 row under a
-    # newer pre-schema row returns `unreadable` (from here).
-    _ihdg_verdict "unreadable"; return $?
-  fi
-
-  # ── G3 — the newest row is RECENT ───────────────────────────────────────────────
-  # THIS PREDICATE WAS A BOOT_ID COMPARISON AND IT WAS DEAD ON ARRIVAL — twice over. It compared
-  # the chosen row's boot_id with the newest row's, which (a) could never differ once the block
-  # above required the chosen row to BE the newest row, and (b) never bounded recency even before
-  # that, because boot_id is CONSTANT across every row of one boot: a row from 90 minutes ago and a
-  # row from ten seconds ago carry the same boot_id and compared equal. The check that reads like a
-  # staleness bound and is not one is worse than no check, because the argument in this file's
-  # header cites it as though it were.
-  #
-  # So G3 is now the wall-clock bound the header always assumed: the newest qualifying row must be
-  # no older than `max_row_age`. That is what makes "the store was empty" a claim about NOW rather
-  # than about some point in a query window the caller chose. Both the boot_id PRESENCE checks are
-  # kept — an unparseable or absent boot_id still means the row shape is not what this gate grades.
-  local chosen_boot
-  chosen_boot="$(_ihdg_field "$chosen_msg" boot_id)" || { _ihdg_verdict "unreadable"; return $?; }
-  [[ -n "$chosen_boot" ]]                            || { _ihdg_verdict "unreadable"; return $?; }
-
-  [[ "$max_row_age" =~ ^[0-9]{1,9}$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  if [[ -z "$now_epoch" ]]; then now_epoch="$(date -u +%s 2>/dev/null)"; fi
-  [[ "$now_epoch" =~ ^[0-9]{1,12}$ ]]  || { _ihdg_verdict "unreadable"; return $?; }
-
-  local newest_dt newest_epoch row_age
-  newest_dt="$(_ihdg_newest_dt "$rows_file" "$host" "$host_name")"
-  [[ -n "$newest_dt" ]] || { _ihdg_verdict "unreadable"; return $?; }
-  # Better Stack renders `dt` as UTC `YYYY-MM-DD HH:MM:SS[.ffffff]`. Anything else is a shape this
-  # gate has not been taught to read, and `date` would happily coerce several of them.
-  [[ "$newest_dt" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?$ ]] \
-    || { _ihdg_verdict "unreadable"; return $?; }
-  newest_epoch="$(date -u -d "${newest_dt} UTC" +%s 2>/dev/null)" \
-    || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$newest_epoch" =~ ^[0-9]{1,12}$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-
-  row_age=$(( now_epoch - newest_epoch ))
-  # A row from the FUTURE is not fresh, it is a clock or an ingestion problem — and it is the one
-  # sign shape that would sail through a `-le` bound on a signed difference.
-  [[ "$row_age" -ge 0 ]]              || { _ihdg_verdict "stale_row"; return $?; }
-  [[ "$row_age" -le "$max_row_age" ]] || { _ihdg_verdict "stale_row"; return $?; }
-  # HOW REACHABLE IS THIS, HONESTLY. The workflow queries `--since 90m` and this bound defaults to
-  # 5400s, so under the CURRENT wiring almost no row that arrives here can exceed it — a row older
-  # than the window is not returned at all, and the gate answers `silent` instead. Said plainly
-  # rather than left for a reader to assume this predicate is carrying independent weight, which is
-  # the mistake the boot_id version of G3 got away with for a whole merge.
-  #
-  # It is kept, and it is not decorative, for four reasons: the bound belongs to the GATE rather
-  # than to one caller (the same posture as sorting rows here instead of trusting the query);
-  # clock skew between the log service and the runner can push a returned row past the bound;
-  # the FUTURE arm above is reachable regardless of any window; and `--since` is a workflow literal
-  # that a later edit can widen — which is why Row 7 of the suite pins it at 90m on BOTH queries
-  # and counts them, so widening the window and leaving this bound behind reddens rather than
-  # silently making the emptiness claim older than the argument that justifies it.
-
-  # ── G4 — probe_schema is EXACTLY 7 ──────────────────────────────────────────────
-  # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
-  # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
-  # everything" shape one version forward. A schema bump must force a deliberate edit here.
-  #
-  # BUMPED 7 -> 8 (#8017/#8015/#8013, 2026-09-10) when the emitter gained `data_mount_devid`,
-  # `data_mount_base` and `registry_fns`, and the key histogram became identifier-aware. The
-  # earlier 3 -> 4 bump (#7695) added `redis_key_patterns`. The bump is
-  # the point: a bare `redis_keys` count cannot answer "is this residue or state someone needs?",
-  # which is the question the recut runbook's "confirm before emptying anything" actually asks. A
-  # host still on the schema-3 image emits no `redis_key_patterns`, and grading it here would
-  # authorize a destroy against evidence this gate cannot see. `stale_schema` is the correct and
-  # actionable verdict for such a host: deliver the new image first.
-  #
-  # `stale_schema` is the EXPECTED verdict for every dispatch until the host is replaced: the
-  # running host's boot_id has been unchanged for weeks, so it emits no probe_schema at all. That is
-  # intended and is the mechanical interlock making Phase 2 -> Phase 3 an ordering CONSTRAINT rather
-  # than operator discipline — before the new emitter is live the recut is unreachable by
-  # construction. It stays its own token precisely because it is actionable ("replace the host
-  # first") where `unreadable` is not.
-  local schema
-  schema="$(_ihdg_field "$chosen_msg" probe_schema)" || { _ihdg_verdict "stale_schema"; return $?; }
-  [[ "$schema" == "$expected_schema" ]]              || { _ihdg_verdict "stale_schema"; return $?; }
+  # ── G1..G7 — the graded row: read answered, decoded, populated, newest, tie-free, recent,
+  # schema-exact, boot_id well-formed. ONE helper, shared with the execute gate (#8054); the G-table
+  # in this file's header still names each predicate, and the suite still mutates each line.
+  local graded row_age chosen_msg
+  graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")" \
+    || { _ihdg_verdict "${graded:-unreadable}"; return $?; }
+  row_age="${graded%%$'\n'*}"; chosen_msg="${graded#*$'\n'}"
+  [[ "$row_age" =~ ^[0-9]+$ && -n "$chosen_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
 
   # ── G14 — the two store fields must AGREE ───────────────────────────────────────
   # `redis_keys` is the field this destroy is authorized against, and until schema 4 nothing could
@@ -863,6 +935,251 @@ inngest_host_dark_gate() {
   case "$diagnostic_boot" in
     0|unset) : ;;
     *) _ihdg_verdict "diagnostic_boot"; return $? ;;
+  esac
+
+  _ihdg_verdict "dark"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# inngest_execute_registry_gate — `op=execute` step 2.0 (#8054). The SECOND entry point of this lib.
+#
+# PROPERTY. `scripts/cutover-inngest.sh op=execute` (the P0 cutover step) proceeds past 2.0 only
+# when the dedicated inngest host is established, from evidence the host itself emitted, to be
+# carrying no function registry that could double-fire. 2.0's reachable-empty arm (webhook HTTP 200,
+# `registry_empty=true`) is unchanged and does not come here. THIS gate is the other reading: the
+# host is POSITIVELY DARK — `inngest-server-flip-guard.sh` (P1-5) refuses a prod-URI start while
+# `INNGEST_CUTOVER_FLIP` is outside {armed, flipping, flushed, done}, and every pre-arm value is
+# outside it — and its own flip FSM attested, within `--hb-max-age` on the SAME boot, that the flag
+# is pre-arm. A host that cannot start cannot register a function. Every state in which darkness
+# cannot be established refuses; silence is not darkness.
+#
+# WHY A HEARTBEAT. The probe row is hourly, so on its own it proves darkness as of up to 90 minutes
+# ago. `inngest-cutover-flip.timer` fires every 30 s and its FSM emits one JSON line per tick on
+# EVERY flag, terminal ones included (P0-1/P0-2: `noop-aborted`, `noop-rolled-back`, `noop-done`),
+# carrying the journald `_BOOT_ID`. That is a ~1-2/min attestation of "this boot's flag is X", and
+# joined on the boot id it upgrades the probe's stale darkness to a fresh one. The bridge is
+# FRESHNESS, not corroboration: the probe row's `cutover_flag` and the heartbeat's `.message.flag`
+# are each graded against the same allowlist, and they may legitimately differ (`aborted` on the
+# hourly row, `rolled-back` on the minute-old heartbeat) — only the NEWEST same-boot heartbeat is
+# graded, never "any arm-set flag in the window".
+#
+# THE DELIBERATE DIVERGENCE FROM G8. The recut gate requires `server_active == "inactive"`. The
+# P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the live
+# host), so G8 refuses today's host as `host_serving` — the same class of defect as this file's
+# reason for existing, tracked in its own issue (#8078) rather than changed under a destroy gate
+# here. E10 is `server_active != "active"`: `activating`, `failed`, `inactive` are all not-serving.
+#
+# E-TABLE (evaluation order; population before silence, identity before content):
+#   E1  probe --query-rc numeric and 0                                      unreadable
+#   E2  rows file decodes (raw lines >= 1 and decoded == 0 is a decode fail) unreadable
+#   E3  >= 1 row from ANY host; then >= 1 from soleur-inngest/-prd          silent / wrong_host
+#   E4  newest row is the graded row, tie-free                              unreadable
+#   E5  row age <= --max-row-age, and not from the future                    stale_row
+#   E6  probe_schema == --expected-schema exactly                            stale_schema
+#   E7  boot_id present, /proc UUID shape, strips to 32 hex                  unreadable
+#   E8  host_role == dedicated                                               wrong_host
+#   E9  http_code numeric; != 200                                            unreadable / host_serving
+#   E10 server_active present, non-empty, != unknown; != active              unreadable / host_serving
+#   E11 cutover_flag in {aborted, rolled-back} (POSITIVE allowlist)           flag_armed / flag_unreadable
+#   E12 registry_fns == __UNREADABLE__ (entailed by E9 on the real emitter)   unreadable
+#   E13 heartbeat: --hb-rc 0; --hb-max-age numeric; file decodes; newest      fsm_unreadable /
+#       same-boot inngest-cutover-flip object row age in [0, --hb-max-age];  fsm_silent /
+#       its .message.flag graded by the E11 partition, in bash, after select flag_armed / flag_unreadable
+#   —   all hold                                                             dark (rc 0)
+#
+# E1-E7 ARE `_ihdg_graded_row`, shared byte-for-byte with G1-G7. E8/E9 are the same predicate lines
+# as G7/G9. The suite's mutation harness scopes per-consumer rows to the function and runs
+# helper rows against BOTH entry points — a helper tightening that reddens only one suite is a
+# copy, and copies are how this family of defects recurs.
+#
+# Usage:
+#   source tests/scripts/lib/inngest-host-dark-gate.sh
+#   ERG_RC=0; ERG_VERDICT="$(inngest_execute_registry_gate \
+#     --rows-file <probe rows: betterstack-query.sh JSONEachRow, --grep SOLEUR_INNGEST_SERVER_PROBE> \
+#     --query-rc <n> \
+#     --hb-file   <heartbeat rows: same shape, --grep inngest-cutover-flip> \
+#     --hb-rc     <n> \
+#     [--emit-file <abs path>] [--now-epoch <n>] [--max-row-age 5400] [--hb-max-age 900] \
+#     [--host soleur-inngest] [--host-name soleur-inngest-prd] [--expected-schema 8])" || ERG_RC=$?
+#   # stdout is EXACTLY the verdict token; rc 0 ONLY for `dark`. The caller runs `set -e`, so the
+#   # `|| ERG_RC=$?` shape is load-bearing: a bare `$(…)` aborts before any `::error::` prints.
+#   # `--emit-file` receives `key=value` lines (flag, boot_id, row_age, hb_age, hb_flag), each
+#   # written ONLY after its own predicate passed, so the caller's notice never re-parses a row.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+# _erg_flag_class <flag> — `preflip` | `armed` | `unreadable`. ONE definition of the P1-5 partition
+# for both the probe row (E11) and the heartbeat (E13), and the test suite asserts the `armed` arm
+# is SET-EQUAL to inngest-server-flip-guard.sh's own `case` allowlist — the partition already drifted
+# once (#6553 added `flushed`), and a retyped copy is the recurrence path. A POSITIVE allowlist for
+# the pass class: `unknown` (the emitter's read-failed sentinel), `rollback` (in flight), empty and
+# absent all land on `unreadable`, never on `preflip` — G20 in this file once let "" clear.
+_erg_flag_class() {
+  case "$1" in
+    aborted|rolled-back) printf 'preflip' ;;
+    armed|flipping|flushed|done) printf 'armed' ;;
+    *) printf 'unreadable' ;;
+  esac
+}
+
+# _ihdg_hb_newest <hb-file> <host> <host_name> <bid>
+#
+# The newest `inngest-cutover-flip` heartbeat row on boot `<bid>` from the named host, as TWO lines:
+# its `dt`, then its `.message.flag` (or `__ABSENT__`). Prints NOTHING when no row qualifies, and
+# the single line `__TIE__` when two rows at the newest `dt` carry different flags. The selector
+# filters on TYPE and IDENTITY only — identifier, host pair, a string `_BOOT_ID` equal to the join
+# key, an object `.message` — NEVER on the flag's value: a value filter would skip a fresh `armed`
+# and pass on a stale `aborted` (suite row 22). The flag is graded in bash by the caller.
+_ihdg_hb_newest() {
+  local hb_file="$1" host="$2" host_name="$3" bid="$4"
+  jq -Rn --arg h "$host" --arg hn "$host_name" --arg b "$bid" '
+      [ inputs
+        | fromjson?
+        | select(type == "object")
+'"$_IHDG_IDENT"'
+        | select($d.SYSLOG_IDENTIFIER == "inngest-cutover-flip")
+        | select(($d._BOOT_ID | type) == "string")
+        | select($d._BOOT_ID == $b)
+        | select(($d.message | type) == "object")
+        | { dt: ($outer.dt // ""), flag: (($d.message.flag // "__ABSENT__") | tostring) }
+      ] as $rows
+      | if ($rows | length) == 0 then empty
+        else ($rows | map(.dt) | max) as $newest
+           | ($rows | map(select(.dt == $newest) | .flag) | unique) as $flags
+           | if ($flags | length) != 1 then "__TIE__" else "\($newest)\n\($flags[0])" end
+        end
+    ' -r < "$hb_file" 2>/dev/null
+}
+
+inngest_execute_registry_gate() {
+  local rows_file="" query_rc="" hb_file="" hb_rc="" emit_file=""
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="8"
+  # Two freshness bounds, both NUMERIC seconds. The caller's `FLIP_LIVENESS_SINCE` is the string
+  # "15m" for its Better Stack `--since`; it is NOT this operand, and a non-numeric value here refuses.
+  local now_epoch="" max_row_age="5400" hb_max_age="900"
+
+  while [[ $# -gt 0 ]]; do
+    # A trailing flag with no value: `shift 2` would be a no-op and the loop would spin forever
+    # under the caller's `||` guard. A hang is not a verdict (the sibling learned this first).
+    if [[ "$1" == --* && $# -lt 2 ]]; then _ihdg_verdict "unreadable"; return $?; fi
+    case "$1" in
+      --rows-file)        rows_file="${2-}";        shift 2 ;;
+      --query-rc)         query_rc="${2-}";         shift 2 ;;
+      --hb-file)          hb_file="${2-}";          shift 2 ;;
+      --hb-rc)            hb_rc="${2-}";            shift 2 ;;
+      --emit-file)        emit_file="${2-}";        shift 2 ;;
+      --host)             host="${2-}";             shift 2 ;;
+      --host-name)        host_name="${2-}";        shift 2 ;;
+      --expected-schema)  expected_schema="${2-}";  shift 2 ;;
+      --now-epoch)        now_epoch="${2-}";        shift 2 ;;
+      --max-row-age)      max_row_age="${2-}";      shift 2 ;;
+      --hb-max-age)       hb_max_age="${2-}";       shift 2 ;;
+      *) echo "inngest_execute_registry_gate: unknown argument '$1'" >&2; _ihdg_verdict "unreadable"; return $? ;;
+    esac
+  done
+
+  # The emit file is the validated-values side channel the caller's `::notice::` reads. It is
+  # TRUNCATED here, so it must be an absolute path the caller owns (P1b relative-operand rule: a
+  # bare filename would truncate a tracked file in a suite run from the repo root). Values are
+  # appended ONLY after the predicate that validated them.
+  if [[ -n "$emit_file" ]]; then
+    case "$emit_file" in
+      /*) : ;;
+      *)  echo "inngest_execute_registry_gate: --emit-file must be absolute" >&2; _ihdg_verdict "unreadable"; return $? ;;
+    esac
+    case "$emit_file" in */../*|*/..) _ihdg_verdict "unreadable"; return $? ;; esac
+    : > "$emit_file" || { _ihdg_verdict "unreadable"; return $?; }
+  fi
+  _erg_emit() { [[ -n "$emit_file" ]] && printf '%s=%s\n' "$1" "$2" >> "$emit_file"; return 0; }
+
+  # Both bounds validated BEFORE any read: `[[ "" -le 5 ]]` is FALSE under bash coercion, but an
+  # operand that fails validation must name itself, not surface as a stale-row refusal.
+  [[ "$max_row_age" =~ ^[0-9]{1,9}$ ]] || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$hb_max_age" =~ ^[0-9]{1,9}$ ]]  || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  if [[ -z "$now_epoch" ]]; then now_epoch="$(date -u +%s 2>/dev/null)"; fi
+  [[ "$now_epoch" =~ ^[0-9]{1,12}$ ]]  || { _ihdg_verdict "unreadable"; return $?; }
+
+  # ── E1..E7 — the graded row, via the helper shared with inngest_host_dark_gate ───
+  local graded row_age chosen_msg
+  graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")" \
+    || { _ihdg_verdict "${graded:-unreadable}"; return $?; }
+  row_age="${graded%%$'\n'*}"; chosen_msg="${graded#*$'\n'}"
+  [[ "$row_age" =~ ^[0-9]+$ && -n "$chosen_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
+  # E7's join key. The helper is the AUTHORITY on the boot_id's shape (the /proc UUID regex lives
+  # there, once, and is mutated by the suite against both consumers); a second regex here would be
+  # an equivalent mutant's hiding place — the harness reports a masked line as dead code.
+  local boot_id bid
+  boot_id="$(_ihdg_field "$chosen_msg" boot_id)" || { _ihdg_verdict "unreadable"; return $?; }
+  bid="${boot_id//-/}"
+  _erg_emit boot_id "$boot_id"
+  _erg_emit row_age "$row_age"
+
+  # ── E8 — the row says it is the dedicated host ──────────────────────────────────
+  local host_role
+  host_role="$(_ihdg_field "$chosen_msg" host_role)" || { _ihdg_verdict "wrong_host"; return $?; }
+  [[ "$host_role" == "dedicated" ]]                  || { _ihdg_verdict "wrong_host"; return $?; }
+
+  # ── E9 — the loopback did NOT answer 200 ────────────────────────────────────────
+  # An ABSENT http_code must not read as "non-200": presence, then shape, then the comparison.
+  local http_code
+  http_code="$(_ihdg_field "$chosen_msg" http_code)" || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$http_code" =~ ^[0-9]+$ ]]                     || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$http_code" != "200" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
+
+  # ── E10 — systemd does not say the unit is active ───────────────────────────────
+  # `!= active`, not `== inactive` — see the header. `unknown` is the emitter's read-failed
+  # sentinel and a blank is a shape change; neither is a claim about the unit.
+  local server_active
+  server_active="$(_ihdg_field "$chosen_msg" server_active)" || { _ihdg_verdict "unreadable"; return $?; }
+  [[ -n "$server_active" && "$server_active" != "unknown" ]] || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$server_active" != "active" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
+
+  # ── E11 — the probe row's cutover flag is pre-arm, by POSITIVE allowlist ────────
+  local cutover_flag flag_class
+  cutover_flag="$(_ihdg_field "$chosen_msg" cutover_flag)" || cutover_flag=""
+  flag_class="$(_erg_flag_class "$cutover_flag")"
+  case "$flag_class" in
+    preflip) _erg_emit flag "$cutover_flag" ;;
+    armed)   _erg_emit flag "$cutover_flag"; _ihdg_verdict "flag_armed"; return $? ;;
+    *)       _erg_emit flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
+  esac
+
+  # ── E12 — coherence: a refused loopback cannot have yielded a registry count ────
+  # `registry_fns` (#8015) is `__UNREADABLE__` exactly when the GQL read did not yield an array,
+  # which a non-200 loopback entails on the real emitter. A NUMBER here beside `http_code != 200`
+  # — `0` included; `0` is a measurement, never an absence — means the row contradicts itself.
+  local registry_fns
+  registry_fns="$(_ihdg_field "$chosen_msg" registry_fns)" || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$registry_fns" == "__UNREADABLE__" ]]                || { _ihdg_verdict "unreadable"; return $?; }
+
+  # ── E13 — the flip FSM's heartbeat, same boot, fresh, pre-arm ───────────────────
+  [[ "$hb_rc" =~ ^[0-9]+$ ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  [[ "$hb_rc" -eq 0 ]]       || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  [[ -n "$hb_file" && -f "$hb_file" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  # Decode coherence, as E2: bytes that do not decode are a broken read, not a silent FSM.
+  local hb_raw_lines hb_decoded
+  hb_raw_lines="$(grep -c '' "$hb_file" 2>/dev/null || true)"
+  hb_decoded="$(_ihdg_finished_lines "$hb_file")"
+  [[ "$hb_raw_lines" =~ ^[0-9]+$ && "$hb_decoded" =~ ^[0-9]+$ ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  if [[ "$hb_raw_lines" -ge 1 && "$hb_decoded" -eq 0 ]]; then _ihdg_verdict "fsm_unreadable"; return $?; fi
+
+  local hb_out hb_lines hb_dt hb_flag hb_epoch hb_age
+  hb_out="$(_ihdg_hb_newest "$hb_file" "$host" "$host_name" "$bid")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  [[ -n "$hb_out" ]] || { _ihdg_verdict "fsm_silent"; return $?; }
+  [[ "$hb_out" != "__TIE__" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  hb_lines="$(printf '%s\n' "$hb_out" | wc -l)"
+  [[ "${hb_lines//[[:space:]]/}" == "2" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  hb_dt="${hb_out%%$'\n'*}"; hb_flag="${hb_out#*$'\n'}"
+  # Same `dt` -> epoch path as the probe row (shared helper), same sign discipline as G3/E5.
+  hb_epoch="$(_ihdg_epoch_from_dt "$hb_dt")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  hb_age=$(( now_epoch - hb_epoch ))
+  [[ "$hb_age" -ge 0 ]]             || { _ihdg_verdict "fsm_silent"; return $?; }
+  [[ "$hb_age" -le "$hb_max_age" ]] || { _ihdg_verdict "fsm_silent"; return $?; }
+  _erg_emit hb_age "$hb_age"
+  # The flag, graded in bash on the NEWEST same-boot row, by the same partition as E11.
+  case "$(_erg_flag_class "$hb_flag")" in
+    preflip) _erg_emit hb_flag "$hb_flag" ;;
+    armed)   _erg_emit hb_flag "$hb_flag"; _ihdg_verdict "flag_armed"; return $? ;;
+    *)       _erg_emit hb_flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
   esac
 
   _ihdg_verdict "dark"
