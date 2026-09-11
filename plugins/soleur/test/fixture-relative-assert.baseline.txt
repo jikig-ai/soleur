@@ -333,6 +333,7 @@
 1	scripts/registry-pull-path-health.sh
 1	scripts/registry-restore-from-ghcr.sh
 5	scripts/rename-guard.test.sh
+1	scripts/rotate-supabase-db-credential.sh
 3	scripts/rule-metrics-aggregate.sh
 2	scripts/rule-metrics-aggregate.test.sh
 1	scripts/rule-prune.sh
