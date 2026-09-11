@@ -23,7 +23,8 @@ routine run binds the current default once; retries retain that binding.
 
 - [x] RED-01a: registry eligibility, qualified capabilities, auth-mode binding, no alternate-engine selection, and retry binding tests for the registry surface (19 tests green).
 - [x] GREEN-01a (blockedBy RED-01a): neutral engine contract and reviewed registry surface (`f5b92f5bd`/`25600a6ed`).
-- [ ] RED-01b: persisted conversation/routine binding, dispatch authorization, and no alternate-engine invocation at the execution boundary.
+- [x] RED-01b: persisted conversation/routine binding, dispatch authorization, and no alternate-engine invocation at the execution boundary (4 tests green).
+- [x] GREEN-01b (blockedBy RED-01b): deterministic binding store freezes conversation/routine selection and preserves it for retries (`bf930503c`).
 - [ ] RED-02: event sequencing, terminal-state monotonicity, uncertain cancellation, and usage provenance tests.
 - [ ] GREEN-02 (blockedBy RED-02): normalized lifecycle and deterministic remote adapter.
 
