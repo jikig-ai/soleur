@@ -68,8 +68,11 @@ Before any other work, run the session-start gates from AGENTS.md (`wg-at-sessio
 
 ```bash
 ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
-if [ -n "$ROOT" ] && [ -f "${ROOT}/.claude-plugin/plugin.json" ]; then
-  # Identity is not freshness (#7474) — see the Step 0.0 probe above.
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  # Identity is not freshness (#7474) — see the Step 0.0 probe above. Preferring
+  # GROK_PLUGIN_ROOT does not weaken the name=soleur check Step 0.0 already runs.
   if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
     bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
       git worktree list && \

@@ -429,6 +429,8 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(goMd).toContain("plugin-root-unverified");
     expect(goMd).not.toContain(":-./plugins/soleur");
     expect(goMd).toContain("grok inspect");
+    const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
+    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(2);
   });
 
   test("public getting-started does not overclaim Grok support", () => {
