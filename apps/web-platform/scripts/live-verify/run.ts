@@ -40,7 +40,12 @@
 //                          only a redacted RESULT summary is emitted.
 
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { chromium, type Browser, type LaunchOptions } from "@playwright/test";
+import {
+  chromium,
+  type Browser,
+  type LaunchOptions,
+  type Page,
+} from "@playwright/test";
 
 import { redact } from "./redact";
 
@@ -336,6 +341,53 @@ export async function verifyPrincipal(
 // Drive the deployed app (the ONLY browser-launch call site)
 // ---------------------------------------------------------------------------
 
+/**
+ * Failure-time page state for a visibility wait that timed out (#7969).
+ *
+ * WHY: the composer wait timed out on the first triggered run in five releases
+ * and emitted only `Timeout 20000ms exceeded ... waiting for
+ * getByRole('textbox').first() to be visible`. That string is consistent with
+ * three different causes and distinguishes none of them, so the issue had to
+ * enumerate all three and could close none.
+ *
+ * It also misdirects. The wait is on the CHAT COMPOSER at /dashboard/chat/new,
+ * not a sign-in field — and `/login` renders `<input type="email">`, whose ARIA
+ * role IS textbox, so a bounce to the login page would have MATCHED this
+ * locator rather than timing out. The "synthetic principal never reached the
+ * form" hypothesis is therefore refutable from page state alone, and the state
+ * was never captured.
+ *
+ * Returns a compact, single-line summary. NEVER THROWS: this runs only on the
+ * failure path, and an exception here would replace a diagnosable timeout with
+ * an undiagnosable one — the exact defect it exists to remove.
+ *
+ * The URL is reduced to its PATH. The origin is not secret, but a redirect can
+ * carry credentials in the query string (`?code=`, `?token=`), and this string
+ * reaches a report-only CI log.
+ */
+export async function waitFailureState(
+  page: Page,
+  nav: { status(): number } | null,
+  what: string,
+): Promise<string> {
+  const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await fn();
+    } catch {
+      return fallback;
+    }
+  };
+  const path = await safe(async () => new URL(page.url()).pathname, "<unreadable>");
+  const status = nav ? String(nav.status()) : "<no-response>";
+  const textboxes = await safe(() => page.getByRole("textbox").count(), -1);
+  const title = (await safe(() => page.title(), "")).slice(0, 60);
+  const rail = await safe(() => page.locator(RAIL).count(), -1);
+  return (
+    `${what}-not-visible path=${path} http=${status} ` +
+    `textboxes=${textboxes} rail=${rail} title=${JSON.stringify(title)}`
+  );
+}
+
 const RAIL = '[data-testid="conversations-rail"]';
 // The authenticated app-shell route that renders the rail for the synthetic
 // principal (NOT /dashboard, which is the rail-less onboarding command-center
@@ -418,10 +470,15 @@ async function driveAndVerify(
       // /dashboard/chat/new renders the authenticated shell WITH the rail and
       // only materializes a conversation on message *send* (#5485). The
       // non-dry-run gate path below already uses /dashboard/chat/new.
-      await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
+      const dryNav = await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
         waitUntil: "domcontentloaded",
       });
-      await page.waitForSelector(RAIL, { timeout: 20_000 });
+      try {
+        await page.waitForSelector(RAIL, { timeout: 20_000 });
+      } catch {
+        // #7969: same blindness as the composer wait, same remedy.
+        return { kind: "CANT-RUN", reason: await waitFailureState(page, dryNav, "rail") };
+      }
       return {
         kind: "PASS",
         detail: "dry-run: authenticated app shell rendered, no mutation",
@@ -433,11 +490,16 @@ async function driveAndVerify(
     const sinceIso = new Date().toISOString();
 
     // Start a fresh conversation and send ONE benign message.
-    await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
+    const nav = await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
       waitUntil: "domcontentloaded",
     });
     const input = page.getByRole("textbox").first();
-    await input.waitFor({ state: "visible", timeout: 20_000 });
+    try {
+      await input.waitFor({ state: "visible", timeout: 20_000 });
+    } catch {
+      // #7969: report WHAT WAS ON THE PAGE, not merely that a locator timed out.
+      return { kind: "CANT-RUN", reason: await waitFailureState(page, nav, "composer") };
+    }
     await input.fill("live-verify rail check — automated, please ignore");
 
     // Gate the Send on start_session ACCEPTANCE, not merely WS-connect. The Send
@@ -774,10 +836,13 @@ async function reapOrphans(
 function emit(result: Result): void {
   const line =
     result.kind === "CANT-RUN"
-      ? `RESULT: CANT-RUN:${result.reason}`
+      ? `RESULT: CANT-RUN:${redact(result.reason)}`
       : `RESULT: ${result.kind} — ${redact(result.detail)}`;
   // Single structured line (FR6). redact() scrubs any captured value that
-  // reached the detail string.
+  // reached EITHER string. The CANT-RUN branch was previously unredacted while
+  // its sibling was — an asymmetry that was latent while reasons were fixed
+  // tokens, and becomes load-bearing now that waitFailureState() puts live page
+  // state (title, path) into a reason (#7969).
   console.log(line);
 }
 
