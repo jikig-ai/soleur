@@ -190,8 +190,9 @@ was authored, saved, exported, and layout-verified.
   honest.
 - In-place migration of old transcripts between engines is cut; transfer creates
   a new engine-bound conversation only after explicit authorization.
-- Subscription-based Codex sign-in is cut from the first release pending product,
-  account, and data-handling review.
+- Experimental external ChatGPT token handoff and unsupported Codex auth modes
+  are cut from the first release; v1 supports managed ChatGPT sign-in and API-key
+  authentication through the server-side credential boundary.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -628,8 +629,8 @@ gate above.
 **Rollout:** Keep Claude enabled and the workspace default unchanged while the
 Codex flag is internal-only. Promote only after both adapters pass qualification,
 GDPR/CLO review, CPO/CMO messaging review, the settings `.pen` gate, and QA with
-restart/cancellation evidence. Grok Build and Devin remain future registry
-entries until independently qualified.
+restart/cancellation evidence. Grok Build and Devin remain capability-scoped
+registry entries until their workflow-specific qualification gates pass.
 
 ## Downtime & Cutover
 
