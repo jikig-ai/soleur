@@ -65,8 +65,12 @@ assert() {
 assert "implicit repo, no milestone denies" "deny" \
   'gh issue create --title "x" --body "y"'
 
-# Our repo (implicit) with --milestone → allow.
-assert "implicit repo, with milestone allows" "<none>" \
+# Our repo (implicit) with --milestone but NO filing justification → deny.
+# MIGRATED: before guardrails:require-filing-justification, --milestone alone
+# was sufficient to allow. It is now NECESSARY BUT NOT SUFFICIENT -- a filing
+# must additionally take one of the three justification exits. This fixture is
+# the visible record of that contract change, not a regression.
+assert "implicit repo, milestone alone no longer allows" "deny" \
   'gh issue create --title "x" --body "y" --milestone "Post-MVP / Later"'
 
 # Explicit OUR repo without --milestone → deny (still gated).
@@ -533,6 +537,293 @@ cm_stage 'nothing to see here'
 assert_run "conflict: clean content allows" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 rm -rf "$CM"
+
+# ---------------------------------------------------------------------------
+# guardrails:require-filing-justification — Guard 1 mutation matrix.
+#
+# Every row below was derived from the DESIGN before the guard was written. A
+# matrix derived from finished code tests the code; a matrix derived from the
+# design tests the property.
+#
+# Each fixture carries --milestone so it clears the require-milestone gate
+# first: these rows must exercise the justification gate, not be masked by an
+# upstream deny that happens to produce the same verdict for a different reason.
+# ---------------------------------------------------------------------------
+
+MS='--milestone "Post-MVP / Later"'
+
+# AC7 — the floor: no exit taken at all → deny.
+assert "filing-justification: no exit taken denies" "deny" \
+  "gh issue create --title \"guard checks assertion SHAPE\" --body \"the guard is imperfect\" $MS"
+
+# AC8 exit 1 — the machinery ledger. Free, always available.
+assert "filing-justification: exit 1 (meta/machinery) allows" "<none>" \
+  "gh issue create --title \"live-arm ledger records reachability\" --body \"b\" --label meta/machinery $MS"
+
+# AC8 exit 1 — the = form of the flag must work too.
+assert "filing-justification: exit 1 (--label=meta/machinery) allows" "<none>" \
+  "gh issue create --title \"t\" --body \"b\" --label=meta/machinery $MS"
+
+# AC8 exit 2 — a named surface AND a measured size ABOVE the inline threshold.
+assert "filing-justification: exit 2 (User-Impact + large Fix-Size) allows" "<none>" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s for org owners
+Fix-Size: 240 lines / 9 files\" $MS"
+
+# AC8 exit 3 — a rule mandates the filing (ADR-155 vocabulary).
+assert "filing-justification: exit 3 (Mandated-By) allows" "<none>" \
+  "gh issue create --title \"t\" --body \"Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps\" $MS"
+
+# AC9 — THE row this gate exists for. A measured size INSIDE the inline
+# threshold is refused: the 19-lines-in-1-file deferral that was justified as
+# "a separate change with its own blast radius" and measured otherwise.
+assert "filing-justification: Fix-Size inside inline threshold denies" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /settings page mislabels the plan
+Fix-Size: 19 lines / 1 file\" $MS"
+
+# Boundary — exactly at the threshold is INSIDE it (<=100 AND <=4).
+assert "filing-justification: Fix-Size exactly 100/4 denies (boundary is inclusive)" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /billing page shows a stale total
+Fix-Size: 100 lines / 4 files\" $MS"
+
+# Boundary, other side — one file past the cap is OUTSIDE it.
+assert "filing-justification: Fix-Size 100/5 allows (files past cap)" "<none>" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /billing page shows a stale total
+Fix-Size: 100 lines / 5 files\" $MS"
+
+# The allow-list is POSITIVE: a User-Impact naming no surface from the shared
+# taxonomy does not satisfy exit 2. This is the row a deny-list of bad phrasings
+# could never fail, which is why the taxonomy is an allow-list.
+assert "filing-justification: User-Impact naming no surface denies" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the system is less rigorous
+Fix-Size: 500 lines / 20 files\" $MS"
+
+# Fix-Size is required alongside User-Impact, not optional.
+assert "filing-justification: User-Impact without Fix-Size denies" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s\" $MS"
+
+# Fix-Size must PARSE. An adjective is not a measurement.
+assert "filing-justification: non-numeric Fix-Size denies" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
+Fix-Size: small / a few files\" $MS"
+
+# Derivable-inputs is a DENY PREDICATE on an otherwise-passing filing: the claim
+# itself is the trigger. Without this row the predicate could be deleted and the
+# suite would stay green, because every other row passes it vacuously.
+assert "filing-justification: missing-numbers claim without a source denies" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /reports page is wrong
+Fix-Size: 300 lines / 12 files
+We would have to choose 19 timeout values first.\" $MS"
+
+# ... and the same body WITH a concrete source class passes.
+assert "filing-justification: missing-numbers claim with Inputs-Derived allows" "<none>" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /reports page is wrong
+Fix-Size: 300 lines / 12 files
+We would have to choose 19 timeout values first.
+Inputs-Derived: ten successful main workflow runs\" $MS"
+
+# The machinery exit must NOT be satisfied by the label name merely appearing in
+# prose -- only by a real --label flag. Anchor on the flag, not the bare token
+# (cq-assert-anchor-not-bare-token).
+assert "filing-justification: meta/machinery in prose only still denies" "deny" \
+  "gh issue create --title \"t\" --body \"this is arguably meta/machinery work\" $MS"
+
+# DOCUMENTED RESIDUAL, pinned so it is a known state rather than a surprise: a
+# mid-sentence Mandated-By passes HERE and is refused at the merge boundary,
+# which anchors it whole-line over the issue body. A whole-line anchor here is
+# unmatchable (this hook's corpus for an inline --body is the one-line $COMMAND),
+# so the remediation TEXT carries the fix instead. If this row ever flips to
+# deny, the corpus changed and the residual is closed -- update the deny text.
+assert "filing-justification: mid-sentence Mandated-By still passes the hook (known residual)" "<none>" \
+  "gh issue create --title t --body \"this is Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps per the rule\" $MS"
+
+# Mandated-By must carry a WELL-FORMED rule id, not any text.
+assert "filing-justification: malformed Mandated-By denies" "deny" \
+  "gh issue create --title \"t\" --body \"Mandated-By: because I said so\" $MS"
+
+# INHERITED for free from living inside the require-milestone block -- asserted
+# rather than assumed, because the inheritance is the reason the block was
+# extended instead of duplicated.
+assert "filing-justification: external repo stays exempt" "<none>" \
+  'gh issue create --repo acme/widgets --title "t" --body "no justification"'
+
+# #5192 class: a commit MESSAGE documenting a filing is not a filing. $SCAN has
+# heredocs/quotes stripped, so this must not deny.
+assert "filing-justification: commit body documenting gh issue create allows" "<none>" \
+  'git commit -m "docs: explain that gh issue create needs a justification"'
+
+# --- The PRESCRIBED --body-file form (P1, found at review).
+# review/SKILL.md says "Use `gh issue create --body-file <path>` -- never
+# `--body \"$VAR\"`". Reading only $COMMAND made exits 2 and 3 structurally
+# unreachable for that shape, so every correctly-formed user-facing filing was
+# denied unless it took exit 1 -- which would have pushed real product issues
+# onto the machinery ledger and corrupted the separation this gate creates.
+# The guard must accept the command shape the guard itself prescribes.
+BF_OK="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'User-Impact: the /dashboard route 500s for org owners\nFix-Size: 240 lines / 9 files\n' > "$BF_OK"
+BF_MAND="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps\n' > "$BF_MAND"
+BF_SMALL="$(mktemp -t gr-body.XXXXXXXX.md)"
+printf 'User-Impact: the /settings page mislabels the plan\nFix-Size: 19 lines / 1 file\n' > "$BF_SMALL"
+
+assert "filing-justification: --body-file reaches exit 2" "<none>" \
+  "gh issue create --title t --body-file $BF_OK $MS"
+assert "filing-justification: --body-file reaches exit 3" "<none>" \
+  "gh issue create --title t --body-file $BF_MAND $MS"
+assert "filing-justification: --body-file still refuses inside the inline threshold" "deny" \
+  "gh issue create --title t --body-file $BF_SMALL $MS"
+assert "filing-justification: unreadable --body-file fails TOWARD gating" "deny" \
+  "gh issue create --title t --body-file /nonexistent/soleur-no-such-body.md $MS"
+assert "filing-justification: an EMPTY body-file still denies (no vacuous pass)" "deny" \
+  "gh issue create --title t --body-file /dev/null $MS"
+rm -f "$BF_OK" "$BF_MAND" "$BF_SMALL"
+
+# --- CLASS 4: `gh api .../issues -X POST` creates an issue with the word
+# "create" nowhere in it. This repo has a DOCUMENTED instance of an agent taking
+# that route after guardrails:require-milestone denied the create form.
+assert "filing-justification: gh api POST issues without justification denies" "deny" \
+  'gh api -X POST repos/jikig-ai/soleur/issues -f title=x -f body=y'
+assert "filing-justification: gh api --method POST form also denies" "deny" \
+  'gh api --method POST repos/jikig-ai/soleur/issues -f title=x'
+assert "filing-justification: gh api POST with the machinery label allows" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/issues -f title=x --label meta/machinery'
+
+# NARROWS ONLY. gh api takes no --milestone, so the milestone arm stays scoped
+# to the create form; a GET and a POST to another endpoint are untouched.
+assert "filing-justification: gh api GET issues is untouched" "<none>" \
+  'gh api repos/jikig-ai/soleur/issues --paginate'
+assert "filing-justification: gh api POST to another endpoint is untouched" "<none>" \
+  'gh api -X POST repos/jikig-ai/soleur/labels -f name=x'
+
+# --- Harness rows: the guard's OWN failure modes ---
+#
+# Row H1 — FAIL TOWARD GATING when the shared taxonomy is unreadable. A gate
+# that silently stops matching is indistinguishable from a gate that passed.
+# This row is why the taxonomy read is not a bare `grep ... || true`.
+# EXERCISED AGAINST A COPY, NOT THE REPO. An earlier form emptied the tracked
+# taxonomy in place and restored it afterwards. Three things were wrong with
+# that, and only the third is visible from inside this suite:
+#   * a relative path truncates some OTHER file when the suite runs from a
+#     different CWD;
+#   * an exit between the truncate and the restore leaves the real taxonomy
+#     empty, and an empty allow-list makes the gate deny every exit-2 filing
+#     from then on, for everyone;
+#   * preflight Check 10 executes this suite as the plan's declared
+#     discoverability probe inside a bubblewrap sandbox that binds the repo
+#     READ-ONLY, so the truncate simply fails there -- the probe the plan
+#     declares could not pass in the sandbox it is declared for. Measured: 105/106
+#     in-sandbox, and a chmod -a-w rehearsal reproduces it outside.
+# The gate resolves its taxonomy from its OWN ${BASH_SOURCE[0]%/*}/lib/, so a
+# copy of the hook in a writable temp tree reads the COPY's taxonomy. That
+# exercises the unreadable-allow-list path against the real gate code while
+# writing nothing into the repository.
+TAXO_SANDBOX="$(mktemp -d)"
+cp -R -- "$SCRIPT_DIR/lib" "$TAXO_SANDBOX/lib"
+cp -- "$HOOK" "$TAXO_SANDBOX/guardrails.sh"
+# `cp -R` carries the SOURCE mode bits, so a repo checked out read-only yields a
+# read-only copy and the truncate below fails -- the row then reports <none> and
+# reads as "the gate did not fail toward gating" when in fact the fixture never
+# got set up. Force the copy writable; it lives in a temp dir we own.
+chmod -R u+w "$TAXO_SANDBOX"
+: > "$TAXO_SANDBOX/lib/user-surface-taxonomy.txt"
+# Setup, not an assertion: if the truncate did not take, the row below would be
+# testing a POPULATED taxonomy and passing for the wrong reason.
+[[ -s "$TAXO_SANDBOX/lib/user-surface-taxonomy.txt" ]] && {
+  printf 'FATAL: taxonomy fixture did not truncate; the row below would be vacuous.\n' >&2
+  exit 1
+}
+_HOOK_REAL="$HOOK"
+HOOK="$TAXO_SANDBOX/guardrails.sh"
+assert "filing-justification: unreadable taxonomy fails TOWARD gating" "deny" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 900 lines / 40 files\" $MS"
+HOOK="$_HOOK_REAL"
+rm -rf "$TAXO_SANDBOX"
+
+# --- Escape rows (found by feeding the PRISTINE guard corpora it must refuse).
+# Neither of these is reachable by mutating the guard: it was working exactly as
+# written, so every mutation row stayed green. They took an escape corpus.
+
+# E1 — the machinery exit must read a REAL --label token. Merely NAMING the flag
+# inside a quoted --body previously satisfied the free exit.
+assert "filing-justification: --label named in PROSE does not open the machinery exit" "deny" \
+  "gh issue create --title t --body \"we should use --label meta/machinery here\" $MS"
+
+# E1 control — a genuine flag still opens it, so the fix did not just deny more.
+assert "filing-justification: a REAL --label token still opens the machinery exit" "<none>" \
+  "gh issue create --title t --body \"b\" --label meta/machinery $MS"
+
+# E3 — two Fix-Size lines is MALFORMED. bash =~ binds the FIRST match, so a large
+# size first and the honest small size second evaded the threshold refusal.
+assert "filing-justification: two Fix-Size lines denies (large first, small last)" "deny" \
+  "gh issue create --title t --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 900 lines / 40 files
+Fix-Size: 19 lines / 1 file\" $MS"
+
+# E3 control — the small-first ordering still denies, and a single large size
+# still passes, so the fix discriminates rather than blanket-denying.
+assert "filing-justification: two Fix-Size lines denies (small first, large last)" "deny" \
+  "gh issue create --title t --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 19 lines / 1 file
+Fix-Size: 900 lines / 40 files\" $MS"
+
+# Row H2 — the REAL gate still reads a populated taxonomy. H1 now mutates only
+# a copy, so this row's job shifts from "did the restore run" to "did H1 leak" --
+# if H1 ever regains a repo write, or $HOOK is left pointing at the temp copy,
+# this row denies and says so.
+assert "filing-justification: taxonomy restored after H1" "<none>" \
+  "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
+Fix-Size: 900 lines / 40 files\" $MS"
+
+# --- Ship-time escape rows: the gate refused two shapes gh itself produces.
+#
+# S1 — `--label` is a cobra StringSlice, so `--label a,b` is ordinary documented
+# gh syntax. Exact-equality against the whole value denied it, and the refusal
+# told the filer to add the flag they had just passed. The consequence is the
+# --body-file consequence one syntax over: an honest machinery filing is pushed
+# onto the product ledger, corrupting the separation this gate creates.
+assert "filing-justification: comma-joined --label (machinery first)" "<none>" \
+  "gh issue create --title t --body \"b\" --label meta/machinery,type/bug $MS"
+assert "filing-justification: comma-joined --label (machinery last)" "<none>" \
+  "gh issue create --title t --body \"b\" --label type/bug,meta/machinery $MS"
+assert "filing-justification: comma-joined --label without machinery denies" "deny" \
+  "gh issue create --title t --body \"b\" --label type/bug,type/chore $MS"
+
+# S1 near-misses — the comma anchor must not widen into a substring match.
+assert "filing-justification: foo/meta/machinery is not the label" "deny" \
+  "gh issue create --title t --body \"b\" --label foo/meta/machinery $MS"
+assert "filing-justification: meta/machineryX is not the label" "deny" \
+  "gh issue create --title t --body \"b\" --label meta/machineryX $MS"
+
+# S2 — the `gh api` POST form the trigger already covers has NO --label flag; it
+# spells the same thing `-f labels[]=...`. Reading only --label left exit 1
+# structurally unreachable on that route, so every api-form machinery filing was
+# denied with no honest exit but 2 or 3.
+assert "filing-justification: api labels[]=meta/machinery opens the machinery exit" "<none>" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery' -f body=y"
+assert "filing-justification: api labels[]=type/bug still denies" "deny" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=type/bug' -f body=y"
+
+# ---------------------------------------------------------------------------
+# AC6b — ASSERTION-COUNT FLOOR.
+#
+# This suite had none. A run that executed ZERO assertions exited 0 and read as
+# a pass, so every guard in this file was one dispatch bug away from being
+# certified by a suite that asserted nothing. The floor is derived as
+# "main's count + the rows this change adds" rather than pinned to a literal a
+# sibling PR would silently invalidate, and it is reported with printf + exit
+# rather than through the pass/fail helpers it exists to backstop -- a floor
+# that calls fail() is disarmed by the same edit that disarms fail().
+# Derived, not guessed: 65 rows on main at the merge base + 19 added by this
+# change + 4 escape rows + 1 residual row + 5 body-file rows + 5 class-4 rows found at review
+# + 7 ship-time escape rows (comma-joined --label, its two near-misses, and the
+# api `labels[]=` spelling of exit 1) = 106. Stated as the sum so a sibling PR
+# that adds a row makes this stale LOUDLY (the floor trips) rather than silently.
+MIN_ASSERTIONS=106
+if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
+  printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
+  exit 1
+fi
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

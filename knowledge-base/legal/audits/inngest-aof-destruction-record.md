@@ -45,10 +45,12 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Date/time of destruction (UTC)** | _(fill: the `terraform apply` step's completion time)_ | the dispatch run's own log |
 | **Dispatch run URL** | _(fill)_ | GitHub Actions run |
 | **Authorizing reviewer** | _(fill: the GitHub user who approved the `inngest-cutover` environment)_ | the environment approval record — this is the SOLE authorization (DP-11 F8) |
-| **Physical volume id destroyed** | _(fill)_ | `expected_inngest_volume_id` dispatch input, pinned by Guard 1 against `.change.before.id` AND by Guard 2 against the live Hetzner volume resolved by NAME (an id lookup only — the attachment property is carried by G14's `data_mount_src`, not by this read) |
+| **Physical volume id destroyed** | _(fill)_ | `expected_inngest_volume_id` dispatch input, pinned by Guard 1 against `.change.before.id` AND by Guard 2 against the live Hetzner volume resolved by NAME (an id lookup only — the attachment property is carried by G14's `data_mount_devid` since #8017, not by this read) |
 | **`redis_keys` on the authorizing row** | _(fill — MUST be `0`)_ | the probe row. Any other value means the dispatch was not authorized and this record should not exist |
 | **`data_bytes` on the authorizing row** | _(fill)_ | the probe row. **The audit field.** An empty keyspace on a volume holding megabytes is a state a human should have seen before it was erased — record it whatever it says |
-| **`data_mount_src` on the authorizing row** | _(fill)_ | the probe row. Proves the emptiness measured was about the DEVICE destroyed, not about a Redis process whose `dir` had silently landed on the root disk |
+| **`data_mount_devid` on the authorizing row** | _(fill — MUST equal `scsi-0HC_Volume_<the id above>`)_ | the probe row. **THE PIN G14 AUTHORIZES ON** (#8017, `probe_schema=8`). Proves the emptiness measured was about the DEVICE destroyed, not about a Redis process whose `dir` had silently landed on the root disk. Before #8017 this duty sat on `data_mount_src`, which could never satisfy it — the comparison was against a by-id path the kernel never reports |
+| **`data_mount_src` on the authorizing row** | _(fill)_ | the probe row. **Audit field, not the pin** (demoted #8017). Records the kernel device name the mount actually reported — `/dev/sdb` pre-recut, `/dev/mapper/inngest-redis` post-recut |
+| **`data_mount_base` on the authorizing row** | _(fill)_ | the probe row. The resolved base device. Present so an `__UNREADABLE__` on `data_mount_devid` is not a three-way collision between no-mount, a broken resolution, and a wrong device |
 | **`flush_latched` on the authorizing row** | _(fill: `true` or `false`)_ | the probe row. Records whether an authorized FLUSHALL had already run |
 | **`boot_id` of the authorizing row** | _(fill)_ | the probe row. Ties the reading to the host that was actually destroyed-from |
 | **`INNGEST_CUTOVER_FLIP` at dispatch** | _(fill: `rolled-back` or `aborted`)_ | Guard 2's synchronous Doppler re-read |
@@ -67,4 +69,6 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 - [ ] `status:` in this file's frontmatter is changed from `template` to `complete`.
 - [ ] The encryption-posture ledger row is NOT flipped to `luks` by this act alone — that waits on
       an observed boot reaching `SOLEUR_INNGEST_LUKS_STAGE stage=verify` with
-      `data_mount_src=/dev/mapper/inngest-redis` (ADR-199 §Consequences).
+      `data_mount_src=/dev/mapper/inngest-redis` AND `data_mount_devid` still pinning the volume
+      (ADR-199 §Consequences, as amended 2026-09-10 by #8017 — the mapper NAME alone proves
+      nothing about which device backs it).

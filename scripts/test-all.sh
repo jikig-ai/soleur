@@ -1869,6 +1869,11 @@ if want_scripts; then
   # it every observable is byte-identical to the pre-fix script, so a replace that delivered
   # nothing would report success).
   run_suite "scripts/inngest-cutover-flip-rollout-7761" bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
+  # #7674 serving probe (#8015). This probe had NO suite at all while its exit code gated a P1
+  # tracker AND, since probe_schema=8, decided whether a host counts as serving. Its fixtures are
+  # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
+  # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
+  run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes

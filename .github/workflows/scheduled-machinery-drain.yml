@@ -1,0 +1,194 @@
+# Weekly net-negative drain + issue-flow measurement.
+#
+# NO `schedule:`/`cron:` KEY, DELIBERATELY. ADR-033 makes Inngest the single
+# scheduling substrate, and `.claude/hooks/new-scheduled-cron-prefer-inngest.sh`
+# DENIES a new scheduled-*.yml carrying a cron block. Scheduling lives in
+# `cron-machinery-drain.ts`, which dispatches this workflow. That is the pattern
+# nine sibling crons already use; the hook's override hatch is not reached for.
+name: scheduled-machinery-drain
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: scheduled-machinery-drain
+  cancel-in-progress: false
+
+# THE SINGLE NAMED CONSTANT. The floor and its waiver are both computed from
+# this one value, and `plugins/soleur/test/machinery-drain-floor.test.sh`
+# DERIVES it from this file rather than restating it -- a second copy would be a
+# second pin on one fact, which is the drift class this PR exists to remove.
+env:
+  MACHINERY_DRAIN_CLOSING_FLOOR: 20
+
+jobs:
+  measure-and-drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The measurement is DETERMINISTIC and runs first, so a failure in the
+      # agent-driven drain below never costs us the week's numbers.
+      - name: Measure issue flow
+        id: measure
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          bash scripts/issue-flow-measure.sh > measure.txt 2>&1 || rc=$?
+          echo "RC=$rc"
+          cat measure.txt
+          {
+            echo 'report<<SOLEUR_EOF_REPORT'
+            cat measure.txt
+            echo 'SOLEUR_EOF_REPORT'
+          } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      # Count the candidate pool BEFORE the drain. `closed` is derived as a
+      # delta rather than self-reported by the agent: a runner that reports its
+      # own success is the shape this PR exists to remove.
+      - name: Count machinery candidates (pre-drain)
+        id: pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          echo "candidates=$n" >> "$GITHUB_OUTPUT"
+          echo "candidate pool: $n"
+
+      - name: Drain the machinery ledger
+        id: drain
+        continue-on-error: true
+        uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # `--headless` is load-bearing, not decoration: without it the skill
+          # takes its interactive branch and waits to confirm a cluster with a
+          # human who is not there (drain-labeled-backlog/SKILL.md step 4).
+          prompt: '/soleur:drain-labeled-backlog --label meta/machinery --headless'
+          # Explicit model pin (ADR-053) -- an unpinned model drifts with action
+          # releases, which is an unbounded per-run spend surface on a weekly cron.
+          claude_args: '--model claude-sonnet-5'
+
+      # THE FLOOR, and it is gated on candidate SUPPLY. Without that arm the
+      # floor is unsatisfiable-by-construction the moment the backlog is
+      # actually drained -- a scheduled monitor whose steady state on success is
+      # RED, which trains the operator to ignore it. That is the exact failure
+      # this PR exists to remove, so reproducing it inside the fix would be
+      # self-defeating. The waiver is REPORTED, never silent.
+      - name: Enforce the closing floor
+        id: floor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ steps.pre.outputs.candidates }}
+          FLOOR: ${{ env.MACHINERY_DRAIN_CLOSING_FLOOR }}
+        run: |
+          set -euo pipefail
+          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          closed=$(( BEFORE - after ))
+          [ "$closed" -lt 0 ] && closed=0
+          echo "before=$BEFORE after=$after closed=$closed floor=$FLOOR"
+          # THE WAIVER MUST NAME WHICH WAIVER IT IS. `pool < floor` has two
+          # completely different causes and they look identical in a green run:
+          # the ledger really was drained, or it was never populated (the
+          # backfill is propose-only, so on merge the pool is 0 and stays 0
+          # until labels are applied). Reporting them the same way is the
+          # empty-telemetry-is-not-absence shape this whole change exists to
+          # remove -- inside this change's own instrument. So the outcome is
+          # emitted as a line the standing issue carries, not left in a step log
+          # nobody opens.
+          if [ "$BEFORE" -eq 0 ]; then
+            verdict="WAIVED-EMPTY: pool is 0 -- the ledger holds no machinery issues, so there was nothing to drain. If the backfill has not been applied, this is the expected reading and NOT evidence of a drained backlog."
+            rc=0
+          elif [ "$BEFORE" -lt "$FLOOR" ]; then
+            verdict="WAIVED-SUPPLY: closed=$closed of $BEFORE candidates; pool ($BEFORE) is below the floor ($FLOOR), so the floor cannot be met and is waived."
+            rc=0
+          elif [ "$closed" -lt "$FLOOR" ]; then
+            verdict="BREACH: closed=$closed, below the floor of $FLOOR (pool was $BEFORE). Per-PR net-zero holds the backlog at its current size; this cadence is the only lever that reduces it."
+            rc=1
+          else
+            verdict="MET: closed=$closed (>= floor $FLOOR, pool was $BEFORE)."
+            rc=0
+          fi
+          echo "$verdict"
+          {
+            echo 'verdict<<SOLEUR_EOF_VERDICT'
+            printf 'before=%s after=%s closed=%s floor=%s\n%s\n' \
+              "$BEFORE" "$after" "$closed" "$FLOOR" "$verdict"
+            echo 'SOLEUR_EOF_VERDICT'
+          } >> "$GITHUB_OUTPUT"
+          [ "$rc" -eq 0 ] || echo "::error::$verdict"
+          exit "$rc"
+
+      # FIND-OR-UPDATE exactly one standing issue. A measurement that files a
+      # fresh issue every week is the defect reproducing itself inside its own
+      # instrument, so this never calls `create` when a match exists.
+      #
+      # `if: always()` because the floor step above can exit 1, and the week the
+      # drain UNDERPERFORMS is precisely the week the operator needs the numbers.
+      # Without it the enforcing step silently suppresses the evidence it exists
+      # to act on -- and this workflow's own preamble promises the measurement
+      # runs first so a drain failure never costs the week's numbers.
+      - name: Update the standing measurement issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.measure.outputs.report }}
+          # `if: always()` above means this runs after a floor BREACH too, and
+          # the breach week is exactly when the verdict matters most. A skipped
+          # floor step leaves this empty, which is itself reported rather than
+          # rendered as a blank section.
+          VERDICT: ${{ steps.floor.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          TITLE="issue-flow: weekly measurement"
+          # `--search` is NOT combined with `--label` here: measured 2026-09-10,
+          # gh issue list silently discards --search when --label is present.
+          existing="$(gh issue list --state open --limit 100 \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          # Tilde fences, not backticks. A backtick inside a single-quoted
+          # string trips shellcheck SC2016 (actionlint exits non-zero on it, and
+          # CI runs actionlint), while a backtick inside a DOUBLE-quoted string
+          # or an unquoted heredoc would command-substitute and silently eat the
+          # report. `~~~` is valid GFM and carries no shell meaning at all, so
+          # it removes the hazard class rather than escaping around it.
+          verdict="${VERDICT:-(floor step did not run -- the drain outcome for this week is UNKNOWN, not clean)}"
+          body="$(printf '%s\n\n~~~\n%s\n~~~\n\n%s\n\n~~~\n%s\n~~~\n' \
+            'Standing weekly issue-flow measurement. Updated in place, never re-filed.' \
+            "$REPORT" \
+            'Machinery drain outcome:' \
+            "$verdict")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "updated standing issue #$existing"
+          else
+            gh issue create --title "$TITLE" --body "$body" \
+              --label meta/machinery --milestone "Post-MVP / Later"
+            echo "created the standing issue (first run only)"
+          fi
+
+      # THE MONITOR NEEDS AN EMITTER. sentry_cron_monitor.scheduled_machinery_drain
+      # declares failure_issue_threshold = 1, so without a check-in it pages every
+      # Monday forever on a cron that ran fine -- a check that cannot PASS, which is
+      # the inverse of the vacuity class this change exists to remove, and it would
+      # have landed inside the PR whose thesis is that unreadable machinery signals
+      # are the root cause. `if: always()` is load-bearing: a floor breach must
+      # still check in, or a red drain is indistinguishable from a dead scheduler.
+      - name: Sentry heartbeat
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-machinery-drain
+          status: ${{ job.status == 'success' && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

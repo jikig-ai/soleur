@@ -1144,6 +1144,7 @@ design-tooling
 design-tooling/mcp-tools
 design-tools
 desktop-support
+destroy-gate
 destroy-guard
 destructive-branch
 destructive-migration
@@ -1206,6 +1207,7 @@ distribution-strategy
 dkim
 dmarc
 dns
+dnssec
 doc-drift
 docker
 docker-build
@@ -1349,6 +1351,7 @@ error-handling
 error-mapping
 esbuild
 escape-hatch
+escape-rows
 escape-testing
 escaping
 eslint
@@ -1426,6 +1429,7 @@ fallback-insert
 fallback-path
 fallback-query
 fallback-strings
+false-all-clear
 false-assertions
 false-assumption
 false-boot-race
@@ -1505,6 +1509,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-population
 fixture-redaction
 fixture-safety
 fixture-seam
@@ -1934,6 +1939,7 @@ issue-body-drift
 issue-body-staleness
 issue-deduplication
 issue-filing
+issue-flow
 issue-hygiene
 issue-tracking
 issue-triage
@@ -2163,6 +2169,7 @@ merge-time-timebomb
 merge-time-verification
 message
 message-bubble
+meta-harness
 metadata-extraction
 metadata-routes
 metakey
@@ -2366,6 +2373,7 @@ offline-harness
 og-image
 og-images
 oidc
+omnigent
 on-click-fetch
 on-conflict
 on-delete-restrict
@@ -2632,6 +2640,7 @@ plugin-delivery
 plugin-deploy-gap
 plugin-development
 plugin-discovery
+plugin-fit
 plugin-format
 plugin-hooks
 plugin-instructions
@@ -2757,6 +2766,7 @@ primitive
 prior-art
 prior-art-discovery
 prior-decision-recovery
+privacy
 private-documents
 private-network
 private_key
@@ -3531,6 +3541,7 @@ srp
 ssg
 ssh
 ssh-agent
+ssh-authorization
 ssh-hypothesis-gate
 ssh-provisioner
 ssl
@@ -4066,6 +4077,7 @@ walk
 wall-clock
 warm-standby
 warning-level
+watch-only
 watchdog
 wayland
 weakset

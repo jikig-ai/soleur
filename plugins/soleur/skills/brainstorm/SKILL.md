@@ -568,6 +568,7 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
 
 1. Run `skill: soleur:compound` to capture learnings from the brainstorm session.
    If compound finds nothing to capture, it will skip gracefully — do not block on this.
+   **Watch-only / decline evals are not a skip.** Compound still runs on the feature branch. Do not present merge/ship as a next-step option until compound has run (or recorded skip-with-reason). Compound cannot run on `main`. **Why:** #8060 shipped the CI row first; `/compound` then aborted on main. See `knowledge-base/project/learnings/workflow-issues/2026-09-11-meta-harness-is-not-a-third-harness-union-member.md`.
 2. Commit and push any remaining uncommitted artifacts. Scope `git add` to
    feature-specific directories only (do NOT use `git add -A knowledge-base/`
    which could stage unrelated changes from other worktrees or manual edits):
@@ -650,5 +651,6 @@ Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/arch
 - **Ask one question at a time** - Don't overwhelm
 - **Apply YAGNI** - Prefer simpler approaches
 - **Keep outputs concise** - 200-300 words per section max
+- **Compound before merge/ship** — even when the deliverable is a CI watch row and there is no spec. Compound aborts on `main`.
 
 NEVER CODE! Just explore and document decisions.
