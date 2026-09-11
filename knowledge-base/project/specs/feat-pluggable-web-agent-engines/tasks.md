@@ -36,6 +36,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Repository contract slice: atomic bind RPC, tenant run lookup, and idempotent event append (2 repository tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
+  - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
 
 ## Phase 3 — Codex and settings
