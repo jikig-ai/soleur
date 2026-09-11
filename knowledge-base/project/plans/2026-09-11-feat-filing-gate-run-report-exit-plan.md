@@ -654,21 +654,21 @@ The ADR amendment lands in Phase 6 of the same PR; nothing is deferred.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts` green, including the Guard-1 matrix rows and H2/H3.
-- [ ] AC2 `./node_modules/.bin/vitest run test/server/inngest/cron-claude-eval-substrate.test.ts test/server/inngest/cron-run-report-labels-parity.test.ts` green: every `resolveOutputAwareOk(` call site has a `RUN_REPORT_CRONS` row with its `SENTRY_MONITOR_SLUG` (and vice-versa, legal-audit per D1), every row's `fn` has `gh issue create` in `CRON_BASH_ALLOWLISTS`, and `closeAfterDays === 3 × maxGapDays` for the `TASK_INVENTORY` rows.
-- [ ] AC3 The written `cron-allow.txt` for `cron-ux-audit` carries no `run-report-label` line (delivery negative test).
-- [ ] AC4 `parseClaudeResultLine` tests: two filing-shaped `permission_denials` + one non-filing → `filingDenials: 2`; the `SOLEUR_CRON_FILING_DENY` WARN is emitted once with `count: 2` and not at all at 0.
-- [ ] AC5 `bash plugins/soleur/test/issue-flow-measure.test.sh` green: lines `1c.` and `1d.` printed from stubbed counts; line `1.` unchanged; label array ≡ `_cron-run-reports.ts` labels by grep; 1d query carries `-label:keep-open`.
-- [ ] AC6 `bash plugins/soleur/test/machinery-drain-floor.test.sh` green with the `-label:keep-open` row; `bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh` applies the kill-switch exclusion for `meta/machinery` (test row in that script's suite, or a shell assertion in the drain-floor suite).
-- [ ] AC7 `./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts test/server/inngest/cron-shared.test.ts` green: Guard-2 matrix, incl. the #8027-shaped fixture NOT closed, the `priority/p1-high` digest closed, neither `scheduled-legal-audit` nor `scheduled-campaign-calendar` ever queried, and the verify-side open-or-created guard.
-- [ ] AC8 `grep -c 'startswith("scheduled-")' apps/web-platform/server/inngest/functions/cron-daily-triage.ts` = 1.
-- [ ] AC9 `bash .claude/hooks/guardrails.test.sh` green from the worktree AND from `cd "$(mktemp -d)" && bash <abs-path>/guardrails.test.sh`; `MIN_ASSERTIONS` is written as a sum ≥ 106 + rows added.
-- [ ] AC10 FR7 rows in `guardrails.test.sh`: (a) a command whose heredoc body contains an apostrophe and whose flags carry `--label meta/machinery` yields no deny; (b) exit-1 with `--body-file /nonexistent` yields no deny; (c) exit-2 with `--body-file /nonexistent` still denies; (d) an unbalanced quote outside a heredoc denies with the tokenizer message.
-- [ ] AC11 `python3 scripts/lint-rule-bodies.py --check --base origin/main` passes; `.claude/rule-weakening-acks.txt` has one new line for `wg-defer-only-after-inline-triage` naming 8076; `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` exits 0.
-- [ ] AC12 `grep -c "Addendum 2026-09-11" knowledge-base/engineering/architecture/decisions/ADR-216-machinery-ledger-and-filing-time-lever.md` = 1 and the section names every cron in `RUN_REPORT_CRONS` and states the population key ("calls `resolveOutputAwareOk`").
-- [ ] AC13 `grep -c SOLEUR_CRON_FILING_DENY knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` ≥ 1.
-- [ ] AC14 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
-- [ ] AC15 `bash plugins/soleur/test/c4-count-parity.test.sh` green (no-C4-impact claim backed by the gate, not by reasoning).
+- [x] AC1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts` green, including the Guard-1 matrix rows and H2/H3.
+- [x] AC2 `./node_modules/.bin/vitest run test/server/inngest/cron-claude-eval-substrate.test.ts test/server/inngest/cron-run-report-labels-parity.test.ts` green: every `resolveOutputAwareOk(` call site has a `RUN_REPORT_CRONS` row with its `SENTRY_MONITOR_SLUG` (and vice-versa, legal-audit per D1), every row's `fn` has `gh issue create` in `CRON_BASH_ALLOWLISTS`, and `closeAfterDays === 3 × maxGapDays` for the `TASK_INVENTORY` rows.
+- [x] AC3 The written `cron-allow.txt` for `cron-ux-audit` carries no `run-report-label` line (delivery negative test).
+- [x] AC4 `parseClaudeResultLine` tests: two filing-shaped `permission_denials` + one non-filing → `filingDenials: 2`; the `SOLEUR_CRON_FILING_DENY` WARN is emitted once with `count: 2` and not at all at 0.
+- [x] AC5 `bash plugins/soleur/test/issue-flow-measure.test.sh` green: lines `1c.` and `1d.` printed from stubbed counts; line `1.` unchanged; label array ≡ `_cron-run-reports.ts` labels by grep; 1d query carries `-label:keep-open`.
+- [x] AC6 `bash plugins/soleur/test/machinery-drain-floor.test.sh` green with the `-label:keep-open` row; `bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh` applies the kill-switch exclusion for `meta/machinery` (test row in that script's suite, or a shell assertion in the drain-floor suite).
+- [x] AC7 `./node_modules/.bin/vitest run test/server/inngest/cron-stale-deferred-scope-outs.test.ts test/server/inngest/cron-shared.test.ts` green: Guard-2 matrix, incl. the #8027-shaped fixture NOT closed, the `priority/p1-high` digest closed, neither `scheduled-legal-audit` nor `scheduled-campaign-calendar` ever queried, and the verify-side open-or-created guard.
+- [x] AC8 `grep -c 'startswith("scheduled-")' apps/web-platform/server/inngest/functions/cron-daily-triage.ts` = 1.
+- [x] AC9 `bash .claude/hooks/guardrails.test.sh` green from the worktree AND from `cd "$(mktemp -d)" && bash <abs-path>/guardrails.test.sh`; `MIN_ASSERTIONS` is written as a sum ≥ 106 + rows added.
+- [x] AC10 FR7 rows in `guardrails.test.sh`: (a) a command whose heredoc body contains an apostrophe and whose flags carry `--label meta/machinery` yields no deny; (b) exit-1 with `--body-file /nonexistent` yields no deny; (c) exit-2 with `--body-file /nonexistent` still denies; (d) an unbalanced quote outside a heredoc denies with the tokenizer message.
+- [x] AC11 `python3 scripts/lint-rule-bodies.py --check --base origin/main` passes; `.claude/rule-weakening-acks.txt` has one new line for `wg-defer-only-after-inline-triage` naming 8076; `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` exits 0.
+- [x] AC12 `grep -c "Addendum 2026-09-11" knowledge-base/engineering/architecture/decisions/ADR-216-machinery-ledger-and-filing-time-lever.md` = 1 and the section names every cron in `RUN_REPORT_CRONS` and states the population key ("calls `resolveOutputAwareOk`").
+- [x] AC13 `grep -c SOLEUR_CRON_FILING_DENY knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` ≥ 1.
+- [x] AC14 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
+- [x] AC15 `bash plugins/soleur/test/c4-count-parity.test.sh` green (no-C4-impact claim backed by the gate, not by reasoning).
 - [ ] AC16 PR body carries `Closes #8076`; #8076 carries the follow-through directive and `follow-through` label (AC18).
 
 ### Post-merge (automated)
