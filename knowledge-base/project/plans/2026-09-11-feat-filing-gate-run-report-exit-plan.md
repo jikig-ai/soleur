@@ -512,9 +512,8 @@ logs:
   retention: "Better Stack archive per plan tier"
 
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY --limit 20"
-  expected_output: "zero rows on a healthy week; each row names fn, runId, runStartedAt, count, commands"
-  credentials_required: "Doppler prd_terraform BETTERSTACK_QUERY_* — the ClickHouse read endpoint has no unauthenticated substitute; the ingest token is write-only"
+  command: "grep -c SOLEUR_CRON_FILING_DENY apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  expected_output: "both files report >= 1 — the marker is emitted by the substrate and its runbook recipe exists; the live rows are read with `bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY` under Doppler prd_terraform (zero rows on a healthy week)"
 ```
 
 ## Guard Contract

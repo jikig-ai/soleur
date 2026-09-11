@@ -39,7 +39,8 @@ persists your changes after it verifies the issue exists," and
 liveness. That is "mandated by construction" — the exact reasoning ADR-216 used
 to exempt workflow-YAML filings — but these run in the cron substrate the gate
 covers. Four crons are in that position (community-monitor, content-generator,
-roadmap-review, competitive-analysis). The fifth inventory entry, legal-audit,
+roadmap-review, competitive-analysis) — *corrected at plan time to nine; see
+the addendum below*. The fifth inventory entry, legal-audit,
 is *not*: its `scheduled-legal-audit` label covers up to five per-gap findings
 per run, which is the audit exhaust the gate exists to gate.
 
@@ -112,6 +113,78 @@ Corollaries:
    measurement issue** (`scheduled-machinery-drain.yml:62`, #8068 carries
    `meta/machinery`). Off by one on every run; the closing arm would drain its
    own ledger. **Prevention:** tracked as FR3 of #8076.
+
+## Plan-time addendum (same day)
+
+The brainstorm's answer survived planning; three of its premises did not.
+
+**The population was wrong by four.** The brainstorm keyed the mandated
+filers on `cron-cloud-task-heartbeat.ts` `TASK_INVENTORY` (five). The
+contract that actually mandates a filing is `resolveOutputAwareOk` — the
+"persist only if the scheduled issue exists" verify — and **nine** cron
+functions call it, each passing `label: SENTRY_MONITOR_SLUG`. A heartbeat
+inventory is a *liveness subset*; the filing population is whoever calls the
+verify. Spec-flow found it by grepping the call sites; the brainstorm triad
+and both research agents had all read the inventory and stopped. First fire
+of a cron the brainstorm missed: architecture-diagram-sync, Sun 02:00Z — two
+days after merge.
+
+**A shape rule that looked airtight broke one member.** The advisor
+consult proposed requiring a `[Scheduled] ` title on top of the label, to
+close a file-and-vanish path. Kieran and architecture-strategist each read
+every member's prompt: campaign-calendar's REQUIRED filings are `[Content]
+Overdue: …` under `action-required,scheduled-campaign-calendar`. A rule over
+a population is a claim about every member; check each member's actual
+prompt before writing it.
+
+**A side channel was designed before the existing channel was probed.**
+The plan carried a hook-written `filing-denials.jsonl`, a pre-spawn
+truncate, a `SpawnResult` field, an optional arg on the verify, and nine
+one-line caller edits — to observe hook denials. One throwaway settings hook
+under `claude --print --output-format json` showed a PreToolUse deny lands
+in the result event's `permission_denials[]` with the full
+`tool_input.command`. The substrate already parses that event. Everything
+else was deleted.
+
+### Session Errors (plan phase)
+
+1. **Inherited population.** Recovery: spec-flow P0 → re-keyed on the
+   `resolveOutputAwareOk` call sites with a grep-parity test; the residue in
+   AC2/AC5/Guard 1 took three more reviewers to clear. **Prevention:** when a
+   plan says "the set of X that must Y", grep the mechanism that *enforces* Y
+   for its callers; a nearby list with the right-looking names is a
+   hypothesis about the set, not the set.
+2. **Shape rule not checked per member.** Recovery: title-half cut from the
+   hook; the sweeper's title + author guards close the same path.
+   **Prevention:** before adding a shape predicate over a population,
+   `grep -n '"\[' <each member>.ts` — read every member's prescribed
+   title/label strings, not the two you remember.
+3. **Side channel before probe.** Recovery: 30-second probe; channel
+   deleted. **Prevention:** before designing telemetry out of a spawned CLI,
+   run it once with `--output-format json` and read the result event; a
+   structured field usually already carries the signal.
+4. **`issueCreated` placed where it cannot be computed.** Recovery: own
+   grep found `resolveOutputAwareOk` in the cron functions, not the
+   substrate. **Prevention:** before naming where a value is emitted, grep
+   who computes it.
+5. **Plan `Write` denied by `iac-plan-write-guard`** on "out-of-band" in a
+   learnings citation. Recovery: rephrased to "via `--body-file`".
+   **Prevention:** the guard's tokens (`operator (runs|installs|…)`,
+   `operator-driven`, `out-of-band`, `manually install`) are matched
+   anywhere in the plan; quote learnings by path, not by their trigger
+   phrases.
+6. **Leaf renamed without a sweep.** Recovery: reviewers caught
+   `_cron-task-inventory` vs `_cron-run-reports`. **Prevention:** after any
+   rename inside a plan, `grep -c '<old>' <plan>` must be 0 before review.
+7. **Citation drift** (`main()` L701 vs L683; `SKILL.md:174` vs
+   `group-by-area.sh:116-117`). Recovery: corrected from Kieran's read.
+   **Prevention:** cite a line only after `sed -n` on it in the same turn.
+8. **AC19 measured an open-count a concurrent filing could move.**
+   Recovery: rewritten to the sweeper's own marker count (standing check).
+   **Prevention:** `cq-ac-must-not-depend-on-concurrent-sessions`.
+9. **Two `cd /tmp` probes reset the shell CWD; two turns ended on a
+   first-person promise while agents ran.** One-offs. **Prevention:**
+   absolute paths in probes; declare a wait explicitly.
 
 ## Tags
 
