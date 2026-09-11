@@ -77,6 +77,19 @@ describe("runRoutine — policy", () => {
     expect(r).toEqual({ ok: false, code: "engine_binding_failed", status: 503 });
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
+
+  it("creates an application run id when manual dispatch has no provider id", async () => {
+    const bindRun = vi.fn().mockResolvedValue({ runId: "engine-run-2" });
+    const r = await runRoutine({
+      fnId: "cron-daily-triage", actorClass: "human", workspaceId: "ws-1", bindRun,
+    });
+    expect(r.ok).toBe(true);
+    const boundId = bindRun.mock.calls[0][0].routineRunId;
+    expect(boundId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(mockInngestSend).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ engine_run_id: boundId }),
+    }));
+  });
 });
 
 describe("runRoutine — attribution (route-controlled keys spread last)", () => {

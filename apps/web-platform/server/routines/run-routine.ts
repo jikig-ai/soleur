@@ -17,6 +17,7 @@ import {
   EXPECTED_CRON_FUNCTIONS,
   manualTriggerEventFor,
 } from "@/server/inngest/cron-manifest";
+import { randomUUID } from "node:crypto";
 import { ROUTINE_METADATA } from "@/server/inngest/routine-metadata";
 import { sendInngestWithRetry } from "@/server/inngest/send-with-retry";
 
@@ -70,6 +71,7 @@ export async function runRoutine(
     routineRunId,
     bindRun,
   } = input;
+  let eventData = data;
 
   // Membership check excludes event-driven / one-shot functions.
   if (!EXPECTED.has(fnId)) {
@@ -91,20 +93,23 @@ export async function runRoutine(
         : "manual";
 
   if (bindRun) {
-    if (!workspaceId || !routineRunId && typeof data.run_id !== "string") {
+    if (!workspaceId) {
       return { ok: false, code: "engine_binding_failed", status: 503 };
     }
+    const boundRoutineRunId = routineRunId ??
+      (typeof data.run_id === "string" ? data.run_id : randomUUID());
     try {
       await bindRun({
         workspaceId,
         executionKind: "routine",
         routineId: fnId,
-        routineRunId: routineRunId ?? String(data.run_id),
+        routineRunId: boundRoutineRunId,
         createdBy: actorId ?? delegatingPrincipal ?? "system",
       });
     } catch {
       return { ok: false, code: "engine_binding_failed", status: 503 };
     }
+    eventData = { ...data, engine_run_id: boundRoutineRunId };
   }
 
   // The Inngest client is imported dynamically to defer its load-time
@@ -117,7 +122,7 @@ export async function runRoutine(
         // Route-controlled attribution keys spread LAST (audit-poison guard):
         // a caller's `data` cannot override actor_class / actor_id / trigger.
         data: {
-          ...data,
+          ...eventData,
           trigger,
           at: new Date().toISOString(),
           actor_class: actorClass,
