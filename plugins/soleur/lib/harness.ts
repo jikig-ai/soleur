@@ -361,10 +361,10 @@ export function routingInstructions(harness: Harness): string {
     case "grok":
       return [
         "**Harness: Grok Build**",
-        "- Skills: **slash commands** — `/brainstorm`, `/one-shot`, `/plan`, etc.",
+        "- Skills: Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
         "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
-        "- **Never improvise** — invoke the registered slash command or subagent.",
+        "- **Never improvise** — Read the registered SKILL.md or spawn the subagent; do not invent a nested Skill tool.",
         "",
         fidelity,
         "",
@@ -375,7 +375,7 @@ export function routingInstructions(harness: Harness): string {
       return [
         "**Harness: unknown** — default to Claude conventions.",
         "- Skills: Skill tool (`soleur:<skill>`). Agents: Task tool.",
-        "- If tools are missing, run `grok inspect` and `grok --trust` from repo root.",
+        "- If tools are missing, run `grok inspect` from repo root. Live CLI 1.0.29 has no `--trust` flag — do not invent one.",
         "",
         fidelity,
         "",

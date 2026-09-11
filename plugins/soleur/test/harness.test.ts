@@ -204,17 +204,21 @@ describe("routingInstructions", () => {
     expect(md).toContain("Never improvise");
   });
 
-  test("grok documents /go not /soleur:go", () => {
+  test("grok documents /go not /soleur:go and in-process SKILL.md Read", () => {
     const md = routingInstructions("grok");
     expect(md).toContain("/go");
     expect(md).toContain("**not** `/soleur:go`");
     expect(md).toContain("spawn_subagent");
     expect(md).toContain("Workflow fidelity");
+    expect(md).toMatch(/in this process/i);
+    expect(md).toContain("SKILL.md");
+    expect(md).not.toMatch(/do not read/i);
   });
 
-  test("unknown suggests grok inspect", () => {
+  test("unknown suggests grok inspect and does not invent grok --trust", () => {
     const md = routingInstructions("unknown");
     expect(md).toContain("grok inspect");
+    expect(md).not.toMatch(/grok --trust/);
   });
 });
 

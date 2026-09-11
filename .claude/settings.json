@@ -62,25 +62,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-merge-rebase.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -98,25 +80,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-merge-auto-close-scan.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-unpushed-commits-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -134,25 +98,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-operator-step-gate.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-soak-followthrough-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -170,25 +116,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-net-issue-flow-gate.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/follow-through-directive-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -206,25 +134,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/context-reviewed-gate.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cla-signed-author-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -242,25 +152,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/ship-runbook-ssh-gate.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prod-write-defer-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -278,25 +170,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/git-commit-secret-scan.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/brand-hex-commit-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -314,25 +188,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/doppler-secrets-delete-redirect.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/background-poll-prefer-monitor.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -350,25 +206,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pkill-self-match-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/plugins/soleur/hooks/browser-snapshot-credential-guard.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -404,15 +242,6 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/worktree-write-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
@@ -431,25 +260,7 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guardrails.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/security_reminder_hook.py"
-          }
-        ]
-      },
-      {
-        "matcher": "search_replace",
         "hooks": [
           {
             "type": "command",
@@ -494,15 +305,6 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/iac-plan-write-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Write|Edit",
         "hooks": [
           {
@@ -513,15 +315,6 @@
       },
       {
         "matcher": "write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/new-scheduled-cron-prefer-inngest.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "search_replace",
         "hooks": [
           {
             "type": "command",
@@ -575,25 +368,7 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-memory-write.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/no-memory-write.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -620,15 +395,6 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/kb-domain-allowlist-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -638,26 +404,7 @@
         ]
       },
       {
-        "matcher": "run_terminal_command",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/kb-domain-allowlist-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/grep-rewrite.sh",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -713,25 +460,7 @@
         ]
       },
       {
-        "matcher": "search_replace",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/docs-cli-verification.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/agent-token-tee.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "spawn_subagent",
         "hooks": [
           {
             "type": "command",
@@ -768,19 +497,6 @@
       },
       {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/rule-incident-marker-capture.sh"
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-dispatch-watch-gate.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "run_terminal_command",
         "hooks": [
           {
             "type": "command",

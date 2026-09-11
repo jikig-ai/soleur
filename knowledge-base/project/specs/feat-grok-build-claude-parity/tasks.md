@@ -56,6 +56,6 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 7: Testing
 
-- [ ] 7.1 Guard 1 mutations (including vacuous dispatch) encoded as tests
+- [x] 7.1 Guard 1 mutations (including vacuous dispatch) encoded as tests
 - [x] 7.2 `bash plugins/soleur/scripts/grok-fidelity-gate.sh`
 - [ ] 7.3 Claude golden-path case still green

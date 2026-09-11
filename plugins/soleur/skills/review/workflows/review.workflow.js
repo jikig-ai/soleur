@@ -405,9 +405,12 @@ async function verifyFinding(f, dim) {
 function resolveWorkflowModel(tier) {
   var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
   var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
   var map = grok
     ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
-    : { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
   var resolved = map[tier]
   if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
   return resolved

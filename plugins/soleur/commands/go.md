@@ -122,7 +122,7 @@ all of its phases. Do not invoke a nonexistent Skill tool or a Grok slash comman
 
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
-If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` + `grok --trust` (Grok) or `claude --plugin-dir ./plugins/soleur` (Claude).
+If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok) or `claude --plugin-dir ./plugins/soleur` (Claude). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
 
 Analyze the user input and classify intent using semantic assessment:
 

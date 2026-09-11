@@ -98,7 +98,24 @@ describe("harness-model-map (ADR-110)", () => {
     expect(resolveModelTier("inherit", "unknown")).toBe("inherit");
     expect(warnings).toEqual([]);
     expect(resolveModelTier("standard", "unknown")).toBe("inherit");
-    expect(warnings.some((w) => /unknown harness/i.test(w))).toBe(true);
+    expect(warnings.some((w) => /unmapped harness unknown/i.test(w))).toBe(true);
+  });
+
+  test("codex (and any harness not in TIER_MAPS) inherits instead of throwing", () => {
+    const warnings: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    expect(resolveModelTier("inherit", "codex")).toBe("inherit");
+    expect(warnings).toEqual([]);
+    expect(resolveModelTier("standard", "codex")).toBe("inherit");
+    expect(warnings.some((w) => /unmapped harness codex/i.test(w))).toBe(true);
+    expect(
+      resolveModelTier("cheap", detectHarness(env({ CODEX_THREAD_ID: "thread-1" }))),
+    ).toBe("inherit");
+    expect(() =>
+      resolveModelTier("standard", detectHarness(env({ CODEX_THREAD_ID: "t" }))),
+    ).not.toThrow();
   });
 
   test("reuses detectHarness() — GROK_SESSION is not a grok marker", () => {
@@ -155,6 +172,28 @@ describe("workflow inline resolver is a copy of TIER_MAPS (no import in workflow
     expect(fence).toContain(`advisor: '${TIER_MAPS.claude.advisor}'`);
     expect(fence).toContain(`cheap: '${TIER_MAPS.grok.cheap}'`);
     expect(fence).toContain(`standard: '${TIER_MAPS.grok.standard}'`);
+    expect(fence).toContain(`strong: '${TIER_MAPS.grok.strong}'`);
+    expect(fence).toContain(`advisor: '${TIER_MAPS.grok.advisor}'`);
+    const litRe =
+      /\{ cheap: '([^']+)', standard: '([^']+)', strong: '([^']+)', advisor: '([^']+)', inherit: '([^']+)' \}/g;
+    const lits = [...fence.matchAll(litRe)];
+    expect(lits.length).toBe(3);
+    const toMap = (m: RegExpMatchArray) => ({
+      cheap: m[1],
+      standard: m[2],
+      strong: m[3],
+      advisor: m[4],
+      inherit: m[5],
+    });
+    expect(toMap(lits[0])).toEqual({ ...TIER_MAPS.grok });
+    expect(toMap(lits[1])).toEqual({ ...TIER_MAPS.claude });
+    expect(toMap(lits[2])).toEqual({
+      cheap: "inherit",
+      standard: "inherit",
+      strong: "inherit",
+      advisor: "inherit",
+      inherit: "inherit",
+    });
     expect(fence).not.toMatch(/\bmodel\s*:/);
   });
 

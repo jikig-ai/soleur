@@ -16,7 +16,7 @@
  * test/harness-model-map.test.ts asserts those copies match this file.
  */
 
-import { detectHarness, type Harness } from "./harness";
+import { type Harness } from "./harness";
 
 export type { Harness };
 export type SemanticTier = "cheap" | "standard" | "strong" | "advisor" | "inherit";
@@ -48,8 +48,6 @@ export const TIER_MAPS = {
   },
 } as const;
 
-export { detectHarness };
-
 export function resolveModelTier(tier: SemanticTier, harness: Harness): string {
   if (!SEMANTIC_TIER_SET.has(tier)) {
     throw new Error(`unknown semantic tier: ${String(tier)}`);
@@ -57,9 +55,9 @@ export function resolveModelTier(tier: SemanticTier, harness: Harness): string {
   if (tier === "inherit") {
     return "inherit";
   }
-  if (harness === "unknown") {
+  if (harness === "unknown" || !(harness in TIER_MAPS)) {
     console.warn(
-      `resolveModelTier: unknown harness, passing inherit for tier ${tier}`,
+      `resolveModelTier: unmapped harness ${harness}, passing inherit for tier ${tier}`,
     );
     return "inherit";
   }
