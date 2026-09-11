@@ -44,10 +44,11 @@ those change the design rather than only the prose.
 | 6 | P1-5 refuses every pre-arm flag | Confirmed: `inngest-server-flip-guard.sh` emits `BLOCK: prod Postgres URI with cutover flag='${FLIP_FLAG:-unset}' not in {armed,flipping,flushed,done} — refusing inngest-server start (P1-5)` | HOLDS |
 | 7 | `scripts/cutover-inngest.sh` is not a baked carrier | Confirmed: `.github/workflows/cutover-inngest.yml` runs it from `${GITHUB_WORKSPACE}` after `actions/checkout` — no digest pin, no `user_data` | HOLDS |
 | 8 | The dark gate's G1-G3 standard includes "`boot_id` matching" | **FALSE.** G3 was rewritten to a **wall-clock** bound. Its own comment: *"THIS PREDICATE WAS A BOOT_ID COMPARISON AND IT WAS DEAD ON ARRIVAL … boot_id is CONSTANT across every row of one boot"*. Only two `boot_id` **presence** checks survive | CORRECTED — see D1 |
-| 9 | The flip-guard `BLOCK` marker carries the current `boot_id` | **FALSE.** `inngest-server-flip-guard.sh` logs under `readonly LOG_TAG` = `inngest-server-flip-guard` and its three `BLOCK:` lines carry no `boot_id` field. A `boot_id` join is not derivable from that stream | CORRECTED — see D2 |
+| 9 | The flip-guard `BLOCK` marker carries the current `boot_id` | **Message: FALSE — envelope: TRUE.** The three `BLOCK:` lines carry no `boot_id` field, but every journald row Vector ships carries systemd's `_BOOT_ID` envelope field, and it is the same kernel value the probe writes as `boot_id=` (measured 2026-09-11 on all three streams: probe `boot_id=402c0d5b-1cf3-…` ↔ `_BOOT_ID=402c0d5b1cf3…`, hyphens the only difference; 500/500 heartbeat rows and 229/229 `BLOCK:` rows on the current boot). A `boot_id` join IS derivable — from the envelope, with no arithmetic | CORRECTED twice — see D2; plan-review found the envelope field the first research pass missed |
 | 10 | `registry_fns=__UNREADABLE__` is evidence of darkness | **Partly false.** The emitter sets it unconditionally on the first arm: `if [ "$http_code" != "200" ]; then … registry_fns=__UNREADABLE__`. On the dark arm it is *entailed by* `http_code=000` and carries no independent information | CORRECTED — see D3 |
 | 11 | (unbriefed) the probe row cannot say *why* the host is dark | **FALSE.** `cutover_flag` is field 10 of the same row. The flip-guard's refusal cause is readable from the single row the gate already grades | CORRECTED — see D2 |
 | 12 | (unbriefed) a Better Stack read from `op=execute` needs a new secret | **FALSE.** `scripts/cutover-inngest.sh` already reads Better Stack via `_flip_query_rows`, and the `op=execute` job already carries `DOPPLER_TOKEN` (prd_terraform, read-only) | HOLDS the design — no workflow secret change |
+| 13 | (surfaced by plan-review) the flip FSM's 30 s timer emits a heartbeat the gate can read | **TRUE, and measured.** `inngest-cutover-flip.sh`'s terminal arms call `emit_state 0 "" "noop-aborted" aborted` (and `noop-rolled-back`, `noop-done`, `noop-unset`) on every tick; the timer is never disabled (P0-1). Live: **500 rows in 24 h** on `SYSLOG_IDENTIFIER=inngest-cutover-flip`, ~1–2/min, every one `flag=aborted reason=noop-aborted` with `_BOOT_ID` on the current boot; Vector has already parsed the JSON, so `.message.flag` is a field, not a string. `scripts/cutover-inngest.sh` already reads this stream (`_flip_query_rows`, `_flip_liveness_count`) | DESIGN CHANGE — this is the freshness source (D2b'), replacing the `BLOCK:` read |
 
 Two corrections to the research fan-out's own output, recorded so they do not propagate:
 `scripts/lint-guard-contract.py` **does** exist (13,906 bytes, executable) and
@@ -80,7 +81,8 @@ review rules an addendum insufficient.)
 | A new Better Stack transport / new workflow secret | P1 | `_flip_query_rows` in the same script (`doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh …`), and `DOPPLER_TOKEN` already in the `op=execute` job env. **CUT** |
 | `scripts/inngest-dedicated-host-classify.sh` as the reader | P3, P5 | Wrong shape by its own design: `tests/scripts/lib/inngest-host-dark-gate.sh` records that it *"collapses `silent`, `unreadable` and a pre-schema row into one `probe-unavailable` verdict … the WRONG shape here"*. **CUT** |
 | Calling `inngest_host_dark_gate` itself from 2.0 | P1-P3 | It grades 20 predicates for an irreversible destroy, four of which (G17-G20) are recut-specific dispatch-time re-reads (`--expected-volume-id`, `--live-attachment-id`, `--followthrough-rc`) with no meaning at 2.0. **CUT the call, KEEP the helpers.** |
-| `boot_id` equality between probe row and flip-guard row | corroboration | Not derivable — the guard emits no `boot_id`. Substituted by the boot-window join in D2. **CUT** |
+| `boot_id` equality via a `dt − uptime_s` boot-window join | freshness / same-boot | The journald envelope `_BOOT_ID` is on every shipped row (premise 9, corrected). Equality on that field replaces the arithmetic join; the join is **CUT**, the equality is kept |
+| A second Better Stack read of flip-guard `BLOCK:` rows as the freshness source | freshness | Unsatisfiable after any `stop_server` (an explicit stop does not re-fire `Restart=on-failure`; the 5.4-day stopped-host record proves it), and coupled to ~55k noise rows/day. The FSM heartbeat (premise 13) buys the same property from the component that owns the flag, via the reader the script already has. **CUT — replaced by D2(b′)** |
 | `registry_fns=__UNREADABLE__` as an independent darkness conjunct | P3 | Entailed by `http_code != 200` at the emitter. Demoted to a coherence predicate. **CUT as evidence, KEPT as coherence.** |
 | A new ADR ordinal | recorded decision | ADR-100's dated-addendum convention. **CUT** |
 | A new test-suite file | P5 | `apps/web-platform/infra/cutover-inngest-workflow.test.sh` already extracts pure decision functions with `awk '/^diag_boot_decide\(\) \{$/,/^\}$/'`, sources them, asserts token mappings, and floors dispatch (`diag_boot_decide scenarios actually dispatched (>=7)`). **CUT** |
@@ -145,11 +147,11 @@ performance saving. No unquantified saving is load-bearing anywhere in this plan
 | Claim in the issue / brief | Codebase reality | Plan response |
 |---|---|---|
 | The dark gate's G1-G3 standard is "row present, newest, within a max age, `boot_id` matching" | G3 is a **wall-clock** bound; its own comment records the `boot_id` form as *"DEAD ON ARRIVAL … boot_id is CONSTANT across every row of one boot"*. Only two `boot_id` **presence** checks survive | **D1.** The new arm reuses G1-G4 as they are TODAY — count, newest-is-graded, tie-free, wall-clock age, exact `probe_schema=8`, `boot_id` presence. It does NOT reintroduce a `boot_id` equality that the sibling gate already deleted as vacuous |
-| Corroborate the probe row with the flip-guard `BLOCK` marker "on the CURRENT `boot_id`" | `inngest-server-flip-guard.sh` emits three `BLOCK:` lines under `readonly LOG_TAG="inngest-server-flip-guard"`, none of which carries `boot_id`. The two streams share only `host`, `host_name` and `dt` | **D2.** Two-part substitute. (a) **Row-internal, mandatory:** the probe row's own `cutover_flag` field is read and required to be outside `{armed,flipping,flushed,done}` — the P1-5 refusal cause, on the same row, same boot, no join. (b) **Cross-stream, conditional:** a `BLOCK:` row from `SYSLOG_IDENTIFIER == "inngest-server-flip-guard"` with `dt` at or after `row.dt − uptime_s` (the current boot's start, since `uptime_s` is `cut -d. -f1 /proc/uptime`). (b) ships only if Phase 0's live probe proves such a row exists — see D5 |
-| `probe_schema=8` carries the darkness evidence as `http_code=000`, `server_active` not active, `registry_fns=__UNREADABLE__` | True that all three are emitted, but `registry_fns=__UNREADABLE__` is set by the emitter's FIRST arm — `if [ "$http_code" != "200" ]; then … registry_fns=__UNREADABLE__` — so on the dark arm it is entailed by `http_code`, not independent of it | **D3.** `registry_fns=__UNREADABLE__` is kept, but as a **coherence** predicate in the shape of the existing G14 (`redis_keys==0` implies `redis_key_patterns==__NONE__`): a row asserting `http_code` non-200 while reporting a numeric count contradicts its own emitter and is refused as `row_incoherent`. The independent conjuncts are `http_code`, `server_active`, `host_role` and `cutover_flag` |
+| Corroborate the probe row with the flip-guard `BLOCK` marker "on the CURRENT `boot_id`" | The `BLOCK:` message has no `boot_id`, but the journald **envelope** `_BOOT_ID` is on every row of every stream (measured). And the flip FSM emits a parsed JSON heartbeat every ~30 s carrying `flag`, `reason`, `guard`, on a timer that is never disabled — 500 rows/24 h live | **D2.** (a) **Row-internal, primary:** the probe row's own `cutover_flag` is read as a POSITIVE allowlist — `∈ {aborted, rolled-back}` continues, `∈ {armed, flipping, flushed, done}` refuses `flag_armed`, anything else (`unknown`, `rollback`, empty) refuses `flag_unreadable`. (b′) **Freshness bridge, required:** the newest `inngest-cutover-flip` heartbeat for this host whose `_BOOT_ID` equals the probe row's `boot_id` (hyphens stripped) must be within `FLIP_LIVENESS_SINCE` (15 m) and carry `.message.flag ∈ {aborted, rolled-back}`. It closes the ≤90-min snapshot gap to ~1 min from the component that owns the flag, survives `stop_server` (the timer runs on every flag), and is read by `_flip_query_rows`, which already exists. The `BLOCK:` read, the `dt − uptime_s` join and `guard_unattested` are gone |
+| `probe_schema=8` carries the darkness evidence as `http_code=000`, `server_active` not active, `registry_fns=__UNREADABLE__` | All three are emitted, but `registry_fns=__UNREADABLE__` is set by the emitter's FIRST arm whenever `http_code != 200`, so on the dark arm it is entailed, not independent — and a NUMERIC `registry_fns` on a non-200 row is a state the emitter cannot produce | **D3.** `registry_fns == __UNREADABLE__` is a one-line coherence check (the sibling's G14 shape) refusing `unreadable` on contradiction. There is no `registry_populated` and no `row_incoherent` token: P2 (refuse a reachable host carrying functions) is bought entirely by the untouched HTTP-200 arm. The independent conjuncts are `http_code`, `server_active`, `host_role`, `cutover_flag` |
 | The 2.0 remediation text presumes a dark host that is RUNNING but unarmed | Confirmed — 2.0's `::error::` still says *"(2) stop the dark inngest-server so nothing re-syncs functions"*, which the P1-5 guard has made impossible | **D4.** The remediation text is rewritten in the same edit. Leaving prose that instructs stopping a process that cannot start is the same defect one layer up |
-| (unstated) the flip-guard `BLOCK` marker is reliably present | Every `logger` call in the guard is `2>/dev/null || true`, and it fires from `ExecStartPre`, so it is emitted only when systemd actually attempts a start. **Absence proves nothing** | **D5.** The corroborator's SATISFIABILITY is measured before it is shipped. Phase 0 runs one read against the live host's current boot; if no `BLOCK:` row is found in that window, conjunct (b) is dropped and the plan ships the row-internal conjunction alone. Shipping an unmeasured conjunct is precisely the #8054 defect recurring one layer over |
-| `registry_fns` numeric > 0 must REFUSE | Confirmed and load-bearing, but note `registry_fns` is `n/a` on a **web-host** row, so the host conjunction must run first or the co-located web host grades as dark | **D6.** The `_IHDG_SELECT` host conjunction (`$d.host == $h and $d.host_name == $hn`) runs before any field read, and a separate `host_role == dedicated` predicate is asserted as belt-and-braces (`wrong_role`) |
+| (unstated) the flip-guard `BLOCK` marker is reliably present | It is present ONLY while systemd keeps attempting a start. After `op=rollback` or an FSM-aborted arm the FSM calls `stop_server`; an explicit stop does not re-fire `Restart=on-failure`, so no `BLOCK:` rows are emitted at all — the health workflow measured 5.4 days of exactly that. Today's loop exists only because the host was REPLACED with the flag already `aborted` | **D5.** Plan-review (spec-flow P0, architecture P1, CTO P1, DHH P0, simplicity) converged: a predicate that holds only on a freshly-replaced host and fails on every routine retry is the #8054 defect one layer over. The `BLOCK:` read is deleted; the heartbeat (D2b′) is the freshness source, and it was measured present on THIS boot before being written into the design |
+| `registry_fns` numeric > 0 must REFUSE | On the real emitter a NUMERIC `registry_fns` cannot appear on a non-200 row (it is set to `__UNREADABLE__` on that arm), so on the dark arm it is a contradiction, not a population reading. `registry_fns` is `n/a` on a **web-host** row | **D6.** P2 (refuse a reachable host carrying functions) is bought entirely by the untouched HTTP-200 arm. On the dark arm E12 refuses any non-`__UNREADABLE__` value as `unreadable`. The `_IHDG_SELECT` host conjunction runs before any field read and E8 asserts `host_role == dedicated` (`wrong_host`) so the web host never reaches E12 |
 
 ## Hypotheses
 
@@ -194,7 +196,7 @@ removes that outer layer and leans on the inner ones; the duplicate, if it happe
 user's inbox before any dashboard shows it.
 
 **If this leaks, the user's workflow is exposed via:** the Better Stack warehouse. The new arm ships
-one additional read of rows the host already emits; it must not begin echoing row CONTENT into CI
+two additional reads of rows the host already emits (the probe stream and the flip FSM heartbeat); it must not begin echoing row CONTENT into CI
 logs. The existing readers in this script hold a stated purity contract — *"Count rows, never echo
 one: the standing purity contract of every Better Stack reader here"* — and the new reader adopts
 it, echoing counts and single extracted field values only, never a whole row and never a GQL body.
@@ -217,6 +219,15 @@ Review`; `user-impact-reviewer` is invoked at review time per
   guards (nothing to double-fire), so the arm stays byte-for-byte and gains only a `::warning::`
   naming the sequencing question (Phase 4.2). Whether that arm should REFUSE is a separate decision
   with its own blast radius; it is filed as **#8072** rather than folded into a gate widening.
+- **The sibling recut gate's G8 (`server_active == "inactive"`) is not changed here.** It refuses
+  today's live host (`activating`) as `host_serving` — the same class as this plan, one gate over —
+  but it guards an irreversible destroy and gets its own issue and its own mutation row, not a
+  ride-along edit under a P0 pre-flight fix. Tracked as **#8078**; the divergence from E10 is recorded in the lib header.
+- **`op=registry-probe` has the identical defect and is not changed here.** Its `registry-probe)`
+  arm hits the same hook and `exit 1`s on non-200, so it is unrunnable pre-arm for the same reason.
+  It is a standalone diagnostic, not on the cutover's critical path; tracked as **#8079**.
+- **`scheduled-inngest-health.yml`'s auto-restart is not suppressed here** (R7). It is the next
+  hazard in the flow this plan unblocks, and it is out of this diff; tracked as **#8077**.
 - **`INNGEST_BASE_URL` stays `http://host.docker.internal:8288`.** The co-located scheduler keeps
   serving production. Nothing here repoints traffic.
 - **No outage is started and the one authorized `FLUSHALL` is not spent.** This plan changes a
@@ -233,19 +244,20 @@ Review`; `user-impact-reviewer` is invoked at review time per
 
 | File | Change |
 |---|---|
-| `tests/scripts/lib/inngest-host-dark-gate.sh` | Add ONE new public entry point, `inngest_execute_registry_gate`, beside `inngest_host_dark_gate`. It reuses `_IHDG_SELECT`, `_ihdg_rows`, `_ihdg_newest_dt`, `_ihdg_row_count`, `_ihdg_tied_newest` and `_ihdg_field` **verbatim** — no second selector. Adds `_ihdg_guard_block_count` (the flip-guard stream reader, field-isolated on `SYSLOG_IDENTIFIER`) and `_ierg_verdict` (rc 0 only on the literal `dark-empty`) |
-| `tests/scripts/test-inngest-host-dark-gate.sh` | Extend `bs_line` to take a `SYSLOG_IDENTIFIER` (today it hardcodes `"inngest-server-probe"`), add the must-REFUSE battery below, add `registry_fns` to the B12 consumed-field list, and RAISE both floors — `_PRED_FLOOR=22` and `_FLOOR=124` — to the new measured values |
-| `scripts/cutover-inngest.sh` | 2.0 gains the second arm: `_probe_query_rows` + `_guard_block_query_rows` readers mirroring `_flip_query_rows`, a source of the gate lib, the gate call, and a `case` over the verdict token. The existing 200/`registry_empty` logic is byte-for-byte unchanged. The non-empty remediation text is corrected (D4) |
-| `apps/web-platform/infra/cutover-inngest-workflow.test.sh` | Add the wiring + dispatch assertions: 2.0 routes through exactly one gate call, every verdict token has an arm, the unrecognised-token arm exits 1, and the reader passes host isolation post-decode rather than via `--grep` |
+| `tests/scripts/lib/inngest-host-dark-gate.sh` | Extract `_ihdg_graded_row` (G1–G7 / E1–E7, currently ~110 lines inlined in `inngest_host_dark_gate`) and have both gates call it; fold `_ihdg_row_count`'s inline selector copy onto `"$_IHDG_SELECT"`; add `inngest_execute_registry_gate` (E8–E13) reusing `_ihdg_field` / `_ihdg_verdict` **verbatim** — no second verdict function, no second selector; header lists both consumers, copies the E-table, records the G8/E10 divergence |
+| `tests/scripts/test-inngest-host-dark-gate.sh` | Extend `bs_line` (tag + `_BOOT_ID` args, defaults preserve every existing call) and add `hb_line`; add the `[ERG E1]`…`[ERG E13]` + `[ERG H5]` cases; route every matrix row through `mutate()` with the address-range scoping rule; `_FLOOR` → `-ne` with the `STALE FLOOR` message; raise `_FLOOR` and `_PRED_FLOOR` (measured−1) to the new measured values; add `cutover_flag`, `uptime_s`, `registry_fns` to both B12 consumed-field loops; the `set -euo pipefail` call-shape case; helper-level fixture tests |
+| `scripts/cutover-inngest.sh` | Generalise `_flip_query_rows` → `_bs_query_rows <since> <grep> <limit>` (three existing call sites updated, behaviour unchanged); 2.0 gains the dark arm with the `\|\| ERG_RC=$?` call shape and the guarded `source`; the `case` over 11 tokens; D4 remediation text replaced; the 2.2 STILL RUNNING sentence (4.5); the reachable-arm `::warning::` (4.6). The HTTP-200 decision logic is unchanged (AC7) |
+| `apps/web-platform/infra/cutover-inngest-workflow.test.sh` | Wiring assertions: one guarded gate call; every token has a `case` arm; `*)` exits 1; two `_bs_query_rows` call sites with one distinct `--grep` each; guarded `source`; added-annotation purity; **E11 set-equality against the P1-5 `case` derived from `inngest-server-flip-guard.sh`**; H6 (reachable arm reachable, not routed through the gate) |
 | `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` | New dated addendum (see `## Architecture Decision`) |
-| `knowledge-base/engineering/architecture/diagrams/model.c4` | ONE edge-description edit on `github -> betterstack`: it currently names `op=verify` as the sole SAFETY-CRITICAL cutover read of the Logs warehouse; this plan adds `op=execute` 2.0 as a second, so the sentence is falsified as written (see `## Architecture Decision`) |
+| `knowledge-base/engineering/architecture/diagrams/model.c4` | TWO edge-description edits: `github -> betterstack` (`op=execute` 2.0 beside `op=verify`) and `inngest -> betterstack` (the `inngest-cutover-flip` heartbeat is a safety-critical input to 2.0) |
 
-Phase 5's wiring suite also asserts that the two new readers pass exactly one `--grep` term each —
-the property Phase 0.1 measured the combined form violating.
-
-`.github/workflows/cutover-inngest.yml` is deliberately **absent** from this list: the `op=execute`
-job already carries `DOPPLER_TOKEN` (prd_terraform, read-only), which is the only credential
-`betterstack-query.sh` needs, and `scripts/cutover-inngest.sh` is not a baked carrier.
+`.github/workflows/cutover-inngest.yml` is deliberately **absent**: the `op=execute` job already
+carries `DOPPLER_TOKEN` (prd_terraform, read-only), which is the only credential
+`betterstack-query.sh` needs. `DOPPLER_TOKEN_INNGEST_ARM` stays environment-gated to
+arm/rollback/resume — 2.0 does NOT read the flag synchronously from Doppler; the heartbeat is how it
+gets freshness without that token. `apps/web-platform/infra/inngest-bootstrap.sh`,
+`inngest-server-flip-guard.sh` and `inngest-cutover-flip.sh` are absent because they are baked: no
+image bump, no host replace.
 
 ## Files to Create
 
@@ -262,197 +274,202 @@ searched against every issue body with `jq --arg`. Zero matches.
 ### Phase 0 — Measure before designing anything that depends on a measurement
 
 Phase 0 exists because #8054 IS the cost of skipping it: a predicate was written against a world
-nobody re-measured. Nothing in Phase 1 may proceed on an unmeasured premise.
+nobody re-measured. Every measurement below was taken at plan time (2026-09-11, tree `0d97ede5c`)
+and is re-run by /work as a freshness check; a re-run that disagrees is a finding to stop on, never
+a licence to quietly drop a predicate.
 
-0.1 **Satisfiability of the corroborator (D5) — the fork that decides the design.** TWO reads, from
-the worktree, against the live host's current boot — one per stream:
+0.1 **Two streams, two reads — never one.** From the worktree:
 
 ```
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
   --since 24h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
-  --since 24h --grep inngest-server-flip-guard --limit 500
+  --since 15m --grep inngest-cutover-flip --limit 200
 ```
 
-**They MUST be separate reads, and this was measured, not reasoned.** An earlier draft of this step
-OR-combined both `--grep` terms into one read. Run at plan time (2026-09-11T10:56Z) that single read
-returned exactly 500 rows: 271 under `SYSLOG_IDENTIFIER=doppler` (the guard's `doppler run` wrapper
-noise) + 229 under `inngest-server-flip-guard` — and **zero** probe rows. The P1-5 refusal is a
-`Restart=` loop firing every few seconds, so its two streams fill a 500-row window in roughly an
-hour and the hourly probe row is starved out of the limit every time. A combined read therefore
-grades `silent` against a host that is emitting perfectly, which is the #7674-class false reading
-this whole plan exists to avoid. Host isolation still happens after decoding, never in `--grep`.
-From the two results establish:
+An OR-combined read of two streams was measured returning 500 rows and **zero** probe rows: the
+dedicated host's `doppler run` wrapper noise and the P1-5 refuse loop fill a 500-row window in ~13
+minutes and starve the hourly probe row out of the limit. Host isolation happens after decoding,
+never in `--grep`.
 
-- the newest probe row for `host=soleur-inngest host_name=soleur-inngest-prd`, and its
-  `boot_id`, `uptime_s`, `probe_schema`, `http_code`, `server_active`, `cutover_flag`,
-  `host_role`, `registry_fns`;
-- whether at least one row with `SYSLOG_IDENTIFIER == "inngest-server-flip-guard"` and a message
-  beginning `BLOCK: ` has `dt >= (probe row dt − uptime_s)`.
+**Measured (probe stream):** rc 0, 25 dedicated-host rows in 24 h. Newest (dt `2026-09-11 10:00:55`):
+`boot_id=402c0d5b-1cf3-495a-92e1-cf137732156f uptime_s=46908 probe_schema=8 http_code=000
+server_active=activating cutover_flag=aborted host_role=dedicated registry_fns=__UNREADABLE__
+redis_keys=16`; envelope `_BOOT_ID=402c0d5b1cf3495a92e1cf137732156f`. The previous boot
+`906c015b…` is also in the window — the real "row from a previous boot" fixture.
 
-**Fork.** If such a `BLOCK:` row exists → conjunct D2(b) ships as a required predicate. If it does
-NOT → D2(b) is **dropped** and the plan ships the row-internal conjunction alone; record the
-measurement and the drop in the plan and in the ADR addendum. Do not ship a predicate whose
-satisfiability was never observed.
+**Measured (heartbeat stream):** 500 rows in 24 h (the limit), ~1–2/min, span 06:55→11:23; every
+row `SYSLOG_IDENTIFIER=inngest-cutover-flip`, `_BOOT_ID=402c0d5b…`, and Vector has already parsed
+the JSON: `.message = {"flag":"aborted","reason":"noop-aborted","guard":"7761","exit_code":0,
+"start_ts":…}`. The heartbeat is read with `.message.flag`, not a string parse.
 
-**Fork RESOLVED at plan time (2026-09-11T10:56Z) — D2(b) SHIPS as required.** Measured against the
-live host with the two separate reads above:
+**Two consequences the design carries:** (i) `server_active` reads `activating` — the refuse loop
+never settles to `inactive` — so the dark conjunct is `server_active != active`; (ii) the join
+between streams is `_BOOT_ID` equality (hyphens stripped from the probe's `boot_id`), not clock
+arithmetic.
 
-| Read | Result |
-|---|---|
-| Probe stream | rc 0, 49 rows, **25** dedicated-host rows in 24h. Newest (dt `2026-09-11 10:00:55`): `boot_id=402c0d5b-1cf3-495a-92e1-cf137732156f uptime_s=46908 probe_schema=8 http_code=000 server_active=activating cutover_flag=aborted host_role=dedicated registry_fns=__UNREADABLE__ redis_keys=16` |
-| Guard stream | **229** `BLOCK: ` rows under `SYSLOG_IDENTIFIER=inngest-server-flip-guard` for `host=soleur-inngest` in a 500-row window; oldest in window `2026-09-11 10:43:45`, newest `2026-09-11 10:56:21` |
-| Join | boot start = `10:00:55 − 46908 s` = `2026-09-10 20:59:07`; every `BLOCK:` row in the window is ≥ that. **Satisfied.** |
+0.2 **The live row satisfies the intended conjunction.** Measured: every field agrees (0.1).
 
-Two consequences the design must carry: (i) `server_active` reads `activating` — the `Restart=` loop
-never settles to `inactive` — so the dark conjunct is `server_active != active`, never
-`server_active == inactive` (mutation #2 and must-PASS row H5 already encode this); (ii) at ~229
-`BLOCK:` rows per 500-row window, a `--limit 500` guard read spans roughly the most recent hour,
-which is sufficient for "≥ 1 row at or after boot start" but means D2(b) **depends on the refuse
-loop still running** — see `## Dependencies & Risks`, R1.
+0.3 **Baselines.** `tests/scripts/test-inngest-host-dark-gate.sh`: `_PRED_FLOOR=22` (23 covered — the
+file keeps one of slack by its own comment), `_FLOOR=124` (124 ran — exact), `124 passed, 0 failed`.
+`apps/web-platform/infra/cutover-inngest-workflow.test.sh`: `497 passed, 0 failed`, floor 497.
 
-/work re-runs 0.1 as a freshness check (the state can change under a long pipeline), but the fork
-is closed: a re-run that finds NO `BLOCK:` row is a **new finding to stop on**, not a licence to
-silently drop D2(b).
+0.4 **Two premises the first research pass got wrong, now in the record.** `_ihdg_row_count`
+carries an inline copy of the selector (it does NOT embed `_IHDG_SELECT`), and the gate body's
+`wrong_host_rows` jq is a deliberate inverse — so P4 is false on the current tree until Phase 2
+folds the copy. And `betterstack-query.sh` exit 3 = credentials absent, 2 = query/archive failure;
+`doppler run` itself exits 1 on a dead token — three rcs, three remedies.
 
-0.2 **Confirm the live row already satisfies the intended dark conjunction.** Against
-`boot_id=402c0d5b`, `probe_schema=8`, `cutover_flag=aborted`, `INNGEST_DIAGNOSTIC_BOOT=0`: the row
-must read `http_code=000`, `server_active` not `active`, `host_role=dedicated`,
-`registry_fns=__UNREADABLE__`. If any field disagrees, the design premise is wrong and Phase 1 stops.
+### Phase 1 — Write the failing battery FIRST, keyed on the predicates
 
-**Measured at plan time: every field agrees** (the 0.1 probe-stream row above). `server_active` is
-`activating`, not `inactive`, which the conjunction admits by design.
+`cq-write-failing-tests-before`. The mutation matrix in `## Guard Contract` is derived from the
+DESIGN, before the code. Land the battery RED.
 
-0.3 **Confirm the credential path.** `betterstack-query.sh` exits 3 when
-`BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` are not injected, and that 3 must never be read as
-"nothing found". Confirm the `op=execute` job's `DOPPLER_TOKEN` resolves `prd_terraform` and that
-the new reader distinguishes rc 3 from rc 0-with-zero-rows.
+1.1 Extend `bs_line` to accept a `SYSLOG_IDENTIFIER` argument (default `inngest-server-probe`, every
+existing call site unchanged) and to accept an envelope `_BOOT_ID`; add `hb_line` building a
+heartbeat row whose `.message` is a parsed object with `flag`/`reason`.
 
-0.4 **Baseline the floors.** Record today's values so the raise is derived, not guessed:
-`grep -n '_PRED_FLOOR=\|_FLOOR=' tests/scripts/test-inngest-host-dark-gate.sh` and the green
-assertion count from `bash tests/scripts/test-inngest-host-dark-gate.sh`.
+1.2 **Reuse `expect` and `predicate` unchanged.** The pass token is `dark` — the same literal the
+sibling gate emits and `expect` already maps to rc 0 — so no `expect_erg`/`predicate_erg`/
+`_ierg_verdict` exists. Case names carry the predicate id **namespaced to the gate**: `[ERG E1]` …
+`[ERG E13]`, `[ERG H5]`. The bare `[M1]`…`[M7]`, `H2`, `H3` are already taken by the sibling's own
+matrix in this file (measured: 9 of 25 un-namespaced ids would have matched before a single new
+case existed).
 
-**Measured at plan time (2026-09-11, tree `0d97ede5c`):** `_PRED_FLOOR=22`, `_FLOOR=124`; the suite
-prints `drop-one floor: 23 distinct predicates covered across 23 cases (floor 22)`,
-`anti-vacuity floor: 124 assertions ran (floor 124)`, `inngest-host-dark-gate: 124 passed, 0 failed`.
-The anti-vacuity floor is EXACT (124 == 124), which is the property Phase 1.4 must preserve: the
-raise lands on the new measured count, never on `>=` slack.
+1.3 **Route every mutation row through the existing `mutate()` harness (section 4 of the suite),
+not through case names.** `mutate()` patches a pristine copy with a single-line `sed`, refuses
+no-op and multi-line patches, runs the unmutated control, and asserts the verdict flips — it is
+the machine that makes a matrix real. Two scoping rules, and they are the shared-helper contract:
+per-consumer mutations are **address-range scoped** to their function
+(`/^inngest_execute_registry_gate() {$/,/^}$/ s|…|…|`, likewise for `inngest_host_dark_gate`),
+because predicate lines textually shared by both entry points would otherwise match twice and red
+the sibling's G4/G7/G9 rows with "changed 2 lines"; shared-helper mutations (the `_ihdg_*` rows)
+are **unscoped** and each is asserted to redden BOTH consumers — a helper mutation that reddens
+only one suite is the copy-detector, made mechanical.
 
-0.5 **Baseline the sibling suite.** Record the current pass count of
-`bash apps/web-platform/infra/cutover-inngest-workflow.test.sh`.
+1.4 One case runs a refusing input under `bash -c 'set -euo pipefail; source …; …'` and asserts
+token + rc 1 — the lib has never been called under `errexit` and the production caller is.
 
-**Measured at plan time:** `PASS: anti-deletion floor (497 >= 497 assertions dispatched)`,
-`=== Results: 497 passed, 0 failed ===`. Phase 5's additions raise that floor too.
+### Phase 2 — `inngest_execute_registry_gate`, and the shared prelude it makes visible
 
-### Phase 1 — Write the mutation matrix and the failing battery FIRST
+2.1 **Extract `_ihdg_graded_row`.** G1–G7 of the sibling — query-rc, rows-file, population-then-
+silence, newest/tie-free, wall-clock age, exact schema, `boot_id` presence — are ~110 lines inlined
+in `inngest_host_dark_gate`'s body, not in any helper. E1–E7 are that exact sequence. Extract it
+ONCE as `_ihdg_graded_row` (returns the graded message + row age on stdout, or a refusal token) and
+have BOTH gates call it. Behaviour-preserving for the sibling: its battery stays green at 124 and
+its G-row mutations still redden. Fold `_ihdg_row_count`'s inline selector copy onto
+`"$_IHDG_SELECT"` in the same edit.
 
-`cq-write-failing-tests-before`. The matrix in `## Guard Contract` is derived from the DESIGN in
-this document, not from code that does not yet exist. Land the battery RED before the gate.
+2.2 Add `inngest_execute_registry_gate` beside `inngest_host_dark_gate`. Inputs: `--rows-file`,
+`--query-rc`, `--hb-file`, `--hb-rc`, `--now-epoch`, `--max-row-age`, `--hb-max-age` (default the
+script's `FLIP_LIVENESS_SINCE`, 900 s), `--host`, `--host-name`, `--expected-schema`. Echoes exactly
+one token via `_ihdg_verdict` — rc 0 only on the literal `dark`.
 
-1.1 Extend `bs_line` to accept a `SYSLOG_IDENTIFIER` argument, defaulting to
-`inngest-server-probe` so every existing call site is unchanged, and add a `guard_line` helper that
-builds a flip-guard `BLOCK:` row.
+2.3 Predicates E1–E13 in the order the Guard Contract lists. E8–E12 are the gate-specific
+conjunction; E13 is the heartbeat freshness bridge: decode `--hb-file`, require rc 0 and
+bytes-vs-decodes coherence (raw lines ≥ 1 ∧ decoded == 0 → `fsm_unreadable`), select
+`SYSLOG_IDENTIFIER == inngest-cutover-flip` ∧ same host pair ∧ `_BOOT_ID == strip_hyphens(boot_id)`,
+take the newest, require age ≤ `--hb-max-age` (else `fsm_silent`), require
+`.message.flag ∈ {aborted, rolled-back}` (else `flag_armed` / `flag_unreadable` by the same
+partition as E11).
 
-1.2 Add `expect_erg` / `predicate_erg` mirroring the existing `expect` / `predicate` — assert the
-**token** and the rc together, with rc 0 expected only for `dark-empty` — plus their wrapper
-self-tests (the existing suite self-tests all four of its helpers and rolls the counters back;
-neutering one previously left it at "112 passed, 0 failed").
+2.4 **E11 is a POSITIVE allowlist**, mirroring the sibling's G19 and its own G20 lesson ("THE EMPTY
+STRING IS NOT AN ACCEPTING VALUE, and it was"): `cutover_flag ∈ {aborted, rolled-back}` → continue;
+`∈ {armed, flipping, flushed, done}` → `flag_armed`; anything else — `unknown` (the emitter's
+read-failed sentinel), `rollback` (in flight), empty, absent — → `flag_unreadable`. `server_active`
+likewise must be present, non-empty and not `unknown`, else `unreadable`.
 
-1.3 Write every row of the mutation matrix, plus the harness rows, as failing cases. **Each case
-name carries its matrix row id** — `M1`…`M19` for the mutation rows, `H1`…`H6` for the harness
-rows — so AC16 can prove the contract and the suite name the same set, and a row added to one
-without the other reddens the AC rather than drifting silently.
+2.5 **Lib header:** list both entry points as consumers, name `scripts/cutover-inngest.sh
+op=execute (P0 cutover step)` explicitly so the next editor of `_IHDG_SELECT` knows they are editing
+the cutover, copy the E-table beside the existing G-table so the `[ERG En]` ids resolve in-tree, and
+record the deliberate divergence: G8 is `server_active == "inactive"`, E10 is `!= "active"`. The
+sibling's G8 refuses today's live host (`activating`) as `host_serving` — the same class as this
+plan — and is tracked in its own issue rather than changed under a destroy gate here.
 
-1.4 Raise `_PRED_FLOOR` and `_FLOOR` to the values Phase 3 measures. The file's own comment records
-that the slack is deliberately one, so the raise is exact, never `>=`.
+2.6 Helper-level fixture tests independent of either consumer: `_ihdg_field` absent/dup/newline →
+rc 1; `_ihdg_tied_newest` 1 on identical duplicate, 0 on disagreement; `_ihdg_graded_row` on the
+previous-boot fixture; and an assertion that no `_ihdg_*` helper body calls `_ihdg_verdict` (policy
+cannot leak into a shared helper).
 
-### Phase 2 — `inngest_execute_registry_gate` in the existing gate library
+### Phase 3 — Green, then re-derive the floors
 
-2.1 Add the entry point beside `inngest_host_dark_gate` in
-`tests/scripts/lib/inngest-host-dark-gate.sh`. It takes `--rows-file`, `--query-rc`,
-`--guard-file`, `--guard-rc`, `--now-epoch`, `--max-row-age`, `--host`, `--host-name`,
-`--expected-schema`, and echoes exactly one verdict token.
-
-2.2 Reuse `_IHDG_SELECT`, `_ihdg_rows`, `_ihdg_newest_dt`, `_ihdg_row_count`, `_ihdg_tied_newest`
-and `_ihdg_field` **without copying or re-deriving any of them**. The whole point of the placement
-is that one tightening of `_IHDG_SELECT` reddens both consumers at once.
-
-2.3 Add `_ihdg_guard_block_count` — decode `.raw`, require
-`.SYSLOG_IDENTIFIER == "inngest-server-flip-guard"`, require `$d.host == $h and $d.host_name == $hn`,
-require the message to start `BLOCK: `, and require `dt >= boot_start`. Field-isolate on
-`SYSLOG_IDENTIFIER`; the tag never appears inside `.message`, so a `test("^inngest-server-flip-guard")`
-over the message is a permanent zero-match.
-
-2.4 Add `_ierg_verdict` — echo the token, rc 0 only for the literal `dark-empty`. A positive
-allowlist, exactly as `_ihdg_verdict` is: every other token, `unreadable` included, refuses.
-
-2.5 Predicate order is E1 → E14 as listed in the Guard Contract, and the ordering is load-bearing
-for the DIAGNOSIS: identity population is measured before the silence check so a wrong-host window
-reports `wrong_host` rather than `silent`.
-
-### Phase 3 — Turn the battery green, then re-derive the floors
-
-Run the suite; raise `_PRED_FLOOR` / `_FLOOR` to the measured values from a green run.
+Run the suite. `_FLOOR` becomes `-ne` with a distinct `STALE FLOOR — set _FLOOR=<ran>` message
+(precedent: `scripts/follow-through-closure-guard.test.sh`), so every future addition is a
+one-number bump the failure text dictates; `_PRED_FLOOR` stays measured−1 per the file's own
+comment. Record both new values in the PR body.
 
 ### Phase 4 — Wire 2.0
 
-4.1 Add `_probe_query_rows` and `_guard_block_query_rows` beside `_flip_query_rows`, same transport,
-same `|| rc=$?` shape, returning the query's rc so the caller owns its failure semantics. **Each
-reader issues its own `betterstack-query.sh` invocation with exactly ONE `--grep` term** — the
-probe reader greps only `SOLEUR_INNGEST_SERVER_PROBE`, the guard reader only
-`inngest-server-flip-guard`. Never OR-combine them: Phase 0.1 measured the combined form returning
-500 rows and zero probe rows, because the refuse loop's two streams (`inngest-server-flip-guard`
-+ its `doppler` wrapper noise) fill the window. Phase 5 asserts the one-term-per-reader property.
+4.1 **Readers.** Generalise `_flip_query_rows` to `_bs_query_rows <since> <grep> <limit>` (its three
+existing call sites pass `inngest-cutover-flip`; behaviour unchanged) and call it twice from 2.0 —
+once with `SOLEUR_INNGEST_SERVER_PROBE`, once with `inngest-cutover-flip`. One `--grep` term per
+invocation by construction. Each returns the query's rc (`|| rc=$?`). Rows are captured to
+tempfiles for `--rows-file` / `--hb-file`; they are never echoed.
 
-4.2 In the `execute)` arm, leave the HTTP-200 path byte-for-byte unchanged. Replace **only** the
-`if [[ "$CODE" != "200" ]]; then … exit 1; fi` branch with: log the HTTP code and cause as a notice,
-source the gate library, run the two reads, call `inngest_execute_registry_gate`, and `case` on the
-token. `dark-empty` emits a `::notice::` naming the row's `boot_id`, `cutover_flag` and row age
-**and stating in plain words that dark is the intended, safe pre-flip posture** (E14's wording —
-the annotation text is the founder's entire view of this step, and `http_code=000` beside a green
-tick must not read as a fault), then falls through to 2.1. Every other token emits `::error::` with
-the remediation the E-table names for that token and `exit 1`. An unrecognised token exits 1
-fail-closed, mirroring G3.6's `*)` arm.
+4.2 **Call shape under `set -euo pipefail` — load-bearing.** `scripts/cutover-inngest.sh` runs
+errexit, and every refusal returns non-zero. A bare `ERG_VERDICT=$(…)` aborts the script before the
+`case`, so no `::error::` and no remediation would ever print — fail-closed but mute. The shape is
+`ERG_RC=0; ERG_VERDICT="$(inngest_execute_registry_gate …)" || ERG_RC=$?`, then `case
+"$ERG_VERDICT"`. The `source` of the gate lib is guarded the same way:
+`source tests/scripts/lib/inngest-host-dark-gate.sh || { echo "::error::2.0: gate library not found
+on this ref — dispatch with --ref main"; exit 1; }` (cwd-relative, matching how the script already
+invokes `scripts/betterstack-query.sh`; this is the second `scripts/`-side consumer of a
+`tests/scripts/lib` gate after `scripts/followthroughs/git-data-rung2-evidence-capture.sh`).
 
-**The HTTP-200 arm gains one `::warning::`, nothing else.** Since ADR-100's 2026-08-20 addendum the
-dark slot holds the prod DSN as steady state, so a dedicated host that *answers* at `execute` time
-means either the P1-5 guard did not hold or `op=arm` already ran — a 200 here is an out-of-sequence
-signal. The arm's decision logic stays byte-for-byte (AC7) because a reachable-EMPTY host still
-satisfies the gate's property; the warning names the sequencing question. It is emitted **after** the
-existing `pre-flight clear` notice, outside the range AC7 diffs, so the arm's decision logic is
-provably untouched. Changing that arm's behaviour is tracked as **#8072**, not folded in here.
+4.3 **The dark arm.** In the `execute)` arm, leave the HTTP-200 decision logic unchanged. Replace
+ONLY the `if [[ "$CODE" != "200" ]]; then … exit 1; fi` branch with: a `::notice::` prefixed
+*"expected pre-arm (P1-5): webhook probe HTTP $CODE — grading darkness from the host's own rows"*
+(the webhook's `CAUSE` is a question phrased as a fault and must not be printed bare beside a green
+step), the two reads, the guarded call, and the `case`. `dark` emits the E13 notice and falls
+through to 2.1. Every refusal token emits the `::error::` the E-table names and `exit 1`. The `*)`
+arm prints the token, both rcs, and *"this is a defect in the gate, not a host state — file an
+issue with this run URL; do not proceed"*, then `exit 1`.
 
-4.3 Correct the non-empty remediation text (D4): step (2) can no longer instruct stopping a process
-the P1-5 guard will not start. Replace with the flag-and-registry path that is actually available.
+4.4 **D4 — the P1-6 remediation text.** Step (2) of the existing non-empty `::error::` reads *"stop
+the dark inngest-server so nothing re-syncs functions"* — impossible under P1-5. Replace steps
+(2)–(3) with: *"(2) read the flag the gate graded (`ERG_FLAG`); if it is `done`, the cutover already
+completed — dispatch `op=verify`; if `armed`/`flipping`, an arm is in flight — read that run, do not
+re-dispatch execute; if `flushed`, dispatch `op=resume`. (3) if the flag is pre-arm and the registry
+is still non-empty, the dedicated server started outside the guard — dispatch `op=doublefire-probe
+-f cron_period_seconds=1200`, then `op=rollback`."* This edited echo is the ONE line inside the
+reachable-empty block that changes; AC7 excludes it by content anchor.
 
-4.4 Adopt the purity contract verbatim — counts and single extracted fields only, never a whole row,
-never a GQL body. The rows the two readers return are captured into variables and written to
-tempfiles for `--rows-file` / `--guard-file`; the ONLY values that may reach an `echo "::…"` line
-are the six singles `ERG_VERDICT`, `ERG_BOOT_ID`, `ERG_FLAG`, `ERG_ROW_AGE`, `ERG_GUARD_COUNT`,
-plus the two reader rcs `PROBE_RC` / `GUARD_RC`. AC9 enumerates the closed set and Phase 5 asserts
-it, so a whole-row variable appearing in an annotation is a suite failure, not a review finding.
+4.5 **The 2.2 message, one sentence added.** When 2.2 fails STILL RUNNING, append: *"On the first
+`execute` of a cutover this is the designed stop and the run is red by design. `op=quiesce-web`
+STOPS production scheduling on both web hosts (it opens the maintenance window); dispatch it only
+when you can continue through `op=arm` in the same sitting — `scheduled-inngest-health.yml`
+auto-restarts the web scheduler within 15 minutes of seeing it down."* Today the SEAM text that
+explains the window prints only after 2.2 passes, so a first-run operator never sees it.
+
+4.6 **The reachable-empty arm gains one `::warning::` after the `pre-flight clear` notice** —
+*"a dedicated host that ANSWERS pre-arm is out of sequence (P1-5 should keep it dark); the empty
+registry still satisfies 2.0 — see #8072"* — and nothing else.
 
 ### Phase 5 — Wiring assertions in the sibling suite
 
-Add to `apps/web-platform/infra/cutover-inngest-workflow.test.sh`: 2.0 routes through exactly one
-`inngest_execute_registry_gate` call; every verdict token the gate can emit has a matching `case`
-arm; the `*)` arm exits 1; the readers isolate host post-decode and pass no host term to `--grep`;
-and the HTTP-200 path is unchanged.
+Add to `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, each extracted from source with
+the suite's existing `awk '/^fn() {$/,/^}$/'` pattern: 2.0 routes through exactly one guarded
+`inngest_execute_registry_gate` call (`|| ERG_RC=$?` shape present; a bare `$(…)` is a failure);
+every token the lib can emit has a `case` arm; the `*)` arm exits 1; both `_bs_query_rows` call
+sites in 2.0 pass exactly one `--grep` term and distinct terms; no `echo "::…"` line added by this
+PR interpolates `PROBE_ROWS*`, `HB_ROWS*` or `BODY`; the `source` line is `||`-guarded; and the
+E11 allowlist in the lib is **set-equal to the P1-5 allowlist derived from
+`apps/web-platform/infra/inngest-server-flip-guard.sh`'s own `case` arm** (the partition already
+drifted once — #6553 added `flushed`; a retyped copy is the recurrence path).
 
-### Phase 6 — ADR addendum, then the full battery
+### Phase 6 — ADR addendum, C4, then the full battery
 
-6.1 Write the ADR-100 addendum (see `## Architecture Decision`), including Phase 0.1's measurement
-and the D5 fork outcome. Amend the `github -> betterstack` edge description in
-`knowledge-base/engineering/architecture/diagrams/model.c4` so `op=execute` 2.0 is named beside
-`op=verify` as a safety-critical Logs read, then run the C4 syntax + render suites (AC14).
+6.1 Write the ADR-100 addendum (see `## Architecture Decision`). Amend TWO edge descriptions in
+`knowledge-base/engineering/architecture/diagrams/model.c4`: `github -> betterstack` (`op=execute`
+2.0 joins `op=verify` as a safety-critical Logs read) and `inngest -> betterstack` (the
+`inngest-cutover-flip` heartbeat is now a safety-critical INPUT to 2.0 — the producer-side editor
+reads that edge, not the consumer's). Run the C4 syntax + render suites.
 
-6.2 `shellcheck` both edited shell files; run `bash scripts/test-all.sh` for the full battery, not
-only the touched shards — `tests/scripts/test-inngest-host-dark-gate.sh` is registered by an
-explicit `run_suite` line at `scripts/test-all.sh`'s `#7695 — the two guards on
-apply_target=inngest-volume-recut` comment, and nothing auto-discovers `tests/scripts/`.
+6.2 `shellcheck` every edited shell file; `bash scripts/test-all.sh` for the full battery —
+`tests/scripts/test-inngest-host-dark-gate.sh` is registered by an explicit `run_suite` line and
+nothing auto-discovers `tests/scripts/`.
 
-6.3 Run `python3 scripts/lint-guard-contract.py` against this plan and
-`bash scripts/lint-orphan-test-suites.sh`.
+6.3 `python3 scripts/lint-guard-contract.py` against this plan; `bash scripts/lint-orphan-test-suites.sh`.
 
 ## Guard Contract
 
@@ -460,79 +477,90 @@ apply_target=inngest-volume-recut` comment, and nothing auto-discovers `tests/sc
 
 **Property.** `op=execute` proceeds past 2.0 only when the dedicated inngest host is established,
 from evidence the host itself emitted, to be carrying no function registry that could double-fire —
-either because it answered and reported an empty registry, or because it is positively dark. Every
-other state, including every state in which the host's condition cannot be established, refuses.
+either because it answered and reported an empty registry, or because it is positively dark AND its
+own flip FSM attested, within the last 15 minutes and on the same boot, that the cutover flag is
+outside the arm set. Every other state, including every state in which the host's condition cannot
+be established, refuses.
 
-**Assembly.** The quantification is over three chokepoints, and naming them structurally rather than
-by today's members is the point. (1) **Row selection** — every consumer of a
-`SOLEUR_INNGEST_SERVER_PROBE` row flows through `_IHDG_SELECT` and the four helpers that embed it
-(`_ihdg_rows`, `_ihdg_newest_dt`, `_ihdg_row_count`, `_ihdg_tied_newest`); a fifth reader added
-outside that set is the defect this contract exists to catch, and `_ihdg_field` is the sole field
-extractor. (2) **Verdict dispatch** — `_ierg_verdict` is the only place a token becomes an rc, and
-2.0's `case` is the only place a token becomes control flow; both must be single chokepoints, and a
-second `exit 0`/fall-through path reachable from 2.0 is a breach. (3) **Evidence acquisition** —
-`_probe_query_rows` and `_guard_block_query_rows` are the only paths by which rows enter the gate,
-and both must return the query's rc rather than swallowing it. The `_ihdg_*` helpers are shared with
-`inngest_host_dark_gate`, so a tightening of any of them must redden BOTH suites; a change that
-reddens only one means a copy was made.
+**Assembly.** Three chokepoints, named structurally. (1) **Row grading** — every consumer of a
+`SOLEUR_INNGEST_SERVER_PROBE` row flows through `_ihdg_graded_row`, which is the ONLY place G1–G7 /
+E1–E7 are evaluated, and which itself flows through `_IHDG_SELECT` and `_ihdg_field`; a second copy
+of any of that (the state of the tree TODAY, where `_ihdg_row_count` carries an inline selector) is
+the defect this contract exists to catch. (2) **Verdict dispatch** — `_ihdg_verdict` is the only
+place a token becomes an rc for BOTH gates, and 2.0's `case` is the only place a token becomes
+control flow; the production call is `||`-guarded so every token reaches the `case`. (3) **Evidence
+acquisition** — `_bs_query_rows` is the only path by which rows enter either read, and it returns
+the query's rc. The `_ihdg_*` helpers and `_ihdg_graded_row` are shared with `inngest_host_dark_gate`,
+so a tightening of any of them must redden BOTH suites — the `mutate()` scoping rule in Phase 1.3 is
+what makes that mechanical rather than aspirational.
 
-**Predicates, in evaluation order, and the token each refusal emits.** The order is load-bearing for
-the DIAGNOSIS (population before silence, identity before content): every token names one cause,
-and `dark-empty` is reachable only by passing all fourteen. Every remediation is a `gh workflow run`
-verb or a host-replace dispatch — none is an SSH step (`hr-no-ssh-fallback-in-runbooks`).
+**Assumed world, and who owns it.** E9/E10 assume the dedicated host cannot serve pre-arm — owned by
+`apps/web-platform/infra/inngest-server-flip-guard.sh` (P1-5). E11/E13 assume the flag partition
+`{armed, flipping, flushed, done}` — owned by the same file; Phase 5 derives it from source. E13
+assumes the flip timer runs on every flag — owned by `inngest-cutover-flip.timer` (P0-1) and
+measured (premise 13). E6 assumes `probe_schema=8` — owned by the baked emitter (PR #8019). A future
+change to any of those files is a change to this gate.
 
-| E | Predicate (from the graded probe row unless stated) | Refusal token | Remediation the `::error::` names |
+**Predicates, in evaluation order, and the token each refusal emits.** Population before silence,
+identity before content; `dark` is reachable only by passing all thirteen. Every remediation is a
+`gh workflow run` verb, a wait bounded by a named cadence, or "file an issue" — never an SSH step.
+
+| E | Predicate | Refusal token | Remediation the `::error::` names |
 |---|---|---|---|
-| E1 | probe `--query-rc` is numeric and `0` | `unreadable` | The Better Stack read path did not answer (precedent: HTTP 503 "source under maintenance"), or `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` are not injected (exit 3). Verify the three in `prd_terraform`; re-dispatch when the read path is healthy. Nothing about the host was measured |
-| E2 | `--rows-file` exists and decodes | `unreadable` | as E1 |
-| E3 | window holds ≥ 1 row from ANY host; then ≥ 1 row with `host==soleur-inngest && host_name==soleur-inngest-prd` | `silent` (zero rows) / `wrong_host` (rows, none ours) | `silent`: the host emits nothing — cross-check `scheduled-inngest-health.yml`'s latest run; two consecutive probe-unavailable readings there make it a host replace (`apply-web-platform-infra.yml -f apply_target=inngest-host-replace`), the only no-SSH path to a dead Vector/timer. `wrong_host`: an identity mislabel (#6616 class) — stop; do not proceed |
-| E4 | the newest row is the graded row and is tie-free (`_ihdg_tied_newest`) | `unreadable` | Two rows at the same newest `dt` disagree — the emitter or the warehouse is inconsistent; wait one probe period and re-dispatch |
-| E5 | row age ≤ `--max-row-age` | `stale_row` | The newest row predates the bound — wait for the next hourly probe (≤ 60 min) and re-dispatch; if it stays stale, treat as `silent` |
-| E6 | `probe_schema == "8"` (exact) | `stale_schema` | The host runs a pre-schema-8 renderer. The emitter is baked, so this is a host replace on a pin that carries the emitter — confirm first with the dark gate's own tag check (`git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh \| grep -c probe_schema=8`); a replace on an unbumped pin re-delivers the same bytes |
-| E7 | `boot_id` present and non-empty | `unreadable` | The row is truncated (the #7674 field-order lesson) — treat as E1 |
-| E8 | `host_role == dedicated` | `wrong_role` | A web-host row reached the dedicated selector — identity mislabel (#6616 class); stop |
-| E9 | `http_code` is numeric and `!= 200` | `host_serving` | The host IS answering pre-arm. This is the second-scheduler precursor: STOP, run `op=doublefire-probe -f cron_period_seconds=1200`, do not proceed to 2.1 |
-| E10 | `server_active != active` | `host_serving` | as E9 |
-| E11 | `cutover_flag ∉ {armed, flipping, flushed, done}` | `flag_armed` | `INNGEST_CUTOVER_FLIP` is inside the arm allowlist — an arm is in flight or complete and `execute` is out of sequence. Read the flag (`op=inventory`); if `done`, the cutover has already happened |
-| E12 | coherence: `http_code != 200` ⇒ `registry_fns == __UNREADABLE__`. A numeric `^[1-9][0-9]*$` is its own token; `0` or any other value on a non-200 row contradicts the emitter | `registry_populated` / `row_incoherent` | `registry_populated`: the P1-6 abort — the host carries functions; STOP. `row_incoherent`: the emitter contradicts itself — treat as `unreadable` and file an issue against `inngest-bootstrap.sh` |
-| E13 | guard `--guard-rc` is `0` AND ≥ 1 row with `SYSLOG_IDENTIFIER == inngest-server-flip-guard`, same host pair, message starting `BLOCK: `, `dt ≥ row.dt − uptime_s` | `unreadable` (rc) / `guard_unattested` (no row) | `guard_unattested`: the probe row is dark but the guard has not refused a start inside this boot's window — the refuse loop has quieted (R1). Dispatch `restart-inngest-server.yml`: on a dark host it re-attempts a start, which re-emits `BLOCK:`; re-dispatch `execute` after the next probe |
-| E14 | all of E1–E13 hold | **`dark-empty`** (rc 0) | Proceeds to 2.1. The `::notice::` MUST say, in plain words: *"the dedicated host is intentionally refusing to start until `op=arm`; `http_code=000 server_active=activating` is the correct pre-flip posture, not a fault"* — a founder reading a green step beside `000` must not go looking for a fix that must not be applied |
+| E1 | probe `--query-rc` numeric and `0` | `unreadable` | Branch on `PROBE_RC` in the message: **3** → `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` not injected — verify in `prd_terraform`; **2** → the Better Stack read path did not answer (precedent: HTTP 503 "source under maintenance") — re-dispatch later; **1** → `doppler run` itself failed — the `DOPPLER_TOKEN` repo secret. Nothing about the host was measured |
+| E2 | rows file decodes; raw lines ≥ 1 ∧ decoded == 0 is a decode failure, not silence | `unreadable` | as E1, `PROBE_RC=0` arm: "rows arrived but did not decode — file an issue with this run URL" |
+| E3 | ≥ 1 row from ANY host; then ≥ 1 with `host==soleur-inngest ∧ host_name==soleur-inngest-prd` | `silent` / `wrong_host` | `silent`: the host emits no probe rows — read `scheduled-inngest-health.yml`'s latest run; two consecutive probe-unavailable readings there make it a host replace (`apply-web-platform-infra.yml -f apply_target=inngest-host-replace`). `wrong_host`: identity mislabel (#6616 class) — file an issue with this run URL; no host action, the host is not the problem |
+| E4 | newest row is the graded row and tie-free | `unreadable` | Two rows at the same newest `dt` disagree — wait one probe period (≤ 60 min), re-dispatch |
+| E5 | row age ≤ `--max-row-age` | `stale_row` | Wait for the next hourly probe and re-dispatch; if it stays stale, treat as `silent`. There is no no-SSH way to fire the probe early |
+| E6 | `probe_schema == "8"` exact | `stale_schema` | The emitter is baked: host replace on a pin that carries the emitter — confirm first with `git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh \| grep -c probe_schema=8` |
+| E7 | `boot_id` present, non-empty, matches `^[0-9a-f-]{36}$` | `unreadable` | Truncated row (the #7674 field-order lesson) — as E2 |
+| E8 | `host_role == dedicated` | `wrong_host` | as E3 `wrong_host` (same predicate the sibling maps to the same token) |
+| E9 | `http_code` numeric; `!= 200` | `unreadable` (non-numeric) / `host_serving` | The host answers on loopback while the webhook returned non-200 — the row and the webhook disagree. Check the WEBHOOK path first (`op=registry-probe`: CF Access / WAF / web-host); if it returns 200 the host IS serving pre-arm → `op=doublefire-probe -f cron_period_seconds=1200`; a double-fire → `op=rollback`; clean → re-dispatch `execute` |
+| E10 | `server_active` present, non-empty, `!= unknown`, `!= active` | `unreadable` / `host_serving` | as E9 |
+| E11 | `cutover_flag` **∈ {aborted, rolled-back}** (positive allowlist) | `flag_armed` (∈ arm set) / `flag_unreadable` (anything else) | `flag_armed`: print `ERG_FLAG` and branch — `done` → the cutover already completed, dispatch `op=verify`; `armed`/`flipping` → an arm is in flight, read that run, do not re-dispatch; `flushed` → `op=resume`. `flag_unreadable`: the emitter could not read the flag (`unknown`) or it is mid-transition (`rollback`) — wait one probe period, re-dispatch |
+| E12 | coherence: `registry_fns == __UNREADABLE__` (entailed by E9 on the real emitter) | `unreadable` | The emitter contradicts itself — file an issue against `inngest-bootstrap.sh` with this run URL |
+| E13 | heartbeat: `--hb-rc` is `0`; decode coherence as E2; newest `inngest-cutover-flip` row for this host pair with `_BOOT_ID == strip_hyphens(boot_id)` has age ≤ `--hb-max-age`; `.message.flag ∈ {aborted, rolled-back}` | `fsm_unreadable` (rc / decode) / `fsm_silent` (no fresh same-boot row) / `flag_armed` · `flag_unreadable` (as E11) | `fsm_silent`: the flip timer has not reported on this boot in 15 min — the FSM timer or Vector is down on a host the probe still sees; two consecutive readings → host replace. `fsm_unreadable`: as E1 with `HB_RC`. Flag tokens: as E11 |
+| — | all of E1–E13 hold | **`dark`** (rc 0) | Proceeds to 2.1. The `::notice::` names `boot_id`, the graded flag, the probe row's age and the heartbeat's age, and says in plain words: *"the dedicated host is intentionally refusing to start until `op=arm`; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault"* — value-agnostic about the flag literal, since `rolled-back` is equally correct |
 
-**Mutation matrix**
+**Token set** (11): `dark` · `unreadable` · `silent` · `wrong_host` · `stale_row` · `stale_schema` ·
+`host_serving` · `flag_armed` · `flag_unreadable` · `fsm_silent` · `fsm_unreadable`. Eight are the
+sibling's own vocabulary; the three new ones each carry a remedy no existing token names.
 
-| # | Mutation (derived from the design, not from the code) | Must drive |
+**Mutation matrix** — every row is a `mutate()` invocation (Phase 1.3), scoped per the rule there.
+"Both" means the unscoped helper mutation must redden BOTH suites.
+
+| # | Mutation (derived from the design) | Scope | Must drive |
+|---|---|---|---|
+| 1 | Delete E9's `!= 200` | gate | RED — a `http_code=200` row grades `dark` |
+| 2 | Delete E10's `!= active` | gate | RED — a serving host with a broken loopback grades `dark` |
+| 3 | Widen E11 to a NEGATIVE allowlist (`∉ arm set`) | gate | RED — `cutover_flag=unknown` grades `dark` (the G20 class) |
+| 4 | Delete E8 | gate | RED — a web-host row (`host_role=web`, `registry_fns=n/a`) grades `dark` |
+| 5 | Delete E12 | gate | RED — a numeric `registry_fns` on a non-200 row passes |
+| 6 | Weaken E6 from `== "8"` to `>=` | gate | RED |
+| 7 | Change E3's zero-row arm from refuse to pass | shared (`_ihdg_graded_row`) | RED in **both** — `silent` becomes a pass |
+| 8 | Change E1's non-zero rc arm from refuse to pass | shared | RED in **both** |
+| 9 | Drop the host conjunction from `_IHDG_SELECT` | shared | RED in **both** — a foreign fresh row supplies the recency bound |
+| 10 | Delete E7 | shared | RED in **both** |
+| 11 | Make `_ihdg_verdict` return rc 0 for any token | shared | RED in **both** — every refusal case's rc assertion flips |
+| 12 | **Second member:** after a compliant newest row, add a second row at the same newest `dt` that disagrees | shared | RED in **both** — tie disagreement must refuse |
+| 13 | **Own dispatch:** make `inngest_execute_registry_gate` echo `dark` before evaluating anything | gate | RED — `_FLOOR` (exact, `-ne`) fires; `0 checked, ok` is not a pass |
+| 14 | Change E13's `_BOOT_ID` equality to "any boot" | gate | RED — a previous boot's heartbeat (`906c015b…`, real fixture) attests the current one |
+| 15 | Widen `--hb-max-age` so a 2-hour-old heartbeat passes | gate | RED — `fsm_silent` unreachable |
+| 16 | Widen E13's flag check to the negative form | gate | RED — heartbeat `flag=unknown` passes |
+| 17 | Make `_bs_query_rows` swallow rc (`\|\| rc=$?` removed) | script (wiring suite) | RED — a dead read presents as `silent` with the wrong remedy |
+| 18 | Replace 2.0's `case` `*)` arm with a fall-through | script (wiring suite) | RED |
+| 19 | Un-guard the production call (`ERG_VERDICT=$(…)` bare) | script (wiring suite) | RED — under `set -e` no verdict is ever emitted |
+| 20 | Retype E11's allowlist with one member missing | gate | RED — Phase 5's set-equality against the P1-5 source |
+
+**Harness rows.** These mutate the SUITE, because a matrix that never touches the harness cannot see
+a harness that asserts nothing. The suite already self-tests `expect`, `predicate`, `mutate` and
+the floor counters (Phase 1.2 reuses them), so the pre-existing harness rows carry over; the two
+below are new and gate-specific.
+
+| # | Harness input | Must drive |
 |---|---|---|
-| 1 | Delete the `registry_fns` numeric-greater-than-zero refusal | RED — token `registry_populated` no longer emitted |
-| 2 | Delete the `server_active != active` conjunct | RED — a serving host with a broken loopback grades `dark-empty` |
-| 3 | Delete the `http_code == 000` conjunct | RED |
-| 4 | Delete the `cutover_flag ∉ {armed,flipping,flushed,done}` conjunct | RED — token `flag_armed` unreachable |
-| 5 | Delete the `host_role == dedicated` conjunct | RED — a web-host row (`registry_fns=n/a`) grades dark |
-| 6 | Delete the coherence conjunct (non-200 implies `registry_fns=__UNREADABLE__`) | RED — token `row_incoherent` unreachable |
-| 7 | Weaken `probe_schema` from exact `== "8"` to `>=` | RED |
-| 8 | Change the zero-row arm from refuse to pass | RED — `silent` becomes `dark-empty` |
-| 9 | Change the non-zero `--query-rc` arm from refuse to pass | RED — `unreadable` becomes `dark-empty` |
-| 10 | Widen `--max-row-age` so a stale newest row passes | RED — `stale_row` unreachable |
-| 11 | Replace `_IHDG_SELECT` in `_ihdg_newest_dt` only, with a copy that drops the host conjunction | RED **in both suites** — a foreign fresh row supplies the recency bound |
-| 12 | Make `_ierg_verdict` return rc 0 for any token, not only `dark-empty` | RED — every refusal case's rc assertion flips |
-| 13 | Add a SECOND member: after a compliant first probe row, add a second row at the same newest `dt` that disagrees | RED — tie disagreement must refuse, not take file order |
-| 14 | **Guard's own dispatch:** make `inngest_execute_registry_gate` return before evaluating any predicate, echoing `dark-empty` | RED — the anti-vacuity floor must fire, not report `0 checked, ok` |
-| 15 | Delete the `boot_id` presence check | RED |
-| 16 | Delete `_probe_query_rows`'s `|| rc=$?` so a failed query returns rc 0 with empty rows | RED — a dead read must not present as silence-then-refusal-for-the-wrong-reason |
-| 17 | Move the guard-marker read so it observes a window that starts BEFORE `row.dt − uptime_s` | RED — a previous boot's `BLOCK:` row must not attest the current one |
-| 18 | Replace 2.0's `case` `*)` fail-closed arm with a fall-through | RED — an unrecognised token must never proceed |
-| 19 | Collapse `_probe_query_rows` + `_guard_block_query_rows` into ONE `betterstack-query.sh` call carrying both `--grep` terms | RED — Phase 5's one-term-per-reader assertion; measured at plan time to return 500 rows and zero probe rows, i.e. a false `silent` |
-
-**Harness rows.** The matrix above mutates the system under test; these mutate the SUITE, because a
-matrix that never touches the harness cannot see a harness that asserts nothing.
-
-| # | Harness mutation or input | Must drive |
-|---|---|---|
-| H1 | Neuter `expect_erg` so it compares only the token and ignores the rc | RED — at least one case must depend on the rc alone |
-| H2 | Neuter `predicate_erg`'s distinct-predicate accounting so every case registers the same `En` | RED — `_PRED_FLOOR` must fire |
-| H3 | Delete one `fails=$((fails + 1))` increment | RED — a floor that dispatches through its own counter is not a floor |
-| H4 | Lower `_FLOOR` below the measured green count | RED — the floor must be exact, never `>=` slack |
-| H5 | **Must-PASS, non-canonical:** a probe row with `server_active=failed` (not `inactive`), a different `boot_id`, an unfamiliar `image_ref`, a row age well inside the bound, and an extra trailing field the gate does not consume | PASS `dark-empty` — the contract permits every one of these, and a suite whose only PASS input is the canonical fixture cannot tell a correct gate from one that rejects everything |
-| H6 | **Must-PASS, non-canonical:** the reachable-empty arm — `http_code=200`, `server_active=active`, `registry_fns=0` reached through the WEBHOOK path, with no probe row at all | PASS — the pre-existing arm must remain reachable and must not be routed through the new gate |
+| H5 | **Must-PASS, non-canonical:** probe row with `server_active=failed` (not `activating`), `cutover_flag=rolled-back` (not `aborted`), an unfamiliar `image_ref`, an extra trailing field the gate never reads, age well inside the bound; heartbeat with `flag=rolled-back reason=noop-rolled-back` on the same `_BOOT_ID` | PASS `dark` — the contract permits every one of these; a suite whose only PASS input is the canonical fixture cannot tell a correct gate from one that rejects everything |
+| H6 | **Must-PASS, wiring suite:** the reachable-empty arm — webhook `200`, `registry_empty=true`, no probe read at all | PASS — the pre-existing arm must remain reachable and must not route through the new gate |
 
 ## Observability
 
@@ -540,7 +568,7 @@ matrix that never touches the harness cannot see a harness that asserts nothing.
 liveness_signal:
   what: >-
     The 2.0 verdict line itself. On the dark arm, a `::notice::` naming the graded row's
-    boot_id, cutover_flag, row age and the verdict token `dark-empty`; on every refusal an
+    boot_id, the graded flag, the probe-row age, the heartbeat age and the verdict token `dark`; on every refusal an
     `::error::` naming the token. The verdict is emitted on EVERY op=execute run, so the
     absence of a 2.0 verdict line in a run log is itself a signal that the block was skipped.
   cadence: once per `op=execute` dispatch of `.github/workflows/cutover-inngest.yml` (manual)
@@ -555,15 +583,15 @@ error_reporting:
     GitHub Actions `::error::` annotations on the run, plus the upstream evidence trail in
     Better Stack (source 2457081) which holds the rows the verdict was computed from.
   fail_loud: >-
-    Yes, and fail-closed. Every non-`dark-empty` token exits 1. `betterstack-query.sh`
-    exit 3 (credentials not injected) is mapped to its OWN token, never to "no rows found" —
-    the two have opposite remedies and only one of them is a wait.
+    Yes, and fail-closed. Every non-`dark` token exits 1. `betterstack-query.sh`
+    exit 3 (credentials not injected) yields `unreadable` with `PROBE_RC=3` printed and the remedy
+    branched on it — never `silent`; the two have opposite remedies and only one of them is a wait.
 failure_modes:
   - mode: The Better Stack read path is down (measured precedent: HTTP 503 "This source is currently under maintenance")
     detection: non-zero `--query-rc` reaching the gate; verdict token `unreadable`
     alert_route: "`::error::` + exit 1 on the op=execute run; the operator re-runs when the read path recovers"
   - mode: The credentials are not injected into the job
-    detection: "`betterstack-query.sh` exit 3, mapped to a distinct token, never to `silent`"
+    detection: "`betterstack-query.sh` exit 3 → `unreadable` with `PROBE_RC=3` in the message, never `silent`"
     alert_route: "`::error::` naming `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` in prd_terraform"
   - mode: The host has stopped emitting probe rows (timer or Vector down)
     detection: zero qualifying rows with a successful read; verdict token `silent`
@@ -572,8 +600,11 @@ failure_modes:
     detection: exact-equality schema check fails; verdict token `stale_schema`
     alert_route: "`::error::` naming the replace-only delivery constraint — the emitter is baked, so this is actionable as a host replace with a bumped pin, not as a retry"
   - mode: The host is reachable and CARRYING functions (the double-fire precursor)
-    detection: "`registry_fns` matching `^[1-9][0-9]*$`, or the webhook arm's `registry_empty=false`; tokens `registry_populated` / the existing 2.0 ABORT"
+    detection: "the webhook arm's `registry_empty=false` (the existing 2.0 ABORT); on the dark arm a numeric `registry_fns` is an emitter contradiction → `unreadable`"
     alert_route: "`::error::` + exit 1 with the P1-6 remediation"
+  - mode: The flip FSM heartbeat has stopped or is not shipping (timer disabled, Vector allowlist drift)
+    detection: no `inngest-cutover-flip` row with this boot's `_BOOT_ID` inside 15 min; verdict token `fsm_silent`
+    alert_route: "`::error::` + exit 1; two consecutive readings make it a host replace"
   - mode: The gate's own dispatch is skipped or short-circuited
     detection: "the suite's anti-vacuity floor (`_FLOOR`) and distinct-predicate floor (`_PRED_FLOOR`) in `tests/scripts/test-inngest-host-dark-gate.sh`"
     alert_route: CI failure on `scripts/test-all.sh`
@@ -606,99 +637,104 @@ soak window.
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **D2(b) depends on the P1-5 refuse loop still running.** The corroborating `BLOCK:` row is emitted from `ExecStartPre` only when systemd attempts a start. Today the unit retries every few seconds (229 rows per 500-row window, measured), so the row is always fresh. If a future change adds a `StartLimitBurst` that lets the unit settle to `failed`, `BLOCK:` rows stop, age past the read window, and D2(b) refuses a host that is legitimately dark — a **fail-closed** false refusal that blocks the cutover, never a false pass. | The refusal token names the cause (`guard_unattested`) and its `::error::` names the no-SSH remedy that exists today: `.github/workflows/restart-inngest-server.yml` re-attempts a start, which re-emits a `BLOCK:` row on a dark host. Recorded in the ADR-100 addendum in one sentence — *"any change that quiets the P1-5 refuse loop (start-limit, backoff, clean stop) must re-measure D2(b) or 2.0 refuses again"* — so the next well-meaning noise-reduction PR knows what it is disarming. |
-| R2 | **Stream starvation in the Better Stack read.** Measured at plan time: an OR-combined read of both streams returns 500 rows and zero probe rows. | Two reads, one `--grep` term each (Phase 4.1); Phase 5 asserts the property; mutation #19 reddens on regression. |
-| R3 | **The read window and the probe cadence.** The probe fires hourly; `--max-row-age` must exceed one probe period plus Vector/warehouse lag or a healthy host grades `stale_row` between probes. The sibling gate's own G3 sets the precedent. | Reuse the dark gate's `--max-row-age` default rather than inventing one; the H5 must-PASS row uses an age "well inside the bound", and one RED row (#10) proves the bound bites. |
-| R4 | **A second reader drifts from the first.** The whole class of #8017 and #8054 is two readers of one row disagreeing. | The new entry point shares `_IHDG_SELECT` and every `_ihdg_*` helper by construction; mutation #11 requires a tightening to redden BOTH suites; `## Files to Create` is empty. |
-| R5 | **Transport confinement on the `github -> betterstack` edge (#7873 / ADR-202).** Every credentialed curl on that edge must be `--disable`/`--noproxy` confined. | The new readers add NO curl — both call `scripts/betterstack-query.sh`, which owns the transport. `lint-shell-trace-credential-refusal.py` Rule D runs on every touched file. |
-| R6 | **The planning pipeline itself hit an API rate limit** (three research/domain agents terminated with HTTP 429 on 2026-09-11; weekly limit, resets 2026-09-16). | The plan body was recovered from disk and completed inline; Phase 0 was measured directly rather than delegated. `## Domain Review` records which leaders actually ran and which did not, so nothing reads as reviewed that was not. |
+| R1 | **The freshness bridge (E13) depends on the flip FSM timer emitting on every flag.** If the timer is disabled or Vector stops shipping the `inngest-cutover-flip` tag, E13 refuses `fsm_silent` on a legitimately dark host — fail-closed, never fail-open. | The timer is designed never to be disabled (`inngest-cutover-flip.sh` P0-1: "a disabled timer would make no-SSH rollback unreachable") and emits on every terminal flag (P0-2); measured live at ~1–2/min for 24 h. The dependency is recorded in the ADR-100 addendum and on the `inngest -> betterstack` C4 edge, so the producer-side editor sees it. `fsm_silent` names the remedy. |
+| R2 | **Stream starvation in a Better Stack read.** Measured: an OR-combined read of two streams returned 500 rows and zero probe rows. | One `--grep` term per `_bs_query_rows` invocation, by construction (Phase 4.1); Phase 5 asserts distinct single terms at both 2.0 call sites. |
+| R3 | **The read window vs. the probe cadence.** The probe fires hourly; `--max-row-age` must exceed one period plus ingest lag or a healthy host grades `stale_row` between probes. | Reuse the sibling gate's `--max-row-age` default (5400 s); H5 uses an age well inside it; mutation #15 proves the heartbeat bound bites. There is no no-SSH way to fire the probe early, and E5's text says so. |
+| R4 | **A second reader drifts from the first.** #8017 and #8054 are two readers of one row disagreeing. | `_ihdg_graded_row` is extracted so G1–G7 / E1–E7 exist ONCE; `_ihdg_row_count`'s inline copy is folded; mutation rows 7–12 are unscoped and must redden BOTH suites; `## Files to Create` is empty. |
+| R5 | **Transport confinement on the `github -> betterstack` edge (#7873 / ADR-202).** | No new curl — both reads go through `scripts/betterstack-query.sh`, which owns the transport; `lint-shell-trace-credential-refusal.py` Rule D runs on every touched file. |
+| R6 | **The planning pipeline hit an API rate limit** (three agents 429'd 2026-09-11). | Plan recovered from disk and completed inline; Phase 0 measured directly; `## Domain Review` records which leaders ran. The plan-review panel ran in full afterwards. |
+| R7 | **The health watchdog races the cutover window.** `scheduled-inngest-health.yml` runs every 15 min and its "Auto-dispatch inngest restart" step fires `restart-inngest-server.yml` on `inngest_down` with no quiesce suppression — so after `op=quiesce-web` the watchdog RESTARTS the web scheduler, and the second `execute` fails 2.2 STILL RUNNING. Out of this diff, but it is the flow this plan unblocks. | The 2.2 message (Phase 4.5) tells the operator to dispatch `quiesce-web → execute → arm` back-to-back inside 15 min; the suppression is **#8077**. |
+| R8 | **The reachable-empty arm is now the weaker arm** — the dark arm enforces the flag (E11/E13) and the reachable arm does not, so gate strength depends on which arm the host lands in. | Recorded in the ADR addendum; the `::warning::` names #8072, where the decision is taken with its own blast radius. |
 
-**Dependencies.** PR #8019 (merged 2026-09-10) — `probe_schema=8` and the `registry_fns` field the
-new arm reads are on the live host (measured: `image_ref=…v1.1.35@sha256:c8e27c71…`,
-`probe_schema=8`). No other PR must land first.
+**Dependencies.** PR #8019 (merged 2026-09-10) — `probe_schema=8` and `registry_fns` are on the live
+host (measured). The flip FSM heartbeat and Vector's `inngest-cutover-flip` allowlist entry are on
+the live host (measured, premise 13). No other PR must land first.
 
 ## Architecture Decision (ADR/C4)
 
-The plan changes what the cutover orchestrator accepts as evidence of a safe pre-flip state, and
-adds a second safety-critical CI read of the Logs warehouse. A competent engineer reading only
-ADR-100 and the C4 model after this ships would be misled on both counts, so both are deliverables
-here — not follow-ups.
+The plan changes what the cutover orchestrator accepts as evidence of a safe pre-flip state, adds a
+second safety-critical CI read of the Logs warehouse, and makes the flip FSM's heartbeat a
+safety-critical input. A competent engineer reading only ADR-100 and the C4 model after this ships
+would be misled on all three, so all three are deliverables here.
 
 ### ADR
 
-**Amend ADR-100** (`knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`)
-with a dated addendum in its existing convention — heading
+**Amend ADR-100** with a dated addendum in its existing convention — heading
 `## Addendum — 2026-09-11 (#8054) — "host dark" is a positive reading, and 2.0 accepts it`. No new
-ordinal: the 2026-08-25 (#7674) addendum already decided the adjacent question (*"host dark" is
-not "query finds nothing"*), and this is its direct continuation. (Fallback if review rules an
-addendum insufficient: next free ordinal measured **215** on `origin/main`, **216** across all
-`origin/*` refs — provisional until merge per the ordinal-collision gate.)
+ordinal: the 2026-08-25 (#7674) addendum decided the adjacent question (*"host dark" is not "query
+finds nothing"*), and this is its continuation. (Fallback if review rules an addendum insufficient:
+next free ordinal measured **215** on `origin/main`, **216** across all `origin/*` refs —
+provisional until merge per the ordinal-collision gate.)
 
 The addendum records, as decision text: (1) the P1-5 guard and 2.0 were written against different
 worlds, and the guard is the one that is right; (2) 2.0's property is *not carrying a double-fire
-registry*, satisfied by reachable-empty OR positively-dark, never by silence; (3) the row-internal
-conjunction (D2a) is the primary evidence and `cutover_flag` on the probe row is the P1-5 cause
-read without a join; (4) the D5 fork outcome — `BLOCK:` corroboration measured satisfiable
-2026-09-11T10:56Z and shipped as required — with R1's dependency on the refuse loop stated
-plainly and the sentence *"any change that quiets the P1-5 refuse loop (start-limit, backoff, clean stop) must re-measure D2(b) or 2.0 refuses again"*; (5) the stream-starvation measurement and the one-`--grep`-per-reader rule it forces.
+registry*, satisfied by reachable-empty OR positively-dark, never by silence; (3) the probe row's
+own `cutover_flag`, read as a POSITIVE allowlist, is the P1-5 cause without a join; (4) the flip
+FSM's heartbeat, joined on the journald `_BOOT_ID` envelope, is the freshness bridge — its value is
+freshness, not corroboration, and it is why a dark host can be graded from a ≤90-min row; (5) the
+`BLOCK:`-stream design was measured, found unsatisfiable after any `stop_server`, and rejected —
+recorded so it is not proposed again; (6) the stream-starvation measurement and the
+one-`--grep`-per-read rule; (7) the deliberate G8/E10 divergence (`== inactive` vs `!= active`) and
+that the sibling refuses today's live host, tracked as #8078; (8) the reachable-arm asymmetry
+(R8) deferred to #8072.
 
 ### C4 views
 
-All three model files were read (`model.c4` 710 lines, `views.c4` 74, `spec.c4` 54), and the
-external actors, systems, containers and relationships this change touches were enumerated:
+All three model files were read (`model.c4` 710 lines, `views.c4` 74, `spec.c4` 54) and the
+actors, systems, containers and relationships this change touches were enumerated:
 
 | Actor / system / container / relationship | Modeled? | Disposition |
 |---|---|---|
-| Dedicated Inngest host (`inngest` container, `hetzner -> inngest` "dedicated single-host node, private-net 10.0.1.40") | yes | unchanged |
+| Dedicated Inngest host (`inngest` container; `hetzner -> inngest` "dedicated single-host node, private-net 10.0.1.40") | yes | unchanged |
 | `inngestRedis`, `inngestPostgres` | yes | unchanged — this plan reads neither |
-| Better Stack as the Logs warehouse (`betterstack` system; `inngest -> betterstack` ships journald via Vector) | yes | unchanged |
-| GitHub Actions as the cutover orchestrator (`github` system; `github -> tunnel` for the webhook path) | yes | unchanged |
-| **`github -> betterstack`** — the CI read of the warehouse | yes, but its description names `op=verify` as the sole *SAFETY-CRITICAL* cutover read | **EDIT** — the sentence beginning `SINCE #6178/ADR-146 this edge also carries a SAFETY-CRITICAL read: cutover-inngest.yml op=verify …` gains `op=execute` 2.0 (the probe-row + flip-guard-row read; a retention miss or query failure refuses 2.0 closed, exactly as it fails `verify` closed). The `--disable`/`--noproxy` obligation already stated on that edge is inherited via `betterstack-query.sh`, so no new transport is introduced |
-| Human actors | none new — the reads are CI-initiated, no operator in the loop | unchanged |
+| Better Stack as the Logs warehouse (`betterstack` system) | yes | unchanged |
+| GitHub Actions as the cutover orchestrator (`github`; `github -> tunnel` for the webhook path) | yes | unchanged |
+| **`github -> betterstack`** — CI reads of the warehouse | yes, but its description names `op=verify` as the sole *SAFETY-CRITICAL* cutover read | **EDIT** — the sentence beginning `SINCE #6178/ADR-146 this edge also carries a SAFETY-CRITICAL read: cutover-inngest.yml op=verify …` gains `op=execute` 2.0 (probe-row + FSM-heartbeat reads; a retention miss or query failure refuses 2.0 closed, as it fails `verify` closed). The `--disable`/`--noproxy` obligation is inherited via `betterstack-query.sh` |
+| **`inngest -> betterstack`** — the host ships journald via Vector | yes, described as telemetry shipping | **EDIT** — one clause: the `inngest-cutover-flip` heartbeat on this edge is now a safety-critical INPUT to `op=execute` 2.0 (E13); a producer-side editor reads this edge, not the consumer's |
+| Human actors | none new — CI-initiated reads, no operator in the loop | unchanged |
 | Data stores | none new | unchanged |
 
-No element is added, so `views.c4` needs no `include` change. Validation after the edit:
+No element is added, so `views.c4` needs no `include` change. Validation after the edits:
 `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts`.
-(The `c4-count-parity` gate named in the plan skill was looked for and is not present on this tree
-— `git ls-files | grep -i count-parity` returns nothing — so the edge-description edit is the whole
-C4 change and the syntax/render suites are the validation.)
+(The `c4-count-parity` gate the plan skill names is not present on this tree — `git ls-files |
+grep -i count-parity` returns nothing — so the syntax/render suites are the validation.)
 
 ### Sequencing
 
-The ADR addendum and the `.c4` edit land in the same PR as the code (Phase 6.1), before the
-full-battery run. Nothing here is soak-gated: the decision is true the moment the gate widens.
+The ADR addendum and both `.c4` edits land in the same PR as the code (Phase 6.1), before the
+full-battery run. Nothing here is soak-gated.
 
 ## Acceptance Criteria
 
 Every criterion is a checkable post-condition on file state or command output, anchored on a
-dispatch or a token — never a bare literal the file also documents, never a line number. All
-pre-merge criteria run in CI or locally with no credentials except where stated.
+dispatch or a token — never a bare literal the file also documents, never a line number. Comments
+are stripped (`grep -v '^\s*#'`) before any count. All pre-merge criteria run in CI or locally with
+no credentials except where stated.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — dark-gate battery green, floors raised exactly.** `bash tests/scripts/test-inngest-host-dark-gate.sh` exits 0; its last line matches `^inngest-host-dark-gate: [0-9]+ passed, 0 failed$` with the passed count **> 124** (the plan-time baseline); the two floor lines print, and the anti-vacuity line's ran-count EQUALS its floor (`grep -oE 'anti-vacuity floor: ([0-9]+) assertions ran \(floor \1\)'` matches — exact, no slack, as the file's own comment requires).
+- [ ] **AC1 — dark-gate battery green, floors re-derived.** `bash tests/scripts/test-inngest-host-dark-gate.sh` exits 0; its last line matches `^inngest-host-dark-gate: [0-9]+ passed, 0 failed$` with the passed count **> 124**; the anti-vacuity line's ran-count EQUALS its floor (`grep -oE 'anti-vacuity floor: ([0-9]+) assertions ran \(floor \1\)'` matches) and the floor comparison in the file is `-ne` (`grep -cE '_FLOOR \) -ne|-ne "\$_FLOOR"|_FLOOR" -ne' tests/scripts/test-inngest-host-dark-gate.sh` ≥ 1); `_PRED_FLOOR` equals covered−1 per the file's convention.
 - [ ] **AC2 — wiring suite green, floor raised.** `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0; last line matches `^=== Results: [0-9]+ passed, 0 failed ===$` with the count **> 497**.
-- [ ] **AC3 — one entry point, one selector, one lib.** `grep -cE '^inngest_execute_registry_gate\(\) \{' tests/scripts/lib/inngest-host-dark-gate.sh` → `1`; `grep -cE '^_IHDG_SELECT=' tests/scripts/lib/inngest-host-dark-gate.sh` → `1`; `git diff --name-only origin/main -- tests/scripts/lib/ | wc -l` → `1` (only the dark-gate lib changed under that directory — no sibling reader was created).
-- [ ] **AC4 — positive allowlist, every refusal token exercised.** `grep -cE '^_ierg_verdict\(\) \{' tests/scripts/lib/inngest-host-dark-gate.sh` → `1`. For every token `T` in `grep -oE '_ierg_verdict "[a-z_-]+"' tests/scripts/lib/inngest-host-dark-gate.sh | cut -d'"' -f2 | sort -u`, `grep -cF "\"$T\"" tests/scripts/test-inngest-host-dark-gate.sh` ≥ 1 — no token can be emitted that the battery never asserts.
-- [ ] **AC5 — 2.0 routes through exactly one gate call.** `awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' scripts/cutover-inngest.sh | grep -c 'inngest_execute_registry_gate'` → `1`.
-- [ ] **AC6 — two readers, one `--grep` term each.** `grep -cE '^_probe_query_rows\(\) \{' scripts/cutover-inngest.sh` → `1` and `grep -cE '^_guard_block_query_rows\(\) \{' scripts/cutover-inngest.sh` → `1`. For each: `awk '/^_probe_query_rows\(\) \{$/{f=1;next} f&&/^\}$/{exit} f' scripts/cutover-inngest.sh | grep -o -- '--grep' | wc -l` → `1` (same command with `_guard_block_query_rows` → `1`). Both end in `|| rc=$?` + `return "$rc"` (`… | grep -cE 'return "\$rc"'` → `1` each).
-- [ ] **AC7 — the reachable-empty arm is byte-identical to `origin/main`.** `diff <(git show origin/main:scripts/cutover-inngest.sh | awk '/REG_EMPTY=\$\(echo "\$BODY"/{f=1} f{print} f&&/pre-flight clear/{exit}') <(awk '/REG_EMPTY=\$\(echo "\$BODY"/{f=1} f{print} f&&/pre-flight clear/{exit}' scripts/cutover-inngest.sh)` exits 0 with no output.
-- [ ] **AC8 — D4 remediation corrected.** `grep -c 'stop the dark inngest-server' scripts/cutover-inngest.sh` → `0`.
-- [ ] **AC9 — purity contract in the 2.0 block.** Within the `execute)` arm, every `echo "::` line interpolates only single extracted fields: `awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' scripts/cutover-inngest.sh | grep -E 'echo "::(notice|error|warning)::' | grep -oE '\$\{?[A-Z_]+' | tr -d '${' | sort -u` is a subset of `{CODE, CAUSE, CUTOVER_HOSTS, ERG_VERDICT, ERG_BOOT_ID, ERG_FLAG, ERG_ROW_AGE, ERG_GUARD_COUNT, PROBE_RC, GUARD_RC, REG_COUNT, REG_EMPTY, HOSTS, INNGEST_CONNS, EXPECTED_BURST_COST, READINESS_CEILING, POOL_SIZE, SUPAVISOR_WARM_RESERVE, POOL_BREAKDOWN, POOL_HTTP, POOL_RC, POOL_BODY_SAFE}` — i.e. the pre-existing set plus the six `ERG_*` singles. No `PROBE_ROWS*`, `GUARD_ROWS*` or `BODY` appears in any annotation line.
-- [ ] **AC10 — shellcheck clean.** `shellcheck -S warning scripts/cutover-inngest.sh tests/scripts/lib/inngest-host-dark-gate.sh tests/scripts/test-inngest-host-dark-gate.sh apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0 (ShellCheck 0.10.0 on this tree).
+- [ ] **AC3 — one grading prelude, one selector, two entry points.** In `tests/scripts/lib/inngest-host-dark-gate.sh` (comments stripped): `grep -cE '^_ihdg_graded_row\(\) \{'` → `1`; `grep -cE '^inngest_[a-z_]+\(\) \{'` → `2`; `grep -cE '^_IHDG_SELECT='` → `1`; the literal `test("^SOLEUR_INNGEST_SERVER_PROBE ")` appears exactly **2** times (the selector and the deliberate `wrong_host_rows` inverse — the inline copy in `_ihdg_row_count` is gone); `grep -c '"\$_IHDG_SELECT"'` ≥ 4.
+- [ ] **AC4 — one verdict function, every token exercised, none vacuous.** `grep -cE '^_ierg_verdict\(\)' tests/scripts/lib/inngest-host-dark-gate.sh` → `0` (no second verdict function). `T=$(grep -oE '_ihdg_verdict "[a-z_-]+"' tests/scripts/lib/inngest-host-dark-gate.sh | cut -d'"' -f2 | sort -u)`; `echo "$T" | grep -qx dark` and `echo "$T" | wc -l` ≥ 11; for every `t` in `$T`, `grep -cF "\"$t\"" tests/scripts/test-inngest-host-dark-gate.sh` ≥ 1.
+- [ ] **AC5 — exactly one guarded gate call in 2.0.** `awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' scripts/cutover-inngest.sh | grep -v '^\s*#' | grep -cE '^\s*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' → `1`, and that same line matches `\|\| ERG_RC=\$\?` (the `set -e`-safe shape).
+- [ ] **AC6 — one reader, two call sites, one term each.** `grep -cE '^_bs_query_rows\(\) \{' scripts/cutover-inngest.sh` → `1`; `grep -cE '^_(flip|probe|guard_block)_query_rows\(\) \{' scripts/cutover-inngest.sh` → `0`; within the execute arm (comments stripped) the lines calling `_bs_query_rows` number exactly `2`, one containing `SOLEUR_INNGEST_SERVER_PROBE` and one containing `inngest-cutover-flip`, and neither line contains both.
+- [ ] **AC7 — the reachable-empty decision logic is unchanged.** Scoped to the execute arm and excluding the one edited echo: `for src in <(git show origin/main:scripts/cutover-inngest.sh) scripts/cutover-inngest.sh; do awk '/^  execute\)$/{e=1} e&&/REG_EMPTY=\$\(echo "\$BODY"/{f=1} f{print} f&&/pre-flight clear/{exit}' "$src" | grep -v 'Remediation (P1-6)'; done` produces two identical streams (`diff` exits 0). (Measured: the un-scoped anchor first matches in the `registry-probe)` arm at a different line; the arm scope is load-bearing.)
+- [ ] **AC8 — D4 replaced, not deleted.** In the execute arm, `grep -c 'stop the dark inngest-server'` → `0` AND `grep -cE 'Remediation \(P1-6\).*ERG_FLAG'` → `1`.
+- [ ] **AC9 — purity of the ADDED annotation lines.** `git diff origin/main -- scripts/cutover-inngest.sh | grep '^+' | grep -E 'echo "::(notice|error|warning)::' | grep -cE '\$\{?(PROBE_ROWS|HB_ROWS|BODY)\b'` → `0`.
+- [ ] **AC10 — shellcheck clean.** `shellcheck -S warning scripts/cutover-inngest.sh tests/scripts/lib/inngest-host-dark-gate.sh tests/scripts/test-inngest-host-dark-gate.sh apps/web-platform/infra/cutover-inngest-workflow.test.sh` exits 0 (ShellCheck 0.10.0).
 - [ ] **AC11 — guard-contract lint.** `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-10-fix-cutover-execute-dark-host-registry-gate-plan.md` exits 0.
-- [ ] **AC12 — orphan-suite lint.** `bash scripts/lint-orphan-test-suites.sh` exits 0 (the dark-gate suite is registered by an explicit `run_suite` line in `scripts/test-all.sh`, and this PR adds no new suite file).
-- [ ] **AC13 — ADR-100 addendum present and substantive.** `grep -cE '^## Addendum — 2026-09-1[0-9] \(#8054\)' knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` → `1`; within that addendum (from its heading to the next `^## ` or EOF), `grep -c 'BLOCK:'` ≥ 1 and `grep -c -- '--grep'` ≥ 1 (the D5 outcome and the starvation rule are both recorded).
-- [ ] **AC14 — C4 edge amended and the model still renders.** `grep -E '^\s*github -> betterstack' knowledge-base/engineering/architecture/diagrams/model.c4 | grep -c 'op=execute'` → `1`; `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` exits 0.
-- [ ] **AC15 — untouched surfaces are untouched.** `git diff --quiet origin/main -- .github/workflows/cutover-inngest.yml apps/web-platform/infra/inngest-bootstrap.sh apps/web-platform/infra/cloud-init-inngest.yml apps/web-platform/infra/inngest-server-flip-guard.sh` exits 0 — no workflow secret change, no emitter change, no guard change, so no image bump and no host replace.
-- [ ] **AC16 — mutation matrix rows are each named in the battery.** For each `n` in 1..19 and each of H1..H6, `grep -cE "(^|[^0-9])(M$n|H$n)\b" tests/scripts/test-inngest-host-dark-gate.sh` ≥ 1 — the case names carry the row ids so the matrix in `## Guard Contract` and the suite cannot silently diverge.
-- [ ] **AC17 — full battery.** `bash scripts/test-all.sh` prints a marker matching `^=== [0-9]+/[0-9]+ suites passed ===$` and its rc file reads `0`.
-- [ ] **AC18 — plan-review artifacts.** This plan's frontmatter carries `requires_cpo_signoff: true` and `brand_survival_threshold: single-user incident`; `## Domain Review` records the CPO sign-off status as measured, and `knowledge-base/project/specs/feat-one-shot-8054-execute-dark-host-registry-gate/tasks.md` exists.
+- [ ] **AC12 — orphan-suite lint.** `bash scripts/lint-orphan-test-suites.sh` exits 0.
+- [ ] **AC13 — ADR-100 addendum present.** `grep -cE '^## Addendum — 2026-09-1[0-9] \(#8054\)' knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` → `1`.
+- [ ] **AC14 — both C4 edges amended and the model renders.** `grep -E '^\s*github -> betterstack' knowledge-base/engineering/architecture/diagrams/model.c4 | grep -c 'op=execute'` → `1`; `grep -E '^\s*inngest -> betterstack' knowledge-base/engineering/architecture/diagrams/model.c4 | grep -c 'inngest-cutover-flip'` → `1`; `cd apps/web-platform && ./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` exits 0.
+- [ ] **AC15 — untouched surfaces are untouched.** `git diff --quiet origin/main -- .github/workflows/cutover-inngest.yml apps/web-platform/infra/inngest-bootstrap.sh apps/web-platform/infra/cloud-init-inngest.yml apps/web-platform/infra/inngest-server-flip-guard.sh apps/web-platform/infra/inngest-cutover-flip.sh` exits 0 — no workflow secret change, no emitter change, no guard or FSM change, so no image bump and no host replace.
+- [ ] **AC16 — the E11 allowlist is derived, not retyped.** The wiring suite contains an assertion that extracts the P1-5 `case` allowlist from `apps/web-platform/infra/inngest-server-flip-guard.sh` and the E11/E13 set from the gate lib, and asserts set-equality (it prints a PASS line naming both files); mutation #20 reddens it.
+- [ ] **AC17 — full battery.** `bash scripts/test-all.sh` prints a marker matching `^=== [0-9]+/[0-9]+ suites passed ===$` and its rc file reads `0`, on a run this branch owns. A run with no marker and rc `4` was REFUSED because a sibling full-gate run was in flight — that is *no verdict*, not a failure; re-run when no sibling is running.
+- [ ] **AC18 — the sibling gate is behaviour-preserved.** Every pre-existing `[G<n>]` case and every pre-existing `mutate()` row in `tests/scripts/test-inngest-host-dark-gate.sh` still passes after the `_ihdg_graded_row` extraction (AC1's `0 failed` covers it), and `git diff origin/main -- tests/scripts/lib/inngest-host-dark-gate.sh | grep -cE '^-.*server_active" == "inactive"'` → `0` (G8 was not changed here; it is tracked separately).
 
 ### Post-merge — dispatched by the pipeline (no operator step)
 
-- [ ] **AC19 — the step that could not run, runs.** After merge, `gh workflow run cutover-inngest.yml --ref main -f op=execute -f cron_period_seconds=1200` (1200 is the measured shortest registered cron period — `cron-ghcr-token-minter` at `*/20 * * * *`; the 3600 default would report a phantom double-fire). In the run log: a `::notice::` line matching `2\.0 .*dark-empty` that names `boot_id=` and `cutover_flag=aborted`; a subsequent `2.1` capture line (proof 2.0 fell through); and the run terminates at `2.2 QUIESCE HARD GATE` with the STILL-RUNNING verdict, because the co-located scheduler is serving — the **expected** stop for a pre-flip dispatch. The conclusion is `failure` at 2.2, not at 2.0. `INNGEST_BASE_URL` on `soleur/prd` still reads `http://host.docker.internal:8288` afterwards.
-
+- [ ] **AC19 — the step that could not run, runs.** Precondition, re-measured immediately before dispatch: `doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain` → `aborted`, and the newest dedicated probe row still reads `http_code=000`. If either has moved, this criterion is re-scoped to the new state, not marked failed. Then `gh workflow run cutover-inngest.yml --ref main -f op=execute` (no `cron_period_seconds` — the execute arm never reads it). In `gh run view <id> --log`: a line matching `expected pre-arm \(P1-5\)`; a `::notice::` matching `2\.0 .*dark` that names `boot_id=` and the graded flag; the line `::notice::2.1 capture: Σcaptured=`; the line `quiesce check \(LB-reachable host\): inngest STILL RUNNING`; and `::error::2.2 QUIESCE HARD GATE FAILED` followed by the sentence beginning *"On the first `execute` of a cutover this is the designed stop"*. **The red X on the run is the pass condition**: the failure is at 2.2, not at 2.0. Afterwards `doppler secrets get INNGEST_BASE_URL -p soleur -c prd --plain` still reads `http://host.docker.internal:8288`, and nothing was quiesced, armed or flushed.
 
 ## Domain Review
 
@@ -763,10 +799,10 @@ ADR-100). All four conditions were applied to this plan before `## Acceptance Cr
    the sentence *"any change that quiets the P1-5 refuse loop (start-limit, backoff, clean stop)
    must re-measure D2(b) or 2.0 refuses again."*
 2. **Token-to-remediation table written** — the E1…E14 predicate table in `## Guard Contract`
-   names every token the gate can emit, including the previously unnamed *"probe dark but zero
-   `BLOCK:` rows in the boot window"* case (`guard_unattested`), and every remediation is a
-   `gh workflow run` verb or a host-replace dispatch.
-3. **The `dark-empty` notice states in plain words that dark is the intended, safe state** (E14 and
+   names every token the gate can emit and every remediation is a `gh workflow run` verb, a
+   bounded wait, or "file an issue". (The `guard_unattested` token this condition first produced was
+   later CUT with the `BLOCK:` design — see the Plan Review Panel below.)
+3. **The `dark` notice states in plain words that dark is the intended, safe state** (the E-table's pass row and
    Phase 4.2) — a founder reading `http_code=000 server_active=activating` beside a green tick
    must not go looking for a fix that must not be applied.
 4. **Why the reachable-empty arm keeps its PASS is recorded** (`## Non-Goals`, Phase 4.2), the arm
@@ -788,13 +824,85 @@ the guard, which is now the primary barrier and is baked into the host image. Ca
 R1: the gate now depends on a noisy refuse loop staying noisy (tens of thousands of Better Stack
 rows per day with no product value); quieting it is a CTO/COO decision for after the cutover, and
 whoever takes it must know D2(b) is downstream.
+
+### Plan Review Panel (2026-09-11)
+
+**Panel:** DHH, Kieran, code-simplicity (eng baseline) + architecture-strategist, spec-flow-analyzer
+(threshold escalation) + cto (named panel, devex lens — closing the Engineering gap left by the
+rate-limited domain-leader spawn). All six returned. cpo was not re-spawned: its sign-off ran first,
+with conditions applied. cmo and ux-design-lead: not relevant (no market/brand copy, no UI surface).
+
+**Where both panels fired on one scope — delete over fix, applied:**
+- **D2(b) on the flip-guard `BLOCK:` stream — CUT.** Simplification panel: ceremony that answers
+  "why is the host dark" when the property is "does it carry a registry" (DHH P0, simplicity CUT).
+  Correctness panel: unsatisfiable after any `stop_server` — an explicit stop does not re-fire
+  `Restart=on-failure`, and the health workflow measured 5.4 days of exactly that; the remediation
+  named a workflow that restarts the WEB scheduler and, post-quiesce, un-quiesces it (spec-flow P0
+  ×2, architecture P1, CTO P1). Today's loop exists only because the host was replaced with the
+  flag already `aborted`.
+
+**Where the panels disagreed — resolution and class:**
+- **Keep a freshness bridge at all?** DHH and simplicity: no — `cutover_flag` on the probe row
+  suffices. Architecture (P1, findings 3/7) and CTO (P1, finding 2): yes — the probe row is ≤90 min
+  old, and the flip FSM's heartbeat proves the flag was outside the arm set ~1 min ago, from the
+  component that owns it, via the reader the script already has. **Resolved for the bridge
+  (D2b′)** because it was MEASURED present (premise 13: 500 rows/24 h, `_BOOT_ID`-joined) before
+  being adopted — the same rule that rejected the `BLOCK:` design. The dissent is recorded as
+  **Taste** in `decision-challenges.md`.
+- **Fix the sibling G8 (`== inactive`) here?** DHH: yes, once, in the shared prelude. Architecture
+  (9d): record the divergence and file an issue — it is a destroy gate. **Resolved for the issue**;
+  the divergence is in the lib header (Phase 2.5) and the sibling is asserted unchanged (AC18).
+- **The reachable-arm `::warning::`?** Simplicity: cut (out of scope by the plan's own Non-Goals).
+  CPO condition 4 and architecture 13: keep, name #8072. **Kept** — it is the founder's only view of
+  an out-of-sequence host; recorded as **Taste** in `decision-challenges.md`.
+
+**Mechanical findings applied (one right answer each):** E11 and E13 are POSITIVE allowlists
+(`unknown`/`rollback`/empty refuse — architecture P0, Kieran 8); the production call is
+`|| ERG_RC=$?`-guarded and the `source` is guarded, or `set -e` kills the script before any verdict
+(architecture P1, Kieran 13, spec-flow 8); `_ihdg_graded_row` extracted and `_ihdg_row_count`'s
+inline selector folded (DHH 2, simplicity a, Kieran 4, architecture 8); `mutate()` with
+address-range scoping for per-gate rows and unscoped both-suites rows for helpers (architecture P1
+finding 5, DHH 3); `_BOOT_ID` envelope equality replaces the `dt − uptime_s` join (dissolves Kieran
+5/12, architecture 4/6/10, spec-flow 13/15); tokens collapsed onto the sibling's vocabulary — pass
+token `dark`, `wrong_role`→`wrong_host`, `row_incoherent`/`registry_populated` gone (simplicity b/d,
+DHH 4/5, architecture 12); `unreadable` remediations branch on the rc (Kieran 7, spec-flow 5); E11
+allowlist derived from the guard's source by a set-equality test (CTO 3); `_FLOOR` `-ne`,
+`_PRED_FLOOR` measured−1, Phase 1.4 deleted (CTO 4, Kieran 11); `M<n>` ids dropped — they collided
+with the sibling's own `[M1]`–`[M7]` (Kieran 3) — cases keyed `[ERG En]`; AC7 scoped to the execute
+arm and excluding the D4 echo (Kieran P0 — the un-scoped anchor first matched in `registry-probe)`
+and AC7/AC8 could not both hold); AC9 diff-scoped denylist (Kieran 2); AC4 non-vacuous (Kieran 10);
+AC5/AC6 comment-stripped (Kieran 9); AC19 drops the inert `cron_period_seconds` and gains literal
+anchors and "the red X is the pass" (spec-flow 10/11); every "stop" token ends in a verb or "file an
+issue" (spec-flow 9); E9/E10 check the webhook path before fearing a second scheduler (CTO 8,
+spec-flow 7); E11 `flag_armed` branches on the value instead of pointing at `op=inventory`, which
+does not read the flag (spec-flow 6); the 2.2 message gains the designed-stop sentence and the
+maintenance-window warning (spec-flow P1 3/4); a producer-side C4 clause on `inngest -> betterstack`
+(architecture 14); "what world does this predicate assume, and who owns it" added to the Guard
+Contract (CTO strategy; templated by #8081).
+
+**Follow-up issues filed from the panel (deferral tracking):** **#8077** watchdog quiesce suppression
+(R7, spec-flow 4); **#8078** sibling G8 vs the live `activating` host (architecture 9d, DHH 2);
+**#8079** `op=registry-probe` same defect (CTO 7); **#8080** post-cutover hardening — satisfiability
+witness on `scheduled-inngest-health.yml` + `RestartSec` quieting with the ~55k rows/day figure on
+the ledger (CTO strategy + loop recommendation); **#8081** the plan skill's Guard Contract gains an
+"assumed world, and who owns it" field (CTO strategy — three instances in one week).
+
+**Not applied, and why:** DHH 7 (the `## Hypotheses` walk and premise table are ceremony) — the
+walk is mandated by the plan skill's network-outage checklist when `unreachable` appears in the
+brief, and the premise table is the record of what changed the design; both stay. Architecture 9's
+per-entry-point `_PRED_FLOOR` split — the `[ERG En]` keying already names the gate in a coverage
+loss; not worth a second counter.
+
 ## Test Scenarios
 
 | # | Scenario | Type | Steps | Expected |
 |---|---|---|---|---|
-| TS1 | Hermetic battery, dark arm | local, no credentials | `bash tests/scripts/test-inngest-host-dark-gate.sh` | AC1's exact output shape; the H5 non-canonical must-PASS row (`server_active=failed`, unfamiliar `image_ref`, extra trailing field) grades `dark-empty`; every RED row in the matrix is a named failing case when its mutation is applied (spot-check M2, M8, M14, M19 by applying the mutation with `sed`, observing RED, reverting) |
-| TS2 | Hermetic wiring suite | local, no credentials | `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` | AC2; the one-gate-call, one-`--grep`-per-reader, `*)`-exits-1 and reachable-arm-unchanged assertions each print a PASS line |
-| TS3 | Live read against the real host | read-only, `doppler run -p soleur -c prd_terraform` | Run the two Phase 0.1 reads from the worktree; decode; select `host=soleur-inngest host_name=soleur-inngest-prd` post-decode | Newest probe row: `probe_schema=8 http_code=000 server_active!=active cutover_flag=aborted host_role=dedicated registry_fns=__UNREADABLE__`; ≥ 1 `BLOCK: ` row under `SYSLOG_IDENTIFIER=inngest-server-flip-guard` with `dt ≥ row.dt − uptime_s`. Then call `inngest_execute_registry_gate` directly with those two files and the live `--now-epoch` → token `dark-empty`, rc 0 |
-| TS4 | Live read, negative control | read-only | Same as TS3 but pass `--host soleur-web-platform --host-name soleur-web-platform-prd` | Token is a refusal (`wrong_host` or `silent`), never `dark-empty` — the co-located web host, whose row carries `registry_fns=n/a` and `host_role=web`, must not grade dark |
-| TS5 | Live read, credential failure is not silence | read-only | Run `_probe_query_rows` with `BETTERSTACK_QUERY_PASSWORD` unset in the environment | `betterstack-query.sh` exits 3; the gate receives `--query-rc 3` and emits `unreadable`, never `silent` |
-| TS6 | The unblocked dispatch (post-merge, AC19) | live dispatch, pipeline-owned | `gh workflow run cutover-inngest.yml --ref main -f op=execute -f cron_period_seconds=1200`; poll with the Monitor tool | 2.0 `dark-empty` notice → 2.1 capture → stops at the 2.2 quiesce gate with STILL RUNNING. Nothing is quiesced, armed or flushed |
+| TS1 | Hermetic battery, dark arm | local, no credentials | `bash tests/scripts/test-inngest-host-dark-gate.sh` | AC1's exact output shape; `[ERG H5]` (`server_active=failed`, `cutover_flag=rolled-back`, heartbeat `flag=rolled-back`, unfamiliar `image_ref`, trailing unknown field) grades `dark`; every `mutate()` row in the matrix reddens its scope — rows 7–12 in BOTH suites |
+| TS2 | Hermetic wiring suite | local, no credentials | `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` | AC2; the guarded-call, one-term-per-read, `*)`-exits-1, guarded-`source`, E11-set-equality and reachable-arm-unchanged assertions each print a PASS line |
+| TS3 | Live read against the real host | read-only, `doppler run -p soleur -c prd_terraform` | Run the two Phase 0.1 reads; write each to a tempfile; call `inngest_execute_registry_gate --rows-file … --hb-file … --now-epoch "$(date +%s)"` with the live `--host`/`--host-name` | Token `dark`, rc 0. Probe row: `probe_schema=8 http_code=000 server_active!=active cutover_flag∈{aborted,rolled-back} host_role=dedicated registry_fns=__UNREADABLE__`; heartbeat: newest same-`_BOOT_ID` row ≤ 15 min old, `.message.flag=aborted` |
+| TS4 | Live read, negative control | read-only | Same as TS3 with `--host soleur-web-platform --host-name soleur-web-platform-prd` | A refusal (`wrong_host` or `silent`), never `dark` — the co-located web host (`host_role=web`, `registry_fns=n/a`) must not grade dark |
+| TS5 | Live read, previous-boot fixture | read-only | Same as TS3 but with `--hb-file` filtered to rows whose `_BOOT_ID` is the previous boot `906c015b…` (present in the 24 h window) | `fsm_silent` — a heartbeat from another boot must not attest this one (mutation #14 is the code-side twin) |
+| TS6 | Credential failure is not silence | read-only | Run `_bs_query_rows` with `BETTERSTACK_QUERY_PASSWORD` unset | `betterstack-query.sh` exits 3; the gate receives `--query-rc 3` → `unreadable`, and the `::error::` names `PROBE_RC=3` and the three `BETTERSTACK_QUERY_*` names |
+| TS7 | `set -euo pipefail` call shape | local | `bash -c 'set -euo pipefail; source tests/scripts/lib/inngest-host-dark-gate.sh; ERG_RC=0; V="$(inngest_execute_registry_gate --rows-file /dev/null --query-rc 0 …)" \|\| ERG_RC=$?; echo "$V $ERG_RC"'` | Prints `silent 1` (or `unreadable 1`) and the shell survives to print it — under a bare `$(…)` it would have died first |
+| TS8 | The unblocked dispatch (post-merge, AC19) | live dispatch, pipeline-owned | `gh workflow run cutover-inngest.yml --ref main -f op=execute`; poll with the Monitor tool | The AC19 anchors in order; stops at 2.2 with the designed-stop sentence; nothing quiesced, armed or flushed |
+
