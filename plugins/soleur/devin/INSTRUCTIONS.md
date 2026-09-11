@@ -33,6 +33,24 @@ devin plugins install --local ./soleur/plugins/soleur -y
 Use `/soleur:go <intent>`, `/soleur:sync`, and `/soleur:help` as Devin slash commands.
 These are skill invocations, not shell commands.
 
+## Updating the plugin
+
+Devin caches plugin content locally. To pull the latest `main` from the monorepo source, run:
+
+```bash
+devin plugins update soleur
+```
+
+To refresh every installed plugin at once:
+
+```bash
+devin plugins update
+```
+
+For local-folder installs (`--local`), edits are reflected in the next session with no `update` needed.
+
+If you see a transient warning such as "plugin ... is in your settings but its content could not be fetched; it will be retried automatically", the cloud-side fetcher is having trouble reaching GitHub. The CLI copy usually still works; run `devin plugins update soleur` again after a moment, or switch to a `--local` install if the remote source stays unreachable.
+
 ## Tools
 
 | Soleur instruction | Devin execution |
