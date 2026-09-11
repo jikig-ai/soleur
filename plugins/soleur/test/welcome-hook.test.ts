@@ -22,10 +22,14 @@ function createTempGitRepo(): string {
   return dir;
 }
 
-function runHook(cwd: string): { exitCode: number; stdout: string; stderr: string } {
+function runHook(cwd: string, codex = false): { exitCode: number; stdout: string; stderr: string } {
+  const environment = gitFixtureEnv(cwd);
+  delete environment.CODEX_THREAD_ID;
+  delete environment.PLUGIN_ROOT;
+  if (codex) environment.CODEX_THREAD_ID = "test-codex-thread";
   const result = Bun.spawnSync(["bash", HOOK_PATH], {
     cwd,
-    env: gitFixtureEnv(cwd),
+    env: environment,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -45,6 +49,14 @@ describe("welcome-hook project scope guard", () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("Codex uses its own bootstrap without a Claude welcome sentinel", () => {
+    mkdirSync(join(tempDir, "plugins", "soleur"), { recursive: true });
+    const result = runHook(tempDir, true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(existsSync(join(tempDir, ".claude", "soleur-welcomed.local"))).toBe(false);
   });
 
   test("non-Soleur git repo: exits 0, no sentinel created", () => {

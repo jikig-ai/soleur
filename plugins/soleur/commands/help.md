@@ -34,12 +34,16 @@ Detect the active harness before printing commands:
 - **Claude Code:** commands use the `/soleur:` prefix (`/soleur:go`, `/soleur:sync`, `/soleur:help`). Workflow skills are invoked via the **Skill tool** (`soleur:<skill>`).
 - **Grok Build:** commands are unqualified (`/go`, `/sync`, `/help`). Workflow skills are invoked via **slash commands** (`/brainstorm`, `/one-shot`, …) — not `/soleur:go`.
 - Implementation reference: `plugins/soleur/lib/harness.ts` (`routingInstructions`, `formatSkillInvocation`).
+- **Codex:** entry points are `$soleur:go`, `$soleur:sync`, and `$soleur:help`.
+  Read [Codex compatibility instructions](../codex/INSTRUCTIONS.md) and resolve
+  component paths from the installed plugin root. Render the Claude block below
+  with Codex skill mentions and skill-loading instructions substituted.
 
 Use the matching column in Step 3 below.
 
 ## Step 3: Output the Help Reference
 
-Present the following formatted overview. Replace placeholder counts with actual values from Step 2. **Print the Claude block OR the Grok block** based on Step 2.5 — not both.
+Present one harness-appropriate overview. Replace placeholder counts with actual values from Step 2, using the naming rules in Step 2.5.
 
 ### Claude Code
 

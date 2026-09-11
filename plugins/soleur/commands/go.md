@@ -100,6 +100,12 @@ Before applying the routing table, detect the active harness and use the correct
 |---------|--------|--------|---------------|
 | Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
+| Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
+
+**Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
+Use the installed plugin root for plugin-owned paths. Reading the full named
+skill is the Codex entry point when no skill-loading tool is available; execute
+all of its phases. Do not invoke a nonexistent Skill tool or a Grok slash command.
 
 **Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
 
