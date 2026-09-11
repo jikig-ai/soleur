@@ -34,6 +34,14 @@ ASSERT_SCRIPT="$SCRIPT_DIR/cron-egress-postapply-assert.sh"
 PASS=0
 FAIL=0
 
+# One owning EXIT trap for every tempdir this suite allocates (ADR-129 / #6734):
+# per-test `mktemp -d` calls land under a suite-owned scratch dir via TMPDIR, so
+# a suite that dies between allocation and its own `rm -rf` leaks nothing. The
+# trap runs once, in this shell — a `$( … )` test subshell does not inherit it.
+SUITE_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/cron-egress-firewall-test.XXXXXX")"
+export TMPDIR="$SUITE_SCRATCH"
+trap 'rm -rf "$SUITE_SCRATCH"' EXIT
+
 assert_grep() {
   local description="$1" pattern="$2" file="$3"
   if grep -qE -- "$pattern" "$file"; then

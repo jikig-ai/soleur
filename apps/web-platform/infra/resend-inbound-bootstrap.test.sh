@@ -31,6 +31,14 @@ PASS=0
 FAIL=0
 TOTAL=0
 
+# One owning EXIT trap for every tempdir this suite allocates (ADR-129 / #6734):
+# per-test `mktemp -d` calls land under a suite-owned scratch dir via TMPDIR, so
+# a suite that dies between allocation and its own `rm -rf` leaks nothing. The
+# trap runs once, in this shell — a `$( … )` test subshell does not inherit it.
+SUITE_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/resend-inbound-bootstrap-test.XXXXXX")"
+export TMPDIR="$SUITE_SCRATCH"
+trap 'rm -rf "$SUITE_SCRATCH"' EXIT
+
 FAKE_KEY="re_test_fake_key_123"
 
 # Shim dir: curl (records argv positions + validates the --config fd
