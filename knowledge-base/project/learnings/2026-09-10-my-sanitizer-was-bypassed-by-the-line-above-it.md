@@ -155,3 +155,64 @@ Both were invisible because a working fallback absorbed them:
 
 Same root: `error from registry: denied` on ghcr.io. A control that neither protects anything nor can
 be safely enabled, with nothing surfacing that.
+
+## Addendum — 2026-09-11 (ship-time review round, PR #8026)
+
+The first panel ran 5 of the 12 seats the classification called for and emitted no coverage trailer;
+with the threshold at `single-user incident` the ship gate blocked ready, so the other seven ran.
+Three more findings of the class this file is about, plus one about the instrument that had passed
+them.
+
+### 5. A value-based redaction arm is order-dependent, and the test that "covered" it was satisfied by the leak
+
+Substituting env values in file order let a SHORT public value that is a substring of a LONGER
+secret rewrite the composite before the composite was matched — a bare `DB_HOST` listed before a
+`DATABASE_URL` of the shape `scheme://user:password@host/db` shipped the password in clear beside a
+`<redacted:DB_HOST>` marker certifying that redaction ran. The value-arm test asserted only that a
+marker appeared, which this output satisfies. Fix: longest value first (pure bash selection — no
+`sort`/`awk` on the redaction path, so a missing binary cannot downgrade the arm to a no-op), and the
+test asserts the secret's **absence**. The general rule: a redaction test that checks for the marker
+is checking that redaction *ran*; only the negative checks that it *worked*.
+
+### 6. A `{1,200}` bound let a 100-char clamp survive the battery — an upper bound is not a length pin
+
+The performance seat asked for a 64 KiB pre-clamp before the value arm (bash literal substitution is
+quadratic in match count; a 4 MB stderr of a repeated env value took 148 s on the failure path). The
+first mutant I wrote — clamp to 100 instead of 65536 — **survived** 249/249, because the truncation
+scenario asserted `bwrap_err="[^"]{1,200}"` and 100 chars satisfy it. Pinned to `{200}` exactly
+(nothing in that fixture is redactable, so sanitized length == clamp), plus a value-arm analogue of
+F14: an env value straddling the 200-char window must be fully redacted, which a clamp of 230 also
+fails. Geometry matters: the value has to be long enough (100 chars) that a straddle, a 230-cut and a
+whole marker inside the window can all hold at once — the first geometry could not, and the control
+run reddened on the marker being bisected (which is legal and the runbook says so).
+
+### 7. "Not mechanically verifiable" was false — the soak the plan scoped out is exactly what `earliest=` is for
+
+`tasks.md` cut the follow-through probe on the grounds that "landing the marker is its precondition,
+so there is nothing to observe yet". The ship soak gate fired on #8016, and the override option
+("the close criterion is genuinely not mechanically verifiable") did not apply: a Better Stack count
+over a window is the sweeper's native shape, and `earliest=<deploy+7d>` IS the precondition. The probe
+now decides between the issue's two closing arms, and never reprints the free-text field into the
+public issue.
+
+### Session errors, this round
+
+- **M_clamp survived and I nearly recorded it as equivalent.** It was a test-strength gap (§6).
+- **Straddle fixture geometry wrong on the first cut** — the control run reddened because the 23-char
+  marker was bisected by the window, which is correct behaviour; I had asserted marker-present on a
+  geometry where that cannot hold.
+- **`source file | head` runs the source in a subshell** — `CREDS_REQ` came back empty and I briefly
+  chased a parser bug that did not exist.
+- **Ran a Claude hook script as a CLI** (`pre-merge-auto-close-scan.sh <file>`); it blocked on stdin
+  until killed. The ship skill's own `auto-close-scan.sh <body-file>` is the CLI.
+- **gitleaks rejected a code COMMENT** carrying a `postgres://u:PASSWORD@host/x` example
+  (`database-url-with-password`). Describe the shape in words in comments; keep literal shapes to
+  fixtures the scanner is configured for.
+- **`--pr` mode of the PIR gate read the wrong "plan"** — it takes the first
+  `knowledge-base/project/(plans|specs)/` path in the body, which was the mutation-battery record, and
+  reported no signal; the real plan signals. Put the plan link first in the body, or feed the gate
+  its corpus on stdin.
+- **Preflight Check 10 named a script the PR deliberately did not build** — the archived plan's
+  `discoverability_test.command` would have FAILed on a missing file, not on the property. Replaced
+  with the real credentialed read under `credentials_required` (SKIP-DECLARED), old command kept in a
+  superseded note.
