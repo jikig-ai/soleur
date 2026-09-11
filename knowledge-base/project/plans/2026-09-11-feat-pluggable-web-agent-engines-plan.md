@@ -40,8 +40,9 @@ official Codex App Server/auth docs, and Pencil MCP.
 
 - Codex `thread.sessionId` is distinct from `thread.id`; the adapter must persist
   the documented session identity and resume by thread ID rather than deriving one.
-- Codex API-key authentication has different data controls and feature limits from
-  ChatGPT sign-in, so API-key-only remains a bounded first-release decision.
+- Codex API-key authentication and ChatGPT subscription sign-in have different
+  billing, access, retention, and data-control behavior; v1 supports both and
+  keeps the authentication mode visible in workspace settings and policy checks.
 - The deepening fan-out was partial because two earlier research agents hit the
   session usage limit; local evidence and the three successful review agents are
   recorded below.
@@ -104,9 +105,9 @@ cost visible.
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server) documents threads,
   resumptions, streamed events, approval requests, permissions, and token usage.
   [Codex authentication](https://learn.chatgpt.com/docs/auth) supports API-key and
-  ChatGPT subscription sign-in with different billing and data controls. API-key
-  authentication is the proposed first-release path; subscription login is a
-  separate product decision.
+  ChatGPT subscription sign-in with different billing and data controls. Both
+  modes are in the first-release scope; the adapter must preserve the mode in
+  credential metadata and apply the corresponding policy.
 - The App Server requires an initialize/initialized handshake, uses
   `thread/start` and `thread/resume`, and documents `thread.sessionId` as the live
   session-tree root while `thread.id` is the resume handle. Required MCP-server
@@ -164,9 +165,9 @@ was authored, saved, exported, and layout-verified.
 
 ### Properties to preserve
 
-1. Every new user-chat conversation dispatches through its persisted workspace
-   default; explicitly classified system jobs follow their own documented
-   binding policy.
+1. Every new user-chat conversation and routine run dispatches through the
+   persisted workspace default; each routine run records the engine selected at
+   dispatch so retries and continuations remain stable.
 2. Existing conversations keep their engine and native session handle.
 3. Chat rendering and lifecycle consumers read a normalized event contract.
 4. Soleur authorization, tenant isolation, credential ownership, and spend caps
@@ -264,8 +265,9 @@ to reconcile in this pass.
    and Anthropic-only auxiliary call. Include `ws-handler.ts`,
    `support-conversation.ts`, `auto-sync-trigger.ts`,
    `app/api/support/route.ts`, and `app/api/repo/setup/route.ts`. Classify each
-   as an engine-bound user workload, a separately constrained system job, or an
-   auxiliary model call before making `engine_id` required. Persist the result
+   as an engine-bound user workload, an engine-bound routine run, a separately
+   constrained system job, or an auxiliary model call before making `engine_id`
+   required. Persist the result
    in `knowledge-base/project/specs/feat-pluggable-web-agent-engines/agent-engine-consumer-inventory.md`.
 3. Define neutral types: `AgentEngineId`, engine definition, capability status
    (`unsupported`, `supported`, `verified`), opaque native session handle,
@@ -292,9 +294,11 @@ to reconcile in this pass.
    Add durable `agent_engine_runs` and `agent_engine_events` tables with workspace
    and conversation FKs, RLS, unique provider idempotency/event keys, cursors,
    cancellation/reconciliation state, native-reference provenance, and usage
-   metadata. Annotate lawful basis and retention intent; keep credential values
-   out of snapshots. Backfill legacy conversations to Claude, verify counts, and
-   enforce new-row binding only after the backfill check.
+   metadata. Include execution kind and routine-run linkage where applicable so
+   routine dispatches carry the same persisted engine binding. Annotate lawful
+   basis and retention intent; keep credential values out of snapshots. Backfill
+   legacy conversations to Claude, verify counts, and enforce new-row binding
+   only after the backfill check.
 2. Add owner-only SECURITY DEFINER RPCs with `SET search_path = public, pg_temp`
    for changing the workspace default and atomically creating a conversation from
    the current default. Revoke direct writes, validate the reviewed registry
@@ -322,14 +326,17 @@ to reconcile in this pass.
 
 ### Phase 3 — Codex adapter and workspace UX
 
-1. Add the Codex adapter using the selected authentication path (API key for the
-   first release unless product review changes it). Map App Server thread start/
-   resume, streamed events, approval requests, permission scopes, cancellation,
-   and token usage into the neutral contract. Persist `thread.id` as the resume
-   handle and `thread.sessionId` as native session identity; do not derive one
-   from the other or expose protocol objects to client code.
+1. Add the Codex adapter with both supported authentication modes: API key and
+   ChatGPT subscription sign-in. Map App Server thread start/resume, streamed
+   events, approval requests, permission scopes, cancellation, and token usage
+   into the neutral contract. Persist `thread.id` as the resume handle and
+   `thread.sessionId` as native session identity; do not derive one from the
+   other or expose protocol objects to client code.
 2. Extend provider and lease resolution for Codex/OpenAI credentials. Reuse the
-   current encrypted storage and zeroization boundary; the client cannot supply
+   current encrypted storage and zeroization boundary; implement the managed
+   ChatGPT OAuth/device login and token refresh server-side, and never accept
+   browser-supplied access tokens. Preserve the auth mode, billing source, and
+   data-control profile in non-secret metadata. The client cannot supply
    provider, credential owner, model, endpoint, or engine configuration. Resolve
    all of them server-side and recheck membership, revocation, entitlement,
    spend authorization, and egress policy immediately before dispatch and every
@@ -340,7 +347,8 @@ to reconcile in this pass.
    missing; authenticate and replay-protect all remote callbacks.
 4. Add a “Default agent engine for new conversations” section to the existing
    workspace settings page. Show engine availability, required credential state,
-   capability gaps, and the rule that existing conversations keep their engine.
+   capability gaps, the selected Codex auth mode (API key or ChatGPT sign-in),
+   and the rule that existing conversations and routine runs keep their engine.
    The API must validate ownership, engine qualification, and credential presence
    independently of the UI.
 5. The committed Pencil wireframe is
@@ -354,21 +362,25 @@ to reconcile in this pass.
    approval denial, restart recovery, cancellation, cross-workspace isolation,
    revoked credential, usage attribution, attachment handling, and capability
    mismatch. Bound live usage and record the measured results.
-2. Add a feature flag for Codex dispatch and roll out to an internal cohort first.
-   Keep Claude as the default until Codex qualification passes; never use a flag
-   as a substitute for capability or authorization checks.
+2. Add a feature flag for Codex dispatch and roll out to an internal cohort using
+   synthetic or explicitly redacted repository data only. Keep Claude as the
+   default until Codex qualification passes; never use a flag as a substitute for
+   capability or authorization checks.
 3. Add explicit DSAR/account-delete ordering: stop new work, cancel and reconcile
    active runs, erase remote content where supported, then purge/anonymize local
    runs/events/snapshots and include them in export. Providers without verified
    erasure remain disabled for customer content.
 4. Publish a capability matrix and update Claude Code-only public claims only after
-   CMO/CLO signoff. Keep Grok Build and Devin in the registry design/future scope
-   until their own qualification gates pass.
+   CMO/CLO signoff. Keep Grok Build and Devin behind capability-scoped registry
+   entries until the workflow-specific qualification gates pass; do not imply
+   full interactive parity.
 5. Complete the vendor qualification record for Codex (and each future remote
-   engine): data-processing/DPA status, billing owner and recurring expense,
-   retention/deletion behavior, endpoint and subprocess trust boundary, failure
-   and support assumptions, pinned package/binary version and digest where
-   applicable, lockfile/provenance scan, and a no-network-at-runtime decision.
+   engine): auth-mode-specific data-processing/DPA status, billing owner and
+   recurring expense, retention/deletion behavior, endpoint and subprocess trust
+   boundary, failure and support assumptions, pinned package/binary version and
+   digest where applicable, lockfile/provenance scan, and a no-network-at-runtime
+   decision. CLO approval is required before customer repository content is
+   enabled.
 
 ## Acceptance Criteria
 
@@ -377,7 +389,8 @@ to reconcile in this pass.
   adapter tests.
 - New user-chat conversations inherit the workspace default; existing rows
   retain their engine and native session binding across default changes and
-  restarts. System-job treatment is explicit in the consumer inventory.
+  restarts. Routine runs inherit the current default at dispatch and retain that
+  binding across retries and continuations.
 - Atomic creation tests prove the persisted engine and configuration snapshot are
   selected and inserted in one transaction; concurrent default changes and
   concurrent first dispatches cannot split the binding. A database boundary
@@ -387,6 +400,9 @@ to reconcile in this pass.
   to another provider.
 - All adapters enforce current membership, credential validity, revocation,
   permission decisions, spend authorization, and platform-tool policy.
+- Codex supports both API-key and ChatGPT subscription sign-in; the selected mode
+  is encrypted at rest, visible in workspace settings, and mapped to its own
+  billing and data-control policy without accepting browser-supplied tokens.
 - For engine dispatch, clients cannot select provider, credential owner, model,
   endpoint, or engine configuration. Workspace A cannot use workspace/user B's
   key, including delegated-key continuations after revocation.
@@ -397,6 +413,9 @@ to reconcile in this pass.
 - Queued remote work, absent streaming, duplicate events, uncertain dispatch,
   delayed cancellation, and estimated/unavailable usage have deterministic tests
   and honest client states.
+- A remote engine can be enabled for a restricted workflow only when its declared
+  capabilities and vendor evidence qualify that workflow; no partial adapter is
+  presented as full interactive parity.
 - Native usage units and provenance remain distinct from monetary cost; no
   unverified value is stored or displayed as zero.
 - Restart and disconnect recovery is idempotent, and a cancellation request is
@@ -410,8 +429,8 @@ to reconcile in this pass.
 - The first-release inventory names every remaining Anthropic-dependent auxiliary
   call and states its user-visible implication before Codex rollout.
 - Workspace settings explain default scope, existing-conversation continuity,
-  missing credentials, and capability gaps; the committed `.pen` wireframe exists
-  and matches the shipped flow.
+  routine-run binding, both Codex auth modes, missing credentials, and capability
+  gaps; the committed `.pen` wireframe exists and matches the shipped flow.
 - ADR-217, `model.c4`, and the regenerated `model.likec4.json` describe the
   same registry, adapter, persistence, credential, remote-execution, and
   observability boundaries.
@@ -623,14 +642,21 @@ row counts, null coverage, and dual-read compatibility before enforcing the new
 binding, and roll back by disabling the new creator while preserving the added
 columns and records. No serving host restart or maintenance window is required.
 
-## Open Decisions Before `/work`
+## Resolved Decisions Before `/work`
 
-1. Confirm API-key-only Codex authentication for the first release; subscription
-   login remains out of scope unless product and data review changes it.
-2. Decide whether workspace-owned routines inherit the default at creation or
-   remain separately constrained system jobs; user-chat conversations always
-   receive a persisted engine binding.
-3. Decide whether a future remote engine may be exposed for a restricted workflow
-   subset when it cannot meet the full interactive contract.
-4. Confirm the vendor qualification record and CLO disposition for Codex's data
-   processing, retention, and remote erasure capabilities.
+1. Codex v1 supports both API-key authentication and ChatGPT subscription
+   sign-in. The auth mode, billing source, retention controls, and data-control
+   profile remain distinct policy inputs.
+2. Workspace routines are included in the workspace default. Each routine run
+   resolves the current default at dispatch and persists that engine binding;
+   retries and continuations retain it.
+3. The registry supports capability-scoped remote engines. A restricted workflow
+   may be enabled only after workflow-specific capability and vendor
+   qualification; no partial adapter is presented as full interactive parity.
+4. Synthetic or explicitly redacted internal dogfooding is allowed behind the
+   Codex flag. Customer repository content remains blocked until the vendor
+   qualification record and CLO disposition cover both auth modes, processing,
+   retention, geography, billing, and remote erasure.
+
+The remaining items are work-phase gates and evidence collection, rather than
+unresolved product direction.
