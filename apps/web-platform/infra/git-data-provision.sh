@@ -32,6 +32,12 @@ set -euo pipefail
 # client cannot influence it (the workspace_id in SSH_ORIGINAL_COMMAND is the only
 # client input, and it is validated below).
 REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories}"
+# (#8043 F8) The MOUNT the store lives on — a SECOND, independently-defaulted seam, asserted
+# below with mountpoint(1). It is deliberately not derived from REPO_ROOT: `mountpoint -q` on
+# the repositories SUBDIRECTORY returns 1 on a correctly mounted host, so an assertion on
+# REPO_ROOT would refuse every erasure/provision (measured, ubuntu-24.04). The suites point
+# this at a real mount (`stat -c %m` of their temp root) rather than stubbing the instrument.
+MOUNT_ROOT="${GIT_DATA_MOUNT_ROOT:-/mnt/git-data}"
 
 reject() {
   echo "remote: git-data provision: $1" >&2
@@ -54,15 +60,32 @@ case "$workspace_id" in
 esac
 
 # --- Build the target path and refuse if it does not canonicalize under the root ---
+# --- (#8043 F8) REFUSE UNLESS THE STORE IS MOUNTED — before any path guard below.
+#     `readlink -f` SUCCEEDS on a path that does not exist, so on a host whose volume never
+#     mounted the guards below all pass and `git init --bare` wrote a REAL user repository
+#     onto the root disk, where a later successful mount silently hides it. That is data
+#     loss, not a false report. mountpoint(1) is the instrument; it is resolved from PATH
+#     (sshd sets the server's PATH, and `AcceptEnv LANG LC_*` cannot reach it) and its
+#     ABSENCE fails closed — a check that cannot run is not a check that passed. ---
+mountpoint_bin="$(command -v mountpoint 2>/dev/null || true)"
+[ -n "$mountpoint_bin" ] || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
+"$mountpoint_bin" -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
+
 repo_path="${REPO_ROOT}/${workspace_id}.git"
-# The repo need not exist yet, so canonicalize the PARENT (REPO_ROOT, which does).
+# The repo need not exist yet, so canonicalize the PARENT (REPO_ROOT, which must exist:
+# git-data-bootstrap.sh creates it at boot, downstream of its own mountpoint FATAL). The
+# `-d` is what makes this guard LIVE — `readlink -f` returns a path for an absent root.
 root_real="$(readlink -f "$REPO_ROOT" 2>/dev/null || echo "")"
-[ -n "$root_real" ] || reject "repo root $REPO_ROOT is not present"
+[ -n "$root_real" ] && [ -d "$root_real" ] || reject "repo root $REPO_ROOT is not present"
 parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 [ "$parent_real" = "$root_real" ] || reject "resolved path escapes the repo root"
 
 # --- Idempotent init under a per-workspace lock (concurrent first-init safe) ---
-mkdir -p "$REPO_ROOT"
+# (#8043 F8) NO mkdir OF THE REPO ROOT HERE. git-data-bootstrap.sh creates the root at boot,
+# downstream of its own mountpoint FATAL, so on a healthy host this was dead code and on an
+# unmounted one it was precisely the hazard: it created the store on the root disk. If the
+# root is absent, `exec 9>` fails the redirection and `set -e` exits — the load-bearing
+# control; the mount assertion above upgrades that raw bash error into a named refusal.
 lock_file="${REPO_ROOT}/.${workspace_id}.init.lock"
 exec 9>"$lock_file"
 flock 9 || reject "could not acquire init lock for '$workspace_id'"

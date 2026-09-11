@@ -33,6 +33,12 @@ set -euo pipefail
 # influence it (the workspace_id in SSH_ORIGINAL_COMMAND is the only client input,
 # validated below).
 REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories}"
+# (#8043 F8) The MOUNT the store lives on — a SECOND, independently-defaulted seam, asserted
+# below with mountpoint(1). It is deliberately not derived from REPO_ROOT: `mountpoint -q` on
+# the repositories SUBDIRECTORY returns 1 on a correctly mounted host, so an assertion on
+# REPO_ROOT would refuse every erasure/provision (measured, ubuntu-24.04). The suites point
+# this at a real mount (`stat -c %m` of their temp root) rather than stubbing the instrument.
+MOUNT_ROOT="${GIT_DATA_MOUNT_ROOT:-/mnt/git-data}"
 
 reject() {
   echo "remote: git-data remove: $1" >&2
@@ -53,16 +59,31 @@ case "$workspace_id" in
   (*[!A-Za-z0-9._-]*) reject "workspace_id has unsafe characters: '$workspace_id'" ;;
 esac
 
+# --- (#8043 F8) REFUSE UNLESS THE STORE IS MOUNTED — before any path guard below.
+#     `readlink -f` SUCCEEDS on a path that does not exist, so on a host whose volume never
+#     mounted the guards below all pass, the repo is "not present", and this script used to
+#     print a no-op SUCCESS over a store nobody looked at: an Article 17 erasure that erased
+#     nothing. mountpoint(1) is the instrument; it is resolved from PATH (sshd sets the
+#     server's PATH, and `AcceptEnv LANG LC_*` cannot reach it) and its ABSENCE fails
+#     closed — a check that cannot run is not a check that passed. ---
+mountpoint_bin="$(command -v mountpoint 2>/dev/null || true)"
+[ -n "$mountpoint_bin" ] || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
+"$mountpoint_bin" -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
+
 # --- Build the target path and refuse if the PARENT does not canonicalize under
-#     the root (identical to provision's guard). ---
+#     the root (identical to provision's guard). The `-d` is what makes this guard LIVE:
+#     `readlink -f` returns a path for an absent root, so `-n` alone never fired. ---
 repo_path="${REPO_ROOT}/${workspace_id}.git"
 root_real="$(readlink -f "$REPO_ROOT" 2>/dev/null || echo "")"
-[ -n "$root_real" ] || reject "repo root $REPO_ROOT is not present"
+[ -n "$root_real" ] && [ -d "$root_real" ] || reject "repo root $REPO_ROOT is not present"
 parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 [ "$parent_real" = "$root_real" ] || reject "resolved path escapes the repo root"
 
-# --- Idempotent erasure under a per-workspace lock (mirrors provision's lock) ---
-mkdir -p "$REPO_ROOT"
+# --- Idempotent erasure under a per-workspace lock (mirrors provision's lock).
+#     (#8043 F8) NO mkdir OF THE REPO ROOT HERE: an erasure path must never CREATE the
+#     store. The bootstrap creates the root at boot; if it is absent, `exec 9>` below fails
+#     the redirection and `set -e` exits — that deletion is the load-bearing control, the
+#     mount assertion above is the message upgrade that names why. ---
 lock_file="${REPO_ROOT}/.${workspace_id}.init.lock"
 exec 9>"$lock_file"
 flock 9 || reject "could not acquire init lock for '$workspace_id'"
