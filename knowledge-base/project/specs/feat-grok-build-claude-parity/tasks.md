@@ -17,7 +17,7 @@ Lane: `cross-domain`. Closes #8064.
 - [ ] 2.1 `go.md` Step 0.0/0: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` — no `:-` CWD default, no `sync.md` `:-`
 - [ ] 2.2 Empty root still emits `plugin-root-unverified`
 
-## Phase 3: ADR-110 (only if operator keeps it in this PR)
+## Phase 3: ADR-110 (in this PR)
 
 - [ ] 3.1 Create `plugins/soleur/lib/harness-model-map.ts` + `test/harness-model-map.test.ts` (reuse `detectHarness()`)
 - [ ] 3.2 Confirm Grok fixture model ids against live xAI docs (do not guess in the plan)
@@ -47,7 +47,7 @@ Lane: `cross-domain`. Closes #8064.
 - [ ] 5.3 Same table in `README.md` and `plugins/soleur/README.md`
 - [ ] 5.4 Confirm trust token (`/hooks-trust` vs Claude-compat settings) before any public TOM sentence
 
-## Phase 6: Legal lockstep (only if operator keeps it in this PR)
+## Phase 6: Legal lockstep — PARKED (follow-up issue)
 
 - [ ] 6.1 Canonical `docs/legal/{terms-and-conditions,privacy-policy,data-protection-disclosure,gdpr-policy,acceptable-use-policy}.md` harness-neutral plugin copy
 - [ ] 6.2 Eleventy mirrors `plugins/soleur/docs/pages/legal/<same>.md` (hero + body dates)

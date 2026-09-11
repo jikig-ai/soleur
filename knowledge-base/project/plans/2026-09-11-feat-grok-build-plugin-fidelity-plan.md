@@ -36,7 +36,7 @@ Panel: DHH, code-simplicity, architecture-strategist, spec-flow, CPO, CMO, UX, C
 7. C4: if `grokBuild` is added, it is a **local harness** loading `plugin` via `.grok/config.toml`, **not** a child of Cloud CLI Engine `platform.engine`. No `api`/`hetzner` edges. (Whether C4 ships in this PR is coupled to ADR-110 — User-Challenge below.)
 8. Live CLI (this host, `grok --help`): **no `--trust` flag**. `--always-approve` and `--no-subagents` exist. Do **not** freeze `grok --trust` into legal copy. `/work` must confirm which token arms Soleur PreToolUse (`/hooks-trust` vs Claude-compat `.claude/settings.json`) before Phase 5/6.
 
-**Taste / User-Challenge (not auto-applied):** see operator question after this revision. DHH: cut ADR-110 + legal + C4 from this PR. Architecture/CPO: keep ADR-110 and five-file legal lockstep. CMO: “Same platform” not “Same plugin”; dual-voice getting-started FAQ+JSON-LD. UX: table after install, before callouts; no `.pen`.
+**Taste / User-Challenge (resolved 2026-09-11):** operator chose **keep ADR-110, park legal**. Phase 3 + C4 local `grokBuild` stay in this PR. Phase 6 legal lockstep is deferred until `/work` confirms a live trust token (this `grok --help` has no `--trust`). Do not freeze `grok --trust` into T&C.
 
 ## Research Insights
 
@@ -158,7 +158,7 @@ Do not add a Grok Skill-tool shim. Do not edit `apps/web-platform/server/agent-r
 
 #### Phase 3 — ADR-110 (FR4)
 
-Park vs keep is a User-Challenge. If kept:
+**In this PR** (operator 2026-09-11).
 
 - `harness-model-map.ts` + tests. Reuse `detectHarness()` from `harness.ts` (not `GROK_SESSION`).
 - `workflow-model-pins.test.ts` allowlist → `cheap`/`standard`; resolve in the seven `*.workflow.js` `agent()` helpers already enumerated.
@@ -193,9 +193,9 @@ Only after Phases 1–2 tests are green (Phase 3 if kept):
 - Do not launch (no “Grok support” changelog/social).
 - Do not freeze a trust CLI token into public copy until `/work` confirms it.
 
-#### Phase 6 — Legal (FR9)
+#### Phase 6 — Legal (FR9) — PARKED
 
-User-Challenge (DHH cut vs operator/CPO keep). If kept: 3-way lockstep on the five canonical docs + Eleventy mirrors + `legal-doc-shas.ts`. Harness-neutral plugin sentence. **No** `grok --trust` as a TOM until the live token is known. **No** xAI customer sub-processor row. Cookie-policy and disclaimer stay Claude-exclusive unless CLO expands lockstep — name that residual; do not claim “legal is harness-neutral.”
+Deferred from this PR until a live Grok trust/hooks token is confirmed. Residual: five canonical legal docs plus cookie-policy and disclaimer still say “Claude Code plugin.” Do not claim legal is harness-neutral. Follow-up: document in-place here (net-issue-flow hook blocked a dedicated issue). Re-open when the live Grok trust token is confirmed.
 
 ## Files to Edit
 
