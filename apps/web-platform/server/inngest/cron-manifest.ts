@@ -59,6 +59,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-kb-template-health",
   "cron-legal-audit",
   "cron-linkedin-token-check",
+  "cron-machinery-drain",
   "cron-main-health-monitor",
   "cron-membership-health",
   "cron-nag-4216-readiness",

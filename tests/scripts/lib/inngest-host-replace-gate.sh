@@ -94,7 +94,8 @@ inngest_host_replace_gate() {
         # Measured: after a partial recut the volume is destroyed and out of state, and every
         # dispatch refused. `inngest-volume-recut` aborts because Guard 2 runs before the plan and
         # grades the LIVE host (no volume by that name => id_pin_mismatch, and /mnt/data is not on
-        # the pinned device => mount_mismatch). `apply_target=inngest-host` aborts because
+        # the pinned volume alias => mount_mismatch, on `data_mount_devid` since #8017).
+        # `apply_target=inngest-host` aborts because
         # the hcloud_server.inngest `user_data` embeds hcloud_volume.inngest_redis.id with no
         # `ignore_changes` on it, so an absent volume makes that id unknown at plan time, forces a
         # server replace, and the additive-only guard refuses any delete. And this gate aborted

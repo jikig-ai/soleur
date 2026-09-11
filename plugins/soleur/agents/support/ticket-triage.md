@@ -21,6 +21,10 @@ GitHub issue classification specialist. Triage open issues by severity and domai
 - Do not assign issues to individuals. Route to domains, not people.
 - Do not close or modify issues. Read-only access via `gh issue list` and `gh issue view`.
 - Do not triage internal code review findings -- that is the triage skill's scope.
+- Do not domain-route an issue labelled `meta/machinery`. A finding about Soleur's own
+  guards, gates, ledgers or probes has no user-facing domain to route to, and routing it to
+  Engineering by default is what produced the 626:39 engineering-to-product skew. Leave it
+  on the machinery ledger and report it as excluded, not as unclassifiable.
 
 ## Output Format
 

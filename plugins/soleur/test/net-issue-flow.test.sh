@@ -425,8 +425,17 @@ for _f in number body createdAt state; do
   fi
 done
 cases=$((cases + 1))
-if [[ "$issue_call" != *"deferred-scope-out"* ]]; then pass "FILED query is not label-filtered (label covers ~8%)"
-else fail "FILED query must not filter by deferred-scope-out; got: $issue_call"; fi
+# Anchored on the MECHANISM (`--label` / `-label:`), not on one label NAME.
+# Grepping for `deferred-scope-out` pinned the 2026-07 instance and would have
+# passed silently on a future `--label meta/machinery` or
+# `--search '-label:meta/machinery'` -- the exact change ADR-216 says must never
+# happen. If the FILED query ever becomes label-filtered, machinery filings stop
+# counting toward NET, every machinery-only PR passes net-positive, and the
+# ledger grows under no gate while visible on no surface: the accountability
+# hole ADR-216 rejected the separate-repo option to avoid, reintroduced.
+if [[ "$issue_call" != *"--label"* && "$issue_call" != *"-label:"* ]]; then
+  pass "FILED query is not label-filtered by ANY label (ADR-216 accountability boundary)"
+else fail "FILED query must not filter by any label; got: $issue_call"; fi
 
 # ---------------------------------------------------------------------------
 # Case 9: createdAt filter is applied client-side on the FULL ISO timestamp.

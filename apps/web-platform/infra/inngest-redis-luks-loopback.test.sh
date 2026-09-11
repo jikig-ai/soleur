@@ -291,6 +291,86 @@ fi
 cryptsetup close inngest-redis >/dev/null 2>&1
 run_arm "ARM2 crypto_LUKS opens and mounts" true "$L_RAW" 0
 if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "ARM2 mounted from the mapper"; else no "ARM2 not mounted from the mapper"; fi
+
+# --- ARM2b — #8017's device resolution against a REAL, KERNEL-BUILT device tree -------------
+# Every other data_mount_devid arm in this repo drives a PATH-stubbed lsblk, and a stub answers
+# whatever the fixture author imagined lsblk prints. This arm is the only place the resolution
+# meets a tree the KERNEL actually built: a real dm-crypt node over a real loopback device, with
+# a real /sys topology underneath it. If `lsblk -s` does not walk dm -> backing device the way
+# the emitter assumes, this is the arm that says so.
+#
+# THE PIPELINE IS EXTRACTED FROM THE EMITTER, not retyped. A retyped copy proves that some
+# pipeline works, never that the SHIPPED one does -- and drifts the moment the emitter changes.
+LB_EMITTER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/inngest-bootstrap.sh"
+# EXTRACT BY DELIMITER, NEVER BY THE PROGRAM'S OWN TEXT. The previous form anchored on the awk's
+# first rule (`NF{l=$1}`), so it silently stopped matching the moment that rule changed -- which is
+# exactly what an extract-from-source arm exists to survive. It was already broken by the time this
+# ran in CI: the emitter had moved to a leaf-counting program and the sed still asked for the
+# original last-non-empty one. Anchor on the SHELL delimiters instead, which are the stable part.
+LB_AWK="$(awk "/[|] awk '''/{f=1; sub(/.*[|] awk '''/, \"\")} f{ if (/''' [|][|] true\)\"/) { sub(/''' [|][|] true\)\".*/, \"\"); print; exit } print }" "$LB_EMITTER")"
+if [ -n "$LB_AWK" ] && printf '%s\n' "" | awk "$LB_AWK" >/dev/null 2>&1; then
+  ok "ARM2b the base-device awk was EXTRACTED from the emitter and PARSES (this arm cannot drift from it)"
+else
+  no "ARM2b could not extract a parseable base-device awk from the emitter"
+  # HARD STOP, no fallback. The previous revision fell back to a RETYPED copy of the old program
+  # (`awk "${LB_AWK:-NF{l=$1} ...}"`), so an extraction failure did not stop the arm -- it quietly
+  # re-pointed every assertion below at stale text while the header still claimed the arm "cannot
+  # drift from" the emitter. A guard whose failure mode is to test something else and keep going is
+  # the vacuity class this whole file exists to close.
+  printf '[FATAL] ARM2b cannot proceed: the emitter awk did not extract. Refusing to test a retyped copy.\n' >&2
+  exit 1
+fi
+
+# What does the kernel actually report for a mapper over a loop device?
+LB_SRC="$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)"
+# -inso, not -nso: the emitter asks lsblk for ASCII so byte depth tracks logical depth, and an arm
+# that drives a DIFFERENT invocation is not exercising the shipped path.
+LB_BASE="$(timeout 5 lsblk -inso NAME "$LB_SRC" 2>/dev/null | awk "$LB_AWK")"
+LB_WANT="$(basename "$L_RAW")"
+if [ "$LB_BASE" = "$LB_WANT" ]; then
+  ok "ARM2b lsblk -s walks the REAL mapper to its REAL backing device ($LB_SRC -> $LB_BASE)"
+else
+  no "ARM2b the real device tree did NOT resolve to the backing device (got '$LB_BASE', want '$LB_WANT') — the emitter's assumption is false on a kernel-built tree"
+fi
+
+# ...and the reverse map, against real symlinks resolved by the real readlink. The Hetzner
+# namespace is synthesized over the loop device because no HC_Volume exists on a CI box, but
+# every link, target and resolution below is genuine.
+LB_BYID="$TMPROOT/byid"; mkdir -p "$LB_BYID"
+ln -sf "$L_RAW" "$LB_BYID/scsi-0HC_Volume_106261946"
+lb_devid() {  # lb_devid <byid-dir> <base> -> the emitter's reverse map, same shape
+  _h=0; _m=""
+  for _a in "$1"/scsi-0HC_Volume_*; do
+    [ -e "$_a" ] || continue
+    _t="$(readlink -f "$_a" 2>/dev/null || true)"; [ -n "$_t" ] || continue
+    case "$_t" in */"$2") _h=$((_h+1)); _m="${_a##*/}" ;; esac
+  done
+  if [ "$_h" -eq 0 ]; then printf '__NOMATCH__'; elif [ "$_h" -gt 1 ]; then printf '__AMBIGUOUS__'; else printf '%s' "$_m"; fi
+}
+LB_DEVID="$(lb_devid "$LB_BYID" "$LB_BASE")"
+if [ "$LB_DEVID" = "scsi-0HC_Volume_106261946" ]; then
+  ok "ARM2b the reverse map resolves a REAL symlink to the volume alias (the value G14 authorizes on)"
+else
+  no "ARM2b the reverse map failed against real symlinks (got '$LB_DEVID')"
+fi
+# A second alias on the same real device must be AMBIGUOUS, not an arbitrary pick.
+ln -sf "$L_RAW" "$LB_BYID/scsi-0HC_Volume_999999999"
+if [ "$(lb_devid "$LB_BYID" "$LB_BASE")" = "__AMBIGUOUS__" ]; then
+  ok "ARM2b two REAL aliases on one device => __AMBIGUOUS__, never an arbitrary pick"
+else
+  no "ARM2b a genuinely multi-valued reverse map did not report __AMBIGUOUS__"
+fi
+rm -f "$LB_BYID/scsi-0HC_Volume_999999999"
+# A dangling alias must be SKIPPED, not matched. This is production semantics -- an alias pointing
+# at nothing is a device that is gone -- and it is the exact fixture defect that made an earlier
+# stub-based arm silently report __NOMATCH__ while claiming to test a healthy host.
+ln -sf "$TMPROOT/no-such-device" "$LB_BYID/scsi-0HC_Volume_111111111"
+if [ "$(lb_devid "$LB_BYID" "$LB_BASE")" = "scsi-0HC_Volume_106261946" ]; then
+  ok "ARM2b a DANGLING alias is skipped rather than matched (real -e semantics)"
+else
+  no "ARM2b a dangling alias perturbed the reverse map"
+fi
+rm -f "$LB_BYID/scsi-0HC_Volume_111111111"
 if [ -f "$ARM_MNT/canary" ]; then ok "ARM2 the existing store was OPENED, not reformatted"; else no "ARM2 the canary is gone — the crypto_LUKS arm reformatted an existing store"; fi
 umount "$ARM_MNT" >/dev/null 2>&1
 cryptsetup close inngest-redis >/dev/null 2>&1
