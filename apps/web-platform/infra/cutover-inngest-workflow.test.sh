@@ -527,10 +527,10 @@ assert "confirm keys on the emitter FLAG field (\"flag\":\"done\" + exit_code:0 
 assert "confirm does NOT key on \"reason\":\"done\" (the field-mismatch bug the review caught)" "! grep -qF '\"reason\":\"done\"' '$CONFIRM_FILE'"
 assert "confirm detects the aborted terminal flag (fail-loud path)" "grep -qF '\"flag\":\"aborted\"' '$CONFIRM_FILE'"
 assert "confirm detects the rolled-back terminal flag" "grep -qF '\"flag\":\"rolled-back\"' '$CONFIRM_FILE'"
-# #7674: the query itself moved into the shared _flip_query_rows helper (one reader, two
+# #7674: the query itself moved into the shared _bs_query_rows helper (one reader, two
 # callers). The no-SSH / no-deploy-status invariant is asserted on the HELPER below; what is
 # assertable HERE is that confirm still routes through it rather than growing a second reader.
-assert "confirm reads through the shared _flip_query_rows helper (no second reader)" "grep -qE '_flip_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
+assert "confirm reads through the shared _bs_query_rows helper (no second reader)" "grep -qE '_bs_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
 assert "confirm never dumps a raw Better Stack row (no 'jq .')" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$CONFIRM_FILE'"
 assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warning:: CONFIRM PATH)" "grep -qE 'CONFIRM PATH' '$CONFIRM_FILE'"
 # Emitter parity: the on-host emitter MUST actually stamp the flag states the confirm greps for.
@@ -868,9 +868,9 @@ FLV_FN_N=$(wc -l < "$FLV_FN" | tr -d '[:space:]')
 assert "#7674 _flip_liveness_count extraction is non-vacuous (>5 lines, got $FLV_FN_N)" "[[ '$FLV_FN_N' -gt 5 ]]"
 
 FLQ_FN="$(mktemp)"; SCRATCH+=("$FLQ_FN")
-awk '/^_flip_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
+awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
 FLQ_FN_N=$(wc -l < "$FLQ_FN" | tr -d '[:space:]')
-assert "#7674 _flip_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
+assert "#7674 _bs_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
 # The no-SSH invariant, migrated here from confirm_flip_state when the reader was extracted.
 assert "#7674 the shared reader queries via betterstack-query.sh (no SSH, no new transport)" \
   "grep -qE 'betterstack-query.sh' '$FLQ_FN' && ! grep -qE 'deploy-status' '$FLQ_FN'"
@@ -1036,9 +1036,12 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
 # prevent, and drift between them is how the confirm path and the gate path stop asking the same
 # question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
 # unset H is the fail-open this gate was built to close.
-FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_flip_query_rows ' "$BODY_SH") || true
-assert "#7674 the shared reader has exactly 2 call sites (confirm + liveness), got $FLQ_SITES" \
-  "[[ '$FLQ_SITES' -eq 2 ]]"
+FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\(|[A-Z_]+_RC=0;[[:space:]]+)?_bs_query_rows ' "$BODY_SH") || true
+assert "#7674/#8054 the shared reader has exactly 4 call sites (confirm + liveness + execute 2.0 probe + heartbeat), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 4 ]]"
+FLQ_FLIP_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-cutover-flip 50\)' "$BODY_SH") || true
+assert "#7674 the confirm + liveness call sites pass the flip tag and the one-page limit unchanged, got $FLQ_FLIP_SITES" \
+  "[[ '$FLQ_FLIP_SITES' -eq 2 ]]"
 FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
 assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
   "[[ '$FLV_SITES' -eq 1 ]]"

@@ -674,8 +674,18 @@ inngest_host_dark_gate() {
   # schema-exact, boot_id well-formed. ONE helper, shared with the execute gate (#8054); the G-table
   # in this file's header still names each predicate, and the suite still mutates each line.
   local graded row_age chosen_msg
-  graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")" \
-    || { _ihdg_verdict "${graded:-unreadable}"; return $?; }
+  if ! graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")"; then
+    # LITERAL tokens only, by whitelist. The helper's stdout is what it printed — and if a helper
+    # ever leaked something that is not a token, dispatching `$graded` would put it on THIS gate's
+    # stdout, which the caller prints. Anything unrecognised is `unreadable`.
+    case "$graded" in
+      silent)       _ihdg_verdict "silent";       return $? ;;
+      wrong_host)   _ihdg_verdict "wrong_host";   return $? ;;
+      stale_row)    _ihdg_verdict "stale_row";    return $? ;;
+      stale_schema) _ihdg_verdict "stale_schema"; return $? ;;
+      *)            _ihdg_verdict "unreadable";   return $? ;;
+    esac
+  fi
   row_age="${graded%%$'\n'*}"; chosen_msg="${graded#*$'\n'}"
   [[ "$row_age" =~ ^[0-9]+$ && -n "$chosen_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
 
@@ -1100,8 +1110,18 @@ inngest_execute_registry_gate() {
 
   # ── E1..E7 — the graded row, via the helper shared with inngest_host_dark_gate ───
   local graded row_age chosen_msg
-  graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")" \
-    || { _ihdg_verdict "${graded:-unreadable}"; return $?; }
+  if ! graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")"; then
+    # LITERAL tokens only, by whitelist. The helper's stdout is what it printed — and if a helper
+    # ever leaked something that is not a token, dispatching `$graded` would put it on THIS gate's
+    # stdout, which the caller prints. Anything unrecognised is `unreadable`.
+    case "$graded" in
+      silent)       _ihdg_verdict "silent";       return $? ;;
+      wrong_host)   _ihdg_verdict "wrong_host";   return $? ;;
+      stale_row)    _ihdg_verdict "stale_row";    return $? ;;
+      stale_schema) _ihdg_verdict "stale_schema"; return $? ;;
+      *)            _ihdg_verdict "unreadable";   return $? ;;
+    esac
+  fi
   row_age="${graded%%$'\n'*}"; chosen_msg="${graded#*$'\n'}"
   [[ "$row_age" =~ ^[0-9]+$ && -n "$chosen_msg" ]] || { _ihdg_verdict "unreadable"; return $?; }
   # E7's join key. The helper is the AUTHORITY on the boot_id's shape (the /proc UUID regex lives
