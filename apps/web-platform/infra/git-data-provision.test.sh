@@ -29,6 +29,7 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 # The unmounted row overrides the third argument. Stderr is kept so the refusal TEXT can be
 # pinned rather than "non-zero", which a charset reject also produces.
 ERR="$(mktemp "${TMPDIR:-/tmp}/gdprov-err.XXXXXX")"
+trap 'rm -f "$ERR"' EXIT
 run_provision() {
   local root="$1" id="$2" mnt="${3:-}"
   [ -n "$mnt" ] || mnt="$(stat -c %m "$root")"

@@ -34,6 +34,7 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 # with a directory that is NOT a mount point. Stderr goes to $ERR so a row can pin the
 # refusal TEXT and not merely "non-zero" (a charset reject is also non-zero).
 ERR="$(mktemp "${TMPDIR:-/tmp}/gdrm-err.XXXXXX")"
+trap 'rm -f "$ERR"' EXIT
 run_remove() {
   local root="$1" id="$2" mnt="${3:-}"
   [ -n "$mnt" ] || mnt="$(stat -c %m "$root")"

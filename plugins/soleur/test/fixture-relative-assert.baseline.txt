@@ -115,9 +115,9 @@
 1	apps/web-platform/infra/git-data-luks.test.sh
 2	apps/web-platform/infra/git-data-pre-receive.sh
 19	apps/web-platform/infra/git-data-pre-receive.test.sh
-4	apps/web-platform/infra/git-data-provision.test.sh
+7	apps/web-platform/infra/git-data-provision.test.sh
 1	apps/web-platform/infra/git-data-remove.sh
-5	apps/web-platform/infra/git-data-remove.test.sh
+10	apps/web-platform/infra/git-data-remove.test.sh
 1	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
 9	apps/web-platform/infra/git-data-transport-wrapper.test.sh
 2	apps/web-platform/infra/git-data-userdata-budget.sh

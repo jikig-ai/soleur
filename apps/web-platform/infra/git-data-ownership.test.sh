@@ -256,11 +256,14 @@ fi
 # ── FLOOR + LEDGER ─────────────────────────────────────────────────────────────────
 # 2 (S1) + 1 (S2) + 1 (S3) + 6 (S4) + 1 (S5) + 6 (S6) + 10 runtime = 27. Skipped runtime rows
 # count toward the floor (they were DECLARED), never toward passes.
-_ran=$((passes + fails + SKIPPED))
+# ADR-193 shape: the floor reports with `printf >&2` + `exit 1` INSIDE its own block, never
+# through the pass()/fail() helpers it backstops — a neutered helper cannot disarm it, and the
+# vacuity guard's mutant (the block alone, counters zeroed) must exit non-zero by itself.
+_declared=${SKIPPED:-0}
+_ran=$((passes + fails + _declared))
 if [ "$_ran" -lt 27 ]; then
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran/declared, floor is 27")
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 27\n' "$_ran"
+  printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 27 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  exit 1
 fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then
   printf '  FAIL LEDGER: %s failures counted but %s recorded\n' "$fails" "${#FAILURES[@]}"; exit 1
