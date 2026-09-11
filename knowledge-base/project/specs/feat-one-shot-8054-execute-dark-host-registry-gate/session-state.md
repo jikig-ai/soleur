@@ -41,3 +41,7 @@
 
 ## Deepen Phase
 - Status: complete — five agents (observability, security, test-design, learnings, verify-the-negative); all findings Mechanical and applied; see plan `## Enhancement Summary`
+
+## 2026-09-11 — work phase complete (Phases 0–6.3), full battery refused by siblings
+
+Commits on the branch after the rebase: RED battery (60be176cd) → lib + gate (7c0c3eff8) → 2.0 wiring (4e8797c45) → wiring suite (91bba6555) → ADR/C4 (fade08a1b) → lint drawdown + suite extensions (de0ebccbb). `bash scripts/test-all.sh` REFUSED rc 4 (6 sibling full-gate runs in other worktrees) — no verdict; every suite/lint reading a touched file was run in isolation and is green (see tasks.md 6.4). Next: `soleur:review` → resolve → `soleur:compound` → `soleur:ship` (full battery at ship) → AC19 post-merge `op=execute` dispatch.
