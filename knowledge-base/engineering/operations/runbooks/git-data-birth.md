@@ -201,7 +201,7 @@ a deliberate actor with repository write. What compensates is that the same gate
 the live production root on every pull request, so a collapse cannot reach `main` without
 first reddening the required `test` check.
 
-### The invariant Article 17 correctness rests on — asserted since 2026-09-11 (#8043 F8)
+### The invariant Article 17 correctness rests on — asserted from PR #8052 (#8043 F8)
 
 **Erasure and provision refuse to act unless the store is mounted, and never create it.** Until
 2026-09-11 this was an *accident*, and the accident is worth keeping on record because it is
@@ -411,7 +411,7 @@ boot signal and FAILS the job if it does not arrive, so a green run is now meani
 verify independently if that step warned that its credentials were missing.
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
-(`git-shell` + three `command=`/`no-pty` forced commands, deny-all public ingress).
+(three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
 
 ```bash
 # 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).

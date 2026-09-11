@@ -531,7 +531,7 @@ git_data_rung2_bound_files() {
   if [[ "$_n_occ" != "$_n_strict" ]]; then
     echo "git_data_rung2_bound_files: ABORT — ${module_tf} has ${_n_occ} \`file\`-family occurrence(s) but only ${_n_strict} in the strict single-line \"\${path.module}/…\" form. The remainder render into user_data while the extractor cannot see them, so the evidence digest would not move when they change. Offending site(s), as line:content in ${module_tf}:"
     _nonstrict_file_sites | sed 's/^/  /'
-    echo "git_data_rung2_user_data_sha256: restore the canonical form, or extend this gate deliberately. Fail-closed."
+    echo "git_data_rung2_bound_files: restore the canonical form, or extend this gate deliberately. Fail-closed."
     return 1
   fi
 

@@ -3,8 +3,8 @@
 #
 # Rendered by templatefile() in git-data.tf. Installs ONLY the durable substrate
 # (git, the transport user + its restricted key, the volume mount, the bootstrap,
-# the fail-closed placeholder hook). The real CAS fence hook ships later via the
-# web-platform deploy pipeline. NO SSH provisioner runs against this host
+# the fail-closed placeholder hook). The real CAS fence hook lands by host replace or
+# the cutover's operator root path (never git-uid; ADR-149 F9). NO SSH provisioner runs against this host
 # (cloud-init-only) — the CI runner cannot SSH either host, so a remote-exec would
 # hang the merge-triggered auto-apply.
 package_update: true
@@ -103,10 +103,11 @@ write_files:
   # amendment 2026-07-01 "PR B bare-repo provisioning" + #5274 Phase 3 Art. 17):
   #   1. TRANSPORT (git-data-transport-wrapper.sh, Sub-PR 3.D): an allowlist forced
   #      command that permits ONLY git-upload-pack / git-receive-pack and adds the
-  #      CWE-22 canonicalize-under-root fence git-shell lacks — never an interactive
-  #      shell (replaces the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"`).
+  #      CWE-22 canonicalize-under-root fence — never an interactive shell (replaced
+  #      the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"`; with the login shell /bin/sh
+  #      this map is the WHOLE confinement — see the users: block).
   #   2. PROVISION (git-data-provision.sh): a FIXED wrapper that idempotently
-  #      `git init --bare`s ONE per-workspace repo (git-shell -c cannot run init).
+  #      `git init --bare`s ONE per-workspace repo (the transport allowlist cannot run init).
   #   3. REMOVE (git-data-remove.sh): a FIXED wrapper that idempotently
   #      `rm -rf`s ONE per-workspace repo + its in-repo fence (GDPR Art. 17).
   # Separate keys ⇒ provisioning, ref-write, and erasure authority have separate
@@ -928,7 +929,7 @@ runcmd:
     # umask 077, not the inherited 022: cloud-init's default would create this 0644 on a
     # host that has a real local `git` account, and the file receives a dmesg tail that
     # kernel.dmesg_restrict=1 deliberately withholds from non-root. Defense-in-depth (the
-    # account is git-shell-confined), one subshell.
+    # account is confined to its three forced commands), one subshell.
     ( umask 077; : > "$GIT_DATA_LUKS_DETAIL" ) || true
     luks_err() {
       rc=$?

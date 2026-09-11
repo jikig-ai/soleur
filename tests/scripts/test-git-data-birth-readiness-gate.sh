@@ -1698,7 +1698,7 @@ _gE="$TMP/gE"; _g_repo "$_gE"; _gE_c1="$(_g_head "$_gE")"
 _r2_evidence_write "$_gE/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gE")"
 _g_commit "$_gE" "c2: evidence created alone"; _gE_c2="$(_g_head "$_gE")"
 _g "G10: row 6 MUST-PASS — a rehearsal commit creating the evidence and nothing else => ARM 2 passes" \
-  0 "PASS" git_data_rung2_evidence_provenance_gate "$_gE/ci.yml" "$_gE/evidence.env" range "$_gE_c1" "$_gE_c2"
+  0 "rehearsal-PR shape" git_data_rung2_evidence_provenance_gate "$_gE/ci.yml" "$_gE/evidence.env" range "$_gE_c1" "$_gE_c2"
 _g "G11: row 6 MUST-PASS — the same tree RELEASES the rehearsal gate (ARM 1 sees an evidence-only commit)" \
   0 "RELEASED" git_data_rung2_rehearsal_gate "$_gE/ci.yml" "$_gE/evidence.env"
 
@@ -1789,6 +1789,43 @@ _g "G25: MUST-PASS — a payload edit that leaves the evidence untouched => ARM 
 _g "G26: bound files outside the evidence's repository => a NAMED HOLD (nothing measured)" \
   1 "outside" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gB/evidence.env" birth
 
+# G27–G29 (#8052 review, test-design seat): three shapes the gate handles that no row pinned —
+# each survived a lib mutation with the suite green (G27: `--diff-filter=AM` -> `=M`; G28:
+# skipping `*.tf` in the intersection; G29: dropping `-m` from `diff-tree`, under which a merge
+# that is the last evidence-touching commit diffs as NOTHING and passes).
+# G27 — range mode, evidence CREATED (not modified) in the same commit as a payload edit.
+_gX="$TMP/gX"; _g_repo "$_gX"; _gX_c1="$(_g_head "$_gX")"
+printf '\n# a later edit to a shipped payload\n' >> "$_gX/git-data-gc.sh"
+_r2_evidence_write "$_gX/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gX")"
+_g_commit "$_gX" "c2: evidence CREATED + payload edit"; _gX_c2="$(_g_head "$_gX")"
+_g "G27: evidence ADDED alongside a payload edit => ARM 2 HOLD (the A in --diff-filter=AM)" \
+  1 "git-data-gc.sh" git_data_rung2_evidence_provenance_gate "$_gX/ci.yml" "$_gX/evidence.env" range "$_gX_c1" "$_gX_c2"
+# G28 — birth mode, the co-edited bound file is one of the three MODULE .tf roster members.
+_gY="$TMP/gY"; _g_repo "$_gY" with-evidence
+printf '\n# a later edit to the module\n' >> "$_gY/modules/git-data-userdata/main.tf"
+_r2_evidence_write "$_gY/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gY")"
+_g_commit "$_gY" "c3: main.tf edit + hash edit"
+_g "G28: module main.tf edit + evidence edit in one commit => ARM 1 HOLD naming main.tf" \
+  1 "main.tf" git_data_rung2_evidence_provenance_gate "$_gY/ci.yml" "$_gY/evidence.env" birth
+# G29 — birth mode, a MERGE commit is the last evidence-touching commit: the evidence branch
+# is merged onto a main that carries a payload edit, and the merge itself re-touches the
+# evidence (a conflict-resolution-style edit). `diff-tree -m` diffs against EACH parent.
+_gZ="$TMP/gZ"; _g_repo "$_gZ"
+git -C "$_gZ" checkout -q -b ev
+_r2_evidence_write "$_gZ/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gZ")"
+_g_commit "$_gZ" "ev: evidence alone"
+git -C "$_gZ" checkout -q main
+printf '\n# main-side payload edit\n' >> "$_gZ/git-data-gc.sh"
+_g_commit "$_gZ" "main: payload edit"
+git -C "$_gZ" merge -q --no-ff --no-edit ev >/dev/null 2>&1
+_r2_evidence_write "$_gZ/evidence.env" PASS "$_G_URL2" "$(_r2_hash "$_gZ")"
+git -C "$_gZ" add -A >/dev/null; git -C "$_gZ" commit -q --amend --no-edit >/dev/null 2>&1
+_gZ_last="$(git -C "$_gZ" log -1 --format=%H -- evidence.env)"
+_gZ_np="$(git -C "$_gZ" rev-list --parents -n1 "$_gZ_last" | wc -w)"
+if [[ "$_gZ_np" -ne 3 ]]; then _a_setup_fail "G29 fixture: the last evidence-touching commit ${_gZ_last} has $((_gZ_np - 1)) parent(s), expected 2 (a merge)"; fi
+_g "G29: a MERGE commit touching the evidence, one parent side carrying a payload edit => ARM 1 HOLD (-m is load-bearing)" \
+  1 "git-data-gc.sh" git_data_rung2_evidence_provenance_gate "$_gZ/ci.yml" "$_gZ/evidence.env" birth
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -1871,18 +1908,24 @@ _g "G26: bound files outside the evidence's repository => a NAMED HOLD (nothing 
 #     1  G26       bound files outside the evidence's repository: nothing measured => HOLD
 #   ----
 #    26
+# RAISED 146 -> 149 (#8052 review, test-design seat), ITEMISED — lib mutants that survived 146/146:
+#     1  G27       evidence ADDED beside a payload edit, range mode (kills `--diff-filter=AM` -> `=M`)
+#     1  G28       a MODULE .tf co-edit, birth mode (kills "skip *.tf in the intersection")
+#     1  G29       a merge commit as the last evidence toucher (kills dropping `-m` from diff-tree)
+#            G10's needle moved from "PASS" to "rehearsal-PR shape" so it cannot be satisfied by
+#            the "untouched" PASS branch.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 146 ]]; then
+if [[ "$_ran" -lt 149 ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 146")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 146. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 149")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 149. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 146)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 149)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

@@ -5,13 +5,15 @@
 # provisioning").
 #
 # `git-receive-pack` never auto-creates its target, so the per-workspace bare repo
-# MUST exist before the first replication push. The git-shell TRANSPORT key cannot
-# `git init --bare` (git-shell -c permits only receive-pack/upload-pack). This
+# MUST exist before the first replication push. The TRANSPORT key cannot
+# `git init --bare` (its forced command, git-data-transport-wrapper.sh, allowlists only
+# receive-pack/upload-pack — the login shell is /bin/sh, #8043, so the forced-command
+# map is the whole confinement). This
 # wrapper is bound to a SECOND, dedicated provision key's forced command
 # (`command="/usr/local/bin/git-data-provision.sh"` in cloud-init authorized_keys),
 # so provisioning authority and ref-write authority are SEPARATE credentials with
 # separate blast radii (ADR-068 §6 — never a cluster-wide cred). The transport
-# git-shell key is untouched.
+# key is untouched.
 #
 # Contract: read `workspace_id` from SSH_ORIGINAL_COMMAND as a SINGLE OPAQUE
 # argument (validated, NEVER eval'd — no shell-injection surface regardless of what
@@ -72,6 +74,18 @@ esac
 command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
 mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
 
+# --- (#8043 review, same as git-data-remove.sh) HONOUR THE CUTOVER FREEZE. git-data-cutover.sh plants
+#     `$MOUNT_ROOT/.cutover-freeze` between its post-drain delta rsync and the mount repoint;
+#     the pre-receive fence already denies pushes on it, but an erasure/provision landing in
+#     that window would act on the plaintext volume only while the LUKS copy — already
+#     `--delete`-synced — keeps the repo, and the outcome would be reported success. The
+#     sentinel is root-owned on a root-owned mount root: the git uid cannot forge or remove it.
+#     The path seam is the one git-data-pre-receive.sh already carries (test-only; AcceptEnv
+#     cannot reach it), so a suite can plant the sentinel without owning a mount root. ---
+cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"
+[ ! -e "$cutover_freeze" ] || reject "store is frozen for cutover ($cutover_freeze present) — retry after the cutover (fail-closed)"
+
+
 repo_path="${REPO_ROOT}/${workspace_id}.git"
 # The repo need not exist yet, so canonicalize the PARENT (REPO_ROOT, which must exist:
 # git-data-bootstrap.sh creates it at boot, downstream of its own mountpoint FATAL). The
@@ -93,7 +107,14 @@ parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 # unmounted one it was precisely the hazard: it created the store on the root disk. If the
 # root is absent, `exec 9>` fails the redirection and `set -e` exits — the load-bearing
 # control; the mount assertion above upgrades that raw bash error into a named refusal.
+#     (#8043 review, same as git-data-remove.sh) The lock file is a git-owned dotfile in a git-owned root, so a symlink can be
+#     planted at its path by the same uid: `exec 9>` would then O_TRUNC whatever it points at.
+#     Refuse a symlink before opening. It is NEVER unlinked afterwards: unlinking a lock file
+#     while a sibling holds fd 9 on it lets the next opener create a new inode and hold "the
+#     lock" concurrently (measured — provision and remove then race on one path). 0-byte
+#     dotfiles are invisible to git-data-gc.sh, which iterates `*.git` only. ---
 lock_file="${REPO_ROOT}/.${workspace_id}.init.lock"
+[ ! -L "$lock_file" ] || reject "lock path is a symlink: '$lock_file' (fail-closed)"
 exec 9>"$lock_file"
 flock 9 || reject "could not acquire init lock for '$workspace_id'"
 

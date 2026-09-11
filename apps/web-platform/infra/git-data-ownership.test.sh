@@ -77,6 +77,31 @@ if grep -qE '^[[:space:]]*chown[[:space:]]+-R[[:space:]].*\.ssh' <<< "$BOOT_CODE
   fail "S3: the bootstrap still has a recursive chown over .ssh — it runs after write_files and reverts the root ownership" "$(grep -nE '^[[:space:]]*chown[[:space:]]+-R' <<< "$BOOT_CODE")"
 else pass "S3: no recursive chown over .ssh survives in the bootstrap (the last writer no longer reverts the map)"; fi
 
+# S3b — WRITER CENSUS, fail-closed (#8052 review: seven mutants on one axis). The last-writer
+# model below parses exactly three writer forms: `chown O:G <path>`, `chmod NNNN <path>` and
+# `install -o O -g G -m NNNN … <path>`. Any OTHER writer that names a guarded path — `chown -R`,
+# `--recursive`, a symbolic `chmod g+w`, a `${VAR}` or absolute spelling, a chown over the parent
+# `$GIT_DATA_ROOT` — would run after write_files, decide the real ownership, and be INVISIBLE to
+# S4. So every chown/chmod/install line that mentions any spelling of a guarded path must be
+# one the model parses, or the suite fails naming the line. The one legitimate exception is the
+# `chown -h` of the $GIT_HOME/repositories symlink (it sets the LINK, not a guarded path).
+_guard_re='(\$\{?GIT_HOME\}?|/home/git|\$\{?HOOKS_DIR\}?|\$\{?PRE_RECEIVE\}?|\$\{?REPO_ROOT\}?|\$\{?GIT_DATA_ROOT\}?|/mnt/git-data)'
+_writers="$(grep -nE "^[[:space:]]*(chown|chmod|install)[[:space:]]" <<< "$BOOT_CODE" | grep -E "$_guard_re" || true)"
+_unmodelled=""
+while IFS= read -r _wl; do
+  [ -n "$_wl" ] || continue
+  _body="${_wl#*:}"
+  if grep -qE '^[[:space:]]*chown[[:space:]]+-h[[:space:]]+"\$GIT_USER:\$GIT_USER"[[:space:]]+"\$GIT_HOME/repositories"[[:space:]]*$' <<< "$_body"; then continue; fi
+  if grep -qE '^[[:space:]]*chown[[:space:]]+"?[A-Za-z0-9_$]+:[A-Za-z0-9_$]+"?[[:space:]]+"\$(GIT_HOME|GIT_HOME/\.ssh|GIT_HOME/\.ssh/authorized_keys|HOOKS_DIR|REPO_ROOT|PRE_RECEIVE)"[[:space:]]*$' <<< "$_body"; then continue; fi
+  if grep -qE '^[[:space:]]*chmod[[:space:]]+[0-7]{4}[[:space:]]+"\$(GIT_HOME|GIT_HOME/\.ssh|GIT_HOME/\.ssh/authorized_keys|HOOKS_DIR|REPO_ROOT|PRE_RECEIVE)"[[:space:]]*$' <<< "$_body"; then continue; fi
+  if grep -qE '^[[:space:]]*install[[:space:]]+-o[[:space:]]+[a-z]+[[:space:]]+-g[[:space:]]+[a-z]+[[:space:]]+-m[[:space:]]+[0-7]{4}[[:space:]]+"[^"]+"[[:space:]]+"\$PRE_RECEIVE"[[:space:]]*$' <<< "$_body"; then continue; fi
+  _unmodelled+="${_wl}"$'\n'
+done <<< "$_writers"
+_n_writers="$(grep -c . <<< "$_writers" || true)"
+if [ "$_n_writers" -lt 10 ]; then fail "S3b: writer census found only ${_n_writers} chown/chmod/install lines naming a guarded path — the census regex or the bootstrap changed shape" "$_writers"
+elif [ -z "$_unmodelled" ]; then pass "S3b: every one of the ${_n_writers} ownership writers naming a guarded path is a form the last-writer model parses"
+else fail "S3b: UNMODELLED ownership writer(s) — they run after write_files and S4 cannot see them" "$_unmodelled"; fi
+
 # S4 — the last-writer model over the literals. For each path, the LAST `chown O:G <path>`
 # and the LAST `chmod MODE <path>` in the comment-stripped bootstrap; `install -o O -g G -m
 # MODE … <path>` counts as both. A path with no writer is a FAIL, not a pass: silence about
@@ -148,12 +173,18 @@ else pass "S5: REPO_ROOT and HOOKS_DIR are owned separately (the triple is split
 # `stat -c '%U:%G %a'` instrument must exist in the code that reads the table.
 if grep -qF "stat -c '%U:%G %a'" <<< "$BOOT_CODE"; then pass "S6: the bootstrap reads ownership back with stat -c '%U:%G %a'"
 else fail "S6: no stat -c '%U:%G %a' readback in the bootstrap"; fi
+# Each row's `owner mode` must EQUAL what the last writer set (#8052 review: a table that
+# disagrees with the chown lines FATALs every birth — a fail-closed outage no static row saw).
 for p in '$GIT_HOME' '$GIT_HOME/.ssh' '$GIT_HOME/.ssh/authorized_keys' '$HOOKS_DIR' '$PRE_RECEIVE'; do
-  if grep -qE "^${p//\$/\\$} [a-z]+:[A-Za-z0-9_\$]+ [0-7]{3} " "$BOOTSTRAP"; then pass "S6: readback table has a literal user:group mode row for $p"
-  else fail "S6: no readback table row for $p in the bootstrap post-conditions"; fi
+  _rowv="$(grep -E "^${p//\$/\\$} [a-z]+:[A-Za-z0-9_\$]+ [0-7]{3} " "$BOOTSTRAP" | head -1 | awk '{print $2, $3}')"
+  _lm="$(_last_mode "$p")"
+  _want="$(_norm "$(_last_owner "$p")") ${_lm: -3}"   # stat %a prints 3 digits; the chmod literal is 4
+  if [ -z "$_rowv" ]; then fail "S6: no readback table row for $p in the bootstrap post-conditions"
+  elif [ "$(_norm "$_rowv")" = "$_want" ]; then pass "S6: readback table row for $p equals its last writer ($_want)"
+  else fail "S6: readback table row for $p says '$_rowv' but the last writer sets '$_want' — the boot would FATAL on a healthy host"; fi
 done
 # S6b — the model's premise ("git is in group git and no other") is asserted at boot, not assumed.
-if grep -qE 'id -Gn "\$GIT_USER"' <<< "$BOOT_CODE"; then pass "S6b: the bootstrap asserts the git account's group membership (the model's premise)"
+if grep -qE '^[[:space:]]*\[\[ "\$\(id -Gn "\$GIT_USER"\)" == "\$GIT_USER" \]\] \|\| ' <<< "$BOOT_CODE"; then pass "S6b: the bootstrap asserts the git account's group membership (the model's premise)"
 else fail "S6b: nothing asserts id -Gn git == git at boot; a supplementary group makes the root:git 0750 model wrong"; fi
 
 # S7 — the login shell is a REAL shell. sshd runs a forced `command=` as `<login shell> -c
@@ -166,6 +197,48 @@ case "$GIT_SHELL" in
   /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) pass "S7: the git user's login shell is a real shell ($GIT_SHELL) — forced commands can execute" ;;
   *) fail "S7: the git user's login shell is '${GIT_SHELL:-<unset>}' — a restricted or missing shell kills every forced command at '<shell> -c'" ;;
 esac
+
+# S7b — the shell readback runs AFTER the account-existence guard: under `set -eo pipefail` a
+# `getent` on an absent account exits the bootstrap silently at the wrong line (#8052 review).
+_ln_id="$(grep -nE '^id "\$GIT_USER" >/dev/null 2>&1 \|\| \{' <<< "$BOOT_CODE" | head -1 | cut -d: -f1)"
+_ln_sh="$(grep -nE '^_git_shell="\$\(getent passwd "\$GIT_USER" \| cut -d: -f7\)"' <<< "$BOOT_CODE" | head -1 | cut -d: -f1)"
+if [ -n "$_ln_id" ] && [ -n "$_ln_sh" ] && [ "$_ln_id" -lt "$_ln_sh" ]; then pass "S7b: the login-shell readback (line $_ln_sh) follows the 'user absent' FATAL guard (line $_ln_id)"
+else fail "S7b: the shell readback is not downstream of the id guard (id=$_ln_id shell=$_ln_sh) — an absent account dies silently under pipefail"; fi
+# S7c — the placeholder fence is installed only from a ROOT-owned staged file (/tmp is sticky
+# and world-writable; a git-uid file there would become the root:root 0755 fence on a re-run).
+if grep -qE '^[[:space:]]*\[\[ "\$\(stat -c %U "\$PLACEHOLDER_STAGED"\)" == root \]\] \|\| \{' <<< "$BOOT_CODE"; then pass "S7c: the staged placeholder must be root-owned before it is installed as the fence"
+else fail "S7c: nothing asserts the staged placeholder in /tmp is root-owned before install"; fi
+
+# S8 — the four defaults of the store's mount root and hook directory AGREE across the writer
+# of record (the bootstrap) and the three forced-command wrappers (#8052 review: every wrapper
+# row overrides the seam, so a typo in a production default would fail-close every push,
+# provision and erasure with nothing red before birth).
+_bs_root="$(sed -nE 's/^GIT_DATA_ROOT="([^"]+)".*$/\1/p' "$BOOTSTRAP" | head -1)"
+_tpl_root="$(grep -oE 'mount[[:space:]]+[^[:space:]]+[[:space:]]+/mnt/git-data([[:space:]]|$)' "$TEMPLATE" | head -1 | awk '{print $3}')"
+for w in git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh; do
+  _w_mnt="$(sed -nE 's/^MOUNT_ROOT="\$\{GIT_DATA_MOUNT_ROOT:-([^}]+)\}".*$/\1/p' "${DIR}/${w}" | head -1)"
+  _w_repo="$(sed -nE 's/^REPO_ROOT="\$\{GIT_DATA_REPO_ROOT:-([^}]+)\}".*$/\1/p' "${DIR}/${w}" | head -1)"
+  if [ -n "$_bs_root" ] && [ "$_w_mnt" = "$_bs_root" ] && [ "$_w_repo" = "${_bs_root}/repositories" ] && [ "$_tpl_root" = "$_bs_root" ]; then
+    pass "S8: $w defaults (mount $_w_mnt, root $_w_repo) equal the bootstrap's GIT_DATA_ROOT and the template's mount target"
+  else fail "S8: $w defaults disagree with the writer of record" "wrapper mount='$_w_mnt' root='$_w_repo' bootstrap='$_bs_root' template mount='$_tpl_root'"; fi
+done
+_w_hooks="$(sed -nE 's/^HOOKS_DIR="\$\{GIT_DATA_HOOKS_DIR:-([^}]+)\}".*$/\1/p' "${DIR}/git-data-transport-wrapper.sh" | head -1)"
+if [ -n "$_bs_root" ] && [ "$_w_hooks" = "${_bs_root}/hooks" ]; then pass "S8: the transport wrapper's core.hooksPath pin ($_w_hooks) is the bootstrap's HOOKS_DIR"
+else fail "S8: the transport wrapper pins core.hooksPath=$_w_hooks but the bootstrap's hooks dir is ${_bs_root}/hooks"; fi
+
+# S9 — what ROOT trusts from git-owned bytes, pinned on the maintenance path (#8052 structural
+# seat, measured in the pinned image): (a) root's gc names each repo on the command line
+# (`-c safe.directory="$repo"`), because the system-wide `$REPO_ROOT/*` form needs git >= 2.46
+# and 24.04 ships 2.43.0 — without it every weekly run fails every repo and reports success;
+# (b) the gc lock is NOT under world-writable /var/lock, where a git-uid pre-created file makes
+# root's open fail under fs.protected_regular; (c) the unit grants that path, not /var/lock.
+_gc_code="$(_code "${DIR}/git-data-gc.sh")"
+if grep -qE '^[[:space:]]*timeout -k 30 "\$REPO_TIMEOUT" git -c safe\.directory="\$repo" -C "\$repo" ' <<< "$_gc_code"; then pass "S9a: root's gc passes -c safe.directory=<repo> per command (effective on git 2.43)"
+else fail "S9a: git-data-gc.sh runs git against git-owned repos without -c safe.directory=<repo> — on git 2.43 the system /* form matches nothing and every repo fails"; fi
+if grep -qE '^LOCK="\$\{GIT_DATA_GC_LOCK:-/run/git-data-gc/lock\}"' <<< "$_gc_code" && ! grep -qE '/var/lock' <<< "$_gc_code"; then pass "S9b: the gc lock lives under the unit's RuntimeDirectory, not /var/lock"
+else fail "S9b: git-data-gc.sh keeps its lock under a git-writable directory (/var/lock) or moved it somewhere unpinned"; fi
+if grep -qxE 'RuntimeDirectory=git-data-gc' "${DIR}/git-data-gc.service" && ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lock([[:space:]]|$)' "${DIR}/git-data-gc.service"; then pass "S9c: git-data-gc.service declares RuntimeDirectory=git-data-gc and no longer grants /var/lock"
+else fail "S9c: git-data-gc.service does not declare RuntimeDirectory=git-data-gc, or still grants /var/lock"; fi
 
 # ── RUNTIME ARM (pinned image) ──────────────────────────────────────────────────────
 #
@@ -191,8 +264,11 @@ _og_repo="$(_norm "$(_last_owner '$REPO_ROOT')")"; _m_repo="$(_last_mode '$REPO_
 
 if ! command -v docker >/dev/null 2>&1; then _runtime_skip "docker absent"
 elif ! docker info >/dev/null 2>&1; then _runtime_skip "docker daemon unreachable"
-elif [ -z "$_og_home$_m_home$_og_ssh$_m_ssh$_og_ak$_m_ak$_og_hooks$_m_hooks$_og_pr$_m_pr$_og_repo$_m_repo" ]; then
-  fail "runtime arm: no literals extracted from the bootstrap, nothing to apply"
+elif _missing="$(for v in _og_home _m_home _og_ssh _m_ssh _og_ak _m_ak _og_hooks _m_hooks _og_pr _m_pr _og_repo _m_repo; do [ -n "${!v}" ] || printf '%s ' "$v"; done)" && [ -n "$_missing" ]; then
+  # Per-literal, not all-or-nothing: ONE empty literal would reach `chown "" path` in the
+  # container and turn every R-row into a misleading rc (S4 already reds on it; this keeps the
+  # runtime arm from reporting on a fixture it never built).
+  fail "runtime arm: literal(s) not extracted from the bootstrap, nothing to apply: ${_missing}"
   SKIPPED=$((SKIPPED + RUNTIME_ROWS - 1))
 else
   TMP="$(mktemp -d "${TMPDIR}/gdown.XXXXXX")"
@@ -272,15 +348,15 @@ DRV
 fi
 
 # ── FLOOR + LEDGER ─────────────────────────────────────────────────────────────────
-# 2 (S1) + 1 (S2) + 1 (S3) + 6 (S4) + 1 (S5) + 7 (S6/S6b) + 1 (S7) + 10 runtime = 29. Skipped runtime rows
+# 2 (S1) + 1 (S2) + 2 (S3/S3b) + 6 (S4) + 1 (S5) + 7 (S6/S6b) + 3 (S7/S7b/S7c) + 4 (S8) + 3 (S9) + 10 runtime = 39. Skipped runtime rows
 # count toward the floor (they were DECLARED), never toward passes.
 # ADR-193 shape: the floor reports with `printf >&2` + `exit 1` INSIDE its own block, never
 # through the pass()/fail() helpers it backstops — a neutered helper cannot disarm it, and the
 # vacuity guard's mutant (the block alone, counters zeroed) must exit non-zero by itself.
 _declared=${SKIPPED:-0}
 _ran=$((passes + fails + _declared))
-if [ "$_ran" -lt 29 ]; then
-  printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 29 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+if [ "$_ran" -lt 39 ]; then
+  printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 39 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   exit 1
 fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then

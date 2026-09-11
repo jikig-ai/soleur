@@ -7,8 +7,11 @@
 # chained `;`) is REJECTED; dot-path traversal, an escaping relative path, a symlink
 # planted at the repo path, a nested (non-direct-child) path, and a non-existent repo
 # are all REJECTED before any exec. Accept cases use the test-only EXEC_DRYRUN hook
-# (sshd never passes it — AcceptEnv empty, same posture as GIT_DATA_REPO_ROOT) so we
-# assert the canonicalized command WITHOUT a live git-upload-pack handshake.
+# (sshd never passes it — `AcceptEnv LANG LC_*` cannot match the name, same posture as
+# GIT_DATA_REPO_ROOT; #8043 F10) so we assert the canonicalized command WITHOUT a live
+# git-upload-pack handshake. (#8043 review) The store-mounted guard the wrapper shares with
+# provision/remove is exercised against a REAL mount (`stat -c %m` of the fixture root),
+# not a stub, and the exec'd argv must carry the `core.hooksPath` pin.
 #
 # MUTATION meta-check: the reject inputs are ALSO run against an always-exit-0 stub
 # wrapper; each MUST exit 0 there — proving the real wrapper's non-zero is what
@@ -33,16 +36,20 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
 # Run the wrapper (DRYRUN so a valid command echoes instead of exec-ing real git).
 # Echoes the exit code. Runs WITHOUT set -e propagation (reject cases exit 1 by design).
+# $3 (optional) overrides the mount root; the default is the mount the fixture root sits on.
+ERR="$(mktemp "${TMPDIR:-/tmp}/gdxport-err.XXXXXX")"
+trap 'rm -f "$ERR"' EXIT
 run_wrap() {
-  local root="$1" cmd="$2"
-  env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 \
-    SSH_ORIGINAL_COMMAND="$cmd" bash "$WRAPPER" >/dev/null 2>&1
+  local root="$1" cmd="$2" mnt="${3:-}"
+  [ -n "$mnt" ] || mnt="$(stat -c %m "$root")"
+  env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$mnt" GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 \
+    SSH_ORIGINAL_COMMAND="$cmd" bash "$WRAPPER" >/dev/null 2>"$ERR"
   echo $?
 }
 # Capture stdout of an accepted (dry-run) command.
 run_wrap_out() {
   local root="$1" cmd="$2"
-  env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 \
+  env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 \
     SSH_ORIGINAL_COMMAND="$cmd" bash "$WRAPPER" 2>/dev/null
 }
 
@@ -54,7 +61,7 @@ root=$(fresh_root); make_repo "$root" "ws-1"
 rc=$(run_wrap "$root" "git-upload-pack '${root}/ws-1.git'")
 if [ "$rc" = "0" ]; then pass; else fail "T1 git-upload-pack hyphen: expected accept (0), got $rc"; fi
 out=$(run_wrap_out "$root" "git-upload-pack '${root}/ws-1.git'")
-case "$out" in *"DRYRUN-EXEC git-upload-pack ${root}/ws-1.git"*) pass ;; *) fail "T1 expected canonicalized exec of git-upload-pack, got: $out" ;; esac
+case "$out" in *"DRYRUN-EXEC git -c core.hooksPath=/mnt/git-data/hooks upload-pack ${root}/ws-1.git"*) pass ;; *) fail "T1 expected canonicalized exec of upload-pack through the hooksPath pin, got: $out" ;; esac
 rm -rf "$root"
 
 # --- T2: git receive-pack (space form) on a real repo is ACCEPTED ---
@@ -62,7 +69,7 @@ root=$(fresh_root); make_repo "$root" "ws-2"
 rc=$(run_wrap "$root" "git receive-pack '${root}/ws-2.git'")
 if [ "$rc" = "0" ]; then pass; else fail "T2 git receive-pack space-form: expected accept (0), got $rc"; fi
 out=$(run_wrap_out "$root" "git receive-pack '${root}/ws-2.git'")
-case "$out" in *"DRYRUN-EXEC git-receive-pack ${root}/ws-2.git"*) pass ;; *) fail "T2 expected canonicalized exec of git-receive-pack, got: $out" ;; esac
+case "$out" in *"DRYRUN-EXEC git -c core.hooksPath=/mnt/git-data/hooks receive-pack ${root}/ws-2.git"*) pass ;; *) fail "T2 expected canonicalized exec of receive-pack through the hooksPath pin, got: $out" ;; esac
 rm -rf "$root"
 
 # --- T3: arbitrary / non-transport commands are REJECTED ---
@@ -117,6 +124,47 @@ rc=$(run_wrap "$root" "git-upload-pack '${root}/ws-absent.git'")
 if [ "$rc" != "0" ]; then pass; else fail "T7 absent repo: expected reject, got 0"; fi
 rm -rf "$root"
 
+# --- T8 (#8043 review, Guard 1 on the third forced command): an UNMOUNTED store is a
+#     named refusal. The mount root is pointed at a plain directory. ---
+root=$(fresh_root); make_repo "$root" "ws-unm"
+unmounted="$(mktemp -d "${TMPDIR:-/tmp}/gdxport-unm.XXXXXX")"
+if mountpoint -q "$unmounted"; then fail "T8 fixture: $unmounted is unexpectedly a mount point"; fi
+rc=$(run_wrap "$root" "git-receive-pack '${root}/ws-unm.git'" "$unmounted")
+if [ "$rc" != "0" ]; then pass; else fail "T8 unmounted store: expected refusal, got 0"; fi
+if grep -q 'not mounted' "$ERR"; then pass; else fail "T8 unmounted store: refusal does not name the mount ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root" "$unmounted"
+
+# --- T9 (#8043 review): a MOUNTED store whose repo root is NOT ON IT → refuse. /proc is a
+#     mount on every Linux runner; the fixture root is not on it. ---
+root=$(fresh_root); make_repo "$root" "ws-off"
+rc=$(run_wrap "$root" "git-receive-pack '${root}/ws-off.git'" "/proc")
+if [ "$rc" != "0" ]; then pass; else fail "T9 root off the store: expected refusal, got 0"; fi
+if grep -q 'is not on the store' "$ERR"; then pass; else fail "T9 root off the store: refusal does not name the containment ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root"
+
+# --- T10 (#8043 review): mountpoint(1) ABSENT from PATH → fails CLOSED, naming the
+#     instrument (curated PATH of symlinks to everything else the wrapper needs). ---
+root=$(fresh_root); make_repo "$root" "ws-noinst"
+curated="$(mktemp -d "${TMPDIR:-/tmp}/gdxport-path.XXXXXX")"
+for tool in bash readlink dirname stat git; do
+  src="$(command -v "$tool")" && ln -s "$src" "${curated}/${tool}"
+done
+env -i PATH="$curated" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 \
+  SSH_ORIGINAL_COMMAND="git-receive-pack '${root}/ws-noinst.git'" bash "$WRAPPER" >/dev/null 2>"$ERR"; rc=$?
+if [ "$rc" != "0" ]; then pass; else fail "T10 mountpoint absent: expected fail-closed, got 0"; fi
+if grep -qF 'mountpoint(1) not on PATH' "$ERR"; then pass; else fail "T10 mountpoint absent: refusal does not name the instrument ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root" "$curated"
+
+# --- T11 (#8043 review): the hooksPath pin is a SEAM with the bootstrap's literal, and the
+#     exec form is `git -c core.hooksPath=<dir> <verb>` — never the bare `git-<verb>` binary,
+#     which would let a repo-local core.hooksPath (git-writable) outrank the root-owned fence. ---
+root=$(fresh_root); make_repo "$root" "ws-pin"
+out=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" GIT_DATA_HOOKS_DIR="/srv/h" \
+  GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 SSH_ORIGINAL_COMMAND="git-receive-pack '${root}/ws-pin.git'" bash "$WRAPPER" 2>/dev/null)
+case "$out" in *"git -c core.hooksPath=/srv/h receive-pack ${root}/ws-pin.git"*) pass ;; *) fail "T11 hooksPath seam: expected the overridden pin in the exec argv, got: $out" ;; esac
+if grep -qE '^exec git -c "core\.hooksPath=\$\{HOOKS_DIR\}" "\$\{verb#git-\}" "\$repo_real"$' "$WRAPPER"; then pass; else fail "T11 the live exec line does not pin core.hooksPath through git -c"; fi
+rm -rf "$root"
+
 # --- MUTATION meta-check: the reject assertions have teeth ---
 # An always-exit-0 stub stands in for a wrapper whose allowlist/canonicalize guard
 # was removed. Representative reject inputs MUST exit 0 against it — i.e. WITHOUT the
@@ -133,8 +181,8 @@ rm -f "$stub"; rm -rf "$mut_root"
 
 # --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 22 ]; then
-  echo "FAIL: ran only ${total} assertions (<22) — suite did not execute fully" >&2
+if [ "$total" -lt 30 ]; then
+  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
   exit 1
 fi
 

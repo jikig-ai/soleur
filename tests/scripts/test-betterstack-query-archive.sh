@@ -489,6 +489,32 @@ else
       "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
 fi
 
+# G5.6 (#8052 review) — the pre-scan STEPS OVER a valued flag's value. `--grep --table` is a grep
+# for the literal text "--table" (a mode-2 shape: raw SQL takes no --grep); a pre-scan that
+# inspected the value would lift the NEXT `--table t1_x_logs` from under it and the query would
+# go to the default table. The only row that exercises the value-stepping arm — without it the
+# arm is one edit from a silent revert.
+rc="$(run_raw --grep --table --table t1_stepped_logs)"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"remote(t1_stepped_logs)"* && "$sql_g5" == *"--table"* ]]; then
+  ok "mode 2: the pre-scan steps over a --grep value spelled '--table' (the real flag is still honoured)"
+else
+  bad "mode 2: the pre-scan steps over a --grep value spelled '--table' (the real flag is still honoured)" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
+# G5.7 (#8052 review) — the raw-SQL refusal for an UNDERIVABLE archive has a row. A `--table`
+# that is not `<name>_logs` with a query spelling `$BS_TABLE_S3` and no `--table-s3` must
+# refuse (rc 64, named) rather than send `s3Cluster(primary, )` to the server.
+rc="$(run_raw "$RAW_BOTH" --table t1_notlogs)"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "64" && -z "$sql_g5" && "$(cat "$ERR_LOG")" == *"cannot derive an archive table"* ]]; then
+  ok "mode 1: an underivable archive with \$BS_TABLE_S3 in the query refuses (rc 64), sends nothing"
+else
+  bad "mode 1: an underivable archive with \$BS_TABLE_S3 in the query refuses (rc 64), sends nothing" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 # ANTI-VACUITY FLOOR (Guard 2 row 4). Without it this suite exits 0 on ZERO cases, so a
 # mutation that made every arm unreachable — or an early `exit` inserted above — would read as
@@ -499,8 +525,9 @@ printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 # exit 0. Set to the measured green count so a dropped section is caught. A FLOOR,
 # not an equality: adding rows must not red the suite, so raise it when you add one.
 # Re-derived 2026-09-11 (#8043 Guard 5): the floor was 30 = the measured green count before
-# section 11; section 11 adds exactly five rows (G5.1–G5.5), so 30 + 5 = 35.
-readonly MIN_ASSERTIONS=35
+# section 11; section 11 adds exactly five rows (G5.1–G5.5), so 30 + 5 = 35. Then 37 at the
+# #8052 review (G5.6 value-stepping, G5.7 underivable-archive refusal).
+readonly MIN_ASSERTIONS=37
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '%s: FAIL — only %d assertions ran; floor is %d. A suite that ran fewer cases than it declares cannot pass.\n' \
     "$(basename "$0")" "$((pass + fail))" "$MIN_ASSERTIONS" >&2

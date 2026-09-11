@@ -275,7 +275,10 @@ resource "sentry_alert" "git_data_boot_warning" {
       conditions = [
         # `in`, not two `eq` filters: the values are a closed set that grows with the emitter's
         # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
-        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn" } },
+        # `gc_report` is emitted by the git-data-gc.sh PAYLOAD (not the template): a weekly run
+        # that did not complete or had per-repo failures. Before #8052 it was routed by nothing —
+        # and on the pinned image every run emitted it (safe.directory inert on git 2.43).
+        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },

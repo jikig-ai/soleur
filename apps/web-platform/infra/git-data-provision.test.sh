@@ -105,7 +105,9 @@ done
 env -i PATH="$curated" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
   SSH_ORIGINAL_COMMAND="ws-noinst" bash "$WRAPPER" >/dev/null 2>"$ERR"; rc=$?
 if [ "$rc" != "0" ]; then pass; else fail "T6 mountpoint absent: expected fail-closed (non-zero), got 0"; fi
-if grep -q 'mountpoint' "$ERR"; then pass; else fail "T6 mountpoint absent: refusal does not name the instrument ($(head -c 200 "$ERR"))"; fi
+# Anchored on the wrapper's OWN text — bash's "mountpoint: command not found" also contains
+# the bare token when the `command -v` guard is deleted (measured on the remove suite).
+if grep -qF 'mountpoint(1) not on PATH' "$ERR"; then pass; else fail "T6 mountpoint absent: refusal does not name the instrument ($(head -c 200 "$ERR"))"; fi
 if [ ! -e "${root}/ws-noinst.git" ]; then pass; else fail "T6 mountpoint absent: the wrapper provisioned without being able to verify the mount"; fi
 rm -rf "$root" "$curated"
 # --- T7 (#8043 F8, Guard 1 row 4): MOUNTED store, repo root ABSENT → refuse, root still
@@ -115,6 +117,7 @@ parent="$(mktemp -d "${TMPDIR:-/tmp}/gdprov-noroot.XXXXXX")"
 rc=$(run_provision "${parent}/repositories" "ws-abc-123" "$(stat -c %m "$parent")")
 if [ "$rc" != "0" ]; then pass; else fail "T7 rootless store: expected refusal (non-zero), got 0"; fi
 if [ ! -e "${parent}/repositories" ]; then pass; else fail "T7 rootless store: the wrapper CREATED the repo root ($(ls -A "${parent}/repositories" | tr '\n' ' '))"; fi
+if grep -q 'is not present' "$ERR"; then pass; else fail "T7 rootless store: refusal does not name the absent root ($(head -c 200 "$ERR"))"; fi
 rm -rf "$parent"
 
 # --- T8 (#8043 review): a MOUNTED store whose repo root is NOT ON IT → refuse, nothing
@@ -125,13 +128,35 @@ rc=$(run_provision "$root" "ws-offstore" /proc)
 if [ "$rc" != "0" ]; then pass; else fail "T8 off-store root: expected refusal (non-zero), got 0"; fi
 if grep -q 'not on the store' "$ERR" && [ -z "$(ls -A "$root" 2>/dev/null)" ]; then pass; else fail "T8 off-store root: refusal does not name containment, or a repo was written ($(head -c 200 "$ERR"))"; fi
 rm -rf "$root"
+
+# --- T9 (#8043 review): the CUTOVER FREEZE sentinel refuses provisioning (see the remove
+#     suite's T12 for the seam and the pinned default). ---
+root=$(fresh_root)
+: > "${root}/.frozen"
+rc=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="ws-frozen" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+if [ "$rc" != "0" ]; then pass; else fail "T9 cutover freeze: expected refusal (non-zero), got 0"; fi
+if grep -q 'frozen for cutover' "$ERR" && [ ! -e "${root}/ws-frozen.git" ]; then pass; else fail "T9 cutover freeze: refusal does not name the freeze, or a repo was written ($(head -c 200 "$ERR"))"; fi
+if grep -qF 'cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"' "$WRAPPER"; then pass; else fail "T9 the freeze sentinel default is not <mount root>/.cutover-freeze"; fi
+rm -rf "$root"
+
+# --- T10 (#8043 review): a SYMLINK planted at the lock path is refused before `exec 9>`
+#     truncates its target. ---
+root=$(fresh_root)
+victim="$(mktemp "${TMPDIR:-/tmp}/gdprov-victim.XXXXXX")"; printf 'keep\n' > "$victim"
+ln -s "$victim" "${root}/.ws-lock.init.lock"
+rc=$(run_provision "$root" "ws-lock")
+if [ "$rc" != "0" ]; then pass; else fail "T10 lock symlink: expected refusal (non-zero), got 0"; fi
+if grep -q 'lock path is a symlink' "$ERR" && [ "$(cat "$victim")" = "keep" ]; then pass; else fail "T10 lock symlink: refusal does not name it, or the target was truncated ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root" "$victim"
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the fence test). 12 -> 24 with the four mount
-#     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before. ---
+#     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before.
+#     24 -> 30 at review: T7 +1 (message pin), T9 3, T10 2. ---
 total=$((passes + fails))
-if [ "$total" -lt 24 ]; then
-  echo "FAIL: ran only ${total} assertions (<24) — suite did not execute fully" >&2
+if [ "$total" -lt 30 ]; then
+  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
   exit 1
 fi
 

@@ -46,6 +46,29 @@ const cloudInitCode = cloudInit
   .map((l) => (/^\s*#/.test(l) ? "" : l))
   .join("\n");
 
+// (#8052 review, test-design seat) THE STAGE-ASSIGNMENT EXTRACTOR, with a PARSE FLOOR. The
+// previous regex (`^\s*STAGE=(\w+)\s*$`) rejected a trailing comment, and the template already
+// carried that shape (`STAGE=volume_mount # (#6982) …`): an emit after an unparsed assignment
+// was attributed to the PREVIOUS stage, so a renamed-with-comment stage stayed green while the
+// runtime emitted an unrouted name. Two rules: the regex accepts a trailing `#` comment, and
+// the count of RAW `STAGE=` lines inside runcmd must equal the count parsed — a same-line
+// `STAGE=x; emit …` shape (which the regex cannot attribute) reds here by name instead of
+// silently mis-resolving. Scoped to runcmd: the emitter script under write_files carries
+// `STAGE="$${2:-unknown}"` lines that are its own positional parsing, not stage assignments.
+const RUNCMD_START = cloudInitCode.indexOf("\nruncmd:");
+expect(RUNCMD_START, "no top-level runcmd: block").toBeGreaterThan(-1);
+const STAGE_ASSIGN_RE = /^\s*STAGE=([A-Za-z0-9_]+)\s*(#.*)?$/gm;
+function stageAssignments(corpus: string): RegExpMatchArray[] {
+  const runcmd = corpus.slice(RUNCMD_START);
+  const rawLines = [...runcmd.matchAll(/^\s*STAGE=/gm)].length;
+  const parsed = [...corpus.matchAll(STAGE_ASSIGN_RE)].filter((m) => m.index! >= RUNCMD_START);
+  expect(
+    parsed.length,
+    `parse floor: ${rawLines} raw STAGE= lines in runcmd but only ${parsed.length} parsed — an assignment shape the extractor cannot attribute (same-line command? unusual spelling?)`,
+  ).toBe(rawLines);
+  return [...corpus.matchAll(STAGE_ASSIGN_RE)];
+}
+
 // MUTATION-PROVEN, with one axis deliberately NOT covered and one that was CLAIMED and was
 // not — stated so neither is mistaken for coverage.
 //
@@ -87,6 +110,7 @@ const WARNING_STAGES = [
   "betterstack_ingest",
   "gitdata_nftables_metadata_warn",
   "sshd_config_warn",
+  "gc_report", // emitted by the git-data-gc.sh payload, not the template (see the corpus note in (b))
 ] as const;
 
 // Warning-level emits that ROUTE TO THE FATAL RULE. `gc_timer` is emitted at level warning
@@ -96,7 +120,9 @@ const WARNING_STAGES = [
 // rather than changes (ADR-198: a stage must not move across the severity boundary silently);
 // whether it SHOULD page is filed as a policy decision, not fixed here. Assertion (c) proves
 // every member is actually on the fatal rule.
-const WARNING_EMITS_ROUTED_BY_FATAL_RULE = ["gc_timer"] as const;
+// `gc` is the gc payload's own stage for the unit DYING (lock unopenable emits it at level
+// warning); the fatal rule filters `stage eq gc`, so it pages — by design (the script says so).
+const WARNING_EMITS_ROUTED_BY_FATAL_RULE = ["gc_timer", "gc"] as const;
 
 // The fatal-side name for the same runcmd item. STAGE is whatever was last assigned when the
 // top-armed trap fires, so a death anywhere in that item reports THIS value, not the _warn one.
@@ -164,7 +190,7 @@ describe("git-data warning-stage routing op contract", () => {
     // STAGE assignment and require it to be exactly this stage. That is the same shape the
     // runcmd suite's R3(2) arm uses for its own ordering property ("co-presence is not
     // ordering"), one directory over.
-    const assignments = [...cloudInitCode.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
+    const assignments = stageAssignments(cloudInitCode);
     expect(assignments.length, "no whole-line STAGE= assignments found").toBeGreaterThan(0);
     const preceding = assignments.filter((m) => m.index! < emitAt);
     expect(preceding.length, "the _warn emit has no STAGE assignment before it").toBeGreaterThan(0);
@@ -214,7 +240,22 @@ describe("git-data warning-stage routing op contract", () => {
     // joined first: one emit's stage+level sit on the continued line. The corpus is the
     // comment-stripped one for the reason the first `it` records — a prose line quotes an emit.
     const joined = cloudInitCode.replace(/\\\n\s*/g, " ");
-    const assignments = [...joined.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
+    // Continuation-joining never moves a STAGE= line's start before RUNCMD_START (it only
+    // shortens what follows a backslash), so the runcmd scope still holds on `joined`.
+    const assignments = stageAssignments(joined);
+    // (#8052 review, structural seat) THE CORPUS IS THE HOST'S, NOT THE TEMPLATE'S. The nine
+    // file()-bound payloads are rendered into the host and emit through `"$EMIT"`; the template
+    // alone under-counts the warning vocabulary, and `gc_report` — the stage every weekly gc
+    // run emitted on the pinned image — was routed by nothing while this equality held. The gc
+    // payload is the only one that emits at level warning today; a second emitting payload is
+    // added here, not discovered by a future outage.
+    const gcCode = readFileSync(join(here, "../infra/git-data-gc.sh"), "utf8")
+      .split("\n")
+      .map((l) => (/^\s*#/.test(l) ? "" : l))
+      .join("\n")
+      .replace(/\\\n\s*/g, " ");
+    const payloadEmits = [...gcCode.matchAll(/"\$EMIT"\s+"[^"]*"\s+("?[^"\s]+"?)\s+warning\b/g)];
+    expect(payloadEmits.length, "fewer than 2 warning-level \"$EMIT\" calls found in git-data-gc.sh").toBeGreaterThanOrEqual(2);
     const nearestStageBefore = (idx: number): string => {
       const preceding = assignments.filter((m) => m.index! < idx);
       expect(preceding.length, "a warning emit has no STAGE= assignment before it").toBeGreaterThan(0);
@@ -234,6 +275,11 @@ describe("git-data warning-stage routing op contract", () => {
     // Plus the emitter-internal mirror construct, which emits a warning body as a JSON tag pair
     // rather than through the positional form.
     for (const m of joined.matchAll(/"level":"warning","tags":\{"stage":"([A-Za-z0-9_]+)"/g)) resolved.add(m[1]);
+    for (const m of payloadEmits) {
+      const tok = m[1].replace(/^"|"$/g, "");
+      expect(tok, `git-data-gc.sh emits a warning through a non-literal stage token ${tok}`).toMatch(/^[A-Za-z0-9_]+$/);
+      resolved.add(tok);
+    }
     expect([...resolved].sort()).toEqual(
       [...WARNING_STAGES, ...WARNING_EMITS_ROUTED_BY_FATAL_RULE].sort(),
     );

@@ -132,6 +132,14 @@ load-bearing control. Phase 2 must not present them the other way round.
 so on an unmounted host it fails closed on every push. **It gets no mount assertion**: the plan's own
 justification for touching it was "consistency", which is not a property.
 
+> **Superseded at review (#8052, pattern-recognition + structural seats).** "Rejects a non-existent
+> repo" covers the *absent* root, not the *off-store* root the review pass added to provision/remove
+> (`stat -c %m` containment): a wrapper whose root resolved onto the root disk beside a healthy mount
+> exec'd `git-receive-pack` there (measured, `rc=0`). The property is "the forced command that writes
+> user source acts only on the store", which is not consistency. The wrapper now carries the same
+> mount + containment guard, the `.cutover-freeze` refusal, and pins `core.hooksPath` on the command
+> line; `git-data-transport-wrapper.test.sh` T8–T11 pin it.
+
 ### F11 in detail — measured, not inferred
 
 From git-data's own Better Stack source (2734275 / `t520508_soleur_git_data_prd_logs`), filtered to
@@ -245,7 +253,7 @@ below.
 | Root-owning `/home/git` closes F7 | **False.** `authorized_keys` is `git:git 0600` — `git` rewrites it **in place**; no directory swap needed. The home is the *second* hole, not the only one. | Root-own all three (below). |
 | Pinning `AcceptEnv` empty enforces the corrected comment | **False, and boot-fatal-capable.** The keyword **accumulates**; `AcceptEnv` bare → `sshd -T` rc=255, `AcceptEnv ""` → rc=255. A 255 lands on the `sshd -t REJECTED` arm → `exit 1` → runcmd aborts **before LUKS** → dark host, and a `level:fatal` that fails the rung-2 gate closed. | Pin **cut**. F10 ships as the comment correction only. |
 | A new `STAGE=` is a safe way to add a stage | **False.** The top-armed trap reports the last-assigned `STAGE`, and `git_data_boot_fatal` routes on ten literal values, so a new assignment makes any later death in that item report a stage in no rule. | Emit a literal stage string; leave `STAGE=sshd_config` intact. |
-| The erasure "outcome token" adds accountability | **Premise false twice.** Three distinct outcomes already exist on stderr (`reject`, `not present (no-op)`, `erased bare repo for`); and the token is **unreadable by construction** — `sshWithPrivateKeyAuth` returns **stdout only**, `removeGitDataRepo` is `Promise<void>` and discards it. | Token **cut**. Art. 5(2) is delivered by FR4's non-zero exit plus the existing Sentry mirror. |
+| The erasure "outcome token" adds accountability | **Premise false twice.** Three distinct outcomes already exist on stderr (`reject`, `not present (no-op)`, `erased bare repo for`); and the token is **unreadable by construction** — `sshWithPrivateKeyAuth` resolves to **stdout only**, `removeGitDataRepo` is `Promise<void>` and discards it (on failure the rejection carries `stderr`/`code` — review correction, see §User-Brand Impact). | Token **cut**. Art. 5(2) is delivered by FR4's non-zero exit plus the existing Sentry mirror. |
 | `ExecMainStartTimestampMonotonic` proves the daemon started | Duplicates the existing `_sshd_r_rc` branch, and on a once-per-instance `runcmd` on a never-booted host both branches are acceptable — it distinguishes two non-defects, and nothing acts on the answer. | **Cut.** |
 | The new row routes to operator email | **False, twice.** `sshd_config_warn` matches **nothing** in `sentry/` or `test/` — the F11 discovery row pages nobody. And `git_data_boot_warning` carries `fallthrough_type = "NoOne"` against a project with no ownership rule, so it lands in the issue stream and pages no one. | Reuse and **route** `sshd_config_warn`; state the `NoOne` reality in Observability. |
 | The plan's Files-to-Edit closes the erasure loop | **False.** `account-delete.ts` catches, mirrors to Sentry, and **continues** — the user is still told the account was deleted. | Stated honestly; the boundary is FR17's cutover-deadlined follow-up. |
@@ -287,7 +295,7 @@ Terraform, the op-contract test, the suites, the runbooks — is free.
 
 | Mechanism | Property | Why cut |
 |---|---|---|
-| Erasure outcome token (FR5, first draft) | 1 | Premise false: three outcomes already distinguishable on stderr, and the token is unreadable by construction (`sshWithPrivateKeyAuth` returns stdout only; `removeGitDataRepo` returns `void`). Designing its shape "for the sibling web-host defect" was speculative generality for a deferred issue. |
+| Erasure outcome token (FR5, first draft) | 1 | Premise false: three outcomes already distinguishable on stderr, and the token is unreadable by construction (`sshWithPrivateKeyAuth` resolves to stdout only; `removeGitDataRepo` returns `void`). Designing its shape "for the sibling web-host defect" was speculative generality for a deferred issue. |
 | `ExecMainStartTimestampMonotonic` capture | 5 | Duplicates the existing rc branch; distinguishes two acceptable states on a first boot; no consequent. |
 | Mount assertion in `git-data-transport-wrapper.sh` | — | Maps to no property; the plan's own justification was "consistency". |
 | `AcceptEnv` pin | 7 | Unrepresentable — accumulating keyword, both clearing syntaxes exit 255 into the boot-abort arm. |
@@ -560,7 +568,7 @@ publicly retracted in the #6588 data-protection-disclosure retraction, one docum
   later mount silently hides it — **data loss**, not a false report. Both become reachable at the
   `GIT_DATA_STORE_ENABLED` cutover, and after the birth cost a destructive host replace to fix.
 - **If this leaks, the user's source code will be exposed via** the SSH authorization map, which the
-  constrained principal currently **owns and can rewrite in place**.
+  template declared `git:git`, so the constrained principal **would own and could rewrite in place**.
 - **If erasure silently no-ops,** the user's repository remains after a deletion reported success. At
   the cutover this falls inside three **already-published** statements — DPD §10.3(b), T&C §14.1b,
   and the in-product Delete Account dialog — with no amendment needed. Deliberately **not** claiming
@@ -570,8 +578,15 @@ publicly retracted in the #6588 data-protection-disclosure retraction, one docum
 - **The app-layer boundary is NOT closed here, and the plan must not imply otherwise.** After FR4 the
   host stops lying and the **application keeps lying**: `account-delete.ts` catches, calls
   `reportSilentFallback`, and continues the cascade, so the user is still told the account was
-  deleted; `sshWithPrivateKeyAuth` returns stdout only, so *refused* is indistinguishable from a
-  reachability blip. FR17 files it, deadlined to the cutover.
+  deleted. *(Corrected at review, #8052 observability seat: `sshWithPrivateKeyAuth` resolves to stdout
+  only on SUCCESS; on failure the `execFile` rejection carries `stderr`, `code` and the remote refusal
+  line, and `reportSilentFallback` ships that Error to Sentry — so refused IS distinguishable from a
+  reachability blip in Sentry/Better Stack. What is not closed is the user-facing outcome, which the
+  cascade never consults; and no issue-alert rule matches the op, so the event is issue-stream only.)*
+  FR17 filed it as #8094, deadlined to the cutover.
+- **If the attestation is forged in its own commit,** the birth releases on unrehearsed bytes: Guard 4
+  catches only the same-commit shape, and any later evidence-only commit re-blesses a voided file
+  through both arms. The run-resolution residual is #8010; it reaches users only through a born host.
 - **Brand-survival threshold:** `single-user incident`
 
 ## Observability
@@ -713,8 +728,13 @@ derives `REPO_ROOT` **and** performs a create or destroy — stated as an explic
 an absolute floor of **2**, because deriving it by grepping the scripts under test would take the
 expected set from the artifact under test. `git-data-transport-wrapper.sh` derives `REPO_ROOT` but is
 deliberately **out** of this guard: it mutates nothing and already rejects a non-existent repo.
+*(Superseded at review — see the note under FR5's "gets no mount assertion" above: it execs
+`git-receive-pack`, which writes objects and refs, and it is now IN the guard.)*
 
-**Three fixture constraints the rows depend on (test-design review at deepen-plan):** the
+**Three fixture constraints the rows depend on (test-design review at deepen-plan):** *(superseded at
+implementation: the suites use a REAL mount — `stat -c %m` of the fixture root — and `/proc` for the
+off-store rows, not a `mountpoint` stub; `git-data-remove.test.sh` says "NOT A STUB". The exact-match
+concern below is what the real instrument gives for free.)* the
 `mountpoint` stub prepended to the suites' `env -i PATH=` must **exact-match** its argument
 against the fixture's mount root — a prefix match lets row 2 (refusal pointed at `$REPO_ROOT`)
 survive, because `$REPO_ROOT` starts with the mount root; row 3 must assert `$REPO_ROOT` is still
@@ -728,7 +748,7 @@ PATH" edge needs the curated-symlink PATH named in Test Scenario 13.
 |---|---|---|
 | 1 | Remove the refusal from `git-data-remove.sh` and invoke it against a non-mount holding no repo | RED |
 | 2 | Point the refusal at `$REPO_ROOT` instead of the mount root — the shape that looks right and fails **every** erasure closed on a healthy host | RED |
-| 3 | Re-add `mkdir -p "$REPO_ROOT"` to `git-data-remove.sh` | RED |
+| 3 | Re-add `mkdir -p "$REPO_ROOT"` to `git-data-remove.sh` | RED — *placed ABOVE the path guards (T7/T8/T10 red). At its original position, below the `-d` guard, the mutant is EQUIVALENT (the guard refuses first, the mkdir never runs); measured 29/29 at review.* |
 | 4 | Re-add it to `git-data-provision.sh` | RED |
 | 5 | Neuter the guard's own dispatch — the per-suite assertion floors in `git-data-remove.test.sh` / `git-data-provision.test.sh` are the dispatch (there is no cross-script roster to neuter: Guard 1 lives in the two per-script suites, and the floor of 2 is "both suites carry the mount rows", asserted by a grep in QG2, not a runtime roster) — delete the floor, zero-case run reports success | RED |
 | 6 | Fix `git-data-remove.sh` but leave `git-data-provision.sh` unguarded — the second member must still be checked | RED |
@@ -1058,7 +1078,7 @@ roster of modes is derived from the script's own dispatch branches. Suite:
   | `cloud-init.yml`, `-registry` sibling templates | Low. **Noisy, not unhardened.** Must not repeat the unreproduced red-drift-guard claim. |
   | `cloud-init-inngest.yml` | **Higher** — its next runcmd emits `inngest-boot-phone-home.sh sshd-restarted`, a positive attestation for an action failing every boot. A false-attestation instrument on a live host, not noise. |
   | `AuthorizedKeysFile` → `/etc/ssh/authorized_keys.d/%u` | Low, filed as **"structural hardening; the hole is already closed"** — not as an open vulnerability. |
-  | Post-cutover mapper identity | **Gates the cutover.** Both volumes coexist (#6897, expiring 2026-10-22), so post-cutover a boot could mount the **plaintext** volume at `/mnt/git-data` and erasure would act on the wrong store. |
+  | Post-cutover mapper identity | **Gates the cutover.** Both volumes coexist (#6897, expiring 2026-10-22), so post-cutover a boot could mount the **plaintext** volume at `/mnt/git-data` and erasure would act on the wrong store. Filed at review as **#8101** (with the cutover `hooks/` rsync gap). |
   | App-layer erasure boundary (`account-delete.ts` reports success on refusal) | **P1/P2, deadlined to the cutover.** |
   | Web-host `removeWorkspaceDir` Phase 3 | **P1/P2, NOT P3** — the only item here on the host **serving production now**, against a dialog promising "permanently deleted". File naming the reaper-liveness gap (`orphan-reaper.sh` always `exit 0`s) and the undisclosed ~30 h window. "Bounded" must not be used unqualified. |
   | `git_data_host_replace` has no `environment:` gate while `git_data_host_create` does | Low, noted. |

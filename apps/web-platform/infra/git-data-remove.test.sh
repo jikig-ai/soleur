@@ -138,7 +138,9 @@ done
 env -i PATH="$curated" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
   SSH_ORIGINAL_COMMAND="ws-noinst" bash "$WRAPPER" >/dev/null 2>"$ERR"; rc=$?
 if [ "$rc" != "0" ]; then pass; else fail "T8 mountpoint absent: expected fail-closed (non-zero), got 0"; fi
-if grep -q 'mountpoint' "$ERR"; then pass; else fail "T8 mountpoint absent: refusal does not name the instrument ($(head -c 200 "$ERR"))"; fi
+# The anchor is the wrapper's OWN refusal text: a bare `mountpoint` is also satisfied by bash's
+# "mountpoint: command not found" when the `command -v` guard is deleted (measured).
+if grep -qF 'mountpoint(1) not on PATH' "$ERR"; then pass; else fail "T8 mountpoint absent: refusal does not name the instrument ($(head -c 200 "$ERR"))"; fi
 if [ -e "${root}/ws-noinst.git/HEAD" ]; then pass; else fail "T8 mountpoint absent: the wrapper erased without being able to verify the mount"; fi
 rm -rf "$root" "$curated"
 
@@ -161,6 +163,7 @@ parent="$(mktemp -d "${TMPDIR:-/tmp}/gdrm-noroot.XXXXXX")"
 rc=$(run_remove "${parent}/repositories" "ws-abc-123" "$(stat -c %m "$parent")")
 if [ "$rc" != "0" ]; then pass; else fail "T10 rootless store: expected refusal (non-zero), got 0"; fi
 if [ ! -e "${parent}/repositories" ]; then pass; else fail "T10 rootless store: the wrapper CREATED the repo root"; fi
+if grep -q 'is not present' "$ERR"; then pass; else fail "T10 rootless store: refusal does not name the absent root ($(head -c 200 "$ERR"))"; fi
 rm -rf "$parent"
 
 # --- T11 (#8043 review): a MOUNTED store whose repo root is NOT ON IT → refuse. "A store is
@@ -173,14 +176,50 @@ rc=$(run_remove "$root" "ws-offstore" /proc)
 if [ "$rc" != "0" ]; then pass; else fail "T11 off-store root: expected refusal (non-zero), got 0"; fi
 if grep -q 'not on the store' "$ERR" && [ -e "${root}/ws-offstore.git/HEAD" ]; then pass; else fail "T11 off-store root: refusal does not name containment, or the repo was erased ($(head -c 200 "$ERR"))"; fi
 rm -rf "$root"
+
+# --- T12 (#8043 review): the CUTOVER FREEZE sentinel refuses the erasure, nothing erased.
+#     The sentinel lives at the MOUNT root in production (git-data-cutover.sh
+#     FREEZE_SENTINEL), which a suite cannot own; the path seam is the same
+#     GIT_DATA_CUTOVER_FREEZE the pre-receive fence carries, and the DEFAULT is pinned on
+#     the line so the seam cannot drift from the cutover's sentinel path. ---
+root=$(fresh_root); make_repo "$root" "ws-frozen"
+: > "${root}/.frozen"
+rc=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
+  GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" SSH_ORIGINAL_COMMAND="ws-frozen" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+if [ "$rc" != "0" ]; then pass; else fail "T12 cutover freeze: expected refusal (non-zero), got 0"; fi
+if grep -q 'frozen for cutover' "$ERR" && [ -e "${root}/ws-frozen.git/HEAD" ]; then pass; else fail "T12 cutover freeze: refusal does not name the freeze, or the repo was erased ($(head -c 200 "$ERR"))"; fi
+if grep -qF 'cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"' "$WRAPPER"; then pass; else fail "T12 the freeze sentinel default is not <mount root>/.cutover-freeze"; fi
+rm -rf "$root"
+
+# --- T13 (#8043 review): a SYMLINK planted at the lock path is refused BEFORE `exec 9>`
+#     truncates its target (same uid can plant it: the root is git-owned). ---
+root=$(fresh_root); make_repo "$root" "ws-lock"
+victim="$(mktemp "${TMPDIR:-/tmp}/gdrm-victim.XXXXXX")"; printf 'keep\n' > "$victim"
+ln -s "$victim" "${root}/.ws-lock.init.lock"
+rc=$(run_remove "$root" "ws-lock")
+if [ "$rc" != "0" ]; then pass; else fail "T13 lock symlink: expected refusal (non-zero), got 0"; fi
+if grep -q 'lock path is a symlink' "$ERR" && [ "$(cat "$victim")" = "keep" ]; then pass; else fail "T13 lock symlink: refusal does not name it, or the target was truncated ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root" "$victim"
+
+# --- T14 (#8043 review): the lock file is NEVER unlinked (unlink-while-held lets the next
+#     opener hold a fresh inode concurrently), and the destructive rm carries
+#     --one-file-system (a bind mount inside <id>.git would otherwise have its SOURCE erased
+#     — root-only to plant, so pinned on the line rather than reproduced here). ---
+root=$(fresh_root); make_repo "$root" "ws-keep"
+rc=$(run_remove "$root" "ws-keep")
+if [ "$rc" = "0" ] && [ -e "${root}/.ws-keep.init.lock" ]; then pass; else fail "T14 lock retained: expected rc 0 with the lock file still present (rc=$rc)"; fi
+if grep -qE '^rm -rf --one-file-system "\$repo_real" \|\| reject ' "$WRAPPER"; then pass; else fail "T14 the destructive rm does not carry --one-file-system"; fi
+if ! grep -qE '^[[:space:]]*rm -f "\$lock_file"' "$WRAPPER"; then pass; else fail "T14 the wrapper still unlinks the lock file"; fi
+rm -rf "$root"
 rm -f "$ERR"
 
 # --- Minimum-cardinality guard (mirrors the provision/fence tests). 13 -> 29 with the
 #     six mount rows (T6 2, T7 3, T8 3, T9 2, T10 2, T11 2), re-derived from the rows rather
-#     than incremented by memory (T1 2, T2 1, T3 8, T4 2, T5 2 = 15 before). ---
+#     than incremented by memory (T1 2, T2 1, T3 8, T4 2, T5 2 = 15 before). 29 -> 37 at
+#     review: T10 +1 (message pin), T12 3, T13 2, T14 3. ---
 total=$((passes + fails))
-if [ "$total" -lt 29 ]; then
-  echo "FAIL: ran only ${total} assertions (<29) — suite did not execute fully" >&2
+if [ "$total" -lt 38 ]; then
+  echo "FAIL: ran only ${total} assertions (<38) — suite did not execute fully" >&2
   exit 1
 fi
 

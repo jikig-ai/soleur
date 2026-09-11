@@ -11,7 +11,7 @@ Plan: `knowledge-base/project/plans/2026-09-10-fix-git-data-hash-bound-hardening
 ## Unit A — F8 / Guard 1 (remove + provision mount assertion; mkdir deletion)
 - [x] RED: remove.test.sh — mounted store still erases (T-mount-ok, written FIRST); unmounted → named reject, rc≠0, REPO_ROOT still absent; provision.test.sh — unmounted → refuses, no repo written; floors raised
 - [x] GREEN: `GIT_DATA_MOUNT_ROOT` seam + `mountpoint` fail-closed resolution + reject in remove.sh and provision.sh; delete both `mkdir -p "$REPO_ROOT"`
-- [x] Guard 1 mutation rows 1–6, 9, 10 demonstrated RED; 7, 8 PASS
+- [x] Guard 1 mutation rows 1–6, 9, 10 demonstrated RED; 7, 8 PASS (row 3 RED only when the mkdir is placed ABOVE the path guards; at its original position the mutant is equivalent)
 
 ## Unit B — F7 / F9 / FR3 / Guard 3 (ownership)
 - [x] RED: birth-gate suite fixture + ownership arm expects `owner: root:root`; rehearsal-suite static rows over bootstrap literals (traversal model); S1 runtime rows (git appends → denied; mv .ssh → denied; traverses + writes REPO_ROOT)
@@ -46,3 +46,9 @@ Plan: `knowledge-base/project/plans/2026-09-10-fix-git-data-hash-bound-hardening
 ## Exit
 - [~] Touched-shard gate: `test-all.sh` refused rc=4 (two sibling full-gate runs in flight) — reported skipped-for-contention; every touched suite run individually on final HEAD, all green; ship Phase 4 owns the full battery
 - [x] gdpr-gate single pass on cumulative diff
+
+## Review (ten seats + design pass)
+- [x] P1: rebase onto origin/main (PROMOTED_FILES union); evidence-capture fixture is a repo (80/80)
+- [x] P2: provenance step last in job; transport wrapper Guard 1 + freeze + hooksPath pin; gc safe.directory per repo + RuntimeDirectory lock; --one-file-system; lock never unlinked; gc_report routed; op-contract extractor + payload corpus; ownership census/S6/S6b/S8/S9; birth-gate G27–G29; stdout-only claim corrected; rationale sweep
+- [x] Every new row mutation-checked RED in a sandbox; rehearsal 92/92 on the final tree
+- [x] Follow-ups filed/commented (cutover hooks + device assertion; #8010 C21; #8094 amendment)

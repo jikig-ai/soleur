@@ -5,9 +5,11 @@
 # Idempotent. Installs the DURABLE SUBSTRATE for the multi-host /workspaces
 # split's git-data store: the block-volume mount, git + flock, the dedicated
 # `git` transport user's .ssh perms, the bare-repo root, and a FAIL-CLOSED
-# PLACEHOLDER pre-receive hook. The REAL CAS fence (git-data-pre-receive.sh)
-# ships later via the web-platform deploy pipeline — the most-likely-to-iterate,
-# safety-critical artifact stays pipeline-iterable (CI cannot SSH either host).
+# PLACEHOLDER pre-receive hook. The REAL CAS fence (git-data-pre-receive.sh) is
+# delivered by a host replace (cloud-init) or the operator root path the cutover
+# uses — NEVER by a git-uid channel: $HOOKS_DIR is root:git 0750 and the hook root:root
+# (#8043 F9), and the "web-platform deploy pipeline" this header once named was never
+# built (ADR-149, F9 disposition). CI cannot SSH either host.
 #
 # DELIVERY: embedded into cloud-init-git-data.yml via base64encode(file()) and
 # run once from runcmd on first boot (mirrors inngest-redis-bootstrap.sh).
@@ -125,7 +127,8 @@ if [ "$_luks_src" != "$LUKS_MAPPER" ]; then
   exit 1
 fi
 
-# 2. git + flock (util-linux) + git-shell. cloud-init `packages:` installs git;
+# 2. git + flock (util-linux), and the git account's LOGIN SHELL (not git-shell — see the
+#    assertion below). cloud-init `packages:` installs git;
 #    assert + self-heal idempotently so a transient apt drop on first boot fails
 #    LOUD, not silent.
 if ! command -v git >/dev/null 2>&1; then
@@ -142,20 +145,6 @@ command -v flock >/dev/null 2>&1 || {
   log "FATAL: flock (util-linux) missing — fence lock would be unenforceable"
   exit 1
 }
-# (#8043) THE TRANSPORT USER'S LOGIN SHELL MUST BE A REAL SHELL. sshd runs a forced
-# `command=` as `<login shell> -c "<command>"`; git-shell refuses anything but its four
-# built-ins (measured in the pinned image: rc=128 "fatal: unrecognized command"), so a
-# git-shell login would kill transport, provision and the Art. 17 erasure alike. The
-# confinement is the forced-command map, not the shell. Read the shell back from the
-# account rather than trusting the template's declaration.
-_git_shell="$(getent passwd "$GIT_USER" | cut -d: -f7)"
-case "$_git_shell" in
-  /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) : ;;
-  *)
-    log "FATAL: $GIT_USER login shell is '$_git_shell' — must be a real shell, or every forced command dies at '<shell> -c'"
-    exit 1 ;;
-esac
-
 # 3. The dedicated `git` transport user (created by cloud-init `users:`). (#8043 F7) THE
 #    ACCOUNT MUST NOT OWN ITS OWN AUTHORIZATION MAP, nor the directory holding it, nor the
 #    home that directory sits in — owning any one of the three lets `git` rewrite the map
@@ -175,6 +164,22 @@ id "$GIT_USER" >/dev/null 2>&1 || {
   log "FATAL: $GIT_USER user absent (cloud-init users: stage did not run)"
   exit 1
 }
+# (#8043) THE TRANSPORT USER'S LOGIN SHELL MUST BE A REAL SHELL. sshd runs a forced
+# `command=` as `<login shell> -c "<command>"`; git-shell refuses anything but its four
+# built-ins (measured in the pinned image: rc=128 "fatal: unrecognized command"), so a
+# git-shell login would kill transport, provision and the Art. 17 erasure alike. The
+# confinement is the forced-command map, not the shell. Read the shell back from the
+# account rather than trusting the template's declaration. AFTER the `id` guard above: under
+# `set -eo pipefail` a `getent` on an absent account fails the pipeline and exits here with
+# no message, hiding the named "user absent" FATAL written for exactly that case.
+_git_shell="$(getent passwd "$GIT_USER" | cut -d: -f7)"
+case "$_git_shell" in
+  /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) : ;;
+  *)
+    log "FATAL: $GIT_USER login shell is '$_git_shell' — must be a real shell, or every forced command dies at '<shell> -c'"
+    exit 1 ;;
+esac
+
 mkdir -p "$GIT_HOME/.ssh"
 chown "root:$GIT_USER" "$GIT_HOME"
 chmod 0750 "$GIT_HOME"
@@ -197,7 +202,7 @@ chown "root:$GIT_USER" "$HOOKS_DIR"
 chmod 0750 "$HOOKS_DIR"
 
 # 4b. Repo-root reconcile (ADR-068 amendment 2026-07-01 "PR B bare-repo
-#     provisioning"). The git-shell TRANSPORT resolves push URL paths relative to
+#     provisioning"). The TRANSPORT forced command resolves push URL paths relative to
 #     the git user's HOME ($GIT_HOME), while the PROVISION wrapper writes absolute
 #     paths under $REPO_ROOT (/mnt/git-data/repositories). Symlink so a push URL of
 #     `.../repositories/<id>.git` and the provisioned `/mnt/git-data/repositories/
@@ -209,14 +214,21 @@ chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
 
 # 5. Install the FAIL-CLOSED placeholder pre-receive. Staged to /tmp by cloud-init
 #    (base64). core.hooksPath (step 6) points every per-workspace bare repo at it,
-#    so a push is rejected until the real fence hook lands via the deploy pipeline.
+#    so a push is rejected until the real fence hook lands by host replace (see header).
 #    Re-runnable: skip the staged install only when the hook is already in place.
 #    (#8043 F9) ROOT-OWNED, not git-owned. A root-owned $HOOKS_DIR alone does not close the
 #    property: truncating an existing file needs write permission on the FILE, so a git-owned
 #    0755 pre-receive inside a root-owned directory is still a fence the fenced account can
 #    overwrite. `git` needs only x (other) to exec it from receive-pack.
+#    The staged copy must be ROOT'S: /tmp is sticky and world-writable, so on any re-run after
+#    /tmp was cleared a git-uid file at this path would be installed root:root 0755 as the
+#    fence. cloud-init writes it root-owned at first boot; anything else is refused.
 if [[ -f "$PLACEHOLDER_STAGED" ]]; then
   assert_not_symlink "$PLACEHOLDER_STAGED"
+  [[ "$(stat -c %U "$PLACEHOLDER_STAGED")" == root ]] || {
+    log "FATAL: staged placeholder $PLACEHOLDER_STAGED is owned by $(stat -c %U "$PLACEHOLDER_STAGED"), not root — refusing to install it as the fence"
+    exit 1
+  }
   install -o root -g root -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
 elif [[ ! -f "$PRE_RECEIVE" ]]; then
   log "FATAL: placeholder hook not staged at $PLACEHOLDER_STAGED and $PRE_RECEIVE absent"
@@ -276,6 +288,10 @@ git config --system core.bigFileThreshold 32m
 # reflog-expire, repack and prune ALL fail per repo, and because the script exits 0 on
 # per-repo failures systemd reports the unit successful. ADR-068's D-SIZE sizing argument
 # rests on this maintenance path actually running.
+# (#8043 review) THIS LINE ALONE IS NOT ENOUGH on the pinned image: the trailing `/*` form
+# needs git >= 2.46 and ubuntu-24.04 ships 2.43.0, where it matches nothing (measured, rc 128
+# per repo). git-data-gc.sh therefore passes `-c safe.directory="$repo"` per command; this
+# system value is kept as the documented intent and becomes effective on a newer git.
 git config --system safe.directory "$REPO_ROOT/*"
 
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
