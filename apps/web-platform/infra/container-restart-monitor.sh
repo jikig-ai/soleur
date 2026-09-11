@@ -109,21 +109,23 @@ sentry_event() {
   # environment and is interpolated into the request URL, so each part is
   # adjudicated before a credentialed byte moves. Host: case-fold and strip ONE
   # trailing dot (DNS is case-insensitive and `host.` is a valid absolute FQDN),
-  # then a POSITIVE DNS-label grammar ending in ADR-031's ingest apexes — it
-  # refuses `@ / ? # :`, `%2F`, an empty label and every non-DNS byte on its
-  # own. Project id / key regexes are `_cron-shared.ts`'s SENTRY_PROJECT_RE /
-  # SENTRY_PUBLIC_KEY_RE verbatim (one repo-wide definition of a valid triple).
-  # Residual (ADR-052): `*.ingest.de.sentry.io` admits every Sentry EU tenant's
-  # org host, not ours. All three vars are initialised BEFORE the `if` so the
-  # triple-unset path reads nothing unbound under set -u. Kept byte-identical
-  # to cron-egress-alarm.sh (a parity row in cron-egress-firewall.test.sh
-  # diffs the region).
+  # then a POSITIVE DNS-label grammar ending in ADR-031's two ingest apexes
+  # (`.ingest.de.sentry.io` / `.ingest.us.sentry.io` — the region is mandatory;
+  # the glossary lists no region-less apex) — it refuses `@ / ? # :`, `%2F`,
+  # an empty label and every non-DNS byte on its own. Project id / key regexes
+  # are `_cron-shared.ts`'s SENTRY_PROJECT_RE / SENTRY_PUBLIC_KEY_RE verbatim
+  # (one repo-wide definition of a valid triple). Residual (ADR-052):
+  # `*.ingest.de.sentry.io` admits every Sentry EU tenant's org host, not ours.
+  # All three vars are initialised BEFORE the `if` so the triple-unset path
+  # reads nothing unbound under set -u. The region is kept byte-identical to
+  # cron-egress-alarm.sh › sentry_checkin() at the same indentation (a parity
+  # row in cron-egress-firewall.test.sh diffs the two regions verbatim).
   # BEGIN sentry-dest-pin (#7898)
   sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     _si_host="${SENTRY_INGEST_DOMAIN%.}"
     _si_host="${_si_host,,}"
-    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de\.|us\.)?sentry\.io$ ]]; then
+    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de|us)\.sentry\.io$ ]]; then
       sentry_dest_ok=1
     else
       sentry_refuse_reason=host-shape
@@ -139,7 +141,10 @@ sentry_event() {
       emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=${sentry_refuse_reason}"
       SENTRY_CHANNEL_NOTE="sentry channel refused: destination failed the #7898 pin"
     else
+      # A deliberate skip, not a failure: SEND_SKIPPED is its own marker class
+      # so a future alert rule on SEND_FAILED never pages on configuration.
       log "WARN: Sentry env unset — event not posted (op=${op})"
+      emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=sentry reason=unset"
     fi
     return 0
   fi
@@ -156,17 +161,17 @@ sentry_event() {
   }
   # (#7873) transport confinement, position load-bearing (see resend_email).
   # The URL interpolates the FOLDED host, never the raw env value.
-  local code
+  local code rc=0
   code="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 -X POST \
     "https://${_si_host}/api/${SENTRY_PROJECT_ID}/store/" \
     -H "Content-Type: application/json" \
     -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
-    -d "$payload" 2>/dev/null)" || code="000"
+    -d "$payload" 2>/dev/null)" || { rc=$?; code="000"; }
   if [[ ! "$code" =~ ^2 ]]; then
     # A shape-valid but REJECTED key (401/403) was previously indistinguishable
-    # from success; the HTTP code is the reason token.
+    # from success; the HTTP code and curl's exit status are the reason tokens.
     log "WARN: Sentry event POST failed (HTTP ${code}, op=${op})"
-    emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=sentry http_code=${code}"
+    emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=sentry http_code=${code} rc=${rc}"
   fi
 }
 
@@ -180,7 +185,7 @@ resend_email() {
   [[ -z "${SENTRY_CHANNEL_NOTE:-}" ]] || sentry_state="(Sentry channel refused too)"
   if [[ -z "${RESEND_API_KEY:-}" ]]; then
     log "WARN: RESEND_API_KEY unset — skipping email channel ${sentry_state}"
-    emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend reason=unset"
+    emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=unset"
     return 0
   fi
   if ! command -v jq >/dev/null 2>&1; then

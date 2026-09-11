@@ -47,6 +47,8 @@ trap 'rm -rf "$SUITE_SCRATCH"' EXIT
 #   MOCK_JOURNAL_OOM=1    - journalctl -k prints an oom-kill line
 #   MOCK_DATE_EPOCH       - epoch from date +%s (default 1700000000)
 #   MOCK_RESEND_FAIL=1    - Resend POST returns HTTP 500
+#   MOCK_SENTRY_FAIL=1    - Sentry store POST returns HTTP 500 (#7898)
+#   MOCK_CURL_EXIT=<n>    - every curl exits <n> with code 000 (transport failure)
 #   MOCK_NO_WEBHOOK=1     - leave RESEND_API_KEY unset
 #   MOCK_SENTRY_HOST      - SENTRY_INGEST_DOMAIN (default: the POSITIVE synthetic
 #                           fixture o0000000.ingest.de.sentry.io — #7898 pin)
@@ -120,12 +122,14 @@ MOCK
   # the '*' compare is quoted (unquoted `== *` matches anything).
   cat > "$mock_dir/curl" << MOCK
 #!/bin/bash
-vendor=""
+vendor=""; scheme_http=0; has_proto=0
 for arg in "\$@"; do
   case "\$arg" in
     *api.resend.com*) vendor="api.resend.com" ;;
     *.sentry.io*) vendor="sentry.io" ;;
   esac
+  [[ "\$arg" == http://* ]] && scheme_http=1
+  [[ "\$arg" == "--proto" ]] && has_proto=1
 done
 if [[ -n "\$vendor" ]]; then
   echo "\$vendor" >> "$mock_dir/curl_checked"
@@ -138,13 +142,17 @@ if [[ -n "\$vendor" ]]; then
     if [[ "\$arg" == "--noproxy" ]]; then n=\$((n + 1)); fi
   done
   if [[ "\$n" -ne 1 ]]; then echo "NOPROXY_COUNT n=\$n" >> "$mock_dir/curl_violations"; fi
+  # TLS-env canary exported by the harness: the script's unset prologue must
+  # have cleared it before any credentialed curl ran.
+  if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$mock_dir/curl_violations"; fi
 fi
+# A plain-http (loopback) call must NOT carry --proto '=https' — a mechanical
+# "confine every curl" sweep would break it silently (the stub answers 200).
+if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$mock_dir/curl_violations"; fi
 echo "\$*" >> "$mock_dir/curl_args"
-if [[ "\${MOCK_RESEND_FAIL:-}" == "1" ]]; then
-  for arg in "\$@"; do
-    if [[ "\$arg" == *"api.resend.com"* ]]; then echo "500"; exit 0; fi
-  done
-fi
+if [[ -n "\${MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$MOCK_CURL_EXIT"; fi
+if [[ "\${MOCK_RESEND_FAIL:-}" == "1" && "\$vendor" == "api.resend.com" ]]; then echo "500"; exit 0; fi
+if [[ "\${MOCK_SENTRY_FAIL:-}" == "1" && "\$vendor" == "sentry.io" ]]; then echo "500"; exit 0; fi
 echo "200"
 exit 0
 MOCK
@@ -182,7 +190,12 @@ MOCK
   else
     export PATH="$mock_dir:$PATH"
   fi
-  bash "$MONITOR_SCRIPT" 2>&1
+  # TLS-env canary (#7898): the script's unset prologue must clear these before
+  # any credentialed curl; the stub records TLS_ENV_LEAK if it still sees them.
+  export SSLKEYLOGFILE="$mock_dir/keys.log" CURL_CA_BUNDLE="$mock_dir/ca.pem"
+  # Run from a NON-EMPTY cwd so an unquoted `--noproxy *` in the script would
+  # glob-expand before reaching the stub and fail the argv[3] check (T11).
+  ( cd "$mock_dir" && bash "$MONITOR_SCRIPT" 2>&1 )
 }
 
 # A PATH with every coreutil the monitor needs and NO `logger` (#7898). Symlinks
@@ -397,7 +410,7 @@ t_resend_fail_mirror() {
   # never the key
   grep -qF -- "-p user.crit" "$d/logger_args" 2>/dev/null || ok=0
   grep -qF -- "-t container-restart-monitor" "$d/logger_args" 2>/dev/null || ok=0
-  grep -qE 'SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend http_code=500 rc=[0-9]+' "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF 'SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend http_code=500 rc=0' "$d/logger_args" 2>/dev/null || ok=0   # transport ok, vendor refused
   grep -qF "re_test_fake_key_123" "$d/logger_args" 2>/dev/null && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: Resend failure still mirrors to Sentry + logs warning";
   else FAIL=$((FAIL+1)); echo "  FAIL: resend-fail mirror (rc=$rc) out: $out"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
@@ -434,8 +447,14 @@ t_missing_env() {
   local out rc
   out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_NO_WEBHOOK=1; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
   # Sentry channel does not need RESEND; alert still posts to Sentry, exit 0.
-  if [[ "$rc" -eq 0 ]]; then PASS=$((PASS+1)); echo "  PASS: missing Resend key still exits 0 (Sentry channel independent)";
-  else FAIL=$((FAIL+1)); echo "  FAIL: missing env exit (rc=$rc) out: $out"; fi
+  # (#7898) the deliberate skip ships a SEND_SKIPPED row — never SEND_FAILED.
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  sentry_hit "$d" || ok=0
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=unset" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF "_SEND_FAILED" "$d/logger_args" 2>/dev/null && ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: missing Resend key still exits 0 (Sentry channel independent); SEND_SKIPPED reason=unset row";
+  else FAIL=$((FAIL+1)); echo "  FAIL: missing env exit (rc=$rc) out: $out"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
   rm -rf "$d"
 }
 t_missing_env
@@ -582,6 +601,23 @@ t_pin_bad_key() {
 }
 t_pin_bad_key
 
+# (d2) project shape: a traversal suffix on the project id with a valid host/key.
+t_pin_bad_project() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_PROJECT="4321/../evil"; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
+  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=project-shape" || ok=0
+  resend_hit "$d" || ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-numeric project id is refused with reason=project-shape; email still fires";
+  else FAIL=$((FAIL+1)); echo "  FAIL: bad-project row (rc=$rc) out: $out"; fi
+  rm -rf "$d"
+}
+t_pin_bad_project
+
 # (e) triple UNSET on an alert tick: the pre-existing "Sentry env unset" branch
 # is kept verbatim and — under set -u — must not abort before the Resend send
 # (the only surviving channel).
@@ -595,8 +631,9 @@ t_pin_triple_unset() {
   grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
   printf '%s\n' "$out" | grep -qF "Sentry env unset" || ok=0
   printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0     # unset is not a refusal
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=sentry reason=unset" "$d/logger_args" 2>/dev/null || ok=0   # but it is shipped off-box
   resend_hit "$d" || ok=0
-  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: triple unset → 'Sentry env unset' log, no refusal marker, Resend still fires, exit 0";
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: triple unset → 'Sentry env unset' log + SEND_SKIPPED row, no refusal marker, Resend still fires, exit 0";
   else FAIL=$((FAIL+1)); echo "  FAIL: triple-unset row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
   rm -rf "$d"
 }
@@ -621,6 +658,60 @@ t_logger_absent() {
 t_logger_absent
 
 echo ""
+echo "--- (o) #7898 P9: failed sends ship a SEND_FAILED row per channel ---"
+t_sentry_500() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_FAIL=1; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  sentry_hit "$d" || ok=0
+  resend_hit "$d" || ok=0
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=sentry http_code=500 rc=0" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF "channel=resend" "$d/logger_args" 2>/dev/null && ok=0     # Resend side was healthy
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: Sentry 500 → SEND_FAILED channel=sentry http_code=500 rc=0; Resend still sends";
+  else FAIL=$((FAIL+1)); echo "  FAIL: sentry-500 row (rc=$rc) out: $out"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_sentry_500
+
+t_curl_exit_7() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_CURL_EXIT=7; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=sentry http_code=000 rc=7" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend http_code=000 rc=7" "$d/logger_args" 2>/dev/null || ok=0
+  [[ ! -f "$d/curl_violations" ]] || ok=0      # the failing calls still carried the flags
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: curl exit 7 on both channels → http_code=000 rc=7 rows, flags present, exit 0";
+  else FAIL=$((FAIL+1)); echo "  FAIL: curl-exit-7 row (rc=$rc) out: $out"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_curl_exit_7
+
+# Static rows over the script source (#7898 review): a credentialed curl must
+# never follow redirects (curl forwards a custom auth header cross-host on a
+# 3xx), and no invocation may be path-qualified (a `/usr/bin/curl` bypasses
+# this PATH stub AND the Rule D linter's CURL_INVOKE regex). Anchored on the
+# call form so a comment cannot satisfy either.
+t_static_curl_shape() {
+  TOTAL=$((TOTAL + 1))
+  local description="no credentialed curl follows redirects and none is path-qualified"
+  local redirects pathq
+  redirects=$(grep -cE '^[[:space:]]*([A-Za-z_]+="?\$\()?curl .* (-L|--location)( |$)' "$MONITOR_SCRIPT" || true)
+  pathq=$(grep -cE '(^|[[:space:]"(])/[A-Za-z0-9_./-]*/curl([[:space:]]|$)' "$MONITOR_SCRIPT" || true)
+  if [[ "$redirects" -eq 0 && "$pathq" -eq 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (redirects=$redirects path-qualified=$pathq)"
+  fi
+}
+t_static_curl_shape
+
+echo ""
 echo "--- (i) named constants present (AC6) ---"
 t_constants() {
   TOTAL=$((TOTAL + 1))
@@ -633,4 +724,13 @@ t_constants
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# Anti-vacuity floor (ADR-193): the results line above is a human convention;
+# CI reads only the exit status, so a deleted row-dispatch line would vanish
+# green. Read the INDEPENDENT total and report directly — never through the
+# PASS/FAIL accounting this backstops. Ratchet when adding rows.
+if [[ "$TOTAL" -lt 29 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 29. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
+  exit 1
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

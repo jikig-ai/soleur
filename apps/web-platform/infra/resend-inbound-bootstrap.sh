@@ -98,7 +98,7 @@ fi
 # transport flags present. The live key shape is `re_` + [A-Za-z0-9_]; `-` is
 # admitted because it cannot open a directive and lowers rotation-breakage risk.
 if [[ ! "$RESEND_API_KEY" =~ ^re_[A-Za-z0-9_-]+$ ]]; then
-  emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED reason=key-shape"
+  emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=key-shape"
   echo "ERROR: RESEND_API_KEY contains characters outside re_[A-Za-z0-9_-] (trailing whitespace/newline?) — refusing to write it into a curl config file" >&2
   exit 2
 fi
@@ -125,7 +125,7 @@ resend_api() {
   # credentialed request elsewhere. Every in-file call site is /domains… or
   # /webhooks….
   if [[ ! "$path" =~ ^(/domains|/webhooks)(/[A-Za-z0-9_-]+)?$ ]]; then
-    emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED reason=path-shape"
+    emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED channel=resend reason=path-shape"
     echo "ERROR: resend_api path is outside the /domains|/webhooks allowlist — refusing to build a credentialed request from it" >&2
     exit 2
   fi

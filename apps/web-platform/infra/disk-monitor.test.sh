@@ -81,12 +81,14 @@ MOCK
   # anything and would make the argv row vacuous.
   cat > "$mock_dir/curl" << MOCK
 #!/bin/bash
-vendor=""
+vendor=""; scheme_http=0; has_proto=0
 for arg in "\$@"; do
   case "\$arg" in
     *api.resend.com*) vendor="api.resend.com" ;;
     *.sentry.io*) vendor="sentry.io" ;;
   esac
+  [[ "\$arg" == http://* ]] && scheme_http=1
+  [[ "\$arg" == "--proto" ]] && has_proto=1
 done
 if [[ -n "\$vendor" ]]; then
   echo "\$vendor" >> "$mock_dir/curl_checked"
@@ -99,7 +101,13 @@ if [[ -n "\$vendor" ]]; then
     if [[ "\$arg" == "--noproxy" ]]; then n=\$((n + 1)); fi
   done
   if [[ "\$n" -ne 1 ]]; then echo "NOPROXY_COUNT n=\$n" >> "$mock_dir/curl_violations"; fi
+  # TLS-env canary exported by the harness: the script's unset prologue must
+  # have cleared it before any credentialed curl ran.
+  if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$mock_dir/curl_violations"; fi
 fi
+# A plain-http (loopback) call must NOT carry --proto '=https' — a mechanical
+# "confine every curl" sweep would break it silently (the stub answers 200).
+if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$mock_dir/curl_violations"; fi
 echo "\$*" >> "$mock_dir/curl_args"
 if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then
   echo "000"
@@ -163,7 +171,12 @@ MOCK
   else
     export PATH="$mock_dir:$PATH"
   fi
-  bash "$MONITOR_SCRIPT" 2>&1
+  # TLS-env canary (#7898): the script's unset prologue must clear these before
+  # any credentialed curl; the stub records TLS_ENV_LEAK if it still sees them.
+  export SSLKEYLOGFILE="$mock_dir/keys.log" CURL_CA_BUNDLE="$mock_dir/ca.pem"
+  # Run from a NON-EMPTY cwd so an unquoted `--noproxy *` in the script would
+  # glob-expand before reaching the stub and fail the argv[3] check (T11).
+  ( cd "$mock_dir" && bash "$MONITOR_SCRIPT" 2>&1 )
 }
 
 # A PATH with every coreutil the monitor needs and NO `logger` (#7898). Symlinks
@@ -508,7 +521,7 @@ test_curl_failure() {
   [[ -f "$largs" ]] || ok=0
   grep -qF -- "-p user.crit" "$largs" 2>/dev/null || ok=0
   grep -qF -- "-t disk-monitor" "$largs" 2>/dev/null || ok=0
-  grep -qE 'SOLEUR_DISK_MONITOR_SEND_FAILED channel=resend http_code=[0-9]+ rc=[0-9]+' "$largs" 2>/dev/null || ok=0
+  grep -qF 'SOLEUR_DISK_MONITOR_SEND_FAILED channel=resend http_code=000 rc=1' "$largs" 2>/dev/null || ok=0   # curl exit 1 → rc=1, code 000
   grep -qF "re_test_fake_key_123" "$largs" 2>/dev/null && ok=0
   [[ ! -f "$mock_dir/curl_violations" ]] || ok=0
   [[ -f "$mock_dir/curl_checked" ]] || ok=0
@@ -609,8 +622,36 @@ test_logger_absent() {
 
 test_logger_absent
 
+# Static rows over the script source (#7898 review): a credentialed curl must
+# never follow redirects (curl forwards a custom auth header cross-host on a
+# 3xx), and no invocation may be path-qualified (a `/usr/bin/curl` bypasses
+# this PATH stub AND the Rule D linter's CURL_INVOKE regex). Anchored on the
+# call form so a comment cannot satisfy either.
+test_static_curl_shape() {
+  TOTAL=$((TOTAL + 1))
+  local description="no credentialed curl follows redirects and none is path-qualified"
+  local redirects pathq
+  redirects=$(grep -cE '^[[:space:]]*([A-Za-z_]+="?\$\()?curl .* (-L|--location)( |$)' "$MONITOR_SCRIPT" || true)
+  pathq=$(grep -cE '(^|[[:space:]"(])/[A-Za-z0-9_./-]*/curl([[:space:]]|$)' "$MONITOR_SCRIPT" || true)
+  if [[ "$redirects" -eq 0 && "$pathq" -eq 0 ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $description (redirects=$redirects path-qualified=$pathq)"
+  fi
+}
+test_static_curl_shape
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# Anti-vacuity floor (ADR-193): the results line above is a human convention;
+# CI reads only the exit status, so a deleted row-dispatch line would vanish
+# green. Read the INDEPENDENT total and report directly — never through the
+# PASS/FAIL accounting this backstops. Ratchet when adding rows.
+if [[ "$TOTAL" -lt 15 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d row(s) ran, expected >= 15. A row was deleted or its dispatch line removed.\n' "$TOTAL" >&2
+  exit 1
+fi
 
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1
