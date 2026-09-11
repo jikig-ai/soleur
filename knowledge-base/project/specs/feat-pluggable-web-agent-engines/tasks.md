@@ -33,6 +33,7 @@ routine run binds the current default once; retries retain that binding.
 - [ ] RED-03: atomic workspace-default/conversation/routine binding, owner setting writes, immutable bindings, tenant/RLS and event idempotency tests.
 - [ ] GREEN-03 (blockedBy RED-03): migration, durable run/event records, scoped RPCs and repositories.
   - [x] Schema contract slice: migration 138 defines settings, live runs, immutable bindings, idempotent events, RLS, and owner RPC (5 migration tests green).
+  - [x] Repository contract slice: atomic bind RPC, tenant run lookup, and idempotent event append (2 repository tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
