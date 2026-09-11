@@ -9,7 +9,7 @@ import {
   spawnAgent,
 } from "../lib/harness";
 
-const markers = ["CLAUDECODE", "GROK_HOME", "GROK_AGENT", "GROK_DEFAULT_MODEL", "GROK_SUBAGENTS", "CODEX_THREAD_ID"];
+const markers = ["CLAUDECODE", "GROK_HOME", "GROK_AGENT", "GROK_DEFAULT_MODEL", "GROK_SUBAGENTS", "CODEX_THREAD_ID", "DEVIN", "DEVIN_HOME"];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {

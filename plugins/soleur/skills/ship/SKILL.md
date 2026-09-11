@@ -448,6 +448,13 @@ Defense-in-depth check that review ran before shipping. Phase 1.5 catches this e
 
 ### Review-Findings Exit Gate (mandatory)
 
+> **Rule `rf-review-finding-default-fix-inline` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> Review findings default to fix-inline on the PR branch for all severities [id: rf-review-finding-default-fix-inline] [skill-enforced: ship Phase 5.5 Review-Findings Exit Gate]. Scope-out criteria and labels defined in `plugins/soleur/skills/review/SKILL.md` §5 and the compound skill's Route-Learning-to-Definition step.
+
 Blocks merge when review findings from Phase 1.5 / Phase 5.5 Completion Gate
 remain unresolved — neither fixed inline nor formally scoped out with a
 `deferred-scope-out` label.
@@ -750,6 +757,13 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
 
 ### Recurring-Vendor-Expense Gate (mandatory)
+
+> **Rule `wg-record-recurring-vendor-expense-before-ready` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> Any PR that incurs a new or changed **recurring vendor expense** (new vendor SDK/dep, vendor env var, or plan-tier strings like `Pro`/`subscription`/`upgrade` in the diff or PR body) MUST record it in `knowledge-base/operations/expenses.md` in the same change before `gh pr ready` — or, if billing is operator-driven, file a tracked `type/chore` follow-up with the `deferred-automation` sentinel [id: wg-record-recurring-vendor-expense-before-ready] [skill-enforced: ship Phase 5.5 Recurring-Vendor-Expense Gate]. **Why:** #5325 added a 2nd Resend domain (Pro $20/mo), unrecorded.
 
 Enforces workflow gate `wg-record-recurring-vendor-expense-before-ready` at the `gh pr ready` boundary. This is the **deterministic, blocking** counterpart to the COO Expense-Tracking Gate above: the COO gate *discovers and recommends* (soft, advisory), this gate *blocks PR-ready* until a detected recurring vendor cost is either recorded in `knowledge-base/operations/expenses.md` in the same change OR carried as a tracked operator-driven follow-up. The two are complementary — run the COO gate first to surface costs, this gate to enforce that they landed.
 
@@ -1060,6 +1074,13 @@ fi
 **Defense in depth.** This gate covers the `/ship` code path only. PRs created without `/ship` (direct `gh pr create`, GitHub UI) bypass it. The 12h `scheduled-terraform-drift.yml` cron remains the terminal safety net for those paths and for "operator deferred / forgot to apply" scenarios.
 
 ### Retroactive Gate Application (conditional)
+
+> **Rule `wg-when-fixing-a-workflow-gates-detection` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> When fixing a workflow gate's detection logic, retroactively apply the fixed gate to the case that exposed the gap [id: wg-when-fixing-a-workflow-gates-detection] [skill-enforced: ship Phase 5.5 Retroactive Gate Application]. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
 
 **Trigger:** The PR fixes a gate's detection logic (trigger conditions, assessment questions, or routing rules) AND the fix was motivated by a specific case that the gate missed.
 

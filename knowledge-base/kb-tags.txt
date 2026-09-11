@@ -328,6 +328,7 @@ assert-dev-signin-eliminated.sh
 assert-vs-measure
 asserted-vs-measured
 assertion
+assertion-design
 assertion-drift
 assertion-floor
 assertions
@@ -1904,6 +1905,7 @@ installation-token
 instrument-error
 instrument-validation
 instrument-verification
+instrument-void
 instrumentation
 instruments
 integration
@@ -3877,6 +3879,7 @@ transaction-safety
 transcript-judging
 transition
 transparency
+transport-confinement
 trap
 trap-cleanup
 traversal
