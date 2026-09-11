@@ -31,4 +31,15 @@ Session tooling corrections:
 - The commit guard resolved the hook's main-branch CWD despite the shell tool's
   feature-worktree `workdir`. Its documented resolver understands an explicit
   `cd <worktree> && git commit`; use that supported form so the guard checks the
-  intended branch. Do not disable the guard.
+  intended branch. The `cd` must be the first shell operation in a compound
+  command; staging before it still trips the main-branch guard. Do not disable
+  the guard.
+- Two planned read-only research agents hit the current agent usage limit before
+  returning findings. Recovery: continue with bounded local `rg`/`cat` research,
+  record the fan-out as partial, and never interpret an agent-limit error as an
+  empty research result.
+- The required Pencil dependency check found the headless CLI but could not
+  authenticate it, so no `.pen` wireframe can be produced in this session. Keep
+  the UI work hard-blocked until Pencil Desktop, an IDE extension, or an
+  authenticated headless CLI is available; do not claim that a prose wireframe
+  satisfies the design gate.
