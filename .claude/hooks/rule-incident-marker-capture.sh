@@ -55,6 +55,9 @@ REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." 
 [[ -n "$REPO_ROOT" && -d "$REPO_ROOT" ]] || exit 0
 
 RULES_FILE="$REPO_ROOT/AGENTS.rules.md"
+# Rules that moved to a skill-local home but are still ACTIVE (see that file's
+# header). Single source of truth, shared with scripts/rule-metrics-aggregate.sh.
+MIGRATED_FILE="$REPO_ROOT/scripts/migrated-rule-ids.txt"
 INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
 [[ -f "$INCIDENTS_LIB" ]] || exit 0
 
@@ -105,8 +108,20 @@ _valid_rule() {
     hook-input-*|grep-rewrite-*|net-issue-flow-mandated-filing--*) return 1 ;;
   esac
   [[ "$r" =~ ^(hr|wg|cq|rf|pdr|cm)- ]] || return 0
-  # Closed corpus: an id that claims to be a rule must be a real AGENTS.rules.md rule.
-  grep -qF "[id: ${r}]" "$RULES_FILE" 2>/dev/null
+  # Closed corpus: an id that claims to be a rule must be a real AGENTS.rules.md rule...
+  grep -qF "[id: ${r}]" "$RULES_FILE" 2>/dev/null && return 0
+  # ...OR a rule that MIGRATED to a skill-local home. Migrated rules are ACTIVE:
+  # they still emit SOLEUR_RULE_APPLIED from the phase that enforces them, they
+  # are simply no longer bodies in AGENTS.rules.md. They carry an AGENTS section
+  # prefix, so the check above applies to them and would drop their markers at
+  # `_valid_rule || continue` with NO sentinel -- silent telemetry loss, which
+  # this hook's producer/consumer parity assertion exists to catch.
+  #
+  # Grammar is pinned to match scripts/rule-metrics-aggregate.sh; the
+  # registry-parser parity assertion in the companion suite proves both readers
+  # accept the same id set (and reject the same malformed row).
+  [[ -f "$MIGRATED_FILE" ]] &&
+    grep -qE "^${r}[[:space:]]*\|" "$MIGRATED_FILE" 2>/dev/null
 }
 
 # shellcheck source=/dev/null
