@@ -145,9 +145,9 @@ describe("formatSkillInvocation", () => {
   test("devin formats soleur: skill with args", () => {
     process.env.DEVIN = "1";
     expect(formatSkillInvocation("one-shot", "fix auth")).toBe(
-      "soleur:one-shot (args: fix auth)",
+      "/soleur:one-shot fix auth",
     );
-    expect(formatSkillInvocation("brainstorm")).toBe("soleur:brainstorm");
+    expect(formatSkillInvocation("brainstorm")).toBe("/soleur:brainstorm");
   });
 });
 
@@ -174,15 +174,16 @@ describe("invokeSkill", () => {
     expect(inv.instruction).toContain("slash command");
   });
 
-  test("devin returns Skill tool invocation", () => {
+  test("devin returns slash_command invocation", () => {
     process.env.DEVIN = "1";
     const inv = invokeSkill("one-shot", "fix bug");
 
     expect(inv.harness).toBe("devin");
-    expect(inv.tool).toBe("Skill");
-    expect(inv.command).toBe("soleur:one-shot");
+    expect(inv.tool).toBe("slash_command");
+    expect(inv.command).toBe("/soleur:one-shot fix bug");
     expect(inv.args).toBe("fix bug");
-    expect(inv.instruction).toContain("Skill tool");
+    expect(inv.instruction).toContain("/soleur:one-shot fix bug");
+    expect(inv.instruction).toContain("slash command");
     expect(inv.instruction).toContain("Do NOT improvise");
   });
 
@@ -279,9 +280,11 @@ describe("routingInstructions", () => {
   test("devin documents /soleur:go and run_subagent", () => {
     const md = routingInstructions("devin");
     expect(md).toContain("/soleur:go");
+    expect(md).toContain("/soleur:<skill>");
     expect(md).toContain("run_subagent");
     expect(md).toContain("devin/INSTRUCTIONS.md");
     expect(md).toContain("Workflow fidelity");
+    expect(md).not.toContain("Skill tool");
   });
 
   test("unknown suggests grok inspect", () => {

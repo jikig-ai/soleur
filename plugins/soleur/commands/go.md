@@ -101,7 +101,7 @@ Before applying the routing table, detect the active harness and use the correct
 | Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
-| Devin CLI | **Skill tool** — `soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
+| Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
 
 **Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
 Use the installed plugin root for plugin-owned paths. Reading the full named
@@ -109,13 +109,13 @@ skill is the Codex entry point when no skill-loading tool is available; execute
 all of its phases. Do not invoke a nonexistent Skill tool or a Grok slash command.
 
 **Devin CLI harness:** read [Devin compatibility instructions](../devin/INSTRUCTIONS.md).
-Devin uses the same Skill tool format as Claude Code with `soleur:<skill>` namespace and `run_subagent` for agents.
+Devin exposes Soleur skills as slash commands: `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`). Agents are spawned via `run_subagent`.
 
 **Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
 
 **Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Map `soleur:<skill>` → `/<skill>` (strip prefix) at invocation time. **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
-**Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Skills use the same `soleur:<skill>` namespace as Claude Code. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+**Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Invoke routed skills with the `/soleur:<skill>` slash command. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
@@ -143,7 +143,7 @@ Analyze the user input and classify intent using semantic assessment:
 When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:brainstorm`, `soleur:drain-labeled-backlog`, `soleur:drain-prs`):
 
 0. **You are still in `/go`, not in the pipeline skill.** Routing is classification + dispatch only. The `/go` handler does **not** run pipeline phases, create worktrees for implementation, or write product code — even if you "know what the skill would do next."
-1. **Your very next action** MUST invoke that skill via the harness adapter — Grok: slash command (`/brainstorm <args>`, `/one-shot <args>`, …); Claude: Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …). Do **not** read the skill's SKILL.md and execute a subset of its steps with Write/Edit/Shell yourself.
+1. **Your very next action** MUST invoke that skill via the harness adapter — Grok: slash command (`/brainstorm <args>`, `/one-shot <args>`, …); Claude: Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …); Devin: slash command (`/soleur:brainstorm <args>`, `/soleur:one-shot <args>`, …). Do **not** read the skill's SKILL.md and execute a subset of its steps with Write/Edit/Shell yourself.
 2. **Do NOT end your turn** after routing, worktree creation, brainstorm artifacts, or a pushed draft PR. Those are mid-pipeline checkpoints, not deliverables.
 3. **`brainstorm` deliverable:** brainstorm doc + spec + handoff to `/plan` (or `/one-shot` shortcut when requirements are clear). **FORBIDDEN:** product code during brainstorm.
 4. **`one-shot` deliverable:** merged PR + `<promise>DONE</promise>` (Step 8). Pushed code on a draft PR without review/ship is a **protocol violation**, not completion.
@@ -155,6 +155,7 @@ If intent is clear, route without confirmation:
 
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
 - **Grok Build:** invoke via **slash command** (`/<skill>` with args appended). Agents: **spawn_subagent** with the agent id and prompt = original user input.
+- **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
 
 Map `soleur:<skill>` cells in the table to Grok `/<skill>` at invocation time (strip the `soleur:` prefix). **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
