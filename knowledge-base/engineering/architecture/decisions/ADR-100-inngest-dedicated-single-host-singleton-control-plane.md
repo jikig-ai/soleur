@@ -1036,8 +1036,14 @@ defined ONCE (`_erg_flag_class`) and the wiring suite asserts it set-equal to th
 The probe row is hourly, so alone it proves darkness as of up to 90 minutes ago.
 `inngest-cutover-flip.timer` fires every 30 s and the FSM emits one JSON line per tick on EVERY
 flag, terminal ones included (P0-1/P0-2), carrying the journald `_BOOT_ID` envelope (measured: 500
-rows/24 h at the limit, ~1–2/min, all `_BOOT_ID=402c0d5b…`, `.message` already parsed by Vector
-into `{flag, reason, guard, exit_code, start_ts}`). Joined on `_BOOT_ID == strip_hyphens(boot_id)`,
+rows/24 h at the limit, ~1–2/min, all `_BOOT_ID=402c0d5b…`, `.message` an OBJECT
+`{flag, reason, guard, exit_code, start_ts}` in the warehouse). **Who parses it matters for the
+remedy:** the FSM logs a JSON *string* (`logger -t inngest-cutover-flip "$json"`), Vector ships it
+as a string (`vector.toml` ends every transform in `encode_json`), and it is **Better Stack's
+ingest-side parse** that yields the object the gate selects on. If that parse stopped, every
+heartbeat would be present and unreadable — a warehouse read-path change, which the gate reports
+as `fsm_unreadable` ("do not replace the host for it"), never as `fsm_silent`. Joined on
+`_BOOT_ID == strip_hyphens(boot_id)`,
 the NEWEST same-boot heartbeat within 15 minutes upgrades the probe's stale darkness to a fresh
 one. Its value is FRESHNESS: the probe's flag and the heartbeat's flag may legitimately differ
 (`aborted` on the hourly row, `rolled-back` a minute ago) and the gate does not require them to
@@ -1045,6 +1051,20 @@ agree — it grades each against the allowlist. Only the newest same-boot heartb
 "any arm-set flag in the window": the real post-abort trace holds an `armed` row minutes before
 the `aborted` one, and a gate that over-rejected it would refuse the exact state `op=execute` meets
 after a failed arm.
+
+### 4b. The dark arm is admitted only by the host's OWN refusal signature
+
+A non-200 from the webhook is not, by itself, evidence about the host: a CF Access 403, a WAF 5xx,
+`webhook.service` down, or a GQL error from a *reachable* server all arrive as non-200. The one
+non-200 that IS evidence is the web-host probe's own `inngest-registry-probe: FATAL … errors=
+["__FETCH_FAILED__"]` (HTTP 500 through the hook's error passthrough), emitted exactly when its
+fetch of `10.0.1.40:8288` was refused — the only *synchronous* "the port is not bound right now"
+reading this step ever gets, and the one thing the hourly probe row (≤90 min old) and the heartbeat
+(a flag, not a port) cannot supply. So 2.0 enters the dark arm only on that signature and refuses
+every other non-200 as `webhook_path` (remedy: `op=registry-probe`), **without reading Better Stack
+at all** — a stale dark row and a fresh heartbeat must not be consulted when the live path said
+nothing about the host. 2.1 capture uses the same webhook path, so this costs nothing in
+reachability. (Found at review, 2026-09-11.)
 
 ### 5. The `BLOCK:`-stream design was measured unsatisfiable and is REJECTED
 
@@ -1070,7 +1090,14 @@ Guard 2 (`inngest_host_dark_gate`) requires `server_active == "inactive"`. The e
 the unit sits in `activating` indefinitely, so **G8 refuses today's live host as `host_serving`** —
 the same defect class as this addendum — and is tracked as **#8078** rather than changed under a
 destroy-authorizing gate here. E1–E7 and G1–G7 are one shared helper (`_ihdg_graded_row`); the
-suite's mutation harness runs every shared-helper row against BOTH entry points.
+suite's mutation harness runs every shared-helper mutation row through `mutate_both` (asserted:
+any single-consumer `mutate ERG-*` row must be function-scoped) so a tightening that reddens only
+one consumer is visible. **One tightening this extraction applied to the recut gate too,
+recorded here rather than left to be rediscovered:** E7 requires the probe row's `boot_id` to be
+the `/proc/sys/kernel/random/boot_id` UUID shape (it is the E13 join key after hyphen-stripping),
+so a `boot_id=unknown` row — the emitter's read-failed fallback — now refuses BOTH gates as
+`unreadable`, where Guard 2 previously required only presence. Safe direction; the recut battery
+stayed green.
 
 ### 8. The reachable-arm asymmetry is deferred
 

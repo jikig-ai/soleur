@@ -1835,8 +1835,13 @@ assert "#8054 both reads capture stderr to a file and return the query's rc into
   "[[ \$(printf '%s\n' \"\$ERG_READS\" | grep -cE '^[[:space:]]*(PROBE|HB)_RC=0;[[:space:]]+_bs_query_rows .* \"\\\$(PROBE|HB)_ERR\" > \"\\\$(PROBE|HB)_ROWS\" \|\| (PROBE|HB)_RC=\\\$\?$') -eq 2 ]]"
 _trap_line="trap 'rm -rf \"\$ERG_DIR\"' EXIT"
 _mktemp_line='mktemp -d "${RUNNER_TEMP:-/tmp}/erg.XXXXXXXX"'
-assert "#8054 the row files live under RUNNER_TEMP via mktemp -d, umask 077, removed on EXIT" \
-  "grep -qE '^[[:space:]]*umask 077$' '$EXEC_ARM_FILE' && grep -qF -- \"\$_mktemp_line\" '$EXEC_ARM_FILE' && grep -qF -- \"\$_trap_line\" '$EXEC_ARM_FILE'"
+assert "#8054 the row files live under a private mktemp -d (0700) directory under RUNNER_TEMP, removed on EXIT" \
+  "grep -qF -- \"\$_mktemp_line\" '$EXEC_ARM_FILE' && grep -qF -- \"\$_trap_line\" '$EXEC_ARM_FILE' && ! grep -qE '^[[:space:]]*umask ' '$EXEC_ARM_FILE'"
+# The dark arm is entered ONLY on the dedicated host's own connection-refused signature (HTTP 500
+# + __FETCH_FAILED__ from inngest-registry-probe.sh); every other non-200 is a WEBHOOK-PATH fault
+# and refuses without reading Better Stack at all.
+assert "#8054 the dark arm is gated on HTTP 500 + the __FETCH_FAILED__ signature; other non-200s refuse as webhook_path" \
+  "grep -qE '^[[:space:]]*if \[\[ \"\\\$CODE\" != \"500\" \|\| \"\\\$BODY\" != \*\"__FETCH_FAILED__\"\* \]\]; then' '$EXEC_ARM_FILE' && grep -qE 'REFUSED \(webhook_path\).*op=registry-probe' '$EXEC_ARM_FILE' && grep -A2 -E 'REFUSED \(webhook_path\)' '$EXEC_ARM_FILE' | grep -qE '^[[:space:]]*exit 1$'"
 
 # ── Purity: no annotation line interpolates a row file, the body or the cause (AC9) ──
 ANNOT_LEAKS=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{exit} f' "$EXEC_ARM_FILE" \
@@ -1944,8 +1949,11 @@ DRIVER
   echo "__TMPD=$tmpd"   # the caller runs this in $(…), so a global would not survive; parse it
 }
 render_tmpd_of() { printf '%s\n' "$1" | sed -n 's/^__TMPD=//p' | tail -1; }
+# The web-host probe's REAL refusal body (run 34529824513, 2026-09-10) — the only non-200 that
+# admits the dark arm.
+FF_BODY='inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["__FETCH_FAILED__"] data_keys=[]); is the dedicated inngest-server reachable at http://10.0.1.40:8288/v0/gql?'
 # shellcheck disable=SC2034  # the *_OUT captures are read inside assert's eval'd condition strings
-H5_OUT="$(render_2_0 "$REGION_FILE" 500 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["__FETCH_FAILED__"])' h5 h5)"
+H5_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 h5)"
 assert "#8054 H5 render: the dark arm PASSES and falls through to 2.1 (rc 0)" "printf '%s\n' \"\$H5_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$H5_OUT\" | grep -qx '__REGION_FELL_THROUGH__'"
 assert "#8054 H5 render: the pre-arm notice names P1-5 and the webhook code" "printf '%s\n' \"\$H5_OUT\" | grep -qE '^::notice::2\.0 expected pre-arm \(P1-5\): webhook probe HTTP 500'"
 assert "#8054 H5 render: the dark notice carries boot_id=<36-char uuid> then flag=(aborted|rolled-back)" \
@@ -1957,21 +1965,21 @@ assert "#8054 H5 render: the notice reports BOTH ages and the heartbeat flag fro
 assert "#8054 H5 render: the webhook body appears exactly once, as a plain line" \
   "[[ \$(printf '%s\n' \"\$H5_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$H5_OUT\" | grep -q '^2\.0 webhook body (HTTP 500, informational'"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
-SILENT_OUT="$(render_2_0 "$REGION_FILE" 500 'x' empty h5)"
+SILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" empty h5)"
 assert "#8054 silent render: zero probe rows REFUSE with the silent remedy and rc 1 (silence is not darkness)" \
   "printf '%s\n' \"\$SILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$SILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && ! printf '%s\n' \"\$SILENT_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
-FAILREAD_OUT="$(render_2_0 "$REGION_FILE" 500 'x' fail h5)"
+FAILREAD_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" fail h5)"
 assert "#8054 read-failure render: probe rc 22 routes to the read remedy with the rc, never a host verdict" \
   "printf '%s\n' \"\$FAILREAD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FAILREAD_OUT\" | grep -qE '^::error::2\.0 probe read: stub remedy rc=22'"
 # shellcheck disable=SC2034  # read inside assert's eval'd condition
-FSMSILENT_OUT="$(render_2_0 "$REGION_FILE" 500 'x' h5 empty)"
+FSMSILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 empty)"
 assert "#8054 fsm_silent render: a dark probe row with no same-boot heartbeat REFUSES (freshness cannot be established)" \
   "printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(fsm_silent\)'"
 # H6 — the reachable-empty arm: webhook 200 + registry_empty=true, NO Better Stack read at all.
 # Positive control for the read markers: a non-200 webhook with the same stubs MUST leave both
 # markers, or the H6 absence assertion below is vacuous.
-CTRL_OUT="$(render_2_0 "$REGION_FILE" 500 'x' forbidden forbidden)"; CTRL_TMPD="$(render_tmpd_of "$CTRL_OUT")"
+CTRL_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" forbidden forbidden)"; CTRL_TMPD="$(render_tmpd_of "$CTRL_OUT")"
 assert "#8054 marker control: the dark arm performs both reads (markers present) — so H6's absence is a measurement" \
   "[[ -e '$CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$CTRL_TMPD/HB_READ_HAPPENED' ]] && printf '%s\n' \"\$CTRL_OUT\" | grep -qx '__RC=1'"
 H6_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":true,"function_count":0}' forbidden forbidden)"; H6_TMPD="$(render_tmpd_of "$H6_OUT")"
@@ -1983,6 +1991,19 @@ assert "#8054 H6 render: the reachable-empty arm performed NO Better Stack read 
 H6N_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":false,"function_count":3}' forbidden forbidden)"
 assert "#8054 H6 render: the reachable NON-empty arm still aborts with the P1-6 remediation, rc 1" \
   "printf '%s\n' \"\$H6N_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$H6N_OUT\" | grep -qE '^::error::Remediation \(P1-6\).*scheduled-inngest-health'"
+# webhook_path — a CF Access 403 and a 500 WITHOUT the refusal signature both refuse BEFORE any
+# Better Stack read; a stale dark row + fresh heartbeat must not be consulted when the live path
+# said nothing about the host.
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+WP403_OUT="$(render_2_0 "$REGION_FILE" 403 '{"error":"cf access"}' forbidden forbidden)"; WP403_TMPD="$(render_tmpd_of "$WP403_OUT")"
+assert "#8054 webhook_path render: HTTP 403 refuses naming the webhook path (op=registry-probe), rc 1, with NO Better Stack read" \
+  "printf '%s\n' \"\$WP403_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP403_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\).*op=registry-probe' && [[ ! -e '$WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$WP403_TMPD/HB_READ_HAPPENED' ]]"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+WP500_OUT="$(render_2_0 "$REGION_FILE" 500 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["some other graphql error"] data_keys=["functions"])' forbidden forbidden)"; WP500_TMPD="$(render_tmpd_of "$WP500_OUT")"
+assert "#8054 webhook_path render: HTTP 500 WITHOUT __FETCH_FAILED__ (a reachable server's GQL error) refuses as webhook_path, no read" \
+  "printf '%s\n' \"\$WP500_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP500_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e '$WP500_TMPD/PROBE_READ_HAPPENED' ]]"
+assert "#8054 webhook_path render: the refusal never falls through to 2.1" \
+  "! printf '%s\n' \"\$WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__' && ! printf '%s\n' \"\$WP500_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
 
 # ── mutate_file: the matrix rows that live in the SCRIPT (17, 18, 19) and the lib (20) ────
 # Patches a PRISTINE copy of a file with one single-line `sed` (same cmp + exactly-one-line guards
@@ -2039,10 +2060,19 @@ check_refusal_is_not_mute() {
   local f="$1" region out
   region="$(mktemp)"; SCRATCH+=("$region")
   awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
-  out="$(render_2_0 "$region" 500 'x' empty h5)"
+  out="$(render_2_0 "$region" 500 "$FF_BODY" empty h5)"
   printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && printf '%s\n' "$out" | grep -qx '__RC=1'
 }
 mutate_file "row19 gate call un-guarded" "$BODY_SH" 's|^      ERG_VERDICT="\$(inngest_execute_registry_gate \(.*\))" \|\| ERG_RC=\$?$|      ERG_VERDICT="$(inngest_execute_registry_gate \1)"|' check_refusal_is_not_mute
+# webhook_path gate — neuter the signature test. Property (DYNAMIC): a 403 must refuse without a read.
+check_403_refuses_without_read() {
+  local f="$1" region out tmpd
+  region="$(mktemp)"; SCRATCH+=("$region")
+  awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
+  out="$(render_2_0 "$region" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
+  printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
+}
+mutate_file "webhook_path gate neutered" "$BODY_SH" 's|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_403_refuses_without_read
 # Row 20 — the lib's allowlist retyped with one member missing. Property: set-equality with P1-5.
 check_e11_set_equal() { [[ "$(e11_set_of "$1")" == "$P15_SET" ]]; }
 mutate_file "row20 E11 allowlist minus flushed" "$GATE_LIB" "s|^    armed\|flipping\|flushed\|done) printf 'armed' ;;|    armed\|flipping\|done) printf 'armed' ;;|" check_e11_set_equal
@@ -2080,7 +2110,7 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   already claimed it was: the operator was `-lt`, and a `-lt` floor is satisfied by
 #   delete-one-add-one. The failure text dictates the new number.
 _DISPATCHED=$((PASS + FAIL))
-_EXACT_FLOOR=545
+_EXACT_FLOOR=550
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

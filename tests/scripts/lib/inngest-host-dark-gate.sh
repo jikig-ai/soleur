@@ -191,6 +191,13 @@ _IHDG_IDENT='
 _IHDG_SELECT="$_IHDG_IDENT"'
         | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))'
 
+# THE EXPECTED PROBE SCHEMA, DEFINED ONCE. Both entry points default `--expected-schema` to this
+# and the execute gate's caller interpolates it into the `stale_schema` remedy. The emitter's
+# schema has bumped 3 -> 4 -> 7 -> 8 and a bump that lands on one consumer and not the other would
+# make the two gates disagree about the same row forever (the suite asserts the literal appears
+# here and nowhere else in this file).
+_IHDG_EXPECTED_SCHEMA="8"
+
 # _ihdg_field <message> <field-name>
 #
 # Returns 0 and prints the value when the field is PRESENT, 1 when it is ABSENT. The distinction is
@@ -560,8 +567,10 @@ _ihdg_graded_row() {
   #
   # So G3 is now the wall-clock bound the header always assumed: the newest qualifying row must be
   # no older than `max_row_age`. That is what makes "the store was empty" a claim about NOW rather
-  # than about some point in a query window the caller chose. Both the boot_id PRESENCE checks are
-  # kept — an unparseable or absent boot_id still means the row shape is not what this gate grades.
+  # than about some point in a query window the caller chose. The boot_id PRESENCE check is kept —
+  # and since #8054 it is joined by a SHAPE check (E7 below): a `boot_id=unknown` row, the emitter's
+  # /proc-read-failed fallback, now refuses BOTH consumers as `unreadable` where the recut gate
+  # previously accepted it. Safe direction; recorded in ADR-100's 2026-09-11 addendum.
   local chosen_boot
   chosen_boot="$(_ihdg_field "$chosen_msg" boot_id)" || { _ihdg_refuse unreadable; return 1; }
   [[ -n "$chosen_boot" ]]                            || { _ihdg_refuse unreadable; return 1; }
@@ -588,11 +597,13 @@ _ihdg_graded_row() {
   # sign shape that would sail through a `-le` bound on a signed difference.
   [[ "$row_age" -ge 0 ]]              || { _ihdg_refuse stale_row; return 1; }
   [[ "$row_age" -le "$max_row_age" ]] || { _ihdg_refuse stale_row; return 1; }
-  # HOW REACHABLE IS THIS, HONESTLY. The workflow queries `--since 90m` and this bound defaults to
-  # 5400s, so under the CURRENT wiring almost no row that arrives here can exceed it — a row older
-  # than the window is not returned at all, and the gate answers `silent` instead. Said plainly
-  # rather than left for a reader to assume this predicate is carrying independent weight, which is
-  # the mistake the boot_id version of G3 got away with for a whole merge.
+  # HOW REACHABLE IS THIS, HONESTLY. The recut workflow queries `--since 90m` and this bound
+  # defaults to 5400s, so under THAT caller almost no row that arrives here can exceed it — a row
+  # older than the window is not returned at all, and the gate answers `silent` instead. The execute
+  # gate's caller reads `--since 24h` precisely so that this arm IS reachable there (#8054): the
+  # window has to exceed the bound or `stale_row` collapses into `silent`. Said plainly rather than
+  # left for a reader to assume this predicate is carrying independent weight, which is the
+  # mistake the boot_id version of G3 got away with for a whole merge.
   #
   # It is kept, and it is not decorative, for four reasons: the bound belongs to the GATE rather
   # than to one caller (the same posture as sorting rows here instead of trusting the query);
@@ -640,7 +651,7 @@ inngest_host_dark_gate() {
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="8"
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="$_IHDG_EXPECTED_SCHEMA"
   # G3's recency bound. `now_epoch` is injectable so the suite can pin a clock; the default is the
   # real one. 5400s = 90 minutes, the window the monotonicity argument in this file's header
   # assumes — it was, until this revision, assumed and enforced nowhere.
@@ -677,7 +688,10 @@ inngest_host_dark_gate() {
   if ! graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")"; then
     # LITERAL tokens only, by whitelist. The helper's stdout is what it printed — and if a helper
     # ever leaked something that is not a token, dispatching `$graded` would put it on THIS gate's
-    # stdout, which the caller prints. Anything unrecognised is `unreadable`.
+    # stdout, which the caller prints. Anything unrecognised is `unreadable`. This block is
+    # DELIBERATELY duplicated in the other entry point rather than hoisted: a shared dispatcher
+    # would be a `_ihdg_*` helper calling `_ihdg_verdict` (policy in a helper — the suite forbids
+    # it), and `_ihdg_verdict "$graded"` would put a variable where the suite requires a literal.
     case "$graded" in
       silent)       _ihdg_verdict "silent";       return $? ;;
       wrong_host)   _ihdg_verdict "wrong_host";   return $? ;;
@@ -1034,8 +1048,14 @@ _erg_flag_class() {
 # _ihdg_hb_newest <hb-file> <host> <host_name> <bid>
 #
 # The newest `inngest-cutover-flip` heartbeat row on boot `<bid>` from the named host, as TWO lines:
-# its `dt`, then its `.message.flag` (or `__ABSENT__`). Prints NOTHING when no row qualifies, and
-# the single line `__TIE__` when two rows at the newest `dt` carry different flags. The selector
+# its `dt`, then its `.message.flag` (or `__ABSENT__`). Prints NOTHING when no row qualifies, the
+# single line `__TIE__` when two rows at the newest `dt` carry different flags, and the single line
+# `__UNPARSED__` when same-boot rows under the tag EXIST but none carries an OBJECT `.message`.
+# That last one matters for the remedy: the FSM logs a JSON STRING (`logger -t inngest-cutover-flip
+# "$json"`), Vector re-encodes it as a string, and it is BETTER STACK that parses it into an object
+# at ingest (measured 2026-09-11: `.message = {"flag":…}` in the warehouse). If the warehouse stops
+# parsing, every heartbeat is present and unreadable — a read-path change, not a dead timer, and
+# telling the operator to replace the host for it would be the wrong remedy. The selector
 # filters on TYPE and IDENTITY only — identifier, host pair, a string `_BOOT_ID` equal to the join
 # key, an object `.message` — NEVER on the flag's value: a value filter would skip a fresh `armed`
 # and pass on a stale `aborted` (suite row 22). The flag is graded in bash by the caller.
@@ -1049,10 +1069,12 @@ _ihdg_hb_newest() {
         | select($d.SYSLOG_IDENTIFIER == "inngest-cutover-flip")
         | select(($d._BOOT_ID | type) == "string")
         | select($d._BOOT_ID == $b)
-        | select(($d.message | type) == "object")
-        | { dt: ($outer.dt // ""), flag: (($d.message.flag // "__ABSENT__") | tostring) }
-      ] as $rows
-      | if ($rows | length) == 0 then empty
+        | { dt: ($outer.dt // ""), obj: (($d.message | type) == "object"),
+            flag: (if ($d.message | type) == "object" then (($d.message.flag // "__ABSENT__") | tostring) else "" end) }
+      ] as $tagged
+      | ($tagged | map(select(.obj))) as $rows
+      | if ($tagged | length) == 0 then empty
+        elif ($rows | length) == 0 then "__UNPARSED__"
         else ($rows | map(.dt) | max) as $newest
            | ($rows | map(select(.dt == $newest) | .flag) | unique) as $flags
            | if ($flags | length) != 1 then "__TIE__" else "\($newest)\n\($flags[0])" end
@@ -1062,7 +1084,7 @@ _ihdg_hb_newest() {
 
 inngest_execute_registry_gate() {
   local rows_file="" query_rc="" hb_file="" hb_rc="" emit_file=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="8"
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="$_IHDG_EXPECTED_SCHEMA"
   # Two freshness bounds, both NUMERIC seconds. The caller's `FLIP_LIVENESS_SINCE` is the string
   # "15m" for its Better Stack `--since`; it is NOT this operand, and a non-numeric value here refuses.
   local now_epoch="" max_row_age="5400" hb_max_age="900"
@@ -1113,7 +1135,10 @@ inngest_execute_registry_gate() {
   if ! graded="$(_ihdg_graded_row "$rows_file" "$query_rc" "$host" "$host_name" "$expected_schema" "$now_epoch" "$max_row_age")"; then
     # LITERAL tokens only, by whitelist. The helper's stdout is what it printed — and if a helper
     # ever leaked something that is not a token, dispatching `$graded` would put it on THIS gate's
-    # stdout, which the caller prints. Anything unrecognised is `unreadable`.
+    # stdout, which the caller prints. Anything unrecognised is `unreadable`. This block is
+    # DELIBERATELY duplicated in the other entry point rather than hoisted: a shared dispatcher
+    # would be a `_ihdg_*` helper calling `_ihdg_verdict` (policy in a helper — the suite forbids
+    # it), and `_ihdg_verdict "$graded"` would put a variable where the suite requires a literal.
     case "$graded" in
       silent)       _ihdg_verdict "silent";       return $? ;;
       wrong_host)   _ihdg_verdict "wrong_host";   return $? ;;
@@ -1186,6 +1211,10 @@ inngest_execute_registry_gate() {
   hb_out="$(_ihdg_hb_newest "$hb_file" "$host" "$host_name" "$bid")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
   [[ -n "$hb_out" ]] || { _ihdg_verdict "fsm_silent"; return $?; }
   [[ "$hb_out" != "__TIE__" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  # Same-boot heartbeat rows are PRESENT but none is a parsed object — the warehouse's ingest-side
+  # JSON parse (not Vector's, not the FSM's) has changed. Unreadable, never silent: the timer is
+  # demonstrably alive.
+  [[ "$hb_out" != "__UNPARSED__" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
   hb_lines="$(printf '%s\n' "$hb_out" | wc -l)"
   [[ "${hb_lines//[[:space:]]/}" == "2" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
   hb_dt="${hb_out%%$'\n'*}"; hb_flag="${hb_out#*$'\n'}"

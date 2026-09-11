@@ -611,6 +611,20 @@ identity before content; `dark` is reachable only by passing all thirteen. Every
 `host_serving` · `flag_armed` · `flag_unreadable` · `fsm_silent` · `fsm_unreadable`. Eight are the
 sibling's own vocabulary; the three new ones each carry a remedy no existing token names.
 
+**Amendments at review (2026-09-11).** (i) **E0 — the webhook's own refusal signature admits the
+dark arm.** The SCRIPT (not the lib) enters the dark arm only when the webhook returned HTTP 500
+carrying `__FETCH_FAILED__` (the web-host probe's connection-refused body — the sole synchronous
+port evidence this step gets); every other non-200 refuses as `webhook_path` (remedy
+`op=registry-probe`) with NO Better Stack read. Wiring suite: 403 and non-signature-500 renders,
+plus a `mutate_file` row neutering the gate. (ii) **E13 `__UNPARSED__`.** Same-boot heartbeat rows
+present but none an object → `fsm_unreadable`, not `fsm_silent`: the FSM logs a string, Vector ships
+a string, Better Stack parses at ingest — a parse regression is a read-path fault, and the
+`fsm_silent` remedy (host replace) would be wrong. The ADR §4 / C4 attribution "parsed by Vector"
+was corrected. (iii) **E11 vs E13 on a stale `armed` probe row** is a conservative refusal
+(`flag_armed`) that clears on the next hourly row; kept as designed, pinned by a case, and the
+caller's remedy now names which sample it quotes. (iv) `_IHDG_EXPECTED_SCHEMA` is one lib
+constant; the recut gate inherits E7's UUID-shape check (recorded in ADR-100 §7).
+
 **Mutation matrix** — every row is a `mutate()` invocation (Phase 1.3), scoped per the rule there.
 "Both" means the unscoped helper mutation must redden BOTH suites.
 

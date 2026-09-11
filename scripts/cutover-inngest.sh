@@ -114,6 +114,7 @@ _bs_read_remedy() {
     1)  echo "::error::2.0 $label read: doppler run itself failed (rc=1) — the DOPPLER_TOKEN repo secret. stderr: ${err1:-<none>}" ;;
     22) body1="$(head -c 200 "$rowsfile" 2>/dev/null | tr -d '\r\n')"
         echo "::error::2.0 $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; the 2026-09-03 503 'source under maintenance' precedent). Re-dispatch later. body: ${body1:-<empty>} stderr: ${err1:-<none>}" ;;
+    6|7|28|35) echo "::error::2.0 $label read: the transport could not reach the read path (rc=$rc: DNS / connect / timeout / TLS from the runner) — a transient network fault on the RUNNER side, not a host state. Re-dispatch later. stderr: ${err1:-<none>}" ;;
     2|64|78) echo "::error::2.0 $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace) — a reader misconfiguration, not a host state. File an issue with this run URL. stderr: ${err1:-<none>}" ;;
     *)  echo "::error::2.0 $label read: betterstack-query.sh rc=$rc (unclassified). File an issue with this run URL. stderr: ${err1:-<none>}" ;;
   esac
@@ -1263,24 +1264,44 @@ case "$OP" in
       # still pre-arm within 15 min. Silence is not darkness: every state in which darkness cannot
       # be established refuses. The gate is tests/scripts/lib/inngest-host-dark-gate.sh's second
       # entry point; its E-table names every token below and the remedy each one carries.
-      echo "::notice::2.0 expected pre-arm (P1-5): webhook probe HTTP $CODE — grading darkness from the host's own rows"
+      # THE NON-200 MUST BE THE DEDICATED HOST'S REFUSAL, NOT THE WEBHOOK PATH'S. The web-host probe
+      # (inngest-registry-probe.sh) exits 1 — HTTP 500 through the hook's error passthrough — with
+      # `errors=["__FETCH_FAILED__"]` exactly when ITS own fetch of 10.0.1.40:8288 was refused: the only
+      # SYNCHRONOUS "the port is not bound right now" evidence this step ever sees, and the one
+      # thing the hourly probe row (up to 90 min old) and the FSM heartbeat (a flag, not a port)
+      # cannot supply. A CF Access 403, a WAF 5xx, webhook.service down (000/502) or a GQL error
+      # from a REACHABLE server all arrive here as non-200 too, and none of them says the host is
+      # dark — so they refuse, naming the webhook path, and 2.1 capture (the same webhook path)
+      # would have failed on them anyway. Only the refusal signature enters the dark arm.
+      if [[ "$CODE" != "500" || "$BODY" != *"__FETCH_FAILED__"* ]]; then
+        echo "::error::2.0 REFUSED (webhook_path): the registry-probe webhook returned HTTP $CODE without the dedicated host's connection-refused signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault, not evidence the host is dark. Check the path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / webhook.service on the web host); when it returns the __FETCH_FAILED__ refusal or HTTP 200, re-dispatch op=execute. Do NOT SSH the host."
+        echo "2.0 webhook body (HTTP $CODE): ${CAUSE:-<empty body>}"
+        exit 1
+      fi
+      echo "::notice::2.0 expected pre-arm (P1-5): webhook probe HTTP $CODE carries the dedicated host's connection-refused signature — grading darkness from the host's own rows"
       # The webhook body is a question phrased as a fault ("is the dedicated inngest-server
       # reachable?") and must not sit bare inside an annotation next to a green step — but it is
-      # the only synchronous evidence of the webhook path, which E9/E10's remedy says to check
-      # first. Printed once, as a plain line, CR/LF-stripped.
+      # the live corroboration the gate below cannot read, so it IS printed: once, as a plain line,
+      # CR/LF-stripped.
       echo "2.0 webhook body (HTTP $CODE, informational — grading from host rows): ${CAUSE:-<empty body>}"
       # shellcheck source=tests/scripts/lib/inngest-host-dark-gate.sh
       source tests/scripts/lib/inngest-host-dark-gate.sh || { echo "::error::2.0: gate library tests/scripts/lib/inngest-host-dark-gate.sh not found on this ref — dispatch with --ref main"; exit 1; }
       # Two reads, two files, ONE --grep term each (see _bs_query_rows). The rows are full journald
-      # payloads from the prod host: mktemp under RUNNER_TEMP with umask 077, removed on exit, and
+      # payloads from the prod host: `mktemp -d` creates the directory 0700 (so every file under it
+      # is unreadable to other users without a process-wide umask change), removed on exit, and
       # NEVER echoed — the gate's stdout is exactly one token and its notice fields come back
       # through --emit-file, each written only after the predicate that validated it.
-      umask 077
       ERG_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/erg.XXXXXXXX") || { echo "::error::2.0: mktemp -d failed under ${RUNNER_TEMP:-/tmp}"; exit 1; }
       trap 'rm -rf "$ERG_DIR"' EXIT
       PROBE_ROWS="$ERG_DIR/probe.rows"; PROBE_ERR="$ERG_DIR/probe.err"
       HB_ROWS="$ERG_DIR/hb.rows";       HB_ERR="$ERG_DIR/hb.err"
       ERG_EMIT="$ERG_DIR/emit.txt"
+      # WINDOWS ARE NOT BOUNDS. Freshness is decided by the gate (`--max-row-age` 5400 s on the probe
+      # row, `--hb-max-age` 900 s on the heartbeat); the `--since` windows only have to be WIDER than
+      # those bounds so that `stale_row` / `fsm_silent` are reachable verdicts — a 90m probe window
+      # would return no row older than the bound and collapse `stale_row` into `silent`. 24h at
+      # --limit 500 holds ~24 hourly probe rows plus the previous boot's; 15m at --limit 200 holds
+      # the ~15-30 heartbeats a live FSM emits in that window.
       PROBE_RC=0; _bs_query_rows 24h SOLEUR_INNGEST_SERVER_PROBE 500 "$PROBE_ERR" > "$PROBE_ROWS" || PROBE_RC=$?
       HB_RC=0;    _bs_query_rows "$FLIP_LIVENESS_SINCE" inngest-cutover-flip 200 "$HB_ERR" > "$HB_ROWS" || HB_RC=$?
       # THE CALL SHAPE IS LOAD-BEARING under `set -e`: every refusal returns non-zero, and a bare
@@ -1288,21 +1309,22 @@ case "$OP" in
       # `::error::` and no remedy ever printed. `|| ERG_RC=$?` lets every token reach the `case`.
       ERG_RC=0
       ERG_VERDICT="$(inngest_execute_registry_gate --rows-file "$PROBE_ROWS" --query-rc "$PROBE_RC" --hb-file "$HB_ROWS" --hb-rc "$HB_RC" --emit-file "$ERG_EMIT" --host "$INNGEST_HOST" --host-name "$INNGEST_HOST_NAME")" || ERG_RC=$?
+      # Every field this arm ever prints comes from the emit file, read ONCE here behind a shape
+      # regex — no second selection, no re-parse of a raw row in this script. A field the gate did
+      # not reach (it refused earlier) stays at its sentinel.
+      ERG_FLAG="__UNREAD__"; ERG_BOOT="__UNREAD__"; ERG_ROW_AGE="__UNREAD__"; ERG_HB_AGE="__UNREAD__"; ERG_HB_FLAG="__UNREAD__"
+      while IFS= read -r _erg_line; do
+        [[ "$_erg_line" =~ ^(flag|boot_id|row_age|hb_age|hb_flag)=([A-Za-z0-9_-]{1,64})$ ]] || continue
+        case "${BASH_REMATCH[1]}" in
+          flag)    ERG_FLAG="${BASH_REMATCH[2]}" ;;
+          boot_id) ERG_BOOT="${BASH_REMATCH[2]}" ;;
+          row_age) ERG_ROW_AGE="${BASH_REMATCH[2]}" ;;
+          hb_age)  ERG_HB_AGE="${BASH_REMATCH[2]}" ;;
+          hb_flag) ERG_HB_FLAG="${BASH_REMATCH[2]}" ;;
+        esac
+      done < "$ERG_EMIT"
       case "$ERG_VERDICT" in
         dark)
-          # The notice's fields come ONLY from the emit file, behind a shape regex — no second
-          # selection, no re-parse of a raw row in this script.
-          ERG_FLAG=""; ERG_BOOT=""; ERG_ROW_AGE=""; ERG_HB_AGE=""; ERG_HB_FLAG=""
-          while IFS= read -r _erg_line; do
-            [[ "$_erg_line" =~ ^(flag|boot_id|row_age|hb_age|hb_flag)=([A-Za-z0-9_-]{1,64})$ ]] || continue
-            case "${BASH_REMATCH[1]}" in
-              flag)    ERG_FLAG="${BASH_REMATCH[2]}" ;;
-              boot_id) ERG_BOOT="${BASH_REMATCH[2]}" ;;
-              row_age) ERG_ROW_AGE="${BASH_REMATCH[2]}" ;;
-              hb_age)  ERG_HB_AGE="${BASH_REMATCH[2]}" ;;
-              hb_flag) ERG_HB_FLAG="${BASH_REMATCH[2]}" ;;
-            esac
-          done < "$ERG_EMIT"
           echo "::notice::2.0 dark-host arm PASSED — the dedicated host is positively dark on boot_id=$ERG_BOOT: probe row ${ERG_ROW_AGE}s old with flag=$ERG_FLAG, FSM heartbeat ${ERG_HB_AGE}s old with flag=$ERG_HB_FLAG. The dedicated host is intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault. No registry can double-fire from a host that cannot start — pre-flight clear." ;;
         unreadable)
           if [[ "$PROBE_RC" -ne 0 ]]; then
@@ -1318,13 +1340,20 @@ case "$OP" in
         stale_row)
           echo "::error::2.0 REFUSED (stale_row): the dedicated host's newest probe row is older than the gate's bound (or future-dated). Wait for the next hourly probe and re-dispatch op=execute; if it stays stale, treat it as silent (see that remedy). There is no no-SSH way to fire the probe early."; exit 1 ;;
         stale_schema)
-          echo "::error::2.0 REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=8 — the emitter is BAKED, so it needs a host replace on a pin that carries the schema-8 emitter. Confirm first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c probe_schema=8 (a replace on an unbumped pin re-delivers the same bytes), then gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why>."; exit 1 ;;
+          echo "::error::2.0 REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=${_IHDG_EXPECTED_SCHEMA} — the emitter is BAKED, so it needs a host replace on a pin that carries the schema-${_IHDG_EXPECTED_SCHEMA} emitter. Confirm first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c probe_schema=${_IHDG_EXPECTED_SCHEMA} (a replace on an unbumped pin re-delivers the same bytes), then gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why>."; exit 1 ;;
         host_serving)
           echo "::error::2.0 REFUSED (host_serving): the dedicated host's own row says it is serving (loopback 200 or unit active) while the webhook returned HTTP $CODE — the row and the webhook disagree. Check the WEBHOOK path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / web host). If that returns 200 the host IS serving pre-arm: gh workflow run cutover-inngest.yml -f op=doublefire-probe -f cron_period_seconds=1200; a double-fire means op=rollback; clean means re-dispatch op=execute. Do NOT SSH the host."; exit 1 ;;
         flag_armed)
-          ERG_FLAG="__UNREAD__"
-          while IFS= read -r _erg_line; do [[ "$_erg_line" =~ ^flag=([A-Za-z0-9_-]{1,64})$ ]] && ERG_FLAG="${BASH_REMATCH[1]}"; done < "$ERG_EMIT"
-          echo "::error::2.0 REFUSED (flag_armed): INNGEST_CUTOVER_FLIP reads '$ERG_FLAG' on the dedicated host — inside the P1-5 arm set, so execute is out of sequence. done => the cutover already completed: dispatch op=verify. armed/flipping => an arm is in flight: read that run, do NOT re-dispatch execute. flushed => dispatch op=resume."; exit 1 ;;
+          # TWO SOURCES, DIFFERENT AGES. E11 grades the HOURLY probe row's flag (up to 90 min old)
+          # before E13 grades the ~1/min heartbeat, so `hb_flag` is still unread here when the probe
+          # row refused — and a probe row sampled mid-arm reads `armed` for up to an hour after the
+          # arm has aborted. The remedy must say which sample it is quoting.
+          if [[ "$ERG_HB_FLAG" == "__UNREAD__" ]]; then
+            echo "::error::2.0 REFUSED (flag_armed): the dedicated host's newest HOURLY probe row (${ERG_ROW_AGE}s old) reads INNGEST_CUTOVER_FLIP='$ERG_FLAG' — inside the P1-5 arm set. If that arm is still in flight, read its run and do NOT re-dispatch execute; if it has since aborted or rolled back, this row is a stale sample and the refusal is conservative — wait for the next hourly probe row (<= 60 min) and re-dispatch op=execute. done => the cutover already completed: dispatch op=verify. flushed => dispatch op=resume."
+          else
+            echo "::error::2.0 REFUSED (flag_armed): the flip FSM's newest same-boot heartbeat (${ERG_HB_AGE}s old) reads INNGEST_CUTOVER_FLIP='$ERG_HB_FLAG' — inside the P1-5 arm set, so execute is out of sequence. done => the cutover already completed: dispatch op=verify. armed/flipping => an arm is in flight: read that run, do NOT re-dispatch execute. flushed => dispatch op=resume."
+          fi
+          exit 1 ;;
         flag_unreadable)
           echo "::error::2.0 REFUSED (flag_unreadable): the dedicated host's cutover flag is neither pre-arm nor in the arm set — the emitter could not read it ('unknown') or it is mid-transition ('rollback'). Wait one probe period and re-dispatch op=execute."; exit 1 ;;
         fsm_silent)
@@ -1333,7 +1362,7 @@ case "$OP" in
           if [[ "$HB_RC" -ne 0 ]]; then
             _bs_read_remedy heartbeat "$HB_RC" "$HB_ERR" "$HB_ROWS"
           else
-            echo "::error::2.0 REFUSED (fsm_unreadable): the heartbeat read answered (rc=0) but its rows could not be graded — bytes that did not decode, two rows at the newest dt that disagree, or a gate operand out of shape. File an issue with this run URL. Nothing was changed."
+            echo "::error::2.0 REFUSED (fsm_unreadable): the heartbeat read answered (rc=0) but its rows could not be graded — bytes that did not decode; two rows at the newest dt that disagree; same-boot heartbeat rows PRESENT but none parsed to an object (the FSM logs a JSON string, Vector ships it as a string, and Better Stack parses it at ingest — if that ingest-side parse stopped, this is a READ-PATH change on the warehouse, not a dead timer: do NOT replace the host for it); or a gate operand out of shape. File an issue with this run URL. Nothing was changed."
           fi
           exit 1 ;;
         *)
@@ -1355,7 +1384,7 @@ case "$OP" in
         # keeps from starting — an unperformable remedy. This path never runs the gate, so no
         # ERG_* value exists here (under set -u an interpolation would abort with no remedy
         # printed): the replacement names a read the OPERATOR performs.
-        echo "::error::Remediation (P1-6): (1) read INNGEST_POSTGRES_URI on soleur-inngest/prd and record which backend it targets — do NOT assume it is non-prod: a successful op=arm writes the PROD DSN there and op=rollback has no inverse for that write, so since the first arm (2026-07-23) it holds the prod value as its documented steady state (ADR-100 addendum 2026-08-20); (2) read the cutover flag from the latest health run — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep -o 'cutover_flag=[a-z-]*'. If it is done, the cutover already completed — dispatch op=verify; if armed/flipping, an arm is in flight — read that run, do not re-dispatch execute; if flushed, dispatch op=resume; (3) if the flag is pre-arm and the registry is still non-empty, the dedicated server started outside the guard — dispatch op=doublefire-probe -f cron_period_seconds=1200, then op=rollback. Do NOT proceed to the flip."
+        echo "::error::Remediation (P1-6): (1) read INNGEST_POSTGRES_URI on soleur-inngest/prd and record which backend it targets — do NOT assume it is non-prod: a successful op=arm writes the PROD DSN there and op=rollback has no inverse for that write, so since the first arm (2026-07-23) it holds the prod value as its documented steady state (ADR-100 addendum 2026-08-20); (2) read the cutover flag from the latest health run — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep -oE \"cutover_flag='?[a-z-]+\". If it is done, the cutover already completed — dispatch op=verify; if armed/flipping, an arm is in flight — read that run, do not re-dispatch execute; if flushed, dispatch op=resume; (3) if the flag is pre-arm and the registry is still non-empty, the dedicated server started outside the guard — dispatch op=doublefire-probe -f cron_period_seconds=1200, then op=rollback. Do NOT proceed to the flip."
         exit 1
       fi
       echo "::notice::2.0 registry-probe: dark registry EMPTY (function_count=$REG_COUNT) — pre-flight clear"
