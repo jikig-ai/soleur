@@ -3,6 +3,10 @@ name: review
 description: "This skill should be used when performing exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/review` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:review`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/review`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
@@ -1034,7 +1038,7 @@ spawn fails at it. That experiment has not been run.
 
 #### Step 3: Summary Report
 
-**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `/work` or `/one-shot` slash command, or a `slash_command` tool use of those skills. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
 **Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
@@ -1168,11 +1172,11 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `/work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `/one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
-1. Run `skill: soleur:compound` to capture learnings from the review session.
+1. Run `skill: soleur:compound` (**Grok:** Read `plugins/soleur/skills/compound/SKILL.md` in this process / `/compound`) to capture learnings from the review session.
    If compound finds nothing to capture, it will skip gracefully — do not block on this.
 2. Commit any local artifacts. GitHub issues are already created remotely,
    but local files may have been modified (plan updates, todo resolutions).
@@ -1223,7 +1227,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 4. **Continue to `/soleur:ship` in the same turn — review is not a stopping point.**
    Findings are fixed inline (§5), so a clean review means the PR is ready to go
    out, not ready to be handed over. Invoke `skill: soleur:compound` then
-   `skill: soleur:ship`, and let ship carry the PR to MERGED
+   `skill: soleur:ship` (**Grok:** Read each child's SKILL.md in this process / `/compound` then `/ship`), and let ship carry the PR to MERGED
    (`rf-never-skip-qa-review-before-merging`, `wg-after-marking-a-pr-ready-run-gh-pr-merge`).
 
    Do NOT end the turn by telling the operator to run the next skill. This step

@@ -181,6 +181,15 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:sync` | Analyze codebase and populate knowledge-base |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
 
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+
 ### Workflow Skills
 
 | Skill | Purpose |

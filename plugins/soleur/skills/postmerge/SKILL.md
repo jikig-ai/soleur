@@ -3,6 +3,10 @@ name: postmerge
 description: "This skill should be used when verifying a merged PR deployed correctly and production is healthy."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/postmerge` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:postmerge`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # postmerge Skill
 
 <!-- postmerge-harness-protocol:start -->
