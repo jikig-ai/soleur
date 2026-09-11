@@ -600,6 +600,12 @@ rc="$(rc_of "$LINT" "$FIX/violation-inverted-guard.sh")"
 [ "$rc" = "1" ] && grep -q 'INVERTED' "$WORK/out" "$WORK/err" \
   && pass "G2-M7 -z \"\${VAR:+x}\" (inverted guard) is reported" \
   || fail "G2-M7 expected rc=1 with the INVERTED message, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -4)"
+# G2-H3: the correct guard under an OUTER negation, or in `||` form, is NOT inverted -- both
+# refuse when the credential is SET. Reported by the ship-phase advisor consult as a false
+# positive of the first INVERTED_GUARD; a control fixture per spelling.
+rc="$(rc_of "$LINT" "$FIX/compliant-negated-z.sh" "$FIX/compliant-z-or-exit.sh")"
+[ "$rc" = "0" ] && pass "G2-H3 ! [ -z \"\${VAR:+x}\" ] and [ -z … ] || exit are accepted (not inverted)" \
+  || fail "G2-H3 negated/|| forms of -z should report rc=0, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -4)"
 mutate_row 'G2-M7 Rule C: inverted-guard detection removed' \
   's/^INVERTED_GUARD = re\.compile\(.*\)$/INVERTED_GUARD = re.compile(r"(?!x)x")/m' \
   "$FIX/violation-inverted-guard.sh" 1 0
@@ -667,7 +673,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-MIN_ASSERTIONS=76
+MIN_ASSERTIONS=77
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

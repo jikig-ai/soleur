@@ -73,11 +73,12 @@ carry the session cookie).
    Click *New Token* (`scrollIntoView(); click()`); the value appears once in a readonly textbox
    whose measured selector is `input[aria-label="Generated token"]`. Up to 20 tokens per
    integration.
-3. **Capture → normalise → store → verify → shred, one process:**
+3. **Capture → normalise → verify → store → shred, one process:**
    `bash scripts/rotate-sentry-actions-ro-token.sh capture --selector 'input[aria-label="Generated token"]'`.
-   The script stores on **stdin with no body flag**, asserts `gh secret list` shows the name,
-   reads `.auth.scopes` and requires it **equal** the triple, probes one endpoint per consumer
-   class (header from a file, never argv), pins the region host, and shreds on exit. It logs the
+   The script reads `.auth.scopes` and requires it **equal** the triple, probes one endpoint per
+   consumer class (header from a file, never argv), pins the region host, and only THEN stores on
+   **stdin with no body flag** and asserts `gh secret list` shows the name — a token that fails
+   verification never overwrites the previous secret (GitHub cannot read one back). It logs the
    token's length and **last four characters** — the same four Sentry renders in the masked
    panel row — so the stored one can be told apart later. Any `[FAIL]` blocks the cutover.
 4. **Dispatch the sweep, read the verdicts, then revoke the old.** Order is store new →
@@ -113,7 +114,7 @@ in the script's header — the runbook does not restate them.
 | `[FAIL] .auth.scopes is … expected exactly …` | The permission set selected returned an implied extra or is missing one | Edit the integration's permissions in-page; re-read scopes on the **same** token; if unchanged, revoke, create a new token, re-run the chain |
 | `[FAIL] <code> <consumer endpoint>` at verification | 404: the consumer's org slug or monitor slug moved — fix the consumer's literal (Rule D pins it) and the probe list. 403 with the slug unchanged: the endpoint needs a scope outside the triple — a plan change on the record (ADR-031), never a widening in place | Re-read the consumer's exact host + org + path; measure the endpoint's `scope_map` before touching the permission set |
 | `[FAIL] regionUrl is … pinned to https://de.sentry.io` | The org's region host changed | Update `REGION_HOST_PINNED` in the script and the boot-trail's literal together; do not proceed on an unpinned host |
-| `[FATAL] gh secret set … failed` | The store did not land; a live token exists that nothing holds | Revoke the token in-page immediately, then retry the chain. (`gh secret list` failing *after* the write is reported separately and does not mean "not stored" — re-run the list before revoking) |
+| `[FAIL] … the cutover is BLOCKED` at verification, or `[FATAL] gh secret set … failed` | Verification failed (the repo secret was NOT touched — the previous token still serves), or the store did not land after a green verification; either way a live token exists that nothing holds | Revoke the token in-page, then retry the chain. (`gh secret list` failing *after* the write is reported separately and does not mean "not stored" — re-run the list before revoking) |
 | A probe posts TRANSIENT after the dispatch, or every Sentry-backed probe posts 401 daily under a green run | 401: the stored value is wrong (JSON-encoded, truncated) or the integration/token was deleted dashboard-side; 403: a scope gap | 401: re-run the chain (the normalise step asserts shape), recreating the integration if the panel is empty; 403: the scope row above |
 | The sweeper run is red with `REQUIRED SECRET MISSING` | A tracker directive names a secret the workflow does not bind (retired name, misspelling, or an empty binding) | Rewrite the directive's `secrets=` clause (`gh issue edit <n> --body-file …`) or fix the workflow `env:`; the comment on the tracker names which |
 | `[WARN] shred … failed` on exit | Non-tmpfs `/tmp` or a permission change | Remove the named directory by hand; the plaintext lived seconds under 0700 |

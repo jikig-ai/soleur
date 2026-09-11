@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rotate-sentry-actions-ro-token.sh -- the capture -> normalise -> store -> verify -> shred
+# rotate-sentry-actions-ro-token.sh -- the capture -> normalise -> verify -> store -> shred
 # chain for SENTRY_ACTIONS_RO_TOKEN, the org-level read-only Sentry Internal Integration
 # token (`actions-read-prd`, ADR-031) that scripts/followthroughs/*.sh and the fresh-host
 # boot-trail consume. Lives ONCE; the rotation runbook
@@ -118,8 +118,10 @@ if [[ -n "$SELECTOR" ]]; then
   # `get value` writes the raw textbox value; it is the one read of the token panel that
   # is NOT a snapshot or a screenshot (#7947 discipline). On failure only the exit code and
   # the selector are reported -- agent-browser's stderr is not proven value-free.
-  if ! agent-browser get value "$SELECTOR" > "$TOK" 2>/dev/null; then
-    printf '[FATAL] agent-browser get value %q failed (rc=%s) -- is the Tokens panel open in the current session?\n' "$SELECTOR" "$?" >&2; exit 1
+  cap_rc=0
+  agent-browser get value "$SELECTOR" > "$TOK" 2>/dev/null || cap_rc=$?
+  if (( cap_rc != 0 )); then
+    printf '[FATAL] agent-browser get value %q failed (rc=%s) -- is the Tokens panel open in the current session?\n' "$SELECTOR" "$cap_rc" >&2; exit 1
   fi
 else
   [[ -f "$FROM_FILE" ]] || { printf '[FATAL] --from-file %q is absent: the capture did not land where expected; find and shred it before retrying\n' "$FROM_FILE" >&2; exit 1; }
@@ -173,22 +175,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-# --- store: the value on stdin, never as a flag argument (visible in ps and under -x) ----
-if ! gh secret set SENTRY_ACTIONS_RO_TOKEN < "$TOK"; then  # literal: AC-12 counts this exact form
-  printf '[FATAL] gh secret set %s failed. A live token exists that nothing holds: REVOKE IT IN-PAGE NOW (the integration'"'"'s Tokens panel), then retry.\n' "$SECRET_NAME" >&2
-  exit 1
-fi
-# The list read is a SEPARATE instrument from the write: a failed list (expired auth, rate
-# limit, network) must not be read as "not stored" and turned into a revoke instruction.
-if ! listing="$(gh secret list 2>"$TOKEN_DIR/list.err")"; then
-  printf '[FATAL] gh secret list failed after the write (%s) -- the store may have landed; re-run the list before revoking anything\n' "$(tr '\n' ' ' < "$TOKEN_DIR/list.err" | head -c 200)" >&2
-  exit 1
-fi
-if [[ "$(grep -c "^${SECRET_NAME}\b" <<<"$listing")" != "1" ]]; then
-  printf '[FATAL] %s is not listed after a successful write -- revoke the token in-page and investigate\n' "$SECRET_NAME" >&2; exit 1
-fi
-printf '[ok] stored %s (token ends ...%s; GitHub cannot read it back -- the value is proven by the sweeper dispatch)\n' "$SECRET_NAME" "$TAIL4"
-
 # --- verify: the header rides a FILE, never argv ---------------------------------------
 { printf 'Authorization: Bearer '; cat "$TOK"; } > "$HDR"
 get() { # get <url> -> prints http code (000 + the curl error on a transport failure); body to $TOKEN_DIR/body
@@ -241,8 +227,29 @@ for u in "${probes[@]}"; do
   fi
 done
 if (( fails > 0 )); then
-  printf '[FAIL] %d verification failure(s) -- the cutover is BLOCKED until every row is 200 and the scopes match\n' "$fails" >&2
+  printf '[FAIL] %d verification failure(s) -- the cutover is BLOCKED until every row is 200 and the scopes match; the repo secret was NOT touched. Revoke this token in-page before retrying.\n' "$fails" >&2
   exit 1
 fi
-printf '[ok] verified: scopes exact, every consumer endpoint class 200. The trap shreds the plaintext on exit.\n'
+printf '[ok] verified: scopes exact, every consumer endpoint class 200 -- storing.\n'
+
+# --- store: AFTER verification, so a token that fails the scope or endpoint checks never
+# overwrites the previous repo secret (GitHub cannot read a secret back, so an overwrite is
+# unrecoverable and the next sweep would run on the rejected token). The value rides stdin,
+# never a flag argument (visible in ps and under -x). -------------------------------------
+if ! gh secret set SENTRY_ACTIONS_RO_TOKEN < "$TOK"; then  # literal: AC-12 counts this exact form
+  printf '[FATAL] gh secret set %s failed. A live token exists that nothing holds: REVOKE IT IN-PAGE NOW (the integration'"'"'s Tokens panel), then retry.\n' "$SECRET_NAME" >&2
+  exit 1
+fi
+# The list read is a SEPARATE instrument from the write: a failed list (expired auth, rate
+# limit, network) must not be read as "not stored" and turned into a revoke instruction.
+if ! listing="$(gh secret list 2>"$TOKEN_DIR/list.err")"; then
+  printf '[FATAL] gh secret list failed after the write (%s) -- the store may have landed; re-run the list before revoking anything\n' "$(tr '\n' ' ' < "$TOKEN_DIR/list.err" | head -c 200)" >&2
+  exit 1
+fi
+if [[ "$(grep -c "^${SECRET_NAME}\b" <<<"$listing")" != "1" ]]; then
+  printf '[FATAL] %s is not listed after a successful write -- revoke the token in-page and investigate\n' "$SECRET_NAME" >&2; exit 1
+fi
+printf '[ok] stored %s (token ends ...%s; GitHub cannot read it back -- the value is proven by the sweeper dispatch)\n' "$SECRET_NAME" "$TAIL4"
+
+printf '[ok] done. The trap shreds the plaintext on exit.\n'
 exit 0

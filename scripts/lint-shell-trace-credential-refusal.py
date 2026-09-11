@@ -470,7 +470,14 @@ def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             f"  Give the alternate a value: `[ -n \"${{{empty_alt[0]}:+x}}\" ]`.\n"
         )
         return out
-    inverted = sorted(set(INVERTED_GUARD.findall(window)))
+    # A `-z` under an OUTER negation is the correct guard spelled differently:
+    # `! [ -z "${V:+x}" ]` and `[ -z "${V:+x}" ] || exit 78` both refuse when V is
+    # SET. Only an un-negated `-z` whose branch is the refusal is inverted.
+    inverted = sorted({
+        m.group(1) for m in INVERTED_GUARD.finditer(window)
+        if not re.search(r"!\s*(\[\[?|test)\s*-z", window[max(0, m.start() - 12):m.end()])
+        and not re.search(r"\]\]?\s*\|\|", window[m.end():m.end() + 12])
+    })
     if inverted:
         out.append(
             f"{rel}:{preamble_at + 1}: the xtrace refusal is INVERTED -- `-z \"${{{inverted[0]}:+x}}\"` "

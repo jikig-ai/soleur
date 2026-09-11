@@ -890,7 +890,7 @@ org-level Soleur credential carries — with no human gate once the session was 
 `jikigai-eu.sentry.io`, the control silo `sentry.io`, and the region host `de.sentry.io` as
 returned by `.links.regionUrl` (serving `/api/0/` reads, as the Glossary's 2026-09-03 (#7481)
 correction already records). Everything operational — the
-capture→normalise→store→verify→shred chain, the probe table, the failure modes — lives once in
+capture→normalise→verify→store→shred chain, the probe table, the failure modes — lives once in
 the script and its runbook `knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`.
 Counting note: classes are counted by consumer; the org also carries `postmerge-issue-rw`
 (`SENTRY_ISSUE_RW_TOKEN`), referenced in the 2026-06-17 amendment and never enrolled as a
