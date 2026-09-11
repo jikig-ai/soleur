@@ -79,6 +79,13 @@ esac
 #     `stat -c %m` names the mount the root sits on, which must be the store's own. ---
 command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
 mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing transport on an unmounted store (fail-closed)"
+# --- (#8043 review) HONOUR THE CUTOVER FREEZE, same seam as provision/remove and the
+#     pre-receive fence. The fence already denies receive-pack while the sentinel exists,
+#     but the fence is reached through core.hooksPath, and the one window where that path
+#     can dangle is the cutover itself (#8101) — so the refusal is duplicated here, ahead of
+#     any exec, for both verbs. ---
+cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"
+[ ! -e "$cutover_freeze" ] || reject "store is frozen for cutover ($cutover_freeze present) — retry after the cutover (fail-closed)"
 
 # --- Canonicalize under the bare-repo root (CWE-22, same guard as provision/remove) --
 root_real="$(readlink -f "$REPO_ROOT" 2>/dev/null || echo "")"

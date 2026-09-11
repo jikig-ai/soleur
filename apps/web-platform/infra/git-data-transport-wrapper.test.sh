@@ -165,6 +165,17 @@ case "$out" in *"git -c core.hooksPath=/srv/h receive-pack ${root}/ws-pin.git"*)
 if grep -qE '^exec git -c "core\.hooksPath=\$\{HOOKS_DIR\}" "\$\{verb#git-\}" "\$repo_real"$' "$WRAPPER"; then pass; else fail "T11 the live exec line does not pin core.hooksPath through git -c"; fi
 rm -rf "$root"
 
+# --- T12 (#8043 review): the CUTOVER FREEZE sentinel refuses transport (both verbs), via
+#     the same GIT_DATA_CUTOVER_FREEZE seam the fence and the other wrappers carry. ---
+root=$(fresh_root); make_repo "$root" "ws-frz"; : > "${root}/.frozen"
+for v in git-upload-pack git-receive-pack; do
+  rc=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" GIT_DATA_CUTOVER_FREEZE="${root}/.frozen" \
+    GIT_DATA_TRANSPORT_EXEC_DRYRUN=1 SSH_ORIGINAL_COMMAND="$v '${root}/ws-frz.git'" bash "$WRAPPER" >/dev/null 2>"$ERR"; echo $?)
+  if [ "$rc" != "0" ] && grep -q 'frozen for cutover' "$ERR"; then pass; else fail "T12 cutover freeze ($v): expected named refusal, got rc=$rc ($(head -c 120 "$ERR"))"; fi
+done
+if grep -qF 'cutover_freeze="${GIT_DATA_CUTOVER_FREEZE:-${MOUNT_ROOT}/.cutover-freeze}"' "$WRAPPER"; then pass; else fail "T12 the freeze sentinel default is not <mount root>/.cutover-freeze"; fi
+rm -rf "$root"
+
 # --- MUTATION meta-check: the reject assertions have teeth ---
 # An always-exit-0 stub stands in for a wrapper whose allowlist/canonicalize guard
 # was removed. Representative reject inputs MUST exit 0 against it — i.e. WITHOUT the
@@ -181,8 +192,8 @@ rm -f "$stub"; rm -rf "$mut_root"
 
 # --- Minimum-cardinality guard (a silent-empty extraction must fail loud) ---
 total=$((passes + fails))
-if [ "$total" -lt 30 ]; then
-  echo "FAIL: ran only ${total} assertions (<30) — suite did not execute fully" >&2
+if [ "$total" -lt 33 ]; then
+  echo "FAIL: ran only ${total} assertions (<33) — suite did not execute fully" >&2
   exit 1
 fi
 
