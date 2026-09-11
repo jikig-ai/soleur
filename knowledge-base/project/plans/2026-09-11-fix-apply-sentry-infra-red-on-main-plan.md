@@ -397,6 +397,7 @@ ACs marked **(evidence)** depend on GitHub, live Sentry, or the prod plan and ar
 **Brand-survival threshold:** `single-user incident` — inherited from the #7650 plan that introduced this probe (`brand_survival_threshold: single-user incident`), because the probe is the only control that notices `byok-art-33-breach` matching nothing. `requires_cpo_signoff: true` (granted with notes, below); `user-impact-reviewer` runs at review time; plan-review ran the five-agent panel.
 
 - threshold rationale: every anti-vacuity floor in the probe and the gate is asserted by a mutation row (Guard Contract), so "PASS having compared nothing" is a tested-unreachable state, not a hoped-for one.
+- explicit scope-out (review, user-impact-reviewer): `environment` is not compared on either side. It is the one attribute under `lifecycle.ignore_changes` on every `sentry_alert` block by #7650's design (issue-alerts.tf documents the UI-binding case it tolerates), so a rule bound to a non-production environment in the Sentry UI is invisible to this probe. Changing that is a detection-scope decision for the Sentry root, not a fix for a red `main`; recorded here so it is not read as an oversight.
 
 ## Domain Review
 
