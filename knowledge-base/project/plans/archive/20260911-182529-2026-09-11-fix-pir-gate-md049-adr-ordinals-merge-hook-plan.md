@@ -668,8 +668,8 @@ logs:
   retention: "PR body: lifetime of the repository; CI logs per GitHub retention (90 days); local transcripts per session"
 
 discoverability_test:
-  command: "bash plugins/soleur/test/ship-pir-action-items-gate.test.sh"
-  expected_output: "`0 failed ===` and `failed=0`"
+  command: bash plugins/soleur/test/ship-pir-action-items-gate.test.sh
+  expected_output: "Failed: 0" or "failed=0"
 ```
 
 The suite writes only under `mktemp -d`; preflight Check 10 executes it with the repo read-only
