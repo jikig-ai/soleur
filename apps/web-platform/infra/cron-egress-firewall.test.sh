@@ -672,7 +672,7 @@ echo "-- alarm transport confinement + Sentry destination pin (#7898 §2) --"
 # on COUNT equality rather than -q: both credentialed curls (Sentry check-in +
 # Resend) must carry the four flags first, the positive ingest-apex grammar
 # must be present exactly once, and no bare `curl -s` may remain.
-CONFINED_CURLS="$(grep -cE "^[[:space:]]*curl --disable --noproxy '\\*' --proto '=https' -g" "$ALARM" || true)"
+CONFINED_CURLS="$(grep -cE "^[[:space:]]*([A-Za-z_]+=\"?\\\$\()?curl --disable --noproxy '\\*' --proto '=https' -g" "$ALARM" || true)"
 if [[ "$CONFINED_CURLS" -eq 2 ]]; then
   PASS=$((PASS + 1)); echo "  PASS: both alarm curls are transport-confined (count=2)"
 else
@@ -684,7 +684,7 @@ if [[ "$PIN_GRAMMAR_COUNT" -eq 1 ]]; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: expected the ingest-apex grammar once in alarm, found $PIN_GRAMMAR_COUNT"
 fi
-assert_not_grep "alarm has no unconfined bare 'curl -s' line" '^[[:space:]]*curl -s' "$ALARM"
+assert_not_grep "alarm has no unconfined bare 'curl -s' line" '^[[:space:]]*([A-Za-z_]+="?\$\()?curl -s' "$ALARM"
 
 # Exec rows: the alarm under a PATH-shimmed curl / logger / journalctl, with a
 # fake Resend key and the cooldown stamp redirected into a tmpdir. Each row is
@@ -695,7 +695,8 @@ run_alarm() {
   mkdir -p "$d/bin"
   cat > "$d/bin/curl" << MOCK
 #!/bin/bash
-echo "\$*" >> "$d/curl_args"
+# one line per INVOCATION (the -d payload is multi-line JSON)
+echo "\$*" | tr '\\n' ' ' >> "$d/curl_args"; echo >> "$d/curl_args"
 echo "200"
 exit 0
 MOCK

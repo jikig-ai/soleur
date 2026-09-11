@@ -30,6 +30,34 @@
 # and https://resend.com/docs/api-reference/webhooks/create-webhook.
 
 set -euo pipefail
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — the key arrives
+# from the doppler-wrapped shell and every request below carries it, so a
+# `${VAR:+x}` hatch buys nothing a traced run could not print (#7898 §2).
+case "$-" in
+  *x*)
+    printf 'SOLEUR_RESEND_INBOUND_BOOTSTRAP_HALT reason=xtrace-credential-bound issue=7797\n'
+    printf 'resend-inbound-bootstrap: refusing to run under xtrace: this script handles a live credential and -x would print it. Nothing has been read or sent.\n' >&2
+    exit 78
+    ;;
+esac
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
+# session keys, the CA vars substitute the trust store, OPENSSL_CONF loads an
+# arbitrary provider .so, LD_PRELOAD applies to the curl child (#7898 §2).
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+# The shape checks' [A-Za-z0-9] classes are locale-defined; pin the locale.
+export LC_ALL=C
+
+# Emit a refusal marker (#7898). This is a laptop surface, so the sinks are the
+# invoking terminal's stdout AND stderr — every resend_api call site is a
+# `var="$(resend_api …)"`, whose capture would swallow a stdout-only marker.
+# Reason tokens only — never the key, a path value or a body.
+emit_refusal() {
+  printf '%s\n' "$1"
+  printf '%s\n' "$1" >&2
+}
 
 # IMPORTANT (verified live 2026-06-11, #5103): Resend RECEIVING is DOMAIN-SCOPED.
 # Enabling receiving on the apex `soleur.ai` domain produces a Receiving MX on the
@@ -64,21 +92,52 @@ if [[ -z "${RESEND_API_KEY:-}" ]]; then
   echo "  doppler run -p ${DOPPLER_PROJECT} -c ${DOPPLER_CONFIG} -- bash $0" >&2
   exit 1
 fi
+# (#7898 §2) The key is written into a curl CONFIG file (below), where a newline
+# is a directive boundary: measured, a value carrying `\nurl = "…/exfil"` makes
+# curl fetch the injected URL as well as the intended one — with all four
+# transport flags present. The live key shape is `re_` + [A-Za-z0-9_]; `-` is
+# admitted because it cannot open a directive and lowers rotation-breakage risk.
+if [[ ! "$RESEND_API_KEY" =~ ^re_[A-Za-z0-9_-]+$ ]]; then
+  emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED reason=key-shape"
+  echo "ERROR: RESEND_API_KEY contains characters outside re_[A-Za-z0-9_-] (trailing whitespace/newline?) — refusing to write it into a curl config file" >&2
+  exit 2
+fi
 
 # Authenticated GET/POST/PATCH against the Resend API. The API key NEVER
 # appears in argv (a `curl -H "Authorization: ..."` header is readable by any
 # local process via /proc/<pid>/cmdline): the Authorization header reaches
 # curl through --config on a process-substitution FD, so it exists only as an
 # unlinked pipe between bash and curl.
+#
+# (#7898 §2) Every call site MUST stay a bare `var="$(resend_api …)"` — a
+# wrapper (`if $(resend_api …)`, `… || …`) would swallow the in-function
+# `exit 2` below and continue past a refused request. The three `local`s are
+# separate statements so `path` is an in-file assignment the Rule D classifier
+# can see (measured necessary and harmless).
 resend_api() {
-  local method="$1" path="$2" body="${3:-}"
+  local method="$1"
+  local path="$2"
+  local body="${3:-}"
+  # The path is caller-controlled and concatenated onto the literal RESEND_API:
+  # allow only the two collections this script talks to plus one id segment —
+  # no authority (`@`), traversal (`..`), query or second slash can smuggle the
+  # credentialed request elsewhere. Every in-file call site is /domains… or
+  # /webhooks….
+  if [[ ! "$path" =~ ^(/domains|/webhooks)(/[A-Za-z0-9_-]+)?$ ]]; then
+    emit_refusal "SOLEUR_RESEND_INBOUND_BOOTSTRAP_REFUSED reason=path-shape"
+    echo "ERROR: resend_api path is outside the /domains|/webhooks allowlist — refusing to build a credentialed request from it" >&2
+    exit 2
+  fi
+  # (#7873) transport confinement, position load-bearing: `--disable` aborts
+  # ~/.curlrc parsing only when FIRST; `--noproxy '*'` ignores every proxy var;
+  # `--proto '=https'` refuses a scheme downgrade; `-g` disables URL globbing.
   if [[ -n "$body" ]]; then
-    curl -sS -X "$method" "${RESEND_API}${path}" \
+    curl --disable --noproxy '*' --proto '=https' -g -sS -X "$method" "${RESEND_API}${path}" \
       --config <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY") \
       -H "Content-Type: application/json" \
       -d "$body"
   else
-    curl -sS -X "$method" "${RESEND_API}${path}" \
+    curl --disable --noproxy '*' --proto '=https' -g -sS -X "$method" "${RESEND_API}${path}" \
       --config <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY")
   fi
 }

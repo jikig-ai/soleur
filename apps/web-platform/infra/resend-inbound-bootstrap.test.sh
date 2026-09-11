@@ -186,9 +186,11 @@ test_xtrace_halt
 test_bare_call_sites() {
   TOTAL=$((TOTAL + 1))
   local description="no resend_api call site is wrapped in if/||/&& (a wrapper would swallow the in-function exit 2)"
+  # Comment lines are stripped first: the function's own docstring names the
+  # forbidden shapes, and a bare-token grep would count them (cq-assert-anchor-not-bare-token).
   local wrapped total
-  wrapped=$(grep -cE '(^[[:space:]]*if |\|\||&&).*\$\(resend_api' "$SCRIPT" || true)
-  total=$(grep -cE '\$\(resend_api ' "$SCRIPT" || true)
+  wrapped=$(grep -vE '^[[:space:]]*#' "$SCRIPT" | grep -cE '(^[[:space:]]*if |\|\||&&).*\$\(resend_api' || true)
+  total=$(grep -vE '^[[:space:]]*#' "$SCRIPT" | grep -cE '\$\(resend_api ' || true)
   if [[ "$wrapped" -eq 0 && "$total" -ge 8 ]]; then PASS=$((PASS + 1)); echo "  PASS: $description ($total bare call sites)"
   else FAIL=$((FAIL + 1)); echo "  FAIL: $description (wrapped=$wrapped total=$total)"; fi
 }
