@@ -2,7 +2,7 @@
 title: "Fixture PIR"
 brand_survival_threshold: none
 ---
-<!-- expect: fail/rows-without-issue -->
+<!-- expect: fail/duplicate-heading -->
 
 # Fixture PIR
 
@@ -12,9 +12,12 @@ Synthesized fixture for the action-items shape gate. Not a real event.
 
 ## Action Items & Follow-ups
 
-- [ ] File the sweep issue (#1002)
-- [ ] Re-run the probe
+No action items — incident fully resolved in the source PR with no residual work.
 
 ## Timeline
 
 - t0 — nothing.
+
+## Action Items & Follow-ups
+
+- [ ] The real, untracked follow-up

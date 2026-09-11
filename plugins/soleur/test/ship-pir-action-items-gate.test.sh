@@ -52,6 +52,13 @@ assert_verdict_line() {
   fi
 }
 
+# Positive control for the dispatch helpers: an assert_eq that MUST fail has to move FAIL, and
+# assert_verdict_line on empty streams has to fail too. An always-pass helper keeps the floor
+# intact (it counts), so the floor alone cannot see it — this can.
+( assert_eq a b "control" >/dev/null; [[ $FAIL -eq 1 ]] ) || { printf 'FATAL: assert_eq cannot fail — dispatch is neutered\n' >&2; exit 2; }
+( : > "$TMP/c.out"; : > "$TMP/c.err"; assert_verdict_line "$TMP/c.out" "$TMP/c.err" "control" >/dev/null; [[ $FAIL -eq 1 ]] ) \
+  || { printf 'FATAL: assert_verdict_line cannot fail — dispatch is neutered\n' >&2; exit 2; }
+
 # ---------------------------------------------------------------------------------------------
 echo "=== Arm 1: fixtures ==="
 # ---------------------------------------------------------------------------------------------
@@ -69,7 +76,7 @@ for f in "$FIXTURES"/*.md; do
   # Second, independent declaration: the first line after the frontmatter block carries
   # `expect: pass` or `expect: fail/<reason>` (after the fence, so every fixture is still a
   # well-formed frontmatter document if the frontmatter check is ever scripted into the gate).
-  token="$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{getline; print; exit}' "$f" | sed -nE 's/^<!-- expect: ([a-z/-]+) -->$/\1/p')"
+  token="$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{getline; print; exit}' "$f" | sed -nE 's/^<!-- expect: (pass|fail\/[a-z][a-z-]*) -->$/\1/p')"
   case "$want_rc:$token" in
     0:pass)   ;;
     1:fail/*) ;;
@@ -91,13 +98,13 @@ for f in "$FIXTURES"/*.md; do
     reason="${token#fail/}"
     # Exactly one [FAIL] line, naming this file and the reason the fixture declares.
     assert_eq "1" "$(grep -cE '^\[FAIL\] ' "$err" || true)" "$name prints exactly one [FAIL] line"
-    assert_eq "1" "$(grep -cF -- "[FAIL] $f: $reason" "$err" || true)" "$name [FAIL] reason is '$reason'"
+    assert_eq "1" "$(grep -cF -- "[FAIL] $f: $reason — " "$err" || true)" "$name [FAIL] reason is '$reason'"
   fi
 done
 # Hand-measured floors, not derived from the directory: a directory that lost its fixtures would
 # otherwise pass with zero assertions.
-assert_eq "1" "$(( pass_n >= 5 ))" "pass-* floor ($pass_n >= 5: plain, two legacy marker forms, sub-heading, table)"
-assert_eq "1" "$(( fail_n >= 8 ))" "fail-* floor ($fail_n >= 8)"
+assert_eq "1" "$(( pass_n >= 6 ))" "pass-* floor ($pass_n >= 6: plain, two legacy marker forms, sub-heading, table, fence-inside-section)"
+assert_eq "1" "$(( fail_n >= 17 ))" "fail-* floor ($fail_n >= 17)"
 # The two legacy emphasised forms (the 21 shipped PIRs) are committed fixtures
 # (pass-sentence-legacy-{underscore,asterisk}.md) — the fixture directory is lint-ignored, so MD049
 # cannot restyle them, and they ride the loop above. Pin that they are really the marker forms:
@@ -108,6 +115,14 @@ assert_eq "1" "$(grep -cF -- '*No action items — ' "$FIXTURES/pass-sentence-le
 # exit 2, never a verdict.
 set +e; bash "$GATE" "$TMP/does-not-exist.md" >/dev/null 2>"$TMP/missing.err"; rc=$?; set -e
 assert_eq "2" "$rc" "nonexistent path exits 2"
+ln -s "$FIXTURES/pass-sentence.md" "$TMP/link-postmortem.md"
+set +e; bash "$GATE" "$TMP/link-postmortem.md" >/dev/null 2>"$TMP/link.err"; rc=$?; set -e
+assert_eq "1" "$rc" "a symlink to a passing PIR is refused (not-a-regular-file)"
+assert_eq "1" "$(grep -cF -- ": not-a-regular-file — " "$TMP/link.err" || true)" "symlink refusal names its reason"
+set +e; bash "$GATE" >/dev/null 2>&1; rc=$?; set -e
+assert_eq "2" "$rc" "no argument is a usage error (exit 2)"
+set +e; bash "$GATE" --bogus >/dev/null 2>&1; rc=$?; set -e
+assert_eq "2" "$rc" "an unknown flag is a usage error (exit 2)"
 
 # ---------------------------------------------------------------------------------------------
 echo "=== Arm 2: template parity ==="
@@ -125,6 +140,7 @@ set +e; bash "$GATE" "$synth" >"$synth.out" 2>"$synth.err"; rc=$?; set -e
 assert_eq "0" "$rc" "a PIR synthesised from pir.md's sentence passes the gate"
 assert_eq "1" "$(grep -cxF -- "$SENTENCE" "$DRY_RUN" || true)" "dry-run.sh carries the sentence byte-equal, as a whole line"
 assert_eq "1" "$(grep -cF -- "\`$SENTENCE\`" "$INCIDENT_SKILL" || true)" "incident/SKILL.md carries the sentence byte-equal, backticked"
+assert_eq "1" "$(grep -cF -- "\`$SENTENCE\`" "$SHIP_SKILL" || true)" "ship/SKILL.md's Exit-0 arm quotes the sentence byte-equal, backticked"
 
 # ---------------------------------------------------------------------------------------------
 echo "=== Arm 3: corpus ==="
@@ -148,7 +164,7 @@ else
     failed="$(sed -E 's/.*failed=([0-9]+).*/\1/' <<<"$summary")"
     assert_eq "0" "$failed" "corpus failed=0 ($summary)"
     assert_eq "$selected" "$((examined + skipped))" "corpus selected == examined + skipped"
-    assert_eq "1" "$(( selected >= 50 ))" "corpus selector floor ($selected >= 50)"
+    assert_eq "1" "$(( examined >= 50 ))" "corpus examined floor ($examined >= 50; a swapped or collapsed field reads far lower)"
   fi
 fi
 
@@ -158,7 +174,12 @@ echo "=== Arm 5: wiring ==="
 section="$(awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' "$SHIP_SKILL")"
 assert_eq "1" "$(grep -cE '^bash "\$\{CLAUDE_PLUGIN_ROOT\}/skills/ship/scripts/ship-pir-action-items-gate\.sh" --branch$' <<<"$section" || true)" \
   "ship/SKILL.md invokes the gate in command position with --branch (bare anchor, ADR-179)"
-assert_eq "1" "$(grep -cE '^rc=\$\?$' <<<"$section" || true)" "the invocation captures rc=\$?"
+assert_eq "1" "$(awk 'prev ~ /ship-pir-action-items-gate\.sh" --branch$/ && $0 == "rc=$?" {n++} {prev=$0} END{print n+0}' <<<"$section")" "the line after the --branch invocation is rc=\$?"
+# The signal scan (upstream of the shape check) branches on ITS rc the same way; the earlier
+# `if`/`else` read exit 127 as "no signal" (#7941 review). Both blocks capture rc; each has a HALT.
+assert_eq "2" "$(grep -cE '^[[:space:]]*rc=\$\?$' <<<"$section" || true)" "both gate blocks capture rc=\$? (signal scan + shape check)"
+assert_eq "1" "$(grep -cE '^[[:space:]]*\*\) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=signal-scan-unavailable rc=\$rc"' <<<"$section" || true)" "the signal scan's catch-all arm halts (not 'no signal')"
+assert_eq "1" "$(grep -cE '^[[:space:]]*1\) echo "gate: no incident signal\."' <<<"$section" || true)" "the signal scan's exit-1 arm is the only 'no signal' line"
 assert_eq "1" "$(grep -cE '^[[:space:]]*1\) echo "gate: \[FAIL\]' <<<"$section" || true)" "case arm 1) (fix and re-run) present"
 assert_eq "1" "$(grep -cE '^[[:space:]]*3\) echo "gate: no PIR in the diff' <<<"$section" || true)" "case arm 3) (no PIR in diff) present"
 assert_eq "1" "$(grep -cE '^[[:space:]]*\*\) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=unavailable rc=\$rc"' <<<"$section" || true)" "the catch-all case arm prints SOLEUR_SHIP_PIR_GATE_HALT"
@@ -221,9 +242,41 @@ git -C "$REPO_A" checkout -q -b feat-nopir
 printf 'more\n' >> "$REPO_A/README.md"
 git -C "$REPO_A" add -A
 git -C "$REPO_A" commit -q -m nopir
+# Advance origin/main past the branch point with a PIR edit: two-dot would list main's PIR as
+# the branch's and turn "no PIR" into a verdict; three-dot keeps it exit 3.
+git -C "$REPO_A" checkout -q main
+printf '\nMain-side addendum.\n' >> "$REPO_A/$PIR_REL/a-postmortem.md"
+git -C "$REPO_A" commit -q -am main-moved
+git -C "$REPO_A" update-ref refs/remotes/origin/main HEAD
+git -C "$REPO_A" checkout -q feat-nopir
 set +e; (cd "$REPO_A" && bash "$GATE" --branch) >"$TMP/branch2.out" 2>"$TMP/branch2.err"; rc=$?; set -e
-assert_eq "3" "$rc" "--branch exits 3 when the diff touches no PIR"
+assert_eq "3" "$rc" "--branch exits 3 when the diff touches no PIR (origin/main ahead: three-dot, not two-dot)"
 assert_eq "1" "$(grep -cF 'PIR-ACTION-ITEMS: no PIR in diff' "$TMP/branch2.out" "$TMP/branch2.err" | awk -F: '{s+=$NF} END{print s+0}')" "--branch prints the no-PIR line"
+
+# Branch 3: every touched PIR passes → exit 0 with a [PASS] line (the Match arm's input).
+git -C "$REPO_A" checkout -q -b feat-allpass origin/main
+printf '\nAnother addendum.\n' >> "$REPO_A/$PIR_REL/c-postmortem.md"
+git -C "$REPO_A" commit -q -am allpass
+set +e; (cd "$REPO_A" && bash "$GATE" --branch) >"$TMP/branch3.out" 2>"$TMP/branch3.err"; rc=$?; set -e
+assert_eq "0" "$rc" "--branch exits 0 when every touched PIR passes"
+assert_eq "1" "$(grep -cF "[PASS] $PIR_REL/c-postmortem.md" "$TMP/branch3.out" || true)" "the passing PIR gets its [PASS] line"
+
+# Corpus negative controls in the fixture repo (the real corpus is green, so arm 3 alone can
+# never see a --corpus that stops counting failures). On feat (A ok, B unbacked, C-new ok):
+git -C "$REPO_A" checkout -q feat
+set +e; (cd "$REPO_A" && bash "$GATE" --corpus) >"$TMP/corpus-neg.out" 2>"$TMP/corpus-neg.err"; rc=$?; set -e
+assert_eq "1" "$rc" "--corpus exits 1 when a tracked PIR fails"
+assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: corpus selected=3 examined=3 skipped=0 failed=1$' "$TMP/corpus-neg.out" || true)" "--corpus counts the one failing PIR"
+assert_eq "1" "$(grep -cF "[FAIL] $PIR_REL/b-postmortem.md: rows-without-issue — " "$TMP/corpus-neg.err" || true)" "--corpus names the failing PIR"
+if [[ $EUID -eq 0 ]]; then
+  echo "  SKIP: unreadable-file corpus control (root reads everything)"; SKIPPED=$((SKIPPED + 1))
+else
+  chmod 000 "$REPO_A/$PIR_REL/a-postmortem.md"
+  set +e; (cd "$REPO_A" && bash "$GATE" --corpus) >"$TMP/corpus-unr.out" 2>"$TMP/corpus-unr.err"; rc=$?; set -e
+  chmod 644 "$REPO_A/$PIR_REL/a-postmortem.md"
+  assert_eq "2" "$rc" "--corpus exits 2 (not 1, not SKIP) on an unreadable tracked PIR"
+  assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: corpus selected=3 examined=3 skipped=0 failed=1$' "$TMP/corpus-unr.out" || true)" "the unreadable PIR is examined, not skipped, and not counted as failed"
+fi
 
 # Repo B: no refs/remotes/origin/main → exit 2 with the unavailable line, never "no PIR".
 REPO_B="$TMP/repo-b"
@@ -237,6 +290,15 @@ set +e; (cd "$REPO_B" && bash "$GATE" --branch) >"$TMP/repob.out" 2>"$TMP/repob.
 assert_eq "2" "$rc" "--branch exits 2 when origin/main does not resolve"
 assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: unavailable — git diff origin/main\.\.\.HEAD failed \(rc=[0-9]+\)$' "$TMP/repob.err" || true)" "--branch prints the unavailable line on stderr"
 
-# Floor measured on a green run (arm 1: 14 fixtures × 2 + 9 × 2 + 2 floors + 2 legacy pins + 1;
-# arm 2: 5; arm 3: 5; arm 5: 10; arm 4: 9; measured 80) — set at the measured count; ratchet in lockstep.
-print_results 80
+# A red run must show WHICH file failed and why: the captured streams live under $TMP, which the
+# EXIT trap removes. Print them first.
+if (( FAIL > 0 )); then
+  for e in "$TMP"/*.err; do
+    [[ -s "$e" ]] || continue
+    printf -- '--- %s\n' "$(basename "$e")"; sed 's/^/    /' "$e"
+  done
+fi
+# Floor set at the measured green count — ratchet it in lockstep with every added assertion
+# (arm 1: 23 fixtures × 2 + 17 × 2 + 2 floors + 2 legacy pins + 5; arm 2: 6; arm 3: 5;
+# arm 5: 13; arm 4: 18; measured 129).
+print_results 129

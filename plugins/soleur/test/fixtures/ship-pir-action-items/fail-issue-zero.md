@@ -12,8 +12,9 @@ Synthesized fixture for the action-items shape gate. Not a real event.
 
 ## Action Items & Follow-ups
 
-- [ ] File the sweep issue (#1002)
-- [ ] Re-run the probe
+| Issue | Action | Owner |
+|---|---|---|
+| #0 | Placeholder issue number | ops |
 
 ## Timeline
 

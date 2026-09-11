@@ -1106,12 +1106,16 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    # stderr saying what it actually read.
    # The gate owns the regexes + strips (scripts/ship-incident-pir-gate.sh, #6813);
    # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal,
-   # ANYTHING ELSE = the scan did not run (2 = usage/gh failure; 127 = the script is not
-   # at that path — it lives at the monorepo root, so this resolves only from a cwd exactly
-   # two levels below it; #7941 review measured it as 127 from the repo root and on the hosted
-   # path). An `if`/`else` on this line collapsed 127 into "no signal", which is a verdict the
-   # scan never gave. Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
-   bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"
+   # ANYTHING ELSE = the scan did not run (2 = usage/gh failure; 127 = no script at that path).
+   # The script lives at THIS repository's root, so resolve it from the current tree. The
+   # previous form, `${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/…`, was depth-relative: from a
+   # `.worktrees/<name>/` cwd it silently ran the PRIMARY checkout's copy (a different tree —
+   # `hr-when-in-a-worktree-never-read-from-bare`), from the repo root and on the hosted path it
+   # was 127, and the `if`/`else` around it read 127 as "no signal" — a verdict the scan never
+   # gave (#7941 review). On a self-hosted plugin install there is no repo-root script: that is
+   # 127 → the HALT arm, by design. This block runs WITHOUT `set -e` (agent-executed, like every
+   # block in this file); under `set -e` the bare invocation would abort before `rc=$?`.
+   bash "$(git rev-parse --show-toplevel)/scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"
    rc=$?
    case "$rc" in
      0) echo "gate: incident signal — a PIR is required (see below)." ;;
@@ -1119,6 +1123,12 @@ Enforces the operator's standing rule — **every detected incident gets a post-
      *) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=signal-scan-unavailable rc=$rc" >&2 ;;   # halt; do not read this as "no signal"
    esac
    ```
+
+   **`SOLEUR_SHIP_PIR_GATE_HALT reason=signal-scan-unavailable`** means the trigger could not be
+   evaluated at all: halt Phase 5.5 here and name it — do not proceed to PR-ready on "no signal",
+   and do not author a PIR either. On this repository it is a path/`gh` problem to fix; on a
+   self-hosted plugin install the scan is absent by construction and triggers 1 and 2 above are
+   the only ways the PIR requirement fires.
 
    The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
@@ -1151,12 +1161,24 @@ esac
   2. The `## Action Items & Follow-ups` section shape the script just verified is exactly ONE of two valid forms: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own — `No action items — incident fully resolved in the source PR with no residual work.` — plain, or with an optional single leading `_` or `*` marker (the spellings shipped before the template dropped emphasis; the class is frozen in the script's comment). The script prefix-matches through `fully resolved`, so a resolution note may follow on the same line (four shipped PIRs carry one) — the gate checks the shape, and whether a trailing note is actually "no residual work" is the reviewer's read of the section, not the script's. Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, a bold sentence, or an empty or missing section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection is table-and-first-cell-anchored and column-0-anchored for the sentence, so the template's own instructional prose (a backticked copy mid-sentence) cannot satisfy it.
 
 - **Exit 1 — a listed PIR fails:** the `[FAIL] <path>: <reason>` line names the file and the
-  reason (`rows-without-issue`, `no-sentence`, `no-heading`). For `rows-without-issue`: halt and
-  require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and
-  its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when
-  genuinely resolved. For `no-sentence` / `no-heading`: fix the section. Then re-run the gate;
-  the loop ends only when it prints a per-file verdict and exits 0. This applies in BOTH headless
-  and interactive modes — file the issues, do not defer.
+  reason. `rows-without-issue` covers every untracked item — a table row with no `#NNNN` Issue
+  cell, AND any bullet/numbered item in the section whether or not a table or the sentence is
+  also present (the script lists the offending lines): halt and require each such item to be
+  filed as a GitHub issue and its `#NNNN` recorded in the table, OR collapsed into the permitted
+  no-item sentence when genuinely resolved. Filing shape (the guardrails hook denies anything
+  else): `gh issue create --milestone <m> --label <type/…> --body-file <path>`, the body
+  cross-referencing the source PR and carrying either `User-Impact:` + `Fix-Size:` lines or a
+  whole-line `Mandated-By: <rule-id>`; and because these filings are net-positive under the
+  Net-Issue-Flow Gate that runs earlier in this phase, add `<!-- gate-override: net-issue-flow -->`
+  with a one-line justification per issue to the PR body — a PIR follow-up is the "filing forced by
+  a SKILL.md phase mandate" case that gate names. `no-sentence` / `no-heading` /
+  `duplicate-heading`: fix the section itself (`no-sentence` means the section holds NO items and
+  no sentence — if it holds items in any form the reason is `rows-without-issue`).
+  `not-a-regular-file`: the path is a symlink or directory — commit the file. Then **commit** the
+  fix and re-run the gate: `--branch` reads the working tree but selects committed paths, so an
+  uncommitted edit is graded and then never pushed. The loop ends only when the re-run prints a
+  per-file verdict and exits 0. This applies in BOTH headless and interactive modes — file the
+  issues, do not defer.
 - **Exit 2 or anything else — `SOLEUR_SHIP_PIR_GATE_HALT`:** the gate could not run (usage
   drift, `origin/main` unresolvable in this repository, or the script absent from the plugin
   snapshot — bash prints 127). Halt and name it; do not treat an unavailable gate as a pass or as
@@ -1453,7 +1475,7 @@ git fetch origin main -q
 bash scripts/check-adr-ordinals.sh
 ```
 
-`check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it does NOT heading-check a new ADR — its layer-3 heading check is pinned to ADR-041/ADR-042 only, per the script header; ADR-211 shipped without a `## Status` heading and it passed). Exit 0 → pass silently.
+`check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it does NOT heading-check a new ADR — its layer-3 heading check is pinned to ADR-041/ADR-042 only, per the script header; ADR-210 shipped without a `## Status` heading and it passed). Exit 0 → pass silently.
 
 **If it exits 1 on an ADR THIS branch introduced:** renumber to the next free ordinal BEFORE merge — never merge a colliding ADR:
 
@@ -1490,7 +1512,7 @@ bash scripts/check-adr-ordinals.sh
 
 **The collision window extends through Phase 7** (mirrors the migration-number-collision re-check in work Phase 2): a sibling's ADR can land on `main` and be pulled into the branch by a **BEHIND auto-sync AFTER this gate ran**. After any Phase 6.5 / Phase 7 sync whose merge output lists `knowledge-base/engineering/architecture/decisions/`, re-run `check-adr-ordinals.sh` and renumber-during-ship before the next merge attempt (see Phase 7 "ADR-ordinal collision after a sync").
 
-**Why:** PR #5945 (#5933) chose ADR-081 at plan time (080 was the highest then); sibling PR #5934's ADR-081 landed during the ~90-min pipeline and auto-synced into the branch during Phase 7. The ruleset did not yet carry `adr-ordinals`, so the auto-merge fired on the green required set and the collision surfaced as RED CI on `main`, fixed by a follow-up renumber (#5952 → ADR-082). The IaC-managed required set gained `adr-ordinals` in #6050 (2026-07-05, two days after #5945), and ADR-032 records the applied ruleset already carried it at reconciliation time — so since then the Phase 7 required-check-failure exit catches this automatically, and this gate is the cheaper, earlier catch.
+**Why:** PR #5945 (#5933) chose ADR-081 at plan time (080 was the highest then); sibling PR #5934's ADR-081 landed during the ~90-min pipeline and auto-synced into the branch during Phase 7. The ruleset did not yet carry `adr-ordinals`, so the auto-merge fired on the green required set and the collision surfaced as RED CI on `main`, fixed by a follow-up renumber (#5952 → ADR-082). That gap closed two days later (see Phase 7, "ADR-ordinal collision after a sync", for the SSOT and the current failure model) — this gate is the cheaper, earlier catch.
 
 ## Phase 6.4: Unpushed-Commits Gate
 
@@ -1880,7 +1902,7 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
    - **Code conflicts**: Resolve based on intent of both changes
    - **Many files conflict with whole-function (not line-level) competing implementations**: a sibling PR may have shipped your feature mid-pipeline (the one-shot collision gate only probes at START and misses a sibling that implements the same feature under a *different* issue). Do NOT reflexively resolve to "mine." `git merge --abort`, read `origin/main`'s ACTUAL implementation (`git show origin/main:<file>`), and decide "is my PR still needed?" If main supersedes it, trace main end-to-end against the original bug for any residual gap, surface the collision + gap to the operator for a design call, then `git reset --hard origin/main` (salvage plan/spec to /tmp first — they live only on the branch) and rebuild ONLY the residual delta. **Why:** PR #4641 — #4638 shipped the same invite-redirect feature mid-one-shot; reset-and-rebuild turned a 6-file competing rewrite into a 2-file delta. See `knowledge-base/project/learnings/workflow-patterns/2026-05-29-dirty-conflict-during-ship-may-mean-sibling-shipped-your-feature.md`.
 
-4. Stage resolved files and commit the merge (the `bun-test` pre-commit hook skips merge commits by configuration — `skip: [merge]` in `lefthook.yml` — so no `--no-verify` is needed; the remaining seconds-long hooks still run, and the pushed head's CI is the battery for this commit):
+4. Stage resolved files and commit the merge (the `bun-test` pre-commit hook skips merge commits by configuration — `skip: [merge]` in `lefthook.yml` — so no `--no-verify` is needed. The other hooks still run on what the merge stages: most are seconds, but `plugin-component-test` runs `bun test plugins/soleur/test/` (~65 s) whenever a `plugins/soleur/**/*.md` is staged, and `web-platform-typecheck` runs `tsc` on a web-platform `.ts`; a minute of silence is those, not a hang. The pushed head's CI is the battery for this commit):
 
    ```bash
    git add <resolved files>

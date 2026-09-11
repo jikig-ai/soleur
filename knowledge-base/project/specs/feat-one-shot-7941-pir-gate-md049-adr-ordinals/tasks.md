@@ -6,7 +6,7 @@ the contract for 1.1-1.7).
 
 ## Phase 1: Thread 1 — extract, prove parity, then widen (RED first)
 
-- [x] 1.1 Create the twelve fixtures under `plugins/soleur/test/fixtures/ship-pir-action-items/`
+- [x] 1.1 Create the twelve fixtures (23 after review: legacy marker forms committed, nine panel-found shapes added; `expect:` token sits after the frontmatter fence) under `plugins/soleur/test/fixtures/ship-pir-action-items/`
       (`pass-table-all-issued.md`, `pass-sentence.md`, `pass-subheading-inside-section.md`,
       `fail-table-missing-issue.md`, `fail-table-tbd-placeholder.md`, `fail-header-only-table.md`,
       `fail-bullet-list.md`, `fail-empty-section.md`, `fail-no-heading.md`, `fail-sentence-bold.md`,
@@ -15,8 +15,8 @@ the contract for 1.1-1.7).
 - [x] 1.2 Write `plugins/soleur/test/ship-pir-action-items-gate.test.sh` — sources
       `test-helpers.sh`, `export LC_ALL=C`, `set +e; …; rc=$?; set -e` captures, all writes under
       `mktemp -d`; five arms: fixture (name-derived rc + `expect:` token agreement + reason on
-      stderr + hard floors `pass_n >= 3` / `fail_n >= 8` + unknown prefix aborts + generated
-      `_…_`/`*…*` variants with instrument checks + exit 2 on a missing path), template parity
+      stderr + hard floors (`pass_n >= 6` / `fail_n >= 17` after review) + unknown prefix aborts + committed
+      legacy `_…_`/`*…*` fixtures + exit 2 on a missing path + symlink/usage arms), template parity
       (`grep -oE 'write exactly `[^`]+`' pir.md | sed …`, cardinality 1, plain-form assertion,
       synthesised PIR passes, fixed-string greps on `incident/SKILL.md` and `dry-run.sh`), corpus
       (`--corpus`; anchored summary regex; `failed=0`; `selected == examined + skipped`;

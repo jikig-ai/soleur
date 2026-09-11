@@ -12,8 +12,9 @@ Synthesized fixture for the action-items shape gate. Not a real event.
 
 ## Action Items & Follow-ups
 
-- [ ] File the sweep issue (#1002)
-- [ ] Re-run the probe
+No action items — incident fully resolved in the source PR with no residual work.
+
+- [ ] Except: sweep the siblings (untracked)
 
 ## Timeline
 

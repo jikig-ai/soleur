@@ -288,12 +288,15 @@ pre-commit:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"
       # A conflict-resolved `git merge origin/main` stages the whole of main's delta, so the glob
-      # always matches and the full battery queues behind every sibling (measured on one PR:
+      # always matches and the full battery queues behind every sibling (measured on PR #7866:
       # 3861 s before any suite started, four --no-verify bypasses). What the merge adds is the
       # resolution, which the PR's CI runs on push and ship's Phase 7 loop watches; no pre-push
       # battery exists, so CI is the only net for this commit -- by design (ADR-183: no local run
       # is the merge gate). A clean merge never reached this hook anyway: only pre-commit and
-      # pre-push are installed. `run:` is unchanged and still carries the ADR-196 hatch.
+      # pre-push are installed. lefthook keys `merge` on MERGE_HEAD, so a squash-merge commit, an
+      # amended merge commit and a cherry-pick/revert `--continue` still run the battery
+      # (measured, lefthook 2.1.6). `run:` is unchanged and still carries the ADR-196 hatch.
+      # Pinned by plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh.
       skip:
         - merge
       # SOLEUR_ALLOW_FULL_GATE=1 is deliberate, not a workaround (#7553). test-all.sh refuses a

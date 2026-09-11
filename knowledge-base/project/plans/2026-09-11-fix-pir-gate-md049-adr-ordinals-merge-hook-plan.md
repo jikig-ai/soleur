@@ -707,7 +707,7 @@ other two byte-equal to it.
 | 6 | Change `pir.md`'s "write exactly" sentence by one character | A prefix edit reds the template-parity arm through the gate; a suffix edit (the anchor is prefix-only) reds it through the three-site equality assertion — either way the arm reds while every fixture stays green: the 2026-09-09 shape |
 | 7 | Convert one corpus file's sentence to bold `**…**` | Corpus arm reds (`failed=1`), and `fail-sentence-bold.md` reds hermetically — bold is outside the frozen class |
 | 8 | In `--branch`, drop `--diff-filter=d` | The branch arm's deleted PIR D makes the script exit 2 (unreadable path) where the arm expects exit 1 with verdicts for A, B and C only |
-| 9 | In `--branch`, drop `--no-renames` | The renamed PIR C is reported as `R` and filtered out: the branch arm expects a verdict line at C's new path and sees none |
+| 9 | In `--branch`, drop `--no-renames` | **EQUIVALENT, measured at review** — `--name-only --diff-filter=d` lists a rename at its NEW path whether or not rename detection runs (listing byte-identical with and without the flag, incl. `-c diff.renames=copies`); the flag was dropped from the script and the branch arm's rename case pins the new-path verdict directly |
 | 10 | In `--branch`, return 0 instead of 3 on an empty selection | The branch arm's no-PIR branch expects exit 3; and the caller's `case` would route "no PIR" to the Match-pass arm — the class the exit code exists to prevent |
 | 11 | In `--branch`, wrap the `git diff` in `\|\| true` | The no-`origin/main` repo yields exit 3 ("no PIR") instead of exit 2 ("unavailable"); the branch arm reds |
 | 12 | Change `set -uo pipefail` to `set -euo pipefail` | `pass-sentence.md` reds: the row classifier's no-match `grep` aborts the script at exit 1 with no verdict line, and the suite's "every exit carries a verdict line" dual reds on the same run |
@@ -796,7 +796,10 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
     worktree → same; a conflict-resolved merge commit whose resolution stages only `a.md` →
     commit succeeds, record the exact marker printed; ordinary commit staging `a.ts` → commit
     rejected, `PROBE-RAN`; ordinary commit staging only `a.md` → commit succeeds,
-    `(skip) no matching staged files`. The five lines go in the PR body.
+    `(skip) no matching staged files`. The five lines go in the PR body. (Review measured the
+    skip's boundary: lefthook keys `merge` on MERGE_HEAD, so a squash-merge commit, an amended
+    merge commit and a cherry-pick/revert `--continue` still run the battery — recorded in the
+    stanza comment; AC11 is now a standing suite, `plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh`.)
 11. `bash plugins/soleur/test/fanout-suite-scope.test.sh` and
     `bash plugins/soleur/test/hook-git-env-coverage.test.sh` — both green.
 
@@ -826,8 +829,9 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
 
 ## Acceptance Criteria
 
-- [x] **AC1** — `bash plugins/soleur/test/ship-pir-action-items-gate.test.sh` exits 0; its final
-  line matches `=== N passed, 0 failed ===`; its corpus line matches
+- [x] **AC1** — `bash plugins/soleur/test/ship-pir-action-items-gate.test.sh` exits 0; its summary
+  reads `Passed: N` / `Failed: 0` / `ALL TESTS PASSED` (amended at review: the plan quoted a
+  `=== N passed, 0 failed ===` line that `print_results` never prints); its corpus line matches
   `^PIR-ACTION-ITEMS: corpus selected=[0-9]+ examined=[0-9]+ skipped=[0-9]+ failed=0$` with
   `selected == examined + skipped` and `selected >= 50`; it reports the branch arm's three
   outcomes (exit 1 with verdicts for A/B/C-new, exit 3 on the no-PIR branch, exit 2 on the
@@ -838,7 +842,13 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
   → every `pass-*` line ends `rc=0`, every `fail-*` line ends `rc=1`;
   `bash plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh /nonexistent; echo $?` → `2`;
   every `fail-*` run prints exactly one `[FAIL] <path>: ` line on stderr whose reason matches
-  the fixture's first-line `expect:` token; `head -1 plugins/soleur/test/fixtures/ship-pir-action-items/*.md | grep -c 'expect: '` → 12;
+  the fixture's `expect:` token (the first line AFTER the frontmatter fence — moved there at
+  review so every fixture is a well-formed document);
+  `for f in plugins/soleur/test/fixtures/ship-pir-action-items/*.md; do awk 'NR>1 && $0=="---"{getline; print; exit}' "$f"; done | grep -c 'expect: '` → 23
+  (amended at review from 12 first-line tokens: the two legacy marker forms are committed
+  fixtures and nine shapes the panel found unpinned — bullets beside a table or the sentence,
+  `#0`, duplicate heading, heading only inside a fence, sentence under a later h1, heading
+  mentioned in prose, fenced sentence copy, a fence inside the section — gained fixtures);
   `grep -c '^set -uo pipefail$' plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh` → 1.
 - [x] **AC3** — `grep -c 'write exactly `No action items — incident fully resolved in the source PR with no residual work.`' plugins/soleur/skills/incident/templates/pir.md`
   → 1; `grep -c '^No action items — incident fully resolved in the source PR with no residual work.$' plugins/soleur/skills/incident/scripts/dry-run.sh` → 1;
@@ -848,11 +858,12 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
   (amended at review: ADR-179 mandates the bare anchor for customer-facing executable paths; the
   `:-plugins/soleur` form the plan copied from `auto-close-scan.sh` is an unmigrated site, #7453);
   `grep -c 'ship-pir-action-items-gate.sh' plugins/soleur/skills/ship/SKILL.md` ≥ 2 (invocation + conjunct 1);
-  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 6
-  (amended at /work from 3 and again at review: the marker appears in the shape-check `case` arm,
-  in the prose bullet mapping that arm, AND — since review found the signal scan's `if`/`else`
-  collapsed exit 127 into "no signal" — in the signal scan's own `case`, which also captures
-  `rc=$?`; the suite's wiring arm asserts each construct individually);
+  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 8
+  (amended at /work from 3 and twice at review: the marker appears in the shape-check `case` arm
+  and its prose bullet, AND — since review found the signal scan's `if`/`else` collapsed exit 127
+  into "no signal" — in the signal scan's own `case` and its prose bullet, both blocks capturing
+  `rc=$?`; the suite's wiring arm asserts each construct individually, so this count is a
+  derivation, not a contract);
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'postmortem\\.md\$'` → 0 (the selector lives in the script only);
   `grep -c "grep -qE '\^_No action items" plugins/soleur/skills/ship/SKILL.md` → 0;
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'head -n1'` → 0.

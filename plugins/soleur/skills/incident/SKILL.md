@@ -221,7 +221,7 @@ Selected runbook slugs auto-populate Phase 4 `triggers[]` verbatim (SpecFlow Imp
 | `{{LUCKY}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WELL}}` | Phase 7 review (default `TBD`) |
 | `{{WENT_WRONG}}` | Phase 7 review (default `TBD`) |
-| `{{ACTION_ITEM_ISSUE}}` / `{{ACTION_ITEM_DESC}}` | Phase 7 review — the merged **Action Items & Follow-ups** table. **Every row REQUIRES a filed GitHub issue number:** run `gh issue create` (cross-referencing the source PR in the body) FIRST, then fill `#<n>` + description. No bare bullets, no `TBD`. If there are genuinely zero follow-ups, replace the table with the single permitted sentence `No action items — incident fully resolved in the source PR with no residual work.`. The `/ship` Incident-PIR gate blocks merge on any item lacking a `#NNNN`. |
+| `{{ACTION_ITEM_ISSUE}}` / `{{ACTION_ITEM_DESC}}` | Phase 7 review — the merged **Action Items & Follow-ups** table. **Every row REQUIRES a filed GitHub issue number:** run `gh issue create` (cross-referencing the source PR in the body) FIRST, then fill `#<n>` + description. No bare bullets, no `TBD`. If there are genuinely zero follow-ups, replace the table with the single permitted sentence `No action items — incident fully resolved in the source PR with no residual work.`. The `/ship` Incident-PIR gate blocks merge on any item lacking a `#NNNN`; self-check before ship with `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/ship-pir-action-items-gate.sh" <pir-path>` (exit 0 = shape accepted). |
 
 **Secret-leak preamble** (TR2): if `triggers[]` contains any of `api_key_leaked`, `credentials_exposed`, `token_exposed`, `secret_in_logs`, replace `{{SECRET_LEAK_PREAMBLE}}` with:
 
