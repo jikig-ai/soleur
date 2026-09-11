@@ -329,7 +329,7 @@ S3="$TMP/s3"; git clone "$UP3" "$S3" >/dev/null 2>&1
     && git push origin main >/dev/null 2>&1 )
 rm -rf "$S3"
 LOCAL3="$TMP/local3.git"; git init --bare -b main "$LOCAL3" >/dev/null
-( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL3" && git remote add origin "$UP3" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 LEASE_ROOT3="$LOCAL3/soleur-session-state"
 # `if ( cd … && … )` rather than `&& pass || fail` (SC2015) or a bare `cd`
@@ -595,7 +595,7 @@ S8="$TMP/s8"; git clone "$UP8" "$S8" >/dev/null 2>&1
     && git push origin main >/dev/null 2>&1 )
 rm -rf "$S8"
 LOCAL8="$TMP/local8.git"; git init --bare -b main "$LOCAL8" >/dev/null
-( cd "$LOCAL8" && git remote add origin "$UP8" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL8" && git remote add origin "$UP8" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 LEASE_ROOT8="$LOCAL8/soleur-session-state"
 
 # Guarded cd — this suite runs `set -uo pipefail` WITHOUT -e, so an unguarded

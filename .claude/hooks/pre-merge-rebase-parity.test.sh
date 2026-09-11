@@ -138,7 +138,7 @@ build_repo() {
   git init -q --bare -b main "$origin"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin HEAD:main
-  git -C "$work" fetch -q origin
+  git -C "$work" fetch --no-tags -q origin
 
   git -C "$work" checkout -q -b feat-parity
   echo feature > "$work/feature.txt"
