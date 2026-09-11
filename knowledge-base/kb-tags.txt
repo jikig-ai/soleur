@@ -2169,6 +2169,7 @@ merge-time-timebomb
 merge-time-verification
 message
 message-bubble
+meta-harness
 metadata-extraction
 metadata-routes
 metakey
@@ -2372,6 +2373,7 @@ offline-harness
 og-image
 og-images
 oidc
+omnigent
 on-click-fetch
 on-conflict
 on-delete-restrict
@@ -2638,6 +2640,7 @@ plugin-delivery
 plugin-deploy-gap
 plugin-development
 plugin-discovery
+plugin-fit
 plugin-format
 plugin-hooks
 plugin-instructions
@@ -4074,6 +4077,7 @@ walk
 wall-clock
 warm-standby
 warning-level
+watch-only
 watchdog
 wayland
 weakset
