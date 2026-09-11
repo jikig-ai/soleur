@@ -13,6 +13,11 @@ claude plugin install soleur@soleur-marketplace
 
 ## The Soleur Workflow
 
+**Codex:** install with `codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur`,
+then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
+and use `$soleur:go <intent>`. Codex shares the same skills and agent
+definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
+
 The recommended way to use Soleur is through the unified entry point:
 
 ```text

@@ -26,6 +26,7 @@ let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
   savedEnv = {
+    CODEX_THREAD_ID: process.env.CODEX_THREAD_ID,
     CLAUDECODE: process.env.CLAUDECODE,
     GROK_HOME: process.env.GROK_HOME,
     GROK_AGENT: process.env.GROK_AGENT,
@@ -33,6 +34,7 @@ beforeEach(() => {
     GROK_SUBAGENTS: process.env.GROK_SUBAGENTS,
   };
   delete process.env.CLAUDECODE;
+  delete process.env.CODEX_THREAD_ID;
   delete process.env.GROK_HOME;
   delete process.env.GROK_AGENT;
   delete process.env.GROK_DEFAULT_MODEL;

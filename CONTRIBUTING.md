@@ -14,6 +14,22 @@ claude --plugin-dir ./plugins/soleur
 
 This loads the plugin directly without installation, so you can test changes immediately.
 
+### Codex
+
+From the repository or feature worktree root:
+
+```bash
+bash scripts/setup-codex.sh
+codex
+```
+
+Review the project and plugin hooks in `/hooks`, then use `$soleur:go <intent>`.
+After plugin edits, repeat `codex plugin add soleur@soleur` and start a new
+session: Codex runs the installed cache, not the source directory.
+Run `node scripts/codex-plugin-smoke.mjs` to verify native discovery without
+model calls. See [Codex onboarding](knowledge-base/engineering/codex-onboarding.md)
+for the supported repository guards and remaining harness differences.
+
 With [Grok Build](https://docs.x.ai/build/overview), the same in-repo plugin loads automatically via the committed `.grok/config.toml` (project plugin path + Claude-compat hooks/MCP). From the repo root:
 
 ```bash

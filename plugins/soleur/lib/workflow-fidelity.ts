@@ -121,6 +121,9 @@ export function mandatorySuccessors(skill: string): readonly string[] {
 }
 
 function formatSkillList(skills: readonly string[], harness: Harness): string {
+  if (harness === "codex") {
+    return skills.map((skill) => `\`$soleur:${skill}\``).join(", ");
+  }
   if (harness === "grok") {
     return skills.map((s) => `\`/${s}\``).join(", ");
   }
@@ -136,11 +139,13 @@ function formatSkillList(skills: readonly string[], harness: Harness): string {
  */
 export function workflowFidelityInstructions(harness: Harness): string {
   const invokeSurface =
-    harness === "grok"
-      ? "slash command (`/brainstorm`, `/one-shot`, `/plan`, `/work`, `/review`, `/ship`, …)"
-      : harness === "claude"
-        ? "Skill tool (`soleur:<skill>`)"
-        : "registered skill invocation";
+    harness === "codex"
+      ? "skill loading (skills.read when available; otherwise read the installed SKILL.md and execute its full workflow)"
+      : harness === "grok"
+        ? "slash command (`/brainstorm`, `/one-shot`, `/plan`, `/work`, `/review`, `/ship`, …)"
+        : harness === "claude"
+          ? "Skill tool (`soleur:<skill>`)"
+          : "registered skill invocation";
 
   const brainstormNext = formatSkillList(BRAINSTORM_CHILD_SKILLS, harness);
   const workTail = formatSkillList(
