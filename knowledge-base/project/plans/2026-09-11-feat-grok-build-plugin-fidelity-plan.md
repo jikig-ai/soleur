@@ -396,7 +396,7 @@ Live `/gdpr-gate` skill was **not** re-invoked (Grok 402). Carry-forward CLO act
 - [x] AC3: `plugins/soleur/lib/harness-model-map.ts` exists; `resolveModelTier` returns non-empty for `cheap|standard|strong|advisor` × `claude|grok` fixtures; ADR-110 Status line is `Accepted`.
 - [x] AC4: `git grep -n 'sonnet\|haiku' -- plugins/soleur/test/workflow-model-pins.test.ts` no longer treats those as the only pinnable workflow tiers (allowlist is semantic `cheap`/`standard`).
 - [ ] AC5: `go.md` Step 0.0 uses `GROK_PLUGIN_ROOT` then `CLAUDE_PLUGIN_ROOT` with **no** `:-` CWD default; identity check still requires plugin.json name soleur; empty root still emits `plugin-root-unverified`.
-- [ ] AC6: `.claude/settings.json` contains `ask_user_question` and `spawn_subagent` as matcher tokens **and** still contains `"matcher": "Skill"` and `"matcher": "Monitor"`.
+- [x] AC6: `.claude/settings.json` contains `ask_user_question` and `spawn_subagent` as matcher tokens **and** still contains `"matcher": "Skill"` and `"matcher": "Monitor"`.
 - [ ] AC7: `getting-started.njk` contains `/go` and `/soleur:go` in the same section; does not contain the substring `full Grok support` or `zero configuration`.
 - [ ] AC8: `docs/legal/terms-and-conditions.md` no longer defines Soleur exclusively as “a Claude Code plugin” (must mention Grok Build); Eleventy mirror date matches; `legal-doc-shas.ts` updated. `git grep -n 'xAI' -- docs/legal/` does not add a sub-processor / Third-Party Services customer-path row.
 

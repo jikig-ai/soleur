@@ -36,9 +36,9 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 4: Hook aliases
 
-- [ ] 4.1 Duplicate matcher objects with exact Grok names (`run_terminal_command`, `ask_user_question`, `spawn_subagent`, `search_replace`/`write`) — no regex-OR
-- [ ] 4.2 No fake Skill or Monitor matchers; skip `reason=no-tool` vs `reason=untrusted-session`
-- [ ] 4.3 Guard 2: Skill and Monitor tokens still present
+- [x] 4.1 Duplicate matcher objects with exact Grok names (`run_terminal_command`, `ask_user_question`, `spawn_subagent`, `search_replace`/`write`) — no regex-OR
+- [x] 4.2 No fake Skill or Monitor matchers; skip `reason=no-tool` vs `reason=untrusted-session`
+- [x] 4.3 Guard 2: Skill and Monitor tokens still present
 
 ## Phase 5: Docs (after Phases 1–2 green)
 

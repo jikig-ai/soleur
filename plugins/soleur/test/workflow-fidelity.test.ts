@@ -427,3 +427,132 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(syncScript).toContain("mergeStateStatus");
   });
 });
+
+const SETTINGS_PATH = resolve(PLUGIN_ROOT, "../../.claude/settings.json");
+const HOOK_EVENTS = ["PreToolUse", "PostToolUse"] as const;
+const CLAUDE_TO_GROK: Record<string, readonly string[]> = {
+  Bash: ["run_terminal_command"],
+  AskUserQuestion: ["ask_user_question"],
+  Task: ["spawn_subagent"],
+  Write: ["write"],
+  Edit: ["search_replace"],
+  MultiEdit: ["search_replace"],
+  NotebookEdit: ["search_replace"],
+};
+const GROK_EXACT_NAMES = [
+  "run_terminal_command",
+  "ask_user_question",
+  "spawn_subagent",
+  "search_replace",
+  "write",
+] as const;
+
+type HookEntry = { matcher?: string; hooks?: { command?: string }[] };
+
+function hookCommands(entry: HookEntry): string[] {
+  return (entry.hooks ?? [])
+    .map((h) => h.command ?? "")
+    .filter(Boolean)
+    .sort();
+}
+
+function grokNamesFor(matcher: string): string[] {
+  const names = new Set<string>();
+  for (const part of matcher.split("|")) {
+    for (const g of CLAUDE_TO_GROK[part] ?? []) names.add(g);
+  }
+  return [...names];
+}
+
+describe("Guard 2 — Claude Skill/Monitor matchers remain and Grok aliases are exact-name objects", () => {
+  const src = readFileSync(SETTINGS_PATH, "utf-8");
+  const settings = JSON.parse(src) as { hooks: Record<string, HookEntry[]> };
+
+  test("chokepoint is .claude/settings.json hooks.PreToolUse (not a sibling file)", () => {
+    expect(SETTINGS_PATH.replace(/\\/g, "/")).toMatch(/\/\.claude\/settings\.json$/);
+    expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+    expect(settings.hooks.PreToolUse.length).toBeGreaterThan(0);
+  });
+
+  test('Skill and Monitor remain as exact matcher tokens (not toContain("S"), not case-folded)', () => {
+    expect(src).toContain('"matcher": "Skill"');
+    expect(src).toContain('"matcher": "Monitor"');
+    const matchers = HOOK_EVENTS.flatMap((e) =>
+      (settings.hooks[e] ?? []).map((x) => x.matcher),
+    );
+    expect(matchers).toContain("Skill");
+    expect(matchers).toContain("Monitor");
+    expect(matchers).not.toContain("skill");
+  });
+
+  test("no regex-OR mixes a Claude name with a Grok name", () => {
+    const claude = [
+      "Bash",
+      "AskUserQuestion",
+      "Task",
+      "Write",
+      "Edit",
+      "Skill",
+      "Monitor",
+    ];
+    for (const event of HOOK_EVENTS) {
+      for (const entry of settings.hooks[event] ?? []) {
+        const m = entry.matcher ?? "";
+        if (!m.includes("|")) continue;
+        const parts = m.split("|");
+        const hasGrok = parts.some((p) =>
+          (GROK_EXACT_NAMES as readonly string[]).includes(p),
+        );
+        const hasClaude = parts.some((p) => claude.includes(p));
+        expect(hasGrok && hasClaude).toBe(false);
+      }
+    }
+  });
+
+  test("Grok exact names are present as standalone matcher tokens", () => {
+    const matchers = HOOK_EVENTS.flatMap((e) =>
+      (settings.hooks[e] ?? []).map((x) => x.matcher),
+    );
+    for (const name of GROK_EXACT_NAMES) {
+      expect(matchers).toContain(name);
+    }
+  });
+
+  test("every Claude matcher object has exact-name Grok duplicate(s) with the same commands", () => {
+    for (const event of HOOK_EVENTS) {
+      const entries = settings.hooks[event] ?? [];
+      const byMatcher = new Map<string, string[][]>();
+      for (const entry of entries) {
+        const m = entry.matcher ?? "";
+        if (!byMatcher.has(m)) byMatcher.set(m, []);
+        byMatcher.get(m)!.push(hookCommands(entry));
+      }
+      for (const entry of entries) {
+        const m = entry.matcher ?? "";
+        const want = grokNamesFor(m);
+        if (want.length === 0) continue;
+        const cmds = hookCommands(entry);
+        for (const grokName of want) {
+          const siblings = byMatcher.get(grokName) ?? [];
+          expect(
+            siblings.some((c) => JSON.stringify(c) === JSON.stringify(cmds)),
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  test("Skill and Monitor are not faked as Grok matchers (SOLEUR_HOOK_SKIP reason=no-tool)", () => {
+    const matchers = HOOK_EVENTS.flatMap((e) =>
+      (settings.hooks[e] ?? []).map((x) => x.matcher),
+    );
+    expect(matchers).not.toContain("skill");
+    expect(matchers).not.toContain("monitor");
+    const fidelity = readFileSync(
+      resolve(PLUGIN_ROOT, "lib/workflow-fidelity.ts"),
+      "utf-8",
+    );
+    expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=no-tool");
+    expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=untrusted-session");
+  });
+});

@@ -66,6 +66,14 @@ export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
 export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
 export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
 
+/**
+ * Grok has no Skill or Monitor tool. Do not invent matchers for them.
+ * Distinct from an untrusted session (no live grok --trust token on the
+ * 2026-09-11 host). Drain-prs Grok polling is AwaitShell, not Monitor.
+ */
+export const GROK_HOOK_SKIP_NO_TOOL = "SOLEUR_HOOK_SKIP reason=no-tool";
+export const GROK_HOOK_SKIP_UNTRUSTED = "SOLEUR_HOOK_SKIP reason=untrusted-session";
+
 /** Re-export for workflow tests — BEHIND resync lives in pr-merge-poll.ts. */
 export { PR_BEHIND_SYNC_SENTINEL } from "./pr-merge-poll";
 
