@@ -209,7 +209,7 @@ pir_body() { # $1 = shape: ok | unbacked
 
 REPO_A="$TMP/repo-a"
 mkdir -p "$REPO_A"
-git_fixture_env "$REPO_A"
+git_fixture_env "$REPO_A" || { echo "FATAL: git_fixture_env refused fixture $REPO_A" >&2; exit 64; }
 git init -q -b main "$REPO_A"
 mkdir -p "$REPO_A/$PIR_REL"
 pir_body ok > "$REPO_A/$PIR_REL/a-postmortem.md"
@@ -224,7 +224,7 @@ git -C "$REPO_A" update-ref refs/remotes/origin/main HEAD
 git -C "$REPO_A" checkout -q -b feat
 printf '\nAddendum.\n' >> "$REPO_A/$PIR_REL/a-postmortem.md"
 pir_body unbacked > "$REPO_A/$PIR_REL/b-postmortem.md"
-git -C "$REPO_A" mv "$PIR_REL/c-postmortem.md" "$PIR_REL/c-new-postmortem.md"
+git -C "$REPO_A" mv "$REPO_A/$PIR_REL/c-postmortem.md" "$REPO_A/$PIR_REL/c-new-postmortem.md"
 printf '\nRenamed addendum.\n' >> "$REPO_A/$PIR_REL/c-new-postmortem.md"
 git -C "$REPO_A" rm -q "$PIR_REL/d-postmortem.md"
 git -C "$REPO_A" add -A
@@ -286,7 +286,7 @@ assert_eq "1" "$(grep -cF "[FAIL] $PIR_REL/b-postmortem.md: rows-without-issue â
 # Repo B: no refs/remotes/origin/main â†’ exit 2 with the unavailable line, never "no PIR".
 REPO_B="$TMP/repo-b"
 mkdir -p "$REPO_B"
-git_fixture_env "$REPO_B"
+git_fixture_env "$REPO_B" || { echo "FATAL: git_fixture_env refused fixture $REPO_B" >&2; exit 64; }
 git init -q -b main "$REPO_B"
 printf 'x\n' > "$REPO_B/README.md"
 git -C "$REPO_B" add -A
