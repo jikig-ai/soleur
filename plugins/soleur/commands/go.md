@@ -98,7 +98,7 @@ Run `pwd`. If the path contains `.worktrees/`, extract the feature name and ment
 
 "You're in worktree **feat-[name]**. Want to continue working on this, or start something new?"
 
-If the user wants to continue the current feature, delegate to `soleur:work` via the **Skill tool** with the user input as arguments. Then stop.
+If the user wants to continue the current feature, delegate to `soleur:work`. **Claude:** Skill tool (`soleur:work`) with the user input as arguments. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process and run it to completion. Then stop.
 
 **Bare-repo CWD guard.** If `pwd` is NOT inside `.worktrees/` AND `git rev-parse --is-bare-repository` returns `true`, the CWD is a bare-repo root with no working tree. Any Edit/Write to files visible at this path lands on stray untracked content not on any branch, and `node_modules` is not hydrated so typecheck/dev-server commands fail. For file-touching intents (the `fix`/`implement`/`drain`/`review` rows in Step 2), do NOT edit in place — route through `/one-shot` (Grok) or `soleur:one-shot` (Claude) so a proper worktree is created via `worktree-manager.sh`. For read-only intents (questions, exploration, `clo-attestation`, `legal-threshold`), proceed without worktree creation. See `knowledge-base/project/learnings/2026-05-19-bare-repo-grep-and-subagent-infra-claim-verification.md`.
 
@@ -125,7 +125,7 @@ Devin uses the same Skill tool format as Claude Code with `soleur:<skill>` names
 
 **Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
 
-**Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Map `soleur:<skill>` → `/<skill>` (strip prefix) at invocation time. **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+**Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Invoke a skill by Reading `plugins/soleur/skills/<name>/SKILL.md` in this process (`/<skill>` names the skill; it is not a nested tool_use). **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Skills use the same `soleur:<skill>` namespace as Claude Code. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
@@ -166,9 +166,9 @@ When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:brainstor
 If intent is clear, route without confirmation:
 
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
-- **Grok Build:** invoke via **slash command** (`/<skill>` with args appended). Agents: **spawn_subagent** with the agent id and prompt = original user input.
+- **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
 
-Map `soleur:<skill>` cells in the table to Grok `/<skill>` at invocation time (strip the `soleur:` prefix). **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
+Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
 **PR-vs-issue type resolution (when `#N` or a bare number is the input):** Before evaluating the `clo-attestation` and `review` rows, run `gh issue view N --json body,title,state 2>/dev/null` to determine whether `N` is an issue. If `gh issue view` succeeds AND the body satisfies the `clo-attestation` predicate, route to clo. If `gh issue view` succeeds but no `clo-attestation` match, route to `soleur:review` only after confirming `gh pr view N` ALSO succeeds (otherwise the input is a non-attestation issue — route to default/brainstorm with the issue body as context). This ordering closes the gap that caused `/soleur:go #3998` to mis-route an issue to PR review. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 

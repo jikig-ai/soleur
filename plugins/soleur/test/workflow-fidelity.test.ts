@@ -423,6 +423,32 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
     expect(goMd).toMatch(IN_PROCESS_READ);
   });
 
+  test("go.md live dispatch after Step 2.1 does not nested-slash on Grok", () => {
+    // Header-only in-process Read is vacuous if the bullet the parent follows
+    // still says "invoke via slash command" (the 2026-09-11 /go failure).
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    const start = goMd.indexOf("If intent is clear, route without confirmation:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = goMd.indexOf("Map `soleur:<skill>`", start);
+    expect(end).toBeGreaterThan(start);
+    const block = goMd.slice(start, end);
+    expect(block).toMatch(IN_PROCESS_READ);
+    expect(block).toContain("SKILL.md");
+    expect(block).not.toMatch(/invoke via \*\*slash command\*\*/i);
+  });
+
+  test("go.md Step 1 worktree-continue dual-voices Grok in-process Read", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    const start = goMd.indexOf("## Step 1: Worktree Context");
+    const end = goMd.indexOf("## Step 2:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const step1 = goMd.slice(start, end);
+    expect(step1).toMatch(IN_PROCESS_READ);
+    expect(step1).toContain("work/SKILL.md");
+    expect(step1).toContain("Skill tool");
+  });
+
   test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
     const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
     expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
