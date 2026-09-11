@@ -1,0 +1,42 @@
+{
+  "name": "soleur",
+  "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support that compounds your company knowledge over time.",
+  "author": {
+    "name": "Jean Deruelle",
+    "email": "jean.deruelle@jikigai.com",
+    "url": "https://github.com/deruelle"
+  },
+  "homepage": "https://soleur.ai",
+  "repository": "https://github.com/jikig-ai/soleur",
+  "license": "BUSL-1.1",
+  "keywords": [
+    "soleur",
+    "devin",
+    "claude-code",
+    "codex",
+    "grok-build",
+    "ai-agents",
+    "company-as-a-service",
+    "solo-founder",
+    "orchestration",
+    "ux-audit"
+  ],
+  "mcpServers": {
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "transport": "http"
+    },
+    "cloudflare": {
+      "url": "https://mcp.cloudflare.com/mcp",
+      "transport": "http"
+    },
+    "vercel": {
+      "url": "https://mcp.vercel.com",
+      "transport": "http"
+    },
+    "stripe": {
+      "url": "https://mcp.stripe.com",
+      "transport": "http"
+    }
+  }
+}

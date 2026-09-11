@@ -224,8 +224,19 @@ calls return 404).
 > unchanged is the recommendation: the org-subdomain is required because `eu.sentry.io`
 > rewrites `-eu`-suffixed slugs, which this correction does not touch.
  The canonical EU API base_url is therefore
-`https://eu.sentry.io/api/` — set on the Terraform provider config in
-`apps/web-platform/infra/sentry/main.tf` whenever `var.sentry_region = "de"`.
+`https://<org-slug>.sentry.io/api/` — set on the Terraform provider config in
+`apps/web-platform/infra/sentry/main.tf`, which reads
+`base_url = "https://${var.sentry_org}.sentry.io/api/"`.
+
+> **Corrected 2026-09-10 (#7997).** This sentence previously named
+> `https://eu.sentry.io/api/`. That contradicted both the `Cluster / Host
+> Glossary` MUST above it and the Terraform it claims to describe: the regional
+> host rewrites slugs ending in `-eu`, so it is wrong for every slug-scoped
+> path, which is the whole reason the glossary requires the org subdomain.
+> One credentialed call in this repo is deliberately slug-LESS and therefore
+> works against the regional hosts: the `/users/me/` region-discovery probe in
+> `apps/web-platform/scripts/sentry-monitors-audit.sh`. It is the only one, and
+> it is why that script's candidate set is wider than the org subdomain alone.
 See `Cluster / Host Glossary` above for the full host-class split and the
 Sentry-residency cascade learning at
 `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
