@@ -171,8 +171,42 @@ fi
 # --enumerate is SHIFTED off argv so the group is still read positionally below
 # (`bash scripts/test-all.sh --enumerate scripts`), keeping one argv convention.
 _ENUMERATE=0
+_EMIT_COMMANDS=0
 if [[ "${1:-}" == "--enumerate" ]]; then
   _ENUMERATE=1
+  shift
+elif [[ "${1:-}" == "--enumerate-commands" ]]; then
+  # --enumerate-commands publishes the COMMAND each registration would run, not just its
+  # label. It raises the enumerate flag as WELL as its own, deliberately: SEVEN conditionals in
+  # this file gate on `_ENUMERATE` (an earlier revision of this comment said nine — it counted
+  # three assignments and itself), and one of them is the entire "takes no lock" property.
+  # The mechanism is worth stating precisely, because the obvious reading is wrong: `tc_acquire`
+  # is NOT skipped. It is called unconditionally; the gated line sets
+  # SOLEUR_DISABLE_SESSION_STATE=1, and `scripts/lib/test-contention.sh` returns early on that
+  # without serialising. The OUTCOME — this path cannot deadlock a gate run that already holds
+  # the lock — is what matters and is unchanged. A mode that set only its own flag would take
+  # the lock and reintroduce the deadlock `--enumerate` exists to avoid, so the two flags are
+  # not independent and must not be made so.
+  #
+  # RECORD CONTRACT. This mode emits two record types, both TAB-delimited, one per line. It does
+  # NOT own the whole stream: unrelated preamble lines reach stdout too (measured — the orphan
+  # reaper's `ORPHAN_SCAN valid=1 …` line, space-delimited, emitted before any registration). A
+  # consumer MUST select by record prefix rather than assume every line is a record; the guard
+  # does exactly that. An earlier revision of this comment said "two record types, one per line"
+  # full stop, which would have misled the next consumer into a strict parse.
+  #   SUITE_COMMAND\t<label>\t<argv0>\t<argv1>...   — from run_suite; fields 3..N are the
+  #                                                    exact argv the runner would exec.
+  #   SUITE_COMMAND_DECLINED\t<label>\t<rerun>       — from skip_suite; field 3 is a HUMAN
+  #                                                    DISPLAY string, never argv. The two
+  #                                                    types are distinct precisely so a
+  #                                                    consumer cannot parse a display string
+  #                                                    as a command.
+  # ESCAPING: none. A TAB or NEWLINE inside an argv element would corrupt the record, so the
+  # emitter REFUSES rather than emitting a corrupt line (fail closed, exit 2). No registration
+  # in this file carries such an element today; if one ever does, the consumer must learn a
+  # real encoding rather than the emitter silently mangling it.
+  _ENUMERATE=1
+  _EMIT_COMMANDS=1
   shift
 fi
 
@@ -761,10 +795,64 @@ _shard_enumerate_emit() {
   printf 'SUITE_REGISTRATION\t%s\n' "$1"
 }
 
+# Emit one SUITE_COMMAND record: label, then the argv verbatim, TAB-delimited.
+# Refuses (exit 2) on an element containing a TAB or NEWLINE — see the record contract at the
+# --enumerate-commands parse arm. A corrupt record read as a command list is worse than no
+# record, because the consumer cannot tell it was corrupted.
+_shard_enumerate_command_emit() {
+  local label="$1"; shift
+  local a
+  for a in "$label" "$@"; do
+    case "$a" in
+      # `$'\t'` and `$'\n'`, NOT `"$(printf '\t')"`: the command-substitution form forks once per
+      # argv element per registration. Measured END TO END from a valid repo root, three runs per
+      # arm, two trials: 9.48s/9.29s before vs 6.20s/5.70s after, i.e. ~3.1s -> ~2.0s per
+      # enumeration. (A micro-benchmark of the `case` alone shows 1.364s vs 0.009s per 2000
+      # iterations; that ratio does NOT carry to the whole mode, which is why the figure quoted
+      # here is the measured one. An earlier draft of this comment quoted the micro-benchmark and
+      # implied ~18s per battery run.) The guard enumerates twice per invocation and the mutation
+      # battery invokes it 21 times.
+      *$'\t'* | *$'\n'*)
+        printf 'ERROR: --enumerate-commands cannot encode an argv element containing a TAB or NEWLINE (label=%s)\n' "$label" >&2
+        exit 2
+        ;;
+    esac
+  done
+  printf 'SUITE_COMMAND\t%s' "$label"
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+}
+
+# One dispatch point per registration function, so each function keeps a single
+# enumerate-mode conjunct line, and the mode choice lives here rather than being
+# duplicated at both call sites.
+_shard_enumerate_dispatch() {
+  local label="$1"; shift
+  if (( _EMIT_COMMANDS == 1 )); then
+    _shard_enumerate_command_emit "$label" "$@"
+  else
+    _shard_enumerate_emit "$label"
+  fi
+}
+
+_shard_enumerate_declined_dispatch() {
+  if (( _EMIT_COMMANDS == 1 )); then
+    _shard_enumerate_declined_emit "$1" "$2"
+  else
+    _shard_enumerate_emit "$1"
+  fi
+}
+
+# skip_suite's third positional is a human RERUN string, not argv — a distinct record type so
+# a consumer can never parse it as a command.
+_shard_enumerate_declined_emit() {
+  printf 'SUITE_COMMAND_DECLINED\t%s\t%s\n' "$1" "$2"
+}
+
 run_suite() {
   local label="$1"; shift
   _shard_selects || return 0
-  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_dispatch "$label" "$@"; return 0; fi
   suites=$((suites + 1))
   # --- Runtime ceiling (#7869) ---------------------------------------------
   #
@@ -928,7 +1016,7 @@ skip_suite() {
   # functions increment `suites`, so filtering only one makes per-leg denominators and the
   # epilogue's decline accounting disagree about how many registrations the leg owned.
   _shard_selects || return 0
-  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))
   echo ""
@@ -1353,6 +1441,14 @@ _repo_boundary_exit_note() {
 # outright (measured -- it does not compose), so a trap up there would have looked correct and freed
 # nothing. Skipped when the root was INHERITED: freeing an outer runner's sandbox mid-run would
 # silently re-point every later suite at the operator's real ledger.
+_soleur_refguard_cleanup() {
+  # The hook dir is a mktemp copy, so lefthook's auto-install lands in /tmp instead of the
+  # repository. Guarded on the name so a mis-set variable cannot rm an unrelated path.
+  [[ -n "${_soleur_refguard_dir:-}" && "$_soleur_refguard_dir" == */soleur-refguard.* ]] \
+    && rm -rf "$_soleur_refguard_dir"
+  return 0
+}
+
 _soleur_inc_cleanup() {
   [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == */soleur-inc-* ]] && rm -rf "$_soleur_inc_owned"
   # `return 0` is LOAD-BEARING, not tidiness. When the root was INHERITED,
@@ -1368,7 +1464,7 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_inc_cleanup' EXIT
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -1397,6 +1493,79 @@ trap '_repo_boundary_exit_note; _soleur_inc_cleanup' EXIT
 # assertion runs — which is why the prose above describes them instead of reproducing them.
 if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 tc_acquire "test-all"
+
+# --- ARM THE REF-STORE STATE PREDICATE (#7917, AP-025) --------------------------------------
+# `scripts/battery-tag-authorship.test.sh` is a STATIC census: it enumerates the ways a
+# tag-authoring command can be REACHED. AP-025 says a hazard that is a property of runtime STATE
+# wants a self-refusal the artifact CARRIES, because a list of ways to reach a state cannot be
+# proven complete — and that guard's header enumerates eight places where it is not. This arms
+# the complement: a `reference-transaction` hook that refuses a refs/tags/* CREATE in THIS
+# repository for the duration of the run, whatever spelling produced it.
+#
+# Env-scoped, so there is nothing to install and nothing to tear down: GIT_CONFIG_* is inherited
+# by the whole process tree and dies with it. A suite that sets `-c core.hooksPath=…` per command
+# still wins (command-line config outranks env), which is how the eleven suites that legitimately
+# create tags in mktemp sandboxes stay unaffected — and they are unaffected anyway, because the
+# hook compares --git-common-dir against THIS repo and ignores every other ref store.
+#
+# THE HOOK DIRECTORY HOLDS ONLY THIS HOOK, DELIBERATELY. `core.hooksPath` replaces the hooks
+# directory wholesale, so the alternative — pointing it at a directory that also carries copies of
+# `scripts/hooks/pre-commit` and `pre-push` — would start running those in EVERY fixture repo the
+# battery creates, since the env config reaches fixtures too. A `git init` fixture has no hooks
+# today; with a single-hook directory it still effectively has none, because this hook is inert for
+# non-tag refs and for every ref store that is not this one. The cost of the narrow directory is
+# that the operator's own hooks are displaced for git calls made DURING a gate run — which is a
+# non-event, since a suite that commits to the live repository is the thing
+# `scripts/lib/repo-write-boundary.sh` exists to catch.
+#
+# Skipped under --enumerate: no suite runs, and the mode's contract is that it takes no lock and
+# changes no state.
+if (( _ENUMERATE == 0 )); then
+  _bt_common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$_bt_common" ]]; then
+    case "$_bt_common" in /*) : ;; *) _bt_common="$PWD/$_bt_common" ;; esac
+    _bt_common="$(cd "$_bt_common" 2>/dev/null && pwd -P || true)"
+  fi
+  # SHARED NAMESPACE, stated rather than engineered around: plugins/soleur/test/lib/git-fixture-env.sh
+  # also writes the count-indexed GIT_CONFIG_* namespace (commit.gpgsign), and unconditionally, so
+  # every fixture built through that chokepoint clobbers this arming — which is exactly why fixtures
+  # stay hermetic under it. Benign at COUNT=1 on both sides; fragile above it. Do not build
+  # indirection for this, just do not raise either count without reading the other.
+  if [[ -n "$_bt_common" && -x scripts/hooks/battery-ref-guard/reference-transaction ]]; then
+    # POINT core.hooksPath AT A RUN-SCOPED COPY, NEVER AT THE TRACKED DIRECTORY.
+    #
+    # An earlier revision pointed it straight at scripts/hooks/battery-ref-guard, which is a
+    # TRACKED source path — and lefthook auto-installs into whatever core.hooksPath names. A full
+    # gate run therefore ended with an untracked `pre-commit` sitting in the repository and the
+    # write-boundary sentinel firing "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY", worktree
+    # dimension. `scripts/lib/repo-write-boundary.sh` already excludes the contents of .git/hooks
+    # "so `lefthook install` does not fire here"; redirecting hooksPath at a tracked path routed
+    # around that exclusion and put the install where it DOES fire. Only a full gate run surfaces
+    # this: nothing installs hooks during a single suite.
+    #
+    # A temp copy costs the "nothing to install, nothing to tear down" property the env-scoped
+    # design started with. That property was not survivable, and a stray file in /tmp is a strictly
+    # better failure than a stray file in the repository.
+    _bt_hookdir="$(mktemp -d -t soleur-refguard.XXXXXXXX)" || _bt_hookdir=""
+    if [[ -n "$_bt_hookdir" && -d "$_bt_hookdir" ]] \
+       && cp scripts/hooks/battery-ref-guard/reference-transaction "$_bt_hookdir/" 2>/dev/null; then
+      chmod +x "$_bt_hookdir/reference-transaction" 2>/dev/null || true
+      _soleur_refguard_dir="$_bt_hookdir"
+      export BATTERY_TAG_LIVE_COMMON_DIR="$_bt_common"
+      export GIT_CONFIG_COUNT=1
+      export GIT_CONFIG_KEY_0=core.hooksPath
+      export GIT_CONFIG_VALUE_0="$_bt_hookdir"
+    else
+      printf 'WARNING: ref-store state predicate NOT armed (could not stage a run-scoped hook dir) — this run is guarded by the static census alone.\n' >&2
+    fi
+  else
+    # Never silent: "the predicate is armed" and "the predicate could not arm" must not render
+    # identically, or a disarmed run reads exactly like a protected one.
+    printf 'WARNING: ref-store state predicate NOT armed (common-dir=%s, hook present=%s) — this run is guarded by the static census alone.\n' \
+      "${_bt_common:-<unresolved>}" "$([[ -x scripts/hooks/battery-ref-guard/reference-transaction ]] && echo yes || echo no)" >&2
+  fi
+  unset _bt_common
+fi
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
 # to TC_LOCK_TIMEOUT (3600 s) here, so a reading taken before the wait describes a
@@ -1835,6 +2004,13 @@ if want_scripts; then
   # #6475, and the probe's whole purpose is to be the fail-loud alarm, so a vacuous PASS (or a
   # false FAIL that pages a green codebase) must redden CI here.
   run_suite "scripts/ci-deploy-sentry-post-fail-6475" bash scripts/followthroughs/ci-deploy-sentry-post-fail-6475.test.sh
+  # #8016: exit-code harness for the bwrap deploy-gate self-report soak. Registered explicitly
+  # (orphan-suite class above). Its exit code decides whether the sweeper closes #8016 as an
+  # environmental non-recurrence (0) or leaves it open on the next occurrence (1); the
+  # load-bearing arms are FAIL-precedence over a liveness fault, SYSLOG_IDENTIFIER field
+  # isolation against webhook contamination, and withholding the free-text bwrap_err from the
+  # public issue comment. Mutation-proved at authoring (5/5 killed).
+  run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
   # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
   # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
   # ship into the same Better Stack source from the same app container, so a substring-matching
@@ -2409,6 +2585,9 @@ if want_scripts; then
   # run against the branch. A parity pin nothing executes is three copies with no pin at all.
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
+  run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
+  run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
+  run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by
   # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop
   # expands. Nested loop rather than one flat `for f in ${SUITE_GLOBS[@]}`: the flat form
