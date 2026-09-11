@@ -651,7 +651,7 @@ try:
             ceiling_err = ("could not read reusable workflow %s: %s"
                            % (callee_rel, str(e).replace("\n", " ")))
 
-    # --- CI declared path, and why it is NOT in the assertion (#5806 / ADR-215) ---
+    # --- CI declared path, and why it is NOT in the assertion (#5806 / ADR-217) ---
     # WAS job_timeout("await-ci"). That job is GONE: the deploy now fires on a
     # workflow_run completed event from ci.yml rather than polling for CI inside
     # this workflow. job_timeout() returns the GitHub 360 default for an ABSENT

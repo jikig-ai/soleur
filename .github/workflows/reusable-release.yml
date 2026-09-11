@@ -90,7 +90,7 @@ jobs:
     # worst run ever observed here and 88x the plugin caller's worst.
     #
     # WHY NOT LOWER. The drift checker's threshold bounds this pipeline's declared critical
-    # path, which is NOT a serial sum. Since #5806 (ADR-215) the parallel arms live in DIFFERENT
+    # path, which is NOT a serial sum. Since #5806 (ADR-217) the parallel arms live in DIFFERENT
     # WORKFLOWS: this `release` job runs on web-platform-release.yml's push arm while CI runs in
     # ci.yml, both started by the same push, and the deploy chain fires on CI's completion. So
     # the path is:
@@ -1676,7 +1676,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────────────────────
-      # CARRY THIS JOB'S OUTPUT VALUES ACROSS THE RUN BOUNDARY (#5806, ADR-215).
+      # CARRY THIS JOB'S OUTPUT VALUES ACROSS THE RUN BOUNDARY (#5806, ADR-217).
       #
       # WHY THIS EXISTS. web-platform-release.yml's deploy chain moved onto a
       # `workflow_run: completed` arm, which is a DIFFERENT RUN from the one

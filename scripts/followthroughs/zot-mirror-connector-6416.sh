@@ -92,7 +92,7 @@ JOB_NAME="release / release"
 NEED=5
 SCAN=25
 
-# `event=push` IS LOAD-BEARING, NOT A NARROWING CONVENIENCE (#5806, ADR-215).
+# `event=push` IS LOAD-BEARING, NOT A NARROWING CONVENIENCE (#5806, ADR-217).
 # web-platform-release.yml is split across two triggers and produces TWO runs per
 # merge: a push-arm run that actually builds and crane-copies (the `release` job),
 # and a workflow_run-arm run carrying the deploy chain where `release` is SKIPPED.

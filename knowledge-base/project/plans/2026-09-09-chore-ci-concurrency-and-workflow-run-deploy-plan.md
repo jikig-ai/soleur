@@ -573,7 +573,7 @@ They are not:
 > now entirely `ci.yml`'s. The headroom statement cannot be asserted while any job is unbounded, so
 > it is computed only when every job declares a ceiling and otherwise warns with the list. B9
 > asserts the arm this pipeline controls (195 ≤ 207); B9b ratchets the unbounded count; B9c stops
-> B9b going vacuous. Filed as **#8020**. Full reasoning in ADR-215 Decision 4.
+> B9b going vacuous. Filed as **#8020**. Full reasoning in ADR-217 Decision 4.
 
 Guard 5 pins each quantity to its own subject so they cannot be swapped.
 

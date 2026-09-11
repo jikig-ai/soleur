@@ -54,7 +54,7 @@ on:
         type: string
         default: ""
   # THE DEPLOY CHAIN FIRES ON CI COMPLETION, NOT ON A POLL (#5806, ADR-072 option 3,
-  # ADR-215). `await-ci` used to sit in this workflow holding an idle GitHub-hosted
+  # ADR-217). `await-ci` used to sit in this workflow holding an idle GitHub-hosted
   # runner for up to 72 minutes polling for CI's verdict on this SHA, and failing
   # CLOSED when CI outran its ceiling — the #7902 symptom, where a healthy build
   # could not deploy. Firing on the real completion event removes the ceiling
@@ -138,7 +138,7 @@ jobs:
     secrets: inherit
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # resolve-target — REPLACES `await-ci` (#5806, ADR-072 option 3, ADR-215).
+  # resolve-target — REPLACES `await-ci` (#5806, ADR-072 option 3, ADR-217).
   #
   # WHAT IT REPLACES AND WHY. `await-ci` polled the REST API for CI's verdict on
   # this SHA, holding an idle runner for up to 72 minutes and failing CLOSED when
@@ -566,7 +566,7 @@ jobs:
           echo "resolved: version=$version tag=$tag sha=$WR_HEAD_SHA"
 
       # ─────────────────────────────────────────────────────────────────────
-      # CI-BUDGET CREEP DETECTOR — relocated, not deleted (#5806, ADR-215).
+      # CI-BUDGET CREEP DETECTOR — relocated, not deleted (#5806, ADR-217).
       #
       # `await-ci` carried the only creep detector on this pipeline: a
       # `::warning::` at 0.7 x CEILING_S (ADR-212 Decision 4). Deleting the job
@@ -1212,7 +1212,7 @@ jobs:
           exit 1
 
       # ─────────────────────────────────────────────────────────────────────
-      # MONOTONIC-VERSION PRECONDITION (#7931 part 1 x #5806 interaction, ADR-215
+      # MONOTONIC-VERSION PRECONDITION (#7931 part 1 x #5806 interaction, ADR-217
       # Decision 5). NEITHER ISSUE ANTICIPATES THIS AND IT IS THE SHARPEST
       # INTERACTION BETWEEN THE TWO.
       #
@@ -1297,7 +1297,7 @@ jobs:
             # name a cause the job MEASURED. The job measured the opposite.
             #
             # So this is a clean, GREEN, terminal skip that says what happened.
-            echo "::notice::deploy superseded — production is on ${LIVE}, which is newer than this run's ${VERSION}. A later release already shipped these changes; nothing is stuck and no action is needed. (ADR-215 Decision 5: per-SHA CI concurrency makes out-of-order completion reachable, and this is the guard working.)"
+            echo "::notice::deploy superseded — production is on ${LIVE}, which is newer than this run's ${VERSION}. A later release already shipped these changes; nothing is stuck and no action is needed. (ADR-217 Decision 5: per-SHA CI concurrency makes out-of-order completion reachable, and this is the guard working.)"
             {
               echo "### Deploy superseded"
               echo ""
@@ -1850,7 +1850,7 @@ jobs:
   # fixed ceiling any more: the deploy fires on CI's real completion event, so the
   # quantity this job warned about no longer exists and a warning about it would be
   # a warning about nothing. The creep detection it provided is NOT lost — it is
-  # relocated to `resolve-target`'s derived soft ceiling (ADR-215), which measures
+  # relocated to `resolve-target`'s derived soft ceiling (ADR-217), which measures
   # CI's share of the declared end-to-end pipeline budget rather than its distance
   # from a constant that has been deleted.
   notify-gated:

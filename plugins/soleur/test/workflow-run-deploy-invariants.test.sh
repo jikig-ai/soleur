@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Guards 3/4/5/7/8 (#5806, ADR-215) — the workflow_run deploy gate.
+# Guards 3/4/5/7/8 (#5806, ADR-217) — the workflow_run deploy gate.
 #
 # SUCCESSOR TO await-ci-ceiling-invariants.test.sh, renamed rather than deleted.
 # That suite guarded the constants of a polling job that no longer exists. Its
@@ -682,7 +682,7 @@ case "$_nopage" in
 esac
 
 # ═══ GUARD 13 — every deploy-ACTING step is gated on the ordering guard ═════
-# ADR-215 Decision 5. Part 1 removed the property that ordered deploys (ci.yml's
+# ADR-217 Decision 5. Part 1 removed the property that ordered deploys (ci.yml's
 # single `main` group made CI completions FIFO), so `workflow_run` guarantees
 # correct-SHA, not latest-SHA. The monotonic-version precondition is what
 # replaces it — and it is a STEP, so it protects only the steps that consult its
@@ -730,7 +730,7 @@ else:
 ")
 case "$_ungated" in
   *"ORDERING GUARD STEP IS GONE"*)
-    fail "G13 the ordering-guard step was not found in the deploy job — ADR-215 Decision 5's replacement for the FIFO property part 1 deleted is missing, and the rows below cannot locate what they bound" ;;
+    fail "G13 the ordering-guard step was not found in the deploy job — ADR-217 Decision 5's replacement for the FIFO property part 1 deleted is missing, and the rows below cannot locate what they bound" ;;
 esac
 _n_gated=$(printf '%s' "$_deploy_steps" | python3 -c "
 import json,sys; print(sum(1 for s in json.load(sys.stdin) if s['gated']))")
@@ -738,7 +738,7 @@ if [ "$_n_gated" -ge 3 ]; then pass; else
   fail "G13 only $_n_gated deploy steps are gated on steps.ordering.outputs.superseded — the ordering guard was the replacement for the FIFO property part 1 removed, and with fewer than the three acting steps gated it is not protecting the deploy"
 fi
 if [ -z "$_ungated" ]; then pass; else
-  fail "G13 deploy-acting step(s) NOT gated on the ordering guard: ${_ungated}. When a newer version is already live this step still acts, so an out-of-order completion deploys the OLDER build and the run stays GREEN (ADR-215 Decision 5)"
+  fail "G13 deploy-acting step(s) NOT gated on the ordering guard: ${_ungated}. When a newer version is already live this step still acts, so an out-of-order completion deploys the OLDER build and the run stays GREEN (ADR-217 Decision 5)"
 fi
 
 # ═══ GUARD 10 — the artifact contract holds ACROSS the file boundary ════════

@@ -25,7 +25,7 @@ on:
 permissions:
   contents: read
 
-# CONCURRENCY: PER-SHA ON PUSH, PER-REF ON PULL REQUESTS (#7931 part 1, ADR-215).
+# CONCURRENCY: PER-SHA ON PUSH, PER-REF ON PULL REQUESTS (#7931 part 1, ADR-217).
 #
 # NOTHING IS CANCELLED ON `main` UNDER EITHER KEY. `cancel-in-progress` is, and
 # stays, pull_request-only: superseded PR runs collapse, `main` runs always run to
@@ -1033,7 +1033,7 @@ jobs:
     # WHAT THE PER-SHA KEY BUYS. It removes the queue term unconditionally rather than
     # probabilistically. Its median wall-clock saving is ZERO, because the median run has no queue
     # term to remove. It is justified on SEMANTICS — a run's gated quantity should not contain an
-    # unbounded term belonging to a different commit — not on wall clock (ADR-215, Decision 1).
+    # unbounded term belonging to a different commit — not on wall clock (ADR-217, Decision 1).
     # It raises peak runner concurrency, and the table above says the pool is the binding
     # constraint on 76% of runs, so this could make the median WORSE. That is the declared risk.
     #

@@ -73,7 +73,7 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # A principled bound rather than a guess, and ~4x every observed run.
 #
 # `await-ci` USED to supply the second term (at 72) by polling for CI inside this workflow. It
-# was deleted by #5806 — see ADR-215. The term that replaced it is CI's own DECLARED path to its
+# was deleted by #5806 — see ADR-217. The term that replaced it is CI's own DECLARED path to its
 # `test` aggregator (`test-scripts` 60 + `test` 10), read out of ci.yml by B9 rather than
 # restated here, so it moves when a CI ceiling moves. `resolve-target` is in the max() rather
 # than the sum because its only unbounded activity is a liveness poll on the RELEASE run, which

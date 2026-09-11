@@ -269,7 +269,7 @@ jobs:
           BODY="${BODY}"$'\n\n'"Undeployed (first 10): ${MISSING_SHAS:-<none captured>}"
           BODY="${BODY}"$'\n\n'"### Remediation"
           BODY="${BODY}"$'\n\n'"1. Find the release run that did not deploy. \`--event workflow_run\` is load-bearing:"
-          BODY="${BODY}"$'\n'"   since #5806 (ADR-215) every merge produces TWO web-platform-release runs — a push-arm"
+          BODY="${BODY}"$'\n'"   since #5806 (ADR-217) every merge produces TWO web-platform-release runs — a push-arm"
           BODY="${BODY}"$'\n'"   run carrying only \`release\` (build + publish) and a workflow_run-arm run carrying the"
           BODY="${BODY}"$'\n'"   whole deploy chain. Without the filter half the window has no \`deploy\` job at all."
           BODY="${BODY}"$'\n'"   \`gh run list --workflow=web-platform-release.yml --event workflow_run --limit 10 --json conclusion,createdAt,url,headSha\`"

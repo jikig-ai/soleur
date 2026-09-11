@@ -1,5 +1,5 @@
 ---
-title: "ADR-215: The deploy fires on CI's completion event, and the verdict never crosses as a value"
+title: "ADR-217: The deploy fires on CI's completion event, and the verdict never crosses as a value"
 status: Accepted
 date: 2026-09-09
 supersedes: []
@@ -10,7 +10,7 @@ amends:
 tags: [ci, deploy, release, concurrency, observability]
 ---
 
-# ADR-215: The deploy fires on CI's completion event, and the verdict never crosses as a value
+# ADR-217: The deploy fires on CI's completion event, and the verdict never crosses as a value
 
 ## Status
 

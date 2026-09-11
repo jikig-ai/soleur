@@ -283,7 +283,7 @@ If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 
 **Watch the first post-merge release run** (the one Phase 2/3 already identified) for a canary rollback.
 
-**Select the DEPLOY arm, not "the latest run".** Since #5806 / ADR-215 `web-platform-release.yml` is split across two triggers, so every merge produces **two** runs of it:
+**Select the DEPLOY arm, not "the latest run".** Since #5806 / ADR-217 `web-platform-release.yml` is split across two triggers, so every merge produces **two** runs of it:
 
 | arm | trigger | jobs |
 |---|---|---|
@@ -293,7 +293,7 @@ If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 `--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` does not exist, the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `--event workflow_run`** (cheap and exact — the deploy chain runs only on that arm), plus a job-presence assertion so a wrong selection fails loudly instead of silently.
 
 ```bash
-# The DEPLOY-arm release run for this merge (#5806, ADR-215). --event is what
+# The DEPLOY-arm release run for this merge (#5806, ADR-217). --event is what
 # distinguishes it from the push-arm build-and-publish run for the same SHA.
 RELEASE_RUN_ID=$(gh run list --branch main --workflow web-platform-release.yml \
   --event workflow_run --limit 1 --json databaseId --jq '.[0].databaseId')
@@ -331,7 +331,7 @@ fi
 
 **Interpretation:**
 
-- `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-215). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
+- `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
 - `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate.
 - Release **succeeded** (deploy job present and `success`): the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
 - Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.

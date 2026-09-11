@@ -18,7 +18,7 @@
 # `success` even on FAIL/skip and is NOT a reliable signal.
 #
 # WHICH ARM. `web-platform-release.yml` is split across two triggers (#5806,
-# ADR-215): the `push` arm runs ONLY the `release` job (build + publish), and the
+# ADR-217): the `push` arm runs ONLY the `release` job (build + publish), and the
 # `workflow_run` arm (fired on CI completion) carries the whole deploy chain —
 # resolve-target/migrate/deploy/live-verify. Every merge therefore produces TWO
 # runs of this workflow, and only ONE of them can contain a `live-verify` job.

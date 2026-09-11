@@ -50,7 +50,7 @@
   pinned to separate subjects. **Corrected at review:** `CI_DECLARED_PATH` was given as 70
   (`test-scripts` + `test`), which is CI's declared path to its `test` aggregator — correct for
   `await-ci`, which polled that CHECK, and wrong for a trigger that waits for the whole run
-  (measured 720m; 19 of 25 jobs declare no ceiling). See ADR-215 Decision 4 and #8020.
+  (measured 720m; 19 of 25 jobs declare no ceiling). See ADR-217 Decision 4 and #8020.
 
 - **#5806 item 4** (gate the "v0.X.Y released!" announcement on deploy-success) is deferred on
   MECHANISM but filed at **P2 with a dated trigger**, because the topology change makes the
@@ -87,7 +87,7 @@ LPT deferral"), which confirms the miss. **Decision 3 governs: do NOT implement 
 - **ADR ordinal: the plan's `ADR-214` is CLAIMED.** Phase 0.3's all-refs probe (not just `ls` over
   `main`) shows ADR-213 taken by the pushed branch `feat-one-shot-7946-7947-sentry-org-token-and-
   snapshot-redaction` and ADR-214 by `feat-one-shot-7898-7055-credfwd-plugins-bs-pin-byok-fixture`.
-  **The free ordinal is ADR-215**, and that is what the shipped comments cite.
+  **The free ordinal is ADR-217**, and that is what the shipped comments cite.
 
 - **Live suite count is 386 registrations**, not the 376 `ci.yml`'s K-table stanza states
   (`bash scripts/test-all.sh --enumerate scripts`). This PR adds 2 more, taking it to 388. K is

@@ -85,7 +85,7 @@ unresolved CI state.
   `max(build, CI)` parallelism unless build/deploy are restructured. **Deferred** to a tracking
   issue; not required to fix the incident.
 
-  > **ADOPTED 2026-09-09 — see [ADR-215](./ADR-215-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
+  > **ADOPTED 2026-09-09 — see [ADR-217](./ADR-217-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
   > Two of the three deferral reasons resolved differently than expected, and the third turned
   > out not to bind:
   >
@@ -106,12 +106,12 @@ unresolved CI state.
   >   the run boundary intact, while the VALUES need an artifact carrier. Critically, the values
   >   that cannot cross — `docker_pushed`, `mirror_verified` — were never the gate: this file's
   >   own FR-A5/FR-A9 notes record them as non-blocking. Substituting either for the conclusion
-  >   read would re-open the fail-open, and ADR-215 carries a mutation row against it.
+  >   read would re-open the fail-open, and ADR-217 carries a mutation row against it.
   >
   > **The named fail-open is closed.** The out-of-order risk this option was meant to fix
   > structurally is *not* fully fixed by `workflow_run` alone — the event carries the correct
   > SHA, not the latest one — and the per-SHA CI concurrency key that shipped alongside it
-  > REMOVES the serialisation that was providing the ordering. ADR-215 Decision 5 adds a
+  > REMOVES the serialisation that was providing the ordering. ADR-217 Decision 5 adds a
   > monotonic-version precondition to close it.
 - **Superseded-SHA guard ("Phase C") on the deploy job.** Designed and **rejected** by
   deepen-plan review: keying on `git rev-parse origin/main` false-skips nearly every deploy
@@ -121,7 +121,7 @@ unresolved CI state.
   pre-existing (`cancel-in-progress: false` is not newest-wins today) and is fixed structurally
   by option 3.
 
-  > **SCOPE CLARIFIED 2026-09-09 (ADR-215 Decision 5).** This prohibition is on the
+  > **SCOPE CLARIFIED 2026-09-09 (ADR-217 Decision 5).** This prohibition is on the
   > **git-ancestry** form, and all three defects named above are properties of that form. It does
   > NOT cover a version-monotonicity check, which shipped with #5806: it compares two version
   > strings over a value `deploy` already fetches from the live host, so it needs no

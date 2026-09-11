@@ -184,7 +184,7 @@ fi
 #   grep -rln 'crane copy' .github/workflows/
 ZOT_WRITER_WORKFLOWS="${REGISTRY_PREFLIGHT_ZOT_WRITERS:-web-platform-release.yml build-inngest-config-bundle.yml build-inngest-bootstrap-image.yml}"
 # DELIBERATELY UNFILTERED BY EVENT, and that is a decision, not an oversight (#5806,
-# ADR-215). web-platform-release.yml now produces TWO runs per merge: a push-arm run
+# ADR-217). web-platform-release.yml now produces TWO runs per merge: a push-arm run
 # that crane-copies into zot (the `release` job) and a workflow_run-arm run carrying
 # the deploy chain, which does NOT crane-copy. Counting only the push arm would be
 # the narrower reading of P3's stated hazard — but the deploy arm PULLS from this

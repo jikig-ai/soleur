@@ -103,7 +103,7 @@ broke the web container or Cloudflare proxying drifted.
 Diagnose:
 
 ```bash
-# --event workflow_run selects the DEPLOY arm. Since #5806 (ADR-215) this workflow
+# --event workflow_run selects the DEPLOY arm. Since #5806 (ADR-217) this workflow
 # runs twice per merge and the push arm carries no deploy job at all.
 gh run list --workflow=web-platform-release.yml --event workflow_run --limit 5
 ssh prod-web -- 'docker ps --format "table {{.Names}}\t{{.Status}}"'

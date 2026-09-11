@@ -142,5 +142,5 @@ The one-line version, for anyone extending a battery:
 - [[2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran]] — the same family, one level out: wrappers that could not distinguish clean from never-ran
 - [[2026-09-04-every-fix-reintroduced-the-class-it-was-fixing]] — anchors, and fixes applied to the instance rather than the class
 - [[2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances]] — the direct ancestor
-- ADR-215 — the `workflow_run` split
+- ADR-217 — the `workflow_run` split
 - #8020 — the unbounded ci.yml ceilings this exposed

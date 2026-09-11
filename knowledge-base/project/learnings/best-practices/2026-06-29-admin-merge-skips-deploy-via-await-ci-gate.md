@@ -65,7 +65,7 @@ the red release:
 **The mechanism this learning documents no longer exists. Do not act on the
 "verify three things and move on" checklist above.**
 
-`await-ci` was DELETED from `web-platform-release.yml` by #5806 (ADR-215,
+`await-ci` was DELETED from `web-platform-release.yml` by #5806 (ADR-217,
 ADR-072 option 3). It was a job that held an idle GitHub-hosted runner for up to
 72 minutes polling the REST API for CI's verdict on a SHA, and it failed CLOSED
 when CI outran its ceiling — a fixed bound on an unbounded, growing quantity.
@@ -110,7 +110,7 @@ restricted to zero-conflict-surface changes. Only its justification changed —
 from "the deploy never happens, so nothing can be stranded" to "CI verifies the
 squash commit before the deploy arm fires".
 
-Superseding refs: #5806, ADR-215, `plugins/soleur/skills/ship/SKILL.md`
+Superseding refs: #5806, ADR-217, `plugins/soleur/skills/ship/SKILL.md`
 §settle-then-admin-merge escape hatch (rewritten in the same change).
 
 ## Tags

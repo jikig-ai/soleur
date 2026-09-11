@@ -77,7 +77,7 @@ will otherwise be re-proposed:
 cannot drift). That measures time-to-`test` **including the queue**, on every release, and
 catches the creep class that produced #7902 months before it becomes a fail-closed deploy.
 
-> **RELOCATED 2026-09-09 — see [ADR-215](./ADR-215-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
+> **RELOCATED 2026-09-09 — see [ADR-217](./ADR-217-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
 > `await-ci` is deleted; the deploy now fires on CI's `workflow_run: completed` event, so
 > `CEILING_S` no longer exists and nothing can be derived from it. **The detector is relocated,
 > not deleted** — dropping it would have regressed this decision and undone what #7902 shipped
@@ -108,7 +108,7 @@ catches the creep class that produced #7902 months before it becomes a fail-clos
 > `workflow_run: types: [completed]` waits for the WHOLE run: measured 720m, because 19 of 25
 > `ci.yml` jobs declare no `timeout-minutes` and carry the platform's 360m default. The headroom
 > statement therefore cannot be asserted at all while any job is unbounded — it is computed only
-> when every job declares a ceiling, and otherwise warns with the list. See ADR-215 Decision 4 and
+> when every job declares a ceiling, and otherwise warns with the list. See ADR-217 Decision 4 and
 > #8020.
 
 **5. Job ceilings exist to bound a HUNG job, and a silent bound must never fire before a loud
@@ -150,7 +150,7 @@ a kill, so it is the last resort and must sit strictly above whatever else can s
   intact" property `ci.yml` documents. That is a decision about that property and is tracked as a
   follow-up, not folded into a production unblock.
 
-  > **Superseded 2026-09-09 (ADR-215, #7931 part 1).** Two claims in the bullet above are wrong,
+  > **Superseded 2026-09-09 (ADR-217, #7931 part 1).** Two claims in the bullet above are wrong,
   > and both are corrected where the key actually changed (`ci.yml`'s dispatch note):
   >
   > 1. **"the concurrency queue is the dominant term" — not across the population.** Measured over

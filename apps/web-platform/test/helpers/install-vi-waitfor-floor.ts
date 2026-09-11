@@ -11,7 +11,7 @@ import { vi } from "vitest";
 // full-suite forked-worker CPU contention a 1s wait is exceeded before the
 // condition settles — the proven CI-red flake (live-repo-badge.test.tsx
 // vi.waitFor.timeout) that silently skips prod deploys. (The mechanism changed in
-// #5806/ADR-215 but the consequence did not: `await-ci` used to fail-close on a
+// #5806/ADR-217 but the consequence did not: `await-ci` used to fail-close on a
 // red CI; now web-platform-release.yml's workflow_run deploy arm fires on CI
 // COMPLETION and `resolve-target` clean-skips with `skip_reason=ci_not_green`,
 // concluding GREEN having deployed nothing. A flake still costs a prod cutover,

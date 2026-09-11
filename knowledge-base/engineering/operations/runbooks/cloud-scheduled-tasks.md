@@ -427,7 +427,7 @@ latest release (it restarts the container):
 # deploy-status. (SSH fallback if the workflow is unavailable: `docker restart
 # soleur-web-platform`.)
 #
-# `--event workflow_run` IS REQUIRED. Since #5806 (ADR-215) web-platform-release.yml
+# `--event workflow_run` IS REQUIRED. Since #5806 (ADR-217) web-platform-release.yml
 # is split across two triggers and every merge produces TWO runs: a push-arm run
 # holding only `release` (build + publish — it does NOT touch the container) and a
 # workflow_run-arm run holding the deploy chain. Re-running the push arm rebuilds an
