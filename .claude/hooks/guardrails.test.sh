@@ -61,6 +61,31 @@ assert() {
   fi
 }
 
+# Returns the permissionDecisionReason, or "<none>" on an allow. Same
+# isolation as decision_of (non-git tmp CWD, sandboxed incidents).
+reason_of() {
+  local cmd="$1" tmp; tmp="$(mktemp -d)"
+  local out
+  out="$(cd "$tmp" && mk_payload "$cmd" | INCIDENTS_REPO_ROOT="$tmp" bash "$HOOK" 2>/dev/null)"
+  rm -rf "$tmp"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
+  echo "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // "<none>"' 2>/dev/null || echo "<jq-fail>"
+}
+
+# Asserts a deny whose reason CONTAINS $want. A verdict-only row cannot tell
+# "denied for the reason under test" from "denied by an upstream gate for a
+# different reason"; where two denies are reachable, pin the text.
+assert_reason() {
+  local label="$1" want="$2" cmd="$3"
+  TOTAL=$((TOTAL + 1))
+  local got; got="$(reason_of "$cmd")"
+  if [[ "$got" == *"$want"* ]]; then
+    PASS=$((PASS + 1)); echo "PASS: $label → contains '$want'"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want reason containing: $want"; echo "  got:  ${got:0:160}"
+  fi
+}
+
 # Our repo (implicit) without --milestone → deny.
 assert "implicit repo, no milestone denies" "deny" \
   'gh issue create --title "x" --body "y"'
@@ -804,6 +829,113 @@ assert "filing-justification: api labels[]=type/bug still denies" "deny" \
   "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=type/bug' -f body=y"
 
 # ---------------------------------------------------------------------------
+# Guard 3 — interactive-gate tokenizer and ordering (FR7; two false denies on
+# honest exit-1 filings, learning 2026-09-11 §Session Errors 3).
+#
+# PROPERTY. For any command whose REAL flag tokens carry --label meta/machinery,
+# the gate passes exit 1 regardless of heredoc-body content or the readability
+# of --body-file; a command that cannot be tokenized is denied with an
+# actionable message, never passed on a guess.
+#
+# (a) A heredoc body containing an apostrophe ("Soleur's") made `xargs -n1`
+#     abort on an unmatched quote, so the --label token was never read and the
+#     refusal told the filer to add the flag they had just passed. The tokenizer
+#     now reads strip_heredocs "$COMMAND" -- bodies blanked, quoting preserved.
+# (b) The unreadable --body-file deny fired BEFORE exit 1 was honoured, so an
+#     exit-1 filing was refused for a body it does not need.
+# ---------------------------------------------------------------------------
+
+HD_APOS=$'cat > body.md <<\'EOF\'\nSoleur\'s guard fired twice\nEOF'
+
+# (a) heredoc apostrophe + real --label + --body-file (the exact shape denied).
+assert "guard3: heredoc apostrophe + real --label meta/machinery allows" "<none>" \
+  "$HD_APOS
+gh issue create --title t --body-file body.md --label meta/machinery $MS"
+
+# (a) isolated to the tokenizer: same heredoc, inline --body, no body-file at
+# all -- so this row cannot pass through the ordering fix in (b).
+assert "guard3: heredoc apostrophe + inline --body + real --label allows" "<none>" \
+  "$HD_APOS
+gh issue create --title t --body b --label meta/machinery $MS"
+
+# (a) control: blanking the heredoc must not OPEN the exit -- the same heredoc
+# with no label is still denied.
+assert "guard3: heredoc apostrophe without the label still denies" "deny" \
+  "$HD_APOS
+gh issue create --title t --body b $MS"
+
+# (b) exit 1 is honoured before the body-file read: the corpus is not needed.
+assert "guard3: exit 1 + nonexistent --body-file allows" "<none>" \
+  "gh issue create --title t --body-file /nonexistent/soleur-no-such-body.md --label meta/machinery $MS"
+
+# (c) ... and a filing NOT on exit 1 still fails toward gating on the SAME
+# unreadable file, with the body-file reason (not the no-exit floor).
+assert_reason "guard3: exit-2-shaped filing + nonexistent --body-file still denies on the body" \
+  "which this gate cannot read" \
+  "gh issue create --title t --body-file /nonexistent/soleur-no-such-body.md --label type/bug $MS"
+
+# (d) unbalanced quoting OUTSIDE any heredoc: fail-closed, actionable.
+TOK_MSG="BLOCKED: the command could not be tokenized (unbalanced quoting); write the body to a file and pass --body-file"
+assert_reason "guard3: apostrophe inside --title (unbalanced, no heredoc) denies with the tokenizer message" \
+  "$TOK_MSG" \
+  "gh issue create --title 'its unbalanced --body b --label meta/machinery $MS"
+
+# Mutation 2 pin: a whitespace-split fallback would read the --label inside
+# this quoted --body as a real flag and reopen the bare-token escape.
+assert_reason "guard3: unbalanced quote + --label inside quoted --body denies (no whitespace-split fallback)" \
+  "$TOK_MSG" \
+  "gh issue create --title 'x --body \"x --label meta/machinery y\" $MS"
+
+# Third member of the same class, found while fixing (a): GNU xargs cannot
+# carry a quoted token across a line, so a multi-line inline --body stopped the
+# tokenizer and a --label AFTER it was never read (measured on main: denied).
+# Newlines are folded to spaces before xargs; this row is the pin.
+assert "guard3: multi-line inline --body followed by --label meta/machinery allows" "<none>" \
+  "gh issue create --title t --body \"line one
+line two\" --label meta/machinery $MS"
+
+# ... and the fold must not flatten quoting: the label INSIDE a multi-line
+# quoted body is still prose, not a flag.
+assert "guard3: --label inside a multi-line quoted --body is still prose (denies)" "deny" \
+  "gh issue create --title t --body \"line one
+--label meta/machinery in prose\" $MS"
+
+# (e) must-PASS non-canonical (H2): comma-joined label, machinery last, with an
+# apostrophe in the heredoc body.
+assert "guard3: --label type/bug,meta/machinery with heredoc apostrophe allows" "<none>" \
+  "$HD_APOS
+gh issue create --title t --body-file body.md --label type/bug,meta/machinery $MS"
+
+# (f) regression pin: a `gh issue create` that appears ONLY inside a heredoc
+# body is not a filing (_gh_create reads \$SCAN). Already true; pinned so the
+# tokenizer change cannot regress it.
+assert "guard3: gh issue create only inside a heredoc body is not a filing" "<none>" \
+  $'cat > notes.md <<\'EOF\'\ngh issue create --title x --body y\nEOF'
+
+# strip_heredocs blanks ONLY the heredoc body: quoted spans survive, because
+# xargs needs them to tokenize `--milestone "Post-MVP / Later"` as one value.
+TOTAL=$((TOTAL + 1))
+_sh_got="$(strip_heredocs "$HD_APOS
+gh issue create --milestone \"Post-MVP / Later\" --label 'meta/machinery'")"
+_sh_want=$'cat > body.md <<\'EOF\'\nEOF\ngh issue create --milestone "Post-MVP / Later" --label \'meta/machinery\''
+if [[ "$_sh_got" == "$_sh_want" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: strip_heredocs blanks the body and preserves quoted spans"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: strip_heredocs"; echo "  want: $_sh_want"; echo "  got:  $_sh_got"
+fi
+
+# strip_command_bodies is BYTE-IDENTICAL to its pre-factor form (six other
+# hooks consume it). Expected string captured from the pre-change lib.
+TOTAL=$((TOTAL + 1))
+_scb_got="$(strip_command_bodies $'git commit -F - <<EOF\nbody\nEOF\n && gh issue create --title "x y" --body \'z\'')"
+_scb_want=$'git commit -F - <<EOF\nEOF\n && gh issue create --title   --body  '
+if [[ "$_scb_got" == "$_scb_want" ]]; then
+  PASS=$((PASS + 1)); echo "PASS: strip_command_bodies unchanged after the heredoc-regex factor"
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: strip_command_bodies drifted"; echo "  want: $_scb_want"; echo "  got:  $_scb_got"
+fi
+
+# ---------------------------------------------------------------------------
 # AC6b — ASSERTION-COUNT FLOOR.
 #
 # This suite had none. A run that executed ZERO assertions exited 0 and read as
@@ -816,9 +948,12 @@ assert "filing-justification: api labels[]=type/bug still denies" "deny" \
 # Derived, not guessed: 65 rows on main at the merge base + 19 added by this
 # change + 4 escape rows + 1 residual row + 5 body-file rows + 5 class-4 rows found at review
 # + 7 ship-time escape rows (comma-joined --label, its two near-misses, and the
-# api `labels[]=` spelling of exit 1) = 106. Stated as the sum so a sibling PR
-# that adds a row makes this stale LOUDLY (the floor trips) rather than silently.
-MIN_ASSERTIONS=106
+# api `labels[]=` spelling of exit 1) = 106, + 13 Guard 3 rows (FR7: the
+# tokenizer and ordering false denies -- 11 hook rows and 2 direct
+# strip_heredocs/strip_command_bodies rows) = 119. Stated as the sum so a
+# sibling PR that adds a row makes this stale LOUDLY (the floor trips) rather
+# than silently.
+MIN_ASSERTIONS=$((106 + 13))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
