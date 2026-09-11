@@ -38,8 +38,16 @@ Session tooling corrections:
   returning findings. Recovery: continue with bounded local `rg`/`cat` research,
   record the fan-out as partial, and never interpret an agent-limit error as an
   empty research result.
-- The required Pencil dependency check found the headless CLI but could not
-  authenticate it, so no `.pen` wireframe can be produced in this session. Keep
-  the UI work hard-blocked until Pencil Desktop, an IDE extension, or an
-  authenticated headless CLI is available; do not claim that a prose wireframe
-  satisfies the design gate.
+- The first Pencil dependency check found the headless CLI but could not
+  authenticate it. Loading `PENCIL_CLI_KEY` from Doppler and re-running the
+  check unlocked the connected Pencil MCP; the committed wireframe was then
+  authored, exported, saved, and layout-verified. A prose substitute would not
+  satisfy the design gate.
+- Pencil rejected a first `batch_design` block because frame borders use the
+  object shape `{align, thickness, fill}`, not `stroke: string` plus
+  `strokeWidth`. The adapter rolled back the block; re-read an existing `.pen`
+  precedent and reran with the canonical shape.
+- `lint-guard-contract.py` accepts plan paths as positional arguments; passing
+  the literal `plan` made it look for a nonexistent file. Use the explicit plan
+  path (or omit paths to scan the repository) and inspect non-zero output before
+  continuing.
