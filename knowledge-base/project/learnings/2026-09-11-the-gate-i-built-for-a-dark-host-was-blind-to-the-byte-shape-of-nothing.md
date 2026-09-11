@@ -154,3 +154,17 @@ consumer that lived in a different file.
 20. **A batch edit aborted on a wrong anchor with earlier replacements unwritten.** Recovery:
     re-applied. **Prevention:** assert every anchor before writing any (the script did; it just
     wrote nothing — which is the correct failure).
+21. **Two gates the targeted runs never exercised reddened the full battery** — `lint-shell-capture-exit`
+    (nine `X=$(grep …)` pins in the new suites, undecided under `set -e`) and the P1b
+    `fixture-relative-assert` row ratchet (six residue rows from the new `mktemp`/`--emit-file` sites).
+    Recovery: `|| true` on each pin (every one is followed by an assertion that reddens on empty);
+    baseline regenerated in the same commit. **Prevention:** `/work` Phase 0.5 §6.5 should run the
+    repo-wide `scripts/lint-*.py` set and the P1a/P1b ratchets on the diff, not only the baselined-file
+    lints — a ratchet that fails on a RISE is a lint by another name.
+22. **I edited and committed in the worktree WHILE the full battery was running in it**, so the
+    runner's read-only boundary fired `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` on the
+    `[worktree]` dimension — a self-inflicted false positive that cost the run its verdict (the two real
+    reds were already known; the battery had to be re-run at the new HEAD regardless). Recovery: re-run
+    with the tree untouched. **Prevention:** while a full-gate run is in flight in a worktree, that
+    worktree is read-only for the operator too — stage fixes in the scratchpad, or wait for the rc
+    file, then edit. Same shape as #7828's "two writers, one index".
