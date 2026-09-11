@@ -40,4 +40,4 @@
   lint-guard-contract.py, lint-infra-no-human-steps.py, both test suites (baselines).
 
 ## Deepen Phase
-- Status: pending
+- Status: complete — five agents (observability, security, test-design, learnings, verify-the-negative); all findings Mechanical and applied; see plan `## Enhancement Summary`
