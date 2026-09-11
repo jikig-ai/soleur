@@ -239,10 +239,36 @@ function budgetOk() {
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Analyze')
-log('tier pins: analyze→sonnet, commit→sonnet (mechanical steps per ADR-053; plan + resolvers inherit the session model)')
-// Pinned 'sonnet': TODO inventory extraction is mechanical (ADR-053).
-const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA, model: 'sonnet' })
+log('tier pins: analyze→standard, commit→standard (mechanical steps per ADR-053; plan + resolvers inherit the session model)')
+// Pinned 'standard': TODO inventory extraction is mechanical (ADR-053).
+const analysis = await agent(analyzePrompt, { label: 'analyze', phase: 'Analyze', schema: ANALYZE_SCHEMA, model: 'standard' })
 let items = (analysis?.items || []).filter((i) => i && i.id && i.file)
 
 if (!items.length) {
@@ -341,8 +367,8 @@ let commit = { committed: false, pushed: false, branch: '', sha: '', note: '' }
 const touched = resolutions.filter((r) => (r.filesTouched || []).length && r.status !== 'skipped')
 if (touched.length) {
   commit =
-    // Pinned 'sonnet': commit-message generation over a known diff is mechanical (ADR-053).
-    (await agent(commitPrompt(touched, tiers.length), { label: 'commit', phase: 'Commit', schema: COMMIT_SCHEMA, model: 'sonnet' })) || commit
+    // Pinned 'standard': commit-message generation over a known diff is mechanical (ADR-053).
+    (await agent(commitPrompt(touched, tiers.length), { label: 'commit', phase: 'Commit', schema: COMMIT_SCHEMA, model: 'standard' })) || commit
 } else {
   commit.note = 'no files were modified by any resolver — skipped commit'
   log(commit.note)

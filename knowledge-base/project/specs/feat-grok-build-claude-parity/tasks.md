@@ -19,10 +19,10 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 3: ADR-110 (in this PR)
 
-- [ ] 3.1 Create `plugins/soleur/lib/harness-model-map.ts` + `test/harness-model-map.test.ts` (reuse `detectHarness()`)
-- [ ] 3.2 Confirm Grok fixture model ids against live xAI docs (do not guess in the plan)
-- [ ] 3.3 Update `workflow-model-pins.test.ts` allowlist to `cheap`/`standard`
-- [ ] 3.4 Resolve tiers in `agent()` of:
+- [x] 3.1 Create `plugins/soleur/lib/harness-model-map.ts` + `test/harness-model-map.test.ts` (reuse `detectHarness()`)
+- [x] 3.2 Confirm Grok fixture model ids against live xAI docs (do not guess in the plan)
+- [x] 3.3 Update `workflow-model-pins.test.ts` allowlist to `cheap`/`standard`
+- [x] 3.4 Resolve tiers in `agent()` of:
   - `skills/deepen-plan/workflows/deepen-plan.workflow.js`
   - `skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js`
   - `skills/plan-review/workflows/plan-review.workflow.js`
@@ -30,9 +30,9 @@ Lane: `cross-domain`. Closes #8064.
   - `skills/resolve-pr-parallel/workflows/resolve-pr-parallel.workflow.js`
   - `skills/resolve-todo-parallel/workflows/resolve-todo-parallel.workflow.js`
   - `skills/review/workflows/review.workflow.js`
-- [ ] 3.5 `plan` Step 4.5 and `ship` Phase 5.5 spawn `advisor` via resolver
-- [ ] 3.6 ADR-110 Status → Accepted
-- [ ] 3.7 C4: `grokBuild` as a **local** harness (not under Cloud CLI Engine); run c4 syntax/render + `c4-count-parity.test.sh`
+- [x] 3.5 `plan` Step 4.5 and `ship` Phase 5.5 spawn `advisor` via resolver
+- [x] 3.6 ADR-110 Status → Accepted
+- [x] 3.7 C4: `grokBuild` as a **local** harness (not under Cloud CLI Engine); run c4 syntax/render + `c4-count-parity.test.sh`
 
 ## Phase 4: Hook aliases
 

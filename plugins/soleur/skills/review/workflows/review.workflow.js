@@ -397,10 +397,36 @@ async function verifyFinding(f, dim) {
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Classify')
-log('tier pins: classify→sonnet, file→haiku (mechanical steps per ADR-053; judgment steps inherit the session model)')
-// Pinned 'sonnet': schema-constrained diff-class classification is mechanical (ADR-053).
-const classification = await agent(classifyPrompt, { label: 'classify', phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'sonnet' })
+log('tier pins: classify→standard, file→cheap (mechanical steps per ADR-053; judgment steps inherit the session model)')
+// Pinned 'standard': schema-constrained diff-class classification is mechanical (ADR-053).
+const classification = await agent(classifyPrompt, { label: 'classify', phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'standard' })
 if (!classification) {
   // Classify agent died (terminal API error). Without a class we cannot fan out
   // the right dimensions — fail loudly rather than dereference null.
@@ -482,8 +508,8 @@ if (candidates.length) {
     // paths AND the `$(cat …)` substitution in the gh command (P1 fix).
     const fid = safeId(j.f.id, `${idx}`)
     if (fileScopeOuts) {
-      // Pinned 'haiku': template-fill GitHub issue filing from one structured finding (ADR-053).
-      const filed = await agent(fileIssuePrompt(fid, safeTitleStr, issueBody), { label: `file:${fid}`, phase: 'File', model: 'haiku' })
+      // Pinned 'cheap': template-fill GitHub issue filing from one structured finding (ADR-053).
+      const filed = await agent(fileIssuePrompt(fid, safeTitleStr, issueBody), { label: `file:${fid}`, phase: 'File', model: 'cheap' })
       filings.push({ finding: j.f.title, file: j.f.file, action: 'filed', url: filed })
     } else {
       filings.push({ finding: j.f.title, file: j.f.file, action: 'dry-run', wouldFileTitle: safeTitleStr, wouldFileBody: issueBody })
