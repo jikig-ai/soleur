@@ -283,7 +283,7 @@ jobs:
             printf -- '2. **The pagination ceiling.** The probe refuses at >= 100 workflows because a rule on page 2 would read as DELETED and produce a false "27 rules are gone" alarm. If the org has grown past 100, the fix is cursor-following in `scripts/sentry-alert-live-fidelity.sh`, not raising the ceiling.\n'
             printf -- '3. **A non-array payload.** A 200 carrying something other than a JSON array means schema drift or an interstitial, not an auth problem — `curl -fsS` would already have aborted on any >= 400.\n'
             printf -- '4. **An unreadable capture.** The probe refuses if the committed capture yields zero in-scope rules, rather than reporting "no drift" having compared nothing.\n\n'
-            printf 'Re-run this workflow once the cause is fixed; it auto-closes this issue on any run that reaches a verdict.\n'
+            printf 'Re-run this workflow after addressing whichever refusal the section above names; it auto-closes this issue on any run that reaches a verdict.\n'
           } > "$BODY_FILE"
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
