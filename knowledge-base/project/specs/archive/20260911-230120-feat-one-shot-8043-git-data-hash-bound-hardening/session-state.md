@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-09-10-fix-git-data-hash-bound-hardening-batch-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260911-230120-2026-09-10-fix-git-data-hash-bound-hardening-batch-plan.md
 - Status: complete (plan + plan-review + deepen-plan 2026-09-11)
 - Plan artifact: recovered (selector=branch) — planning subagent hit an API rate limit mid plan-review corrections; resumed from transcript and finished.
 

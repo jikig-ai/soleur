@@ -1761,6 +1761,7 @@ harvest-debt
 has_function_privilege
 hash
 hash-based-csp
+hash-bound
 hash-cli
 hcl
 hcloud
@@ -2979,6 +2980,7 @@ regression-analysis
 regression-class
 regression-guard
 regression-test
+rehearsal
 rehype-highlight
 relative-path
 release
@@ -3154,6 +3156,7 @@ runtime-errors
 runtime-vs-cron
 s3
 safe-bash
+safe-directory
 safety
 safety-mechanisms
 safety-primitive-replacement
@@ -3866,6 +3869,7 @@ tooling-traps
 toolmcp
 tools
 touch-swipe
+touched-shard-gate
 tr4
 tr9
 trace-tests

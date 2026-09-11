@@ -1,6 +1,6 @@
 # Tasks — feat-one-shot-8043-git-data-hash-bound-hardening
 
-Plan: `knowledge-base/project/plans/2026-09-10-fix-git-data-hash-bound-hardening-batch-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260911-230120-2026-09-10-fix-git-data-hash-bound-hardening-batch-plan.md`
 
 ## Phase 0 — preconditions (no edits)
 - [x] Baseline hash = 3a2392fb…4ce1725 (re-derived with `git_data_rung2_user_data_sha256`)
