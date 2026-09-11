@@ -40,8 +40,14 @@ TOTAL=0
 #   MOCK_DATE_EPOCH       - epoch from date +%s (default 1700000000)
 #   MOCK_RESEND_FAIL=1    - Resend POST returns HTTP 500
 #   MOCK_NO_WEBHOOK=1     - leave RESEND_API_KEY unset
+#   MOCK_SENTRY_HOST      - SENTRY_INGEST_DOMAIN (default: the POSITIVE synthetic
+#                           fixture o0000000.ingest.de.sentry.io — #7898 pin)
+#   MOCK_SENTRY_KEY       - SENTRY_PUBLIC_KEY (default: 32 synthetic hex)
+#   MOCK_SENTRY_UNSET=1   - leave the whole Sentry triple unset
+#   MOCK_LOGGER_ABSENT=1  - `logger` is OFF the PATH entirely (#7898)
 #
-# Files: $mock_dir/curl_args (one line per curl invocation)
+# Files: $mock_dir/curl_args (one line per curl invocation), curl_checked /
+#        curl_violations (#7898 argv inspection), logger_args (crit rows)
 setup_mocks_and_run() {
   local mock_dir="$1"
   local cid="${MOCK_DOCKER_ID:-cid-A}"
@@ -61,10 +67,18 @@ setup_mocks_and_run() {
     : > "$env_file"
   fi
   export ENV_FILE="$env_file"
-  # Sentry env present so the Sentry channel is exercised in tests.
-  export SENTRY_INGEST_DOMAIN="ingest.example.test"
-  export SENTRY_PROJECT_ID="4321"
-  export SENTRY_PUBLIC_KEY="pubkey_test"
+  # Sentry env present so the Sentry channel is exercised in tests. The default
+  # is the POSITIVE synthetic fixture that the #7898 destination pin accepts
+  # (ADR-214: a vendor-shaped synthetic host, never an env-declared seam). The
+  # old `ingest.example.test` / `pubkey_test` values live on as the NEGATIVE
+  # fixtures in the pin rows below.
+  if [[ "${MOCK_SENTRY_UNSET:-}" == "1" ]]; then
+    unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY
+  else
+    export SENTRY_INGEST_DOMAIN="${MOCK_SENTRY_HOST:-o0000000.ingest.de.sentry.io}"
+    export SENTRY_PROJECT_ID="${MOCK_SENTRY_PROJECT:-4321}"
+    export SENTRY_PUBLIC_KEY="${MOCK_SENTRY_KEY:-0123456789abcdef0123456789abcdef}"
+  fi
 
   # Mock docker — only `docker inspect` is intercepted; absence simulated.
   cat > "$mock_dir/docker" << MOCK
@@ -91,8 +105,32 @@ exit 0
 MOCK
   chmod +x "$mock_dir/journalctl"
 
+  # (#7898 §2) Transport-confinement inspection runs FIRST. Host-filtered on the
+  # two vendor hosts; every inspected call is counted into curl_checked so the
+  # alert rows can pin `checked == 2` (Sentry + Resend — a filter that silently
+  # dropped .sentry.io would read 1). Violations are WRITTEN, never exited on;
+  # the '*' compare is quoted (unquoted `== *` matches anything).
   cat > "$mock_dir/curl" << MOCK
 #!/bin/bash
+vendor=""
+for arg in "\$@"; do
+  case "\$arg" in
+    *api.resend.com*) vendor="api.resend.com" ;;
+    *.sentry.io*) vendor="sentry.io" ;;
+  esac
+done
+if [[ -n "\$vendor" ]]; then
+  echo "\$vendor" >> "$mock_dir/curl_checked"
+  if [[ "\${1:-}" != "--disable" || "\${2:-}" != "--noproxy" || "\${3:-}" != '*' \\
+     || "\${4:-}" != "--proto" || "\${5:-}" != "=https" || "\${6:-}" != "-g" ]]; then
+    echo "ARGV_ORDER host=\$vendor" >> "$mock_dir/curl_violations"
+  fi
+  n=0
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--noproxy" ]]; then n=\$((n + 1)); fi
+  done
+  if [[ "\$n" -ne 1 ]]; then echo "NOPROXY_COUNT n=\$n" >> "$mock_dir/curl_violations"; fi
+fi
 echo "\$*" >> "$mock_dir/curl_args"
 if [[ "\${MOCK_RESEND_FAIL:-}" == "1" ]]; then
   for arg in "\$@"; do
@@ -120,8 +158,36 @@ fi
 MOCK
   chmod +x "$mock_dir/date"
 
-  export PATH="$mock_dir:$PATH"
+  # Mock logger -- records the joined argv of every crit row the monitor ships
+  # off-box (#7898 P6/P9). MOCK_LOGGER_ABSENT=1 leaves `logger` OFF the PATH.
+  if [[ "${MOCK_LOGGER_ABSENT:-}" != "1" ]]; then
+    cat > "$mock_dir/logger" << MOCK
+#!/bin/bash
+echo "\$*" >> "$mock_dir/logger_args"
+exit 0
+MOCK
+    chmod +x "$mock_dir/logger"
+  fi
+
+  if [[ "${MOCK_LOGGER_ABSENT:-}" == "1" ]]; then
+    export PATH="$mock_dir:$(make_logger_absent_path "$mock_dir")"
+  else
+    export PATH="$mock_dir:$PATH"
+  fi
   bash "$MONITOR_SCRIPT" 2>&1
+}
+
+# A PATH with every coreutil the monitor needs and NO `logger` (#7898). Symlinks
+# resolved from the inherited PATH so the farm is host-agnostic.
+make_logger_absent_path() {
+  local mock_dir="$1" farm="$1/no-logger-bin" bin
+  mkdir -p "$farm"
+  for bin in bash awk cat cut grep head jq mktemp mv rm sort tail touch tr wc sed; do
+    local real
+    real="$(command -v "$bin" 2>/dev/null || true)"
+    [[ -n "$real" ]] && ln -sf "$real" "$farm/$bin"
+  done
+  echo "$farm"
 }
 
 # Seed a baseline state file (container_id restart_count oom_counter epoch).
@@ -132,7 +198,9 @@ seed_baseline() {
 }
 
 resend_hit() { grep -qF "api.resend.com" "$1/curl_args" 2>/dev/null; }
-sentry_hit() { grep -qF "ingest.example.test" "$1/curl_args" 2>/dev/null; }
+# Greps the POSITIVE Sentry host (folded form) — a request to the unfolded
+# `O0000000.INGEST…` or to a refused host must not satisfy this.
+sentry_hit() { grep -qF "https://o0000000.ingest.de.sentry.io/" "$1/curl_args" 2>/dev/null; }
 
 assert_no_alert() {
   local desc="$1" mock_dir="$2" rc="$3" out="$4"
@@ -317,8 +385,14 @@ t_resend_fail_mirror() {
   [[ "$rc" -eq 0 ]] || ok=0
   sentry_hit "$d" || ok=0                                   # mirror still posted
   printf '%s\n' "$out" | grep -qiF "resend" || ok=0          # warning logged
+  # (#7898 P9) the failed send ships off-box as a crit row: marker + http code,
+  # never the key
+  grep -qF -- "-p user.crit" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF -- "-t container-restart-monitor" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qE 'SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend http_code=500 rc=[0-9]+' "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF "re_test_fake_key_123" "$d/logger_args" 2>/dev/null && ok=0
   if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: Resend failure still mirrors to Sentry + logs warning";
-  else FAIL=$((FAIL+1)); echo "  FAIL: resend-fail mirror (rc=$rc) out: $out"; fi
+  else FAIL=$((FAIL+1)); echo "  FAIL: resend-fail mirror (rc=$rc) out: $out"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
   rm -rf "$d"
 }
 t_resend_fail_mirror
@@ -397,6 +471,146 @@ t_deploy_during_storm_no_recovery() {
   rm -rf "$d"
 }
 t_deploy_during_storm_no_recovery
+
+echo ""
+echo "--- (l) #7898 §2: transport confinement (argv position, both vendors) ---"
+# Both credentialed curls (Sentry store + Resend) must carry the four flags as
+# argv[1..6] with exactly one --noproxy. `checked == 2` pins that the stub saw
+# BOTH members — a host filter that silently dropped .sentry.io would read 1 and
+# pass an unconfined Sentry call (under a full mock an invocation count is not a
+# wall-clock quantity, so pinning it is sound).
+t_confined_alert() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local checked=0
+  [[ -f "$d/curl_checked" ]] && checked=$(wc -l < "$d/curl_checked" | tr -d ' ')
+  if [[ "$rc" -eq 0 && ! -f "$d/curl_violations" && "$checked" -eq 2 ]]; then
+    PASS=$((PASS+1)); echo "  PASS: alert tick: Sentry + Resend curls both confined (checked=2, no violations)"
+  else
+    FAIL=$((FAIL+1)); echo "  FAIL: confinement (rc=$rc checked=$checked) violations: $(cat "$d/curl_violations" 2>/dev/null)"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"
+  fi
+  rm -rf "$d"
+}
+t_confined_alert
+
+echo ""
+echo "--- (m) #7898 §2: Sentry destination pin (Guard 1) ---"
+# (a) refused apex: the kept NEGATIVE fixture. No Sentry curl, a REFUSED marker
+# with a reason TOKEN (never the host), the Resend email still fires carrying
+# the refusal note, exit 0, and no logger argv carries the refused host.
+t_pin_refused_host() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_HOST=ingest.example.test; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  grep -qF "example.test" "$d/curl_args" 2>/dev/null && ok=0            # no Sentry curl to the refused host
+  resend_hit "$d" || ok=0                                                # Resend channel survives
+  grep -qF "sentry channel refused" "$d/curl_args" 2>/dev/null || ok=0  # note rides the email payload
+  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+  grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" "$d/logger_args" 2>/dev/null || ok=0
+  grep -qF "example.test" "$d/logger_args" 2>/dev/null && ok=0          # reason token only, never the host
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: refused ingest host → no Sentry curl, marker+crit row (reason token), email carries the note, exit 0";
+  else FAIL=$((FAIL+1)); echo "  FAIL: refused-host row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; echo "        logger: $(cat "$d/logger_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_pin_refused_host
+
+# (b) must-PASS non-canonical: uppercase + one trailing dot folds to the
+# positive host and the Sentry curl fires to the FOLDED host.
+t_pin_folded_host() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_HOST="O0000000.INGEST.DE.SENTRY.IO."; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  sentry_hit "$d" || ok=0                                                # folded host in the request
+  grep -qF "INGEST.DE.SENTRY.IO" "$d/curl_args" 2>/dev/null && ok=0     # never the raw value
+  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: uppercase + trailing-dot host is accepted and the request uses the folded host";
+  else FAIL=$((FAIL+1)); echo "  FAIL: folded-host row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_pin_folded_host
+
+# (c) smuggling: a path/query suffix and a percent-encoded separator (which a
+# deny-list arm would pass to curl's own hostname check) are both refused.
+t_pin_smuggled_host() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  local ok=1 host out rc
+  for host in "o0000000.ingest.de.sentry.io/?x=" "evil.example%2F.ingest.de.sentry.io"; do
+    rm -rf "$d"; d=$(mktemp -d); seed_baseline "$d" "cid-A" 0 0
+    out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_HOST="$host"; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+    [[ "$rc" -eq 0 ]] || ok=0
+    grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0             # no Sentry curl at all
+    printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=host-shape" || ok=0
+    resend_hit "$d" || ok=0
+  done
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: path/query suffix and %2F-encoded separator are refused with reason=host-shape";
+  else FAIL=$((FAIL+1)); echo "  FAIL: smuggled-host row (rc=$rc, last host=$host) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_pin_smuggled_host
+
+# (d) key shape: the kept NEGATIVE key fixture (not 32 hex) with a valid host.
+t_pin_bad_key() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_KEY=pubkey_test; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  sentry_hit "$d" && ok=0
+  printf '%s\n' "$out" | grep -qF "SOLEUR_CONTAINER_RESTART_MONITOR_REFUSED channel=sentry reason=key-shape" || ok=0
+  grep -qF "pubkey_test" "$d/logger_args" 2>/dev/null && ok=0
+  resend_hit "$d" || ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo  "  PASS: non-hex public key is refused with reason=key-shape; email still fires";
+  else FAIL=$((FAIL+1)); echo "  FAIL: bad-key row (rc=$rc) out: $out"; fi
+  rm -rf "$d"
+}
+t_pin_bad_key
+
+# (e) triple UNSET on an alert tick: the pre-existing "Sentry env unset" branch
+# is kept verbatim and — under set -u — must not abort before the Resend send
+# (the only surviving channel).
+t_pin_triple_unset() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_SENTRY_UNSET=1; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  grep -qF "sentry.io" "$d/curl_args" 2>/dev/null && ok=0
+  printf '%s\n' "$out" | grep -qF "Sentry env unset" || ok=0
+  printf '%s\n' "$out" | grep -qF "_REFUSED channel=sentry" && ok=0     # unset is not a refusal
+  resend_hit "$d" || ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: triple unset → 'Sentry env unset' log, no refusal marker, Resend still fires, exit 0";
+  else FAIL=$((FAIL+1)); echo "  FAIL: triple-unset row (rc=$rc) out: $out"; echo "        curl: $(cat "$d/curl_args" 2>/dev/null)"; fi
+  rm -rf "$d"
+}
+t_pin_triple_unset
+
+echo ""
+echo "--- (n) #7898: logger absent from PATH → exit 0, stderr names the gap ---"
+t_logger_absent() {
+  TOTAL=$((TOTAL + 1)); local d; d=$(mktemp -d)
+  seed_baseline "$d" "cid-A" 0 0
+  local out rc
+  out=$(export MOCK_DOCKER_ID=cid-A MOCK_RESTART_COUNT=3 MOCK_RESEND_FAIL=1 MOCK_LOGGER_ABSENT=1; setup_mocks_and_run "$d" 2>&1) && rc=0 || rc=$?
+  local ok=1
+  [[ "$rc" -eq 0 ]] || ok=0
+  sentry_hit "$d" || ok=0
+  printf '%s\n' "$out" | grep -qF "logger=absent" || ok=0
+  [[ -f "$d/logger_args" ]] && ok=0
+  if [[ "$ok" -eq 1 ]]; then PASS=$((PASS+1)); echo "  PASS: logger absent: alert still posts, exit 0, stderr carries logger=absent";
+  else FAIL=$((FAIL+1)); echo "  FAIL: logger-absent row (rc=$rc) out: $out"; fi
+  rm -rf "$d"
+}
+t_logger_absent
 
 echo ""
 echo "--- (i) named constants present (AC6) ---"

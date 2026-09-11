@@ -667,6 +667,157 @@ assert_grep "alarm posts Sentry error check-in" 'status=error' "$ALARM"
 assert_grep "alarm emails via Resend (disk-monitor precedent)" 'api\.resend\.com/emails' "$ALARM"
 assert_grep "alarm email cooldown (no per-tick inbox storm)" 'EMAIL_COOLDOWN_SECS' "$ALARM"
 
+echo "-- alarm transport confinement + Sentry destination pin (#7898 §2) --"
+# Static rows anchored on SYNTAX (a comment cannot satisfy `^\s*curl …`), and
+# on COUNT equality rather than -q: both credentialed curls (Sentry check-in +
+# Resend) must carry the four flags first, the positive ingest-apex grammar
+# must be present exactly once, and no bare `curl -s` may remain.
+CONFINED_CURLS="$(grep -cE "^[[:space:]]*curl --disable --noproxy '\\*' --proto '=https' -g" "$ALARM" || true)"
+if [[ "$CONFINED_CURLS" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: both alarm curls are transport-confined (count=2)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected exactly 2 confined curl lines in alarm, found $CONFINED_CURLS"
+fi
+PIN_GRAMMAR_COUNT="$(grep -cF 'ingest\.(de\.|us\.)?sentry\.io$' "$ALARM" || true)"
+if [[ "$PIN_GRAMMAR_COUNT" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm carries the positive Sentry ingest-apex grammar exactly once"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected the ingest-apex grammar once in alarm, found $PIN_GRAMMAR_COUNT"
+fi
+assert_not_grep "alarm has no unconfined bare 'curl -s' line" '^[[:space:]]*curl -s' "$ALARM"
+
+# Exec rows: the alarm under a PATH-shimmed curl / logger / journalctl, with a
+# fake Resend key and the cooldown stamp redirected into a tmpdir. Each row is
+# LABELLED (four verdicts, not one bundled one). The curl shim records argv per
+# line; the logger shim records the crit rows the alarm ships off-box.
+run_alarm() {
+  local d="$1"; shift
+  mkdir -p "$d/bin"
+  cat > "$d/bin/curl" << MOCK
+#!/bin/bash
+echo "\$*" >> "$d/curl_args"
+echo "200"
+exit 0
+MOCK
+  cat > "$d/bin/logger" << MOCK
+#!/bin/bash
+echo "\$*" >> "$d/logger_args"
+exit 0
+MOCK
+  cat > "$d/bin/journalctl" << 'MOCK'
+#!/bin/bash
+echo "(fixture journal line)"
+exit 0
+MOCK
+  cat > "$d/bin/hostname" << 'MOCK'
+#!/bin/bash
+echo "test-server-cx33"
+MOCK
+  chmod +x "$d/bin/"*
+  (
+    export PATH="$d/bin:$PATH"
+    export EMAIL_COOLDOWN_FILE="$d/last-email"
+    export RESEND_API_KEY="re_test_fake_key_123"
+    env "$@" bash "$ALARM" cron-egress-resolve.service
+  )
+}
+
+# Row 1: refused ingest host (the negative fixture) → REFUSED marker with a
+# reason TOKEN, exactly one curl (Resend) whose payload carries the note, exit
+# 0; then a project id with a traversal suffix → reason=project-shape.
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" SENTRY_INGEST_DOMAIN=ingest.example.test SENTRY_PROJECT_ID=4321 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(grep -c '' "$ALARM_D/curl_args" 2>/dev/null || true)" -eq 1 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+grep -qF "sentry channel refused" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+echo "$ALARM_OUT" | grep -qF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=host-shape" || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=host-shape" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF "example.test" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+rm -rf "$ALARM_D"; ALARM_D="$(mktemp -d)"
+ALARM_OUT2="$(run_alarm "$ALARM_D" SENTRY_INGEST_DOMAIN=o0000000.ingest.de.sentry.io SENTRY_PROJECT_ID=4321/../evil SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef 2>&1)" || true
+echo "$ALARM_OUT2" | grep -qF "SOLEUR_CRON_EGRESS_ALARM_REFUSED channel=sentry reason=project-shape" || ALARM_OK=0
+grep -qF "sentry.io" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+if [[ "$ALARM_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm exec: refused host/project → marker (reason token), one Resend curl carrying the note, exit 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: alarm exec refused-host row (rc=$ALARM_RC) out: $ALARM_OUT"; echo "        out2: $ALARM_OUT2"
+fi
+rm -rf "$ALARM_D"
+
+# Row 2: must-PASS non-canonical host (uppercase + trailing dot) → two curls,
+# the first to the FOLDED host.
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" SENTRY_INGEST_DOMAIN=O0000000.INGEST.DE.SENTRY.IO. SENTRY_PROJECT_ID=4321 SENTRY_PUBLIC_KEY=0123456789abcdef0123456789abcdef 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(grep -c '' "$ALARM_D/curl_args" 2>/dev/null || true)" -eq 2 ]] || ALARM_OK=0
+head -1 "$ALARM_D/curl_args" 2>/dev/null | grep -qF "https://o0000000.ingest.de.sentry.io/api/4321/cron/" || ALARM_OK=0
+grep -qF "INGEST.DE.SENTRY.IO" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+echo "$ALARM_OUT" | grep -qF "_REFUSED channel=sentry" && ALARM_OK=0
+if [[ "$ALARM_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm exec: uppercase + trailing-dot host accepted, check-in sent to the folded host, then Resend"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: alarm exec folded-host row (rc=$ALARM_RC) out: $ALARM_OUT"; echo "        curl: $(cat "$ALARM_D/curl_args" 2>/dev/null)"
+fi
+rm -rf "$ALARM_D"
+
+# Row 3: cooldown stamp present + Sentry triple unset → ZERO curls, and the
+# suppressed email is still visible off-box as a SEND_FAILED crit row naming
+# the unit (the unit-failure signal must not be journald-only for the whole
+# cooldown window).
+ALARM_D="$(mktemp -d)"
+mkdir -p "$ALARM_D"; touch "$ALARM_D/last-email"
+ALARM_OUT="$(run_alarm "$ALARM_D" -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_args" ]] || ALARM_OK=0
+grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_FAILED channel=resend reason=cooldown unit=cron-egress-resolve.service" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF -- "-p user.crit" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+grep -qF -- "-t cron-egress-alarm" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+echo "$ALARM_OUT" | grep -qF "Sentry check-in still posted" && ALARM_OK=0   # nothing was posted
+if [[ "$ALARM_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm exec: cooldown active + triple unset → zero curls, SEND_FAILED reason=cooldown crit row"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: alarm exec cooldown row (rc=$ALARM_RC) out: $ALARM_OUT"; echo "        logger: $(cat "$ALARM_D/logger_args" 2>/dev/null)"
+fi
+rm -rf "$ALARM_D"
+
+# Row 4: Sentry triple UNSET, no cooldown → exactly one (Resend) curl, exit 0
+# (an unbound read on this path under set -u would abort the only surviving channel).
+ALARM_D="$(mktemp -d)"
+ALARM_OUT="$(run_alarm "$ALARM_D" -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+[[ "$(grep -c '' "$ALARM_D/curl_args" 2>/dev/null || true)" -eq 1 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+head -1 "$ALARM_D/curl_args" 2>/dev/null | grep -qE "^--disable --noproxy \* --proto =https -g " || ALARM_OK=0
+echo "$ALARM_OUT" | grep -qF "Sentry env unset" || ALARM_OK=0
+echo "$ALARM_OUT" | grep -qF "_REFUSED channel=sentry" && ALARM_OK=0
+if [[ "$ALARM_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: alarm exec: triple unset → one confined Resend curl, exit 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: alarm exec triple-unset row (rc=$ALARM_RC) out: $ALARM_OUT"; echo "        curl: $(cat "$ALARM_D/curl_args" 2>/dev/null)"
+fi
+rm -rf "$ALARM_D"
+
+# Parity row: the predicate-only `sentry-dest-pin` region must be identical
+# (modulo leading indentation — the monitor's copy sits inside a function) in
+# the alarm and container-restart-monitor.sh. Both extractions must be
+# non-empty: a missing marker must not diff two empty strings green.
+PIN_ALARM="$(sed -n '/# BEGIN sentry-dest-pin (#7898)/,/# END sentry-dest-pin (#7898)/p' "$ALARM" | sed 's/^[[:space:]]*//')"
+PIN_MONITOR="$(sed -n '/# BEGIN sentry-dest-pin (#7898)/,/# END sentry-dest-pin (#7898)/p' "$SCRIPT_DIR/container-restart-monitor.sh" | sed 's/^[[:space:]]*//')"
+if [[ -z "$PIN_ALARM" || -z "$PIN_MONITOR" ]]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin region missing (alarm=$(echo -n "$PIN_ALARM" | wc -c)B monitor=$(echo -n "$PIN_MONITOR" | wc -c)B) — a missing BEGIN/END marker must not read as parity"
+elif ! grep -qF "# END sentry-dest-pin (#7898)" <<<"$PIN_ALARM" || ! grep -qF "# END sentry-dest-pin (#7898)" <<<"$PIN_MONITOR"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin region is unterminated in alarm or monitor (END marker absent)"
+elif [[ "$PIN_ALARM" == "$PIN_MONITOR" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: sentry-dest-pin predicate is identical in alarm and container-restart-monitor.sh"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: sentry-dest-pin predicate drifted between alarm and container-restart-monitor.sh:"; diff <(echo "$PIN_ALARM") <(echo "$PIN_MONITOR") | sed 's/^/        /' || true
+fi
+
 echo "-- allowlist completeness (grep-enumerated runtime hosts) --"
 for host in api.anthropic.com github.com api.github.com api.doppler.com \
   edge.api.flagsmith.com api.x.com api.linkedin.com bsky.social discord.com \
