@@ -296,7 +296,51 @@ fi
 #
 # Zero headroom against the current count, so any deletion is loud. Ratchet when adding cases,
 # and read a floor failure on an otherwise-green run as "you added cases, update this number".
-HOOK_MIN_ASSERTIONS=12
+# BEHAVIOURAL parity between the migrated-rule registry's two readers. They
+# cannot be compared textually -- the aggregator EXTRACTS every id
+# (`^[a-z0-9]...`) while the hook MATCHES one interpolated id (`^${r}...`) -- so
+# assert the property that actually matters: every id the aggregator exempts,
+# the hook accepts, and a malformed row is rejected by both.
+#
+# An earlier draft compared one hardcoded pattern to ITSELF: a tautology that
+# survives any drift (cq-assert-anchor-not-bare-token). Mutation-verified --
+# dropping the pipe requirement from either grammar makes the second case FAIL.
+_REPO_MR="${REPO_ROOT:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
+_real_reg="$_REPO_MR/scripts/migrated-rule-ids.txt"
+_agg_extract() { grep -oE '^[a-z0-9][a-z0-9-]{2,79}[[:space:]]*\|' "$1" 2>/dev/null | sed -E 's/[[:space:]]*\|$//'; }
+_hook_accepts() { grep -qE "^${2}[[:space:]]*\|" "$1" 2>/dev/null; }
+
+CASES=$((CASES + 1))
+if [[ -f "$_real_reg" ]]; then
+  _n=0; _drift=""
+  while IFS= read -r _id; do
+    [[ -n "$_id" ]] || continue
+    _n=$((_n + 1))
+    _hook_accepts "$_real_reg" "$_id" || _drift="$_drift $_id"
+  done < <(_agg_extract "$_real_reg")
+  if [[ "$_n" -ge 1 && -z "$_drift" ]]; then
+    pass "registry parity: all ${_n} aggregator-exempt id(s) are hook-accepted"
+  else
+    fail "registry parity" "n=${_n} hook-rejects:${_drift:-none}"
+  fi
+else
+  pass "registry parity: no migrated-rule registry in this tree"
+fi
+
+CASES=$((CASES + 1))
+_tmp_reg="$(mktemp)"
+printf '# comment\nwg-good-entry | 2026-01-01 | #1 | x :: ## H\nwg-malformed-no-pipe 2026-01-01 #2 y\n' > "$_tmp_reg"
+_got="$(_agg_extract "$_tmp_reg" | tr '\n' ' ' | sed 's/ $//')"
+if [[ "$_got" == "wg-good-entry" ]] \
+   && _hook_accepts "$_tmp_reg" "wg-good-entry" \
+   && ! _hook_accepts "$_tmp_reg" "wg-malformed-no-pipe"; then
+  pass "registry parity: pipe-less row rejected by both readers"
+else
+  fail "registry parity: malformed-row handling diverges" "aggregator extracted '${_got}'"
+fi
+rm -f "$_tmp_reg"
+
+HOOK_MIN_ASSERTIONS=14
 if (( CASES < HOOK_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$HOOK_MIN_ASSERTIONS" >&2
