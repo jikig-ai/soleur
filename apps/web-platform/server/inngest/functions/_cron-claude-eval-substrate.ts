@@ -1,3 +1,4 @@
+import { RUN_REPORT_CRONS } from "./_cron-run-reports";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -450,6 +451,59 @@ export const CRON_MCP_ALLOWLISTS: Record<
   },
 };
 
+// #8076 / ADR-216 addendum — the run-report directive. A cron whose run
+// completion is verified by its own scheduled issue MUST file it, so the
+// substrate issues `run-report-label <label>` into the per-spawn cron-allow.txt
+// (the agent can neither read nor write that file) and the containment hook
+// honours it as exit 0 of the filing gate iff a REAL --label token equals it.
+// DERIVED from the leaf, never hand-copied: `_cron-run-reports.ts` is the
+// single source and `cron-run-report-labels-parity.test.ts` binds it to the
+// `resolveOutputAwareOk` call sites. Absent for every other cron.
+export const CRON_RUN_REPORT_LABELS: Readonly<Record<string, string>> =
+  Object.freeze(Object.fromEntries(RUN_REPORT_CRONS.map((r) => [r.fn, r.label])));
+
+/**
+ * The exact lines the substrate writes into `.claude/cron-allow.txt` for a
+ * cron: bash prefixes first, then the directive lines the hook's
+ * `parseAllowlist` understands (`mcp-allow`, `navigate-origin`,
+ * `run-report-label`). Pure, so the delivery contract is unit-testable without
+ * a clone. Throws when an mcp cron's navigate origin cannot be resolved — the
+ * unguarded form is the exfil vector the origin pin exists to close.
+ */
+export function buildAllowlistLines(
+  cronName: string,
+  allow: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): { lines: string[]; navigateOrigin: string | null; runReportLabel: string | null } {
+  const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
+  let navigateOrigin: string | null = null;
+  const lines = [...allow];
+  if (mcpEntry) {
+    for (const tool of mcpEntry.tools) lines.push(`mcp-allow ${tool}`);
+    if (mcpEntry.navigateOriginEnv) {
+      const raw = env[mcpEntry.navigateOriginEnv];
+      try {
+        navigateOrigin = raw ? new URL(raw).origin : null;
+      } catch {
+        navigateOrigin = null;
+      }
+      if (!navigateOrigin) {
+        // Refuse to relax browser_navigate without a resolvable origin pin — the
+        // unguarded form is the exfil vector this whole mechanism exists to close.
+        throw new Error(
+          `[${cronName}] cannot resolve navigate-origin from env ` +
+            `${mcpEntry.navigateOriginEnv} (value: ${raw ?? "<unset>"}) — refusing ` +
+            `to relax mcp browser_navigate without an origin pin. Aborting cron.`,
+        );
+      }
+      lines.push(`navigate-origin ${navigateOrigin}`);
+    }
+  }
+  const runReportLabel = CRON_RUN_REPORT_LABELS[cronName] ?? null;
+  if (runReportLabel) lines.push(`run-report-label ${runReportLabel}`);
+  return { lines, navigateOrigin, runReportLabel };
+}
+
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
 // `defaultMode:"default"` + `allow:[]` are inert (the hook is the boundary). The
 // token "bypassPermissions" MUST NOT appear here (v1 P1-blocked exfil primitive).
@@ -519,8 +573,19 @@ export function runHookSelfTest(args: {
   // bash allow[0] probe verifies bash delivery.
   mcpAllow?: string[];
   navigateOrigin?: string | null;
+  // #8076 — the run-report directive, passed explicitly (from the map, not
+  // parsed from the file) so probe (a) cross-checks that the file ACTUALLY
+  // delivered it, exactly like the bash allow[0] probe verifies bash delivery.
+  runReportLabel?: string | null;
 }): void {
-  const { spawnCwd, cronName, allow, mcpAllow = [], navigateOrigin = null } = args;
+  const {
+    spawnCwd,
+    cronName,
+    allow,
+    mcpAllow = [],
+    navigateOrigin = null,
+    runReportLabel = null,
+  } = args;
   const nodeBin = resolveNodeBin();
   const hookAbs = join(spawnCwd, HOOK_REL_PATH);
   const allowlistAbs = join(spawnCwd, ALLOWLIST_REL_PATH);
@@ -556,6 +621,40 @@ export function runHookSelfTest(args: {
       throw new Error(
         `[${cronName}] containment hook self-test FAILED: allowlisted verb "${allow[0]}" ` +
           `was NOT allowed (allowlist not delivered). Aborting cron.`,
+      );
+    }
+  }
+
+  // #8076 — the run-report exit, three probes per spawn that carries the
+  // directive: (a) the cron's REQUIRED filing on a real --label token must
+  // ALLOW (a lost directive line is what this detects — the same delivery
+  // cross-check as the mcp probes); (b) the label merely NAMED in --body must
+  // DENY (the bare-token class); (c) a suffixed label must DENY (the comma
+  // anchor). A hook that raw-string-matches the label passes (a) and fails
+  // (b)/(c), which is exactly the regression these exist to catch.
+  if (runReportLabel) {
+    const probeCreate = (rest: string) =>
+      run({ tool_name: "Bash", tool_input: { command: `gh issue create --title t ${rest}` } });
+    const a = probeCreate(`--label ${runReportLabel} --milestone "Post-MVP / Later"`);
+    if (!a.includes('"permissionDecision":"allow"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: the run-report filing ` +
+          `(--label ${runReportLabel}) was NOT allowed (run-report-label directive not ` +
+          `delivered). Aborting cron.`,
+      );
+    }
+    const b = probeCreate(`--body 'run-report-label ${runReportLabel}'`);
+    if (!b.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: the run-report label named ` +
+          `in prose opened exit 0 (bare-token match). Aborting cron.`,
+      );
+    }
+    const c = probeCreate(`--label ${runReportLabel}x`);
+    if (!c.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: a suffixed run-report label ` +
+          `opened exit 0 (comma anchor lost). Aborting cron.`,
       );
     }
   }
@@ -767,29 +866,11 @@ export async function setupEphemeralWorkspace(args: {
   // The origin is resolved from env HERE (not baked) and pinned in the file so
   // the agent — which cannot read .claude/ — cannot tamper with it.
   const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
-  let navigateOrigin: string | null = null;
-  const allowlistLines = [...allow];
-  if (mcpEntry) {
-    for (const tool of mcpEntry.tools) allowlistLines.push(`mcp-allow ${tool}`);
-    if (mcpEntry.navigateOriginEnv) {
-      const raw = process.env[mcpEntry.navigateOriginEnv];
-      try {
-        navigateOrigin = raw ? new URL(raw).origin : null;
-      } catch {
-        navigateOrigin = null;
-      }
-      if (!navigateOrigin) {
-        // Refuse to relax browser_navigate without a resolvable origin pin — the
-        // unguarded form is the exfil vector this whole mechanism exists to close.
-        throw new Error(
-          `[${cronName}] cannot resolve navigate-origin from env ` +
-            `${mcpEntry.navigateOriginEnv} (value: ${raw ?? "<unset>"}) — refusing ` +
-            `to relax mcp browser_navigate without an origin pin. Aborting cron.`,
-        );
-      }
-      allowlistLines.push(`navigate-origin ${navigateOrigin}`);
-    }
-  }
+  const {
+    lines: allowlistLines,
+    navigateOrigin,
+    runReportLabel,
+  } = buildAllowlistLines(cronName, allow, process.env);
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
     allowlistLines.length ? allowlistLines.join("\n") + "\n" : "",
@@ -818,6 +899,7 @@ export async function setupEphemeralWorkspace(args: {
     allow,
     mcpAllow: mcpEntry?.tools ?? [],
     navigateOrigin,
+    runReportLabel,
   });
 
   return { ephemeralRoot, spawnCwd };

@@ -37,9 +37,11 @@ writeFileSync(UNJUSTIFIED_BODY, "Found a discrepancy while auditing.\n");
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
+  buildAllowlistLines,
   buildCronEvalSettings,
   CRON_BASH_ALLOWLISTS,
   CRON_MCP_ALLOWLISTS,
+  CRON_RUN_REPORT_LABELS,
   DEFAULT_CLAUDE_SETTINGS,
   ISSUE_CREATOR_BASH_ALLOWLIST,
   parseClaudeResultLine,
@@ -620,6 +622,95 @@ describe("runHookSelfTest (AC2c fail-closed + AC-P2.2 relax gate)", () => {
       runHookSelfTest({ spawnCwd, cronName: "cron-x", allow: [] }),
     ).toThrow(/WebFetch|egress|navigate|fail-closed|unknown/i);
   });
+
+// --- #8076: the run-report directive (exit 0) — delivery + self-test probes ---
+describe("run-report directive (#8076)", () => {
+  it("CRON_RUN_REPORT_LABELS is derived from the leaf: ten crons, community-monitor → its slug, ux-audit absent", () => {
+    expect(Object.keys(CRON_RUN_REPORT_LABELS).length).toBe(10);
+    expect(CRON_RUN_REPORT_LABELS["cron-community-monitor"]).toBe("scheduled-community-monitor");
+    expect(CRON_RUN_REPORT_LABELS["cron-legal-audit"]).toBe("scheduled-legal-audit");
+    expect(CRON_RUN_REPORT_LABELS["cron-ux-audit"]).toBeUndefined();
+  });
+
+  it("buildAllowlistLines writes `run-report-label <label>` for a mapped cron and never for ux-audit (AC3)", () => {
+    const cm = buildAllowlistLines("cron-community-monitor", ISSUE_CREATOR_BASH_ALLOWLIST, {});
+    expect(cm.lines).toContain("run-report-label scheduled-community-monitor");
+    expect(cm.runReportLabel).toBe("scheduled-community-monitor");
+    // Directives are appended AFTER the bash prefixes and never replace one.
+    for (const p of ISSUE_CREATOR_BASH_ALLOWLIST) expect(cm.lines).toContain(p);
+
+    const ux = buildAllowlistLines(
+      "cron-ux-audit",
+      ISSUE_CREATOR_BASH_ALLOWLIST,
+      { NEXT_PUBLIC_APP_URL: "https://app.soleur.ai" },
+    );
+    expect(ux.lines.some((l) => l.startsWith("run-report-label"))).toBe(false);
+    expect(ux.runReportLabel).toBeNull();
+    // The existing mcp directives still ride the same builder.
+    expect(ux.lines).toContain("navigate-origin https://app.soleur.ai");
+  });
+
+  it("self-test passes when the file delivered the directive (probe a allows, b/c deny)", () => {
+    const fileLines = [
+      ...ISSUE_CREATOR_BASH_ALLOWLIST,
+      "run-report-label scheduled-community-monitor",
+    ];
+    const spawnCwd = makeSpawnCwd({ allow: fileLines });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: "cron-community-monitor",
+        allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+        runReportLabel: "scheduled-community-monitor",
+      }),
+    ).not.toThrow();
+  });
+
+  it("self-test throws when the directive is expected but the file did NOT deliver it (delivery cross-check, Guard 1 #1)", () => {
+    const spawnCwd = makeSpawnCwd({ allow: ISSUE_CREATOR_BASH_ALLOWLIST });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: "cron-community-monitor",
+        allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+        runReportLabel: "scheduled-community-monitor",
+      }),
+    ).toThrow(/run-report/);
+  });
+
+  it("self-test throws when the hook opens exit 0 on a prose mention or a suffixed label (Guard 1 #2/#3)", () => {
+    // A hook that matches the label ANYWHERE in the raw command (the bare-token
+    // class) allows the prose-mention probe (b) and the suffix probe (c); it
+    // still denies the canonical exfil payload, so only the run-report probes
+    // can catch it.
+    const rawMatchHook = [
+      "#!/usr/bin/env node",
+      'import { readFileSync } from "node:fs";',
+      'const input = JSON.parse(readFileSync(0, "utf-8"));',
+      "let v = \"deny\";",
+      'if (input.tool_name === "Bash") {',
+      '  const c = String(input.tool_input?.command ?? "");',
+      '  if (/\\/proc\\//.test(c)) v = "deny";',
+      '  else if (c.startsWith("gh issue create")) v = c.includes("scheduled-community-monitor") ? "allow" : "deny";',
+      '  else v = "allow";',
+      '} else if (input.tool_name === "Task" || input.tool_name === "Skill") v = "allow";',
+      "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: \"PreToolUse\", permissionDecision: v } }));",
+      "process.exit(0);",
+    ].join("\n");
+    const spawnCwd = makeSpawnCwd({
+      allow: [...ISSUE_CREATOR_BASH_ALLOWLIST, "run-report-label scheduled-community-monitor"],
+      hookSource: rawMatchHook,
+    });
+    expect(() =>
+      runHookSelfTest({
+        spawnCwd,
+        cronName: "cron-community-monitor",
+        allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+        runReportLabel: "scheduled-community-monitor",
+      }),
+    ).toThrow(/run-report/);
+  });
+});
 });
 
 describe("spawnSimple — stderr capture (clone-128 diagnosability)", () => {
