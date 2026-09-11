@@ -9,10 +9,10 @@ Install the plugin:
 **Devin CLI:**
 
 ```bash
-devin plugins install jikig-ai/soleur
+devin plugins install jikig-ai/soleur#plugins/soleur -y
 ```
 
-Start a Devin session and use `/soleur:go <what you want to do>`.
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
 **Claude Code (marketplace):**
 
@@ -351,8 +351,10 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 **Devin CLI:**
 
 ```bash
-devin plugins install jikig-ai/soleur
+devin plugins install jikig-ai/soleur#plugins/soleur -y
 ```
+
+Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
 **From the marketplace (recommended):**
 
