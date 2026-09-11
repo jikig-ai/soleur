@@ -76,7 +76,7 @@ for f in "$FIXTURES"/*.md; do
   # Second, independent declaration: the first line after the frontmatter block carries
   # `expect: pass` or `expect: fail/<reason>` (after the fence, so every fixture is still a
   # well-formed frontmatter document if the frontmatter check is ever scripted into the gate).
-  token="$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{getline; print; exit}' "$f" | sed -nE 's/^<!-- expect: (pass|fail\/[a-z][a-z-]*) -->$/\1/p')"
+  token="$(tr -d '\r' < "$f" | awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{getline; print; exit}' | sed -nE 's/^<!-- expect: (pass|fail\/[a-z][a-z-]*) -->$/\1/p')"
   case "$want_rc:$token" in
     0:pass)   ;;
     1:fail/*) ;;
@@ -103,7 +103,7 @@ for f in "$FIXTURES"/*.md; do
 done
 # Hand-measured floors, not derived from the directory: a directory that lost its fixtures would
 # otherwise pass with zero assertions.
-assert_eq "1" "$(( pass_n >= 6 ))" "pass-* floor ($pass_n >= 6: plain, two legacy marker forms, sub-heading, table, fence-inside-section)"
+assert_eq "1" "$(( pass_n >= 8 ))" "pass-* floor ($pass_n >= 8: plain, two legacy marker forms, sub-heading, table, fence-inside-section, thematic break, CRLF)"
 assert_eq "1" "$(( fail_n >= 17 ))" "fail-* floor ($fail_n >= 17)"
 # The two legacy emphasised forms (the 21 shipped PIRs) are committed fixtures
 # (pass-sentence-legacy-{underscore,asterisk}.md) — the fixture directory is lint-ignored, so MD049
@@ -278,6 +278,11 @@ else
   assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: corpus selected=3 examined=3 skipped=0 failed=1$' "$TMP/corpus-unr.out" || true)" "the unreadable PIR is examined, not skipped, and not counted as failed"
 fi
 
+# cwd independence: the repo modes pin the cwd to the toplevel (git paths are root-relative).
+set +e; (cd "$REPO_A/$PIR_REL" && bash "$GATE" --branch) >"$TMP/branch-sub.out" 2>"$TMP/branch-sub.err"; rc=$?; set -e
+assert_eq "1" "$rc" "--branch from a subdirectory grades the same PIRs (not 'unreadable')"
+assert_eq "1" "$(grep -cF "[FAIL] $PIR_REL/b-postmortem.md: rows-without-issue — " "$TMP/branch-sub.err" || true)" "--branch from a subdirectory names the failing PIR"
+
 # Repo B: no refs/remotes/origin/main → exit 2 with the unavailable line, never "no PIR".
 REPO_B="$TMP/repo-b"
 mkdir -p "$REPO_B"
@@ -288,6 +293,10 @@ git -C "$REPO_B" add -A
 git -C "$REPO_B" commit -q -m base
 set +e; (cd "$REPO_B" && bash "$GATE" --branch) >"$TMP/repob.out" 2>"$TMP/repob.err"; rc=$?; set -e
 assert_eq "2" "$rc" "--branch exits 2 when origin/main does not resolve"
+# --corpus over a repo with no PIR is exit 3 (nothing examined), never a green sweep.
+set +e; (cd "$REPO_B" && bash "$GATE" --corpus) >"$TMP/repob-corpus.out" 2>"$TMP/repob-corpus.err"; rc=$?; set -e
+assert_eq "3" "$rc" "--corpus exits 3 when the selector matches nothing"
+assert_eq "1" "$(grep -cF 'PIR-ACTION-ITEMS: no PIR in corpus' "$TMP/repob-corpus.out" || true)" "--corpus prints the no-PIR line"
 assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: unavailable — git diff origin/main\.\.\.HEAD failed \(rc=[0-9]+\)$' "$TMP/repob.err" || true)" "--branch prints the unavailable line on stderr"
 
 # A red run must show WHICH file failed and why: the captured streams live under $TMP, which the
@@ -300,5 +309,5 @@ if (( FAIL > 0 )); then
 fi
 # Floor set at the measured green count — ratchet it in lockstep with every added assertion
 # (arm 1: 23 fixtures × 2 + 17 × 2 + 2 floors + 2 legacy pins + 5; arm 2: 6; arm 3: 5;
-# arm 5: 13; arm 4: 18; measured 129).
-print_results 129
+# arm 5: 13; arm 4: 22; measured 137).
+print_results 137

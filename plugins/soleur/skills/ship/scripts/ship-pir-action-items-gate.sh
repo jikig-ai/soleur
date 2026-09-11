@@ -73,6 +73,8 @@ SENTENCE_RE='^[_*]?No action items — incident fully resolved'
 # A list item: bullet or numbered, optionally a task box. Inside the section these are action
 # items that are not in the issue-backed table, whatever else the section holds.
 ITEM_RE='^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]'
+# A thematic break (`* * *`, `- - -`, `---`) is not an item; it is excluded before ITEM_RE runs.
+BREAK_RE='^[[:space:]]*([-*_][[:space:]]*){3,}$'
 
 usage() {
   printf 'usage: %s <path> | --branch | --corpus\n' "$(basename "$0")" >&2
@@ -87,7 +89,8 @@ section_lines() {
   awk -v h="$HEADING" '
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
     fence { next }
-    $0 == h { n++; if (n == 1) { f = 1 } else { f = 0 }; next }
+    { line = $0; sub(/[[:space:]\r]+$/, "", line) }
+    line == h { n++; if (n == 1) { f = 1 } else { f = 0 }; next }
     /^#{1,2} / { f = 0 }
     f { body = body $0 "\n" }
     END { printf "HEADINGS=%d\n%s", n, body }
@@ -122,7 +125,7 @@ check_one() {
           | grep -vE '^[[:space:]]*\|[[:space:]]*Issue[[:space:]]*\|' \
           | grep -vE '^[[:space:]]*\|[-:|[:space:]]+\|[[:space:]]*$' \
           | sed '/^[[:space:]]*$/d')"
-  items="$(printf '%s\n' "$sec" | grep -E "$ITEM_RE")"
+  items="$(printf '%s\n' "$sec" | grep -vE "$BREAK_RE" | grep -E "$ITEM_RE")"
   # Shape (a): every item row MUST open with a `#NNNN` Issue cell (`#0` is not an issue). `#NNNN`
   # anywhere else in the row (an Action cell citing an issue) does not count — the Issue cell is
   # the tracked field. A list item anywhere in the section is an untracked item too.
@@ -165,6 +168,21 @@ select_paths() {
 
 [[ $# -eq 1 ]] || usage
 
+# `git diff --name-only` and `git ls-files` print ROOT-relative paths, but check_one opens them
+# relative to the cwd — from a subdirectory every PIR would read as unreadable (--branch → exit 2)
+# or, worse, `git ls-files` scoped to the subdirectory would select nothing and --corpus would
+# print a green summary over zero files. Pin the cwd for both repo-wide modes.
+case "$1" in
+  --branch|--corpus)
+    top="$(git rev-parse --show-toplevel 2>/dev/null)"; grc=$?
+    if [[ $grc -ne 0 || -z "$top" ]]; then
+      printf 'PIR-ACTION-ITEMS: unavailable — not inside a git work tree (rc=%s)\n' "$grc" >&2
+      exit 2
+    fi
+    cd "$top" || exit 2
+    ;;
+esac
+
 case "$1" in
   --branch)
     # Run the diff ON ITS OWN, never inside a `|| true` pipeline: a git failure (128 when
@@ -196,6 +214,13 @@ case "$1" in
       exit 2
     fi
     selected=${#files[@]} examined=0 skipped=0 failed=0 worst=0
+    if [[ $selected -eq 0 ]]; then
+      # An empty selection is not a passing sweep: nothing was examined. Same code as the
+      # branch mode's "no PIR" so a caller cannot read it as green.
+      printf 'PIR-ACTION-ITEMS: corpus selected=0 examined=0 skipped=0 failed=0\n'
+      printf 'PIR-ACTION-ITEMS: no PIR in corpus\n'
+      exit 3
+    fi
     for f in "${files[@]}"; do
       # `-r` first: `! grep -q` on an unreadable file (rc 2) would otherwise read as "no heading"
       # and SKIP it — an unreadable tracked PIR must reach check_one and its exit 2.
