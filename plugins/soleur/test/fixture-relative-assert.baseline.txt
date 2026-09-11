@@ -118,7 +118,7 @@
 12	apps/web-platform/infra/git-data-provision.test.sh
 16	apps/web-platform/infra/git-data-remove.test.sh
 1	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
-13	apps/web-platform/infra/git-data-transport-wrapper.test.sh
+15	apps/web-platform/infra/git-data-transport-wrapper.test.sh
 2	apps/web-platform/infra/git-data-userdata-budget.sh
 2	apps/web-platform/infra/git-lock-chardevice-sweep.sh
 6	apps/web-platform/infra/infra-config-apply.sh

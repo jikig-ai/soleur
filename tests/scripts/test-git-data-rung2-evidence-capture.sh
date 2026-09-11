@@ -34,8 +34,7 @@ trap 'rm -rf "$TMP"' EXIT
 # shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
 source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
   || { printf 'FATAL: could not source the fixture git environment\n' >&2; exit 2; }
-git_fixture_env "$TMP" \
-  || { printf 'FATAL: git_fixture_env refused the fixture root %s\n' "$TMP" >&2; exit 2; }
+git_fixture_env "$TMP" || { printf 'FATAL: git_fixture_env refused the fixture root %s\n' "$TMP" >&2; exit 2; }
 
 passes=0
 fails=0
