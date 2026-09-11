@@ -17,9 +17,26 @@ requires_cpo_signoff: true
 
 ## Overview
 
-Make Soleur's Grok Build plugin path match the current Claude Code lifecycle without regressing Claude. Grok has no nested Skill/slash tool: after `/go` classifies, the parent Reads the next SKILL.md in-process through `harness.ts`. Dual-voice pipeline skills, implement ADR-110, additive hook aliases, plugin-root substitution, then public docs and legal harness-neutral copy after the golden-path eval is green. Web ACP and GPU dogfood stay parked.
+Make Soleur's Grok Build plugin path match the current Claude Code lifecycle without regressing Claude. Grok has no nested Skill/slash tool: after `/go` classifies, the parent Reads the next SKILL.md **in-process**. That Read **is** the invoke. The adapter (`harness.ts` + `workflowFidelityInstructions("grok")` + `go.md` Step 2.1) must say so — today they still forbid Read. Dual-voice is a short harness block plus handoff-site `invokeSkill()` citations, not a full-body rewrite. Plugin-root prefers `GROK_PLUGIN_ROOT` then `CLAUDE_PLUGIN_ROOT` with **no** CWD default. Hook aliases are exact-name duplicates. Docs/legal after eval. Web ACP and GPU stay parked.
 
-CPO sign-off at plan time: brainstorm CPO recommended Track 1 only (Approach A); operator confirmed. `user-impact-reviewer` runs at PR review.
+CPO sign-off at plan time: granted 2026-09-11 under Track 1 / eval-then-docs / no Phase 4 promotion. `user-impact-reviewer` runs at PR review.
+
+## Plan Review Revisions (2026-09-11)
+
+Panel: DHH, code-simplicity, architecture-strategist, spec-flow, CPO, CMO, UX, CTO. **Kieran 402** (not run). Mechanical findings auto-applied below. Taste / User-Challenge listed at the end of this section for the operator gate.
+
+**Mechanical (applied):**
+
+1. Honest Grok invoke lives in `harness.ts` `invokeSkill()` + `workflowFidelityInstructions("grok")` + `go.md` Step 2.1 + existing anti-bypass headers (brainstorm/plan/one-shot/work). Grok: Read `skills/<name>/SKILL.md` in-process and run it to completion. Forbidden is **selective** execution, not the Read. Claude keeps “do not Read SKILL.md; use the Skill tool.”
+2. Dual-voice = 8–12 line harness block citing `invokeSkill()` / `routingInstructions()`, plus **handoff/pipeline-detection sites**. Do not twin every `skill: soleur:` sentence in 1k-line bodies.
+3. Guard 1 pins `harness.ts` or `invokeSkill()` **and** an in-process-Read sentence on the Grok branch. A header that mentions `harness.ts` while Phase 4 still says only `skill: soleur:review` must go **red**. Slash-token OR is forbidden (review/work already contain `/ship` and would pass). Do not add `incident` as a locked member.
+4. Plugin-root: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` with **no** `:-./plugins/soleur` (ADR-179 / #7442 / `test-sync-producer-reachability.sh` T0b). Empty → keep `probe-unreachable`. Do not add `:-` to `sync.md`. Local Grok fail copy is not Concierge “Settings → Repository.”
+5. Hook aliases: **duplicate matcher objects** with exact Grok tool names (`run_terminal_command`, `ask_user_question`, `spawn_subagent`, and measured Write/Edit names). Do not OR into Claude regex until matcher grammar is measured. Write/Edit aliases are in-scope (ADR-089), not a `/work` spike. Skill/Monitor: no fake matcher. Distinct markers: `reason=no-tool` vs `reason=untrusted-session`.
+6. Cut: optional `harness.test.ts` on grok-fidelity-gate; research-agent `cheap` call sites; AUP extra xAI flow-down as a required AC; `SOLEUR_HOOK_SKIP` as a new SessionStart hook (onboarding sentence is enough for no-tool).
+7. C4: if `grokBuild` is added, it is a **local harness** loading `plugin` via `.grok/config.toml`, **not** a child of Cloud CLI Engine `platform.engine`. No `api`/`hetzner` edges. (Whether C4 ships in this PR is coupled to ADR-110 — User-Challenge below.)
+8. Live CLI (this host, `grok --help`): **no `--trust` flag**. `--always-approve` and `--no-subagents` exist. Do **not** freeze `grok --trust` into legal copy. `/work` must confirm which token arms Soleur PreToolUse (`/hooks-trust` vs Claude-compat `.claude/settings.json`) before Phase 5/6.
+
+**Taste / User-Challenge (not auto-applied):** see operator question after this revision. DHH: cut ADR-110 + legal + C4 from this PR. Architecture/CPO: keep ADR-110 and five-file legal lockstep. CMO: “Same platform” not “Same plugin”; dual-voice getting-started FAQ+JSON-LD. UX: table after install, before callouts; no `.pen`.
 
 ## Research Insights
 
@@ -41,7 +58,11 @@ CPO sign-off at plan time: brainstorm CPO recommended Track 1 only (Approach A);
 - Web ACP / `agent-runner.ts` → `#6547` parked.
 - GEX44 Robot IaC / GPU order → `#6546`/`#7882` parked.
 - Port `claude-code-action` CI → ADR-110 out of scope.
-- Fake Monitor matcher for a tool Grok does not have → documented skip + `SOLEUR_*` marker.
+- Fake Monitor matcher for a tool Grok does not have → documented skip.
+- CWD/`:-./plugins/soleur` plugin-root default → ADR-179 single-user incident (#7442).
+- Regex-OR matcher strings (`Bash|run_terminal_command`) until Grok matcher grammar is measured.
+- `grok --trust` in legal copy until `/work` confirms a live CLI token (`grok --help` on this host has no `--trust`).
+- Optional `harness.test.ts` enrollment; research-agent `cheap` call sites; AUP extra xAI link as an AC.
 
 **Phase 1 fan-out.** Brainstorm already ran CPO/CLO/CTO/COO/CMO/CCO/CFO + repo-research + learnings. Plan-time repo-research and learnings-researcher **failed 402** (Grok Build usage balance exhausted). Findings below are from that brainstorm plus orchestrator greps on this worktree. Do not treat the 402 as “no remaining gaps.”
 
@@ -51,7 +72,7 @@ CPO sign-off at plan time: brainstorm CPO recommended Track 1 only (Approach A);
 
 ### Dual-voice pattern (copy this)
 
-`plugins/soleur/lib/harness.ts` `invokeSkill()` / `routingInstructions()`. Skills that already dual-voice: `commands/go.md`, `skills/brainstorm/SKILL.md`, `skills/one-shot/SKILL.md`, `skills/ship/SKILL.md`, `skills/plan/SKILL.md` (anti-bypass header). Claude branch keeps **Skill tool** `soleur:<skill>`. Grok branch says slash `/<skill>` meaning **Read that SKILL.md in-process**.
+`plugins/soleur/lib/harness.ts` `invokeSkill()` / `routingInstructions()`. Skills that already dual-voice: `commands/go.md`, `skills/brainstorm/SKILL.md`, `skills/one-shot/SKILL.md`, `skills/ship/SKILL.md`, `skills/plan/SKILL.md` (anti-bypass header). Claude branch keeps **Skill tool** `soleur:<skill>` and **forbids** reading SKILL.md as a substitute. Grok branch: **Read** `plugins/soleur/skills/<name>/SKILL.md` in-process and execute it to completion — that Read is the invoke. Do not write “invoke `/name` as a nested tool_use” or “do not Read SKILL.md” on the Grok branch.
 
 Skill-tool-only (or Claude-qualified only) call sites to dual-voice, re-derived this session:
 
@@ -105,120 +126,101 @@ Epic #6320 closed claiming Skill→slash parity. Grok still has no nested Skill 
 
 ## Proposed Solution
 
-One sequenced spec (#8064). Dual-voice via existing `harness.ts`. Implement ADR-110. Additive hook aliases. Plugin-root fallback. Public docs and legal lockstep only after `grok-fidelity` asserts Skill-tool-only pipeline files fail.
+One sequenced spec (#8064). Fix the adapter first (`harness.ts` + fidelity instructions + go.md Step 2.1) so Grok’s sanctioned next action is in-process Read. Dual-voice headers + handoff sites. Plugin-root env fallback with no CWD default. Exact-name hook aliases. Docs after eval. ADR-110 and legal lockstep stay in the plan pending the operator User-Challenge (DHH cut vs CPO/architecture keep).
 
 ## Technical Approach
 
 ### Architecture
 
-Keep one plugin. `detectHarness()` already splits Claude vs Grok. Skills must call `invokeSkill()` language, not hardcode Skill tool. Model pins go through `resolveModelTier()`. Session-start bash uses a single `PLUGIN_ROOT` expansion: `GROK_PLUGIN_ROOT` → `CLAUDE_PLUGIN_ROOT` → `./plugins/soleur`.
+Keep one plugin. `detectHarness()` already splits Claude vs Grok. The **invoke contract** is `harness.ts` + `workflow-fidelity.ts`, not SKILL.md folklore. Skills cite `invokeSkill()`. Session-start: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` with no CWD default. Model pins go through `resolveModelTier()` **if** Phase 3 stays in this PR.
 
 Do not add a Grok Skill-tool shim. Do not edit `apps/web-platform/server/agent-runner.ts`.
 
 ### Implementation Phases
 
-#### Phase 1 — Dual-voice + eval (FR1–FR3)
+#### Phase 1 — Adapter contract + dual-voice + eval (FR1–FR3)
 
-- Add a `workflow-fidelity` (or sibling) test that, for each name in `PIPELINE_SKILLS` ∪ `HANDOFF_SKILLS` ∪ `IMPLEMENTATION_TAIL` ∪ `{plan,postmerge}`, reads `skills/<name>/SKILL.md` (or `commands/go.md` for go) and fails if the file contains `Skill tool` / `skill: soleur:` **and** contains neither `harness.ts` nor a Grok slash branch (`/plan`, `slash_command`, `invokeSkill`).
-- Dual-voice the Skill-tool-only files listed above. Preserve Claude Skill-tool wording in the Claude branch.
-- Pipeline-detection strings in review/work that key only on `skill: soleur:work` must also match `/work` and `slash_command` so Grok in-process runs still count as pipeline mode.
-- Enroll the new test in `grok-fidelity-gate.sh`. Optionally enroll `harness.test.ts` in the same bun test line (cheap).
-- **Success:** `bash plugins/soleur/scripts/grok-fidelity-gate.sh` green; a one-line revert of the review dual-voice header turns the new test red.
+- Change `invokeSkill()` Grok `instruction` and `workflowFidelityInstructions("grok")`: Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Forbidden = selective execution, not the Read.
+- `go.md` Step 2.1: same. Claude branch unchanged.
+- Anti-bypass headers on brainstorm/plan/one-shot/work: Grok REQUIRED line must not forbid in-process Read.
+- Dual-voice Skill-tool-only **handoff sites** (8–12 line harness block + Phase 4 / drain / review pipeline-detection). Do not twin every `skill: soleur:` sentence.
+- Pipeline-detection inventory: review, work Phase 4, qa, compound, ship, one-shot child steps, plan exit — match `skill: soleur:X` **or** `/X` **or** `slash_command`.
+- Guard 1: locked set includes `deepen-plan`. Fail unless file cites `harness.ts` or `invokeSkill()` **and** Grok branch has an in-process-Read sentence. Header-only dual-voice on work Phase 4 must-RED. Cases live in existing `workflow-fidelity.test.ts` (already in grok-fidelity-gate).
+- Sharp edge in `go.md`: if the operator typed `/soleur:go`, say Grok’s entry is `/go`.
+- **Success:** fidelity gate green; stripping the in-process-Read sentence from `review/SKILL.md` reds Guard 1; Claude golden-path Skill-tool case stays green.
 
 #### Phase 2 — Plugin-root (FR5)
 
-- Introduce a documented expansion used by `go.md` Step 0.0/0, `sync.md` probes, and `hooks/hooks.json` if Grok interpolates it: `PLUGIN_ROOT="${GROK_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}}"`.
-- Identity check stays “plugin.json name is soleur”, not path shape (#7474).
-- **Success:** with `CLAUDECODE` unset and `GROK_HOME` set, the Step 0.0 probe is not `source=probe-unreachable reason=plugin-root-unverified` when `./plugins/soleur/.claude-plugin/plugin.json` exists.
+- `go.md` Step 0.0/0 only: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`. Empty → keep `plugin-root-unverified`. Identity = plugin.json name soleur.
+- Do not add `:-./plugins/soleur`. Do not add `:-` to `sync.md`. Do not change `hooks.json` until interpolation is measured.
+- Fail copy when Grok env is set: local checkout / `grok inspect` should list soleur — not Concierge Settings → Repository.
+- **Success:** both env vars unset still emits `plugin-root-unverified`. `GROK_PLUGIN_ROOT` pointing at `plugins/soleur` is ready.
 
 #### Phase 3 — ADR-110 (FR4)
 
-- Add `plugins/soleur/lib/harness-model-map.ts` and `plugins/soleur/test/harness-model-map.test.ts` per `feat-harness-model-map/spec.md`.
-- Migrate `workflow-model-pins.test.ts` allowlist `sonnet`/`haiku` → `standard`/`cheap`; resolve in each `*.workflow.js` `agent()` helper before spawn.
-- Research agents: pass `cheap` at call site until spawn APIs accept frontmatter `model: cheap`.
-- `plan` Step 4.5 / `ship` Phase 5.5 use `advisor` via resolver, not raw `fable`.
-- Flip ADR-110 to **Accepted**.
-- Live Grok model id strings: confirm at `/work` against current xAI docs (`https://docs.x.ai/build/…`) — do not freeze a guessed SKU in this plan. Tests use fixture maps.
-- **Success:** `resolveModelTier("cheap"|"standard"|"strong"|"advisor", "claude"|"grok")` returns non-empty; Claude pins still behave as haiku/sonnet/opus/fable in the Claude fixture.
+Park vs keep is a User-Challenge. If kept:
+
+- `harness-model-map.ts` + tests. Reuse `detectHarness()` from `harness.ts` (not `GROK_SESSION`).
+- `workflow-model-pins.test.ts` allowlist → `cheap`/`standard`; resolve in the seven `*.workflow.js` `agent()` helpers already enumerated.
+- plan Step 4.5 / ship Phase 5.5 use `advisor` via resolver.
+- ADR-110 Status → Accepted. Fixture maps only; live SKUs at `/work`.
+- Do not pass `cheap` at research-agent call sites in this PR.
 
 #### Phase 4 — Hook aliases (FR6)
 
-Additive matchers in `.claude/settings.json` (and plugin `hooks.json` if Grok loads it):
+Duplicate matcher **objects** (exact Grok names). Do not write `Bash|run_terminal_command` as one string.
 
-| Claude matcher | Grok alias | Action |
-|----------------|------------|--------|
-| `Bash` | `run_terminal_command` | Add `Bash\|run_terminal_command` (Grok already maps Bash→run_terminal_cmd per onboarding; verify live, do not drop `Bash`) |
-| `AskUserQuestion` | `ask_user_question` | Add both |
-| `Task` | `spawn_subagent` | Add both |
-| `Write`/`Edit` | keep; confirm Grok edit tool names (`search_replace` / `write`) and alias if PreToolUse does not fire |
-| `Skill` | none | Grok has no Skill tool. Keep Claude matcher. Document skip; emit `SOLEUR_HOOK_SKIP harness=grok matcher=Skill reason=no-tool` from a SessionStart note in grok-onboarding, not a fake matcher |
-| `Monitor` / `TaskStop` | none | Grok poll path is Shell/AwaitShell (`pollInstructions("grok")`). Document skip. drain-prs dual-voice must tell Grok to use AwaitShell, not Monitor |
+| Claude matcher | Grok exact name | Action |
+|----------------|-----------------|--------|
+| `Bash` | `run_terminal_command` | Duplicate object |
+| `AskUserQuestion` | `ask_user_question` | Duplicate object |
+| `Task` | `spawn_subagent` | Duplicate object |
+| `Write` / `Edit` | `search_replace` / `write` (this session) | Duplicate — in-scope ADR-089 |
+| `Skill` | none | Keep Claude; skip `reason=no-tool` |
+| `Monitor` | none | Keep Claude; drain-prs Grok = AwaitShell |
 
-**Success:** a Grok `ask_user_question` PreToolUse hits the same hook command as Claude `AskUserQuestion`. Claude matchers still present (grep `Skill` and `Monitor` unchanged as tokens).
+Untrusted session: `reason=untrusted-session` + one user line naming the **live** trust token. This host’s `grok --help` has no `--trust`.
+
+**Success:** settings.json still has `"matcher": "Skill"` and `"matcher": "Monitor"` and exact `ask_user_question` / `spawn_subagent` strings.
 
 #### Phase 5 — Docs after eval (FR7–FR8)
 
-Only after Phases 1–3 tests are green on this branch:
+Only after Phases 1–2 tests are green (Phase 3 if kept):
 
-- Refresh `knowledge-base/engineering/grok-onboarding.md` (date this change): `/go` not `/soleur:go`; `grok --trust`; user-config `[subagents]`; filename-stem spawn; in-process SKILL.md contract; refuse xAI CLI “improve the product and model” for non-personal repos.
-- Getting-started: two-column command table on the **existing** page (`getting-started.njk`) — not a new layout. Allowed: “Same plugin. Claude Code: `/soleur:go`. Grok Build: `/go`.” Forbidden: “full Grok support”, “zero configuration”.
-- Root `README.md` + `plugins/soleur/README.md` same table.
-- CLI tokens verified this session: `/go` (this run), `grok --trust` and `grok inspect` cited from `knowledge-base/engineering/grok-onboarding.md` (2026-07-10) and xAI docs `https://docs.x.ai/build/overview`. Re-verify `--help` at `/work` if the binary is on PATH.
+- Refresh `grok-onboarding.md` with **live** tokens from `/work` (`grok --help` this session: no `--trust`; `--no-subagents` exists; subagents are user-config). In-process Read contract. Training-opt-in refusal. Slash-collision FAQ (`/help` `/plan` `/review`). Fail-loud: hooks armed? spawn available?
+- Getting-started: four-row table (go/sync/help/next-skill) on the **existing** page in `#self-hosted` **after** the Claude install block and **before** the Existing/Starting-fresh callouts. Do not edit hero, waitlist CTA, or AEO definition. No new layout/CSS. No `.pen`. Forbidden: `full Grok support`, `zero configuration`, `out of the box`, Grok “two commands”. Caption: “Claude Code: `/soleur:go`. Grok Build: `/go`.” Dual-voice the existing `/soleur:go` callouts, workflow “Skill tool” sentence, and the `/soleur:go` FAQ + FAQPage JSON-LD in the **same** file (otherwise the table fights the rest of the page). Bump `last_updated`.
+- Same four-row table in root `README.md` and `plugins/soleur/README.md`.
+- Do not launch (no “Grok support” changelog/social).
+- Do not freeze a trust CLI token into public copy until `/work` confirms it.
 
-#### Phase 6 — Legal harness-neutral plugin copy (FR9)
+#### Phase 6 — Legal (FR9)
 
-3-way lockstep in the same PR (`2026-05-29-legal-doc-triple-lockstep…`):
-
-- Canonical `docs/legal/{terms-and-conditions,privacy-policy,data-protection-disclosure,gdpr-policy,acceptable-use-policy}.md`
-- Eleventy `plugins/soleur/docs/pages/legal/<same>.md` (hero + body Last Updated)
-- `apps/web-platform/lib/legal/legal-doc-shas.ts`
-
-Replace exclusive “Claude Code plugin” with harness-neutral plugin language (“Claude Code or Grok Build plugin”). Document `grok --trust` as a confidentiality TOM. **Do not** add xAI as a customer sub-processor or Third-Party Services path.
-
-AUP § Anthropic flow-down: add a Grok/xAI AUP link for Grok runtime users; keep Anthropic for Claude. Still not a processor row.
+User-Challenge (DHH cut vs operator/CPO keep). If kept: 3-way lockstep on the five canonical docs + Eleventy mirrors + `legal-doc-shas.ts`. Harness-neutral plugin sentence. **No** `grok --trust` as a TOM until the live token is known. **No** xAI customer sub-processor row. Cookie-policy and disclaimer stay Claude-exclusive unless CLO expands lockstep — name that residual; do not claim “legal is harness-neutral.”
 
 ## Files to Edit
 
-- `plugins/soleur/lib/workflow-fidelity.ts` (test helper export if needed)
+- `plugins/soleur/lib/harness.ts` (Grok `invokeSkill` instruction)
+- `plugins/soleur/lib/workflow-fidelity.ts` (`workflowFidelityInstructions("grok")`)
 - `plugins/soleur/test/workflow-fidelity.test.ts`
-- `plugins/soleur/scripts/grok-fidelity-gate.sh`
+- `plugins/soleur/skills/brainstorm/SKILL.md` (Grok anti-bypass: allow in-process Read)
+- `plugins/soleur/skills/plan/SKILL.md` (same; advisor spawn only if Phase 3 kept)
+- `plugins/soleur/skills/one-shot/SKILL.md` (same)
 - `plugins/soleur/skills/review/SKILL.md`
 - `plugins/soleur/skills/qa/SKILL.md`
 - `plugins/soleur/skills/compound/SKILL.md`
 - `plugins/soleur/skills/drain-labeled-backlog/SKILL.md`
 - `plugins/soleur/skills/drain-prs/SKILL.md`
 - `plugins/soleur/skills/work/SKILL.md`
-- `plugins/soleur/commands/go.md`
-- `plugins/soleur/commands/sync.md`
-- `plugins/soleur/hooks/hooks.json`
+- `plugins/soleur/commands/go.md` (Step 2.1 + Step 0.0 + `/soleur:go` recovery copy)
 - `.claude/settings.json`
-- `plugins/soleur/test/workflow-model-pins.test.ts`
-- `plugins/soleur/skills/plan/SKILL.md` (advisor spawn via resolver)
-- `plugins/soleur/skills/ship/SKILL.md` (advisor spawn via resolver)
-- workflow `*.workflow.js` under `plugins/soleur/skills/` that pin `sonnet`/`haiku` (enumerate at `/work` via `git grep -l "sonnet\|haiku" -- 'plugins/soleur/**/*.workflow.js'`)
-- `knowledge-base/engineering/architecture/decisions/ADR-110-harness-semantic-model-tier-map.md`
-- `knowledge-base/engineering/architecture/diagrams/model.c4`
-- `knowledge-base/engineering/architecture/diagrams/views.c4` (views that include `platform.engine.claude` at views.c4 lines containing that token)
 - `knowledge-base/engineering/grok-onboarding.md`
 - `plugins/soleur/docs/pages/getting-started.njk`
 - `README.md`
 - `plugins/soleur/README.md`
-- `docs/legal/terms-and-conditions.md`
-- `docs/legal/privacy-policy.md`
-- `docs/legal/data-protection-disclosure.md`
-- `docs/legal/gdpr-policy.md`
-- `docs/legal/acceptable-use-policy.md`
-- `plugins/soleur/docs/pages/legal/terms-and-conditions.md`
-- `plugins/soleur/docs/pages/legal/privacy-policy.md`
-- `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- `plugins/soleur/docs/pages/legal/gdpr-policy.md`
-- `plugins/soleur/docs/pages/legal/acceptable-use-policy.md`
-- `apps/web-platform/lib/legal/legal-doc-shas.ts`
 
-## Files to Create
+Phase 3 only (if ADR-110 stays): `harness-model-map.ts` (create), `harness-model-map.test.ts` (create), `workflow-model-pins.test.ts`, seven `*.workflow.js` pin files already listed in tasks.md, ADR-110 status, C4 `grokBuild` as a local harness (not under `platform.engine`), `skills/ship/SKILL.md` advisor spawn.
 
-- `plugins/soleur/lib/harness-model-map.ts`
-- `plugins/soleur/test/harness-model-map.test.ts`
+Phase 6 only (if legal stays): five `docs/legal/*.md` + Eleventy mirrors + `legal-doc-shas.ts`. No cookie/disclaimer unless CLO expands.
 
 ## Alternative Approaches Considered
 
@@ -233,7 +235,7 @@ AUP § Anthropic flow-down: add a Grok/xAI AUP link for Grok runtime users; keep
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** `/go` in Grok Build, public getting-started `/soleur:go`, or PreToolUse hooks that never arm
-- **If this leaks, the user's workflow / repo content is exposed via:** inlined pipeline (skip review/ship), untrusted session (`grok --trust` skipped), or xAI CLI training opt-in on a non-personal repo
+- **If this leaks, the user's workflow / repo content is exposed via:** inlined pipeline (skip review/ship), untrusted session (hooks never armed), or xAI CLI training opt-in on a non-personal repo
 - **Brand-survival threshold:** `single-user incident`
 
 Carry-forward from brainstorm Phase 0.1. Artifact = Soleur plugin workflows under Grok Build.
@@ -275,19 +277,20 @@ No soak-gated close criterion — no follow-through enrollment.
 
 ### Guard 1 — pipeline skills are not Skill-tool-only
 
-**Property.** Every locked pipeline/handoff SKILL.md that mentions Skill-tool invocation also mentions the Grok harness adapter or a Grok slash branch.
+**Property.** Every locked pipeline/handoff SKILL.md cites `harness.ts` or `invokeSkill()` and its Grok branch contains an in-process-Read sentence. Header-only dual-voice with Skill-tool-only handoff sites is not enough.
 
-**Assembly.** The chokepoint is one test in `plugins/soleur/test/workflow-fidelity.test.ts` that iterates `PIPELINE_SKILLS ∪ HANDOFF_SKILLS ∪ IMPLEMENTATION_TAIL ∪ {plan, postmerge}` and reads each skill file from `plugins/soleur/skills/<name>/SKILL.md` (go from `plugins/soleur/commands/go.md`). The test is invoked from `plugins/soleur/scripts/grok-fidelity-gate.sh` (the bun test argv). No second inventory.
+**Assembly.** One test in `plugins/soleur/test/workflow-fidelity.test.ts` iterates `PIPELINE_SKILLS ∪ HANDOFF_SKILLS ∪ IMPLEMENTATION_TAIL ∪ {plan, postmerge, deepen-plan}` and reads `plugins/soleur/skills/<name>/SKILL.md` (go from `plugins/soleur/commands/go.md`). Invoked from `grok-fidelity-gate.sh` bun argv. No second inventory.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the Grok/`harness.ts` sentences from `skills/review/SKILL.md`, leave `skill: soleur:compound` | RED |
-| 2 | Change the test to iterate an empty list (dispatch 0 files) while still exiting 0 | RED (vacuous dispatch) |
-| 3 | Add `skills/incident/SKILL.md` to the locked set in the test without dual-voicing that file | RED (second member after a compliant first) |
-| 4 | Harness: comment out the `expect` that fails on Skill-tool-only, leave the file walk | RED |
-| 5 | Must-PASS: `skills/brainstorm/SKILL.md` as it exists (already dual-voice) | PASS |
+| 1 | Delete the in-process-Read sentence from `skills/review/SKILL.md`, leave `skill: soleur:compound` | RED |
+| 2 | Change the test to iterate an empty list and still exit 0 | RED (vacuous dispatch) |
+| 3 | Add `skills/qa/SKILL.md` to the locked set (already in union) without an in-process-Read sentence | RED (second member) |
+| 4 | Harness: comment out the `expect` that fails, leave the file walk | RED |
+| 5 | Must-PASS: a file with harness block + in-process-Read + Claude Skill-tool example (brainstorm after Phase 1 header fix) | PASS |
+| 6 | Header mentions `harness.ts` but work Phase 4 handoff sites remain Skill-tool-only | RED |
 
 Write the matrix in the test file as named cases before implementing the walker.
 
@@ -364,9 +367,9 @@ Amend **ADR-110** in this plan: Status Proposed → Accepted when `harness-model
 Read `model.c4`, `views.c4`, `spec.c4`.
 
 - **External human actor:** founder already modeled.
-- **External system:** Claude Code is `platform.engine.claude` (container “Agent Runtime”). **Grok Build CLI is not modeled.** Add a sibling container `grokBuild` (or softwareSystem) “Grok Build harness” under the same engine parent: loads the same `plugin` via `.grok/config.toml`, not Concierge `agent-runner`.
-- **Relationships:** `founder -> grokBuild` (`grok --trust`, `/go`); `grokBuild -> plugin` (skills/agents/hooks). Do **not** edge Concierge/web to grokBuild (that is #6547).
-- **Views:** `views.c4` includes `platform.engine.claude` in at least two views (lines 34 and 62). Add `platform.engine.grokBuild` to those same `include` lists so it renders.
+- **External system:** Claude Code is `platform.engine.claude`. **Grok Build CLI is not modeled.** If C4 ships in this PR, add `grokBuild` as a **local harness** that loads `plugin` via `.grok/config.toml` — **not** a child of Cloud CLI Engine `platform.engine` (that parent inherits Hetzner + `api → claude`).
+- **Relationships:** `founder -> grokBuild` (`/go`); `grokBuild -> plugin`. Do **not** edge Concierge/web to grokBuild (#6547). Do not inherit `hetzner`/`api` edges.
+- **Views:** add `grokBuild` only to views that should show the local plugin CLI, not every view that includes `platform.engine.claude`.
 - **Cardinalities:** no new cron/monitor; run `apps/web-platform/test/c4-count-parity.test.sh` after the model edit (expected: still green if no count prose changed).
 - After edit: `apps/web-platform/test/c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
@@ -392,7 +395,7 @@ Live `/gdpr-gate` skill was **not** re-invoked (Grok 402). Carry-forward CLO act
 - [ ] AC2: `dispatchGoRoute("fix", …, claudeTestEnv())` still uses Skill tool `soleur:one-shot` (`go-routing-golden-path.test.ts` existing Claude case stays green).
 - [ ] AC3: `plugins/soleur/lib/harness-model-map.ts` exists; `resolveModelTier` returns non-empty for `cheap|standard|strong|advisor` × `claude|grok` fixtures; ADR-110 Status line is `Accepted`.
 - [ ] AC4: `git grep -n 'sonnet\|haiku' -- plugins/soleur/test/workflow-model-pins.test.ts` no longer treats those as the only pinnable workflow tiers (allowlist is semantic `cheap`/`standard`).
-- [ ] AC5: `go.md` Step 0.0 uses a fallback that includes `./plugins/soleur` when `CLAUDE_PLUGIN_ROOT` is unset; identity check still requires plugin.json name soleur.
+- [ ] AC5: `go.md` Step 0.0 uses `GROK_PLUGIN_ROOT` then `CLAUDE_PLUGIN_ROOT` with **no** `:-` CWD default; identity check still requires plugin.json name soleur; empty root still emits `plugin-root-unverified`.
 - [ ] AC6: `.claude/settings.json` contains `ask_user_question` and `spawn_subagent` as matcher tokens **and** still contains `"matcher": "Skill"` and `"matcher": "Monitor"`.
 - [ ] AC7: `getting-started.njk` contains `/go` and `/soleur:go` in the same section; does not contain the substring `full Grok support` or `zero configuration`.
 - [ ] AC8: `docs/legal/terms-and-conditions.md` no longer defines Soleur exclusively as “a Claude Code plugin” (must mention Grok Build); Eleventy mirror date matches; `legal-doc-shas.ts` updated. `git grep -n 'xAI' -- docs/legal/` does not add a sub-processor / Third-Party Services customer-path row.
@@ -441,8 +444,9 @@ Onboarding, getting-started, READMEs, legal lockstep, ADR-110 Accepted, C4 grokB
 
 ## Session Errors
 
-1. Plan-time `repo-research-analyst` and `learnings-researcher` returned **402 Payment Required: Grok Build usage balance exhausted**. Orchestrator grepped the worktree instead. Re-run those agents under Claude or a funded Grok session if this plan is challenged.
-2. `plan-review` panel not executed for the same 402. At `single-user incident` the skill wants DHH + Kieran + simplicity + architecture-strategist + spec-flow. **Operator: run `/plan-review` on this file before `/work`, or explicitly skip.**
+1. Plan-time `repo-research-analyst` and `learnings-researcher` returned **402**. Orchestrator grepped the worktree instead.
+2. Plan-review **Kieran 402**. Other eight panel seats completed; mechanical findings applied 2026-09-11. Kieran correctness pass is still missing — `/work` should treat unverified CLI/AC wording as suspect.
+3. Live `grok --help` (this host) has **no `--trust`**. July onboarding and this plan’s first draft froze a token the binary does not accept.
 
 ## Sharp Edges
 

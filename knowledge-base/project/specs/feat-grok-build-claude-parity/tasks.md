@@ -2,25 +2,24 @@
 
 Lane: `cross-domain`. Closes #8064.
 
-## Phase 1: Dual-voice + eval
+## Phase 1: Adapter + dual-voice + eval
 
-- [ ] 1.1 Add Guard 1 test in `plugins/soleur/test/workflow-fidelity.test.ts` (locked skill list + Skill-tool-only fail)
-- [ ] 1.2 Dual-voice `skills/review/SKILL.md` (Claude Skill tool kept; Grok `/compound` `/ship`; pipeline detection matches `/work`)
-- [ ] 1.3 Dual-voice `skills/qa/SKILL.md`, `skills/compound/SKILL.md`
-- [ ] 1.4 Dual-voice `skills/drain-labeled-backlog/SKILL.md`, `skills/drain-prs/SKILL.md` (Grok AwaitShell not Monitor)
-- [ ] 1.5 Dual-voice `skills/work/SKILL.md` Phase 4 (`invokeSkill` / `/review` … `/ship`)
-- [ ] 1.6 Enroll the new test (and optionally `harness.test.ts`) in `plugins/soleur/scripts/grok-fidelity-gate.sh`
-- [ ] 1.7 Run `bash plugins/soleur/scripts/grok-fidelity-gate.sh` — must exit 0
+- [ ] 1.1 `harness.ts` `invokeSkill()` Grok instruction + `workflowFidelityInstructions("grok")`: in-process Read **is** the invoke
+- [ ] 1.2 `go.md` Step 2.1 same; `/soleur:go` recovery one-liner; Grok fail copy is not Concierge
+- [ ] 1.3 Anti-bypass headers on brainstorm/plan/one-shot/work: do not forbid Grok Read
+- [ ] 1.4 Guard 1: `harness.ts`/`invokeSkill()` + in-process-Read sentence; header-only dual-voice must-RED; include `deepen-plan`
+- [ ] 1.5 Handoff-site dual-voice: review, qa, compound, drain-labeled-backlog, drain-prs (AwaitShell), work Phase 4
+- [ ] 1.6 Pipeline-detection matches `skill: soleur:X` or `/X` or `slash_command`
+- [ ] 1.7 `bash plugins/soleur/scripts/grok-fidelity-gate.sh` exits 0
 
 ## Phase 2: Plugin-root
 
-- [ ] 2.1 `go.md` Step 0.0/0: `PLUGIN_ROOT="${GROK_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}}"`; keep plugin.json identity check
-- [ ] 2.2 Same expansion in `commands/sync.md` probes
-- [ ] 2.3 `hooks/hooks.json` — document/verify Grok interpolates `GROK_PLUGIN_ROOT` or keep Claude var plus fallback
+- [ ] 2.1 `go.md` Step 0.0/0: `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"` — no `:-` CWD default, no `sync.md` `:-`
+- [ ] 2.2 Empty root still emits `plugin-root-unverified`
 
-## Phase 3: ADR-110
+## Phase 3: ADR-110 (only if operator keeps it in this PR)
 
-- [ ] 3.1 Create `plugins/soleur/lib/harness-model-map.ts` + `test/harness-model-map.test.ts`
+- [ ] 3.1 Create `plugins/soleur/lib/harness-model-map.ts` + `test/harness-model-map.test.ts` (reuse `detectHarness()`)
 - [ ] 3.2 Confirm Grok fixture model ids against live xAI docs (do not guess in the plan)
 - [ ] 3.3 Update `workflow-model-pins.test.ts` allowlist to `cheap`/`standard`
 - [ ] 3.4 Resolve tiers in `agent()` of:
@@ -33,22 +32,22 @@ Lane: `cross-domain`. Closes #8064.
   - `skills/review/workflows/review.workflow.js`
 - [ ] 3.5 `plan` Step 4.5 and `ship` Phase 5.5 spawn `advisor` via resolver
 - [ ] 3.6 ADR-110 Status → Accepted
-- [ ] 3.7 C4: add `grokBuild` sibling of `platform.engine.claude`; include in views that list `platform.engine.claude`; run c4 syntax/render + `c4-count-parity.test.sh`
+- [ ] 3.7 C4: `grokBuild` as a **local** harness (not under Cloud CLI Engine); run c4 syntax/render + `c4-count-parity.test.sh`
 
 ## Phase 4: Hook aliases
 
-- [ ] 4.1 `.claude/settings.json`: alias `AskUserQuestion|ask_user_question`, `Task|spawn_subagent`; Bash alias only after verifying Grok PreToolUse name
-- [ ] 4.2 Do not add fake Skill or Monitor matchers; document skip in grok-onboarding
-- [ ] 4.3 Guard 2 test: Skill and Monitor matcher tokens still present
+- [ ] 4.1 Duplicate matcher objects with exact Grok names (`run_terminal_command`, `ask_user_question`, `spawn_subagent`, `search_replace`/`write`) — no regex-OR
+- [ ] 4.2 No fake Skill or Monitor matchers; skip `reason=no-tool` vs `reason=untrusted-session`
+- [ ] 4.3 Guard 2: Skill and Monitor tokens still present
 
-## Phase 5: Docs (after Phases 1–3 green)
+## Phase 5: Docs (after Phases 1–2 green)
 
-- [ ] 5.1 Refresh `knowledge-base/engineering/grok-onboarding.md`
-- [ ] 5.2 Two-column `/go` vs `/soleur:go` on existing `plugins/soleur/docs/pages/getting-started.njk`
+- [ ] 5.1 Refresh `grok-onboarding.md` from **live** `grok --help` (no `--trust` on this host)
+- [ ] 5.2 Four-row table on existing getting-started `#self-hosted` after install, before callouts; dual-voice callouts + Skill-tool sentence + FAQ/JSON-LD; no hero/AEO edit
 - [ ] 5.3 Same table in `README.md` and `plugins/soleur/README.md`
-- [ ] 5.4 Re-verify `grok --help` / `grok inspect` tokens if the binary is on PATH
+- [ ] 5.4 Confirm trust token (`/hooks-trust` vs Claude-compat settings) before any public TOM sentence
 
-## Phase 6: Legal lockstep
+## Phase 6: Legal lockstep (only if operator keeps it in this PR)
 
 - [ ] 6.1 Canonical `docs/legal/{terms-and-conditions,privacy-policy,data-protection-disclosure,gdpr-policy,acceptable-use-policy}.md` harness-neutral plugin copy
 - [ ] 6.2 Eleventy mirrors `plugins/soleur/docs/pages/legal/<same>.md` (hero + body dates)
