@@ -99,3 +99,15 @@ the callers to branch — scope beyond confinement. Recorded, not changed.
 Because the four monitors are `COPY`d into the image, this merge triggers `web-platform-release.yml`
 and a prod container stop → start (`ci-deploy.sh` cron-drain block, `docker stop --time=12`).
 In-flight streams are cut, identical to every `apps/web-platform/**` merge. Stated so it is not implied.
+
+## 10. Record: the Rule D classifier cannot see the Sentry host pin (work-phase finding)
+
+**Class:** mechanical (fact record for the PR body; candidate follow-up in a different subsystem)
+
+With the host limb of the `sentry-dest-pin` region deleted, `scripts/lint-shell-trace-credential-refusal.py`
+still passes both `container-restart-monitor.sh` and `cron-egress-alarm.sh`: the credentialed URL
+interpolates the DERIVED `_si_host`, and the classifier's env-settable test does not follow a
+derivation from the curl operand back to its env-settable source. The committed exec harness rows
+are the guard (every host-limb mutant is RED there). The classifier is untouched (forbidden by
+the ask). Upgrade trigger for the classifier, surfaced for `ship`: a destination operand DERIVED one
+hop from an env-settable variable should inherit its env-settability.
