@@ -5,7 +5,7 @@ description: "Install Soleur in two commands and run a full AI organization — 
 layout: base.njk
 permalink: getting-started/
 date: 2026-06-01
-last_updated: 2026-06-01
+last_updated: 2026-09-11
 ---
 
     <!-- Hero -->
@@ -55,9 +55,42 @@ last_updated: 2026-06-01
 claude plugin install soleur@soleur-marketplace</code></pre>
         </div>
 
+        <p>Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Claude Code</th>
+              <th>Grok Build</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Entry</td>
+              <td><code>/soleur:go</code></td>
+              <td><code>/go</code></td>
+            </tr>
+            <tr>
+              <td>Sync</td>
+              <td><code>/soleur:sync</code></td>
+              <td><code>/sync</code></td>
+            </tr>
+            <tr>
+              <td>Help</td>
+              <td><code>/soleur:help</code></td>
+              <td><code>/help</code></td>
+            </tr>
+            <tr>
+              <td>Next skill</td>
+              <td>Skill tool <code>soleur:&lt;skill&gt;</code></td>
+              <td>Read <code>SKILL.md</code> in this process (<code>/&lt;skill&gt;</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+
         <div class="callout">
-          <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
-          <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
+          <strong>Existing project?</strong> Claude Code: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Analyze the codebase and populate the knowledge base.<br>
+          <strong>Starting fresh?</strong> Claude Code: <code>/soleur:go</code>. Grok Build: <code>/go</code>. Describe what you need.
         </div>
 
         <div class="callout">
@@ -67,7 +100,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
         <p>Soleur follows a structured 6-step workflow for software development:</p>
 
-        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or directly via Skill tool):</p>
+        <p>The 6-step workflow (invoked automatically via <code>/soleur:go</code> or Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; via <code>/go</code> then Read <code>SKILL.md</code> in this process on Grok Build):</p>
 
         <div class="commands-list">
           <div class="command-item">
@@ -180,11 +213,11 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between /soleur:go and individual skills?</summary>
-            <p class="faq-answer"><code>/soleur:go</code> is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need.</p>
+            <p class="faq-answer"><code>/soleur:go</code> (Claude Code) or <code>/go</code> (Grok Build) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need &mdash; Skill tool <code>soleur:&lt;skill&gt;</code> on Claude Code; Read that skill&rsquo;s <code>SKILL.md</code> in this process on Grok Build.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Can I use Soleur with an existing project?</summary>
-            <p class="faq-answer">Yes. Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
+            <p class="faq-answer">Yes. Claude Code: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between the cloud platform and self-hosted?</summary>
@@ -236,7 +269,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "What is the difference between /soleur:go and individual skills?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "/soleur:go is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need."
+            "text": "/soleur:go (Claude Code) or /go (Grok Build) is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need — Skill tool soleur:<skill> on Claude Code; Read that skill's SKILL.md in this process on Grok Build."
           }
         },
         {
@@ -244,7 +277,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "Can I use Soleur with an existing project?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. Run /soleur:sync to analyze your codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
+            "text": "Yes. Claude Code: /soleur:sync. Grok Build: /sync. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
           }
         },
         {

@@ -10,7 +10,7 @@ Lane: `cross-domain`. Closes #8064.
 - [x] 1.4 Guard 1: `harness.ts`/`invokeSkill()` + in-process-Read sentence; header-only dual-voice must-RED; include `deepen-plan`
 - [x] 1.5 Handoff-site dual-voice: review, qa, compound, drain-labeled-backlog, drain-prs (AwaitShell), work Phase 4
 - [x] 1.6 Pipeline-detection matches `skill: soleur:X` or `/X` or `slash_command`
-- [ ] 1.7 `bash plugins/soleur/scripts/grok-fidelity-gate.sh` exits 0
+- [x] 1.7 `bash plugins/soleur/scripts/grok-fidelity-gate.sh` exits 0
 
 ## Phase 2: Plugin-root
 
@@ -42,10 +42,10 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 5: Docs (after Phases 1–2 green)
 
-- [ ] 5.1 Refresh `grok-onboarding.md` from **live** `grok --help` (no `--trust` on this host)
-- [ ] 5.2 Four-row table on existing getting-started `#self-hosted` after install, before callouts; dual-voice callouts + Skill-tool sentence + FAQ/JSON-LD; no hero/AEO edit
-- [ ] 5.3 Same table in `README.md` and `plugins/soleur/README.md`
-- [ ] 5.4 Confirm trust token (`/hooks-trust` vs Claude-compat settings) before any public TOM sentence
+- [x] 5.1 Refresh `grok-onboarding.md` from **live** `grok --help` (no `--trust` on this host)
+- [x] 5.2 Four-row table on existing getting-started `#self-hosted` after install, before callouts; dual-voice callouts + Skill-tool sentence + FAQ/JSON-LD; no hero/AEO edit
+- [x] 5.3 Same table in `README.md` and `plugins/soleur/README.md`
+- [x] 5.4 Confirm trust token (`/hooks-trust` vs Claude-compat settings) before any public TOM sentence
 
 ## Phase 6: Legal lockstep — PARKED (follow-up issue)
 
@@ -57,5 +57,5 @@ Lane: `cross-domain`. Closes #8064.
 ## Phase 7: Testing
 
 - [ ] 7.1 Guard 1 mutations (including vacuous dispatch) encoded as tests
-- [ ] 7.2 `bash plugins/soleur/scripts/grok-fidelity-gate.sh`
+- [x] 7.2 `bash plugins/soleur/scripts/grok-fidelity-gate.sh`
 - [ ] 7.3 Claude golden-path case still green

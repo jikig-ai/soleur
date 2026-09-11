@@ -26,7 +26,16 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-The 6-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+
+The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
 
 ```text
 brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
