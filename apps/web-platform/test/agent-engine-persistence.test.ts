@@ -56,4 +56,40 @@ describe("AgentEnginePersistenceRepository", () => {
       payload: { type: "status", status: "running" },
     })).rejects.toThrow("engine event append failed: unique violation");
   });
+
+  it("normalizes persisted snake_case rows into the neutral binding contract", async () => {
+    const supabase = client();
+    supabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: {
+              id: "run-1",
+              workspace_id: "ws-1",
+              execution_kind: "routine",
+              routine_id: "daily-triage",
+              routine_run_id: "2026-09-12T01:00:00Z",
+              engine_id: "claude-code",
+              auth_mode: "managed",
+              adapter_version: "claude-v1",
+              created_at: "2026-09-12T01:00:01Z",
+            },
+            error: null,
+          }),
+        }),
+      }),
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.getRun("run-1")).resolves.toEqual({
+      id: "run-1",
+      binding: {
+        workspaceId: "ws-1",
+        execution: { kind: "routine", routineId: "daily-triage", routineRunId: "2026-09-12T01:00:00Z" },
+        engineId: "claude-code",
+        authMode: "managed",
+        adapterVersion: "claude-v1",
+        boundAt: "2026-09-12T01:00:01Z",
+      },
+    });
+  });
 });
