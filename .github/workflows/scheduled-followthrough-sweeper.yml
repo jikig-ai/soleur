@@ -90,7 +90,15 @@ jobs:
           # Secrets that one or more verification scripts may declare via
           # the `secrets=` directive clause. Add new ones here when a new
           # follow-through ships needing them.
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          # #7946 — the Sentry read for every followthrough: the org-level Internal
+          # Integration `actions-read-prd` (ADR-031; Issue & Event / Organization /
+          # Project = Read, nothing else). One store, this repo secret, deliberately
+          # NOT mirrored to Doppler — the name is chosen so that no `doppler run`
+          # config can satisfy it by accident (the canonical vendor env-var name
+          # bound a personal, human-account-scoped token under `-c prd_terraform`).
+          # A directive that names a secret absent from this block is commented on
+          # by the sweeper and reds the run; that is the intended reading, not noise.
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           # #5875 canary-promotion-5875.sh — GETs /hooks/deploy-status (HMAC + CF-Access).
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -98,16 +106,17 @@ jobs:
           # #5934 chardevice-wedge-nonrecurrence-5934.sh (and #5110 betterstack-
           # quota-verdict) — Better Stack Telemetry read creds for scripts/
           # betterstack-query.sh (mirror Doppler soleur/prd_terraform). If these GH
-          # secrets are not yet provisioned they resolve to "", and the probes are
-          # fail-safe TRANSIENT (never a false PASS/close) until they are set.
+          # secrets are not provisioned they resolve to "" -- and since #7946 the sweeper's
+          # Guard 3 refuses an EMPTY binding: the tracker gets a REQUIRED SECRET MISSING
+          # comment and the run goes red, rather than the probe running and TRANSIENTing.
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
           # #6438 l3-probe-armed-6438.sh — Better Stack heartbeats API (uptime.betterstack.com
           # /api/v2/heartbeats) read for the web-1 private-net probe soak (mirror Doppler
           # soleur/prd_terraform BETTERSTACK_API_TOKEN). Distinct from the QUERY_* Logs creds
-          # above (ClickHouse); this is the account-wide uptime API token. Fail-safe TRANSIENT
-          # (never a false PASS/close) if unset.
+          # above (ClickHouse); this is the account-wide uptime API token. If unset it resolves
+          # to "" and Guard 3 refuses it (comment + red run, #7946) before the probe runs.
           BETTERSTACK_API_TOKEN: ${{ secrets.BETTERSTACK_API_TOKEN }}
           # #7855 betterstack-roundtrip-latency-7855.sh — the INGEST (write) credential for the
           # git-data source (2734275). That probe writes a marker and reads it back, which is the
@@ -122,8 +131,8 @@ jobs:
           # marker there would manufacture the very liveness the rung-2 capture consults as its
           # control, at the gate authorising a host's birth.
           #
-          # Unset resolves to "" and the probe reports ROUNDTRIP_UNKNOWN (exit 3 = TRANSIENT),
-          # never a false PASS and never a FAIL blaming the vendor for our own missing credential.
+          # Unset resolves to "" and Guard 3 refuses to forward it (comment + red run, #7946), so
+          # the probe's own ROUNDTRIP_UNKNOWN (exit 3) arm is reached only on a genuine vendor miss.
           GIT_DATA_BETTERSTACK_LOGS_TOKEN: ${{ secrets.GIT_DATA_BETTERSTACK_LOGS_TOKEN }}
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).

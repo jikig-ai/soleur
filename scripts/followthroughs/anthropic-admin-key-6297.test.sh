@@ -106,9 +106,10 @@ T1="2026-07-19 06:17:00"   # older
 T2="2026-07-20 06:17:00"   # newer
 
 # `env -i` — hermetic, mirroring how the sweeper actually runs probes. With a
-# plain `env VAR=…` an ambient SENTRY_AUTH_TOKEN/GH_TOKEN leaks in from the
+# plain `env VAR=…` an ambient SENTRY_ACTIONS_RO_TOKEN/GH_TOKEN leaks in from the
 # developer or CI shell and the zero-rows fixture makes a LIVE 25s network call
-# to sentry.io, so the suite's result depends on the machine it runs on.
+# to the pinned org host (jikigai-eu.sentry.io), so the suite's result depends on
+# the machine it runs on.
 run_probe() {
   local dir="$1"
   # TMPDIR is in the allowlist deliberately. `env -i` clears the environment, so without
@@ -250,7 +251,7 @@ fi
 # 8-12 — the ZERO-ROW mitigations (AC14b).
 #
 # Tests 1-7 all run `run_probe`, which is `env -i` with only BETTERSTACK_QUERY_*
-# and discards stdout. So GH_TOKEN/SENTRY_AUTH_TOKEN are ALWAYS unset there and
+# and discards stdout. So GH_TOKEN/SENTRY_ACTIONS_RO_TOKEN are ALWAYS unset there and
 # every zero-row run takes the two "skipped/unavailable" arms — the Sentry
 # DIVERGENCE branch and the STALLED branch were reachable code that no fixture
 # ever executed, and no arm's output was asserted at all.
@@ -276,7 +277,7 @@ run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
       BETTERSTACK_QUERY_HOST=h \
       BETTERSTACK_QUERY_USERNAME=u \
       BETTERSTACK_QUERY_PASSWORD=p \
-      GH_TOKEN=t SENTRY_AUTH_TOKEN=s \
+      GH_TOKEN=t SENTRY_ACTIONS_RO_TOKEN=s \
       bash scripts/followthroughs/anthropic-admin-key-6297.sh 2>&1 )
 }
 

@@ -53,6 +53,12 @@ secrets**:
   project:read for plan-only).
 - `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` — DSN-derived,
   consumed by the workflow check-in steps. Not read by Terraform.
+- `SENTRY_ACTIONS_RO_TOKEN` — the org-level read-only Internal Integration
+  `actions-read-prd` (`[event:read, org:read, project:read]`, ADR-031 amendment
+  2026-09-11). Read by `scripts/followthroughs/*.sh` via the sweeper and by the
+  fresh-host boot-trail step; not read by Terraform. Repository secret only, never
+  mirrored into Doppler. Rotation:
+  `knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`.
 
 R2 backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) come from
 Doppler `prd_terraform` via `doppler secrets get --plain` — same pattern as

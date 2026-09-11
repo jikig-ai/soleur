@@ -373,14 +373,125 @@ for prov_job in web_host_create web_host_replace; do
   fi
 done
 
-# ── AC13 (#6090 follow-up): the surfacing step sources its token from Doppler ──
-# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips
-# and logs "Sentry query skipped" — the read never happens and nobody notices.
-if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$TRAIL"; then
-  ok "AC13: the surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
+# ── AC13 (#6090 follow-up, retargeted by #7946): the surfacing step binds its token from
+# the WORKFLOW ENV, never from Doppler — and names the unbound case rather than self-skipping.
+#
+# History: the original AC13 pinned a `doppler secrets get SENTRY_AUTH_TOKEN -c prd_terraform`
+# read because the repo secret of that name was unset and a `secrets.*` binding self-skipped
+# silently. That read bound a PERSONAL, human-account-scoped token (#7797 class). #7946
+# moves the reader onto the org-level `actions-read-prd` integration via the repo secret
+# SENTRY_ACTIONS_RO_TOKEN, and the silent-skip class AC13 exists to prevent is closed on
+# the other side: (a) the script names the unbound case in an annotation AND the summary,
+# (b) the workflow is asserted to BIND the secret on both provisioning jobs, so an un-wired
+# step is red here rather than dark in production.
+#
+# (a) The script reads the new name from its environment. Anchored on the expansion.
+if grep -qE '\$\{SENTRY_ACTIONS_RO_TOKEN' "$TRAIL"; then
+  ok "AC13a: the surface step reads SENTRY_ACTIONS_RO_TOKEN from its environment"
 else
-  no "AC13: the surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
+  no "AC13a: the surface step must read SENTRY_ACTIONS_RO_TOKEN from its environment (found no \${SENTRY_ACTIONS_RO_TOKEN expansion)"
 fi
+# (b) The unbound case is NAMED on two channels from ONE sentence (`msg=`): an
+# `echo "::${level}::…${msg}"` CALL (reachable via `gh run view --log`) and a
+# `tee -a "$GITHUB_STEP_SUMMARY"` write of the same variable. Anchored on the CALLS and the
+# assignment, not the sentence alone (the AC14 lesson).
+if grep -qE '^\s*msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' "$TRAIL" \
+   && grep -qE '^\s*echo "::\$\{level\}::\$\{WEB_HOST_KEY:-\?\}: \$\{msg\}"' "$TRAIL"; then
+  ok "AC13b: the unbound case emits a ::\${level}:: annotation carrying the one not-bound sentence"
+else
+  no "AC13b: the unbound case must assign the not-bound sentence to \`msg=\` and emit it via \`echo \"::\${level}::…\${msg}\"\`"
+fi
+if grep -qF 'echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"' "$TRAIL"; then
+  ok "AC13c: the same sentence (\${msg}) is written to GITHUB_STEP_SUMMARY via tee -a"
+else
+  no "AC13c: the not-bound sentence must reach GITHUB_STEP_SUMMARY as \`echo \"_\${msg}_\" | tee -a \"\$GITHUB_STEP_SUMMARY\"\`"
+fi
+# (b2) The bearer is the NEW name and the retired one appears nowhere in the reader.
+if grep -qF 'Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}' "$TRAIL"; then
+  ok "AC13b2: the Sentry read bears SENTRY_ACTIONS_RO_TOKEN"
+else
+  no "AC13b2: the Sentry read must send \`Authorization: Bearer \${SENTRY_ACTIONS_RO_TOKEN}\`"
+fi
+if ! grep -q 'SENTRY_AUTH_TOKEN' "$TRAIL"; then
+  ok "AC13b3: the retired name SENTRY_AUTH_TOKEN appears nowhere in the reader"
+else
+  no "AC13b3: the reader still names the retired credential SENTRY_AUTH_TOKEN ($(grep -c 'SENTRY_AUTH_TOKEN' "$TRAIL") site(s))"
+fi
+# (c) No Doppler READ remains — not the token's, not SENTRY_ORG's, not SENTRY_PROJECT's.
+# Anchored on the read CONSTRUCTS (`doppler secrets …`, `doppler run …`, a DOPPLER_TOKEN
+# binding), not the bare word: the script legitimately names the host's `doppler_retry` /
+# `doppler_download` BOOT STAGES, which are Sentry tag values in lockstep with the cloud-init
+# emitters and are not reads (cq-assert-anchor-not-bare-token).
+if [[ "$(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL" || true)" == "0" ]]; then
+  ok "AC13d: the surface step makes no Doppler read at all (no \`doppler secrets\`/\`doppler run\`/DOPPLER_TOKEN)"
+else
+  no "AC13d: the surface step still carries a Doppler read ($(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL") site(s)) — every Doppler read must be gone, not only the token's"
+fi
+# (d) BEHAVIOURAL: run the script with the secret UNBOUND. It must emit the annotation, write
+# the summary line, exit 0 (a skipped read is not a proven dark boot), and never call doppler
+# — a `doppler` on PATH that records its invocation is the tripwire.
+_ac13_tmp="$(mktemp -d)"
+# The one owning trap in this file (lint-trap-tempfile-ownership): the block below also removes
+# the directory on its normal path, so this exists for a death between allocation and that rm.
+trap 'rm -rf "${_ac13_tmp:-}"' EXIT
+mkdir -p "$_ac13_tmp/bin"
+printf '#!/usr/bin/env bash\necho invoked >> "%s/doppler-called"; exit 1\n' "$_ac13_tmp" > "$_ac13_tmp/bin/doppler"
+chmod +x "$_ac13_tmp/bin/doppler"
+: > "$_ac13_tmp/summary"
+# `|| _ac13_rc=$?`: a non-zero exit is a FINDING here, and under `set -e` a bare
+# `x="$(cmd)"; rc=$?` would abort the suite before the row reports it.
+_ac13_rc=0
+_ac13_out="$(cd "$_ac13_tmp" && env -i PATH="$_ac13_tmp/bin:$PATH" HOME="$HOME" \
+  GITHUB_STEP_SUMMARY="$_ac13_tmp/summary" JOB_STATUS=success WEB_HOST_KEY=web-9 \
+  bash "$TRAIL" 2>&1)" || _ac13_rc=$?
+if [[ "$_ac13_rc" == "0" ]] && grep -q '::error::web-9: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' <<<"$_ac13_out"; then
+  ok "AC13e: run with the secret unbound on a SUCCESSFUL job -> ::error:: annotation on stdout and exit 0"
+else
+  no "AC13e: run with the secret unbound on a successful job must exit 0 with an ::error:: naming SENTRY_ACTIONS_RO_TOKEN (rc=$_ac13_rc): $(head -c 400 <<<"$_ac13_out")"
+fi
+_ac13_rc2=0
+_ac13_out2="$(cd "$_ac13_tmp" && env -i PATH="$_ac13_tmp/bin:$PATH" HOME="$HOME" \
+  GITHUB_STEP_SUMMARY="$_ac13_tmp/summary" JOB_STATUS=failure WEB_HOST_KEY=web-9 \
+  bash "$TRAIL" 2>&1)" || _ac13_rc2=$?
+if [[ "$_ac13_rc2" == "0" ]] && grep -q '::warning::web-9: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' <<<"$_ac13_out2"; then
+  ok "AC13e2: run with the secret unbound on a FAILED job -> ::warning:: (not error) and exit 0"
+else
+  no "AC13e2: run with the secret unbound on a failed job must exit 0 with a ::warning:: (rc=$_ac13_rc2): $(head -c 400 <<<"$_ac13_out2")"
+fi
+if grep -q 'SENTRY_ACTIONS_RO_TOKEN.*not bound' "$_ac13_tmp/summary"; then
+  ok "AC13f: run with the secret unbound -> the not-bound sentence landed in GITHUB_STEP_SUMMARY"
+else
+  no "AC13f: the not-bound sentence did not reach GITHUB_STEP_SUMMARY: $(head -c 300 "$_ac13_tmp/summary")"
+fi
+if [[ ! -e "$_ac13_tmp/doppler-called" ]]; then
+  ok "AC13g: run with the secret unbound made NO doppler call"
+else
+  no "AC13g: the script invoked doppler ($(wc -l < "$_ac13_tmp/doppler-called") time(s)) — the personal-token read path is still live"
+fi
+rm -rf "$_ac13_tmp"
+# (e) BOTH provisioning jobs BIND the secret in the boot-trail step's env and no longer carry
+# DOPPLER_TOKEN there — an `if: always()` step holding a prd_terraform-capable credential on
+# every failed or cancelled apply was the wider exposure. Per job, with the AC8d extraction,
+# then narrowed to the boot-trail step so a binding elsewhere in the job cannot satisfy it.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  STEP="$(awk '/- name: Surface fresh-host Sentry/{f=1} f && /^      - name:/ && !/Surface fresh-host Sentry/{exit} f' <<<"$PROV")"
+  if [[ -z "$STEP" ]]; then
+    no "AC13h: no boot-trail step found in ${prov_job} — nothing to assert the binding on (the step was renamed or removed; AC13i below is skipped for the same reason)"
+  elif grep -qE '^[[:space:]]*SENTRY_ACTIONS_RO_TOKEN: \$\{\{ secrets\.SENTRY_ACTIONS_RO_TOKEN \}\}[[:space:]]*(#.*)?$' <<<"$STEP"; then
+    ok "AC13h: ${prov_job} boot-trail step binds SENTRY_ACTIONS_RO_TOKEN from the repo secret"
+  else
+    no "AC13h: ${prov_job} boot-trail step must bind \`SENTRY_ACTIONS_RO_TOKEN: \${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}\` in its env: block"
+  fi
+  # Anchored on the BINDING (a YAML env key), not the bare word, which a comment may carry.
+  if [[ -z "$STEP" ]]; then
+    no "AC13i: no boot-trail step found in ${prov_job} — cannot assert DOPPLER_TOKEN is unbound (an empty subject is not a pass)"
+  elif ! grep -qE '^[[:space:]]*DOPPLER_TOKEN:' <<<"$STEP"; then
+    ok "AC13i: ${prov_job} boot-trail step no longer binds DOPPLER_TOKEN"
+  else
+    no "AC13i: ${prov_job} boot-trail step still binds DOPPLER_TOKEN — it was there only for the Doppler reads AC13d forbids"
+  fi
+done
 
 # ── AC14 (ADR-128 R1): the DSN is asserted non-empty BEFORE the host is created ──
 # Anchored on an `echo "::error::` CALL carrying the message — not the message alone.
@@ -938,5 +1049,14 @@ else
   no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
 fi
 
+# ADR-193 floor at the MEASURED green count (113 on 2026-09-11, #7946 review): a lower bound,
+# so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
+# matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
+# Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
+MIN_ASSERTIONS=113
+if (( pass + fail < MIN_ASSERTIONS )); then
+  printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

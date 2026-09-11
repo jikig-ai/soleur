@@ -19,16 +19,26 @@
 # a genuine post-birth boot failure produces, training the reader to ignore the one signal
 # that matters. `REOPEN_MAX` caps only the closed path, so the open path has no brake.
 #
-# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: the sweeper
-# passes SENTRY_AUTH_TOKEN (from SENTRY_IAC_AUTH_TOKEN), which scripts/sentry-issue.sh's own
-# header records as 403-ing on `event:read` — that script needs SENTRY_ISSUE_RO_TOKEN, which
-# the sweeper does not pass. The BETTERSTACK_QUERY_* triple below is what the sweeper
-# actually has, which is what makes this probe executable AT ALL rather than silently
-# failing on an unknown secret name.
+# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: this probe was
+# written when the sweeper's Sentry credential lacked the scope scripts/sentry-issue.sh
+# needs (that script's own header records the 403), and the read-only inline credential it
+# does need is not one the sweeper forwards. The BETTERSTACK_QUERY_* triple below is what
+# the sweeper actually has, which is what makes this probe executable AT ALL rather than
+# silently failing on an unknown secret name. (The sweeper's Sentry credential is now the
+# org-level actions integration, ADR-031 -- this probe still has no reason to use it.)
 #
 # It deliberately does NOT read the heartbeat API: `status == "up"` proves reachability,
 # the proxy D-HB rejects (a host whose LUKS never mounted still answers on :22).
 set -uo pipefail
+
+# REFUSE TO RUN UNDER XTRACE (#7797) -- unconditionally, not behind a `${VAR:+x}` hatch:
+# the credentials below are bound by INDIRECT expansion (`${!v:-}`), which xtrace prints
+# as the VALUE, and a conditional hatch keyed on one literal name cannot cover an
+# indirection. `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script binds live credentials by indirect expansion and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${REPO_ROOT}/scripts/betterstack-query.sh"

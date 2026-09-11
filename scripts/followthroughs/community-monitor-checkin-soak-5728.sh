@@ -25,10 +25,12 @@
 #   1 = FAIL       (≥1 missed/timeout — delivery regressed; sweeper comments, leaves open)
 #   * = TRANSIENT  (Sentry API unreachable, auth failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN). Optional: SENTRY_ORG (default jikigai-eu),
-#   SENTRY_API_HOST (default de.sentry.io — the EU region host; ADR-031, and the
-#   host live-verified for the checkins endpoint during #5728 Phase 0).
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
+#   The org and API host are PINNED literals (Rule D, ADR-202): `jikigai-eu` on `de.sentry.io`,
+#   the EU region host live-verified for the checkins endpoint during #5728 Phase 0. An env
+#   override that does not equal the pin is refused (TRANSIENT), never followed.
 
 set -uo pipefail
 
@@ -40,25 +42,31 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
-ORG="${SENTRY_ORG:-jikigai-eu}"
-API_HOST="${SENTRY_API_HOST:-de.sentry.io}"
+readonly ORG_PINNED="jikigai-eu"
+readonly API_HOST_PINNED="de.sentry.io"
+ORG="${SENTRY_ORG:-$ORG_PINNED}"
+API_HOST="${SENTRY_API_HOST:-$API_HOST_PINNED}"
+if [[ "$ORG" != "$ORG_PINNED" || "$API_HOST" != "$API_HOST_PINNED" ]]; then
+  echo "TRANSIENT: refusing an unpinned Sentry destination (org=${ORG} host=${API_HOST}; pinned to ${ORG_PINNED} / ${API_HOST_PINNED})" >&2
+  exit 2
+fi
 MONITOR_SLUG="scheduled-community-monitor"
 WINDOW_DAYS=7
 
 URL="https://${API_HOST}/api/0/organizations/${ORG}/monitors/${MONITOR_SLUG}/checkins/?per_page=30"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "$URL")
 
