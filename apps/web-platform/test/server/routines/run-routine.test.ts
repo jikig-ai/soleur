@@ -51,6 +51,32 @@ describe("runRoutine — policy", () => {
     expect(r.ok).toBe(true);
     expect(mockInngestSend).toHaveBeenCalledTimes(1);
   });
+
+  it("binds a routine before sending its Inngest event", async () => {
+    const bindRun = vi.fn().mockResolvedValue({ runId: "engine-run-1" });
+    const r = await runRoutine({
+      fnId: "cron-daily-triage",
+      actorClass: "human",
+      actorId: "op-1",
+      workspaceId: "ws-1",
+      routineRunId: "routine-run-1",
+      bindRun,
+    });
+    expect(r).toEqual({ ok: true, event: "cron/daily-triage.manual-trigger" });
+    expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: "ws-1", routineId: "cron-daily-triage", routineRunId: "routine-run-1",
+    }));
+    expect(mockInngestSend).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the routine binding cannot be persisted", async () => {
+    const bindRun = vi.fn().mockRejectedValue(new Error("db unavailable"));
+    const r = await runRoutine({
+      fnId: "cron-daily-triage", actorClass: "human", workspaceId: "ws-1", bindRun,
+    });
+    expect(r).toEqual({ ok: false, code: "engine_binding_failed", status: 503 });
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
 });
 
 describe("runRoutine — attribution (route-controlled keys spread last)", () => {

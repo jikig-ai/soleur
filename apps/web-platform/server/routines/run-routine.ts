@@ -33,14 +33,24 @@ export interface RunRoutineInput {
   data?: Record<string, unknown>;
   /** Observability feature tag for sendInngestWithRetry. */
   feature?: string;
+  /** Trusted workspace context used by the engine binding repository. */
+  workspaceId?: string;
+  routineRunId?: string;
+  bindRun?: (input: {
+    workspaceId: string;
+    executionKind: "routine";
+    routineId: string;
+    routineRunId: string;
+    createdBy: string;
+  }) => Promise<unknown>;
 }
 
 export type RunRoutineResult =
   | { ok: true; event: string }
   | {
       ok: false;
-      code: "unknown_routine" | "confirmation_required";
-      status: 400 | 409;
+      code: "unknown_routine" | "confirmation_required" | "engine_binding_failed";
+      status: 400 | 409 | 503;
     };
 
 const EXPECTED = new Set(EXPECTED_CRON_FUNCTIONS);
@@ -56,6 +66,9 @@ export async function runRoutine(
     confirmed = false,
     data = {},
     feature = "run-routine",
+    workspaceId,
+    routineRunId,
+    bindRun,
   } = input;
 
   // Membership check excludes event-driven / one-shot functions.
@@ -76,6 +89,23 @@ export async function runRoutine(
       : actorClass === "system"
         ? "manual-api"
         : "manual";
+
+  if (bindRun) {
+    if (!workspaceId || !routineRunId && typeof data.run_id !== "string") {
+      return { ok: false, code: "engine_binding_failed", status: 503 };
+    }
+    try {
+      await bindRun({
+        workspaceId,
+        executionKind: "routine",
+        routineId: fnId,
+        routineRunId: routineRunId ?? String(data.run_id),
+        createdBy: actorId ?? delegatingPrincipal ?? "system",
+      });
+    } catch {
+      return { ok: false, code: "engine_binding_failed", status: 503 };
+    }
+  }
 
   // The Inngest client is imported dynamically to defer its load-time
   // fail-closed throw (missing INNGEST_SIGNING_KEY) to call time.
