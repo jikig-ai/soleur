@@ -30,9 +30,12 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-WF="$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml"
+# Overridable so the in-suite mutation rows (W8-a..e, W9-a) can point the SAME
+# check functions at a PyYAML-mutated temp copy and assert they go RED. A check
+# that has never been driven red is a reading, not a test.
+WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=5
+EXPECTED_TESTS=14
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -180,11 +183,228 @@ t_probe_marker_matches_what_the_step_greps() {
   fi
 }
 
+
+# ── W8 / W9 — the dead-man's switch and the title key (#8050) ─────────────────
+#
+# THE MEASURED FALSE POSITIVE. Run 34573504979 (2026-09-11 07:15 UTC) reached
+# `verdict=drift`, filed the drift issue (#8057) — and then ALSO filed #8058,
+# "the drift probe could not establish a verdict", whose body read `Verdict
+# reached: drift`. The filer was gated `if: always() && failure()`, and the
+# drift filer two steps above it ends in a deliberate `exit 1` on every drift
+# verdict, so `failure()` was true on exactly the class of run the step was
+# written to exclude. The gate below is on the VERDICT pair `(verdict, filed)`,
+# never on job status.
+#
+# These rows read the `if:` TEXT via PyYAML rather than executing it — GitHub's
+# expression evaluator is not available locally — so each is paired with an
+# in-suite mutation of a temp copy (YAML-level, not `sed`: five other steps in
+# this file carry `always() &&`, and a single-line `s///` outside a range hits
+# the wrong one first) that must drive the SAME check red. The landing assert
+# re-loads the copy and compares the DOCUMENT, not the file bytes.
+
+# _step_field <wf> <selector-kind> <selector> <field> — prints the field of the
+# ONE matching step, or exits 3 with a message when the selector does not match
+# exactly one step. Selector kinds: `id` (exact) and `name_prefix`.
+_step_field() {
+  python3 - "$1" "$2" "$3" "$4" <<'PYEOF'
+import sys, yaml
+wf, kind, sel, field = sys.argv[1:5]
+d = yaml.safe_load(open(wf))
+steps = d["jobs"]["drift-check"]["steps"]
+if kind == "id":
+    m = [s for s in steps if s.get("id") == sel]
+else:
+    m = [s for s in steps if (s.get("name") or "").startswith(sel)]
+if len(m) != 1:
+    sys.exit(f"expected exactly one step matching {kind}={sel!r}, found {len(m)}")
+v = m[0].get(field, "")
+print(v if isinstance(v, str) else yaml.safe_dump(v))
+PYEOF
+}
+
+# _collapse — whitespace-insensitive text for the `if:` assertions. A
+# multi-line `if: >-` folds differently from a one-liner and both are the same
+# expression to GitHub.
+_collapse() { tr -s ' \n\t' ' ' | sed 's/^ //; s/ $//'; }
+
+# _w8_filer_gate_ok <wf> — 0 when the probe-unavailable filer is gated on the
+# verdict pair; non-zero with a reason on stdout otherwise.
+_w8_filer_gate_ok() {
+  local cond
+  if ! cond=$(_step_field "$1" id file_unavailable if 2>&1); then
+    echo "selector floor: $cond"; return 1
+  fi
+  cond=$(_collapse <<<"$cond")
+  local why=()
+  grep -qF -- '!cancelled()' <<<"$cond" || why+=("missing !cancelled() — a Stop click or timeout would file a false issue")
+  grep -qF -- "verdict == 'unavailable'" <<<"$cond" || why+=("missing the 'unavailable' arm")
+  grep -qF -- "verdict == ''" <<<"$cond" || why+=("missing the == '' arm — a run that aborts before the probe writes a verdict would file nothing")
+  grep -qF -- "filed != 'true'" <<<"$cond" || why+=("missing the drift-not-filed arm")
+  grep -qF -- 'failure()' <<<"$cond" && why+=("contains failure() — true on every drift verdict because the drift filer exits 1 by design (#8058)")
+  if [[ ${#why[@]} -gt 0 ]]; then printf '%s; ' "${why[@]}"; echo; return 1; fi
+  return 0
+}
+
+# _w8_closer_gate_ok <wf> — the probe-unavailable CLOSER must be disjoint from
+# the filer on the pair `(verdict, filed)`: without the `filed == 'true'`
+# conjunct it runs on the very arm the filer adds (`drift` + not filed) and
+# closes the issue the filer just opened in the same run.
+_w8_closer_gate_ok() {
+  local cond
+  if ! cond=$(_step_field "$1" name_prefix "Close the probe-unavailable" if 2>&1); then
+    echo "selector floor: $cond"; return 1
+  fi
+  cond=$(_collapse <<<"$cond")
+  local why=()
+  grep -qF -- "verdict == 'clean'" <<<"$cond" || why+=("missing the 'clean' arm")
+  grep -qF -- "verdict == 'drift' && steps.file_drift.outputs.filed == 'true'" <<<"$cond" || why+=("the 'drift' arm lacks the filed == 'true' conjunct — the closer would undo the filer's drift-not-filed arm in the same run")
+  grep -qF -- "!=" <<<"$cond" && why+=("contains an inequality")
+  if [[ ${#why[@]} -gt 0 ]]; then printf '%s; ' "${why[@]}"; echo; return 1; fi
+  return 0
+}
+
+# _w9_title_parity_ok <wf> — the drift TITLE is ONE string, defined once at
+# job-level env and referenced (never restated) by the filer and its closer.
+_w9_title_parity_ok() {
+  python3 - "$1" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+job = d["jobs"]["drift-check"]
+env = job.get("env") or {}
+title = env.get("DRIFT_TITLE")
+want = "[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture"
+if title != want:
+    sys.exit(f"jobs.drift-check.env.DRIFT_TITLE is {title!r}, want the unchanged literal")
+steps = job["steps"]
+filer = [s for s in steps if s.get("id") == "file_drift"]
+closer = [s for s in steps if (s.get("name") or "").startswith("Close the drift issue")]
+if len(filer) != 1 or len(closer) != 1:
+    sys.exit(f"expected one filer and one drift closer, found {len(filer)}/{len(closer)}")
+bad = []
+for label, s in (("filer", filer[0]), ("closer", closer[0])):
+    run = s.get("run", "")
+    if '"$DRIFT_TITLE"' not in run:
+        bad.append(f"{label} does not reference \"$DRIFT_TITLE\"")
+    if want in run:
+        bad.append(f"{label} restates the title literal inline — a second copy is a second thing to keep true")
+    if "${{ env." in run:
+        bad.append(f"{label} interpolates env into the shell string; read it as $VAR")
+if bad:
+    sys.exit("; ".join(bad))
+PYEOF
+}
+
+t_w8_filer_gated_on_verdict_pair() {
+  local why
+  if why=$(_w8_filer_gate_ok "$WF"); then
+    _report "W8 the probe-unavailable filer is gated on (verdict, filed) with !cancelled(), never on failure()" ok
+  else
+    _report "W8 probe-unavailable filer gate" fail "$why"
+  fi
+}
+
+t_w8_closer_disjoint_from_filer() {
+  local why
+  if why=$(_w8_closer_gate_ok "$WF"); then
+    _report "W8c the probe-unavailable closer carries the filed == 'true' conjunct (disjoint from the filer)" ok
+  else
+    _report "W8c probe-unavailable closer gate" fail "$why"
+  fi
+}
+
+t_w9_title_is_one_string() {
+  local why
+  if why=$(_w9_title_parity_ok "$WF" 2>&1); then
+    _report "W9 the drift TITLE is defined once (env.DRIFT_TITLE) and referenced by filer and closer" ok
+  else
+    _report "W9 drift title parity" fail "$why"
+  fi
+}
+
+# _mutate_wf <label> <python-body> — writes a mutated copy of $WF to
+# $TMPD/<label>.yml. The python body receives `steps` (the job's step list) and
+# edits in place. The landing assert reloads the copy and requires the DOCUMENT
+# to differ from the shipped one — a mutation that did not land would make the
+# row below re-test the shipped file and pass for the wrong reason.
+# Prints the path, or `NOLAND`/`PYFAIL`.
+_mutate_wf() {
+  local label="$1" body="$2" out="$TMPD/$1.yml" rc=0
+  python3 - "$WF" "$out" "$body" <<'PYEOF' 2>"$TMPD/$label.err" || rc=$?
+import sys, yaml, copy
+src, out, body = sys.argv[1:4]
+d = yaml.safe_load(open(src))
+orig = copy.deepcopy(d)
+steps = d["jobs"]["drift-check"]["steps"]
+exec(body, {"d": d, "steps": steps})
+yaml.safe_dump(d, open(out, "w"), sort_keys=False, width=10000)
+# exit 7 is the LANDING floor, distinct from any python failure.
+if yaml.safe_load(open(out)) == orig:
+    sys.exit(7)
+PYEOF
+  case "$rc" in
+    0) echo "$out" ;;
+    7) echo "NOLAND" ;;
+    *) echo "PYFAIL" ;;
+  esac
+}
+
+# _red_row <test-label> <mutant-path-or-marker> <check-fn> <expected-substring>
+_red_row() {
+  local label="$1" f="$2" fn="$3" want="$4" why
+  if [[ "$f" == "PYFAIL" || "$f" == "NOLAND" ]]; then
+    _report "$label" fail "the mutation did not land ($f) — this row re-tested the shipped file"; return
+  fi
+  if why=$("$fn" "$f" 2>&1); then
+    _report "$label" fail "the mutated copy still passes the check — the assertion cannot see this edit"
+  elif grep -qF -- "$want" <<<"$why"; then
+    _report "$label" ok
+  else
+    _report "$label" fail "went red for the wrong reason: '$why' (want '$want')"
+  fi
+}
+
+t_w8_mutants() {
+  local f
+  f=$(_mutate_wf w8a 'for s in steps:
+    if s.get("id") == "file_unavailable": s["if"] = "always() && failure()"')
+  _red_row "W8-a restoring if: always() && failure() reds W8" "$f" _w8_filer_gate_ok "contains failure()"
+
+  f=$(_mutate_wf w8b "for s in steps:
+    if s.get('id') == 'file_unavailable': s['if'] = s['if'].replace(\" || steps.probe.outputs.verdict == ''\", '')")
+  _red_row "W8-b dropping the verdict == '' arm reds W8" "$f" _w8_filer_gate_ok "missing the == '' arm"
+
+  f=$(_mutate_wf w8c 'for s in steps:
+    if s.get("id") == "file_unavailable": s["if"] = s["if"].replace("!cancelled() && ", "")')
+  _red_row "W8-c dropping !cancelled() reds W8" "$f" _w8_filer_gate_ok "missing !cancelled()"
+
+  f=$(_mutate_wf w8d 'for s in steps:
+    if s.get("id") == "file_unavailable": del s["id"]')
+  _red_row "W8-d removing id: file_unavailable trips the exactly-one selector floor" "$f" _w8_filer_gate_ok "selector floor"
+
+  f=$(_mutate_wf w8e "for s in steps:
+    if (s.get('name') or '').startswith('Close the probe-unavailable'):
+        s['if'] = s['if'].replace(\" && steps.file_drift.outputs.filed == 'true'\", '')")
+  _red_row "W8-e dropping the closer's filed == 'true' conjunct reds W8c" "$f" _w8_closer_gate_ok "lacks the filed == 'true' conjunct"
+}
+
+t_w9_mutant() {
+  local f
+  f=$(_mutate_wf w9a "for s in steps:
+    if (s.get('name') or '').startswith('Close the drift issue'):
+        s['run'] = s['run'].replace('\"\$DRIFT_TITLE\"', '\"[ci/sentry-alert-drift] a migrated Sentry alert has drifted\"')")
+  _red_row "W9-a an inline differing title in the close step reds W9" "$f" _w9_title_parity_ok "does not reference"
+}
+
 t_clean
 t_drift
 t_unavailable
 t_close_gated_on_clean_only
 t_probe_marker_matches_what_the_step_greps
+t_w8_filer_gated_on_verdict_pair
+t_w8_closer_disjoint_from_filer
+t_w9_title_is_one_string
+t_w8_mutants
+t_w9_mutant
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))
