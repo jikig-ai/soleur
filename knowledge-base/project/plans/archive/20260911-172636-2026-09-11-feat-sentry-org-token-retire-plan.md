@@ -657,9 +657,17 @@ logs:
   retention: GitHub Actions default for run logs; tracker comments are permanent
 
 discoverability_test:
-  command: bash scripts/lint-followthrough-varq-ban.sh && python3 scripts/lint-shell-trace-credential-refusal.py scripts/followthroughs/community-monitor-checkin-soak-5728.sh && bash scripts/sweep-followthroughs.test.sh && grep -c '::warning::.*SENTRY_ACTIONS_RO_TOKEN' apps/web-platform/infra/scripts/fresh-host-boot-trail.sh
-  expected_output: "clean (N probe(s) scanned) with N >= 10 and scanned_rule2 >= N, then the lint exits 0 on a migrated file with baselines bypassed (explicit path), then the sweeper suite green including Guard 3 M1-M6 against a stub gh, then a count of 1 or more"
+  command: bash scripts/lint-followthrough-varq-ban.sh
+  expected_output: "followthrough-varq-ban: clean"
 ```
+
+*(Amended at /ship 2026-09-11: the original command chained four probes with `&&`, which
+preflight Check 10 rejects as a shell-active token before execution, and its last limb
+grepped a `::warning::` literal the review-phase boot-trail rewrite (`msg=` on both channels,
+`::error::` on a successful job) no longer carries. One verb, one line: rule 1 + rule 2 over
+the live `scripts/followthroughs/` tree, which is the property this plan retires the name
+for. The other three limbs stay as suite rows — refusal lint G2-M1…M8, sweeper G3-M1…M9,
+infra AC13e/e2 — and run in CI on every PR.)*
 
 No limb requires SSH. The runbook has no SSH fallback.
 
