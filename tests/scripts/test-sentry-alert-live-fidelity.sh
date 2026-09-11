@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=33
+EXPECTED_TESTS=34
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -214,6 +214,24 @@ t_deleted() {
 # drift issue routes DRIFT to "re-run the apply" and DISABLED to "an apply will
 # NOT fix this", so a misclassified UI mute sends the operator down the wrong
 # path. Verified by the review's mutation battery.
+# The complement of F3: a rule the ROOT declares `enabled = false` and live holds
+# disabled is in its desired state and must NOT be reported DISABLED (which would
+# red every apply and every daily run for as long as the declaration stands — the
+# #8050 shape one attribute over). Built by deriving a reference from a capture
+# whose byok-art-33-breach is disabled, then probing that same disabled live copy.
+t_declared_disabled_is_not_a_finding() {
+  local f; f=$(_mutant decldisabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)')
+  if [[ "$f" == "JQFAIL" || "$f" == "NOOP" ]]; then _report "F34 declared-disabled rule is not DISABLED" fail "the mutation did not land ($f)"; return; fi
+  local r="$TMPD/decldisabled.reference.json"
+  jq --arg side live -f "$PROJ" "$f" | jq -S --arg side reference -f "$PROJ" > "$r" || { _report "F34 declared-disabled rule is not DISABLED" fail "could not derive the reference"; return; }
+  jq -e '."byok-art-33-breach".enabled == false' "$r" >/dev/null || { _report "F34 declared-disabled rule is not DISABLED" fail "derived reference does not carry enabled:false"; return; }
+  _run "$f" "$r"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'live fidelity: PASS' <<<"$_out" && ! grep -q 'DISABLED:' <<<"$_out"; then
+    _report "F34 a rule declared enabled=false and live-disabled PASSES with no DISABLED finding (DISABLED is judged against the declared value)" ok
+  else
+    _report "F34 declared-disabled rule is not DISABLED" fail "rc=$_rc (want 0); DISABLED $(grep -q 'DISABLED:' <<<"$_out" && echo present || echo absent). Output: $(head -c 300 <<<"$_out")"
+  fi
+}
 t_disabled() {
   _drift_case disabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)' \
     "DISABLED: 'byok-art-33-breach'" \
@@ -680,6 +698,7 @@ t_identity_passes
 t_live_api_shape
 t_deleted
 t_disabled
+t_declared_disabled_is_not_a_finding
 t_detector_unbind
 t_detector_empty
 t_logictype_flip

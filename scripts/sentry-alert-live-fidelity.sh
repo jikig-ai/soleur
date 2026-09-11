@@ -246,7 +246,14 @@ while IFS= read -r name; do
     _finding "DELETED or RENAMED: '$name' is declared in the Sentry root and absent from live Sentry. An apply can recreate a deleted rule; a rule renamed in the UI needs the name restored (Terraform owns \`name\`, so the next apply would otherwise create a SECOND rule)."
     continue
   fi
-  if ! jq -e --arg n "$name" '.[$n].enabled == true' >/dev/null <<<"$live_proj"; then
+  # DISABLED is judged against the DECLARED value, not against `true`. A rule the
+  # root declares `enabled = false` and live Sentry holds disabled is in its desired
+  # state; flagging it would red every apply and every daily run for as long as the
+  # declaration stands — the #8050 shape one attribute over (a reference that cannot
+  # agree with a correct live state). Declared-true/live-false is the DISABLED class;
+  # declared-false/live-true is caught below as DRIFT on `enabled`, which an apply fixes.
+  if jq -e --arg n "$name" '.[$n].enabled == true' >/dev/null <<<"$ref_proj" \
+     && ! jq -e --arg n "$name" '.[$n].enabled == true' >/dev/null <<<"$live_proj"; then
     _finding "DISABLED: '$name' exists but is not enabled — it pages nobody. Enablement is live state; an apply will NOT fix it."
   fi
   # Field-by-field so the report names WHICH attribute moved, not just "differs".
