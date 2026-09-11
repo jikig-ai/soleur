@@ -26,7 +26,7 @@ routine run binds the current default once; retries retain that binding.
 - [x] RED-01b: persisted conversation/routine binding, dispatch authorization, and no alternate-engine invocation at the execution boundary (4 tests green).
 - [x] GREEN-01b (blockedBy RED-01b): deterministic binding store freezes conversation/routine selection and preserves it for retries (`bf930503c`).
 - [x] RED-02: event sequencing, terminal-state monotonicity, uncertain cancellation, and usage provenance tests (3 tests green).
-- [x] GREEN-02 (blockedBy RED-02): normalized lifecycle ledger with idempotent events and conservative cancellation (`pending`).
+- [x] GREEN-02 (blockedBy RED-02): normalized lifecycle ledger with idempotent events and conservative cancellation (`8ff20caa8`).
 
 ## Phase 1 — Persistence and Claude extraction
 
