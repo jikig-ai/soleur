@@ -1,5 +1,21 @@
 # Resume Prompt — fix the issue-flow structurally
 
+> **SUPERSEDED 2026-09-11 — the work described here SHIPPED in #8038**
+> ("feat(issue-flow): separate the machinery ledger and move the lever to filing
+> time"). That PR implements all four levers below, not only the two this prompt
+> prioritised, and it cites this document's measurements directly.
+>
+> **Do not action this prompt.** It is retained because the MEASUREMENT and the
+> DIAGNOSIS are what #8038 is built on, and because the three open questions at
+> the end were answered by that PR's design rather than by an operator — anyone
+> auditing why the levers took the shape they did should read both.
+>
+> What changed versus this prompt: it proposed a `domain/`-style split and an
+> expiry sweep as separable steps; #8038 ships them coupled, because levers 2-4
+> all key off the `meta/machinery` ledger that lever 1 introduces. It also found
+> a second filing chokepoint this prompt did not name ("the issue-flow filing
+> gate has two chokepoints, not one").
+
 Self-contained. Paste into a fresh session; every number below is measured, so
 do not re-derive before starting.
 
