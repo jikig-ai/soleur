@@ -173,6 +173,11 @@ resource "sentry_issue_alert" "auth_per_user_loop" {
 # `betterstack_ingest` (shipped #7460 — the emitter fell back to the stale baked token after a
 # Better-Stack-side rotation, so the pre-Doppler stages go dark) and, as of #7772,
 # `gitdata_nftables_metadata_warn` (the metadata-egress drop failed to arm). NOTHING read either.
+# (#8043 F11) A THIRD was in the same state: `sshd_config_warn` — emitted by the sshd stage when
+# `sshd -t` could not run, when the unit action failed, and now (#8043) when a hardening
+# directive is absent from the `sshd -T` effective config or `-T` could not run. The rehearsal
+# row that carried the F11 measurement ("Unit sshd.service not found.") reached no rule at all;
+# the op-contract test now derives the emitter's warning vocabulary and set-compares it here.
 # `git_data_boot_fatal` above filters ten stage values and neither is among them, and the rung-2
 # rehearsal's `_sentry_consult` is pinned to level:fatal BY DESIGN — its job is catching a boot
 # death the Better Stack read missed. ADR-198 states this plainly: as shipped, the mirror was "a
@@ -270,7 +275,7 @@ resource "sentry_alert" "git_data_boot_warning" {
       conditions = [
         # `in`, not two `eq` filters: the values are a closed set that grows with the emitter's
         # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
-        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn" } },
+        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },

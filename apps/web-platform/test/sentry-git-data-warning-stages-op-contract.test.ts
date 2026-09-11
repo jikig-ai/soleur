@@ -67,20 +67,36 @@ const cloudInitCode = cloudInit
 // assignment, dropping the `_warn` suffix from the emit, and renaming the resource itself (which
 // hits scopeResource's miss-guard with a named message rather than a slice(-1) silent pass).
 //
-// NOT COVERED: population growth. WARNING_STAGES is a literal, so adding a THIRD warning stage to
-// the emitter without routing it would not fail here — the new stage is simply unknown to this
-// file. That is the same limitation the fatal sibling has, and closing it means deriving the set
-// from the emitter, which is the general extraction engine this suite is explicitly not allowed
-// to become (it would scope-creep the pre-existing nine-fatal-stage reconciliation). The
-// mitigation is procedural and lives in cloud-init-git-data.yml's own comment: git-data-emit's
-// stage vocabulary is a closed set that two files must agree on, and adding to it means adding
-// here too.
+// POPULATION GROWTH IS NOW COVERED, in both directions (#8043 F11, Guard 2). This header used to
+// say it was not: WARNING_STAGES was a literal checked with `toContain`, which proved only
+// `WARNING_STAGES ⊆ tf`, so a THIRD warning stage emitted by the template and routed by nothing
+// shipped 5/5 green — and that is exactly what happened: `sshd_config_warn` was emitted twice
+// by the sshd stage and matched nothing in issue-alerts.tf, so the very row that carried the
+// F11 measurement paged nobody. Three set-equality assertions close it: (a) the tf `in` list
+// set-equals WARNING_STAGES; (b) the EMITTER's warning-level vocabulary — derived from the
+// comment-stripped template, warning-level emits only — set-equals WARNING_STAGES ∪ the named
+// fatal-routed exceptions; (c) each named exception really is a `value = "…"` on the fatal
+// rule, so the exception literal cannot become a dumping ground for unrouted stages.
 //
-// The closed set of git-data stages that emit at level WARNING.
+// The derivation stays inside this file's boundary: it extracts WARNING-level emits only (the
+// call shape with a literal `warning` level), never the fatal set, so it is not the general
+// extraction engine the nine-fatal-stage reconciliation was kept away from.
+//
+// The closed set of git-data stages that emit at level WARNING and route to the NON-paging rule.
 const WARNING_STAGES = [
   "betterstack_ingest",
   "gitdata_nftables_metadata_warn",
+  "sshd_config_warn",
 ] as const;
+
+// Warning-level emits that ROUTE TO THE FATAL RULE. `gc_timer` is emitted at level warning
+// (`git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning` under
+// STAGE=gc_timer) and the fatal rule filters on `stage` only, never on `level` — so a
+// timer-arm failure PAGES today. That is a pre-existing paging-policy fact this suite pins
+// rather than changes (ADR-198: a stage must not move across the severity boundary silently);
+// whether it SHOULD page is filed as a policy decision, not fixed here. Assertion (c) proves
+// every member is actually on the fatal rule.
+const WARNING_EMITS_ROUTED_BY_FATAL_RULE = ["gc_timer"] as const;
 
 // The fatal-side name for the same runcmd item. STAGE is whatever was last assigned when the
 // top-armed trap fires, so a death anywhere in that item reports THIS value, not the _warn one.
@@ -161,11 +177,13 @@ describe("git-data warning-stage routing op contract", () => {
     ).toBe(NFT_FATAL_STAGE);
   });
 
-  it("every warning stage is routed by the low-severity rule", () => {
+  it("every warning stage is routed by the low-severity rule — and only those (set equality)", () => {
     const scoped = scopeResource(tf, "git_data_boot_warning");
-    for (const stage of WARNING_STAGES) {
-      expect(scoped, `warning stage ${stage} is not routed`).toContain(stage);
-    }
+    // (a) tf ⊇ AND ⊆ WARNING_STAGES. The old `toContain` per stage proved one direction only.
+    const inMatch = scoped.match(/key\s*=\s*"stage",\s*match\s*=\s*"in",\s*value\s*=\s*"([^"]+)"/);
+    expect(inMatch, "the warning rule has no stage `in` list").not.toBeNull();
+    const inList = inMatch![1].split(",").map((x) => x.trim()).sort();
+    expect(inList).toEqual([...WARNING_STAGES].sort());
     // `in`, the `sentry_alert` spelling of the old `IS_IN`. Still asserting a SET match
     // rather than `eq`: an `eq` here would route exactly one stage and silently drop the rest.
     expect(scoped).toMatch(/match\s*=\s*"in"/);
@@ -189,6 +207,44 @@ describe("git-data warning-stage routing op contract", () => {
     // host that booted fine — the severity split is the whole point of a second rule.
     expect(scoped).toContain("NoOne");
     expect(scoped).not.toContain("ActiveMembers");
+  });
+
+  it("the EMITTER's warning vocabulary set-equals the routed set plus the named fatal-routed exceptions", () => {
+    // (b) Derived from the template, warning-level emits only. Backslash continuations are
+    // joined first: one emit's stage+level sit on the continued line. The corpus is the
+    // comment-stripped one for the reason the first `it` records — a prose line quotes an emit.
+    const joined = cloudInitCode.replace(/\\\n\s*/g, " ");
+    const assignments = [...joined.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
+    const nearestStageBefore = (idx: number): string => {
+      const preceding = assignments.filter((m) => m.index! < idx);
+      expect(preceding.length, "a warning emit has no STAGE= assignment before it").toBeGreaterThan(0);
+      return preceding[preceding.length - 1][1];
+    };
+    const emits = [...joined.matchAll(/git-data-emit\s+"[^"]*"\s+("?[^"\s]+"?)\s+warning\b/g)];
+    // FLOOR: with the regex mis-anchored the derived set is empty and the equality below reds
+    // anyway, but the floor turns that into a named failure rather than a confusing diff.
+    expect(emits.length, "fewer than 3 warning-level emit calls found in the template").toBeGreaterThanOrEqual(3);
+    const resolved = new Set<string>();
+    for (const m of emits) {
+      const tok = m[1].replace(/^"|"$/g, "");
+      if (tok === "$STAGE" || tok === "${STAGE}") resolved.add(nearestStageBefore(m.index!));
+      else if (tok === "$${STAGE}_warn" || tok === "${STAGE}_warn") resolved.add(`${nearestStageBefore(m.index!)}_warn`);
+      else resolved.add(tok); // a bare literal stage string
+    }
+    // Plus the emitter-internal mirror construct, which emits a warning body as a JSON tag pair
+    // rather than through the positional form.
+    for (const m of joined.matchAll(/"level":"warning","tags":\{"stage":"([A-Za-z0-9_]+)"/g)) resolved.add(m[1]);
+    expect([...resolved].sort()).toEqual(
+      [...WARNING_STAGES, ...WARNING_EMITS_ROUTED_BY_FATAL_RULE].sort(),
+    );
+    // (c) every named exception is REALLY on the fatal rule — the literal cannot absorb an
+    // unrouted stage.
+    const fatal = scopeResource(tf, "git_data_boot_fatal");
+    for (const stage of WARNING_EMITS_ROUTED_BY_FATAL_RULE) {
+      expect(fatal, `${stage} is named as fatal-routed but is not on the fatal rule`).toMatch(
+        new RegExp(`value\\s*=\\s*"${stage}"`),
+      );
+    }
   });
 
   it("the fatal-side nftables stage is routed by the FATAL rule, and the _warn name is not", () => {
