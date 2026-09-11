@@ -73,5 +73,5 @@ export class AgentEngineBindingStore {
 function executionKey(execution: EngineExecution): string {
   return execution.kind === "conversation"
     ? `conversation:${execution.conversationId}`
-    : `routine:${execution.routineId}:${execution.schedulerKey}`;
+    : `routine:${execution.routineId}:${execution.routineRunId}`;
 }

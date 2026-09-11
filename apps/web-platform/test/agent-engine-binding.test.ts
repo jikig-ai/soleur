@@ -36,7 +36,7 @@ describe("AgentEngineBindingStore", () => {
   it("rejects a second binding for the same execution", () => {
     const store = new AgentEngineBindingStore({ defaultEngineId: "claude-code" });
     const input = {
-      execution: { kind: "routine", routineId: "routine-1", schedulerKey: "cron:daily" } as const,
+      execution: { kind: "routine", routineId: "routine-1", routineRunId: "run-1" } as const,
       actor: { userId: "owner-1", isWorkspaceOwner: true },
     };
     store.bind(input);
