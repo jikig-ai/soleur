@@ -456,8 +456,11 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
     vi.useFakeTimers();
     try {
       let searchAttempts = 0;
-      octokitRequestSpy.mockImplementation(async (route: string) => {
+      octokitRequestSpy.mockImplementation(async (route: string, params?: { q?: string }) => {
         if (route === "GET /search/issues") {
+          // #8076: the run-report arm's per-label searches are not under test
+          // here — answer them empty without counting.
+          if (String(params?.q ?? "").includes('label:"scheduled-')) return { data: { items: [] } };
           searchAttempts += 1;
           // First attempt: octokit's real wrapped connect-timeout shape.
           if (searchAttempts === 1) throw wrappedConnectTimeout();
@@ -597,8 +600,10 @@ describe("cronStaleDeferredScopeOuts — connect-timeout resilience", () => {
     vi.useFakeTimers();
     try {
       let searchAttempts = 0;
-      octokitRequestSpy.mockImplementation(async (route: string) => {
+      octokitRequestSpy.mockImplementation(async (route: string, params?: { q?: string }) => {
         if (route === "GET /search/issues") {
+          // #8076: the run-report arm's searches answer empty (not under test).
+          if (String(params?.q ?? "").includes('label:"scheduled-')) return { data: { items: [] } };
           searchAttempts += 1;
           throw wrappedConnectTimeout(); // every attempt fails
         }
@@ -900,5 +905,260 @@ describe("cron-stale-deferred-scope-outs — per-label close caps", () => {
     expect(perLabel["deferred-scope-out"]).toBeGreaterThanOrEqual(
       perLabel["meta/machinery"],
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8076 — the run-report arm. SUCCESS run-reports (the `[Scheduled] …` issues
+// that ten crons MUST file) had no lifecycle: 43 open community digests, last
+// bulk-closed by a person on 2026-07-27. This arm closes them at a per-label
+// literal window (`closeAfterDays` in _cron-run-reports.ts), never a FAILED
+// report, never a human-touched one, never a finding that merely borrowed the
+// label (title shape + author), never campaign-calendar's standing issue or
+// legal-audit's findings (rows with closeAfterDays: null are never queried).
+// Guard Contract: plan §Guard 2.
+// ---------------------------------------------------------------------------
+describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
+  const NOW = new Date("2026-09-12T12:00:00Z");
+  const RR_MARKER = "<!-- soleur:auto-close-run-report -->";
+
+  function rrIssue(args: {
+    number: number;
+    label?: string;
+    title?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    body?: string;
+    labels?: string[];
+    comments?: number;
+    author?: string;
+  }) {
+    return {
+      number: args.number,
+      title: args.title ?? `[Scheduled] Community Monitor - 2026-08-${String(args.number % 28 + 1).padStart(2, "0")}`,
+      created_at: args.createdAt ?? "2026-08-01T08:08:00Z",
+      updated_at: args.updatedAt ?? "2026-08-01T08:08:00Z",
+      state: "open",
+      body: args.body ?? "## Community Monitor — 2026-08-01\n\n**Platform status:** ok",
+      labels: (args.labels ?? [args.label ?? "scheduled-community-monitor"]).map((name) => ({ name })),
+      comments: args.comments ?? 0,
+      user: { login: args.author ?? "soleur-ai[bot]", type: args.author ? "User" : "Bot" },
+    };
+  }
+
+  // Route the per-label run-report searches; scope-out searches get nothing.
+  function mockSearch(byLabel: Record<string, unknown[]>, extra?: (route: string, params: Record<string, unknown>) => unknown) {
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "GET /search/issues") {
+        const q = String(params.q ?? "");
+        for (const [label, items] of Object.entries(byLabel)) {
+          if (q.includes(`label:"${label}"`)) return { data: { items } };
+        }
+        return { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") return { data: [] };
+      if (extra) return extra(route, params);
+      return { data: {} };
+    });
+  }
+
+  const closeCalls = () =>
+    octokitRequestSpy.mock.calls.filter(([route]) => route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}");
+  const commentCalls = () =>
+    octokitRequestSpy.mock.calls.filter(([route]) => route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments");
+  const searchQueries = () =>
+    octokitRequestSpy.mock.calls
+      .filter(([route]) => route === "GET /search/issues")
+      .map(([, p]) => String((p as { q: string }).q));
+
+  async function run() {
+    const { __TESTING__ } = await importModule();
+    return __TESTING__.sweepRunReports({
+      octokit: { request: octokitRequestSpy } as never,
+      now: NOW,
+      dryRun: false,
+      logger,
+    });
+  }
+
+  it("#7: closes a 10-day-old SUCCESS community digest with state_reason completed and its own marker comment", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 8000, createdAt: "2026-09-02T08:08:00Z" })] });
+    const r = await run();
+    expect(r.closed).toBe(1);
+    expect(closeCalls()).toHaveLength(1);
+    expect(closeCalls()[0][1]).toMatchObject({ issue_number: 8000, state: "closed", state_reason: "completed" });
+    expect(commentCalls()).toHaveLength(1);
+    expect(String((commentCalls()[0][1] as { body: string }).body)).toContain(RR_MARKER);
+  });
+
+  it("#1/#10: the query is created:-bounded, author-scoped, and per label", async () => {
+    mockSearch({});
+    await run();
+    const qs = searchQueries();
+    expect(qs.length).toBeGreaterThanOrEqual(8);
+    for (const q of qs) {
+      expect(q).toMatch(/is:open/);
+      expect(q).toMatch(/author:app\/soleur-ai/);
+      expect(q).toMatch(/created:<\d{4}-\d{2}-\d{2}/);
+      expect(q).not.toMatch(/updated:/);
+      expect(q.match(/label:/g) ?? []).toHaveLength(1);
+    }
+  });
+
+  it("#11: never queries scheduled-legal-audit or scheduled-campaign-calendar", async () => {
+    mockSearch({});
+    await run();
+    const joined = searchQueries().join("\n");
+    expect(joined).not.toContain("scheduled-legal-audit");
+    expect(joined).not.toContain("scheduled-campaign-calendar");
+    expect(joined).toContain("scheduled-community-monitor");
+    expect(joined).toContain("scheduled-roadmap-review");
+  });
+
+  it("#2: skips the #8027-shaped FAILED self-report (normal title, FAILED body prefix, p1-high)", async () => {
+    mockSearch({
+      "scheduled-community-monitor": [
+        rrIssue({ number: 8027, createdAt: "2026-09-01T08:00:00Z", body: "Automated FAILED self-report from `cron-community-monitor`.", labels: ["scheduled-community-monitor", "priority/p1-high", "type/bug"] }),
+      ],
+    });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["failed-report"]).toBe(1);
+    expect(closeCalls()).toHaveLength(0);
+  });
+
+  it("#3: skips a `- FAILED` title", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7001, title: "[Scheduled] Community Monitor - FAILED", createdAt: "2026-09-01T08:00:00Z" })] });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["failed-report"]).toBe(1);
+  });
+
+  it("#4: skips action-required; kill-switch labels skip too", async () => {
+    mockSearch({
+      "scheduled-community-monitor": [
+        rrIssue({ number: 7002, labels: ["scheduled-community-monitor", "action-required"], createdAt: "2026-09-01T08:00:00Z" }),
+        rrIssue({ number: 7003, labels: ["scheduled-community-monitor", "keep-open"], createdAt: "2026-09-01T08:00:00Z" }),
+        rrIssue({ number: 7004, labels: ["scheduled-community-monitor", "do-not-autoclose"], createdAt: "2026-09-01T08:00:00Z" }),
+      ],
+    });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(closeCalls()).toHaveLength(0);
+    expect(r.skipped).toBe(3);
+  });
+
+  it("#5/H2: does NOT skip a priority/p1-high digest (triage noise is not product signal) — the exact #8027 SUCCESS label set closes", async () => {
+    mockSearch({
+      "scheduled-community-monitor": [
+        rrIssue({ number: 7005, labels: ["scheduled-community-monitor", "priority/p2-medium", "type/bug", "domain/operations"], createdAt: "2026-09-01T08:00:00Z" }),
+        rrIssue({ number: 7006, labels: ["scheduled-community-monitor", "priority/p1-high"], createdAt: "2026-09-01T08:00:00Z" }),
+      ],
+    });
+    const r = await run();
+    expect(r.closed).toBe(2);
+  });
+
+  it("#6: a 20-day-old weekly roadmap review is NOT closed (window is 27 d)", async () => {
+    mockSearch({ "scheduled-roadmap-review": [rrIssue({ number: 7007, label: "scheduled-roadmap-review", title: "[Scheduled] Weekly Roadmap Review - 2026-08-23", createdAt: "2026-08-23T09:00:00Z" })] });
+    const r = await run();
+    // The query's created:< cutoff would exclude it at GitHub; the client-side
+    // age guard is the belt-and-suspenders that stops a stub-returned row.
+    expect(r.closed).toBe(0);
+  });
+
+  it("#9: skips a finding-shaped title that borrowed the label (not-run-report-shape)", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7008, title: "bug: the digest omits Bluesky", createdAt: "2026-09-01T08:00:00Z" })] });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["not-run-report-shape"]).toBe(1);
+  });
+
+  it("skips a human-commented report (non-bot comment)", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7009, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      (route) => (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
+        ? { data: [{ body: "keep this one", user: { login: "deruelle", type: "User" } }] }
+        : { data: {} }),
+    );
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "GET /search/issues") {
+        return String(params.q).includes('label:"scheduled-community-monitor"')
+          ? { data: { items: [rrIssue({ number: 7009, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] } }
+          : { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        return { data: [{ body: "keep this one", user: { login: "deruelle", type: "User" } }] };
+      }
+      return { data: {} };
+    });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["human-triaged"]).toBe(1);
+  });
+
+  it("#12: marker already present → skips the POST but still PATCHes the close", async () => {
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "GET /search/issues") {
+        return String(params.q).includes('label:"scheduled-community-monitor"')
+          ? { data: { items: [rrIssue({ number: 7010, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] } }
+          : { data: { items: [] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        return { data: [{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" } }] };
+      }
+      return { data: {} };
+    });
+    const r = await run();
+    expect(r.closed).toBe(1);
+    expect(commentCalls()).toHaveLength(0);
+    expect(closeCalls()).toHaveLength(1);
+  });
+
+  it("#8: cap — 26 eligible → exactly 25 closed + 1 deferred (asserted as counts)", async () => {
+    const items = Array.from({ length: 26 }, (_, i) => rrIssue({ number: 6000 + i, createdAt: "2026-08-20T08:00:00Z" }));
+    mockSearch({ "scheduled-community-monitor": items });
+    const r = await run();
+    expect(r.closed).toBe(25);
+    expect(r.deferred).toBe(1);
+    expect(closeCalls()).toHaveLength(25);
+  });
+
+  it("H1: an empty search page closes nothing and reports total 0 (not vacuously green)", async () => {
+    mockSearch({});
+    const r = await run();
+    expect(r.total).toBe(0);
+    expect(r.closed).toBe(0);
+    expect(closeCalls()).toHaveLength(0);
+  });
+
+  it("dry run: closes nothing, counts eligibility", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7011, createdAt: "2026-09-01T08:00:00Z" })] });
+    const { __TESTING__ } = await importModule();
+    const r = await __TESTING__.sweepRunReports({ octokit: { request: octokitRequestSpy } as never, now: NOW, dryRun: true, logger });
+    expect(r.closed).toBe(0);
+    expect(closeCalls()).toHaveLength(0);
+  });
+
+  it("#14: the handler runs the arm in its OWN step; a run-report search fault does not replay the scope-out arm", async () => {
+    let scopeOutSearches = 0;
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "GET /search/issues") {
+        const q = String(params.q);
+        if (q.includes("scheduled-")) throw new Error("boom: search down for run-reports");
+        scopeOutSearches += 1;
+        return { data: { items: [] } };
+      }
+      return { data: {} };
+    });
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+    await expect(
+      cronStaleDeferredScopeOutsHandler({ step, logger, attempt: 1, maxAttempts: 2 } as never),
+    ).rejects.toThrow();
+    expect(step.calls.some((c) => c.name === "sweep-stale-deferred-scope-outs")).toBe(true);
+    // The scope-out arm ran exactly once (its own step) and the run-report
+    // fault surfaced through the shared sweepFailed path.
+    expect(scopeOutSearches).toBe(1);
   });
 });

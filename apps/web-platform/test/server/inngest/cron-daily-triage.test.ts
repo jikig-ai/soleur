@@ -172,6 +172,30 @@ describe("cron-daily-triage — T1 happy path", () => {
   });
 });
 
+describe("cron-daily-triage — #8076 run-reports are not triage input", () => {
+  it("the issue-list jq predicate excludes every scheduled-* label (run-reports are liveness tokens, not bugs)", async () => {
+    // Daily triage labelled 21 of 43 community digests `priority/p1-high,
+    // type/bug` and hid #8027's "Credit balance is too low" under them.
+    const child = makeChild();
+    spawnSpy.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const handler = await importHandler();
+    const step = makeStep();
+    await handler({ step, logger });
+    const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
+    const prompt = spawnArgs[spawnArgs.length - 1];
+    // The clause must sit INSIDE the same select(...) as the two existing ones.
+    const m = /--jq 'map\(select\(([^']+)\)\)'/.exec(prompt);
+    expect(m, "the --jq map(select(...)) predicate is present").toBeTruthy();
+    const predicate = m![1];
+    expect(predicate).toContain('index("ux-audit") | not');
+    expect(predicate).toContain('any(startswith("agent:")) | not');
+    expect(predicate).toContain('any(startswith("scheduled-")) | not');
+  });
+});
+
 describe("cron-daily-triage — T6 GitHub App token injection (#512e25)", () => {
   it("mints an installation token first and injects it as GH_TOKEN into the claude spawn", async () => {
     const child = makeChild();

@@ -806,7 +806,10 @@ export async function deferIfTier2Cron(args: {
 // to created_at. cron-shared.test.ts test-enforces this coupling via the
 // campaign-calendar marker assertion.) Within a producer's ~50-min run window
 // only the producer itself touches its own labeled issues (daily-triage runs at a
-// different hour), so updated_at moving == the producer did something.
+// different hour), so updated_at moving == the producer did something — with one
+// exception since #8076: cron-stale-deferred-scope-outs (12:00Z) CLOSES old
+// SUCCESS run-reports, so the client-side guard below refuses a CLOSED issue
+// (a close bumps updated_at; a closed issue is never this run's output).
 //
 // Callers gate their Sentry heartbeat on this result so a quiet producer turns
 // its OWN per-function monitor red, with no dependency on the watchdog. Reuses
@@ -848,10 +851,26 @@ export async function verifyScheduledIssueCreated(args: {
 
   // Belt-and-suspenders client-side guard (the server `since` is inclusive and
   // authoritative; this defends against a stub/mock that ignores `since`).
-  const issues = res.data as Array<{ updated_at: string }>;
-  return issues.some(
-    (issue) => new Date(issue.updated_at).getTime() >= sinceMs,
-  );
+  //
+  // #8076 — a CLOSED issue whose updated_at moved into the window is NOT
+  // producer output: the run-report sweeper (cron-stale-deferred-scope-outs,
+  // daily 12:00Z) closes old SUCCESS run-reports, and a close bumps
+  // updated_at, so inside a verify-caller's retry window (seo-aeo-audit fires
+  // Mon 11:00Z) the old updated_at-only guard would have committed a run that
+  // filed nothing. Credit: created in-window (whatever its state now), or
+  // updated in-window while still open (campaign-calendar's comment-bump).
+  // `state` absent (a stub) reads as open, so the guard only ever narrows.
+  const issues = res.data as Array<{
+    updated_at: string;
+    created_at?: string;
+    state?: string;
+  }>;
+  return issues.some((issue) => {
+    const createdMs = issue.created_at ? new Date(issue.created_at).getTime() : NaN;
+    if (createdMs >= sinceMs) return true;
+    const updatedMs = new Date(issue.updated_at).getTime();
+    return updatedMs >= sinceMs && issue.state !== "closed";
+  });
 }
 
 // ---------------------------------------------------------------------------
