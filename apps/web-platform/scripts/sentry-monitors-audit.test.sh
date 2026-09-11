@@ -1804,6 +1804,32 @@ else
   fail "T36 $t36_bad of 4 prefix-extended lookalikes ACCEPTED:$t36_detail"
 fi
 
+echo "T40: a SHAPE-VALID org outside the allowlist is refused"
+# The merge with #7989 narrowed this gate from an RFC 1035 shape check to a
+# two-slug allowlist. Measured at that moment: the whole suite stayed 50/50
+# green, i.e. NO row distinguished the narrower control from the weaker one, so
+# silently reverting to the shape check would have been invisible. These slugs
+# are all perfectly well-formed RFC 1035 labels -- they pass the OLD predicate
+# and must fail the NEW one. That difference is the entire point of the merge
+# resolution, so it gets an assertion.
+T40=$(mktemp -d); mk_curl_stub "$T40" >/dev/null
+t40_bad=0; t40_detail=""
+for o in jikigai-us jikigai2 acme sentry jikigai-eu-staging; do
+  set +e
+  o40=$(run_sut_stubbed "$T40" SENTRY_ORG="$o" 2>&1); r40=$?
+  set -e
+  n40=$(wc -l < "$T40/requests.txt" 2>/dev/null || echo 0)
+  if [[ "$r40" -ne 2 ]] || ! grep -q 'refusing org' <<<"$o40" || [[ "$n40" -ne 0 ]]; then
+    t40_bad=$((t40_bad + 1)); t40_detail+=" [$o rc=$r40 requests=$n40]"
+  fi
+  : > "$T40/requests.txt"
+done
+if [[ "$t40_bad" -eq 0 ]]; then
+  pass "T40 all 5 shape-valid non-allowlisted orgs refused, zero requests"
+else
+  fail "T40 $t40_bad of 5 shape-valid orgs were ACCEPTED — the gate is a shape check, not an allowlist:$t40_detail"
+fi
+
 echo "T39: the Gate-3 DELETE call site is reached, and IS confined"
 # Every other #7997 row stops long before Gate 3: none of them supplies a
 # responder, so the very first request errors and the run dies with one entry in
@@ -1866,8 +1892,8 @@ if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
   exit 1
 fi
 PASS=$_h_p; FAIL=$_h_f
-if [[ $((PASS + FAIL)) -lt 46 ]]; then
-  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 46.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 47 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 47.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 

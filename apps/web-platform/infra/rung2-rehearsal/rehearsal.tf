@@ -136,6 +136,15 @@ resource "hcloud_firewall" "rehearsal" {
 # meaningful: the bytes that boot here are the same template and the same nine payloads the
 # rung-2 gate hashes, so the hash in the evidence file is a hash OF WHAT BOOTED.
 #
+# THE THREE PUBKEYS BELOW ARE A CAPABILITY DIVERGENCE, NOT AN IDENTITY ONE (#8009).
+# This file collapses transport/provision/erase onto ONE tls_private_key. That is
+# deliberate and fine for a rehearsal -- but it means this rehearsal can never exercise
+# the host's SSH authorization map, and, because the three are ALREADY identical here, a
+# production edit that collapses them is a NO-OP in this rehearsal: boot_complete still
+# emits, no fatal appears, the evidence still records PASS, and RUNG2_TEMPLATE_SHA256
+# moves so the file even looks freshly re-rehearsed. Allowing the divergence is correct;
+# inferring that it is harmless is not. git_data_authorization_map_gate closes that
+# inference statically over the production root.
 # Only identity-shaped vars diverge, and the set below is exactly
 # GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST in tests/scripts/lib/git-data-birth-readiness-gate.sh.
 # The capture script writes that same set into RUNG2_VAR_DIVERGENCE and the gate refuses

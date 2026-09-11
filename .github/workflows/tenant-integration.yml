@@ -12,8 +12,9 @@
 # environment=dev before any Supabase secret is touched, per
 # hr-dev-prd-distinct-supabase-projects. No untrusted github.event.*
 # inputs are interpolated in any run: block; only secrets.*, runner.os and
-# hashFiles() are referenced (the concurrency group is a ref-independent
-# constant since #7055 — see the block below).
+# hashFiles() are referenced. The concurrency group interpolates github.ref
+# (#8048); that is a ref name, never attacker-authored text, and it appears in a
+# `concurrency:` key rather than a `run:` body, so the audit above still holds.
 #
 # Triggers (#5585): the workflow ALWAYS triggers on push-to-main + every PR
 # (no workflow-level `paths:` filter). Path detection moved into the
@@ -118,8 +119,13 @@ jobs:
     if: needs.detect-changes.outputs.tenant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Repo-wide mutex on the ONE shared dev Supabase project (#7055), declared at
-    # JOB level -- deliberately NOT at workflow level.
+    # Per-ref mutex on the ONE shared dev Supabase project, declared at JOB level
+    # -- deliberately NOT at workflow level. #7055 made this key repo-wide; #8048
+    # scoped it back per-ref after the repo-wide form starved the queue (measured
+    # in the concurrency block below). The paragraphs immediately following are
+    # #7055's rationale for the repo-wide key: they are RETAINED because they
+    # correctly describe hazards a per-ref key does NOT cover, not because they
+    # describe the current config. Read them as the open residual, not as intent.
     #
     # WHY A MUTEX AT ALL. The group was `tenant-integration-${{ github.ref }}`,
     # which serializes a ref against itself and nothing else, so two runs on
@@ -154,29 +160,86 @@ jobs:
     # is `skipped` and never joins the group.
     #
     # THE RESIDUAL, NAMED -- EVICTION IS REDUCED, NOT ELIMINATED. If a THIRD
-    # isolation-surface run arrives while one is executing and one is pending, the
-    # pending job is cancelled. `needs.tenant-integration.result` is then
-    # `cancelled` and scripts/tenant-integration-gate-verdict.sh fails CLOSED via
-    # its eviction arm. That red is accepted, NOT greened: detect-changes said
-    # this tree touches the isolation surface and the suite never ran against it,
-    # so passing it would be a fail-open on a tenant-isolation gate. It is
-    # acceptable on a required check because (a) it needs three-way overlap inside
-    # one job's runtime, (b) the victim is by construction a run on this surface --
-    # the population #7055 already accepted would queue -- never an unrelated PR,
-    # and (c) the remedy is a one-click "Re-run failed jobs", named verbatim in
-    # the failure annotation. If the eviction proves worse than the flake, the
-    # revert is this block plus the verdict script's `cancelled` arm.
+    # isolation-surface run arrives on THIS BRANCH while one is executing and one
+    # is pending, the pending job is cancelled. `needs.tenant-integration.result`
+    # is then `cancelled` and scripts/tenant-integration-gate-verdict.sh fails
+    # CLOSED via its eviction arm. That red is accepted, NOT greened:
+    # detect-changes said this tree touches the isolation surface and the suite
+    # never ran against it, so passing it would be a fail-open on a
+    # tenant-isolation gate. The remedy is a one-click "Re-run failed jobs", named
+    # verbatim in the failure annotation.
+    #
+    # CORRECTED 2026-09-10 -- an earlier revision of this paragraph justified the
+    # accepted red on the grounds that eviction "needs three-way overlap inside
+    # one job's runtime" and so would be rare. That was true only while the group
+    # was per-ref. #7986 briefly made the group a single repo-wide literal, which
+    # put EVERY ref in one queue and made eviction the steady state rather than an
+    # edge (measurements in the block below). The rarity is restored by the
+    # per-ref key, not by the sentence -- and the residual has TWO arms, not one:
+    # (i) rapid pushes to a single PR, the #5585 R3 case, and (ii) three
+    # isolation-surface merges to `refs/heads/main` inside one suite execution,
+    # which is NOT a rapid-push case and reds a main commit. #7055 counted ~6
+    # merges to main a day for exactly this reason. Do not re-globalise this key
+    # without re-deriving capacity from EXECUTION time under `timeout-minutes`.
+    #
+    # The eviction ARM in the verdict script stays either way. It is not an
+    # artifact of the global mutex: any `cancelled` suite means coverage was not
+    # obtained, and greening that is a fail-open regardless of which key evicted
+    # it. #7986's revert note paired the arm with the block; only the block is
+    # reverted here, deliberately.
     concurrency:
-      # Named for the contended RESOURCE, not for this workflow, so a future job
-      # that applies migrations to or runs a heavy suite against the dev project
-      # joins the same literal rather than minting a parallel mutex -- a mutex on
-      # one side of a race is not a mutex.
+      # PER-REF, not repo-wide. A single repo-wide literal was tried in #7986 and
+      # MEASURED as unusable at this repo's arrival rate. In a 40-minute window
+      # after that merge: 15 arrivals, 2 completions, queue depth 14-15 and
+      # growing monotonically.
+      #
+      # THE CAPACITY ARITHMETIC, STATED IN THE RIGHT UNITS. Observed run
+      # durations were 14-30 min, but that is END-TO-END WALL CLOCK UNDER THE
+      # GLOBAL MUTEX -- queue time plus execution -- so using it as service time
+      # measures the symptom as if it were the cause. `timeout-minutes: 15` above
+      # bounds EXECUTION, so serialized service capacity is >= 4 runs/hour against
+      # ~22 arrivals/hour: still ~5x oversubscribed, which is what makes the queue
+      # unbounded. If you ever re-derive this, derive it from execution time under
+      # the job timeout, never from wall clock measured while a queue existed.
+      #
+      # Because only one entry may be PENDING per group, each arrival evicted the
+      # waiting one; every evicted run concluded `cancelled`, and the verdict
+      # script (rightly) failed the REQUIRED gate closed. At this arrival rate
+      # that is the steady state, and it degraded every branch rather than the one
+      # PR that pushed. #7986's own comment named this abort condition -- "if the
+      # eviction proves worse than the flake, the revert is this block" -- and the
+      # measurement above is that condition being met.
+      #
+      # WHAT THIS KEY DOES NOT COVER -- READ BEFORE ASSUMING IT IS SAFE. A per-ref
+      # key does NOT serialize the `Apply migrations to dev` step across refs, and
+      # that step is genuinely unsafe to run twice concurrently against one
+      # project (the paragraph above says so, and it is still true). This job sets
+      # ALLOW_UNMERGED_DEV_APPLY=1, so every isolation-surface run applies its own
+      # unmerged migrations to the shared dev project; run-migrations.sh takes no
+      # lock and does check-then-apply across two psql sessions, so two refs
+      # applying the same filename can both observe count=0 and the loser aborts
+      # on the `_schema_migrations.filename` primary key. That surfaces as
+      # `failure` (NOT `cancelled`), so it does not even reach the eviction arm's
+      # diagnosis. This is the PRE-#7986 baseline, not something #8048 introduces
+      # -- but it is a real open hazard and the mutex is the wrong place to fix
+      # it: a repo-wide CI mutex spends 15 minutes of capacity to protect seconds
+      # of DDL. The right fix is a transaction-scoped advisory lock around a
+      # re-checked apply inside run-migrations.sh. Tracked in #8049.
+      #
+      # NOT A REASON FOR THE REPO-WIDE KEY: the byok-delegation suite's per-run
+      # row scoping. An earlier draft of #8048 credited #7986 with landing that
+      # and concluded the mutex was redundant. That is FALSE and is corrected
+      # here: the fresh-grantee/fresh-delegation scoping PREDATES #7986 (identical
+      # randomUUID usage at b29131393^), so it was already in force when #7055
+      # decided a repo-wide mutex was needed. #7986 added partitioned assertions
+      # and a sequential null-change control -- evidence ABOUT isolation, not the
+      # isolation itself. This revert rests on the starvation measurement alone.
       #
       # cancel-in-progress: false (intentional, #5585 R3): a superseded run
-      # cancelled MID-FLIGHT would also conclude `cancelled` and fail the gate on
-      # the head SHA until a re-run; keeping false avoids that edge at the cost of
-      # a second full suite on rapid pushes to an isolation-touching PR (rare).
-      group: dev-supabase-exclusive
+      # cancelled MID-FLIGHT would conclude `cancelled` and fail the gate on the
+      # head SHA until a re-run; keeping false avoids that edge at the cost of a
+      # second full suite on rapid pushes to an isolation-touching ref.
+      group: dev-supabase-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

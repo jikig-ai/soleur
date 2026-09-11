@@ -36,6 +36,7 @@ import { cronContentPublisher } from "@/server/inngest/functions/cron-content-pu
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
+import { cronMachineryDrain } from "@/server/inngest/functions/cron-machinery-drain";
 import { cronDomainModelDrift } from "@/server/inngest/functions/cron-domain-model-drift";
 import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
 import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-verify-by";
@@ -145,6 +146,7 @@ export const { GET, POST, PUT } = serve({
     cronContentVendorDrift,
     cronDailyTriage,
     cronDevMigrationDrift,
+    cronMachineryDrain,
     cronDomainModelDrift,
     cronEmailIngressProbe,
     cronExpensesVerifyBy,

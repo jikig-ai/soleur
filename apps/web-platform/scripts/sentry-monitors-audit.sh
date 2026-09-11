@@ -151,11 +151,32 @@ _safe() {
   printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
 }
 
-# RFC 1035 §2.3.4 label, 63 octets. The subshell is MANDATORY: `LC_ALL=C [[ … ]]`
-# is a parse error (`[[` is a keyword, so it takes no env prefix), and without
-# the C locale the a-z0-9 ranges admit ~1,162 non-ASCII characters.
-( LC_ALL=C; [[ "$SENTRY_ORG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ) || {
-  printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2; }
+# ORG ALLOWLIST, not a shape check (#7997 + #7989/#7797 reconciled at merge).
+# Both PRs pinned this independently: #7997 required an RFC 1035 §2.3.4 label,
+# #7989 required membership of a two-slug set. The SET IS STRICTLY NARROWER, so
+# it wins and the shape check would be dead code behind it. It also closes a
+# residual #7997 had consciously accepted and recorded: SENTRY_HOST_CANDIDATES
+# interpolates the slug into candidate 1, so under a shape-only check
+# `SENTRY_ORG=evil` yields `evil.sentry.io`, which the membership refusal then
+# ACCEPTS by construction. #7997 argued that residual was tenant confusion
+# rather than exfiltration (`*.sentry.io` is Sentry SaaS — a slug buys a tenancy,
+# not an origin); true, and an allowlist removes it anyway.
+#
+# `jikigai` is retained but is NOT a live destination: ADR-031 records both orgs
+# as operator-owned EU-database orgs and the duplicate `jikigai` CANCELED
+# vendor-side on 2026-05-21. It stays only because it is this script's historical
+# default and the value the stub-driven suites fixture. #7989's comment called it
+# "still the US-org value"; that is wrong on both counts and is corrected here.
+# The live slug is `jikigai-eu` (infra/sentry/variables.tf `sentry_org` default).
+#
+# The refusal CONTRACT is #7997's, deliberately, not #7989's `exit 1`: the
+# workflows discriminate a destination refusal from a Sentry fault by matching
+# `^ERROR: refusing (org|destination host|curl-binary) ` at rc=2
+# (reusable-release.yml, sentry-audit-gate.yml), and 50 suite rows assert it.
+case "$SENTRY_ORG" in
+  jikigai|jikigai-eu) ;;
+  *) printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
+esac
 
 readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
@@ -1082,6 +1103,14 @@ done < "$class_c_out"
 # #7590; the figure had gone stale while still reading as "verified", which is
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
+#
+# Addendum 2026-09-10: the tf root now declares
+# 57 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# one. This is a count of DECLARATIONS, not a re-verification against the live
+# org: the 57th monitor does not exist in Sentry until apply-sentry-infra.yml
+# runs on merge, so the 2026-08-19 live figure above is left standing rather
+# than silently promoted to 57. T25 derives from the tf root, so it reads this
+# line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1409,7 +1438,7 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # The `<!-- ids: ... -->` manifest was RETIRED in #7590.
   #
   # It existed to feed a first-time `terraform import` of issue-alert rules.
-  # That adoption is complete — it is now 28 `sentry_alert` plus 2
+  # That adoption is complete — it is now 29 `sentry_alert` plus 2
   # `sentry_issue_alert` resources against a full-root plan, not 29
   # `sentry_issue_alert` — so the manifest has no live consumer, and its README
   # runbook was stale by 25 resources. Repointing it at the workflows endpoint would

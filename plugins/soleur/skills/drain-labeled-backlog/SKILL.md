@@ -36,6 +36,8 @@ Confirm cluster scope (size, `--top-n`, milestone) before allowing the skill to 
 Optional flags (any subset):
 
 - `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying so an invalid name fails fast with a readable error rather than a silent empty cluster.
+
+  **`meta/machinery` is excluded from every drain whose `--label` is not itself `meta/machinery`.** The exclusion is explicit in the helper rather than implied by the default: machinery findings are out of a `deferred-scope-out` drain today only because nobody has changed that default, and a future change would silently pull hundreds of findings-about-guards into a drain the operator reads as user-facing work. It is applied as a `jq` filter over the labels the query already returns, **not** as a `-label:` search qualifier — measured 2026-09-10, `gh issue list` silently discards `--search` when `--label` is present, so a query-level exclusion here is a no-op that passes every positive test. Naming `--label meta/machinery` outright lifts the exclusion, which is how the weekly machinery cadence drains that ledger deliberately.
 - `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID — `gh issue create` rejects numeric milestone IDs with a clear error.
 - `--top-n N` — how many clusters to consider. Default: `1`.
 - `--min-cluster-size M` — minimum issues in a cluster before the skill will pick it. Default: `3`.
@@ -119,6 +121,33 @@ gh issue list --label "${LABEL:-deferred-scope-out}" --state open \
 ```
 
 Report: `Before: X, After: Y, Closed: Z` and the per-area drain.
+
+### Closing floor (weekly cadence only)
+
+The weekly machinery cadence carries a **closing floor of 20**: a scheduled run
+that closes fewer than 20 FAILS. That floor is what makes the gate net-NEGATIVE
+rather than net-zero — per-PR net-zero, perfectly enforced, holds the backlog at
+its current size forever.
+
+**The floor is gated on candidate supply, and that arm is not optional.** The run
+fails below the floor only when the candidate pool held at least 20 to begin
+with. When the pool is smaller, the run closes every candidate and PASSES,
+reporting:
+
+```
+closed=N of N candidates (floor waived: pool < floor)
+```
+
+Without that arm the floor becomes unsatisfiable-by-construction the moment the
+backlog is actually drained — a scheduled monitor whose steady state on success
+is red, which trains the operator to ignore it. That is the failure this whole
+change exists to remove, so reproducing it inside the fix would be self-defeating.
+
+The waiver is **reported, never silent**: a chronically empty pool must be
+visible rather than indistinguishable from a healthy run.
+
+Both the floor and the waiver line are cited by the runner and its test from a
+single named constant, so the two cannot drift apart.
 
 ## Post-merge follow-up — Scheduling
 
