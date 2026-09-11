@@ -1239,10 +1239,22 @@ _docker_login_http_status() {
 # records "a value-based arm additionally substitutes the LUKS passphrase, WHICH NO PATTERN
 # COULD MATCH". Same reasoning, same threat, different host.
 #
-# Bounded deliberately: values under 12 bytes are skipped, because short values are things
-# like `production` or `true` and substituting them would shred the diagnostic this whole
-# change exists to produce. Uses bash literal substitution (`${v//"$needle"/…}`), never a
-# regex, so no metacharacter in a secret can alter the pattern.
+# Bounded deliberately: values under 12 characters are skipped, because short values are
+# things like `production` or `true` and substituting them would shred the diagnostic this
+# whole change exists to produce. (Characters, not bytes -- but the `tr -c '[:print:]'`
+# stage upstream runs under LC_ALL=C and blanks every non-ASCII byte, so only ASCII values
+# can match at all and the two counts coincide.) Uses bash literal substitution
+# (`${v//"$needle"/…}`), never a regex, so no metacharacter in a secret can alter the
+# pattern; the replacement is quoted too, because under bash 5.2+ `patsub_replacement` an
+# unquoted `&` in the key would expand to the matched value.
+#
+# LONGEST VALUE FIRST, and this ordering is load-bearing. Env-file order is arbitrary, and a
+# SHORT public value that is a substring of a LONGER secret (a bare DB_HOST inside a
+# DATABASE_URL of the shape scheme://user:password@host/db) substituted first rewrites the
+# composite so the composite no longer matches -- the password then ships in clear, with a
+# `<redacted:DB_HOST>` beside it certifying that redaction ran. Measured during #8026 review.
+# Sorting by value length descending means every composite is consumed before any of its
+# parts.
 #
 # Known limit, stated rather than implied: this runs AFTER the quote fold, so a value
 # containing a literal `"` will not match. Secrets in this estate do not, and the shape
@@ -1267,12 +1279,28 @@ _docker_login_http_status() {
 _cred_redact_env_values() {
   local -n _target="$1"
   [[ -n "${ENV_FILE:-}" && -r "${ENV_FILE:-}" ]] || return 0
-  local _k _v
-  while IFS='=' read -r _k _v; do
+  local _k _v _i _j _n=0 _best
+  local -a _ks=() _vs=() _done=()
+  # `|| [[ -n "$_k" ]]`: `read` returns non-zero on a final line with no trailing newline
+  # while still filling the variables, and the last entry in the file is a secret like any
+  # other.
+  while IFS='=' read -r _k _v || [[ -n "$_k" ]]; do
     [[ -z "$_k" || "$_k" == \#* ]] && continue
     (( ${#_v} < 12 )) && continue
-    _target="${_target//"$_v"/<redacted:$_k>}"
+    _ks[_n]="$_k"; _vs[_n]="$_v"; _done[_n]=0; _n=$(( _n + 1 ))
   done < "$ENV_FILE"
+  # Selection over the array rather than `sort`: no external tool on the redaction path, so
+  # a missing binary cannot silently downgrade this arm to a no-op. n is the env-file line
+  # count (tens), so the quadratic scan is nothing.
+  for (( _i = 0; _i < _n; _i++ )); do
+    _best=-1
+    for (( _j = 0; _j < _n; _j++ )); do
+      (( _done[_j] )) && continue
+      if (( _best < 0 || ${#_vs[_j]} > ${#_vs[_best]} )); then _best=$_j; fi
+    done
+    _done[_best]=1
+    _target="${_target//"${_vs[_best]}"/"<redacted:${_ks[_best]}>"}"
+  done
   return 0
 }
 
@@ -1286,6 +1314,15 @@ _cred_err_tail() {
     | sed -E 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/eyJ.REDACTED/g' \
     | sed -E 's/(^|[^A-Za-z0-9])(gh[pousr]|sbp|dop_v1|whsec|xox[baprs])_[A-Za-z0-9_-]+/\1\2_REDACTED/g')" || _rc=$?
   if (( _rc != 0 )); then printf '%s' '<sanitize_failed>'; return 0; fi
+  # Pre-clamp to 64 KiB before the value arm. `docker exec` streams the child's output with
+  # no cap, and bash literal substitution is quadratic in MATCH COUNT: measured during #8026
+  # review, a 4 MB stderr made of a repeated env value took 148 s in the loop below -- on the
+  # failure path, where rollback timing matters. Only the last 200 chars survive anyway.
+  # The shape rules above already ran on the FULL input, so a shape-token straddling this
+  # cut is already `REDACTED`; a VALUE straddling it would need to be longer than 64 KiB
+  # minus the 200-char tail to leak anything, which no env value is. Redaction still
+  # precedes the 200-char truncation (F14), because this clamp is not that truncation.
+  if (( ${#_e} > 65536 )); then _e="${_e:$(( ${#_e} - 65536 ))}"; fi
   _cred_redact_env_values _e
   # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
   # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
@@ -3081,11 +3118,14 @@ case "$COMPONENT" in
       BWRAP_T0="$(_now_ms)"
       BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
       BWRAP_T1="$(_now_ms)"
-      # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. That form sits BETWEEN the rc capture and
-      # the rollback branch, so any failure inside it aborts under `set -e` and takes the
-      # logger line, the canary teardown and final_write_state with it -- a failed probe would
-      # exit with reason=unhandled and no rollback record at all. The timing instrument must
-      # never be able to kill the gate it is timing.
+      # Guarded, not `$(( $(_now_ms) - BWRAP_T0 ))`. Two reasons, measured separately:
+      #   - a non-numeric operand is NOT fatal here (bash reads `unknown` or `` as a name that
+      #     expands to 0), so the unguarded form silently emits a garbage 13-digit `ms`
+      #     alongside a real rc -- a wrong number that reads as a measurement;
+      #   - `_now_ms` is the only place a `10#` base prefix appears, and THAT form IS fatal on
+      #     a non-digit -- which is why it validates before arithmetic and never reaches here.
+      # Either way the timing instrument sits BETWEEN the rc capture and the rollback branch,
+      # and must never be able to kill or corrupt the gate it is timing.
       if [[ "$BWRAP_T0" =~ ^[0-9]+$ && "$BWRAP_T1" =~ ^[0-9]+$ ]]; then
         BWRAP_MS=$(( BWRAP_T1 - BWRAP_T0 ))
       else
@@ -3102,10 +3142,14 @@ case "$COMPONENT" in
       if [[ -n "$BWRAP_ERR_SAN" ]]; then printf '%s\n' "$BWRAP_ERR_SAN"; fi
       if (( BWRAP_RC != 0 )); then
         echo "Canary sandbox check failed, rolling back..."
-        # err_chars is the PRE-sanitization length on purpose: it is the only discriminator
-        # between a truncated diagnostic and a complete one. Computing it from the sanitized
-        # value would report 200 beside a 200-character field and make truncation permanently
-        # undetectable.
+        # err_chars is the PRE-sanitization length on purpose, and it is an APPROXIMATE
+        # truncation discriminator, not an exact one: redaction changes length in both
+        # directions (a 12-char value grows to a `<redacted:NAME>` marker; a 64-hex key
+        # shrinks to one), so a raw length under 200 can still be truncated after
+        # substitution, and one over 200 can fit. Read it as "how much did bwrap say", and
+        # treat bwrap_err as possibly truncated whenever err_chars is anywhere near the clamp.
+        # Computing it from the sanitized value instead would report 200 beside a 200-char
+        # field and make truncation permanently undetectable.
         # bwrap_err is free text and is therefore LAST on the line by construction (ADR-115
         # trusted region): consumers anchor on bwrap_err="[^"]*"$ and must never substring-match
         # k=v tokens across the line. `:-` is correct here -- an empty value MUST become the
@@ -3129,8 +3173,11 @@ case "$COMPONENT" in
       # ambiguous across five states -- passed, never ran, aborted before the branch, logger
       # died, or the health gate skipped the probe entirely -- and a probe that silently
       # stopped running is indistinguishable from a healthy fleet. Same tag, so one query
-      # answers "did the gate run, and what did it measure".
-      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: bwrap sandbox verified in $IMAGE:$TAG rc=0 ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR}" || true
+      # answers "did the gate run, and what did it measure". Carries the same sanitized
+      # bwrap_err as the rollback line: a PASS that still wrote to stderr is the early signal
+      # before the next rollback, and `err_chars>0` with no text would say only THAT it spoke.
+      # Same trusted-region layout -- free text last, quote-bounded.
+      logger -t "$LOG_TAG" "SANDBOX_PROBE_OK: bwrap sandbox verified in $IMAGE:$TAG rc=0 ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\"" || true
 
       # Faithful sandbox canary (#5875 / ADR-079) — NON-BLOCKING dark-launch.
       # Runs the SDK-captured split-unshare argv the legacy probe above does NOT

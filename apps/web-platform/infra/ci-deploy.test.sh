@@ -2452,6 +2452,9 @@ assert_blocking_probe_line() {
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc (expected exactly 1 rollback line, got $hits)"
     echo "        journald capture:"; sed 's/^/          /' "$logger_file"
+    # A zero-count here usually means the deploy aborted BEFORE the probe; without the
+    # deploy's own output there is no evidence of why (review finding, #8026).
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
     rm -rf "$d"
     return
   fi
@@ -2476,6 +2479,7 @@ assert_blocking_probe_line() {
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc"
     echo "        line: $line"
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
   fi
 
   rm -rf "$d"
@@ -2552,13 +2556,20 @@ assert_probe_pass_chatter_reemits() {
   # journald" is ambiguous across five states, and a probe that silently stopped running is
   # indistinguishable from a healthy fleet. Deleting it left the suite green.
   local ok; ok=$(grep -cF 'SANDBOX_PROBE_OK' "$logger_file" || true)
-  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
+  # The OK line must carry the chatter itself as a quote-bounded, LAST bwrap_err field --
+  # `err_chars>0` alone says only THAT bwrap spoke, and the stdout copy lands untagged in
+  # the webhook leg where no literal can find it (review finding, #8026).
+  local ok_line; ok_line=$(grep -F 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  local ok_err=0
+  printf '%s' "$ok_line" | grep -qE 'err_chars=[0-9]+ bwrap_err="[^"]*namespace fallback engaged"$' && ok_err=1
+  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && [[ "$ok_err" == "1" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
     PASS=$((PASS + 1))
-    echo "  PASS: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
+    echo "  PASS: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
   else
     FAIL=$((FAIL + 1))
-    echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
-    echo "        rollback_lines=$rb probe_ok_markers=$ok exit=$actual_exit"
+    echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
+    echo "        rollback_lines=$rb probe_ok_markers=$ok ok_line_carries_bwrap_err=$ok_err exit=$actual_exit"
+    echo "        ok_line: $ok_line"
     echo "        output: $output"
   fi
   rm -rf "$d"
@@ -2626,6 +2637,11 @@ assert_probe_output_purity() {
   fi
   # A CR must not survive into the journald line -- it would forge a second record.
   if printf '%s' "$line" | grep -q $'\r'; then problems="$problems CR-survived"; fi
+  # The non-ASCII leg must ASSERT something (review finding, #8026): the two bytes of `é`
+  # are blanked by `tr -c '[:print:]'` under LC_ALL=C, so no byte outside printable ASCII
+  # may reach the journald line, and the `caf` prefix must survive as ordinary text.
+  if LC_ALL=C grep -q '[^ -~]' <<<"$line"; then problems="$problems non-ascii-byte-in-journald"; fi
+  if ! printf '%s' "$line" | grep -qF 'caf '; then problems="$problems non-ascii-leg-shredded-neighbour"; fi
   # The field must remain parseable: bwrap_err is last, value carries no bare quote.
   if ! printf '%s' "$line" | grep -qE 'bwrap_err="[^"]*"$'; then problems="$problems err-field-unparseable"; fi
 
@@ -2651,11 +2667,13 @@ assert_probe_output_purity
 # ${#BWRAP_ERR} and so is satisfied whether truncation happened or not (raising the clamp to
 # 100000 passes) AND whether the helper keeps the head or the tail (the fixture is 4000
 # identical X, so head and tail are indistinguishable by construction). Pinning a distinct
-# TAILMARKER present + the head absent kills both mutants.
+# TAILMARKER present + the head absent kills both mutants. The field is EXACTLY 200 chars
+# (nothing in this fixture is redactable, so sanitized length == clamp): a `{1,200}` bound let
+# a pre-clamp of 100 survive the battery, silently shrinking the diagnostic (#8026 review).
 assert_blocking_probe_line \
   "#8016 truncation: err_chars is pre-sanitization AND the TAIL is what survives" \
   "HEADMARKER$(printf 'X%.0s' $(seq 1 4000))TAILMARKER" 1 "" \
-  'err_chars=402[0-9]' 'bwrap_err="[^"]{1,200}"$' 'bwrap_err="[^"]*TAILMARKER"$'
+  'err_chars=402[0-9]' 'bwrap_err="[^"]{200}"$' 'bwrap_err="[^"]*TAILMARKER"$'
 
 # Scenario 6 -- SLOW: without this, ms has one value across the whole set and a
 # hardcoded ms=0 would satisfy every other scenario. Bounded, never exact.
@@ -5766,6 +5784,19 @@ else
 fi
 rm -rf "$F16_D"
 
+# _cet: the extracted sanitizer under test, shared by F14 below and the #8016 cases.
+_cet() {
+  # BOTH functions: _cred_err_tail calls _cred_redact_env_values, so extracting only the
+  # former leaves the value arm undefined and every value-based case silently measures the
+  # shape rules alone. (Measured: that is exactly what happened on the first run here.)
+  # shellcheck disable=SC1090
+  source /dev/stdin <<CETEOF
+$(sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT")
+$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
+CETEOF
+  _cred_err_tail "$1"
+}
+
 # --- #7095 R3 (F14): redaction MUST precede truncation, and it must be OBSERVABLE ---------
 # The existing canary sits ~50 bytes from the end, i.e. wholly inside the 200-byte tail window,
 # so truncate-first still hands the redactor a complete match and BOTH orderings pass. The
@@ -5777,13 +5808,10 @@ rm -rf "$F16_D"
 TOTAL=$((TOTAL + 1))
 F14_TOKEN="dp.st.prd.$(printf 'S%.0s' $(seq 1 60))TAILMARKER"
 F14_INPUT="$(printf 'A%.0s' $(seq 1 100))${F14_TOKEN}$(printf 'B%.0s' $(seq 1 160))"
-F14_OUT=$(
-  # shellcheck disable=SC1090
-  source /dev/stdin <<F14EOF
-$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
-F14EOF
-  _cred_err_tail "$F14_INPUT"
-)
+# Extracted via _cet (defined just above), which sources BOTH helpers. The older
+# `_cred_err_tail`-only extraction printed `_cred_redact_env_values: command not found` on
+# every run once the value arm landed, and exercised the helper minus that arm.
+F14_OUT=$(_cet "$F14_INPUT")
 if [[ -n "$F14_OUT" ]] && ! grep -qF 'TAILMARKER' <<<"$F14_OUT"; then
   PASS=$((PASS + 1)); echo "  PASS: a boundary-straddling token is fully redacted — redaction provably precedes truncation"
 else
@@ -5798,17 +5826,6 @@ fi
 # rule alone, so a rule's removal reds its own case. Fixtures are synthesized and built by
 # CONCATENATION -- a contiguous secret-shaped literal in this file trips GitHub Push
 # Protection even though the value is fake.
-_cet() {
-  # BOTH functions: _cred_err_tail calls _cred_redact_env_values, so extracting only the
-  # former leaves the value arm undefined and every value-based case silently measures the
-  # shape rules alone. (Measured: that is exactly what happened on the first run here.)
-  # shellcheck disable=SC1090
-  source /dev/stdin <<CETEOF
-$(sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT")
-$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
-CETEOF
-  _cred_err_tail "$1"
-}
 
 _assert_cet_redacts() {
   local desc="$1" tok="$2"
@@ -5856,32 +5873,75 @@ _assert_cet_preserves "an underscore ident"   'ask_live_migrations failed'
 # THE VALUE-BASED ARM -- the most security-critical line added, and it had zero coverage.
 # Deleting its call left the suite green. Drives the real ENV_FILE format, both sides of the
 # 12-byte floor, and the <redacted:KEY> rendering.
+# Asserts the NEGATIVE too: when redaction is expected, the secret value itself must be
+# ABSENT from the output. A marker-present check alone is satisfied by a partial leak
+# (`<redacted:DB_HOST>` beside a password in clear -- the ordering defect below), so the
+# marker is necessary and the absence is what carries the security claim.
+# $envline may be multi-line (literal newlines) to drive ordering and file-shape cases;
+# a trailing newline is written unless $envline already ends without one and
+# $6 == nonl (the unterminated-last-line case).
 _assert_cet_env_value() {
-  local desc="$1" envline="$2" probe="$3" expect_redacted="$4"
+  local desc="$1" envline="$2" probe="$3" expect_redacted="$4" secret="${5:-}" nl="${6:-}"
   TOTAL=$((TOTAL + 1))
-  local d out; d=$(mktemp -d); printf '%s\n' "$envline" > "$d/envfile"
+  local d out; d=$(mktemp -d)
+  if [[ "$nl" == nonl ]]; then printf '%s' "$envline" > "$d/envfile"; else printf '%s\n' "$envline" > "$d/envfile"; fi
   out="$(ENV_FILE="$d/envfile" _cet "$probe")"
   rm -rf "$d"
   local redacted=no; [[ "$out" == *"<redacted:"* ]] && redacted=yes
-  if [[ "$redacted" == "$expect_redacted" ]]; then
+  local leaked=no; [[ -n "$secret" && "$out" == *"$secret"* ]] && leaked=yes
+  if [[ "$redacted" == "$expect_redacted" && "$leaked" == no ]]; then
     PASS=$((PASS + 1)); echo "  PASS: #8016 value-arm $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 value-arm $desc (expected redacted=$expect_redacted)"
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 value-arm $desc (expected redacted=$expect_redacted, got redacted=$redacted leaked=$leaked)"
     echo "        out: $out"
   fi
 }
 # BYOK is the case the shape rules structurally cannot reach: 64 bare hex, no prefix.
 _assert_cet_env_value "redacts a bare-hex secret no shape rule can match" \
   'BYOK_ENCRYPTION_KEY=9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' \
-  'invalid environment variable: 9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' yes
+  'invalid environment variable: 9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' yes \
+  '9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c'
 _assert_cet_env_value "redacts a hyphenated vendor key (sk-ant-, misses rule 2)" \
   'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
-  'exec failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA rejected' yes
-# The floor is the boundary: 12 bytes redacts, 11 does not. Both sides, or the floor is unpinned.
-_assert_cet_env_value "redacts a value AT the 12-byte floor" \
-  'SOME_TOKEN=abcdefghijkl' 'saw abcdefghijkl here' yes
-_assert_cet_env_value "PRESERVES a value below the floor (no diagnostic shredding)" \
+  'exec failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA rejected' yes 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+# The floor is the boundary: 12 characters redacts, 11 does not. Both sides pinned at EXACTLY
+# 12 and 11 -- the earlier "below" case used `production` (10), so a floor of 11 passed both.
+_assert_cet_env_value "redacts a value AT the 12-char floor" \
+  'SOME_TOKEN=abcdefghijkl' 'saw abcdefghijkl here' yes 'abcdefghijkl'
+_assert_cet_env_value "PRESERVES an 11-char value just below the floor (no diagnostic shredding)" \
+  'SOME_LABEL=abcdefghijk' 'saw abcdefghijk here' no
+_assert_cet_env_value "PRESERVES a short value like NODE_ENV=production" \
   'NODE_ENV=production' 'NODE_ENV was production during the run' no
+# ORDERING (review finding, #8026): a SHORT public value that is a substring of a LONGER
+# secret, listed FIRST in the env file. Substituting in file order rewrites the composite so
+# it no longer matches and the password ships in clear beside a `<redacted:DB_HOST>` marker
+# certifying that redaction ran. Longest-first consumes the composite before its parts.
+_assert_cet_env_value "consumes a composite secret before a shorter public substring of it" \
+  $'DB_HOST=db.example.com\nDATABASE_URL=postgres://u:S3CR3TPASSW0RD@db.example.com/x' \
+  'connect failed: postgres://u:S3CR3TPASSW0RD@db.example.com/x' yes 'S3CR3TPASSW0RD'
+# FILE SHAPE: the last line of the env file has no trailing newline. `read` returns non-zero
+# on it while still filling the variables; without the `|| [[ -n "$_k" ]]` guard that last
+# secret is silently skipped and nothing reds.
+_assert_cet_env_value "redacts the LAST entry of an env file with no trailing newline" \
+  $'FIRST_KEY=aaaaaaaaaaaaaaaa\nLAST_KEY=zzzzzzzzzzzzzzzzzzzz' \
+  'saw zzzzzzzzzzzzzzzzzzzz at the end' yes 'zzzzzzzzzzzzzzzzzzzz' nonl
+# STRADDLE (value-arm analogue of F14): the env VALUE begins >200 chars from the end and its
+# tail lands inside the 200-char window. The value arm must see the WHOLE value -- any clamp
+# under (200 + value length) before the arm, or truncate-first, cuts the needle so it no longer
+# matches and the secret's tail ships. Pinned: STRADDLETAIL must be absent from the output.
+# Geometry: 150 A + 100-char value + 170 B = 420 chars; the window starts at 220, so the value
+# (150..250) straddles it, and a pre-clamp of 230 (window start 190) cuts it too. After
+# substitution the string is 343 chars and the 23-char marker sits wholly inside the window
+# (a longer B pad bisects the marker itself, which is legal -- the runbook says so -- but would
+# defeat the marker-present half of this assertion). Value length is what makes both hold.
+_STRADDLE_VAL="$(printf 'S%.0s' $(seq 1 88))STRADDLETAIL"
+_assert_cet_env_value "redacts an env value straddling the 200-char tail boundary" \
+  "STRADDLE_KEY=${_STRADDLE_VAL}" \
+  "$(printf 'A%.0s' $(seq 1 150))${_STRADDLE_VAL}$(printf 'B%.0s' $(seq 1 170))" yes 'STRADDLETAIL'
+# KEY QUOTING: a `&` in a key name must render literally under bash 5.2+ patsub_replacement,
+# not expand to the matched value inside the marker.
+_assert_cet_env_value "renders a key containing & literally in the marker" \
+  'K&AMP=abcdefghijklmn' 'saw abcdefghijklmn' yes 'abcdefghijklmn'
 
 _CET_P1="sk_"; _assert_cet_redacts "a Stripe-shaped live key"   "${_CET_P1}live_AAAAAAAAAAAAAAAAAAAA"
 _CET_P2="ey";  _assert_cet_redacts "a three-segment JWT"        "${_CET_P2}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
