@@ -15,6 +15,14 @@ Soleur gives a single founder the leverage of a full organization. **68 agents**
 
 ## Installation
 
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur
+```
+
+Start a Devin session and use `/soleur:go <what you want to do>`.
+
 **Codex:**
 
 ```bash

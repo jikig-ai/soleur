@@ -113,19 +113,25 @@ Before applying the routing table, detect the active harness and use the correct
 | Claude Code | **Skill tool** — `soleur:<skill>` | **Task tool** — `subagent_type` | `/soleur:go` |
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
+| Devin CLI | **Skill tool** — `soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
 
 **Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
 Use the installed plugin root for plugin-owned paths. Reading the full named
 skill is the Codex entry point when no skill-loading tool is available; execute
 all of its phases. Do not invoke a nonexistent Skill tool or a Grok slash command.
 
+**Devin CLI harness:** read [Devin compatibility instructions](../devin/INSTRUCTIONS.md).
+Devin uses the same Skill tool format as Claude Code with `soleur:<skill>` namespace and `run_subagent` for agents.
+
 **Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
 
 **Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Map `soleur:<skill>` → `/<skill>` (strip prefix) at invocation time. **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
+**Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Skills use the same `soleur:<skill>` namespace as Claude Code. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
-If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok) or `claude --plugin-dir ./plugins/soleur` (Claude). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
+If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok), `claude --plugin-dir ./plugins/soleur` (Claude), or `devin plugins install ./plugins/soleur` (Devin). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
 
 Analyze the user input and classify intent using semantic assessment:
 

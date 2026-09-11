@@ -32,6 +32,8 @@ beforeEach(() => {
     GROK_AGENT: process.env.GROK_AGENT,
     GROK_DEFAULT_MODEL: process.env.GROK_DEFAULT_MODEL,
     GROK_SUBAGENTS: process.env.GROK_SUBAGENTS,
+    DEVIN: process.env.DEVIN,
+    DEVIN_HOME: process.env.DEVIN_HOME,
   };
   delete process.env.CLAUDECODE;
   delete process.env.CODEX_THREAD_ID;
@@ -39,6 +41,8 @@ beforeEach(() => {
   delete process.env.GROK_AGENT;
   delete process.env.GROK_DEFAULT_MODEL;
   delete process.env.GROK_SUBAGENTS;
+  delete process.env.DEVIN;
+  delete process.env.DEVIN_HOME;
 });
 
 afterEach(() => {
@@ -64,10 +68,30 @@ describe("detectHarness", () => {
     expect(detectHarness(env({ GROK_AGENT: "grok-build" }))).toBe("grok");
   });
 
+  test("DEVIN → devin", () => {
+    expect(detectHarness(env({ DEVIN: "1" }))).toBe("devin");
+  });
+
+  test("DEVIN_HOME → devin", () => {
+    expect(detectHarness(env({ DEVIN_HOME: "/home/user/.devin" }))).toBe("devin");
+  });
+
   test("CLAUDECODE wins over GROK_* when both set", () => {
     expect(
       detectHarness(env({ CLAUDECODE: "1", GROK_HOME: "/home/user/.grok" })),
     ).toBe("claude");
+  });
+
+  test("CLAUDECODE wins over DEVIN when both set", () => {
+    expect(
+      detectHarness(env({ CLAUDECODE: "1", DEVIN: "1" })),
+    ).toBe("claude");
+  });
+
+  test("GROK wins over DEVIN when both set", () => {
+    expect(
+      detectHarness(env({ GROK_HOME: "/home/user/.grok", DEVIN: "1" })),
+    ).toBe("grok");
   });
 
   test("empty env → unknown", () => {
@@ -117,6 +141,14 @@ describe("formatSkillInvocation", () => {
     );
     expect(formatSkillInvocation("plan")).toBe("/plan");
   });
+
+  test("devin formats soleur: skill with args", () => {
+    process.env.DEVIN = "1";
+    expect(formatSkillInvocation("one-shot", "fix auth")).toBe(
+      "soleur:one-shot (args: fix auth)",
+    );
+    expect(formatSkillInvocation("brainstorm")).toBe("soleur:brainstorm");
+  });
 });
 
 describe("invokeSkill", () => {
@@ -142,6 +174,18 @@ describe("invokeSkill", () => {
     expect(inv.instruction).toMatch(/in this process/i);
     expect(inv.instruction).toContain("SKILL.md");
     expect(inv.instruction).not.toMatch(/do not read/i);
+  });
+
+  test("devin returns Skill tool invocation", () => {
+    process.env.DEVIN = "1";
+    const inv = invokeSkill("one-shot", "fix bug");
+
+    expect(inv.harness).toBe("devin");
+    expect(inv.tool).toBe("Skill");
+    expect(inv.command).toBe("soleur:one-shot");
+    expect(inv.args).toBe("fix bug");
+    expect(inv.instruction).toContain("Skill tool");
+    expect(inv.instruction).toContain("Do NOT improvise");
   });
 
   test("one-shot invocation includes pipeline completion suffix", () => {
@@ -176,6 +220,19 @@ describe("spawnAgent", () => {
     expect(spawn.instruction).toContain("soleur-legal-clo");
     expect(spawn.instruction).toContain("soleur:legal:clo");
   });
+
+  test("devin uses run_subagent", () => {
+    process.env.DEVIN = "1";
+    delete process.env.CLAUDECODE;
+    delete process.env.GROK_HOME;
+    const spawn = spawnAgent("clo", "Review issue #123");
+
+    expect(spawn.harness).toBe("devin");
+    expect(spawn.tool).toBe("run_subagent");
+    expect(spawn.agent).toBe("soleur:legal:clo");
+    expect(spawn.instruction).toContain("run_subagent");
+    expect(spawn.prompt).toContain("devin/INSTRUCTIONS.md");
+  });
 });
 
 describe("formatAgentSpawn", () => {
@@ -193,6 +250,15 @@ describe("formatAgentSpawn", () => {
     expect(text).toContain("spawn_subagent");
     expect(text).toContain("soleur-legal-clo");
     expect(text).toContain("soleur:legal:clo");
+  });
+
+  test("devin mentions run_subagent", () => {
+    process.env.DEVIN = "1";
+    delete process.env.CLAUDECODE;
+    delete process.env.GROK_HOME;
+    const text = formatAgentSpawn("clo", "prompt body");
+    expect(text).toContain("run_subagent");
+    expect(text).toContain("prompt body");
   });
 });
 
@@ -213,6 +279,14 @@ describe("routingInstructions", () => {
     expect(md).toMatch(/in this process/i);
     expect(md).toContain("SKILL.md");
     expect(md).not.toMatch(/do not read/i);
+  });
+
+  test("devin documents /soleur:go and run_subagent", () => {
+    const md = routingInstructions("devin");
+    expect(md).toContain("/soleur:go");
+    expect(md).toContain("run_subagent");
+    expect(md).toContain("devin/INSTRUCTIONS.md");
+    expect(md).toContain("Workflow fidelity");
   });
 
   test("unknown suggests grok inspect and does not invent grok --trust", () => {
@@ -236,5 +310,14 @@ describe("pollInstructions", () => {
     const md = pollInstructions("claude");
     expect(md).toContain("Monitor tool");
     expect(md).toContain("postmerge");
+  });
+
+  test("devin documents get_output merge-deploy polling", () => {
+    const md = pollInstructions("devin");
+    expect(md).toContain("get_output");
+    expect(md).toContain("/soleur:postmerge");
+    expect(md).toContain("NEVER ask");
+    expect(md).toContain("BEHIND");
+    expect(md).toContain("/soleur:ship");
   });
 });
