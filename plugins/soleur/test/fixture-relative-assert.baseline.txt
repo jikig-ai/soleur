@@ -279,6 +279,7 @@
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
 4	scripts/content-publisher.test.sh
+4	scripts/cutover-inngest.sh
 1	scripts/derive-app-domain-base.test.sh
 1	scripts/dogfood/grok-measure.sh
 1	scripts/domain-model-drift.test.sh
@@ -361,6 +362,7 @@
 2	tests/commands/test-sync-rule-prune.sh
 3	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
+2	tests/scripts/lib/inngest-host-dark-gate.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
 1	tests/scripts/test-betterstack-absence-classifier.sh

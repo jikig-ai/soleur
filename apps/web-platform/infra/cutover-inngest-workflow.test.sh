@@ -1806,7 +1806,7 @@ assert "#8054 no other arm sources or calls the gate (2.0 is the only consumer i
   "[[ \$(grep -v '^[[:space:]]*#' '$BODY_SH' | grep -c 'inngest_execute_registry_gate') -eq 1 ]]"
 
 # ── Every token the lib can emit has a case arm; the *) arm exits 1 ─────────────
-LIB_TOKENS=$(grep -v '^[[:space:]]*#' "$GATE_LIB" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u)
+LIB_TOKENS=$(grep -v '^[[:space:]]*#' "$GATE_LIB" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u || true)
 LIB_TOKEN_N=$(printf '%s\n' "$LIB_TOKENS" | grep -c . || true)
 assert "#8054 the lib emits a non-trivial token set (>= 11, got $LIB_TOKEN_N)" "[[ '$LIB_TOKEN_N' -ge 11 ]]"
 # The recut gate's own tokens (redis_down, store_populated, …) are not reachable from the execute
@@ -1814,7 +1814,7 @@ assert "#8054 the lib emits a non-trivial token set (>= 11, got $LIB_TOKEN_N)" "
 # execute gate's function body + the shared helpers' whitelist in it.
 ERG_FN_FILE="$(mktemp)"; SCRATCH+=("$ERG_FN_FILE")
 awk '/^inngest_execute_registry_gate\(\) \{$/,/^\}$/' "$GATE_LIB" > "$ERG_FN_FILE"
-ERG_TOKENS=$(grep -v '^[[:space:]]*#' "$ERG_FN_FILE" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u)
+ERG_TOKENS=$(grep -v '^[[:space:]]*#' "$ERG_FN_FILE" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u || true)
 ERG_TOKEN_N=$(printf '%s\n' "$ERG_TOKENS" | grep -c . || true)
 assert "#8054 the execute gate's reachable token set is the plan's 11" "[[ '$ERG_TOKEN_N' -eq 11 ]]"
 _missing_arms=""
@@ -1854,9 +1854,9 @@ assert "#8054 the webhook body is printed ONCE, as a plain non-annotation line, 
   "[[ \$(grep -cE '^[[:space:]]*echo \"2\.0 webhook body \(HTTP \\\$CODE, informational' '$EXEC_ARM_FILE') -eq 1 ]]"
 
 # ── ERG_* values: read only from --emit-file behind the shape regex; none on the HTTP-200 path (AC16b) ──
-GATE_CALL_LN=$(grep -nE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1)
+GATE_CALL_LN=$(grep -nE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1 || true)
 ELSE_LN=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{print NR; exit}' "$EXEC_ARM_FILE")
-PREFLIGHT_LN=$(grep -nF '::notice::2.0 registry-probe: dark registry EMPTY' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1)
+PREFLIGHT_LN=$(grep -nF '::notice::2.0 registry-probe: dark registry EMPTY' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1 || true)
 assert "#8054 anchors resolve (gate call, else, pre-flight clear)" "[[ -n '$GATE_CALL_LN' && -n '$ELSE_LN' && -n '$PREFLIGHT_LN' && '$GATE_CALL_LN' -lt '$ELSE_LN' && '$ELSE_LN' -lt '$PREFLIGHT_LN' ]]"
 _erg_before=$(sed -n "1,${GATE_CALL_LN}p" "$EXEC_ARM_FILE" | grep -v '^[[:space:]]*#' | grep -E '\$\{?ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG|VERDICT|SAN)\b' | grep -c . || true)
 assert "#8054 no ERG_ value is interpolated BEFORE the gate call (got $_erg_before)" "[[ '$_erg_before' -eq 0 ]]"
@@ -1898,7 +1898,7 @@ assert "#8054 2.2 STILL RUNNING carries the first-run 'designed stop' sentence" 
 # ── E11/E13 allowlist is DERIVED from the P1-5 source, not retyped (AC16) ────────
 # Order-independent: anchored on the `flag_ok=true` arm, not on `armed` being its first alternative
 # (the same derivation inngest-server-flip-guard.test.sh uses).
-P15_SET=$(grep -E 'flag_ok=true' "$FLIP_GUARD" | grep -vE '^[[:space:]]*#' | head -1 | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort | tr '\n' ',')
+P15_SET=$(grep -E 'flag_ok=true' "$FLIP_GUARD" | grep -vE '^[[:space:]]*#' | head -1 | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort | tr '\n' ',' || true)
 e11_set_of() { awk '/^_erg_flag_class\(\) \{$/,/^}$/' "$1" | grep -oE "^[[:space:]]*[a-z|-]+\) printf 'armed'" | sed -E "s/\) printf 'armed'//; s/^[[:space:]]*//" | tr '|' '\n' | sort | tr '\n' ','; }
 E11_SET=$(e11_set_of "$GATE_LIB")
 assert "#8054 AC16: E11/E13 arm set [$E11_SET] is SET-EQUAL to the P1-5 allowlist [$P15_SET] in $(basename "$FLIP_GUARD") (read from $(basename "$GATE_LIB"))" \
@@ -1909,8 +1909,8 @@ assert "#8054 AC16: E11/E13 arm set [$E11_SET] is SET-EQUAL to the P1-5 allowlis
 # Derive that literal from the PRODUCER and require the script to test for the same bytes; a rename
 # on either side otherwise refuses every execute as webhook_path with both suites green.
 REGISTRY_PROBE="$REPO_ROOT/apps/web-platform/infra/inngest-registry-probe.sh"
-FF_LITERAL_PRODUCER="$(grep -oE '"message":"__[A-Z_]+__"' "$REGISTRY_PROBE" | head -1 | grep -oE '__[A-Z_]+__')"
-FF_LITERAL_SCRIPT="$(grep -oE '"\$BODY" != \*"__[A-Z_]+__"\*' "$EXEC_ARM_FILE" | head -1 | grep -oE '__[A-Z_]+__')"
+FF_LITERAL_PRODUCER="$(grep -oE '"message":"__[A-Z_]+__"' "$REGISTRY_PROBE" | head -1 | grep -oE '__[A-Z_]+__' || true)"
+FF_LITERAL_SCRIPT="$(grep -oE '"\$BODY" != \*"__[A-Z_]+__"\*' "$EXEC_ARM_FILE" | head -1 | grep -oE '__[A-Z_]+__' || true)"
 assert "#8054 the dark arm's admission literal [$FF_LITERAL_SCRIPT] equals the web-host probe's fetch-failure literal [$FF_LITERAL_PRODUCER] (derived from $(basename "$REGISTRY_PROBE"))" \
   "[[ -n '$FF_LITERAL_PRODUCER' && '$FF_LITERAL_PRODUCER' == '$FF_LITERAL_SCRIPT' ]]"
 assert "#8054 the web-host probe still exits 1 on that literal (the hook's error passthrough turns it into the HTTP 500 the script requires)" \
