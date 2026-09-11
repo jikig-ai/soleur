@@ -888,8 +888,8 @@ org-level Soleur credential carries — with no human gate once the session was 
 **no token was auto-issued on creation** (contrary to the vendor doc), one was created with
 *New Token*. Hosts per the `## Cluster / Host Glossary` above: the org API host
 `jikigai-eu.sentry.io`, the control silo `sentry.io`, and the region host `de.sentry.io` as
-returned by `.links.regionUrl` (measured 2026-09-11 serving `/api/0/` reads; the Glossary's
-"ingest-only" note on `de.sentry.io` predates that reading). Everything operational — the
+returned by `.links.regionUrl` (serving `/api/0/` reads, as the Glossary's 2026-09-03 (#7481)
+correction already records). Everything operational — the
 capture→normalise→store→verify→shred chain, the probe table, the failure modes — lives once in
 the script and its runbook `knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`.
 Counting note: classes are counted by consumer; the org also carries `postmerge-issue-rw`
@@ -936,7 +936,7 @@ branch's `decision-challenges.md`.
 rotation-domain independence) versus "reuse `inline-read-prd` and copy `SENTRY_ISSUE_RO_TOKEN`
 into GitHub secrets" (an identical scope set widens the rotation surface for nothing). The reuse
 arm existed only under "every followthrough endpoint returns 200 under `[event:read, org:read]`".
-Measured 2026-09-11 (`specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`):
+Measured 2026-09-11 (`specs/archive/20260911-192621-feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`):
 the cron **check-in endpoint returns 403** under that set with a known-granted control at 200 —
 Sentry's `MonitorEndpoint` requires `project:read|write|admin` or `alerts:*`, never `event:read`.
 Three followthroughs call it, and the boot-trail's project-events endpoint needs `project:read`

@@ -165,5 +165,5 @@ architecture lens's residual ("identical scope set") dissolves with its premise:
 is the delta, and the boot-trail's project-events endpoint needs the same delta. The full
 record, the rejected IaC-token-under-new-name shape, and the store discriminator are in
 `ADR-031-sentry-as-iac.md` (2026-09-11 amendment). Measurement table:
-`knowledge-base/project/specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`.
+`knowledge-base/project/specs/archive/20260911-192621-feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`.
 Closes the open limb of #7993.

@@ -12,7 +12,7 @@ consumer classes bind it: every `scripts/followthroughs/*.sh` Sentry reader, for
 `scheduled-followthrough-sweeper.yml`, and `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`,
 bound by both host-provisioning jobs in `apply-web-platform-infra.yml`. Its scopes are exactly
 `[event:read, org:read, project:read]` — the measured minimum for the union of both classes
-(record: `knowledge-base/project/specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`).
+(record: `knowledge-base/project/specs/archive/20260911-192621-feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`).
 
 **One store.** The GitHub repository secret, and nowhere else. It is deliberately not
 mirrored into Doppler: the name is chosen so that no `doppler run` config can satisfy it by
