@@ -209,7 +209,7 @@ available: nothing in the repo could measure how much state the volume actually 
 
 ### What changed
 
-`SOLEUR_INNGEST_SERVER_PROBE` now emits, at `probe_schema=3`, a `redis_keys` count summed from
+`SOLEUR_INNGEST_SERVER_PROBE` now emits (from `probe_schema=3`; the schema is 8 as of #8017) a `redis_keys` count summed from
 `INFO keyspace` across every database, alongside `data_mount_src` (the `findmnt` source of
 `/mnt/data`), `data_bytes`, `host_role` and `redis_active`. So the sentence "the volume holds
 sole-copy state" is now a proposition with a truth value, on a specific row, from a specific boot.
