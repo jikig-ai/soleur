@@ -51,3 +51,37 @@ Session tooling corrections:
   the literal `plan` made it look for a nonexistent file. Use the explicit plan
   path (or omit paths to scan the repository) and inspect non-zero output before
   continuing.
+
+## Work-phase preflight addendum
+
+- Reading the installed work skill in one call truncated its output. Use bounded
+  section reads; the installed file includes long single-line learned rules.
+- Agent definitions recurse: `ux-design-lead.md` lives under `agents/product/design/`.
+  Discover with `rg --files` before reading an assumed flat path.
+- The installed `cleanup-merged` cleaned one sibling, then treated the linked
+  feature worktree as a non-bare root and checked it out to main. Both specialist
+  agents detected absent artifacts before writing. `git reflog` confirmed the
+  checkout, the feature ref was intact, and `git switch feat-pluggable-web-agent-engines`
+  restored the clean feature tree. Its non-bare post-cleanup arm in
+  `worktree-manager.sh` also contains a hard reset, so do not rerun it from a
+  linked checkout. Verify branch and HEAD after cleanup before any task starts;
+  run future cleanup from the actual common repository root.
+- Two work-phase subagents hit the session usage limit after one produced a
+  partial inventory artifact and the other produced no persistence changes.
+  Preserve any files they wrote, inspect them against the worktree HEAD, and
+  continue the failed slice sequentially; an errored agent notification is not
+  evidence that its earlier writes were absent.
+- Pencil export timed out waiting for its prompt after writing a complete PNG.
+  Verify the file signature, dimensions, visual output, and `.pen` post-save size
+  before retrying an export; a timeout notification alone does not establish a
+  failed export.
+- A shell probe was accidentally issued as JavaScript (`const x=1`), producing a
+  predictable `command not found`; keep JavaScript orchestration inside
+  `functions.exec` and pass only valid shell syntax to `exec_command`.
+- `apply_patch` resolves paths from the session root, so edits to a linked
+  worktree must use the `.worktrees/<name>/...` path when invoked from the root.
+- The pre-commit full gate ran for more than 90 minutes and completed with 397/404
+  suites passed and two failures while several sibling gates were active; an
+  isolated web-platform rerun then queued behind the same shared lock and was
+  stopped. The commit was created only after the targeted registry test was green;
+  the full-gate failures remain an open validation issue to resolve before merge.

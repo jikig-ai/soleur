@@ -251,8 +251,10 @@ architecture ADRs on origin/main: latest 216 → ADR-217
 Supabase migrations on origin/main: latest 137 → 138_agent_engine_binding
 ```
 
-No feature-specific `tasks.md` exists yet, so there was no separate task ledger
-to reconcile in this pass.
+The work-phase ledger now lives at
+`knowledge-base/project/specs/feat-pluggable-web-agent-engines/tasks.md`; it is
+the execution checklist for the RED/GREEN slices below and records verification
+evidence as implementation proceeds.
 
 ## Implementation Plan
 
@@ -299,13 +301,20 @@ to reconcile in this pass.
    routine dispatches carry the same persisted engine binding. Annotate lawful
    basis and retention intent; keep credential values out of snapshots. Backfill
    legacy conversations to Claude, verify counts, and enforce new-row binding
-   only after the backfill check.
-2. Add owner-only SECURITY DEFINER RPCs with `SET search_path = public, pg_temp`
-   for changing the workspace default and atomically creating a conversation from
-   the current default. Revoke direct writes, validate the reviewed registry
-   identifier, and test concurrent default changes, first-dispatch binding, and
-   attempted direct updates. Members may read the setting; `admin` is not a
-   current role and must not be introduced implicitly.
+   only after the backfill check. The first-dispatch claim for a routine uses a
+   stable scheduler/action identity before any external side effect; the
+   terminal-only `routine_runs` WORM row is linked afterward and is not a
+   pre-dispatch foreign-key authority. Existing migration 107 forbids
+   `CREATE INDEX CONCURRENTLY` inside Supabase's transaction wrapper, so use
+   ordinary bounded indexes in this migration or a separately supported index
+   operation.
+2. Add a SECURITY DEFINER RPC with `SET search_path = public, pg_temp` for the
+   owner-only workspace-default mutation and a separate member-authorized RPC
+   for atomically creating a conversation from the current default. Revoke
+   direct writes, validate the reviewed registry identifier, and test concurrent
+   default changes, first-dispatch binding, and attempted direct updates. Members
+   may read the setting; `admin` is not a current role and must not be introduced
+   implicitly.
 3. Extract current Claude SDK code from `soleur-go-runner.ts`, `cc-dispatcher.ts`,
    and `agent-runner-query-options.ts` into a Claude adapter. Preserve existing
    permission callback, session resume, abort-before-replace, worktree lease,
@@ -450,6 +459,15 @@ to reconcile in this pass.
 - `apps/web-platform/server/conversation-writer.ts`
 - `apps/web-platform/server/support-conversation.ts`
 - `apps/web-platform/server/auto-sync-trigger.ts`
+- `apps/web-platform/server/routines/run-routine.ts`
+- `apps/web-platform/server/routines-tools.ts`
+- `apps/web-platform/server/inngest/functions/agent-on-spawn-requested.ts`
+- `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts`
+- `apps/web-platform/server/inngest/functions/cron-daily-triage.ts`
+- `apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts`
+- `apps/web-platform/server/inngest/functions/cron-weekly-analytics.ts`
+- `apps/web-platform/server/inngest/middleware/run-log.ts`
+- `apps/web-platform/server/inngest/cron-manifest.ts`
 - `apps/web-platform/server/dsar-export.ts`
 - `apps/web-platform/server/dsar-export-allowlist.ts`
 - `apps/web-platform/server/account-delete.ts`
@@ -485,6 +503,7 @@ to reconcile in this pass.
 - `apps/web-platform/test/agent-engine-dsar.test.ts`
 - `knowledge-base/engineering/architecture/decisions/ADR-217-pluggable-web-agent-runtime.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/agent-engine-consumer-inventory.md`
+- `knowledge-base/product/design/agent-engine-selection/implementation-brief.md`
 - `knowledge-base/product/design/agent-engine-selection/workspace-default-engine.pen`
 - `knowledge-base/product/design/agent-engine-selection/screenshots/01-workspace-default-agent-engine.png`
 
@@ -636,12 +655,14 @@ registry entries until their workflow-specific qualification gates pass.
 
 The migration touches hot `workspaces` and `conversations` tables, so the plan
 uses an expand/contract, zero-downtime path: add nullable columns and new tables;
-backfill in bounded batches; add indexes concurrently where needed; add foreign
-keys/checks as `NOT VALID` and validate them separately; then enable the atomic
-creator for new rows. Existing Claude dispatch remains valid throughout. Verify
-row counts, null coverage, and dual-read compatibility before enforcing the new
-binding, and roll back by disabling the new creator while preserving the added
-columns and records. No serving host restart or maintenance window is required.
+backfill in bounded batches; add ordinary bounded indexes inside the migration
+transaction (or use a separately supported non-transactional index operation);
+add foreign keys/checks as `NOT VALID` and validate them separately; then enable
+the atomic creator for new rows. Existing Claude dispatch remains valid
+throughout. Verify row counts, null coverage, and dual-read compatibility before
+enforcing the new binding, and roll back by disabling the new creator while
+preserving the added columns and records. No serving host restart or maintenance
+window is required.
 
 ## Resolved Decisions Before `/work`
 

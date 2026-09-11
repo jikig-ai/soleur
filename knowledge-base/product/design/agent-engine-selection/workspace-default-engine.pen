@@ -15,7 +15,7 @@
           "type": "frame",
           "id": "UvRVA",
           "name": "Sidebar",
-          "width": 260,
+          "width": 216,
           "height": "fill_container",
           "fill": "#232323",
           "layout": "vertical",
@@ -74,6 +74,16 @@
                   "letterSpacing": 1.5
                 }
               ]
+            },
+            {
+              "type": "text",
+              "id": "u3kok",
+              "name": "Collapse navigation button",
+              "fill": "#B8B8B0",
+              "content": "‹ COLLAPSE",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 11,
+              "fontWeight": "normal"
             }
           ]
         },
@@ -84,8 +94,8 @@
           "width": "fill_container",
           "height": "fill_container",
           "layout": "vertical",
-          "gap": 24,
-          "padding": 40,
+          "gap": 20,
+          "padding": 36,
           "children": [
             {
               "type": "text",
@@ -105,7 +115,7 @@
               "fill": "#F5F5F0",
               "content": "DEFAULT AGENT ENGINE",
               "fontFamily": "Space Grotesk",
-              "fontSize": 36,
+              "fontSize": 32,
               "fontWeight": "700",
               "letterSpacing": 1
             },
@@ -114,10 +124,10 @@
               "id": "BipuW",
               "name": "intro2",
               "fill": "#B8B8B0",
-              "content": "Choose the engine used for new conversations. Existing conversations keep their original engine and session.",
+              "content": "Choose the engine for new conversations and future routine runs.\nExisting conversations and started runs keep their engine, including retries.",
               "lineHeight": 1.5,
               "fontFamily": "IBM Plex Mono",
-              "fontSize": 13,
+              "fontSize": 12,
               "fontWeight": "normal"
             },
             {
@@ -125,7 +135,7 @@
               "id": "yZZf8",
               "name": "Engine Default Card",
               "width": "fill_container",
-              "height": 250,
+              "height": 180,
               "fill": "#232323",
               "stroke": {
                 "align": "inside",
@@ -133,8 +143,8 @@
                 "fill": "#3D3D3D"
               },
               "layout": "vertical",
-              "gap": 16,
-              "padding": 24,
+              "gap": 14,
+              "padding": 20,
               "children": [
                 {
                   "type": "frame",
@@ -222,7 +232,7 @@
               "id": "ejQ5y",
               "name": "Codex Availability",
               "width": "fill_container",
-              "height": 150,
+              "height": 330,
               "fill": "#1A1A1A",
               "stroke": {
                 "align": "inside",
@@ -230,7 +240,7 @@
                 "fill": "#3D3D3D"
               },
               "layout": "vertical",
-              "gap": 10,
+              "gap": 14,
               "padding": 20,
               "children": [
                 {
@@ -238,7 +248,7 @@
                   "id": "yiubV",
                   "name": "codexTitle2",
                   "fill": "#F5F5F0",
-                  "content": "CODEX  /  AVAILABLE TO ENABLE",
+                  "content": "CODEX  /  SET UP CONNECTION",
                   "fontFamily": "Space Grotesk",
                   "fontSize": 13,
                   "fontWeight": "700",
@@ -249,10 +259,136 @@
                   "id": "ldAVb",
                   "name": "codexBody2",
                   "fill": "#B8B8B0",
-                  "content": "API key required. Capability status: qualification in progress. Cost and approval support will be shown before activation.",
+                  "content": "Choose how Codex is connected. This choice determines the billing source.\nAvailability is checked separately for conversations and routines.",
                   "lineHeight": 1.5,
                   "fontFamily": "IBM Plex Mono",
                   "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "IiZGJ",
+                  "name": "Codex authentication options",
+                  "width": "fill_container",
+                  "height": 108,
+                  "gap": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "GINTJ",
+                      "name": "API key selected",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "fill": "#232323",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 2,
+                        "fill": "#FFD600"
+                      },
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "I2o8E",
+                          "name": "API key radio",
+                          "fill": "#F5F5F0",
+                          "content": "● API KEY",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 13,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "4Znge",
+                          "name": "API billing",
+                          "fill": "#B8B8B0",
+                          "content": "Billed to your OpenAI API account",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ULC3D",
+                          "name": "Connect API key button",
+                          "fill": "#FFD600",
+                          "content": "CONNECT API KEY  →",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 12,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "keTIH",
+                      "name": "ChatGPT subscription option",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "fill": "#232323",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#3D3D3D"
+                      },
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 14,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "RTP6j",
+                          "name": "ChatGPT radio",
+                          "fill": "#F5F5F0",
+                          "content": "○ CHATGPT SUBSCRIPTION",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 13,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "G2Zjc",
+                          "name": "ChatGPT billing",
+                          "fill": "#B8B8B0",
+                          "content": "Uses your eligible ChatGPT plan limits",
+                          "fontFamily": "IBM Plex Mono",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ujrZG",
+                          "name": "Managed signin button",
+                          "fill": "#F5F5F0",
+                          "content": "SIGN IN WITH CHATGPT  →",
+                          "fontFamily": "Space Grotesk",
+                          "fontSize": 12,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "xMUJ2",
+                  "name": "Selected connection status",
+                  "fill": "#B8B8B0",
+                  "content": "Selected method: API key · Not connected",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "dMu8T",
+                  "name": "Codex availability qualification",
+                  "fill": "#FF6B35",
+                  "content": "NOT READY TO SELECT · Connection and workflow checks required",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 11,
                   "fontWeight": "normal"
                 }
               ]
@@ -262,7 +398,7 @@
               "id": "kWYky",
               "name": "notice2",
               "fill": "#FF6B35",
-              "content": "[!] Changing this setting affects new conversations only. No existing transcript or credential is transferred.",
+              "content": "If the selected engine or sign-in method is unavailable, work pauses with a clear reason.\nSoleur never switches engines or billing methods automatically.",
               "lineHeight": 1.5,
               "fontFamily": "IBM Plex Mono",
               "fontSize": 12,
