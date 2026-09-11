@@ -34,6 +34,8 @@ routine run binds the current default once; retries retain that binding.
 - [ ] GREEN-03 (blockedBy RED-03): migration, durable run/event records, scoped RPCs and repositories.
   - [x] Schema contract slice: migration 138 defines settings, live runs, immutable bindings, idempotent events, RLS, and owner RPC (5 migration tests green).
   - [x] Repository contract slice: atomic bind RPC, tenant run lookup, and idempotent event append (2 repository tests green).
+  - [x] Conversation composition slice: websocket conversation creation binds the trusted workspace default before first-turn dispatch; authenticated RPC execution is identity-bound (10 focused tests green).
+  - [x] Binding normalization slice: persisted snake_case rows are translated to the neutral execution contract before adapter dispatch (8 focused tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
