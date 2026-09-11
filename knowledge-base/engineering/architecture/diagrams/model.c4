@@ -5,6 +5,14 @@
 // component-plugin) — union of all elements and relationships, nothing dropped.
 model {
 
+  codex = system "Codex" {
+    #external
+    description "Loads the Soleur Codex plugin from its repository marketplace. Shares canonical skills and agent definitions through the harness adapter, with explicitly trusted lifecycle hooks. Repository setup adds rule loading and Bash guardrails; per-file Claude hook parity is not implied (ADR-215)."
+  }
+
+  founder -> codex "Invokes Soleur skills and company workflows"
+  codex -> platform.plugin "Loads canonical skills, command wrappers, agent instructions, MCP connections, and compatible hooks"
+
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }

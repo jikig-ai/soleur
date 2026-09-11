@@ -15,6 +15,18 @@ Soleur gives a single founder the leverage of a full organization. **68 agents**
 
 ## Installation
 
+**Codex:**
+
+```bash
+codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur
+codex plugin add soleur@soleur
+```
+
+Start a new Codex session, review the bundled hooks in `/hooks`, and use
+`$soleur:go <what you want to do>`. See the
+[Codex setup guide](knowledge-base/engineering/codex-onboarding.md) for local
+development, updates, and compatibility details.
+
 **From the marketplace (recommended):**
 
 ```bash
