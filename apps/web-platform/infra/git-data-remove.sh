@@ -28,10 +28,12 @@
 set -euo pipefail
 
 # The bare-repo root on the block volume. Overridable ONLY for tests via
-# GIT_DATA_REPO_ROOT — sshd passes NO client env to a forced command (AcceptEnv
-# empty), so in production this is always the server default and the client cannot
-# influence it (the workspace_id in SSH_ORIGINAL_COMMAND is the only client input,
-# validated below).
+# GIT_DATA_REPO_ROOT. In production this is always the server default: sshd forwards
+# client environment only for names matched by AcceptEnv, and Ubuntu's stock
+# sshd_config ships `AcceptEnv LANG LC_*` (#8043 F10 — an earlier comment here claimed
+# AcceptEnv was empty; the premise was wrong, the conclusion holds), which cannot match
+# GIT_DATA_REPO_ROOT or GIT_DATA_MOUNT_ROOT. The client's only input is the workspace_id
+# in SSH_ORIGINAL_COMMAND, validated below.
 REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories}"
 # (#8043 F8) The MOUNT the store lives on — a SECOND, independently-defaulted seam, asserted
 # below with mountpoint(1). It is deliberately not derived from REPO_ROOT: `mountpoint -q` on

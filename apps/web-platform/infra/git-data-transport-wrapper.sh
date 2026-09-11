@@ -19,12 +19,14 @@
 # a clear remote: error + exit 1. Extract the single quoted path arg, reject dot-path
 # traversal, `readlink -f` it, and refuse unless it canonicalizes to a DIRECT
 # `<root>/<id>.git` child of the bare-repo root (mirrors git-data-remove.sh's exact-
-# child assertion). Runs as the `git` user; sshd passes NO client env (AcceptEnv
-# empty) so REPO_ROOT is always the server default in production.
+# child assertion). Runs as the `git` user; sshd forwards client environment only for
+# names matched by AcceptEnv, and Ubuntu's stock sshd_config ships `AcceptEnv LANG LC_*`
+# (#8043 F10 — not "empty", as this comment once said), which cannot match
+# GIT_DATA_REPO_ROOT, so REPO_ROOT is always the server default in production.
 set -euo pipefail
 
-# Overridable ONLY for tests (sshd passes no client env — identical posture to
-# git-data-provision.sh / git-data-remove.sh REPO_ROOT).
+# Overridable ONLY for tests (unreachable from a client: `AcceptEnv LANG LC_*` cannot
+# match this name — identical posture to git-data-provision.sh / git-data-remove.sh).
 REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories}"
 
 reject() {
@@ -84,8 +86,9 @@ case "$child" in
   */*) reject "repo path is not a direct child of the root (nested): '$repo_real'" ;;
 esac
 
-# --- Test-only dry-run hook (sshd never passes this — AcceptEnv empty, identical
-#     posture to GIT_DATA_REPO_ROOT). Lets the drift test assert the ACCEPT path
+# --- Test-only dry-run hook (unreachable from a client: `AcceptEnv LANG LC_*` cannot
+#     match GIT_DATA_TRANSPORT_EXEC_DRYRUN — identical posture to GIT_DATA_REPO_ROOT).
+#     Lets the drift test assert the ACCEPT path
 #     without spinning a real git-upload-pack handshake. NO security impact: it only
 #     replaces the final exec with an echo of the validated, canonicalized command. -
 if [ "${GIT_DATA_TRANSPORT_EXEC_DRYRUN:-0}" = "1" ]; then
