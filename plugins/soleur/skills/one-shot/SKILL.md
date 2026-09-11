@@ -3,6 +3,10 @@ name: one-shot
 description: "This skill should be used when running the full autonomous engineering workflow from plan to merged PR."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/one-shot` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:one-shot`). Forbidden is executing a subset of these steps, not the Read.
+<!-- grok-harness-invoke:end -->
+
 Run these steps in order. Do not do anything else.
 
 <!-- one-shot-anti-bypass-protocol:start -->
@@ -13,7 +17,7 @@ You are the **pipeline runner** for this skill. Whether entered via `/go` → `/
 - **FORBIDDEN:** Cherry-picking steps (e.g. 0b worktree + inline implementation + push, then stopping).
 - **FORBIDDEN:** Using Write/Edit/Shell on product code **before** Steps 1–2 (plan) complete — unless Step 1 recovered an on-disk plan and Step 3 (`/work`) is next.
 - **FORBIDDEN:** Treating a draft PR or pushed branch as done. Deliverable = **merged PR** + `<promise>DONE</promise>` (Step 8).
-- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Do not read their SKILL.md and improvise.
+- **REQUIRED (Grok Build):** Invoke child skills via slash commands — `/plan`, `/deepen-plan`, `/work`, `/review`, `/qa`, `/compound`, `/ship` (ship chains `/postmerge`). Read each child's SKILL.md in this process and run it to completion — do not improvise a subset.
 - **REQUIRED before `git push` (Grok Build):** Run `bash plugins/soleur/scripts/grok-pre-push-gate.sh` from repo root — local CI parity (`test-all.sh` + fast required checks + `grok-fidelity`) — this now includes `infra-validation`'s suites, because the gate calls `test-all.sh` with no `TEST_GROUP` and it runs `run-registered-suites.sh` as a nested suite when the diff touches `apps/web-platform/infra/`. Do NOT run that runner concurrently alongside the gate (shared `TMPDIR=/var/tmp` → false RED); read the epilogue and run it separately only if it reports `is NOT covered above`. Abort push on non-zero exit; inspect `EXIT=$rc` explicitly (no `| tail`).
 - **Merge → deploy:** YOU poll merge/release/deploy — never ask the operator to watch CI. Grok: **AwaitShell** + `pattern`; Claude: **Monitor tool**. See `harness.ts` `pollInstructions()`.
 - **Continuation gates:** `## Work Phase Complete`, `## Code Review Complete`, and similar exit summaries mean **proceed to the next step in this same turn** — never hand off to the operator.

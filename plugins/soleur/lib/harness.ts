@@ -149,8 +149,9 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
       command,
       args: trimmedArgs,
       instruction:
-        `Invoke the registered skill via slash command \`${command}\`. ` +
-        "Do NOT improvise workflow steps — run the skill to completion." +
+        `Read \`plugins/soleur/skills/${name}/SKILL.md\` in this process and run it to completion ` +
+        `(Grok has no nested Skill/slash tool; \`/${name}\` names the skill, it is not a nested tool_use). ` +
+        "Do NOT improvise a subset of its steps." +
         pipelineSuffix,
     };
   }

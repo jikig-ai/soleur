@@ -139,7 +139,9 @@ describe("invokeSkill", () => {
     expect(inv.harness).toBe("grok");
     expect(inv.tool).toBe("slash_command");
     expect(inv.command).toBe("/drain-labeled-backlog --label security");
-    expect(inv.instruction).toContain("slash command");
+    expect(inv.instruction).toMatch(/in this process/i);
+    expect(inv.instruction).toContain("SKILL.md");
+    expect(inv.instruction).not.toMatch(/do not read/i);
   });
 
   test("one-shot invocation includes pipeline completion suffix", () => {

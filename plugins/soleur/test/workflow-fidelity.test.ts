@@ -343,6 +343,69 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(gate).toContain("GROK_FIDELITY_SKIP_BUDGET");
   });
 
+  test("Grok invokeSkill tells the parent to Read SKILL.md in-process", () => {
+    process.env.GROK_HOME = "/home/user/.grok";
+    const inv = invokeSkill("brainstorm", "explore");
+    expect(inv.harness).toBe("grok");
+    expect(inv.instruction).toMatch(/in this process/i);
+    expect(inv.instruction).toContain("SKILL.md");
+    expect(inv.instruction).not.toMatch(/do not read/i);
+  });
+
+  test("Grok workflowFidelityInstructions sanctions in-process Read", () => {
+    const md = workflowFidelityInstructions("grok");
+    expect(md).toMatch(/in this process/i);
+    expect(md).toContain("SKILL.md");
+    expect(md).not.toMatch(/not reading SKILL\.md/i);
+  });
+
+  test("Claude workflowFidelityInstructions still forbids Read as a Skill-tool substitute", () => {
+    const md = workflowFidelityInstructions("claude");
+    expect(md).toMatch(/not reading SKILL\.md/i);
+  });
+});
+
+const IN_PROCESS_READ = /in this process/i;
+const ADAPTER_CITE = /harness\.ts|invokeSkill/;
+const LOCKED_PIPELINE_SKILLS = [
+  "one-shot",
+  "brainstorm",
+  "drain-labeled-backlog",
+  "drain-prs",
+  "plan",
+  "work",
+  "review",
+  "qa",
+  "compound",
+  "ship",
+  "postmerge",
+  "deepen-plan",
+] as const;
+
+describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () => {
+  test("walker is not vacuous (locked set is non-empty)", () => {
+    expect(LOCKED_PIPELINE_SKILLS.length).toBeGreaterThan(0);
+  });
+
+  test.each([...LOCKED_PIPELINE_SKILLS])(
+    "%s SKILL.md cites harness.ts or invokeSkill and has an in-process Read sentence",
+    (name) => {
+      const body = readFileSync(
+        resolve(PLUGIN_ROOT, "skills", name, "SKILL.md"),
+        "utf-8",
+      );
+      expect(body).toMatch(ADAPTER_CITE);
+      expect(body).toMatch(IN_PROCESS_READ);
+      expect(body).toContain("SKILL.md");
+    },
+  );
+
+  test("go.md Step 2.1 sanctions Grok in-process Read", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    expect(goMd).toMatch(ADAPTER_CITE);
+    expect(goMd).toMatch(IN_PROCESS_READ);
+  });
+
   test("AGENTS.rules.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
     const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");

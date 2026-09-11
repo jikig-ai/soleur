@@ -153,9 +153,14 @@ export function workflowFidelityInstructions(harness: Harness): string {
     harness,
   );
 
+  const nextActionLine =
+    harness === "grok"
+      ? "- After `/go` routes to a pipeline skill (`one-shot`, `brainstorm`, `drain-*`), your **next action** MUST be to Read that skill's SKILL.md in this process and run it to completion (Grok has no nested Skill tool). Forbidden is executing a subset or writing product code before the child skill finishes — not the Read itself."
+      : `- After \`/go\` routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`;
+
   const lines = [
     "**Workflow fidelity (never bypass)**",
-    `- After \`/go\` routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`,
+    nextActionLine,
     `- **FORBIDDEN after routing to \`brainstorm\`:** product code (Write/Edit/Shell); ending after spec/brainstorm doc without handoff. **REQUIRED next:** ${brainstormNext}.`,
     `- **FORBIDDEN after routing to \`one-shot\`:** inline implementation before Steps 1–8 complete; ending after push/draft PR; reporting "done" without \`${ONE_SHOT_DONE_MARKER}\`.`,
     `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → \`/work\`; \`work\` → ${workTail}.`,

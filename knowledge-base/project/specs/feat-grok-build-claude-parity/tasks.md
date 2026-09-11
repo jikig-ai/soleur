@@ -4,12 +4,12 @@ Lane: `cross-domain`. Closes #8064.
 
 ## Phase 1: Adapter + dual-voice + eval
 
-- [ ] 1.1 `harness.ts` `invokeSkill()` Grok instruction + `workflowFidelityInstructions("grok")`: in-process Read **is** the invoke
-- [ ] 1.2 `go.md` Step 2.1 same; `/soleur:go` recovery one-liner; Grok fail copy is not Concierge
-- [ ] 1.3 Anti-bypass headers on brainstorm/plan/one-shot/work: do not forbid Grok Read
-- [ ] 1.4 Guard 1: `harness.ts`/`invokeSkill()` + in-process-Read sentence; header-only dual-voice must-RED; include `deepen-plan`
-- [ ] 1.5 Handoff-site dual-voice: review, qa, compound, drain-labeled-backlog, drain-prs (AwaitShell), work Phase 4
-- [ ] 1.6 Pipeline-detection matches `skill: soleur:X` or `/X` or `slash_command`
+- [x] 1.1 `harness.ts` `invokeSkill()` Grok instruction + `workflowFidelityInstructions("grok")`: in-process Read **is** the invoke
+- [x] 1.2 `go.md` Step 2.1 same; `/soleur:go` recovery one-liner; Grok fail copy is not Concierge
+- [x] 1.3 Anti-bypass headers on brainstorm/plan/one-shot/work: do not forbid Grok Read
+- [x] 1.4 Guard 1: `harness.ts`/`invokeSkill()` + in-process-Read sentence; header-only dual-voice must-RED; include `deepen-plan`
+- [x] 1.5 Handoff-site dual-voice: review, qa, compound, drain-labeled-backlog, drain-prs (AwaitShell), work Phase 4
+- [x] 1.6 Pipeline-detection matches `skill: soleur:X` or `/X` or `slash_command`
 - [ ] 1.7 `bash plugins/soleur/scripts/grok-fidelity-gate.sh` exits 0
 
 ## Phase 2: Plugin-root

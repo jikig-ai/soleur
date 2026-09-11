@@ -3,6 +3,10 @@ name: work
 description: "This skill should be used when executing work plans efficiently while maintaining quality and finishing features."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/work` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:work`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- work-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
@@ -1225,16 +1229,18 @@ This is the `/work`-side mirror of `/ship` Phase 5.5 Net-Issue-Flow Surfacing �
 
 #### Invocation Mode
 
-**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
+**Child-skill invoke (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** **Claude:** Skill tool (`soleur:<skill>`). **Grok:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/review`, `/qa`, `/compound`, `/ship`). Slash names the skill; it is not a nested tool_use.
+
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output, `/one-shot`, or a `slash_command` of `one-shot` earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (**Grok:** Read `plugins/soleur/skills/review/SKILL.md` in this process / `/review`) (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order, forwarding `--headless` if `HEADLESS_MODE=true`:
 
-1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless) — catch issues before shipping
+1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless; **Grok:** `/review`) — catch issues before shipping
 2. `skill: soleur:resolve-todo-parallel` — resolve any review findings (no `--headless` needed; this skill has no interactive prompts)
-2.5. **Structural-UI visual gate (#4834 / ADR-049).** If the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`, run `skill: soleur:qa` (or `--headless`) BEFORE shipping — its auth-seeded headless Playwright nav-states gate catches the CSS-layout regressions jsdom structurally cannot (the #4810 class). This is the step whose absence let direct `/work` skip the browser check that one-shot runs at its step 5.5 — wiring it here closes that asymmetry. Do NOT fire on leaf-component or content-only `.tsx` diffs. This is a scope boundary, not a stopping point: do not announce or return control here — continue executing the next step.
-3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+2.5. **Structural-UI visual gate (#4834 / ADR-049).** If the diff (`git diff --name-only origin/main...HEAD` — the branch-vs-main merge-base diff; do NOT use `origin/<branch>...HEAD`, which only sees unpushed commits and returns 0 files once the branch is pushed) touches `apps/web-platform/app/(dashboard)/**`, `apps/web-platform/components/dashboard/**`, or any `layout.tsx`, run `skill: soleur:qa` (or `--headless`; **Grok:** `/qa`) BEFORE shipping — its auth-seeded headless Playwright nav-states gate catches the CSS-layout regressions jsdom structurally cannot (the #4810 class). This is the step whose absence let direct `/work` skip the browser check that one-shot runs at its step 5.5 — wiring it here closes that asymmetry. Do NOT fire on leaf-component or content-only `.tsx` diffs. This is a scope boundary, not a stopping point: do not announce or return control here — continue executing the next step.
+3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless; **Grok:** `/compound`) — capture learnings before committing
 3.5. Display: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task."
-4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
+4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless; **Grok:** `/ship`) — commit, push, create PR, merge
 
 ---
 

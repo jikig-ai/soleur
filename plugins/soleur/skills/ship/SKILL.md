@@ -3,6 +3,10 @@ name: ship
 description: "This skill should be used when preparing a feature for production deployment. Enforces the lifecycle checklist: commit artifacts, update docs, capture learnings, create PR. Version bumping happens in CI."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/ship` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:ship`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # ship Skill
 
 <!-- ship-merge-deploy-protocol:start -->

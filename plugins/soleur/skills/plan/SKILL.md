@@ -3,6 +3,10 @@ name: plan
 description: "This skill should be used when transforming feature descriptions into well-structured project plans following conventions."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/plan` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:plan`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- plan-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
