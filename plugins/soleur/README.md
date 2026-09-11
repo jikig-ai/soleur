@@ -6,6 +6,16 @@ A full AI organization across engineering, finance, marketing, legal, operations
 
 Install the plugin:
 
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
+
+**Claude Code (marketplace):**
+
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
 claude plugin install soleur@soleur-marketplace
@@ -17,6 +27,10 @@ claude plugin install soleur@soleur-marketplace
 then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
 definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
+
+**Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. Start a Devin session
+and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
+[compatibility instructions](devin/INSTRUCTIONS.md).
 
 The recommended way to use Soleur is through the unified entry point:
 
@@ -48,7 +62,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 68 |
 | Commands | 3 |
-| Skills | 95 |
+| Skills | 98 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -333,6 +347,14 @@ agent-browser install  # Downloads Chrome for Testing
 The `agent-browser` skill provides comprehensive documentation on usage.
 
 ## Installation
+
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
 **From the marketplace (recommended):**
 

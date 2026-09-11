@@ -21,7 +21,10 @@ PROBE="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
 # it tests compares 28 — the suite would go red for the fixture, not the code.
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 pass=0; fail=0
-EXPECTED_TESTS=13
+# Must equal the number of `t_*` invocations in the call block at the foot of
+# this file. Exact equality, not a floor: a floor cannot see a row that stopped
+# being invoked.
+EXPECTED_TESTS=21
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -280,6 +283,207 @@ t_survivors_out_of_scope() {
   fi
 }
 
+# ── Transport confinement + destination pinning (#7997). ───────────────────
+# These four rows run NON-FIXTURE on purpose. `fetch_rules()` short-circuits on
+# SENTRY_FIXTURE_RULES *before* it reads SENTRY_API_HOST, so a fixture-mode row
+# asserts exactly nothing about the host adjudication — it would pass against a
+# script with no adjudication at all. The stub `curl` on PATH is what makes a
+# live-path run hermetic.
+_stub_curl_dir() {
+  local d="$TMPD/stub.$1"
+  mkdir -p "$d"
+  cat > "$d/curl" <<'STUB'
+#!/usr/bin/env bash
+: > "$STUB_ARGV"
+for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
+printf '%s\n' "${SSLKEYLOGFILE-<unset>}" > "$STUB_ENV"
+printf '[]'
+STUB
+  chmod +x "$d/curl"
+  printf '%s' "$d"
+}
+
+# _run_live <name> [env assignments...] -> _rc, _out, and $_argv / $_envf paths.
+_run_live() {
+  local name="$1"; shift
+  local d; d=$(_stub_curl_dir "$name")
+  _argv="$TMPD/$name.argv"; _envf="$TMPD/$name.env"
+  : > "$_argv"; : > "$_envf"
+  _rc=0
+  _out=$(env -u SENTRY_FIXTURE_RULES \
+           PATH="$d:$PATH" STUB_ARGV="$_argv" STUB_ENV="$_envf" \
+           SENTRY_AUTH_TOKEN=fixture \
+           "$@" bash "$PROBE" 2>&1) || _rc=$?
+}
+
+t_hostile_host_refused() {
+  # Table-driven over all four hosts. attacker.tld is the obvious arm; the three
+  # NEAR-MISSES are the ones that matter, because they authenticate and then
+  # silently grade a different tenant -- ADR-031 records eu.sentry.io rewriting
+  # slugs ending in `-eu`. A single-arm row would pass against an implementation
+  # that only rejects unknown TLDs.
+  local h bad=0 detail=""
+  for h in attacker.tld eu.sentry.io de.sentry.io sentry.io; do
+    _run_live "hostilehost.${h//./_}" SENTRY_ORG=jikigai-eu SENTRY_API_HOST="$h"
+    if [[ "$_rc" -ne 2 ]] || ! grep -q 'refusing destination host' <<<"$_out" \
+       || [[ -s "$_argv" ]]; then
+      bad=$((bad + 1))
+      detail+=" [$h rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F14 all four non-pinned hosts REFUSED before any request (incl. the 3 near-misses)" ok
+  else
+    _report "F14 hostile SENTRY_API_HOST is refused" fail \
+      "$bad of 4 arms wrong:$detail"
+  fi
+}
+
+# --- F19/F20: the plan required these and they were not written. ---
+t_org_locale_independent() {
+  # M23 measured that without the subshell LC_ALL=C pin the a-z0-9 ranges admit
+  # ~1,162 non-ASCII characters under a UTF-8 locale -- i.e. the guard is weaker
+  # on the operator's laptop than in CI. Assert BOTH locales refuse.
+  local lc bad=0 detail=""
+  for lc in C en_US.UTF-8; do
+    _run_live "loc.${lc//./_}" LC_ALL="$lc" LANG="$lc" \
+      SENTRY_ORG='jikigaí' SENTRY_API_HOST=jikigai-eu.sentry.io
+    if [[ "$_rc" -ne 2 ]] || ! grep -q 'refusing org' <<<"$_out"; then
+      bad=$((bad + 1)); detail+=" [LC_ALL=$lc rc=$_rc]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F19 a non-ASCII org is refused under BOTH LC_ALL=C and en_US.UTF-8" ok
+  else
+    _report "F19 org refusal is locale-independent" fail "$bad of 2 locales wrong:$detail"
+  fi
+}
+
+t_org_length_boundary() {
+  # RFC 1035 sec 2.3.4: 63 octets. The regex is ^[a-z0-9][a-z0-9-]{0,62}$ -- one
+  # leading char plus 62 = 63. Pin both sides of the boundary; an off-by-one here
+  # either rejects a legitimate org or admits an over-long label.
+  local ok63 rej64
+  _run_live len63 SENTRY_ORG="a$(printf 'b%.0s' $(seq 62))" SENTRY_API_HOST=x.sentry.io
+  ok63=$_rc; local out63="$_out"
+  _run_live len64 SENTRY_ORG="a$(printf 'b%.0s' $(seq 63))" SENTRY_API_HOST=x.sentry.io
+  rej64=$_rc
+  # 63 must pass the ORG gate (it then fails the HOST gate, which is fine --
+  # what matters is that it did not fail for being too long).
+  if ! grep -q 'refusing org' <<<"$out63" && [[ "$rej64" -eq 2 ]]; then
+    _report "F20 a 63-octet org slug passes the shape gate and a 64-octet one is refused" ok
+  else
+    _report "F20 org length boundary is 63/64" fail \
+      "63-char refused-as-org=$(grep -c 'refusing org' <<<"$out63"); 64-char rc=$rej64 (want 2)"
+  fi
+}
+
+t_hostile_org_refused() {
+  # One member per forbidden character CLASS, so a partial widening of the regex
+  # cannot survive. The original single fixture used '@evil.tld/x' -- and '@' is
+  # outside even a widened [a-z0-9./-] class, so it could not discriminate:
+  # measured, widening the class to admit '.' and '/' left the suite 20/20 green.
+  # The org is interpolated into `organizations/${SENTRY_ORG}/`, so '/' is path
+  # injection on a URL that carries the bearer.
+  local o bad=0 detail=""
+  for o in '@evil.tld/x' 'jikigai.evil.tld' 'jikigai/../../evil' 'jikigai%2fx' 'JIKIGAI' '-leading' ''; do
+    # The HOST is derived from the org so the host pin CANNOT be what refuses --
+    # otherwise this row short-circuits on a different guard than the one it
+    # names. Measured: with a fixed host, widening the org class left this row
+    # green because the singleton case stopped matching and refused first.
+    _run_live "hostileorg.$bad" SENTRY_ORG="$o" SENTRY_API_HOST="${o}.sentry.io"
+    if [[ "$_rc" -eq 0 ]] || [[ -s "$_argv" ]]; then
+      bad=$((bad + 1)); detail+=" [org='$o' rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F15 every non-RFC-1035 org shape is REFUSED before any request" ok
+  else
+    _report "F15 hostile SENTRY_ORG is refused" fail "$bad shape(s) reached the wire:$detail"
+  fi
+}
+
+t_transport_flags_first() {
+  _run_live flags SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  # Position is the whole property: --disable aborts ~/.curlrc parsing and is a
+  # no-op anywhere but first.
+  local a1 a2 a3 a4
+  a1=$(sed -n '1p' "$_argv"); a2=$(sed -n '2p' "$_argv")
+  a3=$(sed -n '3p' "$_argv"); a4=$(sed -n '4p' "$_argv")
+  if [[ "$a1" == "--disable" && "$a2" == "--noproxy" && "$a3" == '*' \
+        && "$a4" == "--proto" ]] && grep -qx -- '=https' "$_argv" && grep -qx -- '-g' "$_argv"; then
+    _report "F16 the credentialed curl is transport-confined, flags FIRST" ok
+  else
+    _report "F16 transport flags are first" fail \
+      "argv[1..4]=[$a1 $a2 $a3 $a4]; want [--disable --noproxy * --proto]. Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+
+t_transport_not_reopened_by_suffix() {
+  # F16 pins a PREFIX. A prefix pin cannot express the property, which is "no
+  # argument RE-OPENS what the prefix closed" -- measured: appending
+  # `--proxy http://exfil.tld:8080 -k` to the pinned call site kept F16 green and
+  # the whole suite at 20/20, while sending the bearer through an attacker proxy
+  # with certificate verification off. The suffix is the half nobody asserts, so
+  # assert it as a NEGATIVE over the WHOLE argv (ADR-193): name the values that
+  # must never appear rather than the ones expected to.
+  _run_live suffix SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  local a bad="" n_noproxy=0 n_proto=0
+  while IFS= read -r a; do
+    case "$a" in
+      # re-opens proxying, which --noproxy '*' closed
+      -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
+        |--socks5-hostname|--socks5-basic|--socks5-gssapi) bad+=" $a" ;;
+      # re-reads a config file, which --disable aborted
+      -K|--config) bad+=" $a" ;;
+      # widens the protocol set, which --proto '=https' closed
+      --proto-default|--proto-redir) bad+=" $a" ;;
+      # re-points the destination behind the host pin (Host header preserved)
+      --resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url) bad+=" $a" ;;
+      # weakens or re-anchors TLS, or leaks the bearer across a redirect
+      -k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
+        |--doh-url|--doh-insecure|--location-trusted) bad+=" $a" ;;
+      # re-enables glob interpretation of the URL, which -g closed
+      --no-globoff) bad+=" $a" ;;
+    esac
+    [[ "$a" == "--noproxy" ]] && n_noproxy=$((n_noproxy + 1))
+    [[ "$a" == "--proto"   ]] && n_proto=$((n_proto + 1))
+  done < "$_argv"
+  # A SECOND --noproxy/--proto silently overrides the first; one occurrence each
+  # is the only shape in which the prefix pin means anything.
+  [[ "$n_noproxy" -eq 1 ]] || bad+=" --noproxy x${n_noproxy}"
+  [[ "$n_proto"   -eq 1 ]] || bad+=" --proto x${n_proto}"
+  if [[ -z "$bad" && -s "$_argv" ]]; then
+    _report "F21 no later argument re-opens the transport the prefix closed" ok
+  else
+    _report "F21 the argv SUFFIX re-opens confinement" fail \
+      "offending token(s):${bad:-<none>}; argv-bytes=$(wc -c <"$_argv"). Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+
+t_resolver_env_scrubbed() {
+  _run_live scrub SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io \
+    SSLKEYLOGFILE=/tmp/should-not-survive
+  # --noproxy and a host pin do not touch the resolver or the trust anchor;
+  # the prologue is what closes them, and only the child can testify.
+  if grep -qx '<unset>' "$_envf"; then
+    _report "F17 resolver / trust-anchor / keylog env is scrubbed before the request" ok
+  else
+    _report "F17 resolver env is scrubbed" fail \
+      "the child saw SSLKEYLOGFILE=$(cat "$_envf") — the unset prologue did not run"
+  fi
+}
+
+t_fixture_mode_still_passes() {
+  # The guards must not break the path the other 13 rows exercise.
+  _run "$CAPTURE"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'all 28 in-scope rules match' <<<"$_out"; then
+    _report "F18 fixture mode still PASSES with the guards in place" ok
+  else
+    _report "F18 fixture mode still passes" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+  fi
+}
+
 t_identity_passes
 t_live_api_shape
 t_deleted
@@ -293,8 +497,28 @@ t_comparison_interval_drift
 t_unmanaged_new_rule
 t_empty_capture_refuses
 t_survivors_out_of_scope
+t_hostile_host_refused
+t_hostile_org_refused
+t_transport_flags_first
+t_transport_not_reopened_by_suffix
+t_resolver_env_scrubbed
+t_fixture_mode_still_passes
+t_org_locale_independent
+t_org_length_boundary
 
 echo "=== $pass passed, $fail failed ==="
+
+# HARNESS SELF-TEST. EXPECTED_TESTS catches a row that stopped being INVOKED; it
+# is blind to a row that stopped DISCRIMINATING -- measured, making _report's FAIL
+# branch increment `pass` left this suite 18/18 green with `ran` conserved.
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail "x"; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then

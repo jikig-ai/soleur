@@ -179,7 +179,7 @@
 3	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
-8	apps/web-platform/scripts/sentry-monitors-audit.test.sh
+10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
 3	apps/web-platform/scripts/supabase-local.test.sh
 3	apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 1	.claude/hooks/agent-token-tee.sh
@@ -333,6 +333,7 @@
 1	scripts/registry-pull-path-health.sh
 1	scripts/registry-restore-from-ghcr.sh
 5	scripts/rename-guard.test.sh
+1	scripts/rotate-supabase-db-credential.sh
 3	scripts/rule-metrics-aggregate.sh
 2	scripts/rule-metrics-aggregate.test.sh
 1	scripts/rule-prune.sh
