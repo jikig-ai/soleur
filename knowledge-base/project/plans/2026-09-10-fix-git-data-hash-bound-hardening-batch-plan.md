@@ -387,7 +387,7 @@ Two holes, both measured:
 |---|---|---|
 | `/home/git` | `root:git 0750` | sshd `chdir()`s here for the forced command and `git` resolves `$HOME` config here. `root:root 0750` would repeat exactly the `$HOOKS_DIR` traversal trap F9 exists to avoid. |
 | `/home/git/.ssh` | `root:git 0750` | Not writable by `git`, so `authorized_keys2` cannot be created — which is what actually closes the fall-through. |
-| `authorized_keys` | `root:root 0644` | sshd reads it as root before dropping privileges; StrictModes explicitly permits `st_uid == 0`. |
+| `authorized_keys` | `root:root 0644` | ~~sshd reads it as root before dropping privileges~~ **Corrected at review 2026-09-11:** sshd opens the map under the TARGET USER's uid (measured in the pinned image — `root:root 0600` is "Permission denied" and every push is refused; `root:root 0644` authenticates), which is exactly why the mode is 0644 and not 0600. StrictModes permits `st_uid == 0` — that half stands. |
 
 **Where the fix may live is constrained by a gate, not by taste.** `git_data_authorization_map_gate`
 HOLDs if the template references the literal `/home/git/.ssh/authorized_keys` **outside** its

@@ -142,10 +142,19 @@ command -v flock >/dev/null 2>&1 || {
   log "FATAL: flock (util-linux) missing — fence lock would be unenforceable"
   exit 1
 }
-command -v git-shell >/dev/null 2>&1 || {
-  log "FATAL: git-shell missing — transport user shell unenforceable"
-  exit 1
-}
+# (#8043) THE TRANSPORT USER'S LOGIN SHELL MUST BE A REAL SHELL. sshd runs a forced
+# `command=` as `<login shell> -c "<command>"`; git-shell refuses anything but its four
+# built-ins (measured in the pinned image: rc=128 "fatal: unrecognized command"), so a
+# git-shell login would kill transport, provision and the Art. 17 erasure alike. The
+# confinement is the forced-command map, not the shell. Read the shell back from the
+# account rather than trusting the template's declaration.
+_git_shell="$(getent passwd "$GIT_USER" | cut -d: -f7)"
+case "$_git_shell" in
+  /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) : ;;
+  *)
+    log "FATAL: $GIT_USER login shell is '$_git_shell' — must be a real shell, or every forced command dies at '<shell> -c'"
+    exit 1 ;;
+esac
 
 # 3. The dedicated `git` transport user (created by cloud-init `users:`). (#8043 F7) THE
 #    ACCOUNT MUST NOT OWN ITS OWN AUTHORIZATION MAP, nor the directory holding it, nor the
@@ -287,27 +296,27 @@ mountpoint -q "$LUKS_ROOT" || {
 # (#8043 F7/F9) OWNERSHIP IS READ BACK, NOT ASSUMED. Each path is compared as a literal
 # `user:group mode` so this proves the ABSENCE of the reverted state (a later recursive
 # chown, a re-added `-o git` install), not merely that a chown line exists above.
+# The table IS the contract: one row per path, `path expected-owner expected-mode why`.
+# The model these literals were chosen against (git is in group git and no other; a path is
+# traversable iff owner-x/group-x/other-x reaches git, writable iff the same with w) only
+# holds if the group membership holds, so that is asserted first.
 _own() { stat -c '%U:%G %a' "$1"; }
-[[ "$(_own "$GIT_HOME")" == "root:$GIT_USER 750" ]] || {
-  log "FATAL: $GIT_HOME is $(_own "$GIT_HOME"), expected root:$GIT_USER 750 (git could replace .ssh, or sshd cannot chdir)"
+[[ "$(id -Gn "$GIT_USER")" == "$GIT_USER" ]] || {
+  log "FATAL: $GIT_USER is in groups '$(id -Gn "$GIT_USER")', expected only '$GIT_USER' — a supplementary group makes the root:git 0750 model wrong"
   exit 1
 }
-[[ "$(_own "$GIT_HOME/.ssh")" == "root:$GIT_USER 750" ]] || {
-  log "FATAL: $GIT_HOME/.ssh is $(_own "$GIT_HOME/.ssh"), expected root:$GIT_USER 750 (git could create authorized_keys2, or sshd cannot traverse)"
-  exit 1
-}
-[[ "$(_own "$GIT_HOME/.ssh/authorized_keys")" == "root:root 644" ]] || {
-  log "FATAL: authorized_keys is $(_own "$GIT_HOME/.ssh/authorized_keys" 2>/dev/null || echo absent), expected root:root 644 (git could rewrite the map, or sshd cannot read it)"
-  exit 1
-}
-[[ "$(_own "$HOOKS_DIR")" == "root:$GIT_USER 750" ]] || {
-  log "FATAL: $HOOKS_DIR is $(_own "$HOOKS_DIR"), expected root:$GIT_USER 750 (git could write the hook dir, or cannot traverse it)"
-  exit 1
-}
-[[ "$(_own "$PRE_RECEIVE")" == "root:root 755" ]] || {
-  log "FATAL: $PRE_RECEIVE is $(_own "$PRE_RECEIVE"), expected root:root 755 (git could overwrite the fence it is fenced by)"
-  exit 1
-}
+while read -r _p _o _m _why; do
+  [[ "$(_own "$_p" 2>/dev/null || echo absent)" == "$_o $_m" ]] || {
+    log "FATAL: $_p is $(_own "$_p" 2>/dev/null || echo absent), expected $_o $_m ($_why)"
+    exit 1
+  }
+done <<EOF
+$GIT_HOME root:$GIT_USER 750 git could replace .ssh, or sshd cannot chdir
+$GIT_HOME/.ssh root:$GIT_USER 750 git could create authorized_keys2, or sshd cannot traverse
+$GIT_HOME/.ssh/authorized_keys root:root 644 git could rewrite the map, or sshd cannot read it
+$HOOKS_DIR root:$GIT_USER 750 git could write the hook dir, or cannot traverse it
+$PRE_RECEIVE root:root 755 git could overwrite the fence it is fenced by
+EOF
 [[ "$(git config --system core.hooksPath)" == "$HOOKS_DIR" ]] || {
   log "FATAL: core.hooksPath not set to $HOOKS_DIR"
   exit 1

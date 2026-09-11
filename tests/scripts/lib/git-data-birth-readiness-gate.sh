@@ -270,8 +270,10 @@ HOLD
 #
 # The split is HASH-NEUTRAL by construction: every ABORT check that used to run before the
 # hash loop still runs here, in the same order, with the same messages, and the hash function
-# below hashes exactly the lines this prints. Measured on the live tree at the split:
-# bbe1a1426667ee8898f1883505f95aca8fe6e723b639cb5900e9b3560cedbb1a before and after.
+# below hashes exactly the lines this prints. Measured at the split: the digest of the same
+# tree through the old function and through this pair was byte-identical (the value itself is
+# not cited — it moves with every bound-file edit, and a reader reproducing at a later commit
+# would get a different number for the same true statement).
 #
 # Usage:  git_data_rung2_bound_files <cloud-init-git-data.yml>
 #         # prints the ABSOLUTE path of every file that composes user_data, one per line —
@@ -721,9 +723,12 @@ GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_
 # ${GITHUB_WORKSPACE}/… ; the suite calls it from a temp dir; a laptop calls it from anywhere.
 #
 # RESIDUAL, STATED SO NOBODY READS THIS AS A PROOF. ARM 1 inspects ONE commit. A PR that
-# edits a bound file in commit A and the hash in commit B and lands by REBASE-MERGE (all
-# three merge methods are enabled on this repo) presents an evidence commit touching only
-# the evidence, and passes ARM 1; only ARM 2 sees it, pre-merge, and ARM 2 is advisory.
+# edits a bound file in commit A and the hash in commit B and lands by ANY NON-SQUASH
+# METHOD — rebase-merge OR merge-commit (all three methods are enabled on this repo; with
+# `--no-ff`, `git log -1 -- <evidence>` still resolves to B by history simplification,
+# measured) — presents an evidence commit touching no bound file, and passes ARM 1; only
+# ARM 2 sees it, pre-merge, and ARM 2 is advisory. Nor can ARM 1 tell a hand-authored
+# evidence file landed alone (after a permitted deletion) from a rehearsal PR's.
 # Closing that requires resolving the run RUNG2_EVIDENCE_URL names and binding its head SHA
 # — #8010's scope, not this guard's. This is the structural mitigation for the single-commit
 # shape (squash, the one-shot pipeline's default), and it says so.
@@ -823,7 +828,7 @@ git_data_rung2_evidence_provenance_gate() {
     # commit (commit it alone, then re-run); a dirty tracked file is an edit on top of a
     # commit (revert it, or land it alone). Both are refused.
     if [[ -z "$(git -C "$_top" ls-files -- "$_ev_rel" 2>/dev/null)" ]]; then
-      echo "${_me}: HOLD — ${_ev_rel} is not tracked, so no commit touches it and its provenance cannot be read. Commit the evidence in a commit that touches ONLY the evidence, then re-run. Fail-closed."
+      echo "${_me}: HOLD — ${_ev_rel} is not tracked, so no commit touches it and its provenance cannot be read. Commit the evidence in a commit that touches none of the hash-bound files, then re-run. Fail-closed."
       return 1
     fi
     if [[ -n "$(git -C "$_top" status --porcelain -- "$_ev_rel" 2>/dev/null)" ]]; then
@@ -1085,7 +1090,7 @@ HOLD
   # payload PR should see, and this arm speaks only once the hash has nothing left to say —
   # which is exactly when the forged shape would otherwise release. Every refusal below is
   # fail-closed and named (shallow clone, uncommitted evidence, unresolvable commit); see the
-  # function's header for the full list and for the rebase-merge residual that is #8010's.
+  # function's header for the full list and for the non-squash-merge residual that is #8010's.
   local _prov_out
   if ! _prov_out="$(git_data_rung2_evidence_provenance_gate "$cloud_init" "$evidence" birth)"; then
     echo "git_data_rung2_rehearsal_gate: HOLD — the evidence is hash-valid but its provenance refuses it. ${_prov_out}"

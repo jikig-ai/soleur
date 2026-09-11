@@ -54,15 +54,25 @@ bootcmd:
             -d '{"message":"git-data boot stage","level":"info","tags":{"stage":"bootcmd_start","host_name":"${host_name}"}}' \
             >/dev/null 2>&1 || true ) || true
 
-# Dedicated transport user for git over the private net. Its login shell is
-# git-shell (no arbitrary commands), and the authorized_keys forced-command below
-# is defense-in-depth on top of that. cloud-init's `ssh_authorized_keys:`
+# Dedicated transport user for git over the private net. Its login shell is a REAL
+# shell, on purpose — and it used to be git-shell, which would have killed every
+# forced command on the host (#8043 review, measured in the pinned ubuntu-24.04
+# image): sshd runs a `command=` as `<login shell> -c "<command>"`, and git-shell
+# accepts only its four built-ins or a bare name under ~/git-shell-commands, so
+# `git-shell -c /usr/local/bin/git-data-transport-wrapper.sh` exits 128
+# `fatal: unrecognized command` — transport, provision AND the Art. 17 erasure all
+# unreachable. Nobody had connected to the host, so nothing had measured it. The
+# confinement is the authorized_keys map itself: every key carries a fixed
+# `command=` plus no-pty/no-forwarding, and git_data_authorization_map_gate refuses
+# a birth unless exactly those three fenced lines exist (ADR-068; #8009). A
+# restricted login shell adds nothing once every key is forced — it only decides
+# whether the forced command can run at all. cloud-init's `ssh_authorized_keys:`
 # directive cannot carry per-key options (command=...), so the key is written via
 # write_files instead.
 users:
   - default
   - name: git
-    shell: /usr/bin/git-shell
+    shell: /bin/sh
     lock_passwd: true
 
 write_files:
@@ -758,13 +768,8 @@ runcmd:
     if [ "$_sshd_T_rc" -eq 0 ]; then
       _sshd_T_dump="$(printf '%s\n' "$_sshd_T_raw" | tr '[:upper:]' '[:lower:]')"
       _sshd_absent=""
-      for _sshd_d in "passwordauthentication no" "permitrootlogin prohibit-password"; do
-        _sshd_alt="$_sshd_d"
-        [ "$_sshd_d" = "permitrootlogin prohibit-password" ] && _sshd_alt="permitrootlogin without-password"
-        if printf '%s\n' "$_sshd_T_dump" | grep -qx "$_sshd_d"; then :;
-        elif printf '%s\n' "$_sshd_T_dump" | grep -qx "$_sshd_alt"; then :;
-        else _sshd_absent="$${_sshd_absent}$${_sshd_d}; "; fi
-      done
+      printf '%s\n' "$_sshd_T_dump" | grep -qx "passwordauthentication no" || _sshd_absent="passwordauthentication no; "
+      printf '%s\n' "$_sshd_T_dump" | grep -qxE "permitrootlogin (prohibit-password|without-password)" || _sshd_absent="$${_sshd_absent}permitrootlogin prohibit-password; "
       if [ -n "$_sshd_absent" ]; then
         _sshd_T_detail=/run/git-data-sshd-T.err
         ( umask 077; printf 'absent from sshd -T effective config: %s\n' "$_sshd_absent" > "$_sshd_T_detail" ) 2>/dev/null || true

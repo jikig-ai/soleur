@@ -171,7 +171,10 @@ fixes for every per-step plan:
 > through the transport key). **Resolution: a dedicated, separately-keyed SSH
 > forced-command provisioning path.** A SECOND ED25519 key on the git-data host —
 > distinct from the git-shell transport key, same `git` OS user (repo root is
-> `git:git 0750`; per-key `command=` overrides the login shell) — carries a FIXED
+> `git:git 0750`; per-key `command=` is RUN BY the login shell as `<shell> -c "<command>"`, so
+> the login shell must be a real shell — git-shell refuses it with `fatal: unrecognized
+> command`, rc=128, measured in the pinned image and corrected by #8043 to `/bin/sh`; the
+> confinement is the forced-command map, never the shell) — carries a FIXED
 > forced command `command="/usr/local/bin/git-data-provision.sh"`. The wrapper
 > reads `workspace_id` from `SSH_ORIGINAL_COMMAND` as an OPAQUE argument (validated,
 > NEVER `eval`'d), enforces `^[A-Za-z0-9._-]+$` and rejects `.`/`..`/slash

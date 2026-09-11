@@ -1564,7 +1564,7 @@ jobs:
       # the birth job, the rehearsal route and the freshness step below — this step is the
       # early warning that fires on the PR, before a birth burns an environment approval.
       # Its residual is stated in the gate's header: a bound-file edit in one commit and the
-      # hash in another, landed by rebase-merge, is visible ONLY here (#8010's scope).
+      # hash in another, landed by any non-squash method (rebase-merge or merge-commit), is visible ONLY here (#8010's scope).
       #
       # THE RANGE MIRRORS `detect-changes` EXACTLY — `origin/${BASE_REF}...HEAD` on
       # pull_request, `$BEFORE_SHA HEAD` on push — and the gate HOLDs on an unresolvable base

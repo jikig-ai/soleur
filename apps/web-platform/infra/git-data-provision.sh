@@ -69,16 +69,21 @@ esac
 #     loss, not a false report. mountpoint(1) is the instrument; it is resolved from PATH
 #     (sshd sets the server's PATH, and `AcceptEnv LANG LC_*` cannot reach it) and its
 #     ABSENCE fails closed — a check that cannot run is not a check that passed. ---
-mountpoint_bin="$(command -v mountpoint 2>/dev/null || true)"
-[ -n "$mountpoint_bin" ] || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
-"$mountpoint_bin" -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
+command -v mountpoint >/dev/null 2>&1 || reject "cannot verify the store is mounted: mountpoint(1) not on PATH (fail-closed)"
+mountpoint -q "$MOUNT_ROOT" || reject "git-data store is not mounted at $MOUNT_ROOT — refusing to act on an unmounted store (fail-closed)"
 
 repo_path="${REPO_ROOT}/${workspace_id}.git"
 # The repo need not exist yet, so canonicalize the PARENT (REPO_ROOT, which must exist:
 # git-data-bootstrap.sh creates it at boot, downstream of its own mountpoint FATAL). The
 # `-d` is what makes this guard LIVE — `readlink -f` returns a path for an absent root.
 root_real="$(readlink -f "$REPO_ROOT" 2>/dev/null || echo "")"
-[ -n "$root_real" ] && [ -d "$root_real" ] || reject "repo root $REPO_ROOT is not present"
+[ -d "$root_real" ] || reject "repo root $REPO_ROOT is not present"
+# (#8043 review) THE ROOT MUST BE ON THE STORE, not merely "a store is mounted and a root
+# exists" — those are two facts about two paths, and nothing else binds them. A repo root
+# that resolves onto the root disk while /mnt/git-data is mounted would satisfy both
+# checks above and put the erasure/provision on the wrong disk. `stat -c %m` names the
+# mount a path sits on; the store's mount is the mount root itself.
+[ "$(stat -c %m "$root_real")" = "$(readlink -f "$MOUNT_ROOT")" ] || reject "repo root $root_real is not on the store mounted at $MOUNT_ROOT (fail-closed)"
 parent_real="$(readlink -f "$(dirname "$repo_path")" 2>/dev/null || echo "")"
 [ "$parent_real" = "$root_real" ] || reject "resolved path escapes the repo root"
 

@@ -162,14 +162,25 @@ rc=$(run_remove "${parent}/repositories" "ws-abc-123" "$(stat -c %m "$parent")")
 if [ "$rc" != "0" ]; then pass; else fail "T10 rootless store: expected refusal (non-zero), got 0"; fi
 if [ ! -e "${parent}/repositories" ]; then pass; else fail "T10 rootless store: the wrapper CREATED the repo root"; fi
 rm -rf "$parent"
+
+# --- T11 (#8043 review): a MOUNTED store whose repo root is NOT ON IT → refuse. "A store is
+#     mounted" and "a root exists" are facts about two paths; nothing else binds them, so a
+#     root on the root disk beside a healthy /mnt/git-data mount would pass both and put the
+#     erasure on the wrong disk. /proc is a mount on every Linux host; the root is elsewhere. ---
+root=$(fresh_root)
+make_repo "$root" "ws-offstore"
+rc=$(run_remove "$root" "ws-offstore" /proc)
+if [ "$rc" != "0" ]; then pass; else fail "T11 off-store root: expected refusal (non-zero), got 0"; fi
+if grep -q 'not on the store' "$ERR" && [ -e "${root}/ws-offstore.git/HEAD" ]; then pass; else fail "T11 off-store root: refusal does not name containment, or the repo was erased ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root"
 rm -f "$ERR"
 
-# --- Minimum-cardinality guard (mirrors the provision/fence tests). 13 -> 27 with the
-#     five mount rows (T6 2, T7 3, T8 3, T9 2, T10 2), re-derived from the rows rather
+# --- Minimum-cardinality guard (mirrors the provision/fence tests). 13 -> 29 with the
+#     six mount rows (T6 2, T7 3, T8 3, T9 2, T10 2, T11 2), re-derived from the rows rather
 #     than incremented by memory (T1 2, T2 1, T3 8, T4 2, T5 2 = 15 before). ---
 total=$((passes + fails))
-if [ "$total" -lt 27 ]; then
-  echo "FAIL: ran only ${total} assertions (<27) — suite did not execute fully" >&2
+if [ "$total" -lt 29 ]; then
+  echo "FAIL: ran only ${total} assertions (<29) — suite did not execute fully" >&2
   exit 1
 fi
 

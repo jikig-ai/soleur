@@ -142,16 +142,30 @@ if grep -qE '^[[:space:]]*(chown|chmod)[[:space:]]+[^[:space:]]+[[:space:]]+"\$R
 else pass "S5: REPO_ROOT and HOOKS_DIR are owned separately (the triple is split)"; fi
 
 # S6 — the post-condition READS BACK ownership with stat and compares LITERALS, so the boot
-# proves the ABSENCE of the reverted state rather than the presence of a chown line. Anchored
-# on the comparison construct (`<path>")" == "<user>:<group> <mode>"`), not on a helper name,
-# so an inline `stat` and a wrapper function are both accepted; the `stat -c '%U:%G %a'`
-# instrument must exist somewhere in the code.
+# proves the ABSENCE of the reverted state rather than the presence of a chown line. The
+# bootstrap's readback is a TABLE (`<path> <owner:group> <mode> <why>` rows fed to one loop),
+# so each row is anchored as a whole-line table entry with a literal owner and mode; the
+# `stat -c '%U:%G %a'` instrument must exist in the code that reads the table.
 if grep -qF "stat -c '%U:%G %a'" <<< "$BOOT_CODE"; then pass "S6: the bootstrap reads ownership back with stat -c '%U:%G %a'"
 else fail "S6: no stat -c '%U:%G %a' readback in the bootstrap"; fi
 for p in '$GIT_HOME' '$GIT_HOME/.ssh' '$GIT_HOME/.ssh/authorized_keys' '$HOOKS_DIR' '$PRE_RECEIVE'; do
-  if grep -qE "\"${p//\$/\\$}\"\)\" == \"[a-z]+:[A-Za-z0-9_\$]+ [0-7]{3}\"" <<< "$BOOT_CODE"; then pass "S6: post-condition compares $p against a literal user:group mode"
-  else fail "S6: no literal user:group mode comparison for $p in the bootstrap post-conditions"; fi
+  if grep -qE "^${p//\$/\\$} [a-z]+:[A-Za-z0-9_\$]+ [0-7]{3} " "$BOOTSTRAP"; then pass "S6: readback table has a literal user:group mode row for $p"
+  else fail "S6: no readback table row for $p in the bootstrap post-conditions"; fi
 done
+# S6b — the model's premise ("git is in group git and no other") is asserted at boot, not assumed.
+if grep -qE 'id -Gn "\$GIT_USER"' <<< "$BOOT_CODE"; then pass "S6b: the bootstrap asserts the git account's group membership (the model's premise)"
+else fail "S6b: nothing asserts id -Gn git == git at boot; a supplementary group makes the root:git 0750 model wrong"; fi
+
+# S7 — the login shell is a REAL shell. sshd runs a forced `command=` as `<login shell> -c
+# "<command>"`; git-shell refuses anything but its four built-ins (measured in the pinned
+# image: rc=128 "fatal: unrecognized command"), so a git-shell login kills transport,
+# provision and the Art. 17 erasure alike. The runtime arm creates its user with THIS shell,
+# so R9 (a real forced command through sshd) is what proves it, and this row is what names it.
+GIT_SHELL="$(awk '$0 ~ /^  - name: git[[:space:]]*$/ { want=1; next } want && $0 ~ /^    shell:/ { sub(/^    shell:[[:space:]]*/, ""); print; exit }' "$TEMPLATE")"
+case "$GIT_SHELL" in
+  /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) pass "S7: the git user's login shell is a real shell ($GIT_SHELL) — forced commands can execute" ;;
+  *) fail "S7: the git user's login shell is '${GIT_SHELL:-<unset>}' — a restricted or missing shell kills every forced command at '<shell> -c'" ;;
+esac
 
 # ── RUNTIME ARM (pinned image) ──────────────────────────────────────────────────────
 #
@@ -159,7 +173,7 @@ done
 # principal. Ten rows; when docker is unavailable they are DECLARED skipped (counted in the
 # floor, reported as such) — and under CI=true that is a failure, because the runner must
 # provide the dependency (the rehearsal suite's _skip has the same contract).
-RUNTIME_ROWS=10
+RUNTIME_ROWS=10   # R1..R10; R9 runs a REAL forced command through sshd under the template's login shell
 _runtime_skip() {
   if [ "${CI:-}" = "true" ]; then
     fail "runtime arm: $1 — and CI=true, so this is a FAILURE: the runner must provide docker"
@@ -188,11 +202,14 @@ else
 set -u
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq openssh-server openssh-client git >/dev/null 2>&1 || { echo "FIXTURE_APT_FAILED"; exit 100; }
-useradd -m -s /bin/sh git || exit 2
+useradd -m -s "${GIT_SHELL:?}" git || exit 2
 mkdir -p /run/sshd /mnt/git-data/repositories /mnt/git-data/hooks
 ssh-keygen -q -t ed25519 -N '' -f /tmp/k
 mkdir -p /home/git/.ssh
-printf 'command="/bin/true",no-pty %s\n' "$(cat /tmp/k.pub)" > /home/git/.ssh/authorized_keys
+# A REAL forced command, not /bin/true: under git-shell `<shell> -c /usr/local/bin/…` dies
+# before any script runs, and only a command that must PRINT can show the difference.
+printf '#!/bin/sh\necho "WRAPPER_RAN uid=$(id -u) cmd=[$SSH_ORIGINAL_COMMAND]"\n' > /usr/local/bin/git-data-probe-wrapper.sh; chmod 755 /usr/local/bin/git-data-probe-wrapper.sh
+printf 'command="/usr/local/bin/git-data-probe-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty %s\n' "$(cat /tmp/k.pub)" > /home/git/.ssh/authorized_keys
 printf '#!/bin/sh\nexit 0\n' > /tmp/pre-receive
 apply() { chown "$1" "$3"; chmod "$2" "$3"; }
 apply "$OG_HOME"  "$M_HOME"  /home/git
@@ -211,10 +228,11 @@ su git -s /bin/sh -c 'touch /mnt/git-data/hooks/x' 2>/dev/null; r write_hooks $?
 su git -s /bin/sh -c 'echo x >> /mnt/git-data/hooks/pre-receive' 2>/dev/null; r write_pre_receive $?
 su git -s /bin/sh -c '/mnt/git-data/hooks/pre-receive' 2>/dev/null; r exec_pre_receive $?
 su git -s /bin/sh -c 'mkdir /mnt/git-data/repositories/ws.git' 2>/dev/null; r write_repo_root $?
-sshd_auth() { # $1 label — start sshd, try publickey auth as git, record the outcome
+sshd_auth() { # $1 label — start sshd, run the forced command as git over publickey, record rc AND whether the wrapper ran
   /usr/sbin/sshd -D -p 2222 -o StrictModes=yes -o PasswordAuthentication=no -o 'AuthorizedKeysFile .ssh/authorized_keys' -E /tmp/sshd.log & pid=$!; sleep 1
-  ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -i /tmp/k -p 2222 git@127.0.0.1 true 2>/dev/null; rc=$?
-  kill $pid 2>/dev/null; wait $pid 2>/dev/null; r "$1" $rc
+  out=$(ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -i /tmp/k -p 2222 git@127.0.0.1 ws1 2>&1); rc=$?
+  case "$out" in *WRAPPER_RAN*) ran=1 ;; *) ran=0 ;; esac
+  kill $pid 2>/dev/null; wait $pid 2>/dev/null; r "$1" "$rc"; r "${1}_ran" "$ran"; printf '%s=%s\n' "${1}_out" "$out" >> /out/rows
 }
 sshd_auth ssh_auth_shipped
 # NEGATIVE CONTROL: root:root 0600 — sshd opens the map as the target user, so this must be
@@ -227,7 +245,7 @@ DRV
   docker run --rm \
     -e OG_HOME="$_og_home" -e M_HOME="$_m_home" -e OG_SSH="$_og_ssh" -e M_SSH="$_m_ssh" \
     -e OG_AK="$_og_ak" -e M_AK="$_m_ak" -e OG_HOOKS="$_og_hooks" -e M_HOOKS="$_m_hooks" \
-    -e OG_PR="$_og_pr" -e M_PR="$_m_pr" -e OG_REPO="$_og_repo" -e M_REPO="$_m_repo" \
+    -e OG_PR="$_og_pr" -e M_PR="$_m_pr" -e OG_REPO="$_og_repo" -e M_REPO="$_m_repo" -e GIT_SHELL="$GIT_SHELL" \
     -v "$TMP/drive.sh:/work/drive.sh:ro" -v "$TMP/out:/out" \
     "$UBUNTU_BASE" bash /work/drive.sh > "$TMP/out/stdout" 2>&1
   DRC=$?
@@ -243,7 +261,7 @@ DRV
     _deny write_pre_receive && pass "R6: git overwriting pre-receive is DENIED (rc=$(_rv write_pre_receive))"          || fail "R6: git could overwrite the fence it is fenced by" "rc=$(_rv write_pre_receive)"
     _allow exec_pre_receive && pass "R7: git can still EXECUTE pre-receive (receive-pack execs the hook)"              || fail "R7: git cannot execute the hook — every push would be rejected" "rc=$(_rv exec_pre_receive)"
     _allow write_repo_root && pass "R8: git can write \$REPO_ROOT (provisioning works)"                                  || fail "R8: git cannot write the repo root" "rc=$(_rv write_repo_root)"
-    _allow ssh_auth_shipped && pass "R9: sshd ACCEPTS publickey auth for git with the shipped owner/mode literals"     || fail "R9: sshd refused the key at the shipped literals — the map is unreadable or StrictModes rejects it" "rc=$(_rv ssh_auth_shipped) $(grep -oE 'Authentication refused[^,]*|Permission denied' "$TMP/out/stdout" | head -1)"
+    _allow ssh_auth_shipped && [ "$(_rv ssh_auth_shipped_ran)" = 1 ] && pass "R9: sshd accepts the key at the shipped literals AND the forced command RUNS under the template's login shell ($GIT_SHELL)" || fail "R9: the forced command did not run through sshd (rc=$(_rv ssh_auth_shipped), ran=$(_rv ssh_auth_shipped_ran)) — unreadable map, StrictModes, or a login shell that refuses '<shell> -c'" "$(_rv ssh_auth_shipped_out | head -c 200)"
     _deny ssh_auth_control_0600 && pass "R10: NEGATIVE CONTROL — root:root 0600 is refused by sshd (R9 can fail)"     || fail "R10: the negative control was ACCEPTED — R9 proves nothing" "rc=$(_rv ssh_auth_control_0600)"
   elif grep -qx FIXTURE_APT_FAILED "$TMP/out/stdout" || [ "$DRC" = 125 ]; then
     _runtime_skip "container did not reach the fixture (docker rc=$DRC): $(tail -2 "$TMP/out/stdout" | tr '\n' ' ')"
@@ -254,15 +272,15 @@ DRV
 fi
 
 # ── FLOOR + LEDGER ─────────────────────────────────────────────────────────────────
-# 2 (S1) + 1 (S2) + 1 (S3) + 6 (S4) + 1 (S5) + 6 (S6) + 10 runtime = 27. Skipped runtime rows
+# 2 (S1) + 1 (S2) + 1 (S3) + 6 (S4) + 1 (S5) + 7 (S6/S6b) + 1 (S7) + 10 runtime = 29. Skipped runtime rows
 # count toward the floor (they were DECLARED), never toward passes.
 # ADR-193 shape: the floor reports with `printf >&2` + `exit 1` INSIDE its own block, never
 # through the pass()/fail() helpers it backstops — a neutered helper cannot disarm it, and the
 # vacuity guard's mutant (the block alone, counters zeroed) must exit non-zero by itself.
 _declared=${SKIPPED:-0}
 _ran=$((passes + fails + _declared))
-if [ "$_ran" -lt 27 ]; then
-  printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 27 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+if [ "$_ran" -lt 29 ]; then
+  printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 29 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   exit 1
 fi
 if [ "${#FAILURES[@]}" -ne "$fails" ]; then

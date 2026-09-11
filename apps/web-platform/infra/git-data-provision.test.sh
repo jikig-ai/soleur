@@ -116,13 +116,22 @@ rc=$(run_provision "${parent}/repositories" "ws-abc-123" "$(stat -c %m "$parent"
 if [ "$rc" != "0" ]; then pass; else fail "T7 rootless store: expected refusal (non-zero), got 0"; fi
 if [ ! -e "${parent}/repositories" ]; then pass; else fail "T7 rootless store: the wrapper CREATED the repo root ($(ls -A "${parent}/repositories" | tr '\n' ' '))"; fi
 rm -rf "$parent"
+
+# --- T8 (#8043 review): a MOUNTED store whose repo root is NOT ON IT → refuse, nothing
+#     written. See the remove suite's T11. This is the provision half of the same bypass:
+#     a real repo would have been written onto the root disk beside a healthy mount. ---
+root=$(fresh_root)
+rc=$(run_provision "$root" "ws-offstore" /proc)
+if [ "$rc" != "0" ]; then pass; else fail "T8 off-store root: expected refusal (non-zero), got 0"; fi
+if grep -q 'not on the store' "$ERR" && [ -z "$(ls -A "$root" 2>/dev/null)" ]; then pass; else fail "T8 off-store root: refusal does not name containment, or a repo was written ($(head -c 200 "$ERR"))"; fi
+rm -rf "$root"
 rm -f "$ERR"
 
-# --- Minimum-cardinality guard (mirrors the fence test). 12 -> 22 with the three mount
-#     rows (T5 3, T6 3, T7 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before. ---
+# --- Minimum-cardinality guard (mirrors the fence test). 12 -> 24 with the four mount
+#     rows (T5 3, T6 3, T7 2, T8 2), re-derived: T1 2, T2 2, T3 8, T4 2 = 14 before. ---
 total=$((passes + fails))
-if [ "$total" -lt 22 ]; then
-  echo "FAIL: ran only ${total} assertions (<22) — suite did not execute fully" >&2
+if [ "$total" -lt 24 ]; then
+  echo "FAIL: ran only ${total} assertions (<24) — suite did not execute fully" >&2
   exit 1
 fi
 
