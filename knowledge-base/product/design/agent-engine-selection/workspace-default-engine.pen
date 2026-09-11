@@ -1,0 +1,276 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "rbLVa",
+      "x": 0,
+      "y": 0,
+      "name": "Workspace Default Agent Engine",
+      "width": 1440,
+      "height": 900,
+      "fill": "#1A1A1A",
+      "children": [
+        {
+          "type": "frame",
+          "id": "UvRVA",
+          "name": "Sidebar",
+          "width": 260,
+          "height": "fill_container",
+          "fill": "#232323",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "f5cXy",
+              "name": "sideTitle2",
+              "fill": "#F5F5F0",
+              "content": "SOLEUR",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 18,
+              "fontWeight": "700",
+              "letterSpacing": 2
+            },
+            {
+              "type": "frame",
+              "id": "V3Q2o",
+              "name": "sideNav2",
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SXBGn",
+                  "name": "nav12",
+                  "fill": "#FFD600",
+                  "content": "[01] WORKSPACE",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "letterSpacing": 1.5
+                },
+                {
+                  "type": "text",
+                  "id": "10X0t",
+                  "name": "nav22",
+                  "fill": "#6B6B6B",
+                  "content": "[02] TEAM",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "letterSpacing": 1.5
+                },
+                {
+                  "type": "text",
+                  "id": "0qrTW",
+                  "name": "nav32",
+                  "fill": "#F5F5F0",
+                  "content": "[03] SETTINGS",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 12,
+                  "fontWeight": "700",
+                  "letterSpacing": 1.5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "LI4KF",
+          "name": "Settings Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": 40,
+          "children": [
+            {
+              "type": "text",
+              "id": "75k4I",
+              "name": "eyebrow2",
+              "fill": "#6B6B6B",
+              "content": "WORKSPACE / SETTINGS",
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 11,
+              "fontWeight": "normal",
+              "letterSpacing": 1
+            },
+            {
+              "type": "text",
+              "id": "K4CQS",
+              "name": "title2",
+              "fill": "#F5F5F0",
+              "content": "DEFAULT AGENT ENGINE",
+              "fontFamily": "Space Grotesk",
+              "fontSize": 36,
+              "fontWeight": "700",
+              "letterSpacing": 1
+            },
+            {
+              "type": "text",
+              "id": "BipuW",
+              "name": "intro2",
+              "fill": "#B8B8B0",
+              "content": "Choose the engine used for new conversations. Existing conversations keep their original engine and session.",
+              "lineHeight": 1.5,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "yZZf8",
+              "name": "Engine Default Card",
+              "width": "fill_container",
+              "height": 250,
+              "fill": "#232323",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#3D3D3D"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "09pD4",
+                  "name": "cardHead2",
+                  "gap": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "O1JrQ",
+                      "name": "cardLabel2",
+                      "fill": "#FFD600",
+                      "content": "ACTIVE DEFAULT",
+                      "fontFamily": "Space Grotesk",
+                      "fontSize": 13,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "WECe0",
+                      "name": "status2",
+                      "fill": "#FFD600",
+                      "content": "READY",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 10,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "fwscR",
+                  "name": "selector2",
+                  "width": "fill_container",
+                  "height": 64,
+                  "fill": "#1A1A1A",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "#FFD600"
+                  },
+                  "gap": 16,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "IU1n0",
+                      "name": "selected2",
+                      "fill": "#F5F5F0",
+                      "content": "CLAUDE CODE",
+                      "fontFamily": "Space Grotesk",
+                      "fontSize": 18,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "QKkaM",
+                      "name": "chevron2",
+                      "fill": "#FFD600",
+                      "content": "CHANGE  >",
+                      "fontFamily": "IBM Plex Mono",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ftEJh",
+                  "name": "helper2",
+                  "fill": "#B8B8B0",
+                  "content": "Claude Code  •  Verified  •  Interactive approvals  •  Live streaming",
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ejQ5y",
+              "name": "Codex Availability",
+              "width": "fill_container",
+              "height": 150,
+              "fill": "#1A1A1A",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#3D3D3D"
+              },
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "yiubV",
+                  "name": "codexTitle2",
+                  "fill": "#F5F5F0",
+                  "content": "CODEX  /  AVAILABLE TO ENABLE",
+                  "fontFamily": "Space Grotesk",
+                  "fontSize": 13,
+                  "fontWeight": "700",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "text",
+                  "id": "ldAVb",
+                  "name": "codexBody2",
+                  "fill": "#B8B8B0",
+                  "content": "API key required. Capability status: qualification in progress. Cost and approval support will be shown before activation.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "IBM Plex Mono",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "kWYky",
+              "name": "notice2",
+              "fill": "#FF6B35",
+              "content": "[!] Changing this setting affects new conversations only. No existing transcript or credential is transferred.",
+              "lineHeight": 1.5,
+              "fontFamily": "IBM Plex Mono",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
