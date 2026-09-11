@@ -105,6 +105,14 @@ assert "shares deploy/restart concurrency group (state-slot serialization)" "gre
 assert "timeout-minutes present (>= poll budget)" "grep -qE 'timeout-minutes:[[:space:]]*[0-9]+' '$WF'"
 assert "no-op on the registration push (workflow_dispatch guard)" "grep -qE \"github.event_name == 'workflow_dispatch'\" '$WF'"
 
+# Rule D (#7873 / ADR-202, paid down at #8054 when this file left the lint's baseline): EVERY
+# credentialed curl is transport-confined — `--disable` as the LITERAL FIRST argument, then
+# `--noproxy '*'`. Counted against the curl count so a new call site cannot land unconfined.
+BODY_CURLS=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\bcurl ' || true)
+BODY_CONFINED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE "\bcurl --disable --noproxy '\*' " || true)
+assert "#8054 every curl in the body is transport-confined (curl=$BODY_CURLS confined=$BODY_CONFINED)" "[[ '$BODY_CURLS' -ge 20 && '$BODY_CURLS' -eq '$BODY_CONFINED' ]]"
+assert "#8054 the body refuses to run under xtrace (it binds live credentials)" "grep -qE '^[[:space:]]*\*x\*\) printf .*refusing to run under xtrace.*exit 78' '$BODY_SH'"
+
 # every curl carries --max-time (no unbounded network call)
 CURL_LINES=$(grep -c 'curl ' "$WF" || true)
 MAXTIME_LINES=$(grep -c -- '--max-time' "$WF" || true)
@@ -345,8 +353,8 @@ assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-star
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
 # outer curl budgets present (the ceiling the sum must stay under).
-assert "inventory outer curl --max-time 30 present" "grep -qE 'curl -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+assert "inventory outer curl --max-time 30 present" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 30 -o /tmp/inv-body' '$WF'"
+assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 120 -o /tmp/verify-runs' '$WF'"
 
 # ============================================================================
 # #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
@@ -2072,7 +2080,7 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   already claimed it was: the operator was `-lt`, and a `-lt` floor is satisfied by
 #   delete-one-add-one. The failure text dictates the new number.
 _DISPATCHED=$((PASS + FAIL))
-_EXACT_FLOOR=543
+_EXACT_FLOOR=545
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

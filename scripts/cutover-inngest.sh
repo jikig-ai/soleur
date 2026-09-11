@@ -31,6 +31,11 @@
 # the body had no test AND could not be linted before; `shellcheck scripts/cutover-inngest.sh`
 # now covers it. See ADR-150.
 set -euo pipefail
+# xtrace refusal (#7797): this script binds live credentials (WEBHOOK_SECRET, CF Access, the
+# Better Stack API token, Doppler service tokens); `-x` would print them into the run log.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 BASE="https://deploy.soleur.ai/hooks"
 
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
@@ -681,7 +686,7 @@ case "$OP" in
     # (mirrors the deploy-status GET signature).
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/enum-body
-    CODE=$(curl -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -723,7 +728,7 @@ case "$OP" in
     # again rather than by an in-arm loop.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/registry-probe-body
-    CODE=$(curl -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -784,7 +789,7 @@ case "$OP" in
     DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
-    CODE=$(curl -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -876,7 +881,7 @@ case "$OP" in
     # registry probe (HMAC over empty body); require function_count > 0.
     RSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-probe
-    RCODE=$(curl -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
+    RCODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$RSIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -922,7 +927,7 @@ case "$OP" in
     PAYLOAD='{"mode":"rearm-from-capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rearm-body
-    CODE=$(curl -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
@@ -968,7 +973,7 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/capture-body
-    CODE=$(curl -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
@@ -996,7 +1001,7 @@ case "$OP" in
     # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
     PAYLOAD='{}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-    CODE=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /dev/null -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
@@ -1016,7 +1021,7 @@ case "$OP" in
     POLL_INTERVAL=10
     for i in $(seq 1 "$MAX_POLLS"); do
       rm -f /tmp/verify-body
-      curl -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
+      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/verify-body -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$GSIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1059,7 +1064,7 @@ case "$OP" in
     HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN --plain)
     TS=$(date -u +%Y%m%dT%H%M%SZ)
     rm -f /tmp/backup-body
-    CODE=$(curl -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/backup-body -w '%{http_code}' \
       -X POST \
       -H "Authorization: Bearer $HCLOUD_TOKEN" \
       -H "Content-Type: application/json" \
@@ -1074,7 +1079,7 @@ case "$OP" in
     # Poll the action to terminal (snapshot of a running server takes minutes).
     for i in $(seq 1 60); do
       rm -f /tmp/backup-action
-      curl -s --max-time 15 -o /tmp/backup-action \
+      curl --disable --noproxy '*' -s --max-time 15 -o /tmp/backup-action \
         -H "Authorization: Bearer $HCLOUD_TOKEN" \
         "https://api.hetzner.cloud/v1/actions/$ACTION_ID" >/dev/null || true
       ST=$(jq -r '.action.status // "running"' < /tmp/backup-action 2>/dev/null || echo running)
@@ -1100,7 +1105,7 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/inv-body
-      CODE=$(curl -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
+      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/inv-body -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$SIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1186,7 +1191,7 @@ case "$OP" in
     # would let `set -e` abort at the assignment on a non-zero exit BEFORE the rc read,
     # making the failure branch dead (still fail-closed via the abort, but non-diagnostic).
     POOL_RC=0
-    POOL_RESP="$(curl --silent --show-error \
+    POOL_RESP="$(curl --disable --noproxy '*' --silent --show-error \
       --request POST \
       --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
       --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
@@ -1234,7 +1239,7 @@ case "$OP" in
     # against prod Postgres, the exact failure this cutover exists to prevent.
     SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-probe
-    CODE=$(curl -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1370,7 +1375,7 @@ case "$OP" in
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-capture
-    CODE=$(curl -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1424,7 +1429,7 @@ case "$OP" in
     reached_non200=false
     for _probe in $(seq 1 "$QUIESCE_PROBES"); do
       rm -f /tmp/exec-inv
-      ICODE=$(curl -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
+      ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$GSIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1772,7 +1777,7 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-body
-    CODE=$(curl -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1801,7 +1806,7 @@ case "$OP" in
     QUIESCED=0
     for i in $(seq 1 "$QMAX_POLLS"); do
       rm -f /tmp/quiesce-status
-      curl -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
+      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/quiesce-status -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$GSIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1849,7 +1854,7 @@ case "$OP" in
     # (host-side synchronous verify, stronger than the LB-routed inventory read).
     GSIG2=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/quiesce-inv
-    ICODE=$(curl -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
+    ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
       -X GET \
       -H "X-Signature-256: sha256=$GSIG2" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1880,7 +1885,7 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-probe
-      CODE=$(curl -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
+      CODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/verify-probe -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$SIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -1972,7 +1977,7 @@ case "$OP" in
     CODE=000; BODY=""
     for attempt in 1 2; do
       rm -f /tmp/verify-runs
-      CODE=$(curl -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
+      CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-runs -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$SIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -2223,12 +2228,12 @@ case "$OP" in
     if [[ -z "$BS_API" ]]; then
       echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
     else
-      HB_ID=$(curl -fsS --max-time 20 -H "Authorization: Bearer $BS_API" \
+      HB_ID=$(curl --disable --noproxy '*' -fsS --max-time 20 -H "Authorization: Bearer $BS_API" \
         'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' 2>/dev/null \
         | jq -r '.data[] | select(.attributes.name == "soleur-inngest-consumer-prd") | .id' 2>/dev/null | head -1 || true)
       if [[ -z "$HB_ID" ]]; then
         echo "::warning::op=rollback: could not resolve the 'soleur-inngest-consumer-prd' heartbeat id from the Better Stack API — NOT pausing it. It will alarm ~4min after the dedicated scheduler stops. NOT blocking the web re-enable."
-      elif curl -fsS --max-time 20 -X PATCH -H "Authorization: Bearer $BS_API" -H 'Content-Type: application/json' \
+      elif curl --disable --noproxy '*' -fsS --max-time 20 -X PATCH -H "Authorization: Bearer $BS_API" -H 'Content-Type: application/json' \
              --data-binary '{"paused":true}' \
              "https://uptime.betterstack.com/api/v2/heartbeats/$HB_ID" >/dev/null 2>&1; then
         echo "::notice::op=rollback: paused the consumer heartbeat (soleur-inngest-consumer-prd) — its feeder is deliberately silenced by this rollback, so pausing prevents a page for an intended state. The ADR-117 measured-beat arm gate re-arms it on the first apply after the host serves again."
@@ -2250,7 +2255,7 @@ case "$OP" in
     PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/rollback-body
-    CODE=$(curl -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
+    CODE=$(curl --disable --noproxy '*' -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
       -H "X-Signature-256: sha256=$SIG" \
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
@@ -2274,7 +2279,7 @@ case "$OP" in
     ENABLED=0
     for i in $(seq 1 "$RMAX_POLLS"); do
       rm -f /tmp/rollback-status
-      curl -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
+      curl --disable --noproxy '*' -s --max-time 10 -o /tmp/rollback-status -w '%{http_code}' \
         -X GET \
         -H "X-Signature-256: sha256=$GSIG" \
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \

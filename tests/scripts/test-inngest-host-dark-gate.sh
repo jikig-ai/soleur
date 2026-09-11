@@ -221,9 +221,14 @@ gate() {
 }
 
 # expect <label> <want-token> <args to gate…>
+_seen_tokens=""
 expect() {
   local label="$1" want="$2"; shift 2
   local out rc=0 tok want_rc=1
+  # TOKEN COVERAGE IS A RUNTIME FLOOR, NOT A GREP (AC4). Tokens are bare words to this wrapper, so a
+  # grep over the suite measures MENTION, not assertion (measured: `grep -cF '"wrong_host"'` is 0
+  # while `wrong_host` is asserted seven times). Record what was actually asserted.
+  _seen_tokens="${_seen_tokens} ${want}"
   [[ "$want" == "dark" ]] && want_rc=0
   out="$(gate "$@" 2>&1)" || rc=$?
   tok="$(printf '%s\n' "$out" | tail -1)"
@@ -762,7 +767,7 @@ else
     # Field names the REAL emitter writes, as `name=$var` pairs.
     EMITTED="$(printf '%s\n' "$EMIT_LINE" | grep -oE '[a-z_]+=\$[a-z_]+' | sed 's/=.*//' | sort -u)"
     _missing=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid cutover_flag registry_fns; do
       printf '%s\n' "$EMITTED" | grep -qx "$_f" || _missing="${_missing} ${_f}"
     done
     if [[ -z "$_missing" ]]; then pass; else fail "B12: the gate consumes field(s) the emitter does not write:${_missing}"; fi
@@ -774,13 +779,28 @@ else
       _real_msg+=" ${_f}=${PD[$_f]:-x}"
     done <<< "$EMITTED"
     _unresolved=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid cutover_flag registry_fns; do
       _ihdg_field "$_real_msg" "$_f" >/dev/null || _unresolved="${_unresolved} ${_f}"
     done
     if [[ -z "$_unresolved" ]]; then pass; else fail "B12: the gate's extractor did not resolve:${_unresolved} from a real-emitter-shaped line"; fi
     # The whole real-emitter-shaped line must clear the gate, or the contract is name-level only.
     mk_rows "$TMP/rows-b12.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$_real_msg")"
     expect "B12: a message built from the REAL emitter's field list => dark" dark "$TMP/rows-b12.json" "$FIN"
+    # #8054 — and the same real-emitter-shaped line, valued as the measured pre-arm row, clears the
+    # EXECUTE gate too (its heartbeat fixture is built further down, so this arm is deferred to it).
+    _real_msg_erg="SOLEUR_INNGEST_SERVER_PROBE"
+    while IFS= read -r _f; do
+      [[ -n "$_f" ]] || continue
+      case "$_f" in
+        boot_id)       _real_msg_erg+=" boot_id=a1b2c3d4-0000-4000-8000-00000000cafe" ;;
+        server_active) _real_msg_erg+=" server_active=activating" ;;
+        cutover_flag)  _real_msg_erg+=" cutover_flag=aborted" ;;
+        registry_fns)  _real_msg_erg+=" registry_fns=__UNREADABLE__" ;;
+        redis_keys)    _real_msg_erg+=" redis_keys=16" ;;
+        *)             _real_msg_erg+=" ${_f}=${PD[$_f]:-x}" ;;
+      esac
+    done <<< "$EMITTED"
+    B12_ERG_MSG="$_real_msg_erg"
   fi
 fi
 
@@ -1161,6 +1181,11 @@ if [[ "$(printf '%s\n' "$_out" | wc -l)" -eq 1 ]]; then pass; else fail "[ERG-st
 # broken READ, and refusing it as `silent` would tell the operator the host emits nothing.
 predicate ERG-E1 "probe query rc 22 => unreadable (not silent)" unreadable "$EROWS" "$HB" --query-rc 22
 predicate ERG-E1 "probe query rc non-numeric => unreadable" unreadable "$EROWS" "$HB" --query-rc x
+# One case per remediation branch the CALLER partitions on (3 creds / 1 doppler / 2 reader / 99
+# unclassified): the gate's token is the same for all — the rc travels beside it, not inside it.
+for _rc in 3 1 2 99; do
+  predicate ERG-E1 "probe query rc $_rc => unreadable (the caller branches on the rc, the gate does not)" unreadable "$EROWS" "$HB" --query-rc "$_rc"
+done
 predicate ERG-E1 "rows file absent => unreadable" unreadable "$TMP/does-not-exist.json" "$HB"
 
 # E2 — bytes arrived, nothing decoded. Not silence: a gzipped or truncated response is a decode
@@ -1309,6 +1334,13 @@ mk_rows "$TMP/erg-hb-newarmed.json" \
   "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)" \
   "$(hb_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
 predicate ERG-E13 "[row 22] NEWEST same-boot heartbeat armed (60s) beside an older aborted (600s) => flag_armed" flag_armed "$EROWS" "$TMP/erg-hb-newarmed.json"
+# The NEWEST row under the tag is a STRING message (the FSM also logs plain lines, e.g. the seam
+# refusal) beside an OLDER object row: the type filter must drop the string and grade the object,
+# never refuse on the string and never let it shadow the fresh attestation.
+mk_rows "$TMP/erg-hb-strnewest.json" \
+  "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
+  "$(bs_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" 'SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED reason=noop' inngest-cutover-flip "$EBID")"
+expect "[ERG-E13] a newer STRING row under the tag beside an older object row => dark (type filter, not value filter)" dark "$EROWS" "$TMP/erg-hb-strnewest.json"
 # Two heartbeat rows at the same newest dt that DISAGREE — a tie is not a winner here either.
 mk_rows "$TMP/erg-hb-tie.json" \
   "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)" \
@@ -1396,6 +1428,15 @@ _rc=0; _ihdg_field $'a=1\nb=2' a >/dev/null || _rc=$?;          [[ "$_rc" -eq 1 
 [[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00.123456')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must accept the fractional-second shape"
 _rc=0; _ihdg_epoch_from_dt 'yesterday' >/dev/null || _rc=$?;    [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse a shape date(1) would coerce"
 _rc=0; _ihdg_epoch_from_dt '' >/dev/null || _rc=$?;             [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse the empty string"
+_rc=0; _ihdg_epoch_from_dt 'now' >/dev/null || _rc=$?;          [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse 'now'"
+_rc=0; _ihdg_epoch_from_dt '2026-09-11 10:00:00; touch x' >/dev/null || _rc=$?; [[ "$_rc" -eq 1 && ! -e x ]] && pass || { fail "[helper] _ihdg_epoch_from_dt must refuse a shape carrying a shell metacharacter"; rm -f x; }
+# B12 for the execute gate: the real emitter's field list, valued as the measured pre-arm row.
+if [[ -n "${B12_ERG_MSG:-}" ]]; then
+  erows b12 '2026-09-03 10:00:00' "$B12_ERG_MSG"
+  expect "[ERG-B12] a message built from the REAL emitter's field list, valued pre-arm => dark" dark "$TMP/erg-b12.json" "$HB"
+else
+  fail "[ERG-B12] the emitter-shaped message was not built (B12 above did not run)"
+fi
 # `_ihdg_graded_row` on the previous-boot row: the HELPER grades the row (it knows no "current"
 # boot — that is E13's job), so it must PASS and hand back that row's own boot_id.
 mk_rows "$TMP/erg-oldboot-row.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg "boot_id=$OBOOT")" inngest-server-probe "$OBID")"
@@ -1471,6 +1512,8 @@ mutate_both ERG-M9  's|select(\$d.host == \$h and \$d.host_name == \$hn)|select(
 mk_rows "$TMP/rows-boot-unknown.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg boot_id=unknown)")"
 mutate_both ERG-M10 's|^  \[\[ "\$chosen_boot" =~ \^\[0-9a-f\]{8}-.*|  :|'           "$TMP/rows-boot-unknown.json" unreadable "$TMP/erg-e7b.json" unreadable
 mutate_both ERG-M11 's|^  \[\[ "\$1" == "dark" \]\]$|  true|'                          "$TMP/rows-g9.json" host_serving "$TMP/erg-e9.json" host_serving
+# Row 12 — the tie check itself, neutered in the shared helper: a disagreeing tie must refuse in both.
+mutate_both ERG-M12 's|^  if \[\[ "\$(_ihdg_tied_newest "\$rows_file" "\$host" "\$host_name")" != "1" \]\]; then$|  if false; then|' "$TMP/rows-m6a.json" unreadable "$TMP/erg-tie.json" unreadable
 
 GATE_FN=inngest_host_dark_gate
 unset GATE_FN
@@ -1494,6 +1537,23 @@ else
   printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor %s)\n' "$_distinct" "$predicate_cases" "$_PRED_FLOOR"
 fi
 
+# TOKEN COVERAGE (AC4, #8054). T = every token the lib can emit (from the lib, not from this file);
+# every member must have been ASSERTED through expect(), and `dark` — the one arm a refuse-
+# everything gate satisfies — at least twice.
+_T="$(grep -v '^[[:space:]]*#' "$GATE" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u)"
+_T_n=0; _T_hit=0; _T_miss=""
+for _tok in $_T; do
+  _T_n=$((_T_n + 1))
+  case " ${_seen_tokens} " in *" ${_tok} "*) _T_hit=$((_T_hit + 1)) ;; *) _T_miss="${_T_miss} ${_tok}" ;; esac
+done
+_dark_n=0; for _tok in $_seen_tokens; do [[ "$_tok" == "dark" ]] && _dark_n=$((_dark_n + 1)); done
+if [[ "$_T_n" -ge 11 && "$_T_hit" -eq "$_T_n" && "$_dark_n" -ge 2 ]]; then
+  printf '  ok   token coverage: %s/%s tokens asserted (dark asserted %sx)\n' "$_T_hit" "$_T_n" "$_dark_n"
+else
+  fails=$((fails + 1))
+  printf '  FAIL TOKEN COVERAGE: %s/%s lib tokens asserted (dark %sx); never asserted:%s\n' "$_T_hit" "$_T_n" "$_dark_n" "${_T_miss:- none}" >&2
+fi
+
 # The assertion floor is self-contained — bash builtins and this suite's own counters only. A floor
 # that lives in a helper is silenced by the same move that silences the arms it guards.
 # THE COMPARISON AND THE MESSAGE MUST CARRY THE SAME NUMBER. They did not: the printf was bumped
@@ -1507,7 +1567,7 @@ fi
 # helpers in this file, a helper row that quietly stops running for ONE consumer is the failure
 # mode, and only an exact count sees it. The cost is a one-number bump on every legitimate
 # addition — and the failure text below dictates the number, so the bump is mechanical.
-_FLOOR=246
+_FLOOR=256
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
