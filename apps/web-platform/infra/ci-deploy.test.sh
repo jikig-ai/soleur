@@ -2456,7 +2456,10 @@ assert_blocking_probe_line() {
     return
   fi
 
-  line=$(grep -F "$marker" "$logger_file")
+  # `|| true`: the count assertion above guarantees exactly one match, so grep cannot
+  # exit non-zero here -- but under `set -e` a capture of a grep that CAN return 1 is
+  # the lint-shell-capture-exit S1 class, and the linter cannot see the count guard.
+  line=$(grep -F "$marker" "$logger_file" || true)
 
   local pat failed=0
   for pat in "$@"; do
