@@ -47,7 +47,24 @@ from pathlib import Path
 # Calibrated non-vacuity ratchet, derived from a green run against the real
 # corpus (not from a number anyone expected). A FLOOR, never equality: new
 # rules raise these freely, and only a DROP is a finding.
-MIN_CHECKS = {"hook_checks": 10, "skill_units": 30, "anchor_checks": 28}
+#
+# skill_units 30 -> 26 and anchor_checks 28 -> 27 (2026-09-10, PR #8034). This is
+# the "corpus legitimately shrank" case this linter's own failure text
+# anticipates, NOT a gate loosened to turn a red build green.
+#
+# Five domain-scoped rules moved out of the always-loaded corpus into the skill
+# phase that already enforced each one (cq-agents-md-tier-gate), each keeping its
+# [skill-enforced:] tag VERBATIM at its new home. The enforcement those units
+# represented still exists and still fires; it is simply no longer visible from
+# AGENTS.rules.md, the only file this linter reads.
+#
+# Measured with the invocation lefthook and T1 use (`AGENTS.md AGENTS.rules.md`):
+#     before: 12 hook + 31 skill via 32 anchor checks
+#     after:  12 hook + 26 skill via 27 anchor checks
+# hook_checks untouched at 10 (12 measured): no hook-enforced rule moved. Floors
+# are the EXACT measured counts, so headroom is zero and the ratchet is STRICTER
+# than before against any further drop.
+MIN_CHECKS = {"hook_checks": 10, "skill_units": 26, "anchor_checks": 27}
 CORPUS_FILENAME = "AGENTS.rules.md"
 
 HOOK_TAG_RE = re.compile(r"\[hook-enforced: ([^\]]+)\]")

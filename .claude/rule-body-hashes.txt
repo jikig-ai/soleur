@@ -53,7 +53,6 @@ d49f75e348d514dd0ac018cc1593be8750e1ec4d2fc3deb5ca8d42158ba8b0a8  hr-when-triagi
 5fec24ab593f1ed130c5e663784bf126f66756a1142b6caa3c346a0af5dca83b  wg-after-a-pr-merges-to-main-verify-all
 996dc0695215e6fb6de2582dd7a786bd8eede2ae95ecde91e86e8fd2cf0e59be  wg-after-marking-a-pr-ready-run-gh-pr-merge
 e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-merging-a-pr-that-adds-or-modifies
-c110204548405e57c1cc7089a049768f1ab2706bd6c0b7ff44e09c1676845680  wg-architecture-decision-is-a-plan-deliverable
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
 eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur
 c171187443a446c1020bc06932c93b6b36a44344ec038ed211b6c87d8caacdcc  wg-block-pr-ready-on-undeferred-operator-steps
@@ -66,7 +65,6 @@ e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work
 2b511a98582e3841e92287f336522bcde6fb74b454f486c03d6e3edbcde8fe75  wg-never-bump-version-files-in-feature
 080278af90659f4df6abfbebee5c4d98313847557d72eacd5eeb1097234f3ff3  wg-plan-prescribed-skills-must-run-inline
 eff970196e3c179da0a1869e06bc537b74291551d82c5ec1679521bf55e2848e  wg-pm-class-followthrough-for-operator-dogfood
-21ab9039ee82bf0c43b917f3480d26fb03bb83154003395e2cea3708cebee828  wg-record-recurring-vendor-expense-before-ready
 a7d752df4f6a2f494ffec8dfc4efc74afe4d43d9034d0fba0e972517b18f2d7b  wg-ship-push-before-merge
 8b95ccde7d534ca9b2a25e7c65f9780fbd20facaf00a813a40bdc7933d33ea79  wg-ui-feature-requires-pen-wireframe
 ea8a5568d2b51e204dcb090c14e897b3d78a6d7b3664b9a643756df163230203  wg-use-closes-n-in-pr-body-not-title-to
@@ -76,6 +74,5 @@ c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-work
 f7664416f6cf7eb36ce7d2e5977f904069e1811c29928a9853f81df425634980  wg-when-an-audit-identifies-pre-existing
 b95ce4dcdabe6b01a67775263a97bff856aacd380ef7de07c8f9c552461291ae  wg-when-closing-a-phase-milestone-update
 0bd0bc73f6535aeb97e9d0f07812bad5631231473b62d6c704c39b1acd3d969b  wg-when-deferring-a-capability-create-a
-70897e40a0f3f0ebc33ad0310d528590c9f4fb602f0b2fcf51748a81417c6629  wg-when-fixing-a-workflow-gates-detection
 d0511fb43e953e962dc14188c9ad2d6d6d1d76cb78e0b1d7bde23d5220a58e92  wg-when-tests-fail-and-are-confirmed-pre
 5e963b1aecdd81004578ed7e100f2267a1e3b8f48cfda6a15477c731280a8846  wg-zero-agents-until-user-confirms
