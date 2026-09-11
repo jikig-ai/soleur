@@ -66,7 +66,7 @@ SENTRY_API="https://sentry.io/api/0"
 QUERY='feature:"workspaces-luks" op:"workspaces-luks-drift"'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 URL="${SENTRY_API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${SOAK_DAYS}d&per_page=10&field=title&field=timestamp"
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$URL")
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$URL")
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
 BODY=$(printf '%s' "$RESP" | sed '$d')
 if [[ "$HTTP_STATUS" != "200" ]]; then

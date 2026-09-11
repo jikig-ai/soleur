@@ -52,8 +52,16 @@ esac
 
 if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
 
-ORG="${SENTRY_ORG:-jikigai}"
+# `jikigai-eu`, not the legacy `jikigai` slug: that org was cancelled vendor-side (article-30
+# register PA-8 (d), 2026-05-21) and returns 403/404 for every credential, so this probe
+# posted a daily TRANSIENT 404 under the old default. Rule D pin (ADR-202): both values are
+# env-settable and ride a credentialed call, so each is adjudicated against its literal.
+ORG="${SENTRY_ORG:-jikigai-eu}"
 PROJECT="${SENTRY_PROJECT:-web-platform}"
+if [[ "$ORG" != "jikigai-eu" || "$PROJECT" != "web-platform" ]]; then
+  echo "TRANSIENT: refusing an unpinned Sentry destination (org=${ORG} project=${PROJECT}; expected jikigai-eu / web-platform)" >&2
+  exit 2
+fi
 # Trailing window covering the one-week soak. The sweeper fires daily once the
 # directive's earliest (2026-07-06) passes; 7d at run time spans the soak week
 # (merge 2026-06-29 → ~2026-07-06).
@@ -61,7 +69,7 @@ STATS_PERIOD="${SYNC_HEALTH_STATS_PERIOD:-7d}"
 
 # Region discovery: the org lives on a non-US Sentry cluster (EU/DE). Resolve the
 # regionUrl from the control-silo endpoint rather than hardcoding the host.
-region_json=$(curl -sS --max-time 30 \
+region_json=$(curl --disable --noproxy '*' -sS --max-time 30 \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   "https://sentry.io/api/0/organizations/${ORG}/" 2>/dev/null || echo "")
 api_host=$(printf '%s' "$region_json" | jq -r '.links.regionUrl // empty' 2>/dev/null | sed 's#^https://##; s#/$##')
@@ -72,7 +80,7 @@ api_host=$(printf '%s' "$region_json" | jq -r '.links.regionUrl // empty' 2>/dev
 QUERY="feature:workspace-sync-health op:ready-null-installation"
 url="https://${api_host}/api/0/projects/${ORG}/${PROJECT}/issues/"
 
-http_code=$(curl -sS -o /tmp/sh5689.json -w '%{http_code}' --max-time 45 \
+http_code=$(curl --disable --noproxy '*' -sS -o /tmp/sh5689.json -w '%{http_code}' --max-time 45 \
   -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
   --get "$url" \
   --data-urlencode "query=${QUERY}" \

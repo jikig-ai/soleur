@@ -56,7 +56,7 @@ QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
 URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=3d&per_page=25&field=title&field=timestamp&field=host_id&field=recovery_stage"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
   -H "Accept: application/json" \
   "$URL")

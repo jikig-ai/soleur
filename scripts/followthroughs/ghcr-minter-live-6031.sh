@@ -50,7 +50,7 @@ MONITOR_SLUG="scheduled-ghcr-token-minter"
 # one missed tick), matching the <=40 < 60-min token-TTL staleness floor.
 FRESH_WINDOW_SECS=$((40 * 60))
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
   -H "Accept: application/json" \
   "${API}/organizations/${ORG}/monitors/${MONITOR_SLUG}/checkins/?per_page=1") || {

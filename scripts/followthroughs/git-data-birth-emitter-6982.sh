@@ -30,6 +30,15 @@
 # the proxy D-HB rejects (a host whose LUKS never mounted still answers on :22).
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797) -- unconditionally, not behind a `${VAR:+x}` hatch:
+# the credentials below are bound by INDIRECT expansion (`${!v:-}`), which xtrace prints
+# as the VALUE, and a conditional hatch keyed on one literal name cannot cover an
+# indirection. `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script binds live credentials by indirect expansion and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${REPO_ROOT}/scripts/betterstack-query.sh"
 

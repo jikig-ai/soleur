@@ -129,10 +129,16 @@ if (( ROWS == 0 )); then
   else
     SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
     SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
+    # Rule D pin (ADR-202): both are env-settable and carry a live credential, so each is
+    # adjudicated against the ONE literal it may take before the credentialed call.
+    if [[ "$SENTRY_HOST" != "jikigai-eu.sentry.io" || "$SENTRY_ORG" != "jikigai-eu" ]]; then
+      echo "TRANSIENT: refusing an unpinned Sentry destination (host=${SENTRY_HOST} org=${SENTRY_ORG}; expected jikigai-eu.sentry.io / jikigai-eu)" >&2
+      exit 2
+    fi
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
-    SC=$(curl -sS --fail --max-time 25 -G \
+    SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \

@@ -57,7 +57,7 @@ WINDOW_DAYS=7
 
 URL="https://${API_HOST}/api/0/organizations/${ORG}/monitors/${MONITOR_SLUG}/checkins/?per_page=30"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
   -H "Accept: application/json" \
   "$URL")

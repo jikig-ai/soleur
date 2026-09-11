@@ -35,7 +35,8 @@ esac
 
 if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
 
-ORG="jikigai"
+# `jikigai-eu`: the legacy `jikigai` org was cancelled vendor-side and 403s for every credential.
+ORG="jikigai-eu"
 API="https://sentry.io/api/0"
 SLUGS=(
   scheduled-terraform-drift
@@ -54,7 +55,7 @@ errors=0
 
 for slug in "${SLUGS[@]}"; do
   total_count=$((total_count + 1))
-  http_code=$(curl -sS -o /tmp/ck.json -w '%{http_code}' \
+  http_code=$(curl --disable --noproxy '*' -sS -o /tmp/ck.json -w '%{http_code}' \
     --max-time 30 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" || echo "000")

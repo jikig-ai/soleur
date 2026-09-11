@@ -174,7 +174,7 @@ RETRIED=""
 RETRY_DETAIL=""
 TOTAL=0
 while :; do
-  HTTP=$(curl -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
+  HTTP=$(curl --disable --noproxy '*' -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     --data-urlencode "per_page=100" \
     --data-urlencode "statsPeriod=1h" \

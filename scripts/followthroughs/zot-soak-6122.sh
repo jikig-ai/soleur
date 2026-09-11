@@ -213,7 +213,7 @@ sentry_count() {
   q="$1"
   enc=$(printf '%s' "$q" | jq -sRr @uri)
   url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
-  resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+  resp=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
     -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
