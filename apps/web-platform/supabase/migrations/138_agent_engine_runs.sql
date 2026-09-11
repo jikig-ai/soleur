@@ -91,4 +91,38 @@ $$;
 REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.set_workspace_default_engine(uuid, text) TO authenticated;
 
+CREATE OR REPLACE FUNCTION public.bind_agent_engine_run(
+  p_workspace_id uuid,
+  p_execution_kind text,
+  p_conversation_id uuid,
+  p_routine_id text,
+  p_routine_run_id text,
+  p_created_by uuid
+) RETURNS public.agent_engine_runs
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_row public.agent_engine_runs;
+BEGIN
+  IF NOT public.is_workspace_member(p_workspace_id, auth.uid()) THEN
+    RAISE EXCEPTION 'workspace membership required' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO public.agent_engine_runs(
+    workspace_id, execution_kind, conversation_id, routine_id, routine_run_id,
+    engine_id, auth_mode, adapter_version, status, created_by
+  )
+  SELECT p_workspace_id, p_execution_kind, p_conversation_id, p_routine_id,
+         p_routine_run_id, COALESCE(s.default_engine_id, 'claude-code'),
+         'unresolved', 'registry-pending', 'queued', p_created_by
+    FROM (SELECT default_engine_id FROM public.workspace_engine_settings
+           WHERE workspace_id = p_workspace_id) s
+  RIGHT JOIN (SELECT 1) sentinel ON true
+  RETURNING * INTO v_row;
+  RETURN v_row;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) TO service_role;
+
 COMMIT;

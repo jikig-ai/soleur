@@ -25,6 +25,7 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/SECURITY DEFINER[\s\S]*SET search_path = public, pg_temp/);
     expect(code).toMatch(/public\.is_workspace_owner/);
     expect(code).toMatch(/public\.workspace_engine_settings/);
+    expect(code).toMatch(/CREATE OR REPLACE FUNCTION public\.bind_agent_engine_run/);
   });
 
   it("does not use transactional-incompatible concurrent indexes", () => {
