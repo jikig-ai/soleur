@@ -1154,7 +1154,7 @@ if awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -qE 'logger}" -t "\$LOG_TA
 else
   fail "#8054 emit_state no longer logs under LOG_TAG=inngest-cutover-flip — 2.0's heartbeat read would return zero rows (fsm_silent)"
 fi
-if grep -qE '^[[:space:]]*"inngest-cutover-flip",?$|"inngest-cutover-flip"' "$SCRIPT_DIR/vector.toml"; then
+if grep -qE '^[[:space:]]*"inngest-cutover-flip",?[[:space:]]*(#.*)?$' "$SCRIPT_DIR/vector.toml"; then
   pass "#8054 vector.toml still allowlists the inngest-cutover-flip tag"
 else
   fail "#8054 vector.toml no longer allowlists inngest-cutover-flip — the heartbeat never reaches the warehouse"

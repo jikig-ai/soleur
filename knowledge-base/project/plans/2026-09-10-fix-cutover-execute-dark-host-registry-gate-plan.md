@@ -623,7 +623,22 @@ a string, Better Stack parses at ingest — a parse regression is a read-path fa
 was corrected. (iii) **E11 vs E13 on a stale `armed` probe row** is a conservative refusal
 (`flag_armed`) that clears on the next hourly row; kept as designed, pinned by a case, and the
 caller's remedy now names which sample it quotes. (iv) `_IHDG_EXPECTED_SCHEMA` is one lib
-constant; the recut gate inherits E7's UUID-shape check (recorded in ADR-100 §7).
+constant; the recut gate inherits E7's UUID-shape check (recorded in ADR-100 §7). (v) **E14 — the
+probe row postdates the newest same-boot FSM transition** (`reason` not `noop-*`), else `stale_row`:
+closes the window in which a probe row from before an arm-then-abort could grade a host the FSM
+may have left bound (ADR-100 §4c). `_erg_hb_newest` returns the transition `dt` as a third line.
+(vi) **`__FETCH_FAILED__` fires on ANY curl failure of the web-host probe** (refused, timeout,
+reset), not only connection-refused — E0's wording was corrected; the signature is now also
+cross-pinned to `inngest-registry-probe.sh` in the wiring suite. (vii) The wiring suite's render
+stubs the PROCESS boundary (`doppler`) and runs the REAL `_bs_query_rows`/`_bs_read_remedy`: the
+first cut stubbed the reader and its empty result had the wrong byte shape (0 bytes vs the real
+`\n`), which hid that E2 graded a zero-row read as `unreadable`; E2/E13 now count NON-EMPTY lines
+(`_ihdg_undecodable`). (viii) The rc-22 read-failure body is never printed (a ClickHouse 403 body
+names the query username; the repo is public) — length + classification only. (ix) The recut
+workflow's `stale_schema` remedy derived the schema with `grep 'expected_schema="[0-9]+"'`, which
+the constant refactor broke; fixed to `_IHDG_EXPECTED_SCHEMA` and pinned by the dark-gate suite
+(Row 6d). (x) Execute #2 after `op=quiesce-web` fails at 2.1 capture (pre-existing, #6921) — the
+2.2 warning and the `quiesce-web` arm now say so before the operator opens the window.
 
 **Mutation matrix** — every row is a `mutate()` invocation (Phase 1.3), scoped per the rule there.
 "Both" means the unscoped helper mutation must redden BOTH suites.
@@ -697,6 +712,18 @@ error_reporting:
     exit 3 (credentials not injected) yields `unreadable` with `PROBE_RC=3` printed and the remedy
     branched on it — never `silent`; the two have opposite remedies and only one of them is a wait.
 failure_modes:
+  - mode: The webhook returned a non-200 WITHOUT the web-host probe's fetch-failure signature (CF Access 403, WAF 5xx, webhook.service down 000/502, or a GQL error from a REACHABLE server)
+    detection: "`CODE != 500` or body lacking `__FETCH_FAILED__` → script-level refusal `webhook_path`, BEFORE any Better Stack read (layer 6: the synchronous webhook response body, printed once as a plain line)"
+    alert_route: "`::error::` + exit 1 naming the webhook path; remedy `gh workflow run cutover-inngest.yml -f op=registry-probe`; re-dispatch when it returns the refusal or HTTP 200"
+  - mode: The Better Stack read path REJECTED the credentials (HTTP 401/403 → `curl --fail-with-body` rc 22 with a `Code: 516 … Authentication failed` body that names the query USERNAME)
+    detection: "rc 22 with a body matching `Authentication failed|Code: 516`; the body is classified and NEVER printed (public repo, credentials injected by doppler inside the reader so GitHub cannot mask them)"
+    alert_route: "`::error::` naming `BETTERSTACK_QUERY_{USERNAME,PASSWORD}` in prd_terraform as the thing to rotate/verify; re-dispatching without that does not clear it"
+  - mode: The probe row predates an FSM TRANSITION on the same boot (an arm that started the server and aborted after the hourly row was emitted)
+    detection: "E14 — newest same-boot heartbeat with a non-`noop-*` reason is newer than the graded probe row → `stale_row`"
+    alert_route: "`::error::` + exit 1; wait for the next hourly probe row (which reads `http_code=200` if the server is bound → `host_serving`)"
+  - mode: Same-boot heartbeat rows are present but none (or not the newest JSON-shaped one) is a parsed object — the warehouse's ingest-side JSON parse changed
+    detection: "`_erg_hb_newest` → `__UNPARSED__` → `fsm_unreadable` (distinct from `fsm_silent`, whose remedy is a host replace)"
+    alert_route: "`::error::` naming the read path, explicitly `do NOT replace the host for it`; file an issue"
   - mode: The Better Stack read path is down (measured precedent: HTTP 503 "This source is currently under maintenance" → `curl --fail-with-body` rc 22)
     detection: "non-zero `--query-rc` / `--hb-rc` reaching the gate; tokens `unreadable` / `fsm_unreadable` with `PROBE_RC` / `HB_RC` and the captured stderr line printed (layer 6)"
     alert_route: "`::error::` + exit 1 on the op=execute run; the E1 rc branch names the remedy; re-dispatch when the read path recovers"

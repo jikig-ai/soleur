@@ -1057,14 +1057,29 @@ after a failed arm.
 A non-200 from the webhook is not, by itself, evidence about the host: a CF Access 403, a WAF 5xx,
 `webhook.service` down, or a GQL error from a *reachable* server all arrive as non-200. The one
 non-200 that IS evidence is the web-host probe's own `inngest-registry-probe: FATAL … errors=
-["__FETCH_FAILED__"]` (HTTP 500 through the hook's error passthrough), emitted exactly when its
-fetch of `10.0.1.40:8288` was refused — the only *synchronous* "the port is not bound right now"
-reading this step ever gets, and the one thing the hourly probe row (≤90 min old) and the heartbeat
-(a flag, not a port) cannot supply. So 2.0 enters the dark arm only on that signature and refuses
-every other non-200 as `webhook_path` (remedy: `op=registry-probe`), **without reading Better Stack
-at all** — a stale dark row and a fresh heartbeat must not be consulted when the live path said
-nothing about the host. 2.1 capture uses the same webhook path, so this costs nothing in
-reachability. (Found at review, 2026-09-11.)
+["__FETCH_FAILED__"]` (HTTP 500 through the hook's error passthrough), emitted when its fetch of
+`10.0.1.40:8288/v0/gql` **failed** — refused, connect-timed-out, or reset; the probe discards
+curl's rc, so this is "the endpoint did not answer the web host just now", not specifically
+"refused" — the only *synchronous* reading this step ever gets, and the one thing the hourly probe
+row (≤90 min old) and the heartbeat (a flag, not a port) cannot supply. So 2.0 enters the dark arm
+only on that signature and refuses every other non-200 as `webhook_path` (remedy:
+`op=registry-probe`), **without reading Better Stack at all** — a stale dark row and a fresh
+heartbeat must not be consulted when the live path said nothing about the host. 2.1 capture uses
+the same webhook path, so this costs nothing in reachability. (Found at review, 2026-09-11; the
+"connection-refused" overstatement in the first cut of this section was corrected the same day.)
+
+### 4c. The probe row must postdate the newest FSM transition (E14)
+
+The hourly probe row can be up to 90 minutes old, and the FSM can change the host's state inside
+that window: an `op=arm` starts the server, `verify_or_abort` fails, the flag is driven to
+`aborted` — the FSM's own text names the case "a prod scheduler is STILL RUNNING on this host
+under a terminal flag" when `stop_server` also fails. A probe row from before that arm says
+`http_code=000`; a heartbeat from after it says `aborted`; both are true and the host may be
+bound. So the execute gate also requires the graded probe row to POSTDATE the newest same-boot
+heartbeat whose `reason` is not `noop-*` (a transition row — `verify-*`, `rolled-back`,
+`flip-complete`, `unexpected-exit`…), refusing `stale_row` otherwise. The cost is a wait of one
+probe period after any FSM transition; the next probe row then reads `http_code=200` if the server
+is in fact bound and E9 refuses `host_serving`. (Found at review, 2026-09-11.)
 
 ### 5. The `BLOCK:`-stream design was measured unsatisfiable and is REJECTED
 

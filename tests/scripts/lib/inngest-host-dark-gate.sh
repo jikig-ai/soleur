@@ -5,8 +5,10 @@
 # TWO ENTRY POINTS, TWO CONSUMERS — EDITING A SHARED HELPER EDITS BOTH:
 #   inngest_host_dark_gate         .github/workflows/apply-web-platform-infra.yml  (recut Guard 2)
 #   inngest_execute_registry_gate  scripts/cutover-inngest.sh op=execute step 2.0  (P0 cutover, #8054)
-# `_IHDG_IDENT` / `_IHDG_SELECT`, every `_ihdg_*` helper and `_ihdg_graded_row` (G1-G7 == E1-E7)
-# are shared. The execute gate is documented at the bottom of this file, E-table included.
+# `_IHDG_IDENT` / `_IHDG_SELECT` and every `_ihdg_*` helper are SHARED; `_ihdg_graded_row` is the
+# shared prelude (G1-G6 plus the boot_id shape check == E1-E7; the execute gate's E8 is the same
+# predicate as G7). Helpers prefixed `_erg_` are consumed by the EXECUTE gate only. The execute
+# gate is documented at the bottom of this file, E-table included.
 #
 # Layers 1-4 authorize by intent: a human approved the environment, a confirm literal was typed, a
 # volume id was pinned, a plan document matched a shape. Every one of them can be fully satisfied
@@ -357,14 +359,16 @@ _ihdg_finished_count() {
     ' < "$rows_file" 2>/dev/null
 }
 
-# _ihdg_finished_lines <rows-file>
+# _ihdg_decoded_rows <rows-file>
 #
-# G10's POSITIVE CONTROL. Counts rows that DECODE — regardless of host — so "zero rows attributable
-# to this host" can be distinguished from "the parser understood nothing in this file". It
-# deliberately does NOT filter on the `function.finished` marker: a window in which this fleet ran
-# no functions at all is legitimate, and what must be proved is that the read and the decode
-# worked, not that any particular event occurred.
-_ihdg_finished_lines() {
+# Counts rows that DECODE — regardless of host or marker — so "zero rows attributable to this
+# host" can be distinguished from "the parser understood nothing in this file". Born as G10's
+# positive control (under the name `_ihdg_finished_lines`); since #8054 it is the ONE decode
+# counter for all three streams this lib reads (function.finished rows, probe rows in E2, heartbeat
+# rows in E13), so it is named for what it counts. It deliberately does NOT filter on any marker: a
+# window in which this fleet ran no functions at all is legitimate, and what must be proved is that
+# the read and the decode worked, not that any particular event occurred.
+_ihdg_decoded_rows() {
   local rows_file="$1"
   jq -Rn '
       [ inputs
@@ -374,6 +378,27 @@ _ihdg_finished_lines() {
         | select(type == "object")
       ] | length
     ' < "$rows_file" 2>/dev/null
+}
+
+# _ihdg_undecodable <rows-file> — rc 0 when the file carries at least one NON-EMPTY line and NONE
+# of its lines decodes; rc 1 otherwise. No token, no policy: the caller names the refusal (E2 says
+# `unreadable`, E13 says `fsm_unreadable`). ONE definition for both consumers (#8054 review: the
+# two inline copies had already drifted from G10's idiom).
+#
+# NON-EMPTY lines (`grep -c .`), not physical lines (`grep -c ''`), and that distinction is what
+# makes the `silent` verdicts REACHABLE from the production caller: `_bs_query_rows` in
+# scripts/cutover-inngest.sh renders its result with `printf '%s\n' "$rows"`, so a ZERO-row result
+# lands on disk as ONE empty line. Counted as a physical line it read as "bytes present, nothing
+# decoded" -> `unreadable`, and the operator was told to file an issue against the emitter when the
+# correct remedy was the `silent` one (read the health run, then replace the host). Measured
+# 2026-09-11 at review: a 1-byte file graded `unreadable`, a 0-byte file `silent`, for the same
+# host state. `grep -c .` prints 0 and exits 1 on no match, hence `|| true`.
+_ihdg_undecodable() {
+  local rows_file="$1" raw_lines decoded_rows
+  raw_lines="$(grep -c . "$rows_file" 2>/dev/null || true)"
+  decoded_rows="$(_ihdg_decoded_rows "$rows_file")"
+  [[ "$raw_lines" =~ ^[0-9]+$ && "$decoded_rows" =~ ^[0-9]+$ ]] || return 0   # could not count: treat as undecodable
+  [[ "$raw_lines" -ge 1 && "$decoded_rows" -eq 0 ]]
 }
 
 # _ihdg_refuse <token> — print a refusal token for the CALLER to dispatch, rc 1. Shared helpers
@@ -427,14 +452,9 @@ _ihdg_graded_row() {
   [[ -n "$rows_file" && -f "$rows_file" ]] || { _ihdg_refuse unreadable; return 1; }
   # E2 — BYTES THAT DO NOT DECODE ARE NOT SILENCE. A gzipped, truncated or HTML error body is a
   # file with lines and zero rows; refusing it as `silent` would send the operator to replace a
-  # host whose read path is what broke. Raw lines >= 1 and decoded rows == 0 is a decode failure.
-  # (`grep -c ''` counts a final unterminated line too, and prints 0 on an empty file — hence the
-  # `|| true` to keep the count under pipefail.)
-  local raw_lines decoded_rows
-  raw_lines="$(grep -c '' "$rows_file" 2>/dev/null || true)"
-  decoded_rows="$(_ihdg_finished_lines "$rows_file")"
-  [[ "$raw_lines" =~ ^[0-9]+$ && "$decoded_rows" =~ ^[0-9]+$ ]] || { _ihdg_refuse unreadable; return 1; }
-  if [[ "$raw_lines" -ge 1 && "$decoded_rows" -eq 0 ]]; then _ihdg_refuse unreadable; return 1; fi
+  # host whose read path is what broke. Non-empty lines >= 1 and decoded rows == 0 is a decode
+  # failure (see `_ihdg_undecodable` for why NON-EMPTY, and why that is load-bearing).
+  if _ihdg_undecodable "$rows_file"; then _ihdg_refuse unreadable; return 1; fi
 
   local rows_tsv rows_count
   rows_tsv="$(_ihdg_rows "$rows_file" "$host" "$host_name")" || { _ihdg_refuse unreadable; return 1; }
@@ -613,7 +633,7 @@ _ihdg_graded_row() {
   # and counts them, so widening the window and leaving this bound behind reddens rather than
   # silently making the emptiness claim older than the argument that justifies it.
 
-  # ── G4 — probe_schema is EXACTLY 7 ──────────────────────────────────────────────
+  # ── G4 — probe_schema is EXACTLY the expected schema (8 today) ──────────────────
   # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
   # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
   # everything" shape one version forward. A schema bump must force a deliberate edit here.
@@ -776,7 +796,7 @@ inngest_host_dark_gate() {
   local finished_raw finished_total finished_count
   finished_raw="$(grep -c . "$finished_file" 2>/dev/null || true)"
   [[ "$finished_raw" =~ ^[0-9]+$ ]]   || { _ihdg_verdict "unreadable"; return $?; }
-  finished_total="$(_ihdg_finished_lines "$finished_file")"
+  finished_total="$(_ihdg_decoded_rows "$finished_file")"
   [[ "$finished_total" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
   finished_count="$(_ihdg_finished_count "$finished_file" "$host" "$host_name")"
   [[ "$finished_count" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
@@ -1009,10 +1029,17 @@ inngest_host_dark_gate() {
 #   E13 heartbeat: --hb-rc 0; --hb-max-age numeric; file decodes; newest      fsm_unreadable /
 #       same-boot inngest-cutover-flip object row age in [0, --hb-max-age];  fsm_silent /
 #       its .message.flag graded by the E11 partition, in bash, after select flag_armed / flag_unreadable
+#   E14 the probe row postdates the newest same-boot FSM TRANSITION (reason   stale_row
+#       not noop-*) in the heartbeat window
 #   —   all hold                                                             dark (rc 0)
 #
-# E1-E7 ARE `_ihdg_graded_row`, shared byte-for-byte with G1-G7. E8/E9 are the same predicate lines
-# as G7/G9. The suite's mutation harness scopes per-consumer rows to the function and runs
+# The CALLER adds one refusal of its own BEFORE this gate runs — `webhook_path`: the webhook's
+# non-200 must carry the web-host probe's own fetch-failure signature (HTTP 500 + __FETCH_FAILED__)
+# or the script refuses without reading Better Stack at all. It is a script token, not a lib one.
+#
+# E1-E7 ARE `_ihdg_graded_row`, shared byte-for-byte with G1-G6 plus the boot_id shape check (which
+# the recut gate inherits — see the ADR-100 2026-09-11 addendum §7). E8/E9 are the same predicate
+# lines as G7/G9. The suite's mutation harness scopes per-consumer rows to the function and runs
 # helper rows against BOTH entry points — a helper tightening that reddens only one suite is a
 # copy, and copies are how this family of defects recurs.
 #
@@ -1045,21 +1072,52 @@ _erg_flag_class() {
   esac
 }
 
-# _ihdg_hb_newest <hb-file> <host> <host_name> <bid>
+# _erg_emit <emit-file|""> <key> <value>   (execute-gate-only helper: `_erg_` prefix)
 #
-# The newest `inngest-cutover-flip` heartbeat row on boot `<bid>` from the named host, as TWO lines:
-# its `dt`, then its `.message.flag` (or `__ABSENT__`). Prints NOTHING when no row qualifies, the
-# single line `__TIE__` when two rows at the newest `dt` carry different flags, and the single line
-# `__UNPARSED__` when same-boot rows under the tag EXIST but none carries an OBJECT `.message`.
-# That last one matters for the remedy: the FSM logs a JSON STRING (`logger -t inngest-cutover-flip
-# "$json"`), Vector re-encodes it as a string, and it is BETTER STACK that parses it into an object
-# at ingest (measured 2026-09-11: `.message = {"flag":…}` in the warehouse). If the warehouse stops
-# parsing, every heartbeat is present and unreadable — a read-path change, not a dead timer, and
-# telling the operator to replace the host for it would be the wrong remedy. The selector
-# filters on TYPE and IDENTITY only — identifier, host pair, a string `_BOOT_ID` equal to the join
-# key, an object `.message` — NEVER on the flag's value: a value filter would skip a fresh `armed`
-# and pass on a stale `aborted` (suite row 22). The flag is graded in bash by the caller.
-_ihdg_hb_newest() {
+# Append one validated `key=value` line to the caller's `--emit-file` side channel, or do nothing
+# when no file was given. The value MUST already have passed the predicate that validates it — the
+# gate's contract with its caller is that nothing in this file is a raw row field. A failed append
+# is swallowed: the caller's notice then prints `__UNREAD__` for that field, which is a visible
+# degradation of a diagnostic, never a change of verdict.
+_erg_emit() {
+  local emit_file="$1" key="$2" value="$3"
+  [[ -n "$emit_file" ]] || return 0
+  printf '%s=%s\n' "$key" "$value" >> "$emit_file" 2>/dev/null || true
+  return 0
+}
+
+# _erg_hb_newest <hb-file> <host> <host_name> <bid>   (execute-gate-only helper: `_erg_` prefix)
+#
+# The newest `inngest-cutover-flip` heartbeat row on boot `<bid>` from the named host, as THREE
+# lines: its `dt`; its `.message.flag` (or `__ABSENT__`); and the `dt` of the newest same-boot
+# TRANSITION row — a parsed row whose `.message.reason` does not start with `noop-` — or `-` when
+# there is none in the window. Prints NOTHING when no row qualifies, the single line `__TIE__` when
+# two rows at the newest `dt` carry different flags, and the single line `__UNPARSED__` when
+# same-boot rows under the tag EXIST but none carries an OBJECT `.message` — OR when a same-boot
+# row NEWER than the newest parsed one carries a STRING `.message` that begins with `{` (a
+# heartbeat the warehouse did not parse; the FSM's own plain-text lines under the same tag —
+# `SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED …`, `latch-unrecordable …` — never begin with `{` and are
+# skipped, never graded).
+#
+# WHY `__UNPARSED__` IS ITS OWN SENTINEL: the FSM logs a JSON STRING (`logger -t
+# inngest-cutover-flip "$json"`), Vector re-encodes it as a string, and it is BETTER STACK that
+# parses it into an object at ingest (measured 2026-09-11: `.message = {"flag":…}` in the
+# warehouse). If that parse stops, every heartbeat is present and unreadable — a read-path change,
+# not a dead timer, and telling the operator to replace the host for it would be the wrong remedy.
+#
+# WHY THE TRANSITION `dt` IS RETURNED: the probe row is hourly and the FSM can change the host's
+# state in between — an arm that started the server and then aborted (`verify_or_abort`, whose own
+# text names the case "a prod scheduler is STILL RUNNING on this host under a terminal flag").
+# After such a transition the probe row's darkness describes a state that no longer exists, so the
+# execute gate refuses (`stale_row`) until a probe row POSTDATING the transition lands — which will
+# then read `http_code=200` if the server is in fact bound. `noop-*` reasons are idle heartbeats
+# (P0-1/P0-2), not transitions, and are excluded from that comparison.
+#
+# The selector filters on TYPE and IDENTITY only — identifier, host pair, a string `_BOOT_ID` equal
+# to the join key, an object `.message` — NEVER on the flag's value: a value filter would skip a
+# fresh `armed` and pass on a stale `aborted` (suite row 22). The flag is graded in bash by the
+# caller.
+_erg_hb_newest() {
   local hb_file="$1" host="$2" host_name="$3" bid="$4"
   jq -Rn --arg h "$host" --arg hn "$host_name" --arg b "$bid" '
       [ inputs
@@ -1070,14 +1128,20 @@ _ihdg_hb_newest() {
         | select(($d._BOOT_ID | type) == "string")
         | select($d._BOOT_ID == $b)
         | { dt: ($outer.dt // ""), obj: (($d.message | type) == "object"),
-            flag: (if ($d.message | type) == "object" then (($d.message.flag // "__ABSENT__") | tostring) else "" end) }
+            jsonstr: ((($d.message | type) == "string") and ($d.message | startswith("{"))),
+            flag: (if ($d.message | type) == "object" then (($d.message.flag // "__ABSENT__") | tostring) else "" end),
+            transition: ((($d.message | type) == "object") and ((($d.message.reason // "") | tostring | startswith("noop-")) | not)) }
       ] as $tagged
       | ($tagged | map(select(.obj))) as $rows
       | if ($tagged | length) == 0 then empty
         elif ($rows | length) == 0 then "__UNPARSED__"
         else ($rows | map(.dt) | max) as $newest
-           | ($rows | map(select(.dt == $newest) | .flag) | unique) as $flags
-           | if ($flags | length) != 1 then "__TIE__" else "\($newest)\n\($flags[0])" end
+           | if ([ $tagged[] | select(.jsonstr and .dt > $newest) ] | length) > 0 then "__UNPARSED__"
+             else
+               ($rows | map(select(.dt == $newest) | .flag) | unique) as $flags
+               | ([ $rows[] | select(.transition) | .dt ] | max // "-") as $transition
+               | if ($flags | length) != 1 then "__TIE__" else "\($newest)\n\($flags[0])\n\($transition)" end
+             end
         end
     ' -r < "$hb_file" 2>/dev/null
 }
@@ -1121,7 +1185,6 @@ inngest_execute_registry_gate() {
     case "$emit_file" in */../*|*/..) _ihdg_verdict "unreadable"; return $? ;; esac
     : > "$emit_file" || { _ihdg_verdict "unreadable"; return $?; }
   fi
-  _erg_emit() { [[ -n "$emit_file" ]] && printf '%s=%s\n' "$1" "$2" >> "$emit_file"; return 0; }
 
   # Both bounds validated BEFORE any read: `[[ "" -le 5 ]]` is FALSE under bash coercion, but an
   # operand that fails validation must name itself, not surface as a stale-row refusal.
@@ -1155,8 +1218,8 @@ inngest_execute_registry_gate() {
   local boot_id bid
   boot_id="$(_ihdg_field "$chosen_msg" boot_id)" || { _ihdg_verdict "unreadable"; return $?; }
   bid="${boot_id//-/}"
-  _erg_emit boot_id "$boot_id"
-  _erg_emit row_age "$row_age"
+  _erg_emit "$emit_file" boot_id "$boot_id"
+  _erg_emit "$emit_file" row_age "$row_age"
 
   # ── E8 — the row says it is the dedicated host ──────────────────────────────────
   local host_role
@@ -1179,13 +1242,16 @@ inngest_execute_registry_gate() {
   [[ "$server_active" != "active" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
 
   # ── E11 — the probe row's cutover flag is pre-arm, by POSITIVE allowlist ────────
+  # This `case` and E13's are the same three arms modulo the emit key; they stay duplicated for
+  # the reason the whitelist `case` above records — hoisting them would put `_ihdg_verdict` inside a
+  # helper, which the suite forbids.
   local cutover_flag flag_class
   cutover_flag="$(_ihdg_field "$chosen_msg" cutover_flag)" || cutover_flag=""
   flag_class="$(_erg_flag_class "$cutover_flag")"
   case "$flag_class" in
-    preflip) _erg_emit flag "$cutover_flag" ;;
-    armed)   _erg_emit flag "$cutover_flag"; _ihdg_verdict "flag_armed"; return $? ;;
-    *)       _erg_emit flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
+    preflip) _erg_emit "$emit_file" flag "$cutover_flag" ;;
+    armed)   _erg_emit "$emit_file" flag "$cutover_flag"; _ihdg_verdict "flag_armed"; return $? ;;
+    *)       _erg_emit "$emit_file" flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
   esac
 
   # ── E12 — coherence: a refused loopback cannot have yielded a registry count ────
@@ -1201,34 +1267,42 @@ inngest_execute_registry_gate() {
   [[ "$hb_rc" -eq 0 ]]       || { _ihdg_verdict "fsm_unreadable"; return $?; }
   [[ -n "$hb_file" && -f "$hb_file" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
   # Decode coherence, as E2: bytes that do not decode are a broken read, not a silent FSM.
-  local hb_raw_lines hb_decoded
-  hb_raw_lines="$(grep -c '' "$hb_file" 2>/dev/null || true)"
-  hb_decoded="$(_ihdg_finished_lines "$hb_file")"
-  [[ "$hb_raw_lines" =~ ^[0-9]+$ && "$hb_decoded" =~ ^[0-9]+$ ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
-  if [[ "$hb_raw_lines" -ge 1 && "$hb_decoded" -eq 0 ]]; then _ihdg_verdict "fsm_unreadable"; return $?; fi
+  if _ihdg_undecodable "$hb_file"; then _ihdg_verdict "fsm_unreadable"; return $?; fi
 
-  local hb_out hb_lines hb_dt hb_flag hb_epoch hb_age
-  hb_out="$(_ihdg_hb_newest "$hb_file" "$host" "$host_name" "$bid")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  local hb_out hb_lines hb_dt hb_flag hb_transition hb_epoch hb_age
+  hb_out="$(_erg_hb_newest "$hb_file" "$host" "$host_name" "$bid")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
   [[ -n "$hb_out" ]] || { _ihdg_verdict "fsm_silent"; return $?; }
   [[ "$hb_out" != "__TIE__" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
-  # Same-boot heartbeat rows are PRESENT but none is a parsed object — the warehouse's ingest-side
-  # JSON parse (not Vector's, not the FSM's) has changed. Unreadable, never silent: the timer is
-  # demonstrably alive.
+  # Same-boot heartbeat rows are PRESENT but none is a parsed object (or the newest JSON-shaped one
+  # is unparsed) — the warehouse's ingest-side JSON parse (not Vector's, not the FSM's) has changed.
+  # Unreadable, never silent: the timer is demonstrably alive.
   [[ "$hb_out" != "__UNPARSED__" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
   hb_lines="$(printf '%s\n' "$hb_out" | wc -l)"
-  [[ "${hb_lines//[[:space:]]/}" == "2" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
-  hb_dt="${hb_out%%$'\n'*}"; hb_flag="${hb_out#*$'\n'}"
+  [[ "${hb_lines//[[:space:]]/}" == "3" ]] || { _ihdg_verdict "fsm_unreadable"; return $?; }
+  hb_dt="${hb_out%%$'\n'*}"; hb_transition="${hb_out##*$'\n'}"
+  hb_flag="${hb_out#*$'\n'}"; hb_flag="${hb_flag%$'\n'*}"
   # Same `dt` -> epoch path as the probe row (shared helper), same sign discipline as G3/E5.
   hb_epoch="$(_ihdg_epoch_from_dt "$hb_dt")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
   hb_age=$(( now_epoch - hb_epoch ))
   [[ "$hb_age" -ge 0 ]]             || { _ihdg_verdict "fsm_silent"; return $?; }
   [[ "$hb_age" -le "$hb_max_age" ]] || { _ihdg_verdict "fsm_silent"; return $?; }
-  _erg_emit hb_age "$hb_age"
+  _erg_emit "$emit_file" hb_age "$hb_age"
+  # ── E14 — the probe row POSTDATES the newest FSM transition on this boot ────────
+  # The graded probe row is up to `max_row_age` old; a transition (an arm that started the server
+  # and aborted, a rollback, a flip) since then means its darkness describes a state that no longer
+  # exists. Refuse until a probe row from AFTER the transition lands — the same `stale_row` token
+  # and wait the hourly cadence already gives. `-` means no transition in the heartbeat window.
+  if [[ "$hb_transition" != "-" ]]; then
+    local hb_transition_epoch row_epoch
+    hb_transition_epoch="$(_ihdg_epoch_from_dt "$hb_transition")" || { _ihdg_verdict "fsm_unreadable"; return $?; }
+    row_epoch=$(( now_epoch - row_age ))
+    [[ "$hb_transition_epoch" -le "$row_epoch" ]] || { _ihdg_verdict "stale_row"; return $?; }
+  fi
   # The flag, graded in bash on the NEWEST same-boot row, by the same partition as E11.
   case "$(_erg_flag_class "$hb_flag")" in
-    preflip) _erg_emit hb_flag "$hb_flag" ;;
-    armed)   _erg_emit hb_flag "$hb_flag"; _ihdg_verdict "flag_armed"; return $? ;;
-    *)       _erg_emit hb_flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
+    preflip) _erg_emit "$emit_file" hb_flag "$hb_flag" ;;
+    armed)   _erg_emit "$emit_file" hb_flag "$hb_flag"; _ihdg_verdict "flag_armed"; return $? ;;
+    *)       _erg_emit "$emit_file" hb_flag "__UNREADABLE__"; _ihdg_verdict "flag_unreadable"; return $? ;;
   esac
 
   _ihdg_verdict "dark"

@@ -88,8 +88,10 @@ INNGEST_HOST_NAME="${INNGEST_HOST_NAME:-soleur-inngest-prd}"
 #       row out of the limit. Host isolation happens after decoding, never in `--grep`.
 #   $3  --limit
 #   $4  (optional) file to capture the reader's stderr into. The default discards it, as the
-#       pre-#8054 reader always did; 2.0 keeps it so an `unreadable` refusal can name the CAUSE
-#       (betterstack-query.sh prints the host's LENGTH, never the host; the transport prints only a code).
+#       pre-#8054 reader always did; 2.0 keeps it so an `unreadable` refusal can name the CAUSE.
+#       That stderr is NOT credential-free by construction — betterstack-query.sh's allowlist
+#       refusal prints the derived HOST, and the transport's rc 6/7/35 messages name the host too — so
+#       `_bs_read_remedy` scrubs it before any echo.
 # Echoes the raw betterstack-query.sh rows on stdout and RETURNS THE QUERY'S rc, so each caller
 # owns its own failure semantics: confirm warns and keeps polling, the liveness counter and the
 # execute gate fail closed. No-SSH by construction — betterstack-query.sh is the only transport.
@@ -102,18 +104,32 @@ _bs_query_rows() {
 
 # _bs_read_remedy <label> <rc> <errfile> <rowsfile> — the operator-facing diagnosis of a failed
 # Better Stack read, branched on the reader's rc (measured partition: 3 = credentials absent;
-# 1 = `doppler run` itself failed; 22 = the transport's `--fail-with-body` saw an HTTP error — the 503
-# "source under maintenance" precedent lands HERE; 2/64/78 = the reader's own refusals). Prints
-# the CR/LF-stripped first stderr line; on 22 also the first 200 bytes of the error body (an HTTP
-# error body is a ClickHouse `{"exception":…}`, never a row). Nothing about the host was measured.
+# 1 = `doppler run` or the reader exited 1; 22 = the transport's `--fail-with-body` saw an HTTP
+# error; 6/7/28/35 = transport faults (DNS/connect/timeout/TLS); 2/64/78 = the reader's own refusals).
+#
+# THIS RUNS ON A PUBLIC REPO'S RUN LOG, and the credentials enter via `doppler run` INSIDE the
+# reader, so GitHub's secret masking never sees them. Two egress rules, both measured at review
+# (2026-09-11): (1) the HTTP error BODY is never printed — a ClickHouse 403 body is
+# `Code: 516. DB::Exception: <BETTERSTACK_QUERY_USERNAME>: Authentication failed…`, i.e. half of
+# the Basic-auth pair; only its LENGTH and a two-way classification (credentials rejected /
+# source under maintenance) are echoed; (2) the first stderr line is scrubbed of quoted values
+# and of `*.betterstackdata.com` hostnames before it is echoed. Every pipeline here is `|| true`
+# so this function — whose only job is to print the remedy — cannot itself die mute under `set -e`.
 _bs_read_remedy() {
-  local label="$1" rc="$2" errfile="$3" rowsfile="$4" err1 body1
-  err1="$(head -1 "$errfile" 2>/dev/null | tr -d '\r\n' | cut -c1-200)"
+  local label="$1" rc="$2" errfile="$3" rowsfile="$4" err1 body_len body_class
+  err1="$(head -1 "$errfile" 2>/dev/null | tr -d '\r\n' | sed -E "s/'[^']*'/'<redacted>'/g; s/[A-Za-z0-9.-]*betterstackdata\.com/<host>/g" | cut -c1-200 || true)"
   case "$rc" in
     3)  echo "::error::2.0 $label read: betterstack-query.sh rc=3 — BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not injected. Check: doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain | wc -c (value-silent) must be non-zero. stderr: ${err1:-<none>}" ;;
-    1)  echo "::error::2.0 $label read: doppler run itself failed (rc=1) — the DOPPLER_TOKEN repo secret. stderr: ${err1:-<none>}" ;;
-    22) body1="$(head -c 200 "$rowsfile" 2>/dev/null | tr -d '\r\n')"
-        echo "::error::2.0 $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; the 2026-09-03 503 'source under maintenance' precedent). Re-dispatch later. body: ${body1:-<empty>} stderr: ${err1:-<none>}" ;;
+    1)  echo "::error::2.0 $label read: doppler run or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    22) body_len="$(wc -c < "$rowsfile" 2>/dev/null | tr -d '[:space:]' || true)"
+        body_class="other"
+        grep -qiE 'Authentication failed|Code: 516|password is incorrect' "$rowsfile" 2>/dev/null && body_class="credentials-rejected"
+        grep -qi 'maintenance' "$rowsfile" 2>/dev/null && body_class="source-under-maintenance"
+        case "$body_class" in
+          credentials-rejected) echo "::error::2.0 $label read: the ClickHouse read path REJECTED the credentials (HTTP error under --fail-with-body, rc=22; body ${body_len:-?} bytes, not printed — it names the username). Rotate/verify BETTERSTACK_QUERY_{USERNAME,PASSWORD} in prd_terraform against the Better Stack query endpoint; re-dispatching without that will not clear it." ;;
+          source-under-maintenance) echo "::error::2.0 $label read: the ClickHouse read path is under maintenance (HTTP error under --fail-with-body, rc=22; the 2026-09-03 503 precedent; body ${body_len:-?} bytes, not printed). Re-dispatch later." ;;
+          *) echo "::error::2.0 $label read: the ClickHouse read path returned an HTTP error (transport rc=22 under --fail-with-body; body ${body_len:-?} bytes, not printed). Re-dispatch later; if it persists, file an issue with this run URL. stderr: ${err1:-<none>}" ;;
+        esac ;;
     6|7|28|35) echo "::error::2.0 $label read: the transport could not reach the read path (rc=$rc: DNS / connect / timeout / TLS from the runner) — a transient network fault on the RUNNER side, not a host state. Re-dispatch later. stderr: ${err1:-<none>}" ;;
     2|64|78) echo "::error::2.0 $label read: betterstack-query.sh refused (rc=$rc: destination pin / usage / trace) — a reader misconfiguration, not a host state. File an issue with this run URL. stderr: ${err1:-<none>}" ;;
     *)  echo "::error::2.0 $label read: betterstack-query.sh rc=$rc (unclassified). File an issue with this run URL. stderr: ${err1:-<none>}" ;;
@@ -1263,22 +1279,27 @@ case "$OP" in
       # current boot) plus the flip FSM's ~1/min heartbeat on the SAME boot attesting the flag is
       # still pre-arm within 15 min. Silence is not darkness: every state in which darkness cannot
       # be established refuses. The gate is tests/scripts/lib/inngest-host-dark-gate.sh's second
-      # entry point; its E-table names every token below and the remedy each one carries.
-      # THE NON-200 MUST BE THE DEDICATED HOST'S REFUSAL, NOT THE WEBHOOK PATH'S. The web-host probe
-      # (inngest-registry-probe.sh) exits 1 — HTTP 500 through the hook's error passthrough — with
-      # `errors=["__FETCH_FAILED__"]` exactly when ITS own fetch of 10.0.1.40:8288 was refused: the only
-      # SYNCHRONOUS "the port is not bound right now" evidence this step ever sees, and the one
-      # thing the hourly probe row (up to 90 min old) and the FSM heartbeat (a flag, not a port)
-      # cannot supply. A CF Access 403, a WAF 5xx, webhook.service down (000/502) or a GQL error
-      # from a REACHABLE server all arrive here as non-200 too, and none of them says the host is
-      # dark — so they refuse, naming the webhook path, and 2.1 capture (the same webhook path)
-      # would have failed on them anyway. Only the refusal signature enters the dark arm.
+      # entry point; its E-table names every lib token below and the remedy each one carries. One
+      # refusal is this script's own and precedes the gate: `webhook_path` (below).
+      # THE NON-200 MUST BE THE DEDICATED HOST'S FETCH FAILURE, NOT THE WEBHOOK PATH'S. The web-host
+      # probe (inngest-registry-probe.sh) exits 1 — HTTP 500 through the hook's error passthrough —
+      # with `errors=["__FETCH_FAILED__"]` when ITS OWN fetch of 10.0.1.40:8288/v0/gql failed:
+      # connection refused, connect-timeout (host off / private-net drop), or a mid-request
+      # failure — curl's rc is not preserved, so this is "the GQL endpoint did not answer the web
+      # host just now", not specifically "refused". It is still the only SYNCHRONOUS reading this
+      # step ever sees; the hourly probe row (up to 90 min old) and the FSM heartbeat (a flag, not
+      # a port) cannot supply it, and the gate's E14 closes the window in which a stale probe row
+      # could outlive an FSM transition. A CF Access 403, a WAF 5xx, webhook.service down (000/502)
+      # or a GQL error from a REACHABLE server all arrive here as non-200 too, and none of them
+      # says anything about the host — so they refuse, naming the webhook path (2.1 capture uses
+      # the same path and would have failed on them anyway). Only the fetch-failure signature
+      # enters the dark arm. `webhook_path` is a script-level refusal, not one of the lib's tokens.
       if [[ "$CODE" != "500" || "$BODY" != *"__FETCH_FAILED__"* ]]; then
-        echo "::error::2.0 REFUSED (webhook_path): the registry-probe webhook returned HTTP $CODE without the dedicated host's connection-refused signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault, not evidence the host is dark. Check the path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / webhook.service on the web host); when it returns the __FETCH_FAILED__ refusal or HTTP 200, re-dispatch op=execute. Do NOT SSH the host."
+        echo "::error::2.0 REFUSED (webhook_path): the registry-probe webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so this is a WEBHOOK-PATH fault, not evidence about the host. Check the path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / webhook.service on the web host); when it returns the __FETCH_FAILED__ refusal or HTTP 200, re-dispatch op=execute. Do NOT SSH the host."
         echo "2.0 webhook body (HTTP $CODE): ${CAUSE:-<empty body>}"
         exit 1
       fi
-      echo "::notice::2.0 expected pre-arm (P1-5): webhook probe HTTP $CODE carries the dedicated host's connection-refused signature — grading darkness from the host's own rows"
+      echo "::notice::2.0 expected pre-arm (P1-5): webhook probe HTTP $CODE carries the dedicated host's fetch-failure signature (the web host could not reach 10.0.1.40:8288 just now) — grading darkness from the host's own rows"
       # The webhook body is a question phrased as a fault ("is the dedicated inngest-server
       # reachable?") and must not sit bare inside an annotation next to a green step — but it is
       # the live corroboration the gate below cannot read, so it IS printed: once, as a plain line,
@@ -1300,10 +1321,18 @@ case "$OP" in
       # row, `--hb-max-age` 900 s on the heartbeat); the `--since` windows only have to be WIDER than
       # those bounds so that `stale_row` / `fsm_silent` are reachable verdicts — a 90m probe window
       # would return no row older than the bound and collapse `stale_row` into `silent`. 24h at
-      # --limit 500 holds ~24 hourly probe rows plus the previous boot's; 15m at --limit 200 holds
-      # the ~15-30 heartbeats a live FSM emits in that window.
+      # --limit 500 holds ~48 hourly probe rows (BOTH hosts run the shared renderer and ship to one
+      # source; the gate isolates the dedicated host after decoding) plus the previous boot's; the
+      # reader returns the NEWEST rows under --limit, so the graded row is never displaced. 30m at
+      # --limit 200 holds the ~30-60 heartbeats a live FSM emits in that window, and 30m > 900 s
+      # keeps the age bound a real bound (the arm-side liveness read's 15m window is a different
+      # operand for a different gate and is not reused here).
       PROBE_RC=0; _bs_query_rows 24h SOLEUR_INNGEST_SERVER_PROBE 500 "$PROBE_ERR" > "$PROBE_ROWS" || PROBE_RC=$?
-      HB_RC=0;    _bs_query_rows "$FLIP_LIVENESS_SINCE" inngest-cutover-flip 200 "$HB_ERR" > "$HB_ROWS" || HB_RC=$?
+      HB_RC=0;    _bs_query_rows 30m inngest-cutover-flip 200 "$HB_ERR" > "$HB_ROWS" || HB_RC=$?
+      # The emit file exists BEFORE the gate runs: the gate truncates it after argument parsing, so a
+      # refusal inside the parser would otherwise leave nothing for the read loop below to open, and
+      # under `set -e` a failed redirection aborts the script before the `case` prints the token.
+      : > "$ERG_EMIT"
       # THE CALL SHAPE IS LOAD-BEARING under `set -e`: every refusal returns non-zero, and a bare
       # `ERG_VERDICT=$(…)` would abort the script before the `case` — fail-closed but MUTE, with no
       # `::error::` and no remedy ever printed. `|| ERG_RC=$?` lets every token reach the `case`.
@@ -1325,6 +1354,11 @@ case "$OP" in
       done < "$ERG_EMIT"
       case "$ERG_VERDICT" in
         dark)
+          # Token AND rc. `_ihdg_verdict` maps `dark` to rc 0; a `dark` with any other rc is a gate
+          # defect and is treated as one, never as a pass.
+          if [[ "$ERG_RC" -ne 0 ]]; then
+            echo "::error::2.0 REFUSED: the dark-host gate printed dark but exited rc=$ERG_RC — token and exit code disagree. This is a defect in the gate, not a host state — file an issue with this run URL; do not proceed."; exit 1
+          fi
           echo "::notice::2.0 dark-host arm PASSED — the dedicated host is positively dark on boot_id=$ERG_BOOT: probe row ${ERG_ROW_AGE}s old with flag=$ERG_FLAG, FSM heartbeat ${ERG_HB_AGE}s old with flag=$ERG_HB_FLAG. The dedicated host is intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault. No registry can double-fire from a host that cannot start — pre-flight clear." ;;
         unreadable)
           if [[ "$PROBE_RC" -ne 0 ]]; then
@@ -1355,14 +1389,19 @@ case "$OP" in
           fi
           exit 1 ;;
         flag_unreadable)
-          echo "::error::2.0 REFUSED (flag_unreadable): the dedicated host's cutover flag is neither pre-arm nor in the arm set — the emitter could not read it ('unknown') or it is mid-transition ('rollback'). Wait one probe period and re-dispatch op=execute."; exit 1 ;;
+          if [[ "$ERG_HB_FLAG" == "__UNREAD__" ]]; then
+            echo "::error::2.0 REFUSED (flag_unreadable): the dedicated host's newest HOURLY probe row (${ERG_ROW_AGE}s old) reads a cutover flag that is neither pre-arm nor in the arm set — the emitter could not read it ('unknown': a Doppler read failure, OR a host that has NEVER been armed and so has no INNGEST_CUTOVER_FLIP at all) or it is mid-transition ('rollback'). Mid-transition: wait for the next hourly probe row (<= 60 min) and re-dispatch op=execute. Never-armed host: this gate refuses it by design (positive allowlist); file an issue naming this run so the first execute on a fresh host can be planned — do NOT write the flag by hand."
+          else
+            echo "::error::2.0 REFUSED (flag_unreadable): the flip FSM's newest same-boot heartbeat (${ERG_HB_AGE}s old) reads a cutover flag that is neither pre-arm nor in the arm set ('${ERG_HB_FLAG}' — 'rollback' is mid-transition; 'unset' is a never-armed host). Mid-transition: re-dispatch op=execute in a few minutes (the FSM ticks every 30 s). Never-armed host: this gate refuses it by design; file an issue naming this run — do NOT write the flag by hand."
+          fi
+          exit 1 ;;
         fsm_silent)
-          echo "::error::2.0 REFUSED (fsm_silent): the probe row is dark but the flip FSM has not reported on THIS boot within $FLIP_LIVENESS_SINCE — freshness cannot be established. Re-dispatch op=execute after >= 15 min. A SECOND fsm_silent with the probe row still dark means inngest-cutover-flip.timer or Vector is down on a host the probe still sees: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the health workflow reads the probe stream, not the heartbeat, so it cannot supply that second reading). Do NOT SSH the host."; exit 1 ;;
+          echo "::error::2.0 REFUSED (fsm_silent): the probe row is dark but the flip FSM has not reported on THIS boot within the gate's 15-minute heartbeat bound — freshness cannot be established. Re-dispatch op=execute after >= 15 min. A SECOND fsm_silent with the probe row still dark means inngest-cutover-flip.timer or Vector is down on a host the probe still sees: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the health workflow reads the probe stream, not the heartbeat, so it cannot supply that second reading). Do NOT SSH the host."; exit 1 ;;
         fsm_unreadable)
           if [[ "$HB_RC" -ne 0 ]]; then
             _bs_read_remedy heartbeat "$HB_RC" "$HB_ERR" "$HB_ROWS"
           else
-            echo "::error::2.0 REFUSED (fsm_unreadable): the heartbeat read answered (rc=0) but its rows could not be graded — bytes that did not decode; two rows at the newest dt that disagree; same-boot heartbeat rows PRESENT but none parsed to an object (the FSM logs a JSON string, Vector ships it as a string, and Better Stack parses it at ingest — if that ingest-side parse stopped, this is a READ-PATH change on the warehouse, not a dead timer: do NOT replace the host for it); or a gate operand out of shape. File an issue with this run URL. Nothing was changed."
+            echo "::error::2.0 REFUSED (fsm_unreadable): the heartbeat read answered (rc=0) but its rows could not be graded — bytes that did not decode; two rows at the newest dt that disagree; or same-boot heartbeat rows PRESENT with none (or not the newest JSON-shaped one) parsed to an object. The FSM logs each heartbeat as a JSON string, Vector ships it as a string, and Better Stack parses it at ingest — so an unparsed JSON heartbeat is a READ-PATH change on the warehouse, not a dead timer: do NOT replace the host for it. (The FSM also logs plain-text lines under the same tag — VERIFY_FAILED, latch-unrecordable — those are skipped, never graded.) File an issue with this run URL. Nothing was changed."
           fi
           exit 1 ;;
         *)
@@ -1483,10 +1522,14 @@ case "$OP" in
       echo "quiesce check (LB-reachable host): UNREADABLE (no HTTP answer across ${QUIESCE_PROBES} probe(s)) — UNKNOWN, fail-closed"
     fi
     if [[ "$STILL_RUNNING" -gt 0 || "$UNKNOWN_COUNT" -gt 0 ]]; then
-      echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed). NO-SSH REMEDIATION: run 'gh workflow run cutover-inngest.yml --field op=quiesce-web' (stop+disables inngest across the host-set over the private net, no SSH), confirm it reports 'quiesced', then re-run op=execute. If UNKNOWN (000) the webhook was unreachable — check CF-Access/HMAC + the run log and re-dispatch. Arming the flip now could create a second live scheduler on prod Postgres. Do NOT SSH the host."
       if [[ "$STILL_RUNNING" -gt 0 ]]; then
-        echo "::notice::On the first execute of a cutover this is the designed stop and the run is red by design. op=quiesce-web STOPS production scheduling on both web hosts (it opens the maintenance window); dispatch it only when you can continue through op=arm in the same sitting — scheduled-inngest-health.yml auto-restarts the web scheduler within 15 minutes of seeing it down."
+        # THE WARNING COMES BEFORE THE VERB. An operator reads top-down; the remedy below names
+        # `op=quiesce-web`, and that op STOPS production scheduling for every user (crons and
+        # reminders) on both web hosts — it opens the maintenance window, with no reviewer gate of
+        # its own. Say so first, at warning level, and say what the sequence can and cannot do today.
+        echo "::warning::2.2: On the first execute of a cutover this is the designed stop and the run is red by design. op=quiesce-web STOPS production scheduling on both web hosts (it opens the maintenance window) and has no reviewer gate; scheduled-inngest-health.yml auto-restarts the web scheduler within 15 minutes of seeing it down (#8077). KNOWN GAP (#6921): a second op=execute after quiesce-web currently FAILS at 2.1 capture, because the capture enumerates the web scheduler you just stopped — the execute -> quiesce -> execute loop is not yet drivable end to end, and the capture file left by THIS run is the one a later op=rearm would replay (reminders armed between this capture and the quiesce are not in it). Do not dispatch op=quiesce-web until #6921 lands or you are prepared to run op=rollback to reopen scheduling."
       fi
+      echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed). NO-SSH REMEDIATION: run 'gh workflow run cutover-inngest.yml --field op=quiesce-web' (stop+disables inngest across the host-set over the private net, no SSH), confirm it reports 'quiesced', then re-run op=execute. If UNKNOWN (000) the webhook was unreachable — check CF-Access/HMAC + the run log and re-dispatch. Arming the flip now could create a second live scheduler on prod Postgres. Do NOT SSH the host."
       exit 1
     fi
     echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11). op=quiesce-web (when run) now stop+disables web-2's scheduler too (an ACT), but CI still cannot VERIFY web-2 AND web-2's local reminders were never captured — the MANDATORY web-2 freeze/recreate step in the SEAM below is NOT superseded; do NOT read a green op=quiesce-web as 'web-2 handled'."
@@ -1802,6 +1845,7 @@ case "$OP" in
     if [[ "${#HOSTS[@]}" -lt 1 ]]; then
       echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
     fi
+    echo "::warning::quiesce-web: this STOPS production scheduling (every user's crons and reminders) on host-set [$CUTOVER_HOSTS] — the maintenance window opens NOW. scheduled-inngest-health.yml will auto-restart the web scheduler within ~15 minutes (#8077); a second op=execute currently fails at 2.1 capture against the stopped scheduler (#6921). If you did not mean to open the window, dispatch op=rollback."
     echo "::notice::quiesce-web: stop+disabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — no-SSH remediation for the 2.2 gate"
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
