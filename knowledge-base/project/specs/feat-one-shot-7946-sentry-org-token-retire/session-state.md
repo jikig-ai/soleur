@@ -73,3 +73,9 @@ No `curl:` usage error, no HTTP 000, no 401/403. Every Sentry-calling script rea
 - Dry run (T9): `agent-browser` path and MCP `--from-file` path both byte-identical to the sentinel; `gh secret set … --no-store` ciphertext 89 bytes == computed 89; trap removed the directory; nothing written; absent `--from-file` fails loud.
 - W1: `actions-read-prd` (slug `actions-read-prd-fc548f`) minted headed; the operator cleared login + 2FA (the sanctioned handoff); the form had no human gate. No auto-issued token — created one via *New Token*; panel holds exactly one.
 - W2: stored via the chain; `.auth.scopes == [event:read, org:read, project:read]`; every consumer endpoint 200 (6031's monitor absent by design). Post-mint table in `phase-0-scope-probe.md`.
+
+### Phase 4 / 5.1 (2026-09-11)
+- W5: filing gate (`wg-defer-only-after-inline-triage`, hook-enforced) refused the rotate-x defect as inline-sized (2 lines / 1 file) → fixed inline in `scripts/rotate-x-api-secret-bootstrap.sh`; the revocation deferral filed as **#8090** (Mandated-By `wg-block-pr-ready-on-undeferred-operator-steps`).
+- ADR-031 amended (fourth class, store discriminator, DC-3 record); post-mortem addendum appended (0 deletions); DC-3 RESOLUTION appended (0 deletions); PA-8 §(g) bracket + compliance-posture row; `lint-legal-registers.sh` green; C4 parity green with no diagram diff.
+- `origin/main` moved 5 commits during the run (incl. #8023 on the same Rule D baseline); merged in at `c3157a460`, no conflicts; refusal suite 68/68, vacuity meta-guard 23/23, Guard 1 clean live, AC-5 `comm` = 0 after the merge.
+- AC-1…AC-24 walked with their literal commands (AC-9 = the shard gate; AC-22 = the 3.3e table above): all hold. Amendments recorded in the plan: AC-11 (read-construct anchor), AC-12 (13 enumerated failure modes), AC-21 (one deferral + inline fix), AC-24 (`g3_run` helper).
