@@ -181,17 +181,51 @@ Class D candidates as *unresolved*, never as clean.
 
 Two different things drift here, and they have two different detectors.
 
-**Alert-rule fidelity** — `.github/workflows/scheduled-sentry-alert-drift.yml`,
-daily, Inngest-dispatched per ADR-033. It runs
-`scripts/sentry-alert-live-fidelity.sh`: one read-only GET against the
-non-deprecated workflows endpoint, diffed field-by-field against the committed
-capture at
-`knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json`.
-It detects deletion, `enabled:false`, name drift, changed
-`comparison.{value,interval}`, changed `tagged_event`, a `logicType` flip and a
-`monitor_ids` unbind — for all 27, not the 4 that
-`assert-byok-rules-exist.sh` covers. This exists because a migrated rule can go
-dark weeks later: still present, still planning clean, matching nothing.
+**Alert-rule fidelity** — `scripts/sentry-alert-live-fidelity.sh`: one
+read-only GET against the non-deprecated workflows endpoint, diffed
+field-by-field against a reference **projected from the Terraform plan** by
+`tests/scripts/lib/sentry-alert-projection.jq` (#8050). It detects deletion,
+`enabled:false`, name drift, changed `comparison.{value,interval}`, changed
+`tagged_event`, a multi-trigger `logicType` flip, a `monitor_ids` unbind, and
+a live in-scope rule the root does not declare — for every `sentry_alert`, not
+the 4 that `assert-byok-rules-exist.sh` covers. This exists because a migrated
+rule can go dark weeks later: still present, still planning clean, matching
+nothing. It runs at two sites with two references:
+
+- **Post-apply**, in `apply-sentry-infra.yml`: the plan step projects the plan
+  it is about to apply into `${RUNNER_TEMP}/sentry-alert-reference.json` and
+  the probe reads that. A divergence right after the apply is therefore live
+  state Terraform does not own, or evidence the apply did not do what it
+  reported — true by construction. **Do not "fix" the apply job to read the
+  committed file below**: that coupling is what redded `main` after a complete
+  apply (run 34491157462) — a rule cannot be captured before it is applied.
+- **Daily**, in `scheduled-sentry-alert-drift.yml` (Inngest-dispatched per
+  ADR-033): the probe reads the committed `alert-reference.json` in this
+  directory, which exists ONLY because the daily job has no Terraform access.
+  `scripts/sentry-alert-reference-gate.sh` in `plan_pr` holds it equal to the
+  plan at PR time, so it cannot merge stale under the strict up-to-date policy.
+
+**Adding or editing a rule = a resource block + a regenerated
+`alert-reference.json`.** From this directory, after the Local invocation
+triplet above:
+
+```bash
+terraform plan -input=false -out=/var/tmp/sentry.tfplan
+terraform show -json /var/tmp/sentry.tfplan > /var/tmp/sentry-plan.json
+jq -S --arg side tf -f ../../../../tests/scripts/lib/sentry-alert-projection.jq \
+  /var/tmp/sentry-plan.json > alert-reference.json
+```
+
+If you forget, the gate reds the PR with the leaf-level diff, prints the exact
+expected file into the step summary, and uploads it as the artifact
+`sentry-alert-reference-expected-<run-id>`. Two normalisations live in the
+module and nowhere else: lifecycle triggers (`{}` in the provider,
+`comparison: true` live) and trigger `logicType`, which the provider hard-codes
+to `any-short` on every write while imported single-trigger rules still read
+`all` — single-trigger rules project a constant on both sides. The Phase 2 and
+Phase 3.4 captures under `knowledge-base/project/specs/fix-7650-sentry-alert-migration/`
+are history (the adoption record and `sentry-adoption-plan-assert.sh`'s
+self-skipping bijection input), not the probe's reference.
 
 **Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
 matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
