@@ -258,15 +258,33 @@ HOLD
 # same basename in different directories would collapse into one line and silently narrow the
 # binding, which is the same fail-open the floor exists to catch.
 #
-# Usage:  git_data_rung2_user_data_sha256 <cloud-init-git-data.yml>
-#         # prints the 64-hex hash on stdout and returns 0; on failure prints a
-#         # fail-closed ABORT diagnostic on stdout and returns 1.
-git_data_rung2_user_data_sha256() {
+# ── ONE DERIVATION, TWO CONSUMERS (#8043 NFR2 / Guard 4) ─────────────────────────────
+#
+# The enumeration below used to be the first half of git_data_rung2_user_data_sha256. It is
+# now its own function because a SECOND consumer arrived: the evidence-provenance guard
+# (git_data_rung2_evidence_provenance_gate) needs the same 13-file roster the hash binds —
+# and needs it to be the SAME walk, not a second list that agrees today. A provenance guard
+# over a hand-listed subset passes the moment a payload is bound that the list does not name,
+# which is the "attests a byte set that is not what ships" class one function over. The hash
+# consumes this function's output; so does the guard; there is nothing else to drift.
+#
+# The split is HASH-NEUTRAL by construction: every ABORT check that used to run before the
+# hash loop still runs here, in the same order, with the same messages, and the hash function
+# below hashes exactly the lines this prints. Measured on the live tree at the split:
+# bbe1a1426667ee8898f1883505f95aca8fe6e723b639cb5900e9b3560cedbb1a before and after.
+#
+# Usage:  git_data_rung2_bound_files <cloud-init-git-data.yml>
+#         # prints the ABSOLUTE path of every file that composes user_data, one per line —
+#         # the template, the render module's .tf/.tf.json files, and every file()-bound
+#         # payload — and returns 0; on failure prints a fail-closed ABORT diagnostic on
+#         # stdout and returns 1. Order: template, main.tf, siblings (glob order), payloads
+#         # (sorted). The hash sorts its own lines, so this order is not load-bearing there.
+git_data_rung2_bound_files() {
   local cloud_init="${1:-}"
   local tf_dir module_dir module_tf _inputs=() _f _n_uniq
 
   if [[ -z "$cloud_init" || ! -f "$cloud_init" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is nothing to hash."
+    echo "git_data_rung2_bound_files: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is nothing to hash."
     return 1
   fi
 
@@ -274,7 +292,7 @@ git_data_rung2_user_data_sha256() {
   module_dir="${tf_dir}/modules/git-data-userdata"
   module_tf="${module_dir}/main.tf"
   if [[ ! -r "$module_tf" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — cannot read ${module_tf}, so the payload set backing the evidence hash is unknown. The render module is where the templatefile map lives (#7025 R7); if it moved again, this derivation and every consumer of it must move with it. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — cannot read ${module_tf}, so the payload set backing the evidence hash is unknown. The render module is where the templatefile map lives (#7025 R7); if it moved again, this derivation and every consumer of it must move with it. Fail-closed."
     return 1
   fi
 
@@ -318,7 +336,7 @@ git_data_rung2_user_data_sha256() {
   # "deleted, and the hash correctly reflects it" from "present but unenumerable", so the
   # unreadable-directory case has to refuse before the loop runs.
   if [[ ! -r "$module_dir" || ! -x "$module_dir" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — the render module directory '${module_dir}' cannot be listed (needs both read and execute). Its Terraform files would be silently omitted from the hash, producing a well-formed digest over a NARROWER set than ships. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — the render module directory '${module_dir}' cannot be listed (needs both read and execute). Its Terraform files would be silently omitted from the hash, producing a well-formed digest over a NARROWER set than ships. Fail-closed."
     return 1
   fi
   #
@@ -345,7 +363,7 @@ git_data_rung2_user_data_sha256() {
     [[ -e "$_f" || -L "$_f" ]] || continue
     [[ "$_f" == "$module_tf" ]] && continue
     if [[ ! -r "$_f" ]]; then
-      echo "git_data_rung2_user_data_sha256: ABORT — module Terraform file '${_f}' cannot be read (present and unreadable, or a dangling symlink), so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
+      echo "git_data_rung2_bound_files: ABORT — module Terraform file '${_f}' cannot be read (present and unreadable, or a dangling symlink), so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
       return 1
     fi
     _inputs+=("$_f")
@@ -465,7 +483,7 @@ git_data_rung2_user_data_sha256() {
   local _n_tf
   _n_tf=$(printf '%s\n' "$_shape_src" | grep -oE 'templatefile\(' | wc -l | tr -d '[:space:]')
   if [[ "$_n_tf" != "1" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} contains ${_n_tf} \`templatefile(\` occurrence(s); the canonical shape has exactly 1. A second template renders into user_data and is invisible to the payload extractor, so the evidence digest would attest a byte set that is not what ships. Restore the canonical single-template shape, or extend this gate deliberately. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf} contains ${_n_tf} \`templatefile(\` occurrence(s); the canonical shape has exactly 1. A second template renders into user_data and is invisible to the payload extractor, so the evidence digest would attest a byte set that is not what ships. Restore the canonical single-template shape, or extend this gate deliberately. Fail-closed."
     return 1
   fi
   #     The argument must be a strict single-line "${path.module}/…" literal — the SAME form
@@ -487,7 +505,7 @@ git_data_rung2_user_data_sha256() {
   #     catches. A filename pin would assert a different property — identity, not
   #     admissibility — and would buy the digest nothing.
   if ! printf '%s\n' "$_shape_src" | grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"'; then
-    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
     return 1
   fi
 
@@ -509,7 +527,7 @@ git_data_rung2_user_data_sha256() {
   # strict-form occurrences anywhere in the module.
   _n_strict=$(printf '%s\n' "$_shape_src" | grep -oE '(^|[^A-Za-z])file[a-z0-9]*\("\$\{path\.module\}/[^"]+"' | grep -vc 'templatefile(' || true)
   if [[ "$_n_occ" != "$_n_strict" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} has ${_n_occ} \`file\`-family occurrence(s) but only ${_n_strict} in the strict single-line \"\${path.module}/…\" form. The remainder render into user_data while the extractor cannot see them, so the evidence digest would not move when they change. Offending site(s), as line:content in ${module_tf}:"
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf} has ${_n_occ} \`file\`-family occurrence(s) but only ${_n_strict} in the strict single-line \"\${path.module}/…\" form. The remainder render into user_data while the extractor cannot see them, so the evidence digest would not move when they change. Offending site(s), as line:content in ${module_tf}:"
     _nonstrict_file_sites | sed 's/^/  /'
     echo "git_data_rung2_user_data_sha256: restore the canonical form, or extend this gate deliberately. Fail-closed."
     return 1
@@ -519,7 +537,7 @@ git_data_rung2_user_data_sha256() {
   while IFS= read -r _f; do
     [[ -n "$_f" ]] || continue
     if [[ ! -r "${module_dir}/${_f}" ]]; then
-      echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} references payload '${_f}', but '${module_dir}/${_f}' cannot be read (absent, or present and unreadable). That payload renders into user_data, so hashing without it would bind the evidence to fewer files than ship. Fail-closed."
+      echo "git_data_rung2_bound_files: ABORT — ${module_tf} references payload '${_f}', but '${module_dir}/${_f}' cannot be read (absent, or present and unreadable). That payload renders into user_data, so hashing without it would bind the evidence to fewer files than ship. Fail-closed."
       return 1
     fi
     _inputs+=("${module_dir}/${_f}")
@@ -542,13 +560,36 @@ git_data_rung2_user_data_sha256() {
   # bindings from main.tf leaves every REMAINING reference resolving perfectly while the hash
   # binds four files fewer than ship.
   if [[ "$_n_payloads" -lt 9 ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — the payload extraction from ${module_tf} resolved only ${_n_payloads} payload(s); ship binds 9. The extraction drifted, or bindings were removed. If the payload set legitimately grew or shrank, the floor literal in git_data_rung2_user_data_sha256() is where the new count belongs. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — the payload extraction from ${module_tf} resolved only ${_n_payloads} payload(s); ship binds 9. The extraction drifted, or bindings were removed. If the payload set legitimately grew or shrank, the floor literal in git_data_rung2_bound_files() is where the new count belongs. Fail-closed."
     return 1
   fi
 
   _n_uniq="$(printf '%s\n' "${_inputs[@]}" | while IFS= read -r _f; do basename "$_f"; done | LC_ALL=C sort -u | wc -l)"
   if [[ "$_n_uniq" -ne "${#_inputs[@]}" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — the ${#_inputs[@]} user_data inputs carry only ${_n_uniq} distinct basenames. The hash is basename-keyed for path invariance, so a collision would silently bind the evidence to fewer files than ship. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — the ${#_inputs[@]} user_data inputs carry only ${_n_uniq} distinct basenames. The hash is basename-keyed for path invariance, so a collision would silently bind the evidence to fewer files than ship. Fail-closed."
+    return 1
+  fi
+
+  printf '%s\n' "${_inputs[@]}"
+  return 0
+}
+
+# Usage:  git_data_rung2_user_data_sha256 <cloud-init-git-data.yml>
+#         # prints the 64-hex hash on stdout and returns 0; on failure prints a
+#         # fail-closed ABORT diagnostic on stdout and returns 1.
+git_data_rung2_user_data_sha256() {
+  local cloud_init="${1:-}"
+  local _roster _inputs=() _f
+  # EVERY refusal lives in the enumeration; this function only hashes what it is handed.
+  if ! _roster="$(git_data_rung2_bound_files "$cloud_init")"; then
+    printf '%s\n' "$_roster"
+    return 1
+  fi
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] && _inputs+=("$_f")
+  done <<<"$_roster"
+  if [[ "${#_inputs[@]}" -eq 0 ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — the bound-file enumeration returned 0 inputs without refusing. Hashing nothing would produce a well-formed digest of an empty set. Fail-closed."
     return 1
   fi
 
@@ -615,6 +656,238 @@ git_data_rung2_user_data_sha256() {
 # inference is closed by git_data_authorization_map_gate, a STATIC assertion over the
 # production root which needs no rehearsal to run — see the head of this file.
 GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey"
+
+# ── GUARD 4 (#8043 NFR2): A VOIDED ATTESTATION CANNOT BE MADE TO LOOK FRESH ──────────
+#
+# THE PROPERTY. git-data-rung2-boot-evidence.env is never MODIFIED in the same change as any
+# of the hash-bound files it attests. It may be DELETED in such a change (this batch's own
+# shape: the attestation is void, and deleting the file says so), or CREATED by a rehearsal
+# PR that touches none of them.
+#
+# WHY THE GATE BELOW CANNOT SEE THIS ON ITS OWN. git_data_rung2_rehearsal_gate binds the
+# evidence to the template by hash, and that binding is what makes a stale attestation
+# self-invalidating. It does NOT bind the evidence to a REHEARSAL: its only provenance check
+# is that RUNG2_EVIDENCE_URL is shaped like an Actions run URL for this repo — it never
+# fetches the run. So a change that edits a payload and hand-edits RUNG2_TEMPLATE_SHA256 to
+# the moved digest, leaving the URL alone, is hash-VALID evidence citing a rehearsal that
+# never booted the shipped bytes. The hash says "fresh"; the attestation is void; the birth
+# route releases. This guard makes that shape a HOLD.
+#
+# ONE DERIVATION. The roster this guard quantifies over is git_data_rung2_bound_files — the
+# SAME walk the hash consumes — so the set the guard watches cannot drift from the set the
+# digest binds. That is the reason the enumeration was split out of the hash function.
+#
+# TWO ARMS, ONE FUNCTION, ONE INTERSECTION.
+#
+#   birth  (ARM 1, BLOCKING) — wired INSIDE git_data_rung2_rehearsal_gate, so every caller
+#          of that gate gets it for free: the birth job (apply-web-platform-infra.yml
+#          git-data-host-create), the rehearsal route, and the CI freshness step. It inspects
+#          the ONE commit that last touched the evidence (`git log -1 -- <evidence>`) and
+#          HOLDs if that commit also touched any bound file (`git diff-tree --no-commit-id
+#          --name-only -r --root -m <sha>`). `--root` is load-bearing: without it a root
+#          commit diffs as NOTHING, so the one commit that provably touched all fourteen
+#          files would intersect as empty. `-m` makes a merge commit diff against each
+#          parent rather than as nothing, which over-approximates toward HOLD.
+#   range  (ARM 2, ADVISORY) — the same intersection over `git diff --name-only
+#          --diff-filter=AM <range>`, for a CI step that sees the whole PR before it merges.
+#          A DELETION of the evidence is the permitted shape and is deliberately outside the
+#          filter. It runs in infra-validation.yml's deploy-script-tests job, which is not a
+#          required check — a visible red, not a merge gate.
+#
+# FAIL-CLOSED ON EVERYTHING IT CANNOT MEASURE, and every such case is NAMED, because "could
+# not measure" and "measured clean" must never share a message:
+#   - a SHALLOW checkout (`git rev-parse --is-shallow-repository` = true). Provenance cannot
+#     be read from a depth-1 clone, and actions/checkout is depth-1 unless told otherwise.
+#     This is what makes forgetting `fetch-depth: 0` on the birth job fail CLOSED (a HOLD
+#     naming the shallow clone) rather than open (a pass over history it could not see).
+#   - the evidence has no commit at all (untracked, or never committed): there is no
+#     provenance to read. This is also what an operator hits running the gate on a freshly
+#     downloaded evidence file BEFORE committing it — commit it alone, then re-run.
+#   - the evidence differs from its committed state (a working-tree edit): the commit that
+#     `git log` names is not the bytes the gate is reading.
+#   - a range whose base does not resolve — including the all-zeros branch-create sentinel
+#     that `github.event.before` carries on a first push. `git diff` against it FAILS and
+#     prints nothing, which a naive reader takes for "no changes". It is a HOLD, and it is
+#     worded so it cannot be mistaken for the empty-diff pass.
+#   - a roster below its structural floor. The enumeration yields at least 11 entries by
+#     construction (template + main.tf + the 9-payload floor), so fewer means the derivation
+#     itself broke — and an empty roster intersects as empty, which would be a fail-open.
+#   - a bound file outside the evidence's repository (no shared toplevel): the paths cannot
+#     be compared, so nothing was measured.
+#
+# COMPARED BY REPO-RELATIVE PATH, derived from `git rev-parse --show-toplevel` of the
+# evidence's own directory and each input's PHYSICAL path — never from the caller's cwd or
+# `--show-prefix` of wherever the caller happens to stand. Production calls this with
+# ${GITHUB_WORKSPACE}/… ; the suite calls it from a temp dir; a laptop calls it from anywhere.
+#
+# RESIDUAL, STATED SO NOBODY READS THIS AS A PROOF. ARM 1 inspects ONE commit. A PR that
+# edits a bound file in commit A and the hash in commit B and lands by REBASE-MERGE (all
+# three merge methods are enabled on this repo) presents an evidence commit touching only
+# the evidence, and passes ARM 1; only ARM 2 sees it, pre-merge, and ARM 2 is advisory.
+# Closing that requires resolving the run RUNG2_EVIDENCE_URL names and binding its head SHA
+# — #8010's scope, not this guard's. This is the structural mitigation for the single-commit
+# shape (squash, the one-shot pipeline's default), and it says so.
+#
+# Usage:  git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> [birth]
+#         git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> range <rev>...
+#         # 0=PASS, 1=HOLD. One line on stdout naming the verdict and its reason. <rev>... is
+#         # handed to `git diff` verbatim: `origin/main...HEAD`, or `<before> HEAD`.
+
+# _git_data_repo_rel <path> <toplevel> — the repo-relative form of <path>, whose DIRECTORY
+# must exist (the file itself need not: a deleted evidence file still has a repo path).
+# Physical (`cd -P`) so `${module_dir}/../../name` and a symlinked checkout both normalise
+# to what git prints. Returns 1 when <path> is not under <toplevel>.
+_git_data_repo_rel() {
+  local _p="$1" _top="$2" _d _full
+  _d="$(cd -P "$(dirname "$_p")" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "$_d" && "${_d}/" == "${_top}/"* ]] || return 1
+  _full="${_d}/$(basename "$_p")"
+  # Parameter expansion, not sed: the toplevel is a path, and a path is not a regex.
+  printf '%s\n' "${_full#"${_top}"/}"
+}
+
+git_data_rung2_evidence_provenance_gate() {
+  local cloud_init="${1:-}" evidence="${2:-}" mode="${3:-birth}"
+  local _me="git_data_rung2_evidence_provenance_gate"
+  local _n=$#
+  if [[ "$_n" -ge 3 ]]; then shift 3; else shift "$_n"; fi   # "$@" is now <rev>... (range only)
+
+  if [[ -z "$cloud_init" || ! -f "$cloud_init" ]]; then
+    echo "${_me}: HOLD — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is no bound-file roster to compare against."
+    return 1
+  fi
+  if [[ -z "$evidence" ]]; then
+    echo "${_me}: HOLD — no evidence path supplied. Fail-closed."
+    return 1
+  fi
+  case "$mode" in
+    birth|range) ;;
+    *) echo "${_me}: HOLD — unknown mode '${mode}' (expected 'birth' or 'range'). Fail-closed: a misspelt arm must not select the more permissive one."; return 1 ;;
+  esac
+
+  # THE ROSTER, from the one derivation. Every ABORT in the enumeration is a HOLD here.
+  local _roster _bound=() _f
+  if ! _roster="$(git_data_rung2_bound_files "$cloud_init")"; then
+    echo "${_me}: HOLD — the bound-file roster could not be derived, so no provenance was measured. ${_roster}"
+    return 1
+  fi
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] && _bound+=("$_f")
+  done <<<"$_roster"
+  if [[ "${#_bound[@]}" -lt 11 ]]; then
+    echo "${_me}: HOLD — the derived bound-file roster has only ${#_bound[@]} entries; the enumeration yields at least 11 by construction (template + main.tf + the 9-payload floor). The derivation is broken, and an empty roster intersects as empty — which would release. Fail-closed."
+    return 1
+  fi
+
+  # THE REPOSITORY, from the evidence's own directory — never the cwd.
+  local _ev_dir _top
+  _ev_dir="$(dirname "$evidence")"
+  if [[ ! -d "$_ev_dir" ]]; then
+    echo "${_me}: HOLD — the evidence directory '${_ev_dir}' does not exist, so there is no repository to read provenance from. Fail-closed."
+    return 1
+  fi
+  if ! _top="$(git -C "$_ev_dir" rev-parse --show-toplevel 2>/dev/null)" || [[ -z "$_top" ]]; then
+    echo "${_me}: HOLD — '${_ev_dir}' is not inside a git work tree, so the evidence has no readable provenance. Fail-closed."
+    return 1
+  fi
+  local _shallow
+  _shallow="$(git -C "$_top" rev-parse --is-shallow-repository 2>/dev/null || echo unknown)"
+  if [[ "$_shallow" != "false" ]]; then
+    echo "${_me}: HOLD — SHALLOW CHECKOUT (is-shallow-repository=${_shallow}). Provenance cannot be read from a clone that does not carry the commit history; actions/checkout is depth-1 unless the step sets fetch-depth: 0. Fail-closed rather than passing over history this gate could not see."
+    return 1
+  fi
+
+  # REPO-RELATIVE PATHS for the evidence and every bound file.
+  local _ev_rel _b _rel _bound_rel=()
+  if ! _ev_rel="$(_git_data_repo_rel "$evidence" "$_top")"; then
+    echo "${_me}: HOLD — the evidence path '${evidence}' is outside the repository at ${_top}. Fail-closed."
+    return 1
+  fi
+  for _b in "${_bound[@]}"; do
+    if ! _rel="$(_git_data_repo_rel "$_b" "$_top")"; then
+      echo "${_me}: HOLD — bound file '${_b}' is outside the evidence's repository (${_top}), so its provenance cannot be compared with the evidence's. Nothing was measured. Fail-closed."
+      return 1
+    fi
+    _bound_rel+=("$_rel")
+  done
+
+  # THE CHANGED SET, per arm.
+  local _changed="" _sha=""
+  if [[ "$mode" == "birth" ]]; then
+    if [[ ! -f "$evidence" ]]; then
+      echo "${_me}: HOLD — no evidence file at ${evidence}. Fail-closed."
+      return 1
+    fi
+    # UNTRACKED and DIRTY are told apart, because their remedies differ: an untracked file
+    # is the operator running the gate on a freshly downloaded evidence file before the
+    # commit (commit it alone, then re-run); a dirty tracked file is an edit on top of a
+    # commit (revert it, or land it alone). Both are refused.
+    if [[ -z "$(git -C "$_top" ls-files -- "$_ev_rel" 2>/dev/null)" ]]; then
+      echo "${_me}: HOLD — ${_ev_rel} is not tracked, so no commit touches it and its provenance cannot be read. Commit the evidence in a commit that touches ONLY the evidence, then re-run. Fail-closed."
+      return 1
+    fi
+    if [[ -n "$(git -C "$_top" status --porcelain -- "$_ev_rel" 2>/dev/null)" ]]; then
+      echo "${_me}: HOLD — ${_ev_rel} differs from its committed state (an uncommitted edit). The bytes this gate would read are not the bytes any commit attests, so there is no provenance to check. Revert the edit, or land it in a commit that touches ONLY the evidence, then re-run. Fail-closed."
+      return 1
+    fi
+    _sha="$(git -C "$_top" log -1 --format=%H -- "$_ev_rel" 2>/dev/null || true)"
+    if [[ ! "$_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "${_me}: HOLD — no commit touches ${_ev_rel} (git log -1 returned '${_sha}'), so its provenance cannot be read. Fail-closed."
+      return 1
+    fi
+    if ! _changed="$(git -C "$_top" diff-tree --no-commit-id --name-only -r --root -m --no-renames "$_sha" 2>/dev/null)"; then
+      echo "${_me}: HOLD — could not list the files touched by ${_sha}, the commit that last modified ${_ev_rel}. Fail-closed."
+      return 1
+    fi
+  else
+    if [[ "$#" -eq 0 ]]; then
+      echo "${_me}: HOLD — range mode was called with no range. Fail-closed: an absent range is not an empty diff."
+      return 1
+    fi
+    local _rev
+    for _rev in "$@"; do
+      if [[ "$_rev" == *0000000000000000000000000000000000000000* ]]; then
+        echo "${_me}: HOLD — the range names the all-zeros branch-create sentinel ('${_rev}'), so the base is unresolvable. \`git diff\` against it fails and prints nothing, which is NOT an empty diff. Fail-closed."
+        return 1
+      fi
+    done
+    if ! _changed="$(git -C "$_top" diff --name-only --diff-filter=AM --no-renames "$@" -- 2>/dev/null)"; then
+      echo "${_me}: HOLD — the range '$*' does not resolve in ${_top} (a missing base, an unfetched ref, or a merge base a shallow history cannot reach). Nothing was measured. Fail-closed."
+      return 1
+    fi
+    local _ev_in_range=0 _c
+    while IFS= read -r _c; do
+      [[ "$_c" == "$_ev_rel" ]] && _ev_in_range=1
+    done <<<"$_changed"
+    if [[ "$_ev_in_range" -eq 0 ]]; then
+      echo "${_me}: PASS — ${_ev_rel} is untouched (not added or modified) in range '$*'; a deletion is the permitted shape and is not in the filter. Bound-file edits without an evidence edit are the STALE EVIDENCE case, which the rehearsal gate's hash check reports."
+      return 0
+    fi
+  fi
+
+  # THE INTERSECTION. Same loop for both arms.
+  local _hits="" _c
+  while IFS= read -r _c; do
+    [[ -n "$_c" ]] || continue
+    for _rel in "${_bound_rel[@]}"; do
+      [[ "$_c" == "$_rel" ]] && _hits+="${_c} "
+    done
+  done <<<"$_changed"
+  if [[ -n "$_hits" ]]; then
+    if [[ "$mode" == "birth" ]]; then
+      echo "${_me}: HOLD — VOIDED ATTESTATION. ${_ev_rel} was last modified in commit ${_sha}, which also changed hash-bound input(s): ${_hits}. An evidence file edited in the same change as the bytes it attests is not a rehearsal record of those bytes — the rehearsal ran on the bytes BEFORE the edit, if it ran at all — and the URL-shape check cannot tell the difference. The permitted shapes are: delete the evidence in a change that edits bound files (the birth then HOLDs for lack of evidence, honestly), or create it in a rehearsal change that edits none. Re-run the rung-2 rehearsal against the current tree and land its evidence in its own commit. Fail-closed."
+    else
+      echo "${_me}: HOLD — VOIDED ATTESTATION. Range '$*' adds or modifies ${_ev_rel} AND changes hash-bound input(s): ${_hits}. An evidence file edited alongside the bytes it attests is not a rehearsal record of those bytes. Either delete the evidence in this change (the birth then HOLDs honestly) or land the rehearsal's evidence in its own change that touches none of the bound files."
+    fi
+    return 1
+  fi
+  if [[ "$mode" == "birth" ]]; then
+    echo "${_me}: PASS — ${_ev_rel} was last modified in commit ${_sha}, which touched none of the ${#_bound_rel[@]} hash-bound inputs."
+  else
+    echo "${_me}: PASS — range '$*' modifies ${_ev_rel} and none of the ${#_bound_rel[@]} hash-bound inputs (a rehearsal-PR shape)."
+  fi
+  return 0
+}
 
 # Usage:  git_data_rung2_rehearsal_gate <cloud-init-git-data.yml> [evidence-file]
 #         # 0=RELEASED, 1=HOLD
@@ -800,7 +1073,26 @@ HOLD
     return 1
   fi
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence}. NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  # ── GUARD 4, ARM 1 (#8043 NFR2): the evidence's own provenance, checked AFTER the hash ──
+  #
+  # A hash match says the evidence names the bytes that would ship. It does not say a
+  # rehearsal ever booted them: a payload edit plus a hand-edited RUNG2_TEMPLATE_SHA256 in the
+  # same commit matches perfectly. So the last question is who wrote the evidence — the ONE
+  # commit that last touched it must have touched none of the inputs it attests.
+  #
+  # AFTER the hash, deliberately. A stale hash and a voided attestation are different defects
+  # with different remedies; the hash check's STALE EVIDENCE message is the one an ordinary
+  # payload PR should see, and this arm speaks only once the hash has nothing left to say —
+  # which is exactly when the forged shape would otherwise release. Every refusal below is
+  # fail-closed and named (shallow clone, uncommitted evidence, unresolvable commit); see the
+  # function's header for the full list and for the rebase-merge residual that is #8010's.
+  local _prov_out
+  if ! _prov_out="$(git_data_rung2_evidence_provenance_gate "$cloud_init" "$evidence" birth)"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — the evidence is hash-valid but its provenance refuses it. ${_prov_out}"
+    return 1
+  fi
+
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
 }
 

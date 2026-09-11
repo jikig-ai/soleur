@@ -1548,6 +1548,59 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+      # (#8043 NFR2 / Guard 4, ARM 2) THE EVIDENCE-PROVENANCE GUARD, PR-RANGE ARM.
+      #
+      # git-data-rung2-boot-evidence.env must never be ADDED or MODIFIED in the same change as
+      # any of the 13 hash-bound files it attests; it may only be DELETED there, or created by
+      # a rehearsal PR that touches none of them. The freshness step below cannot see this: a
+      # payload edit plus a hand-edited RUNG2_TEMPLATE_SHA256 is hash-valid evidence citing a
+      # rehearsal that never booted the shipped bytes. This step intersects the PR's added-or-
+      # modified set with the roster the hash binds (ONE derivation —
+      # git_data_rung2_bound_files — so the two cannot drift), and reds on a hit.
+      #
+      # ADVISORY, IN THE WORDS THIS FILE ALREADY USES: `deploy-script-tests` is NOT in
+      # scripts/required-checks.txt, so a RED row in THIS job does not block a merge. The
+      # BLOCKING arm of the same guard (ARM 1) runs inside git_data_rung2_rehearsal_gate at
+      # the birth job, the rehearsal route and the freshness step below — this step is the
+      # early warning that fires on the PR, before a birth burns an environment approval.
+      # Its residual is stated in the gate's header: a bound-file edit in one commit and the
+      # hash in another, landed by rebase-merge, is visible ONLY here (#8010's scope).
+      #
+      # THE RANGE MIRRORS `detect-changes` EXACTLY — `origin/${BASE_REF}...HEAD` on
+      # pull_request, `$BEFORE_SHA HEAD` on push — and the gate HOLDs on an unresolvable base
+      # (the all-zeros branch-create sentinel, a force-pushed-away base): "running too much
+      # costs CI minutes; running nothing costs the guarantee". This job's checkout is already
+      # fetch-depth: 0 (see its checkout step), which the `...` merge-base form needs.
+      # workflow_dispatch has no range and no PR; the guard reports that and passes.
+      - name: Rung-2 evidence provenance (ADVISORY — never modified alongside a hash-bound file)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          # Empty on pull_request; on push it is the pre-push tip (all-zeros on branch create).
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source tests/scripts/lib/git-data-birth-readiness-gate.sh
+          CI_YML=apps/web-platform/infra/cloud-init-git-data.yml
+          EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "workflow_dispatch has no commit range; the provenance guard has nothing to intersect (its blocking arm runs at the birth)."
+            exit 0
+          fi
+          # THE CAPTURE IS `rc=0; cmd || rc=$?`: under -e an unguarded call aborts the step
+          # at the call and the annotation below never prints.
+          rc=0
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            git_data_rung2_evidence_provenance_gate "$CI_YML" "$EV" range "$BEFORE_SHA" HEAD || rc=$?
+          else
+            git_data_rung2_evidence_provenance_gate "$CI_YML" "$EV" range "origin/${BASE_REF}...HEAD" || rc=$?
+          fi
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::rung-2 evidence provenance HOLD (advisory in this job; blocking at the birth). This change adds or modifies ${EV} in the same range as a file the evidence's hash binds — or the range could not be resolved. A voided attestation must be DELETED, not refreshed by hand; a real rehearsal lands its evidence in its own change. See the gate's message above."
+            exit 1
+          fi
+
       # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
       #
       # The gate has exactly ONE non-test call site: the birth job. So today a payload edit

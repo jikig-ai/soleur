@@ -431,9 +431,11 @@ jobs:
               echo '```bash'
               echo "gh run download ${GITHUB_RUN_ID} -n git-data-rung2-boot-evidence"
               echo "mv git-data-rung2-boot-evidence.env apps/web-platform/infra/"
+              echo "# (#8043 Guard 4) COMMIT FIRST, ALONE: the gate's provenance arm reads the evidence's own commit and HOLDs on an untracked file or on a commit that also touches a hash-bound file."
+              echo "git checkout -b evidence-git-data-rung2 && git add apps/web-platform/infra/git-data-rung2-boot-evidence.env && git commit -m 'feat(git-data): commit the rung-2 boot evidence from run ${GITHUB_RUN_ID}'"
               echo "source tests/scripts/lib/git-data-birth-readiness-gate.sh"
               echo "git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/git-data-rung2-boot-evidence.env"
-              echo "git checkout -b evidence-git-data-rung2 && git add apps/web-platform/infra/git-data-rung2-boot-evidence.env && gh pr create"
+              echo "gh pr create"
               echo '```'
               echo ""
               echo "Open the PR promptly: the evidence carries a sha256 of \`cloud-init-git-data.yml\`, so any merge touching that template or its nine payloads invalidates it and costs a full re-rehearsal."

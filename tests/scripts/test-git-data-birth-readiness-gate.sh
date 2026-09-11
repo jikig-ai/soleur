@@ -40,6 +40,22 @@ GATE="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# (#8043 NFR2 / Guard 4) THE FIXTURE GIT ENVIRONMENT, sourced BEFORE any fixture is created.
+# The rung-2 fixture tree below is a real git repository from here on (the provenance arm reads
+# `git log` on the evidence file), and the Guard 4 rows commit into throwaway repositories under
+# $TMP. This file is the #7849 chokepoint: sourcing it ARMS the tripwire that refuses an inherited
+# GIT_DIR — in a linked worktree git exports GIT_DIR/GIT_INDEX_FILE to every hook as absolute
+# paths, and they override `git -C`, so a fixture's `git init` would initialise nothing and its
+# commits would land on the developer's live branch (#7833; precedent: tests/scripts/
+# test-weakness-miner.sh; learning 2026-03-24-git-ceiling-directories-test-isolation.md).
+# `git_fixture_env` then exports the ceiling (the parent of $TMP), a synthesized identity, and
+# config hermeticity into THIS shell, so every `git -C "$fixture"` below is contained.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { printf 'FATAL: could not source the fixture git environment\n' >&2; exit 2; }
+git_fixture_env "$TMP" \
+  || { printf 'FATAL: git_fixture_env refused the fixture root %s\n' "$TMP" >&2; exit 2; }
+
 # Byte-identical copy of the repo-wide fixture-containment guard. It is duplicated per file
 # rather than sourced because the consumers are standalone scripts; the P1a suite asserts every
 # tracked copy is identical, so do not reformat it. `_authmap_root` writes a fixture tree from a
@@ -295,6 +311,65 @@ _r2_write_module() {  # $1 = root dir, remaining args = payload basenames
 _r2_write_module "$R2" "${_r2_payloads[@]}"
 for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$R2/$_p"; done
 
+# ── fixture git helpers (#8043 NFR2 / Guard 4) ────────────────────────────────────
+#
+# `_a_setup_fail` lived beside the A-rows; it is hoisted here because the helpers below run
+# from THIS point on (the R2 tree is committed a few lines down) and a function is resolved at
+# call time, not at definition time.
+_a_setup_fail() { printf '\n  HARNESS ABORT: %s\n' "$1" >&2; exit 2; }
+
+# THE COMMIT IS SILENT ON PURPOSE, AND THE CHECK AFTER IT IS THE GUARD (Guard 4 row 7).
+#
+# A runner with no git identity fails `git commit` with "Author identity unknown" and rc=128.
+# Under this suite's `set -uo pipefail` (no -e) that failure is NON-FATAL: HEAD does not move,
+# every fixture below then has c1 == c2 with an empty diff, and every provenance row that
+# expects a HOLD would read the unchanged tree as "nothing touched a bound file" -- a PASS. The
+# suite would go GREEN on a harness that built nothing. So the commit's own exit status is
+# deliberately discarded and the invariant is asserted instead: HEAD moved, and the diff between
+# the two heads is non-empty. Violated, the HARNESS reds (exit 2) -- not the SUT.
+#
+# NEVER call this in a command substitution: `_a_setup_fail`'s `exit 2` would terminate only
+# the subshell (the hazard `_a_tree` records by name). Read HEAD afterwards with rev-parse.
+_g_commit() {  # $1=repo $2=message -- commits EVERYTHING in the work tree as one commit
+  local d="$1" msg="$2" before after
+  assert_fixture_dir "$d"
+  before="$(git -C "$d" rev-parse --verify --quiet HEAD 2>/dev/null || true)"   # empty when unborn
+  git -C "$d" add -A >/dev/null 2>&1 || true
+  git -C "$d" commit -q -m "$msg" >/dev/null 2>&1 || true
+  after="$(git -C "$d" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+  if [[ -z "$after" || "$before" == "$after" ]]; then
+    _a_setup_fail "git commit '${msg}' in ${d} landed NO new commit (HEAD before='${before:-unborn}' after='${after:-unborn}'). A runner with no git identity fails exactly this way, silently; the harness reds here so the SUT is never asked about a tree that did not change."
+  fi
+  if [[ -n "$before" && -z "$(git -C "$d" diff --name-only "$before" "$after" 2>/dev/null)" ]]; then
+    _a_setup_fail "git commit '${msg}' in ${d} produced an EMPTY diff between ${before} and ${after}; a provenance row over it would be vacuous."
+  fi
+}
+
+# Commit ONE file in a commit that touches only it -- the shape a rehearsal PR lands the
+# evidence in, and the shape every RELEASED row in the legacy R2 battery now needs, because the
+# rehearsal gate reads the evidence's provenance (ARM 1). No-op outside a work tree, and a no-op
+# when the file already matches HEAD (rewriting identical evidence is not a change).
+_r2_commit_alone() {  # $1 = file inside a fixture repository
+  local f="$1" d before after
+  d="$(dirname "$f")"
+  git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  [[ -n "$(git -C "$d" status --porcelain --untracked-files=all -- "$f" 2>/dev/null)" ]] || return 0
+  before="$(git -C "$d" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+  git -C "$d" add -- "$f" >/dev/null 2>&1 || true
+  git -C "$d" commit -q -m "evidence: $(basename "$f")" -- "$f" >/dev/null 2>&1 || true
+  after="$(git -C "$d" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+  if [[ -z "$after" || "$before" == "$after" ]]; then
+    _a_setup_fail "evidence-only commit of ${f} landed NO new commit (HEAD before='${before:-unborn}' after='${after:-unborn}')."
+  fi
+}
+
+# THE R2 TREE IS A REPOSITORY, committed as c1 BEFORE any evidence is written, so that every
+# evidence file `r2_evidence` writes below lands in its OWN commit (via _r2_commit_alone) --
+# the only provenance shape the rehearsal gate's ARM 1 releases. The template, module and
+# payloads are in c1; no evidence is.
+git -C "$R2" init -q -b main || _a_setup_fail "git init failed in $R2"
+_g_commit "$R2" "c1: template, module, payloads"
+
 # Compute the expected hash exactly the way the gate does, so the fixture tracks the gate's
 # own definition rather than restating it.
 #
@@ -354,13 +429,20 @@ r2check() {
 # precondition of nine fixtures, not a property of any of them.
 R2_URL="https://github.com/jikig-ai/soleur/actions/runs/17250000001"
 
-r2_evidence() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence, default "none"]
+_r2_evidence_write() {  # $1=dest $2=verdict $3=url $4=sha [$5=divergence, default "none"] -- the pure writer
   # Defaults to the EXPLICIT `none` rather than omitting the key: an absent key is now
   # refused, because omitting it left the allowlist loop iterating zero times and the CLOSED
   # allowlist refusing nothing (#7066 review). "Nothing diverged" must be declared.
   printf 'RUNG2_BOOT_REHEARSAL=%s\nRUNG2_EVIDENCE_URL=%s\nRUNG2_TEMPLATE_SHA256=%s\nRUNG2_VAR_DIVERGENCE=%s\n' \
     "$2" "$3" "$4" "${5:-none}" > "$1"
   return 0
+}
+# The legacy writer: write, then commit the file ALONE (#8043 NFR2). The Guard 4 fixtures use
+# `_r2_evidence_write` directly because they need the evidence in the SAME commit as a bound
+# file -- that is the shape they exist to refuse.
+r2_evidence() {
+  _r2_evidence_write "$@"
+  _r2_commit_alone "$1"
 }
 
 r2_evidence "$R2/ok.env" PASS "https://github.com/jikig-ai/soleur/actions/runs/1" "$R2_SHA"
@@ -693,6 +775,9 @@ mutate_r2 "rung-2 render-var divergence arm" \
 r2_evidence "$R2/trailing.env" PASS "$R2_URL" "$R2_SHA"
 sed -i 's|^RUNG2_BOOT_REHEARSAL=PASS$|RUNG2_BOOT_REHEARSAL=PASS   # rehearsed on a throwaway host|' "$R2/trailing.env"
 grep -q '#' "$R2/trailing.env" || fail "fixture setup: trailing comment was not applied" "n/a" ""
+# Re-commit the edited evidence ALONE: ARM 1 refuses evidence that differs from its committed
+# state, and this row is about the trailing comment, not about provenance.
+_r2_commit_alone "$R2/trailing.env"
 r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/trailing.env"
 
 # ── A1–A10 — the rung-2 user_data hash input set (#7485) ──────────────────────────────
@@ -710,8 +795,9 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 #
 # SIBLING BASENAMES MUST NOT COLLIDE WITH ANY PAYLOAD BASENAME, or the basename-uniqueness
 # check downstream reddens these arms for the wrong reason.
-
-_a_setup_fail() { printf '\n  HARNESS ABORT: %s\n' "$1" >&2; exit 2; }
+#
+# (`_a_setup_fail` is defined beside the fixture git helpers above, since #8043 NFR2 -- the R2
+# tree is committed before this point, and the helper that reds on a silent commit uses it.)
 
 # SETS A GLOBAL; IT DOES NOT PRINT. Called as `_aN="$(_a_tree aN)"` the helper runs in a
 # COMMAND-SUBSTITUTION SUBSHELL, so `_a_setup_fail`'s `exit 2` terminated only that subshell and
@@ -1464,6 +1550,245 @@ B="$TMP/am-b38"; _authmap_root "$B"
 sed -i "s|^    permissions: '0644'$|    permissions: '0600'|" "$B/cloud-init-git-data.yml"
 _am "B38: a root-owned map at 0600 HOLDs — unreadable by the git uid sshd reads it as" 1 "0644" "$B"
 
+# ── G1–G26 — Guard 4 (#8043 NFR2): a voided attestation cannot be made to look fresh ──────
+#
+# THE PROPERTY. git-data-rung2-boot-evidence.env is never MODIFIED in the same change as any
+# of the 13 hash-bound files; it may only be DELETED there, or CREATED by a rehearsal PR that
+# touches none of them. The rehearsal gate cannot see this by itself: its provenance check is
+# a URL-shape regex, so a payload edit plus a hand-edited RUNG2_TEMPLATE_SHA256 is hash-valid
+# evidence citing a rehearsal that never booted the shipped bytes.
+#
+# EVERY ROW RUNS AGAINST A THROWAWAY REPOSITORY under $TMP built by `_g_repo` from the same
+# `_r2_write_module` writer the R2 battery uses, plus the two module siblings the live tree
+# carries -- so the derived roster is 13 entries wide, exactly as in production (G1 asserts
+# that before anything else runs). Each fixture is at least two commits deep; `_g_commit`
+# reds the HARNESS if a commit silently fails to land (G12 proves that guard fires).
+#
+# Row numbers in the names are the plan's mutation-matrix rows (§ Guard 4).
+printf '\nguard 4 — evidence provenance (#8043 NFR2)\n'
+
+_G_URL="https://github.com/jikig-ai/soleur/actions/runs/17260000001"
+_G_URL2="https://github.com/jikig-ai/soleur/actions/runs/17260000002"
+
+# _g_repo <dir> [with-evidence]
+#   c1: template + 3 module .tf + 9 payloads (13 files). No evidence.
+#   c2 (with-evidence only): hash-matched evidence, committed ALONE -- the rehearsal-PR shape.
+_g_repo() {
+  local d="$1" ev="${2:-}" p
+  assert_fixture_dir "$d"
+  rm -rf "$d"; mkdir -p "$d" || _a_setup_fail "could not create $d"
+  cp "$TMP/mixed.yml" "$d/ci.yml" || _a_setup_fail "could not seed the template into $d"
+  _r2_write_module "$d" "${_r2_payloads[@]}"
+  _a_sibling_var "$d/modules/git-data-userdata/variables.tf"
+  _a_sibling_out "$d/modules/git-data-userdata/outputs.tf"
+  for p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$p" > "$d/$p"; done
+  git -C "$d" init -q -b main || _a_setup_fail "git init failed in $d"
+  _g_commit "$d" "c1: template, module, payloads"
+  if [[ "$ev" == "with-evidence" ]]; then
+    _r2_evidence_write "$d/evidence.env" PASS "$_G_URL" "$(_r2_hash "$d")"
+    _g_commit "$d" "c2: evidence (rehearsal PR shape)"
+  fi
+}
+_g_head() { git -C "$1" rev-parse HEAD; }
+
+# _g <name> <want_rc> <needle> <fn> <args...> -- run a lib function and assert rc + needle.
+_g() {
+  local name="$1" want_rc="$2" needle="$3" out rc; shift 3
+  out="$("$@" 2>&1)"; rc=$?
+  if [[ "$rc" -eq "$want_rc" && "$out" == *"$needle"* ]]; then
+    pass "$name"
+  else
+    fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
+  fi
+}
+
+# mutate_g <label> <sed_expr> <want_rc> <fn> <args...> -- the mutate_r2 idiom, for any function.
+mutate_g() {
+  local label="$1" sed_expr="$2" want_rc="$3" mutated out rc; shift 3
+  mutated="$TMP/mutated-g.sh"
+  sed "$sed_expr" "$GATE" > "$mutated"
+  if cmp -s "$mutated" "$GATE"; then
+    fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted." "n/a" "no textual change"
+    return
+  fi
+  out="$(bash -c 'source "$1"; shift; "$@"' _ "$mutated" "$@" 2>&1)"; rc=$?
+  if [[ "$rc" -eq "$want_rc" ]]; then
+    pass "$label (arm is load-bearing — neutering it flips the verdict)"
+  else
+    fail "$label — the arm did NOT change behavior when neutered; it may be dead code" "$rc" "$out"
+  fi
+}
+
+# gA — row 1: a template edit and the moved digest, in ONE commit (the squash shape).
+_gA="$TMP/gA"; _g_repo "$_gA" with-evidence; _gA_c2="$(_g_head "$_gA")"
+printf '\n# a later edit to the template\n' >> "$_gA/ci.yml"
+_r2_evidence_write "$_gA/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gA")"
+_g_commit "$_gA" "c3: template edit + hash edit"; _gA_c3="$(_g_head "$_gA")"
+
+# G1 — harness: the roster this guard quantifies over is 13 wide here, as in production. A
+# narrower roster would make G6's empty-roster mutation prove less than it claims.
+_g_roster_n="$(git_data_rung2_bound_files "$_gA/ci.yml" 2>/dev/null | grep -c . || true)"
+if [[ "$_g_roster_n" -ge 13 ]]; then
+  pass "G1: harness — the derived bound-file roster has ${_g_roster_n} entries (>= 13)"
+else
+  fail "G1: harness — the derived bound-file roster has fewer than 13 entries" "n/a" "roster=${_g_roster_n}"
+fi
+
+_g "G2: row 1 — template edit + hash edit in one commit => the REHEARSAL GATE holds (ARM 1 is wired in)" \
+  1 "ci.yml" git_data_rung2_rehearsal_gate "$_gA/ci.yml" "$_gA/evidence.env"
+_g "G3: row 1 — the same shape seen by ARM 2 over the range => HOLD" \
+  1 "ci.yml" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" range "$_gA_c2" "$_gA_c3"
+
+# gB — row 2: a payload edit alongside a NON-hash key (the URL). The hash is left stale on
+# purpose: the row is about provenance, so it calls ARM 1 directly rather than through the
+# gate's hash check.
+_gB="$TMP/gB"; _g_repo "$_gB" with-evidence; _gB_c2="$(_g_head "$_gB")"
+printf '\n# a later edit to a shipped payload\n' >> "$_gB/git-data-gc.sh"
+_r2_evidence_write "$_gB/evidence.env" PASS "$_G_URL2" "$(_r2_hash "$_gB")"
+_g_commit "$_gB" "c3: payload edit + url edit"; _gB_c3="$(_g_head "$_gB")"
+_g "G4: row 2 — any other evidence key edited alongside a payload edit => ARM 1 HOLD naming the payload" \
+  1 "git-data-gc.sh" git_data_rung2_evidence_provenance_gate "$_gB/ci.yml" "$_gB/evidence.env" birth
+_g "G5: row 2 — the same shape seen by ARM 2 => HOLD" \
+  1 "git-data-gc.sh" git_data_rung2_evidence_provenance_gate "$_gB/ci.yml" "$_gB/evidence.env" range "$_gB_c2" "$_gB_c3"
+
+# gC — row 10: the squash-shaped commit touching the evidence AND git-data-remove.sh, with
+# the digest moved to match. Hash-VALID, provenance-VOID: the exact shape the gate could not
+# see before this guard.
+_gC="$TMP/gC"; _g_repo "$_gC" with-evidence; _gC_c2="$(_g_head "$_gC")"
+printf '\n# a later edit to the erasure path\n' >> "$_gC/git-data-remove.sh"
+_r2_evidence_write "$_gC/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gC")"
+_g_commit "$_gC" "c3: remove.sh edit + hash edit (squash shape)"; _gC_c3="$(_g_head "$_gC")"
+_g "G17: row 10 — a squash commit touching evidence + git-data-remove.sh => ARM 1 HOLD" \
+  1 "git-data-remove.sh" git_data_rung2_evidence_provenance_gate "$_gC/ci.yml" "$_gC/evidence.env" birth
+_g "G18: row 10 — the SAME evidence is hash-valid, and the rehearsal gate still HOLDs on provenance" \
+  1 "git-data-remove.sh" git_data_rung2_rehearsal_gate "$_gC/ci.yml" "$_gC/evidence.env"
+
+# G6 — row 3: neuter the derivation to an EMPTY bound set. A naive guard intersects nothing
+# with the commit and PASSes; this one must refuse a roster below its structural floor.
+mutate_g "G6: row 3 — an EMPTY bound-file roster is refused (rc=1), never an empty intersection" \
+  's|^  printf '"'"'%s\\n'"'"' "${_inputs\[@\]}"$|  :|' \
+  1 git_data_rung2_evidence_provenance_gate "$_gC/ci.yml" "$_gC/evidence.env" birth
+
+# G7 — row 4: bind only the TEMPLATE in the intersection (the roster stays 13 wide, so the
+# floor is not what catches it). The remove.sh fixture then PASSes -- which is to say G17/G18
+# would go RED under this mutation, so the suite catches a guard that stops at the template.
+mutate_g "G7: row 4 — intersecting only the template lets a payload edit + evidence edit PASS (G17 is load-bearing over payloads)" \
+  's|^    for _rel in "${_bound_rel\[@\]}"; do$|    for _rel in "${_bound_rel[0]}"; do|' \
+  0 git_data_rung2_evidence_provenance_gate "$_gC/ci.yml" "$_gC/evidence.env" birth
+
+# G19 — the WIRING is load-bearing: neuter ARM 1's call inside the rehearsal gate and the
+# hash-valid, provenance-void evidence RELEASES the birth route.
+mutate_g "G19: neutering ARM 1's call inside git_data_rung2_rehearsal_gate releases the voided attestation" \
+  's|^  if ! _prov_out="$(git_data_rung2_evidence_provenance_gate .*|  if false; then|' \
+  0 git_data_rung2_rehearsal_gate "$_gC/ci.yml" "$_gC/evidence.env"
+
+# gD — row 5 (MUST-PASS): this PR's own shape. Bound files change and the evidence is DELETED.
+_gD="$TMP/gD"; _g_repo "$_gD" with-evidence; _gD_c2="$(_g_head "$_gD")"
+printf '\n# a later edit to the template\n' >> "$_gD/ci.yml"
+printf '\n# a later edit to a shipped payload\n' >> "$_gD/git-data-gc.sh"
+rm -f "$_gD/evidence.env"
+_g_commit "$_gD" "c3: bound edits + evidence deleted"; _gD_c3="$(_g_head "$_gD")"
+_g "G8: row 5 MUST-PASS — bound files change and the evidence is DELETED => ARM 2 passes" \
+  0 "PASS" git_data_rung2_evidence_provenance_gate "$_gD/ci.yml" "$_gD/evidence.env" range "$_gD_c2" "$_gD_c3"
+_g "G9: row 5 — the deleted evidence is still a HOLD at the birth (absent file), unchanged" \
+  1 "no rung-2 boot evidence" git_data_rung2_rehearsal_gate "$_gD/ci.yml" "$_gD/evidence.env"
+
+# gE — row 6 (MUST-PASS): a rehearsal PR that CREATES the evidence and touches none of the 13.
+_gE="$TMP/gE"; _g_repo "$_gE"; _gE_c1="$(_g_head "$_gE")"
+_r2_evidence_write "$_gE/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gE")"
+_g_commit "$_gE" "c2: evidence created alone"; _gE_c2="$(_g_head "$_gE")"
+_g "G10: row 6 MUST-PASS — a rehearsal commit creating the evidence and nothing else => ARM 2 passes" \
+  0 "PASS" git_data_rung2_evidence_provenance_gate "$_gE/ci.yml" "$_gE/evidence.env" range "$_gE_c1" "$_gE_c2"
+_g "G11: row 6 MUST-PASS — the same tree RELEASES the rehearsal gate (ARM 1 sees an evidence-only commit)" \
+  0 "RELEASED" git_data_rung2_rehearsal_gate "$_gE/ci.yml" "$_gE/evidence.env"
+
+# G12 — row 7: the HARNESS row. Strip the identity `git_fixture_env` exported and pin
+# user.useConfigOnly so git cannot guess one from the host: `git commit` then fails with
+# "Author identity unknown" -- silently, because _g_commit discards its status by design.
+# The invariant check inside _g_commit must red the harness (exit 2, "HARNESS ABORT"); it
+# must not hand the SUT an unchanged tree. Run in a subshell so the abort is observable.
+_gK="$TMP/gK"; _g_repo "$_gK"
+printf '\n# an edit that will not be committed\n' >> "$_gK/ci.yml"
+_gK_out="$( ( unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+              export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_1=user.useConfigOnly GIT_CONFIG_VALUE_1=true
+              _g_commit "$_gK" "c2: attempted with no identity" ) 2>&1 )"; _gK_rc=$?
+if [[ "$_gK_rc" -eq 2 && "$_gK_out" == *"HARNESS ABORT"* && "$_gK_out" == *"NO new commit"* ]]; then
+  pass "G12: row 7 harness — a silently failing fixture commit reds the HARNESS, not the SUT"
+else
+  fail "G12: row 7 harness — a silently failing fixture commit must red the harness (want rc=2 + 'HARNESS ABORT' + 'NO new commit')" "$_gK_rc" "$_gK_out"
+fi
+
+# G13/G14/G15 — row 8: an unresolvable base and a shallow clone are NAMED holds, distinct
+# from an empty diff. `git diff 000…0 HEAD` fails and prints NOTHING, which a naive reader
+# takes for "no changes"; the all-zeros sentinel is what github.event.before carries on a
+# branch-create push.
+_g "G13: row 8 — the all-zeros branch-create sentinel as a base => a NAMED HOLD" \
+  1 "sentinel" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" range 0000000000000000000000000000000000000000 HEAD
+_gS="$TMP/gS"
+git clone -q --depth 1 "file://$_gE" "$_gS" 2>/dev/null || _a_setup_fail "could not make a shallow clone of $_gE"
+[[ "$(git -C "$_gS" rev-parse --is-shallow-repository)" == "true" ]] || _a_setup_fail "the clone at $_gS is not shallow"
+_g "G14: row 8 — a SHALLOW checkout => a NAMED HOLD (provenance cannot be read from depth 1)" \
+  1 "SHALLOW" git_data_rung2_evidence_provenance_gate "$_gS/ci.yml" "$_gS/evidence.env" birth
+# The control: an EMPTY diff is a pass that says the evidence was untouched -- and the two
+# unresolvable-base holds above must not be wearing its words.
+_g15_out="$(git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" range "$_gA_c3" "$_gA_c3" 2>&1)"; _g15_rc=$?
+_g13_out="$(git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" range 0000000000000000000000000000000000000000 HEAD 2>&1)"
+if [[ "$_g15_rc" -eq 0 && "$_g15_out" == *"untouched"* && "$_g13_out" != *"untouched"* ]]; then
+  pass "G15: row 8 control — an EMPTY range passes as 'untouched', and the sentinel HOLD does not reuse that word"
+else
+  fail "G15: row 8 control — empty range must PASS as 'untouched' and the sentinel HOLD must be worded differently" "$_g15_rc" "empty=${_g15_out} | sentinel=${_g13_out}"
+fi
+
+# gF — row 9 (MUST-PASS): the last evidence-touching commit touches ONLY the evidence
+# (a URL correction on top of an existing attestation).
+_gF="$TMP/gF"; _g_repo "$_gF" with-evidence
+_r2_evidence_write "$_gF/evidence.env" PASS "$_G_URL2" "$(_r2_hash "$_gF")"
+_g_commit "$_gF" "c3: evidence URL edit alone"
+_g "G16: row 9 MUST-PASS — the last evidence-touching commit touches only the evidence => ARM 1 passes" \
+  0 "PASS" git_data_rung2_evidence_provenance_gate "$_gF/ci.yml" "$_gF/evidence.env" birth
+
+# G20 — a ROOT commit carrying the evidence with everything else. `git diff-tree -r <root>`
+# prints NOTHING without --root, so the intersection would be empty and the guard would PASS
+# the one commit that provably touched all 14 files. Pins --root.
+_gG="$TMP/gG"; assert_fixture_dir "$_gG"; rm -rf "$_gG"; mkdir -p "$_gG"
+cp "$TMP/mixed.yml" "$_gG/ci.yml"; _r2_write_module "$_gG" "${_r2_payloads[@]}"
+_a_sibling_var "$_gG/modules/git-data-userdata/variables.tf"; _a_sibling_out "$_gG/modules/git-data-userdata/outputs.tf"
+for _p in "${_r2_payloads[@]}"; do printf '#!/usr/bin/env bash\n# %s\ntrue\n' "$_p" > "$_gG/$_p"; done
+_r2_evidence_write "$_gG/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gG")"
+git -C "$_gG" init -q -b main || _a_setup_fail "git init failed in $_gG"
+_g_commit "$_gG" "c1: everything, including the evidence (root commit)"
+_g "G20: a ROOT commit carrying evidence + bound files => ARM 1 HOLD (diff-tree --root is load-bearing)" \
+  1 "ci.yml" git_data_rung2_evidence_provenance_gate "$_gG/ci.yml" "$_gG/evidence.env" birth
+
+# G21/G22 — evidence with NO readable provenance: a working-tree edit, and a never-committed file.
+printf '# an uncommitted edit\n' >> "$_gF/evidence.env"
+_g "G21: evidence that differs from its committed state => a NAMED HOLD (a working-tree edit has no provenance)" \
+  1 "committed state" git_data_rung2_evidence_provenance_gate "$_gF/ci.yml" "$_gF/evidence.env" birth
+_gI="$TMP/gI"; _g_repo "$_gI"
+_r2_evidence_write "$_gI/evidence.env" PASS "$_G_URL" "$(_r2_hash "$_gI")"
+_g "G22: evidence that was never committed => a NAMED HOLD (no commit touches it)" \
+  1 "no commit" git_data_rung2_evidence_provenance_gate "$_gI/ci.yml" "$_gI/evidence.env" birth
+
+# G23/G24 — fail-closed on a malformed call.
+_g "G23: an unknown mode => HOLD" \
+  1 "mode" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" sideways
+_g "G24: range mode with NO range => HOLD" \
+  1 "range" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gA/evidence.env" range
+
+# gJ — G25 (MUST-PASS): an ordinary payload PR that leaves the evidence alone. ARM 2 is the
+# advisory step on every infra PR; it must not red the PRs whose staleness the hash check
+# already reports.
+_gJ="$TMP/gJ"; _g_repo "$_gJ" with-evidence; _gJ_c2="$(_g_head "$_gJ")"
+printf '\n# a later edit to a shipped payload\n' >> "$_gJ/git-data-gc.sh"
+_g_commit "$_gJ" "c3: payload edit, evidence untouched"; _gJ_c3="$(_g_head "$_gJ")"
+_g "G25: MUST-PASS — a payload edit that leaves the evidence untouched => ARM 2 passes" \
+  0 "untouched" git_data_rung2_evidence_provenance_gate "$_gJ/ci.yml" "$_gJ/evidence.env" range "$_gJ_c2" "$_gJ_c3"
+
+# G26 — a template whose bound files live OUTSIDE the evidence's repository: paths cannot be
+# compared, so nothing was measured, so HOLD.
+_g "G26: bound files outside the evidence's repository => a NAMED HOLD (nothing measured)" \
+  1 "outside" git_data_rung2_evidence_provenance_gate "$_gA/ci.yml" "$_gB/evidence.env" birth
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -1523,18 +1848,41 @@ _am "B38: a root-owned map at 0600 HOLDs — unreadable by the git uid sshd read
 #
 # RAISED 118 -> 120 (#8043 F7), ITEMISED:
 #     2  B37/B38   the map's OWNER and MODE, in the directions that rot (git:git; root 0600)
+#
+# RAISED 120 -> 146 (#8043 NFR2 / Guard 4), ITEMISED — the plan's ten mutation-matrix rows plus
+# the fail-closed edges each of them implied, every one over a throwaway repository:
+#     1  G1        harness: the derived roster is 13 wide here, as in production
+#     2  G2/G3     row 1: template edit + hash edit in one commit (rehearsal gate; ARM 2)
+#     2  G4/G5     row 2: a non-hash key edited alongside a payload edit (ARM 1; ARM 2)
+#     1  G6        row 3: an EMPTY roster is refused, never intersected (mutation)
+#     1  G7        row 4: intersecting only the template lets a payload edit pass (mutation)
+#     2  G8/G9     row 5 MUST-PASS: bound edits + evidence DELETED (ARM 2 passes; birth still holds)
+#     2  G10/G11   row 6 MUST-PASS: a rehearsal commit creating the evidence alone (ARM 2; gate)
+#     1  G12       row 7 harness: a silently failing fixture commit reds the HARNESS
+#     3  G13/G14/G15 row 8: the all-zeros sentinel and a shallow clone are NAMED holds; the
+#                     empty-range control passes as 'untouched' and the holds do not say so
+#     1  G16       row 9 MUST-PASS: the last evidence-touching commit touches only the evidence
+#     2  G17/G18   row 10: a squash commit touching evidence + git-data-remove.sh (ARM 1; gate)
+#     1  G19       the WIRING is load-bearing: neutering ARM 1's call releases the forgery
+#     1  G20       a root commit carrying everything: diff-tree --root is load-bearing
+#     2  G21/G22   evidence with no readable provenance: a working-tree edit; never committed
+#     2  G23/G24   fail-closed on a malformed call: unknown mode; range mode with no range
+#     1  G25       MUST-PASS: an ordinary payload PR that leaves the evidence untouched (ARM 2)
+#     1  G26       bound files outside the evidence's repository: nothing measured => HOLD
+#   ----
+#    26
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 120 ]]; then
+if [[ "$_ran" -lt 146 ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 120")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 120. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 146")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 146. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 120)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 146)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is
