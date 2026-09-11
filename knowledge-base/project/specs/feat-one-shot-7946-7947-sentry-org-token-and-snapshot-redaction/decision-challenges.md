@@ -149,3 +149,21 @@ the unblocking in (1) and the revert-safety in (2).
 **What this does NOT change:** the plan, its phases, its guard contract, and DC-2/DC-3 all stand
 as written. The split is a delivery-boundary change, not a re-plan. `closes:` for PR #7975
 narrows to `[7947]`; #7946 carries its own `closes: [7946]` on the follow-on PR.
+
+## DC-3 — RESOLUTION: decided by measurement (2026-09-11, #7946 / #7993)
+
+**Reading:** `inline-read-prd`'s `[event:read, org:read]` returns **403** on the cron check-in
+endpoint three followthroughs call (`/api/0/organizations/{org}/monitors/{slug}/checkins/`),
+with a known-granted control at 200 on the same URL; the scope class is confirmed from Sentry's
+`MonitorEndpoint` permission source and the public reference. The reuse arm's premise ("all
+four endpoints 200 under the two-scope set") is false, so there is nothing to reuse without
+widening a shared credential — which both lenses agreed is never done.
+
+**Decision:** mint the dedicated Internal Integration `actions-read-prd` at
+`[event:read, org:read, project:read]` (minted 2026-09-11; scopes read back exactly). The
+architecture lens's residual ("identical scope set") dissolves with its premise: `project:read`
+is the delta, and the boot-trail's project-events endpoint needs the same delta. The full
+record, the rejected IaC-token-under-new-name shape, and the store discriminator are in
+`ADR-031-sentry-as-iac.md` (2026-09-11 amendment). Measurement table:
+`knowledge-base/project/specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`.
+Closes the open limb of #7993.

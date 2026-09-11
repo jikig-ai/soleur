@@ -68,3 +68,8 @@ Run shape: `env -i PATH=<FHS> HOME=$HOME bash -c 'export SENTRY_ACTIONS_RO_TOKEN
 | zot-soak-6122.sh | 2 | n/a in-tree (START unpinned, named); **scratch copy with START pinned: rc 1, 200, FAIL verdict** | by design |
 
 No `curl:` usage error, no HTTP 000, no 401/403. Every Sentry-calling script reached its endpoint with the new name; the two placeholder-START probes were exercised on scratch copies.
+
+### Phase 2 — mint and store (2026-09-11, W1 + W2 authorized per command by the operator)
+- Dry run (T9): `agent-browser` path and MCP `--from-file` path both byte-identical to the sentinel; `gh secret set … --no-store` ciphertext 89 bytes == computed 89; trap removed the directory; nothing written; absent `--from-file` fails loud.
+- W1: `actions-read-prd` (slug `actions-read-prd-fc548f`) minted headed; the operator cleared login + 2FA (the sanctioned handoff); the form had no human gate. No auto-issued token — created one via *New Token*; panel holds exactly one.
+- W2: stored via the chain; `.auth.scopes == [event:read, org:read, project:read]`; every consumer endpoint 200 (6031's monitor absent by design). Post-mint table in `phase-0-scope-probe.md`.

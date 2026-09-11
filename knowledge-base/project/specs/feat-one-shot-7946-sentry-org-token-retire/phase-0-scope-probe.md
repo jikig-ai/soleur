@@ -38,15 +38,37 @@ Organization = Read, Project = Read, everything else No Access.
 read-only and the IaC token). `sentry-checkins-3859.sh` and `sync-health-residual-5689.sh` move
 to `jikigai-eu` in this PR.
 
-## Post-mint readings (`actions-read-prd`)
+## Post-mint readings (`actions-read-prd`, slug `actions-read-prd-fc548f`, minted 2026-09-11T16:12Z)
 
-_Filled in at Phase 2.3._
+Minted in the dashboard through `agent-browser` (headed; the operator cleared login + 2FA — the
+one interactive step; the form itself had no CAPTCHA/MFA/passkey). Form: name
+`actions-read-prd`; Issue & Event = Read, Organization = Read, Project = Read; every other
+resource No Access; no webhook. **Sentry did NOT auto-issue a token on creation here** (the
+Tokens panel read "You haven't created any authentication tokens yet"; the vendor doc's claim
+did not hold) — one token was created with *New Token*; the panel holds exactly one after a
+reload (`************2dcf`, scopes `event:read, org:read, project:read`). Captured with
+`agent-browser get value 'input[aria-label="Generated token"]'` into a 0700 trap directory and
+shredded; stored on stdin; never on argv, never in a snapshot.
+
+Integration list (`GET /api/0/organizations/jikigai-eu/sentry-apps/`, names and scopes only):
+`actions-read-prd` is one of **five** internal integrations on the org
+(`inline-read-prd`, `postmerge-issue-rw`, `iac-terraform-prd`, `web-platform-ci` are the others).
 
 | Reading | Result |
 |---|---|
-| `.auth.scopes` (sorted) | PENDING |
-| `https://sentry.io/api/0/organizations/jikigai-eu/` | PENDING |
-| `https://sentry.io/api/0/organizations/jikigai-eu/events/` | PENDING |
-| `https://sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/` ×3 | PENDING |
-| `https://<regionUrl>/api/0/projects/jikigai-eu/web-platform/issues/` | PENDING |
-| `https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/events/` | PENDING |
+| `.auth.scopes` (sorted) | `["event:read","org:read","project:read"]` — exactly the triple, no implied extra |
+| `https://sentry.io/api/0/organizations/jikigai-eu/` | 200; `.links.regionUrl` = `https://de.sentry.io` (pinned) |
+| `https://sentry.io/api/0/organizations/jikigai-eu/events/?field=…` | 200 |
+| `https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/?field=count()` (6297's host) | 200 |
+| `https://de.sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-community-monitor/checkins/` (5728's host) | 200 |
+| `https://sentry.io/api/0/organizations/jikigai-eu/monitors/<slug>/checkins/` ×8 (3859's slugs) | 200 ×8 |
+| `https://sentry.io/api/0/organizations/jikigai-eu/monitors/scheduled-ghcr-token-minter/checkins/` (6031) | 404 — the monitor does not exist until that cutover; 6031 reports this as its own pre-cutover TRANSIENT; not a scope reading, and the same under the IaC control |
+| `https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/issues/` (5689) | 200 |
+| `https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/events/` (boot-trail) | 200 |
+
+Two instrument corrections made while verifying, both in `scripts/rotate-sentry-actions-ro-token.sh`
+and neither about the token: the org-events probe lacked the `field=` the endpoint requires
+(HTTP 400 "No columns selected" — every real caller passes one), and `.links.regionUrl` is
+served by the org endpoint, not by `/api/0/`.
+
+Repo secret: `gh secret list | grep -c '^SENTRY_ACTIONS_RO_TOKEN'` = 1 (AC-7).

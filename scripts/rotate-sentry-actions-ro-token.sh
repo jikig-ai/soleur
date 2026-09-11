@@ -206,18 +206,23 @@ else
   printf '[FAIL] .auth.scopes is %s, expected exactly %s -- edit the integration'"'"'s permissions in-page and re-read on the SAME token; if it does not change, revoke, recreate, re-run\n' "$scopes" "$EXPECTED_SCOPES" >&2
   fails=$((fails + 1))
 fi
-# Region host: read back, then PINNED against the one literal it may take (Rule D).
+# Region host: read back from the ORG endpoint (`/api/0/` carries no `.links`; measured
+# 2026-09-11), then PINNED against the one literal it may take (Rule D).
+code="$(get "${CONTROL_HOST}/api/0/organizations/${ORG}/")"
 region="$(jq -r '.links.regionUrl // empty' "$TOKEN_DIR/body" 2>/dev/null | sed 's#/$##')"
-if [[ "$region" != "$REGION_HOST_PINNED" ]]; then
-  printf '[FAIL] regionUrl is %q, pinned to %s -- refusing an unpinned destination\n' "$region" "$REGION_HOST_PINNED" >&2; fails=$((fails + 1))
+if [[ "$code" != "200" || "$region" != "$REGION_HOST_PINNED" ]]; then
+  printf '[FAIL] org read HTTP %s, regionUrl is %q, pinned to %s -- refusing an unpinned destination\n' "$code" "$region" "$REGION_HOST_PINNED" >&2; fails=$((fails + 1))
 fi
 # Every consumer's EXACT host + org + path (plan Phase 2.3). Never reason from one
-# endpoint's 200 to another's.
+# endpoint's 200 to another's. The org-events endpoint REQUIRES `field=` (HTTP 400 "No
+# columns selected" without it -- every real caller passes one). ghcr-minter-live-6031's
+# monitor (`scheduled-ghcr-token-minter`) is deliberately absent: it does not exist until
+# that cutover, and a 404 on a nonexistent monitor says nothing about the token; the
+# check-in endpoint CLASS is covered by the nine rows below.
 probes=(
   "${CONTROL_HOST}/api/0/organizations/${ORG}/"
-  "${CONTROL_HOST}/api/0/organizations/${ORG}/events/?per_page=1"
+  "${CONTROL_HOST}/api/0/organizations/${ORG}/events/?per_page=1&field=title&field=timestamp"
   "${ORG_HOST}/api/0/organizations/${ORG}/events/?field=count()&statsPeriod=1h"
-  "${CONTROL_HOST}/api/0/organizations/${ORG}/monitors/scheduled-ghcr-token-minter/checkins/?per_page=1"
   "${REGION_HOST_PINNED}/api/0/organizations/${ORG}/monitors/scheduled-community-monitor/checkins/?per_page=1"
   "${CONTROL_HOST}/api/0/organizations/${ORG}/monitors/scheduled-terraform-drift/checkins/?limit=5"
   "${CONTROL_HOST}/api/0/organizations/${ORG}/monitors/scheduled-oauth-probe/checkins/?limit=5"
