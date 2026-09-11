@@ -880,96 +880,85 @@ org-level **Internal Integration `actions-read-prd`** (slug `actions-read-prd-fc
 token is the repository secret **`SENTRY_ACTIONS_RO_TOKEN`**, consumed by every Sentry reader
 under `scripts/followthroughs/` (forwarded by `scheduled-followthrough-sweeper.yml`) and by
 `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh` (bound by both host-provisioning
-jobs in `apply-web-platform-infra.yml`). Permission set selected in the form: **Issue & Event =
-Read, Organization = Read, Project = Read, everything else No Access**; `.auth.scopes` returned
-**exactly `[event:read, org:read, project:read]`** (read 2026-09-11 post-mint; no implied
-extra). Minted through the dashboard (the API path `POST …/sentry-apps/` needs `org:admin` /
-`org:integrations`, which no org-level Soleur credential carries); the form had no human gate
-once the session was authenticated, and — contrary to the vendor doc's "instantly generate an
-organization-wide authentication token" — **no token was auto-issued on creation** here; one
-was created with *New Token*. Rotation runbook:
-`knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`; the
-capture→normalise→store→verify→shred chain lives once in
-`scripts/rotate-sentry-actions-ro-token.sh`. (Counting note: classes are counted by consumer
-here; the org also carries `postmerge-issue-rw` / `SENTRY_ISSUE_RW_TOKEN`, referenced in the
-2026-06-17 amendment and never enrolled as a numbered class — five internal integrations exist
-on the org today.)
+jobs in `apply-web-platform-infra.yml`). Permission set: **Issue & Event = Read, Organization =
+Read, Project = Read**; `.auth.scopes` read back **exactly `[event:read, org:read, project:read]`**
+(the one executable copy is `EXPECTED_SCOPES` in `scripts/rotate-sentry-actions-ro-token.sh`).
+Minted through the dashboard — the API path needs `org:admin` / `org:integrations`, which no
+org-level Soleur credential carries — with no human gate once the session was authenticated;
+**no token was auto-issued on creation** (contrary to the vendor doc), one was created with
+*New Token*. Hosts per the `## Cluster / Host Glossary` above: the org API host
+`jikigai-eu.sentry.io`, the control silo `sentry.io`, and the region host `de.sentry.io` as
+returned by `.links.regionUrl` (measured 2026-09-11 serving `/api/0/` reads; the Glossary's
+"ingest-only" note on `de.sentry.io` predates that reading). Everything operational — the
+capture→normalise→store→verify→shred chain, the probe table, the failure modes — lives once in
+the script and its runbook `knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`.
+Counting note: classes are counted by consumer; the org also carries `postmerge-issue-rw`
+(`SENTRY_ISSUE_RW_TOKEN`), referenced in the 2026-06-17 amendment and never enrolled as a
+numbered class — five internal integrations exist on the org today.
 
 **Why the name, not only the store, is the defect.** The CI path was never personal: the
-sweeper already bound `secrets.SENTRY_IAC_AUTH_TOKEN` under the env name `SENTRY_AUTH_TOKEN`.
-But that is the canonical vendor env-var name, and Doppler `soleur/prd_terraform` exports a
-**personal, human-account-scoped** token (sixteen scopes including `org:admin`,
-`org:integrations`, `event:admin`, `team:admin`) under exactly it — so any workstation run of a
-followthrough under `doppler run -c prd_terraform` bound the personal token silently (#7797
-class). A name a personal credential can satisfy is what gets retired. **Consequence, by
-design:** `SENTRY_ACTIONS_RO_TOKEN` is unsatisfiable by any Doppler config; a workstation run
-without it exits 2 TRANSIENT from each script's presence guard (fail-closed). The documented
-workstation path is the sweeper's own `workflow_dispatch` with `dry_run=true`; an explicit
-`SENTRY_ACTIONS_RO_TOKEN="$(doppler secrets get SENTRY_IAC_AUTH_TOKEN -p soleur -c prd --plain)"`
-assignment is the last resort, with the caveat that it is the IaC superset.
+sweeper bound `secrets.SENTRY_IAC_AUTH_TOKEN` under the env name `SENTRY_AUTH_TOKEN`. But that
+is the canonical vendor env-var name, and Doppler `soleur/prd_terraform` exports a **personal,
+human-account-scoped** token (sixteen scopes including `org:admin`) under exactly it — so a
+workstation run under `doppler run -c prd_terraform` bound the personal token silently (#7797
+class). A name a personal credential can satisfy is what gets retired; `SENTRY_ACTIONS_RO_TOKEN`
+is unsatisfiable by any Doppler config, and a workstation run without it exits 2 TRANSIENT
+(fail-closed). Workstation path: the sweeper's own `workflow_dispatch` with `dry_run=true`
+(runbook §Workstation dry run).
 
-**Store discriminator (the CTO-lens argument, now the rule).** A GitHub Actions consumer takes a
-GitHub repository secret; a `doppler run` inline consumer takes a Doppler secret; **never copy one
-into the other** — two stores double the rotation surface and reintroduce the coupling the
-2026-05-19 revision rejected for `web-platform-ci`. So `SENTRY_ACTIONS_RO_TOKEN` is deliberately
-NOT mirrored into Doppler (the `BETTERSTACK_*` mirror pattern in the sweeper env is the
-exception this departs from, and the workflow comment says so). This diverges from AP-008 in
-`knowledge-base/engineering/architecture/principles-register.md` in the way this ADR already
-justifies at `Authentication / secret-store divergence`. **Cost, stated accurately:** a
-repository secret is reachable from any workflow a write collaborator runs on a same-repo branch
-(two collaborators on this public repo). The two live `pull_request_target` workflows (`cla.yml`,
-`cla-evidence.yml`) neither check out the PR head nor bind a Sentry secret, so fork reachability
-is nil. And `event:read` on this org exposes production event context (emails, IPs,
-breadcrumbs), so the exposure is not cosmetic — which is why the integration is scoped to the
-narrowest set (Internal Integrations are org-wide; there is no project set to narrow) and why
-the strictly narrower **Actions *environment* secret** was considered and not taken: it would
-need a new environment only for the sweeper (the provisioning jobs already declare
-`environment: web-platform-infra-apply`) and diverges from both sibling Sentry secrets —
-recorded as DC-5 (Taste) on the #7946 branch's `decision-challenges.md`.
+**Store rule, stated as it actually holds.** Each consumer takes the secret from the store its
+runtime reads — a GitHub Actions consumer a repository secret, a `doppler run` consumer a
+Doppler secret — and a value is **not copied between stores by default**, because two stores
+double the rotation surface. The standing exceptions are named, not implied: the IaC token is
+mirrored into Doppler `soleur/prd` for operator runs (§Local-token source above); the
+`BETTERSTACK_*` credentials are mirrored for the same reason (sweeper `env:` comments);
+`X_API_SECRET` lives only in Doppler today with no repository secret or binding; and the
+personal `SENTRY_AUTH_TOKEN` value in `prd_terraform` is the exception being **removed** (#8090).
+`SENTRY_ACTIONS_RO_TOKEN` follows the default: repository secret only. This diverges from AP-008
+(`principles-register.md`) in the way `Authentication / secret-store divergence` already
+justifies. **Cost, measured:** a repository secret is reachable from any workflow a write
+collaborator runs on a same-repo branch (two collaborators); the two live `pull_request_target`
+workflows neither check out the PR head nor bind a Sentry secret, so fork reachability is nil.
+What `event:read` exposes on this project was measured rather than assumed: 20 recent
+`web-platform` events (2026-09-11) each carry a `user` object whose `email` and `ip_address`
+are **null** on every one, consistent with the privacy policy's pseudonymised-`userIdHash`
+posture (§5.10); what IS exposed is titles, messages, stack context and tags (`url`,
+`transaction`, `server_name`, …). Not cosmetic, so the integration is scoped to the narrowest
+set (Internal Integrations are org-wide; there is no project set to narrow), and the strictly
+narrower **Actions environment secret** was considered and not taken — recorded as DC-5 on the
+branch's `decision-challenges.md`.
 
 **Surface distinction.** #7946's premise that "the org-token surface is empty" conflated
 *Organization Auth Tokens* (`/settings/auth-tokens/`, empty) with *Internal Integrations*
-(`/settings/developer-settings/`), of which the org carries five. This ADR's classes are the
-latter.
+(`/settings/developer-settings/`), of which the org carries five. This ADR's classes are the latter.
 
-**DC-3 (#7993) — decided by a reading, recorded here.** The fork was "mint a dedicated
-integration" (CTO lens: store and rotation-domain independence) versus "reuse the existing
-read-only `inline-read-prd` and copy `SENTRY_ISSUE_RO_TOKEN` into GitHub secrets" (architecture
-lens: a fourth class with an identical scope set widens the rotation surface). The reuse arm
-existed only under the condition "every followthrough endpoint returns 200 under
-`[event:read, org:read]`". Measured 2026-09-11 (record:
-`knowledge-base/project/specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`):
-the cron **check-in endpoint returns 403** under that set, with a known-granted control at 200 on
-the same URL — Sentry's `MonitorEndpoint` requires one of `project:read|write|admin` or
-`alerts:read|write`, never `event:read`. Three followthroughs call it; the boot-trail's
-project-events endpoint needs `project:read` too. So the reuse arm's premise is false, and the
-architecture lens's residual ("identical scope set") dissolves with it: `project:read` is the
-delta. Reusing would have required **widening a shared credential** consumed by the no-SSH inline
-reader, which both lenses agreed is never done. The one other zero-mint shape — keep binding
-`secrets.SENTRY_IAC_AUTH_TOKEN` under the new name — satisfies "not personal" but fails the
-stated ask (`project:admin`, `project:write`, `alerts:write` on a repo-wide-reachable secret for a
-GET-only class) and couples the followthroughs to the IaC apply lifecycle. **Rule restated:
-narrow by ADDING a dedicated integration, never by mutating a shared one.** What would have
-flipped it: all four endpoints at 200 under the two-scope set. It did not happen.
+**DC-3 (#7993) — decided by a reading.** "Mint a dedicated integration" (store and
+rotation-domain independence) versus "reuse `inline-read-prd` and copy `SENTRY_ISSUE_RO_TOKEN`
+into GitHub secrets" (an identical scope set widens the rotation surface for nothing). The reuse
+arm existed only under "every followthrough endpoint returns 200 under `[event:read, org:read]`".
+Measured 2026-09-11 (`specs/feat-one-shot-7946-sentry-org-token-retire/phase-0-scope-probe.md`):
+the cron **check-in endpoint returns 403** under that set with a known-granted control at 200 —
+Sentry's `MonitorEndpoint` requires `project:read|write|admin` or `alerts:*`, never `event:read`.
+Three followthroughs call it, and the boot-trail's project-events endpoint needs `project:read`
+too, so `project:read` is the delta and reuse would have meant **widening a shared credential**
+consumed by the no-SSH inline reader. Keeping `secrets.SENTRY_IAC_AUTH_TOKEN` under the new name
+fails the stated ask (`project:admin`, `project:write`, `alerts:write` on a GET-only class) and
+couples the followthroughs to the apply lifecycle. **Rule restated: narrow by ADDING a dedicated
+integration, never by mutating a shared one.** What would have flipped it: all four endpoints at
+200 under the two-scope set. It did not happen.
 
-**Rotation.** No calendar cadence, as for every Internal Integration token here: rotate on
-incident or on scope change. The runbook's one honest handoff is the browser session (login +
-2FA when the profile's session has expired); everything after it is agent-driven. A
-login-free rung exists in principle — `POST /api/0/sentry-apps/{slug}/api-tokens/` — but it
-requires `org:write`, a wider grant than the token it would rotate; recorded as a possible
-future path, not minted.
+**Rotation.** No calendar cadence, as for every Internal Integration token here: on incident or
+scope change. The one honest handoff is the browser session (login + 2FA when it has expired);
+everything after it is agent-driven. A login-free rung (`POST /api/0/sentry-apps/{slug}/api-tokens/`)
+needs `org:write`, wider than the token it would rotate — recorded, not minted.
 
-**Known gaps, stated rather than instrumented.** (a) A dashboard-side permission edit after the
-mint is detected only at the next sweep (403 TRANSIENT on the tracker) or the next provision.
-(b) Deleting the integration or its token dashboard-side yields daily **401** TRANSIENTs under a
-green run — indistinguishable from a network blip except by the 401 (deleted) vs 403 (scope
-edited) discriminator. Both are in the runbook's failure table. On the other side, a missing or
-empty binding is now loud: the sweeper posts on the tracker and reds the run (#7946 Guard 3).
-
-**Enforcement.** Rule 2 of `scripts/lint-followthrough-varq-ban.sh` bans the retired name
-anywhere under `scripts/followthroughs/` (comments and `.test.sh` included); Rule C of
-`scripts/lint-shell-trace-credential-refusal.py` reports a refusal predicate emptied by a rename
-(`[ -n "" ]`); the personal value's revocation in Doppler `prd_terraform` is #8090.
+**Known gaps and enforcement.** A dashboard-side permission edit surfaces as 403 at the next
+sweep; a deleted integration or token as daily 401 — the discriminator and the next action are
+the runbook's failure table. A missing or empty binding is loud: the sweeper posts on the tracker
+and reds the run (#7946 Guard 3). Rule 2 of `scripts/lint-followthrough-varq-ban.sh` bans the
+retired name anywhere under `scripts/followthroughs/` (any file at any depth, comments included);
+Rule C of `scripts/lint-shell-trace-credential-refusal.py` reports a refusal predicate emptied by
+a rename; the personal value's revocation in Doppler `prd_terraform` is #8090.
 
 ## Consequences
 

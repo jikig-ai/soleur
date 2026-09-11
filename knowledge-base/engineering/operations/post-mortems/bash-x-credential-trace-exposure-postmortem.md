@@ -543,9 +543,10 @@ names. Frontmatter is untouched: the `art_33_*` / `art_34_*` fields describe the
 determination, which this addendum does not amend.
 
 **Supersedes `### Still open` (2026-09-08 addendum).** The org-level migration
-that section called "the durable fix" has shipped. The sixteen
-`scripts/followthroughs/*.sh` files no longer name `SENTRY_AUTH_TOKEN`; they
-consume `SENTRY_ACTIONS_RO_TOKEN`, the token of a dedicated Internal Integration
+that section called "the durable fix" has shipped. Sixteen files under
+`scripts/followthroughs/` (thirteen Sentry readers, one emitter that only refused
+under xtrace, two `.test.sh` stubs) no longer name `SENTRY_AUTH_TOKEN`; the
+readers consume `SENTRY_ACTIONS_RO_TOKEN`, the token of a dedicated Internal Integration
 `actions-read-prd` on `jikigai-eu` with exactly `[event:read, org:read,
 project:read]` (measured post-mint), stored as one GitHub repository secret and
 deliberately not mirrored into Doppler — so no `doppler run` config can bind a
@@ -573,7 +574,10 @@ GET-only class. ADR-031 holds the record.
 the canonical name in Doppler `soleur/prd_terraform` is still live: it has no
 repo-side reader via Doppler any more, but the Terraform provider, sentry-cli and
 `next.config.ts` keep the name, and five workstation scripts bind it under
-`doppler run -c prd_terraform`. Its replacement with the `iac-terraform-prd`
+`doppler run -c prd_terraform`: `apps/web-platform/infra/cutover-verify.sh`,
+`scripts/sentry-alert-live-fidelity.sh`, and under `apps/web-platform/scripts/`
+`sentry-monitors-audit.sh`, `configure-sentry-alerts.sh` and
+`assert-byok-rules-exist.sh`. Its replacement with the `iac-terraform-prd`
 value and revocation is **#8090**. Separately, the sweeper's silent
 missing-secret path (a directive naming an absent credential was skipped with
 stderr only under a green run) and a pre-existing command injection in the same

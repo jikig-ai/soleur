@@ -26,9 +26,11 @@
 #   * = TRANSIENT  (Sentry API unreachable, auth failure; retry next sweep)
 #
 # Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN). Optional: SENTRY_ORG (default jikigai-eu),
-#   SENTRY_API_HOST (default de.sentry.io — the EU region host; ADR-031, and the
-#   host live-verified for the checkins endpoint during #5728 Phase 0).
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
+#   The org and API host are PINNED literals (Rule D, ADR-202): `jikigai-eu` on `de.sentry.io`,
+#   the EU region host live-verified for the checkins endpoint during #5728 Phase 0. An env
+#   override that does not equal the pin is refused (TRANSIENT), never followed.
 
 set -uo pipefail
 
@@ -50,8 +52,14 @@ esac
 
 if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
-ORG="${SENTRY_ORG:-jikigai-eu}"
-API_HOST="${SENTRY_API_HOST:-de.sentry.io}"
+readonly ORG_PINNED="jikigai-eu"
+readonly API_HOST_PINNED="de.sentry.io"
+ORG="${SENTRY_ORG:-$ORG_PINNED}"
+API_HOST="${SENTRY_API_HOST:-$API_HOST_PINNED}"
+if [[ "$ORG" != "$ORG_PINNED" || "$API_HOST" != "$API_HOST_PINNED" ]]; then
+  echo "TRANSIENT: refusing an unpinned Sentry destination (org=${ORG} host=${API_HOST}; pinned to ${ORG_PINNED} / ${API_HOST_PINNED})" >&2
+  exit 2
+fi
 MONITOR_SLUG="scheduled-community-monitor"
 WINDOW_DAYS=7
 

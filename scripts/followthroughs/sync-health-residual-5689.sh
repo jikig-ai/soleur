@@ -57,15 +57,14 @@ if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS
 # register PA-8 (d), 2026-05-21) and returns 403/404 for every credential, so this probe
 # posted a daily TRANSIENT 404 under the old default. Rule D pin (ADR-202): both values are
 # env-settable and ride a credentialed call, so each is adjudicated against its literal.
-ORG="${SENTRY_ORG:-jikigai-eu}"
-PROJECT="${SENTRY_PROJECT:-web-platform}"
-if [[ "$ORG" != "jikigai-eu" || "$PROJECT" != "web-platform" ]]; then
-  echo "TRANSIENT: refusing an unpinned Sentry destination (org=${ORG} project=${PROJECT}; expected jikigai-eu / web-platform)" >&2
+readonly ORG_PINNED="jikigai-eu"
+readonly PROJECT_PINNED="web-platform"
+ORG="${SENTRY_ORG:-$ORG_PINNED}"
+PROJECT="${SENTRY_PROJECT:-$PROJECT_PINNED}"
+if [[ "$ORG" != "$ORG_PINNED" || "$PROJECT" != "$PROJECT_PINNED" ]]; then
+  echo "TRANSIENT: refusing an unpinned Sentry destination (org=${ORG} project=${PROJECT}; pinned to ${ORG_PINNED} / ${PROJECT_PINNED})" >&2
   exit 2
 fi
-# Trailing window covering the one-week soak. The sweeper fires daily once the
-# directive's earliest (2026-07-06) passes; 7d at run time spans the soak week
-# (merge 2026-06-29 → ~2026-07-06).
 # `14d`, not `7d`: the project-issues endpoint accepts only '', '24h' and '14d' for
 # statsPeriod (measured 2026-09-11: `7d` -> HTTP 400 "Invalid stats_period"), a defect the
 # dead org slug's 404 masked until #7946 moved the probe to `jikigai-eu`. 14d still spans
@@ -79,7 +78,14 @@ region_json=$(curl --disable --noproxy '*' -sS --max-time 30 \
   -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
   "https://sentry.io/api/0/organizations/${ORG}/" 2>/dev/null || echo "")
 api_host=$(printf '%s' "$region_json" | jq -r '.links.regionUrl // empty' 2>/dev/null | sed 's#^https://##; s#/$##')
-[[ -z "$api_host" ]] && api_host="sentry.io"
+# Rule D (ADR-202): the host read back from the API is PINNED to the one literal it may
+# take. A response naming any other host -- or no host (transport failure, `sentry.io`
+# would have been the old silent fallback) -- is refused, never followed.
+readonly API_HOST_PINNED="de.sentry.io"
+if [[ "$api_host" != "$API_HOST_PINNED" ]]; then
+  echo "TRANSIENT: regionUrl resolved to '${api_host:-<none>}', pinned to ${API_HOST_PINNED} -- refusing an unpinned destination" >&2
+  exit 2
+fi
 
 # Project-scoped issues matching the arm-1 skip tags, active in the soak window.
 # feature/op are emitted as Sentry tags by reportSilentFallback (observability.ts).

@@ -84,11 +84,16 @@ echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${
   echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
 } >> "$GITHUB_STEP_SUMMARY"
 if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-  # BOTH channels, deliberately: an annotation is reachable from `gh run view --log`, a step
-  # summary is not; the summary is what the operator reads. Exit 0 -- a skipped read is not
-  # a proven dark boot, and this step must never fail an apply that succeeded.
-  echo "::warning::${WEB_HOST_KEY:-?}: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run"
-  echo "_Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run. This is NOT a 'host emitted nothing' result._" | tee -a "$GITHUB_STEP_SUMMARY"
+  # ONE sentence on BOTH channels: an annotation is reachable from `gh run view --log`, a
+  # step summary is not; the summary is what the operator reads. A successful apply whose
+  # boot verdict cannot be read is an ERROR annotation (the read was the point of the step);
+  # a failed job gets a warning (there may be no host to read). Exit 0 either way -- a
+  # skipped read is not a proven dark boot, and this step must never fail an apply.
+  msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run. This is NOT a 'host emitted nothing' result."
+  level=warning
+  [[ "${JOB_STATUS}" == "success" ]] && level=error
+  echo "::${level}::${WEB_HOST_KEY:-?}: ${msg}"
+  echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"
   exit 0
 fi
 # Lockstep with the emit MESSAGE literals in soleur-host-bootstrap.sh and

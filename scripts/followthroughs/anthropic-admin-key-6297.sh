@@ -127,12 +127,14 @@ if (( ROWS == 0 )); then
   if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
     echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set."
   else
-    SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
-    SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
+    readonly SENTRY_HOST_PINNED="jikigai-eu.sentry.io"
+    readonly SENTRY_ORG_PINNED="jikigai-eu"
+    SENTRY_HOST="${SENTRY_API_HOST:-$SENTRY_HOST_PINNED}"
+    SENTRY_ORG="${SENTRY_ORG:-$SENTRY_ORG_PINNED}"
     # Rule D pin (ADR-202): both are env-settable and carry a live credential, so each is
     # adjudicated against the ONE literal it may take before the credentialed call.
-    if [[ "$SENTRY_HOST" != "jikigai-eu.sentry.io" || "$SENTRY_ORG" != "jikigai-eu" ]]; then
-      echo "TRANSIENT: refusing an unpinned Sentry destination (host=${SENTRY_HOST} org=${SENTRY_ORG}; expected jikigai-eu.sentry.io / jikigai-eu)" >&2
+    if [[ "$SENTRY_HOST" != "$SENTRY_HOST_PINNED" || "$SENTRY_ORG" != "$SENTRY_ORG_PINNED" ]]; then
+      echo "TRANSIENT: refusing an unpinned Sentry destination (host=${SENTRY_HOST} org=${SENTRY_ORG}; pinned to ${SENTRY_HOST_PINNED} / ${SENTRY_ORG_PINNED})" >&2
       exit 2
     fi
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's

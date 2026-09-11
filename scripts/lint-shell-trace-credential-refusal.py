@@ -346,7 +346,15 @@ def unconditional_reason(body: str, lines: list[str]) -> tuple[str, str] | None:
     return None
 
 CREDENTIAL_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b")
-GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}")
+# The alternate must be NON-EMPTY: `${VAR:+}` expands to "" whether or not VAR is set,
+# so `[ -n "${VAR:+}" ]` can never be true -- it is `[ -n "" ]` wearing the variable's
+# name. EMPTY_ALTERNATE reports that residue; GUARDED_NAME does not count it as a guard.
+GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]+\}")
+EMPTY_ALTERNATE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+\}")
+# `-z "${VAR:+x}"` is the guard INVERTED: it refuses only while the credential is EMPTY
+# and traces freely once it is set -- the exact opposite of the property, and a
+# one-character edit away from the correct form.
+INVERTED_GUARD = re.compile(r"(?:-z|!\s+-n)\s+\"?\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}\"?")
 # Any expansion of a credential inside the arm that is NOT the `:+`/`+` form
 # puts the VALUE on the command line, which xtrace then prints -- so the refusal
 # leaks the thing it is refusing over. This is the PR's own headline defect
@@ -355,9 +363,14 @@ GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}")
 # Guard 2 (#7946): an empty-string non-emptiness test in the refusal arm -- the residue of
 # deleting a single-credential file's only `${VAR:+x}` limb during a rename. `[ -n "" ]`
 # can never be true, so the refusal reads as protection and never fires. Either test
-# syntax, either quote style. Checked BEFORE the `":+" not in window` early return, which
-# would otherwise classify this as an unconditional (strongest-possible) refusal.
-EMPTY_PREDICATE = re.compile(r"\[\[?\s+-n\s+(\"\"|'')\s+\]\]?")
+# syntax (`[`, `[[`, `test`), either quote style, `-n ""`, `! -z ""` or the bare `[ "" ]`.
+# Checked BEFORE the `not referenced` return (a file whose only literal credential name was
+# deleted in the same edit has an empty referenced set) and BEFORE the `":+" not in window`
+# early return, which would otherwise classify this as an unconditional refusal.
+EMPTY_PREDICATE = re.compile(
+    r"(?:\[\[?|\btest)\s+(?:-n\s+|!\s+-z\s+)?(?:\"\"|'')(?:\s+\]\]?|\s*(?:$|;|&&|\|\|))",
+    re.M,
+)
 EXPANDING_IN_ARM = re.compile(
     r"\$\{([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))(?::?-[^}]*)?\}"
     r"|\$([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b"
@@ -370,11 +383,16 @@ def arm_window(lines: list[str], preamble_at: int) -> str:
     A fixed-size slice runs past the block into the script body, where ordinary
     credential USE then reads as a leaking guard -- the window-scoping defect
     this repo has recorded twice. The window must end where the construct does.
+
+    Comment lines are dropped: a `${VAR:+x}` that survives only in a comment (a
+    commented-out limb, a note quoting the canonical form) is not a guard, and
+    counting it as one is how a two-credential file passes with one limb deleted.
     """
     out = []
     for raw in lines[preamble_at : preamble_at + 20]:
-        out.append(raw)
-        if re.match(r"^\s*esac\b", strip_comment(raw)):
+        line = strip_comment(raw)
+        out.append(line)
+        if re.match(r"^\s*esac\b", line):
             break
     return "".join(out)
 
@@ -431,6 +449,35 @@ def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             f"  {why}\n"
             f"  Refuse unconditionally instead:\n\n{indented}\n"
         )
+    # Guard 2 (#7946): predicates that can NEVER fire or fire INVERTED. Reported before
+    # the `not referenced` return (the deleted-name case has an empty referenced set) and
+    # before the `":+" not in window` return (which would read them as unconditional).
+    if EMPTY_PREDICATE.search(window):
+        out.append(
+            f"{rel}:{preamble_at + 1}: the xtrace refusal tests an empty string and can "
+            f"never fire -- `[ -n \"\" ]` is the residue of deleting the only `${{VAR:+x}}` "
+            f"limb.\n"
+            f"  Restore the `${{VAR:+x}}` limb naming the credential this file consumes, or\n"
+            f"  refuse unconditionally (drop the `if` and exit 78 in the arm).\n"
+        )
+        return out
+    empty_alt = sorted(set(EMPTY_ALTERNATE.findall(window)))
+    if empty_alt:
+        out.append(
+            f"{rel}:{preamble_at + 1}: the xtrace refusal tests `${{{empty_alt[0]}:+}}`, whose "
+            f"alternate is EMPTY -- it expands to \"\" whether or not the credential is set, so "
+            f"the refusal can never fire.\n"
+            f"  Give the alternate a value: `[ -n \"${{{empty_alt[0]}:+x}}\" ]`.\n"
+        )
+        return out
+    inverted = sorted(set(INVERTED_GUARD.findall(window)))
+    if inverted:
+        out.append(
+            f"{rel}:{preamble_at + 1}: the xtrace refusal is INVERTED -- `-z \"${{{inverted[0]}:+x}}\"` "
+            f"refuses only while the credential is EMPTY and traces freely once it is set.\n"
+            f"  Test non-emptiness: `[ -n \"${{{inverted[0]}:+x}}\" ]`.\n"
+        )
+        return out
     if not referenced:
         return out
 
@@ -447,18 +494,6 @@ def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             f"  Use the `:+x` form, which tests non-emptiness without expanding:\n"
             f'    if [ -n "${{{expanding[0]}:+x}}" ]; then\n'
         )
-
-    # Guard 2 (#7946): `[ -n "" ]` is not an unconditional refusal, it is one that
-    # can never fire. Report it before the early return below would accept it.
-    if EMPTY_PREDICATE.search(window):
-        out.append(
-            f"{rel}:{preamble_at + 1}: the xtrace refusal tests an empty string and can "
-            f"never fire -- `[ -n \"\" ]` is the residue of deleting the only `${{VAR:+x}}` "
-            f"limb.\n"
-            f"  Restore the `${{VAR:+x}}` limb naming the credential this file consumes, or\n"
-            f"  refuse unconditionally (drop the `if` and exit 78 in the arm).\n"
-        )
-        return out
 
     # An UNCONDITIONAL refusal (no `${VAR:+x}` test in the arm) covers every
     # credential by construction -- there is nothing for it to be narrower than.

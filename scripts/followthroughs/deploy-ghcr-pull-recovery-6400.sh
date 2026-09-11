@@ -22,7 +22,8 @@
 #   * = TRANSIENT  (Sentry API unreachable / auth failure; retry next sweep)
 #
 # Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN).
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
 
 set -uo pipefail
 

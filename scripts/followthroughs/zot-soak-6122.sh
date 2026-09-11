@@ -141,7 +141,9 @@
 #                   sample means keep soaking, do NOT retire GHCR yet)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
-# Required env: SENTRY_ACTIONS_RO_TOKEN (wire as secrets.SENTRY_IAC_AUTH_TOKEN in the sweeper).
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml as
+#   secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
 # Directive for the tracking issue body (pin START to the cutover UTC, earliest to >=7d):
 #   <!-- soleur:followthrough script=scripts/followthroughs/zot-soak-6122.sh earliest=<UTC+7d> secrets=SENTRY_ACTIONS_RO_TOKEN,GH_TOKEN -->
 

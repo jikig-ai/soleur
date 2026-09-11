@@ -40,24 +40,20 @@ The dashboard mint is proven automatable with no CAPTCHA, MFA or passkey once th
 authenticated (#5495 / #5496). The one honest handoff: if the browser profile's Sentry
 session has expired, the page redirects to login, and clearing login + 2FA is the sanctioned
 interactive-auth gate. The agent stops, names which profile's session expired, and resumes
-when it is authenticated. **Nothing is ever typed as an MCP tool-call argument** — MCP
-arguments are not shell-expanded, so a password on that path lands in the transcript.
+when it is authenticated. **Nothing is ever typed as a tool-call argument.**
 
-**`agent-browser` (Bash path) is primary; the Playwright MCP is the fallback.** The reason is
-the trap scope: `scripts/rotate-sentry-actions-ro-token.sh` holds the plaintext from capture
-to shred under one `trap … EXIT INT TERM HUP`, which is real only inside one process. On the
-Bash path the capture (`agent-browser get value <sel>`) is a subprocess of the script. On the
-MCP path the capture is a separate tool call — a trap set before it has already fired — so
-the script's `prepare` mode creates the 0700 directory and marker first, and the post-capture
-`capture --from-file` call is where the trap scope begins; it also shreds every file under
-`.playwright-mcp/` newer than the marker, because `browser_evaluate(filename:)` cannot expand
-`$TOKEN_DIR` and `@playwright/mcp` resolves the name under its own output directory.
+**`agent-browser` (Bash path) is the only supported path.** `scripts/rotate-sentry-actions-ro-token.sh`
+holds the plaintext from capture to shred under one trap scope, which is real only inside one
+process; its header states why the capture must be a subprocess of the script. The Playwright
+MCP is **not** a supported fallback: `@playwright/mcp` emits an inline accessibility snapshot on
+every `browser_click`, and the click that reveals the token is a click, so the value would land
+in the transcript before any redactor ran.
 
-Under the #7947 discipline throughout: every `browser_snapshot` carries `filename:` and is
-filtered through `plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`; on
-the Bash path the PreToolUse interceptor denies any un-piped `agent-browser snapshot`; **no
-snapshot or screenshot of the Tokens panel, ever**; no `browser_network_requests` /
-`browser_console_messages` dumps (they carry the session cookie).
+Under the #7947 discipline throughout: the PreToolUse interceptor denies any un-piped
+`snapshot` invocation; **no `snapshot`, `screenshot`, `get html`, `get text` or `eval` against
+the Tokens panel, ever** — `get value <sel>` from inside the script is the one sanctioned read,
+and `get count <sel>` (a number) is the one sanctioned check. No console or network dumps (they
+carry the session cookie).
 
 ### Recipe
 
@@ -66,56 +62,58 @@ snapshot or screenshot of the Tokens panel, ever**; no `browser_network_requests
    `agent-browser open http://127.0.0.1:<port>/ --headless`, then
    `bash scripts/rotate-sentry-actions-ro-token.sh capture --selector '#tok' --dry-run --expect ZZQP-SENTINEL-7947`.
    Expect: byte-identical normalise, a `gh secret set` no-store ciphertext length equal to the
-   computed one (48-byte sealed-box overhead + plaintext, base64-expanded), directory removed.
-   Nothing is written. Only then go live.
-2. **Mint.** `agent-browser open https://jikigai-eu.sentry.io/settings/developer-settings/new-internal/`
-   (a redirect to login is the auth handoff above). Name `actions-read-prd` (on rotation the
-   integration already exists — open it under `/settings/developer-settings/` instead and use
-   its Tokens panel). Permissions: Issue & Event = **Read**, Organization = **Read**, Project =
-   **Read**, everything else No Access; no webhook; save. Sentry **auto-issues the first
-   token on creation**; on an existing integration click *New Token*. Up to 20 tokens per
+   computed one, directory removed. Nothing is written. Only then go live.
+2. **Mint.** `agent-browser --headed --session-name sentry open https://jikigai-eu.sentry.io/settings/developer-settings/`
+   (a redirect to login is the auth handoff above; the `--headed` window is where the operator
+   signs in). On rotation the integration `actions-read-prd` already exists — open it and use its
+   Tokens panel. On a rebuild use `…/developer-settings/new-internal/`: name `actions-read-prd`,
+   Issue & Event = **Read**, Organization = **Read**, Project = **Read**, everything else No
+   Access, no webhook, save (the save button needed a DOM `.click()`; measured 2026-09-11).
+   **Saving does not auto-issue a token** (measured 2026-09-11: the panel was empty after save).
+   Click *New Token* (`scrollIntoView(); click()`); the value appears once in a readonly textbox
+   whose measured selector is `input[aria-label="Generated token"]`. Up to 20 tokens per
    integration.
 3. **Capture → normalise → store → verify → shred, one process:**
-   `bash scripts/rotate-sentry-actions-ro-token.sh capture --selector '<the readonly token textbox>'`.
-   The script stores on **stdin with no body flag** (gh has no body-file flag; a body of `-`
-   stores the literal `-` — measured), asserts `gh secret list` shows the name, reads
-   `.auth.scopes` and requires it **equal** the triple, probes every consumer's exact host +
-   org + path (the header read from a file, never argv), pins the region host, and shreds on
-   exit. Any `[FAIL]` blocks the cutover.
+   `bash scripts/rotate-sentry-actions-ro-token.sh capture --selector 'input[aria-label="Generated token"]'`.
+   The script stores on **stdin with no body flag**, asserts `gh secret list` shows the name,
+   reads `.auth.scopes` and requires it **equal** the triple, probes one endpoint per consumer
+   class (header from a file, never argv), pins the region host, and shreds on exit. It logs the
+   token's length and **last four characters** — the same four Sentry renders in the masked
+   panel row — so the stored one can be told apart later. Any `[FAIL]` blocks the cutover.
 4. **Dispatch the sweep, read the verdicts, then revoke the old.** Order is store new →
-   `gh workflow run scheduled-followthrough-sweeper.yml` → confirm the affected trackers got a
-   fresh `### Sweeper run:` comment with no `HTTP 401`/`403` → revoke the previous token in the
-   Tokens panel → assert the panel holds exactly one token (a save can auto-issue one; extras
-   are revoked).
+   `gh workflow run scheduled-followthrough-sweeper.yml` → confirm the run is green and every
+   affected tracker's newest `### Sweeper run:` comment reads `PASS` or `NOT YET (exit 2` with no
+   `HTTP 401`/`403` in the tail — a `### Sweeper run: REQUIRED SECRET MISSING` comment means the
+   binding, not the token, is broken and is a blocker → revoke the previous token in the Tokens
+   panel, identified by its masked last four → `agent-browser get count '<token row selector>'`
+   must be 1. If more than one row exists after a mint, keep the captured one (its last four are
+   in the script's log) and revoke the others.
 
 ### Workstation dry run of the followthroughs
 
 `gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true` runs every probe with
-the real secret at the real scopes, posts nothing, and needs no local credential. That is the
-documented path. The **last resort** is an explicit assignment on one probe —
+the real secret at the real scopes, posts nothing, and needs no local credential. It still
+**reds on a missing secret** (Guard 3 fires under dry run; only the comment is suppressed), so
+it is also the check for a broken binding. That is the documented path. The **last resort** is
+an explicit assignment on one probe —
 `SENTRY_ACTIONS_RO_TOKEN="$(doppler secrets get SENTRY_IAC_AUTH_TOKEN -p soleur -c prd --plain)" bash scripts/followthroughs/<probe>.sh`
 — with its caveat: that is the IaC superset, so a probe can pass locally and 403 in CI. Never
 an ambient `doppler run`, and never the old name.
 
-`/tmp` is tmpfs on the maintained workstation (`findmnt -n -o FSTYPE /tmp`), so `shred -u`
-of the `mktemp -d` path is effective there; on a journaled or copy-on-write filesystem it is
-best-effort, the 0700 directory and the seconds-long lifetime are the primary control, and a
-failed shred is logged, not hidden.
+Trap scope, shred effectiveness by filesystem, and the argv/xtrace refusals are documented once,
+in the script's header — the runbook does not restate them.
 
 ## Failure modes
 
 | Symptom | Reading | Next action |
 |---|---|---|
-| The mint page redirects to login | The browser profile's Sentry session expired | The sanctioned auth handoff: the operator authenticates the profile; the agent types nothing and resumes at the same URL |
+| The page redirects to login | The browser profile's Sentry session expired | The sanctioned auth handoff: the operator signs in to the `--headed` window; the agent types nothing and resumes at the same URL |
 | The permission labels on the form do not match the three named above | Sentry renamed or regrouped a resource | Map by resource, not label; after saving, the script's `.auth.scopes` equality is the arbiter — a mismatch blocks |
-| The form saved but the capture selector found no textbox | The auto-issued token's one-time display was missed | Create a second token from the Tokens panel, capture that one, revoke the first, assert the panel count is one |
-| Two tokens on the Tokens panel after the mint | A save auto-issued one and *New Token* issued another | Keep the captured one; revoke the other in-page; re-run `capture --skip-store --dir <dir>` only if unsure which is stored |
+| The capture selector found no textbox, or more than one token row exists after the mint | *New Token* was not clicked, its one-time display was dismissed, or it was clicked twice | Click *New Token* once more and capture that one; keep the captured token (last four in the script's log), revoke every other row, `get count` must be 1 |
 | `[FAIL] .auth.scopes is … expected exactly …` | The permission set selected returned an implied extra or is missing one | Edit the integration's permissions in-page; re-read scopes on the **same** token; if unchanged, revoke, create a new token, re-run the chain |
-| A consumer's host or org slug moved (a probe 404s/403s on an org or monitor path that the token can read elsewhere) | The script's literal no longer matches the org's live host or slug | Re-read the consumer script's exact host + org + path against `.links.regionUrl` and the monitor list; fix the script's literal (Rule D pins it) and add the new path to the rotation script's probe list |
-| `[FAIL] 403 <consumer endpoint>` at verification with the slug unchanged | The endpoint needs a scope outside the triple | A plan change, never a widening in place: measure the endpoint's `scope_map`, decide on the record (ADR-031), then edit the permission set and re-run the chain |
+| `[FAIL] <code> <consumer endpoint>` at verification | 404: the consumer's org slug or monitor slug moved — fix the consumer's literal (Rule D pins it) and the probe list. 403 with the slug unchanged: the endpoint needs a scope outside the triple — a plan change on the record (ADR-031), never a widening in place | Re-read the consumer's exact host + org + path; measure the endpoint's `scope_map` before touching the permission set |
 | `[FAIL] regionUrl is … pinned to https://de.sentry.io` | The org's region host changed | Update `REGION_HOST_PINNED` in the script and the boot-trail's literal together; do not proceed on an unpinned host |
-| `[FATAL] gh secret set … failed` | The store did not land; a live token exists that nothing holds | Revoke the token in-page immediately, then retry the chain |
-| A probe still posts TRANSIENT after the dispatch | The stored value is wrong (JSON-encoded, truncated, the literal `-`) → 401; or a scope gap → 403 | 401: re-run the chain (the normalise step asserts shape, so re-capture); 403: the scope row above |
-| The sweeper run is red with `required secret` | A tracker directive still names the retired credential, or the env key is misspelled | Rewrite the directive's `secrets=` clause (`gh issue edit <n> --body-file …`) or fix the workflow `env:`; the comment on the tracker names which |
-| Every Sentry-backed probe posts 401 daily under a green run | The integration or its token was deleted dashboard-side | 401 (deleted) vs 403 (scope edited) is the only discriminator; recreate the integration and re-run the chain |
+| `[FATAL] gh secret set … failed` | The store did not land; a live token exists that nothing holds | Revoke the token in-page immediately, then retry the chain. (`gh secret list` failing *after* the write is reported separately and does not mean "not stored" — re-run the list before revoking) |
+| A probe posts TRANSIENT after the dispatch, or every Sentry-backed probe posts 401 daily under a green run | 401: the stored value is wrong (JSON-encoded, truncated) or the integration/token was deleted dashboard-side; 403: a scope gap | 401: re-run the chain (the normalise step asserts shape), recreating the integration if the panel is empty; 403: the scope row above |
+| The sweeper run is red with `REQUIRED SECRET MISSING` | A tracker directive names a secret the workflow does not bind (retired name, misspelling, or an empty binding) | Rewrite the directive's `secrets=` clause (`gh issue edit <n> --body-file …`) or fix the workflow `env:`; the comment on the tracker names which |
 | `[WARN] shred … failed` on exit | Non-tmpfs `/tmp` or a permission change | Remove the named directory by hand; the plaintext lived seconds under 0700 |

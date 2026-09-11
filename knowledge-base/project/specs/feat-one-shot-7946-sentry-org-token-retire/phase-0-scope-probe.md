@@ -72,3 +72,24 @@ and neither about the token: the org-events probe lacked the `field=` the endpoi
 served by the org endpoint, not by `/api/0/`.
 
 Repo secret: `gh secret list | grep -c '^SENTRY_ACTIONS_RO_TOKEN'` = 1 (AC-7).
+
+## Positive control for `sync-health-residual-5689.sh`'s zero (review finding, 2026-09-11)
+
+The probe PASSes (auto-closing #5689) on `issue_count == 0` for
+`query=feature:workspace-sync-health op:ready-null-installation` over `statsPeriod=14d`. A zero
+from an unindexed tag or a wrong search syntax would read identically, so the query was
+positively controlled against the same endpoint with the same window:
+
+| Query | HTTP | Issues |
+|---|---|---|
+| `feature:workspace-sync-health op:ready-null-installation` (the script's) | 200 | 0 |
+| `feature:workspace-sync-health` | 200 | 0 |
+| `feature:supply-chain` (a `feature:` value that exists — same syntax, same window) | 200 | 10 |
+| `is:unresolved` / `level:error` / (empty) | 200 | 25 (limit) |
+| `GET /projects/jikigai-eu/web-platform/tags/feature/values/?statsPeriod=14d` | 200 | 13 values; `workspace-sync-health` not among them |
+
+Reading: the `feature:<value>` search syntax resolves (10 hits on an existing value), the tag key
+is indexed, and the emitter still exists (`cron-workspace-sync-health.ts` emits
+`feature: workspace-sync-health` / `op: ready-null-installation` on the dark branch) — so the
+zero is a genuine zero: no ready+NULL-install residual event was emitted in the last 14 days, and
+the PASS the probe will post is a true PASS, not a syntax artifact.

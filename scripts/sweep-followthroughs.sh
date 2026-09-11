@@ -74,9 +74,36 @@ fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 # canonical GitHub-flavored markdown form) are skipped wholesale. This
 # closes the residual where a directive copy-pasted into a ```html``` fence
 # at column 1 would otherwise satisfy the anchored start-range regex.
+# Guard 3 (#7946): is this `secrets=` token a name the sweeper may forward? Two checks,
+# both BEFORE any `${!name}` expansion (an author-controlled subscript would otherwise
+# be evaluated -- see the loop in run_one). `LC_ALL=C` pins the bracket range: under a
+# non-C collation `[A-Z]` admits lowercase letters, so `path` would pass as an identifier.
+# The denylist refuses names whose forwarding would change how `env -i` runs the probe
+# (PATH/HOME are pinned by the sweeper itself; the rest are read by bash before the
+# script's first line) and the exported-function encoding.
+# Prints nothing; exit 0 = forwardable, 1 = malformed, 2 = reserved.
+valid_secret_name() {
+  local LC_ALL=C
+  local name="$1"
+  [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+  case "$name" in
+    PATH|HOME|IFS|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|CDPATH|LD_*|BASH_FUNC_*) return 2 ;;
+  esac
+  return 0
+}
+
+# A directive token that FAILED validation is author-controlled bytes. It is quoted into
+# the tracker comment only through this: every byte outside a small safe class becomes
+# `?`, and the result is capped, so a crafted token cannot close the backtick span,
+# open an HTML comment (the directive grammar) or pad the comment.
+sanitize_name_for_comment() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '?' | head -c 64
+}
+
 parse_directive() {
   awk '
     BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0 }
+    { sub(/\r$/, "") }  # a CRLF body (web-editor paste) must not leave `\r` glued to the last token
     /^```/ { fence = !fence; next }
     fence { next }
     /^<!-- *soleur:followthrough/ {
@@ -383,8 +410,8 @@ run_one() {
   # Guard 3 (#7946). Three properties of this loop, each measured absent before it:
   #   (a) VALIDATE BEFORE EXPANDING. `${!name+x}` on an author-controlled `name` evaluates
   #       an array subscript, so a directive `secrets=a[$(cmd)]` ran `cmd` inside this job
-  #       with every forwarded secret in its env. The identifier check runs first, and the
-  #       comment below is built from VALIDATED names only -- never from a value.
+  #       with every forwarded secret in its env. `valid_secret_name` runs first, and a
+  #       token that fails it reaches the comment only through sanitize_name_for_comment.
   #   (b) SET-BUT-EMPTY IS MISSING. `${{ secrets.X }}` resolves to "" when the repo secret
   #       is absent or the reference is misspelled; the old set-ness test forwarded "" and
   #       every probe TRANSIENTed under a green run.
@@ -393,7 +420,8 @@ run_one() {
   #       comment on the tracker naming every missing/malformed name and the fix, an
   #       ::error:: annotation (also under DRY_RUN, where only the comment is suppressed),
   #       and MISSING_SECRET=1 so the run goes red after the sweep completes (the same
-  #       shape as TRUNCATED_SWEEP). This runs before the open/closed mode split on purpose:
+  #       shape as TRUNCATED_SWEEP). It sits after the earliest gate and the closed
+  #       precheck but BEFORE the script runs and before the exit-code verdict split, so
   #       a closed-within-lookback tracker naming a retired credential is commented on too.
   local -a missing_lines=()
   if [[ -n "${secrets:-}" ]]; then
@@ -401,8 +429,13 @@ run_one() {
     for name in "${secret_names[@]}"; do
       name="${name// /}"
       [[ -z "$name" ]] && continue
-      if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
-        missing_lines+=("- \`${name}\` — malformed secret name (must match \`^[A-Z][A-Z0-9_]*$\`); refused before any expansion")
+      local vrc=0
+      valid_secret_name "$name" || vrc=$?
+      if (( vrc == 1 )); then
+        missing_lines+=("- \`$(sanitize_name_for_comment "$name")\` — malformed secret name (must match \`^[A-Z][A-Z0-9_]*$\`); refused before any expansion")
+        continue
+      elif (( vrc == 2 )); then
+        missing_lines+=("- \`${name}\` — reserved name: the sweeper never forwards it")
         continue
       fi
       if [[ -z "${!name+x}" ]]; then
@@ -419,20 +452,24 @@ run_one() {
   if (( ${#missing_lines[@]} > 0 )); then
     local missing_msg
     missing_msg="### Sweeper run: REQUIRED SECRET MISSING ($(date -u +%FT%TZ))
-The directive's \`secrets=\` clause names credential(s) this sweep could not forward, so \`$script\` was **not** run:
+\`$script\` was **not** run — its directive's \`secrets=\` clause names credential(s) the sweep cannot forward:
 
 $(printf '%s\n' "${missing_lines[@]}")
 
-Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followthrough-sweeper.yml\` (bound from a repo secret that exists), or correct the directive's \`secrets=\` clause. A retired credential name stays wrong until the directive is rewritten."
-    printf '::error::sweep-followthroughs: issue #%s: required secret missing or malformed in its directive — %s\n' \
-      "$issue_num" "$(printf '%s; ' "${missing_lines[@]}" | sed 's/^- //; s/; - /; /g; s/; $//')" >&2
+Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followthrough-sweeper.yml\` (bound from a repo secret that exists), or correct the directive's \`secrets=\` clause."
+    printf '::error::sweep-followthroughs: issue #%s: required secret missing or malformed in its directive (%s name(s); see the comment on the tracker)\n' \
+      "$issue_num" "${#missing_lines[@]}" >&2
     MISSING_SECRET=1
     if [[ "$DRY_RUN" == "1" ]]; then
       log "issue #$issue_num: DRY_RUN — would comment: required secret missing (${#missing_lines[@]} name(s))"
       return 0
     fi
-    printf '%s' "$missing_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file - \
-      || fail "issue #$issue_num: missing-secret comment post failed"
+    if ! printf '%s' "$missing_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file -; then
+      # The run is already going red (MISSING_SECRET=1); this makes the LOST COMMENT
+      # visible in the annotations too, so "red run, silent tracker" is not the outcome.
+      fail "issue #$issue_num: missing-secret comment post failed"
+      printf '::warning::sweep-followthroughs: issue #%s: the REQUIRED SECRET MISSING comment could not be posted; the tracker was not told\n' "$issue_num" >&2
+    fi
     return 0
   fi
 
@@ -523,6 +560,10 @@ $trimmed_out
 
     if [[ "$DRY_RUN" == "1" ]]; then
       log "issue #$issue_num: DRY_RUN — would $action with verdict=$verdict"
+      # The sanitized tail (trace-stripped, fence-neutralised; and the Actions log, unlike
+      # a comment body, IS behind the runner's secret masker) — a dry-run dispatch is the
+      # documented rotation check, and a verdict without its reason cannot be acted on.
+      log "issue #$issue_num: DRY_RUN — output tail: $(printf '%s' "$trimmed_out" | tail -c 600 | tr '\n' ' ')"
       return 0
     fi
 
@@ -600,6 +641,7 @@ $trimmed_out
 
   if [[ "$DRY_RUN" == "1" ]]; then
     log "issue #$issue_num: DRY_RUN — would $action with verdict=$verdict"
+    log "issue #$issue_num: DRY_RUN — output tail: $(printf '%s' "$trimmed_out" | tail -c 600 | tr '\n' ' ')"
     return 0
   fi
 

@@ -17,8 +17,12 @@
 #   R2-M2  a second file after the first is compliant             -> exit 1, cites BOTH (walk does not stop)
 #   R2-M3  the retired name in a .test.sh only                    -> exit 1 (rule 2 walks test files; rule 1 skips them)
 #   R2-M4  the retired name in a FULL-LINE comment only           -> exit 1 (a comment is what the next author copies)
-#   R2-M5  sandbox COPY of the guard with rule 2's walk emptied,   -> exit 2, diagnostic names rule 2 (its OWN floor
-#          run against the production tree                           fires; rule 1's `scanned` is untouched)
+#   R2-M5  DISPATCH: guard COPY with the rule-2 grep line deleted,  -> exit 0 on the M1 fixture (the grep IS the mechanism)
+#   R2-M6  guard COPY with rule 2's file count forced to 0, run      -> exit 2, diagnostic names rule 2 (its OWN floor
+#          against the production tree                               fires; rule 1's `scanned` is untouched)
+#   R2-M7  two hits in ONE file                                      -> exit 1, BOTH lines cited (the read loop does not stop)
+#   R2-M8  a SUPERSTRING of the name (`MY_SENTRY_AUTH_TOKEN`)        -> exit 1 (the ban is on the substring, on purpose)
+#   R2-M9  the name in a NON-.sh file in a SUBDIRECTORY              -> exit 1 (any file, any depth)
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
 #          name + a comment about "the sweeper's Sentry secret"
 #   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
@@ -165,7 +169,7 @@ LIVE_OUT="$(bash "$GUARD" 2>&1)"; LIVE_RC=$?
 # under scripts/followthroughs/ -- executable line, comment, .sh or .test.sh. The name is the
 # one a workstation `doppler run -c prd_terraform` binds to a PERSONAL token.
 # =======================================================================================
-RETIRED='SENTRY_AUTH_TOKEN'
+RETIRED_NAME='SENTRY_AUTH_TOKEN'  # the same constant the guard carries
 
 # --- R2-M1: retired name on an executable line -> exit 1, cited at its true line ---
 d=$(mkcase r2_m1)
@@ -173,7 +177,7 @@ cat >"$d/probe-old-name.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
 # a comment line so the offender is NOT line 3
-if [[ -z "\${${RETIRED}:-}" ]]; then echo "TRANSIENT: token not set" >&2; exit 2; fi
+if [[ -z "\${${RETIRED_NAME}:-}" ]]; then echo "TRANSIENT: token not set" >&2; exit 2; fi
 EOF
 run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R2-M1 retired name on an executable line -> exit 1" "R2-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
@@ -188,12 +192,12 @@ if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT" >&2; exit 2; f
 EOF
 cat >"$d/b-old.sh" <<EOF
 #!/usr/bin/env bash
-TOK="\$${RETIRED}"
+TOK="\$${RETIRED_NAME}"
 EOF
 cat >"$d/c-old.sh" <<EOF
 #!/usr/bin/env bash
 echo "x"
-: "\${${RETIRED}:-}"
+: "\${${RETIRED_NAME}:-}"
 EOF
 run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R2-M2 two offenders -> exit 1" "R2-M2 expected exit 1, got $GUARD_RC: $GUARD_OUT"
@@ -205,39 +209,89 @@ cat >"$d/probe.sh" <<'EOF'
 #!/usr/bin/env bash
 if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT" >&2; exit 2; fi
 EOF
-cat >"$d/probe.test.sh" <<EOF
+cat >"$d/probe-1234.test.sh" <<EOF
 #!/usr/bin/env bash
-out="\$(${RETIRED}=stub bash probe.sh)"
+out="\$(${RETIRED_NAME}=stub bash probe.sh)"
 EOF
 run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R2-M3 retired name in a .test.sh only -> exit 1 (rule 2 walks test files)" "R2-M3 expected exit 1, got $GUARD_RC: $GUARD_OUT"
-grep -q 'probe.test.sh:2:' <<<"$GUARD_OUT"; check $? "R2-M3 cites the .test.sh at its true line" "R2-M3 did not cite probe.test.sh:2: $GUARD_OUT"
+grep -q 'probe-1234.test.sh:2:' <<<"$GUARD_OUT"; check $? "R2-M3 cites the .test.sh at its true line" "R2-M3 did not cite probe-1234.test.sh:2: $GUARD_OUT"
 
 # --- R2-M4: retired name in a FULL-LINE comment only -> exit 1 (comments are what get copied) ---
 d=$(mkcase r2_m4)
 cat >"$d/probe-comment.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
-# the sweeper forwards ${RETIRED} from its env: block
+# the sweeper forwards ${RETIRED_NAME} from its env: block
 if [[ -z "\${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT" >&2; exit 2; fi
 EOF
 run_guard "$d"
 (( GUARD_RC == 1 )); check $? "R2-M4 retired name in a full-line comment -> exit 1 (rule 2 does NOT strip comments)" "R2-M4 expected exit 1, got $GUARD_RC: $GUARD_OUT"
 grep -q 'probe-comment.sh:3:' <<<"$GUARD_OUT"; check $? "R2-M4 cites the comment line (probe-comment.sh:3)" "R2-M4 did not cite probe-comment.sh:3: $GUARD_OUT"
 
-# --- R2-M5: DISPATCH row. A sandbox COPY of the guard with rule 2's walk emptied, run against the
-# production tree, must exit 2 with a diagnostic naming rule 2 -- rule 2's OWN floor fires, and
-# rule 1's `scanned` (untouched by the mutation) must not be what fires. ---
-MUT="$SANDBOX/guard-rule2-emptied.sh"
-sed 's|"\$TARGET_DIR"/\*\.sh; do  # rule2-walk|"$TARGET_DIR"/*.nomatch-7946; do  # rule2-walk|' "$GUARD" >"$MUT"
+# --- R2-M5: DISPATCH row. A sandbox COPY of the guard with the rule-2 grep line DELETED, run
+# against the M1 fixture, exits 0: the grep is the mechanism, and nothing else in the guard
+# vouches for it. ---
+MUT="$SANDBOX/guard-rule2-grep-deleted.sh"
+sed '/# rule2-grep$/d' "$GUARD" >"$MUT"
 if diff -q "$GUARD" "$MUT" >/dev/null; then
-  check 1 "" "R2-M5 mutation did NOT land (no '# rule2-walk' marker in the guard) -- the row would be vacuous"
+  check 1 "" "R2-M5 mutation did NOT land (no '# rule2-grep' marker in the guard) -- the row would be vacuous"
 else
-  M5_OUT="$(bash "$MUT" 2>&1)"; M5_RC=$?
-  (( M5_RC == 2 )); check $? "R2-M5 rule 2's walk emptied on the production tree -> exit 2" "R2-M5 expected exit 2, got $M5_RC: $M5_OUT"
-  grep -qi 'rule 2' <<<"$M5_OUT"; check $? "R2-M5 diagnostic names rule 2 (its own floor fired, not rule 1's)" "R2-M5 diagnostic does not name rule 2: $M5_OUT"
-  ! grep -q 'expected the full set' <<<"$M5_OUT"; check $? "R2-M5 rule 1's broken-glob diagnostic did NOT fire (its walk was untouched)" "R2-M5 rule 1's floor fired on a rule-2 mutation: $M5_OUT"
+  d=$(mkcase r2_m5)
+  cat >"$d/probe-old-name.sh" <<EOF
+#!/usr/bin/env bash
+if [[ -z "\${${RETIRED_NAME}:-}" ]]; then echo "TRANSIENT" >&2; exit 2; fi
+EOF
+  M5_OUT="$(bash "$MUT" "$d" 2>&1)"; M5_RC=$?
+  (( M5_RC == 0 )); check $? "R2-M5 with the rule-2 grep deleted the M1 fixture passes (exit 0) -- the grep is the mechanism" "R2-M5 expected exit 0 on the mutant, got $M5_RC: $M5_OUT"
 fi
+
+# --- R2-M6: rule 2's OWN floor. A COPY with the rule-2 file count forced to 0, run against the
+# production tree, exits 2 naming rule 2 -- and rule 1's `scanned` (untouched) is not what fires. ---
+MUT6="$SANDBOX/guard-rule2-count-zeroed.sh"
+sed 's|^scanned_rule2=.*# rule2-count$|scanned_rule2=0  # rule2-count|' "$GUARD" >"$MUT6"
+if diff -q "$GUARD" "$MUT6" >/dev/null; then
+  check 1 "" "R2-M6 mutation did NOT land (no '# rule2-count' marker in the guard) -- the row would be vacuous"
+else
+  M6_OUT="$(bash "$MUT6" 2>&1)"; M6_RC=$?
+  (( M6_RC == 2 )); check $? "R2-M6 rule 2's count zeroed on the production tree -> exit 2" "R2-M6 expected exit 2, got $M6_RC: $M6_OUT"
+  grep -qi 'rule 2' <<<"$M6_OUT"; check $? "R2-M6 diagnostic names rule 2 (its own floor fired, not rule 1's)" "R2-M6 diagnostic does not name rule 2: $M6_OUT"
+  ! grep -q 'expected the full set' <<<"$M6_OUT"; check $? "R2-M6 rule 1's broken-glob diagnostic did NOT fire (its walk was untouched)" "R2-M6 rule 1's floor fired on a rule-2 mutation: $M6_OUT"
+fi
+
+# --- R2-M7: two hits in ONE file -> both cited (the read loop does not stop at the first) ---
+d=$(mkcase r2_m7)
+cat >"$d/probe-two.sh" <<EOF
+#!/usr/bin/env bash
+# reads ${RETIRED_NAME}
+: "\${${RETIRED_NAME}:-}"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R2-M7 two hits in one file -> exit 1" "R2-M7 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-two.sh:2:' <<<"$GUARD_OUT" && grep -q 'probe-two.sh:3:' <<<"$GUARD_OUT"; check $? "R2-M7 BOTH lines cited (probe-two.sh:2 and :3)" "R2-M7 did not cite both lines: $GUARD_OUT"
+
+# --- R2-M8: a SUPERSTRING of the name is caught: the ban is on the substring, so a prefixed or
+# suffixed variant cannot smuggle the personal binding back in under a new spelling. ---
+d=$(mkcase r2_m8)
+cat >"$d/probe-super.sh" <<EOF
+#!/usr/bin/env bash
+: "\${MY_${RETIRED_NAME}_V2:-}"
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R2-M8 a superstring of the retired name -> exit 1 (substring ban)" "R2-M8 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# --- R2-M9: the name in a NON-.sh file inside a SUBDIRECTORY -> exit 1 (any file, any depth).
+# The pre-review walk was a top-level `*.sh` glob; a fixture under `fixtures/` was invisible. ---
+d=$(mkcase r2_m9)
+mkdir -p "$d/fixtures"
+cat >"$d/probe.sh" <<'EOF'
+#!/usr/bin/env bash
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT" >&2; exit 2; fi
+EOF
+printf 'env: %s=stub\n' "${RETIRED_NAME}" >"$d/fixtures/env.yml"
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R2-M9 the name in fixtures/env.yml (non-.sh, one level down) -> exit 1" "R2-M9 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'fixtures/env.yml:1:' <<<"$GUARD_OUT"; check $? "R2-M9 cites the nested file at its true line" "R2-M9 did not cite fixtures/env.yml:1: $GUARD_OUT"
 
 # --- R2-H2: must-PASS, not the canonical: the NEW name + a Better Stack name + prose about the
 # sweeper's Sentry secret that never spells the retired literal -> exit 0 ---
@@ -265,7 +319,7 @@ run_guard "$d"
 n1="$(grep -oE '[0-9]+ probe\(s\) scanned' <<<"$LIVE_OUT" | grep -oE '^[0-9]+' || echo 0)"
 n2="$(grep -oE 'retired-name rule checked [0-9]+' <<<"$LIVE_OUT" | grep -oE '[0-9]+$' || echo 0)"
 [[ "$n1" =~ ^[0-9]+$ && "$n1" -ge 10 ]]; check $? "R2-H4 live tree: rule 1 scanned $n1 probe(s) (>= 10)" "R2-H4 rule 1 count unparseable or below floor: n1='$n1' out=$LIVE_OUT"
-[[ "$n2" =~ ^[0-9]+$ && "$n2" -ge "$n1" && "$n2" -gt 0 ]]; check $? "R2-H4 live tree: rule 2 checked $n2 file(s) (>= rule 1's $n1)" "R2-H4 rule 2 count unparseable or below rule 1's: n2='$n2' n1='$n1' out=$LIVE_OUT"
+[[ "$n2" =~ ^[0-9]+$ && "$n2" -gt "$n1" ]]; check $? "R2-H4 live tree: rule 2 checked $n2 file(s) (> rule 1's $n1: the .test.sh files rule 1 skips)" "R2-H4 rule 2 count unparseable or not above rule 1's: n2='$n2' n1='$n1' out=$LIVE_OUT"
 
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
@@ -278,7 +332,7 @@ fi
 # Absolute floor at the MEASURED green count; a lower bound, so adding rows never trips it --
 # re-measure and raise it in the same commit that adds a row. Reported with printf + exit 1,
 # never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=34
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

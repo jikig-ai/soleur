@@ -559,7 +559,7 @@ reports 'compliant-canonical.sh' \
 # through (1 -> 0). The regex is the hardening's own; degenerating it to never-match is the
 # "hardening deleted" mutant without touching the surrounding early return.
 mutate_row 'G2-M3 Rule C: empty-predicate hardening removed' \
-  's/^EMPTY_PREDICATE = re\.compile\(.*\)$/EMPTY_PREDICATE = re.compile(r"(?!x)x")/m' \
+  's/^EMPTY_PREDICATE = re\.compile\(\n.*?\n\)\n/EMPTY_PREDICATE = re.compile(r"(?!x)x")\n/ms' \
   "$FIX/violation-empty-predicate-double.sh" 1 0
 
 # G2-H2: must-PASS, not the canonical -- the genuinely unconditional refusal shares the early
@@ -567,6 +567,53 @@ mutate_row 'G2-M3 Rule C: empty-predicate hardening removed' \
 rc="$(rc_of "$LINT" "$FIX/compliant-indirect-unconditional.sh")"
 [ "$rc" = "0" ] && pass "G2-H2 a genuinely unconditional refusal still passes" \
   || fail "G2-H2 unconditional refusal should report rc=0, got rc=$rc"
+
+# G2-M4: the other three spellings of the empty predicate -- `test -n ""`, `[ ! -z "" ]` and
+# the bare `[ "" ]` -- each reported, in one run after a compliant file.
+rc="$(rc_of "$LINT" "$FIX/compliant-canonical.sh" "$FIX/violation-empty-predicate-test.sh" "$FIX/violation-empty-predicate-not-z.sh" "$FIX/violation-empty-predicate-bare.sh")"
+[ "$rc" = "1" ] \
+  && reports 'violation-empty-predicate-test.sh' && reports 'violation-empty-predicate-not-z.sh' && reports 'violation-empty-predicate-bare.sh' \
+  && pass "G2-M4 test/! -z/bare spellings of the empty predicate all reported" \
+  || fail "G2-M4 expected rc=1 naming all three spellings, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -8)"
+
+# G2-M5: the deleted-name case. The file's only literal credential name went in the same edit
+# that emptied the predicate, so `referenced` is EMPTY; a check placed after the
+# `not referenced` return never runs. The fixture is in scope via its indirect read.
+rc="$(rc_of "$LINT" "$FIX/violation-empty-predicate-indirect.sh")"
+[ "$rc" = "1" ] && pass "G2-M5 empty predicate with NO literal credential name is still reported" \
+  || fail "G2-M5 expected rc=1 on the indirect fixture, got rc=$rc"
+# Dispatch: a copy with the `not referenced` return hoisted ABOVE the Guard 2 block lets it through.
+mutate_row 'G2-M5 Rule C: not-referenced return hoisted above the empty-predicate check' \
+  's/(    # Guard 2 \(#7946\): predicates that can NEVER fire)/    if not referenced:\n        return out\n\n$1/' \
+  "$FIX/violation-empty-predicate-indirect.sh" 1 0
+
+# G2-M6: an EMPTY alternate -- `${VAR:+}` -- expands to "" either way; reported by name.
+rc="$(rc_of "$LINT" "$FIX/violation-empty-alternate.sh")"
+[ "$rc" = "1" ] && grep -q 'alternate is EMPTY' "$WORK/out" "$WORK/err" \
+  && pass "G2-M6 \${VAR:+} (empty alternate) is reported as never firing" \
+  || fail "G2-M6 expected rc=1 with the empty-alternate message, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -4)"
+
+# G2-M7: the INVERTED guard -- `-z "${VAR:+x}"` refuses only while the credential is empty.
+# Baseline reports it; a copy with INVERTED_GUARD degenerated reads the `:+x` as a guard and
+# passes it (1 -> 0), so the regex is the mechanism.
+rc="$(rc_of "$LINT" "$FIX/violation-inverted-guard.sh")"
+[ "$rc" = "1" ] && grep -q 'INVERTED' "$WORK/out" "$WORK/err" \
+  && pass "G2-M7 -z \"\${VAR:+x}\" (inverted guard) is reported" \
+  || fail "G2-M7 expected rc=1 with the INVERTED message, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -4)"
+mutate_row 'G2-M7 Rule C: inverted-guard detection removed' \
+  's/^INVERTED_GUARD = re\.compile\(.*\)$/INVERTED_GUARD = re.compile(r"(?!x)x")/m' \
+  "$FIX/violation-inverted-guard.sh" 1 0
+
+# G2-M8: a `${VAR:+x}` that survives only in a COMMENT inside the arm is not a guard. The
+# fixture guards one of two credentials and carries the other's limb commented out; the
+# comment-keeping window (the mutant) counts it and passes the file (1 -> 0).
+rc="$(rc_of "$LINT" "$FIX/violation-guard-in-comment.sh")"
+[ "$rc" = "1" ] && grep -q 'Unguarded: BETTERSTACK_API_TOKEN' "$WORK/out" "$WORK/err" \
+  && pass "G2-M8 a commented-out limb does not count as a guard (BETTERSTACK_API_TOKEN unguarded)" \
+  || fail "G2-M8 expected rc=1 naming BETTERSTACK_API_TOKEN as unguarded, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -4)"
+mutate_row 'G2-M8 Rule C: arm window keeps comment lines' \
+  's/line = strip_comment\(raw\)\n        out\.append\(line\)/line = raw\n        out.append(line)/' \
+  "$FIX/violation-guard-in-comment.sh" 1 0
 
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
@@ -620,7 +667,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-MIN_ASSERTIONS=68
+MIN_ASSERTIONS=76
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

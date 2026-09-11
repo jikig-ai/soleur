@@ -108,7 +108,8 @@ T2="2026-07-20 06:17:00"   # newer
 # `env -i` — hermetic, mirroring how the sweeper actually runs probes. With a
 # plain `env VAR=…` an ambient SENTRY_ACTIONS_RO_TOKEN/GH_TOKEN leaks in from the
 # developer or CI shell and the zero-rows fixture makes a LIVE 25s network call
-# to sentry.io, so the suite's result depends on the machine it runs on.
+# to the pinned org host (jikigai-eu.sentry.io), so the suite's result depends on
+# the machine it runs on.
 run_probe() {
   local dir="$1"
   # TMPDIR is in the allowlist deliberately. `env -i` clears the environment, so without

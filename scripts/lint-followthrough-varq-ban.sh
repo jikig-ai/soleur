@@ -22,16 +22,17 @@
 # would print as 4). Detection is identical either way; only the diagnostic file:line differs,
 # and naming the offender accurately is the whole value of the guard.
 #
-# RULE 2 (#7946) -- the RETIRED CREDENTIAL NAME BAN. No tracked file under the target dir --
-# `.sh` or `.test.sh`, executable line or comment -- may name `SENTRY_AUTH_TOKEN`. That is the
+# RULE 2 (#7946) -- the RETIRED CREDENTIAL NAME BAN. No file under the target dir -- any name,
+# any depth, executable line or comment -- may name `SENTRY_AUTH_TOKEN`. That is the
 # canonical Sentry env-var name, so a workstation `doppler run -c prd_terraform` binds a
 # PERSONAL, human-account-scoped token under it silently (#7797); the followthroughs consume
 # `SENTRY_ACTIONS_RO_TOKEN`, an org-level read-only integration (ADR-031), which no Doppler
 # config can satisfy by accident. Rule 2 deliberately does NOT apply rule 1's two exemptions:
-# it walks `.test.sh` (an env stub is what the next author copies) and it does NOT strip
-# comments (a name in a comment is what the next author copies). It has its OWN scanned
-# counter (`scanned_rule2`) and its own floor, so a broken rule-2 walk cannot hide behind
-# rule 1's count -- and vice versa. Same exit contract.
+# it reads `.test.sh` and every other file (an env stub or a fixture is what the next author
+# copies) and it does NOT strip comments (a name in a comment is what the next author copies).
+# It has its OWN scanned counter (`scanned_rule2`, the file count under the dir) and its own
+# floor, so a broken rule-2 walk cannot hide behind rule 1's count -- and vice versa. Same
+# exit contract.
 #
 # Usage:  lint-followthrough-varq-ban.sh [TARGET_DIR]
 #   no arg      -> scans <repo-root>/scripts/followthroughs (production run; ≥10-file floor)
@@ -78,22 +79,23 @@ for f in "$TARGET_DIR"/*.sh; do
   done < <(grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$f" | grep -vE '^[0-9]+:[[:space:]]*#')
 done
 
-# RULE 2: the retired credential name, anywhere, in every *.sh INCLUDING *.test.sh, comments
-# INCLUDED. `-F` because the needle is a literal; `-n` on the RAW file so the cited line is
-# the true one. The `# rule2-walk` marker is what the suite's M5 row mutates to empty this
-# walk and prove the floor below fires on rule 2's OWN counter.
+# RULE 2: the retired credential name in ANY file under the dir, at any depth, comments
+# INCLUDED -- one recursive grep, not a `*.sh` glob, so a fixture, a `.md` note or a
+# subdirectory cannot carry it past the ban. `-F` because the needle is a literal (a
+# superstring such as `MY_SENTRY_AUTH_TOKEN` is caught on purpose: it is the same name with a
+# prefix); `-n` on the RAW file so the cited line is the true one. The `# rule2-grep` marker
+# is what the suite's M5 row deletes to prove this line is the mechanism.
 RETIRED_NAME='SENTRY_AUTH_TOKEN'
-scanned_rule2=0
-for f in "$TARGET_DIR"/*.sh; do  # rule2-walk
-  [[ -e "$f" ]] || continue
-  scanned_rule2=$((scanned_rule2 + 1))
-  while IFS= read -r hit; do
-    [[ -z "$hit" ]] && continue
-    lineno="${hit%%:*}"
-    echo "$f:$lineno: rule 2: names the retired credential '$RETIRED_NAME' -- use SENTRY_ACTIONS_RO_TOKEN; the retired name binds a personal token under doppler run -c prd_terraform (see ADR-031, #7946). Comments and .test.sh stubs count: they are what gets copied." >&2
-    violations=$((violations + 1))
-  done < <(grep -nF -- "$RETIRED_NAME" "$f")
-done
+scanned_rule2=$(find "$TARGET_DIR" -type f | wc -l)  # rule2-count
+rule2_hits=""
+rule2_hits=$(grep -rnF -- "$RETIRED_NAME" "$TARGET_DIR" || true)  # rule2-grep
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  # `path:line:text` -- the path is the first field; the line number the second.
+  f="${hit%%:*}"; rest="${hit#*:}"; lineno="${rest%%:*}"
+  echo "$f:$lineno: rule 2: names the retired credential '$RETIRED_NAME' -- use SENTRY_ACTIONS_RO_TOKEN; the retired name binds a personal token under doppler run -c prd_terraform (see ADR-031, #7946). Comments, fixtures and .test.sh stubs count: they are what gets copied." >&2
+  violations=$((violations + 1))
+done <<<"$rule2_hits"
 
 # Minimum-cardinality floor (production run only): a broken glob yielding 0 files must not
 # pass vacuously. Skipped for an explicit sandbox dir (the .test.sh fixtures are few).

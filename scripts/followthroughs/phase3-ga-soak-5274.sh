@@ -28,7 +28,9 @@
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
 # Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
-#   as secrets.SENTRY_IAC_AUTH_TOKEN). Mirrors ac8-founder-ambiguous-soak-5673.sh.
+#   as secrets.SENTRY_ACTIONS_RO_TOKEN -- the org-level read-only `actions-read-prd` integration, ADR-031;
+#   rotation: knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md).
+#   Mirrors ac8-founder-ambiguous-soak-5673.sh.
 
 set -uo pipefail
 
