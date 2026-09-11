@@ -68,9 +68,21 @@ else fail "hook missing or not executable at $HOOK"; fi
 
 # The runner must ARM it. Anchored on the export WITH its value, on comment-stripped source, so
 # the prose above the arming block (which names the same variable) cannot satisfy this.
-ck; _armed="$({ sed 's/[[:space:]]*#.*$//' "$RUNNER" || true; } | grep -cE '^[[:space:]]*export GIT_CONFIG_VALUE_0="\$PWD/scripts/hooks/battery-ref-guard"')"
+ck; _armed="$({ sed 's/[[:space:]]*#.*$//' "$RUNNER" || true; } | grep -cE '^[[:space:]]*export GIT_CONFIG_VALUE_0="\$_bt_hookdir"')"
 if [[ "$_armed" == "1" ]]; then pass "scripts/test-all.sh arms the predicate exactly once"
 else fail "scripts/test-all.sh arms the predicate $_armed time(s), expected exactly 1"; fi
+
+# THE ARMING MUST NOT NAME A TRACKED PATH. lefthook auto-installs into whatever core.hooksPath
+# names; an earlier revision pointed it at scripts/hooks/battery-ref-guard, so a full gate run
+# ended with an untracked pre-commit in the repository and the write-boundary sentinel firing
+# "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY". Nothing installs hooks during a single suite,
+# so only a full gate run surfaced it — which is exactly why it is pinned here now.
+ck; _hookval="$({ sed 's/[[:space:]]*#.*$//' "$RUNNER" || true; } | grep -oE '^[[:space:]]*export GIT_CONFIG_VALUE_0=.*' | head -1)"
+if [[ -n "$_hookval" && "$_hookval" != *scripts/hooks* && "$_hookval" != *'$PWD'* ]]; then
+  pass "the arming points at a run-scoped dir, not a tracked path (lefthook cannot install into the repo)"
+else
+  fail "the arming names a tracked path ($_hookval) — lefthook will install into the repository and trip the write boundary"
+fi
 
 # --- predicate arms, no git required ---------------------------------------------------------
 LIVE_COMMON="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir)" && pwd -P)"
@@ -153,7 +165,7 @@ fi
 printf '\nbattery-ref-guard: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 
 # Reported DIRECTLY, never through fail() (ADR-193). THE BINDING SITS FLUSH AGAINST THE `if`.
-BATTERY_REF_MIN_ASSERTIONS=11
+BATTERY_REF_MIN_ASSERTIONS=12
 if (( asserted < BATTERY_REF_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_REF_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_REF_MIN_ASSERTIONS" >&2
   exit 1

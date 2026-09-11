@@ -1441,6 +1441,14 @@ _repo_boundary_exit_note() {
 # outright (measured -- it does not compose), so a trap up there would have looked correct and freed
 # nothing. Skipped when the root was INHERITED: freeing an outer runner's sandbox mid-run would
 # silently re-point every later suite at the operator's real ledger.
+_soleur_refguard_cleanup() {
+  # The hook dir is a mktemp copy, so lefthook's auto-install lands in /tmp instead of the
+  # repository. Guarded on the name so a mis-set variable cannot rm an unrelated path.
+  [[ -n "${_soleur_refguard_dir:-}" && "$_soleur_refguard_dir" == */soleur-refguard.* ]] \
+    && rm -rf "$_soleur_refguard_dir"
+  return 0
+}
+
 _soleur_inc_cleanup() {
   [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == */soleur-inc-* ]] && rm -rf "$_soleur_inc_owned"
   # `return 0` is LOAD-BEARING, not tidiness. When the root was INHERITED,
@@ -1456,7 +1464,7 @@ _soleur_inc_cleanup() {
   # test-all-runtime-ceiling and test-all-killed-classification.
   return 0
 }
-trap '_repo_boundary_exit_note; _soleur_inc_cleanup' EXIT
+trap '_repo_boundary_exit_note; _soleur_refguard_cleanup; _soleur_inc_cleanup' EXIT
 
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
@@ -1524,10 +1532,32 @@ if (( _ENUMERATE == 0 )); then
   # stay hermetic under it. Benign at COUNT=1 on both sides; fragile above it. Do not build
   # indirection for this, just do not raise either count without reading the other.
   if [[ -n "$_bt_common" && -x scripts/hooks/battery-ref-guard/reference-transaction ]]; then
-    export BATTERY_TAG_LIVE_COMMON_DIR="$_bt_common"
-    export GIT_CONFIG_COUNT=1
-    export GIT_CONFIG_KEY_0=core.hooksPath
-    export GIT_CONFIG_VALUE_0="$PWD/scripts/hooks/battery-ref-guard"
+    # POINT core.hooksPath AT A RUN-SCOPED COPY, NEVER AT THE TRACKED DIRECTORY.
+    #
+    # An earlier revision pointed it straight at scripts/hooks/battery-ref-guard, which is a
+    # TRACKED source path — and lefthook auto-installs into whatever core.hooksPath names. A full
+    # gate run therefore ended with an untracked `pre-commit` sitting in the repository and the
+    # write-boundary sentinel firing "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY", worktree
+    # dimension. `scripts/lib/repo-write-boundary.sh` already excludes the contents of .git/hooks
+    # "so `lefthook install` does not fire here"; redirecting hooksPath at a tracked path routed
+    # around that exclusion and put the install where it DOES fire. Only a full gate run surfaces
+    # this: nothing installs hooks during a single suite.
+    #
+    # A temp copy costs the "nothing to install, nothing to tear down" property the env-scoped
+    # design started with. That property was not survivable, and a stray file in /tmp is a strictly
+    # better failure than a stray file in the repository.
+    _bt_hookdir="$(mktemp -d -t soleur-refguard.XXXXXXXX)" || _bt_hookdir=""
+    if [[ -n "$_bt_hookdir" && -d "$_bt_hookdir" ]] \
+       && cp scripts/hooks/battery-ref-guard/reference-transaction "$_bt_hookdir/" 2>/dev/null; then
+      chmod +x "$_bt_hookdir/reference-transaction" 2>/dev/null || true
+      _soleur_refguard_dir="$_bt_hookdir"
+      export BATTERY_TAG_LIVE_COMMON_DIR="$_bt_common"
+      export GIT_CONFIG_COUNT=1
+      export GIT_CONFIG_KEY_0=core.hooksPath
+      export GIT_CONFIG_VALUE_0="$_bt_hookdir"
+    else
+      printf 'WARNING: ref-store state predicate NOT armed (could not stage a run-scoped hook dir) — this run is guarded by the static census alone.\n' >&2
+    fi
   else
     # Never silent: "the predicate is armed" and "the predicate could not arm" must not render
     # identically, or a disarmed run reads exactly like a protected one.
