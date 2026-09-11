@@ -25,7 +25,8 @@ target
 node_modules/
 __pycache__/
 *.pyc
-.codex/
+.codex/*
+!.codex/config.toml
 .worktrees
 .claude/settings.local.json
 .mcp.local.json
