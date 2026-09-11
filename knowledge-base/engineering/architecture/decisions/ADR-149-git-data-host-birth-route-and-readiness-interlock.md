@@ -223,6 +223,29 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Disposition — #8043 (2026-09-11): six hash-bound hardening items, and what they cost the evidence
+
+Six defects on the git-data host were fixed as ONE change because each edits a file inside the
+13-file `RUNG2_TEMPLATE_SHA256` binding: F6 (a comment framing the three SSH pubkeys as
+identity-shaped), F7 (the `git` account owned its own authorization map), F8 (an Art. 17 erasure
+could report success over an unmounted store), F9 (`core.hooksPath` pointed at a git-writable
+directory), F10 (five wrapper comments claiming `AcceptEnv` is empty), F11 (the stage's only ssh
+unit action named `sshd`, which ubuntu-24.04 does not have). Moving them together costs one
+fresh rehearsal instead of six. Four decisions belong here rather than in the plan:
+
+| Decision | Record |
+|---|---|
+| **The ssh unit is `ssh`, and only git-data is edited** | ubuntu-24.04 ships ssh socket-activated: `ssh.socket` is `Accept=no` (one long-lived `sshd -D`, so no per-connection re-read makes a drop-in effective), and `Alias=sshd.service` is instantiated only when `ssh.service` is enabled — under socket activation, never. `systemctl restart sshd` therefore failed rc=5 on every boot, fail-open. The rename is safe on a console-less host because `ssh.socket` carries no `Conflicts=ssh.service` (the listener stays bound; a failed start does not close port 22); it adds a bounded wait (`Type=notify` + `ExecStartPre`, ≤ `DefaultTimeoutStartSec` 90 s) above the LUKS stage, to be read from the fresh rehearsal's boot wall-clock delta. **Fleet decision — git-data only:** `hcloud_server.web` has `ignore_changes = [user_data]` (an edit is inert); `inngest` and `registry` are ForceNew on LIVE hosts (a destructive replace); `grok_dogfood` renders no ssh action. The siblings load the drop-in at the daemon's first start regardless, so they are *noisy, not unhardened* — except inngest's next `runcmd` item, `inngest-boot-phone-home.sh sshd-restarted`, a positive attestation for an action that fails every boot. Filed at load-bearing severities (#8043 FR17). |
+| **A voided attestation is DELETED, never rewritten** | `git-data-rung2-boot-evidence.env` was deleted by this change rather than edited to the moved digest. Editing would make a void attestation look freshly re-rehearsed — the exact failure the gate exists to prevent and one it structurally cannot catch: `git_data_rung2_rehearsal_gate`'s only provenance check is a regex that `RUNG2_EVIDENCE_URL` *looks like* an Actions run URL; it never fetches the run (#8010). Deletion is fail-closed in both directions: the gate HOLDs on an absent file, and the CI freshness step returns to its dormant-by-design arm, which is also the only way the change could merge — that step is armed once the file exists and fails when the hash moves, while the rehearsal environment deploys from `main` only, so "rehearse first" was a deadlock, not a sequencing preference. A provenance gate now enforces the shape (birth-time arm inside the rehearsal gate; advisory PR-range arm in CI); the rebase-merged multi-commit residual is #8010's. |
+| **The hash binds SOURCE, not the render** | `git_data_rung2_user_data_sha256()` hashes the template and the nine payloads as committed, while `local.git_data_rationale_strip` (ADR-152) strips comment lines at render time. So a comment-only edit (F6, F10) that never reaches the host voids a paid attestation exactly as a code edit does — which is why this batch had to be six items wide, and why a future rung-2 evidence design should consider binding the RENDER. Recorded as a finding, not changed here. |
+| **The authorization-map gate's ownership arm was measured wrong and flipped** | The arm required `owner: git:git` on the rationale that any other owner is "unreadable by sshd or writable by a second principal". Measured in the pinned image: a `root:root 0644` map in a `root:git 0750` `.ssh` authenticates; `root:root 0600` does NOT (sshd opens the file under the target user's uid — "Permission denied", every push refused). The arm now requires `root:root` / `'0644'` (checklist item 10's control, tightened; the three-distinct-keys assertion is unchanged). |
+
+**Checklist effect.** Items 1–7, 9 and 10 are unchanged in status. The rung-2 evidence that
+satisfied item 8's precondition is void by construction (the template moved) and has been
+deleted; item 8 (#7025) is therefore **re-armed** — the sequel is a fresh rehearsal dispatched
+from `main`, its evidence PR, then the banner PR, then the birth. Nothing in this change
+dispatches a rehearsal or a birth.
+
 ### Disposition — #8009 (2026-09-10)
 
 | Item | Status |
