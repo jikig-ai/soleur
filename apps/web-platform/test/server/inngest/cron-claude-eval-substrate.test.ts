@@ -34,6 +34,13 @@ writeFileSync(
 );
 writeFileSync(UNJUSTIFIED_BODY, "Found a discrepancy while auditing.\n");
 
+// #8076 — observe the filing-deny marker without a real pino sink. Partial
+// mock: keep countFilingDenials real, spy only on the emitter.
+const { filingDenyMock } = vi.hoisted(() => ({ filingDenyMock: vi.fn() }));
+vi.mock("@/server/cron-filing-deny-marker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/cron-filing-deny-marker")>()),
+  emitCronFilingDenyMarker: filingDenyMock,
+}));
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
@@ -784,6 +791,36 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     });
   }
 
+  it("#8076: emits SOLEUR_CRON_FILING_DENY once with count=2 when the result event carries two filing denials", async () => {
+    filingDenyMock.mockReset();
+    const resultLine = JSON.stringify({
+      type: "result", subtype: "success", is_error: false, result: "denied twice then gave up",
+      total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 },
+      permission_denials: [
+        { tool_name: "Bash", tool_input: { command: "gh issue create --title a" } },
+        { tool_name: "Bash", tool_input: { command: "gh issue create --title b" } },
+        { tool_name: "Bash", tool_input: { command: "gh issue list" } },
+      ],
+    });
+    const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
+    await runFakeEval(spawnCwd);
+    expect(filingDenyMock).toHaveBeenCalledTimes(1);
+    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({
+      fn: "cron-test-fake",
+      count: 2,
+      commands: ["gh issue create", "gh issue create"],
+    });
+    expect(typeof filingDenyMock.mock.calls[0][0].spawn_started_at).toBe("string");
+  });
+
+  it("#8076: emits nothing when the result event carries no filing denial", async () => {
+    filingDenyMock.mockReset();
+    const resultLine = JSON.stringify({ type: "result", subtype: "success", result: "clean", permission_denials: [] });
+    const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
+    await runFakeEval(spawnCwd);
+    expect(filingDenyMock).not.toHaveBeenCalled();
+  });
+
   it("captures a stdout tail and redacts the installation token", async () => {
     const spawnCwd = installFakeClaudeBin(
       [
@@ -931,8 +968,28 @@ describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
     });
     expect(c.fatal).toBe(false);
   });
-});
 
+  // #8076 — a PreToolUse hook deny lands in the result event's
+  // permission_denials[] (measured 2026-09-11). Count the filing-shaped ones.
+  it("counts filing-shaped permission_denials (2 filing + 1 non-filing → 2)", () => {
+    const line = JSON.stringify({
+      type: "result", subtype: "success", is_error: false, result: "ok",
+      permission_denials: [
+        { tool_name: "Bash", tool_use_id: "t1", tool_input: { command: "gh issue create --title t --body b" } },
+        { tool_name: "Bash", tool_use_id: "t2", tool_input: { command: "gh issue list --label x" } },
+        { tool_name: "Bash", tool_use_id: "t3", tool_input: { command: "gh api repos/jikig-ai/soleur/issues -X POST -f title=t" } },
+      ],
+    });
+    const parsed = parseClaudeResultLine(line);
+    expect(parsed!.filingDenials.count).toBe(2);
+    expect(parsed!.filingDenials.commands).toEqual(["gh issue create", "gh api repos/jikig-ai/soleur/issues"]);
+  });
+
+  it("filingDenials is 0 when permission_denials is empty or absent", () => {
+    expect(parseClaudeResultLine(okResultLine)!.filingDenials.count).toBe(0);
+    expect(parseClaudeResultLine(JSON.stringify({ type: "result", permission_denials: [] }))!.filingDenials.count).toBe(0);
+  });
+});
 describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {
   const cost = { model: null } as NonNullable<
     ReturnType<typeof parseClaudeResultLine>

@@ -1,4 +1,8 @@
 import { RUN_REPORT_CRONS } from "./_cron-run-reports";
+import {
+  countFilingDenials,
+  emitCronFilingDenyMarker,
+} from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -99,6 +103,10 @@ export interface ParsedEvalResult {
   // credit/auth/spawn-fault classifier still sees the error string under the
   // JSON output format (arch P1-A).
   resultText: string;
+  // #8076 — filing-shaped PreToolUse denials from the event's
+  // `permission_denials[]` (a hook deny lands there with the full command —
+  // measured 2026-09-11). Command HEADS only; see cron-filing-deny-marker.ts.
+  filingDenials: { count: number; commands: string[] };
 }
 
 /**
@@ -131,8 +139,10 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
     };
     modelUsage?: Record<string, unknown>;
     result?: unknown;
+    permission_denials?: unknown;
   };
   return {
+    filingDenials: countFilingDenials(r.permission_denials),
     cost: {
       costUsd:
         typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
@@ -981,6 +991,8 @@ export async function spawnClaudeEval(args: {
   // model, parsed fail-open from stdout when `--output-format json` is active.
   // Stays null until a `{"type":"result",…}` line parses (→ capture_status:"ok").
   let evalCost: ParsedEvalResult["cost"] | null = null;
+  // #8076 — filing-gate denials seen in the result event (0 until parsed).
+  let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [] };
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
   // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
   // `--output-format json`) did NOT yield a usable `result` event — a truncated/
@@ -1057,6 +1069,7 @@ export async function spawnClaudeEval(args: {
           const parsedResult = parseClaudeResultLine(line);
           if (parsedResult) {
             evalCost = parsedResult.cost;
+            evalFilingDenials = parsedResult.filingDenials;
             const tailText = redactToken(
               parsedResult.resultText,
               installationToken,
@@ -1118,6 +1131,18 @@ export async function spawnClaudeEval(args: {
             evalCost?.usage?.cache_creation_input_tokens ?? null,
           capture_status: captureStatus,
         });
+        // #8076 — one positive marker per run that had a filing-gate deny;
+        // fail-open like the cost marker, and silent at 0 (a heartbeat would
+        // drown the signal). Correlate with `scheduled-output-missing` on fn.
+        if (evalFilingDenials.count > 0) {
+          emitCronFilingDenyMarker({
+            fn: cronName,
+            run_id: runId ?? cronName,
+            spawn_started_at: new Date(startedAt).toISOString(),
+            count: evalFilingDenials.count,
+            commands: evalFilingDenials.commands,
+          });
+        }
         resolve(r);
       };
 
