@@ -147,22 +147,45 @@ command -v git-shell >/dev/null 2>&1 || {
   exit 1
 }
 
-# 3. The dedicated `git` transport user (created by cloud-init `users:`). Lock down
-#    its .ssh so sshd accepts the forced-command authorized_keys cloud-init wrote.
+# 3. The dedicated `git` transport user (created by cloud-init `users:`). (#8043 F7) THE
+#    ACCOUNT MUST NOT OWN ITS OWN AUTHORIZATION MAP, nor the directory holding it, nor the
+#    home that directory sits in — owning any one of the three lets `git` rewrite the map
+#    (in place, or by replacing .ssh, or by replacing the home). This block is the LAST
+#    WRITER of those paths: it runs in runcmd, AFTER write_files declared `owner:` on the
+#    map, so what it sets is what boots. It used to `chown -R git:git .ssh`, which reverted
+#    cloud-init's declaration on every boot (learning 2026-03-20: a recursive chown placed
+#    after a targeted one silently reverts it, and cloud-init exits 0). There is NO correct
+#    position for a `-R` over .ssh once the map is root-owned, so it is deleted, not moved.
+#    Three targeted, non-recursive calls, ordered home -> .ssh -> file. Modes are chosen so
+#    the account can still WORK: sshd chdir()s into the home for the forced command and
+#    traverses .ssh to read the map, so both are `root:git 0750` (`root:root 0750` would be
+#    untraversable — the trap step 4 avoids for $HOOKS_DIR). The map itself is `root:root
+#    0644`, NOT 0600: sshd opens it under the target user's uid (measured in the pinned
+#    ubuntu-24.04 image — 0600 is "Permission denied" and every push is refused).
 id "$GIT_USER" >/dev/null 2>&1 || {
   log "FATAL: $GIT_USER user absent (cloud-init users: stage did not run)"
   exit 1
 }
 mkdir -p "$GIT_HOME/.ssh"
-chmod 700 "$GIT_HOME/.ssh"
-[[ -f "$GIT_HOME/.ssh/authorized_keys" ]] && chmod 600 "$GIT_HOME/.ssh/authorized_keys"
-chown -R "$GIT_USER:$GIT_USER" "$GIT_HOME/.ssh"
+chown "root:$GIT_USER" "$GIT_HOME"
+chmod 0750 "$GIT_HOME"
+chown "root:$GIT_USER" "$GIT_HOME/.ssh"
+chmod 0750 "$GIT_HOME/.ssh"
+if [[ -f "$GIT_HOME/.ssh/authorized_keys" ]]; then
+  chown root:root "$GIT_HOME/.ssh/authorized_keys"
+  chmod 0644 "$GIT_HOME/.ssh/authorized_keys"
+fi
 
-# 4. Bare-repo root + hooks dir on the volume, owned by the transport user. chown
-#    immediately after mkdir (the five-bug-cascade learning, inngest-redis-bootstrap).
+# 4. Bare-repo root + hooks dir on the volume. chown immediately after mkdir (the
+#    five-bug-cascade learning, inngest-redis-bootstrap). (#8043 F9) TWO OWNERS, NOT ONE:
+#    $REPO_ROOT stays git-owned (git-data-provision.sh inits repos there as `git`), but
+#    $HOOKS_DIR is `root:git 0750` — not writable by the account whose pushes the hook in it
+#    fences, still traversable because `git` runs receive-pack, which execs the hook.
 mkdir -p "$REPO_ROOT" "$HOOKS_DIR"
-chown "$GIT_USER:$GIT_USER" "$REPO_ROOT" "$HOOKS_DIR"
-chmod 0750 "$REPO_ROOT" "$HOOKS_DIR"
+chown "$GIT_USER:$GIT_USER" "$REPO_ROOT"
+chmod 0750 "$REPO_ROOT"
+chown "root:$GIT_USER" "$HOOKS_DIR"
+chmod 0750 "$HOOKS_DIR"
 
 # 4b. Repo-root reconcile (ADR-068 amendment 2026-07-01 "PR B bare-repo
 #     provisioning"). The git-shell TRANSPORT resolves push URL paths relative to
@@ -179,9 +202,13 @@ chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
 #    (base64). core.hooksPath (step 6) points every per-workspace bare repo at it,
 #    so a push is rejected until the real fence hook lands via the deploy pipeline.
 #    Re-runnable: skip the staged install only when the hook is already in place.
+#    (#8043 F9) ROOT-OWNED, not git-owned. A root-owned $HOOKS_DIR alone does not close the
+#    property: truncating an existing file needs write permission on the FILE, so a git-owned
+#    0755 pre-receive inside a root-owned directory is still a fence the fenced account can
+#    overwrite. `git` needs only x (other) to exec it from receive-pack.
 if [[ -f "$PLACEHOLDER_STAGED" ]]; then
   assert_not_symlink "$PLACEHOLDER_STAGED"
-  install -o "$GIT_USER" -g "$GIT_USER" -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
+  install -o root -g root -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
 elif [[ ! -f "$PRE_RECEIVE" ]]; then
   log "FATAL: placeholder hook not staged at $PLACEHOLDER_STAGED and $PRE_RECEIVE absent"
   exit 1
@@ -255,6 +282,30 @@ mountpoint -q "$LUKS_ROOT" || {
 }
 [[ -x "$PRE_RECEIVE" ]] || {
   log "FATAL: pre-receive hook missing/not executable"
+  exit 1
+}
+# (#8043 F7/F9) OWNERSHIP IS READ BACK, NOT ASSUMED. Each path is compared as a literal
+# `user:group mode` so this proves the ABSENCE of the reverted state (a later recursive
+# chown, a re-added `-o git` install), not merely that a chown line exists above.
+_own() { stat -c '%U:%G %a' "$1"; }
+[[ "$(_own "$GIT_HOME")" == "root:$GIT_USER 750" ]] || {
+  log "FATAL: $GIT_HOME is $(_own "$GIT_HOME"), expected root:$GIT_USER 750 (git could replace .ssh, or sshd cannot chdir)"
+  exit 1
+}
+[[ "$(_own "$GIT_HOME/.ssh")" == "root:$GIT_USER 750" ]] || {
+  log "FATAL: $GIT_HOME/.ssh is $(_own "$GIT_HOME/.ssh"), expected root:$GIT_USER 750 (git could create authorized_keys2, or sshd cannot traverse)"
+  exit 1
+}
+[[ "$(_own "$GIT_HOME/.ssh/authorized_keys")" == "root:root 644" ]] || {
+  log "FATAL: authorized_keys is $(_own "$GIT_HOME/.ssh/authorized_keys" 2>/dev/null || echo absent), expected root:root 644 (git could rewrite the map, or sshd cannot read it)"
+  exit 1
+}
+[[ "$(_own "$HOOKS_DIR")" == "root:$GIT_USER 750" ]] || {
+  log "FATAL: $HOOKS_DIR is $(_own "$HOOKS_DIR"), expected root:$GIT_USER 750 (git could write the hook dir, or cannot traverse it)"
+  exit 1
+}
+[[ "$(_own "$PRE_RECEIVE")" == "root:root 755" ]] || {
+  log "FATAL: $PRE_RECEIVE is $(_own "$PRE_RECEIVE"), expected root:root 755 (git could overwrite the fence it is fenced by)"
   exit 1
 }
 [[ "$(git config --system core.hooksPath)" == "$HOOKS_DIR" ]] || {

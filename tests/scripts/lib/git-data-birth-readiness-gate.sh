@@ -978,12 +978,19 @@ git_data_authorization_map_gate() {
     want && $0 ~ /^[[:space:]]*(owner|permissions):/ { print; n++ }
     want && n >= 2 { exit }
   ' "$cloud_init")"
-  if ! grep -qE "^[[:space:]]*owner:[[:space:]]*git:git[[:space:]]*$" <<< "$_ak_meta"; then
-    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry is not owned by git:git. The forced commands run as the git user; an authorization map owned by anyone else is either unreadable by sshd or writable by a second principal."
+  # (#8043 F7) ROOT-OWNED. This arm used to require `owner: git:git` on the rationale that "an
+  # authorization map owned by anyone else is either unreadable by sshd or writable by a second
+  # principal" — MEASURED FALSE in the pinned ubuntu-24.04 image: a `root:root 0644` map inside a
+  # `root:git 0750` .ssh authenticates the git key, and StrictModes permits uid 0. What git:git
+  # actually meant was that the CONSTRAINED PRINCIPAL owned its own authorization map and could
+  # rewrite it in place. The mode is 0644, NOT 0600: sshd opens the file under the target
+  # user's uid, so `root:root 0600` is "Permission denied" (measured) and every push is refused.
+  if ! grep -qE "^[[:space:]]*owner:[[:space:]]*root:root[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry is not owned by root:root. The forced commands run as the git user, and a map the git account owns is a map the constrained principal can rewrite in place — the shortest persistence path for code execution as git (#8043 F7). sshd reads the file as the git uid, so root ownership at 0644 stays readable."
     return 1
   fi
-  if ! grep -qE "^[[:space:]]*permissions:[[:space:]]*'0600'[[:space:]]*$" <<< "$_ak_meta"; then
-    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry does not declare permissions '0600'. Any group- or world-writable mode makes the authorization map rewritable by a second principal on the host, and this gate proves nothing about a file that anything can edit."
+  if ! grep -qE "^[[:space:]]*permissions:[[:space:]]*'0644'[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry does not declare permissions '0644'. Under root ownership 0600 is UNREADABLE by sshd (it opens the map as the target user; measured 'Permission denied' in the pinned image) and refuses every push; any group- or world-WRITABLE mode makes the map rewritable by a second principal. 0644 is the one mode that is both readable by the git uid and writable by root only."
     return 1
   fi
 

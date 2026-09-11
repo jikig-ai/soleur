@@ -1473,6 +1473,13 @@ jobs:
       - name: Run git-data bare-repo erasure (Art. 17) tests
         run: bash apps/web-platform/infra/git-data-remove.test.sh
 
+      # (#8043 F7/F9, Guard 3) The git account cannot rewrite its own authorization map or the
+      # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
+      # applies them in the pinned image and proves sshd accepts the map (with a negative
+      # control). Under CI=true the runtime arm is a FAILURE if docker is unavailable.
+      - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
+        run: bash apps/web-platform/infra/git-data-ownership.test.sh
+
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 

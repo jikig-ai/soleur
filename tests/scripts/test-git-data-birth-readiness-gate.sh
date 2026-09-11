@@ -1044,8 +1044,8 @@ write_files:
       command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
       command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
       command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
-    owner: git:git
-    permissions: '0600'
+    owner: root:root
+    permissions: '0644'
 YML
   cat > "$d/modules/git-data-userdata/main.tf" <<'TF'
 locals {
@@ -1449,6 +1449,21 @@ io.open(p,'w',encoding='utf-8').write(s)
 PYX
 _am "B36: a base64 authorized_keys ABORTS — the extractor must not latch onto a later block" 2 "literal" "$B"
 
+# --- (#8043 F7) the OWNER of the map: the constrained principal must not own it -----------
+# The arm used to REQUIRE git:git on a rationale measured false (a root-owned 0644 map inside a
+# root:git 0750 .ssh authenticates in the pinned image). B37 pins the flip in the direction that
+# rots: a template that hands the map back to the git account must HOLD, naming root:root.
+B="$TMP/am-b37"; _authmap_root "$B"
+sed -i 's|^    owner: root:root$|    owner: git:git|' "$B/cloud-init-git-data.yml"
+_am "B37: an authorized_keys owned by git:git HOLDs — the constrained principal would own its own map" 1 "root:root" "$B"
+
+# B38 — 0600 under root ownership is UNREADABLE by sshd (it opens the map as the target user;
+# measured "Permission denied" in the pinned image), so every push is refused. The mode is
+# part of the map, in the direction a "tighten it" edit would take.
+B="$TMP/am-b38"; _authmap_root "$B"
+sed -i "s|^    permissions: '0644'$|    permissions: '0600'|" "$B/cloud-init-git-data.yml"
+_am "B38: a root-owned map at 0600 HOLDs — unreadable by the git uid sshd reads it as" 1 "0644" "$B"
+
 # A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
@@ -1505,18 +1520,21 @@ _am "B36: a base64 authorized_keys ABORTS — the extractor must not latch onto 
 #                     mawk-vs-gawk split that made this gate ABORT on every CI run)
 #   ----
 #    15
+#
+# RAISED 118 -> 120 (#8043 F7), ITEMISED:
+#     2  B37/B38   the map's OWNER and MODE, in the directions that rot (git:git; root 0600)
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 118 ]]; then
+if [[ "$_ran" -lt 120 ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 118")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 118. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 120")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 120. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 118)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 120)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

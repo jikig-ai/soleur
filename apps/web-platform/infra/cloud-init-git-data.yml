@@ -85,6 +85,7 @@ write_files:
       ClientAliveCountMax 2
       MaxStartups 10:30:60
       MaxSessions 4
+      AuthorizedKeysFile .ssh/authorized_keys
     owner: root:root
     permissions: '0644'
 
@@ -101,14 +102,26 @@ write_files:
   # Separate keys ⇒ provisioning, ref-write, and erasure authority have separate
   # blast radii. A bare dollar-var (no braces) is left literal by terraform
   # templatefile() — only dollar-brace interpolates. `defer: true` writes after the
-  # `git` user exists; git-data-bootstrap.sh fixes the .ssh perms so sshd accepts.
+  # `git` user exists.
+  #
+  # (#8043 F7) ROOT-OWNED, 0644, AND THE ONLY AUTHORIZATION FILE. The map was `git:git 0600`,
+  # so the constrained principal OWNED it and could rewrite it in place — the shortest
+  # persistence path for code execution as `git`. Now `root:root`, inside a `root:git 0750`
+  # .ssh inside a `root:git 0750` home (both set by git-data-bootstrap.sh, the last writer,
+  # because git_data_authorization_map_gate refuses this literal anywhere outside this
+  # write_files entry). 0644 and NOT 0600: sshd opens authorized_keys under the TARGET USER's
+  # uid — measured in the pinned ubuntu-24.04 image, `root:root 0600` is "Permission denied"
+  # and every push is refused; `root:root 0644` authenticates. StrictModes permits a
+  # root-owned file. `AuthorizedKeysFile .ssh/authorized_keys` above drops the stock
+  # `.ssh/authorized_keys2` fallback: with .ssh root-owned nothing can create it, so the pin
+  # is defence in depth against an ownership regression, not the control that closes the hole.
   - path: /home/git/.ssh/authorized_keys
     content: |
       command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
       command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
       command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
-    owner: git:git
-    permissions: '0600'
+    owner: root:root
+    permissions: '0644'
     defer: true
 
   # --- (#7460) The BAKED Better Stack ingest token, at 0600 root:root.
