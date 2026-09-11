@@ -40,7 +40,12 @@
 //                          only a redacted RESULT summary is emitted.
 
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { chromium, type Browser, type LaunchOptions } from "@playwright/test";
+import {
+  chromium,
+  type Browser,
+  type LaunchOptions,
+  type Page,
+} from "@playwright/test";
 
 import { redact } from "./redact";
 
@@ -337,6 +342,183 @@ export async function verifyPrincipal(
 // ---------------------------------------------------------------------------
 
 const RAIL = '[data-testid="conversations-rail"]';
+
+/**
+ * The composer's ARIA role — used by BOTH the wait and the diagnostic that
+ * explains the wait's failure. They must never re-derive it independently: a
+ * diagnostic counting a different role than the wait queried would report the
+ * opposite of the truth, and only on the failure path where nobody is looking.
+ */
+export const COMPOSER_ROLE = "textbox" as const;
+
+/** Per-field ceiling for the renderer round trips in waitFailureState. */
+const FIELD_TIMEOUT_MS = 3_000;
+
+/** Paths this harness can legitimately be on; anything else is reduced. */
+const EXPECTED_PATHS =
+  /^\/(?:dashboard(?:\/chat(?:\/new|\/[0-9a-f-]{36})?)?|login|accept-terms)$/;
+
+/**
+ * Strip the characters a log/JSON viewer treats as line breaks.
+ * `JSON.stringify` escapes only C0, `"` and `\` — U+2028/U+2029 (and DEL) pass
+ * through literally, so a crafted title could render as a second line and forge
+ * a `RESULT:` verdict in an operator's eye. Written as escapes, never literals
+ * (`cq-regex-unicode-separators-escape-only`).
+ */
+function scrubLine(v: string): string {
+  return v.replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ");
+}
+
+/**
+ * Failure-time page state for a visibility wait that timed out (#7969).
+ * Background and the three hypotheses it separates: issue #7969, PR #8092.
+ *
+ * Two invariants constrain every future edit here:
+ *
+ * 1. NEVER THROWS. This runs only on the already-failing path, so an exception
+ *    would replace a diagnosable timeout with an undiagnosable one. Every field
+ *    goes through safe() and degrades to a sentinel (`<unreadable>`, `-1`) —
+ *    never to a value a healthy page could also produce.
+ * 2. The URL is cut to its PATH, and that is the ONLY control on the query
+ *    string: redact.ts's rules cover access_token/refresh_token/provider_token/
+ *    apikey, and NOT `code=`, which is what Supabase PKCE puts there. Widening
+ *    this back to a full URL leaks that grant into a public CI log.
+ */
+export async function waitFailureState(
+  page: Page,
+  nav: { status(): number; url?(): string } | null,
+  what: "composer" | "rail",
+  cause?: unknown,
+): Promise<string> {
+  // BOUNDED, not merely guarded (#8092 review). page.title() and
+  // Locator.count() accept no timeout and evaluate in the RENDERER — and a
+  // wedged renderer is one of the hypotheses this helper exists to separate.
+  // Unbounded, a hang here would blow the job's timeout-minutes, emit NO
+  // RESULT: line at all, and the workflow escalates that absence to BLOCK=1 —
+  // turning a non-blocking CANT-RUN into a blocking release failure carrying
+  // LESS information than the timeout it replaced. So: never throws AND always
+  // returns.
+  const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        fn(),
+        new Promise<T>((resolve) => {
+          timer = setTimeout(() => resolve(fallback), FIELD_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      return fallback;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  // ALLOWLIST, not raw emit (#8092 review). Cutting the URL to its pathname
+  // strips the query and the fragment — where Supabase PKCE puts `?code=` and
+  // the implicit flow puts `#access_token=` — but a pathname can ITSELF be a
+  // credential: this app serves /shared/<token>, /api/kb/share/<token>,
+  // /invite/<token> and /api/account/export/<jobId>, none of which any
+  // redact.ts rule matches. The harness cannot reach those today only because
+  // middleware.ts passes literal redirect targets and the nav target is a
+  // constant — three files away, pinned by nothing here. So emit only the paths
+  // this harness can legitimately be on, and reduce anything else to its first
+  // segment, which is enough to diagnose and cannot carry a token.
+  const path = await safe(async () => {
+    const raw = new URL(page.url()).pathname;
+    if (EXPECTED_PATHS.test(raw)) return raw;
+    return `<unexpected:/${raw.split("/")[1] ?? ""}>`;
+  }, "<unreadable>");
+  // IN safe(), despite Response.status() being a sync accessor: on a CLOSED
+  // target every accessor throws ("Target page, context or browser has been
+  // closed"), and a wedged page that just blew a 20s wait is exactly where a
+  // context teardown races this. Measured consequence of leaving it out — the
+  // throw escapes driveAndVerify and SKIPS `supabase.auth.signOut()` below, so
+  // the synthetic PRODUCTION principal's session is never destroyed.
+  const status = nav
+    ? await safe(async () => String(nav.status()), "<unreadable>")
+    : "<no-response>";
+  // OVERLOADED, deliberately recorded: playwright's Frame.queryCount swallows a
+  // RETRIABLE error ("Execution context was destroyed, most likely because of a
+  // navigation") and returns 0. So `textboxes=0` means "no elements" OR "the
+  // query hit a mid-navigation page" — and mid-navigation is itself one of the
+  // hypotheses. The `-1` sentinel is unreachable for that class; `visible` below
+  // is what disambiguates a real zero from a late paint.
+  const textboxes = await safe(() => page.getByRole(COMPOSER_ROLE).count(), -1);
+  // redact BEFORE the cut: redact()'s rules need WHOLE tokens (the JWT
+  // three-segment shape, the email TLD), so truncating first can leave an
+  // unmatched fragment of a secret.
+  const title = redact(await safe(() => page.title(), "<unreadable>")).slice(0, 60);
+  const rail = await safe(() => page.locator(RAIL).count(), -1);
+  // `http` describes the document goto() fetched; `path` is read at FAILURE
+  // time, after any client-side push. Emitting the nav path too is what makes
+  // `http=200 path=/login` decidable between "the server served /login" and
+  // "the server served the chat route, then the client pushed to /login" —
+  // which is exactly the bounce hypothesis this helper exists to settle.
+  const navPath = nav?.url
+    ? ((): string => {
+        try {
+          return new URL(nav.url!()).pathname;
+        } catch {
+          return "<unreadable>";
+        }
+      })()
+    : "<none>";
+  // Re-probe visibility AT REPORT TIME. The wait sampled at T+0..20s; this
+  // samples at ~T+20.05s. `textboxes=1 visible=false` is drift (present but
+  // hidden); `textboxes=1 visible=true` means it painted just after the wait
+  // expired, i.e. slow first paint — the hypothesis the original message could
+  // not separate at all.
+  const visible = await safe(
+    () => page.getByRole(COMPOSER_ROLE).first().isVisible(),
+    // a distinct sentinel: "we could not tell", never a boolean a healthy page
+    // could also produce
+    "<unreadable>" as boolean | string,
+  );
+  // `.name` ONLY — `.message` embeds the origin URL. This separates a genuine
+  // timeout from TargetClosedError / "Execution context was destroyed", which
+  // the bare catch previously discarded entirely.
+  const errName =
+    cause && typeof cause === "object" && "name" in cause
+      ? scrubLine(String((cause as { name: unknown }).name)).slice(0, 40)
+      : "<none>";
+  return (
+    `${what}-not-visible path=${path} http=${status} nav=${navPath} ` +
+    `err=${errName} textboxes=${textboxes} visible=${visible} rail=${rail} ` +
+    `title=${JSON.stringify(scrubLine(title))}`
+  );
+}
+
+/**
+ * Await a visibility condition, or return a CANT-RUN carrying the page state.
+ *
+ * WHY THIS IS A FUNCTION AND NOT TWO INLINE try/catch BLOCKS (#7969 review):
+ * the inline form made the PR's own central change unpinned — reverting either
+ * call site to a bare `await …waitFor(…)` left the whole suite GREEN, because
+ * `waitFailureState` was unit-tested in isolation and nothing asserted it was
+ * ever CALLED. The endpoints were covered and the wire was not. Routing both
+ * waits through one exported seam makes the wire itself drivable from a test,
+ * and `no-bare-visibility-wait.test.ts` asserts no bare form comes back.
+ *
+ * Returns `null` when the wait succeeds, so callers read as
+ * `const bad = await …; if (bad) return bad;`.
+ */
+export async function awaitVisibleOrDiagnose(
+  wait: () => Promise<unknown>,
+  page: Page,
+  nav: { status(): number; url?(): string } | null,
+  what: "composer" | "rail",
+): Promise<{ kind: "CANT-RUN"; reason: string } | null> {
+  try {
+    await wait();
+    return null;
+  } catch (err) {
+    return {
+      kind: "CANT-RUN",
+      reason: await waitFailureState(page, nav, what, err),
+    };
+  }
+}
+
 // The authenticated app-shell route that renders the rail for the synthetic
 // principal (NOT /dashboard, which is the rail-less onboarding command-center
 // for an org-less user). Used by both the dry-run auth proof and the gate path.
@@ -418,10 +600,17 @@ async function driveAndVerify(
       // /dashboard/chat/new renders the authenticated shell WITH the rail and
       // only materializes a conversation on message *send* (#5485). The
       // non-dry-run gate path below already uses /dashboard/chat/new.
-      await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
+      const dryNav = await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
         waitUntil: "domcontentloaded",
       });
-      await page.waitForSelector(RAIL, { timeout: 20_000 });
+      // #7969: same blindness as the composer wait, same remedy.
+      const railFailed = await awaitVisibleOrDiagnose(
+        () => page.waitForSelector(RAIL, { timeout: 20_000 }),
+        page,
+        dryNav,
+        "rail",
+      );
+      if (railFailed) return railFailed;
       return {
         kind: "PASS",
         detail: "dry-run: authenticated app shell rendered, no mutation",
@@ -433,11 +622,18 @@ async function driveAndVerify(
     const sinceIso = new Date().toISOString();
 
     // Start a fresh conversation and send ONE benign message.
-    await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
+    const nav = await page.goto(`${cfg.productionUrl}${CHAT_NEW_PATH}`, {
       waitUntil: "domcontentloaded",
     });
-    const input = page.getByRole("textbox").first();
-    await input.waitFor({ state: "visible", timeout: 20_000 });
+    const input = page.getByRole(COMPOSER_ROLE).first();
+    // #7969: report WHAT WAS ON THE PAGE, not merely that a locator timed out.
+    const composerFailed = await awaitVisibleOrDiagnose(
+      () => input.waitFor({ state: "visible", timeout: 20_000 }),
+      page,
+      nav,
+      "composer",
+    );
+    if (composerFailed) return composerFailed;
     await input.fill("live-verify rail check — automated, please ignore");
 
     // Gate the Send on start_session ACCEPTANCE, not merely WS-connect. The Send
@@ -771,13 +967,23 @@ async function reapOrphans(
 // Orchestrator
 // ---------------------------------------------------------------------------
 
+/** The RESULT line builder, exported so the redaction can be tested as a COMPOSITION. */
+export function emitLine(result: Result): string {
+  return result.kind === "CANT-RUN"
+    ? `RESULT: CANT-RUN:${redact(result.reason)}`
+    : `RESULT: ${result.kind} — ${redact(result.detail)}`;
+}
+
 function emit(result: Result): void {
   const line =
     result.kind === "CANT-RUN"
-      ? `RESULT: CANT-RUN:${result.reason}`
+      ? `RESULT: CANT-RUN:${redact(result.reason)}`
       : `RESULT: ${result.kind} — ${redact(result.detail)}`;
   // Single structured line (FR6). redact() scrubs any captured value that
-  // reached the detail string.
+  // reached EITHER string. The CANT-RUN branch was previously unredacted while
+  // its sibling was — an asymmetry that was latent while reasons were fixed
+  // tokens, and becomes load-bearing now that waitFailureState() puts live page
+  // state (title, path) into a reason (#7969).
   console.log(line);
 }
 
