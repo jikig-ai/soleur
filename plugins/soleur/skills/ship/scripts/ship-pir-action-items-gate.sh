@@ -51,6 +51,10 @@ HEADING='## Action Items & Follow-ups'
 # marker) and the marker forms are the 21 PIRs shipped before that change. Do not widen it
 # (`**` is a different shape, pinned red by a fixture) and do not narrow it to plain-only (that
 # reds the 21 shipped files, which the skill cannot sweep in an operator's repository).
+# PREFIX match, deliberately: four shipped PIRs append a resolution note after "fully resolved"
+# (an issue list, a parenthetical), so end-anchoring would red them. The cost is that a suffix
+# such as ", except the three items below" also passes — the gate checks the SHAPE the template
+# prescribes, not the honesty of what follows it; that is what the Exit-0 arm's prose review is for.
 SENTENCE_RE='^[_*]?No action items — incident fully resolved'
 
 usage() {
@@ -99,16 +103,6 @@ check_one() {
   return 1
 }
 
-# check_many <path>... → runs check_one over each; exit 1 if any failed, 2 if any unreadable, else 0.
-check_many() {
-  local f rc worst=0
-  for f in "$@"; do
-    check_one "$f"; rc=$?
-    (( rc > worst )) && worst=$rc
-  done
-  return "$worst"
-}
-
 [[ $# -eq 1 ]] || usage
 
 case "$1" in
@@ -127,8 +121,12 @@ case "$1" in
       printf 'PIR-ACTION-ITEMS: no PIR in diff\n'
       exit 3
     fi
-    check_many "${files[@]}"
-    exit $?
+    worst=0
+    for f in "${files[@]}"; do
+      check_one "$f"; rc=$?
+      (( rc > worst )) && worst=$rc
+    done
+    exit "$worst"
     ;;
   --corpus)
     listing="$(git ls-files)"; grc=$?
@@ -139,7 +137,9 @@ case "$1" in
     mapfile -t files < <(printf '%s\n' "$listing" | grep -E "$SELECTOR")
     selected=${#files[@]} examined=0 skipped=0 failed=0
     for f in "${files[@]}"; do
-      if ! grep -qE -- "^$HEADING" "$f"; then
+      # `-r` first: `! grep -q` on an unreadable file (rc 2) would otherwise read as "no heading"
+      # and SKIP it — an unreadable tracked PIR must fall through to check_one's exit 2.
+      if [[ -r "$f" ]] && ! grep -qE -- "^$HEADING" "$f"; then
         printf 'SKIP %s (no heading — pre-template)\n' "$f"
         skipped=$((skipped + 1))
         continue

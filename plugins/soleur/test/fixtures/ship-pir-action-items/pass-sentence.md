@@ -1,8 +1,8 @@
-<!-- expect: pass -->
 ---
 title: "Fixture PIR"
 brand_survival_threshold: none
 ---
+<!-- expect: pass -->
 
 # Fixture PIR
 

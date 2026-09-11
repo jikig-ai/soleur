@@ -66,8 +66,10 @@ for f in "$FIXTURES"/*.md; do
       printf 'FATAL: fixture %s has neither a pass- nor a fail- prefix; refusing to guess.\n' "$name" >&2
       exit 2 ;;
   esac
-  # Second, independent declaration: the first line carries `expect: pass` or `expect: fail/<reason>`.
-  token="$(head -n1 "$f" | sed -nE 's/^<!-- expect: ([a-z/-]+) -->$/\1/p')"
+  # Second, independent declaration: the first line after the frontmatter block carries
+  # `expect: pass` or `expect: fail/<reason>` (after the fence, so every fixture is still a
+  # well-formed frontmatter document if the frontmatter check is ever scripted into the gate).
+  token="$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{getline; print; exit}' "$f" | sed -nE 's/^<!-- expect: ([a-z/-]+) -->$/\1/p')"
   case "$want_rc:$token" in
     0:pass)   ;;
     1:fail/*) ;;
@@ -94,21 +96,13 @@ for f in "$FIXTURES"/*.md; do
 done
 # Hand-measured floors, not derived from the directory: a directory that lost its fixtures would
 # otherwise pass with zero assertions.
-if (( pass_n >= 3 )); then PASS=$((PASS + 1)); echo "  PASS: pass-* floor ($pass_n >= 3)"; else FAIL=$((FAIL + 1)); echo "  FAIL: pass-* floor ($pass_n < 3)"; fi
-if (( fail_n >= 8 )); then PASS=$((PASS + 1)); echo "  PASS: fail-* floor ($fail_n >= 8)"; else FAIL=$((FAIL + 1)); echo "  FAIL: fail-* floor ($fail_n < 8)"; fi
-
-# The two legacy emphasised forms of the sentence (the 21 shipped PIRs) must still pass. Generated
-# from the plain fixture rather than committed, so the fixture directory carries the plain form
-# only. Instrument checks first: the variant must differ from its source and carry exactly one
-# marker-prefixed sentence line, or the assertion below tests the plain form twice.
-for marker in '_' '*'; do
-  variant="$TMP/pass-sentence-variant-$([[ "$marker" == "_" ]] && echo underscore || echo asterisk).md"
-  sed -E "s/^(No action items — .*\.)$/${marker//\*/\\*}\1${marker//\*/\\*}/" "$FIXTURES/pass-sentence.md" > "$variant"
-  if ! cmp -s "$variant" "$FIXTURES/pass-sentence.md"; then PASS=$((PASS + 1)); echo "  PASS: variant '$marker' differs from the plain source"; else FAIL=$((FAIL + 1)); echo "  FAIL: variant '$marker' is byte-identical to the plain source (sed matched nothing)"; fi
-  assert_eq "1" "$(grep -cF -- "${marker}No action items — " "$variant" || true)" "variant '$marker' carries exactly one marker-prefixed sentence line"
-  set +e; bash "$GATE" "$variant" >"$variant.out" 2>"$variant.err"; rc=$?; set -e
-  assert_eq "0" "$rc" "legacy '$marker' form still passes"
-done
+assert_eq "1" "$(( pass_n >= 5 ))" "pass-* floor ($pass_n >= 5: plain, two legacy marker forms, sub-heading, table)"
+assert_eq "1" "$(( fail_n >= 8 ))" "fail-* floor ($fail_n >= 8)"
+# The two legacy emphasised forms (the 21 shipped PIRs) are committed fixtures
+# (pass-sentence-legacy-{underscore,asterisk}.md) — the fixture directory is lint-ignored, so MD049
+# cannot restyle them, and they ride the loop above. Pin that they are really the marker forms:
+assert_eq "1" "$(grep -cF -- '_No action items — ' "$FIXTURES/pass-sentence-legacy-underscore.md" || true)" "legacy underscore fixture carries the _ marker form"
+assert_eq "1" "$(grep -cF -- '*No action items — ' "$FIXTURES/pass-sentence-legacy-asterisk.md" || true)" "legacy asterisk fixture carries the * marker form"
 
 # Bold is outside the frozen class and is pinned by fail-sentence-bold.md above; a missing path is
 # exit 2, never a verdict.
@@ -123,10 +117,8 @@ assert_eq "1" "$(printf '%s\n' "$sentence_lines" | grep -c . || true)" "pir.md c
 SENTENCE="$(printf '%s\n' "$sentence_lines" | head -n1)"
 # The plain form is the contract: without this, reverting all three sites to an emphasised form
 # stays green because the gate accepts the legacy markers.
-case "$SENTENCE" in
-  "No action items — "*) PASS=$((PASS + 1)); echo "  PASS: template sentence is the plain form" ;;
-  *) FAIL=$((FAIL + 1)); echo "  FAIL: template sentence is not the plain form: '$SENTENCE'" ;;
-esac
+case "$SENTENCE" in "No action items — "*) plain=1 ;; *) plain=0 ;; esac
+assert_eq "1" "$plain" "template sentence is the plain form (got: '$SENTENCE')"
 synth="$TMP/synth-from-template.md"
 printf '%s\n' '---' 'title: "Synthesized from pir.md"' '---' '' '## Action Items & Follow-ups' '' "$SENTENCE" '' '## Timeline' '' '- t0.' > "$synth"
 set +e; bash "$GATE" "$synth" >"$synth.out" 2>"$synth.err"; rc=$?; set -e
@@ -156,7 +148,7 @@ else
     failed="$(sed -E 's/.*failed=([0-9]+).*/\1/' <<<"$summary")"
     assert_eq "0" "$failed" "corpus failed=0 ($summary)"
     assert_eq "$selected" "$((examined + skipped))" "corpus selected == examined + skipped"
-    if (( selected >= 50 )); then PASS=$((PASS + 1)); echo "  PASS: corpus selector floor ($selected >= 50)"; else FAIL=$((FAIL + 1)); echo "  FAIL: corpus selector floor ($selected < 50) — the selector matched almost nothing"; fi
+    assert_eq "1" "$(( selected >= 50 ))" "corpus selector floor ($selected >= 50)"
   fi
 fi
 
@@ -164,19 +156,19 @@ fi
 echo "=== Arm 5: wiring ==="
 # ---------------------------------------------------------------------------------------------
 section="$(awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' "$SHIP_SKILL")"
-assert_eq "1" "$(grep -cE '^bash "\$\{CLAUDE_PLUGIN_ROOT:-plugins/soleur\}/skills/ship/scripts/ship-pir-action-items-gate\.sh" --branch$' <<<"$section" || true)" \
-  "ship/SKILL.md invokes the gate in command position with --branch"
+assert_eq "1" "$(grep -cE '^bash "\$\{CLAUDE_PLUGIN_ROOT\}/skills/ship/scripts/ship-pir-action-items-gate\.sh" --branch$' <<<"$section" || true)" \
+  "ship/SKILL.md invokes the gate in command position with --branch (bare anchor, ADR-179)"
 assert_eq "1" "$(grep -cE '^rc=\$\?$' <<<"$section" || true)" "the invocation captures rc=\$?"
-assert_eq "1" "$(grep -cE '^[[:space:]]*1\) ' <<<"$section" || true)" "case arm 1) (fix and re-run) present"
-assert_eq "1" "$(grep -cE '^[[:space:]]*3\) ' <<<"$section" || true)" "case arm 3) (no PIR in diff) present"
+assert_eq "1" "$(grep -cE '^[[:space:]]*1\) echo "gate: \[FAIL\]' <<<"$section" || true)" "case arm 1) (fix and re-run) present"
+assert_eq "1" "$(grep -cE '^[[:space:]]*3\) echo "gate: no PIR in the diff' <<<"$section" || true)" "case arm 3) (no PIR in diff) present"
 assert_eq "1" "$(grep -cE '^[[:space:]]*\*\) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=unavailable rc=\$rc"' <<<"$section" || true)" "the catch-all case arm prints SOLEUR_SHIP_PIR_GATE_HALT"
 assert_eq "0" "$(grep -cF -- '-postmortem\.md$' <<<"$section" || true)" "the file selector ERE no longer appears in the Incident-PIR section"
 assert_eq "0" "$(grep -cF -- 'head -n1' <<<"$section" || true)" "the first-PIR-only 'head -n1' is gone from the Incident-PIR section"
+# The conjunct-1 list is the region between "ALL THREE hold" and the "2. **Every**" conjunct.
+conjunct1="$(awk '/ALL THREE hold/{f=1} /^[[:space:]]*2\. \*\*Every\*\*/{f=0} f' <<<"$section")"
 for p in 'plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh' \
          'plugins/soleur/test/ship-pir-action-items-gate.test.sh' \
          'plugins/soleur/test/fixtures/ship-pir-action-items/'; do
-  # The conjunct-1 list is the region between "ALL THREE hold" and the "2. **Every**" conjunct.
-  conjunct1="$(awk '/ALL THREE hold/{f=1} /^[[:space:]]*2\. \*\*Every\*\*/{f=0} f' <<<"$section")"
   assert_eq "1" "$(grep -cF -- "\`$p\`" <<<"$conjunct1" || true)" "meta-case conjunct 1 lists $p"
 done
 
@@ -245,6 +237,6 @@ set +e; (cd "$REPO_B" && bash "$GATE" --branch) >"$TMP/repob.out" 2>"$TMP/repob.
 assert_eq "2" "$rc" "--branch exits 2 when origin/main does not resolve"
 assert_eq "1" "$(grep -cE '^PIR-ACTION-ITEMS: unavailable — git diff origin/main\.\.\.HEAD failed \(rc=[0-9]+\)$' "$TMP/repob.err" || true)" "--branch prints the unavailable line on stderr"
 
-# Floor measured on a green run (arm 1: 12 fixtures × 2 + 9 × 2 + 2 floors + 2 variants × 3 + 1;
-# arm 2: 5; arm 3: 5; arm 5: 10; arm 4: 9) — a lower bound, not equality.
-print_results 60
+# Floor measured on a green run (arm 1: 14 fixtures × 2 + 9 × 2 + 2 floors + 2 legacy pins + 1;
+# arm 2: 5; arm 3: 5; arm 5: 10; arm 4: 9; measured 80) — set at the measured count; ratchet in lockstep.
+print_results 80

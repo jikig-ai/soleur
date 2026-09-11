@@ -1,8 +1,8 @@
-<!-- expect: fail/rows-without-issue -->
 ---
 title: "Fixture PIR"
 brand_survival_threshold: none
 ---
+<!-- expect: fail/rows-without-issue -->
 
 # Fixture PIR
 

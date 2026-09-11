@@ -1105,13 +1105,19 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    # pattern was. Do NOT re-inline it. The script emits a `PIR-CORPUS…` line on
    # stderr saying what it actually read.
    # The gate owns the regexes + strips (scripts/ship-incident-pir-gate.sh, #6813);
-   # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal.
-   # Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
-   if bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"; then
-     echo "gate: incident signal — a PIR is required (see below)."
-   else
-     echo "gate: no incident signal."
-   fi
+   # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal,
+   # ANYTHING ELSE = the scan did not run (2 = usage/gh failure; 127 = the script is not
+   # at that path — it lives at the monorepo root, so this resolves only from a cwd exactly
+   # two levels below it; #7941 review measured it as 127 from the repo root and on the hosted
+   # path). An `if`/`else` on this line collapsed 127 into "no signal", which is a verdict the
+   # scan never gave. Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
+   bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"
+   rc=$?
+   case "$rc" in
+     0) echo "gate: incident signal — a PIR is required (see below)." ;;
+     1) echo "gate: no incident signal." ;;
+     *) echo "SOLEUR_SHIP_PIR_GATE_HALT reason=signal-scan-unavailable rc=$rc" >&2 ;;   # halt; do not read this as "no signal"
+   esac
    ```
 
    The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
@@ -1128,7 +1134,7 @@ in a transcript.
 
 ```bash
 # --branch enumerates `git diff origin/main...HEAD` itself and checks EVERY added/modified/renamed-to PIR.
-bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/ship-pir-action-items-gate.sh" --branch
+bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/ship-pir-action-items-gate.sh" --branch
 rc=$?
 case "$rc" in
   0) echo "gate: every added/modified PIR passes the action-items shape check." ;;   # paste the [PASS] lines into the PR body gate record
@@ -1142,7 +1148,7 @@ esac
   script's `[PASS]` lines are the file list — read it from them, not from a re-run selector.
   Pass *only after* also confirming, for each listed file:
   1. **Frontmatter** carries `brand_survival_threshold` and the Art. 33/34 fields (availability outages set both `false` with an `n/a` rationale; data-exposure incidents must evaluate the GDPR gate per `/soleur:incident` Phase 2).
-  2. The `## Action Items & Follow-ups` section shape the script just verified is exactly ONE of two valid forms: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own — `No action items — incident fully resolved in the source PR with no residual work.` — plain, or with an optional single leading `_` or `*` marker (the spellings shipped before the template dropped emphasis; the class is frozen in the script's comment). Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, a bold sentence, or an empty or missing section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection is table-and-first-cell-anchored and column-0-anchored for the sentence, so the template's own instructional prose (a backticked copy mid-sentence) cannot satisfy it.
+  2. The `## Action Items & Follow-ups` section shape the script just verified is exactly ONE of two valid forms: (a) a table where **every item row cites a `#NNNN` GitHub issue in its first (Issue) cell**, or (b) the standalone permitted no-item sentence as a line of its own — `No action items — incident fully resolved in the source PR with no residual work.` — plain, or with an optional single leading `_` or `*` marker (the spellings shipped before the template dropped emphasis; the class is frozen in the script's comment). The script prefix-matches through `fully resolved`, so a resolution note may follow on the same line (four shipped PIRs carry one) — the gate checks the shape, and whether a trailing note is actually "no residual work" is the reviewer's read of the section, not the script's. Any other shape — a row with an empty Issue cell (even if it mentions `#NNNN` in prose elsewhere), a bare `- [ ]` bullet, free-form prose, an unfilled `#TBD`/placeholder, a bold sentence, or an empty or missing section — FAILS the gate (a follow-up with no issue rots the moment the session ends — the exact gap that left PR #5003's `workspace_path`/`workspace_status` sweep untracked until #5005 was filed retroactively). Detection is table-and-first-cell-anchored and column-0-anchored for the sentence, so the template's own instructional prose (a backticked copy mid-sentence) cannot satisfy it.
 
 - **Exit 1 — a listed PIR fails:** the `[FAIL] <path>: <reason>` line names the file and the
   reason (`rows-without-issue`, `no-sentence`, `no-heading`). For `rows-without-issue`: halt and
@@ -1438,7 +1444,7 @@ done
 
 ### ADR-Ordinal Collision Gate (mandatory)
 
-Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. The ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. A collision cannot reach `main`: `adr-ordinals` is a required status check and `main` is strict-up-to-date, so a sibling's ADR arriving through a Phase 7 sync reds the PR's own `adr-ordinals` job and the poll loop's required-check-failure exit stops there (Phase 7, "ADR-ordinal collision after a sync", cites the SSOT). This gate is defense-in-depth: catching the collision at PR-ready costs one commit, while catching it in Phase 7 costs a sync plus a full CI cycle (the ~35-minute figure the settle paragraph measures), and a renumber done inside the poll loop is the one most likely to leave the plan/tasks sweep undone.
+Blocks PR-ready when the branch adds a NEW `ADR-NNN-*.md` whose ordinal `NNN` is already taken on `origin/main` by a DIFFERENT file. The ordinal was free when the ADR was authored at plan/brainstorm time, but a sibling PR claimed it during the pipeline. A collision cannot reach `main` through the queued auto-merge (the `--admin` hatch in Phase 7 bypasses the whole `required_status_checks` rule, which is why its step 2 exists): `adr-ordinals` is a required status check and `main` is strict-up-to-date, so a sibling's ADR arriving through a Phase 7 sync reds the PR's own `adr-ordinals` job and the poll loop's required-check-failure exit stops there (Phase 7, "ADR-ordinal collision after a sync", cites the SSOT). This gate is defense-in-depth: catching the collision at PR-ready costs one commit, while catching it in Phase 7 costs a sync plus a full CI cycle (the ~35-minute figure the settle paragraph measures), and a renumber done inside the poll loop is the one most likely to leave the plan/tasks sweep undone.
 
 **Detection.** Run the canonical sentinel from the branch root:
 
@@ -1447,7 +1453,7 @@ git fetch origin main -q
 bash scripts/check-adr-ordinals.sh
 ```
 
-`check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it also trips on a NEW ADR missing the required `## Status`/`## Context`/`## Decision`/`## Consequences` headings). Exit 0 → pass silently.
+`check-adr-ordinals.sh` exits 1 with `NEW ADR ordinal collision (not in pre-existing allowlist): ADR-NNN` when two files share ordinal `NNN` (it does NOT heading-check a new ADR — its layer-3 heading check is pinned to ADR-041/ADR-042 only, per the script header; ADR-211 shipped without a `## Status` heading and it passed). Exit 0 → pass silently.
 
 **If it exits 1 on an ADR THIS branch introduced:** renumber to the next free ordinal BEFORE merge — never merge a colliding ADR:
 

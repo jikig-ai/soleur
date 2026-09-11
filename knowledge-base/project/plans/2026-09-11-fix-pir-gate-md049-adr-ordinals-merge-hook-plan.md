@@ -167,7 +167,10 @@ each is a pin on a string or a fact that drifted from the thing it pins.
   `bash ${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/…` (the form this plan adopts),
   `net-issue-flow.sh` by a hard-coded repo-relative path.
   The new script goes there. (The signal scan's own path is a pre-existing gap outside this
-  plan's scope; the PR body names it in one sentence.)
+  plan's scope; the PR body names it in one sentence. Review measured it as worse than stated:
+  `${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/` is depth-relative, so it resolves only from a cwd
+  exactly two levels below the repo root — 127 from the monorepo root and on the hosted path — and
+  the `if`/`else` around it read 127 as "no signal"; the caller now branches on `rc` with a HALT arm.)
 
 ### Property List and Cut List (Phase 0.6b)
 
@@ -841,11 +844,15 @@ standing check; the Phase 3 probe is the one-time behavioural confirmation.
   → 1; `grep -c '^No action items — incident fully resolved in the source PR with no residual work.$' plugins/soleur/skills/incident/scripts/dry-run.sh` → 1;
   `grep -c '`No action items — incident fully resolved in the source PR with no residual work.`' plugins/soleur/skills/incident/SKILL.md` → 1;
   `grep -rn '_No action items\|\*No action items' plugins/soleur/skills/` → no lines.
-- [x] **AC4** — `grep -cE 'bash \$\{CLAUDE_PLUGIN_ROOT:-plugins/soleur\}/skills/ship/scripts/ship-pir-action-items-gate\.sh --branch' plugins/soleur/skills/ship/SKILL.md` → 1;
+- [x] **AC4** — `grep -cE 'bash "\$\{CLAUDE_PLUGIN_ROOT\}/skills/ship/scripts/ship-pir-action-items-gate\.sh" --branch' plugins/soleur/skills/ship/SKILL.md` → 1
+  (amended at review: ADR-179 mandates the bare anchor for customer-facing executable paths; the
+  `:-plugins/soleur` form the plan copied from `auto-close-scan.sh` is an unmigrated site, #7453);
   `grep -c 'ship-pir-action-items-gate.sh' plugins/soleur/skills/ship/SKILL.md` ≥ 2 (invocation + conjunct 1);
-  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 4
-  (amended at /work from 3: the marker appears in the `case` arm AND in the prose bullet that maps
-  that arm onto the halt instruction — the suite's wiring arm asserts each construct individually);
+  `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -cE 'rc=\$\?|^\s*3\)|SOLEUR_SHIP_PIR_GATE_HALT'` → 6
+  (amended at /work from 3 and again at review: the marker appears in the shape-check `case` arm,
+  in the prose bullet mapping that arm, AND — since review found the signal scan's `if`/`else`
+  collapsed exit 127 into "no signal" — in the signal scan's own `case`, which also captures
+  `rc=$?`; the suite's wiring arm asserts each construct individually);
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'postmortem\\.md\$'` → 0 (the selector lives in the script only);
   `grep -c "grep -qE '\^_No action items" plugins/soleur/skills/ship/SKILL.md` → 0;
   `awk '/^### Incident-PIR Gate/{f=1} /^### /&&!/Incident-PIR/{f=0} f' plugins/soleur/skills/ship/SKILL.md | grep -c 'head -n1'` → 0.

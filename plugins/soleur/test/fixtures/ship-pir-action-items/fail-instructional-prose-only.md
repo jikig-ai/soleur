@@ -1,8 +1,8 @@
-<!-- expect: fail/no-sentence -->
 ---
 title: "Fixture PIR"
 brand_survival_threshold: none
 ---
+<!-- expect: fail/no-sentence -->
 
 # Fixture PIR
 
