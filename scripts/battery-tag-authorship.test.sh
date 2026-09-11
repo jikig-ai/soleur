@@ -83,11 +83,11 @@
 # open, and grading is per COMMAND rather than per line, so that class is closed rather than
 # declared. Both false greens were demonstrated end-to-end before being fixed.
 #
-# ENVIRONMENT DELTA, re-measured 2026-09-10 (and again after merging origin/main the same day,
-# which moved roots 457/460 -> 459/462 and the closure 808 -> 833 — the drift this paragraph's
-# closing sentence predicts, arriving within the hour). Under CI the relevance gate's bypass is an
+# ENVIRONMENT DELTA, re-measured 2026-09-11. It has now moved THREE times in two days, once per
+# origin/main merge: roots 457/460 -> 459/462 -> 462/465, closure 808 -> 833 -> 837. That cadence
+# is the argument for the closing sentence below, not a footnote to it. Under CI the relevance gate's bypass is an
 # unconditional early return, so a decline is unreachable and `skip_suite` is never invoked —
-# those registrations arrive as real commands instead. Measured: roots 459 (local) vs 462 (CI=1),
+# those registrations arrive as real commands instead. Measured: roots 462 (local) vs 465 (CI=1),
 # and OUT-OF-CLASS 1 vs 2 (the two `bash -c '… npm run test:ci …'` registrations, the second a
 # decline locally). `unclassified` is 0 in BOTH, and that distinction matters: the inline-script
 # arm logs INLINE_SCRIPT and returns 1, then the OUT_OF_CLASS ledger claims it — so the counter
@@ -600,7 +600,18 @@ for f in $(printf '%s\n' "${!CLOSURE[@]}" | LC_ALL=C sort); do
     ln="${hit%%:*}"
     code="${hit#*:}"
     # DECLARED APPROXIMATION 1: full-line comments only.
-    [[ "$code" =~ ^[[:space:]]*# ]] && continue
+    #
+    # THREE comment openers, not one. The shell-only `#` form graded a PROSE line in a TypeScript
+    # file an OFFENDER the day `apps/web-platform/server/git-data-replication.ts` reached the
+    # closure from main: `// `git fetch <peer namespace>`; GitHub `origin/main` stays canonical`.
+    # The closure spans .ts/.mjs/.cjs/.py as well as shell, so it must know their comment openers;
+    # `*` catches a JSDoc/block-comment continuation line.
+    #
+    # This is SOUND rather than an accepted fail-open, and the distinction matters because every
+    # other exclusion in this file is the latter: a command inside a full-line comment does not
+    # EXECUTE, so declining to count it cannot hide a live tag author. What it can hide is a line
+    # that only looks like a comment, which no shell or TS parser produces.
+    [[ "$code" =~ ^[[:space:]]*(#|//|\*) ]] && continue
     # The LEDGER key stays derived from the whole LINE, deliberately: re-keying it to the
     # segment would orphan every existing entry at once. Two commands on one line therefore
     # share a key, which the ledger already tolerates.
