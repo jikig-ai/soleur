@@ -603,9 +603,15 @@ jobs:
           f="${RUNNER_TEMP}/sentry-alert-reference.expected.json"
           [[ -f "$f" ]] || { echo "no expected-reference file to sweep (the gate did not produce one — another guard redded this job)."; exit 0; }
           sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
-          # rc on its OWN LINE; `grep | head` would report head's status.
+          # `set +e` bracket: Actions runs this block as `bash -e {0}`, and `grep -q`
+          # exits 1 on its NORMAL (clean) path — under inherited errexit the step
+          # would die there and `rc=$?` would be dead code (tests/scripts/
+          # test-sentry-full-root-apply.sh T13 caught exactly this). rc on its
+          # OWN LINE; `grep | head` would report head's status.
+          set +e
           grep -qE "$sentinel" "$f"
           rc=$?
+          set -e
           if [[ "$rc" -eq 0 ]]; then
             rm -f "$f"
             echo "::error::the expected alert-reference document carried secret-shaped bytes and was NOT uploaded. The projection should have refused a sensitive leaf — investigate tests/scripts/lib/sentry-alert-projection.jq before trusting the gate's output."
