@@ -2543,7 +2543,6 @@ if want_scripts; then
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
-  run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by
   # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop
