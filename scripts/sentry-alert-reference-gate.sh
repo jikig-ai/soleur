@@ -167,7 +167,25 @@ echo "::error::Regenerate (needs the Doppler prd_terraform triplet): ${REGEN_CMD
 # The exact expected document, for a reviewer WITHOUT prod credentials. Written
 # here; the workflow sweeps it and then publishes it to the step summary and to
 # the artifact `sentry-alert-reference-expected-<run-id>`.
+# `assert_fixture_dir` refuses a RELATIVE (or empty, or `..`-bearing) RUNNER_TEMP
+# before the redirect below can root a write at the caller's CWD — the P1b guard
+# (fixture-relative-assert.test.sh) recognises only this helper, executed as a
+# statement. Byte-identical to the canonical definition in
+# plugins/soleur/test/test-helpers.sh, whose equality fixture-dir-operand-assert
+# asserts across every tracked copy; do not reword it here alone. Copied rather
+# than sourced because this is a production script, not a suite.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 if [[ -n "${RUNNER_TEMP:-}" && -d "${RUNNER_TEMP}" ]]; then
+  assert_fixture_dir "${RUNNER_TEMP}"
   jq -S . <<<"$planned" > "${RUNNER_TEMP}/sentry-alert-reference.expected.json"
   echo "::error::No credentials needed: the expected document is in this run's step summary and in the artifact sentry-alert-reference-expected-${GITHUB_RUN_ID:-<run-id>} — gh run download ${GITHUB_RUN_ID:-<run-id>} -n sentry-alert-reference-expected-${GITHUB_RUN_ID:-<run-id>} && cp sentry-alert-reference.expected.json apps/web-platform/infra/sentry/alert-reference.json" >&2
 fi
