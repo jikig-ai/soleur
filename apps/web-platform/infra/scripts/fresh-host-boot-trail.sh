@@ -22,7 +22,11 @@
 #   JOB_STATUS      ${{ job.status }} — only a job that got as far as a successful apply is
 #                   entitled to a dark-boot verdict
 #   DISPATCH_LABEL  the apply_target name, used in log/summary prose (default web-host-create)
-#   DOPPLER_TOKEN   read-only source for SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT
+#   SENTRY_ACTIONS_RO_TOKEN  the org-level read-only Sentry integration token (ADR-031
+#                   `actions-read-prd`), bound by the caller from the repo secret of the same
+#                   name. Empty/unbound → the read is SKIPPED and NAMED (annotation + summary),
+#                   never silently. No Doppler read: the previous form fetched a PERSONAL token
+#                   under the canonical vendor name from `prd_terraform` (#7797 class, #7946).
 #   BOOT_TRAIL_SINCE epoch seconds; events older than this are ignored (run anchor, see below)
 #   GITHUB_STEP_SUMMARY  runner-provided; every summary write appends to it (REQUIRED)
 #
@@ -31,13 +35,13 @@
 
 set +e
 
-# REFUSE TO RUN UNDER XTRACE (#7797). This script ACQUIRES a credential at
-# runtime, so the refusal is UNCONDITIONAL: a `${VAR:+x}` hatch would be open
-# here by construction (the variable is still empty) and the fetch itself would
-# then be traced. `$-` is the load-bearing arm -- bash applies an env-supplied
-# SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
+# REFUSE TO RUN UNDER XTRACE (#7797). Unconditional rather than a `${VAR:+x}` hatch: the
+# token now arrives bound in the environment, but the refusal predates that and the cost of
+# keeping it unconditional is nil, while a hatch keyed on one name is exactly the shape a
+# later rename leaves stale (#7946 Guard 2). `$-` is the load-bearing arm -- bash applies an
+# env-supplied SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
 case "$-" in
-  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script carries a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
@@ -56,20 +60,16 @@ if [[ -n "$BOOT_TRAIL_SINCE" && "$BOOT_TRAIL_SINCE" != "0" ]]; then
 else
   echo "boot-trail: NO run anchor set — a same-named predecessor's terminal event can be read as this host's. Callers should export BOOT_TRAIL_SINCE."
 fi
-# R3-adjacent: read creds from Doppler prd_terraform, NOT GitHub repo secrets —
-# the repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips and
-# logs "skipped", which is the silent-dark class this step exists to end. Capture
-# the fetch rc so a FETCH FAILURE is NAMED rather than collapsed into "not
-# configured".
-SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform 2>/tmp/doppler-sentry.err); dop_rc=$?
-# Doppler-fetched secrets are NOT auto-masked by Actions (unlike `secrets.*`).
-# Every other Doppler read in this job masks; this one was the sole exception, and
-# it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
-# in the file, and nothing echoes it) — masked anyway, because "no current caller
-# prints it" is a property of today's code, not of the secret.
-[[ -n "${SENTRY_AUTH_TOKEN:+x}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
-SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
+# R3-adjacent, re-decided in #7946: the token is BOUND by the workflow from the repo secret
+# SENTRY_ACTIONS_RO_TOKEN (a `secrets.*` binding is masked by Actions itself, in the log and
+# in the summary file, so no `::add-mask::` here). The silent-dark class R3 was written
+# against -- a step reading an UNSET repo secret self-skips and nobody notices -- is closed
+# on the other side now: the unbound case is NAMED below on two channels, and the
+# observability suite asserts BOTH provisioning jobs bind the secret. Org and project are
+# literals: they were read from Doppler only because the token was, and Rule D pins them
+# against these same literals regardless.
+readonly SENTRY_ORG="jikigai-eu"
+readonly SENTRY_PROJECT="web-platform"
 # Echo to the LOG as well as the summary so
 # `gh run view <id> --log | grep 'fresh-host Sentry pointer'` works.
 echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${JOB_STATUS})"
@@ -83,12 +83,12 @@ echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${
   fi
   echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
 } >> "$GITHUB_STEP_SUMMARY"
-if [[ "$dop_rc" -ne 0 ]]; then
-  echo "_Sentry query skipped: DOPPLER FETCH FAILED (rc=${dop_rc}) — verify secrets.DOPPLER_TOKEN scope/validity for soleur/prd_terraform. doppler stderr: $(tr '\n' ' ' </tmp/doppler-sentry.err | tail -c 300)_" | tee -a "$GITHUB_STEP_SUMMARY"
-  exit 0
-fi
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
-  echo "_Sentry query skipped: fetch succeeded but SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT is empty in Doppler prd_terraform (secret genuinely absent)._" | tee -a "$GITHUB_STEP_SUMMARY"
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+  # BOTH channels, deliberately: an annotation is reachable from `gh run view --log`, a step
+  # summary is not; the summary is what the operator reads. Exit 0 -- a skipped read is not
+  # a proven dark boot, and this step must never fail an apply that succeeded.
+  echo "::warning::${WEB_HOST_KEY:-?}: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run"
+  echo "_Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound in this step's env (repo secret absent or workflow env not wired); the auto-read did NOT run. This is NOT a 'host emitted nothing' result._" | tee -a "$GITHUB_STEP_SUMMARY"
   exit 0
 fi
 # Lockstep with the emit MESSAGE literals in soleur-host-bootstrap.sh and
@@ -175,7 +175,7 @@ RETRY_DETAIL=""
 TOTAL=0
 while :; do
   HTTP=$(curl --disable --noproxy '*' -s --max-time 20 -G -o /tmp/sentry-events.json -w '%{http_code}' \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
     --data-urlencode "per_page=100" \
     --data-urlencode "statsPeriod=1h" \
     --data-urlencode "sort=-timestamp" \

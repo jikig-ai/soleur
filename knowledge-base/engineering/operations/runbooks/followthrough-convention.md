@@ -45,6 +45,7 @@ verification passes — no human revisit required.
      runbook section) is left dangling, discovered by whoever next reddens that suite. List those
      references in the probe's header under a `RETIREMENT:` line, so the deletion is one grep.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
+   - **Never name the retired Sentry credential.** The sweeper's Sentry read is `SENTRY_ACTIONS_RO_TOKEN` (the org-level read-only `actions-read-prd` integration, ADR-031, repo secret only). The canonical vendor env-var name it replaced is banned anywhere under `scripts/followthroughs/` — executable line, comment, `.sh` or `.test.sh` — because a workstation `doppler run -c prd_terraform` binds a *personal*, human-account-scoped token under it (#7797, #7946). Enforced as **rule 2** of `scripts/lint-followthrough-varq-ban.sh` (the executable form of this census); rotation: `sentry-actions-ro-token-rotation.md`.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
    - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.
 3. **Declare needed secrets** via the directive's `secrets=` clause. Only the named secrets get exported into the script's environment. Add the secret to `.github/workflows/scheduled-followthrough-sweeper.yml` `env:` block if it isn't already wired.
@@ -54,7 +55,7 @@ verification passes — no human revisit required.
    <!-- soleur:followthrough
      script=scripts/followthroughs/sentry-checkins-3859.sh
      earliest=2026-05-17T18:00:00Z
-     secrets=SENTRY_AUTH_TOKEN
+     secrets=SENTRY_ACTIONS_RO_TOKEN
    -->
    ```
 
@@ -85,7 +86,7 @@ instead of rotting open. Each trigger shape maps 1:1 to an exit-code probe:
 | **Dependency** — `Re-evaluate when #N lands` | filing date | `GH_TOKEN` | `[[ "$(gh issue view N --json state --jq .state)" == CLOSED ]] && exit 0 \|\| exit 2` |
 | **Event-grep** — `Re-evaluate when <pattern> matches in <corpus>` | filing date | `GH_TOKEN` (gh corpus) | corpus probe nonempty ? `exit 0` : `exit 2` — e.g. `gh run list --workflow X --status success --created ">=<cutoff>" --json conclusion \| jq -e 'length >= 1' >/dev/null && exit 0 \|\| exit 2` |
 | **Counter** — `Re-evaluate when <counter> exceeds <threshold>` | filing date | `GH_TOKEN` (gh/API counter) | `[[ "$count" -ge "$threshold" ]] && exit 0 \|\| exit 2` where `$count` comes from `gh`/SQL/grep |
-| **Soak** — `<signal> stays at ~0 for N days post-deploy` (often gating an ADR `adopting → accepted` flip) | `<deploy>+Nd` (UTC; gates the first check to after the soak window) | `SENTRY_AUTH_TOKEN` (Sentry-rate soaks) | rate==0 over a window pinned strictly after deploy ? `exit 0` : `exit 1` — mirror [`reconcile-ff-only-sentry-4977.sh`](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh) / [`ac8-founder-ambiguous-soak-5673.sh`](../../../../scripts/followthroughs/ac8-founder-ambiguous-soak-5673.sh) (`start=` pins the window past deploy so pre-deploy events don't contaminate the verdict). Enforced at ship time by the **Soak-Gated Follow-Through Enrollment Gate** (ship/SKILL.md Phase 5.5) — a soak declared in PR/plan prose blocks PR-ready until its tracker is enrolled here. |
+| **Soak** — `<signal> stays at ~0 for N days post-deploy` (often gating an ADR `adopting → accepted` flip) | `<deploy>+Nd` (UTC; gates the first check to after the soak window) | `SENTRY_ACTIONS_RO_TOKEN` (Sentry-rate soaks; the org-level read-only `actions-read-prd` integration, ADR-031) | rate==0 over a window pinned strictly after deploy ? `exit 0` : `exit 1` — mirror [`reconcile-ff-only-sentry-4977.sh`](../../../../scripts/followthroughs/reconcile-ff-only-sentry-4977.sh) / [`ac8-founder-ambiguous-soak-5673.sh`](../../../../scripts/followthroughs/ac8-founder-ambiguous-soak-5673.sh) (`start=` pins the window past deploy so pre-deploy events don't contaminate the verdict). Enforced at ship time by the **Soak-Gated Follow-Through Enrollment Gate** (ship/SKILL.md Phase 5.5) — a soak declared in PR/plan prose blocks PR-ready until its tracker is enrolled here. |
 
 **`secrets=GH_TOKEN` is MANDATORY for any gh-using probe.** The sweeper runs
 verification scripts under `env -i` (PATH + HOME + directive-declared `secrets=`
@@ -94,7 +95,7 @@ so a gh-using script with NO `secrets=GH_TOKEN` is unauthenticated → `gh` fail
 the probe returns exit 2 (transient) on every sweep and the issue **never closes**
 (a silent never-close, not a loud failure). The date shape is the only one that
 needs no `secrets=` (its body never calls `gh`). This is the same opt-in
-mechanism `sentry-checkins-3859.sh` uses (`secrets=SENTRY_AUTH_TOKEN`).
+mechanism `sentry-checkins-3859.sh` uses (`secrets=SENTRY_ACTIONS_RO_TOKEN`).
 
 **Exit contract** (same as Author workflow): `0` = PASS → sweeper closes;
 `1` = FAIL → sweeper comments + leaves open (reserve for a genuine "this should

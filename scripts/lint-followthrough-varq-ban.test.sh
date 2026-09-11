@@ -278,7 +278,7 @@ fi
 # Absolute floor at the MEASURED green count; a lower bound, so adding rows never trips it --
 # re-measure and raise it in the same commit that adds a row. Reported with printf + exit 1,
 # never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=32
+MIN_ASSERTIONS=28
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -352,6 +352,12 @@ GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}")
 # leaks the thing it is refusing over. This is the PR's own headline defect
 # (`[ -n "${VAR:-}" ]` traced as `+ '[' -n <TOKEN> ']'`), and without this check
 # a one-character revert in any of 22 production copies re-ships it, lint-green.
+# Guard 2 (#7946): an empty-string non-emptiness test in the refusal arm -- the residue of
+# deleting a single-credential file's only `${VAR:+x}` limb during a rename. `[ -n "" ]`
+# can never be true, so the refusal reads as protection and never fires. Either test
+# syntax, either quote style. Checked BEFORE the `":+" not in window` early return, which
+# would otherwise classify this as an unconditional (strongest-possible) refusal.
+EMPTY_PREDICATE = re.compile(r"\[\[?\s+-n\s+(\"\"|'')\s+\]\]?")
 EXPANDING_IN_ARM = re.compile(
     r"\$\{([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))(?::?-[^}]*)?\}"
     r"|\$([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b"
@@ -441,6 +447,18 @@ def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             f"  Use the `:+x` form, which tests non-emptiness without expanding:\n"
             f'    if [ -n "${{{expanding[0]}:+x}}" ]; then\n'
         )
+
+    # Guard 2 (#7946): `[ -n "" ]` is not an unconditional refusal, it is one that
+    # can never fire. Report it before the early return below would accept it.
+    if EMPTY_PREDICATE.search(window):
+        out.append(
+            f"{rel}:{preamble_at + 1}: the xtrace refusal tests an empty string and can "
+            f"never fire -- `[ -n \"\" ]` is the residue of deleting the only `${{VAR:+x}}` "
+            f"limb.\n"
+            f"  Restore the `${{VAR:+x}}` limb naming the credential this file consumes, or\n"
+            f"  refuse unconditionally (drop the `if` and exit 78 in the arm).\n"
+        )
+        return out
 
     # An UNCONDITIONAL refusal (no `${VAR:+x}` test in the arm) covers every
     # credential by construction -- there is nothing for it to be narrower than.

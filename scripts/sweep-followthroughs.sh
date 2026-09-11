@@ -25,7 +25,7 @@ set -euo pipefail
 # name exists for a hatch to test and it would be open by construction.
 # Measured -- the append at `env_args+=("$name=${!name}")` does NOT leak (bash
 # prints array appends unexpanded), but the invocation below traces as
-#   ++ env -i PATH=... SENTRY_AUTH_TOKEN=<value> scripts/followthroughs/<probe>
+#   ++ env -i PATH=... SENTRY_ACTIONS_RO_TOKEN=<value> scripts/followthroughs/<probe>
 # putting every secret this sweeper forwards onto one line, which then reaches a
 # public issue comment. To debug a probe, trace the probe itself: xtrace is not
 # inherited across this child invocation (and `env -i` clears it outright), so
@@ -380,19 +380,60 @@ run_one() {
   # the purpose of `env -i`. The verification scripts under
   # scripts/followthroughs/ should not depend on caller-side PATH state.
   local -a env_args=("env" "-i" "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" "HOME=$HOME")
+  # Guard 3 (#7946). Three properties of this loop, each measured absent before it:
+  #   (a) VALIDATE BEFORE EXPANDING. `${!name+x}` on an author-controlled `name` evaluates
+  #       an array subscript, so a directive `secrets=a[$(cmd)]` ran `cmd` inside this job
+  #       with every forwarded secret in its env. The identifier check runs first, and the
+  #       comment below is built from VALIDATED names only -- never from a value.
+  #   (b) SET-BUT-EMPTY IS MISSING. `${{ secrets.X }}` resolves to "" when the repo secret
+  #       is absent or the reference is misspelled; the old set-ness test forwarded "" and
+  #       every probe TRANSIENTed under a green run.
+  #   (c) LOUD. The old branch was `fail …; return 0`: stderr only, no comment, run green
+  #       -- a tracker whose directive named a retired credential was never told. Now: one
+  #       comment on the tracker naming every missing/malformed name and the fix, an
+  #       ::error:: annotation (also under DRY_RUN, where only the comment is suppressed),
+  #       and MISSING_SECRET=1 so the run goes red after the sweep completes (the same
+  #       shape as TRUNCATED_SWEEP). This runs before the open/closed mode split on purpose:
+  #       a closed-within-lookback tracker naming a retired credential is commented on too.
+  local -a missing_lines=()
   if [[ -n "${secrets:-}" ]]; then
     IFS=',' read -r -a secret_names <<<"$secrets"
     for name in "${secret_names[@]}"; do
       name="${name// /}"
       [[ -z "$name" ]] && continue
-      # Only pass through if the var is set in our environment.
-      if [[ -n "${!name+x}" ]]; then
-        env_args+=("$name=${!name}")
-      else
-        fail "issue #$issue_num: required secret '$name' not set in workflow env — leaving issue open"
-        return 0
+      if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+        missing_lines+=("- \`${name}\` — malformed secret name (must match \`^[A-Z][A-Z0-9_]*$\`); refused before any expansion")
+        continue
       fi
+      if [[ -z "${!name+x}" ]]; then
+        missing_lines+=("- \`${name}\` — not set in the workflow env")
+        continue
+      fi
+      if [[ -z "${!name}" ]]; then
+        missing_lines+=("- \`${name}\` — bound but empty: the repo secret is absent or the \`secrets.\` reference in the workflow is misspelled")
+        continue
+      fi
+      env_args+=("$name=${!name}")
     done
+  fi
+  if (( ${#missing_lines[@]} > 0 )); then
+    local missing_msg
+    missing_msg="### Sweeper run: REQUIRED SECRET MISSING ($(date -u +%FT%TZ))
+The directive's \`secrets=\` clause names credential(s) this sweep could not forward, so \`$script\` was **not** run:
+
+$(printf '%s\n' "${missing_lines[@]}")
+
+Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followthrough-sweeper.yml\` (bound from a repo secret that exists), or correct the directive's \`secrets=\` clause. A retired credential name stays wrong until the directive is rewritten."
+    printf '::error::sweep-followthroughs: issue #%s: required secret missing or malformed in its directive — %s\n' \
+      "$issue_num" "$(printf '%s; ' "${missing_lines[@]}" | sed 's/^- //; s/; - /; /g; s/; $//')" >&2
+    MISSING_SECRET=1
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "issue #$issue_num: DRY_RUN — would comment: required secret missing (${#missing_lines[@]} name(s))"
+      return 0
+    fi
+    printf '%s' "$missing_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file - \
+      || fail "issue #$issue_num: missing-secret comment post failed"
+    return 0
   fi
 
   log "issue #$issue_num: running $script"
@@ -574,6 +615,9 @@ $trimmed_out
 # at the end of main(), AFTER every reachable tracker has been swept -- failing
 # early would skip the probes this sweep can still run.
 TRUNCATED_SWEEP=0
+# Guard 3 (#7946): set inside run_one when a directive names a secret the env cannot
+# forward; read beside TRUNCATED_SWEEP after main returns, for the same reason.
+MISSING_SECRET=0
 
 main() {
   log "sweep start (repo=$REPO dry_run=$DRY_RUN)"
@@ -703,6 +747,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # to break.
   if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
+    exit 1
+  fi
+  if [[ "$MISSING_SECRET" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because at least one tracker directive names a secret the workflow env does not carry (see the comment posted on that tracker).\n' >&2
     exit 1
   fi
 fi

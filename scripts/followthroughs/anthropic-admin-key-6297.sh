@@ -32,8 +32,8 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -124,8 +124,8 @@ if (( ROWS == 0 )); then
   # Stack shows nothing, the producer is alive and the SHIPPING path is broken
   # — a real fault the Sentry cron monitor cannot see (its check-in succeeded,
   # so it stays GREEN in exactly this mode).
-  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    echo "  Sentry cross-check skipped: SENTRY_AUTH_TOKEN not set."
+  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+    echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set."
   else
     SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
     SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
@@ -139,7 +139,7 @@ if (( ROWS == 0 )); then
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
     SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+      -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
       --data-urlencode 'statsPeriod=48h' \

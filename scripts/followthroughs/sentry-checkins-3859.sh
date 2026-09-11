@@ -8,7 +8,7 @@
 #   1 = FAIL (criteria not met → sweeper leaves open, comments)
 #   * = TRANSIENT (e.g. network error → sweeper leaves open, retries next day)
 #
-# Required env: SENTRY_AUTH_TOKEN
+# Required env: SENTRY_ACTIONS_RO_TOKEN
 #
 # Close criteria (from #3859 body):
 #   - Every slug returns 200 on the checkins API
@@ -25,15 +25,15 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 # `jikigai-eu`: the legacy `jikigai` org was cancelled vendor-side and 403s for every credential.
 ORG="jikigai-eu"
@@ -57,7 +57,7 @@ for slug in "${SLUGS[@]}"; do
   total_count=$((total_count + 1))
   http_code=$(curl --disable --noproxy '*' -sS -o /tmp/ck.json -w '%{http_code}' \
     --max-time 30 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
     "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" || echo "000")
 
   if [[ "$http_code" != "200" ]]; then

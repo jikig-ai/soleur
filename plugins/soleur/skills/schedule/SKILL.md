@@ -73,7 +73,8 @@ Classify `$ARGUMENTS` (the task description):
    - Full decision matrix + the exact arm HTTP shape: [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
 2. **Periodic verification needing a secret already wired to the follow-through
    sweeper** (`scheduled-followthrough-sweeper.yml` passes an allowlist; e.g. the
-   job exposes the GitHub secret `SENTRY_IAC_AUTH_TOKEN` as env `SENTRY_AUTH_TOKEN`)
+   job exposes the repo secret `SENTRY_ACTIONS_RO_TOKEN`, the org-level read-only
+   `actions-read-prd` Sentry integration, under that same name)
    → a vetted follow-through script (under the repo's
    `followthroughs` dir) + a follow-through directive. No new workflow, no
    Inngest deploy.

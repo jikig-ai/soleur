@@ -27,7 +27,7 @@
 #   1 = FAIL       (still soaking, OR "SOAK PASSED — wipe authorized" but not yet observed complete)
 #   * = TRANSIENT  (Sentry/Better Stack unreachable, auth/parse failure — retry next sweep)
 #
-# Required env (declared in the tracker directive's secrets=): SENTRY_AUTH_TOKEN,
+# Required env (declared in the tracker directive's secrets=): SENTRY_ACTIONS_RO_TOKEN,
 #   BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD.
 
 set -uo pipefail
@@ -40,8 +40,8 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -54,7 +54,7 @@ ADR="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-119-luks-a
 SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-7}"
 
 # Explicit empty-checks, NOT ${VAR:?} (which aborts status 1 = FAIL, the opposite of TRANSIENT).
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then echo "TRANSIENT: $v not set" >&2; exit 2; fi
 done
@@ -66,7 +66,7 @@ SENTRY_API="https://sentry.io/api/0"
 QUERY='feature:"workspaces-luks" op:"workspaces-luks-drift"'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 URL="${SENTRY_API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${SOAK_DAYS}d&per_page=10&field=title&field=timestamp"
-RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$URL")
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" -H "Accept: application/json" "$URL")
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
 BODY=$(printf '%s' "$RESP" | sed '$d')
 if [[ "$HTTP_STATUS" != "200" ]]; then

@@ -404,12 +404,15 @@ if grep -E 'SENTRY_ACTIONS_RO_TOKEN.*not bound' "$TRAIL" | grep -qF 'tee -a "$GI
 else
   no "AC13c: the not-bound sentence must also reach GITHUB_STEP_SUMMARY via \`tee -a \"\$GITHUB_STEP_SUMMARY\"\`"
 fi
-# (c) No Doppler read remains — not the token's, not SENTRY_ORG's, not SENTRY_PROJECT's.
-# A `doppler` invocation anywhere in the script is the personal-token path re-entering.
-if [[ "$(grep -c 'doppler' "$TRAIL" || true)" == "0" ]]; then
-  ok "AC13d: the surface step makes no Doppler read at all"
+# (c) No Doppler READ remains — not the token's, not SENTRY_ORG's, not SENTRY_PROJECT's.
+# Anchored on the read CONSTRUCTS (`doppler secrets …`, `doppler run …`, a DOPPLER_TOKEN
+# binding), not the bare word: the script legitimately names the host's `doppler_retry` /
+# `doppler_download` BOOT STAGES, which are Sentry tag values in lockstep with the cloud-init
+# emitters and are not reads (cq-assert-anchor-not-bare-token).
+if [[ "$(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL" || true)" == "0" ]]; then
+  ok "AC13d: the surface step makes no Doppler read at all (no \`doppler secrets\`/\`doppler run\`/DOPPLER_TOKEN)"
 else
-  no "AC13d: the surface step still names doppler ($(grep -c 'doppler' "$TRAIL") occurrence(s)) — every Doppler read must be gone, not only the token's"
+  no "AC13d: the surface step still carries a Doppler read ($(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL") site(s)) — every Doppler read must be gone, not only the token's"
 fi
 # (d) BEHAVIOURAL: run the script with the secret UNBOUND. It must emit the annotation, write
 # the summary line, exit 0 (a skipped read is not a proven dark boot), and never call doppler
@@ -452,10 +455,11 @@ for prov_job in web_host_create web_host_replace; do
   else
     no "AC13h: ${prov_job} boot-trail step must bind \`SENTRY_ACTIONS_RO_TOKEN: \${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}\` in its env: block"
   fi
-  if [[ -n "$STEP" ]] && ! grep -q 'DOPPLER_TOKEN' <<<"$STEP"; then
-    ok "AC13i: ${prov_job} boot-trail step no longer carries DOPPLER_TOKEN"
+  # Anchored on the BINDING (a YAML env key), not the bare word, which a comment may carry.
+  if [[ -n "$STEP" ]] && ! grep -qE '^[[:space:]]*DOPPLER_TOKEN:' <<<"$STEP"; then
+    ok "AC13i: ${prov_job} boot-trail step no longer binds DOPPLER_TOKEN"
   else
-    no "AC13i: ${prov_job} boot-trail step still carries DOPPLER_TOKEN — it was there only for the Doppler reads AC13d forbids"
+    no "AC13i: ${prov_job} boot-trail step still binds DOPPLER_TOKEN — it was there only for the Doppler reads AC13d forbids"
   fi
 done
 

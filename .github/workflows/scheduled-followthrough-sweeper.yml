@@ -90,7 +90,15 @@ jobs:
           # Secrets that one or more verification scripts may declare via
           # the `secrets=` directive clause. Add new ones here when a new
           # follow-through ships needing them.
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          # #7946 — the Sentry read for every followthrough: the org-level Internal
+          # Integration `actions-read-prd` (ADR-031; Issue & Event / Organization /
+          # Project = Read, nothing else). One store, this repo secret, deliberately
+          # NOT mirrored to Doppler — the name is chosen so that no `doppler run`
+          # config can satisfy it by accident (the canonical vendor env-var name
+          # bound a personal, human-account-scoped token under `-c prd_terraform`).
+          # A directive that names a secret absent from this block is commented on
+          # by the sweeper and reds the run; that is the intended reading, not noise.
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           # #5875 canary-promotion-5875.sh — GETs /hooks/deploy-status (HMAC + CF-Access).
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}

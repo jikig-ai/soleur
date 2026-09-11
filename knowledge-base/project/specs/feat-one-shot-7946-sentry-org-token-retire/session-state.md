@@ -45,3 +45,26 @@ Each body has exactly one occurrence of the old name. Staged at `<scratchpad>/di
 1. Re-run both queries (open `--limit 200`; closed with `closedAt` > 14 days ago) — the set may have moved.
 2. For each tracker: `diff <(gh issue view <n> --json body --jq .body) <n>.before.md` must be empty; then `gh issue edit <n> --body-file <n>.md`.
 3. `gh workflow run scheduled-followthrough-sweeper.yml`; record `createdAt`; wait; assert AC-P1 and AC-P2.
+
+### Phase 3.3e — per-script exercise under `env -i` with the IaC superset (2026-09-11)
+
+Run shape: `env -i PATH=<FHS> HOME=$HOME bash -c 'export SENTRY_ACTIONS_RO_TOKEN="$(doppler secrets get SENTRY_IAC_AUTH_TOKEN -p soleur -c prd --plain)"; …; exec bash "$0"' <probe>` (value never on argv). Rule D pins (commit 1) were in place.
+
+| Script | rc | Sentry call observed | Reading |
+|---|---|---|---|
+| ac10-workspace-reconcile-sentry-4246.sh | 0 | 200 (PASS: 0 events) | pre-existing 400 "No columns selected" on main (no `field=`); fixed inline, tracker #4246 is CLOSED |
+| ac8-founder-ambiguous-soak-5673.sh | 0 | 200 | PASS |
+| accounted-beacon-live-6462.sh | 2 | 200 | TRANSIENT by design: no fresh boot since 2026-09-04 (not a data point yet) |
+| anthropic-admin-key-6297.sh | 2 | 200 (Sentry cross-check ran) | TRANSIENT by design: zero producer rows in 48h |
+| community-monitor-checkin-soak-5728.sh | 1 | 200 (de.sentry.io check-ins) | FAIL = the probe's verdict on its data, call ran |
+| deploy-ghcr-pull-recovery-6400.sh | 0 | 200 | PASS |
+| ghcr-minter-live-6031.sh | 2 | 404 on the monitor slug | TRANSIENT by design: monitor `scheduled-ghcr-token-minter` not created yet (pre-cutover); a 404 on a nonexistent monitor is the endpoint's answer, not an auth/query defect |
+| git-data-birth-emitter-6982.sh | 2 | n/a (Better Stack reader; names no Sentry credential) | TRANSIENT by design: no boot_complete in 30d |
+| phase3-ga-soak-5274.sh | 2 | n/a in-tree (START placeholder, now named as TRANSIENT instead of an HTTP 400); **scratch copy with START pinned: rc 0, 200, PASS** | pre-existing 400 on main; unpinned-START guard added inline (6122's shape) |
+| reconcile-ff-only-sentry-4977.sh | 0 | 200 | PASS |
+| sentry-checkins-3859.sh | 0 | 200 ×8 slugs | PASS (org slug moved to jikigai-eu) |
+| sync-health-residual-5689.sh | 0 | 200 (PASS: zero ready+NULL-install residual) | on main: daily 404 on the dead `jikigai` slug; after the slug move a latent `statsPeriod=7d` 400 surfaced (endpoint accepts '', 24h, 14d) — fixed inline to 14d |
+| workspaces-luks-soak-6604.sh | 1 | 200 | FAIL = the probe's verdict (still soaking), call ran |
+| zot-soak-6122.sh | 2 | n/a in-tree (START unpinned, named); **scratch copy with START pinned: rc 1, 200, FAIL verdict** | by design |
+
+No `curl:` usage error, no HTTP 000, no 401/403. Every Sentry-calling script reached its endpoint with the new name; the two placeholder-START probes were exercised on scratch copies.

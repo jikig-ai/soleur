@@ -559,7 +559,7 @@ reports 'compliant-canonical.sh' \
 # through (1 -> 0). The regex is the hardening's own; degenerating it to never-match is the
 # "hardening deleted" mutant without touching the surrounding early return.
 mutate_row 'G2-M3 Rule C: empty-predicate hardening removed' \
-  's/EMPTY_PREDICATE = re\.compile\(r"[^"]*"\)/EMPTY_PREDICATE = re.compile(r"(?!x)x")/' \
+  's/^EMPTY_PREDICATE = re\.compile\(.*\)$/EMPTY_PREDICATE = re.compile(r"(?!x)x")/m' \
   "$FIX/violation-empty-predicate-double.sh" 1 0
 
 # G2-H2: must-PASS, not the canonical -- the genuinely unconditional refusal shares the early
@@ -620,7 +620,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-MIN_ASSERTIONS=61
+MIN_ASSERTIONS=68
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

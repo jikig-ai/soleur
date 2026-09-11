@@ -31,46 +31,47 @@ PASS=0
 FAIL=0
 TOTAL=0
 
+# ADR-193 shape: pass()/fail() are the TERMINAL verdict helpers and move ONLY the verdict
+# counters; the assert_* wrappers move TOTAL (the case counter) at the call site. Stubbing
+# a verdict helper therefore drops the verdict WITHOUT dropping its count, and the
+# conservation identity at the bottom catches it.
+pass() { PASS=$((PASS + 1)); echo "PASS: $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
+
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
+  TOTAL=$((TOTAL + 1))
   if [[ "$expected" == "$actual" ]]; then
-    echo "PASS: $name"
-    PASS=$((PASS + 1))
+    pass "$name"
   else
-    echo "FAIL: $name"
+    fail "$name"
     echo "  expected: $expected"
     echo "  actual:   $actual"
-    FAIL=$((FAIL + 1))
   fi
-  TOTAL=$((TOTAL + 1))
 }
 
 assert_contains() {
   local name="$1" needle="$2" haystack="$3"
+  TOTAL=$((TOTAL + 1))
   if [[ "$haystack" == *"$needle"* ]]; then
-    echo "PASS: $name"
-    PASS=$((PASS + 1))
+    pass "$name"
   else
-    echo "FAIL: $name"
+    fail "$name"
     echo "  needle:   $needle"
     echo "  haystack: ${haystack:0:600}"
-    FAIL=$((FAIL + 1))
   fi
-  TOTAL=$((TOTAL + 1))
 }
 
 assert_not_contains() {
   local name="$1" needle="$2" haystack="$3"
+  TOTAL=$((TOTAL + 1))
   if [[ "$haystack" != *"$needle"* ]]; then
-    echo "PASS: $name"
-    PASS=$((PASS + 1))
+    pass "$name"
   else
-    echo "FAIL: $name"
+    fail "$name"
     echo "  forbidden needle: $needle"
     echo "  haystack: ${haystack:0:600}"
-    FAIL=$((FAIL + 1))
   fi
-  TOTAL=$((TOTAL + 1))
 }
 
 # Make a tmpdir with a stubbed `gh` that fails loudly if invoked. The sweeper
@@ -788,10 +789,9 @@ EOF
   [[ -f "$root/comment-body" ]] && posted=$(cat "$root/comment-body")
 
   # Precondition: if nothing was captured, every assertion below is vacuous.
-  if [[ -z "$posted" ]]; then
-    echo "FAIL: T17 captured no comment body -- the assertions would be vacuous"
-    FAIL=$((FAIL + 1))
-  else
+  assert_eq "T17 captured a comment body (precondition -- without it the rows below are vacuous)" \
+            "captured" "$([[ -n "$posted" ]] && echo captured || echo empty)"
+  if [[ -n "$posted" ]]; then
     assert_not_contains "T17 traced probe output is scrubbed before it reaches a public comment" \
                         "NOTAREALTOKEN_T17" "$posted"
     assert_contains     "T17 genuine (non-trace) probe output survives the scrub" \
@@ -860,11 +860,15 @@ EOF
 # credential can satisfy a directive by accident; only the names given here exist.
 g3_run() {
   local root="$1" sut="$2"; shift 2
+  # `|| rc=$?` because the suite runs under `set -e` and the SUT's expected NON-ZERO exit is
+  # the very thing under test -- a bare `bash "$sut"; echo $?` would abort the subshell
+  # before the rc file is written, and every row after it would silently never run.
   (
     cd "$root" || exit 97
+    local rc=0
     env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN="${G3_DRY_RUN:-0}" "$@" \
-      bash "$sut" > "$root/out" 2> "$root/err"
-    echo "$?" > "$root/rc"
+      bash "$sut" > "$root/out" 2> "$root/err" || rc=$?
+    echo "$rc" > "$root/rc"
   )
 }
 
@@ -911,10 +915,9 @@ t_g3_m3_flag_is_the_mechanism() {
   local root; root=$(g3_root "$(g3_body SENTRY_AUTH_TOKEN)")
   local mut="$root/sut-no-flag.sh"
   sed '/^[[:space:]]*MISSING_SECRET=1[[:space:]]*$/d' "$SUT" > "$mut"
-  if diff -q "$SUT" "$mut" >/dev/null 2>&1; then
-    echo "FAIL: G3-M3 mutation did NOT land (no MISSING_SECRET=1 line to delete) -- the row would score the baseline"
-    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
-  else
+  assert_eq "G3-M3 the mutation landed (a MISSING_SECRET=1 line existed to delete)" \
+            "landed" "$(diff -q "$SUT" "$mut" >/dev/null 2>&1 && echo not-landed || echo landed)"
+  if ! diff -q "$SUT" "$mut" >/dev/null 2>&1; then
     g3_run "$root" "$mut" SENTRY_ACTIONS_RO_TOKEN=x
     assert_eq "G3-M3 with the flag assignment deleted, the M1 input exits 0 (flag is the mechanism)" "0" "$(cat "$root/rc")"
   fi
@@ -1071,7 +1074,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=9999
+MIN_ASSERTIONS=102
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

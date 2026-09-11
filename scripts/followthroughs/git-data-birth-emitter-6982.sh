@@ -19,12 +19,13 @@
 # a genuine post-birth boot failure produces, training the reader to ignore the one signal
 # that matters. `REOPEN_MAX` caps only the closed path, so the open path has no brake.
 #
-# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: the sweeper
-# passes SENTRY_AUTH_TOKEN (from SENTRY_IAC_AUTH_TOKEN), which scripts/sentry-issue.sh's own
-# header records as 403-ing on `event:read` — that script needs SENTRY_ISSUE_RO_TOKEN, which
-# the sweeper does not pass. The BETTERSTACK_QUERY_* triple below is what the sweeper
-# actually has, which is what makes this probe executable AT ALL rather than silently
-# failing on an unknown secret name.
+# IT READS BETTER STACK, NOT SENTRY, and that is forced rather than chosen: this probe was
+# written when the sweeper's Sentry credential lacked the scope scripts/sentry-issue.sh
+# needs (that script's own header records the 403), and the read-only inline credential it
+# does need is not one the sweeper forwards. The BETTERSTACK_QUERY_* triple below is what
+# the sweeper actually has, which is what makes this probe executable AT ALL rather than
+# silently failing on an unknown secret name. (The sweeper's Sentry credential is now the
+# org-level actions integration, ADR-031 -- this probe still has no reason to use it.)
 #
 # It deliberately does NOT read the heartbeat API: `status == "up"` proves reachability,
 # the proxy D-HB rejects (a host whose LUKS never mounted still answers on :22).

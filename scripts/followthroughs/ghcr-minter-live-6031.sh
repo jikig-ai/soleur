@@ -19,7 +19,7 @@
 #   1 = FAIL      (monitor exists but latest check-in is not a fresh `ok` — pre-cutover or failing)
 #   * = TRANSIENT (Sentry API unreachable/auth failure, or monitor not created yet → retry)
 #
-# Required env: SENTRY_AUTH_TOKEN
+# Required env: SENTRY_ACTIONS_RO_TOKEN
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 set -uo pipefail
 
@@ -31,8 +31,8 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -41,7 +41,7 @@ esac
 
 # soleur:followthrough-stub v1
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -51,7 +51,7 @@ MONITOR_SLUG="scheduled-ghcr-token-minter"
 FRESH_WINDOW_SECS=$((40 * 60))
 
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "${API}/organizations/${ORG}/monitors/${MONITOR_SLUG}/checkins/?per_page=1") || {
   echo "TRANSIENT: Sentry API unreachable for monitor ${MONITOR_SLUG}" >&2

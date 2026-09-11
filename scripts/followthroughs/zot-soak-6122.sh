@@ -141,9 +141,9 @@
 #                   sample means keep soaking, do NOT retire GHCR yet)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wire as secrets.SENTRY_IAC_AUTH_TOKEN in the sweeper).
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wire as secrets.SENTRY_IAC_AUTH_TOKEN in the sweeper).
 # Directive for the tracking issue body (pin START to the cutover UTC, earliest to >=7d):
-#   <!-- soleur:followthrough script=scripts/followthroughs/zot-soak-6122.sh earliest=<UTC+7d> secrets=SENTRY_AUTH_TOKEN,GH_TOKEN -->
+#   <!-- soleur:followthrough script=scripts/followthroughs/zot-soak-6122.sh earliest=<UTC+7d> secrets=SENTRY_ACTIONS_RO_TOKEN,GH_TOKEN -->
 
 
 # REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
@@ -154,8 +154,8 @@
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${GH_TOKEN:+x}${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (GH_TOKEN, SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -167,8 +167,8 @@ set -uo pipefail
 # that word-expansion aborts with status 1, which this contract reads as FAIL ("criteria not
 # met") when the truth is "the probe could not run". An unprovisioned env must never be able
 # to report a verdict on an irreversible retirement. See followthrough-convention.md.
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SENTRY_AUTH_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
   exit 2
 fi
 
@@ -214,7 +214,7 @@ sentry_count() {
   enc=$(printf '%s' "$q" | jq -sRr @uri)
   url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
   resp=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
+    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
   if [[ "$status" != "200" ]]; then echo "TRANSIENT"; return; fi

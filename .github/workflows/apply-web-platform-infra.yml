@@ -5177,7 +5177,13 @@ jobs:
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # #7946: the read moved OFF Doppler. The Doppler service-token binding this step
+          # used to carry existed only so the script could fetch a PERSONAL Sentry token
+          # (plus org/project, now literals) from prd_terraform — and an `if: always()`
+          # step holding a prd_terraform-capable credential on every failed or cancelled
+          # apply was the wider exposure. The org-level read-only `actions-read-prd` integration
+          # (ADR-031) is bound here from its repo secret; the script names the unbound case.
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           # Explicit rather than inherited: WEB_HOST_KEY rides $GITHUB_ENV from the validation
           # step, so on any if: always() run where validation FAILED it is empty and the host
           # filter degrades to matching only untagged events. `unknown` is legible in the
@@ -5599,7 +5605,9 @@ jobs:
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # #7946: bound from the repo secret, not fetched from Doppler — see the
+          # web_host_create step of the same name for why the Doppler binding left it.
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           # Explicit rather than inherited: WEB_HOST_KEY rides $GITHUB_ENV from the validation
           # step, so on any if: always() run where validation FAILED it is empty and the host
           # filter degrades to matching only untagged events. `unknown` is legible in the

@@ -22,7 +22,7 @@
 #   1 = FAIL       (>=1 event in window; a duplicate slipped past the block — leave open, investigate)
 #   * = TRANSIENT  (Sentry API unreachable / auth / parse failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
 #   as secrets.SENTRY_IAC_AUTH_TOKEN). Mirrors reconcile-ff-only-sentry-4977.sh.
 
 set -uo pipefail
@@ -35,15 +35,15 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -62,7 +62,7 @@ END=$(date -u +%Y-%m-%dT%H:%M:%S)
 URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&start=${START}&end=${END}&per_page=10&field=title&field=timestamp&field=level"
 
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "$URL")
 

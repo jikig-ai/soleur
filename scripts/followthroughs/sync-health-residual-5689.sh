@@ -21,16 +21,17 @@
 #     in the non-zero case is the correct outcome; only the clean (zero) case
 #     auto-closes.
 #
-# This deliberately reuses the SENTRY_AUTH_TOKEN the sweeper already exports
-# (scheduled-followthrough-sweeper.yml) — no new secret, no migration, no
-# prod-DB credential added to the sweeper's blast radius.
+# This deliberately reuses the SENTRY_ACTIONS_RO_TOKEN the sweeper already exports
+# (scheduled-followthrough-sweeper.yml; the org-level read-only `actions-read-prd`
+# integration, ADR-031) — no new secret, no prod-DB credential added to the sweeper's
+# blast radius.
 #
 # Exit codes (sweeper contract):
 #   0 = PASS      (zero residual events → close #5689)
 #   1 = FAIL      (residual events present → leave open, comment count)
 #   * = TRANSIENT (network/HTTP/region-discovery error → leave open, retry next day)
 #
-# Required env: SENTRY_AUTH_TOKEN
+# Required env: SENTRY_ACTIONS_RO_TOKEN
 
 set -uo pipefail
 
@@ -42,15 +43,15 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 # `jikigai-eu`, not the legacy `jikigai` slug: that org was cancelled vendor-side (article-30
 # register PA-8 (d), 2026-05-21) and returns 403/404 for every credential, so this probe
@@ -65,12 +66,17 @@ fi
 # Trailing window covering the one-week soak. The sweeper fires daily once the
 # directive's earliest (2026-07-06) passes; 7d at run time spans the soak week
 # (merge 2026-06-29 → ~2026-07-06).
-STATS_PERIOD="${SYNC_HEALTH_STATS_PERIOD:-7d}"
+# `14d`, not `7d`: the project-issues endpoint accepts only '', '24h' and '14d' for
+# statsPeriod (measured 2026-09-11: `7d` -> HTTP 400 "Invalid stats_period"), a defect the
+# dead org slug's 404 masked until #7946 moved the probe to `jikigai-eu`. 14d still spans
+# the one-week soak; the count is "residual events in the window", so a wider window
+# only makes the zero-residual PASS stricter, never looser.
+STATS_PERIOD="${SYNC_HEALTH_STATS_PERIOD:-14d}"
 
 # Region discovery: the org lives on a non-US Sentry cluster (EU/DE). Resolve the
 # regionUrl from the control-silo endpoint rather than hardcoding the host.
 region_json=$(curl --disable --noproxy '*' -sS --max-time 30 \
-  -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
   "https://sentry.io/api/0/organizations/${ORG}/" 2>/dev/null || echo "")
 api_host=$(printf '%s' "$region_json" | jq -r '.links.regionUrl // empty' 2>/dev/null | sed 's#^https://##; s#/$##')
 [[ -z "$api_host" ]] && api_host="sentry.io"
@@ -81,7 +87,7 @@ QUERY="feature:workspace-sync-health op:ready-null-installation"
 url="https://${api_host}/api/0/projects/${ORG}/${PROJECT}/issues/"
 
 http_code=$(curl --disable --noproxy '*' -sS -o /tmp/sh5689.json -w '%{http_code}' --max-time 45 \
-  -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
   --get "$url" \
   --data-urlencode "query=${QUERY}" \
   --data-urlencode "statsPeriod=${STATS_PERIOD}" \

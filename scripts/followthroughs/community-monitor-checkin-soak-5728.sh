@@ -25,7 +25,7 @@
 #   1 = FAIL       (≥1 missed/timeout — delivery regressed; sweeper comments, leaves open)
 #   * = TRANSIENT  (Sentry API unreachable, auth failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN (wired in scheduled-followthrough-sweeper.yml
+# Required env: SENTRY_ACTIONS_RO_TOKEN (wired in scheduled-followthrough-sweeper.yml
 #   as secrets.SENTRY_IAC_AUTH_TOKEN). Optional: SENTRY_ORG (default jikigai-eu),
 #   SENTRY_API_HOST (default de.sentry.io — the EU region host; ADR-031, and the
 #   host live-verified for the checkins endpoint during #5728 Phase 0).
@@ -40,15 +40,15 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set" >&2; exit 2; fi
 
 ORG="${SENTRY_ORG:-jikigai-eu}"
 API_HOST="${SENTRY_API_HOST:-de.sentry.io}"
@@ -58,7 +58,7 @@ WINDOW_DAYS=7
 URL="https://${API_HOST}/api/0/organizations/${ORG}/monitors/${MONITOR_SLUG}/checkins/?per_page=30"
 
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+  -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" \
   -H "Accept: application/json" \
   "$URL")
 
