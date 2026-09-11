@@ -28,7 +28,8 @@ then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
 definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
 
-**Devin CLI:** install with `devin plugins install jikig-ai/soleur`. Start a Devin session
+**Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur`. To work
+on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
 and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
 [compatibility instructions](devin/INSTRUCTIONS.md).
 
