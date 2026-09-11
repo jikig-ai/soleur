@@ -667,9 +667,19 @@ logs:
   where: "Better Stack Logs (soleur-inngest-vector-prd), hot window plus s3 archive arm"
   retention: "archive rows resolve back to at least 2026-08-13 as measured this session (~28 days)"
 discoverability_test:
-  command: "bash scripts/followthroughs/bwrap-probe-selfreport-check.sh --dry-run"
-  expected_output: "DRY-RUN OK: markers resolved, both byte-forms present, no live query attempted"
+  command: "doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 12h --grep 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' --grep 'SANDBOX_PROBE_OK: bwrap sandbox verified'"
+  expected_output: "JSONEachRow rows whose decoded .message carries rc= ms= cstate= err_chars= for every deploy in the window (plus bwrap_err= on a rollback row); zero rows across a window with no deploy is real absence, because ci-deploy is on the Vector allowlist"
+  credentials_required: "Doppler soleur/prd_terraform BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD — the Better Stack ClickHouse read connection. The property is 'the marker reaches the sink', and the sink has no anonymous read; a grep over the source file would verify the diff, not the delivery."
 ```
+
+> **Superseded 2026-09-11 (#8026):** the block above originally named
+> `bash scripts/followthroughs/bwrap-probe-selfreport-check.sh --dry-run` with expected output
+> `DRY-RUN OK: markers resolved, both byte-forms present, no live query attempted`. That script and
+> its two siblings were deliberately not built — see the archived `tasks.md` §"Deliberately NOT
+> built" — so the command named a file the PR does not create, and Check 10 would have FAILed on a
+> missing script rather than on the property. The replacement is the read this session actually
+> ran against production, declared under `credentials_required` because the sink has no
+> unauthenticated form.
 
 The honest position: **preflight Check 10 cannot execute the read that would actually prove this.**
 It forbids shell substitution and admits only allowlisted first tokens, ruling out the `doppler run`
