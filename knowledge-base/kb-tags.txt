@@ -215,6 +215,7 @@ alert-noise
 alert-rule-drift
 alert-rules
 alerting
+aliases
 alignment
 allowed
 allowed-tools
@@ -1250,6 +1251,7 @@ domain-verification
 dommatrix
 doppler
 dormant-gate
+double-fire
 down-migration
 downshift
 dp-11
@@ -1727,6 +1729,7 @@ growth-audit
 growth-strategist
 growth-targets
 guard
+guard-2
 guard-building
 guard-building-pr
 guard-contract
@@ -1906,6 +1909,7 @@ installation-token
 instrument-error
 instrument-validation
 instrument-verification
+instrument-void
 instrumentation
 instruments
 integration
@@ -2130,6 +2134,7 @@ marketplace-install
 mask-degraded
 mask-degraded-guard
 match
+matcher
 matrix-jobs
 matrix-sharding
 mawk

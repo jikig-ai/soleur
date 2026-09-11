@@ -136,7 +136,7 @@ fi
 # exit on failure: the sync below fails open on network error, and keeping that
 # behaviour here would make "unplug the network" a universal gate bypass.
 FETCH_OK=1
-if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
+if ! git -C "$WORK_DIR" fetch --no-tags origin main >/dev/null 2>&1; then
   FETCH_OK=0
 fi
 

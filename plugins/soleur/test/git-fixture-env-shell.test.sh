@@ -182,7 +182,16 @@ printf '\n=== git_fixture_env: an unenforceable ceiling FAILS, and exports nothi
 # env is the silent degradation this file exists to prevent.
 REL_BASE="$(mkfixture)"; mkdir -p "$REL_BASE/sub" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
 for bad_dir in "/tmp" "relative/path" "$TMPDIR/has:colon/repo"; do
-  probe=$(bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true; echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"' _ "$LIB" "$bad_dir" 2>&1)
+  # `env -u` is load-bearing, and its absence was a latent hermeticity defect. This probe asserts
+  # the BUILDER exported nothing before refusing, but it reads the builder's own signature variable
+  # out of an environment it never cleared — so it conflated "the builder exported this" with "this
+  # variable has a value from anywhere". It therefore passed only while the ambient environment
+  # happened to be empty, i.e. for a reason unrelated to the property it names, and reddened for any
+  # developer carrying GIT_CONFIG_KEY_0 for an unrelated purpose (a gpg workaround, a direnv). #7917
+  # was the first thing in this repo to set it, which is how it surfaced.
+  probe=$(env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    -u GIT_CEILING_DIRECTORIES -u GIT_AUTHOR_NAME \
+    bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true; echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"' _ "$LIB" "$bad_dir" 2>&1)
   r=$(bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1' _ "$LIB" "$bad_dir"; echo $?)
   if [[ "$r" != "0" ]]; then ok "refuses an unenforceable ceiling for [$bad_dir]"
   else bad "ACCEPTED an unenforceable ceiling for [$bad_dir]"; fi
