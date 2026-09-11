@@ -819,6 +819,181 @@ t15_open_path_still_honors_earliest
 t16_main_closed_set_dispatch
 t17_trace_lines_are_scrubbed_before_comment
 
+# =============================================================================
+# Guard 3 (#7946): a directive naming a secret the env does not carry -- absent, SET BUT
+# EMPTY (what `${{ secrets.X }}` resolves to when the repo secret is gone), or not a valid
+# identifier -- is reported ON THE TRACKER and reds the run; no name is ever expanded before
+# it is validated. Before this guard the branch was `fail … ; return 0`: stderr only, green.
+#
+# EVERY CASE RUNS `bash "$SUT"` END TO END -- never `source "$SUT"; main` -- because the
+# red-run verdict (MISSING_SECRET beside TRUNCATED_SWEEP) is raised in the
+# `BASH_SOURCE == $0` block AFTER main returns, which a sourced main can never observe.
+# =============================================================================
+
+# g3_root <open_json> -> root. The stub gh serves the open list from a file and CAPTURES
+# every `issue comment N` body to $root/comment-N so per-tracker assertions are real.
+g3_root() {
+  local open_json="$1" root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/p.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'FOO_TOKEN=%s\n' "${FOO_TOKEN:-<unset>}"
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/p.sh"
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "gh \$*" >> "$root/gh-calls.log"
+case "\$*" in
+  *"--state closed"*)  printf '[]' ;;
+  *"issue list"*)      cat "$root/open.json" ;;
+  *"issue comment"*)   cat > "$root/comment-\$3" ;;
+  *"issue close"*)     : ;;
+  *) printf 'UNSTUBBED gh: %s\n' "\$*" >&2; exit 99 ;;
+esac
+EOF
+  chmod +x "$root/bin/gh"
+  printf '%s' "$open_json" > "$root/open.json"
+  printf '%s' "$root"
+}
+
+# g3_run <root> <sut> [NAME=value ...] -> writes $root/{out,err,rc}. `env -i` so no ambient
+# credential can satisfy a directive by accident; only the names given here exist.
+g3_run() {
+  local root="$1" sut="$2"; shift 2
+  (
+    cd "$root" || exit 97
+    env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN="${G3_DRY_RUN:-0}" "$@" \
+      bash "$sut" > "$root/out" 2> "$root/err"
+    echo "$?" > "$root/rc"
+  )
+}
+
+g3_body() { # g3_body <secrets-clause-or-empty> -> a one-issue open list JSON
+  local clause="$1"
+  local directive="<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z"
+  [[ -n "$clause" ]] && directive="$directive secrets=$clause"
+  directive="$directive -->"
+  printf '[{"number":9001,"body":"%s"}]' "$directive"
+}
+
+# --- G3-M1: the directive names SENTRY_AUTH_TOKEN; the env carries only SENTRY_ACTIONS_RO_TOKEN ---
+t_g3_m1_missing_secret_is_loud() {
+  local root; root=$(g3_root "$(g3_body SENTRY_AUTH_TOKEN)")
+  g3_run "$root" "$SUT" SENTRY_ACTIONS_RO_TOKEN=x
+  local rc; rc=$(cat "$root/rc"); local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "G3-M1 a missing secret reds the run (rc != 0)" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G3-M1 a comment is posted ON THE TRACKER naming the secret" "SENTRY_AUTH_TOKEN" "$posted"
+  assert_contains "G3-M1 the comment names the fix" "secrets=" "$posted"
+  assert_contains "G3-M1 the comment carries the run heading" "### Sweeper run:" "$posted"
+  assert_contains "G3-M1 a ::error:: annotation is emitted" "::error::" "$(cat "$root/err")"
+  assert_not_contains "G3-M1 the probe was NOT run with the secret missing" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
+  rm -rf "$root"
+}
+
+# --- G3-M2: a SECOND tracker with a missing secret after a compliant first -> both commented ---
+t_g3_m2_second_tracker_after_compliant() {
+  local open_json
+  open_json='[{"number":9000,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z secrets=FOO_TOKEN -->"},{"number":9001,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z secrets=SENTRY_AUTH_TOKEN -->"},{"number":9002,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z secrets=OTHER_TOKEN -->"}]'
+  local root; root=$(g3_root "$open_json")
+  g3_run "$root" "$SUT" FOO_TOKEN=forwarded
+  local rc; rc=$(cat "$root/rc")
+  assert_eq       "G3-M2 two missing secrets -> one non-zero exit" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G3-M2 tracker 9001 commented" "SENTRY_AUTH_TOKEN" "$(cat "$root/comment-9001" 2>/dev/null)"
+  assert_contains "G3-M2 tracker 9002 commented (the walk does not stop at the first)" "OTHER_TOKEN" "$(cat "$root/comment-9002" 2>/dev/null)"
+  assert_not_contains "G3-M2 the compliant tracker's verdict comment is not a missing-secret comment" "required secret" "$(cat "$root/comment-9000" 2>/dev/null)"
+  assert_contains "G3-M2 the compliant tracker still got its verdict" "### Sweeper run: PASS" "$(cat "$root/comment-9000" 2>/dev/null)"
+  rm -rf "$root"
+}
+
+# --- G3-M3: DISPATCH row. A sed copy of the SUT with the `MISSING_SECRET=1` assignment deleted
+# lets M1 through (rc 0); the diff proves the mutation landed. The FLAG is the mechanism. ---
+t_g3_m3_flag_is_the_mechanism() {
+  local root; root=$(g3_root "$(g3_body SENTRY_AUTH_TOKEN)")
+  local mut="$root/sut-no-flag.sh"
+  sed '/^[[:space:]]*MISSING_SECRET=1[[:space:]]*$/d' "$SUT" > "$mut"
+  if diff -q "$SUT" "$mut" >/dev/null 2>&1; then
+    echo "FAIL: G3-M3 mutation did NOT land (no MISSING_SECRET=1 line to delete) -- the row would score the baseline"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  else
+    g3_run "$root" "$mut" SENTRY_ACTIONS_RO_TOKEN=x
+    assert_eq "G3-M3 with the flag assignment deleted, the M1 input exits 0 (flag is the mechanism)" "0" "$(cat "$root/rc")"
+  fi
+  rm -rf "$root"
+}
+
+# --- G3-M4: DRY_RUN=1 -> no comment posted, the would-comment and the ::error:: both logged, still rc != 0 ---
+t_g3_m4_dry_run_is_still_red() {
+  local root; root=$(g3_root "$(g3_body SENTRY_AUTH_TOKEN)")
+  G3_DRY_RUN=1 g3_run "$root" "$SUT" SENTRY_ACTIONS_RO_TOKEN=x
+  local rc; rc=$(cat "$root/rc")
+  assert_eq       "G3-M4 DRY_RUN=1 still reds the run" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_eq       "G3-M4 DRY_RUN=1 posts NO comment" "absent" "$([[ -f "$root/comment-9001" ]] && echo present || echo absent)"
+  assert_contains "G3-M4 DRY_RUN=1 logs the would-comment" "DRY_RUN" "$(cat "$root/out")"
+  assert_contains "G3-M4 DRY_RUN=1 still emits ::error::" "::error::" "$(cat "$root/err")"
+  rm -rf "$root"
+}
+
+# --- G3-M5: a malformed name is refused BEFORE any expansion. `${!name+x}` on
+# `a[$(cmd)]` evaluates the subscript, running cmd inside the sweeper job with every forwarded
+# secret in its env. The sentinel must stay absent; the comment quotes the token. ---
+t_g3_m5_malformed_name_never_expands() {
+  local root; root=$(setup_tmpdir); rm -rf "$root"
+  root=$(g3_root '[]')
+  # ${IFS} stands in for the space the awk field split would otherwise eat.
+  local payload="a[\$(touch\${IFS}$root/pwned)]"
+  printf '[{"number":9001,"body":"<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z secrets=%s -->"}]' "$payload" > "$root/open.json"
+  g3_run "$root" "$SUT" SENTRY_ACTIONS_RO_TOKEN=x
+  local rc; rc=$(cat "$root/rc"); local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "G3-M5 the malformed name's payload did NOT execute (sentinel absent)" "absent" "$([[ -e "$root/pwned" ]] && echo present || echo absent)"
+  assert_eq       "G3-M5 a malformed name reds the run" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G3-M5 the comment quotes the malformed token verbatim" "$payload" "$posted"
+  assert_contains "G3-M5 the comment says it is malformed" "malformed" "$posted"
+  rm -rf "$root"
+}
+
+# --- G3-M6: the name is present in the env but EMPTY -> reported as bound but empty ---
+t_g3_m6_bound_but_empty() {
+  local root; root=$(g3_root "$(g3_body SENTRY_AUTH_TOKEN)")
+  g3_run "$root" "$SUT" SENTRY_AUTH_TOKEN=
+  local rc; rc=$(cat "$root/rc"); local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "G3-M6 a set-but-empty secret reds the run" "1" "$([[ "$rc" != "0" ]] && echo 1 || echo 0)"
+  assert_contains "G3-M6 the comment says bound but empty" "bound but empty" "$posted"
+  assert_not_contains "G3-M6 the probe was NOT run with an empty secret" "running scripts/followthroughs/p.sh" "$(cat "$root/out")"
+  rm -rf "$root"
+}
+
+# --- G3-H2: must-PASS, not the canonical: two names both set AND non-empty, one not GH_TOKEN ---
+t_g3_h2_two_names_forwarded() {
+  local root; root=$(g3_root "$(g3_body GH_TOKEN,FOO_TOKEN)")
+  g3_run "$root" "$SUT" GH_TOKEN=stub FOO_TOKEN=forwarded-7946
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "G3-H2 both names present and non-empty -> exit 0" "0" "$(cat "$root/rc")"
+  assert_contains "G3-H2 the second name was forwarded into the env -i sandbox" "FOO_TOKEN=forwarded-7946" "$posted"
+  assert_not_contains "G3-H2 no missing-secret comment on this path" "required secret" "$posted"
+  assert_not_contains "G3-H2 no ::error:: on this path" "::error::" "$(cat "$root/err")"
+  rm -rf "$root"
+}
+
+# --- G3-H3: must-PASS: a directive with no `secrets=` clause at all -> path not entered ---
+t_g3_h3_no_secrets_clause() {
+  local root; root=$(g3_root "$(g3_body "")")
+  g3_run "$root" "$SUT"
+  local posted=""; [[ -f "$root/comment-9001" ]] && posted=$(cat "$root/comment-9001")
+  assert_eq       "G3-H3 no secrets= clause -> exit 0" "0" "$(cat "$root/rc")"
+  assert_contains "G3-H3 the probe ran (FOO_TOKEN unset inside the sandbox)" "FOO_TOKEN=<unset>" "$posted"
+  assert_not_contains "G3-H3 no missing-secret comment" "required secret" "$posted"
+  rm -rf "$root"
+}
+
+t_g3_m1_missing_secret_is_loud
+t_g3_m2_second_tracker_after_compliant
+t_g3_m3_flag_is_the_mechanism
+t_g3_m4_dry_run_is_still_red
+t_g3_m5_malformed_name_never_expands
+t_g3_m6_bound_but_empty
+t_g3_h2_two_names_forwarded
+t_g3_h3_no_secrets_clause
+
 echo
 
 # --- T18: the laundering containment (#7909) --------------------------------
@@ -885,4 +1060,20 @@ assert_contains     "T19 the truncation detector raises the run's VERDICT, not j
                     'FAILING THE RUN because the open follow-through page was full' "$(cat "$SUT")"
 
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+
+# --- ADR-193 floor. TOTAL moves inside the assert helpers (the call site of the verdict),
+# never inside a pass()/fail() a mutation could neuter; the conservation identity and the
+# floor are reported with printf + exit 1 DIRECTLY, never through the counters they police.
+if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
+  printf '[FATAL] accounting: PASS+FAIL (%d) != TOTAL (%d) -- a verdict was dropped or a call site lacks its increment\n' \
+    "$((PASS + FAIL))" "$TOTAL" >&2
+  exit 1
+fi
+# Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
+# re-measure and raise it in the same commit that adds a row.
+MIN_ASSERTIONS=9999
+if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

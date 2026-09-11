@@ -529,6 +529,45 @@ mutate_row 'D4 Rule D: credential classifier narrowed (stdin-header channel drop
   's/CURL_STDIN_HEADER = re\.compile\(r"[^"]*"\)/CURL_STDIN_HEADER = re.compile(r"(?!x)x")/' \
   "$FIX/violation-ruled-stdin-header.sh" 1 0
 
+# --- Guard 2 (#7946): Rule C empty-predicate hardening ------------------------
+# A single-credential file whose only `${VAR:+x}` limb was deleted leaves `[ -n "" ]`,
+# which Rule C's `":+" not in window` branch used to read as an UNCONDITIONAL refusal --
+# the strongest possible guard -- when it is one that can never fire.
+rc="$(rc_of "$LINT" "$FIX/violation-empty-predicate-double.sh")"
+[ "$rc" = "1" ] && pass "G2-M1 empty predicate [ -n \"\" ] is reported" \
+  || fail "G2-M1 empty predicate [ -n \"\" ] should report rc=1, got rc=$rc"
+python3 "$LINT" "$FIX/violation-empty-predicate-double.sh" >"$WORK/g2msg" 2>&1
+grep -q 'violation-empty-predicate-double.sh:6:' "$WORK/g2msg" \
+  && pass "G2-M1 cites the preamble line (:6)" \
+  || fail "G2-M1 did not cite the preamble line: $(head -3 "$WORK/g2msg")"
+grep -q 'can never fire' "$WORK/g2msg" && grep -q ':+x' "$WORK/g2msg" \
+  && pass "G2-M1 message names the restore-or-refuse-unconditionally remedy" \
+  || fail "G2-M1 message lacks the remedy text: $(head -5 "$WORK/g2msg")"
+
+# G2-M2: the other syntax + quote style, in the SAME run after a compliant file -- both the
+# `[[ -n '' ]]` form and "the walk does not stop at the first member".
+rc="$(rc_of "$LINT" "$FIX/compliant-canonical.sh" "$FIX/violation-empty-predicate-double.sh" "$FIX/violation-empty-predicate-single.sh")"
+[ "$rc" = "1" ] \
+  && reports 'violation-empty-predicate-double.sh' && reports 'violation-empty-predicate-single.sh' \
+  && pass "G2-M2 both quote styles reported in one run, after a compliant file" \
+  || fail "G2-M2 expected rc=1 naming both fixtures, got rc=$rc: $(cat "$WORK/out" "$WORK/err" | head -6)"
+reports 'compliant-canonical.sh' \
+  && fail "G2-M2 the compliant file must not be named" \
+  || pass "G2-M2 the compliant file is not named"
+
+# G2-M3: the dispatch row -- a sandbox copy with the hardening's predicate removed lets M1
+# through (1 -> 0). The regex is the hardening's own; degenerating it to never-match is the
+# "hardening deleted" mutant without touching the surrounding early return.
+mutate_row 'G2-M3 Rule C: empty-predicate hardening removed' \
+  's/EMPTY_PREDICATE = re\.compile\(r"[^"]*"\)/EMPTY_PREDICATE = re.compile(r"(?!x)x")/' \
+  "$FIX/violation-empty-predicate-double.sh" 1 0
+
+# G2-H2: must-PASS, not the canonical -- the genuinely unconditional refusal shares the early
+# return the hardening sits in front of; it must stay accepted.
+rc="$(rc_of "$LINT" "$FIX/compliant-indirect-unconditional.sh")"
+[ "$rc" = "0" ] && pass "G2-H2 a genuinely unconditional refusal still passes" \
+  || fail "G2-H2 unconditional refusal should report rc=0, got rc=$rc"
+
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
 # check searched for a literal its own grep line contains, so deleting the floor

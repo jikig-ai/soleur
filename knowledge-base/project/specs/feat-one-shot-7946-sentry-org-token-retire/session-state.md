@@ -21,3 +21,27 @@
 - Skills: soleur:plan, soleur:plan-review, soleur:deepen-plan
 - Plan-review panel: dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist, spec-flow-analyzer, cto, strong-model consult
 - Deepen passes: verify-the-negative sweep, security-sentinel, observability-coverage-reviewer, test-design-reviewer, git-history-analyzer, framework-docs-researcher
+
+## Work Phase
+
+### Phase 0 readings (2026-09-11)
+- Populations re-confirmed: 16 files name `SENTRY_AUTH_TOKEN` under `scripts/followthroughs/`; 13 carry `:+x`; 13 in the Rule D baseline plus `fresh-host-boot-trail.sh` at baseline line 27; `git-data-birth-emitter-6982.sh` at A/B/C baseline line 75.
+- `bash scripts/lint-followthrough-varq-ban.sh` → `clean (70 probe(s) scanned)` — **N = 70** (the plan quoted 67; 70 is the floor input for Guard 1 H4).
+- Claims sweep: the only hit in the two consumer classes is `soleur-host-bootstrap-observability.test.sh` AC13 (already in Files to Edit). `www-apex-canonicalizer-mutation.test.sh:444` is a mutation fixture on a different workflow — not a claim about the sweeper.
+- Browser surfaces: `agent-browser 0.22.3` (primary); `browser-snapshot-credential-guard.sh` present in `hooks.json` PreToolUse.
+
+### Phase 0.4 — directive rewrites staged (resume recipe)
+Open trackers whose directive names the retired credential (queried 2026-09-11, `--limit 200`, 53 open): **#6604, #6297, #5689**. Closed within 14 days naming it: **none**.
+
+| Tracker | `secrets=` before | `secrets=` after |
+|---|---|---|
+| #6604 | `SENTRY_AUTH_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD` | `SENTRY_ACTIONS_RO_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD` |
+| #6297 | `BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD,SENTRY_AUTH_TOKEN,GH_TOKEN,GH_REPO` | `BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD,SENTRY_ACTIONS_RO_TOKEN,GH_TOKEN,GH_REPO` |
+| #5689 | `SENTRY_AUTH_TOKEN` | `SENTRY_ACTIONS_RO_TOKEN` |
+
+Each body has exactly one occurrence of the old name. Staged at `<scratchpad>/directive-rewrites/<n>.before.md` and `<n>.md` (the scratchpad is session-scoped; if it is gone, regenerate with `gh issue view <n> --json body --jq .body | sed 's/SENTRY_AUTH_TOKEN/SENTRY_ACTIONS_RO_TOKEN/g'`).
+
+**Resume recipe for Phase 5.2 (post-merge, W3+W4):**
+1. Re-run both queries (open `--limit 200`; closed with `closedAt` > 14 days ago) — the set may have moved.
+2. For each tracker: `diff <(gh issue view <n> --json body --jq .body) <n>.before.md` must be empty; then `gh issue edit <n> --body-file <n>.md`.
+3. `gh workflow run scheduled-followthrough-sweeper.yml`; record `createdAt`; wait; assert AC-P1 and AC-P2.
