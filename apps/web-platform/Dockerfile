@@ -18,8 +18,9 @@ ARG NEXT_PUBLIC_GITHUB_APP_SLUG
 ARG NEXT_PUBLIC_AGENT_COUNT
 # Web Push VAPID public key (client-side push subscription)
 ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
-# Sentry source map upload (builder stage only — not present in runner image)
-ARG SENTRY_AUTH_TOKEN
+# Sentry source map upload. SENTRY_ORG/SENTRY_PROJECT are slugs (they appear in every
+# Sentry URL), so they stay ARGs. The auth token does NOT — see the secret mount on
+# `npm run build` below and the note there.
 ARG SENTRY_ORG
 ARG SENTRY_PROJECT
 # SENTRY_URL targets the org-subdomain so sentry-cli source-map upload
@@ -28,7 +29,34 @@ ARG SENTRY_PROJECT
 # `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`.
 ENV SENTRY_URL=https://jikigai-eu.sentry.io/
 
-RUN npm run build
+# The Sentry auth token arrives as a BuildKit SECRET MOUNT, never as an ARG (#7389).
+#
+# WHY. Build-args are recorded verbatim in the SLSA provenance attestation that is
+# published alongside the image, so an ARG is a publication channel: this token sat in
+# cleartext in the attestation of every release, and `crane copy` mirrored it into zot.
+# A secret mount is not recorded in provenance and leaves no layer behind.
+#
+# It is NOT enough to rely on `provenance: mode=min`. Measured 2026-08-10 on BuildKit
+# v0.31.2 and v0.32.2: min records zero build-args, max records all of them — but
+# docker/build-push-action picks the default from REPOSITORY VISIBILITY (public => max),
+# so the mode is ambient configuration that drifts. Removing the ARG is the control.
+#
+# WHY `[ -s ]` AND NOT JUST `required=true`. `required=true` proves the secret is
+# PRESENT, never that it is non-empty — an empty `env=` satisfies it. And the Sentry
+# plugin is configured `silent: !process.env.CI` (next.config.ts); `CI` is unset inside
+# a Docker build, so an empty token makes source-map upload fail SILENTLY and ship a
+# release with no symbolication. The emptiness test is the only real control.
+#
+# LOCAL BUILDS must pass a NON-EMPTY dummy, e.g.
+#   docker buildx build --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN ...
+# `src=/dev/null` satisfies `required=true` but fails `[ -s ]` by design — an empty
+# secret is exactly the state that ships an unsymbolicated release.
+RUN --mount=type=secret,id=sentry_auth_token,required=true \
+    if [ ! -s /run/secrets/sentry_auth_token ]; then \
+      echo "ERROR: the sentry_auth_token secret is present but EMPTY. Source-map upload would be skipped silently (next.config.ts sets silent: !CI, and CI is unset in a Docker build). Pass a non-empty value: --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN" >&2; \
+      exit 1; \
+    fi; \
+    SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)" npm run build
 # R3 (feat-dev-signin-bypass): post-build tripwire that fails the prd
 # image if dev-only sign-in symbols leak into client chunks or the RSC
 # manifest. Scope is documented inside the script — server-bundle

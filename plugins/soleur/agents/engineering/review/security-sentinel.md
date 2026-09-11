@@ -44,6 +44,17 @@ You will systematically execute these security scans:
    - Scan for hardcoded credentials, API keys, or secrets
    - Check for sensitive data in logs or error messages
    - Verify proper encryption for sensitive data at rest and in transit
+   - **Published build channels (#7389).** When the diff touches a workflow or a
+     Dockerfile, a credential is disclosed by *publication*, not only by hardcoding.
+     Run `python3 scripts/lint-buildarg-secret-channels.py` and treat any finding as
+     Critical. The class: BuildKit records build-args verbatim in the SLSA provenance
+     attestation published beside the image, so `SECRET=${{ secrets.X }}` under
+     `build-args:` ships the value to everyone who can pull. Do **not** accept
+     `provenance: mode=min` or "the ARG is builder-stage only" as mitigations —
+     the mode is defaulted from repo *visibility* (public ⇒ `mode=max`) and
+     stage-scoping governs the layer cache, not the attestation. The fix is a
+     `secrets:` BuildKit mount. Hard rule:
+     `hr-no-secret-in-buildarg-or-image-metadata`.
 
 6. **OWASP Top 10 Compliance**
    - Systematically check against each OWASP Top 10 vulnerability

@@ -1,0 +1,62 @@
+# Docker build-arg key allowlist -- the single source of truth (#7389).
+#
+# Consumed by scripts/lint-buildarg-secret-channels.py in BOTH its modes (source
+# sweep and --provenance). Do not fork this list into a second file; the test
+# asserts the SUT resolves this path.
+#
+# WHY THIS FILE EXISTS. Docker build-args are recorded verbatim in the SLSA
+# provenance attestation that is published alongside the image. Anyone who can
+# read the image can read the build-args. `SENTRY_IAC_AUTH_TOKEN` reached the
+# published attestation of ghcr.io/jikig-ai/soleur-web-platform this way.
+#
+# THE RULE IS A CONJUNCTION, and the two marker types differ in how they apply it:
+#
+#   prefix:<P>   A key starting with <P> is admitted ONLY IF it is not
+#                credential-shaped. This is what stops a prefix from becoming a
+#                laundering channel: `NEXT_PUBLIC_SECRET_KEY` and
+#                `BUILD_DEPLOY_TOKEN` both match an allowlisted prefix and are
+#                both still rejected.
+#
+#   exact:<K>    Admitted unconditionally. Reserved for keys that ARE
+#                credential-shaped but are genuinely public by design. Every
+#                exact entry must carry a justification comment naming WHY the
+#                value is public. An exact entry is a standing decision on the
+#                record -- adding one is a security review, not a formality.
+#
+# Anything matching neither marker is a finding (default-deny).
+
+# --- prefixes ---------------------------------------------------------------
+
+# Client-side inlining: Next.js substitutes NEXT_PUBLIC_* into the browser
+# bundle at build time, so these values are served to every visitor by
+# construction. Publishing them in an attestation discloses nothing new.
+# The shape conjunction still applies -- see NEXT_PUBLIC_SECRET_KEY above.
+prefix:NEXT_PUBLIC_
+
+# Build provenance metadata: version, commit SHA. Non-secret by construction,
+# and BUILD_SHA doubles as the scanner's positive control (its presence proves
+# the sweep actually parsed the block rather than matching an empty set).
+prefix:BUILD_
+
+# --- exact ------------------------------------------------------------------
+
+# Public by design, but credential-shaped, so each needs an explicit entry.
+
+# The Supabase anon key is the publishable client key: it is embedded in the
+# browser bundle and is only ever as privileged as the row-level-security
+# policies allow. It is not the service-role key, which must never be a build-arg.
+exact:NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+# A Sentry DSN is a public ingest endpoint -- it is compiled into the client
+# bundle so browsers can report errors. It grants write-only event ingest, not read.
+exact:NEXT_PUBLIC_SENTRY_DSN
+
+# The VAPID *public* key is the half of the Web Push keypair that is handed to
+# the browser during subscription. The private key is never a build input.
+exact:NEXT_PUBLIC_VAPID_PUBLIC_KEY
+
+# Sentry org and project slugs. Identifiers, not credentials -- they appear in
+# every Sentry URL. Listed exactly rather than by prefix so that a future
+# SENTRY_* key must be justified individually instead of inheriting admission.
+exact:SENTRY_ORG
+exact:SENTRY_PROJECT

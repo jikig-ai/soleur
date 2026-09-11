@@ -52,6 +52,7 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-verify-repo-capability-claim-before-assert]
 - [id: hr-pipeline-skills-never-inline-after-go-route]
 - [id: hr-third-party-content-grep-on-undertaking]
+- [id: hr-no-secret-in-buildarg-or-image-metadata]
 
 ## Workflow Gates
 
