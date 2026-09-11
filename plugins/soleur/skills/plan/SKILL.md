@@ -685,6 +685,13 @@ This is the affected-surface extension of `hr-observability-as-plan-quality-gate
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
+> **Rule `wg-architecture-decision-is-a-plan-deliverable` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> When a plan makes or changes an architectural decision (ownership/tenancy boundary move, new substrate/trust boundary, or a reversal/extension of an existing ADR), the ADR write and C4 diagram update are deliverables of THAT plan — never a deferred follow-up issue [id: wg-architecture-decision-is-a-plan-deliverable] [skill-enforced: plan Phase 2.10]. **Why:** #5437 — always-enforce-workspace ADR/C4 was wrongly filed as deferred #5440; recorded architecture must not lag the change that creates it.
+
 [skill-enforced: plan Phase 2.10 — `wg-architecture-decision-is-a-plan-deliverable`]
 
 If the plan makes or changes an **architectural decision**, the ADR write and the C4 diagram update are **deliverables of THIS plan** — never a deferred follow-up issue. Phase 0.6 / line 112 already make you *read* the ADR corpus; this gate makes you *produce* the decision record when the plan creates one. Deferring an ADR/C4 update to "later" ships a system whose recorded architecture lies about its real one until someone reopens the issue (usually never).

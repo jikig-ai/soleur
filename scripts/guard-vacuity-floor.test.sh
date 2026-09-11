@@ -336,7 +336,21 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # even reached, so a wrapper that never runs is caught ahead of the count; (c) its bound is a
 # literal adjacent to the test, so it is mutant-CONSTRUCTIBLE. Measured at promotion: 28/28 with
 # 14 assertions driven RED before the fix, and a fixture non-vacuity control of its own.
-PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh)$'
+# `apps/web-platform/scripts/sentry-monitors-audit.test.sh` added by #7997 — the suite gained its
+# FIRST anti-vacuity floor there (review round two), which is what put it in this population at
+# all. The file had previously carried a deliberate no-floor note citing this gate and #7585; that
+# note is superseded, because the measured reason for adding the floor was concrete: neutering
+# `pass()`/`fail()` to `:` made the suite print "Results: 0 passed, 0 failed" and exit 0 — green
+# having asserted nothing. PROMOTED, not deferred, following the sibling entry
+# `run-migrations-schema-probe.test.sh` in this same directory: the FILE is the narrower of the two
+# prescribed moves, the ledger is shrink-only, and `apps/web-platform/scripts/` stays deferred.
+# Measured at promotion on the as-merged suite: control GREEN (51/51); `pass()` neutered to a no-op
+# -> rc=1 with `FATAL: verdict helpers cannot conclude — pass 0->0 (want +1)`; and the ADR-193 case,
+# `fail()` neutered WITH a real defect present -> still rc=1 (`fail 0->0`), because the harness
+# self-test and the floor are both emitted by `printf` + `exit 1` and neither is routed through the
+# helpers they backstop. Both fire BEFORE the count is even reached. Its bound (47) is a literal
+# adjacent to the test, so it is mutant-CONSTRUCTIBLE.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

@@ -15,8 +15,41 @@ set `CLAUDE_PLUGIN_ROOT` to the verified installed root for that command.
 Plugin hooks receive that variable automatically; ordinary shell tools need
 not inherit a plugin hook's environment.
 
+Install the plugin from the monorepo subfolder:
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+You must be signed in (`devin auth login`) for plugin installation. Use `-y` to skip the confirmation prompt. The first install may take a few minutes because Devin clones the `jikig-ai/soleur` repository to reach the `plugins/soleur` subfolder.
+
+If the remote install hangs or fails, clone the repository and install from the local path:
+
+```bash
+git clone https://github.com/jikig-ai/soleur.git
+devin plugins install --local ./soleur/plugins/soleur -y
+```
+
 Use `/soleur:go <intent>`, `/soleur:sync`, and `/soleur:help` as Devin slash commands.
 These are skill invocations, not shell commands.
+
+## Updating the plugin
+
+Devin caches plugin content locally. To pull the latest `main` from the monorepo source, run:
+
+```bash
+devin plugins update soleur
+```
+
+To refresh every installed plugin at once:
+
+```bash
+devin plugins update
+```
+
+For local-folder installs (`--local`), edits are reflected in the next session with no `update` needed.
+
+If you see a transient warning such as "plugin ... is in your settings but its content could not be fetched; it will be retried automatically", the cloud-side fetcher is having trouble reaching GitHub. The CLI copy usually still works; run `devin plugins update soleur` again after a moment, or switch to a `--local` install if the remote source stays unreachable.
 
 ## Tools
 
@@ -25,7 +58,7 @@ These are skill invocations, not shell commands.
 | Read / Glob / Grep | read, grep, glob tools |
 | Write / Edit | write, edit tools |
 | Bash / Shell | exec tool |
-| Skill `soleur:<name>` | Skill tool with `soleur:<skill>` namespace |
+| Skill `soleur:<name>` | Slash command `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`) |
 | Task / Agent / spawn_subagent | run_subagent tool |
 | AskUserQuestion | ask_user_question tool |
 | TodoWrite / TodoRead | todo_write tool |
@@ -33,8 +66,8 @@ These are skill invocations, not shell commands.
 | WebSearch / WebFetch / ToolSearch | web_search, webfetch tools |
 | Workflow scripts | Translate orchestration to available tools; do not execute Claude tool calls as shell JavaScript |
 
-Loading a skill file is Devin's execution entry point. Follow its full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
-Treat `$ARGUMENTS` as the supplied request, never as an environment variable that needs shell interpolation.
+Soleur skills are exposed as Devin slash commands (`/soleur:<skill>`). When a slash command is invoked, Devin loads the skill's `SKILL.md` and treats its body as the prompt. Follow the skill's full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
+Treat `$ARGUMENTS` as the supplied request (the text following the slash command), never as an environment variable that needs shell interpolation.
 
 ## Domain agents
 
@@ -70,7 +103,7 @@ and retain incomplete status instead of silently skipping it.
 
 ## Devin-specific considerations
 
-- **Skill invocation**: Devin uses the same Skill tool format as Claude Code with `soleur:<skill>` namespace
+- **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
 - **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool
 - **Polling**: Use `get_output` with timeout instead of Claude's Monitor tool
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially

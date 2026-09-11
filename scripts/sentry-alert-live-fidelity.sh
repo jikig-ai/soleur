@@ -43,6 +43,34 @@
 #
 # Exit 0 = every in-scope rule matches the capture.
 # Exit 1 = a divergence, or the probe could not establish that it checked anything.
+# Exit 2 = a REFUSAL: the org slug or the destination host is not the pinned one,
+#          so no request was made. Distinct from 1 on purpose — a refusal is a
+#          statement about the environment, never about Sentry.
+#
+# ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
+# SENTRY_API_HOST and SENTRY_ORG are env-settable and both land inside the URL
+# that carries SENTRY_AUTH_TOKEN, so before this pin an attacker-controlled
+# environment sent a live bearer to a host of their choosing (measured: a
+# stubbed curl recorded `bearer=YES` to https://attacker.tld/api/0/... on this
+# file's own HEAD). Two flags are not enough to close it:
+#   * `--disable` must be the FIRST argument — it aborts ~/.curlrc parsing and
+#     is a no-op anywhere later.
+#   * `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY redirecting the request with
+#     the destination pin fully intact.
+# Neither touches the RESOLVER, the TRUST ANCHOR, or the TLS key log:
+# LOCALDOMAIN/RES_OPTIONS/HOSTALIASES still redirect resolution,
+# CURL_CA_BUNDLE/SSL_CERT_FILE/SSL_CERT_DIR still replace the trust anchor, and
+# SSLKEYLOGFILE still exfiltrates session keys. The unset prologue below raises
+# that floor -- it is NOT a boundary, and the distinction matters: an actor who
+# can set SENTRY_API_HOST can equally set LD_PRELOAD, BASH_ENV or
+# BASH_FUNC_curl%%, each of which is total compromise no pin can see (all three
+# measured against these scripts). Those need a strictly STRONGER capability
+# than the env-var-injection this pin defends against, so the pin is still
+# worth having -- but read this as defence in depth against accidental
+# environment, never as a closure claim.
+#
+# `--proto '=https'` and `-g` close scheme downgrade and glob interpretation of
+# the URL.
 set -euo pipefail
 
 # REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
@@ -65,6 +93,44 @@ CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 
+# (a) Strip the environment curl reads that neither --noproxy nor a host pin
+#     reaches. Ordering matters only in that this precedes any curl invocation.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+
+# (b) Defined BEFORE its first call. `-b` (bytes), not `-c` (characters): a
+#     multi-byte hostile value must not be able to walk past the cap.
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
+
+# (c) RFC 1035 §2.3.4 label: 63 octets max. The subshell is MANDATORY —
+#     `LC_ALL=C [[ … ]]` is a parse error (`[[` is a keyword and takes no env
+#     prefix), and without the C locale the a-z0-9 ranges admit ~1,162 non-ASCII
+#     characters under en_US.UTF-8, which is exactly the class this refuses.
+( LC_ALL=C; [[ "$SENTRY_ORG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ) || {
+  printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2; }
+
+# (d) Nothing downstream may re-point it.
+readonly SENTRY_ORG
+
 [[ -r "$CAPTURE" ]] || { echo "ERROR: capture not readable at $CAPTURE" >&2; exit 1; }
 
 # FIXTURE MODE IS ANNOUNCED, LOUDLY. The override exists for this script's own
@@ -84,11 +150,19 @@ fetch_rules() {
     return
   fi
   : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
+  # Singleton, not a candidate set: this file's ONLY endpoint is org-scoped, and
+  # ADR-031 permits only the org subdomain here (it records eu.sentry.io as
+  # hijacking `-eu` slugs). The arm is DOUBLE-QUOTED — an unquoted `case` arm is
+  # a glob, and `*` in a hostile value would match itself.
+  case "$SENTRY_API_HOST" in
+    "${SENTRY_ORG}.sentry.io") ;;
+    *) printf 'ERROR: refusing destination host %s\n' "$(_safe "$SENTRY_API_HOST")" >&2; exit 2 ;;
+  esac
   # The NON-deprecated org workflows endpoint — the same one
   # assert-byok-rules-exist.sh migrated to in #7590. Deliberately not
   # `projects/{org}/{proj}/rules/`: that family is under brownout and would make
   # this probe red on Sentry's calendar rather than on drift.
-  curl -fsS --max-time 15 \
+  curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 15 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
 }

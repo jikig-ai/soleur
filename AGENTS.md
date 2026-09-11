@@ -57,7 +57,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 
 - [id: wg-every-feature-listed-in-a-roadmap-phase]
 - [id: wg-when-closing-a-phase-milestone-update]
-- [id: wg-when-fixing-a-workflow-gates-detection]
 - [id: wg-zero-agents-until-user-confirms]
 - [id: wg-verified-work-ships-without-asking]
 - [id: wg-never-bump-version-files-in-feature]
@@ -78,11 +77,9 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: wg-use-closes-n-in-pr-body-not-title-to]
 - [id: wg-after-merging-a-pr-that-adds-or-modifies]
 - [id: wg-plan-prescribed-skills-must-run-inline]
-- [id: wg-architecture-decision-is-a-plan-deliverable]
 - [id: wg-end-of-work-emit-resume-prompt]
 - [id: wg-block-pr-ready-on-undeferred-operator-steps]
 - [id: wg-pm-class-followthrough-for-operator-dogfood]
-- [id: wg-record-recurring-vendor-expense-before-ready]
 - [id: wg-ui-feature-requires-pen-wireframe]
 
 ## Code Quality
@@ -103,7 +100,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: cq-regex-unicode-separators-escape-only]
 - [id: cq-cite-content-anchor-not-line-number]
 - [id: cq-assert-anchor-not-bare-token]
-- [id: cq-ac-must-not-depend-on-concurrent-sessions]
 
 ## Review & Feedback
 
@@ -112,7 +108,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: rf-before-spawning-review-agents-push-the]
 - [id: rf-before-shipping-verify-1-review-comments]
 - [id: rf-when-a-reviewer-or-user-says-to-keep-a]
-- [id: rf-review-finding-default-fix-inline]
 
 ## Passive Domain Routing
 

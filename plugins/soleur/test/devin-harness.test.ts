@@ -46,12 +46,13 @@ describe("Devin harness", () => {
   test("routes a workflow to its namespaced Devin skill with arguments intact", () => {
     const invocation = invokeSkill("soleur:one-shot", "  fix the checkout  ");
     expect(invocation.harness).toBe("devin");
-    expect(invocation.tool).toBe("Skill");
-    expect(invocation.command).toBe("soleur:one-shot");
+    expect(invocation.tool).toBe("slash_command");
+    expect(invocation.command).toBe("/soleur:one-shot fix the checkout");
     expect(invocation.args).toBe("fix the checkout");
-    expect(invocation.instruction).toContain("Skill tool");
+    expect(invocation.instruction).toContain("/soleur:one-shot fix the checkout");
+    expect(invocation.instruction).toContain("slash command");
     expect(invocation.instruction).toContain("Steps 0–8");
-    expect(formatSkillInvocation("brainstorm", "new feature")).toBe("soleur:brainstorm (args: new feature)");
+    expect(formatSkillInvocation("brainstorm", "new feature")).toBe("/soleur:brainstorm new feature");
   });
 
   test("supplies canonical agent instructions to a Devin subagent", () => {
@@ -69,8 +70,10 @@ describe("Devin harness", () => {
   test("explains skill loading and owned polling without unavailable tools", () => {
     const routing = routingInstructions("devin");
     expect(routing).toContain("/soleur:go");
+    expect(routing).toContain("/soleur:<skill>");
     expect(routing).toContain("run_subagent");
     expect(routing).toContain("devin/INSTRUCTIONS.md");
+    expect(routing).not.toContain("**Skill tool**");
     expect(routing).not.toContain("**Monitor tool**");
     expect(pollInstructions("devin")).toContain("get_output");
     expect(pollInstructions("devin")).toContain("BEHIND");
@@ -82,10 +85,11 @@ describe("Devin harness", () => {
     process.env.DEVIN = "1";
     const inv = invokeSkill("plan", "implement feature");
     expect(inv.harness).toBe("devin");
-    expect(inv.tool).toBe("Skill");
-    expect(inv.command).toBe("soleur:plan");
+    expect(inv.tool).toBe("slash_command");
+    expect(inv.command).toBe("/soleur:plan implement feature");
     expect(inv.args).toBe("implement feature");
-    expect(inv.instruction).toContain("Skill tool");
+    expect(inv.instruction).toContain("/soleur:plan implement feature");
+    expect(inv.instruction).toContain("slash command");
     expect(inv.instruction).toContain("Do NOT improvise");
   });
 

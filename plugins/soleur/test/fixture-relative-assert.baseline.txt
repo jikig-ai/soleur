@@ -179,7 +179,7 @@
 3	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
-8	apps/web-platform/scripts/sentry-monitors-audit.test.sh
+10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
 3	apps/web-platform/scripts/supabase-local.test.sh
 3	apps/web-platform/test/ci/service-role-allowlist-gate.test.sh
 1	.claude/hooks/agent-token-tee.sh
@@ -349,7 +349,7 @@
 1	scripts/test-all-infra-coverage-notice.test.sh
 3	scripts/test-all-killed-classification.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
-1	scripts/test-all.sh
+2	scripts/test-all.sh
 5	scripts/test-contention.test.sh
 4	scripts/test-content-publisher.sh
 6	scripts/tmpfs-guard.sh
