@@ -31,4 +31,29 @@ describe("AgentEnginePersistenceRepository", () => {
       { onConflict: "run_id,event_id", ignoreDuplicates: true },
     );
   });
+
+  it("surfaces bind failures instead of silently creating an unbound run", async () => {
+    const supabase = client();
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: "permission denied" } });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.bind({
+      workspaceId: "ws-1",
+      executionKind: "routine",
+      routineId: "daily-triage",
+      routineRunId: "run-1",
+      createdBy: "user-1",
+    })).rejects.toThrow("engine run bind failed: permission denied");
+  });
+
+  it("surfaces event persistence failures for retry/reconciliation", async () => {
+    const supabase = client();
+    supabase.insert.mockResolvedValueOnce({ data: null, error: { message: "unique violation" } });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.appendEvent({
+      runId: "run-1",
+      eventId: "evt-2",
+      sequence: 2,
+      payload: { type: "status", status: "running" },
+    })).rejects.toThrow("engine event append failed: unique violation");
+  });
 });

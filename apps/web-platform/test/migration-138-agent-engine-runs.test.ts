@@ -28,6 +28,13 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/CREATE OR REPLACE FUNCTION public\.bind_agent_engine_run/);
   });
 
+  it("keeps writes behind server RPCs and scopes reads to workspace membership", () => {
+    expect(code).toMatch(/workspace_engine_settings_member_select[\s\S]*is_workspace_member/);
+    expect(code).toMatch(/agent_engine_runs_member_select[\s\S]*is_workspace_member/);
+    expect(code).toMatch(/agent_engine_events_member_select[\s\S]*is_workspace_member/);
+    expect(code).toMatch(/GRANT EXECUTE ON FUNCTION public\.bind_agent_engine_run[\s\S]*TO service_role/);
+  });
+
   it("does not use transactional-incompatible concurrent indexes", () => {
     expect(code).not.toMatch(/CONCURRENTLY/i);
   });
