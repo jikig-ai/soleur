@@ -300,7 +300,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
        fi
        unused=$(jq -r '.summary.rules_unused_over_8w // "unknown"' "$OUT" 2>/dev/null || echo unknown)
        if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
-         echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
+         echo "[INFO] $unused rules had no ENFORCEMENT event (warn/deny/bypass/applied) in 8 weeks — a shortlist to investigate, NOT evidence of disuse: an obeyed rule emits nothing. Run /soleur:sync rule-prune to surface candidates."
        fi
      else
        # The aggregator's orphan gate exits AFTER writing (CI forensic context),
