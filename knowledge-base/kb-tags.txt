@@ -764,6 +764,7 @@ code-vs-prose
 codebase-precedent
 codeowners
 codeql
+codex
 collapsed-nav
 collapses
 collision

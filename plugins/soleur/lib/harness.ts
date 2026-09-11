@@ -1,5 +1,5 @@
 /**
- * Harness adapter — maps Soleur workflow invocations to Claude Code or Grok Build surfaces.
+ * Harness adapter — maps Soleur workflow invocations to Claude Code, Grok Build, or Codex.
  *
  * Claude: Skill tool (`soleur:<skill>`), Task tool (agents), `/soleur:<command>` slash commands.
  * Grok:   slash commands (`/<skill>`, `/go`), spawn_subagent (agents).
@@ -7,11 +7,17 @@
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
 
-import { agentIdToGrokSubagentType, pathToAgentId } from "./agent-registry";
+import { resolve } from "path";
+import {
+  agentIdToGrokSubagentType,
+  discoverAgentEntries,
+  pathToAgentId,
+  PLUGIN_ROOT,
+} from "./agent-registry";
 import { behindSyncInstructions } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
-export type Harness = "claude" | "grok" | "unknown";
+export type Harness = "claude" | "grok" | "codex" | "unknown";
 
 /** Env vars set by Grok Build (see https://docs.x.ai/build/settings/reference). */
 const GROK_ENV_MARKERS = [
@@ -23,7 +29,7 @@ const GROK_ENV_MARKERS = [
 
 export interface SkillInvocation {
   harness: Harness;
-  tool: "Skill" | "slash_command";
+  tool: "Skill" | "slash_command" | "skill";
   command: string;
   args?: string;
   instruction: string;
@@ -31,7 +37,7 @@ export interface SkillInvocation {
 
 export interface AgentSpawn {
   harness: Harness;
-  tool: "Task" | "spawn_subagent";
+  tool: "Task" | "spawn_subagent" | "spawn_agent";
   agent: string;
   prompt: string;
   instruction: string;
@@ -61,7 +67,7 @@ export function normalizeAgentName(agent: string): string {
 
 /**
  * Detect the active harness from environment markers and process metadata.
- * Detection order: CLAUDECODE → GROK_* → process title/argv heuristics.
+ * Detection order: CLAUDECODE → GROK_* → CODEX_THREAD_ID → process title/argv heuristics.
  */
 export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
   if (env.CLAUDECODE) {
@@ -72,6 +78,10 @@ export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
     if (env[key]) {
       return "grok";
     }
+  }
+
+  if (env.CODEX_THREAD_ID) {
+    return "codex";
   }
 
   // Process heuristics apply only when inspecting the live runtime env — not
@@ -95,6 +105,10 @@ export function formatSkillInvocation(skill: string, args?: string): string {
   const name = normalizeSkillName(skill);
   const trimmedArgs = args?.trim();
 
+  if (harness === "codex") {
+    return trimmedArgs ? `$soleur:${name} ${trimmedArgs}` : `$soleur:${name}`;
+  }
+
   if (harness === "grok") {
     return trimmedArgs ? `/${name} ${trimmedArgs}` : `/${name}`;
   }
@@ -112,6 +126,20 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   const trimmedArgs = args?.trim();
 
   const pipelineSuffix = pipelineInvocationSuffix(name);
+
+  if (harness === "codex") {
+    return {
+      harness,
+      tool: "skill",
+      command: `$soleur:${name}`,
+      args: trimmedArgs,
+      instruction:
+        `Load the registered Soleur skill $soleur:${name}: read its SKILL.md and follow the entire workflow.` +
+        (trimmedArgs ? ` Use these arguments as $ARGUMENTS: ${trimmedArgs}` : "") +
+        " Use skills.read when available, otherwise read the installed skill file. Do not send a dollar mention to the shell." +
+        pipelineSuffix,
+    };
+  }
 
   if (harness === "grok") {
     const command = trimmedArgs ? `/${name} ${trimmedArgs}` : `/${name}`;
@@ -148,6 +176,11 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
   const harness = detectHarness();
   const agentId = normalizeAgentName(agent);
 
+  if (harness === "codex") {
+    const spawn = spawnAgent(agent, prompt);
+    return `${spawn.instruction}\n\n${spawn.prompt}`;
+  }
+
   if (harness === "grok") {
     // Grok validates subagent_type against the .grok/agents filename stem
     // (colons → hyphens), not the colon-qualified Claude id.
@@ -169,6 +202,25 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
 export function spawnAgent(agent: string, prompt: string): AgentSpawn {
   const harness = detectHarness();
   const agentId = normalizeAgentName(agent);
+
+  if (harness === "codex") {
+    const entries = discoverAgentEntries().filter(
+      (entry) => entry.id === agentId || entry.name === agentId,
+    );
+    if (entries.length !== 1) {
+      throw new Error(`Unknown or ambiguous Soleur agent: ${agent}`);
+    }
+    const entry = entries[0];
+    return {
+      harness,
+      tool: "spawn_agent",
+      agent: entry.id,
+      prompt: `Read and follow the Soleur agent definition at ${resolve(PLUGIN_ROOT, entry.path)}.\nApply the Codex compatibility instructions at ${resolve(PLUGIN_ROOT, "codex/INSTRUCTIONS.md")}.\n\n${prompt}`,
+      instruction:
+        "Use the available spawn_agent tool with its default agent type and pass the supplied prompt verbatim as its message. " +
+        "Inherit the session model and permissions. Use the tool's actual schema; the Soleur ID identifies the instruction file, not a registered Codex agent type.",
+    };
+  }
 
   if (harness === "grok") {
     const grokType = agentIdToGrokSubagentType(agentId);
@@ -204,6 +256,15 @@ export function pollInstructions(harness: Harness): string {
   const behind = behindSyncInstructions(harness);
 
   switch (harness) {
+    case "codex":
+      return [
+        "**Merge/deploy polling (Codex)**",
+        "- Use exec_command for bounded status probes; resume yielded shell sessions with write_stdin.",
+        "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing.",
+        "- Keep waiting through merge and release completion; load $soleur:postmerge before declaring completion.",
+        behind,
+      ].join("\n");
+
     case "claude":
       return [
         "**Merge/deploy polling (Claude Code)**",
@@ -272,6 +333,17 @@ export function routingInstructions(harness: Harness): string {
   const polling = pollInstructions(harness);
 
   switch (harness) {
+    case "codex":
+      return [
+        "**Harness: Codex**",
+        "- Entry points: $soleur:go, $soleur:sync, $soleur:help.",
+        "- Load named skills through skills.read when available, otherwise read their installed SKILL.md and follow every required phase.",
+        "- Agents: spawn_agent with a prompt that reads the canonical agent definition; use spawnAgent() to resolve its absolute path.",
+        "- Read codex/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
+        fidelity,
+        polling,
+      ].join("\n");
+
     case "claude":
       return [
         "**Harness: Claude Code**",
