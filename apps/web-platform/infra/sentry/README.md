@@ -203,7 +203,14 @@ nothing. It runs at two sites with two references:
   ADR-033): the probe reads the committed `alert-reference.json` in this
   directory, which exists ONLY because the daily job has no Terraform access.
   `scripts/sentry-alert-reference-gate.sh` in `plan_pr` holds it equal to the
-  plan at PR time, so it cannot merge stale under the strict up-to-date policy.
+  plan at PR time, so it cannot merge stale under the strict up-to-date policy
+  (an admin bypass-merge is the one path to a stale copy; it surfaces as one
+  daily drift issue naming the regeneration below, never as a red apply).
+  **Without Doppler `prd_terraform` access**, the PR round-trip IS the
+  regeneration route: push the `.tf` change, let `plan_pr` red, then
+  `gh run download <run-id> -n sentry-alert-reference-expected-<run-id>` (7-day
+  retention; `gh run rerun <run-id> --failed` regenerates it) and `cp` the file
+  over `alert-reference.json` — byte-exact, no credentials.
 
 **Adding or editing a rule = a resource block + a regenerated
 `alert-reference.json`.** From this directory, after the Local invocation
@@ -216,8 +223,9 @@ jq -S --arg side tf -f ../../../../tests/scripts/lib/sentry-alert-projection.jq 
   /var/tmp/sentry-plan.json > alert-reference.json
 ```
 
-If you forget, the gate reds the PR with the leaf-level diff, prints the exact
-expected file into the step summary, and uploads it as the artifact
+If you forget, the gate reds the PR with the leaf-level diff; the workflow
+sweeps the expected file for secret-shaped bytes and then prints it into the
+step summary and uploads it as the artifact
 `sentry-alert-reference-expected-<run-id>`. Two normalisations live in the
 module and nowhere else: lifecycle triggers (`{}` in the provider,
 `comparison: true` live) and trigger `logicType`, which the provider hard-codes

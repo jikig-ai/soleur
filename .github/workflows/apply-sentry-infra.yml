@@ -79,12 +79,14 @@ on:
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
       - "tests/scripts/lib/destroy-guard-filter-sentry.jq"
-      # Same posture for the reference gate and the projection module (#8050,
-      # #4419 rationale): gate logic living outside the root must run the gate
-      # against itself. A push touching only these runs a 0-change plan, a
-      # no-op apply, and the post-apply probe against a reference projected by
-      # the changed module — the only live exercise of a projection change.
-      - "scripts/sentry-alert-reference-gate.sh"
+      # Same posture for the projection module (#8050, #4419 rationale): a push
+      # touching only it runs a 0-change plan, a no-op apply, and the post-apply
+      # probe against a reference projected by the CHANGED module — the only live
+      # exercise of a projection change (the plan step and the probe's live side
+      # both run it). NOT `scripts/sentry-alert-reference-gate.sh`: the apply
+      # job never invokes the gate, so a push touching only it would run a
+      # prod-token plan that exercises nothing; the gate IS exercised at PR time
+      # via the detect-changes regex below.
       - "tests/scripts/lib/sentry-alert-projection.jq"
   # PR-time destroy gate (#6589). DELIBERATELY has NO `paths:` filter, and the
   # reason is the whole point of #5585: a path-filtered workflow never reports a
@@ -139,6 +141,12 @@ permissions:
 env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra/sentry
+  # ONE sentinel regex for every secret-shape sweep in this file (the state
+  # forensics captures and the expected-reference document). Two inline copies
+  # is how the destroy arithmetic drifted (scripts/sentry-destroy-counts.sh);
+  # a prefix added to one sweep and not the other would upload one class
+  # unswept. Same set the destroy-guard fixtures are redacted against.
+  SENTRY_SECRET_SENTINEL: 'BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
 
 jobs:
   preflight:
@@ -588,21 +596,25 @@ jobs:
           echo "::error::The merge commit must contain a line [ack-destroy]. Pre-stage it now so it survives the squash: put [ack-destroy] on its own line in the BODY of a commit on this branch (not the subject line — GitHub prefixes subjects with '* ' when it composes the squash body, which breaks the line anchor). Then this check goes green and the post-merge apply is authorized to destroy the resources listed above. If you did not intend to destroy anything, restore the resource block(s) instead."
           exit 1
 
-      - name: Sweep the expected reference for secret bytes (#8050)
+      - name: Sweep the expected reference for secret bytes, then publish it (#8050)
+        id: sweep
         # `failure()`: the file exists only when the reference gate above went
         # red. It is a projection of the plan — rule names, tag keys/values,
         # thresholds, a detector id, all already public in issue-alerts.tf — but
         # it is derived from `terraform show -json`, which renders sensitive
         # values in PLAINTEXT, so it is swept with the SAME sentinel the state
-        # forensics upload uses before it can leave the runner. A hit deletes
-        # the file (the projection already refuses any sensitive leaf; this is
-        # the belt to that brace) and the upload below then finds nothing.
+        # forensics upload uses before it can leave the runner by EITHER channel
+        # (the step summary is written HERE, after the sweep — a later step
+        # cannot retract an earlier step's summary, so the gate script writes no
+        # summary of its own). A hit deletes the file (the projection already
+        # refuses any sensitive leaf; this is the belt to that brace) and the
+        # upload below then finds nothing.
         if: failure()
         run: |
           set -uo pipefail
           f="${RUNNER_TEMP}/sentry-alert-reference.expected.json"
           [[ -f "$f" ]] || { echo "no expected-reference file to sweep (the gate did not produce one — another guard redded this job)."; exit 0; }
-          sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
+          sentinel="$SENTRY_SECRET_SENTINEL"
           # `set +e` bracket: Actions runs this block as `bash -e {0}`, and `grep -q`
           # exits 1 on its NORMAL (clean) path — under inherited errexit the step
           # would die there and `rc=$?` would be dead code (tests/scripts/
@@ -619,16 +631,28 @@ jobs:
             rm -f "$f"
             echo "::error::the sentinel sweep failed to run over the expected reference (grep rc=$rc); refusing to upload an unswept file."
           else
-            echo "expected alert-reference document swept clean; uploading."
+            echo "expected alert-reference document swept clean; publishing to the step summary and uploading."
+            n=$(jq 'length' "$f")
+            {
+              printf '## sentry alert reference gate: FAIL\n\n'
+              printf '`apps/web-platform/infra/sentry/alert-reference.json` does not match the projection of this PR'"'"'s plan (%s rules planned). The leaf diff is in the "Full-root plan + destroy gate" step log.\n\n' "$n"
+              printf 'No credentials needed: `gh run download %s -n sentry-alert-reference-expected-%s && cp sentry-alert-reference.expected.json apps/web-platform/infra/sentry/alert-reference.json`, or copy the block below verbatim.\n\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ID"
+              printf '<details><summary>Expected alert-reference.json (%s rules)</summary>\n\n```json\n' "$n"
+              cat "$f"
+              printf '\n```\n\n</details>\n'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload the expected alert-reference.json (reference gate red)
-        # `failure()` + `warn`: any OTHER red in this job (destroy gate, tripwire,
-        # binding gate) leaves the file absent, and demanding it would red the
-        # job a second time for the absence of a diagnostic. Retrieval:
+        # `failure() && steps.sweep.outcome == 'success'`: the file may leave the
+        # runner only after the sweep step ran to completion (a sweep that
+        # aborted before its `rm -f` must not be followed by an upload). `warn`:
+        # any OTHER red in this job (destroy gate, tripwire, binding gate) leaves
+        # the file absent, and demanding it would red the job a second time for
+        # the absence of a diagnostic. Retrieval:
         # `gh run download <run-id> -n sentry-alert-reference-expected-<run-id>`
         # — byte-exact, no prod credentials needed.
-        if: failure()
+        if: failure() && steps.sweep.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sentry-alert-reference-expected-${{ github.run_id }}
@@ -1172,8 +1196,8 @@ jobs:
             rm -f "${RUNNER_TEMP}/sentry-state-post.json"
           fi
 
-          # Same sentinel set the destroy-guard fixtures are redacted against.
-          sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
+          # The workflow-level SENTRY_SECRET_SENTINEL (one definition, two sweeps).
+          sentinel="$SENTRY_SECRET_SENTINEL"
           swept=0
           secret_shape=false
           for f in "${RUNNER_TEMP}/sentry-state-pre.json" "${RUNNER_TEMP}/sentry-state-post.json"; do
@@ -1389,6 +1413,11 @@ jobs:
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_REFERENCE_FILE: ${{ runner.temp }}/sentry-alert-reference.json
+          # Pinned empty, as the drift job pins it: the probe's fixture mode is a
+          # self-comparison that exits 0, and this step branches on rc only, so
+          # a future `$GITHUB_ENV` write of this name would turn the one
+          # post-apply probe into a green no-op with a log warning nobody reads.
+          SENTRY_FIXTURE_RULES: ""
         run: |
           set -euo pipefail
           bash scripts/sentry-alert-live-fidelity.sh
@@ -1468,7 +1497,7 @@ jobs:
             printf -- '- Plan step: `%s` · Apply: `%s` · Post-apply probe: `%s`\n\n' "${PLAN_OUTCOME:-unknown}" "${APPLY_OUTCOME:-unknown}" "${FIDELITY_OUTCOME:-unknown}"
             printf '### First, establish whether the apply was partial\n\n'
             printf 'Read the outcomes line above, then the run log.\n\n'
-            printf -- '- Plan step `failure` with the apply `skipped`: the projection or a guard refused BEFORE apply. Nothing was written and live Sentry is untouched. A re-run cannot fix this class — the remedy is a follow-up PR (for a reference-gate or projection refusal, carrying the expected reference the gate printed).\n'
+            printf -- '- Plan step `failure` with the apply `skipped`: the projection or a guard refused BEFORE apply. Nothing was written and live Sentry is untouched. A re-run cannot fix this class — the remedy is a follow-up PR; for a projection refusal the plan step'"'"'s `::error::` line names it (set the attribute explicitly in the block, or map the new kind in `tests/scripts/lib/sentry-alert-projection.jq` on both sides).\n'
             printf -- '- Failed BEFORE `Terraform apply` for any other reason: nothing was written. Live Sentry is untouched and the gates did their job. Fix the cause and re-run.\n'
             printf -- '- Apply `failure`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n'
             printf -- '- Apply `success`, post-apply probe `failure`: the apply is COMPLETE (AC17 says whether state matches the .tf). The probe compared live Sentry against the reference projected from THIS plan, so its findings are live state Terraform does not own (DISABLED, MONITOR UNBIND, LOGICTYPE FLIP, UNMANAGED) or evidence the apply did not do what it reported — not a stale reference file.\n\n'

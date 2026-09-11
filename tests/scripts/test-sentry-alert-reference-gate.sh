@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/sentry-alert-reference-gate.sh"
 PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 pass=0; fail=0
-EXPECTED_TESTS=21
+EXPECTED_TESTS=29
 
 # A sandbox harness inherits the bare 4 GiB /tmp tmpfs on a direct invocation;
 # every other runner in this repo defaults TMPDIR to /var/tmp. Match them.
@@ -97,6 +97,8 @@ if ! jq -e 'keys == ["single-trigger","two-trigger"]
             and .["two-trigger"].triggerLogicType == "any-short"
             and .["single-trigger"].triggerLogicType == "single"
             and (.["two-trigger"].actionFilters[0].actions | length) == 2
+            and (.["two-trigger"].actionFilters[0].conditions | length) == 2
+            and (.["two-trigger"].triggerConditions | length) == 2
             and (.["two-trigger"].triggerConditions | map(select(.type=="first_seen_event")) | .[0].comparison) == true' "$REF" >/dev/null; then
   echo "ERROR: fixture self-check failed — the projected reference is not the expected two-rule document: $(jq -c . "$REF" | head -c 600)" >&2
   exit 1
@@ -109,21 +111,17 @@ _gate() {
   _out=$(GITHUB_STEP_SUMMARY="$TMPD/summary.md" RUNNER_TEMP="$TMPD" bash "$GATE" "$1" "$2" 2>&1) || _rc=$?
 }
 
-# _mut_plan <label> <jq-program> [jq-args…] — mutated copy of $PLAN, asserted to
+# _mut <src> <label> <jq-program> [jq-args…] — mutated copy of $src, asserted to
 # have LANDED (a selector that matches nothing returns the input unchanged, and
 # the row built on it would compare the fixture to itself).
-_mut_plan() {
-  local f="$TMPD/plan-$1.json"
-  jq "${@:3}" "$2" "$PLAN" > "$f" 2>/dev/null || { echo "JQFAIL"; return; }
-  if jq -S -c . "$f" | cmp -s - <(jq -S -c . "$PLAN"); then echo "NOOP"; return; fi
+_mut() {
+  local src="$1" f="$TMPD/mut-$2.json"
+  jq "${@:4}" "$3" "$src" > "$f" 2>/dev/null || { echo "JQFAIL"; return; }
+  if jq -S -c . "$f" | cmp -s - <(jq -S -c . "$src"); then echo "NOOP"; return; fi
   echo "$f"
 }
-_mut_ref() {
-  local f="$TMPD/ref-$1.json"
-  jq "$2" "$REF" > "$f" 2>/dev/null || { echo "JQFAIL"; return; }
-  if jq -S -c . "$f" | cmp -s - <(jq -S -c . "$REF"); then echo "NOOP"; return; fi
-  echo "$f"
-}
+_mut_plan() { _mut "$PLAN" "$@"; }
+_mut_ref()  { _mut "$REF"  "$@"; }
 
 # _red <label> <plan> <ref> <expected-literal>
 _red() {
@@ -164,12 +162,12 @@ t_m1() {
   local extra; extra=$(_rule third "third-rule" "$TC_B" "$AF_B")
   _red "M1 a third sentry_alert in the plan, reference unchanged → ADDED" \
     "$(_mut_plan m1 '.planned_values.root_module.resources += [$r]' --argjson r "$extra")" "$REF" \
-    "ADDED in .tf, missing from reference: third-rule"
+    'ADDED in .tf, missing from reference: "third-rule"'
 }
 t_m2() {
   _red "M2 a changed event_frequency_count.value in the plan → leaf path naming comparison.value" \
     "$(_mut_plan m2 '(.planned_values.root_module.resources[] | select(.name=="two_trigger") | .values.trigger_conditions[] | select(.event_frequency_count != null) | .event_frequency_count.value) = 99')" "$REF" \
-    "two-trigger.triggerConditions"
+    '"two-trigger".triggerConditions'
   # The same row must ALSO name the leaf. Checked separately so the reason is
   # legible when only one half fails.
   grep -qF -- "comparison.value: planned=99 reference=5" <<<"$_out" \
@@ -179,7 +177,7 @@ t_m2() {
 t_m3() {
   _red "M3 a rule removed from the plan, reference unchanged → REMOVED" \
     "$(_mut_plan m3 '.planned_values.root_module.resources |= map(select(.name != "single_trigger"))')" "$REF" \
-    "REMOVED from .tf, still in reference: single-trigger"
+    'REMOVED from .tf, still in reference: "single-trigger"'
 }
 t_m4() {
   # Three rules: A and B match; C is in BOTH plan and reference but differs in
@@ -189,8 +187,8 @@ t_m4() {
   local ref3="$TMPD/ref-m4.json"; jq -S --arg side tf -f "$PROJ" "$plan3" > "$ref3"
   jq '(.planned_values.root_module.resources[] | select(.name=="third") | .values.frequency_minutes) = 45' "$plan3" > "$plan3.mut"
   _gate "$plan3.mut" "$ref3"
-  if [[ "$_rc" -eq 1 ]] && grep -qF -- "third-rule.frequency: planned=45 reference=22" <<<"$_out" \
-     && ! grep -qE 'two-trigger\.|single-trigger\.' <<<"$_out"; then
+  if [[ "$_rc" -eq 1 ]] && grep -qF -- '"third-rule".frequency: planned=45 reference=22' <<<"$_out" \
+     && ! grep -qE '"two-trigger"\.|"single-trigger"\.' <<<"$_out"; then
     _report "M4 with three rules where two match, ONLY the third is named" ok
   else
     _report "M4 three rules, only the third named" fail "rc=$_rc. Output: $(head -c 500 <<<"$_out")"
@@ -209,13 +207,20 @@ t_m6() {
 t_m7() {
   _red "M7 enabled flipped true→false in the reference renders false, not <absent>" \
     "$PLAN" "$(_mut_ref m7 '.["two-trigger"].enabled = false')" \
-    "two-trigger.enabled: planned=true reference=false"
+    '"two-trigger".enabled: planned=true reference=false'
+  # D1's negative twin: a non-detectorIds diff must NOT carry the hint that
+  # tells the author "this is not an authoring error".
+  if grep -qF 'issue-stream detector id moved' <<<"$_out"; then
+    _report "M7b the detectorIds hint is absent on a non-detectorIds diff" fail "hint printed on an enabled diff"
+  else
+    _report "M7b the detectorIds hint is absent on a non-detectorIds diff" ok
+  fi
 }
 t_m8() {
   local cm; cm=$(jq -n --argjson r "$RULE_B" '[{address:"module.x", resources:[$r]}]')
   _red "M8 a child_modules entry holding a sentry_alert → refused" \
     "$(_mut_plan m8 '.planned_values.root_module.child_modules = $cm' --argjson cm "$cm")" "$REF" \
-    "child_modules"
+    "the root carries child_modules"
 }
 t_m9() {
   _red "M9 a create row with enabled unknown (null) → enabled is not a boolean" \
@@ -224,9 +229,9 @@ t_m9() {
 }
 t_m10() {
   local t; t=$(_trig event_frequency_count '{"interval":"1h","value":1}' | jq '. + {event_unique_user_frequency_count: {"interval":"1h","value":1}} | .event_frequency_count = null')
-  _red "M10 a trigger whose type is in the excluded list → outside the probe's live scope" \
+  _red "M10 a trigger kind outside the allowlist (event_unique_user_frequency_count — the sentry_issue_alert survivors' type) → not mapped" \
     "$(_mut_plan m10 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.trigger_conditions) = [$t]' --argjson t "$t")" "$REF" \
-    "outside the probe's live scope"
+    "trigger kind 'event_unique_user_frequency_count' is not mapped by the projection"
 }
 t_m11() {
   _red "M11 two resources sharing one name → duplicate sentry_alert name" \
@@ -237,6 +242,50 @@ t_m12() {
   _red "M12 a condition element with two non-null keys → exactly one non-null key" \
     "$(_mut_plan m12 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.trigger_conditions[0].first_seen_event) = {}')" "$REF" \
     "exactly one non-null key"
+}
+
+# ── Floors the first battery never mutated (review): each deletable-at-green
+# before these rows existed. Each asserts the module's own literal.
+t_m13() {
+  local a; a=$(_act slack '{"channel":"#ops","channel_id":"C1"}')
+  _red "M13 an action kind outside the allowlist (slack) → not mapped by the projection" \
+    "$(_mut_plan m13 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.action_filters[0].actions) = [$a]' --argjson a "$a")" "$REF" \
+    "action kind 'slack' is not mapped by the projection"
+}
+t_m14() {
+  _red "M14 a sensitive leaf on a sentry_alert → refused (terraform show -json renders sensitive values in plaintext)" \
+    "$(_mut_plan m14 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .sensitive_values.name) = true')" "$REF" \
+    "a sensitive attribute is set on a sentry_alert"
+}
+t_m15() {
+  local doc="$TMPD/not-a-plan.json"; printf '{"format_version":"1.2"}' > "$doc"
+  _red "M15 a document with neither planned_values nor values → not a terraform show -json document" \
+    "$doc" "$REF" "not a terraform show -json plan or state document"
+}
+t_m16() {
+  _red "M16 frequency_minutes rendered as a string → not a number" \
+    "$(_mut_plan m16 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.frequency_minutes) = "22"')" "$REF" \
+    "frequency_minutes is not a number"
+}
+t_m17() {
+  local c; c=$(_cond level '{"match":"eq","level":"error"}')
+  _red "M17 a condition kind outside the allowlist (level) → not mapped by the projection" \
+    "$(_mut_plan m17 '(.planned_values.root_module.resources[] | select(.name=="single_trigger") | .values.action_filters[0].conditions) = [$c]' --argjson c "$c")" "$REF" \
+    "condition kind 'level' is not mapped by the projection"
+}
+t_m18() {
+  _red "M18 sensitive_values absent from a resource → refused (no sensitivity mask)" \
+    "$(_mut_plan m18 '(.planned_values.root_module.resources[] | select(.name=="single_trigger")) |= del(.sensitive_values)')" "$REF" \
+    "sensitive_values is absent or not an object"
+}
+t_m19() {
+  local rc=0 out
+  out=$(jq --arg side bogus -f "$PROJ" "$PLAN" 2>&1) || rc=$?
+  if [[ "$rc" -ne 0 ]] && grep -qF -- "must be one of tf|live|reference" <<<"$out"; then
+    _report "M19 the module refuses an unknown --arg side rather than falling through to a side" ok
+  else
+    _report "M19 unknown --arg side refused" fail "rc=$rc out=$(head -c 200 <<<"$out")"
+  fi
 }
 
 # ── Must-PASS (non-canonical) rows — the gate is order-insensitive. ──────────
@@ -281,28 +330,32 @@ t_detector_hint() {
 t_remedy_and_expected_file() {
   local f; f=$(_mut_ref r1 '.["two-trigger"].frequency = 1')
   _gate "$PLAN" "$f"
-  local ok=1
-  [[ "$_rc" -eq 1 ]] || ok=0
-  grep -qF -- 'Regenerate: jq -S --arg side tf -f tests/scripts/lib/sentry-alert-projection.jq' <<<"$_out" || ok=0
-  grep -qF -- '[ack-destroy]' <<<"$_out" || ok=0
-  [[ -s "$TMPD/sentry-alert-reference.expected.json" ]] || ok=0
+  local why=()
+  [[ "$_rc" -eq 1 ]] || why+=("rc=$_rc")
+  grep -qF -- 'Regenerate (needs the Doppler prd_terraform triplet): jq -S --arg side tf -f tests/scripts/lib/sentry-alert-projection.jq' <<<"$_out" || why+=("regeneration command absent")
+  grep -qF -- 'gh run download' <<<"$_out" || why+=("credential-free artifact fetch absent")
+  [[ -s "$TMPD/sentry-alert-reference.expected.json" ]] || why+=("expected file not written")
   # The expected file IS the projection of the plan — byte-equal to the fixture
-  # reference the gate was told was stale.
-  cmp -s <(jq -S -c . "$TMPD/sentry-alert-reference.expected.json") <(jq -S -c . "$REF") || ok=0
-  grep -qF -- '<details>' "$TMPD/summary.md" 2>/dev/null || ok=0
-  if [[ "$ok" -eq 1 ]]; then
-    _report "R1 a mismatch prints the regeneration command + ack note, writes the expected document to RUNNER_TEMP and a collapsed step summary" ok
+  # reference the gate was told was stale — and is `jq -S .` formatted so a
+  # `cp` over alert-reference.json is byte-exact.
+  cmp -s "$TMPD/sentry-alert-reference.expected.json" <(jq -S . "$REF") || why+=("expected file is not the jq -S projection of the plan")
+  # The gate publishes to NEITHER channel itself (one sweep in the workflow
+  # precedes both): no step summary may be written here.
+  [[ ! -e "$TMPD/summary.md" ]] || why+=("the gate wrote the step summary directly, bypassing the sweep")
+  if [[ ${#why[@]} -eq 0 ]]; then
+    _report "R1 a mismatch prints the regeneration command + the credential-free fetch, writes the expected document to RUNNER_TEMP, and writes NO step summary itself" ok
   else
-    _report "R1 mismatch remedy + expected document" fail "rc=$_rc expected=$(test -s "$TMPD/sentry-alert-reference.expected.json" && echo present || echo absent) summary=$(test -s "$TMPD/summary.md" && echo present || echo absent). Output: $(head -c 400 <<<"$_out")"
+    _report "R1 mismatch remedy + expected document" fail "${why[*]}. Output: $(head -c 400 <<<"$_out")"
   fi
   rm -f "$TMPD/sentry-alert-reference.expected.json" "$TMPD/summary.md"
 }
 
-# ── Harness row H2 — an empty PLAN fixture makes every comparison row FAIL. ───
+# ── Harness row H2 — an EMPTY plan file is refused at the plan floor (named as
+# the plan step having written nothing — distinct from the reference floor).
 t_h2_empty_plan() {
   local empty="$TMPD/empty.json"; : > "$empty"
   _gate "$empty" "$REF"
-  if [[ "$_rc" -eq 1 ]] && ! grep -q 'reference gate: PASS' <<<"$_out" && grep -qF -- 'not readable or empty' <<<"$_out"; then
+  if [[ "$_rc" -eq 1 ]] && ! grep -q 'reference gate: PASS' <<<"$_out" && grep -qF -- 'plan JSON not readable or empty' <<<"$_out"; then
     _report "H2 an empty plan file is refused (no PASS line, names the floor)" ok
   else
     _report "H2 empty plan refused" fail "rc=$_rc. Output: $(head -c 300 <<<"$_out")"
@@ -322,6 +375,13 @@ t_m9
 t_m10
 t_m11
 t_m12
+t_m13
+t_m14
+t_m15
+t_m16
+t_m17
+t_m18
+t_m19
 t_reorder_passes
 t_show_state_passes
 t_whitespace_passes

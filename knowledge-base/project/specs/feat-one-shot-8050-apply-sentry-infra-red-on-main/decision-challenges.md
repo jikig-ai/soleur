@@ -20,7 +20,8 @@ Taste / user-challenge items surfaced at plan review (headless; not auto-applied
 - **Dissent (code-simplicity-reviewer):** keep both call sites — one line, matches the pattern of the sibling guards.
 - **Decision taken:** deleted per "both panels fire → prefer delete". Reverse by adding the call after the adoption-assert in the `apply` job and restoring AC11's second count to `1`.
 
-## 4. Keep the gate script and projection module in `on.push.paths` (taste)
+## 4. Keep the projection module in `on.push.paths`; the gate script is NOT there (taste, revised at review)
 
 - **Finding:** a push touching only those files runs a prod-token 0-change plan and a no-op apply.
-- **Decision taken:** keep (architecture-strategist agrees; precedent `destroy-guard-filter-sentry.jq`, #4419); it is the only live exercise of a projection change.
+- **Decision taken at plan review:** keep both (precedent `destroy-guard-filter-sentry.jq`, #4419).
+- **Revised at code review (architecture-strategist + code-simplicity-reviewer converged):** §3 above removed the apply job's gate call, so the apply job never executes `scripts/sentry-alert-reference-gate.sh` — a push touching only it would run a prod plan that exercises nothing. The gate stays in the `detect-changes` regex (PR-time, where it IS run); only `tests/scripts/lib/sentry-alert-projection.jq` stays in `on.push.paths` (the apply job runs it twice: plan-step projection and the probe's live side).

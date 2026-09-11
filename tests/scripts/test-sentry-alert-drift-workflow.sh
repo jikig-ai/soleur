@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # that has never been driven red is a reading, not a test.
 WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
 pass=0; fail=0
-EXPECTED_TESTS=14
+EXPECTED_TESTS=20
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -92,6 +92,13 @@ exit 1'
 STUB_UNAVAIL='#!/usr/bin/env bash
 echo "ERROR: Sentry workflows response is not a JSON array." >&2
 exit 1'
+# The probe has exits other than 0/1: 78 (xtrace refusal), 2 (destination
+# refusal), 5 (a raw jq error), 127 (missing binary). The step's branch was
+# pinned only by stubs exiting 0 or 1, so an `-eq 0`→`-ne 1` refactor would have
+# turned every one of these into verdict=clean (review mutation).
+STUB_RC78='#!/usr/bin/env bash
+echo "[FATAL] refusing to run under xtrace with a live credential set" >&2
+exit 78'
 
 t_clean() {
   _drive "$STUB_CLEAN"
@@ -119,23 +126,42 @@ t_unavailable() {
   else _report "W3 unavailable" fail "rc=$_rc out='$_out'"; fi
 }
 
+t_unavailable_on_other_exit_codes() {
+  local stub rc bad=""
+  for rc in 78 2 5 127; do
+    stub="${STUB_RC78/exit 78/exit $rc}"
+    _drive "$stub"
+    if [[ "$_rc" != "1" ]] || ! grep -q '^verdict=unavailable$' <<<"$_out"; then bad+=" [probe exit $rc → rc=$_rc $(grep '^verdict=' <<<"$_out" | tr '\n' ' ')]"; fi
+  done
+  if [[ -z "$bad" ]]; then
+    _report "W3b probe exits 78/2/5/127 (refusals, jq error, missing binary) all yield verdict=unavailable and a RED step — never clean" ok
+  else _report "W3b non-0/1 probe exits are unavailable" fail "$bad"; fi
+}
+
 # The close arm must be gated on `clean` ITSELF, never on `!= drift`. Under
 # `!= drift`, an `unavailable` run closes a real drift issue because the probe
 # could not reach Sentry — a false all-clear on 27 paging rules.
+# _close_gated_ok <wf> — PER STEP, by id: a concatenated blob over every "Close"
+# step let one closer lose its `== 'clean'` while the other still carried it
+# (review mutation). 0 when both closers are gated on clean under always().
+_close_gated_ok() {
+  local id cond bad=""
+  for id in close_unavailable close_drift; do
+    if ! cond=$(_step_field "$1" id "$id" if 2>&1); then bad+=" [$id: $cond]"; continue; fi
+    cond=$(_collapse <<<"$cond")
+    grep -qF -- "verdict == 'clean'" <<<"$cond" || bad+=" [$id lacks == 'clean']"
+    grep -qF -- "!=" <<<"$cond" && bad+=" [$id carries an inequality]"
+    grep -qF -- "always()" <<<"$cond" || bad+=" [$id lacks always() — implicit success() skips it on every drift run]"
+  done
+  [[ -z "$bad" ]] && return 0
+  echo "$bad"; return 1
+}
 t_close_gated_on_clean_only() {
-  local cond
-  cond=$(python3 - "$WF" <<'PY'
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-for s in d["jobs"]["drift-check"]["steps"]:
-    if "Close" in (s.get("name") or ""):
-        print(s.get("if", ""))
-PY
-)
-  if grep -q "verdict == 'clean'" <<<"$cond" && ! grep -q "!=" <<<"$cond"; then
-    _report "W5 the close arm is gated on verdict == 'clean', never on '!= drift'" ok
+  local why
+  if why=$(_close_gated_ok "$WF"); then
+    _report "W5 both close arms are gated on verdict == 'clean' (never '!= drift'), each under always()" ok
   else
-    _report "W5 close arm gating" fail "if: '$cond' — an inequality here closes a real drift issue on a run that established nothing"
+    _report "W5 close arm gating" fail "$why"
   fi
 }
 
@@ -229,20 +255,29 @@ _collapse() { tr -s ' \n\t' ' ' | sed 's/^ //; s/ $//'; }
 
 # _w8_filer_gate_ok <wf> — 0 when the probe-unavailable filer is gated on the
 # verdict pair; non-zero with a reason on stdout otherwise.
+# The EXACT expressions, whitespace-collapsed. Substring presence let a bare
+# `filed != 'true'` (no `verdict == 'drift' &&` pairing — files on every CLEAN
+# run), an appended `|| true`, a `&&`→`||` swap, and a wrong `steps.<id>` prefix
+# all pass (review mutations). GitHub's evaluator is not available locally, so
+# the text IS the contract; the diagnostic names the first missing fragment so a
+# legitimate edit still reads as a specific reason.
+FILER_IF="always() && !cancelled() && (steps.probe.outputs.verdict == 'unavailable' || steps.probe.outputs.verdict == '' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true'))"
+CLOSER_IF="always() && (steps.probe.outputs.verdict == 'clean' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed == 'true'))"
 _w8_filer_gate_ok() {
   local cond
   if ! cond=$(_step_field "$1" id file_unavailable if 2>&1); then
     echo "selector floor: $cond"; return 1
   fi
   cond=$(_collapse <<<"$cond")
+  [[ "$cond" == "$FILER_IF" ]] && return 0
   local why=()
   grep -qF -- '!cancelled()' <<<"$cond" || why+=("missing !cancelled() — a Stop click or timeout would file a false issue")
   grep -qF -- "verdict == 'unavailable'" <<<"$cond" || why+=("missing the 'unavailable' arm")
   grep -qF -- "verdict == ''" <<<"$cond" || why+=("missing the == '' arm — a run that aborts before the probe writes a verdict would file nothing")
-  grep -qF -- "filed != 'true'" <<<"$cond" || why+=("missing the drift-not-filed arm")
+  grep -qF -- "(steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true')" <<<"$cond" || why+=("missing the paired drift-not-filed arm (a bare filed != 'true' files on every CLEAN run)")
   grep -qF -- 'failure()' <<<"$cond" && why+=("contains failure() — true on every drift verdict because the drift filer exits 1 by design (#8058)")
-  if [[ ${#why[@]} -gt 0 ]]; then printf '%s; ' "${why[@]}"; echo; return 1; fi
-  return 0
+  why+=("expression is not exactly: $FILER_IF (got: $cond)")
+  printf '%s; ' "${why[@]}"; echo; return 1
 }
 
 # _w8_closer_gate_ok <wf> — the probe-unavailable CLOSER must be disjoint from
@@ -251,40 +286,44 @@ _w8_filer_gate_ok() {
 # closes the issue the filer just opened in the same run.
 _w8_closer_gate_ok() {
   local cond
-  if ! cond=$(_step_field "$1" name_prefix "Close the probe-unavailable" if 2>&1); then
+  if ! cond=$(_step_field "$1" id close_unavailable if 2>&1); then
     echo "selector floor: $cond"; return 1
   fi
   cond=$(_collapse <<<"$cond")
+  [[ "$cond" == "$CLOSER_IF" ]] && return 0
   local why=()
   grep -qF -- "verdict == 'clean'" <<<"$cond" || why+=("missing the 'clean' arm")
   grep -qF -- "verdict == 'drift' && steps.file_drift.outputs.filed == 'true'" <<<"$cond" || why+=("the 'drift' arm lacks the filed == 'true' conjunct — the closer would undo the filer's drift-not-filed arm in the same run")
   grep -qF -- "!=" <<<"$cond" && why+=("contains an inequality")
-  if [[ ${#why[@]} -gt 0 ]]; then printf '%s; ' "${why[@]}"; echo; return 1; fi
-  return 0
+  grep -qF -- "always()" <<<"$cond" || why+=("missing always() — implicit success() skips the closer on every drift run")
+  why+=("expression is not exactly: $CLOSER_IF (got: $cond)")
+  printf '%s; ' "${why[@]}"; echo; return 1
 }
 
 # _w9_title_parity_ok <wf> — the drift TITLE is ONE string, defined once at
 # job-level env and referenced (never restated) by the filer and its closer.
+# _w9_title_parity_ok <wf> [env-key filer-id closer-id expected-literal]
 _w9_title_parity_ok() {
-  python3 - "$1" <<'PYEOF'
+  python3 - "$1" "${2:-DRIFT_TITLE}" "${3:-file_drift}" "${4:-close_drift}" \
+    "${5:-[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture}" <<'PYEOF'
 import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
+wf, key, filer_id, closer_id, want = sys.argv[1:6]
+d = yaml.safe_load(open(wf))
 job = d["jobs"]["drift-check"]
 env = job.get("env") or {}
-title = env.get("DRIFT_TITLE")
-want = "[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture"
+title = env.get(key)
 if title != want:
-    sys.exit(f"jobs.drift-check.env.DRIFT_TITLE is {title!r}, want the unchanged literal")
+    sys.exit(f"jobs.drift-check.env.{key} is {title!r}, want the unchanged literal")
 steps = job["steps"]
-filer = [s for s in steps if s.get("id") == "file_drift"]
-closer = [s for s in steps if (s.get("name") or "").startswith("Close the drift issue")]
+filer = [s for s in steps if s.get("id") == filer_id]
+closer = [s for s in steps if s.get("id") == closer_id]
 if len(filer) != 1 or len(closer) != 1:
-    sys.exit(f"expected one filer and one drift closer, found {len(filer)}/{len(closer)}")
+    sys.exit(f"expected one step id={filer_id} and one id={closer_id}, found {len(filer)}/{len(closer)}")
 bad = []
 for label, s in (("filer", filer[0]), ("closer", closer[0])):
     run = s.get("run", "")
-    if '"$DRIFT_TITLE"' not in run:
-        bad.append(f"{label} does not reference \"$DRIFT_TITLE\"")
+    if f'"${key}"' not in run:
+        bad.append(f"{label} does not reference \"${key}\"")
     if want in run:
         bad.append(f"{label} restates the title literal inline — a second copy is a second thing to keep true")
     if "${{ env." in run:
@@ -292,6 +331,18 @@ for label, s in (("filer", filer[0]), ("closer", closer[0])):
 if bad:
     sys.exit("; ".join(bad))
 PYEOF
+}
+_w9_unavailable_title_parity_ok() {
+  _w9_title_parity_ok "$1" UNAVAILABLE_TITLE file_unavailable close_unavailable \
+    "[ci/sentry-alert-drift] the drift probe could not establish a verdict"
+}
+t_w9b_unavailable_title_is_one_string() {
+  local why
+  if why=$(_w9_unavailable_title_parity_ok "$WF" 2>&1); then
+    _report "W9b the UNAVAILABLE TITLE is defined once (env.UNAVAILABLE_TITLE) and referenced by its filer and closer" ok
+  else
+    _report "W9b unavailable title parity" fail "$why"
+  fi
 }
 
 t_w8_filer_gated_on_verdict_pair() {
@@ -382,9 +433,34 @@ t_w8_mutants() {
   _red_row "W8-d removing id: file_unavailable trips the exactly-one selector floor" "$f" _w8_filer_gate_ok "selector floor"
 
   f=$(_mutate_wf w8e "for s in steps:
-    if (s.get('name') or '').startswith('Close the probe-unavailable'):
+    if s.get('id') == 'close_unavailable':
         s['if'] = s['if'].replace(\" && steps.file_drift.outputs.filed == 'true'\", '')")
   _red_row "W8-e dropping the closer's filed == 'true' conjunct reds W8c" "$f" _w8_closer_gate_ok "lacks the filed == 'true' conjunct"
+
+  f=$(_mutate_wf w8f "for s in steps:
+    if s.get('id') == 'file_unavailable':
+        s['if'] = s['if'].replace(\"(steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true')\", \"steps.file_drift.outputs.filed != 'true'\")")
+  _red_row "W8-f unpairing the drift-not-filed arm (bare filed != 'true' — files on every CLEAN run) reds W8" "$f" _w8_filer_gate_ok "missing the paired drift-not-filed arm"
+
+  f=$(_mutate_wf w8g "for s in steps:
+    if s.get('id') == 'close_unavailable':
+        s['if'] = s['if'] + ' || true'")
+  _red_row "W8-g appending || true to the closer reds W8c" "$f" _w8_closer_gate_ok "expression is not exactly"
+
+  f=$(_mutate_wf w8h "for s in steps:
+    if s.get('id') == 'close_unavailable':
+        s['if'] = s['if'].replace('always() && ', '')")
+  _red_row "W8-h dropping always() from the closer (implicit success() skips it on drift) reds W8c" "$f" _w8_closer_gate_ok "missing always()"
+
+  f=$(_mutate_wf w5a "for s in steps:
+    if s.get('id') == 'close_drift':
+        s['if'] = 'always()'")
+  local why
+  if why=$(_close_gated_ok "$f"); then
+    _report "W5-a a drift closer reduced to always() reds W5 (per-step, not a concatenated blob)" fail "W5 still passes"
+  else
+    _report "W5-a a drift closer reduced to always() reds W5 (per-step, not a concatenated blob)" ok
+  fi
 }
 
 t_w9_mutant() {
@@ -403,6 +479,8 @@ t_probe_marker_matches_what_the_step_greps
 t_w8_filer_gated_on_verdict_pair
 t_w8_closer_disjoint_from_filer
 t_w9_title_is_one_string
+t_w9b_unavailable_title_is_one_string
+t_unavailable_on_other_exit_codes
 t_w8_mutants
 t_w9_mutant
 
