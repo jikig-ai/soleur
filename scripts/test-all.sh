@@ -2189,6 +2189,13 @@ if want_scripts; then
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
   run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # #8050 — the PR-time reference gate and the `tf`/`reference` sides of the
+  # projection module. The probe's reference is projected from the Terraform
+  # plan; the committed copy the daily job reads is held equal to the plan by
+  # this gate. G0 is the positive control; every mutation row asserts its own
+  # literal, so "the gate always exits 1" cannot pass as coverage. Hermetic:
+  # synthesized two-rule plan, no Terraform, no credentials.
+  run_suite "tests/scripts/sentry-alert-reference-gate" bash tests/scripts/test-sentry-alert-reference-gate.sh
   # The drift workflow's VERDICT BRANCHING, extracted from the shipped YAML and
   # executed — never restated. Two of its three outcomes are silent when wrong: a
   # verdict that files nothing looks like a clean run, and a wrongly-closed issue
