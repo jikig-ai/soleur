@@ -23,6 +23,8 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
+Update to the latest version with `devin plugins update soleur`, or `devin plugins update` to refresh all installed plugins. If you see a transient "content could not be fetched" warning, Devin will retry automatically; run the update command again if it persists.
+
 **Codex:**
 
 ```bash
