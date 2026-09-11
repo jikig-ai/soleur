@@ -145,6 +145,17 @@ for every captured-curl site — write the harness row, not the linter citation.
 14. **"byte-identical" claimed while the parity row stripped indentation** — Recovery: the
     `sentry_checkin()` wrapper made it literally true and the row now diffs verbatim.
     **Prevention:** a parity claim in a comment must be the parity the test performs.
+15. **(ship) the incident-PIR gate fired on the archived plan for a preventive-hardening PR with no
+    live event** — its paragraph strip handles the `if this lands broken` framing, but two plan
+    sentences sit outside any marked paragraph: the deepen-plan hypotheses header's own negation
+    ("the plan body names no outage") and a Non-Goals consequence sentence ("the user meets the
+    outage"). Recovery: recorded the verdict and the two matched sentences in the PR body's gate
+    notes; no PIR authored for a non-event. **Prevention:** the gate's negation window
+    (`scripts/ship-incident-pir-gate.sh` › `DROP_RE`) should admit `names no <outage-term>` the
+    way the soak gate already strips negated declarations; and a deepen-plan template sentence
+    that names the vocabulary it is denying belongs inside a fenced or marked block. Documented
+    in place per `wg-when-deferring-a-capability-create-a`; the trigger for a fix is the next
+    preventive-hardening plan that cites its plan path in the PR body.
 
 ## Cost
 
