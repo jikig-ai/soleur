@@ -168,13 +168,66 @@ repository. An earlier draft said "impossible"; that overstated it.
    requires committed rung-2 boot evidence hash-bound to the template being dispatched, and
    re-holds automatically on any later edit to `cloud-init-git-data.yml`. #7025 carries rung 2
    and lands that evidence. *(Terminal: `git-data-birth.md`
-   instructs that it be cleared only when every item above is done.)*
+   instructs that it be cleared only when every OTHER item in this checklist is done. Read as
+   "above", this would exclude items 9 and 10, which sit below it and are both preconditions —
+   the disposition tables are authoritative on which are discharged.)*
 9. **Confirm the SIZING before the first birth** (added by #6982). The checklist had no
    sizing item and neither does the runbook's pre-dispatch table — step 7's stock preflight
    checks **orderability**, never **adequacy**. `user_data` is ForceNew and a `server_type`
    change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape has to be
    right at birth. ADR-068's D-SIZE addendum records the decision (`cpx22`, unmeasured,
    sized for the burst with the burst now bounded by W4's git config + the gc timer).
+10. **Assert the SSH authorization map is three distinct keys held by the three matching
+    authorities** (added by #8009, CPO condition C1). `cloud-init-git-data.yml` pins three
+    DIFFERENT forced commands — the transport wrapper, the provisioner, and
+    `git-data-remove.sh`, which is the Article 17 erasure path — to three DIFFERENT pubkey
+    variables. (Citation precision: ADR-068 designs the TRANSPORT and PROVISION authorities;
+    the ERASE authority is designed in `apps/web-platform/server/git-data-replication.ts`,
+    whose `removeGitDataRepo` calls it "a THIRD authority distinct from provision/transport",
+    and it appears as a payload in ADR-152. ADR-068 names `GIT_REMOVE_SSH_PRIVATE_KEY` exactly
+    once, inside a blast-radius argument, and `git-data-remove.sh` not at all — a false
+    citation propagates further than a missing one.) The three pubkey
+    variables. `rung2-rehearsal/rehearsal.tf` sets all three to one `tls_private_key`.
+    **That is not merely uncovered; it makes the defect invisible.** Because the three were
+    ALREADY identical in the rehearsal, a production edit collapsing them is a **no-op**
+    there: `stage:boot_complete` still emits, no `level:fatal` appears, the evidence still
+    records PASS, and `RUNG2_TEMPLATE_SHA256` moves, so the file even looks freshly
+    re-rehearsed. In production the same edit gives the **transport** key — held by the web
+    app for ordinary push and fetch — the `git-data-remove.sh` forced command; sshd matches
+    by key and takes the first match, so it never surfaces as a failure, only as the
+    transport identity being able to erase a user's repositories.
+    `git_data_authorization_map_gate` closes it **statically**, over the production
+    Terraform root, so it needs no live host and no paid rehearsal — which matters because
+    the evidence hash binds 13 files and any drift buys another Hetzner rehearsal.
+    **What it does not buy, recorded here so it is not mistaken for coverage:** it proves
+    what the root RENDERS, never what a live host HONOURS. Runtime routes to the erase
+    capability — an `authorized_keys2` fall-through, `core.hooksPath` ownership, an unpinned
+    `AcceptEnv` — are properties of a running host and of files that host owns; a static
+    walk structurally cannot see them, and they are tracked separately rather than closed
+    here. The gate also runs on `git-data-host-replace`, which is the only route a collapse
+    can travel once the host exists — but that job has no `environment:` and therefore no
+    `deployment_branch_policy`, so `workflow_dispatch` runs the selected ref and the gate is
+    supplied by the branch it polices. It holds against an accidental collapse merged and
+    dispatched from `main`; it does **not** hold against a deliberate actor with repository
+    write. **The compensating control, which makes that narrower than it sounds:** the gate also
+    runs against the LIVE production root on every pull request, as arm B23 of
+    `tests/scripts/test-git-data-birth-readiness-gate.sh`, which `scripts/test-all.sh` registers —
+    so a collapse or permutation cannot reach `main` without first reddening the required `test`
+    context. The branch-supplied gate on the replace path is the second line of defence, not the
+    only one.
+    **One accepted deviation, recorded rather than left to be rediscovered:** principle AP-026
+    holds that a CI path whose job is to RECORD supplementary evidence must never gate on that
+    evidence. The `needs: [git_data_birth_disclosure]` edge is that shape. It is accepted because
+    AP-026 scopes to pull requests and merge authority, while this is an operator dispatch where
+    the veto costs one re-dispatch and produces a red run with no Approve button — a legible
+    refusal, not a silent one — and because the same disclosure also reaches the operator through
+    the `apply_target` input description, which GitHub renders before any job exists.
+
+### Disposition — #8009 (2026-09-10)
+
+| Item | Status |
+|---|---|
+| 10 — the authorization map is three distinct keys, correctly assigned | **DONE.** `git_data_authorization_map_gate`, wired as a third interlock on BOTH `git_data_host_create` and `git_data_host_replace`, and asserted on every pull request by a live-tree arm in `tests/scripts/test-git-data-birth-readiness-gate.sh`. Measured non-vacuous rather than read: 26 of 26 mutation rows driven non-zero against a copy of the live root, 0 survivors — including both 2-swaps and the 3-cycle, which are perfectly bijective and pass every cardinality predicate. Item 8 (clearing the banner) now depends on this item too. |
 
 ### Disposition — #6982 (2026-07-27)
 

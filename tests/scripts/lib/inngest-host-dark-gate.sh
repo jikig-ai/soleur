@@ -68,7 +68,7 @@
 #   silent        — the host emits nothing. Check the timer and the Vector shipper.
 #   unreadable    — the read path failed, or a field did not parse. Nothing about the host was
 #                   measured; retry.
-#   stale_schema  — the host is emitting, but from a pre-probe_schema=7 renderer. ACTIONABLE:
+#   stale_schema  — the host is emitting, but from a pre-probe_schema=8 renderer. ACTIONABLE:
 #                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
 #                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
 #                   OCI image and reaches the host via the digest literal in user_data, not via
@@ -100,7 +100,7 @@
 #     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
 #     G2  the row count is >= 1                                                -> silent
 #     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
-#     G4  probe_schema == "7", EXACT equality (not >=)                         -> stale_schema
+#     G4  probe_schema == "8", EXACT equality (not >=)                         -> stale_schema
 #     G14 redis_keys==0 implies redis_key_patterns==__NONE__ (coherence)        -> unreadable
 #   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
 #     G5  envelope host      == soleur-inngest                                 -> wrong_host
@@ -114,7 +114,7 @@
 #     G11 redis_active == active                                               -> redis_down
 #     G12 redis_keys parses as ^[0-9]+$                                        -> unreadable
 #     G13 redis_keys == 0                                                      -> store_populated
-#     G14 data_mount_src == the pinned device                                  -> mount_mismatch
+#     G14 data_mount_devid == the pinned volume alias (#8017)                 -> mount_mismatch
 #     G15 data_bytes parses as ^[0-9]+$  (READABILITY ONLY — no ceiling)       -> unreadable
 #   Read proof
 #     G16 flush_latched ∈ {true,false}   (READABILITY ONLY)                    -> unreadable
@@ -370,7 +370,7 @@ inngest_host_dark_gate() {
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="7"
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="8"
   # G3's recency bound. `now_epoch` is injectable so the suite can pin a clock; the default is the
   # real one. 5400s = 90 minutes, the window the monotonicity argument in this file's header
   # assumes — it was, until this revision, assumed and enforced nowhere.
@@ -588,7 +588,9 @@ inngest_host_dark_gate() {
   # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
   # everything" shape one version forward. A schema bump must force a deliberate edit here.
   #
-  # BUMPED 3 -> 4 (#7695, 2026-09-09) when the emitter gained `redis_key_patterns`. The bump is
+  # BUMPED 7 -> 8 (#8017/#8015/#8013, 2026-09-10) when the emitter gained `data_mount_devid`,
+  # `data_mount_base` and `registry_fns`, and the key histogram became identifier-aware. The
+  # earlier 3 -> 4 bump (#7695) added `redis_key_patterns`. The bump is
   # the point: a bare `redis_keys` count cannot answer "is this residue or state someone needs?",
   # which is the question the recut runbook's "confirm before emptying anything" actually asks. A
   # host still on the schema-3 image emits no `redis_key_patterns`, and grading it here would
@@ -724,16 +726,68 @@ inngest_host_dark_gate() {
   # destruction unsafe. The flip FSM already carries a `latch-unrecordable detail=not-a-mountpoint`
   # abort for precisely this shape, so the repo has been bitten by it before.
   #
-  # Pinned to the physical device by id: pre-recut that is the by-id path of the volume the dispatch
-  # named; post-recut it is the mapper. Both are accepted so the gate remains usable for a
-  # re-dispatch after a partial apply.
-  local data_mount_src expected_dev
-  data_mount_src="$(_ihdg_field "$chosen_msg" data_mount_src)" || { _ihdg_verdict "unreadable"; return $?; }
+  # PINNED ON DEVICE IDENTITY, NOT ON STRING FORM (#8017, probe_schema=8). The previous form
+  # compared `data_mount_src` -- which is `findmnt -no SOURCE`, i.e. the KERNEL device name --
+  # against a /dev/disk/by-id/... path. /proc/self/mountinfo stores the RESOLVED target and never
+  # the symlink, so the by-id arm was UNREACHABLE CODE: only the /dev/mapper/inngest-redis arm
+  # could ever match, and that device does not exist until the LUKS cut this gate authorizes.
+  # Net effect: every recut dispatch returned `mount_mismatch`, whose documented remediation
+  # ("the mount failed open and Redis is on the root disk") was actively misleading, because the
+  # mount was healthy and on the right device -- the COMPARISON could not match.
+  #
+  # The gate runs off-host and cannot readlink the host's /dev, so the host resolves and emits
+  # `data_mount_devid` (the scsi-0HC_Volume_<id> alias basename) and the gate compares THAT to
+  # the id the dispatch named. `data_mount_src` is still emitted and still read, but its role
+  # moves from PREDICATE to AUDIT RECORD -- the role `data_bytes` already has under G15. That
+  # opens no hole: the mountpoint duty stays fail-closed through G15, because the emitter binds
+  # `data_bytes=__UNREADABLE__` on the same unreadable-mount branch and G15 requires it numeric.
+  #
+  # This is a strict strengthening in BOTH eras. Pre-recut the predicate becomes satisfiable at
+  # all; post-recut the mapper arm stops being a bare string match on a name any local cryptsetup
+  # could create and becomes a claim about which volume backs the mapper.
+  #
+  # Every value that is not the expected alias refuses: the field absent entirely (a host still
+  # on the old image -- the realistic partial-bump failure, where _ihdg_field returns non-zero
+  # and the verdict is a refusing token rather than a skipped predicate), the empty string, `n/a`
+  # (the emitter took the WEB arm on a dedicated host), __NOMATCH__, __AMBIGUOUS__,
+  # __UNREADABLE__, and any other volume's alias.
+  local data_mount_devid expected_devid
+  data_mount_devid="$(_ihdg_field "$chosen_msg" data_mount_devid)" || { _ihdg_verdict "unreadable"; return $?; }
+  # KEPT, NOT DELETED: this is the only thing constraining a raw workflow_dispatch string before
+  # it is interpolated into the comparand. Nothing between the input and this line bounds its
+  # charset.
   [[ "$expected_volume_id" =~ ^[0-9]+$ ]] || { _ihdg_verdict "id_pin_mismatch"; return $?; }
-  expected_dev="/dev/disk/by-id/scsi-0HC_Volume_${expected_volume_id}"
-  if [[ "$data_mount_src" != "$expected_dev" && "$data_mount_src" != "/dev/mapper/inngest-redis" ]]; then
-    _ihdg_verdict "mount_mismatch"; return $?
+  expected_devid="scsi-0HC_Volume_${expected_volume_id}"
+  # Explicit empty-operand guard so the predicate does not depend on the caller's shell options.
+  # Measured: `bash -c [[ "$a" == "$b" ]]` with both unbound SUCCEEDS, while `set -u` aborts --
+  # and the two contexts that matter disagree, since the dispatch step runs `set -uo pipefail`.
+  # A stale `expected_dev` left by this rewrite, or a data_mount_devid/data_mount_dev_id typo,
+  # would be [[ "" == "" ]] -> PASS in a lax harness and an abort in production.
+  [[ -n "$data_mount_devid" && -n "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
+  # "COULD NOT MEASURE" IS NOT "MISMATCH", and the emitter already ships the field that separates
+  # them. `__UNREADABLE__` on devid has exactly two producers, and they are not the same claim:
+  #   - data_mount_src=__UNREADABLE__  -> findmnt reported NO MOUNT. That IS a measurement, and it
+  #     is the root-disk fallback this predicate exists to catch -> mount_mismatch.
+  #   - data_mount_src is a real path  -> the lsblk/readlink resolution itself broke. Nothing was
+  #     learned about the backing device -> `unreadable`, matching G12/G15/G16, which route every
+  #     readability failure there.
+  # Collapsing both into mount_mismatch asserts a mismatch that was never measured, and this file's
+  # own "WHY THIS IS NOT inngest-dedicated-host-classify.sh" section is several paragraphs on why
+  # that collapse is wrong: the two states have DIFFERENT remedies (fix the mount vs fix the device
+  # resolution), and a verdict token that conflates them sends the operator at the wrong one.
+  if [[ "$data_mount_devid" == "__UNREADABLE__" ]]; then
+    local _dmsrc
+    _dmsrc="$(_ihdg_field "$chosen_msg" data_mount_src)" || { _ihdg_verdict "unreadable"; return $?; }
+    if [[ "$_dmsrc" == "__UNREADABLE__" ]]; then
+      _ihdg_verdict "mount_mismatch"; return $?
+    fi
+    _ihdg_verdict "unreadable"; return $?
   fi
+  # THE RHS STAYS QUOTED. Measured on bash 5.3.9: [[ ]]'s right-hand side is a GLOB by default,
+  # so with an unquoted RHS a dispatch of --expected-volume-id '*' matches ANY Hetzner volume
+  # alias. G17 would still refuse today, but relying on a sibling predicate is exactly what
+  # ADR-199 forbids when it refuses to merge G12 and G13.
+  [[ "$data_mount_devid" == "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
 
   # ── G15 — data_bytes is READABLE (readability only, no ceiling) ─────────────────
   # An AUDIT field, not a threshold. An empty Redis on a volume holding megabytes is a state a human

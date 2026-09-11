@@ -100,7 +100,7 @@
 > throwaway-host rung as **its own** precondition.
 >
 > **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
-> nine-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
+> ten-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
 > verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
 > the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
 > with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive
@@ -133,11 +133,97 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
-| **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 7's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
+| **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
 | The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
+
+### Three things a green boot does NOT mean
+
+The same three statements are written to the **run summary page** by an un-gated job that
+runs before the approval prompt, so you do not have to have read this file to see them
+(#8009, CPO condition C2). They are repeated here because the runbook is where you are
+standing when you decide to dispatch at all.
+
+`confirm=BIRTH-GIT-DATA` is a **typo guard, not an authorization**. The authorization is the
+environment approval.
+
+**1 — Repositories are NOT encrypted at rest before the cutover.** `luks_mounted` is about
+the **device**, not the repositories. `git-data-bootstrap.sh` pins that wording itself, under
+AC30:
+
+> `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being encrypted
+> at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the cutover.
+
+A green boot is fully compatible with every repository sitting on plaintext storage.
+
+**2 — The approval is NOT two-party.** `web-platform-infra-apply` reports
+`prevent_self_review: false` with a single reviewer, so **the person who dispatches can
+approve it**. Two things to know about that reading: it comes from the live API, and
+`prevent_self_review` is declared **nowhere in this repository's Terraform** — so `false` is
+the provider default rather than a setting anyone chose. Every environment here that has
+required reviewers reads the same way, with the same single reviewer: **no approval gate in
+this repo is two-party.** Re-measure rather than trusting this line:
+
+```bash
+gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
+  --jq '.protection_rules[] | select(.type=="required_reviewers")
+        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}'
+```
+
+One human clicking twice is the real control. Treat it as **one** control, not two.
+
+**3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
+measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
+literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
+That is not nothing: each has a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, not a gate),
+so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
+fired", never as "four invariants were measured".
+
+Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
+emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
+`169.254.169.254`), anchored on the metadata address rather than the table name so a table
+whose rule was flushed reads `no`. It read `yes`. It is **not** in
+`git-data-rung2-boot-evidence.env` — that file records the queries, and the capture projects
+only the four hardcoded booleans — so it was read directly from Better Stack and recorded in
+the evidence PR's body.
+
+Finally: the authorization-map interlock is a **static** assertion over Terraform source. It
+proves what the production root *renders*, not what a live host *honours*. No live host is
+probed, because none exists until this dispatch creates one.
+
+**And it is weaker on the replace path than on this one.** `git-data-host-replace` carries no
+`environment:`, therefore no `deployment_branch_policy`, so a `workflow_dispatch` there runs
+the **selected ref's** scripts — the gate is supplied by the branch it polices. It holds
+against an accidental collapse merged and dispatched from `main`; it does **not** hold against
+a deliberate actor with repository write. What compensates is that the same gate runs against
+the live production root on every pull request, so a collapse cannot reach `main` without
+first reddening the required `test` check.
+
+### An undocumented invariant that Article 17 correctness currently rests on
+
+**`/mnt/git-data` must stay root-owned.** This is not a preference; it is the only thing
+making erasure fail closed today, and nothing asserts it.
+
+`git-data-remove.sh` derives `REPO_ROOT=/mnt/git-data/repositories`, then guards with
+`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified: rc=0, and it
+prints the path), so on a host where the volume failed to mount, both guards pass. The script
+then runs `mkdir -p "$REPO_ROOT"`, finds no repo, prints `not present (no-op)` and **exits 0** —
+reporting Article 17 erasure success over a store nobody looked at.
+
+What actually prevents that today: the forced command runs as `git`, cloud-init creates
+`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns `$REPO_ROOT` itself and the
+`repositories` symlink, but **never the mountpoint `/mnt/git-data`**. So the `mkdir -p` takes EACCES and `set -euo pipefail`
+(`git-data-remove.sh` line 28) aborts before the false success.
+
+That is an **accidental** invariant holding up a statutory guarantee. The moment anyone chowns
+that mountpoint to `git` for an unrelated permissions fix, erasure begins silently succeeding
+over nothing, and the failure is invisible — a no-op and a real erasure produce the same exit
+code and the same message. The assertion that would make it deliberate is a `mountpoint -q`
+check, which cannot land here: `git-data-remove.sh` is one of the payloads bound by
+`RUNG2_TEMPLATE_SHA256`, so editing it voids the rung-2 evidence and buys a fresh paid
+rehearsal. It is tracked with the other hash-bound hardening items.
 
 ## Dispatch
 
@@ -158,13 +244,24 @@ approval: the interlock, the birth gate, and the stock preflight.
 
 ## What the job does, in order
 
+0. **The disclosure job** — un-gated, runs first, and writes the three limits above to the
+   run summary so they are on screen before the approval prompt, not after it.
 1. **Validates `confirm`** — before anything reads a secret or contacts a provider.
 2. **Birth-readiness interlock** — refuses while the host would boot dark.
-3. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
+3. **Rung-2 rehearsal interlock** — refuses unless committed boot evidence exists for the
+   CURRENT template, hash-bound so it re-holds on any later edit to `cloud-init-git-data.yml`.
+   (This step was missing from this list; it has run since #6982.)
+4. **Authorization-map interlock** — refuses unless the three SSH forced-command slots
+   resolve to three distinct keys AND each authority's private half is published under the
+   matching Doppler name. Static, so it needs no rehearsal. The rung-2 rehearsal is
+   structurally incapable of catching this class: `rung2-rehearsal/rehearsal.tf` sets all
+   three pubkeys to one `tls_private_key` by design, so a production collapse is a **no-op**
+   there and the evidence still records PASS.
+5. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
    cloud-init-only and never receives it).
-4. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
+6. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
    messages, because they have different remedies.
-5. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
+7. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
    number here:
 
    ```
@@ -174,12 +271,12 @@ approval: the interlock, the birth gate, and the stock preflight.
         END{print n}' .github/workflows/apply-web-platform-infra.yml    # => 20
    ```
 
-6. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
+8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
    which arm refused.
-7. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
+9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
-8. **`terraform apply`**.
+10. **`terraform apply`**.
 
 ## What a green run gives you — and what it does not
 

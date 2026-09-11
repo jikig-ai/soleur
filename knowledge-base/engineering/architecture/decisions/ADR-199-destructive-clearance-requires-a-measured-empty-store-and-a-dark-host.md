@@ -248,14 +248,15 @@ step below is performed by hand; each is an `apply_target` on apply-web-platform
 and logged like any other, and the sequencing is a property of the gates rather than a checklist:
 
     1. merge                     `format` gone; expect_luks still false
-    2. apply_target=inngest-host-replace   new cloud-init goes live; the boot emits probe_schema=3;
+    2. apply_target=inngest-host-replace   new cloud-init goes live; the boot emits the
+       schema the pinned image carries (probe_schema=8 since #8017; was 3 when this was written);
                                            ARM 1 mounts the existing ext4 volume plaintext
-    3. apply_target=inngest-volume-recut   Guard 2 can now read schema-3 rows; the volume is
+    3. apply_target=inngest-volume-recut   Guard 2 can now read the current schema's rows; the volume is
                                            replaced and born raw
     4. apply_target=inngest-host-replace   a fresh FIRST boot; ARM 3 luksFormats the raw device
 
 > **Amended 2026-09-07 (#7695) — step 2 carried a false premise, and it closed this interlock's own
-> escape hatch.** Step 2 says the replace makes the boot emit `probe_schema=3`. That does not follow
+> escape hatch.** Step 2 says the replace makes the boot emit the current `probe_schema`. That does not follow
 > from a replace: the emitter lives in `inngest-bootstrap.sh`, which is **baked into the OCI image**
 > and reaches the host only through the digest literal in `user_data` — not through cloud-init. So
 > while the pin predates the emitter, step 2 boots the *pinned* image, `probe_schema` is absent,
@@ -280,3 +281,56 @@ That arm is real, but the dispatch never reaches Guard 1: Guard 2 runs BEFORE th
 the LIVE host, so after a partial apply it returns `id_pin_mismatch`, `mount_mismatch` and
 `redis_down` in turn. The reachable route is `apply_target=inngest-host`, whose additive-only guard
 admits a bare create of an absent volume — and which, with `format` gone, creates it raw.
+
+## Amendment — 2026-09-10 (#8017, #8015, #8013): C1's mount pin moves to `data_mount_devid`
+
+**Decision C1 above is amended, not superseded.** The conjunction it describes — an emptiness claim
+is only meaningful when bridged from the Redis *process* to the *block device* — is unchanged and
+remains the reason G14 exists. What changes is the field the bridge is built from, because the
+field it named could not carry it.
+
+**The pin was unsatisfiable, and had been since it was written.** C1 says `data_mount_src` is
+"pinned to the physical device". `data_mount_src` is `findmnt -no SOURCE`, which reads
+`/proc/self/mountinfo`, which records the **canonical kernel device name** — `/dev/sdb`. It never
+reports a `/dev/disk/by-id/...` path, because that path is a symlink and the kernel stores the
+resolved target. So G14's `expected_dev` arm was unreachable code: only the
+`/dev/mapper/inngest-redis` arm could ever match, and that device does not exist until the LUKS cut
+G14 gates. Every `apply_target=inngest-volume-recut` dispatch returned `mount_mismatch`, and the
+verdict's documented remediation — "the mount failed open and Redis is on the root disk" — was
+misleading in exactly the case it fired, because the mount was healthy and on the correct device.
+
+Measured on the live host 2026-09-09/10: `data_mount_src=/dev/sdb` against an
+`expected_inngest_volume_id` of `106261946`, i.e. an expected comparand of
+`/dev/disk/by-id/scsi-0HC_Volume_106261946`. Neither accepted value matched.
+
+**The amendment.** The gate runs off-host and cannot resolve the host's `/dev`, so the host resolves
+and emits the identity. `probe_schema=8` adds `data_mount_devid` (the `scsi-0HC_Volume_<id>` alias
+basename, resolved via `lsblk -s` then reverse-mapped inside the Hetzner namespace) and
+`data_mount_base` (the resolved kernel name). G14 compares `data_mount_devid` against
+`scsi-0HC_Volume_${expected_volume_id}`.
+
+`data_mount_src` remains emitted and remains read. Its role moves from **predicate** to **audit
+record** — the role `data_bytes` already holds under G15. That opens no hole in C1's reasoning: the
+mountpoint duty stays fail-closed through G15, because the emitter binds `data_bytes=__UNREADABLE__`
+on the same unreadable-mount branch and G15 requires the field numeric.
+
+**This is a strict strengthening in both eras**, which is why it is an amendment rather than a
+reversal. Pre-recut, the predicate becomes satisfiable at all. Post-recut, the mapper arm stops
+being a bare string match on a name any local `cryptsetup` could create and becomes a claim about
+which volume backs that mapper — a property C1 wanted and the old field could not express.
+
+**Why no new ADR.** The decision being recorded is a change to *how* C1's stated conjunction is
+measured, not a new architectural position. C1 names the mount pin; the record of what that pin is
+belongs next to it. (A new ordinal would also have created a renumber-sweep hazard against sibling
+branches for no gain.)
+
+**Two adjacent records corrected in the same pass**, both pre-existing and both one token:
+the sequencing walkthrough in this file (steps 2 and the escape-hatch note below it) still narrated
+`probe_schema=3` as the value a replace makes the boot emit, and ADR-142 carried the same stale
+reference. Neither was load-bearing, but both name the field family this change renumbers, and a
+stale schema number in a sequencing walkthrough is precisely what produces a partial bump.
+
+**Not done here, deliberately.** This amendment records a code fix. It does **not** dispatch
+`inngest-volume-recut`, does not clear the standing flush latch (#7777), and does not spend the one
+authorized FLUSHALL. G14 becoming satisfiable is a precondition for that dispatch, not a decision to
+make it.

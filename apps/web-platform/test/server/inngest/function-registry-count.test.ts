@@ -103,6 +103,14 @@ const NON_INNGEST_MONITORS = new Set([
   // recorded `cancelled` (not `failure`) and `| tee` discarded the suite's exit
   // code. See sentry_cron_monitor.main_health_monitor in cron-monitors.tf.
   "main-health-monitor",
+  // The weekly machinery drain: cron-machinery-drain.ts only DISPATCHES
+  // scheduled-machinery-drain.yml and declares no SENTRY_MONITOR_SLUG, because
+  // the work runs in the ephemeral GitHub runner rather than the app process.
+  // The workflow's own `sentry-heartbeat` step posts the check-in (with
+  // `if: always()`, so a floor breach still checks in and a red drain stays
+  // distinguishable from a dead scheduler). Same class as main-health-monitor:
+  // the monitor is real and heartbeated, it just maps to no Inngest slug.
+  "scheduled-machinery-drain",
   // #6549 item 2: GHA-fired (scheduled-terraform-drift.yml → heartbeat-live-reconcile
   // job) — the source-vs-live Better Stack heartbeat reconcile. Its final
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
@@ -191,8 +199,9 @@ describe("Inngest function registry — drift guards", () => {
   });
 
   // UPDATE this number when adding/removing Inngest functions.
+  // 68 -> 69: cron-machinery-drain (the weekly issue-flow measurement + drain).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(68);
+    expect(routeEntries.length).toBe(69);
   });
 
   // EVENT functions are invisible to the cron-glob guards (b)/(e) — they only

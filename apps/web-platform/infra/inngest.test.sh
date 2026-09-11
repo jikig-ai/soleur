@@ -883,17 +883,23 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
 # the never-zero loop would assert that the gate's own success condition can never be emitted.
 # Its protection is the opposite shape and lives in its own cases below: a failed or
 # unauthenticated read must degrade to __UNREADABLE__ and never to 0.
-PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
+# #8017/#8015: data_mount_base and data_mount_devid join the never-zero list -- a literal `0`
+# is nonsense for both (a kernel device name and a by-id alias basename), so it can only be a
+# degradation. registry_fns is DELIBERATELY EXCLUDED, for exactly the reason redis_keys is: 0 is
+# its MEANINGFUL reading -- a server that answers and owns nothing, which is the diagnostic-boot
+# signature #8015 exists to grade. Asserting it can never be 0 would assert that the very state
+# the field was added to detect can never be emitted.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid"
 
-assert "#7695 probe declares probe_schema=7 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=7( |\$)' '$PROBE_LOG'"
+assert "#8017 probe declares probe_schema=8 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=8( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1136,6 +1142,471 @@ assert "#7695 schema 7: non-vacuity — a --scan invocation exists to be checked
 assert "#7695 schema 7: the scan is redirected, never piped, so redis-cli's rc survives" \
   "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -q '|'"
 
+# ============================================================================================
+# ARM 5b — probe_schema=8: data_mount_devid, data_mount_base, registry_fns (#8017/#8015/#8013)
+# ============================================================================================
+# The dedicated arm above emits the three new fields, but with `lsblk` unstubbed it can only
+# ever produce __UNREADABLE__ for the device pair -- present, non-empty, and proving nothing.
+# These arms stub the device tree so each RESOLUTION OUTCOME is exercised by name.
+#
+# lsblk is a BINARY, so it is stubbed on PATH exactly like findmnt. The by-id directory is the
+# one env seam (PROBE_BYID_DIR), following the PROBE_DATA_MOUNT / PROBE_LATCH_DIR convention.
+PROBE_S8_BIN="$PING_TMP/probe-bin-s8"
+mkdir -p "$PROBE_S8_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du" "$PROBE_S8_BIN/"
+PROBE_S8_BYID="$PING_TMP/s8-byid"
+PROBE_S8_DEV="$PING_TMP/s8-dev"
+mkdir -p "$PROBE_S8_BYID" "$PROBE_S8_DEV"
+# REAL files as symlink targets. A dangling by-id alias fails `[ -e ]` and is skipped -- which is
+# correct production behaviour (an alias pointing at nothing must not match) but makes a fixture
+# that forgets the target silently measure __NOMATCH__ instead of the arm it named.
+: > "$PROBE_S8_DEV/sdb"
+: > "$PROBE_S8_DEV/sdc"
+S8_VOLID="106261946"
+
+# A GQL-aware curl. The base stub returns `exit 7` UNCONDITIONALLY, so it cannot express a
+# health-200-plus-registry-answer host at all; registry_fns would be pinned to __UNREADABLE__ by
+# the stub rather than by the code.
+s8_curl() {
+  cat > "$PROBE_S8_BIN/curl" <<CURLEOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *"/health") printf '%s' "$1"; exit 0 ;;
+    *"/v0/gql") printf '%s' '$2'; exit ${3:-0} ;;
+  esac
+done
+exit 7
+CURLEOF
+  chmod +x "$PROBE_S8_BIN/curl"
+}
+# lsblk stub: prints the inverse-tree rows for the requested source. Tree glyphs are OCTAL
+# escapes, not hex: these stubs run under /bin/sh = dash, whose printf %b does NOT support \x
+# (measured -- it emits the escape literally, so a hex fixture silently tests the wrong bytes
+# and the awk strips a leading 'x' instead of a tree glyph). The trailing empty line is
+# deliberate and measured -- `lsblk -nsdo` does NOT collapse to one line on util-linux 2.41.3,
+# so a first-line read would take a blank and a NR==1 read would take the CHILD, not the base.
+s8_lsblk() {
+  cat > "$PROBE_S8_BIN/lsblk" <<LSBLKEOF
+#!/bin/sh
+printf '%b' '$1'
+LSBLKEOF
+  chmod +x "$PROBE_S8_BIN/lsblk"
+}
+s8_run() {
+  _s8_log="$PING_TMP/logger-probe-s8-$1.txt"
+  : > "$_s8_log"
+  PATH="$PROBE_S8_BIN:$PATH" LOGGER_OUT="$_s8_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+    PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" \
+    DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$PROBE_BODY" >/dev/null 2>&1 || true
+  printf '%s' "$_s8_log"
+}
+
+cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- shape 1: a RAW DEVICE, the pre-recut live shape (this is the #8017 case) ---------------
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+s8_lsblk 'sdb\n\n'
+S8_RAW="$(s8_run raw)"
+assert "#8017 a RAW device resolves to the Hetzner alias (THE case G14 could never satisfy)" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_RAW'"
+assert "#8017 data_mount_base carries the resolved kernel name alongside it" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_RAW'"
+# The pin is an ALIAS BASENAME, never a path -- so it can never be confused with data_mount_src.
+assert "#8017 data_mount_devid is a basename, never a /dev path" \
+  "! grep -qE 'data_mount_devid=/' '$S8_RAW'"
+assert "#8017 data_mount_src still carries the KERNEL name (demoted to audit, still emitted)" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$S8_RAW'"
+
+# --- shape 2: a MAPPER on a whole disk (the post-recut shape) -------------------------------
+s8_lsblk 'inngest-redis\n`-sdb\n\n'
+S8_MAP="$(s8_run mapper)"
+assert "#8017 a MAPPER resolves through dm to its backing device" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_MAP'"
+assert "#8017 the mapper's base is the BACKING device, not the dm node" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_MAP'"
+
+# --- shape 3: a MAPPER on a PARTITION (two hops: dm -> part -> parent disk) -----------------
+# Does not arise in today's layout -- nothing creates a partition table -- but "does not arise
+# today" describes one layout, and being wrong costs a second tag and a second host replace.
+s8_lsblk 'inngest-redis\n`-sdb1\n  `-sdb\n\n'
+S8_PART="$(s8_run partition)"
+assert "#8017 a mapper on a PARTITION walks all the way to the parent disk" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_PART'"
+assert "#8017 ...and still resolves the volume alias from that parent" \
+  "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_PART'"
+
+# --- shape 4: the FIRST-NON-EMPTY trap ------------------------------------------------------
+# Measured on util-linux 2.41.3: `lsblk -nsdo SERIAL` emits the value AND a trailing blank line.
+# A NR==1 read takes the child; a naive `tail -1` takes the blank. Only last-non-empty is right.
+s8_lsblk 'inngest-redis\n\n`-sdb\n\n\n'
+S8_BLANK="$(s8_run blanks)"
+assert "#8017 interior and trailing BLANK lines do not defeat the base-device read" \
+  "grep -qE 'data_mount_base=sdb( |\$)' '$S8_BLANK'"
+
+# --- shape 5: a FORKED inverse tree (md/RAID, multipath) ------------------------------------
+# THE ONLY FINDING IN THIS PR WITH A DESTRUCTIVE BLAST RADIUS. `lsblk -s` on a multi-parent stack
+# emits two ancestors at the SAME depth, and a last-non-empty read picks one ARBITRARILY. Measured
+# before the fix: base=sdc, devid=scsi-0HC_Volume_777777777 -- a confident pin naming a volume the
+# mount is NOT on. G14 compares that against the dispatch's expected id, so an arbitrarily-picked
+# leaf that happened to match would clear a destructive recut against the wrong physical device.
+# Every other shape in this arm is a CHAIN, which is why no fixture could see it.
+: > "$PROBE_S8_DEV/sdc"
+ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'md0\n|-sdb\n`-sdc\n\n'
+S8_FORK="$(s8_run fork)"
+assert "#8017 a FORKED tree (two ancestors at one depth) => __AMBIGUOUS__, never an arbitrary leaf" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 ...and devid refuses with it rather than pinning the arbitrarily-picked leaf" \
+  "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_FORK'"
+assert "#8017 a forked tree NEVER emits the other volume's alias (the destructive wrong pin)" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK'"
+
+# --- shape 5b: an UNEQUAL-DEPTH fork -- the shape that defeated the FIRST fork fix -----------
+# The first fix counted nodes at the MAXIMUM depth, which is not the same set as the leaves.
+# When one leg of the fork is partitioned and the other is not (md0 -> {sdb1 -> sdb, sdc}), the
+# only node at max depth is sdb, so the fixed emitter STILL pinned sdb confidently while the
+# mount spanned both devices. Every fork fixture written for the first fix was depth-symmetric,
+# which is exactly why none of them could see it. Glyph-independent: fails in ASCII and UTF-8.
+s8_lsblk 'md0\n|-sdb1\n| `-sdb\n`-sdc\n\n'
+S8_FORK2="$(s8_run fork_unequal)"
+assert "#8017 an UNEQUAL-DEPTH fork => __AMBIGUOUS__ (max-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK2'"
+assert "#8017 ...and the unequal-depth fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK2'"
+
+# --- shape 5c: a fork drawn with BOX-DRAWING glyphs -----------------------------------------
+# lsblk indents a NON-last sibling with U+2502 + space (4 bytes) and a last sibling with two
+# plain spaces (2 bytes), so two nodes at the same LOGICAL depth sit at different BYTE depths.
+# Measured: this exact tree returned a confident `sdb` under byte-depth counting while the SAME
+# tree in ASCII returned __AMBIGUOUS__ -- i.e. the verdict was a property of the host locale, and
+# the probe unit sets no LANG/LC_ALL. The emitter now passes -i so production is always ASCII;
+# this fixture keeps the LEAF rule honest if that flag is ever dropped, because the leaf rule is
+# glyph-independent on its own (a child is always strictly deeper than its parent).
+s8_lsblk 'md0\n\0342\0224\0234\0342\0224\0200sdb1\n\0342\0224\0202 \0342\0224\0224\0342\0224\0200sdb\n\0342\0224\0224\0342\0224\0200sdc1\n  \0342\0224\0224\0342\0224\0200sdc\n\n'
+S8_FORK3="$(s8_run fork_glyphs)"
+assert "#8017 a BOX-DRAWING fork => __AMBIGUOUS__ (byte-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK3'"
+assert "#8017 ...and the glyph fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK3'"
+
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
+s8_lsblk 'sdb\n\n'
+
+# --- __NOMATCH__: the mount is real, but not from a Hetzner volume --------------------------
+ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+s8_lsblk 'sdb\n\n'
+S8_NOMATCH="$(s8_run nomatch)"
+assert "#8017 a base device with no Hetzner alias => __NOMATCH__, never a false pin" \
+  "grep -qE 'data_mount_devid=__NOMATCH__( |\$)' '$S8_NOMATCH'"
+
+# --- __AMBIGUOUS__: the measurement that replaced a premise ---------------------------------
+# An earlier draft ASSERTED one alias per volume. Measured here, a whole-by-id walk returns three
+# aliases for one device, so the emitter COUNTS instead of assuming -- and says so when it cannot
+# decide, rather than picking one arbitrarily.
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+S8_AMB="$(s8_run ambiguous)"
+assert "#8017 TWO aliases resolving to one device => __AMBIGUOUS__, never an arbitrary pick" \
+  "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_AMB'"
+assert "#8017 __AMBIGUOUS__ is not silently coerced to the expected alias" \
+  "! grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_AMB'"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+
+# --- __UNREADABLE__: the resolution itself broke, and base DISAMBIGUATES it -----------------
+s8_lsblk '\n'
+S8_UNREAD="$(s8_run unreadable)"
+assert "#8017 an empty lsblk answer => data_mount_base=__UNREADABLE__" \
+  "grep -qE 'data_mount_base=__UNREADABLE__( |\$)' '$S8_UNREAD'"
+assert "#8017 ...and devid inherits it rather than reporting __NOMATCH__" \
+  "grep -qE 'data_mount_devid=__UNREADABLE__( |\$)' '$S8_UNREAD'"
+# THE THREE-WAY COLLISION, resolved. This pair is why data_mount_base ships at all: a broken
+# resolution (src present, base unreadable) and no mount at all (src unreadable, base n/a) carry
+# DIFFERENT remedies and would otherwise be one indistinguishable __UNREADABLE__ on devid.
+assert "#8017 a BROKEN RESOLUTION still reports the mount source, so it is distinguishable from no-mount" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$S8_UNREAD'"
+s8_lsblk 'sdb\n\n'
+
+# --- registry_fns (#8015) -------------------------------------------------------------------
+S8_REG="$(s8_run registry)"
+assert "#8015 a well-formed function array reports its LENGTH" \
+  "grep -qE 'registry_fns=3( |\$)' '$S8_REG'"
+# 0 IS A MEASUREMENT, and this is the entire point of the field: a server that answers /health
+# and owns nothing is a diagnostic boot, which is exactly what G18 was passing vacuously.
+s8_curl 200 '{"data":{"functions":[]}}'
+S8_REG0="$(s8_run registry-empty)"
+assert "#8015 an EMPTY registry reports 0 -- a measurement, not an absence" \
+  "grep -qE 'registry_fns=0( |\$)' '$S8_REG0'"
+assert "#8015 an empty registry is NOT degraded to __UNREADABLE__ (that would re-open the vacuity)" \
+  "! grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REG0'"
+# An error envelope carries data:null. jq indexes null as null, so type is "null" -> the
+# non-numeric arm. Read as a count of zero it would forge the diagnostic-boot signature.
+s8_curl 200 '{"errors":[{"message":"boom"}],"data":null}'
+S8_REGERR="$(s8_run registry-error)"
+assert "#8015 an ERROR ENVELOPE => __UNREADABLE__, never 0" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGERR'"
+assert "#8015 an error envelope never renders as registry_fns=0" \
+  "! grep -qE 'registry_fns=0( |\$)' '$S8_REGERR'"
+# A non-array (a scalar, an object) must not be length()-ed into a number either.
+s8_curl 200 '{"data":{"functions":"not-an-array"}}'
+S8_REGSCALAR="$(s8_run registry-scalar)"
+assert "#8015 a NON-ARRAY functions value => __UNREADABLE__" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGSCALAR'"
+# Transport failure.
+s8_curl 200 '' 7
+S8_REGDOWN="$(s8_run registry-down)"
+assert "#8015 a transport failure => __UNREADABLE__" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGDOWN'"
+# NOT SERVING AT ALL. A 0 here would be indistinguishable from the diagnostic-boot signature on
+# a host that never answered, so the count is never taken.
+s8_curl 000 '{"data":{"functions":[]}}'
+S8_REGDEAD="$(s8_run registry-dead)"
+assert "#8015 a non-200 /health => __UNREADABLE__, never a count we did not take" \
+  "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGDEAD'"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- #8013: the key histogram must not ship an identifier --------------------------------
+# THE LIVE ROW LEAKS TODAY. Read from the warehouse during planning:
+#   redis_key_patterns=?queue?:queue:*=8,?estate:01KYADCPBNEE10PYEYCPCJ08YA?:*=2,...
+# The corpus below is derived from the shapes that row names -- NOT from the single shape the
+# issue quoted -- and it deliberately includes a BRACE-FREE <ns>:<identifier>:... key, because
+# measured, that shape leaks the identical ULID with no brace rule involved. A brace-only fixture
+# would have agreed with a brace-only fix and let #8013 survive the host replace.
+S8_ULID="01KYADCPBNEE10PYEYCPCJ08YA"
+cat > "$PROBE_S8_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+for a in "$@"; do case "$a" in INFO) printf '# Keyspace\ndb0:keys=9,expires=0\n'; exit 0 ;; esac; done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    echo "{queue}:queue:sorted"
+    echo "{queue}:partition:p1"
+    echo "{connect}:gateways:g1"
+    echo "{estate:01KYADCPBNEE10PYEYCPCJ08YA}:runs:1"
+    echo "estate:01KYADCPBNEE10PYEYCPCJ08YA:runs:9"
+    echo "user:f47ac10b-58cc-4372-a567-0e02b2c3d479:session"
+    echo "cache:deadbeefcafebabe0123:blob"
+    echo "tenant:1234567890:config"
+    echo "prefix{estate:01KYADCPBNEE10PYEYCPCJ08YA}suffix:x"
+    echo "estate:run_01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:sess-01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:01kyadcpbnee10pyeycpcj08ya:runs:1"
+    echo "user:550E8400-E29B-41D4-A716-446655440000:p"
+    echo "user:ops@example.com:sessions"
+    echo "token:sk_live_51H8xQ2KLmNopQrStUvWx:meta"
+    echo "{q}{01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "{q}01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "sess:f3a92c1eb7d4e5a6:x"
+    exit 0
+  fi
+done
+exit 0
+RCEOF
+chmod +x "$PROBE_S8_BIN/redis-cli"
+S8_KEYS="$(s8_run keys)"
+# THE PROPERTY, asserted as a NEGATIVE over the whole row: the identifier must not appear
+# ANYWHERE. Asserting a particular reduced spelling would pass on any arm that never reached the
+# field (cq-assert-anchor-not-bare-token); asserting the ULID's ABSENCE cannot.
+assert "#8013 the ULID appears NOWHERE in the emitted row (braced shape)" \
+  "! grep -qF '$S8_ULID' '$S8_KEYS'"
+assert "#8013 the UUID appears nowhere either" \
+  "! grep -qF 'f47ac10b-58cc-4372-a567-0e02b2c3d479' '$S8_KEYS'"
+assert "#8013 a long hex identifier appears nowhere" \
+  "! grep -qF 'deadbeefcafebabe0123' '$S8_KEYS'"
+assert "#8013 a long digit-run identifier appears nowhere" \
+  "! grep -qF '1234567890' '$S8_KEYS'"
+# ...AND THE CATEGORY SURVIVES. Without this the property is satisfiable by emitting nothing at
+# all, which would destroy the field's diagnostic value while passing every assertion above.
+assert "#8013 the {estate} CATEGORY survives the reduction (the tag stays readable)" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]estate[?]' '$S8_KEYS'"
+assert "#8013 a brace group with NO colon is left intact ({queue}:queue is the commonest shape)" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
+assert "#8013 the brace-free identifier shape is reduced too, not just the braced one" \
+  "grep -qE 'redis_key_patterns=[^ ]*(^|,)estate:[*]:[*]' '$S8_KEYS'"
+# THE SHAPES A DENYLIST MISSED. Every row below escaped the first cut verbatim, and none was
+# fixturable then because the fixture set contained exactly the four shapes the denylist knew --
+# the fixture-shape axis no mutation of the implementation can reach. `run_<ULID>` is the one that
+# matters most: a near-universal Redis convention, and Inngest's own keyspace uses ULIDs.
+assert "#8013 a PREFIXED ULID (run_<ULID>) does not survive -- one char defeated length()==26" \
+  "! grep -qF 'run_01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a hyphen-prefixed ULID (sess-<ULID>) does not survive" \
+  "! grep -qF 'sess-01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a LOWERCASE ULID does not survive" \
+  "! grep -qF '01kyadcpbnee10pyeycpcj08ya' '$S8_KEYS'"
+assert "#8013 an UPPERCASE UUID does not survive" \
+  "! grep -qF '550E8400-E29B-41D4-A716-446655440000' '$S8_KEYS'"
+assert "#8013 an EMAIL ADDRESS does not survive (the @ was sanitised; the address was not)" \
+  "! grep -qF 'ops' '$S8_KEYS' || ! grep -qE 'ops[^ ]*example' '$S8_KEYS'"
+assert "#8013 a SECRET-SHAPED value does not survive" \
+  "! grep -qF 'sk_live_51H8xQ2KLmNopQrStUvWx' '$S8_KEYS'"
+# The two shapes below defeated the FIRST allowlist. Redis takes the FIRST {...}, so only that
+# group is category-filtered -- and the segment-1 exemption was written as a SHAPE test
+# (`starts with { and ends with }`) rather than an identity test against the token just rebuilt.
+# Anything opening with a brace and closing with one therefore passed WHOLE. A shape test is a
+# denylist wearing the clothes of an allowlist, which is the exact polarity error the rewrite
+# exists to correct; measured, both of these shipped the ULID verbatim.
+assert "#8013 a SECOND brace group does not smuggle the ULID past the segment-1 exemption" \
+  "! grep -qF '$S8_ULID' '$S8_KEYS'"
+assert "#8013 the segment-1 exemption admits the REBUILT token only, so {q}{...} reduces to *" \
+  "grep -qE 'redis_key_patterns=[^ ]*[*]:x:[*]' '$S8_KEYS'"
+# A 16-char lowercase hex id has no 4-digit run and no uppercase, so every earlier rule admitted
+# it. Category names are words; ids are hex. No measured live category is all [a-f0-9].
+assert "#8013 a SHORT LOWERCASE HEX id does not survive (no digit run, no uppercase)" \
+  "! grep -qF 'f3a92c1eb7d4e5a6' '$S8_KEYS'"
+# ...and the OVER-REDACTION direction, which no absence assertion can see: a filter that emits
+# nothing satisfies every row above while destroying the field's entire diagnostic value.
+assert "#8013 OVER-REDACTION guard: the category tag survives the allowlist" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
+assert "#8013 OVER-REDACTION guard: a brace-free category pair survives" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:[*]' '$S8_KEYS' || grep -qE 'redis_key_patterns=[^ ]*[?]connect[?]:gateways:[*]' '$S8_KEYS'"
+assert "#8013 the field is still non-empty and carries no whitespace" \
+  "grep -qE 'redis_key_patterns=[^ ]+( |\$)' '$S8_KEYS'"
+cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
+
+# --- source assertions: the classes no stub can catch (#8005 precedent, same file) ----------
+# A stub happily ignores an invented flag, so flag SHAPE is unfalsifiable behaviourally. These
+# assert the emitter's TEXT instead -- the discipline that would have caught `--count`.
+assert "#8017 the device walk uses lsblk -s (the documented inverse-tree flag), not a hand-rolled slaves walk" \
+  "grep -qE 'lsblk -inso NAME' '$PROBE_SRC'"
+# -i is part of the same pin, and for a measured reason: without it lsblk indents a NON-last
+# sibling with U+2502 + space (4 bytes) and a last sibling with two spaces (2 bytes), so byte
+# depth stops tracking logical depth. Dropping -i silently makes the fixtures below unfaithful
+# to production, which is the state the first fork fix shipped in.
+assert "#8017 ...and asks for ASCII (-i), so a fixture written in ASCII matches what lsblk emits" \
+  "grep -qE 'lsblk -i[a-z]*nso NAME|lsblk -inso NAME' '$PROBE_SRC'"
+assert "#8017 the lsblk call is BOUNDED, like every other call in this probe" \
+  "grep -qE 'timeout [0-9]+ lsblk' '$PROBE_SRC'"
+assert "#8017 the by-id reverse map is constrained to the Hetzner namespace, never a whole-dir walk" \
+  "grep -qE 'scsi-0HC_Volume_[*]' '$PROBE_SRC'"
+assert "#8017 the by-id directory is seamed (PROBE_BYID_DIR) with a production default" \
+  "grep -qE 'PROBE_BYID_DIR:-/dev/disk/by-id' '$PROBE_SRC'"
+assert "#8015 the registry parse is guarded on jq being present (a HOST fact, not an image fact)" \
+  "grep -qE 'command -v jq' '$PROBE_SRC'"
+assert "#8015 the GQL query is drift-pinned at column zero (else the cross-file pin is vacuous)" \
+  "grep -qE '^readonly FUNCTIONS_GQL_QUERY=' '$PROBE_SRC'"
+# Both new network/tool calls must discard stderr: this row's tag is allowlisted to Better Stack,
+# and jq's stderr on a malformed body echoes the OFFENDING INPUT -- an untrusted HTTP response --
+# into a third-party warehouse.
+assert "#8015 the registry curl discards stderr (untrusted response text must not reach the warehouse)" \
+  "grep -qE 'v0/gql 2>/dev/null' '$PROBE_SRC'"
+assert "#8013 the histogram uses no regex INTERVAL expressions (older mawk lacks them)" \
+  "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -qE '\{[0-9]+(,[0-9]*)?\}'"
+
+# ============================================================================================
+# mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
+# ============================================================================================
+# THIS FILE HAD NO MUTATION HARNESS. Every emitter-side "we checked that neutering X breaks Y"
+# was therefore a hand-applied audit performed once by whoever wrote it, and nothing re-performs
+# it. That is precisely the distinction the Guard Contract exists to enforce: a mutation row is
+# only a guard if a later reader can run it.
+#
+# It mutates the EXTRACTED PROBE BODY -- the post-awk text `sh` actually executes -- not the
+# bootstrap wrapper, so a sed that matches only inside a heredoc still lands where it matters.
+#
+# mutate_emitter <label> <sed-expr> <field> <expect-unmutated>
+#   1. seds a PRISTINE copy and proves the mutation LANDED (cmp) and changed EXACTLY ONE line
+#      (a broader pattern measures collateral damage while reporting the named check);
+#   2. runs the UNMUTATED body and requires <field> to equal <expect-unmutated> today -- without
+#      this the row proves nothing, because a fixture that never reaches the field "passes";
+#   3. runs the MUTATED body and requires <field> to DIFFER.
+EMIT_PRISTINE="$PING_TMP/probe-body.pristine.sh"
+cp "$PROBE_BODY" "$EMIT_PRISTINE"
+emit_field() {  # emit_field <probe-body> <field> -> value, or the empty string
+  _ef_log="$PING_TMP/mut-emit.txt"; : > "$_ef_log"
+  PATH="$PROBE_S8_BIN:$PATH" LOGGER_OUT="$_ef_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$1" >/dev/null 2>&1 || true
+  tr ' ' '\n' < "$_ef_log" | grep -oE "^$2=.*" | head -1 | cut -d= -f2-
+}
+mutate_emitter() {
+  local label="$1" expr="$2" field="$3" want="$4"
+  local mut="$PING_TMP/probe-body.mut.sh" changed base got
+  sed "$expr" "$EMIT_PRISTINE" > "$mut"
+  if cmp -s "$mut" "$EMIT_PRISTINE"; then
+    assert "MUT[$label]: the mutation LANDED in the extracted probe body" "false"
+    return
+  fi
+  changed="$(diff "$EMIT_PRISTINE" "$mut" | grep -c '^<' || true)"
+  assert "MUT[$label]: the mutation changed exactly 1 line (got $changed; a broader sed measures collateral damage)" \
+    "[[ '$changed' == '1' ]]"
+  base="$(emit_field "$EMIT_PRISTINE" "$field")"
+  assert "MUT[$label]: the UNMUTATED emitter produces $field=$want today (else this row exercises nothing)" \
+    "[[ '$base' == '$want' ]]"
+  got="$(emit_field "$mut" "$field")"
+  assert "MUT[$label]: neutering it CHANGES $field (was '$base', now '$got')" \
+    "[[ '$got' != '$base' ]]"
+}
+
+# The harness's own SELF-TEST, first: an anchor that cannot match must be REPORTED, not skipped.
+# Without this, a mutate_emitter whose seds all silently miss reports a clean sweep.
+_me_f0="$FAIL"; _me_p0="$PASS"; _me_t0="$TOTAL"
+# Output suppressed: the failure is DELIBERATE, and a visible "FAIL: MUT[SELFTEST]" line in an
+# otherwise green suite is indistinguishable from a real regression to anyone reading CI logs.
+mutate_emitter SELFTEST 's|__AN_ANCHOR_THAT_CANNOT_EXIST__|x|' data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me_f0" ]]; then
+  # Roll the deliberate failure back and book ONE assertion for the self-test itself. TOTAL must
+  # move with PASS or the suite reports more passes than assertions -- which it briefly did.
+  PASS="$_me_p0"; TOTAL="$_me_t0"; FAIL="$_me_f0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT: a mutation that cannot land is REPORTED, not silently skipped"
+else
+  echo "  FAIL: MUT INSTRUMENT: a non-landing mutation passed — every row below is decorative"
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
+# SELFTEST 2 — THE SCORING BRANCH. The self-test above drives an anchor that cannot match, so it
+# returns at the `cmp -s` early-exit and NEVER REACHES the three asserts below it: the landing
+# count, the unmutated control, and the row that actually scores the mutant. Stubbing only that
+# last assert to `true` left the suite byte-identical green with every M-row decorative — the
+# precise state SELFTEST 1's message claims to prevent. So this one drives a mutation that LANDS
+# and leaves the field UNCHANGED: the harness must report it as a survivor.
+_me2_f0="$FAIL"; _me2_p0="$PASS"; _me2_t0="$TOTAL"
+# A comment-only edit inside the probe body: lands (1 line changes), but cannot alter any field.
+mutate_emitter SELFTEST2 's|^# --- gather (never branch on the results before the emit below) ---$|# --- gather (selftest2 no-op edit) ---|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me2_f0" ]]; then
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT 2: a mutation that LANDS but changes nothing is reported as a SURVIVOR (the scoring branch is live)"
+else
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  echo "  FAIL: MUT INSTRUMENT 2: a landed-but-inert mutation was scored as KILLED — the scoring assert is stubbed, and every M-row below is decorative" >&2
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
+# Restore the healthy fixture set (the registry arms above left curl on a non-200 shape).
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+s8_lsblk 'sdb\n\n'
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+
+# M1 — delete the reverse map's match arm: the pin must stop resolving.
+mutate_emitter devid-revmap 's|^        \*/"\$data_mount_base")$|        __NEVER__)|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}"
+# M2 — drop the ambiguity COUNT: a multi-valued map must not silently pick one.
+# ITS FIXTURE NEEDS TWO ALIASES. With one, _devid_hits is 1, the `-gt 1` arm is UNREACHABLE, and
+# the mutant survives for a reason that says nothing about the guard. Measured: it did survive on
+# the first run, and the fix was the FIXTURE, not the predicate.
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+mutate_emitter devid-ambiguity 's|^      elif \[ "\$_devid_hits" -gt 1 \]; then$|      elif false; then|' \
+  data_mount_devid "__AMBIGUOUS__"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+# M3 — unbound the base-device resolution: devid must inherit __UNREADABLE__, not invent a match.
+mutate_emitter base-resolution 's|^    data_mount_base="\$(timeout 5 lsblk|    data_mount_base="$(false \&\& timeout 5 lsblk|' \
+  data_mount_base "sdb"
+# M4 — neuter the not-serving guard: a non-200 host must not yield a count we never took.
+# ITS FIXTURE NEEDS A NON-200 /health, for the same reason as M2: with 200 the guard's true-branch
+# is never entered and disabling it changes nothing. Also measured surviving on the first run.
+s8_curl 000 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+mutate_emitter registry-guard 's|^  if \[ "\$http_code" != "200" \]; then$|  if false; then|' \
+  registry_fns "__UNREADABLE__"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
 # --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
 # THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
 # with an error and no `db<N>:` lines; `awk … END {print s+0}` prints 0 on no input, so without
@@ -1319,16 +1790,23 @@ for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_
 done
 # Cardinality guard on the loop above: a typo in either list makes the body run zero times and
 # this block reports success having asserted nothing.
-assert "#7695 never-zero invariant covered 6 logs x 5 fields" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 5 ]]"
+assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 7 ]]"
 # TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
 # `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
 # numeric, so the never-zero loop has nothing to say about it either).
 # THREE more since probe_schema=6. Each is excluded from the never-zero loop for its own
 # reason: `redis_keys` and `redis_expires` both have 0 as a MEANINGFUL reading (an empty store;
 # nothing carrying a TTL), and `redis_key_patterns` is never numeric at all.
-assert "#7695 the presence list carries three MORE fields than the never-zero list" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 8 ]]"
+# THE MESSAGE NOW MATCHES WHAT IS COMPARED. It previously said "three MORE fields than the
+# never-zero list" while asserting a bare `-eq 8` on ONE list and never comparing the two, so the
+# stated invariant was untested and the number went stale on every schema bump. This derives the
+# difference from the lists themselves and names the excluded fields, so adding a field to one
+# list without deciding its never-zero status fails here rather than passing silently.
+assert "#7695 presence list minus never-zero list == the four fields whose 0 is a MEASUREMENT" \
+  "[[ \$(( \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) - \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) )) -eq 4 ]]"
+assert "#7695 those four are exactly redis_keys, redis_expires, redis_key_patterns, registry_fns" \
+  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -qx \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -qx \"\$f\" && exit 1; done; true"
 
 # redis_key_patterns must never render as the empty string: the emit is unconditional, so an
 # unbound variable would drop the field entirely and G14 downstream would read the row as
@@ -1358,7 +1836,12 @@ assert "#7695 the extracted payload binds variables, not literals" \
   "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q '\\\$'"
 assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings)" \
   "[[ '$PROBE_PAYLOAD_LOGGER' == '$PROBE_PAYLOAD_PHONE' ]]"
-assert "#7695 each of the 5 store fields appears in the shared payload" \
+# CARDINALITY, not just membership: adding a 22nd field to both emit sites without classifying it
+# left BOTH suites green before this arm existed. The emitted set and the presence list must agree
+# in COUNT, so a new field forces a deliberate edit here rather than arriving unguarded.
+assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
+  "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
+assert "#7695 every field in the presence list appears in the shared payload" \
   "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
@@ -2029,7 +2512,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=305
+INNGEST_MIN_ASSERTIONS=413
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
