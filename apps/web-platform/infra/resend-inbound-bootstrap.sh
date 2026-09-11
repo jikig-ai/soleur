@@ -111,13 +111,14 @@ fi
 #
 # (#7898 §2) Every call site MUST stay a bare `var="$(resend_api …)"` — a
 # wrapper (`if $(resend_api …)`, `… || …`) would swallow the in-function
-# `exit 2` below and continue past a refused request. The three `local`s are
-# separate statements so `path` is an in-file assignment the Rule D classifier
-# can see (measured necessary and harmless).
+# `exit 2` below and continue past a refused request. The `local` stays on ONE
+# line on purpose: the Rule D classifier reads `path` as never-assigned (hence
+# env-settable) in this form and REQUIRES the allowlist below — split onto its
+# own line, `local path="$2"` reads as a non-env assignment and the classifier
+# stops guarding the pin (measured: the linter then passes with the allowlist
+# deleted).
 resend_api() {
-  local method="$1"
-  local path="$2"
-  local body="${3:-}"
+  local method="$1" path="$2" body="${3:-}"
   # The path is caller-controlled and concatenated onto the literal RESEND_API:
   # allow only the two collections this script talks to plus one id segment —
   # no authority (`@`), traversal (`..`), query or second slash can smuggle the
