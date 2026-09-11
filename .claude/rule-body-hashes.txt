@@ -58,7 +58,7 @@ eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-
 c171187443a446c1020bc06932c93b6b36a44344ec038ed211b6c87d8caacdcc  wg-block-pr-ready-on-undeferred-operator-steps
 bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-author-before-merge
 0c66ba0b8543f78224a5e8c3725bd7be5916846c6df4e05942b899e76c66d987  wg-dark-launch-deploy-gates
-bd1b19b00bbbcf9d553041722d3da0b29ed782b1167764d170c15486c76c4255  wg-defer-only-after-inline-triage
+68c64543014fb769a3512988e5c17a11ee309dc509b3e60a997ffc95dde06fb7  wg-defer-only-after-inline-triage
 e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work-emit-resume-prompt
 695ee8e150a170130d85bfcd007faa8a1cb65944148cbd649f3aa31936178e79  wg-every-feature-listed-in-a-roadmap-phase
 5371eb922a7d2402648dbf68dbe902abf582e97d36e3f9e8f04942ed69443cea  wg-every-session-error-must-produce-either

@@ -223,6 +223,41 @@ doppler run -p soleur -c prd_terraform -- \
     steady state, not a transient mint window. See ADR-108 §Consequences and
     issue #6297.
 
+### `SOLEUR_CRON_FILING_DENY` — a cron run was denied a filing
+
+Emitted by `_cron-claude-eval-substrate.ts` at pino **WARN** (same
+`app_container_warn_filter`, same path as the cost markers, no
+`betterstack-query.sh` change) when a cron run's result event carried
+filing-shaped `permission_denials` — a `gh issue create` or
+`gh api …/issues -X POST` the containment hook refused (ADR-216 addendum, the
+"fourth population"). The substrate reads `permission_denials[]` from the
+result event itself; there is no hook-written deny log to look for.
+
+Fields: `fn` (Inngest function id), `runId`, `runStartedAt`, `count` (denied
+filing commands in the run), `commands` (first tokens of each denied command —
+never a body, never a credential).
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY
+```
+
+A deny alone does not say whether the run recovered. Discriminate the two
+outcomes by joining on the same `fn` + `runStartedAt`:
+
+- **Denied and vanished** — a Sentry `scheduled-output-missing` event exists
+  for that `fn` with the same `runStartedAt`: the cron never filed its
+  run-report, the persistence handshake refused the artifacts, and the
+  heartbeat reads the run as silence. This is the #8059 shape and the reason
+  exit 0 exists.
+- **Denied then complied** — no matching `scheduled-output-missing`: the agent
+  retried under an exit (usually exit 1, `meta/machinery`) and the run-report
+  landed. Check measurement line 1d for the residue and the sweeper for a
+  mis-labelled report.
+
+The marker is the deny-side half of that join; the Sentry event is the
+outcome-side half. Neither alone is the answer.
+
 Ranked SQL (run against `remote(t520508_..._logs)`):
 
 ```sql

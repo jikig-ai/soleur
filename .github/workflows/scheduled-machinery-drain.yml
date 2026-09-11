@@ -53,13 +53,16 @@ jobs:
       # Count the candidate pool BEFORE the drain. `closed` is derived as a
       # delta rather than self-reported by the agent: a runner that reports its
       # own success is the shape this PR exists to remove.
+      # `-label:keep-open` (both here and in the post-count) excludes the
+      # standing measurement issue, which IS machinery and carries the
+      # kill-switch -- without it the instrument sits in its own pool forever.
       - name: Count machinery candidates (pre-drain)
         id: pre
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          n="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22+-label:keep-open" --jq '.total_count')"
           echo "candidates=$n" >> "$GITHUB_OUTPUT"
           echo "candidate pool: $n"
 
@@ -91,7 +94,7 @@ jobs:
           FLOOR: ${{ env.MACHINERY_DRAIN_CLOSING_FLOOR }}
         run: |
           set -euo pipefail
-          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22" --jq '.total_count')"
+          after="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+label:%22meta/machinery%22+-label:keep-open" --jq '.total_count')"
           closed=$(( BEFORE - after ))
           [ "$closed" -lt 0 ] && closed=0
           echo "before=$BEFORE after=$after closed=$closed floor=$FLOOR"
@@ -170,8 +173,12 @@ jobs:
             gh issue comment "$existing" --body "$body"
             echo "updated standing issue #$existing"
           else
+            # `keep-open` is the drain kill-switch (group-by-area.sh excludes it
+            # from every candidate set; the sweeper skips it): the standing
+            # issue is machinery, so without it the weekly drain would close its
+            # own measurement surface.
             gh issue create --title "$TITLE" --body "$body" \
-              --label meta/machinery --milestone "Post-MVP / Later"
+              --label meta/machinery --label keep-open --milestone "Post-MVP / Later"
             echo "created the standing issue (first run only)"
           fi
 
