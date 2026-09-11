@@ -1,6 +1,6 @@
 ---
 name: help
-description: List all available Soleur commands, agents, and skills
+description: This skill lists all available Soleur commands, agents, and skills
 argument-hint: ""
 ---
 

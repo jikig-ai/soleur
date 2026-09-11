@@ -1,6 +1,6 @@
 ---
 name: sync
-description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
+description: This skill analyzes the codebase and populates the knowledge-base with conventions, patterns, and technical debt
 argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
 ---
 
