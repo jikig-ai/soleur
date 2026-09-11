@@ -15,6 +15,21 @@ set `CLAUDE_PLUGIN_ROOT` to the verified installed root for that command.
 Plugin hooks receive that variable automatically; ordinary shell tools need
 not inherit a plugin hook's environment.
 
+Install the plugin from the monorepo subfolder:
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+You must be signed in (`devin auth login`) for plugin installation. Use `-y` to skip the confirmation prompt. The first install may take a few minutes because Devin clones the `jikig-ai/soleur` repository to reach the `plugins/soleur` subfolder.
+
+If the remote install hangs or fails, clone the repository and install from the local path:
+
+```bash
+git clone https://github.com/jikig-ai/soleur.git
+devin plugins install --local ./soleur/plugins/soleur -y
+```
+
 Use `/soleur:go <intent>`, `/soleur:sync`, and `/soleur:help` as Devin slash commands.
 These are skill invocations, not shell commands.
 
