@@ -464,12 +464,29 @@ jobs:
             exit 0
           fi
           set +e
+          # Teed, not just echoed: the branch below must READ the script's own
+          # stderr to tell a refusal from a Sentry fault, and nothing captured it
+          # before. script_rc comes from PIPESTATUS[0] -- `$?` after a pipe is
+          # `tee`'s status, which is 0 whatever the script did.
+          audit_log="${RUNNER_TEMP}/sentry-audit.log"
           AUDIT_OUT_DIR="${RUNNER_TEMP}/sentry-audit" \
-            bash apps/web-platform/scripts/sentry-monitors-audit.sh
-          script_rc=$?
+            bash apps/web-platform/scripts/sentry-monitors-audit.sh 2>&1 | tee "$audit_log"
+          script_rc=${PIPESTATUS[0]}
           set -e
           if [[ "$script_rc" -ne 0 ]]; then
+            # A refusal (exit 2, #7997) never reaches the non-array diagnostic the
+            # message below describes, so it would name a cause that did not occur.
+            # Discriminate on the exit code AND a #7997-specific anchor. A bare
+            # `grep 'refusing'` matches TEN strings in that script, including the
+            # residency-mismatch abort at "refusing to emit audit artifact" --
+            # which also exits 2. Matching it would tell the operator to reconcile
+            # a host pairing during a RESIDENCY incident (the #3861 class), which
+            # is worse than saying nothing.
+            if [[ "$script_rc" -eq 2 ]] && grep -qE '^ERROR: refusing (org|destination host|curl-binary) ' "$audit_log" 2>/dev/null; then
+              echo "::warning::Sentry migration audit script REFUSED to run (exit ${script_rc}) — no Article 30 evidence uploaded for this release. This is a destination/credential-pairing refusal, not a Sentry fault: SENTRY_API_HOST is not a member of the candidate set for SENTRY_ORG, the org slug is not an RFC 1035 label, or CURL_BIN was overridden. The script's own stderr names which. Reconcile the SENTRY_ORG / SENTRY_API_HOST pairing per ADR-031 §Authentication."
+            else
             echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. The script's own stderr names the cause: since #7590 a non-array payload prints http_status, api_host, url, which fetch, any x-sentry-deprecation-date / x-sentry-replacement-endpoint, and a verdict distinguishing 'retries exhausted, RE-RUN' from '410, MIGRATE'. Read that block first. SENTRY_API_HOST has no default and must be the org-subdomain (NOT de.sentry.io, which is ingest-only). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            fi
             exit 0
           fi
           report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)

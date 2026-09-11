@@ -328,6 +328,7 @@ assert-dev-signin-eliminated.sh
 assert-vs-measure
 asserted-vs-measured
 assertion
+assertion-design
 assertion-drift
 assertion-floor
 assertions
@@ -3874,6 +3875,7 @@ transaction-safety
 transcript-judging
 transition
 transparency
+transport-confinement
 trap
 trap-cleanup
 traversal

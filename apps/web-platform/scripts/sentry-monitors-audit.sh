@@ -110,27 +110,93 @@ esac
 set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
-: "${SENTRY_ORG:=jikigai}"
-# DESTINATION PIN (#7797). SENTRY_ORG is env-settable and is interpolated into
-# the HOST of a credentialed request (`${SENTRY_ORG}.sentry.io`) as well as into
-# org-scoped API paths, so an attacker-supplied value redirects a Bearer token to
-# an org they control with the destination pin otherwise fully intact. Refuse
-# anything but the two slugs this fleet actually uses: `jikigai` (this script's
-# historical default, still the US-org value) and `jikigai-eu` (the DE org, which
-# is `variable "sentry_org"`'s default in infra/sentry/variables.tf — the two
-# genuinely disagree, which is why this is a set and not one literal).
+: "${SENTRY_ORG:?SENTRY_ORG must be set}"
+
+# ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
+# SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
+# on the path that carries SENTRY_AUTH_TOKEN. Measured on this file's own HEAD
+# before the pin: a stubbed `curl` recorded a live bearer reaching
+# https://attacker.tld/api/0/organizations/jikigai-eu/.
+#
+# `--disable` must be the FIRST argument (it aborts ~/.curlrc parsing and is a
+# no-op later) and `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY redirecting the
+# request with the destination pin fully intact. Neither reaches the RESOLVER,
+# the TRUST ANCHOR or the TLS key log, which is what the unset prologue closes.
+#
+# The default was `jikigai`, which ADR-031 records as canceled vendor-side; a
+# default that silently addresses a dead org is worse than a refusal.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+
+# Defined BEFORE its first call. `-b` (bytes), not `-c`: a multi-byte hostile
+# value must not walk past the cap.
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
+
+# ORG ALLOWLIST, not a shape check (#7997 + #7989/#7797 reconciled at merge).
+# Both PRs pinned this independently: #7997 required an RFC 1035 §2.3.4 label,
+# #7989 required membership of a two-slug set. The SET IS STRICTLY NARROWER, so
+# it wins and the shape check would be dead code behind it. It also closes a
+# residual #7997 had consciously accepted and recorded: SENTRY_HOST_CANDIDATES
+# interpolates the slug into candidate 1, so under a shape-only check
+# `SENTRY_ORG=evil` yields `evil.sentry.io`, which the membership refusal then
+# ACCEPTS by construction. #7997 argued that residual was tenant confusion
+# rather than exfiltration (`*.sentry.io` is Sentry SaaS — a slug buys a tenancy,
+# not an origin); true, and an allowlist removes it anyway.
+#
+# `jikigai` is retained but is NOT a live destination: ADR-031 records both orgs
+# as operator-owned EU-database orgs and the duplicate `jikigai` CANCELED
+# vendor-side on 2026-05-21. It stays only because it is this script's historical
+# default and the value the stub-driven suites fixture. #7989's comment called it
+# "still the US-org value"; that is wrong on both counts and is corrected here.
+# The live slug is `jikigai-eu` (infra/sentry/variables.tf `sentry_org` default).
+#
+# The refusal CONTRACT is #7997's, deliberately, not #7989's `exit 1`: the
+# workflows discriminate a destination refusal from a Sentry fault by matching
+# `^ERROR: refusing (org|destination host|curl-binary) ` at rc=2
+# (reusable-release.yml, sentry-audit-gate.yml), and 50 suite rows assert it.
 case "$SENTRY_ORG" in
   jikigai|jikigai-eu) ;;
-  *)
-    echo "ERROR: SENTRY_ORG='${SENTRY_ORG}' is not a recognised org slug (expected jikigai or jikigai-eu). Refusing to send a credentialed request to an unpinned destination. See #7797." >&2
-    exit 1
-    ;;
+  *) printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
 esac
+
+readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
 # status sequence, response headers and a body — see the header's CURL_BIN note.
 CURL_BIN="${CURL_BIN:-curl}"
+# A caller-named binary receives the bearer as argv. The test seam stays open
+# behind an explicit opt-in the production environment never sets.
+#
+# Spelled as a `case` over a copy, deliberately: T22's execution-site guard
+# counts spellings as a proxy for executions, and this is a COMPARISON. The copy
+# ends its line (no trailing space for the seam pattern) and the arm is `curl)`
+# (followed by `)`, not whitespace), so neither counter moves.
+_cb="$CURL_BIN"
+case "$_cb" in
+  curl) ;;
+  *) [[ -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || {
+       printf 'ERROR: refusing curl-binary %s\n' "$(_safe "$_cb")" >&2; exit 2; } ;;
+esac
 
 # Scratch for per-call header dumps. curl_retry publishes the header-file PATH
 # to its caller, so the file must outlive the call; it is reaped on exit.
@@ -329,7 +395,7 @@ curl_retry() {
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
-    if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
     # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
     # failure produces no status line at all; normalise that to `000` rather
     # than the empty string, so it renders the same way `-w '%{http_code}'`
@@ -437,6 +503,14 @@ sentry_next_cursor() {  # $1 header-dump path
   return 0
 }
 
+# The destination set, declared ONCE and read by both the discovery loop and the
+# membership refusal below — so a host can only be reached by being a member.
+# FOUR members, no us.sentry.io: this set is already wider than the org-scoped
+# contract strictly requires, and the reason it stays wide is that 21 rows in
+# this script's suite pass de.sentry.io. Tightening it to the singleton is a
+# follow-up, not a drive-by.
+readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)
+
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
 #   1. ${SENTRY_ORG}.sentry.io — org-subdomain is the ONLY host that works
@@ -452,8 +526,8 @@ sentry_next_cursor() {  # $1 header-dump path
 # but the 4-gate block below catches that via the org-GET probe.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
-    http=$(curl --disable --noproxy '*' -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
+    http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
     if [[ "$http" == "200" ]]; then
@@ -462,10 +536,27 @@ if [[ -z "$api_host" ]]; then
     fi
   done
   if [[ -z "$api_host" ]]; then
-    echo "ERROR: Sentry token not valid against any candidate host (${SENTRY_ORG}.sentry.io, eu.sentry.io, de.sentry.io, sentry.io). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
+    # Rendered from the array, not a second hand-written list that can drift.
+    _cand_list=$(printf '%s, ' "${SENTRY_HOST_CANDIDATES[@]}"); _cand_list="${_cand_list%, }"
+    echo "ERROR: Sentry token not valid against any candidate host (${_cand_list}). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
     exit 1
   fi
 fi
+
+# Whether $api_host came from the caller or from discovery, it must be a member
+# of the declared set. This is the chokepoint: discovery can only ever select a
+# member, so the refusal binds the CALLER-SUPPLIED path.
+_host_ok=0
+for _c in "${SENTRY_HOST_CANDIDATES[@]}"; do
+  [[ "$api_host" == "$_c" ]] && { _host_ok=1; break; }
+done
+[[ "$_host_ok" -eq 1 ]] || {
+  printf 'ERROR: refusing destination host %s\n' "$(_safe "$api_host")" >&2; exit 2; }
+
+# The pin above is a one-time predicate; five later call sites re-read this
+# variable. SENTRY_ORG and SENTRY_HOST_CANDIDATES are already readonly -- this
+# closes the last mutable operand, so the guard is structural, not temporal.
+readonly api_host
 
 # --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
 # Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
@@ -516,7 +607,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1
   fi
-  curl --disable --noproxy '*' -s --max-time 10 -X DELETE \
+  curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
     -o /dev/null 2>/dev/null || true
