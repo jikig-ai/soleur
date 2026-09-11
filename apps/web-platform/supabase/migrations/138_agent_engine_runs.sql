@@ -107,6 +107,9 @@ BEGIN
   IF NOT public.is_workspace_member(p_workspace_id, auth.uid()) THEN
     RAISE EXCEPTION 'workspace membership required' USING ERRCODE = '42501';
   END IF;
+  IF auth.role() <> 'service_role' AND p_created_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'created_by must match authenticated user' USING ERRCODE = '42501';
+  END IF;
   INSERT INTO public.agent_engine_runs(
     workspace_id, execution_kind, conversation_id, routine_id, routine_run_id,
     engine_id, auth_mode, adapter_version, status, created_by
@@ -123,6 +126,6 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) TO authenticated, service_role;
 
 COMMIT;

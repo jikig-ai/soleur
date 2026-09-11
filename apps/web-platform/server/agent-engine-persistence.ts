@@ -1,7 +1,10 @@
 import type { EngineEvent } from "./agent-engine-contract";
 
-type QueryResult<T> = Promise<{ data: T; error: { message: string } | null }>;
-type PersistenceClient = {
+// Supabase PostgREST builders are thenable but are not typed as native
+// Promises. PromiseLike keeps this repository compatible with both builders
+// and the small promise based test doubles used by the server tests.
+type QueryResult<T> = PromiseLike<{ data: T; error: { message: string } | null }>;
+export type PersistenceClient = {
   rpc(name: string, args: Record<string, unknown>): QueryResult<unknown>;
   from(table: string): {
     insert(row: Record<string, unknown>, options?: Record<string, unknown>): QueryResult<unknown>;
