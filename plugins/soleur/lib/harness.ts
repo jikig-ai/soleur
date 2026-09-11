@@ -131,8 +131,8 @@ export function formatSkillInvocation(skill: string, args?: string): string {
   }
 
   if (harness === "devin") {
-    const skillId = `soleur:${name}`;
-    return trimmedArgs ? `${skillId} (args: ${trimmedArgs})` : skillId;
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
+    return command;
   }
 
   const skillId = `soleur:${name}`;
@@ -178,16 +178,15 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   }
 
   if (harness === "devin") {
-    const command = `soleur:${name}`;
+    const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
     return {
       harness,
-      tool: "Skill",
+      tool: "slash_command",
       command,
       args: trimmedArgs,
       instruction:
-        `Invoke via the **Skill tool** with skill \`${command}\`` +
-        (trimmedArgs ? ` and args: \`${trimmedArgs}\`` : "") +
-        ". Do NOT improvise workflow steps." +
+        `Invoke the registered skill via the \`${command}\` slash command. ` +
+        "Do NOT improvise workflow steps — run the skill to completion." +
         pipelineSuffix,
     };
   }
@@ -449,10 +448,10 @@ export function routingInstructions(harness: Harness): string {
     case "devin":
       return [
         "**Harness: Devin CLI**",
-        "- Skills: **Skill tool** with `soleur:<skill>` namespace.",
+        "- Skills: **slash commands** — `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`).",
         "- Agents: **run_subagent** with agent id.",
         "- Commands: `/soleur:go`, `/soleur:sync`, `/soleur:help`.",
-        "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke it.",
+        "- **Never improvise** when a route names a `soleur:<skill>` or agent — invoke the slash command or subagent.",
         "- Read devin/INSTRUCTIONS.md in the installed plugin for tool and path mappings.",
         "",
         fidelity,

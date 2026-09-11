@@ -40,7 +40,7 @@ These are skill invocations, not shell commands.
 | Read / Glob / Grep | read, grep, glob tools |
 | Write / Edit | write, edit tools |
 | Bash / Shell | exec tool |
-| Skill `soleur:<name>` | Skill tool with `soleur:<skill>` namespace |
+| Skill `soleur:<name>` | Slash command `/soleur:<skill>` (e.g. `/soleur:one-shot`, `/soleur:brainstorm`) |
 | Task / Agent / spawn_subagent | run_subagent tool |
 | AskUserQuestion | ask_user_question tool |
 | TodoWrite / TodoRead | todo_write tool |
@@ -48,8 +48,8 @@ These are skill invocations, not shell commands.
 | WebSearch / WebFetch / ToolSearch | web_search, webfetch tools |
 | Workflow scripts | Translate orchestration to available tools; do not execute Claude tool calls as shell JavaScript |
 
-Loading a skill file is Devin's execution entry point. Follow its full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
-Treat `$ARGUMENTS` as the supplied request, never as an environment variable that needs shell interpolation.
+Soleur skills are exposed as Devin slash commands (`/soleur:<skill>`). When a slash command is invoked, Devin loads the skill's `SKILL.md` and treats its body as the prompt. Follow the skill's full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
+Treat `$ARGUMENTS` as the supplied request (the text following the slash command), never as an environment variable that needs shell interpolation.
 
 ## Domain agents
 
@@ -85,7 +85,7 @@ and retain incomplete status instead of silently skipping it.
 
 ## Devin-specific considerations
 
-- **Skill invocation**: Devin uses the same Skill tool format as Claude Code with `soleur:<skill>` namespace
+- **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
 - **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool
 - **Polling**: Use `get_output` with timeout instead of Claude's Monitor tool
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
