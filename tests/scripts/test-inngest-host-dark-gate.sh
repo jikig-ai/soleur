@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Tests for tests/scripts/lib/inngest-host-dark-gate.sh — Guard 2 of the inngest-volume-recut
-# apply_target (#7695), the layer that checks the WORLD rather than an intent.
+# Tests for tests/scripts/lib/inngest-host-dark-gate.sh — BOTH of its entry points: Guard 2 of the
+# inngest-volume-recut apply_target (#7695), the layer that checks the WORLD rather than an intent,
+# and — since #8054, section 6 below — `inngest_execute_registry_gate`, op=execute 2.0's positively-
+# dark pre-flight, which shares the row-grading prelude with Guard 2.
 #
 # THREE BATTERIES, AND THEY ARE NOT INTERCHANGEABLE:
 #
@@ -73,11 +75,34 @@ OTHERDEVID="scsi-0HC_Volume_${OTHERID}"
 DEVBASE="sdb"
 
 # ── Fixture builders ──────────────────────────────────────────────────────────────
-# bs_line <dt> <host> <host_name> <message> — one betterstack-query.sh JSONEachRow row. `raw` is a
-# JSON STRING containing a JSON document (double-encoded), exactly as ClickHouse stores it.
+# bs_line <dt> <host> <host_name> <message> [SYSLOG_IDENTIFIER] [_BOOT_ID] — one
+# betterstack-query.sh JSONEachRow row. `raw` is a JSON STRING containing a JSON document
+# (double-encoded), exactly as ClickHouse stores it. The two trailing args are OPTIONAL and every
+# pre-#8054 call site passes four: the identifier defaults to the probe's tag, and the journald
+# envelope `_BOOT_ID` is emitted only when given (a probe row that carries none is the shape the
+# pre-Vector-envelope fixtures already exercise, and the execute gate joins on the MESSAGE's
+# `boot_id=`, never on the probe row's envelope).
 bs_line() {
-  jq -cn --arg dt "$1" --arg h "$2" --arg hn "$3" --arg m "$4" \
-    '{dt:$dt, raw: ({host:$h, host_name:$hn, message:$m, SYSLOG_IDENTIFIER:"inngest-server-probe"} | tojson)}'
+  local ident="${5:-inngest-server-probe}" bid="${6-}"
+  jq -cn --arg dt "$1" --arg h "$2" --arg hn "$3" --arg m "$4" --arg id "$ident" --arg b "$bid" \
+    '{dt:$dt, raw: (({host:$h, host_name:$hn, message:$m, SYSLOG_IDENTIFIER:$id}
+                     + (if $b == "" then {} else {_BOOT_ID:$b} end)) | tojson)}'
+}
+
+# hb_line <dt> <host> <host_name> <_BOOT_ID> <flag> [reason] [SYSLOG_IDENTIFIER] — one
+# `inngest-cutover-flip` heartbeat row as the WAREHOUSE holds it: `.message` is a PARSED OBJECT
+# `{flag, reason, guard, exit_code, start_ts}` (measured 2026-09-11). The FSM logs a JSON string,
+# Vector re-encodes it as a string (`vector.toml` ends every transform in `encode_json`), and it
+# is Better Stack's ingest-side parse that yields the object the execute gate reads via
+# `.message.flag`. `_BOOT_ID` is a REQUIRED
+# positional, never derived from the probe row a fixture pairs it with: a default that copied the
+# probe's boot would make the cross-stream join a tautology in every fixture.
+hb_line() {
+  [[ $# -ge 5 ]] || { printf 'FATAL: hb_line needs <dt> <host> <host_name> <_BOOT_ID> <flag>\n' >&2; exit 2; }
+  local reason="${6:-noop-$5}" ident="${7:-inngest-cutover-flip}"
+  jq -cn --arg dt "$1" --arg h "$2" --arg hn "$3" --arg b "$4" --arg f "$5" --arg r "$reason" --arg id "$ident" \
+    '{dt:$dt, raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:$id, _BOOT_ID:$b,
+                     message:{flag:$f, reason:$r, guard:"7761", exit_code:0, start_ts:1788430000}} | tojson)}'
 }
 
 # The probe's field list at probe_schema=7, in emit order (pinned against the real emitter by the
@@ -90,7 +115,10 @@ PROBE_FIELDS=(http_code server_active vector_active redis_active uptime_s boot_i
               data_mount_base data_mount_devid registry_fns)
 declare -A PD=(
   [http_code]=000 [server_active]=inactive [vector_active]=active [redis_active]=active
-  [uptime_s]=98765 [boot_id]=b0000000000000000000000000000001 [image_ref]=ghcr.io/example@sha256:aaa
+  # boot_id is HYPHENATED, as /proc/sys/kernel/random/boot_id renders it (measured live:
+  # `402c0d5b-1cf3-495a-92e1-cf137732156f`); the journald envelope `_BOOT_ID` is the same value
+  # with the hyphens stripped, and that strip is the cross-stream join key (#8054, E7/E13).
+  [uptime_s]=98765 [boot_id]=b0000000-0000-4000-8000-000000000001 [image_ref]=ghcr.io/example@sha256:aaa
   [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=8
   [host_role]=dedicated [flush_latched]=false [redis_keys]=0
   # __NONE__ is the COHERENT partner of redis_keys=0 (G14). A default of __UNREADABLE__ here
@@ -164,22 +192,47 @@ mk_rows "$TMP/rows-selftest.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HO
 #   1788430200 = 2026-09-03 10:10:00 UTC — ten minutes after the baseline row.
 NOW=1788430200
 
-# gate <rows> <finished> [extra args…] — the fully-satisfying dispatch-time inputs, overridable.
+# gate <rows> <second-file> [extra args…] — the fully-satisfying dispatch-time inputs, overridable.
+#
+# DISPATCHES ON `GATE_FN`. This lib now has TWO entry points (#8054): `inngest_host_dark_gate`
+# (the recut's Guard 2, the default) and `inngest_execute_registry_gate` (`op=execute` 2.0). The
+# harness was hard-bound to the first by name — measured: called with the execute gate's flags it
+# answered `unreadable` rc 1 from its unknown-argument arm, so an un-rebound `mutate()` reported
+# "verdict changed" on nine execute-gate rows without any mutation landing on a load-bearing line.
+# The second positional is the sibling file each entry point pairs with the probe rows: the
+# function.finished file for the recut gate, the heartbeat file for the execute gate.
+_gate_default_args() {
+  local rows="$1" second="$2"
+  case "${GATE_FN:-inngest_host_dark_gate}" in
+    inngest_host_dark_gate)
+      printf '%s\n' --rows-file "$rows" --query-rc 0 \
+        --finished-file "$second" --finished-rc 0 \
+        --expected-volume-id "$VOLID" --live-attachment-id "$VOLID" \
+        --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot unset \
+        --now-epoch "$NOW" ;;
+    inngest_execute_registry_gate)
+      printf '%s\n' --rows-file "$rows" --query-rc 0 \
+        --hb-file "$second" --hb-rc 0 \
+        --now-epoch "$NOW" ;;
+    *) printf 'FATAL: GATE_FN=%s is not an entry point of the lib\n' "${GATE_FN}" >&2; exit 2 ;;
+  esac
+}
 gate() {
-  local rows="$1" fin="$2"; shift 2
-  inngest_host_dark_gate \
-    --rows-file "$rows" --query-rc 0 \
-    --finished-file "$fin" --finished-rc 0 \
-    --expected-volume-id "$VOLID" --live-attachment-id "$VOLID" \
-    --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot unset \
-    --now-epoch "$NOW" \
-    "$@"
+  local rows="$1" second="$2"; shift 2
+  local -a args=()
+  mapfile -t args < <(_gate_default_args "$rows" "$second")
+  "${GATE_FN:-inngest_host_dark_gate}" "${args[@]}" "$@"
 }
 
 # expect <label> <want-token> <args to gate…>
+_seen_tokens=""
 expect() {
   local label="$1" want="$2"; shift 2
   local out rc=0 tok want_rc=1
+  # TOKEN COVERAGE IS A RUNTIME FLOOR, NOT A GREP (AC4). Tokens are bare words to this wrapper, so a
+  # grep over the suite measures MENTION, not assertion (measured: `grep -cF '"wrong_host"'` is 0
+  # while `wrong_host` is asserted seven times). Record what was actually asserted.
+  _seen_tokens="${_seen_tokens} ${want}"
   [[ "$want" == "dark" ]] && want_rc=0
   out="$(gate "$@" 2>&1)" || rc=$?
   tok="$(printf '%s\n' "$out" | tail -1)"
@@ -573,11 +626,12 @@ mk_rows "$TMP/rows-m6c.json" \
   "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")"
 expect "[M6c] the SAME row delivered twice at one dt => dark" dark "$TMP/rows-m6c.json" "$FIN"
 
-# M7 — a single-encoded `raw` (an object, not a JSON string). Fail-closed today, but as `silent`:
-# "the host emits nothing" when what changed is the ENCODING. That is the false diagnosis the
-# G1-before-G2 ordering exists to prevent, one layer down. Recorded, not yet distinguished.
+# M7 — a single-encoded `raw` (an object, not a JSON string). Until #8054 this refused as `silent`:
+# "the host emits nothing" when what changed is the ENCODING — the false diagnosis the G1-before-G2
+# ordering exists to prevent, one layer down. E2 (bytes present, nothing decodes) now names it
+# `unreadable`, which is the diagnosis whose remedy is "look at the read path", not "replace the host".
 printf '%s\n' "{\"dt\":\"2026-09-03 10:00:00\",\"raw\":{\"host\":\"$HOSTV\",\"host_name\":\"$HOSTNAMEV\",\"message\":\"$(msg)\"}}" > "$TMP/rows-m7.json"
-expect "[M7] a single-encoded raw envelope refuses (fail-closed on an encoding change)" silent "$TMP/rows-m7.json" "$FIN"
+expect "[M7] a single-encoded raw envelope refuses as unreadable (an encoding change is not silence)" unreadable "$TMP/rows-m7.json" "$FIN"
 
 # ══ 2c. FIELD-INJECTION (constructed and executed; both returned `dark` rc 0) ═════
 # The gate grades a MESSAGE, and nothing validated that message's shape. Two variants reached
@@ -717,7 +771,7 @@ else
     # Field names the REAL emitter writes, as `name=$var` pairs.
     EMITTED="$(printf '%s\n' "$EMIT_LINE" | grep -oE '[a-z_]+=\$[a-z_]+' | sed 's/=.*//' | sort -u)"
     _missing=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid cutover_flag registry_fns; do
       printf '%s\n' "$EMITTED" | grep -qx "$_f" || _missing="${_missing} ${_f}"
     done
     if [[ -z "$_missing" ]]; then pass; else fail "B12: the gate consumes field(s) the emitter does not write:${_missing}"; fi
@@ -729,13 +783,34 @@ else
       _real_msg+=" ${_f}=${PD[$_f]:-x}"
     done <<< "$EMITTED"
     _unresolved=""
-    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid; do
+    for _f in boot_id probe_schema host_role server_active http_code redis_active redis_keys data_mount_src data_bytes flush_latched data_mount_devid cutover_flag registry_fns; do
       _ihdg_field "$_real_msg" "$_f" >/dev/null || _unresolved="${_unresolved} ${_f}"
     done
     if [[ -z "$_unresolved" ]]; then pass; else fail "B12: the gate's extractor did not resolve:${_unresolved} from a real-emitter-shaped line"; fi
     # The whole real-emitter-shaped line must clear the gate, or the contract is name-level only.
     mk_rows "$TMP/rows-b12.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$_real_msg")"
     expect "B12: a message built from the REAL emitter's field list => dark" dark "$TMP/rows-b12.json" "$FIN"
+    # #8054 — and the same real-emitter-shaped line, valued as the measured pre-arm row, clears the
+    # EXECUTE gate too (its heartbeat fixture is built further down, so this arm is deferred to it).
+    _real_msg_erg="SOLEUR_INNGEST_SERVER_PROBE"
+    while IFS= read -r _f; do
+      [[ -n "$_f" ]] || continue
+      case "$_f" in
+        boot_id)       _real_msg_erg+=" boot_id=a1b2c3d4-0000-4000-8000-00000000cafe" ;;
+        server_active) _real_msg_erg+=" server_active=activating" ;;
+        cutover_flag)  _real_msg_erg+=" cutover_flag=aborted" ;;
+        registry_fns)  _real_msg_erg+=" registry_fns=__UNREADABLE__" ;;
+        redis_keys)    _real_msg_erg+=" redis_keys=16" ;;
+        *)             _real_msg_erg+=" ${_f}=${PD[$_f]:-x}" ;;
+      esac
+    done <<< "$EMITTED"
+    B12_ERG_MSG="$_real_msg_erg"
+    # The EMITTER's schema literal and the LIB's constant are one number, cross-pinned here: a bump
+    # that lands in inngest-bootstrap.sh alone would make BOTH gates refuse `stale_schema` on every
+    # dispatch until someone ran one — the #8054 fail-closed-and-unnoticed class.
+    _emit_schema="$(grep -oE '^probe_schema=[0-9]+' "$BOOTSTRAP" | head -1 | cut -d= -f2)"
+    _lib_schema="$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' "$GATE" | grep -oE '[0-9]+')"
+    if [[ -n "$_emit_schema" && "$_emit_schema" == "$_lib_schema" ]]; then pass; else fail "B12: the emitter's probe_schema=${_emit_schema:-<none>} and the lib's _IHDG_EXPECTED_SCHEMA=${_lib_schema:-<none>} disagree"; fi
   fi
 fi
 
@@ -749,6 +824,21 @@ WF="${REPO_ROOT}/.github/workflows/apply-web-platform-infra.yml"
 # the anchor that cannot be a comment is the `source`/`.` keyword at the start of the line.
 if grep -qE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*tests/scripts/lib/inngest-host-dark-gate\.sh' "$WF"; then pass; else fail "Row 6a: the workflow has no live SOURCE statement for inngest-host-dark-gate.sh (a comment naming the path is not a source)"; fi
 if grep -qE '^[[:space:]]*if ! inngest_host_dark_gate ' "$WF"; then pass; else fail "Row 6b: the workflow does not CALL inngest_host_dark_gate under a non-suppressing 'if !'"; fi
+# THE WORKFLOW'S `stale_schema` REMEDY DERIVES THE EXPECTED SCHEMA FROM THIS LIB WITH A GREP — and
+# #8054's "define the schema once" refactor silently broke that grep (it read
+# `expected_schema="[0-9]+"`, a literal the lib no longer carries; a code-quality review agent
+# caught it). Extract the operator's command from the workflow text, run it against the live lib,
+# and require a digit equal to the constant — the cross-consumer grep (hr-type-widening-cross-
+# consumer-grep) made mechanical.
+_wf_pat='EXPECTED=\\?\$\(grep -oE '"'"'[^'"'"']*'"'"' tests/scripts/lib/inngest-host-dark-gate\.sh[^)]*\)'
+_wf_derive="$(grep -oE "$_wf_pat" "$WF" | head -1 | sed 's/\\\$/$/g')"
+if [[ -n "$_wf_derive" ]]; then
+  _wf_expected="$(cd "$REPO_ROOT" && eval "$_wf_derive"; printf '%s' "$EXPECTED")"
+  _lib_expected="$(grep -oE '^_IHDG_EXPECTED_SCHEMA="[0-9]+"' "$GATE" | grep -oE '[0-9]+')"
+  if [[ "$_wf_expected" =~ ^[0-9]+$ && "$_wf_expected" == "$_lib_expected" ]]; then pass; else fail "Row 6d: the workflow's stale_schema remedy derives EXPECTED='${_wf_expected}' from this lib (want '${_lib_expected}'): the operator's copy-paste would misjudge whether the pinned image carries the schema"; fi
+else
+  fail "Row 6d: could not locate the workflow's EXPECTED=\$(grep … inngest-host-dark-gate.sh …) derivation to test it"
+fi
 # Row 6b proves the call EXISTS. It does not prove it RUNS: wrapping it in `if [ 1 -eq 0 ]; then`
 # left the suite green. Assert no conditional opens between the source and the call — the cheap
 # structural form of reachability, and the one a reviewer can check by eye.
@@ -899,8 +989,10 @@ while IFS= read -r _n; do
     *rows-now.json*|*rows-old.json*) : ;;   # Row 8: deliberately the real clock
     *)  _unpinned=$((_unpinned + 1)); printf '    unpinned at line %s: %s\n' "$_n" "${_chunk:0:100}" >&2 ;;
   esac
-done < <(grep -n 'inngest_host_dark_gate ' "${BASH_SOURCE[0]}" \
-         | grep -v '^[0-9]*: *#' | grep -v 'grep -n' | grep -vE '^[0-9]*:[^#]*grep' | cut -d: -f1)
+# `GATE_FN=<name> mutate …` is a SELECTOR assignment, not an invocation — the call it selects goes
+# through mutate(), which pins the clock on both runs.
+done < <(grep -nE 'inngest_(host_dark|execute_registry)_gate ' "${BASH_SOURCE[0]}" \
+         | grep -v '^[0-9]*: *#' | grep -v 'grep -n' | grep -vE '^[0-9]*:[^#]*grep' | grep -v 'GATE_FN=inngest_' | cut -d: -f1)
 if [[ "$_unpinned" -eq 0 ]]; then pass; else fail "Row 9: ${_unpinned} direct gate invocation(s) do not pin --now-epoch — they will pass or fail depending on the time of day"; fi
 
 # ══ 4. THE GUARD-MUTATION HARNESS (AC B10) ══════════════════════════════════════
@@ -935,9 +1027,29 @@ mutate() {
     return
   fi
   # Unmutated control FIRST: if the fixture does not drive this token today, the row proves nothing.
-  local base; base="$(gate "$rows" "$FIN" "$@" 2>&1 | tail -1)"
-  if [[ "$base" != "$tok" ]]; then
-    fail "B10[$gn]: the UNMUTATED gate did not return '$tok' for this fixture (got '$base'); the row does not exercise the check."
+  # The control runs the SAME entry point and the SAME argument list as the mutated run below —
+  # one list (`_gate_default_args`, then the row's env overrides, then the row's extra args, the
+  # parser taking the last assignment), built once, so the two cannot drift apart (the earlier
+  # shape built the mutated run's arguments by hand and pinned a different clock — the Row 9 story).
+  local second
+  case "${GATE_FN:-inngest_host_dark_gate}" in
+    inngest_host_dark_gate) second="${FIN2:-$FIN}" ;;
+    *)                      second="${SECOND:-$HB}" ;;
+  esac
+  local -a margs=()
+  mapfile -t margs < <(_gate_default_args "$rows" "$second")
+  case "${GATE_FN:-inngest_host_dark_gate}" in
+    inngest_host_dark_gate)
+      margs+=(--live-attachment-id "${LIVEID:-$VOLID}" --followthrough-rc "${FTRC:-0}" \
+              --cutover-flag "${FLAGV:-rolled-back}" --diagnostic-boot "${DBOOT:-0}") ;;
+  esac
+  margs+=(--now-epoch "${NOWV:-$NOW}" "$@")
+  local base_rc=0 base_out base want_rc=1
+  [[ "$tok" == "dark" ]] && want_rc=0
+  base_out="$("${GATE_FN:-inngest_host_dark_gate}" "${margs[@]}" 2>&1)" || base_rc=$?
+  base="$(printf '%s\n' "$base_out" | tail -1)"
+  if [[ "$base" != "$tok" || "$base_rc" -ne "$want_rc" ]]; then
+    fail "B10[$gn]: the UNMUTATED gate did not return '$tok' rc=$want_rc for this fixture (got '$base' rc=$base_rc); the row does not exercise the check."
     return
   fi
   # THE MUTATED RUN MUST USE THE SAME CLOCK AS THE CONTROL. The control goes through `gate()`,
@@ -945,13 +1057,46 @@ mutate() {
   # every fixture dated 10:00 UTC that made the mutated run `stale_row` from mid-morning onward —
   # a verdict that differs from the expected token, which is exactly what this row treats as
   # "the mutation changed the verdict". Every B10 row was therefore passing on the clock rather
-  # than on the neutered check, and would have kept doing so.
-  out="$(bash -c "set -uo pipefail; source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
+  # than on the neutered check, and would have kept doing so. `%q` so a value carrying a space or
+  # a quote survives the `bash -c` boundary byte-for-byte.
+  local q; q="$(printf '%q ' "${margs[@]}")"
+  out="$(bash -c "set -uo pipefail; source '$mutated'; ${GATE_FN:-inngest_host_dark_gate} $q" 2>&1)" || rc=$?
   got="$(printf '%s\n' "$out" | tail -1)"
-  if [[ "$got" != "$tok" ]]; then
+  # A MUTANT THAT DID NOT RUN IS NOT A KILL. A `source` that fails to parse, a `return` with no
+  # token, an unbound-variable abort (rc 127) all "change the verdict" while proving nothing about
+  # the neutered line. Require the mutant to have produced a lib token with a lib rc — otherwise the
+  # row is INCONCLUSIVE, which is a FAIL: the sed must be rewritten to weaken the check, not break it.
+  case " ${_LIB_TOKENS:-} " in
+    *" $got "*) : ;;
+    *) fail "B10[$gn]: the MUTANT did not produce a lib token (got '${got:0:80}' rc=$rc) — it crashed or returned mute, so the row is inconclusive; rewrite the sed to WEAKEN the check" "$rc" "$out"; return ;;
+  esac
+  [[ "$rc" -eq 0 || "$rc" -eq 1 ]] || { fail "B10[$gn]: the MUTANT exited rc=$rc (not a lib rc) — inconclusive" "$rc" "$out"; return; }
+  # TOKEN *OR* RC. `_ihdg_verdict` is the one place a token becomes an exit code for both entry
+  # points; a mutation that leaves every token intact and returns 0 for all of them (matrix row 11)
+  # changes no `tail -1` and was invisible to a token-only comparison. The kill CLASS is recorded:
+  # `open` (the mutant graded `dark` — the check was the last thing between the fixture and a pass)
+  # or `diag` (the mutant refused with a different token — the check chose the diagnosis). Rows
+  # that claim to prove a fail-OPEN guard go through `mutate_open`, which requires `open`.
+  if [[ "$got" != "$tok" || "$rc" -ne "$want_rc" ]]; then
+    if [[ "$got" == "dark" && "$rc" -eq 0 ]]; then _kills_open=$((_kills_open + 1)); _last_kill=open; else _kills_diag=$((_kills_diag + 1)); _last_kill=diag; fi
     pass
   else
-    fail "B10[$gn]: neutering the check did NOT change the verdict (still '$tok'); the line may be dead code shadowed by another check." "$rc" "$out"
+    _last_kill=none
+    fail "B10[$gn]: neutering the check did NOT change the verdict (still '$tok' rc=$rc); the line may be dead code shadowed by another check." "$rc" "$out"
+  fi
+}
+_kills_open=0; _kills_diag=0; _last_kill=none
+_LIB_TOKENS="$(grep -v '^[[:space:]]*#' "$GATE" | grep -oE '_ihdg_verdict "[a-z0-9_]+"' | cut -d'"' -f2 | sort -u | tr '\n' ' ')"
+# mutate_open — a mutate() row that must kill FAIL-OPEN: the mutant must grade `dark`. A row whose
+# mutant lands on a SECOND refusal proves only that the check picks the diagnosis; it does not
+# prove the check stands between its fixture and a pass (review found 14 of 50 execute-gate rows
+# killing that way, several because `registry_fns` in the fixture let E12 shadow the line under test).
+mutate_open() {
+  local gn="$1"
+  _last_kill=none
+  mutate "$@"
+  if [[ "$_last_kill" == "diag" ]]; then
+    fail "B10[$gn]: the mutant refused with a DIFFERENT token instead of grading dark — the row proves a diagnosis choice, not a fail-open guard; give the fixture a shape no later predicate refuses"
   fi
 }
 
@@ -965,11 +1110,15 @@ passes="$_w_p"; fails="$_w_f"
 if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: mutate() did not fail on a mutation that cannot land — the whole B10 harness is decorative"; fi
 
 mutate G4  's|^  \[\[ "\$schema" == "\$expected_schema" \]\].*|  :|'                 "$TMP/rows-g4.json"  stale_schema
-mutate G7  's|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
-mutate G8  's|^  \[\[ "\$server_active" == "inactive" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
-mutate G9  's|^  \[\[ "\$http_code" != "200" \]\].*|  :|'                            "$TMP/rows-g9.json"  host_serving
+mutate G7  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
+mutate G8  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$server_active" == "inactive" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
+mutate G9  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$http_code" != "200" \]\].*|  :|'                            "$TMP/rows-g9.json"  host_serving
 mutate G11 's|^  \[\[ "\$redis_active" == "active" \]\].*|  :|'                      "$TMP/rows-g11.json" redis_down
-mutate G12 's|^  \[\[ "\$redis_keys" =~ \^\[0-9\]{1,12}\$ \]\].*|  :|'              "$TMP/rows-g12.json" unreadable
+# G12 on the EMPTY value, not `__UNREADABLE__`: `[[ "" -eq 0 ]]` is TRUE under bash coercion, so
+# the neutered guard grades `dark` — a fail-OPEN kill. Against `__UNREADABLE__` the same mutant
+# aborts on an unbound variable (rc 127), which proves the guard prevents a crash, not a pass, and
+# mutate() now refuses to score a crashed mutant (review, 2026-09-11).
+mutate G12 's|^  \[\[ "\$redis_keys" =~ \^\[0-9\]{1,12}\$ \]\].*|  :|'              "$TMP/rows-m4c.json" unreadable
 mutate G13 's|^  \[\[ "\$redis_keys" -eq 0 \]\].*|  :|'                              "$TMP/rows-g13.json" store_populated
 mutate G15 's|^  \[\[ "\$data_bytes" =~ \^\[0-9\]+\$ \]\].*|  :|'                    "$TMP/rows-g15.json" unreadable
 
@@ -978,7 +1127,7 @@ mutate G14M 's|^  \[\[ "\$data_mount_devid" == "\$expected_devid" \]\].*|  :|' "
 
 # G3's pin and G2's silence arm.
 NOWV=1788440400   mutate G3  's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|'      "$TMP/rows-g3.json"  stale_row --now-epoch 1788440400
-mutate G2  's|^    _ihdg_verdict "silent"; return \$?|    :|'                        "$TMP/rows-empty.json" silent
+mutate G2  's|^    _ihdg_refuse silent; return 1$|    :|'                            "$TMP/rows-empty.json" silent
 
 # The dispatch-time predicates: same contract, driven through the extra gate args.
 LIVEID="$OTHERID" mutate G17 's|^  \[\[ "\$live_attachment_id" == "\$expected_volume_id" \]\].*|  :|' "$ROWS" id_pin_mismatch --live-attachment-id "$OTHERID"
@@ -1007,6 +1156,520 @@ expect "OPERAND: a non-numeric query rc must refuse, not coerce to success" unre
 expect "OPERAND: a non-numeric followthrough rc must refuse" followthrough_7674 "$ROWS" "$FIN" --followthrough-rc ""
 expect "OPERAND: an unknown flag must refuse, never fall through to a decision" unreadable "$ROWS" "$FIN" --not-a-real-flag 1
 
+# ══ 6. THE EXECUTE GATE — inngest_execute_registry_gate (#8054) ══════════════════
+# `op=execute`'s 2.0 pre-flight required the dedicated host to ANSWER over GQL; P1-5 keeps it dark
+# until `op=arm`, which runs AFTER execute — so 2.0 was unrunnable in the very sequence it guards.
+# This entry point grades darkness POSITIVELY from the host's own probe row (E1–E12) and requires
+# the flip FSM's heartbeat, on the SAME boot, to attest within `--hb-max-age` that the flag is
+# outside the arm set (E13). The pass token is the sibling's `dark`, the same literal `expect()`
+# already maps to rc 0, so every wrapper above is reused unchanged — `GATE_FN` is the only switch.
+#
+# Predicate ids are NAMESPACED (`ERG-E1` … `ERG-E13`): the bare `[M1]`…`[M7]`, `H2`, `H3` are the
+# sibling's own ids in this file, and `_seen_predicates` is a word list, so a collision would
+# count a sibling case toward this gate's floor.
+GATE_FN=inngest_execute_registry_gate
+
+# Two boots, both synthesized. `EBOOT` is the CURRENT boot in every execute fixture; `OBOOT` is the
+# previous one (the live window at plan time held both, so "a row from a previous boot" is a
+# measured shape, not a hypothetical). The heartbeat join key is the HYPHEN-STRIPPED form.
+EBOOT="a1b2c3d4-0000-4000-8000-00000000cafe"; EBID="${EBOOT//-/}"
+OBOOT="906c015b-0000-4000-8000-00000000beef"; OBID="${OBOOT//-/}"
+
+# emsg <override>… — the measured pre-arm row (2026-09-11): loopback refused, unit stuck in
+# `activating` under the P1-5 refuse loop, flag `aborted`, registry unreadable BECAUSE the loopback
+# refused. The store fields are populated because this gate must not read them — a row this gate
+# would refuse on `redis_keys` is a row it read a field it has no business grading.
+emsg() {
+  msg "boot_id=$EBOOT" http_code=000 server_active=activating cutover_flag=aborted \
+      registry_fns=__UNREADABLE__ redis_keys=16 redis_key_patterns='inngest:queue:1' "$@"
+}
+# erows <name> <dt> <message> [host] [host_name] — a probe row carrying the CURRENT boot's envelope.
+erows() {
+  mk_rows "$TMP/erg-$1.json" "$(bs_line "$2" "${4:-$HOSTV}" "${5:-$HOSTNAMEV}" "$3" inngest-server-probe "$EBID")"
+}
+EROWS="$TMP/erg-rows.json"
+mk_rows "$EROWS" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")"
+# The heartbeat: one same-boot `aborted` row 60 s before NOW (the FSM emits ~1–2/min on a
+# terminal flag — P0-1/P0-2 — so a 15-minute bound holds ~15–30 rows live).
+HB="$TMP/erg-hb.json"
+mk_rows "$HB" "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+
+# ── The wrappers must discriminate for THIS entry point too ──────────────────────
+# `expect()` is proven against the sibling above; a rebinding bug (`gate()` still calling the
+# sibling by name) would make every execute arm below grade the WRONG gate and this is the arm
+# that sees it: a plainly-serving row must FAIL a `dark` expectation through the rebound path.
+erows selftest '2026-09-03 10:00:00' "$(emsg http_code=200 server_active=active registry_fns=0)"
+_st_p="$passes" _st_f="$fails"
+expect "ERG SELF-TEST (expected to fail): a serving host is not dark" dark "$TMP/erg-selftest.json" "$HB" 2>/dev/null
+if [[ "$fails" -eq $((_st_f + 1)) && "$passes" -eq "$_st_p" ]]; then
+  passes="$_st_p"; fails="$_st_f"; pass
+else
+  passes="$_st_p"; fails="$_st_f"
+  fail "INSTRUMENT: expect() did not fail on a must-fail execute-gate arm — gate() is not dispatching on GATE_FN"
+fi
+# A duplicated predicate id must not widen the distinct-predicate set — the floor counts SET
+# members, and a battery that re-used one id thirteen times would otherwise clear it.
+_d0=0; for _g in ${_seen_predicates:-}; do _d0=$((_d0 + 1)); done
+_w_p="$passes" _w_f="$fails" _pc0="$predicate_cases"
+predicate ERG-DUPTEST "dup-id probe 1 (expected to fail)" dark "$TMP/erg-selftest.json" "$HB" 2>/dev/null
+predicate ERG-DUPTEST "dup-id probe 2 (expected to fail)" dark "$TMP/erg-selftest.json" "$HB" 2>/dev/null
+_d1=0; for _g in ${_seen_predicates:-}; do _d1=$((_d1 + 1)); done
+passes="$_w_p"; fails="$_w_f"; predicate_cases="$_pc0"
+_seen_predicates="${_seen_predicates/ ERG-DUPTEST/}"
+if [[ "$_d1" -eq $((_d0 + 1)) ]]; then pass; else fail "INSTRUMENT: predicate() counted a duplicated id twice (distinct ${_d0} -> ${_d1}); the drop-one floor is inflatable"; fi
+
+# ── BASELINE (must-PASS) ─────────────────────────────────────────────────────────
+expect "[ERG] BASELINE: measured pre-arm row + fresh same-boot heartbeat => dark" dark "$EROWS" "$HB"
+
+# ── The lib has never been called under errexit; the production caller runs `set -euo pipefail`
+# An unguarded failing command inside the gate body dies BEFORE the verdict and leaves stdout
+# EMPTY — fail-closed and mute, with no `::error::` and no remediation. Both directions, direct.
+_rc=0; _out="$(bash -c "set -euo pipefail; source '$GATE'; inngest_execute_registry_gate --rows-file '$TMP/erg-selftest.json' --query-rc 0 --hb-file '$HB' --hb-rc 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
+if [[ "$(printf '%s\n' "$_out" | tail -1)" == "host_serving" && "$_rc" -eq 1 ]]; then pass; else fail "[ERG-errexit] a refusal under 'set -euo pipefail' must still print its token (want host_serving rc 1)" "$_rc" "$_out"; fi
+_rc=0; _out="$(bash -c "set -euo pipefail; source '$GATE'; inngest_execute_registry_gate --rows-file '$EROWS' --query-rc 0 --hb-file '$HB' --hb-rc 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
+if [[ "$(printf '%s\n' "$_out" | tail -1)" == "dark" && "$_rc" -eq 0 ]]; then pass; else fail "[ERG-errexit] the pass path under 'set -euo pipefail' must print dark rc 0" "$_rc" "$_out"; fi
+# …and the gate's stdout is EXACTLY one line. Every helper it calls is `$(…)`-captured; a helper
+# whose stdout leaked would land a full probe row in the caller's `::error::` annotation.
+_out="$(gate "$EROWS" "$HB" 2>/dev/null)"
+if [[ "$(printf '%s\n' "$_out" | wc -l)" -eq 1 ]]; then pass; else fail "[ERG-stdout] the gate printed $(printf '%s\n' "$_out" | wc -l) lines; the verdict must be the whole of stdout" 0 "$_out"; fi
+
+# ══ 6.1 THE DROP-ONE BATTERY — one case per PREDICATE, E1..E13 ═══════════════════
+
+# E1 — the probe read did not answer. Evaluated FIRST: a 503 (rc 22 under --fail-with-body) is a
+# broken READ, and refusing it as `silent` would tell the operator the host emits nothing.
+predicate ERG-E1 "probe query rc 22 => unreadable (not silent)" unreadable "$EROWS" "$HB" --query-rc 22
+predicate ERG-E1 "probe query rc non-numeric => unreadable" unreadable "$EROWS" "$HB" --query-rc x
+# One case per remediation branch the CALLER partitions on (3 creds / 1 doppler / 2 reader / 99
+# unclassified): the gate's token is the same for all — the rc travels beside it, not inside it.
+for _rc in 3 1 2 99; do
+  predicate ERG-E1 "probe query rc $_rc => unreadable (the caller branches on the rc, the gate does not)" unreadable "$EROWS" "$HB" --query-rc "$_rc"
+done
+predicate ERG-E1 "rows file absent => unreadable" unreadable "$TMP/does-not-exist.json" "$HB"
+
+# E2 — bytes arrived, nothing decoded. Not silence: a gzipped or truncated response is a decode
+# failure, and `silent`'s remedy (replace the host) is the wrong one for it.
+printf 'not json{{{\n\x1f\x8b\x08garbage\n' > "$TMP/erg-garbage.json"
+predicate ERG-E2 "bytes present but NOTHING decodes => unreadable (not silent)" unreadable "$TMP/erg-garbage.json" "$HB"
+
+# E3 — zero rows, or rows only from the wrong host. Population before silence.
+: > "$TMP/erg-empty.json"
+predicate ERG-E3 "zero probe rows => silent" silent "$TMP/erg-empty.json" "$HB"
+# THE REAL READER'S EMPTY RESULT IS ONE BLANK LINE, NOT ZERO BYTES. `_bs_query_rows` in
+# scripts/cutover-inngest.sh renders with `printf '%s\n' "$rows"`, so "no rows" reaches the gate
+# as a 1-byte file. Four review agents converged on the same defect: counted as a physical line
+# it graded `unreadable` ("file an issue against the emitter") where the state is `silent` ("read
+# the health run, replace the host"). Both fixtures below are the byte shape production emits.
+printf '\n' > "$TMP/erg-blankline.json"
+predicate ERG-E3 "the reader's EMPTY result (one blank line, the production byte shape) => silent, not unreadable" silent "$TMP/erg-blankline.json" "$HB"
+predicate ERG-E13 "the reader's EMPTY heartbeat result (one blank line) => fsm_silent, not fsm_unreadable" fsm_silent "$EROWS" "$TMP/erg-blankline.json"
+expect "[G2] the sibling grades the one-blank-line file as silent too" silent "$TMP/erg-blankline.json" "$FIN"
+erows web '2026-09-03 10:00:00' "$(emsg host_role=web)" 'soleur-web-platform' 'soleur-web-prd'
+predicate ERG-E3 "rows only from the WEB host => wrong_host (not silent)" wrong_host "$TMP/erg-web.json" "$HB"
+
+# E4 — two rows at the newest `dt` that DISAGREE (matrix row 12). Tied-and-identical is fine.
+mk_rows "$TMP/erg-tie.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg http_code=200 server_active=active registry_fns=9)" inngest-server-probe "$EBID")"
+predicate ERG-E4 "[row 12] tied newest rows that disagree => unreadable" unreadable "$TMP/erg-tie.json" "$HB"
+mk_rows "$TMP/erg-tie-same.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")"
+expect "[ERG-E4] tied newest rows that AGREE (a duplicated delivery) => dark" dark "$TMP/erg-tie-same.json" "$HB"
+
+# E5 — the newest row is OLD, or from the FUTURE. Same bound as the sibling's G3.
+#   row dt 10:00:00 = 1788429600; NOW + 3h = 1788440400; a future row: NOW pinned BEFORE the row.
+mk_rows "$TMP/erg-hb-late.json" "$(hb_line '2026-09-03 12:59:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E5 "newest probe row 3h old => stale_row" stale_row "$EROWS" "$TMP/erg-hb-late.json" --now-epoch 1788440400
+predicate ERG-E5 "newest probe row from the FUTURE => stale_row" stale_row "$EROWS" "$HB" --now-epoch 1788429000
+expect "[ERG-E5] a 3h-old row is inside an explicitly widened bound => dark (bound is the gate's operand)" dark "$EROWS" "$TMP/erg-hb-late.json" --now-epoch 1788440400 --max-row-age 20000
+
+# E6 — probe_schema is EXACTLY 8. `>=` would accept a future schema whose fields this gate has
+# never seen (matrix row 6 mutates this to `-ge`).
+erows e6 '2026-09-03 10:00:00' "$(emsg probe_schema=7)"
+predicate ERG-E6 "probe_schema=7 => stale_schema" stale_schema "$TMP/erg-e6.json" "$HB"
+erows e6b '2026-09-03 10:00:00' "$(emsg probe_schema=9)"
+predicate ERG-E6 "probe_schema=9 (FUTURE) => stale_schema, never >=" stale_schema "$TMP/erg-e6b.json" "$HB"
+erows e6c '2026-09-03 10:00:00' "$(emsg -probe_schema)"
+predicate ERG-E6 "no probe_schema at all => stale_schema" stale_schema "$TMP/erg-e6c.json" "$HB"
+
+# E7 — boot_id is a hyphenated UUID and strips to 32 hex. It is the JOIN KEY for E13, so a value
+# that is present-but-degenerate (`unknown`, the emitter's read-failed sentinel; an all-hyphen
+# string that strips to ""; the un-hyphenated form) must refuse HERE, before any jq sees `$bid`.
+erows e7a '2026-09-03 10:00:00' "$(emsg -boot_id)"
+predicate ERG-E7 "boot_id ABSENT => unreadable" unreadable "$TMP/erg-e7a.json" "$HB"
+erows e7b '2026-09-03 10:00:00' "$(emsg boot_id=unknown)"
+predicate ERG-E7 "boot_id=unknown (the emitter's read-failed sentinel) => unreadable" unreadable "$TMP/erg-e7b.json" "$HB"
+erows e7c '2026-09-03 10:00:00' "$(emsg boot_id=------------------------------------)"
+predicate ERG-E7 "[row 21] boot_id that strips to EMPTY => unreadable (never an empty join key)" unreadable "$TMP/erg-e7c.json" "$HB"
+erows e7d '2026-09-03 10:00:00' "$(emsg "boot_id=$EBID")"
+predicate ERG-E7 "boot_id already un-hyphenated (not the /proc shape) => unreadable" unreadable "$TMP/erg-e7d.json" "$HB"
+erows e7e '2026-09-03 10:00:00' "$(emsg boot_id=)"
+predicate ERG-E7 "boot_id= (present, empty) => unreadable" unreadable "$TMP/erg-e7e.json" "$HB"
+
+# E8 — the row says it is the dedicated host. Same predicate and token as the sibling's G7.
+erows e8 '2026-09-03 10:00:00' "$(emsg host_role=web registry_fns=n/a)"
+predicate ERG-E8 "host_role=web => wrong_host" wrong_host "$TMP/erg-e8.json" "$HB"
+erows e8b '2026-09-03 10:00:00' "$(emsg -host_role)"
+predicate ERG-E8 "host_role ABSENT => wrong_host" wrong_host "$TMP/erg-e8b.json" "$HB"
+
+# E9 — the loopback did NOT answer 200. A 200 here with the webhook refusing is a serving host
+# behind a broken webhook path — refuse and say which one to check first.
+erows e9 '2026-09-03 10:00:00' "$(emsg http_code=200 registry_fns=0)"
+predicate ERG-E9 "http_code=200 => host_serving" host_serving "$TMP/erg-e9.json" "$HB"
+erows e9b '2026-09-03 10:00:00' "$(emsg http_code=abc)"
+predicate ERG-E9 "http_code non-numeric => unreadable" unreadable "$TMP/erg-e9b.json" "$HB"
+erows e9c '2026-09-03 10:00:00' "$(emsg -http_code)"
+predicate ERG-E9 "http_code ABSENT => unreadable (absence is not 'non-200')" unreadable "$TMP/erg-e9c.json" "$HB"
+
+# E10 — systemd does not say `active`. NOT `== inactive`: the P1-5 refuse loop leaves the unit in
+# `activating` (measured), and `failed` / `inactive` are equally dark. `unknown` is the emitter's
+# read-failed sentinel and is a readability failure, not a claim about the unit.
+erows e10 '2026-09-03 10:00:00' "$(emsg server_active=active)"
+predicate ERG-E10 "server_active=active => host_serving" host_serving "$TMP/erg-e10.json" "$HB"
+erows e10b '2026-09-03 10:00:00' "$(emsg server_active=unknown)"
+predicate ERG-E10 "server_active=unknown => unreadable" unreadable "$TMP/erg-e10b.json" "$HB"
+erows e10c '2026-09-03 10:00:00' "$(emsg server_active=)"
+predicate ERG-E10 "server_active= (present, empty) => unreadable" unreadable "$TMP/erg-e10c.json" "$HB"
+erows e10d '2026-09-03 10:00:00' "$(emsg -server_active)"
+predicate ERG-E10 "server_active ABSENT => unreadable" unreadable "$TMP/erg-e10d.json" "$HB"
+
+# E11 — the probe row's cutover_flag is a POSITIVE allowlist {aborted, rolled-back}. The arm set
+# {armed, flipping, flushed, done} names its own remedy; EVERYTHING ELSE — `unknown`, `rollback`
+# (in flight), empty, absent — is `flag_unreadable`. The G20 lesson: the empty string was once an
+# accepting value in this lib, and matrix row 3 mutates this to the negative form to prove it is not.
+for _f in armed flipping flushed "done"; do
+  erows "e11-$_f" '2026-09-03 10:00:00' "$(emsg cutover_flag=$_f)"
+  predicate ERG-E11 "cutover_flag=$_f => flag_armed" flag_armed "$TMP/erg-e11-$_f.json" "$HB"
+done
+for _f in unknown rollback bogus; do
+  erows "e11-$_f" '2026-09-03 10:00:00' "$(emsg cutover_flag=$_f)"
+  predicate ERG-E11 "cutover_flag=$_f => flag_unreadable (positive allowlist)" flag_unreadable "$TMP/erg-e11-$_f.json" "$HB"
+done
+erows e11-empty '2026-09-03 10:00:00' "$(emsg cutover_flag=)"
+predicate ERG-E11 "cutover_flag= (present, empty) => flag_unreadable" flag_unreadable "$TMP/erg-e11-empty.json" "$HB"
+erows e11-absent '2026-09-03 10:00:00' "$(emsg -cutover_flag)"
+predicate ERG-E11 "cutover_flag ABSENT => flag_unreadable" flag_unreadable "$TMP/erg-e11-absent.json" "$HB"
+
+# E12 — coherence: a loopback that refused cannot have yielded a registry count. A numeric
+# `registry_fns` beside `http_code=000` means the emitter contradicts itself (#8015's field).
+erows e12 '2026-09-03 10:00:00' "$(emsg registry_fns=3)"
+predicate ERG-E12 "registry_fns=3 beside http_code=000 => unreadable (incoherent row)" unreadable "$TMP/erg-e12.json" "$HB"
+erows e12b '2026-09-03 10:00:00' "$(emsg registry_fns=0)"
+predicate ERG-E12 "registry_fns=0 beside http_code=000 => unreadable (0 is a measurement, not absence)" unreadable "$TMP/erg-e12b.json" "$HB"
+erows e12c '2026-09-03 10:00:00' "$(emsg -registry_fns)"
+predicate ERG-E12 "registry_fns ABSENT => unreadable" unreadable "$TMP/erg-e12c.json" "$HB"
+
+# E13 — the heartbeat bridge. The probe row is hourly; the FSM heartbeat is ~1–2/min and carries
+# the journald `_BOOT_ID`. Freshness comes from the heartbeat, identity from the boot join, and
+# the flag from the NEWEST same-boot object row's `.message.flag` — graded in bash, never
+# filtered in jq (matrix row 22: a value filter would skip a fresh `armed` for a stale `aborted`).
+predicate ERG-E13 "heartbeat query rc 22 => fsm_unreadable" fsm_unreadable "$EROWS" "$HB" --hb-rc 22
+predicate ERG-E13 "heartbeat query rc non-numeric => fsm_unreadable" fsm_unreadable "$EROWS" "$HB" --hb-rc x
+predicate ERG-E13 "heartbeat file absent => fsm_unreadable" fsm_unreadable "$EROWS" "$TMP/does-not-exist.json"
+predicate ERG-E13 "--hb-max-age non-numeric => fsm_unreadable (never coerced)" fsm_unreadable "$EROWS" "$HB" --hb-max-age 15m
+predicate ERG-E13 "--hb-max-age empty => fsm_unreadable" fsm_unreadable "$EROWS" "$HB" --hb-max-age ""
+predicate ERG-E13 "heartbeat bytes present but NOTHING decodes => fsm_unreadable" fsm_unreadable "$EROWS" "$TMP/erg-garbage.json"
+predicate ERG-E13 "zero heartbeat rows => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-empty.json"
+mk_rows "$TMP/erg-hb-oldboot.json" "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$OBID" aborted)"
+predicate ERG-E13 "[row 14] fresh heartbeat from a PREVIOUS boot only => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-hb-oldboot.json"
+mk_rows "$TMP/erg-hb-2h.json" "$(hb_line '2026-09-03 08:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E13 "[row 15] same-boot heartbeat 2h old => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-hb-2h.json"
+mk_rows "$TMP/erg-hb-future.json" "$(hb_line '2026-09-03 10:11:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E13 "same-boot heartbeat from the FUTURE => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-hb-future.json"
+mk_rows "$TMP/erg-hb-webhost.json" "$(hb_line '2026-09-03 10:09:00' 'soleur-web-platform' 'soleur-web-prd' "$EBID" aborted)"
+predicate ERG-E13 "same-boot heartbeat from the WEB host => fsm_silent (identity conjunction)" fsm_silent "$EROWS" "$TMP/erg-hb-webhost.json"
+mk_rows "$TMP/erg-hb-ident.json" "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted noop-aborted inngest-server-flip-guard)"
+predicate ERG-E13 "same-boot row under another SYSLOG_IDENTIFIER => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-hb-ident.json"
+# `.message` a STRING on EVERY same-boot row: the FSM logs a JSON string, Vector re-encodes it as a
+# string, and it is Better Stack's ingest-side parse that yields the object (measured 2026-09-11).
+# Rows present + none parsed is a READ-PATH change, so it is `fsm_unreadable` — not `fsm_silent`,
+# whose remedy (replace the host for a dead timer) would be wrong for a demonstrably live timer.
+mk_rows "$TMP/erg-hb-string.json" "$(bs_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" '{"flag":"aborted","reason":"noop-aborted"}' inngest-cutover-flip "$EBID")"
+predicate ERG-E13 "every same-boot heartbeat .message is a STRING (warehouse stopped parsing) => fsm_unreadable, not silent" fsm_unreadable "$EROWS" "$TMP/erg-hb-string.json"
+# No `_BOOT_ID` on the heartbeat row at all (row 21's other half): never equal to a real key.
+mk_rows "$TMP/erg-hb-nobid.json" "$(jq -cn --arg dt '2026-09-03 10:09:00' --arg h "$HOSTV" --arg hn "$HOSTNAMEV" \
+  '{dt:$dt, raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:"inngest-cutover-flip", message:{flag:"aborted",reason:"noop-aborted"}} | tojson)}')"
+predicate ERG-E13 "[row 21] heartbeat rows with NO _BOOT_ID => fsm_silent" fsm_silent "$EROWS" "$TMP/erg-hb-nobid.json"
+mk_rows "$TMP/erg-hb-armed.json" "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)"
+predicate ERG-E13 "fresh same-boot heartbeat flag=armed => flag_armed" flag_armed "$EROWS" "$TMP/erg-hb-armed.json"
+mk_rows "$TMP/erg-hb-unknown.json" "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" unknown)"
+predicate ERG-E13 "[row 16] fresh same-boot heartbeat flag=unknown => flag_unreadable" flag_unreadable "$EROWS" "$TMP/erg-hb-unknown.json"
+mk_rows "$TMP/erg-hb-noflag.json" "$(jq -cn --arg dt '2026-09-03 10:09:00' --arg h "$HOSTV" --arg hn "$HOSTNAMEV" --arg b "$EBID" \
+  '{dt:$dt, raw: ({host:$h, host_name:$hn, SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{reason:"noop-aborted"}} | tojson)}')"
+predicate ERG-E13 "fresh same-boot heartbeat with NO .flag => flag_unreadable" flag_unreadable "$EROWS" "$TMP/erg-hb-noflag.json"
+# Row 22 — the flag is graded on the NEWEST same-boot row, in bash, after selection. A jq value
+# filter (`select(.message.flag == "aborted")`) would skip the fresh `armed` and pass on the stale
+# `aborted`. Order in the file is deliberately NOT chronological.
+mk_rows "$TMP/erg-hb-newarmed.json" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)" \
+  "$(hb_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E13 "[row 22] NEWEST same-boot heartbeat armed (60s) beside an older aborted (600s) => flag_armed" flag_armed "$EROWS" "$TMP/erg-hb-newarmed.json"
+# The NEWEST row under the tag is a STRING message (the FSM also logs plain lines, e.g. the seam
+# refusal) beside an OLDER object row: the type filter must drop the string and grade the object,
+# never refuse on the string and never let it shadow the fresh attestation.
+mk_rows "$TMP/erg-hb-strnewest.json" \
+  "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
+  "$(bs_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" 'SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED reason=noop' inngest-cutover-flip "$EBID")"
+expect "[ERG-E13] a newer STRING row under the tag beside an older object row => dark (type filter, not value filter)" dark "$EROWS" "$TMP/erg-hb-strnewest.json"
+# THE STALE-`armed` PROBE ROW. E11 grades the hourly probe row's flag BEFORE E13 grades the fresh
+# heartbeat, so a probe row sampled mid-arm (`cutover_flag=armed`, 50 min old, loopback still
+# refused) beside a fresh same-boot `aborted` heartbeat refuses `flag_armed` — a CONSERVATIVE
+# refusal (the arm has in fact ended) that clears on the next hourly probe row. Pinned so the
+# behaviour is visible and the caller's remedy can name the wait; the Guard Contract keeps E11 as a
+# positive allowlist over the row that E9/E10 grade, and this is the price of grading it.
+mk_rows "$TMP/erg-stale-armed.json" "$(bs_line '2026-09-03 09:20:00' "$HOSTV" "$HOSTNAMEV" "$(emsg cutover_flag=armed)" inngest-server-probe "$EBID")"
+expect "[ERG-E11] stale (50 min) probe row cutover_flag=armed beside a fresh same-boot aborted heartbeat => flag_armed (conservative; clears on the next probe row)" flag_armed "$TMP/erg-stale-armed.json" "$HB"
+# A same-boot row NEWER than the newest parsed heartbeat whose .message is a STRING beginning with
+# `{` is a heartbeat the warehouse did not parse — grading the older parsed one would skip the
+# freshest attestation. `fsm_unreadable`, never `dark`.
+mk_rows "$TMP/erg-hb-newer-unparsed.json" \
+  "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
+  "$(bs_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" '{"flag":"armed","reason":"noop-armed"}' inngest-cutover-flip "$EBID")"
+predicate ERG-E13 "a NEWER same-boot JSON-shaped STRING row beside an older parsed row => fsm_unreadable (never grade past an unparsed heartbeat)" fsm_unreadable "$EROWS" "$TMP/erg-hb-newer-unparsed.json"
+
+# E14 — THE PROBE ROW MUST POSTDATE THE NEWEST FSM TRANSITION. An arm that started the server and
+# then aborted leaves a transition row (reason `verify-health`, not `noop-*`) AFTER the hourly probe
+# row that said the port was closed; that row's darkness describes a state that no longer exists.
+# The FSM's own text names the case: "a prod scheduler is STILL RUNNING on this host under a
+# terminal flag". Refuse `stale_row` until a probe row from after the transition lands.
+mk_rows "$TMP/erg-hb-transition-after.json" \
+  "$(hb_line '2026-09-03 10:02:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted verify-health)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E14 "an FSM transition (verify-health) 2 min AFTER the probe row => stale_row (the row predates the state change)" stale_row "$EROWS" "$TMP/erg-hb-transition-after.json"
+mk_rows "$TMP/erg-hb-transition-before.json" \
+  "$(hb_line '2026-09-03 09:50:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted verify-health)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG-E14] an FSM transition 10 min BEFORE the probe row => dark (the row postdates the state change)" dark "$EROWS" "$TMP/erg-hb-transition-before.json"
+mk_rows "$TMP/erg-hb-transition-foreign.json" \
+  "$(hb_line '2026-09-03 10:02:00' "$HOSTV" "$HOSTNAMEV" "$OBID" aborted verify-health)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG-E14] a transition on a FOREIGN boot after the probe row => dark (only same-boot transitions count)" dark "$EROWS" "$TMP/erg-hb-transition-foreign.json"
+mk_rows "$TMP/erg-hb-transition-equal.json" \
+  "$(hb_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted verify-health)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG-E14] a transition at EXACTLY the probe row's dt => dark (-le, the row is not older than the transition)" dark "$EROWS" "$TMP/erg-hb-transition-equal.json"
+# Two heartbeat rows at the same newest dt that DISAGREE — a tie is not a winner here either.
+mk_rows "$TMP/erg-hb-tie.json" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+predicate ERG-E13 "tied newest heartbeat rows that disagree => fsm_unreadable" fsm_unreadable "$EROWS" "$TMP/erg-hb-tie.json"
+
+# ══ 6.2 H-ROWS — the must-PASS shapes a refuse-everything gate cannot tell apart ═══
+# H5 — non-canonical on FIVE axes: `failed` not `activating`; `rolled-back` not `aborted`; an
+# image_ref the fixture has never used; a trailing field the gate never reads; heartbeat
+# `rolled-back`/`noop-rolled-back`. The contract permits every one of these.
+erows h5 '2026-09-03 10:07:00' "$(emsg server_active=failed cutover_flag=rolled-back image_ref=ghcr.io/other@sha256:fff) zz_unknown_trailing=1"
+mk_rows "$TMP/erg-hb-h5.json" "$(hb_line '2026-09-03 10:09:30' "$HOSTV" "$HOSTNAMEV" "$EBID" rolled-back noop-rolled-back)"
+expect "[ERG-H5] non-canonical dark row (failed/rolled-back/foreign image/extra field) + rolled-back heartbeat => dark" dark "$TMP/erg-h5.json" "$TMP/erg-hb-h5.json"
+# H5b — history + mismatch + the stopped state. The heartbeat file holds an older same-boot `armed`
+# IDLE row (reason `noop-armed` — an idle heartbeat, not a transition; the realistic post-abort trace
+# carries a `verify-*` TRANSITION row instead, which E14 refuses until a fresher probe row lands —
+# see the [ERG-E14] cases), then `aborted`, AND a foreign-boot `armed`; the probe row says
+# `aborted` while the newest heartbeat says `rolled-back`; and `server_active=inactive` is the
+# 5.4-day post-`stop_server` state. Pins that only the NEWEST same-boot heartbeat is graded and
+# that the bridge is freshness, not corroboration of the probe's flag literal.
+erows h5b '2026-09-03 10:00:00' "$(emsg server_active=inactive cutover_flag=aborted)"
+mk_rows "$TMP/erg-hb-h5b.json" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" rolled-back noop-rolled-back)" \
+  "$(hb_line '2026-09-03 10:02:00' "$HOSTV" "$HOSTNAMEV" "$EBID" armed noop-armed)" \
+  "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$OBID" armed noop-armed)"
+expect "[ERG-H5b] older same-boot armed + foreign-boot armed + newest same-boot rolled-back, probe says aborted, unit inactive => dark" dark "$TMP/erg-h5b.json" "$TMP/erg-hb-h5b.json"
+# H5c — boundary EQUALITY on both ages: row_age == max_row_age and hb_age == hb_max_age.
+#   NOW=1788430200 (10:10:00). Probe at 09:40:00 => 1800 s; heartbeat at 10:05:00 => 300 s.
+erows h5c '2026-09-03 09:40:00' "$(emsg)"
+mk_rows "$TMP/erg-hb-h5c.json" "$(hb_line '2026-09-03 10:05:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG-H5c] row_age == max_row_age AND hb_age == hb_max_age => dark (-le, not -lt)" dark "$TMP/erg-h5c.json" "$TMP/erg-hb-h5c.json" --max-row-age 1800 --hb-max-age 300
+expect "[ERG-H5c] one second past either bound refuses (row)" stale_row "$TMP/erg-h5c.json" "$TMP/erg-hb-h5c.json" --max-row-age 1799 --hb-max-age 300
+expect "[ERG-H5c] one second past either bound refuses (heartbeat)" fsm_silent "$TMP/erg-h5c.json" "$TMP/erg-hb-h5c.json" --max-row-age 1800 --hb-max-age 299
+# The measured live shape, verbatim in structure: probe rows from BOTH boots in the window (the
+# previous boot's row is older), heartbeat rows ~1/min on the current boot.
+mk_rows "$TMP/erg-h-live.json" \
+  "$(bs_line '2026-09-03 07:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg "boot_id=$OBOOT" server_active=inactive)" inngest-server-probe "$OBID")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")"
+mk_rows "$TMP/erg-hb-live.json" \
+  "$(hb_line '2026-09-03 10:07:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
+  "$(hb_line '2026-09-03 10:08:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)" \
+  "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG-H-live] two boots in the probe window, three same-boot heartbeats => dark" dark "$TMP/erg-h-live.json" "$TMP/erg-hb-live.json"
+# A malformed line must not swallow the valid rows after it, on EITHER stream.
+mk_rows "$TMP/erg-hb-torn.json" 'not json{{{' "$(hb_line '2026-09-03 10:09:00' "$HOSTV" "$HOSTNAMEV" "$EBID" aborted)"
+expect "[ERG] a malformed heartbeat line does not swallow the valid row after it => dark" dark "$EROWS" "$TMP/erg-hb-torn.json"
+
+# ── The emit-file side channel: validated values only, written only after their predicate ─────
+_emit="$TMP/erg-emit.txt"
+expect "[ERG-emit] --emit-file on the pass path => dark" dark "$EROWS" "$HB" --emit-file "$_emit"
+if grep -qx "flag=aborted" "$_emit" && grep -qx "boot_id=$EBOOT" "$_emit" && grep -qx "row_age=600" "$_emit" && grep -qx "hb_age=60" "$_emit" && grep -qx "hb_flag=aborted" "$_emit"; then pass; else fail "[ERG-emit] the emit file must carry flag=/boot_id=/row_age=/hb_age=/hb_flag= for the pass path" 0 "$(cat "$_emit" 2>/dev/null)"; fi
+expect "[ERG-emit] flag_unreadable writes the literal __UNREADABLE__, never the raw value" flag_unreadable "$TMP/erg-e11-bogus.json" "$HB" --emit-file "$_emit"
+if grep -qx "flag=__UNREADABLE__" "$_emit" && ! grep -q "bogus" "$_emit"; then pass; else fail "[ERG-emit] a refused flag value must not reach the emit file" 0 "$(cat "$_emit" 2>/dev/null)"; fi
+expect "[ERG-emit] a RELATIVE emit-file path refuses (P1b relative-operand rule)" unreadable "$EROWS" "$HB" --emit-file "erg-emit.txt"
+[[ ! -e "erg-emit.txt" ]] && pass || { fail "[ERG-emit] the gate truncated a CWD-relative file"; rm -f erg-emit.txt; }
+
+# ── Operands: the gate's own inputs degenerate ───────────────────────────────────
+expect "[ERG-operand] an EMPTY expected-schema must refuse" stale_schema "$EROWS" "$HB" --expected-schema ""
+expect "[ERG-operand] an EMPTY host identity must refuse" wrong_host "$EROWS" "$HB" --host ""
+expect "[ERG-operand] an EMPTY host_name identity must refuse" wrong_host "$EROWS" "$HB" --host-name ""
+expect "[ERG-operand] an unknown flag must refuse, never fall through" unreadable "$EROWS" "$HB" --not-a-real-flag 1
+expect "[ERG-operand] a trailing flag with no value must refuse, not hang" unreadable "$EROWS" "$HB" --hb-max-age
+expect "[ERG-operand] a non-numeric --max-row-age must refuse" unreadable "$EROWS" "$HB" --max-row-age 90m
+expect "[ERG-operand] a non-numeric --now-epoch must refuse" unreadable "$EROWS" "$HB" --now-epoch now
+
+# ── Row 13 / H2 — an always-dark execute gate is CAUGHT by the arms above ─────────
+_always_dark_erg="$TMP/always-dark-erg.sh"
+sed '/^inngest_execute_registry_gate() {$/,/^}$/ s|^  local rows_file="" query_rc="" hb_file="".*|  _ihdg_verdict "dark"; return $?|' "$GATE" > "$_always_dark_erg"
+if cmp -s "$_always_dark_erg" "$GATE"; then
+  fail "[ERG-H2] the always-dark mutation matched NOTHING; the gate's first line drifted"
+else
+  _rc=0; _out="$(bash -c "set -uo pipefail; source '$_always_dark_erg'; inngest_execute_registry_gate --rows-file '$TMP/erg-e9.json' --query-rc 0 --hb-file '$HB' --hb-rc 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | tail -1)" == "dark" ]]; then
+    pass   # detectable: the [ERG-E9] arm above asserts host_serving and would redden
+  else
+    fail "[ERG-H2] the always-dark copy did not produce a false 'dark'; the arms cannot be shown load-bearing" "$_rc" "$_out"
+  fi
+fi
+
+# ══ 6.3 HELPER-LEVEL CONTRACTS — independent of either consumer ═══════════════════
+_rc=0; _ihdg_field "a=1 b=2" c >/dev/null || _rc=$?;            [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on an ABSENT field must rc 1"
+_rc=0; _ihdg_field "a=1 a=2" a >/dev/null || _rc=$?;            [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on a DUPLICATED field must rc 1"
+_rc=0; _ihdg_field $'a=1\nb=2' a >/dev/null || _rc=$?;          [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_field on a message carrying a NEWLINE must rc 1"
+[[ "$(_ihdg_tied_newest "$TMP/erg-tie-same.json" "$HOSTV" "$HOSTNAMEV")" == "1" ]] && pass || fail "[helper] _ihdg_tied_newest must echo 1 on an identical duplicate"
+[[ "$(_ihdg_tied_newest "$TMP/erg-tie.json" "$HOSTV" "$HOSTNAMEV")" == "0" ]] && pass || fail "[helper] _ihdg_tied_newest must echo 0 on a disagreement"
+[[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must render the G3 shape as UTC epoch"
+[[ "$(_ihdg_epoch_from_dt '2026-09-03 10:00:00.123456')" == "1788429600" ]] && pass || fail "[helper] _ihdg_epoch_from_dt must accept the fractional-second shape"
+_rc=0; _ihdg_epoch_from_dt 'yesterday' >/dev/null || _rc=$?;    [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse a shape date(1) would coerce"
+_rc=0; _ihdg_epoch_from_dt '' >/dev/null || _rc=$?;             [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse the empty string"
+_rc=0; _ihdg_epoch_from_dt 'now' >/dev/null || _rc=$?;          [[ "$_rc" -eq 1 ]] && pass || fail "[helper] _ihdg_epoch_from_dt must refuse 'now'"
+_rc=0; _ihdg_epoch_from_dt '2026-09-11 10:00:00; touch x' >/dev/null || _rc=$?; [[ "$_rc" -eq 1 && ! -e x ]] && pass || { fail "[helper] _ihdg_epoch_from_dt must refuse a shape carrying a shell metacharacter"; rm -f x; }
+# B12 for the execute gate: the real emitter's field list, valued as the measured pre-arm row.
+if [[ -n "${B12_ERG_MSG:-}" ]]; then
+  erows b12 '2026-09-03 10:00:00' "$B12_ERG_MSG"
+  expect "[ERG-B12] a message built from the REAL emitter's field list, valued pre-arm => dark" dark "$TMP/erg-b12.json" "$HB"
+else
+  fail "[ERG-B12] the emitter-shaped message was not built (B12 above did not run)"
+fi
+# `_ihdg_graded_row` on the previous-boot row: the HELPER grades the row (it knows no "current"
+# boot — that is E13's job), so it must PASS and hand back that row's own boot_id.
+mk_rows "$TMP/erg-oldboot-row.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg "boot_id=$OBOOT")" inngest-server-probe "$OBID")"
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-oldboot-row.json" 0 "$HOSTV" "$HOSTNAMEV" 8 "$NOW" 5400)" || _rc=$?
+if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | wc -l)" -eq 2 && "$(printf '%s\n' "$_out" | head -1)" == "600" && "$(printf '%s\n' "$_out" | tail -1)" == *"boot_id=$OBOOT "* ]]; then pass; else fail "[helper] _ihdg_graded_row must return <age>\\n<message> rc 0 for a gradable previous-boot row" "$_rc" "$_out"; fi
+_rc=0; _out="$(_ihdg_graded_row "$TMP/erg-empty.json" 0 "$HOSTV" "$HOSTNAMEV" 8 "$NOW" 5400)" || _rc=$?
+[[ "$_rc" -eq 1 && "$_out" == "silent" ]] && pass || fail "[helper] _ihdg_graded_row must return the bare token rc 1 on refusal" "$_rc" "$_out"
+# Policy cannot leak into a shared helper: no `_ihdg_*` function body other than `_ihdg_verdict`
+# itself may call `_ihdg_verdict`. Awk over function bodies, comments stripped.
+_leaks="$(awk '/^_(ihdg|erg)_[a-z_]+\(\) \{$/ { fn=$1; inb=1; next } inb && /^}$/ { inb=0; next } inb && fn!="_ihdg_verdict()" && !/^[[:space:]]*#/ && /_ihdg_verdict/ { print fn }' "$GATE")"
+if [[ -z "$_leaks" ]]; then pass; else fail "[helper] these shared helpers call _ihdg_verdict (policy in a helper): $_leaks"; fi
+# The selector is defined ONCE: every jq program that selects probe rows embeds `$_IHDG_SELECT`
+# (itself built on `$_IHDG_IDENT`, which the heartbeat reader embeds), and the inline copy
+# `_ihdg_row_count` carried (measured at plan time) is gone.
+_sel_inline="$(grep -c 'select(\$d.host == \$h and \$d.host_name == \$hn)' "$GATE")"
+[[ "$_sel_inline" -eq 1 ]] && pass || fail "[helper] the host conjunction appears ${_sel_inline}x in the lib; it must appear exactly once, inside _IHDG_IDENT"
+# The expected schema is ONE constant: a bump that reaches one entry point and not the other would
+# make the two gates disagree about the same row forever.
+[[ "$(grep -c '^_IHDG_EXPECTED_SCHEMA=' "$GATE")" -eq 1 && "$(grep -v '^[[:space:]]*#' "$GATE" | grep -c 'expected_schema="[0-9]')" -eq 0 ]] && pass || fail "[helper] the expected schema must be defined once as _IHDG_EXPECTED_SCHEMA and never as a per-entry-point literal"
+# (The E11/E13 arm set's SET-EQUALITY to the P1-5 allowlist is asserted in the wiring suite, AC16,
+# which derives both sides from source; a second copy of that derivation here would be the very
+# copy-of-a-derivation class this PR removes. Mutation row ERG-M20 below drives the classifier.)
+
+# ══ 6.4 THE GUARD-MUTATION HARNESS, EXECUTE-GATE ROWS ═════════════════════════════
+# Two scoping rules, and they are the shared-helper contract. GATE-scoped rows patch inside
+# `inngest_execute_registry_gate` only — predicate lines it shares TEXTUALLY with the sibling
+# (E8/G7, E9/G9) would otherwise match twice and fail the exactly-one-line guard. SHARED rows
+# (the `_ihdg_*` helpers, `_IHDG_SELECT`, `_ihdg_verdict`) are UNSCOPED and each is run against
+# BOTH entry points: a helper mutation that reddens only one suite is the copy-detector, made
+# mechanical.
+_S='/^inngest_execute_registry_gate() {$/,/^}$/'
+# mutate_both <gn> <sed> <sibling-rows> <sibling-tok> <erg-rows> <erg-tok> [erg extra args…]
+mutate_both() {
+  local gn="$1" expr="$2" srows="$3" stok="$4" erows_="$5" etok="$6"; shift 6
+  GATE_FN=inngest_host_dark_gate        mutate "${gn}-sib" "$expr" "$srows"  "$stok" "$@"
+  GATE_FN=inngest_execute_registry_gate mutate "${gn}-erg" "$expr" "$erows_" "$etok" "$@"
+}
+
+# H7 — the KNOWN-NEGATIVE. The existing self-test proves mutate() fails on a patch that cannot
+# land; nothing proved it can say "did NOT change" — a harness reporting "changed" for every
+# patch is indistinguishable from a working one. A single-line patch on a COMMENT inside the gate
+# lands, changes exactly one line, and must leave the verdict alone.
+_w_p="$passes" _w_f="$fails"
+mutate ERG-H7 "$_S s|^  # ── E12 — .*|  # ── E12 (comment mutated by the H7 known-negative) ──|" "$EROWS" dark 2>/dev/null
+_w_ok=0; [[ "$fails" -eq $((_w_f + 1)) && "$passes" -eq "$_w_p" ]] && _w_ok=1
+passes="$_w_p"; fails="$_w_f"
+if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT [H7]: mutate() did not report 'did NOT change the verdict' on a non-load-bearing line — it cannot distinguish a dead line from a live one"; fi
+
+# Gate-scoped rows (matrix 1, 2, 4, 5, 14, 15).
+# The E9/E8 fixtures below carry registry_fns=__UNREADABLE__ (emsg's default) ON PURPOSE: the
+# drop-one cases for E9/E8 above use the emitter-realistic `registry_fns=0` / `n/a`, and against
+# THOSE a neutered E9/E8 lands on E12's `unreadable` — a diagnosis kill that says nothing about
+# whether E9/E8 alone stand between a serving host and `dark`. These do.
+erows e9-open  '2026-09-03 10:00:00' "$(emsg http_code=200)"
+erows e8-open  '2026-09-03 10:00:00' "$(emsg host_role=web)"
+mutate_open ERG-M1  "$_S s|^  \[\[ \"\$http_code\" != \"200\" \]\].*|  :|"                 "$TMP/erg-e9-open.json"  host_serving
+mutate_open ERG-M2  "$_S s|^  \[\[ \"\$server_active\" != \"active\" \]\].*|  :|"          "$TMP/erg-e10.json"      host_serving
+mutate_open ERG-M4  "$_S s|^  \[\[ \"\$host_role\" == \"dedicated\" \]\].*|  :|"           "$TMP/erg-e8-open.json"  wrong_host
+mutate_open ERG-M5  "$_S s|^  \[\[ \"\$registry_fns\" == \"__UNREADABLE__\" \]\].*|  :|"  "$TMP/erg-e12.json"      unreadable
+mutate_open ERG-M14 's|select(\$d._BOOT_ID == \$b)|select(true)|'                            "$EROWS" fsm_silent --hb-file "$TMP/erg-hb-oldboot.json"
+mutate_open ERG-M15 "$_S s|^  \[\[ \"\$hb_age\" -le \"\$hb_max_age\" \]\].*|  :|"          "$EROWS" fsm_silent --hb-file "$TMP/erg-hb-2h.json"
+mutate_open ERG-M-E14 "$_S s|^    \[\[ \"\$hb_transition_epoch\" -le \"\$row_epoch\" \]\].*|    :|" "$EROWS" stale_row --hb-file "$TMP/erg-hb-transition-after.json"
+# The flag classifier (matrix 3, 16, 20) — one definition serves E11 and E13, so one mutation
+# reaches both; the two fixtures prove each consumer reads it.
+mutate_open ERG-M3  "s|^    \*) printf 'unreadable' ;;|    *) printf 'preflip' ;;|"        "$TMP/erg-e11-unknown.json" flag_unreadable
+mutate_open ERG-M16 "s|^    \*) printf 'unreadable' ;;|    *) printf 'preflip' ;;|"        "$EROWS" flag_unreadable --hb-file "$TMP/erg-hb-unknown.json"
+mutate ERG-M20 "s|^    armed\|flipping\|flushed\|done) printf 'armed' ;;|    armed\|flipping\|done) printf 'armed' ;;|" "$TMP/erg-e11-flushed.json" flag_armed
+# Shared rows (matrix 6, 7, 8, 9, 10, 11) — each must redden BOTH consumers.
+mk_rows "$TMP/rows-schema9.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg probe_schema=9)")"
+mutate_both ERG-M6  's|^  \[\[ "\$schema" == "\$expected_schema" \]\]|  [[ "$schema" -ge "$expected_schema" ]]|' "$TMP/rows-schema9.json" stale_schema "$TMP/erg-e6b.json" stale_schema
+mutate_both ERG-M7  's|^    _ihdg_refuse silent; return 1$|    :|'                    "$TMP/rows-empty.json" silent "$TMP/erg-empty.json" silent
+mutate_both ERG-M8  's|^  \[\[ "\$query_rc" -eq 0 \]\].*|  :|'                        "$ROWS" unreadable "$EROWS" unreadable --query-rc 22
+# Row 9: a FRESH foreign row beside a STALE dedicated row. With the host conjunction gone the
+# foreign row supplies the recency bound (and is then graded — `wrong_host` from G7/E8).
+mk_rows "$TMP/rows-foreign-fresh.json" \
+  "$(bs_line '2026-09-03 07:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 10:00:00' 'soleur-web-platform' 'soleur-web-prd' "$(msg host_role=web)")"
+mk_rows "$TMP/erg-foreign-fresh.json" \
+  "$(bs_line '2026-09-03 07:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")" \
+  "$(bs_line '2026-09-03 10:00:00' 'soleur-web-platform' 'soleur-web-prd' "$(emsg host_role=web)" inngest-server-probe "$EBID")"
+mutate_both ERG-M9  's|select(\$d.host == \$h and \$d.host_name == \$hn)|select(true)|' "$TMP/rows-foreign-fresh.json" stale_row "$TMP/erg-foreign-fresh.json" stale_row
+mk_rows "$TMP/rows-boot-unknown.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg boot_id=unknown)")"
+mutate_both ERG-M10 's|^  \[\[ "\$chosen_boot" =~ \^\[0-9a-f\]{8}-.*|  :|'           "$TMP/rows-boot-unknown.json" unreadable "$TMP/erg-e7b.json" unreadable
+mutate_both ERG-M11 's|^  \[\[ "\$1" == "dark" \]\]$|  true|'                          "$TMP/rows-g9.json" host_serving "$TMP/erg-e9.json" host_serving
+# Row 12 — the tie check itself, neutered in the shared helper: a disagreeing tie must refuse in both.
+mutate_both ERG-M12 's|^  if \[\[ "\$(_ihdg_tied_newest "\$rows_file" "\$host" "\$host_name")" != "1" \]\]; then$|  if false; then|' "$TMP/rows-m6a.json" unreadable "$TMP/erg-tie.json" unreadable
+# …and in the OTHER file order, where the neutered tie check grades the dark half: `sort_by` is
+# stable, so which row "wins" a tie is the caller's row order, and a fixture that only ever puts the
+# serving row last kills on the safe side of that dependence (review, 2026-09-11).
+mk_rows "$TMP/erg-tie-rev.json" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg http_code=200 server_active=active registry_fns=9)" inngest-server-probe "$EBID")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")"
+GATE_FN=inngest_execute_registry_gate mutate_open ERG-M12-rev 's|^  if \[\[ "\$(_ihdg_tied_newest "\$rows_file" "\$host" "\$host_name")" != "1" \]\]; then$|  if false; then|' "$TMP/erg-tie-rev.json" unreadable
+# EVERY OTHER LINE OF THE SHARED PRELUDE, against both consumers. The sibling's own G3/G4 rows
+# above run against the recut gate alone; a helper line that no execute-gate row drives is a line
+# the execute gate could stop depending on without this file noticing.
+mutate_both ERG-M-G4  's|^  \[\[ "\$schema" == "\$expected_schema" \]\].*|  :|'                    "$TMP/rows-g4.json" stale_schema "$TMP/erg-e6.json" stale_schema
+NOWV=1788440400 SECOND="$TMP/erg-hb-late.json" mutate_both ERG-M-G3 's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|' "$TMP/rows-g3.json" stale_row "$EROWS" stale_row --now-epoch 1788440400
+unset NOWV SECOND
+mutate_both ERG-M-FUT 's|^  \[\[ "\$row_age" -ge 0 \]\].*|  :|'                                  "$ROWS" stale_row "$EROWS" stale_row --now-epoch 1788429000
+mutate_both ERG-M-E2  's|^  \[\[ "\$raw_lines" -ge 1 \&\& "\$decoded_rows" -eq 0 \]\]$|  false|'            "$TMP/erg-garbage.json" unreadable "$TMP/erg-garbage.json" unreadable
+# `_ihdg_field`'s duplicate-name refusal (the field-injection lesson): a row carrying http_code twice.
+mk_rows "$TMP/rows-dupfield.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg) http_code=200")"
+mk_rows "$TMP/erg-dupfield.json"  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg) http_code=200" inngest-server-probe "$EBID")"
+mutate_both ERG-M-DUP 's|^  \[\[ "\$hits" -eq 1 \]\] \|\| return 1$|  :|'                          "$TMP/rows-dupfield.json" unreadable "$TMP/erg-dupfield.json" unreadable
+# "The chosen row must BE the newest row": a newer row with no probe_schema beside an older one with it.
+mk_rows "$TMP/rows-oldschema.json" \
+  "$(bs_line '2026-09-03 09:50:00' "$HOSTV" "$HOSTNAMEV" "$(msg)")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg -probe_schema)")"
+mk_rows "$TMP/erg-oldschema.json" \
+  "$(bs_line '2026-09-03 09:50:00' "$HOSTV" "$HOSTNAMEV" "$(emsg)" inngest-server-probe "$EBID")" \
+  "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(emsg -probe_schema)" inngest-server-probe "$EBID")"
+mutate_both ERG-M-NEW 's|^  if \[\[ "\$chosen_msg" != "\$newest_msg" \]\]; then$|  if false; then|' "$TMP/rows-oldschema.json" unreadable "$TMP/erg-oldschema.json" unreadable
+
+# THE SCOPING RULE IS ENFORCED, NOT DESCRIBED. Every single-consumer `mutate ERG-…` row must be
+# function-scoped (`$_S`), except the four whose line lives in a helper only the execute gate
+# consumes (`_erg_flag_class`, `_erg_hb_newest`). Anything else unscoped is a shared-helper line
+# being asserted against ONE consumer — the copy-detector silently disarmed.
+_unscoped="$(grep -E '^(GATE_FN=[a-z_]+ )?mutate(_open)? ERG-' "${BASH_SOURCE[0]}" | grep -v '"\$_S ' | grep -vE '^(GATE_FN=[a-z_]+ )?mutate(_open)? ERG-(M3|M16|M20|M14|M12-rev) ' || true)"
+if [[ -z "$_unscoped" ]]; then pass; else fail "[harness] single-consumer mutate rows on shared lines must go through mutate_both:" 0 "$_unscoped"; fi
+
+GATE_FN=inngest_host_dark_gate
+unset GATE_FN
+
 # ══ FLOORS ═══════════════════════════════════════════════════════════════════════
 # TWO floors, and they measure different things. The predicate floor is the one AC B11 is about: a
 # battery keyed on verdict TOKENS needs only ~10 cases because several predicates share a token, so
@@ -1015,8 +1678,8 @@ expect "OPERAND: an unknown flag must refuse, never fall through to a decision" 
 # was `-lt 21`, the FAIL message said "floor is 20", and the ok message said "floor 21" -- three
 # numbers for one floor, so whichever a reader trusted was a coin flip. Defined ONCE here and
 # read by all three, the same discipline _FLOOR below already follows. Raised 21 -> 22 with #8017's
-# G14M, keeping the deliberate one of slack.
-_PRED_FLOOR=22
+# G14M, keeping the deliberate one of slack; 22 -> 35 with #8054's thirteen `ERG-E*` predicates.
+_PRED_FLOOR=35
 _distinct=0; for _g in ${_seen_predicates:-}; do _distinct=$((_distinct + 1)); done
 if [[ "$_distinct" -lt "$_PRED_FLOOR" ]]; then
   fails=$((fails + 1))
@@ -1026,21 +1689,50 @@ else
   printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor %s)\n' "$_distinct" "$predicate_cases" "$_PRED_FLOOR"
 fi
 
+# TOKEN COVERAGE (AC4, #8054). T = every token the lib can emit (from the lib, not from this file);
+# every member must have been ASSERTED through expect(), and `dark` — the one arm a refuse-
+# everything gate satisfies — at least twice.
+_T="$(grep -v '^[[:space:]]*#' "$GATE" | grep -oE '_ihdg_verdict "[a-z0-9_]+"' | cut -d'"' -f2 | sort -u)"
+_T_n=0; _T_hit=0; _T_miss=""
+for _tok in $_T; do
+  _T_n=$((_T_n + 1))
+  case " ${_seen_tokens} " in *" ${_tok} "*) _T_hit=$((_T_hit + 1)) ;; *) _T_miss="${_T_miss} ${_tok}" ;; esac
+done
+_dark_n=0; for _tok in $_seen_tokens; do [[ "$_tok" == "dark" ]] && _dark_n=$((_dark_n + 1)); done
+if [[ "$_T_n" -ge 11 && "$_T_hit" -eq "$_T_n" && "$_dark_n" -ge 2 ]]; then
+  printf '  ok   token coverage: %s/%s tokens asserted (dark asserted %sx)\n' "$_T_hit" "$_T_n" "$_dark_n"
+else
+  fails=$((fails + 1))
+  printf '  FAIL TOKEN COVERAGE: %s/%s lib tokens asserted (dark %sx); never asserted:%s\n' "$_T_hit" "$_T_n" "$_dark_n" "${_T_miss:- none}" >&2
+fi
+
 # The assertion floor is self-contained — bash builtins and this suite's own counters only. A floor
 # that lives in a helper is silenced by the same move that silences the arms it guards.
 # THE COMPARISON AND THE MESSAGE MUST CARRY THE SAME NUMBER. They did not: the printf was bumped
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=124
+#
+# EXACT (`-ne`) SINCE #8054, NOT `-lt`. A `-lt` floor is satisfied by delete-one-add-one, and the
+# slack it tolerates is attack budget: the one assertion of slack a sibling suite once carried
+# absorbed exactly the row a mutation had proven load-bearing. With two entry points sharing
+# helpers in this file, a helper row that quietly stops running for ONE consumer is the failure
+# mode, and only an exact count sees it. The cost is a one-number bump on every legitimate
+# addition — and the failure text below dictates the number, so the bump is mechanical.
+_FLOOR=282
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR" >&2
   printf 'inngest-host-dark-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
+elif [[ "$_ran" -ne "$_FLOOR" ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL STALE FLOOR: %s assertions ran, _FLOOR is %s — set _FLOOR=%s (the count is exact by design; an assertion was added without updating it).\n' "$_ran" "$_FLOOR" "$_ran" >&2
+  printf 'inngest-host-dark-gate: %s passed, %s failed\n' "$passes" "$fails"
+  exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
+  printf '  ok   anti-vacuity floor: exactly %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi
 
 echo ""

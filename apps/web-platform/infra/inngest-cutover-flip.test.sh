@@ -1132,6 +1132,34 @@ else
   fail "is_real_mount has ${IRM_STATS} dereferencing stat calls, expected 2"
 fi
 
+# --- #8054: the heartbeat is a CONSUMED CONTRACT, pinned on the producer side ------------------
+# scripts/cutover-inngest.sh op=execute 2.0 (E13 of inngest_execute_registry_gate in
+# tests/scripts/lib/inngest-host-dark-gate.sh) reads the newest same-boot `inngest-cutover-flip`
+# row's `.message.flag` as the freshness bridge that lets a <=90-min-old dark probe row clear the
+# cutover pre-flight. That consumer depends on THREE producer facts this suite now pins, so an
+# edit to emit_state cannot silently disarm the P0 cutover's own gate: (a) the JSON carries a
+# `flag` key; (b) every terminal arm (`done`/`rolled-back`/`aborted`) still emits a heartbeat on
+# each tick (the noop-* reasons the S-block above already exercises); (c) the line is logged under
+# the `inngest-cutover-flip` tag Vector allowlists. This file does NOT edit the FSM — it is baked
+# into the host image — it only asserts what the FSM already emits.
+EMIT_JQ_KEYS="$(awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -oE "'\{[^']*\}'" | head -1 | tr -d "'{}" | tr ',' '\n' | sed -E 's/:.*$//; s/[[:space:]]//g' | sort | tr '\n' ' ')"
+if [[ "$EMIT_JQ_KEYS" == *" flag "* || "$EMIT_JQ_KEYS" == "flag "* ]]; then
+  pass "#8054 emit_state's jq program emits a top-level \`flag\` key (consumed by op=execute 2.0 E13); keys: ${EMIT_JQ_KEYS}"
+else
+  fail "#8054 emit_state's jq program no longer emits \`flag\` — op=execute 2.0's E13 would refuse every dispatch as flag_unreadable; keys: ${EMIT_JQ_KEYS}"
+fi
+if awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -qE 'logger}" -t "\$LOG_TAG" "\$json"' \
+   && grep -qE '^readonly LOG_TAG="inngest-cutover-flip"$' "$TARGET"; then
+  pass "#8054 emit_state logs under LOG_TAG, and LOG_TAG is the literal inngest-cutover-flip (the tag vector.toml allowlists and 2.0 greps)"
+else
+  fail "#8054 emit_state no longer logs under LOG_TAG=inngest-cutover-flip — 2.0's heartbeat read would return zero rows (fsm_silent)"
+fi
+if grep -qE '^[[:space:]]*"inngest-cutover-flip",?[[:space:]]*(#.*)?$' "$SCRIPT_DIR/vector.toml"; then
+  pass "#8054 vector.toml still allowlists the inngest-cutover-flip tag"
+else
+  fail "#8054 vector.toml no longer allowlists inngest-cutover-flip — the heartbeat never reaches the warehouse"
+fi
+
 # --- S8: an assertion-count FLOOR ----------------------------------------------------------
 # Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
 # still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
@@ -1143,7 +1171,9 @@ fi
 # per target), Environment=/seam disjointness (1 extractor floor + 1), the pinned-Doppler-CLI
 # coupling (2), and the is_real_mount dereference (1). Derived from a green run, never guessed;
 # raise in lockstep when adding tests.
-MIN_ASSERTIONS=147
+# 147 -> 150: +3 for the #8054 producer-side heartbeat contract (flag key, tag literal, Vector
+# allowlist) that op=execute 2.0 consumes.
+MIN_ASSERTIONS=150
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

@@ -20,6 +20,9 @@ FAIL=0
 SCRATCH=()
 scratch_cleanup() {
   (( ${#SCRATCH[@]} )) && rm -rf "${SCRATCH[@]}"
+  # Render scratch dirs are created inside `$(…)` subshells (#8054 render_2_0), where a SCRATCH+=
+  # would be lost; the render appends its dir to this file instead, and it is swept here.
+  if [[ -n "${RENDER_TMPDS:-}" && -f "$RENDER_TMPDS" ]]; then xargs -r rm -rf < "$RENDER_TMPDS"; rm -f "$RENDER_TMPDS"; fi
   return 0
 }
 trap scratch_cleanup EXIT
@@ -105,6 +108,14 @@ assert "shares deploy/restart concurrency group (state-slot serialization)" "gre
 assert "timeout-minutes present (>= poll budget)" "grep -qE 'timeout-minutes:[[:space:]]*[0-9]+' '$WF'"
 assert "no-op on the registration push (workflow_dispatch guard)" "grep -qE \"github.event_name == 'workflow_dispatch'\" '$WF'"
 
+# Rule D (#7873 / ADR-202, paid down at #8054 when this file left the lint's baseline): EVERY
+# credentialed curl is transport-confined — `--disable` as the LITERAL FIRST argument, then
+# `--noproxy '*'`. Counted against the curl count so a new call site cannot land unconfined.
+BODY_CURLS=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE '\bcurl ' || true)
+BODY_CONFINED=$(grep -vE '^[[:space:]]*#' "$BODY_SH" | grep -cE "\bcurl --disable --noproxy '\*' " || true)
+assert "#8054 every curl in the body is transport-confined (curl=$BODY_CURLS confined=$BODY_CONFINED)" "[[ '$BODY_CURLS' -ge 20 && '$BODY_CURLS' -eq '$BODY_CONFINED' ]]"
+assert "#8054 the body refuses to run under xtrace (it binds live credentials)" "grep -qE '^[[:space:]]*\*x\*\) printf .*refusing to run under xtrace.*exit 78' '$BODY_SH'"
+
 # every curl carries --max-time (no unbounded network call)
 CURL_LINES=$(grep -c 'curl ' "$WF" || true)
 MAXTIME_LINES=$(grep -c -- '--max-time' "$WF" || true)
@@ -135,7 +146,7 @@ for hook in "${HOOK_IDS[@]}"; do
   # #6919 — the doublefire URL now carries a ?from=&function_ids= query string, so the name may
   # be followed by `?` (query) OR `"` (bare). The char-class boundary still guards against a
   # longer hook name false-matching (e.g. a hypothetical inngest-doublefire-probe-2).
-  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/$hook[?\"]' '$WF'"
+  assert "workflow targets \$BASE/$hook" "grep -qE 'BASE/${hook}[?\"]' '$WF'"
   assert "hook id '$hook' exists in hooks.json.tmpl" "grep -qE '\"id\": \"$hook\"' '$HOOKS_TMPL'"
 done
 
@@ -345,8 +356,8 @@ assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-star
 assert "inventory clamps per-page curl to the remaining budget (not a fixed const)" "grep -qE 'max-time \"\\\$max_time\"' '$INV_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$INV_SH'"
 assert "doublefire clamps per-page curl to the remaining budget" "grep -qE 'max-time \"\\\$max_time\"' '$DF_SH' && grep -qE 'remaining=\\\$\(\( PREFLIGHT_DEADLINE_S - elapsed \)\)' '$DF_SH'"
 # outer curl budgets present (the ceiling the sum must stay under).
-assert "inventory outer curl --max-time 30 present" "grep -qE 'curl -s --max-time 30 -o /tmp/inv-body' '$WF'"
-assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl -s --max-time 120 -o /tmp/verify-runs' '$WF'"
+assert "inventory outer curl --max-time 30 present" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 30 -o /tmp/inv-body' '$WF'"
+assert "doublefire outer curl --max-time 120 present (#6919)" "grep -qE 'curl --disable --noproxy .\*. -s --max-time 120 -o /tmp/verify-runs' '$WF'"
 
 # ============================================================================
 # #6919 — the op=verify HTTP 500 fix's plumbing: the doublefire hook reads a
@@ -527,10 +538,10 @@ assert "confirm keys on the emitter FLAG field (\"flag\":\"done\" + exit_code:0 
 assert "confirm does NOT key on \"reason\":\"done\" (the field-mismatch bug the review caught)" "! grep -qF '\"reason\":\"done\"' '$CONFIRM_FILE'"
 assert "confirm detects the aborted terminal flag (fail-loud path)" "grep -qF '\"flag\":\"aborted\"' '$CONFIRM_FILE'"
 assert "confirm detects the rolled-back terminal flag" "grep -qF '\"flag\":\"rolled-back\"' '$CONFIRM_FILE'"
-# #7674: the query itself moved into the shared _flip_query_rows helper (one reader, two
+# #7674: the query itself moved into the shared _bs_query_rows helper (one reader, two
 # callers). The no-SSH / no-deploy-status invariant is asserted on the HELPER below; what is
 # assertable HERE is that confirm still routes through it rather than growing a second reader.
-assert "confirm reads through the shared _flip_query_rows helper (no second reader)" "grep -qE '_flip_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
+assert "confirm reads through the shared _bs_query_rows helper (no second reader)" "grep -qE '_bs_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
 assert "confirm never dumps a raw Better Stack row (no 'jq .')" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$CONFIRM_FILE'"
 assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warning:: CONFIRM PATH)" "grep -qE 'CONFIRM PATH' '$CONFIRM_FILE'"
 # Emitter parity: the on-host emitter MUST actually stamp the flag states the confirm greps for.
@@ -868,9 +879,9 @@ FLV_FN_N=$(wc -l < "$FLV_FN" | tr -d '[:space:]')
 assert "#7674 _flip_liveness_count extraction is non-vacuous (>5 lines, got $FLV_FN_N)" "[[ '$FLV_FN_N' -gt 5 ]]"
 
 FLQ_FN="$(mktemp)"; SCRATCH+=("$FLQ_FN")
-awk '/^_flip_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
+awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
 FLQ_FN_N=$(wc -l < "$FLQ_FN" | tr -d '[:space:]')
-assert "#7674 _flip_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
+assert "#7674 _bs_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
 # The no-SSH invariant, migrated here from confirm_flip_state when the reader was extracted.
 assert "#7674 the shared reader queries via betterstack-query.sh (no SSH, no new transport)" \
   "grep -qE 'betterstack-query.sh' '$FLQ_FN' && ! grep -qE 'deploy-status' '$FLQ_FN'"
@@ -1036,9 +1047,12 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
 # prevent, and drift between them is how the confirm path and the gate path stop asking the same
 # question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
 # unset H is the fail-open this gate was built to close.
-FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_flip_query_rows ' "$BODY_SH") || true
-assert "#7674 the shared reader has exactly 2 call sites (confirm + liveness), got $FLQ_SITES" \
-  "[[ '$FLQ_SITES' -eq 2 ]]"
+FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\(|[A-Z_]+_RC=0;[[:space:]]+)?_bs_query_rows ' "$BODY_SH") || true
+assert "#7674/#8054 the shared reader has exactly 4 call sites (confirm + liveness + execute 2.0 probe + heartbeat), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 4 ]]"
+FLQ_FLIP_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-cutover-flip 50\)' "$BODY_SH") || true
+assert "#7674 the confirm + liveness call sites pass the flip tag and the one-page limit unchanged, got $FLQ_FLIP_SITES" \
+  "[[ '$FLQ_FLIP_SITES' -eq 2 ]]"
 FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
 assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
   "[[ '$FLV_SITES' -eq 1 ]]"
@@ -1767,6 +1781,368 @@ assert "#6178 each arm EMITS the dropped-run count (2 sites)" \
 assert "#6178 op=verify arm surfaces the dropped count (arm-scoped)" "grep -qF 'run(s) carry no startedAt' '$VERIFY_ARM_FILE'"
 assert "#6178 op=doublefire-probe arm surfaces the dropped count (arm-scoped)" "grep -qF 'run(s) carry no startedAt' '$DFPROBE_ARM_FILE'"
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# #8054 — op=execute 2.0 DARK ARM. Until #8054 the non-200 branch was `exit 1`, which made 2.0
+# unrunnable in the very sequence it guards (P1-5 keeps the dedicated host dark until op=arm, which
+# runs AFTER execute). The arm now grades darkness positively through
+# tests/scripts/lib/inngest-host-dark-gate.sh's second entry point. These rows pin the WIRING —
+# the gate's own predicates are the dark-gate suite's job.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+GATE_LIB="$REPO_ROOT/tests/scripts/lib/inngest-host-dark-gate.sh"
+FLIP_GUARD="$REPO_ROOT/apps/web-platform/infra/inngest-server-flip-guard.sh"
+EXEC_ARM_FILE="$(mktemp)"; SCRATCH+=("$EXEC_ARM_FILE")
+awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$EXEC_ARM_FILE"
+EXEC_ARM_N=$(grep -cv '^[[:space:]]*#' "$EXEC_ARM_FILE" || true)
+assert "#8054 execute arm extraction is non-vacuous (>100 non-comment lines, got $EXEC_ARM_N)" "[[ '$EXEC_ARM_N' -gt 100 ]]"
+
+# ── One guarded gate call, the set -e-safe shape (AC5) ───────────────────────────
+ERG_CALLS=$(grep -v '^[[:space:]]*#' "$EXEC_ARM_FILE" | grep -cE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' || true)
+assert "#8054 2.0 routes through EXACTLY one inngest_execute_registry_gate call, got $ERG_CALLS" "[[ '$ERG_CALLS' -eq 1 ]]"
+assert "#8054 the gate call is ||-guarded (a bare \$(…) under set -e aborts before any ::error:: prints)" \
+  "grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -E '^[[:space:]]*ERG_VERDICT=' | grep -qE '\|\| ERG_RC=\\\$\?'"
+assert "#8054 the gate lib is sourced under an || guard (a missing lib on an old ref names the fix, not a mute abort)" \
+  "grep -qE '^[[:space:]]*source tests/scripts/lib/inngest-host-dark-gate.sh \|\| \{' '$EXEC_ARM_FILE'"
+assert "#8054 no other arm sources or calls the gate (2.0 is the only consumer in this script)" \
+  "[[ \$(grep -v '^[[:space:]]*#' '$BODY_SH' | grep -c 'inngest_execute_registry_gate') -eq 1 ]]"
+
+# ── Every token the lib can emit has a case arm; the *) arm exits 1 ─────────────
+LIB_TOKENS=$(grep -v '^[[:space:]]*#' "$GATE_LIB" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u)
+LIB_TOKEN_N=$(printf '%s\n' "$LIB_TOKENS" | grep -c . || true)
+assert "#8054 the lib emits a non-trivial token set (>= 11, got $LIB_TOKEN_N)" "[[ '$LIB_TOKEN_N' -ge 11 ]]"
+# The recut gate's own tokens (redis_down, store_populated, …) are not reachable from the execute
+# gate; the case must cover every token the EXECUTE gate can return. Derive that set from the
+# execute gate's function body + the shared helpers' whitelist in it.
+ERG_FN_FILE="$(mktemp)"; SCRATCH+=("$ERG_FN_FILE")
+awk '/^inngest_execute_registry_gate\(\) \{$/,/^\}$/' "$GATE_LIB" > "$ERG_FN_FILE"
+ERG_TOKENS=$(grep -v '^[[:space:]]*#' "$ERG_FN_FILE" | grep -oE '_ihdg_verdict "[a-z_]+"' | cut -d'"' -f2 | sort -u)
+ERG_TOKEN_N=$(printf '%s\n' "$ERG_TOKENS" | grep -c . || true)
+assert "#8054 the execute gate's reachable token set is the plan's 11" "[[ '$ERG_TOKEN_N' -eq 11 ]]"
+_missing_arms=""
+for _tok in $ERG_TOKENS; do
+  grep -qE "^[[:space:]]+${_tok}\)$" "$EXEC_ARM_FILE" || _missing_arms="$_missing_arms $_tok"
+done
+assert "#8054 every execute-gate token has its own case arm in 2.0 (missing:${_missing_arms:- none})" "[[ -z '$_missing_arms' ]]"
+assert "#8054 the *) arm exits 1 and names the gate as the defect, never the host" \
+  "awk '/^        \*\)\$/{f=1} f' '$EXEC_ARM_FILE' | sed -n '1,8p' | grep -qE 'defect in the gate, not a host state.*exit 1 ;;'"
+# Every refusal arm exits 1: count `exit 1` inside the case at least once per non-dark token.
+_case_exits=$(awk '/^      case "\$ERG_VERDICT" in$/{f=1} f&&/^      esac$/{exit} f' "$EXEC_ARM_FILE" | grep -c 'exit 1' || true)
+assert "#8054 the 2.0 case carries an exit 1 per refusal token (>= 10, got $_case_exits)" "[[ '$_case_exits' -ge 10 ]]"
+
+# ── Two reads, one --grep term each, distinct (AC6) ──────────────────────────────
+ERG_READS=$(grep -v '^[[:space:]]*#' "$EXEC_ARM_FILE" | grep -E '_bs_query_rows ' || true)
+ERG_READ_N=$(printf '%s\n' "$ERG_READS" | grep -c . || true)
+assert "#8054 2.0 makes exactly two Better Stack reads, got $ERG_READ_N" "[[ '$ERG_READ_N' -eq 2 ]]"
+assert "#8054 one read carries the probe marker, the other the flip tag, and neither carries both" \
+  "printf '%s\n' \"\$ERG_READS\" | grep -c 'SOLEUR_INNGEST_SERVER_PROBE' | grep -qx 1 && printf '%s\n' \"\$ERG_READS\" | grep -c 'inngest-cutover-flip' | grep -qx 1 && ! printf '%s\n' \"\$ERG_READS\" | grep 'SOLEUR_INNGEST_SERVER_PROBE' | grep -q 'inngest-cutover-flip'"
+assert "#8054 both reads capture stderr to a file and return the query's rc into a *_RC variable" \
+  "[[ \$(printf '%s\n' \"\$ERG_READS\" | grep -cE '^[[:space:]]*(PROBE|HB)_RC=0;[[:space:]]+_bs_query_rows .* \"\\\$(PROBE|HB)_ERR\" > \"\\\$(PROBE|HB)_ROWS\" \|\| (PROBE|HB)_RC=\\\$\?$') -eq 2 ]]"
+_trap_line="trap 'rm -rf \"\$ERG_DIR\"' EXIT"
+_mktemp_line='mktemp -d "${RUNNER_TEMP:-/tmp}/erg.XXXXXXXX"'
+assert "#8054 the row files live under a private mktemp -d (0700) directory under RUNNER_TEMP, removed on EXIT" \
+  "grep -qF -- \"\$_mktemp_line\" '$EXEC_ARM_FILE' && grep -qF -- \"\$_trap_line\" '$EXEC_ARM_FILE' && ! grep -qE '^[[:space:]]*umask ' '$EXEC_ARM_FILE'"
+# The dark arm is entered ONLY on the dedicated host's own connection-refused signature (HTTP 500
+# + __FETCH_FAILED__ from inngest-registry-probe.sh); every other non-200 is a WEBHOOK-PATH fault
+# and refuses without reading Better Stack at all.
+assert "#8054 the dark arm is gated on HTTP 500 + the __FETCH_FAILED__ signature; other non-200s refuse as webhook_path" \
+  "grep -qE '^[[:space:]]*if \[\[ \"\\\$CODE\" != \"500\" \|\| \"\\\$BODY\" != \*\"__FETCH_FAILED__\"\* \]\]; then' '$EXEC_ARM_FILE' && grep -qE 'REFUSED \(webhook_path\).*op=registry-probe' '$EXEC_ARM_FILE' && grep -A2 -E 'REFUSED \(webhook_path\)' '$EXEC_ARM_FILE' | grep -qE '^[[:space:]]*exit 1$'"
+
+# ── Purity: no annotation line interpolates a row file, the body or the cause (AC9) ──
+ANNOT_LEAKS=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{exit} f' "$EXEC_ARM_FILE" \
+  | grep -E 'echo "::(notice|error|warning)::' | grep -cE '\$\{?(PROBE_ROWS|HB_ROWS|BODY|CAUSE|newest_msg|chosen_msg|rows_tsv|hb_msg)\b' || true)
+assert "#8054 no dark-arm annotation interpolates PROBE_ROWS/HB_ROWS/BODY/CAUSE (got $ANNOT_LEAKS)" "[[ '$ANNOT_LEAKS' -eq 0 ]]"
+assert "#8054 the webhook body is printed ONCE, as a plain non-annotation line, CR/LF-stripped" \
+  "[[ \$(grep -cE '^[[:space:]]*echo \"2\.0 webhook body \(HTTP \\\$CODE, informational' '$EXEC_ARM_FILE') -eq 1 ]]"
+
+# ── ERG_* values: read only from --emit-file behind the shape regex; none on the HTTP-200 path (AC16b) ──
+GATE_CALL_LN=$(grep -nE '^[[:space:]]*ERG_VERDICT="?\$\(inngest_execute_registry_gate ' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1)
+ELSE_LN=$(awk '/# ---- 2\.0 DARK ARM/{f=1} f&&/^    else$/{print NR; exit}' "$EXEC_ARM_FILE")
+PREFLIGHT_LN=$(grep -nF '::notice::2.0 registry-probe: dark registry EMPTY' "$EXEC_ARM_FILE" | head -1 | cut -d: -f1)
+assert "#8054 anchors resolve (gate call, else, pre-flight clear)" "[[ -n '$GATE_CALL_LN' && -n '$ELSE_LN' && -n '$PREFLIGHT_LN' && '$GATE_CALL_LN' -lt '$ELSE_LN' && '$ELSE_LN' -lt '$PREFLIGHT_LN' ]]"
+_erg_before=$(sed -n "1,${GATE_CALL_LN}p" "$EXEC_ARM_FILE" | grep -v '^[[:space:]]*#' | grep -E '\$\{?ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG|VERDICT|SAN)\b' | grep -c . || true)
+assert "#8054 no ERG_ value is interpolated BEFORE the gate call (got $_erg_before)" "[[ '$_erg_before' -eq 0 ]]"
+_erg_http200=$(sed -n "${ELSE_LN},${PREFLIGHT_LN}p" "$EXEC_ARM_FILE" | grep -v '^[[:space:]]*#' | grep -c 'ERG_' || true)
+assert "#8054 the HTTP-200 (reachable-empty) path never touches an ERG_ variable (set -u would abort mute), got $_erg_http200" "[[ '$_erg_http200' -eq 0 ]]"
+_erg_assign_regex=$(grep -cE '(^|[[:space:]])ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG)="\$\{BASH_REMATCH\[' "$EXEC_ARM_FILE" || true)
+_erg_assign_other=$(grep -v '^[[:space:]]*#' "$EXEC_ARM_FILE" | grep -E 'ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG)=' | grep -vE 'ERG_(FLAG|BOOT|ROW_AGE|HB_AGE|HB_FLAG)=("\$\{BASH_REMATCH\[|""|"__UNREAD__")' | grep -c . || true)
+assert "#8054 every ERG_ notice field is assigned from the emit-file read behind the shape regex (regex-assigns=$_erg_assign_regex, other=$_erg_assign_other)" "[[ '$_erg_assign_regex' -ge 5 && '$_erg_assign_other' -eq 0 ]]"
+assert "#8054 the emit-file read is anchored: ^(flag|boot_id|row_age|hb_age|hb_flag)=([A-Za-z0-9_-]{1,64})\$" \
+  "grep -qF '=~ ^(flag|boot_id|row_age|hb_age|hb_flag)=([A-Za-z0-9_-]{1,64})\$' '$EXEC_ARM_FILE'"
+
+# ── The reachable-empty decision logic is unchanged (AC7) — pinned as CONTENT, not against a ref ──
+# A comparison against `origin/main` is a comparison against whatever main holds when the suite
+# runs: vacuous after this PR merges (main vs main) and dependent on remote state before it. The
+# normalised block (comments stripped, indentation stripped, the one deliberately edited D4 echo
+# excluded) is pinned here verbatim as it stood on main before #8054; a future deliberate change to
+# the reachable-empty decision logic updates this pin in the same commit, which is the point.
+AC7_HEAD="$(mktemp)"; AC7_PIN="$(mktemp)"; SCRATCH+=("$AC7_HEAD" "$AC7_PIN")
+awk '/^  execute\)$/{e=1} e&&/REG_EMPTY=\$\(echo "\$BODY"/{f=1} f{print} f&&/pre-flight clear/{exit}' "$BODY_SH" \
+  | grep -v 'Remediation (P1-6)' | grep -v '^[[:space:]]*#' | sed 's/^[[:space:]]*//' > "$AC7_HEAD"
+cat > "$AC7_PIN" <<'AC7EOF'
+REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
+REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
+if [[ "$REG_EMPTY" != "true" ]]; then
+echo "::error::2.0 ABORT — dark registry is NON-empty (function_count=$REG_COUNT). The cutover flip must only run against an EMPTY dark registry or a second scheduler double-fires against prod Postgres."
+exit 1
+fi
+echo "::notice::2.0 registry-probe: dark registry EMPTY (function_count=$REG_COUNT) — pre-flight clear"
+AC7EOF
+assert "#8054 AC7: the reachable-empty decision logic is byte-identical to its pre-#8054 form (modulo indentation, comments and the D4 echo)" \
+  "[[ -s '$AC7_HEAD' ]] && diff -q '$AC7_PIN' '$AC7_HEAD' >/dev/null"
+assert "#8054 D4: the impossible step (2) is gone and the replacement names an operator-performable read" \
+  "! grep -v '^[[:space:]]*#' '$EXEC_ARM_FILE' | grep -q 'stop the dark inngest-server' && grep -qE 'Remediation \(P1-6\).*scheduled-inngest-health' '$EXEC_ARM_FILE'"
+assert "#8054 the reachable-empty arm gains its out-of-sequence warning after pre-flight clear (#8072)" \
+  "sed -n \"\$((PREFLIGHT_LN + 1))p\" '$EXEC_ARM_FILE' | grep -qE '^[[:space:]]*echo \"::warning::2\.0: a dedicated host that ANSWERS pre-arm is out of sequence.*#8072'"
+assert "#8054 2.2 STILL RUNNING carries the first-run 'designed stop' sentence" \
+  "grep -qF 'On the first execute of a cutover this is the designed stop and the run is red by design' '$EXEC_ARM_FILE'"
+
+# ── E11/E13 allowlist is DERIVED from the P1-5 source, not retyped (AC16) ────────
+# Order-independent: anchored on the `flag_ok=true` arm, not on `armed` being its first alternative
+# (the same derivation inngest-server-flip-guard.test.sh uses).
+P15_SET=$(grep -E 'flag_ok=true' "$FLIP_GUARD" | grep -vE '^[[:space:]]*#' | head -1 | sed -E 's/\).*$//; s/[[:space:]]//g' | tr '|' '\n' | sort | tr '\n' ',')
+e11_set_of() { awk '/^_erg_flag_class\(\) \{$/,/^}$/' "$1" | grep -oE "^[[:space:]]*[a-z|-]+\) printf 'armed'" | sed -E "s/\) printf 'armed'//; s/^[[:space:]]*//" | tr '|' '\n' | sort | tr '\n' ','; }
+E11_SET=$(e11_set_of "$GATE_LIB")
+assert "#8054 AC16: E11/E13 arm set [$E11_SET] is SET-EQUAL to the P1-5 allowlist [$P15_SET] in $(basename "$FLIP_GUARD") (read from $(basename "$GATE_LIB"))" \
+  "[[ -n '$P15_SET' && '$P15_SET' == '$E11_SET' ]]"
+
+# ── The admission signature is a CROSS-FILE contract with the web-host probe ──────
+# `webhook_path` admits the dark arm on the literal the web-host probe emits when its fetch fails.
+# Derive that literal from the PRODUCER and require the script to test for the same bytes; a rename
+# on either side otherwise refuses every execute as webhook_path with both suites green.
+REGISTRY_PROBE="$REPO_ROOT/apps/web-platform/infra/inngest-registry-probe.sh"
+FF_LITERAL_PRODUCER="$(grep -oE '"message":"__[A-Z_]+__"' "$REGISTRY_PROBE" | head -1 | grep -oE '__[A-Z_]+__')"
+FF_LITERAL_SCRIPT="$(grep -oE '"\$BODY" != \*"__[A-Z_]+__"\*' "$EXEC_ARM_FILE" | head -1 | grep -oE '__[A-Z_]+__')"
+assert "#8054 the dark arm's admission literal [$FF_LITERAL_SCRIPT] equals the web-host probe's fetch-failure literal [$FF_LITERAL_PRODUCER] (derived from $(basename "$REGISTRY_PROBE"))" \
+  "[[ -n '$FF_LITERAL_PRODUCER' && '$FF_LITERAL_PRODUCER' == '$FF_LITERAL_SCRIPT' ]]"
+assert "#8054 the web-host probe still exits 1 on that literal (the hook's error passthrough turns it into the HTTP 500 the script requires)" \
+  "grep -qE 'include-command-output-in-response-on-error.*true' '$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl' && awk '/^run_probe\(\) \{$/,/^\}$/' '$REGISTRY_PROBE' | grep -qE '^[[:space:]]*exit 1$'"
+
+# ── RENDER the dark arm against the H5 fixture (AC16b) and the reachable-empty arm (H6) ──
+# The 2.0 region is extracted from the script and executed with the network stubbed: `curl`
+# answers the webhook, `_bs_query_rows` answers the two Better Stack reads from fixtures. The
+# gate lib is REAL (sourced by the region itself, cwd = repo root). Fixtures are dated relative
+# to the wall clock because the production call passes no --now-epoch.
+REGION_FILE="$(mktemp)"; SCRATCH+=("$REGION_FILE")
+awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$BODY_SH" > "$REGION_FILE"
+REGION_N=$(grep -cv '^[[:space:]]*#' "$REGION_FILE" || true)
+assert "#8054 2.0 region extraction is non-vacuous (>60 non-comment lines, got $REGION_N)" "[[ '$REGION_N' -gt 60 ]]"
+H5_BOOT="a1b2c3d4-0000-4000-8000-00000000cafe"; H5_BID="${H5_BOOT//-/}"
+H5_PROBE_DT="$(date -u -d '-7 min' '+%Y-%m-%d %H:%M:%S')"
+H5_HB_DT="$(date -u -d '-1 min' '+%Y-%m-%d %H:%M:%S')"
+H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=8 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ zz_trailing=1"
+H5_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$H5_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
+H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"rolled-back", reason:"noop-rolled-back", guard:"7761", exit_code:0}} | tojson)}')
+# render_2_0 <region-file> <webhook-code> <webhook-body> <probe-mode> <hb-mode>  — echoes stdout+stderr, returns rc
+#
+# RUNS IN A FRESH `bash` PROCESS, NOT A SUBSHELL. Row 19's property is "a refusal is not MUTE under
+# set -e", and bash disables errexit — and IGNORES a re-enabling `set -e` — for everything executed
+# inside an `if` condition or the left side of `||`, which is exactly where mutate_file calls its
+# check function. A `( set -e; … )` subshell there inherits the ignored state and the un-guarded
+# mutant renders identically to the guarded original. A child process starts with its own flags.
+# THE SEAM IS THE PROCESS BOUNDARY, NOT THE READER. The first cut of this driver stubbed
+# `_bs_query_rows` itself, and the stub's `empty` arm wrote ZERO bytes where the real reader
+# writes ONE blank line (`printf '%s\n' "$rows"`); four review agents then found that the real
+# byte shape graded `unreadable` where the render said `silent` — the stub's shape had become the
+# fixture's shape. So the driver now extracts the REAL `_bs_query_rows` and `_bs_read_remedy` from
+# the script under test and stubs `doppler` (the process the reader execs), recording its argv so
+# the `--since`/`--grep`/`--limit` operands are pinned, and emitting each fixture exactly as the
+# real query would print it (rows on stdout; an HTTP-error body on stdout with rc 22).
+BS_READER_FN="$(awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$BODY_SH")"
+BS_REMEDY_FN="$(awk '/^_bs_read_remedy\(\) \{$/,/^\}$/' "$BODY_SH")"
+assert "#8054 render driver: the REAL reader and remedy functions extract non-vacuously" "[[ \$(printf '%s\n' \"\$BS_READER_FN\" | wc -l) -gt 3 && \$(printf '%s\n' \"\$BS_REMEDY_FN\" | wc -l) -gt 10 ]]"
+RENDER_TMPDS="$(mktemp)"
+render_2_0() {
+  local region="$1" code="$2" body="$3" pmode="$4" hmode="$5" tmpd driver rc=0
+  tmpd="$(mktemp -d)"; printf '%s\n' "$tmpd" >> "$RENDER_TMPDS"
+  driver="$tmpd/driver.sh"
+  {
+    printf 'cd %q || exit 97\n' "$REPO_ROOT"
+    printf 'set -euo pipefail\n'
+    printf 'export RUNNER_TEMP=%q\n' "$tmpd"
+    printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
+    printf 'INNGEST_HOST="soleur-inngest"; INNGEST_HOST_NAME="soleur-inngest-prd"; FLIP_LIVENESS_SINCE="15m"\n'
+    printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
+    printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
+    printf '%s\n' "$BS_READER_FN"
+    printf '%s\n' "$BS_REMEDY_FN"
+    cat <<'DRIVER'
+curl() { local o=""; while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done; printf '%s' "$STUB_BODY" > "$o"; printf '%s' "$STUB_CODE"; }
+# doppler <run args…> -- bash scripts/betterstack-query.sh --since S --grep T --limit N : the process
+# the real reader execs. Records the reader's argv, then answers per the --grep term and the mode.
+doppler() {
+  local term="" a
+  for a in "$@"; do [[ "${_prev:-}" == "--grep" ]] && term="$a"; _prev="$a"; done
+  printf '%s\n' "$*" >> "$TMPD/doppler.argv"
+  case "$term" in
+    SOLEUR_INNGEST_SERVER_PROBE)
+      case "$PMODE" in
+        h5)        printf '%s\n' "$H5_PROBE_ROW"; return 0 ;;
+        empty)     return 0 ;;
+        fail)      printf '{"exception":"Code: 241. DB::Exception: Memory limit exceeded; source under maintenance"}'; return 22 ;;
+        authfail)  printf '{"exception":"Code: 516. DB::Exception: u123secretuser-connect: Authentication failed: password is incorrect, or there is no user with such name."}'; return 22 ;;
+        forbidden) touch "$TMPD/PROBE_READ_HAPPENED"; return 0 ;;
+      esac ;;
+    inngest-cutover-flip)
+      case "$HMODE" in
+        h5)        printf '%s\n' "$H5_HB_ROW"; return 0 ;;
+        empty)     return 0 ;;
+        forbidden) touch "$TMPD/HB_READ_HAPPENED"; return 0 ;;
+      esac ;;
+  esac
+  return 99
+}
+DRIVER
+    printf 'source %q\n' "$region"
+    printf 'echo "__REGION_FELL_THROUGH__"\n'
+  } > "$driver"
+  bash "$driver" 2>&1 || rc=$?
+  echo "__RC=$rc"
+  echo "__TMPD=$tmpd"   # the caller runs this in $(…), so a global would not survive; parse it
+}
+# render_tmpd_of <render-output> — the render's scratch dir (swept by scratch_cleanup via
+# RENDER_TMPDS; a `SCRATCH+=` inside render_2_0 would land in the `$(…)` subshell and be lost —
+# measured: 14 dirs leaked per run before this).
+render_tmpd_of() { printf '%s\n' "$1" | sed -n 's/^__TMPD=//p' | tail -1; }
+# The web-host probe's REAL refusal body (run 34529824513, 2026-09-10) — the only non-200 that
+# admits the dark arm.
+FF_BODY='inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["__FETCH_FAILED__"] data_keys=[]); is the dedicated inngest-server reachable at http://10.0.1.40:8288/v0/gql?'
+# shellcheck disable=SC2034  # the *_OUT captures are read inside assert's eval'd condition strings
+H5_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 h5)"
+assert "#8054 H5 render: the dark arm PASSES and falls through to 2.1 (rc 0)" "printf '%s\n' \"\$H5_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$H5_OUT\" | grep -qx '__REGION_FELL_THROUGH__'"
+assert "#8054 H5 render: the pre-arm notice names P1-5 and the webhook code" "printf '%s\n' \"\$H5_OUT\" | grep -qE '^::notice::2\.0 expected pre-arm \(P1-5\): webhook probe HTTP 500'"
+assert "#8054 H5 render: the dark notice carries boot_id=<36-char uuid> then flag=(aborted|rolled-back)" \
+  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -qE 'boot_id=[0-9a-f-]{36}.*flag=(aborted|rolled-back)'"
+assert "#8054 H5 render: the dark notice says in plain words that the refusal to start is the correct pre-flip posture" \
+  "printf '%s\n' \"\$H5_OUT\" | grep -qF 'intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault'"
+assert "#8054 H5 render: the notice reports BOTH ages and the heartbeat flag from the emit file (no raw row)" \
+  "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -qE 'probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back' && ! printf '%s\n' \"\$H5_OUT\" | grep -q 'zz_trailing'"
+H5_TMPD="$(render_tmpd_of "$H5_OUT")"
+assert "#8054 H5 render: the REAL reader was exec'd twice with the pinned operands (24h/SOLEUR_INNGEST_SERVER_PROBE/500, 30m/inngest-cutover-flip/200)" \
+  "grep -qE -- '--since 24h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 500' '$H5_TMPD/doppler.argv' && grep -qE -- '--since 30m --grep inngest-cutover-flip --limit 200' '$H5_TMPD/doppler.argv' && [[ \$(wc -l < '$H5_TMPD/doppler.argv') -eq 2 ]]"
+assert "#8054 H5 render: the heartbeat window (30m) is WIDER than the gate's 900 s bound and the probe window (24h) wider than 5400 s" \
+  "[[ 1800 -gt 900 && 86400 -gt 5400 ]] && grep -qE -- '--since 30m --grep inngest-cutover-flip' '$H5_TMPD/doppler.argv' && grep -qE -- '--since 24h --grep SOLEUR' '$H5_TMPD/doppler.argv'"
+assert "#8054 H5 render: the webhook body appears exactly once, as a plain line" \
+  "[[ \$(printf '%s\n' \"\$H5_OUT\" | grep -c '__FETCH_FAILED__') -eq 1 ]] && printf '%s\n' \"\$H5_OUT\" | grep -q '^2\.0 webhook body (HTTP 500, informational'"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+SILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" empty h5)"
+assert "#8054 silent render: zero probe rows REFUSE with the silent remedy and rc 1 (silence is not darkness)" \
+  "printf '%s\n' \"\$SILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$SILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && ! printf '%s\n' \"\$SILENT_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+FAILREAD_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" fail h5)"
+assert "#8054 read-failure render: probe rc 22 (maintenance body) routes to the REAL read remedy — 'under maintenance', body NOT printed, never a host verdict" \
+  "printf '%s\n' \"\$FAILREAD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FAILREAD_OUT\" | grep -qE '^::error::2\.0 probe read: the ClickHouse read path is under maintenance' && ! printf '%s\n' \"\$FAILREAD_OUT\" | grep -q 'Memory limit exceeded' && printf '%s\n' \"\$FAILREAD_OUT\" | grep -qF 'NOTHING about the dedicated host was measured'"
+# THE CREDENTIAL-REJECTED BODY NAMES THE USERNAME. A ClickHouse 403 body is `Code: 516.
+# DB::Exception: <BETTERSTACK_QUERY_USERNAME>: Authentication failed…` — half of the Basic-auth pair,
+# injected by doppler inside the reader so GitHub never masks it, on a PUBLIC repo's run log.
+# The remedy must classify it and never print it (security + observability review, 2026-09-11).
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+AUTHFAIL_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" authfail h5)"
+assert "#8054 auth-failure render: a credentials-rejected read body is classified and NEVER printed (the username must not reach the run log)" \
+  "printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -qE '^::error::2\.0 probe read: the ClickHouse read path REJECTED the credentials' && ! printf '%s\n' \"\$AUTHFAIL_OUT\" | grep -q 'u123secretuser'"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+FSMSILENT_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" h5 empty)"
+assert "#8054 fsm_silent render: a dark probe row with no same-boot heartbeat REFUSES (freshness cannot be established)" \
+  "printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$FSMSILENT_OUT\" | grep -qE '^::error::2\.0 REFUSED \(fsm_silent\)'"
+# H6 — the reachable-empty arm: webhook 200 + registry_empty=true, NO Better Stack read at all.
+# Positive control for the read markers: a non-200 webhook with the same stubs MUST leave both
+# markers, or the H6 absence assertion below is vacuous.
+CTRL_OUT="$(render_2_0 "$REGION_FILE" 500 "$FF_BODY" forbidden forbidden)"; CTRL_TMPD="$(render_tmpd_of "$CTRL_OUT")"
+assert "#8054 marker control: the dark arm performs both reads (markers present) — so H6's absence is a measurement" \
+  "[[ -e '$CTRL_TMPD/PROBE_READ_HAPPENED' && -e '$CTRL_TMPD/HB_READ_HAPPENED' ]] && printf '%s\n' \"\$CTRL_OUT\" | grep -qx '__RC=1'"
+H6_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":true,"function_count":0}' forbidden forbidden)"; H6_TMPD="$(render_tmpd_of "$H6_OUT")"
+assert "#8054 H6 render: the reachable-empty arm still passes (rc 0, pre-flight clear, then the #8072 warning)" \
+  "printf '%s\n' \"\$H6_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$H6_OUT\" | grep -q 'pre-flight clear' && printf '%s\n' \"\$H6_OUT\" | grep -qE '^::warning::2\.0: a dedicated host that ANSWERS pre-arm'"
+assert "#8054 H6 render: the reachable-empty arm performed NO Better Stack read (it must not route through the gate)" \
+  "[[ ! -e '$H6_TMPD/PROBE_READ_HAPPENED' && ! -e '$H6_TMPD/HB_READ_HAPPENED' ]]"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+H6N_OUT="$(render_2_0 "$REGION_FILE" 200 '{"registry_empty":false,"function_count":3}' forbidden forbidden)"
+assert "#8054 H6 render: the reachable NON-empty arm still aborts with the P1-6 remediation, rc 1" \
+  "printf '%s\n' \"\$H6N_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$H6N_OUT\" | grep -qE '^::error::Remediation \(P1-6\).*scheduled-inngest-health'"
+# webhook_path — a CF Access 403 and a 500 WITHOUT the refusal signature both refuse BEFORE any
+# Better Stack read; a stale dark row + fresh heartbeat must not be consulted when the live path
+# said nothing about the host.
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+WP403_OUT="$(render_2_0 "$REGION_FILE" 403 '{"error":"cf access"}' forbidden forbidden)"; WP403_TMPD="$(render_tmpd_of "$WP403_OUT")"
+assert "#8054 webhook_path render: HTTP 403 refuses naming the webhook path (op=registry-probe), rc 1, with NO Better Stack read" \
+  "printf '%s\n' \"\$WP403_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP403_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\).*op=registry-probe' && [[ ! -e '$WP403_TMPD/PROBE_READ_HAPPENED' && ! -e '$WP403_TMPD/HB_READ_HAPPENED' ]]"
+# shellcheck disable=SC2034  # read inside assert's eval'd condition
+WP500_OUT="$(render_2_0 "$REGION_FILE" 500 'inngest-registry-probe: FATAL /v0/gql functions query failed or non-array (errors=["some other graphql error"] data_keys=["functions"])' forbidden forbidden)"; WP500_TMPD="$(render_tmpd_of "$WP500_OUT")"
+assert "#8054 webhook_path render: HTTP 500 WITHOUT __FETCH_FAILED__ (a reachable server's GQL error) refuses as webhook_path, no read" \
+  "printf '%s\n' \"\$WP500_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$WP500_OUT\" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e '$WP500_TMPD/PROBE_READ_HAPPENED' ]]"
+assert "#8054 webhook_path render: the refusal never falls through to 2.1" \
+  "! printf '%s\n' \"\$WP403_OUT\" | grep -q '__REGION_FELL_THROUGH__' && ! printf '%s\n' \"\$WP500_OUT\" | grep -q '__REGION_FELL_THROUGH__'"
+
+# ── mutate_file: the matrix rows that live in the SCRIPT (17, 18, 19) and the lib (20) ────
+# Patches a PRISTINE copy of a file with one single-line `sed` (same cmp + exactly-one-line guards
+# as the dark-gate suite's mutate()), then re-runs a named assertion FUNCTION against the copy and
+# asserts it FAILS. Before this, matrix rows 17-19 were PR-body claims: this suite was static
+# `assert` over awk-extracted text and nothing patched a copy.
+mutate_file() {
+  local label="$1" src="$2" expr="$3" check_fn="$4" mutated changed
+  mutated="$(mktemp)"; SCRATCH+=("$mutated")
+  sed "$expr" "$src" > "$mutated"
+  if cmp -s "$mutated" "$src"; then
+    assert "#8054 mutate[$label]: the mutation matched NOTHING (byte-identical copy) — the line drifted" "false"; return
+  fi
+  changed="$(diff "$src" "$mutated" | grep -c '^<' || true)"
+  if [[ "$changed" != "1" ]]; then
+    assert "#8054 mutate[$label]: the mutation changed $changed lines, expected exactly 1" "false"; return
+  fi
+  if "$check_fn" "$src"; then :; else
+    assert "#8054 mutate[$label]: the UNMUTATED file does not satisfy the property — the row proves nothing" "false"; return
+  fi
+  if "$check_fn" "$mutated"; then
+    assert "#8054 mutate[$label]: the mutation did NOT redden the property — the assertion is decorative" "false"
+  else
+    assert "#8054 mutate[$label]: the mutation reddens the property (load-bearing)" "true"
+  fi
+}
+# Known-negative for mutate_file itself: a comment-only mutation must be reported as NOT reddening.
+_kn_p=$PASS; _kn_f=$FAIL
+check_always_true() { grep -qE '^set -euo pipefail$' "$1"; }
+mutate_file "known-negative" "$BODY_SH" 's|^# _bs_read_remedy <label> <rc> <errfile> <rowsfile> — .*|# (comment mutated by the known-negative)|' check_always_true >/dev/null
+if [[ "$FAIL" -eq $((_kn_f + 1)) && "$PASS" -eq "$_kn_p" ]]; then
+  FAIL=$((FAIL - 1)); assert "#8054 mutate_file known-negative: a comment-only mutation is reported as NOT reddening" "true"
+else
+  PASS=$_kn_p; FAIL=$_kn_f; assert "#8054 mutate_file known-negative: the harness reports 'reddens' for a dead line — it cannot tell a live line from a dead one" "false"
+fi
+# Row 17 — the reader swallows the query's rc. Property: with doppler stubbed to rc 7, the
+# extracted reader returns 7.
+check_reader_returns_rc() {
+  local f="$1" fn rc=0
+  fn="$(awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$f")"
+  [[ -n "$fn" ]] || return 1
+  ( set +e; eval "$fn"; doppler() { return 7; }; _bs_query_rows 15m t 5 >/dev/null 2>&1; exit $? ) || rc=$?
+  [[ "$rc" -eq 7 ]]
+}
+mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
+# Row 18 — the *) arm falls through. Property: the *) arm exits 1.
+check_star_arm_exits() {
+  awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -qE 'exit 1 ;;'
+}
+mutate_file "row18 *) arm falls through" "$BODY_SH" 's|^          echo "::error::2.0 REFUSED: the dark-host gate returned an unrecognised verdict .*; exit 1 ;;$|          : ;;|' check_star_arm_exits
+# Row 19 — the production call un-guarded. Property (DYNAMIC): a refusing fixture still prints its
+# ::error:: — under set -e a bare $(…) aborts before the case, fail-closed but MUTE.
+check_refusal_is_not_mute() {
+  local f="$1" region out
+  region="$(mktemp)"; SCRATCH+=("$region")
+  awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
+  out="$(render_2_0 "$region" 500 "$FF_BODY" empty h5)"
+  printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(silent\)' && printf '%s\n' "$out" | grep -qx '__RC=1'
+}
+mutate_file "row19 gate call un-guarded" "$BODY_SH" 's|^      ERG_VERDICT="\$(inngest_execute_registry_gate \(.*\))" \|\| ERG_RC=\$?$|      ERG_VERDICT="$(inngest_execute_registry_gate \1)"|' check_refusal_is_not_mute
+# webhook_path gate — neuter the signature test. Property (DYNAMIC): a 403 must refuse without a read.
+check_403_refuses_without_read() {
+  local f="$1" region out tmpd
+  region="$(mktemp)"; SCRATCH+=("$region")
+  awk '/# ---- 2\.0 empty-registry pre-flight/{f=1} f&&/# ---- 2\.1 capture/{exit} f' "$f" > "$region"
+  out="$(render_2_0 "$region" 403 '{"error":"cf access"}' forbidden forbidden)"; tmpd="$(render_tmpd_of "$out")"
+  printf '%s\n' "$out" | grep -qE '^::error::2\.0 REFUSED \(webhook_path\)' && [[ ! -e "$tmpd/PROBE_READ_HAPPENED" ]]
+}
+mutate_file "webhook_path gate neutered" "$BODY_SH" 's|^      if \[\[ "\$CODE" != "500" \|\| "\$BODY" != \*"__FETCH_FAILED__"\* \]\]; then$|      if false; then|' check_403_refuses_without_read
+# Row 20 — the lib's allowlist retyped with one member missing. Property: set-equality with P1-5.
+check_e11_set_equal() { [[ "$(e11_set_of "$1")" == "$P15_SET" ]]; }
+mutate_file "row20 E11 allowlist minus flushed" "$GATE_LIB" "s|^    armed\|flipping\|flushed\|done) printf 'armed' ;;|    armed\|flipping\|done) printf 'armed' ;;|" check_e11_set_equal
+
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
@@ -1793,13 +2169,26 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # printed a clean total and exited 0. A floor enforced through the suspect cannot witness the
 # suspect. Caught by scripts/guard-vacuity-floor.test.sh ARM 2b, whose deferred-scope ratchet is
 # 0 — this suite was the one member of the deferred population that still had the defect.
-if [[ "$PASS" -lt 497 ]]; then
-  printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is 497 — an assertion was removed or skipped.\n' "$PASS" >&2
+# 497 -> 556 (+59) at #8054 (re-measured after two review passes): the op=execute 2.0 dark arm — guarded-call shape, token/case
+#   coverage, reader purity, ERG_ provenance, AC7 logic-diff, E11 set-equality against the P1-5
+#   source, five rendered arms (H5/silent/read-failure/fsm_silent/H6 + control), and mutate_file
+#   rows 17-20 with a known-negative. THE COMPARISON IS NOW EXACT (`-ne`), as the comment above
+#   already claimed it was: the operator was `-lt`, and a `-lt` floor is satisfied by
+#   delete-one-add-one. The failure text dictates the new number.
+_DISPATCHED=$((PASS + FAIL))
+_EXACT_FLOOR=556
+if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
+  printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
+  echo ""
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  exit 1
+elif [[ "$_DISPATCHED" -ne "$_EXACT_FLOOR" ]]; then
+  printf '\n[FATAL] STALE FLOOR: suite dispatched %d assertions, _EXACT_FLOOR is %d — set _EXACT_FLOOR=%d (the count is exact by design; an assertion was added without updating it).\n' "$_DISPATCHED" "$_EXACT_FLOOR" "$_DISPATCHED" >&2
   echo ""
   echo "=== Results: $PASS passed, $FAIL failed ==="
   exit 1
 fi
-echo "  PASS: anti-deletion floor ($PASS >= 497 assertions dispatched)"
+echo "  PASS: anti-deletion floor (exactly $_DISPATCHED assertions dispatched)"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
