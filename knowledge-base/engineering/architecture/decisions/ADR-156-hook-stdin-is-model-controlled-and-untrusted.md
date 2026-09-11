@@ -14,7 +14,10 @@
 
 > **Ordinal.** Renumbered 155 -> 156 at `/ship` time: a sibling PR landed its own ADR-155
 > (cross-gate exemption markers) on `origin/main` during this pipeline, and `adr-ordinals` is not a
-> required check, so the collision would have surfaced as red CI on `main` post-squash.
+> required check, so the collision would have surfaced as red CI on `main` post-squash. [Correction,
+> #7941: the renumber was right; the stated consequence was not — `adr-ordinals` was already a
+> required check when this note was written (IaC row since #6050, 2026-07-05), so the collision would
+> have blocked the merge on the PR, never landed on `main`.]
 
 ## Context
 
