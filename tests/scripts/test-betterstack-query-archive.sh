@@ -396,6 +396,99 @@ case "$sql_q" in
   *) bad "--until single quotes are SQL-escaped" "got: ${sql_q:0:200}" ;;
 esac
 
+# --- 11. Guard 5: a --table flag is never silently discarded in MODE 1 (#8043 FR13) --------
+#
+# THE DEFECT: mode 1 (raw SQL) ran `run_sql` and `exit $?` BEFORE the mode-2 flag loop, so
+# `--table` / `--table-s3` passed alongside raw SQL were parsed by nothing and DISCARDED. The
+# query then read the DEFAULT source (the shared inngest table). Against a git-data host that
+# is a plausible EMPTY result — "the boot was dark" — with exit 0 and no hint that the flag
+# never took. The script's own headline bug (asks for X, gets Y, exit 0), at the dispatch layer.
+#
+# PROPERTY: in every mode a --table* flag is either HONOURED or REFUSED LOUDLY. The rows below
+# pin HONOURED: the captured SQL names the table the flag gave.
+#
+# WHY NOT capture_sql: it discards stderr and its exit code, and the script exits 3 on missing
+# creds and 2 on the identifier check, so a row asserting "non-zero" would tick for the wrong
+# reason. This runner mirrors run_pinned — same synthetic creds, same stub host, stderr to a
+# FILE — and additionally records the `-d` body so the SQL can be asserted, and echoes the rc.
+SQL_LOG="${BS_TMP}/sql-body.log"
+run_raw() {  # args go to the script verbatim; echoes rc; SQL body in $SQL_LOG, stderr in $ERR_LOG
+  : > "$SQL_LOG"; : > "$ERR_LOG"
+  local rc=0
+  BETTERSTACK_QUERY_HOST="$STUB_HOST" \
+  BETTERSTACK_QUERY_USERNAME=synthetic-user-not-a-credential \
+  BETTERSTACK_QUERY_PASSWORD=synthetic-pass-not-a-credential \
+  SQL_LOG="$SQL_LOG" \
+  bash -c '
+    curl() {
+      while [[ $# -gt 0 ]]; do
+        [[ "$1" == "-d" ]] && { printf "%s" "$2" >> "$SQL_LOG"; return 0; }
+        shift
+      done
+      return 0
+    }
+    source "$1" "${@:2}"
+  ' _ "$TARGET" "$@" >/dev/null 2>"$ERR_LOG" || rc=$?
+  printf '%s' "$rc"
+}
+RAW_BOTH='SELECT dt FROM remote($BS_TABLE) UNION ALL SELECT dt FROM s3Cluster(primary, $BS_TABLE_S3) FORMAT JSONEachRow'
+DEFAULT_TABLE="t520508_soleur_inngest_vector_prd_3_logs"
+
+# G5.1 — the headline. The label below is the plan's discoverability anchor; keep it verbatim.
+rc="$(run_raw "$RAW_BOTH" --table t1_foo_logs)"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"remote(t1_foo_logs)"* && "$sql_g5" != *"$DEFAULT_TABLE"* ]]; then
+  ok "mode 1: a --table flag is never silently discarded"
+else
+  bad "mode 1: a --table flag is never silently discarded" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
+# G5.2 — --table-s3 alongside raw SQL is honoured the same way (the archive arm is the one a
+# soak query reads, so dropping THIS flag is the same silent wrong-source read one level down).
+rc="$(run_raw "$RAW_BOTH" --table-s3 t9_explicit_s3)"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"s3Cluster(primary, t9_explicit_s3)"* ]]; then
+  ok "mode 1: a --table-s3 flag is never silently discarded"
+else
+  bad "mode 1: a --table-s3 flag is never silently discarded" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
+# G5.3 — --table alone derives the archive name in mode 1 exactly as mode 2 does, so a raw
+# UNION written with both tokens stays on ONE source by construction.
+rc="$(run_raw "$RAW_BOTH" --table t1_foo_logs)"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"s3Cluster(primary, t1_foo_s3)"* ]]; then
+  ok "mode 1: --table derives <name>_logs -> <name>_s3 for \$BS_TABLE_S3"
+else
+  bad "mode 1: --table derives <name>_logs -> <name>_s3 for \$BS_TABLE_S3" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
+# G5.4 — flag BEFORE the SQL positional. Pre-fix this was a loud 64 (`unknown flag: SELECT…`),
+# not a silent discard, so it is pinned as honoured now rather than as a regression.
+rc="$(run_raw --table t1_foo_logs "$RAW_BOTH")"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"remote(t1_foo_logs)"* ]]; then
+  ok "mode 1: --table is honoured whether it precedes or follows the SQL"
+else
+  bad "mode 1: --table is honoured whether it precedes or follows the SQL" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
+# G5.5 — MUST-PASS: the canonical git-data read. scripts/followthroughs/git-data-rung2-
+# evidence-capture.sh EXPORTS BS_TABLE and passes no flag; the pre-scan must not disturb that.
+rc="$(BS_TABLE=t520508_soleur_git_data_prd_logs run_raw "$RAW_BOTH")"
+sql_g5="$(cat "$SQL_LOG")"
+if [[ "$rc" == "0" && "$sql_g5" == *"remote(t520508_soleur_git_data_prd_logs)"* \
+      && "$sql_g5" == *"s3Cluster(primary, t520508_soleur_git_data_prd_s3)"* ]]; then
+  ok "mode 1: an exported BS_TABLE with no flag still substitutes (evidence-capture path)"
+else
+  bad "mode 1: an exported BS_TABLE with no flag still substitutes (evidence-capture path)" \
+      "rc=$rc sql=${sql_g5:0:160} err=$(last_err)"
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 # ANTI-VACUITY FLOOR (Guard 2 row 4). Without it this suite exits 0 on ZERO cases, so a
 # mutation that made every arm unreachable — or an early `exit` inserted above — would read as
@@ -405,7 +498,9 @@ printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 # SQL-escape row this change adds -- left this suite at "16 passed, 0 failed",
 # exit 0. Set to the measured green count so a dropped section is caught. A FLOOR,
 # not an equality: adding rows must not red the suite, so raise it when you add one.
-readonly MIN_ASSERTIONS=30
+# Re-derived 2026-09-11 (#8043 Guard 5): the floor was 30 = the measured green count before
+# section 11; section 11 adds exactly five rows (G5.1–G5.5), so 30 + 5 = 35.
+readonly MIN_ASSERTIONS=35
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '%s: FAIL — only %d assertions ran; floor is %d. A suite that ran fewer cases than it declares cannot pass.\n' \
     "$(basename "$0")" "$((pass + fail))" "$MIN_ASSERTIONS" >&2
