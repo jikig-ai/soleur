@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatchBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { dispatchBoundEngineRun, dispatchNewEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("loads the persisted binding before invoking the adapter", async () => {
@@ -25,5 +25,20 @@ describe("dispatchBoundEngineRun", () => {
       for await (const _event of dispatchBoundEngineRun({ repository, adapter, runId: "missing", input: { text: "hi", attachmentIds: [] }, context: {} as never })) { /* no-op */ }
     })()).rejects.toThrow("persisted engine binding not found");
     expect(adapter.start).not.toHaveBeenCalled();
+  });
+
+  it("binds before dispatching a newly created execution", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-2", eventId: "evt-1", sequence: 1, payload: { type: "status", status: "running" } as const };
+    }) };
+    const repository = {
+      bind: vi.fn().mockResolvedValue({ id: "run-2", binding: { engineId: "claude-code" } }),
+      getRun: vi.fn().mockResolvedValue({ id: "run-2", binding: { engineId: "claude-code" } }),
+    };
+    const events = [];
+    for await (const event of dispatchNewEngineRun({ repository, adapter, binding: { workspaceId: "ws-1", executionKind: "conversation", conversationId: "conv-1", createdBy: "user-1" }, input: { text: "hi", attachmentIds: [] }, context: {} as never })) events.push(event);
+    expect(repository.bind).toHaveBeenCalledOnce();
+    expect(repository.getRun).toHaveBeenCalledWith("run-2");
+    expect(events).toHaveLength(1);
   });
 });
