@@ -17,12 +17,25 @@
 # The harness step is `continue-on-error: true`, so its step CONCLUSION is
 # `success` even on FAIL/skip and is NOT a reliable signal.
 #
+# WHICH ARM. `web-platform-release.yml` is split across two triggers (#5806,
+# ADR-217): the `push` arm runs ONLY the `release` job (build + publish), and the
+# `workflow_run` arm (fired on CI completion) carries the whole deploy chain —
+# resolve-target/migrate/deploy/live-verify. Every merge therefore produces TWO
+# runs of this workflow, and only ONE of them can contain a `live-verify` job.
+# Scanning unfiltered would spend half the 25-run window on push-arm runs that
+# can never qualify, silently HALVING the #5463 dark-launch lookback. Chosen
+# predicate: `--event workflow_run` (cheap and exact — `live-verify` declares
+# `github.event_name == 'workflow_run'` in its own `if:`), not job-presence
+# probing, which would cost a `gh run view` per discarded run.
+#
 # Env: GH_TOKEN + GH_REPO (injected by the workflow). Uses gh + jq.
 set -uo pipefail
 
 ISSUE=5463
 SENTINEL="live-verify-pass-watch:recorded"
 WORKFLOW="web-platform-release.yml"
+# The deploy chain (and therefore `live-verify`) exists ONLY on this arm.
+EVENT_ARM="workflow_run"
 
 # (a) Only act while the flip-tracker issue is OPEN.
 state="$(gh issue view "$ISSUE" --json state 2>/dev/null | jq -r '.state // ""' 2>/dev/null || true)"
@@ -39,8 +52,10 @@ if gh issue view "$ISSUE" --json comments 2>/dev/null \
   exit 0
 fi
 
-# (c) Scan recent release runs newest-first for the first qualifying PASS.
-runs="$(gh run list --workflow="$WORKFLOW" --limit 25 \
+# (c) Scan recent DEPLOY-arm release runs newest-first for the first qualifying
+# PASS. The `--event` filter keeps `--limit 25` meaning 25 runs that could
+# actually have deployed (see WHICH ARM above).
+runs="$(gh run list --workflow="$WORKFLOW" --event "$EVENT_ARM" --limit 25 \
           --json databaseId,headSha,url,status 2>/dev/null || echo '[]')"
 ids="$(printf '%s' "$runs" | jq -r '.[] | select(.status=="completed") | .databaseId' 2>/dev/null || true)"
 
