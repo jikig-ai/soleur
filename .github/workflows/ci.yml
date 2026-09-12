@@ -25,21 +25,60 @@ on:
 permissions:
   contents: read
 
-# Cancel in-progress CI runs for the same PR when a newer commit lands.
-# Scoped to pull_request events only — on `main` we let prior runs finish
-# so the audit trail (post-merge monitors, release-gate evidence) stays
-# intact. Group keys off (workflow, ref) so PR runs don't compete with
-# main-branch runs of the same workflow. github.workflow / github.ref /
-# github.event_name are GitHub-controlled meta-vars, not attacker-
-# controlled — safe to interpolate directly (the security-reminder hook
-# fires for any ${{ … }} in workflow files; the run:-command injection
-# class does not apply here).
+# CONCURRENCY: PER-SHA ON PUSH, PER-REF ON PULL REQUESTS (#7931 part 1, ADR-217).
+#
+# NOTHING IS CANCELLED ON `main` UNDER EITHER KEY. `cancel-in-progress` is, and
+# stays, pull_request-only: superseded PR runs collapse, `main` runs always run to
+# completion, and the audit trail (post-merge monitors, release-gate evidence)
+# is byte-identically intact. An earlier reading of this change — recorded in
+# ADR-212's `Named residual` and superseded there — claimed per-SHA grouping
+# "would break" that audit trail. It does not; the two properties were never in
+# tension.
+#
+# WHAT CHANGED AND WHY. `github.ref` is CONSTANT across `main` pushes, so the old
+# key put every push in ONE group. With `cancel-in-progress` false on `main` that
+# is not "let prior runs finish" — it is SERIALIZE. The consequence is not
+# primarily wall clock: it is that a run's gated quantity (time-to-`test`,
+# measured from that run's own `created_at`) CONTAINED THE PREVIOUS RUN'S ENTIRE
+# TIME-TO-`test`. That is an unbounded term belonging to a DIFFERENT COMMIT. No
+# declared ceiling has ever had a place for it, and no amount of ceiling-sizing
+# can bound it, because it is not a property of the run being measured.
+#
+# Each `main` push is a distinct SHA that needs its own CI verdict for its own
+# deploy gate, so per-SHA grouping makes the gated quantity a property of the SHA
+# being gated. That is a correctness statement about what the number MEANS, and
+# it holds on 100% of runs regardless of the queue's magnitude.
+#
+# THIS IS NOT SOLD AS A SPEED FIX, and the measurement is why. Over 29
+# consecutive `main` pushes the group was occupied at creation on 7 (24%),
+# costing a median 393s; on the other 22 the first job started a median of 4s
+# after creation and the window's WORST time-to-`test` came from a run whose
+# group was EMPTY. The median saving is ZERO. See the dispatch note in the
+# `test-scripts` job for the full population and the reproduction command.
+#
+# THE COST, STATED PLAINLY. Peak concurrent `main` CI runs rises from 1 to the
+# burst depth. The same measurement identifies the runner pool as the binding
+# constraint on 76% of runs, so this CAN make the median worse. That is the
+# declared risk of part 1 and it is measured post-merge, not assumed.
+#
+# github.workflow / github.ref / github.sha / github.event_name are
+# GitHub-controlled meta-vars, not attacker-controlled — safe to interpolate
+# directly (the security-reminder hook fires for any ${{ … }} in workflow files;
+# the run:-command injection class does not apply here).
+#
+# Guarded by plugins/soleur/test/ci-concurrency-key.test.sh, which evaluates this
+# ternary for both events and checks EVERY concurrency mapping in the file —
+# workflow-level and job-level — so a job-level group keyed on `github.ref`
+# cannot re-serialise `main` one level down behind a correct-looking key here.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   readme-counts:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -54,6 +93,9 @@ jobs:
   # via env: + quoted "$BASE_REF" per workflow-injection guidance — see
   # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions.
   detect-changes:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
@@ -108,6 +150,9 @@ jobs:
   # report on merge_group leaves the queue entry pending forever (see the header
   # note on this workflow's merge_group trigger).
   credential-path-guard:
+    # 15m — measured max 0.5m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       # Do NOT add sparse-checkout or a paths filter here. The linter exits 0
@@ -122,6 +167,9 @@ jobs:
   # ADVISORY job — absent from scripts/required-checks.txt and the ruleset, so a
   # PR can merge with it red. See the #6882 note inside for what moved out.
   lint-bot-statuses:
+    # 15m — measured max 0.7m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
     # workflow-internal literals; no untrusted input is interpolated into the run: blocks.
@@ -292,6 +340,9 @@ jobs:
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -299,6 +350,9 @@ jobs:
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
   lint-conversations-update-callsites:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -326,6 +380,9 @@ jobs:
   # ALLOWED_PATHS ever gains an infra/github path, reproduce this gate in the
   # action's Phase-4 ceiling BEFORE that lands.
   marketplace-manifest-guard:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -345,6 +402,9 @@ jobs:
   # Replaces the rejected ESLint custom rule (per DHH cut #1, simplicity #6).
   # CODEOWNERS pins the allowlist file so this gate cannot be self-defeated.
   service-role-allowlist-gate:
+    # 15m — measured max 0.8m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -363,6 +423,9 @@ jobs:
   # Eleventy mirror prose body is identical after normalisation. The
   # T&C SHA bypass via TC_VERSION bump is preserved.
   tc-document-sha-guard:
+    # 15m — measured max 0.4m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -386,6 +449,9 @@ jobs:
   # ## Consequences headings. See AC18 in 2026-05-25-feat-anthropic-leader-
   # loop-pr-b-plan.md. No user-controlled inputs; static script call.
   adr-ordinals:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -406,6 +472,9 @@ jobs:
   # origin main` so the merge-base (NOT origin/main tip) is resolvable on
   # pull_request / push / merge_group alike.
   rule-body-lint:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -418,6 +487,9 @@ jobs:
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
 
   rule-metrics-shape:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -448,6 +520,9 @@ jobs:
   # The pin step below is the durable fix; see
   # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
   lockfile-sync:
+    # 15m — measured max 1.4m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -546,6 +621,9 @@ jobs:
   # node:22-slim deploy image and byte-diff-fail the committed fixture. bwrap is
   # REPLACED by an in-process PATH shim during capture (no real bubblewrap needed).
   sandbox-canary-capture-gate:
+    # 15m — conditional job, no run in the 10-run sample (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -591,6 +669,9 @@ jobs:
   # caught here. Creds-gated (one paid Haiku turn); skipped when the injection
   # inputs or the SDK are unchanged.
   plugin-root-propagation-gate:
+    # 15m — conditional job, no run in the 10-run sample (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -698,6 +779,9 @@ jobs:
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).
   web-platform-build:
+    # 15m — measured max 2.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -839,7 +923,7 @@ jobs:
     # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
     # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
     #
-    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 376; see the STALE stanza) — slowest-leg
+    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 392 at time of writing; see the STALE stanza) — slowest-leg
     # minutes, group total 35.25 min:
     #
     #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
@@ -856,8 +940,21 @@ jobs:
     # during this PR's own review, purely from ordinal position. Any change to the registered
     # suite set invalidates this table — RE-SIMULATE before touching K.
     #
-    # STALE BY ONE SUITE (2026-09-08, QA). This PR later added
-    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh, taking the set 375 -> 376. Measured
+    # STALE BY SEVENTEEN SUITES (re-measured 2026-09-10). The table above was simulated on a
+    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` returns 392 at this
+    # commit — this PR added 2 (ci-concurrency-key, ci-test-aggregator-diagnosis) and renamed
+    # 1; the rest arrived on `main` while this branch was open.
+    #
+    # DO NOT TRUST THE LITERAL ABOVE EITHER. It read 389, then 391, within hours of when this line was
+    # written and 391 after one rebase. The count is not a fact about the repo, it is a
+    # fact about a commit, and the only safe use of it is to re-run the enumeration.
+    # THE COUNT IS A MOVING TARGET AND EVERY NUMBER BELOW IS KEYED TO A SUPERSEDED ORDER:
+    # re-enumerate before treating any K as chosen (#8006 carries this). The 2026-09-08 note
+    # this replaces read "the set 375 -> 376", which was true when written and is not now.
+    #
+    # The original single-suite note, retained because its mechanism still holds:
+    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh (renamed 2026-09-09 to
+    # workflow-run-deploy-invariants.test.sh, #5806) took the set 375 -> 376. Measured
     # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
     # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
     # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
@@ -890,7 +987,7 @@ jobs:
     #
     # The floor no K can beat is the longest single suite —
     # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the 376-suite
+    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the then-376-suite
     # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
     # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
     # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
@@ -901,40 +998,70 @@ jobs:
     # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
     # pool whose availability produces the multi-minute staggers.
     #
-    # NOTE ON DISPATCH — RETRACTED TWICE; READ THIS BEFORE RE-DERIVING IT.
+    # NOTE ON DISPATCH — RETRACTED TWICE, NOW REPLACED BY A MEASUREMENT.
     #
-    # Revision 1 said the multi-minute gaps between run creation and job start were runner-pool
-    # contention, and used that to argue against larger K.
-    # Revision 2 "corrected" that to: dispatch is ~1s and per-RUN, the gaps are this file's own
-    # `concurrency` group serialising each main push behind its predecessor's `test`, so extra
-    # legs add no dispatch penalty.
+    # Revisions 1 and 2 each asserted a single MECHANISM, and each was retracted by the next
+    # reader. Revision 1: the multi-minute gaps between run creation and job start are runner-pool
+    # contention. Revision 2: dispatch is ~1s and the gaps are this file's own `concurrency` group
+    # serialising each main push behind its predecessor's `test`.
     #
-    # REVISION 2 IS FALSE, and revision 1 was closer. Measured 2026-09-08 on run 34214304922
-    # (`gh api .../runs/<id>/jobs`, start offsets from the run's `created_at`):
+    # BOTH ARE TRUE, OF DIFFERENT COHORTS. That is why each looked like a refutation of the other:
+    # they were measured on different runs. This revision states the population instead of the
+    # mechanism, so there is nothing left to retract.
     #
-    #     + 441s  lint-conversations-update-callsites
-    #     + 621s  credential-path-guard
-    #     +1346s  test-scripts, web-platform-build
+    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02:01Z ->
+    # 2026-09-09T07:50:05Z, the committed TSV's true bounds; an earlier revision of this note
+    # labelled the upper bound 14:22Z, ~6.5h wider than the data it cites). "Group occupied at creation" = the predecessor run's `test` had not yet
+    # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
+    # (they never acquired a runner, so they say nothing about availability). "Start spread" is
+    # measured over the 23 jobs with NO `needs:` — a group release starts those simultaneously, so
+    # any spread across them is runner availability by construction. `test` and `critical-css-gate`
+    # have `needs:` and are excluded from spread for that reason.
     #
-    # CORRECTED 2026-09-09: an earlier revision of this list also cited `+1s` for two jobs and
-    # `+1397s critical-css-gate`. Both are wrong for the argument. The `+1s` pair were SKIPPED
-    # (runner_id null, zero steps) — they never acquired a runner, so they say nothing about
-    # availability. And `critical-css-gate` HAS `needs: detect-changes`, so it is excluded by this
-    # sentence's own selection criterion. The honest figure over needs-less jobs that actually
-    # took a runner is 441s -> 1346s.
+    #   cohort                    n         first-job delay    queue term        start spread
+    #   group OCCUPIED            7 (24%)   med 460s max 1249s med 393s max 1245s med  68s max  913s
+    #   group DRAINED            22 (76%)   med   4s max  731s 0                  med 412s max 1708s
+    #   all                      29         —                  —                  med 292s max 1708s
     #
-    # Those jobs have NO `needs`, so a concurrency gate releases them together — a group release
-    # starts every one of them at the same instant. They stagger across 15 MINUTES inside one run,
-    # which a queue cannot produce. And the group was EMPTY: the predecessor run finished
-    # 2026-09-07T22:03:12Z, this run was created 2026-09-08T10:13:35Z, a 12h10m gap. Separately
-    # `test` — whose start is gated only by its `needs` — waited 619s after its last need
-    # concluded, which is runner wait by definition.
+    # THE MODEL IS ADDITIVE, NOT EITHER/OR:
+    #     time-to-test = queue (only when the group is occupied) + runner availability + execution
+    # The queue term is workload-dependent: large on a merge-burst day, exactly zero on a normal
+    # one. On 2026-09-07 15:16-17:58 five consecutive runs were queue-bound; the queue is real.
+    # It is not the dominant term across the population — it binds on ~a quarter of runs, and the
+    # window's WORST time-to-test (4156s) came from a run whose group was EMPTY.
     #
-    # So the gaps are runner availability, extra legs DO draw on that pool, and the withdrawal of
-    # revision 1's argument is itself withdrawn. What remains genuinely unresolved is how much the
-    # queue contributes on a busy day; do not replace this note with a third confident mechanism
-    # without measuring the start SPREAD within a single run, which is what falsifies the queue
-    # explanation in one command.
+    # WHAT THE PER-SHA KEY BUYS. It removes the queue term unconditionally rather than
+    # probabilistically. Its median wall-clock saving is ZERO, because the median run has no queue
+    # term to remove. It is justified on SEMANTICS — a run's gated quantity should not contain an
+    # unbounded term belonging to a different commit — not on wall clock (ADR-217, Decision 1).
+    # It raises peak runner concurrency, and the table above says the pool is the binding
+    # constraint on 76% of runs, so this could make the median WORSE. That is the declared risk.
+    #
+    # REPRODUCTION (two-stage jq: `gh --jq` does NOT forward `--arg`):
+    #   for p in 1 2 3 4 5 6; do
+    #     gh api "/repos/{owner}/{repo}/actions/runs?event=push&branch=main&per_page=100&page=$p" \
+    #       --jq '.workflow_runs[] | select(.name=="CI") | [.created_at,.id,.conclusion] | @tsv'
+    #   done | sort -ru | awk -F'\t' '$1>="<start>" && $1<="<end>"' > ci-win.tsv
+    #   while IFS=$'\t' read -r created rid concl; do
+    #     gh api "/repos/{owner}/{repo}/actions/runs/$rid/jobs?per_page=100" > j.json
+    #     jq -r --arg rid "$rid" --arg created "$created" \
+    #       '.jobs[] | [$rid,$created,.name,(.started_at//""),(.completed_at//""),
+    #                   (.conclusion//""),(.runner_id|tostring),(.steps|length|tostring)] | @tsv' j.json
+    #   done < ci-win.tsv > jobs.tsv
+    #
+    # `sort -ru` is load-bearing: GitHub's pagination is not stable while new runs are being
+    # created, so a plain `sort -r` can carry the same run on two pages and inflate the
+    # population. The raw `jobs.tsv` this table was computed from is committed at
+    # knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/
+    # measurement-jobs-2026-09-09.tsv, so the arithmetic is checkable without re-querying.
+    #
+    # A PRIOR RUN OF THIS SAME COMMAND, over a population reported as 35, published med 332s /
+    # max 1708s for the drained spread and a 20%/80% split. Re-derived here at 29 runs it is
+    # med 412s / max 1708s and 24%/76%. Every MAXIMUM and the ENTIRE occupied cohort (n=7; 460/
+    # 1249, 393/1245) reproduce to the second; the medians and the population do not. The
+    # conclusions above are invariant across both readings, which is why they are stated as
+    # cohort shape rather than as a headline number. Do not cite a median from this block without
+    # re-running the command — cite the shape.
     strategy:
       fail-fast: false
       matrix:
@@ -948,8 +1075,11 @@ jobs:
     #     "A budget NEVER changes a suite's status or the runner's exit code" — and its only
     #     consumer emits a `[budget]` line AFTER the suite has finished. It reports; it cannot fire.
     #   * `TC_RUNTIME_CEILING_S`, the one real in-runner bound, is explicitly DISABLED under CI.
-    #   * `await-ci`'s CEILING_S bounds a job in a DIFFERENT workflow. A long leg makes THAT job
-    #     fail-close (the #7902 symptom); it does not bound this leg.
+    #   * there USED to be a third: `await-ci`'s CEILING_S, which bounded a job in a DIFFERENT
+    #     workflow — a long leg made THAT job fail-close (the #7902 symptom) without bounding
+    #     this one. #5806 deleted `await-ci`; the deploy now fires on this workflow's completion
+    #     event, so no external ceiling bounds this leg at all. That makes the point below
+    #     STRONGER, not weaker: `timeout-minutes` is now the only bound of any kind.
     #
     # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
     # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
@@ -958,7 +1088,8 @@ jobs:
     #
     #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
     #     measured max) = 48.62 min
-    #   x1.2 (the same convention sizing await-ci's timeout-minutes over CEILING_S) = 58.3
+    #   x1.2 (the convention that sized await-ci's timeout-minutes over CEILING_S before #5806
+    #        deleted that job; the ratio is kept because the reasoning was never about that job) = 58.3
     #   -> 60
     #
     # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That
@@ -1018,7 +1149,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run all 376 suites and all report green. Guard 1 reads ci.yml's
+      # all three legs would run the whole group (392 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
@@ -1061,6 +1192,52 @@ jobs:
         run: bash scripts/test-all.sh scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PER-SUITE TIMINGS, COLLECTED BUT NOT YET CONSUMED (#7931 part 3).
+          #
+          # `run_suite` in scripts/test-all.sh already appends `label <TAB> elapsed_ms`
+          # for every suite it runs, gated on this variable being set — so a default
+          # local run pays nothing for it. NO WORKFLOW BOUND IT, so CI has been
+          # discarding per-suite timings it already knows how to produce, on every run.
+          #
+          # This is deliberately ALL that ships from #7931 part 3. The LPT partition
+          # it was going to feed is DEFERRED (see the deferral issue): LPT does not
+          # deliver the property it was chosen for — it is a greedy GLOBAL assignment,
+          # so adding one slow suite or refreshing one duration can move arbitrarily
+          # many other labels between legs, which is the re-roll it was meant to stop —
+          # and `_shard_selects` cannot compute it anyway, being called once per
+          # streaming registration with no view of the live registration set.
+          #
+          # The timings are collected now because the cheaper alternative the deferral
+          # must weigh first needs REAL data, not a simulation: this file's own K table
+          # records K=3 -> 20.73 min against K=5 -> 10.77 min, a ONE-LINE edit that
+          # beats LPT's entire projected balance gain. Leg membership is not portable
+          # between machines (scripts/test-all.sh says so), so the table cannot be
+          # bootstrapped locally — it takes CI's own C collation, which is what these
+          # artifacts are.
+          TEST_TIMING_LOG: ${{ runner.temp }}/suite-timings.tsv
+
+      - name: Upload per-suite timings
+        # `always()`: a leg that FAILED or was killed is exactly the leg whose timings
+        # the next partition decision needs. Uploading only on success would collect
+        # data for the runs that were never the problem.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # `/` is not permitted in an artifact name, so it is not used at all —
+          # an earlier revision of this comment described a `/`->`-` rewrite the
+          # code never performed. job-index is also matrix-resize-safe, matching
+          # the type-check gate above.
+          name: suite-timings-scripts-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/suite-timings.tsv
+          # `warn`, not `error`: TEST_TIMING_LOG is written by run_suite only when
+          # a suite actually runs, so a leg that was cancelled before starting has
+          # nothing to upload and that is not a fault. The cost is that a leg which
+          # SHOULD have produced timings and did not fails silently — acceptable
+          # while this data is advisory input to #8006 and gates nothing.
+          if-no-files-found: warn
+          retention-days: 14
 
   # #7902 — Guard 1's mutation battery, in its OWN job.
   #
@@ -1112,6 +1289,9 @@ jobs:
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
   grok-fidelity:
+    # 15m — measured max 0.5m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -1160,9 +1340,19 @@ jobs:
     # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
-    # Everything below this line is byte-unchanged from before the shard (#7902 AC5): the
-    # `needs:` list, the `if:`, and the aggregation loop are untouched, which is what proves
-    # matrix legs roll up into ONE `needs.test-scripts.result` with no aggregator edit.
+    # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
+    # byte-unchanged from before the shard (#7902 AC5) ... which is what proves matrix legs roll
+    # up into ONE `needs.test-scripts.result` with no aggregator edit."
+    #
+    # That proof has SERVED ITS PURPOSE and is now discharged by history, not by these bytes:
+    #   git log -p --follow -- .github/workflows/ci.yml
+    # still shows the shard landing with the `needs:`/`if:`/loop untouched. #7931 part 2 edits the
+    # aggregation loop deliberately, so the claim can no longer be true of the working tree, and
+    # leaving it standing would assert a byte-identity that a reader can trivially falsify.
+    #
+    # What is STILL true and is the durable half: the `needs:` list and the `if:` below remain
+    # untouched by the shard, so K matrix legs continue to roll up into exactly ONE
+    # `needs.test-scripts.result`. Only the loop BODY changed, and only to name the cause.
     timeout-minutes: 10
     steps:
       - name: Aggregate shard results
@@ -1170,19 +1360,111 @@ jobs:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+          # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
+          # reachable where `cancel-in-progress` is true, which since #7931 part 1
+          # is pull_request only — see the SUPERSEDED arm below.
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          # NAME THE MEASURED CAUSE, NEVER A GUESSED ONE (#7931 part 2).
+          #
+          # This step used to emit a bare `echo "$shard: $result"`. A leg killed by
+          # its own `timeout-minutes` and a leg cancelled because a newer commit
+          # superseded the run BOTH render as `test-scripts: cancelled`, so the
+          # repo's most load-bearing required check could not distinguish "CI is
+          # too slow" from "someone pushed again" — the discrimination #7902
+          # needed and had to reconstruct from the REST API after the fact.
+          #
+          # THE DISCRIMINATOR IS ALREADY IN THE THREE STRINGS. A concurrency
+          # cancellation cancels the WHOLE run, so every in-flight leg reads
+          # `cancelled`. A `timeout-minutes` kill stops ONE leg while its siblings
+          # conclude normally. That is a shape comparison over data this job
+          # already holds in `env:`, and it is correct whether GitHub reports a
+          # timed-out job as `cancelled` or as `failure`.
+          #
+          # DELIBERATELY NOT DONE: an earlier revision added `actions/checkout`, a
+          # `gh api` call and a new script here to compare each leg's elapsed time
+          # against a parsed budget. That widens the input surface of the repo's
+          # most load-bearing required check — from three GitHub-provided strings
+          # plus this file, to those plus a checkout plus a network call — to
+          # obtain a DIAGNOSTIC STRING. Three reviewers converged against it.
+          #
+          # Guarded by plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh,
+          # which EXTRACTS this body and EXECUTES it over synthetic result triples
+          # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
-          # Single colon-delimited iteration collapses the prior parallel
-          # for-list + case-arms. Adding a 4th shard now requires editing
-          # one line (plus needs: + env:); previously also required
-          # editing a separate case arm.
-          for entry in "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT"; do
+          # Single colon-delimited list, iterated twice: once to classify each leg,
+          # once (inner) to read that leg's siblings. Adding a 4th shard is still a
+          # one-line edit here, plus needs: + env:.
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" )
+          for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
-            if [[ "$result" != "success" ]]; then
-              echo "$shard: $result" >&2
-              fail=1
+            if [[ "$result" == "success" ]]; then
+              continue
             fi
+            # SET BEFORE CLASSIFYING. The classification is a diagnostic; the
+            # verdict is not conditional on it. A non-success leg fails this job
+            # whatever shape the siblings are in.
+            fail=1
+            case "$result" in
+              failure)
+                # NAMES THE OBSERVATION, NOT A MECHANISM. `failure` is GitHub's
+                # conclusion for an assertion failure AND for a `timeout-minutes`
+                # kill (which is annotated, not reported as `cancelled`) AND for a
+                # lost runner or an OOM. The old text here asserted "assertions
+                # failed" — a guessed cause, which is the exact defect this step
+                # exists to remove, one arm over from where it was removed.
+                # The comment above claims the classifier is correct whether a
+                # timed-out leg reads `cancelled` or `failure`; this arm is where
+                # that claim has to be honoured.
+                if [[ "$shard" == "test-scripts" ]]; then
+                  # A matrix rollup: "the job log" is not one log.
+                  echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
+                else
+                  echo "$shard: FAILED — the leg concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; check the $shard job log for a timeout annotation before assuming assertions." >&2
+                fi
+                ;;
+              skipped)
+                echo "$shard: SKIPPED — the leg did not run" >&2
+                ;;
+              cancelled)
+                cancelled_siblings=0
+                concluded_siblings=0
+                sibling_count=0
+                for other in "${entries[@]}"; do
+                  if [[ "${other%%:*}" == "$shard" ]]; then
+                    continue
+                  fi
+                  sibling_count=$((sibling_count + 1))
+                  case "${other#*:}" in
+                    cancelled) cancelled_siblings=$((cancelled_siblings + 1)) ;;
+                    success|failure) concluded_siblings=$((concluded_siblings + 1)) ;;
+                  esac
+                done
+                if [[ "$cancelled_siblings" -gt 0 ]]; then
+                  if [[ "$EVENT_NAME" == "pull_request" ]]; then
+                    echo "$shard: SUPERSEDED — the run was cancelled (a newer commit landed)" >&2
+                  else
+                    # NOT SUPERSEDED, and saying so would be a confident third
+                    # mechanism on a question this file has already retracted twice.
+                    # Since #7931 part 1 every push has its OWN concurrency group and
+                    # cancel-in-progress stays pull_request-only, so supersession
+                    # cannot cancel a push run. A run-wide cancellation here is
+                    # something else (a manual `gh run cancel`, an admin action).
+                    echo "$shard: CANCELLED — the whole run was cancelled on a '$EVENT_NAME' event; cause not determined from the result shape (supersession cannot occur here: each push has its own concurrency group)" >&2
+                  fi
+                elif [[ "$sibling_count" -gt 0 && "$concluded_siblings" -eq "$sibling_count" ]]; then
+                  echo "$shard: STOPPED ALONE — this leg was stopped while its siblings finished; the usual cause is its own declared timeout-minutes" >&2
+                else
+                  echo "$shard: CANCELLED — cause not determined from the result shape" >&2
+                fi
+                ;;
+              *)
+                # An honest UNKNOWN arm is REQUIRED. GitHub may add a result value;
+                # falling silently through would drop the only line the operator gets.
+                echo "$shard: UNCLASSIFIED — result='$result'; cause not determined from the result shape" >&2
+                ;;
+            esac
           done
           if [[ $fail -ne 0 ]]; then
             exit 1
@@ -1202,6 +1484,9 @@ jobs:
   # for this job, root for critical-css-gate); the two jobs are deliberately
   # decoupled and a "tidying" unification will break browser-binary lookup.
   e2e:
+    # 20m — measured max 4.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     container:
       # Pinned by both tag (greppable version) AND multi-arch manifest-list
@@ -1251,6 +1536,9 @@ jobs:
   # deploy-docs.yml's `deploy` job — both gates assert the same FOUC contract
   # via the same screenshot-gate.mjs script.
   critical-css-gate:
+    # 15m — measured max 1.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
     runs-on: ubuntu-latest

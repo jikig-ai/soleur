@@ -385,8 +385,10 @@ curl -s http://127.0.0.1:8288/v1/functions | \
 - The affected function is Inngest-fired (not GHA-fired)
 - Other Inngest-fired crons (daily-triage, bug-fixer, oauth-probe) may
   or may not be affected — check all cron-fire timestamps
-- Recent deploy burst visible in `gh run list --workflow=web-platform-release.yml`
-  (10+ deploys in the 48h preceding the miss)
+- Recent deploy burst visible in
+  `gh run list --workflow=web-platform-release.yml --event workflow_run`
+  (10+ deploys in the 48h preceding the miss). The `--event` filter selects the
+  deploy arm; without it half the listing is push-arm build-only runs (#5806).
 - Sentry heartbeat env vars are present (eliminates H3/Hypothesis D)
 
 **Verify:**
@@ -424,7 +426,14 @@ latest release (it restarts the container):
 # forces the inngest-server to re-discover the app and re-arm crons. Then watch
 # deploy-status. (SSH fallback if the workflow is unavailable: `docker restart
 # soleur-web-platform`.)
-gh run rerun "$(gh run list --workflow=web-platform-release.yml -L1 --json databaseId -q '.[0].databaseId')"
+#
+# `--event workflow_run` IS REQUIRED. Since #5806 (ADR-217) web-platform-release.yml
+# is split across two triggers and every merge produces TWO runs: a push-arm run
+# holding only `release` (build + publish — it does NOT touch the container) and a
+# workflow_run-arm run holding the deploy chain. Re-running the push arm rebuilds an
+# image and restarts NOTHING, so the cron never re-arms and the runbook silently
+# does nothing. The deploy arm is the one that swaps the container.
+gh run rerun "$(gh run list --workflow=web-platform-release.yml --event workflow_run -L1 --json databaseId -q '.[0].databaseId')"
 ```
 
 **Secondary (automatic, ~minutes) — wait for the `--poll-interval` self-heal.**
