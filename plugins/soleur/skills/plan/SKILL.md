@@ -3,6 +3,10 @@ name: plan
 description: "This skill should be used when transforming feature descriptions into well-structured project plans following conventions."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/plan` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:plan`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- plan-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
@@ -681,6 +685,13 @@ This is the affected-surface extension of `hr-observability-as-plan-quality-gate
 
 ### 2.10. Architecture Decision (ADR / C4) Gate
 
+> **Rule `wg-architecture-decision-is-a-plan-deliverable` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> When a plan makes or changes an architectural decision (ownership/tenancy boundary move, new substrate/trust boundary, or a reversal/extension of an existing ADR), the ADR write and C4 diagram update are deliverables of THAT plan — never a deferred follow-up issue [id: wg-architecture-decision-is-a-plan-deliverable] [skill-enforced: plan Phase 2.10]. **Why:** #5437 — always-enforce-workspace ADR/C4 was wrongly filed as deferred #5440; recorded architecture must not lag the change that creates it.
+
 [skill-enforced: plan Phase 2.10 — `wg-architecture-decision-is-a-plan-deliverable`]
 
 If the plan makes or changes an **architectural decision**, the ADR write and the C4 diagram update are **deliverables of THIS plan** — never a deferred follow-up issue. Phase 0.6 / line 112 already make you *read* the ADR corpus; this gate makes you *produce* the decision record when the plan creates one. Deferring an ADR/C4 update to "later" ships a system whose recorded architecture lies about its real one until someone reopens the issue (usually never).
@@ -778,11 +789,11 @@ After planning the issue structure, run SpecFlow Analyzer to validate and refine
 
 Before finalizing the plan into issues, get one strong-model second opinion at the highest-leverage decision point — but pay only for a curated payload, not the whole session.
 
-Spawn a **Task** subagent with `model: fable` (the top advisor tier; if that spawn is rejected because the org lacks Fable access, retry once with `model: opus`) and a **curated** prompt — pass only the plan's `## Overview`, `## Implementation Phases`, and the phase you judge riskiest. Do NOT pass the conversation: a Task subagent receives prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`), so curation is the token lever that makes this far cheaper than Claude Code's built-in advisor (which re-sends the full transcript, uncached, every call). Prompt shape:
+Spawn a **Task** subagent via `resolveAdvisorTier()` (semantic tier `advisor`; if that spawn is rejected because the org lacks the advisor-tier model, retry once with `resolveAdvisorFallback()` / semantic tier `strong`) and a **curated** prompt — pass only the plan's `## Overview`, `## Implementation Phases`, and the phase you judge riskiest. Do NOT pass the conversation: a Task subagent receives prompt text only (`knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`), so curation is the token lever that makes this far cheaper than Claude Code's built-in advisor (which re-sends the full transcript, uncached, every call). Prompt shape:
 
 > Review this implementation plan's approach and its riskiest phase. Name the one or two changes most likely to prevent rework or a wrong-architecture commit. Be concise — assume you see only what is quoted. PLAN:\n<overview + phases + riskiest phase>
 
-Apply the returned guidance before Step 5. Advisory only — do not block, loop, or re-consult. Skip silently in a resource-constrained run only if the plan is trivially mechanical (single-file, no architecture choice). Rationale + the `model: fable` upgrade-pin justification: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`).
+Apply the returned guidance before Step 5. Advisory only — do not block, loop, or re-consult. Skip silently in a resource-constrained run only if the plan is trivially mechanical (single-file, no architecture choice). Rationale + the `resolveAdvisorTier()` / semantic tier `advisor` upgrade-pin justification: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`). Harness SKUs: ADR-110 (`plugins/soleur/lib/harness-model-map.ts`).
 
 **When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` for `ship` to render + file as an `action-required` issue.
 

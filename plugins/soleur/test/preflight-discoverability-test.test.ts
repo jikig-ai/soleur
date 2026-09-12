@@ -2294,7 +2294,24 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // the stage (`inngest-server-probe`) and re-measured. This is the #7873 shape the comment
   // above describes: a `credentials_required` that is TRUE and still lets a wrong command
   // through, because the waiver removes the only thing that would have executed it.
-  const BASELINE_DECLARED_PROBES = 11;
+  //
+  // 11 -> 12 (#8026, 2026-09-11): the archived plan
+  // `plans/archive/20260910-160213-2026-09-10-fix-bwrap-probe-self-report-plan.md`.
+  //   1. PLACEMENT - two-space child of `discoverability_test:`, read from the block.
+  //   2. TRUTH - the probe is `doppler run -p soleur -c prd_terraform -- bash
+  //      scripts/betterstack-query.sh --since 12h --grep '<the two ci-deploy markers>'`, needing
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. EXECUTED during that PR: it is the read that
+  //      returned the single 2026-09-09T22:31:56Z rollback row (message with no bwrap text) that
+  //      the whole change exists to enrich. A warehouse query, not a host login.
+  //   3. NO SUBSTITUTE - the property is "the DEPLOY_ROLLBACK / SANDBOX_PROBE_OK line reaches
+  //      Better Stack from the deploy host"; the sink has no anonymous read, and a grep over the
+  //      source file would verify the diff, not the delivery.
+  // The plan's ORIGINAL command named `scripts/followthroughs/bwrap-probe-selfreport-check.sh
+  // --dry-run`, a script that PR deliberately did not build - so Check 10 would have FAILed on a
+  // missing file rather than on the property. It was replaced (old command kept in a dated
+  // superseded note beneath the block), which is why the declaration is new although the plan
+  // predates it.
+  const BASELINE_DECLARED_PROBES = 12;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

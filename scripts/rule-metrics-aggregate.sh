@@ -34,8 +34,47 @@ source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
 REPO_ROOT="${INCIDENTS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 AGENTS_MD="$REPO_ROOT/AGENTS.md"
-INCIDENTS="$REPO_ROOT/.claude/.rule-incidents.jsonl"
 OUT="$REPO_ROOT/knowledge-base/project/rule-metrics.json"
+
+# Incident logs are written by hooks into `$CWD/.claude/`, so they accumulate in
+# BOTH the shared checkout (beside the git COMMON dir) and in each worktree --
+# `.claude/.rule-incidents*` is gitignored, which makes them untracked, NOT
+# absent. Reading only $REPO_ROOT was the original bug: compound, the
+# authoritative producer (ADR-091), runs from a feature worktree BY DESIGN (its
+# branch-safety gate forbids main), so the aggregator read a worktree path
+# holding a few dozen session-local rows -- or nothing -- and reported nearly
+# every rule unused. That is how `rules_unused_over_8w` reached 105/105 on
+# origin/main with 0 rules at hits>0.
+#
+# Collect EVERY root rather than picking one. Preferring the worktree copy when
+# it exists (a `! -f` guard) reintroduces the same null reading in a new costume.
+#
+# When INCIDENTS_REPO_ROOT is set the caller named the only root that may be
+# read: every test seeds it, and a test exercising the empty-log path must keep
+# seeing an empty log. Never widen past it.
+INCIDENTS_DIRS=("$REPO_ROOT/.claude")
+if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
+  _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$_common_dir" ]]; then
+    case "$_common_dir" in /*) : ;; *) _common_dir="$REPO_ROOT/$_common_dir" ;; esac
+    _shared_root="$(cd "$_common_dir/.." 2>/dev/null && pwd || true)"
+    if [[ -n "$_shared_root" && "$_shared_root/.claude" != "$REPO_ROOT/.claude" ]]; then
+      INCIDENTS_DIRS+=("$_shared_root/.claude")
+    fi
+  fi
+fi
+INCIDENTS="${INCIDENTS_DIRS[0]}/.rule-incidents.jsonl"
+
+# Absence must be LOUD, and "absent" means NO root produced a log. A missing log
+# and a log of genuinely zero hits produce the same all-unused summary, and the
+# silent one reads as a finding rather than the null measurement it is.
+_found_any=0
+for _d in "${INCIDENTS_DIRS[@]}"; do
+  [[ -f "$_d/.rule-incidents.jsonl" ]] && _found_any=1
+done
+if [[ "$_found_any" -eq 0 ]]; then
+  echo "SOLEUR_RULE_METRICS_NO_INCIDENTS dirs=${INCIDENTS_DIRS[*]} reason=absent — summary is a NULL reading, not evidence that rules are unused" >&2
+fi
 
 [[ -f "$AGENTS_MD" ]] || { echo "ERROR: $AGENTS_MD not found" >&2; exit 2; }
 mkdir -p "$(dirname "$OUT")"
@@ -114,10 +153,15 @@ fi
 # and `last_hit`/`first_seen` are computed from event timestamps.
 INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
 : > "$INCIDENTS_MERGED"
-[[ -s "$INCIDENTS" ]] && cat "$INCIDENTS" >> "$INCIDENTS_MERGED"
-for _gz in "$REPO_ROOT"/.claude/.rule-incidents-*.jsonl.gz; do
-  [[ -e "$_gz" ]] || continue
-  zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+# Merge across EVERY incidents root (worktree + shared checkout) and every
+# rotated archive within each. Counts are commutative and first_seen/last_hit
+# come from event timestamps, so order does not matter.
+for _dir in "${INCIDENTS_DIRS[@]}"; do
+  [[ -s "$_dir/.rule-incidents.jsonl" ]] && cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED"
+  for _gz in "$_dir"/.rule-incidents-*.jsonl.gz; do
+    [[ -e "$_gz" ]] || continue
+    zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true
+  done
 done
 
 jq_counts='{}'
@@ -353,7 +397,8 @@ report=$(jq -n \
         # that lives in the guard hook, outside this change.
         # NOTE: no apostrophes in this block. It is inside a single-quoted jq
         # program; one of them ends the program and bash parses the rest as shell.
-        | map(select(. != "cq-pencil-collapse-auto-recover"))) as $orphan_ids
+        | map(select(. != "cq-pencil-collapse-auto-recover"))
+) as $orphan_ids
     # Hook input-contract faults, split out of $counts BEFORE the summary so the
     # count survives the orphan exclusion above. Keyed on rule_id like every
     # other counter in this script.

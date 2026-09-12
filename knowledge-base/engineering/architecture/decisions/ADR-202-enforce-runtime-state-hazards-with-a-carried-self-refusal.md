@@ -126,6 +126,28 @@ what remains after the lint.
   trigger: any PR that edits a listed script must remediate it, enforced by
   `--changed`.
 
+**Amendment — 2026-09-10 (#7997): the Rule D contract, and what it does not
+cover.** Rule D asks whether a credentialed `curl` is transport-confined
+(`--disable` first, `--noproxy '*'`) and destination-pinned (the host compared
+against a literal). Three residuals were measured while closing the two Sentry
+call sites, and each is a property of the RULE, not of those files:
+
+- **A wrapper FUNCTION is out of reach, even under a recogniser widening.** In
+  `sentry-monitors-audit.sh` the credential arrives at `curl_retry` via `"$@"`,
+  so the rule sees no credential at the execution site. Measured by substituting
+  a literal `curl` for `"$CURL_BIN"` on that line: the lint still reports nothing
+  there. Widening the recogniser does not close it; the credential is simply not
+  syntactically present.
+- **A post-request or classification-only adjudication satisfies `_pin_re` while
+  confining nothing.** The rule is satisfied by a comparison against a literal
+  anywhere in scope, including one that runs AFTER the request.
+- **The rule says nothing about the resolver, the trust anchor, the TLS key log,
+  or the binary.** `LOCALDOMAIN`/`RES_OPTIONS`/`HOSTALIASES`,
+  `CURL_CA_BUNDLE`/`SSL_CERT_FILE`/`SSL_CERT_DIR`, `SSLKEYLOGFILE` and a
+  caller-set `CURL_BIN` are all still caller-settable with a fully
+  rule-compliant call site. Closing them needs an `unset` prologue and a binary
+  adjudication, neither of which Rule D asks for.
+
 ### Named residual holes
 
 - A `BASH_ENV`-installed `DEBUG` trap gives per-command echo with **no bit** in

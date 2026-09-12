@@ -43,7 +43,9 @@ on:
       #
       # Know before using it: an override buys NOTHING when the gate is right — an image
       # absent from zot cannot be pulled, so this publishes a still-undeployable release.
-      # It is for a MISFIRING gate. It also bypasses await-ci (a push-only job), and
+      # It is for a MISFIRING gate. On a dispatch the CI gate is bypassed too —
+      # `resolve-target` reads the in-run release job rather than requiring a
+      # workflow_run event (it was `await-ci`, a push-only job, before #5806) — and
       # self-healing the resulting draft on a later run requires the SAME bump_type, or
       # the draft is orphaned permanently.
       allow_unmirrored_reason:
@@ -51,13 +53,54 @@ on:
         required: false
         type: string
         default: ""
+  # THE DEPLOY CHAIN FIRES ON CI COMPLETION, NOT ON A POLL (#5806, ADR-072 option 3,
+  # ADR-217). `await-ci` used to sit in this workflow holding an idle GitHub-hosted
+  # runner for up to 72 minutes polling for CI's verdict on this SHA, and failing
+  # CLOSED when CI outran its ceiling — the #7902 symptom, where a healthy build
+  # could not deploy. Firing on the real completion event removes the ceiling
+  # entirely (however long CI takes, the event still arrives), removes the held
+  # runner, and carries the AUTHORITATIVE SHA so migrate/deploy act on the commit CI
+  # actually verified.
+  #
+  # `branches: [main]` IS NOT OPTIONAL. Without it a full run of this workflow is
+  # CREATED for every PR CI completion and every merge_group completion — every job
+  # skipping, `release-outcome`'s `if: always()` executing each time. It is
+  # defence-in-depth and does NOT replace `resolve-target`'s runtime checks:
+  # `branches:` matches `head_branch`, which a fork PR from a branch named `main`
+  # also satisfies. `resolve-target` re-checks head_branch AND event at runtime.
+  #
+  # DO NOT filter this arm on `github.ref`. Under `workflow_run`, `github.ref` is
+  # ALWAYS the default branch, so `github.ref == 'refs/heads/main'` is VACUOUS — it
+  # reads like a branch filter and gates nothing. deploy-docs.yml carries this
+  # repo's own record of hitting that.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: write
   packages: write
 
+# THE workflow_run ARM IS SHA-KEYED, mirroring fix-constraints-stage-b.yml, which is
+# this repo's existing `workflow_run` precedent. Two CI completions for two different
+# main SHAs are two different deploys and must not collapse into one another; two
+# completions for the SAME SHA (a re-run) are the same deploy and should.
+# `cancel-in-progress: false` because the deploy takes the cross-pipeline `web-1-swap`
+# mutex — cancelling mid-swap is how you get a half-deployed host.
+concurrency:
+  group: web-platform-release-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
   release:
+    # PUSH AND DISPATCH ONLY. On the workflow_run arm the release for this SHA was
+    # already built by the push-arm run; `resolve-target` recovers its verdict from
+    # the jobs API and its values from the artifact it uploaded. Re-running it here
+    # would build a SECOND image for a SHA that already has one — and under
+    # workflow_run `actions/checkout` defaults to the DEFAULT-BRANCH head, so it
+    # would build a SHA newer than the one CI validated.
+    if: github.event_name != 'workflow_run'
     uses: ./.github/workflows/reusable-release.yml
     permissions:
       # A reusable workflow can only USE permissions its CALLER grants. cosign
@@ -94,256 +137,671 @@ jobs:
       allow_unmirrored_reason: ${{ inputs.allow_unmirrored_reason || '' }}
     secrets: inherit
 
-  # Gate the prod cutover (deploy job) on CI's `test` aggregator for THIS
-  # commit's SHA. The image still builds in parallel (release job) — only the
-  # final deploy waits, so time-to-prod = max(build, CI), not build+CI.
-  # Push-only: workflow_dispatch is the operator escape hatch (mirrors
-  # skip_deploy) and bypasses this gate by design. See plan
-  # knowledge-base/project/plans/2026-06-08-feat-cd-deploy-ci-gate-and-build-cache-plan.md
-  await-ci:
-    if: github.event_name == 'push'
+  # ─────────────────────────────────────────────────────────────────────────────
+  # resolve-target — REPLACES `await-ci` (#5806, ADR-072 option 3, ADR-217).
+  #
+  # WHAT IT REPLACES AND WHY. `await-ci` polled the REST API for CI's verdict on
+  # this SHA, holding an idle runner for up to 72 minutes and failing CLOSED when
+  # CI outran its ceiling. That ceiling is a fixed bound on an unbounded, growing
+  # quantity, which is #5806's actual objection. The deploy now fires on the real
+  # `workflow_run: completed` event, so there is no ceiling to outrun and no
+  # runner held while waiting.
+  #
+  # ═══ THE TRUST LADDER — THE ORDER IS THE CONTRACT ═══
+  #
+  # This job resolves the deploy target from TWO sources with DIFFERENT trust
+  # levels, and conflating them is the fail-open this design exists to prevent:
+  #
+  #   1. THE VERDICT comes from the jobs API. Always. `release.result` is the one
+  #      and only thing standing between a mirror-gate-blocked release and a prod
+  #      deploy of an unmirrored image.
+  #   2. THE VALUES come from an artifact the release job uploads, because the
+  #      REST jobs API exposes a job's `conclusion` but NOT its `outputs` — the
+  #      job object has no `outputs` key at all. Verified, not assumed.
+  #
+  # ══ DO NOT GATE ON THE ARTIFACT'S `mirror_verified`. ══
+  # It is legibility, not a gate. `reusable-release.yml` documents `docker_pushed`
+  # as written TEN STEPS BEFORE the zot mirror assertion (so it reads `true` on a
+  # release the gate BLOCKED), and `mirror_verified` at FR-A9 as "DELIBERATELY NOT
+  # a blocking conjunct". Substituting either for the step-1 conclusion read
+  # restores the exact fail-open `needs.release.result` was written to close.
+  # `plugins/soleur/test/workflow-run-deploy-invariants.test.sh` carries a
+  # mutation row for precisely that substitution — if you are reading this because
+  # that row went red, the row is right and the edit is wrong.
+  #
+  # ══ IDENTITY COMES FROM THE TRUSTED EVENT, NEVER FROM THE ARTIFACT. ══
+  # Same discipline as fix-constraints-stage-b.yml, this repo's existing
+  # `workflow_run` consumer. The artifact may only CONFIRM the SHA; it may never
+  # supply it.
+  #
+  # ═══ THE FIVE STATES, AND WHY TWO OF THEM MUST STAY GREEN ═══
+  #
+  # A `workflow_run` trigger inherits NEITHER of the two path gates that decide
+  # whether this workflow should have run at all: this file's `on.push.paths`
+  # denylist, and `reusable-release.yml`'s independent `check_changed` pathspec.
+  # So this arm fires on EVERY main CI completion, including docs-only pushes for
+  # which no release was ever published. Collapsing "correctly published nothing"
+  # into "the release is missing" turns every routine docs commit into a red
+  # release run — and a failure signal that fires that often can no longer
+  # distinguish the real failure it exists to catch. Collapsing it the other way
+  # ("no release -> skip") silently swallows a genuinely failed release.
+  #
+  #   no run for this SHA        -> clean skip, GREEN  (on.push.paths declined)
+  #   run exists, published none -> clean skip, GREEN  (check_changed declined)
+  #   run exists, still running  -> bounded liveness poll (below)
+  #   run exists, release FAILED -> fail closed, LOUD
+  #   run exists, published      -> deploy
+  #
+  # ═══ WHY THE LIVENESS POLL NEEDS NO CEILING ═══
+  #
+  # `await-ci` waited on a BLOCKLIST — keep waiting while the upstream run's
+  # status != completed, fail the moment it concludes without producing what you
+  # need. Applied to the RELEASE run for this SHA that needs no ceiling constant,
+  # because the wait is bounded by that run's own `timeout-minutes`, enforced by
+  # GitHub rather than by us. #5806 objects to a fixed ceiling on an unbounded
+  # growing quantity (CI duration); a liveness poll on an already-running job
+  # bounded by its own declared timeout is not that. Measured release median is
+  # 7.11 min. There is deliberately no RELEASE_WAIT_S constant here — a derived
+  # constant is a fourth thing that can drift, and this design does not need one.
+  # ─────────────────────────────────────────────────────────────────────────────
+  resolve-target:
+    # Runs on BOTH non-push arms. On workflow_dispatch the release job runs in
+    # THIS run, so `needs.release.*` is available directly and no API call or
+    # artifact is involved; on workflow_run the release job is skipped and the
+    # cross-run ladder above applies. `always()` is required because `release` is
+    # skipped on the workflow_run arm and a plain `needs:` would skip this too.
+    if: always() && github.event_name != 'push'
+    needs: [release]
     runs-on: ubuntu-latest
+    # 60 = the `release` job's own ceiling (declared on the callee,
+    # reusable-release.yml). This job's only unbounded activity is the liveness
+    # poll on the RELEASE run for this SHA, so that run's ceiling bounds this one.
+    # It must not EXCEED the release ceiling or it would dominate the declared
+    # critical path in scripts/prod-version-drift-check.test.sh (B9) and push the
+    # pipeline budget past DRIFT_SUSTAINED_THRESHOLD_MIN. In practice the residual
+    # wait is ~0: release and CI start together and release's measured median is
+    # 7.11 min against CI's 35+, so by the time this arm fires the release is done.
+    timeout-minutes: 60
     permissions:
       contents: read
-      checks: read          # commits/<sha>/check-runs API
-      actions: read         # actions/workflows/ci.yml/runs API (fast no-CI-run detection)
-    # Hard backstop only — sized for ≥20% wall-clock headroom over the in-bash
-    # CEILING_S (3600s): 72m = 4320s = 1.2 × 3600. The in-bash ceiling is keyed on
-    # WALL-CLOCK `elapsed` (not attempt count), so it fires FIRST regardless of
-    # per-iteration gh-api latency and the diagnostic ::error:: always emits (a bare
-    # GitHub job-kill reproduces the "silent skip, no signal" symptom #5795 is about — an
-    # attempt-count ceiling could be out-raced by API latency stretching each
-    # iteration; #5795 review P3). Do NOT lower without re-reading ADR-072.
-    timeout-minutes: 72
-    # Surfaced so the soft-ceiling breach has a CONSUMER (#7902). A `::warning::` that only
-    # lands in a green run's log is read by nobody — this repo's operator is non-technical and
-    # does not open CI logs — so an early-warning signal with no route is decorative, which is
-    # the defect class this PR exists to remove rather than reproduce.
+      actions: read
     outputs:
-      soft_breach: ${{ steps.await.outputs.soft_breach }}
-      soft_elapsed_s: ${{ steps.await.outputs.soft_elapsed_s }}
-      # Exported so the notifier can DERIVE the numbers it reports instead of restating them, and
-      # so the fail-closed case has a channel that can tell "the gate gave up" from "tests failed".
-      ceiling_breach: ${{ steps.await.outputs.ceiling_breach }}
-      final_elapsed_s: ${{ steps.await.outputs.final_elapsed_s }}
-      ceiling_s: ${{ steps.await.outputs.ceiling_s }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      released: ${{ steps.resolve.outputs.released }}
+      docker_pushed: ${{ steps.resolve.outputs.docker_pushed }}
+      mirror_verified: ${{ steps.resolve.outputs.mirror_verified }}
+      release_result: ${{ steps.resolve.outputs.release_result }}
+      should_deploy: ${{ steps.resolve.outputs.should_deploy }}
+      skip_reason: ${{ steps.resolve.outputs.skip_reason }}
+      soft_breach: ${{ steps.budget.outputs.soft_breach }}
+      soft_elapsed_s: ${{ steps.budget.outputs.soft_elapsed_s }}
+      soft_ceiling_s: ${{ steps.budget.outputs.soft_ceiling_s }}
+      ci_budget_min: ${{ steps.budget.outputs.ci_budget_min }}
+      ci_declared_path_min: ${{ steps.budget.outputs.ci_declared_path_min }}
+      ci_undeclared_jobs: ${{ steps.budget.outputs.ci_undeclared_jobs }}
     steps:
-      - name: Wait for CI test check-run on this SHA
-        id: await
+      # `actions/checkout` IS permitted here and is NOT permitted on `deploy`. The
+      # prohibition is specific to `deploy`, which drives the cutover over a webhook
+      # while holding the cross-pipeline `web-1-swap` lock — a checkout there would
+      # pull ~1.5k files onto the runner holding that lock. `resolve-target` holds no
+      # lock and drives no deploy, which is exactly why the derivation lives here.
+      # PINNED TO THE EVENT'S SHA. Under `workflow_run`, `actions/checkout` with no
+      # `ref:` resolves the DEFAULT-BRANCH head — this file already says so on the
+      # `release` job, and that warning was not applied to the jobs rehomed onto this
+      # arm. Unpinned, every ceiling this job parses would come from whatever main
+      # HEAD is at deploy time rather than from the SHA being deployed.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve the deploy target
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          # ADAPTIVE CEILING — do NOT lower CEILING_S, MAX_ATTEMPTS, or
-          # timeout-minutes without re-reading ADR-072. The ceiling is bounded by
-          # ci.yml-run LIVENESS, not a fixed CI latency: we only approach it while CI
-          # is provably alive (run status != completed).
-          #
-          # WHAT THIS CEILING BOUNDS (#7902): CI LIVENESS — the wall-clock budget for
-          # ci.yml's `test` aggregator check-run to conclude on this SHA. It is sized
-          # above the MEASURED p100 of that quantity, not above its p50. Re-measured
-          # 2026-09-07 over the last 25 completed push runs on main (time-to-`test` =
-          # the `test` job's completed_at minus the run's created_at):
-          # p50 35.2m, p90 54.0m, p100 57.4m, with 4/25 at or above 50m.
-          # CEILING_S=3600s=60m clears that p100 by 2.6m. That margin is thin ON
-          # PURPOSE-BOUNDED terms: it is the deterministic unblock, and the matrix
-          # sharding of ci.yml's `test-scripts` (#7902, the same PR) is what restores
-          # real headroom by removing ~90% of the wall clock this ceiling waits on.
-          #
-          # The PREVIOUS sizing premise was stated in run WALL-CLOCK terms ("~28m,
-          # measured 2026-06-30 over the last 50 main ci.yml runs") — a quantity this
-          # gate does not measure. The gate polls the `test` CHECK-RUN, so the metric
-          # that matters is time-to-`test`. See ADR-072's 2026-09-07 amendment.
-          #
-          # The in-bash ceiling keys on `elapsed >= CEILING_S` (NOT attempt count) so
-          # it fires before the timeout-minutes hard-kill regardless of per-iteration
-          # gh-api latency (#5795 review P3 — an attempt-count ceiling could be
-          # out-raced by API latency). MAX_ATTEMPTS is the loop's iteration backstop;
-          # timeout-minutes (4320s) carries ≥20% headroom over CEILING_S.
-          #
-          # MAX_ATTEMPTS MOVES WITH CEILING_S — it is not decorative. The loop runs
-          # `seq 1 $((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))` and, on exhaustion, falls
-          # through to a fail-closed `::error::` reporting `total_budget * INTERVAL_S`.
-          # Leaving MAX_ATTEMPTS at 300 while raising CEILING_S to 3600 would make
-          # LOOP EXHAUSTION the binding bound at ~3060s, so the raise would buy 60
-          # seconds instead of 10 minutes and the "elapsed ceiling is primary" claim
-          # two paragraphs up would silently become false.
-          CEILING_S: "3600"          # wall-clock adaptive ceiling = MAX_ATTEMPTS * INTERVAL_S
-          MAX_ATTEMPTS: "360"        # iteration backstop (360 * 10s = CEILING_S); the elapsed ceiling is primary
-          INTERVAL_S: "10"
-          GRACE_ATTEMPTS: "6"        # 60s grace for a ci.yml run to register before declaring "no CI for this SHA"
-          RECONCILE_ATTEMPTS: "6"    # bounded post-ci-completion re-poll absorbing run-completed→test-check-run eventual-consistency lag (load-bearing for green builds; spec-flow P0)
+          EVENT_NAME: ${{ github.event_name }}
+          OWN_RUN_ID: ${{ github.run_id }}
+          # workflow_run context. EMPTY on a dispatch — `github.event.workflow_run.*`
+          # is not populated there, which is why the dispatch arm is a separate
+          # branch rather than a defaulted value.
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          # In-run release job values, populated on the dispatch arm only.
+          D_VERSION: ${{ needs.release.outputs.version }}
+          D_TAG: ${{ needs.release.outputs.tag }}
+          D_RELEASED: ${{ needs.release.outputs.released }}
+          D_DOCKER_PUSHED: ${{ needs.release.outputs.docker_pushed }}
+          D_MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+          D_RESULT: ${{ needs.release.result }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # FAIL-CLOSED, ADAPTIVE. The prod deploy gates on CI's synthetic `test`
-          # aggregator check-run for THIS SHA. GitHub does NOT create that check-run
-          # until `test`'s needs:[shards] reach a terminal state (ci.yml `test` is
-          # needs:[…] + if:always()), so under runner contention it is absent for
-          # many minutes while the ci.yml workflow RUN is already live. A FIXED poll
-          # window therefore times out on a healthy-but-queued build, and each
-          # consecutive squash-merge loses the same race so "next release self-heals"
-          # never fires — the #5795 incident (prod stalled ~2.5h).
+
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          # A clean skip leaves the run GREEN. It is not a failure; it is the
+          # correct outcome for a push that legitimately published nothing.
+          clean_skip() {
+            echo "::notice::deploy skipped — $2"
+            emit head_sha "${1:-}"; emit version ""; emit tag ""
+            emit released "false"; emit docker_pushed "false"
+            emit mirror_verified "false"; emit release_result "skipped"
+            emit should_deploy "false"; emit skip_reason "$3"
+            exit 0
+          }
+          # Fail closed and LOUD. Reserved for states where a release SHOULD
+          # exist and does not, or exists and is broken.
+          fail_closed() {
+            echo "::error::deploy blocked — $1"
+            # EMIT head_sha HERE TOO. Without it every fail-closed state — which is
+            # every state that fires notify-gated — leaves the operator's Slack
+            # message rendering an EMPTY commit and version, because the message
+            # reads needs.resolve-target.outputs.head_sha. The old notify-gated used
+            # `github.sha`, which was always populated; dropping the SHA from the one
+            # channel that says "prod did NOT update" is a regression, not a detail.
+            emit head_sha "${WR_HEAD_SHA:-}"
+            # AND THE RELEASE VERDICT, for the same reason. release-outcome
+            # classifies whatever job results it can see; with release_result
+            # unset it finds only R_RESOLVE=failure and emails "Working out which
+            # build should go to production — failure" when the truth is that
+            # BUILDING the release failed. Slack gets this right; the email
+            # channel — the one built as the non-delivery guarantee — named the
+            # wrong job. Callers pass it when they know it; it stays empty when
+            # the release verdict genuinely was not the thing that failed.
+            emit release_result "${3:-}"
+            emit should_deploy "false"; emit skip_reason "$2"
+            exit 1
+          }
+
+          # EVERY GitHub API READ GOES THROUGH THIS. Under `set -euo pipefail` a
+          # transient 5xx or a secondary rate limit made `x=$(gh api ...)` trip -e
+          # and kill the step before ANY emit ran — so skip_reason stayed empty and
+          # notify-gated, which keys on it, did not fire. release-outcome still
+          # emailed off R_RESOLVE=failure, so the failure was degraded rather than
+          # silent; but Slack, the fast channel, was skipped for a whole class of
+          # failures that have nothing to do with the release. Retried because the
+          # class is overwhelmingly transient, then failed CLOSED with a reason.
+          gh_api() {
+            local _out _rc _try=0
+            while :; do
+              # `|| _rc=$?` — BOTH halves matter, and each fixes a defect the
+              # other form had.
+              #   `if _out=$(gh api ...); then` is errexit-SAFE (a condition is
+              #     exempt) but leaves $? as the IF STATEMENT's status — 0 — so
+              #     the retry message reported rc=0 on every failure, naming a
+              #     code it had not measured (AP-021).
+              #   A bare `_out=$(...)` then `_rc=$?` captures the real code but
+              #     is errexit-FATAL under this step's `set -e`: the shell dies
+              #     AT the assignment, so the retry and the fail-closed path
+              #     below are unreachable. Caught by
+              #     scripts/lint-workflow-errexit-capture.py (ADR-170).
+              # `|| _rc=$?` protects the command AND captures the status.
+              _rc=0
+              _out=$(gh api "$@" 2>"$RUNNER_TEMP/gh.err") || _rc=$?
+              if [ "$_rc" -eq 0 ]; then
+                printf '%s' "$_out"; return 0
+              fi
+              _try=$((_try + 1))
+              [ "$_try" -ge 3 ] && break
+              echo "gh api failed (rc=$_rc, attempt $_try) — retrying in $((_try * 5))s" >&2
+              sleep $((_try * 5))
+            done
+            fail_closed "the GitHub API read '$1' failed after 3 attempts (rc=$_rc): $(tr '\n' ' ' <"$RUNNER_TEMP/gh.err" | head -c 300)" "github_api_unavailable"
+          }
+
+          # ── Dispatch arm: everything is in this run. No API, no artifact. ────
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "workflow_dispatch: reading the in-run release job directly"
+            if [ "$D_RESULT" != "success" ]; then
+              fail_closed "the in-run release job concluded '$D_RESULT'" "release_failed" "$D_RESULT"
+            fi
+            # THE SAME EMPTINESS AND COHERENCE CHECKS AS THE OTHER ARM.
+            # The dispatch arm used to emit should_deploy=true on release success
+            # ALONE, while the workflow_run arm clean-skips on an empty version and
+            # fail-closes on an incoherent one. That asymmetry is not justified by
+            # the operator having asked: `check_changed` can decline on a dispatch
+            # exactly as it does on a push, and a dispatch with an empty D_VERSION
+            # would have run the whole deploy chain against nothing.
+            if [ -z "$D_VERSION" ] || [ -z "$D_TAG" ]; then
+              if [ "$D_RELEASED" = "true" ] || [ "$D_DOCKER_PUSHED" = "true" ]; then
+                fail_closed "the in-run release job reports released=$D_RELEASED docker_pushed=$D_DOCKER_PUSHED but carries no version/tag — incoherent, so this is a broken release rather than a declined one" "release_outputs_incomplete" "$D_RESULT"
+              fi
+              clean_skip "$DISPATCH_SHA" "the in-run release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
+            fi
+            emit head_sha "$DISPATCH_SHA"
+            emit version "$D_VERSION"; emit tag "$D_TAG"
+            emit released "$D_RELEASED"; emit docker_pushed "$D_DOCKER_PUSHED"
+            emit mirror_verified "$D_MIRROR_VERIFIED"
+            emit release_result "$D_RESULT"
+            emit should_deploy "true"; emit skip_reason ""
+            exit 0
+          fi
+
+          # ── workflow_run arm ────────────────────────────────────────────────
+          # Re-check the event filters at RUNTIME. `branches:` on the trigger
+          # matches head_branch, which a fork PR from a branch named `main` also
+          # satisfies, so the trigger filter is defence-in-depth and not the gate.
+          if [ "$WR_HEAD_BRANCH" != "main" ]; then
+            clean_skip "" "upstream CI ran on '$WR_HEAD_BRANCH', not main" "not_main"
+          fi
+          if [ "$WR_EVENT" != "push" ]; then
+            clean_skip "" "upstream CI was a '$WR_EVENT' event, not a push" "not_push"
+          fi
+          if [ "$WR_CONCLUSION" != "success" ]; then
+            clean_skip "" "upstream CI concluded '$WR_CONCLUSION'" "ci_not_green"
+          fi
+          case "$WR_HEAD_SHA" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+              [ "${#WR_HEAD_SHA}" -eq 40 ] || fail_closed "head_sha is not a 40-hex SHA: '$WR_HEAD_SHA'" "bad_sha" ;;
+            *) fail_closed "head_sha is not a 40-hex SHA: '$WR_HEAD_SHA'" "bad_sha" ;;
+          esac
+          echo "resolving deploy target for $WR_HEAD_SHA"
+
+          # ── Step 1: THE VERDICT, from the jobs API ──────────────────────────
+          # Pinned to `?event=push` AND excluding this run: under the new topology
+          # this workflow produces runs for the SAME head_sha on BOTH arms, and the
+          # workflow_run-arm run has `release` SKIPPED. An unfiltered "runs for this
+          # SHA" query would resolve state 2 (published nothing -> clean skip) for a
+          # SHA that DID publish, so the deploy silently never happens and the run
+          # stays green — the worst outcome reached through the mechanism built to
+          # prevent it.
+          runs_json=$(gh_api \
+            "repos/$REPO/actions/workflows/web-platform-release.yml/runs?event=push&head_sha=$WR_HEAD_SHA&per_page=50" \
+            --jq '[.workflow_runs[] | {id: .id, status: .status, conclusion: .conclusion}]')
+          run_id=$(printf '%s' "$runs_json" | jq -r --arg own "$OWN_RUN_ID" \
+            '[.[] | select((.id|tostring) != $own)] | sort_by(.id) | last | .id // ""')
+
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            # STATE 1 — no push-arm run exists for this SHA. The push did not match
+            # this file's `on.push.paths` denylist, so there was nothing to deploy.
+            clean_skip "$WR_HEAD_SHA" "no Web Platform Release run exists for this SHA (on.push.paths declined it)" "no_release_run"
+          fi
+          echo "release run: $run_id"
+
+          # ── Liveness poll — DEFENSIVE, and unreachable in this topology ─────
+          # Blocklist shape, inherited from await-ci: keep waiting while the run is
+          # not completed. Two independent reasons it cannot hang forever, and the
+          # SECOND is the operative one — an earlier revision of this comment
+          # claimed only the first, which is true but is not why the loop is safe:
           #
-          # Instead we wait ADAPTIVELY on the real CI signal:
-          #   - exit 0 ONLY on the `test` check-run conclusion==success;
-          #   - keep waiting as long as the ci.yml RUN for this SHA is alive
-          #     (run status != completed — a BLOCKLIST over the full run-status enum
-          #     queued|in_progress|waiting|requested|pending, NOT an allowlist that
-          #     would dead-end on waiting/requested/pending);
-          #   - fail-CLOSED the instant `test` concludes non-success, or the ci.yml
-          #     run concludes without `test` reaching success after a BOUNDED
-          #     reconciliation grace, or no run registers after the 60s grace, or the
-          #     adaptive ceiling is hit while CI is still in_progress.
-          # The ci.yml RUN `.conclusion` is LIVENESS-ONLY — it MUST NEVER authorize
-          # exit 0 (only the `test` check-run conclusion==success may); a
-          # run.conclusion shortcut would fail-OPEN on a mis-selected run or a green
-          # run whose `test` aggregation was non-success. See ADR-072.
-          status=missing; conclusion=none
-          reconcile_used=0
-          warned_900=0
-          # Soft ceiling (#7902) — DERIVED from CEILING_S, never restated, so the two cannot
-          # drift apart. Deliberately no literal here either: writing the current product into
-          # the comment reintroduces, in prose, exactly the restated-value drift the derivation
-          # exists to remove.
-          warned_soft=0
-          soft_ceiling_s=$(( CEILING_S * 7 / 10 ))
-          start_epoch=$(date +%s)
-          total_budget=$((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))
-          # Publish the ceiling so every downstream message DERIVES it. A consumer that restates
-          # `3600` goes silently wrong on the next raise — which is the drift the soft ceiling's own
-          # derivation exists to remove, and which the Slack body did anyway (#7902 review).
-          echo "ceiling_s=$CEILING_S" >> "${GITHUB_OUTPUT:-/dev/null}"
-          for attempt in $(seq 1 "$total_budget"); do
-            elapsed=$(( $(date +%s) - start_epoch ))
-            if [ "$elapsed" -gt 900 ] && [ "$warned_900" = "0" ]; then
-              echo "::warning::await-ci has waited past 900s (elapsed_s=$elapsed) for CI on $SHA — CI is under contention; the adaptive gate keeps waiting while the ci.yml run is alive (#5795)."
-              warned_900=1
+          #  1. GitHub enforces the release job's declared timeout-minutes, so the
+          #     run it polls reaches `completed` on its own.
+          #  2. THE TWO ARMS SHARE A CONCURRENCY GROUP. This workflow keys on
+          #     `web-platform-release-<sha>` and both arms resolve it to the SAME
+          #     sha, with `cancel-in-progress: false`. So the workflow_run-arm run
+          #     QUEUES behind the push-arm run that contains `release`, and cannot
+          #     start until it finishes. By the time this step runs, the release
+          #     run is already `completed` and the loop exits on iteration 1.
+          #
+          # The loop is therefore dead code on both paths today (a docs-only push
+          # creates no push-arm run at all, and takes the no_release_run clean skip
+          # before reaching here). It is kept because reason 2 is a property of the
+          # concurrency key, not of this job: change that key so the arms stop
+          # sharing a group — which a future edit might do to parallelise them —
+          # and this loop becomes live again with no other warning.
+          #
+          # Job-level `timeout-minutes: 60` bounds it regardless; GitHub starts that
+          # clock when the job STARTS, so queueing behind the push arm does not
+          # consume it.
+          attempt=0
+          while :; do
+            state=$(gh_api "repos/$REPO/actions/runs/$run_id" --jq '.status')
+            [ "$state" = "completed" ] && break
+            attempt=$((attempt + 1))
+            if [ $((attempt % 10)) -eq 1 ]; then
+              echo "release run $run_id is '$state' — waiting (attempt $attempt)"
             fi
-            # EARLY WARNING at 70% of the ceiling (#7902). This is the mechanism that catches
-            # the #7902 creep class, and it is here rather than in CI on purpose: it measures
-            # the quantity the gate actually gates — time-to-`test` — which INCLUDES ci.yml's
-            # own concurrency queue. Declared job ceilings in ci.yml bound execution only, so
-            # arithmetic over them is green on configurations this gate cannot absorb; that
-            # approach was tried and rejected (see ADR-212).
-            if [ "$elapsed" -ge "$soft_ceiling_s" ] && [ "$warned_soft" = "0" ]; then
-              echo "::warning::await-ci has passed 70% of its ceiling for $SHA (elapsed_s=$elapsed, soft_ceiling_s=$soft_ceiling_s, CEILING_S=$CEILING_S). This measures time-to-'test' INCLUDING the ci.yml concurrency queue. Sustained hits mean CI has outgrown the deploy gate — raise CEILING_S (moving DRIFT_SUSTAINED_THRESHOLD_MIN first) or shorten CI, before this becomes a fail-closed deploy."
-              # Written HERE, not at exit: the loop leaves via `exit 0` on the success path, and
-              # the runner reads $GITHUB_OUTPUT after the step ends regardless of exit path.
-              echo "soft_breach=true" >> "${GITHUB_OUTPUT:-/dev/null}"
-              echo "soft_elapsed_s=$elapsed" >> "${GITHUB_OUTPUT:-/dev/null}"
-              warned_soft=1
-            fi
-            # HARD CEILING, EVALUATED AT THE TOP (#7902 review, P1).
-            #
-            # This check used to live inside the `run_status != completed` branch, ~50 lines below
-            # — which both `gh api` failure arms skip via `sleep; continue`. So a degraded token, a
-            # rate limit, or a GitHub API blip spun the loop WITHOUT ever testing elapsed, until
-            # either loop exhaustion or the `timeout-minutes` hard-kill, and the hard-kill emits no
-            # annotation at all. The comment below the old site claimed the opposite ("fires before
-            # the timeout-minutes hard-kill ... regardless of per-iteration gh-api latency"); that
-            # was true of latency and false of failure. Evaluating it here makes it unconditional.
-            if [ "$elapsed" -ge "$CEILING_S" ]; then
-              {
-                echo "soft_breach=${warned_soft:+true}"
-                echo "ceiling_breach=true"
-                echo "final_elapsed_s=$elapsed"
-              } >> "${GITHUB_OUTPUT:-/dev/null}"
-              echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) waiting for CI on $SHA — blocking deploy (fail-closed). This is the GATE giving up, NOT a test failure: CI may still be running and may still go green. See ADR-072."
-              exit 1
-            fi
-            # ── TOP OF LOOP: read the `test` check-run verdict FIRST (AC2). ──
-            # var-based (NOT piped-into-grep) to avoid set -e + pipe fragility;
-            # stderr captured so a missing checks:read perm is diagnosable now.
-            if ! resp=$(gh api "repos/$REPO/commits/$SHA/check-runs" 2>/tmp/gherr); then
-              echo "attempt $attempt: check-runs query failed: $(cat /tmp/gherr) — retrying (elapsed_s=$elapsed)"
-              sleep "$INTERVAL_S"; continue
-            fi
-            # Most-recent NON-cancelled check-run named exactly "test" (excluding
-            # cancelled stops a cancelled re-run shadowing an older green run).
-            sel='([.check_runs[]|select(.name=="test" and .conclusion!="cancelled")]|sort_by(.started_at)|last)//{}'
-            status=$(jq -r "$sel|.status//\"missing\"" <<<"$resp")
-            conclusion=$(jq -r "$sel|.conclusion//\"none\"" <<<"$resp")
-            echo "attempt $attempt: test status=$status conclusion=$conclusion elapsed_s=$elapsed"
-            if [ "$status" = "completed" ]; then
-              if [ "$conclusion" = "success" ]; then
-                echo "CI test passed for $SHA — deploy may proceed."
-                exit 0
-              fi
-              echo "::error::CI test concluded '$conclusion' for $SHA — blocking deploy (fail-closed)."
-              exit 1
-            fi
-            # ── `test` not yet completed: gate on ci.yml-RUN liveness. ──
-            # A transient gh api failure must RETRY (continue), never be parsed as a
-            # zero-run (a false fail-closed); only act on a SUCCESSFUL response. This
-            # replaces the prior `|| echo "0"` which conflated an API error with a
-            # true zero-run.
-            if ! runs_resp=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=20" 2>/tmp/gherr); then
-              echo "attempt $attempt: ci-runs query failed: $(cat /tmp/gherr) — retrying (elapsed_s=$elapsed)"
-              sleep "$INTERVAL_S"; continue
-            fi
-            run_count=$(jq -r '.total_count // 0' <<<"$runs_resp")
-            # Fast fail-closed: after grace, if NO ci.yml run ever registered for
-            # this SHA, block now instead of waiting out the ceiling. Deliberate
-            # skip-ci releases use the workflow_dispatch escape hatch.
-            if [ "$status" = "missing" ] && [ "$attempt" -ge "$GRACE_ATTEMPTS" ] && [ "$run_count" = "0" ]; then
-              echo "::error::No ci.yml run for $SHA after grace — CI was skipped or never triggered. Blocking deploy (fail-closed). Use workflow_dispatch to force a release."
-              exit 1
-            fi
-            # Guard the array before indexing (run_count==0 ⇒ null ⇒ "none"); select
-            # the most-recent push-run for this SHA (squash-merge mints a fresh SHA).
-            run_status=$(jq -r '(.workflow_runs | sort_by(.created_at) | last | .status) // "none"' <<<"$runs_resp")
-            run_conclusion=$(jq -r '(.workflow_runs | sort_by(.created_at) | last | .conclusion) // "none"' <<<"$runs_resp")
-            if [ "$run_status" != "completed" ]; then
-              # CI run is alive (queued/in_progress/waiting/requested/pending) or
-              # not-yet-registered — keep waiting, bounded by the WALL-CLOCK ceiling.
-              # Redundant since #7902's review hoisted the same check to the TOP of the loop
-              # (where no `continue` arm can skip it). Kept as a second net; if it ever fires
-              # before the hoisted one, the hoisted one has been moved or removed.
-              if [ "$elapsed" -ge "$CEILING_S" ]; then
-                echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) while the ci.yml run for $SHA was still '$run_status' — blocking deploy (fail-closed). CI exceeded the adaptive ceiling; see ADR-072."
-                exit 1
-              fi
-              echo "attempt $attempt: ci.yml run status=$run_status (alive) — waiting (elapsed_s=$elapsed)"
-              sleep "$INTERVAL_S"; continue
-            fi
-            # ── ci.yml run COMPLETED but `test` not yet success: reconciliation. ──
-            # Absorb run-completed→check-run eventual-consistency lag with a BOUNDED
-            # re-poll (RECONCILE_ATTEMPTS, consumed as ordinary loop iterations — NOT
-            # a new unbounded inner loop). We proceed ONLY when the NEXT top-of-loop
-            # read re-observes `test`=success; otherwise fail-closed once the grace is
-            # spent (covers ci cancelled/timed_out/skipped/action_required). The run
-            # `.conclusion` here is DIAGNOSTIC ONLY — it never authorizes exit 0.
-            reconcile_used=$((reconcile_used + 1))
-            echo "attempt $attempt: ci.yml run completed (conclusion=$run_conclusion) but test check-run status=$status — reconciling ${reconcile_used}/${RECONCILE_ATTEMPTS} (elapsed_s=$elapsed)"
-            if [ "$reconcile_used" -ge "$RECONCILE_ATTEMPTS" ]; then
-              echo "::error::ci.yml run for $SHA concluded '$run_conclusion' but the 'test' check-run never reached success after ${RECONCILE_ATTEMPTS} reconciliation polls — blocking deploy (fail-closed)."
-              exit 1
-            fi
-            sleep "$INTERVAL_S"
+            sleep 20
           done
-          echo "::error::Timed out after $((total_budget * INTERVAL_S))s waiting for CI test on $SHA (last test status=$status) — blocking deploy (fail-closed)."
-          exit 1
+
+          # PINNED TO THE LITERAL JOB NAME. `release` is a REUSABLE-WORKFLOW call,
+          # so the API row is named `release / release`, NOT `release`. A lookup on
+          # the bare name returns ZERO rows — measured — and a guard built on it
+          # would report clean forever. The non-empty assertion below is what makes
+          # that a loud failure instead of an empty haystack.
+          jobs_json=$(gh_api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "release / release") | {name, conclusion}]')
+          n=$(printf '%s' "$jobs_json" | jq 'length')
+          if [ "$n" -ne 1 ]; then
+            fail_closed "expected exactly 1 job named 'release / release' in run $run_id, found $n (the job may have been renamed — this is the empty-haystack class, not a missing release)" "release_job_unresolvable"
+          fi
+          release_result=$(printf '%s' "$jobs_json" | jq -r '.[0].conclusion')
+          echo "release job conclusion: $release_result"
+
+          if [ "$release_result" != "success" ]; then
+            # STATE 4 — a real failure. This is the arm the mirror gate reaches.
+            fail_closed "the release job for $WR_HEAD_SHA concluded '$release_result' (run $run_id)" "release_failed" "$release_result"
+          fi
+
+          # ── Step 2: THE VALUES, from the artifact ───────────────────────────
+          arts=$(gh_api "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.name == "release-outputs-web-platform") | {id, expired}]')
+          a_n=$(printf '%s' "$arts" | jq 'length')
+          if [ "$a_n" -eq 0 ]; then
+            fail_closed "release run $run_id succeeded but published no release-outputs-web-platform artifact" "release_outputs_missing"
+          fi
+          if [ "$(printf '%s' "$arts" | jq -r '.[0].expired')" = "true" ]; then
+            # A DISTINCT string on purpose: a months-later operator re-run must read
+            # as "the evidence aged out", never as "the release broke".
+            fail_closed "the release-outputs artifact for run $run_id has expired" "release_outputs_expired"
+          fi
+          art_id=$(printf '%s' "$arts" | jq -r '.[0].id')
+          # Not via gh_api(): this one streams BINARY to a file, so it cannot go
+          # through a wrapper that captures stdout. Same fail-closed contract.
+          if ! gh api "repos/$REPO/actions/artifacts/$art_id/zip" > "$RUNNER_TEMP/ro.zip" 2>"$RUNNER_TEMP/gh.err"; then
+            fail_closed "downloading the release-outputs artifact ($art_id) failed: $(tr '\n' ' ' <"$RUNNER_TEMP/gh.err" | head -c 300)" "github_api_unavailable"
+          fi
+          unzip -p "$RUNNER_TEMP/ro.zip" release-outputs.json > "$RUNNER_TEMP/ro.json"
+
+          # ── Step 3: identity binding. The artifact CONFIRMS, never supplies. ──
+          a_sha=$(jq -r '.head_sha // ""' "$RUNNER_TEMP/ro.json")
+          a_run=$(jq -r '.run_id // ""' "$RUNNER_TEMP/ro.json")
+          if [ "$a_sha" != "$WR_HEAD_SHA" ]; then
+            fail_closed "release-outputs head_sha '$a_sha' does not match the event's '$WR_HEAD_SHA' — deploying it would ship the wrong commit" "identity_mismatch"
+          fi
+          if [ "$a_run" != "$run_id" ]; then
+            fail_closed "release-outputs run_id '$a_run' does not match the resolved run '$run_id'" "identity_mismatch"
+          fi
+          # ── Step 4: schema binding. A rename in the shared workflow must fail
+          #    closed, not silently yield empty strings.
+          a_schema=$(jq -r '.schema // ""' "$RUNNER_TEMP/ro.json")
+          if [ "$a_schema" != "1" ]; then
+            fail_closed "release-outputs schema is '$a_schema', expected 1" "schema_mismatch"
+          fi
+
+          version=$(jq -r '.version // ""' "$RUNNER_TEMP/ro.json")
+          tag=$(jq -r '.tag // ""' "$RUNNER_TEMP/ro.json")
+          released=$(jq -r '.released // "false"' "$RUNNER_TEMP/ro.json")
+          docker_pushed=$(jq -r '.docker_pushed // "false"' "$RUNNER_TEMP/ro.json")
+          mirror_verified=$(jq -r '.mirror_verified // "false"' "$RUNNER_TEMP/ro.json")
+
+          # STATE 2 — the release job SUCCEEDED and deliberately published nothing:
+          # reusable-release.yml's own `check_changed` pathspec declined.
+          #
+          # THE DISCRIMINATOR IS `version`, NOT `released`, AND THAT IS EQUAL-STRENGTH
+          # RATHER THAN A PREFERENCE. The gates this arm replaces read
+          # `needs.release.outputs.version != ''` (migrate) and
+          # `needs.release.outputs.docker_pushed == 'true'` (deploy). NEITHER read
+          # `released`. And `released` is FALSE in a state those gates DEPLOYED:
+          # reusable-release.yml derives it as
+          #   create_release.released == 'true' || idempotency.draft_exists == 'true'
+          # so a SHA whose tag is already PUBLISHED (idempotency `exists=true`, the
+          # #4902 already-published branch — NOT the orphaned-draft branch) yields
+          # `released=false` with a perfectly good version and image. Gating on it
+          # would silently clean-skip the re-run an operator uses to recover a failed
+          # deploy: green run, no deploy, no notification. `check_changed` declining
+          # leaves `version` EMPTY, which is the state the old gate keyed on.
+          #
+          # `released` is still carried as a value (legibility, and release-outcome
+          # reads it) — it is simply not a gate.
+          if [ -z "$version" ] || [ -z "$tag" ]; then
+            # COHERENCE FIRST: "published nothing" and "published something and
+            # lost track of it" are different states, and only the first is clean.
+            # `check_changed` declining leaves version, tag, released AND
+            # docker_pushed all empty/false. An artifact claiming a pushed image or
+            # a cut release while carrying NO version is incoherent — the producer
+            # is broken — and routing it to the clean-skip arm would leave the run
+            # GREEN with no notification, which is the failure-swallowed-as-skip
+            # shape this whole job exists to prevent.
+            #
+            # This is also what gives `release_outputs_incomplete` a PRODUCER.
+            # notify-gated named it in both its `if:` and its `case` while nothing
+            # emitted it — the arms were unreachable, and the vocabulary looked
+            # balanced (8 fault + 5 clean = 13) against a producer that emitted 12.
+            if [ "$released" = "true" ] || [ "$docker_pushed" = "true" ]; then
+              fail_closed "release-outputs for $WR_HEAD_SHA reports released=$released docker_pushed=$docker_pushed but carries no version/tag — the artifact is incoherent, so this is a broken release, not a declined one" "release_outputs_incomplete"
+            fi
+            clean_skip "$WR_HEAD_SHA" "the release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
+          fi
+
+          emit head_sha "$WR_HEAD_SHA"
+          emit version "$version"; emit tag "$tag"
+          emit released "$released"; emit docker_pushed "$docker_pushed"
+          emit mirror_verified "$mirror_verified"
+          emit release_result "$release_result"
+          emit should_deploy "true"; emit skip_reason ""
+          echo "resolved: version=$version tag=$tag sha=$WR_HEAD_SHA"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # CI-BUDGET CREEP DETECTOR — relocated, not deleted (#5806, ADR-217).
+      #
+      # `await-ci` carried the only creep detector on this pipeline: a
+      # `::warning::` at 0.7 x CEILING_S (ADR-212 Decision 4). Deleting the job
+      # deletes CEILING_S, and deleting the warning with it would regress the
+      # property and undo what #7902 shipped. So it moves here.
+      #
+      # THE REFERENCE IS DERIVED FROM A CONSTANT THAT IS ALREADY OWNED AND
+      # ALREADY CI-ASSERTED — never a fresh literal, which is precisely what
+      # ADR-212 Decision 3 rejected arithmetic for.
+      # `DRIFT_SUSTAINED_THRESHOLD_MIN` is the declared end-to-end pipeline
+      # budget and check B9 in scripts/prod-version-drift-check.test.sh already
+      # asserts it stays >= the declared critical path. CI's ALLOWED share is
+      # that budget minus the declared ceilings of the jobs downstream of CI.
+      #
+      # TWO DIFFERENT QUANTITIES, PREVIOUSLY CONFLATED. Keep them apart:
+      #   CI_BUDGET_MIN     — what the pipeline budget ALLOWS CI (207 - 135 = 72).
+      #                       The soft ceiling derives from this.
+      #   CI_DECLARED_PATH  — what CI DECLARES for itself (test-scripts 60 +
+      #                       test 10 = 70). B9's arithmetic uses this.
+      # `CI_DECLARED_PATH <= CI_BUDGET_MIN` is the headroom statement that makes
+      # the whole budget hold, and it is asserted below rather than assumed.
+      # Every term is READ from the tree, so the number moves when a ceiling does.
+      - name: Derive the CI budget and check for creep
+        id: budget
+        env:
+          RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          RUN_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+          # `|| true` is LOAD-BEARING, not defensive noise. Under `set -euo
+          # pipefail` a non-matching grep exits 1, pipefail propagates it, and
+          # `THRESHOLD=$(read_threshold)` then trips -e and kills the step —
+          # BEFORE the emptiness loop below can report which term went missing.
+          # The whole "could not read X from the tree" branch was dead for its
+          # first and most important member.
+          read_threshold() {
+            { grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' scripts/prod-version-drift-check.sh \
+              || true; } | { grep -oE '[0-9]+$' || true; } | head -1
+          }
+          # Jobs in a workflow that declare NO `timeout-minutes`. GitHub applies a
+          # 360-minute default to each, so an undeclared job is not "unbounded" in
+          # the API — it is bounded at six hours, which is 3x the entire pipeline
+          # drift threshold. Enumerated, never counted: the list is the remedy.
+          undeclared_jobs() {
+            awk '
+              /^jobs:[[:space:]]*$/ { inj = 1; next }
+              !inj { next }
+              /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {
+                if (job != "" && !seen) print job
+                job = $1; sub(/:$/, "", job); seen = 0; next
+              }
+              /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ { seen = 1 }
+              END { if (job != "" && !seen) print job }
+            ' "$1"
+          }
+          # Job-scoped `timeout-minutes`, read from the workflow itself.
+          # awk, not an inline python heredoc: a `run: |` block scalar terminates
+          # at the first line indented LESS than the block, and a multi-line
+          # `python3 -c '...'` puts its body at column 0. That is a YAML parse
+          # error, not a runtime one — it breaks the whole file.
+          job_ceiling() {
+            awk -v job="$2" '
+              $0 ~ "^  " job ":$" { inb = 1; next }
+              inb && /^  [a-zA-Z0-9_-]+:$/ { exit }
+              inb && /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ {
+                gsub(/[^0-9]/, ""); print; exit
+              }
+            ' "$1"
+          }
+
+          # Longest declared path to the run's COMPLETION: max over the
+          # needs-closure, not a sum of two hand-picked jobs. Only meaningful
+          # once every job declares a ceiling, which is why its sole caller is
+          # gated on that.
+          run_declared_path() {
+            awk '
+              /^jobs:[[:space:]]*$/ { inj = 1; next }
+              !inj { next }
+              /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {
+                job = $1; sub(/:$/, "", job); jobs[++nj] = job; inneeds = 0; next
+              }
+              /^    timeout-minutes:[[:space:]]*[0-9]+$/ { t = $2; tmo[job] = t; next }
+              /^    needs:[[:space:]]*\[/ {
+                line = $0; sub(/^[^[]*\[/, "", line); sub(/\].*$/, "", line)
+                gsub(/[ \t]/, "", line); needs[job] = line; inneeds = 0; next
+              }
+              /^    needs:[[:space:]]*[a-zA-Z0-9_-]+[[:space:]]*$/ { needs[job] = $2; next }
+              /^    needs:[[:space:]]*$/ { inneeds = 1; next }
+              inneeds && /^      - / { needs[job] = needs[job] (needs[job] ? "," : "") $2; next }
+              inneeds && /^    [a-zA-Z]/ { inneeds = 0 }
+              END {
+                for (i = 1; i <= nj; i++) { best = 0
+                  # iterate to a fixed point; DAG depth here is small
+                  for (pass = 0; pass < nj; pass++) for (j = 1; j <= nj; j++) {
+                    n = jobs[j]; m = 0; c = split(needs[n], parts, ",")
+                    for (k = 1; k <= c; k++) if (path[parts[k]] > m) m = path[parts[k]]
+                    # THE PLATFORM DEFAULT, APPLIED HERE TOO. An undeclared job
+                    # is bounded at 360m by GitHub, not at 0. Defaulting to 0 makes
+                    # this silently UNDER-report whenever it is called outside its
+                    # gate — the shape of wrongness hardest to notice, because the
+                    # number still looks plausible. (No apostrophes in this awk
+                    # program: it is single-quoted inside a YAML block scalar, and
+                    # one apostrophe terminates the string.)
+                    path[n] = ((n in tmo) ? tmo[n] : 360) + m
+                  }
+                }
+                for (i = 1; i <= nj; i++) if (path[jobs[i]] > best) best = path[jobs[i]]
+                print best
+              }
+            ' "$1"
+          }
+
+          THRESHOLD=$(read_threshold)
+          REL=.github/workflows/web-platform-release.yml
+          M=$(job_ceiling "$REL" migrate)
+          V=$(job_ceiling "$REL" verify-migrations)
+          D=$(job_ceiling "$REL" deploy)
+          for pair in "THRESHOLD:$THRESHOLD" "migrate:$M" "verify-migrations:$V" \
+                      "deploy:$D"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::could not read ${pair%%:*} from the tree — the CI budget is underived, so the creep detector would be measuring against a made-up number"
+              exit 1
+            fi
+          done
+
+          CI_BUDGET_MIN=$(( THRESHOLD - M - V - D ))
+          # WHAT THE TRIGGER ACTUALLY WAITS FOR. `workflow_run: types:
+          # [completed]` fires when the WHOLE ci.yml run concludes, not when the
+          # `test` aggregator does. The predecessor quantity — `test-scripts` +
+          # `test` — was correct for `await-ci`, which polled for the `test`
+          # CHECK, and it was carried across the rewrite unchanged. It is the
+          # wrong quantity here by an order of magnitude: measured on this tree,
+          # to-`test` is 70m while the whole-run declared path is 720m.
+          CI_UNDECLARED=$(undeclared_jobs .github/workflows/ci.yml)
+          N_UNDECLARED=$(printf '%s' "$CI_UNDECLARED" | grep -c . || true)
+          # 0.7 — the same factor ADR-212 Decision 4 chose for the ceiling this
+          # replaces. Derived from CI_BUDGET_MIN, never restated as a literal.
+          SOFT_CEILING_S=$(( CI_BUDGET_MIN * 60 * 7 / 10 ))
+          emit ci_budget_min "$CI_BUDGET_MIN"
+          emit ci_undeclared_jobs "$N_UNDECLARED"
+          emit soft_ceiling_s "$SOFT_CEILING_S"
+          echo "CI_BUDGET_MIN=${CI_BUDGET_MIN} ci_jobs_without_ceiling=${N_UNDECLARED} soft_ceiling_s=${SOFT_CEILING_S}"
+
+          # HEADROOM INVARIANT — and the honest reason it cannot be asserted yet.
+          #
+          # The statement that makes the budget hold is "CI's declared path fits
+          # in the share the pipeline budget allows it". Asserting it requires
+          # every job on the run to DECLARE a ceiling. While any job does not,
+          # GitHub's 360m default applies to it, and the declared path is 720m
+          # against a 72m share — so the invariant is FALSE, and the previous
+          # `70 <= 72` green was an artifact of measuring to-`test` instead.
+          #
+          # As of #8020 (closed inline in this PR) every ci.yml job declares a
+          # ceiling derived from measured duration, so this branch is not taken
+          # today and the invariant below is ASSERTED. The branch stays because
+          # the condition it guards is a property of ci.yml, not of this file: a
+          # future job added without a ceiling silently re-creates the 360m
+          # default, and a green derived from invented numbers is worse than a
+          # warning that names them.
+          if [ "$N_UNDECLARED" -gt 0 ]; then
+            echo "::warning::CI budget headroom is UNASSERTED: ${N_UNDECLARED} ci.yml job(s) declare no timeout-minutes, so GitHub's 360m default applies to each and the declared path through the run (720m) exceeds the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows CI. The measured soft ceiling below still applies. Undeclared: $(printf '%s' "$CI_UNDECLARED" | tr '\n' ' ')(#8020)"
+          else
+            # Every job declares. Now the arithmetic means something, so assert it.
+            CI_DECLARED_PATH_MIN=$(run_declared_path .github/workflows/ci.yml)
+            emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
+            if [ -z "$CI_DECLARED_PATH_MIN" ]; then
+              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed — the budget would be underived"
+              exit 1
+            fi
+            if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
+              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
+              exit 1
+            fi
+          fi
+          if [ "$SOFT_CEILING_S" -le 0 ]; then
+            echo "::error::derived soft ceiling is ${SOFT_CEILING_S}s — a non-positive ceiling would fire on every run"
+            exit 1
+          fi
+
+          # Measure the REAL quantity: how long the CI run actually took.
+          if [ "$EVENT_NAME" != "workflow_run" ] || [ -z "${RUN_STARTED_AT:-}" ]; then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "not a workflow_run event — no CI duration to measure"
+            exit 0
+          fi
+          # BOTH operands guarded, not just the first. `set -e` on an unparseable
+          # date kills the step before the creep signal is emitted at all, and an
+          # absent `updated_at` is exactly the degenerate operand this arm should
+          # report rather than die on.
+          if [ -z "${RUN_UPDATED_AT:-}" ]; then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "::warning::workflow_run event carried no updated_at — CI duration not measured, so no creep signal for this run"
+            exit 0
+          fi
+          if ! started=$(date -u -d "$RUN_STARTED_AT" +%s 2>/dev/null) \
+             || ! ended=$(date -u -d "$RUN_UPDATED_AT" +%s 2>/dev/null); then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "::warning::could not parse the CI run timestamps ('$RUN_STARTED_AT' / '$RUN_UPDATED_AT') — CI duration not measured"
+            exit 0
+          fi
+          ELAPSED_S=$(( ended - started ))
+          emit soft_elapsed_s "$ELAPSED_S"
+          if [ "$ELAPSED_S" -gt "$SOFT_CEILING_S" ]; then
+            emit soft_breach "true"
+            echo "::warning::CI took ${ELAPSED_S}s for this SHA, past ${SOFT_CEILING_S}s (70% of the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows it). CI is creeping toward the end-to-end budget; this is the signal that used to come from await-ci's soft ceiling."
+          else
+            emit soft_breach "false"
+            echo "CI elapsed ${ELAPSED_S}s, within the ${SOFT_CEILING_S}s soft ceiling"
+          fi
 
   migrate:
-    needs: [release, await-ci]
-    # Gated on await-ci so migrations only apply for a CI-green SHA and never run
-    # ahead of a fail-closed gate. A longer adaptive await-ci (ADR-072) would
-    # otherwise widen the window where the prod DB gets a NEW schema while prod
-    # still serves OLD code, and could apply migrations for a SHA whose CI later
-    # fail-closes.
+    needs: [resolve-target]
+    # Gated on `resolve-target` so migrations only apply for a CI-green SHA and
+    # never run ahead of a fail-closed gate. Before #5806 the gate was `await-ci`,
+    # a poll inside this workflow; it is now the `workflow_run` event itself, which
+    # is why this arm only exists once CI has already concluded. The property is
+    # unchanged and is now stronger: the SHA comes from the completion event rather
+    # than from whatever the poll happened to observe.
     #
     # `if` MUST lead with `always() &&`: GitHub skips a job when any `needs` dep is
-    # SKIPPED *before* the `if` is evaluated, so without always() a
-    # workflow_dispatch run (where await-ci is skipped — it is a push-only job)
-    # would auto-skip migrate, the dispatch-tolerance clause would never run, and
-    # deploy (which tolerates migrate==skipped) would still ship NEW code on an
-    # UN-migrated schema — the more dangerous ordering. Mirrors the deploy job.
+    # SKIPPED *before* the `if` is evaluated. That still matters — on a
+    # workflow_dispatch run `resolve-target` runs but `release` (its own `needs`)
+    # took the dispatch path, and on any arm a skipped upstream would auto-skip
+    # migrate, the dispatch-tolerance clause would never run, and deploy (which
+    # tolerates migrate==skipped) would still ship NEW code on an UN-migrated
+    # schema — the more dangerous ordering. Mirrors the deploy job.
     #
-    # Trade-off (NOT "no net cost"): this serializes migrate AFTER await-ci — it
-    # used to run concurrently with the wait, both off `release` — so under
-    # contention deploy-start ≈ await-ci + migrate_runtime instead of
-    # max(await-ci, migrate). migrate is short transactional DDL so the tail cost
-    # is small and the correctness gain is worth it. Residual window (named, not
+    # Trade-off (NOT "no net cost"): migrate is serialized AFTER the gate rather
+    # than running concurrently with it. Under the old poll that cost
+    # `await-ci + migrate_runtime` instead of `max(await-ci, migrate)`; under
+    # `workflow_run` the gate is an EVENT rather than a wait, so the term it used
+    # to add is gone entirely. migrate is short transactional DDL either way. Residual window (named, not
     # closed): a migrate that applies without a following deploy can still occur on
     # a verify-doppler-secrets failure, leaving NEW schema with OLD prod code —
     # acceptable under expand/contract forward-migration discipline.
@@ -367,10 +825,9 @@ jobs:
     # were gated on `.result`, while `release` alone was gated only on an output.
     if: >-
       always() &&
-      needs.release.result == 'success' &&
-      needs.release.outputs.version != '' &&
-      (needs.await-ci.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
+      needs.resolve-target.result == 'success' &&
+      needs.resolve-target.outputs.should_deploy == 'true' &&
+      needs.resolve-target.outputs.version != '' &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     # Holds the migrate-web-platform lock (cancel-in-progress: false), so an
@@ -382,6 +839,10 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Run migrations
@@ -395,7 +856,11 @@ jobs:
     # `follow-through` issue whose body references a verified migration. Keeps
     # migration verification out of the human follow-through loop. See runbook
     # knowledge-base/engineering/operations/runbooks/supabase-migrations.md §3.
-    needs: migrate
+    # `resolve-target` is in `needs:` because this job reads its `head_sha` output.
+    # A job may only read `needs.<job>.outputs` for jobs it declares. actionlint
+    # catches the omission; at runtime it would be an EMPTY string, silently
+    # verifying migrations against nothing.
+    needs: [resolve-target, migrate]
     if: needs.migrate.result == 'success'
     runs-on: ubuntu-latest
     # Hard cap the job: this job holds the `verify-migrations-web-platform`
@@ -412,6 +877,10 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Install psql
@@ -447,7 +916,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -521,6 +990,13 @@ jobs:
           echo "Auto-closed $closed follow-through issue(s)."
 
   verify-doppler-secrets:
+    # MOVED TO THE NON-PUSH ARMS (#5806). It has no `needs:` and no dependence on the
+    # push context, so moving the JOB is cheaper and strictly safer than proxying its
+    # result cross-run — and losing it would re-open #2769, the config drift that
+    # shipped NEXT_PUBLIC_APP_URL=undefined to production. `deploy.if` keeps its
+    # `needs.verify-doppler-secrets.result == 'success'` conjunct at full strength
+    # because the job now lives in the SAME run as the deploy it gates.
+    if: github.event_name != 'push'
     # Pre-deploy guard: asserts the hand-maintained list of required NEXT_PUBLIC_*
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
@@ -534,6 +1010,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed. This job declares no
+          # `needs:`, so it reads the event directly rather than resolve-target.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Assert required NEXT_PUBLIC_* secrets present in Doppler prd
@@ -543,15 +1024,17 @@ jobs:
           doppler run -c prd -- bash apps/web-platform/scripts/verify-required-secrets.sh
 
   deploy:
-    needs: [release, migrate, verify-migrations, verify-doppler-secrets, await-ci]
+    needs: [resolve-target, migrate, verify-migrations, verify-doppler-secrets]
     # verify-doppler-secrets must succeed — skipped/failed blocks deploy (unlike
     # migrate which tolerates 'skipped' when no migrations changed).
     # verify-migrations tolerates 'skipped' because it only runs on
     # migrate.result==success; when migrate is itself skipped, verify is
     # skipped too, and deploy should still proceed.
-    # await-ci gates the prod cutover on CI's `test` for this SHA: on push it must
-    # succeed (fail-closed); on workflow_dispatch it is skipped (push-only job) and
-    # tolerated, mirroring the skip_deploy operator escape hatch.
+    # `resolve-target` gates the prod cutover on CI's `test` for this SHA. Since
+    # #5806 that is not a poll: this arm only runs BECAUSE CI concluded, and
+    # `resolve-target` fail-closes when the release for that SHA is missing or
+    # broken. On workflow_dispatch it resolves from the in-run release job instead,
+    # mirroring the skip_deploy operator escape hatch.
     # FR-A5 — same conjunct, same reason as `migrate` above, and this is the job it
     # matters most for. `always() &&` discards skip-on-failed-needs, and the only
     # release-side condition below is `outputs.docker_pushed` — an output written by the
@@ -561,13 +1044,12 @@ jobs:
     # image zot is not confirmed to hold. The mirror gate would have protected nothing.
     if: >-
       always() &&
-      needs.release.result == 'success' &&
-      needs.release.outputs.docker_pushed == 'true' &&
+      needs.resolve-target.result == 'success' &&
+      needs.resolve-target.outputs.should_deploy == 'true' &&
+      needs.resolve-target.outputs.docker_pushed == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
       (needs.verify-migrations.result == 'success' || needs.verify-migrations.result == 'skipped') &&
       needs.verify-doppler-secrets.result == 'success' &&
-      (needs.await-ci.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && needs.await-ci.result == 'skipped')) &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     # Holds the shared web-1-swap lock (cancel-in-progress: false) — the
@@ -580,10 +1062,15 @@ jobs:
     # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
     #
-    # COUPLED (#7091, #7160): this value is one term on the declared critical path that bounds
-    # the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum —
-    # `release` and `await-ci` declare no `needs:` and run in PARALLEL:
-    #     max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195
+    # COUPLED (#7091, #7160, #5806): this value is one term on the declared critical path that
+    # bounds the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum,
+    # and since #5806 the parallel arms are in DIFFERENT WORKFLOWS — `release` on this file's
+    # push arm, CI in ci.yml, both started by the same push, with the deploy chain firing on CI's
+    # completion:
+    #     max(release 60, CI-to-`test` 70, resolve-target 60) + migrate 30 + verify-migrations 15
+    #       + deploy 90 = 205
+    # (this comment previously read `max(release 60, await-ci 60) + ... = 195`, which was ALREADY
+    # stale before #5806 — await-ci was 72 and the threshold 207)
     # (the release ceiling is declared on the CALLEE, reusable-release.yml, because the GitHub
     # schema forbids timeout-minutes on a `uses:` job). scripts/prod-version-drift-check.sh sets
     # DRIFT_SUSTAINED_THRESHOLD_MIN from that path, and B9 asserts the threshold stays >= it —
@@ -645,7 +1132,7 @@ jobs:
       # exactly the moment someone is trying to work out why prod is serving old bits.
       - name: Record zot mirror verification status
         env:
-          MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+          MIRROR_VERIFIED: ${{ needs.resolve-target.outputs.mirror_verified }}
         run: |
           set -euo pipefail
           if [[ "${MIRROR_VERIFIED:-}" == "true" ]]; then
@@ -724,12 +1211,117 @@ jobs:
           echo "::error::Prior deploy of $PRIOR_TAG still running (elapsed=${ELAPSED}s). Wait for completion or cancel manually before re-running."
           exit 1
 
+      # ─────────────────────────────────────────────────────────────────────
+      # MONOTONIC-VERSION PRECONDITION (#7931 part 1 x #5806 interaction, ADR-217
+      # Decision 5). NEITHER ISSUE ANTICIPATES THIS AND IT IS THE SHARPEST
+      # INTERACTION BETWEEN THE TWO.
+      #
+      # What ORDERS deploys today is not `workflow_run` — it is ci.yml's single
+      # `main` concurrency group. Main CI runs serially, so their completions are
+      # FIFO and the deploys inherit that order. #7931 part 1 gives every push its
+      # OWN group, which DELETES exactly that property, and #5806 makes the deploy
+      # fire on completion rather than on a serialized gate. `workflow_run`
+      # guarantees the CORRECT SHA; it does not guarantee the LATEST one.
+      #
+      # Reachable scenario: merge A (large diff), then B (a one-liner) ninety
+      # seconds later. Under per-SHA groups both CI runs proceed concurrently,
+      # B finishes first and deploys — then A completes and deploys, and
+      # production REGRESSES to the older commit. Neither change creates this
+      # alone, which is why shipping them together needed more than "D before E".
+      #
+      # Compounding it: `deploy`'s `web-1-swap` group is cross-pipeline with
+      # cancel-in-progress false. GitHub keeps one running plus one pending per
+      # group and CANCELS an older pending run when a third arrives, so three
+      # close merges can drop a deploy entirely.
+      #
+      # THIS IS NOT THE REJECTED PHASE C GUARD. ADR-072 rejected a superseded-SHA
+      # check because it false-skips nearly every deploy (`origin/main` advances
+      # on every merge), because this job has no `actions/checkout`, and because a
+      # step-level `exit 0` reddens the run. This carries NONE of those three: it
+      # compares two VERSION strings over a value this job already fetches from
+      # the live host, needs no git history and no checkout, and refuses by
+      # failing the step rather than by pretending to succeed. ADR-072's
+      # prohibition is scoped to the GIT-ANCESTRY form.
+      - name: Refuse a version regression (ordering guard)
+        id: ordering
+        env:
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -uo pipefail
+          if [ -z "${VERSION:-}" ]; then
+            echo "::error::no resolved version to compare — refusing to swap"
+            exit 1
+          fi
+          HEALTH=$(curl -sf --max-time 10 "https://app.soleur.ai/health" 2>/dev/null || echo "")
+          if [ -z "$HEALTH" ] || ! echo "$HEALTH" | jq -e . >/dev/null 2>&1; then
+            # DEGRADED-PERMISSIVE, deliberately, and this is the one judgement
+            # call in the guard. Being unable to READ the live version is not
+            # evidence of a regression, and /health being unreachable is exactly
+            # when an operator most needs to ship a fix. Failing closed here would
+            # convert an outage into an outage you cannot deploy out of. The
+            # ordering hazard this guards is a narrow race; the deploy-blocked
+            # hazard would be permanent.
+            echo "::warning::could not read the live version from /health — proceeding without the monotonicity check"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
+            exit 0
+          fi
+          LIVE=$(echo "$HEALTH" | jq -r '.version // empty')
+          if [ -z "$LIVE" ]; then
+            echo "::warning::/health returned no version field — proceeding without the monotonicity check"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
+            exit 0
+          fi
+          if [ "$LIVE" = "$VERSION" ]; then
+            echo "live is already $LIVE — re-deploying the same version is idempotent, proceeding"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
+            exit 0
+          fi
+          # `sort -V` is a total order over semver here; the NEWER of the two is
+          # the last line. If that is the LIVE version, this run is older.
+          NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -V | tail -1)
+          if [ "$NEWEST" = "$LIVE" ]; then
+            # SUPERSEDED IS NOT A FAILURE, AND THE DIFFERENCE IS THE OPERATOR'S INBOX.
+            #
+            # This branch fires when a NEWER release already deployed. Production is
+            # ahead, not behind: it holds a descendant of this run's commit, so the
+            # merged changes ARE live, nothing is stuck, and the next merge deploys
+            # normally. Exiting non-zero here would make `deploy` FAIL, and
+            # release-outcome's classifier would then send the operator
+            # "[RELEASE FAILED] ... Production is still running the OLDER build ...
+            # Treat it as urgent: nothing reaches production until it is resolved."
+            # Every one of those four claims is FALSE in this state.
+            #
+            # That is the #7095/#7138 class this file already documents at length
+            # ("one wrong urgent page is exactly what teaches them to stop reading the
+            # next one") and it deviates from AP-021: a CI-emitted message may only
+            # name a cause the job MEASURED. The job measured the opposite.
+            #
+            # So this is a clean, GREEN, terminal skip that says what happened.
+            echo "::notice::deploy superseded — production is on ${LIVE}, which is newer than this run's ${VERSION}. A later release already shipped these changes; nothing is stuck and no action is needed. (ADR-217 Decision 5: per-SHA CI concurrency makes out-of-order completion reachable, and this is the guard working.)"
+            {
+              echo "### Deploy superseded"
+              echo ""
+              echo "Production is on **${LIVE}**; this run resolved **${VERSION}**."
+              echo "A newer release already deployed these changes. No action needed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            # A BARE `exit 0` HERE WOULD DEPLOY THE OLDER VERSION: the step would
+            # succeed, every later step in this job would run, and the webhook would
+            # swap production BACKWARDS — the exact outcome this guard exists to
+            # prevent, reached through the guard itself. The marker is what makes the
+            # refusal effective; the deploy-acting steps below gate on it.
+            printf 'superseded=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'superseded=false\n' >> "$GITHUB_OUTPUT"
+          echo "monotonicity ok: ${LIVE} -> ${VERSION}"
+
       - name: Deploy via webhook
+        if: steps.ordering.outputs.superseded != 'true'
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
           # 2-host deploy fan-out (#5274 Phase 3, ADR-068). The receiving host
           # forwards the deploy to these peer private IPs over the private net so
           # one POST delivers to BOTH hosts; the host self-excludes at runtime.
@@ -760,13 +1352,14 @@ jobs:
           echo "Deploy initiated (HTTP 202), polling health endpoint..."
 
       - name: Verify deploy script completion
+        if: steps.ordering.outputs.superseded != 'true'
         # STATUS_POLL_MAX_ATTEMPTS / STATUS_POLL_INTERVAL_S inherited from
         # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          VERSION: ${{ needs.release.outputs.version }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
         run: |
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
           # payload-hmac-sha256 rule verifies the signature over the request body;
@@ -833,15 +1426,25 @@ jobs:
           exit 1
 
       - name: Verify deploy health and version
+        if: steps.ordering.outputs.superseded != 'true'
         # HEALTH_POLL_MAX_ATTEMPTS / HEALTH_POLL_INTERVAL_S inherited from
         # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
-          VERSION: ${{ needs.release.outputs.version }}
-          # #3409: assert the running image was built from this workflow's
-          # commit SHA. Defense-in-depth against a bad tag→image association
-          # (right semver, wrong source tree). github.sha is the same SHA the
-          # docker-build step at reusable-release.yml tagged the image with.
-          EXPECTED_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+          # #3409: assert the running image was built from the commit this deploy
+          # is for. Defense-in-depth against a bad tag→image association (right
+          # semver, wrong source tree).
+          #
+          # THE CHAIN, since #5806 moved this onto the workflow_run arm — the
+          # comment here used to say `github.sha`, which is no longer what the
+          # code reads and is no longer correct on this arm (under workflow_run it
+          # is the DEFAULT-BRANCH tip, not the deployed commit):
+          #   reusable-release.yml bakes BUILD_SHA=${{ github.sha }} into the image,
+          #   and it runs on the PUSH arm, where github.sha IS the pushed commit;
+          #   resolve-target recovers that same commit cross-run as head_sha.
+          # So the two match by construction, and this gate is what catches the
+          # chain breaking.
+          EXPECTED_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           for i in $(seq 1 "$HEALTH_POLL_MAX_ATTEMPTS"); do
             HEALTH=$(curl -sf "https://app.soleur.ai/health" 2>/dev/null || echo "")
@@ -930,8 +1533,8 @@ jobs:
         continue-on-error: true
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          VERSION: ${{ needs.release.outputs.version }}
-          MIRROR_VERIFIED: ${{ needs.release.outputs.mirror_verified }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+          MIRROR_VERIFIED: ${{ needs.resolve-target.outputs.mirror_verified }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -991,14 +1594,23 @@ jobs:
   # §Substrate "Inngest re-home considered and rejected"): a blocking deploy-gate
   # needs a deterministic, synchronous, host-isolated exit-code signal.
   live-verify:
-    needs: [deploy]
-    if: always() && needs.deploy.result == 'success' && github.event_name == 'push'
+    needs: [resolve-target, deploy]
+    # WAS `github.event_name == 'push'` — under the workflow_run topology the deploy
+    # NEVER runs on a push event, so that conjunct would have skipped live-verify
+    # forever while the run stayed green. The dark-launch gate would silently stop
+    # gating (#5463). The intent was "only on the automatic path, not an operator
+    # dispatch", and that is what this says now.
+    if: always() && needs.deploy.result == 'success' && github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       # The trigger-paths gate runs FIRST (it needs only `gh` + the committed
       # trigger-paths.txt). The bun/doppler/playwright setup + harness below are
       # gated on `triggered == '1'`, so a SKIP release (most merges — no
@@ -1010,10 +1622,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
+          # `github.event.before` DOES NOT EXIST on a workflow_run event. It
+          # resolves to the EMPTY STRING, and a compare-API diff gate with an empty
+          # base is the empty-haystack direction: it does not error, it silently
+          # matches nothing, so the gate would report SKIP on every release and the
+          # #5463 dark-launch check would quietly stop running. The base is resolved
+          # by an explicit PARENT lookup off the event's own head_sha instead.
+          AFTER_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           set -uo pipefail
+          BEFORE_SHA=$(gh api "repos/${REPO}/commits/${AFTER_SHA}" --jq '.parents[0].sha // ""')
+          if [ -z "$BEFORE_SHA" ]; then
+            echo "::error::could not resolve the parent of ${AFTER_SHA}; the changed-file gate cannot run"
+            exit 1
+          fi
+          echo "compare base (parent of ${AFTER_SHA}): ${BEFORE_SHA}"
           # GH compare API (NOT `git diff`): actions/checkout is fetch-depth:1, so
           # `before..sha` errors on the zero-SHA / shallow graph. compare needs no
           # local history. A compare failure is CANT-RUN, never a silent SKIP.
@@ -1115,7 +1738,7 @@ jobs:
           RESULT_LINE: ${{ steps.harness.outputs.result_line }}
           HARNESS_OUTCOME: ${{ steps.harness.outcome }}
           RC: ${{ steps.harness.outputs.rc }}
-          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           set -uo pipefail
           # Compose the tri-state result + Sentry level. Order matters: setup
@@ -1222,93 +1845,60 @@ jobs:
           fi
           echo "live-verify gate: non-blocking (result=${RESULT:-unknown})"
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # Fail-closed notification (#5795 / ADR-072). A fail-closed `await-ci` is
-  # otherwise PULL-ONLY — a red required job + an ::error:: annotation that
-  # nobody is paged on. Worse, the `release` job posts a MISLEADING
-  # "<component> v0.X.Y released!" Slack/email (reusable-release.yml) on
-  # release-job success, INDEPENDENT of await-ci, so a gated deploy looks shipped
-  # while prod is frozen. This job converts the pull-only fail-closed signal into
-  # an operator-visible PUSH notification on the existing release Slack channel.
-  # (Fully gating the "released!" announcement on deploy-success touches the
-  # shared reusable-release.yml — deferred to the option-3 issue.)
-  # THE CONSUMER for await-ci's soft-ceiling breach (#7902). Without this the `::warning::` and
-  # the job output are decorative: this repo's operator is non-technical and does not read CI
-  # logs, so a signal with no route is the defect class #7902 exists to remove, not to reproduce.
-  #
-  # Deliberately a SEPARATE job from notify-gated rather than a widened `if:` on it: that job's
-  # message is written for the fail-closed case, and this fires on a SUCCESSFUL gate. Same
-  # webhook, same continue-on-error posture — a notification hiccup must never redden a release
-  # whose deploy is proceeding normally.
-  notify-slow-ci:
-    needs: [release, await-ci]
-    # `success` is load-bearing: this reports a gate that PASSED while approaching its ceiling.
-    # The fail-closed case is notify-gated's — and notify-gated now receives the breach outputs so
-    # it can say WHICH happened (#7902 review, P1: it previously told the operator "CI did not go
-    # green" on a run where CI went green 12 minutes later).
-    if: always() && needs.await-ci.result == 'success' && needs.await-ci.outputs.soft_breach == 'true'
-    runs-on: ubuntu-latest
-    # Bounds a hung POST. Absent, this inherits GitHub's 360-minute default, in a PR whose subject
-    # is that a silent bound is worse than a loud one.
-    timeout-minutes: 5
-    steps:
-      - name: Post slow-CI early warning to Slack
-        continue-on-error: true
-        env:
-          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
-          SHA: ${{ github.sha }}
-          ELAPSED_S: ${{ needs.await-ci.outputs.soft_elapsed_s }}
-          CEILING_S: ${{ needs.await-ci.outputs.ceiling_s }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
-          if [ -z "$WEBHOOK" ]; then
-            echo "::warning::No Slack webhook URL configured, skipping slow-CI notification"
-            exit 0
-          fi
-          echo "::add-mask::$WEBHOOK"
-          SHORT_SHA="${SHA:0:12}"
-          # DERIVED, not restated (#7902 review, P2). The ceiling and the percentage both come from
-          # the gate's own outputs; hardcoding `3600s` and `70%` here is exactly the drift the soft
-          # ceiling's derivation exists to remove, and it went silently wrong on the next raise.
-          CEIL="${CEILING_S:-unknown}"
-          if [ "$CEIL" != "unknown" ] && [ "$ELAPSED_S" -gt 0 ] 2>/dev/null; then
-            PCT=$(( ELAPSED_S * 100 / CEIL ))
-          else
-            PCT="?"
-          fi
-          # Slack mrkdwn: *single asterisk* is bold and backticks are literal code-spans, not
-          # command substitution — same single-quoted printf format notify-gated uses below.
-          # NOTE the escaping: this is a SHELL printf, so a literal percent is `%%`, not `%%%%`
-          # (the four-percent form is the GitHub-annotation idiom and rendered "70%%" here).
-          # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
-          MESSAGE=$(printf '*:hourglass: CI is approaching the deploy gate ceiling*\n\nThe deploy gate for `%s` passed, but CI first crossed the warning line at %ss against a %ss ceiling (~%s%% of the budget). This measures time-to-CI-green INCLUDING the queue where main pushes wait for runners. If this keeps appearing, CI has outgrown the gate and deploys will start failing closed (that was #7902).\n\n%s' \
-            "$SHORT_SHA" "$ELAPSED_S" "$CEIL" "$PCT" "$RUN_URL")
-          # --max-time and an explicit status check, matching notify-gated below. Without them a
-          # rotated webhook or a Slack 5xx exits 0 and the ONLY early-warning route is lost as
-          # silently as the ::warning:: it exists to escalate.
-          HTTP_CODE=$(printf '%s' "$MESSAGE" | jq -Rs '{text: ., unfurl_links: false}' \
-            | curl -sS -X POST -H 'Content-Type: application/json' -d @- \
-                --max-time 15 -o /dev/null -w '%{http_code}' "$WEBHOOK" || echo "000")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::warning::slow-CI Slack notification failed (HTTP $HTTP_CODE) — the early warning did not reach the operator"
-          fi
-
+  # notify-slow-ci — DELETED (#5806). It existed to surface `await-ci`'s soft-ceiling
+  # breach, i.e. "CI is approaching the deploy gate's fixed ceiling". There is no
+  # fixed ceiling any more: the deploy fires on CI's real completion event, so the
+  # quantity this job warned about no longer exists and a warning about it would be
+  # a warning about nothing. The creep detection it provided is NOT lost — it is
+  # relocated to `resolve-target`'s derived soft ceiling (ADR-217), which measures
+  # CI's share of the declared end-to-end pipeline budget rather than its distance
+  # from a constant that has been deleted.
   notify-gated:
-    needs: [release, await-ci]
-    if: always() && needs.await-ci.result == 'failure'
+    needs: [resolve-target]
+    # "FIRES WHEN THE DEPLOY CHAIN IS GATED" IS NOT IMPLEMENTABLE — this predicate is
+    # written out because the obvious reading silently drops the operator's only
+    # channel. With `await-ci` deleted there is no `.result == 'failure'` to key on,
+    # and `release-outcome`'s classifier treats `skipped` as NOT A FAULT — so a RED CI
+    # on main would produce a GREEN release run and ZERO notifications, where today it
+    # reddens and Slacks.
+    #
+    # `conclusion != 'success'` is deliberate rather than `== 'failure'`: it also
+    # covers `cancelled` and `timed_out`, which are equally "prod did not update".
+    #
+    # THE TWO CLEAN-SKIP STATES MUST NOT FIRE IT. `no_release_run` (on.push.paths
+    # declined) and `upstream_concluded_unpublished` (check_changed declined) are the
+    # correct outcome for a docs-only push; paging the operator on those would make
+    # this channel fire so often it stops carrying information.
+    if: >-
+      always() &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.conclusion != 'success' ||
+       needs.resolve-target.outputs.skip_reason == 'release_failed' ||
+       needs.resolve-target.outputs.skip_reason == 'release_outputs_missing' ||
+       needs.resolve-target.outputs.skip_reason == 'release_outputs_expired' ||
+       needs.resolve-target.outputs.skip_reason == 'release_job_unresolvable' ||
+       needs.resolve-target.outputs.skip_reason == 'identity_mismatch' ||
+       needs.resolve-target.outputs.skip_reason == 'schema_mismatch' ||
+       needs.resolve-target.outputs.skip_reason == 'github_api_unavailable' ||
+       needs.resolve-target.outputs.skip_reason == 'release_outputs_incomplete' ||
+       needs.resolve-target.outputs.skip_reason == 'bad_sha')
     runs-on: ubuntu-latest
     steps:
       - name: Post deploy-gated notification to Slack
         # continue-on-error: a notification-channel hiccup must never be the thing
-        # that reddens the run — the red await-ci job is already the gating signal.
+        # that reddens the run — the red resolve-target job is already the gating signal.
         continue-on-error: true
         env:
           SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
-          SHA: ${{ github.sha }}
-          VERSION: ${{ needs.release.outputs.version }}
-          CEILING_BREACH: ${{ needs.await-ci.outputs.ceiling_breach }}
-          FINAL_ELAPSED_S: ${{ needs.await-ci.outputs.final_elapsed_s }}
+          SHA: ${{ needs.resolve-target.outputs.head_sha }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+          # The gate no longer has a ceiling to breach, so the cause is now the
+          # RESOLVED state rather than a timeout flag. CI's own conclusion and
+          # resolve-target's skip_reason together name what actually happened.
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SKIP_REASON: ${{ needs.resolve-target.outputs.skip_reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
@@ -1329,13 +1919,31 @@ jobs:
           # verdict, or the gate hit its own ceiling while CI was still running. Measured on run
           # 34214305370, the second happened and this message asserted the first — CI concluded
           # SUCCESS twelve minutes after the gate gave up. `ceiling_breach` distinguishes them.
-          if [ "${CEILING_BREACH:-}" = "true" ]; then
-            CAUSE=$(printf 'the deploy gate gave up after %ss while CI was STILL RUNNING — this is the gate timing out, not a test failure. CI may well have gone green afterwards; check the ci.yml run for this SHA before assuming a regression. If this recurs, CI has outgrown the gate (that is #7902)' "${FINAL_ELAPSED_S:-?}")
-          else
-            CAUSE='CI did not go green'
-          fi
+          # NAME THE MEASURED CAUSE. The gate can no longer "give up while CI was
+          # still running" — that failure mode was the fixed ceiling, and it is gone
+          # (#5806). What remains are genuinely different causes and they must not be
+          # conflated, which is the same discipline #7931 part 2 applied to CI's own
+          # aggregator.
+          case "${SKIP_REASON:-}" in
+            release_failed)
+              CAUSE='the release job for this SHA did not succeed — the image may be unbuilt, unsigned or unmirrored' ;;
+            release_outputs_missing)
+              CAUSE='the release job succeeded but published no release-outputs artifact, so the deploy target could not be resolved' ;;
+            release_outputs_expired)
+              CAUSE='the release-outputs artifact for this SHA has expired (14-day retention) — the evidence aged out, the release itself was fine' ;;
+            release_job_unresolvable)
+              CAUSE='the release job could not be located in the upstream run — it may have been renamed, which this gate deliberately treats as unresolvable rather than as "no release"' ;;
+            identity_mismatch|schema_mismatch|release_outputs_incomplete)
+              CAUSE=$(printf 'the release-outputs artifact failed its trust checks (%s) — the deploy was blocked rather than target an unverified commit' "${SKIP_REASON}") ;;
+            bad_sha)
+              CAUSE='the upstream event carried a malformed head_sha' ;;
+            github_api_unavailable)
+              CAUSE='a GitHub API read failed three times while resolving the deploy target — this says nothing about the release itself, and re-running resolve-target is the normal recovery' ;;
+            *)
+              CAUSE=$(printf 'CI concluded %s for this SHA' "${CI_CONCLUSION:-unknown}") ;;
+          esac
           # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
-          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\n%s for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the await-ci job, then re-run the release once CI is green for this SHA.\n\n%s' \
+          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\n%s for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the resolve-target job, then re-run the release once CI is green for this SHA.\n\n%s' \
             "$CAUSE" \
             "$VER_LABEL" "$SHORT_SHA" "$RUN_URL")
           # shellcheck disable=SC2016  # $text is a jq variable, not a shell expansion
@@ -1362,7 +1970,7 @@ jobs:
   # for over a day, and NOTHING paged. A red release run was never itself a
   # monitored condition, so each red was read as "the known incident" instead of
   # as a distinct live fault. The only two push notifications in this file hang
-  # off `deploy` (the in-job email above) and off `await-ci` (`notify-gated`) —
+  # off `deploy` (the in-job email above) and off the gate (`notify-gated`) —
   # and THREE of those eight runs never reached `deploy` at all, so the
   # deploy-scoped email was structurally silent for them.
   #
@@ -1390,22 +1998,70 @@ jobs:
   # the wrong place to accept them: here a non-delivery emits a Sentry event and
   # fails this job loudly.
   release-outcome:
+    # MOVED TO THE NON-PUSH ARMS (#5806). This job is the operator's non-delivery
+    # guarantee, and that guarantee was built on all nine jobs living in ONE run.
+    # After the split the push arm sees only `release: success` — so left there it
+    # would report that the release reached production, which is an observability
+    # REGRESSION on the single surface that exists to say otherwise. It therefore
+    # follows the deploy chain onto the workflow_run arm and recovers the `release`
+    # job's verdict cross-run from `resolve-target`, which already performs exactly
+    # that lookup. No new mechanism.
+    #
+    # THE TWO CLEAN-SKIP STATES CLASSIFY AS DELIVERED-NOTHING-TO-DELIVER, never as
+    # non-delivery — otherwise every docs-only push emails the operator.
+    if: always() && github.event_name != 'push'
     needs:
-      - release
-      - await-ci
+      - resolve-target
       - migrate
       - verify-migrations
       - verify-doppler-secrets
       - deploy
       - live-verify
       - notify-gated
-      - notify-slow-ci
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 5
     steps:
+      # THE CONSUMER FOR THE CI-BUDGET CREEP SIGNAL (I4's successor).
+      #
+      # `resolve-target` derives a soft ceiling and emits a `::warning::` when CI
+      # crosses it. A warning nothing reads is a warning nobody sees, which is why
+      # the suite this replaced carried a row (I4) asserting the old soft-ceiling
+      # output HAD a consumer — deleting the consumer was a silent regression the
+      # emitter could not detect. This step is that consumer, relocated with the
+      # signal. If you are removing it, remove the emitter too, or the guard reds.
+      - name: Surface the CI budget creep signal
+        if: always() && needs.resolve-target.outputs.soft_breach == 'true'
+        env:
+          ELAPSED_S: ${{ needs.resolve-target.outputs.soft_elapsed_s }}
+          CEILING_S: ${{ needs.resolve-target.outputs.soft_ceiling_s }}
+          BUDGET_MIN: ${{ needs.resolve-target.outputs.ci_budget_min }}
+          DECLARED_MIN: ${{ needs.resolve-target.outputs.ci_declared_path_min }}
+          UNDECLARED: ${{ needs.resolve-target.outputs.ci_undeclared_jobs }}
+        run: |
+          set -uo pipefail
+          # AP-021 — name only what was MEASURED. `ci_declared_path_min` is emitted
+          # ONLY when every ci.yml job declares a ceiling; while any does not, the
+          # declared path is not a derived number and printing one would invent it.
+          if [ -n "${DECLARED_MIN:-}" ]; then
+            declared_line="CI currently DECLARES ${DECLARED_MIN}m for its whole run."
+            declared_tail="declared ${DECLARED_MIN}m"
+          else
+            declared_line="CI's declared path is UNASSERTED: ${UNDECLARED:-?} job(s) declare no timeout-minutes, so GitHub's 360m default applies to each (#8020)."
+            declared_tail="declared path unasserted, ${UNDECLARED:-?} job(s) without a ceiling"
+          fi
+          {
+            echo "### CI budget creep"
+            echo ""
+            echo "CI took **${ELAPSED_S}s** for this SHA, past the **${CEILING_S}s** soft ceiling"
+            echo "(70% of the ${BUDGET_MIN}m share the end-to-end pipeline budget allows CI)."
+            echo ""
+            echo "${declared_line} When the measured time"
+            echo "approaches the declared path, the next step is a larger shard count or a"
+            echo "shorter CI — not a bigger budget, which is how #7902 happened."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::CI budget creep: ${ELAPSED_S}s > ${CEILING_S}s soft ceiling (CI share ${BUDGET_MIN}m, ${declared_tail})"
       - name: Classify the run outcome
         id: outcome
         # #7138 — a STEP-level timeout, not just the job-level one. A hung classify used
@@ -1424,8 +2080,15 @@ jobs:
           # | skipped) written by GitHub, never by a contributor — safe to expand
           # in shell. Injected via env (not inline `${{ }}`) per the same
           # convention the rest of this file uses.
-          R_RELEASE: ${{ needs.release.result }}
-          R_AWAIT_CI: ${{ needs.await-ci.result }}
+          # `release` no longer runs in THIS run on the workflow_run arm, so its
+          # verdict is the one resolve-target recovered from the jobs API. On a
+          # dispatch resolve-target read it from the in-run job. Either way this is
+          # the release JOB's own conclusion — never the existence of a Release
+          # object, which is the weaker proxy that would let a mirror-gate-blocked
+          # release look delivered.
+          R_RELEASE: ${{ needs.resolve-target.outputs.release_result }}
+          R_RESOLVE: ${{ needs.resolve-target.result }}
+          SKIP_REASON: ${{ needs.resolve-target.outputs.skip_reason }}
           R_MIGRATE: ${{ needs.migrate.result }}
           R_VERIFY_MIGRATIONS: ${{ needs.verify-migrations.result }}
           R_VERIFY_DOPPLER: ${{ needs.verify-doppler-secrets.result }}
@@ -1450,8 +2113,42 @@ jobs:
           }
           # Plain-language labels: the recipient is a non-technical founder, so
           # the job id is the SECONDARY identifier, not the headline.
+          # A CLEAN SKIP IS NOT A NON-DELIVERY — but the set is exactly the states
+          # where NOTHING WAS DUE, and it is smaller than it looks. The comment
+          # here used to justify the arm by naming two of its five members.
+          #
+          #   no_release_run                  this push did not touch web-platform files
+          #   upstream_concluded_unpublished  the inner pathspec gate declined
+          #   not_main / not_push             the event was not a main push at all
+          #
+          # Emailing the operator "the release did not reach production" for those
+          # would train the recipient to ignore this channel, which is the failure
+          # mode the whole job exists to prevent.
+          #
+          # `ci_not_green` IS NOT ONE OF THEM, and was. CI failing on `main` means a
+          # release WAS due and did not deliver: main advanced, production did not,
+          # and this channel is the non-delivery guarantee. Slack fires for it (via
+          # conclusion != 'success') but the email channel was disarmed, so the one
+          # surface built to say "prod is behind" stayed silent on a state where it
+          # is. It gets its own classification — a real non-delivery, with a cause
+          # upstream of this pipeline rather than a fault inside it, because naming
+          # a deploy-chain job would misattribute it (AP-021).
+          case "${SKIP_REASON:-}" in
+            no_release_run|not_main|not_push|upstream_concluded_unpublished)
+              echo "clean skip (${SKIP_REASON}) — nothing was due for delivery; not paging"
+              exit 0 ;;
+            ci_not_green)
+              FAILED="CI on main"
+              FAILED_HTML="<li><strong>The automated checks on the main branch</strong> — these did not pass for this commit, so nothing was promoted to production. The code that was merged is not live.</li>"
+              echo "release-outcome: CI was not green on main — a release was due and did not deliver." >> "$GITHUB_STEP_SUMMARY"
+              {
+                echo "failed=${FAILED}"
+                echo "failed_html=${FAILED_HTML}"
+              } >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
           classify release "${R_RELEASE}" "Building and publishing the new version"
-          classify await-ci "${R_AWAIT_CI}" "Waiting for the automated tests to go green"
+          classify resolve-target "${R_RESOLVE}" "Working out which build should go to production"
           classify migrate "${R_MIGRATE}" "Applying the database changes"
           classify verify-migrations "${R_VERIFY_MIGRATIONS}" "Double-checking the database changes"
           classify verify-doppler-secrets "${R_VERIFY_DOPPLER}" "Checking production has the credentials it needs"
@@ -1478,8 +2175,8 @@ jobs:
         if: ${{ !cancelled() && (steps.outcome.conclusion == 'failure' || steps.outcome.outputs.failed != '') }}
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          VERSION: ${{ needs.release.outputs.version }}
-          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+          TAG: ${{ needs.resolve-target.outputs.tag }}
           FAILED: ${{ steps.outcome.outputs.failed }}
           FAILED_HTML: ${{ steps.outcome.outputs.failed_html }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1633,7 +2330,7 @@ jobs:
           CLASSIFIER: ${{ steps.outcome.conclusion }}
           REASON: ${{ steps.email.outputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           set -uo pipefail
           # #7138 — TWO INDEPENDENT QUESTIONS, answered by two independent fields.

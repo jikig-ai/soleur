@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — the credential this
+# unit handles is bound BELOW this line (sourced from ENV_FILE), so a `${VAR:+x}`
+# hatch would test an empty variable, open, and trace the bind itself. The
+# `logger` leg ships the halt off-box through Vector Source 2 (PRIORITY 0-2 from
+# any unit); it inlines the literal tag because a `readonly LOG_TAG=` is itself
+# a command Rule A forbids above this refusal (#7898 §2).
+case "$-" in
+  *x*)
+    printf 'SOLEUR_RESOURCE_MONITOR_HALT reason=xtrace-credential-bound issue=7797\n'
+    printf '[resource-monitor] refusing to run under xtrace: this unit handles a live credential and -x would print it\n' >&2
+    logger -p user.crit -t resource-monitor 'SOLEUR_RESOURCE_MONITOR_HALT reason=xtrace-credential-bound issue=7797' 2>/dev/null \
+      || printf '[resource-monitor] logger=absent (SOLEUR_RESOURCE_MONITOR_HALT not shipped off-box)\n' >&2
+    exit 78
+    ;;
+esac
 
 # resource-monitor.sh -- Host CPU/RAM + concurrent-session monitoring (#1052).
 # Runs as a systemd timer every 5 minutes. Always exits 0 (alerting-layer
@@ -8,6 +23,7 @@ set -euo pipefail
 # Pairs with disk-monitor.sh: same cooldown/alert/envfile shape, different
 # signal. Keep pattern changes in sync between both scripts.
 
+readonly LOG_TAG="resource-monitor"
 readonly COOLDOWN_DIR="${COOLDOWN_DIR:-/var/run}"
 readonly COOLDOWN_SECONDS=3600
 readonly WARN_MEM_PCT="${WARN_MEM_PCT:-80}"
@@ -23,6 +39,21 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 0
 fi
 set -a; . "$ENV_FILE"; set +a
+# (#7873/#7898 §2) TLS-env unset, AFTER the env-file source — rationale in disk-monitor.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+
+# Emit a refusal/failed-send marker on every channel that survives it: stdout
+# (journald), stderr (humans), and the crit row Vector Source 2 ships off-box
+# (#7898). Reason tokens only — never an env value, a body or a credential. A
+# missing `logger` must not take the alert down with it, but must not be silent.
+emit_refusal() {
+  printf '%s\n' "$1"
+  printf '[%s] %s\n' "$LOG_TAG" "$1" >&2
+  logger -p user.crit -t "$LOG_TAG" "$1" 2>/dev/null \
+    || printf '[%s] logger=absent (%s not shipped off-box)\n' "$LOG_TAG" "${1%% *}" >&2
+}
 
 if [[ -z "${RESEND_API_KEY:-}" ]]; then
   echo "WARNING: RESEND_API_KEY not set, skipping" >&2
@@ -103,16 +134,20 @@ send_alert() {
     --arg text "$body" \
     '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')
 
-  local HTTP_CODE
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+  # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
+  # The loopback metrics curl in sample_active_sessions() is UNcredentialed and
+  # plain http — it must NOT receive these flags.
+  local HTTP_CODE rc=0
+  HTTP_CODE=$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" \
     --max-time 10 \
     -X POST "https://api.resend.com/emails" \
     -H "Authorization: Bearer ${RESEND_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" 2>/dev/null) || HTTP_CODE="000"
+    -d "$PAYLOAD" 2>/dev/null) || { rc=$?; HTTP_CODE="000"; }
 
   if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
     echo "WARNING: Resend API POST failed (HTTP ${HTTP_CODE})" >&2
+    emit_refusal "SOLEUR_RESOURCE_MONITOR_SEND_FAILED channel=resend http_code=${HTTP_CODE} rc=${rc}"
   fi
 }
 
