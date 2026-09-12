@@ -300,6 +300,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 ## Testing
 
 ### Always
+- A lint cited as the oracle for a guard is proven by a RED, never a green: on a scratch copy delete the guard and run the lint; if it still passes, the guard needs its own harness row and the lint citation is a comment. Same for any code shape a plan justifies as "what the linter needs" — measure it with the guard deleted (2026-09-11, #7898 §2 — the prescribed shape was the one that disarmed the linter)
 
 - Run `bun test` before merging changes that affect parsing, conversion, or output
 - All markdown files must pass markdownlint checks before commit

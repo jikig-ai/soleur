@@ -104,12 +104,12 @@
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
-9	apps/web-platform/infra/container-restart-monitor.test.sh
-1	apps/web-platform/infra/cron-egress-firewall.test.sh
+11	apps/web-platform/infra/container-restart-monitor.test.sh
+6	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
-8	apps/web-platform/infra/disk-monitor.test.sh
+10	apps/web-platform/infra/disk-monitor.test.sh
 4	apps/web-platform/infra/generate-apex-rollback-pr.sh
 2	apps/web-platform/infra/git-data-gc.sh
 1	apps/web-platform/infra/git-data-luks.test.sh
@@ -152,8 +152,9 @@
 2	apps/web-platform/infra/registry-luks.test.sh
 1	apps/web-platform/infra/registry-userdata-budget.sh
 1	apps/web-platform/infra/registry-userdata-budget.test.sh
+4	apps/web-platform/infra/resend-inbound-bootstrap.test.sh
 1	apps/web-platform/infra/resource-monitor.sh
-10	apps/web-platform/infra/resource-monitor.test.sh
+12	apps/web-platform/infra/resource-monitor.test.sh
 1	apps/web-platform/infra/run-registered-suites.test.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
