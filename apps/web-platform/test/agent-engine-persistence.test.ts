@@ -13,6 +13,16 @@ function client() {
 }
 
 describe("AgentEnginePersistenceRepository", () => {
+  it("updates the workspace default only through the owner RPC", async () => {
+    const supabase = client();
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await repo.setDefaultEngine("ws-1", "codex");
+    expect(supabase.rpc).toHaveBeenCalledWith("set_workspace_default_engine", {
+      p_workspace_id: "ws-1",
+      p_engine_id: "codex",
+    });
+  });
+
   it("uses the atomic bind RPC and never derives the engine from client input", async () => {
     const supabase = client();
     const repo = new AgentEnginePersistenceRepository(supabase);

@@ -24,6 +24,15 @@ export interface BindRunInput {
 export class AgentEnginePersistenceRepository {
   constructor(private readonly client: PersistenceClient) {}
 
+  async setDefaultEngine(workspaceId: string, engineId: string): Promise<unknown> {
+    const result = await this.client.rpc("set_workspace_default_engine", {
+      p_workspace_id: workspaceId,
+      p_engine_id: engineId,
+    });
+    if (result.error) throw new Error(`workspace default engine update failed: ${result.error.message}`);
+    return result.data;
+  }
+
   async bind(input: BindRunInput): Promise<unknown> {
     const result = await this.client.rpc("bind_agent_engine_run", {
       p_workspace_id: input.workspaceId,
