@@ -8,6 +8,8 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { runRoutine } from "@/server/routines/run-routine";
+import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 
 export const dynamic = "force-dynamic";
 
@@ -36,12 +38,21 @@ export async function POST(request: Request) {
   const confirmed = body.confirmed === true;
 
   try {
+    const workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+    if (!workspaceId) {
+      return NextResponse.json({ error: "workspace_unbound" }, { status: 503 });
+    }
+    const repository = new AgentEnginePersistenceRepository(
+      supabase as unknown as PersistenceClient,
+    );
     const result = await runRoutine({
       fnId,
       actorClass: "human",
       actorId: user.id,
       confirmed,
       feature: "routines-run-now",
+      workspaceId,
+      bindRun: (binding) => repository.bind(binding),
     });
     if (!result.ok) {
       return NextResponse.json({ error: result.code }, { status: result.status });

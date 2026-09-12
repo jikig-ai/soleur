@@ -11,6 +11,14 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/server/routines/run-routine", () => ({
   runRoutine: mockRunRoutine,
 }));
+vi.mock("@/server/workspace-resolver", () => ({
+  readWorkspaceIdFromDb: vi.fn().mockResolvedValue("ws-1"),
+}));
+vi.mock("@/server/agent-engine-persistence", () => ({
+  AgentEnginePersistenceRepository: class {
+    bind = vi.fn().mockResolvedValue({ id: "engine-run-1" });
+  },
+}));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 import { POST } from "@/app/api/dashboard/routines/run/route";
