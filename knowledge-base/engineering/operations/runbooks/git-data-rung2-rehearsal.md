@@ -129,14 +129,18 @@ are. Substitute the run id of the rehearsal that passed:
 gh run download <run-id> -n git-data-rung2-boot-evidence
 mv git-data-rung2-boot-evidence.env apps/web-platform/infra/
 
-# Validate BEFORE committing — the gate tells you what it would refuse and why.
+# (#8043 Guard 4) COMMIT FIRST, ALONE — then validate. The gate's provenance arm reads the
+# evidence's OWN commit and HOLDs on an untracked file or on a commit that also touches a
+# hash-bound file, so the old "validate before committing" order is now refused by design.
+git checkout -b evidence-git-data-rung2
+git add apps/web-platform/infra/git-data-rung2-boot-evidence.env
+git commit -m 'feat(git-data): commit the rung-2 boot evidence from run <N>'
+
 source tests/scripts/lib/git-data-birth-readiness-gate.sh
 git_data_rung2_rehearsal_gate \
   apps/web-platform/infra/cloud-init-git-data.yml \
   apps/web-platform/infra/git-data-rung2-boot-evidence.env
 
-git checkout -b evidence-git-data-rung2
-git add apps/web-platform/infra/git-data-rung2-boot-evidence.env
 gh pr create
 ```
 

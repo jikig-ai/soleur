@@ -96,6 +96,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] If ALREADY on the target branch (PR branch, requested branch name, or the branch already checked out for review) → proceed with analysis on current branch
 - [ ] If DIFFERENT branch than the review target → offer to use worktree: "Use git-worktree skill for isolated Call `skill: git-worktree` with branch name
 - [ ] Fetch PR metadata using `gh pr view --json` for title, body, files, linked issues
+- [ ] `git fetch origin main && git merge-tree --write-tree origin/main HEAD >/dev/null; echo rc=$?` — a non-zero rc is a conflict with `main`; rebase BEFORE spawning the panel. A conflict found by a seat costs a rebase plus a second fix→CI round (PR #8052: `PROMOTED_FILES` collided with a sibling promotion, found by the code-quality seat).
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.

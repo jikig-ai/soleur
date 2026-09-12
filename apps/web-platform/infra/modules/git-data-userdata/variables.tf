@@ -10,9 +10,16 @@
 # into its evidence file and git_data_rung2_rehearsal_gate refuses any divergence outside
 # the allowlist below.
 #
-#   MAY DIVERGE (identity-shaped — they name WHICH host/volume/credential, never WHAT boots):
+#   MAY DIVERGE — but the set is NOT homogeneous (#8043 F6, mirroring the birth gate's
+#   own wording). Five members name WHICH host/volume/credential, never WHAT boots:
 #     host_name, git_data_volume_id, git_data_luks_volume_id, doppler_token,
-#     doppler_config_name, git_transport_pubkey, git_provision_pubkey, git_remove_pubkey
+#     doppler_config_name
+#   The three pubkeys are a CAPABILITY divergence, not an identity one: together they ARE
+#   the host's SSH authorization map (one forced command per authority — transport,
+#   provision, remove), and the rehearsal collapses them onto one key by design (#8009).
+#   The evidence hash binds these 13 files, not the templatefile ARGUMENTS, so a divergence
+#   here yields hash-valid evidence for a boot whose authorization map is not production's:
+#     git_transport_pubkey, git_provision_pubkey, git_remove_pubkey
 #
 #   MUST MATCH PROD BYTE-FOR-BYTE (they change WHAT the host does):
 #     git_data_server_type          — the Doppler download arch AND its checksum are DERIVED

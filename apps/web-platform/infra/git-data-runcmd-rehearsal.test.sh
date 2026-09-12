@@ -1581,9 +1581,47 @@ exit 0
 EMIT
 chmod +x /usr/local/bin/git-data-emit
 # Stub systemctl on /usr/local/bin (ahead of /usr/bin on Ubuntu's default PATH) — the stage
-# calls it bare. There is no init in a container; the restart's tolerance is not what S1 tests.
-printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/systemctl
+# calls it bare. There is no init in a container.
+#
+# (#8043 F11) PROGRAMMABLE, NOT `exit 0`. The unconditional stub is exactly why the unit-name
+# defect survived this arm: the shipped stage restarted `sshd`, a unit ubuntu-24.04 does not
+# have (ssh is socket-activated and `Alias=sshd.service` is instantiated only when ssh.service
+# is enabled), so on every real boot it failed rc=5 "Unit sshd.service not found." — fail-open,
+# `boot_complete` still all-yes — while the stub answered 0 to whatever it was asked. The stub
+# now answers as the image does: `restart sshd` -> rc 5 with the measured message; `restart ssh`
+# -> rc 0, or under S1_RESTART_MODE=fail rc 1 AND `/run/sshd` torn down, which is what systemd's
+# RuntimeDirectory= does on a failed start (S2 uses it to prove the -T probe ran BEFORE the
+# action). Anything else -> 0.
+cat > /usr/local/bin/systemctl <<'STUB'
+#!/bin/sh
+case "${1:-} ${2:-}" in
+  "restart sshd"|"restart sshd.service")
+    echo "Failed to restart sshd.service: Unit sshd.service not found." >&2; exit 5 ;;
+  "restart ssh"|"restart ssh.service")
+    if [ "${S1_RESTART_MODE:-ok}" = fail ]; then
+      rm -rf /run/sshd
+      echo "Job for ssh.service failed because the control process exited with error code." >&2
+      exit 1
+    fi
+    exit 0 ;;
+esac
+exit 0
+STUB
 chmod +x /usr/local/bin/systemctl
+# (#8043 F11) SSHD_T_MODE=255 wraps the REAL sshd so that `-T` exits 255 with the exact string a
+# torn-down /run/sshd produces, while `-t` passes through untouched. S2 uses it to prove the
+# stage classifies a -T that could not run as could-not-measure, never as "directives absent".
+if [ "${SSHD_T_MODE:-real}" = 255 ]; then
+  mv /usr/sbin/sshd /usr/sbin/sshd.real
+  cat > /usr/sbin/sshd <<'WRAP'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "-T" ]; then echo "Missing privilege separation directory: /run/sshd" >&2; exit 255; fi
+done
+exec /usr/sbin/sshd.real "$@"
+WRAP
+  chmod +x /usr/sbin/sshd
+fi
 # WHERE THIS SITS, AND WHY IT IS NOT FIRST (#7613 review). An earlier revision of this
 # comment claimed the marker precedes apt "so its presence proves the mount worked". It
 # does not -- apt-get update/install run above it under `set -e`. That placement is
@@ -1604,7 +1642,9 @@ sh /work/sshd-stage.sh
 echo "STAGE_RC=$?"
 S1DRV
 
-  _s1_run() { # $1 = stage script to mount
+  _s1_run() { # $1 = stage script to mount; $2 = drop-in to mount (default: the rendered one);
+              # env S1_RESTART_MODE / SSHD_T_MODE are forwarded to the driver (default: real)
+    local _dropin="${2:-$TMP/01-hardening.conf}"
     rm -rf "$TMP/s1out"; mkdir -p "$TMP/s1out"; : > "$TMP/s1out/sshd-capture.log"
     # MOUNT-SOURCE EXISTENCE GUARD (#7613 review), ported from T5. Without it S1 reopened
     # the fail-open T5 closes and its own comment claimed to have closed: docker exits 125
@@ -1616,12 +1656,13 @@ S1DRV
     # and therefore genuinely intercepts that case. A positive marker cannot, so the
     # interception has to happen here instead, before the ladder ever runs.
     local _m
-    for _m in "$1" "$TMP/01-hardening.conf" "$TMP/sshd-drive.sh" "$TMP/s1out"; do
+    for _m in "$1" "$_dropin" "$TMP/sshd-drive.sh" "$TMP/s1out"; do
       [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
     done
     docker run --rm \
+      -e "S1_RESTART_MODE=${S1_RESTART_MODE:-ok}" -e "SSHD_T_MODE=${SSHD_T_MODE:-real}" \
       -v "$1:/work/sshd-stage.sh:ro" \
-      -v "$TMP/01-hardening.conf:/work/01-hardening.conf:ro" \
+      -v "$_dropin:/work/01-hardening.conf:ro" \
       -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" \
       -v "$TMP/s1out:/out" \
       "$UBUNTU_BASE" bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
@@ -1857,6 +1898,114 @@ fi
 _S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
 if [ "$_S1_TOTAL" -eq 13 ]; then pass; else
   fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 13 on every route" \
+       "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
+
+# ── S2 (#8043 F11, Guard 2) — the drop-in is MEASURABLY in effect, and the stage cannot go dark
+#
+# F11: the stage's only ssh unit action named `sshd`; the image ships `ssh`. It failed on every
+# boot, fail-open, and nothing measured whether /etc/ssh/sshd_config.d/01-hardening.conf was
+# in effect at all. The fix names the unit the image ships and asserts the two security-critical
+# directives against `sshd -T` BEFORE the unit action — before, because `ssh.service` declares
+# RuntimeDirectory=sshd and systemd tears /run/sshd down on a failed start, so a probe placed
+# after the action exits 255 in exactly the failure it exists to catch. Rows (a)-(g) are
+# container-INDEPENDENT and read the extracted stage; (h)-(n) spin the pinned image.
+_S2_P0=$passes; _S2_F0=$fails; _S2_S0=$SKIPPED_ASSERTIONS
+if [ -s "$TMP/sshd-stage.sh" ]; then
+  _s2_code="$(sed 's/^[[:space:]]*#.*$//' "$TMP/sshd-stage.sh")"
+  # (a) the unit the image ships — and NOT the one it does not.
+  if printf '%s\n' "$_s2_code" | grep -qE 'systemctl[[:space:]]+restart[[:space:]]+ssh([[:space:]]|$)' \
+     && ! printf '%s\n' "$_s2_code" | grep -qE 'systemctl[[:space:]]+restart[[:space:]]+sshd'; then pass; else
+    fail "S2(a): the sshd stage does not restart the \`ssh\` unit (or still names \`sshd\`, which ubuntu-24.04 does not have)" \
+         "$(printf '%s\n' "$_s2_code" | grep -nE 'systemctl' | head -3)"; fi
+  # (b) ORDER: the -T probe precedes the unit action.
+  _s2_T_ln=$(printf '%s\n' "$_s2_code" | grep -nE '/usr/sbin/sshd -T' | head -1 | cut -d: -f1 || true)
+  _s2_act_ln=$(printf '%s\n' "$_s2_code" | grep -nE 'systemctl[[:space:]]+restart' | head -1 | cut -d: -f1 || true)
+  if [ -n "$_s2_T_ln" ] && [ -n "$_s2_act_ln" ] && [ "$_s2_T_ln" -lt "$_s2_act_ln" ]; then pass; else
+    fail "S2(b): sshd -T is not run BEFORE the unit action (probe line=${_s2_T_ln:-absent}, action line=${_s2_act_ln:-absent})" \
+         "After the action a failed start has torn down /run/sshd and the probe goes silent in the failure it exists to catch."; fi
+  # (c) the stage never reassigns STAGE — a new assignment re-points the top-armed fatal trap.
+  _s2_n_stage=$(printf '%s\n' "$_s2_code" | grep -cE '^[[:space:]]*STAGE=' || true)
+  if [ "$_s2_n_stage" = "1" ]; then pass; else
+    fail "S2(c): the sshd stage carries ${_s2_n_stage} STAGE= assignment(s), expected exactly 1 (STAGE=sshd_config)" \
+         "A later death in this item would report a stage no Sentry rule routes."; fi
+  # (d)+(e) the two-directive literal list, floor 2 — a comparison that stops at the first member,
+  # or iterates an empty list, is the defect itself.
+  if printf '%s\n' "$_s2_code" | grep -qF 'passwordauthentication no'; then pass; else fail "S2(d): the stage does not name passwordauthentication no as a required directive"; fi
+  if printf '%s\n' "$_s2_code" | grep -qF 'permitrootlogin prohibit-password'; then pass; else fail "S2(e): the stage does not name permitrootlogin prohibit-password as a required directive"; fi
+  # (f) the assertion emits on the EXISTING literal stage at level warning — never fatal (the
+  # rung-2 gate contract), never via a derived "$STAGE" (row (c) covers the reassignment half).
+  _s2_n_fatal=$(printf '%s\n' "$_s2_code" | tr -d '\\\n' | grep -oE 'git-data-emit[[:space:]]+"[^"]*"[[:space:]]+[A-Za-z_"$]+[[:space:]]+fatal' | wc -l | tr -d ' ' || true)
+  if [ "$_s2_n_fatal" = "1" ]; then pass; else
+    fail "S2(f): the sshd stage has ${_s2_n_fatal} fatal emit(s), expected exactly 1 (sshd -t REJECTED) — the drop-in assertion must not emit fatal" ""; fi
+  # (g) >= 4 emits on the bare literal `sshd_config_warn warning`: -t could-not-run, restart
+  # failed, directive absent, -T could-not-run. Continuations joined first: one level sits on
+  # a continued line.
+  _s2_n_warn=$(printf '%s\n' "$_s2_code" | tr -d '\\\n' | grep -oE 'sshd_config_warn[[:space:]]+warning' | wc -l | tr -d ' ' || true)
+  if [ "$_s2_n_warn" -ge 4 ]; then pass; else
+    fail "S2(g): only ${_s2_n_warn} emit(s) on the literal stage sshd_config_warn at level warning, expected >= 4" ""; fi
+
+  # ── the container rows ──
+  # (h)(i)(j) CONTRARY drop-in + FAILING action + torn-down /run/sshd, in ONE run. Contrary
+  # VALUES, not deleted lines: the 24.04 default PermitRootLogin prohibit-password renders
+  # identically to the hardened value, so a deleted line produces a green dump. Expected:
+  # stage still exits 0 (the action is tolerated), the directive row names BOTH directives
+  # (so the probe ran BEFORE the action tore /run/sshd down), and the restart-failed row is
+  # also present.
+  printf 'PasswordAuthentication yes\nPermitRootLogin yes\n' > "$TMP/01-contrary.conf"
+  S1_RESTART_MODE=fail _s1_run "$TMP/sshd-stage.sh" "$TMP/01-contrary.conf"
+  case "$S1_STATE" in
+    did-not-run) arm_skip "S2(h-j) did not run: the container never reached the stage. ${S1_NOTE}" 3 ;;
+    harness-defect|fixture-defect)
+      fail "S2(h-j): ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
+      fail "S2(h-j): the same defect leaves the directive assertion undemonstrated" "${S1_NOTE}"
+      fail "S2(h-j): the same defect leaves the pre-action ordering undemonstrated" "${S1_NOTE}" ;;
+    *)
+      if [ "${S1_RC:-none}" = "0" ]; then pass; else fail "S2(h): with a contrary drop-in and a failing action the stage exited ${S1_RC:-<no marker>}, expected 0 (tolerated)" "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+      if grep -q 'hardening directive absent' "$S1_CAP" 2>/dev/null \
+         && grep -qi 'passwordauthentication' "$S1_CAP" && grep -qi 'permitrootlogin' "$S1_CAP"; then pass; else
+        fail "S2(i): the directive row is missing or does not name BOTH contrary directives" "$(cat "$S1_CAP" 2>/dev/null | head -8)"; fi
+      if grep -q 'restart failed' "$S1_CAP" 2>/dev/null; then pass; else
+        fail "S2(j): the failing action's own warn row is absent — the tolerate arm did not report" "$(cat "$S1_CAP" 2>/dev/null | head -8)"; fi ;;
+  esac
+  # (k)(l) sshd -T exits 255 (torn-down /run/sshd) -> could-not-measure, NEVER "directives absent".
+  SSHD_T_MODE=255 _s1_run "$TMP/sshd-stage.sh"
+  case "$S1_STATE" in
+    did-not-run) arm_skip "S2(k-l) did not run: the container never reached the stage. ${S1_NOTE}" 2 ;;
+    harness-defect|fixture-defect)
+      fail "S2(k-l): ${S1_STATE} — docker rc=${S1_DOCKER_RC}, not an environment skip" "${S1_NOTE}"
+      fail "S2(k-l): the same defect leaves the could-not-measure class undemonstrated" "${S1_NOTE}" ;;
+    *)
+      if grep -q 'sshd -T could not run' "$S1_CAP" 2>/dev/null && grep -q 'rc=255' "$S1_CAP"; then pass; else
+        fail "S2(k): a -T that exits 255 was not reported as could-not-measure naming rc=255" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi
+      if ! grep -q 'hardening directive absent' "$S1_CAP" 2>/dev/null; then pass; else
+        fail "S2(l): a -T that could not run was classified as 'directives absent' — the wrong cause" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi ;;
+  esac
+  # (m)(n) MUTATION — restore the unit name the image does not have. This is the row that would
+  # have caught F11: the programmable stub answers rc=5 with the measured message, so the
+  # healthy-drop-in run must now emit the restart-failed row naming the unit.
+  sed -e 's/systemctl restart ssh\b/systemctl restart sshd/' "$TMP/sshd-stage.sh" > "$TMP/sshd-stage.sshdunit.sh"
+  _s2_mb=$(grep -cE 'systemctl restart sshd\b' "$TMP/sshd-stage.sh" || true); _s2_ma=$(grep -cE 'systemctl restart sshd\b' "$TMP/sshd-stage.sshdunit.sh" || true)
+  if [ "$_s2_mb" = "0" ] && [ "$_s2_ma" = "1" ]; then pass; else
+    fail "S2(m) MUTATION did not land: 'systemctl restart sshd' count went ${_s2_mb} -> ${_s2_ma}, expected 0 -> 1" ""
+    fail "S2(n): skipped (mutation did not land)"
+  fi
+  if [ "$_s2_mb" = "0" ] && [ "$_s2_ma" = "1" ]; then
+    _s1_run "$TMP/sshd-stage.sshdunit.sh"
+    case "$S1_STATE" in
+      did-not-run) arm_skip "S2(n) did not run: the container never reached the stage. ${S1_NOTE}" 1 ;;
+      harness-defect|fixture-defect) fail "S2(n): ${S1_STATE} — docker rc=${S1_DOCKER_RC}" "${S1_NOTE}" ;;
+      *)
+        if grep -q 'Unit sshd.service not found' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S2(n) MUTATION: restoring the sshd unit name did not reproduce the measured 'Unit sshd.service not found' row — S1 could not catch F11" "$(cat "$S1_CAP" 2>/dev/null | head -6)"; fi ;;
+    esac
+  fi
+else
+  # FOURTEEN on every route: 7 static + 3 (h-j) + 2 (k-l) + 1 (m) + 1 (n).
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do fail "S2: could not extract the sshd stage (row ${_i} not run)"; done
+fi
+_S2_TOTAL=$(( (passes - _S2_P0) + (fails - _S2_F0) + (SKIPPED_ASSERTIONS - _S2_S0) ))
+if [ "$_S2_TOTAL" -eq 14 ]; then pass; else
+  fail "S2: the arm contributed ${_S2_TOTAL} assertion(s), expected exactly 14 on every route" \
        "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
 
 # AND AN S1-SPECIFIC SKIP BOUND. The suite-wide ceiling cannot tell whose skips they are, so
@@ -3454,8 +3603,9 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # NOT COUNTED, deliberately: the instrument self-test above drives pass() and fail() once each
 # and then UNWINDS both counters. Letting the canary count would inflate this floor by one and
 # mask exactly the arm-deletion it exists to catch.
-if [ "$total" -lt 77 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 77) — harness did not execute fully" >&2
+# RAISED 77 -> 92 (#8043 F11): the S2 arm — 14 rows on every route plus its own invariant.
+if [ "$total" -lt 92 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 92) — harness did not execute fully" >&2
   exit 1
 fi
 # LEDGER RECONCILIATION (#7481 review, V2). FAILURES is append-only and the verdict reads it,

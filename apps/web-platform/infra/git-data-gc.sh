@@ -12,7 +12,12 @@ set -uo pipefail
 REPO_ROOT="${GIT_DATA_REPO_ROOT:-/mnt/git-data/repositories}"
 GIT_DATA_ROOT="${GIT_DATA_ROOT:-/mnt/git-data}"
 EMIT="${GIT_DATA_EMIT:-/usr/local/bin/git-data-emit}"
-LOCK="${GIT_DATA_GC_LOCK:-/var/lock/git-data-gc.lock}"
+# (#8043 review) Under the unit's RuntimeDirectory, NOT /var/lock. /var/lock is /run/lock,
+# root:root 1777 — writable by the `git` uid, and fs.protected_regular (Ubuntu ships 2) makes
+# root's `exec 9>` REFUSE a file the git uid pre-created there (measured), so a git-uid process
+# could park the store unmaintained until an operator removed the file. /run/git-data-gc is
+# created root-only by systemd for this unit and is writable under ProtectSystem=strict.
+LOCK="${GIT_DATA_GC_LOCK:-/run/git-data-gc/lock}"
 # Mirrors bootstrap's pack.windowMemory, passed explicitly so a repack does not depend on
 # the system config still being right.
 WINDOW_MEMORY="${GIT_DATA_GC_WINDOW_MEMORY:-64m}"
@@ -40,7 +45,13 @@ log() { echo "[git-data-gc] $*"; }
 _gc_run() {
   local what="$1" repo="$2"; shift 2
   local rc=0
-  timeout -k 30 "$REPO_TIMEOUT" git -C "$repo" "$@" >/dev/null 2>>"$ERRLOG" || rc=$?
+  # (#8043 review) `-c safe.directory="$repo"` PER REPO, on the command line. The system-wide
+  # `safe.directory=$REPO_ROOT/*` the bootstrap sets needs git >= 2.46 for the trailing `/*`
+  # form; the pinned ubuntu-24.04 image ships 2.43.0, where it matches NOTHING (measured:
+  # `''` and `$REPO_ROOT/*` -> rc 128 "dubious ownership"; the exact path -> 0). An exact-path
+  # value works on every version, and the command-line scope is one the git-owned repo config
+  # cannot override — the same idiom the /workspaces LUKS prober uses.
+  timeout -k 30 "$REPO_TIMEOUT" git -c safe.directory="$repo" -C "$repo" "$@" >/dev/null 2>>"$ERRLOG" || rc=$?
   if [ "$rc" -ne 0 ]; then
     repo_failed=1
     [ "$rc" -eq 124 ] && printf 'timeout after %ss: git %s (killed)\n' "$REPO_TIMEOUT" "$what" >>"$ERRLOG"

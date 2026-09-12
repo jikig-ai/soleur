@@ -5876,6 +5876,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # (#8043 NFR2 / Guard 4) The rung-2 interlock below reads the evidence file's commit provenance; its ARM 1 HOLDs on a shallow clone, so omitting this fails closed rather than open.
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
