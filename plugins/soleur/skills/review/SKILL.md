@@ -3,6 +3,10 @@ name: review
 description: "This skill should be used when performing exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/review` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:review`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/review`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
@@ -1028,7 +1032,7 @@ spawn fails at it. That experiment has not been run.
 
 #### Step 3: Summary Report
 
-**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output. If either is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
+**Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `/work` or `/one-shot` slash command, or a `slash_command` tool use of those skills. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
 **Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
@@ -1162,11 +1166,11 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `/work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `/one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
-1. Run `skill: soleur:compound` to capture learnings from the review session.
+1. Run `skill: soleur:compound` (**Grok:** Read `plugins/soleur/skills/compound/SKILL.md` in this process / `/compound`) to capture learnings from the review session.
    If compound finds nothing to capture, it will skip gracefully — do not block on this.
 2. Commit any local artifacts. GitHub issues are already created remotely,
    but local files may have been modified (plan updates, todo resolutions).
@@ -1217,7 +1221,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 4. **Continue to `/soleur:ship` in the same turn — review is not a stopping point.**
    Findings are fixed inline (§5), so a clean review means the PR is ready to go
    out, not ready to be handed over. Invoke `skill: soleur:compound` then
-   `skill: soleur:ship`, and let ship carry the PR to MERGED
+   `skill: soleur:ship` (**Grok:** Read each child's SKILL.md in this process / `/compound` then `/ship`), and let ship carry the PR to MERGED
    (`rf-never-skip-qa-review-before-merging`, `wg-after-marking-a-pr-ready-run-gh-pr-merge`).
 
    Do NOT end the turn by telling the operator to run the next skill. This step
@@ -1503,6 +1507,8 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 **When a fix's remedy for hostile input is NORMALIZATION — coercion, scrubbing, transliteration, case-folding, a default — re-run the DOWNSTREAM MATCHER against the normalized value before accepting it.** "It can no longer execute" is not "the guard still fires": a coerced value is a *different* value than the matcher was written against, so a fix can close a code-execution path and leave every anchored guard bypassed in the same line. Ask specifically which values the normalizer maps together, because a default that swallows more than intended is invisible — a falsy-default (`//` in jq, `||` in JS, `or` in Python) folds `false`/`0`/`""` into the same branch as *absent*, so a type assertion placed after it can never see the very type it exists to reject. **Why:** #7164 — `tojson` coercion closed the RCE while `["git","stash"]` matched no guard regex (the issue's own first-suggested remedy, which would have closed it on a false negative); a proposed lone-surrogate scrub failed the same way; and the shipped fix then had `(.tool_input.command // "")` rewrite JSON `false` to `""` before `all(type=="string")` ran, so `true` was caught and `false` was not. Each was found only by running the real matcher against the transformed value. See `knowledge-base/project/learnings/2026-08-02-a-fix-that-closes-an-rce-can-leave-the-guard-evaded.md`.
 
 **A finding that turns on the reading of a code COMMENT needs the comment quoted IN FULL — and your own correction is a NEW claim, not an inheritor of the finding's credibility.** Both the reviewer and the author routinely quote the same *fragment*, and a fragment that scopes a narrow allowlist reads exactly like one that scopes a mechanism. The failure is asymmetric and easy to miss because the second state feels like diligence: an overclaim gets flagged, you verify *some* of the finding's legs, and you write a correction that is **more wrong than the original**. Ask of the quoted comment: does it constrain the MECHANISM, or only a narrower ALLOWLIST? Then re-verify the corrected claim on its own evidence. **Why:** #7109 — a new sentinel's comment claimed it was "mirrored to the telemetry sink"; an observability agent rated it P1-unreachable citing `safe-bash.ts`'s *"write verbs (create/cleanup-merged/draft-pr) stay gated … never here"*; the correction asserted the marker mirrors nothing. The CONCUR gate refuted BOTH: read in full that comment scopes the exact-literal **auto-approve carve-out**, not session reachability, and `go.md` Step 0 runs `cleanup-merged` verbatim via the same options object that registers the hook — so the truth was narrower than either claim (mirrored on the platform surface, unmirrored from the CLI, and *reachable* ≠ *has reached*). Corollary from the same session: never write a `#N` into a committed artifact before `gh issue create` has returned it — a guessed number resolved to a real, unrelated PR. See `knowledge-base/project/learnings/2026-07-31-i-reported-a-live-suite-as-finished-and-three-more-results-i-asserted-instead-of-measuring.md`.
+
+**The session `grep` is a ugrep shell function, and on a file carrying non-UTF-8 bytes it returns ZERO matches for a string `sed` just printed.** `apps/web-platform/test/infra/vector-pii-scrub.test.sh` holds a multi-byte pepper fixture; `grep -n 'assert_grep'` over it returned nothing while `sed -n` showed the lines, and `/usr/bin/grep` without `-a` said `binary file matches`. Before concluding a symbol is ABSENT from any test file, `type grep` and retry with `/usr/bin/grep -a` — a search that must match is the positive control every reviewer grep needs (#8073).
 
 **A grep used as review EVIDENCE must be anchored on the EMITTER, and its regex dialect must be the one the tool actually speaks.** Two silent-miss shapes recur when verifying a finding by search. (a) **Dialect:** `awk` is POSIX ERE, not PCRE — `\s` matches a literal `s`, so `awk '/^\s*DOPPLER_/'` matches NOTHING and reads as "the variable is absent." Use `[[:space:]]`. (b) **Anchor:** grepping for a banner/marker NAME matches the test suite's own assertion text *describing* that banner (`[ok] sibling banner names the SIBLING_RUN_DETECTED condition`), so a marker that is never emitted still returns hits. Anchor on the emitter prefix (`[contention] BANNER`), not the name. Both fail in the direction that looks like a verified answer. **Why:** #7162 — the `awk` miss nearly got a present credential env var reported as a live breakage, and the banner grep "confirmed" emitters against the suite that only names them. See `knowledge-base/project/learnings/workflow-issues/2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md`.
 

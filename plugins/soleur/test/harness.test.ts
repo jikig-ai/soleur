@@ -171,7 +171,9 @@ describe("invokeSkill", () => {
     expect(inv.harness).toBe("grok");
     expect(inv.tool).toBe("slash_command");
     expect(inv.command).toBe("/drain-labeled-backlog --label security");
-    expect(inv.instruction).toContain("slash command");
+    expect(inv.instruction).toMatch(/in this process/i);
+    expect(inv.instruction).toContain("SKILL.md");
+    expect(inv.instruction).not.toMatch(/do not read/i);
   });
 
   test("devin returns slash_command invocation", () => {
@@ -269,12 +271,15 @@ describe("routingInstructions", () => {
     expect(md).toContain("Never improvise");
   });
 
-  test("grok documents /go not /soleur:go", () => {
+  test("grok documents /go not /soleur:go and in-process SKILL.md Read", () => {
     const md = routingInstructions("grok");
     expect(md).toContain("/go");
     expect(md).toContain("**not** `/soleur:go`");
     expect(md).toContain("spawn_subagent");
     expect(md).toContain("Workflow fidelity");
+    expect(md).toMatch(/in this process/i);
+    expect(md).toContain("SKILL.md");
+    expect(md).not.toMatch(/do not read/i);
   });
 
   test("devin documents /soleur:go and run_subagent", () => {
@@ -287,9 +292,10 @@ describe("routingInstructions", () => {
     expect(md).not.toContain("Skill tool");
   });
 
-  test("unknown suggests grok inspect", () => {
+  test("unknown suggests grok inspect and does not invent grok --trust", () => {
     const md = routingInstructions("unknown");
     expect(md).toContain("grok inspect");
+    expect(md).not.toMatch(/grok --trust/);
   });
 });
 

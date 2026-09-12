@@ -343,6 +343,131 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(gate).toContain("GROK_FIDELITY_SKIP_BUDGET");
   });
 
+  test("Grok invokeSkill tells the parent to Read SKILL.md in-process", () => {
+    process.env.GROK_HOME = "/home/user/.grok";
+    const inv = invokeSkill("brainstorm", "explore");
+    expect(inv.harness).toBe("grok");
+    expect(inv.instruction).toMatch(/in this process/i);
+    expect(inv.instruction).toContain("SKILL.md");
+    expect(inv.instruction).not.toMatch(/do not read/i);
+  });
+
+  test("Grok workflowFidelityInstructions sanctions in-process Read", () => {
+    const md = workflowFidelityInstructions("grok");
+    expect(md).toMatch(/in this process/i);
+    expect(md).toContain("SKILL.md");
+    expect(md).not.toMatch(/not reading SKILL\.md/i);
+  });
+
+  test("Claude workflowFidelityInstructions still forbids Read as a Skill-tool substitute", () => {
+    const md = workflowFidelityInstructions("claude");
+    expect(md).toMatch(/not reading SKILL\.md/i);
+  });
+});
+
+const IN_PROCESS_READ = /in this process/i;
+const ADAPTER_CITE = /harness\.ts|invokeSkill/;
+const LOCKED_PIPELINE_SKILLS = [
+  "one-shot",
+  "brainstorm",
+  "drain-labeled-backlog",
+  "drain-prs",
+  "plan",
+  "work",
+  "review",
+  "qa",
+  "compound",
+  "ship",
+  "postmerge",
+  "deepen-plan",
+] as const;
+
+describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () => {
+  test("walker is not vacuous (locked set is non-empty)", () => {
+    expect(LOCKED_PIPELINE_SKILLS.length).toBeGreaterThan(0);
+  });
+
+  test.each([...LOCKED_PIPELINE_SKILLS])(
+    "%s SKILL.md cites harness.ts or invokeSkill and has an in-process Read sentence",
+    (name) => {
+      const body = readFileSync(
+        resolve(PLUGIN_ROOT, "skills", name, "SKILL.md"),
+        "utf-8",
+      );
+      expect(body).toMatch(ADAPTER_CITE);
+      expect(body).toMatch(IN_PROCESS_READ);
+      expect(body).toContain("SKILL.md");
+    },
+  );
+
+  test("one-shot Steps 3-8 dual-voice Grok in-process Read (header-only is vacuous)", () => {
+    const body = readFileSync(
+      resolve(PLUGIN_ROOT, "skills/one-shot/SKILL.md"),
+      "utf-8",
+    );
+    const start = body.indexOf("**Steps 3-8:");
+    const end = body.indexOf("Start with step 0b now.");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const steps = body.slice(start, end);
+    expect(steps).toMatch(IN_PROCESS_READ);
+    expect(steps).toContain("SKILL.md");
+    expect(steps).toContain("soleur:work");
+    expect(steps).toContain("soleur:review");
+    expect(steps).toContain("soleur:ship");
+  });
+
+  test("go.md Step 2.1 sanctions Grok in-process Read", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    expect(goMd).toMatch(ADAPTER_CITE);
+    expect(goMd).toMatch(IN_PROCESS_READ);
+  });
+
+  test("go.md live dispatch after Step 2.1 does not nested-slash on Grok", () => {
+    // Header-only in-process Read is vacuous if the bullet the parent follows
+    // still says "invoke via slash command" (the 2026-09-11 /go failure).
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    const start = goMd.indexOf("If intent is clear, route without confirmation:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = goMd.indexOf("Map `soleur:<skill>`", start);
+    expect(end).toBeGreaterThan(start);
+    const block = goMd.slice(start, end);
+    expect(block).toMatch(IN_PROCESS_READ);
+    expect(block).toContain("SKILL.md");
+    expect(block).not.toMatch(/invoke via \*\*slash command\*\*/i);
+  });
+
+  test("go.md Step 1 worktree-continue dual-voices Grok in-process Read", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    const start = goMd.indexOf("## Step 1: Worktree Context");
+    const end = goMd.indexOf("## Step 2:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const step1 = goMd.slice(start, end);
+    expect(step1).toMatch(IN_PROCESS_READ);
+    expect(step1).toContain("work/SKILL.md");
+    expect(step1).toContain("Skill tool");
+  });
+
+  test("go.md plugin-root prefers GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT with no CWD default", () => {
+    const goMd = readFileSync(resolve(PLUGIN_ROOT, "commands/go.md"), "utf-8");
+    expect(goMd).toContain('ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"');
+    expect(goMd).toContain("plugin-root-unverified");
+    expect(goMd).not.toContain(":-./plugins/soleur");
+    expect(goMd).toContain("grok inspect");
+    const namePin = `grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"'`;
+    expect(goMd.split(namePin).length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  test("public getting-started does not overclaim Grok support", () => {
+    const page = readFileSync(
+      resolve(PLUGIN_ROOT, "docs/pages/getting-started.njk"),
+      "utf-8",
+    );
+    expect(page).not.toMatch(/full Grok support/i);
+    expect(page).not.toMatch(/zero configuration/i);
+  });
+
   test("AGENTS.rules.md pins pipeline, lifecycle, and merge-deploy hard rules", () => {
     const core = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
     expect(core).toContain("hr-pipeline-skills-never-inline-after-go-route");
@@ -354,5 +479,84 @@ describe("workflow-fidelity sentinel markers in skills", () => {
       "utf-8",
     );
     expect(syncScript).toContain("mergeStateStatus");
+  });
+});
+
+const SETTINGS_PATH = resolve(PLUGIN_ROOT, "../../.claude/settings.json");
+const HOOK_EVENTS = ["PreToolUse", "PostToolUse"] as const;
+/** Grok alias table (user-guide 10-hooks.md, CLI 1.0.29, 2026-09-11).
+ * Bash already matches run_terminal_command; Write/Edit/MultiEdit already
+ * match search_replace; Task already matches spawn_subagent. Duplicate
+ * matcher objects for those names double-fire on Grok. */
+const ALIASED_GROK_NAMES = [
+  "run_terminal_command",
+  "search_replace",
+  "spawn_subagent",
+] as const;
+/** Unaliased Grok names that still need exact-name twins. */
+const UNALIASED_GROK_NAMES = ["ask_user_question", "write"] as const;
+
+type HookEntry = { matcher?: string; hooks?: { command?: string }[] };
+
+describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (measured 2026-09-11)", () => {
+  const src = readFileSync(SETTINGS_PATH, "utf-8");
+  const settings = JSON.parse(src) as { hooks: Record<string, HookEntry[]> };
+  const allMatchers = HOOK_EVENTS.flatMap((e) =>
+    (settings.hooks[e] ?? []).map((x) => x.matcher ?? ""),
+  );
+
+  test("chokepoint is repo-root .claude/settings.json (not a fixture path)", () => {
+    const posix = SETTINGS_PATH.replace(/\\/g, "/");
+    expect(posix).not.toMatch(/\/test\/|\/fixtures\//);
+    const gitRoot = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf-8",
+      cwd: PLUGIN_ROOT,
+    });
+    expect(gitRoot.status).toBe(0);
+    expect(posix).toBe(
+      resolve(gitRoot.stdout.trim(), ".claude/settings.json").replace(/\\/g, "/"),
+    );
+    expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+    expect(settings.hooks.PreToolUse.length).toBeGreaterThan(0);
+  });
+
+  test('Skill and Monitor remain as exact matcher tokens (not toContain("S"), not case-folded)', () => {
+    expect(src).toContain('"matcher": "Skill"');
+    expect(src).toContain('"matcher": "Monitor"');
+    expect(allMatchers).toContain("Skill");
+    expect(allMatchers).toContain("Monitor");
+    expect(allMatchers).not.toContain("skill");
+  });
+
+  test("no matcher substring-ORs a Grok exact name (regex-OR is forbidden; split-on-| is not the gate)", () => {
+    for (const m of allMatchers) {
+      if (!m.includes("|")) continue;
+      for (const grokName of [...ALIASED_GROK_NAMES, ...UNALIASED_GROK_NAMES]) {
+        expect(m.includes(grokName)).toBe(false);
+      }
+    }
+  });
+
+  test("unaliased Grok names stay as standalone matcher tokens", () => {
+    for (const name of UNALIASED_GROK_NAMES) {
+      expect(allMatchers).toContain(name);
+    }
+  });
+
+  test("aliased Grok names must not appear as standalone matchers (they double-fire)", () => {
+    for (const name of ALIASED_GROK_NAMES) {
+      expect(allMatchers).not.toContain(name);
+    }
+  });
+
+  test("Skill and Monitor are not faked as Grok matchers (SOLEUR_HOOK_SKIP reason=no-tool)", () => {
+    expect(allMatchers).not.toContain("skill");
+    expect(allMatchers).not.toContain("monitor");
+    const fidelity = readFileSync(
+      resolve(PLUGIN_ROOT, "lib/workflow-fidelity.ts"),
+      "utf-8",
+    );
+    expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=no-tool");
+    expect(fidelity).toContain("SOLEUR_HOOK_SKIP reason=untrusted-session");
   });
 });
