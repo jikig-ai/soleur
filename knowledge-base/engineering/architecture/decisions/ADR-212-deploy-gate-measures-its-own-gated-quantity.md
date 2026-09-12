@@ -8,6 +8,7 @@ date: 2026-09-07
 
 - **Deciders:** Jean (operator), CTO agent (binding ruling on three forks), review panel
   (code-simplicity-reviewer, architecture-strategist, performance-oracle)
+
 - **Relates to:** #7902 (this change),
   [ADR-072](./ADR-072-adaptive-ci-signal-wait-for-deploy-gate.md) (the gate this bounds; amended
   by the same PR), #5806 (deploy off `workflow_run` — still open, re-armed),
@@ -60,9 +61,11 @@ will otherwise be re-proposed:
   arithmetic by construction, so the guard is green on configurations the gate provably cannot
   absorb: under back-to-back merges — the normal case, 12 runs in 9 hours — the real quantity is
   `previous run's time-to-test + own critical path`.
+
 - **No headroom factor repairs it.** Applying the repo's own 1.2x convention still yields a green
   verdict on that same failure. A multiplier rescales a term that is present; it cannot conjure a
   term that is absent.
+
 - It would not have caught #7902. Before that PR no closure job declared `timeout-minutes` at
   all, and CI grew slower for months under no declared ceilings. The arithmetic only moves when a
   human edits an integer.
@@ -73,6 +76,40 @@ will otherwise be re-proposed:
 `::warning::` at `0.7 * CEILING_S` (a value DERIVED from `CEILING_S`, never restated, so the two
 cannot drift). That measures time-to-`test` **including the queue**, on every release, and
 catches the creep class that produced #7902 months before it becomes a fail-closed deploy.
+
+> **RELOCATED 2026-09-09 — see [ADR-217](./ADR-217-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
+> `await-ci` is deleted; the deploy now fires on CI's `workflow_run: completed` event, so
+> `CEILING_S` no longer exists and nothing can be derived from it. **The detector is relocated,
+> not deleted** — dropping it would have regressed this decision and undone what #7902 shipped
+> two days earlier.
+>
+> Declaring a fresh `CI_BUDGET_S` and warning at 0.7x it was rejected: that is an unowned
+> number, which is exactly what Decision 3 of this ADR rejected arithmetic for. The reference
+> now derives from a constant that is **already owned and already CI-asserted** —
+> `DRIFT_SUSTAINED_THRESHOLD_MIN`, which check B9 asserts stays >= the declared critical path.
+> CI's allowed share is that budget minus the ceilings downstream of it:
+> `CI_BUDGET_MIN = 207 - (30 + 15 + 90) = 72`, and the warning fires at `0.7 x` it — the same
+> factor chosen here.
+>
+> **The measured quantity changed with it, and the change is an improvement.** This decision
+> measured time-to-`test` *including the queue*, which was correct while the queue was inside
+> the gated quantity. Since #7931 part 1 gave every `main` push its own concurrency group there
+> IS no queue term, so the detector now measures CI's own duration from the completion event —
+> the same creep, without a term belonging to a different commit.
+>
+> One thing this decision did not have to distinguish, and its successor does:
+> `CI_BUDGET_MIN` (72, what the budget ALLOWS CI) and `CI_DECLARED_PATH` (what CI declares for
+> ITSELF) are different quantities. An earlier revision of the #5806 work used them
+> interchangeably.
+>
+> **Correction, same PR, before merge:** this addendum first gave `CI_DECLARED_PATH` as 70 and
+> called `70 <= 72` the headroom statement. 70 is CI's declared path to its `test` aggregator —
+> correct for `await-ci`, which polled the `test` CHECK, and carried across the rewrite unchanged.
+> `workflow_run: types: [completed]` waits for the WHOLE run: measured 720m, because 19 of 25
+> `ci.yml` jobs declare no `timeout-minutes` and carry the platform's 360m default. The headroom
+> statement therefore cannot be asserted at all while any job is unbounded — it is computed only
+> when every job declares a ceiling, and otherwise warns with the list. See ADR-217 Decision 4 and
+> #8020.
 
 **5. Job ceilings exist to bound a HUNG job, and a silent bound must never fire before a loud
 one.**
@@ -102,14 +139,36 @@ a kill, so it is the last resort and must sit strictly above whatever else can s
 
 - CI creeping toward the ceiling is now visible on every release, in the release log, measured in
   the quantity that matters — rather than inferred from job ceilings nobody edits.
+
 - The warning is advisory by design. It cannot block a deploy; `await-ci`'s existing fail-closed
   `::error::` at `CEILING_S` remains the only blocking bound.
+
 - **Named residual, correctly attributed this time:** the concurrency queue is the dominant term
   and this ADR does not remove it. The candidate fix is a one-line key change
   (`github.event_name == 'pull_request' && github.ref || github.sha`), which raises peak runner
   concurrency and would break the deliberate "let prior runs finish so the audit trail stays
   intact" property `ci.yml` documents. That is a decision about that property and is tracked as a
   follow-up, not folded into a production unblock.
+
+  > **Superseded 2026-09-09 (ADR-217, #7931 part 1).** Two claims in the bullet above are wrong,
+  > and both are corrected where the key actually changed (`ci.yml`'s dispatch note):
+  >
+  > 1. **"the concurrency queue is the dominant term" — not across the population.** Measured over
+  >    29 consecutive `main` push runs, the group is occupied at creation on **7 (24%)**, costing a
+  >    median 393s / max 1245s. On the other 22 the first job starts a median of **4s** after
+  >    creation, and the window's WORST time-to-`test` (4156s) came from a run whose group was
+  >    empty. The queue is real, bounded and intermittent; runner availability is the larger term
+  >    overall (needs-less start spread med 292s, max 1708s).
+  > 2. **"would break the ... audit trail" — it does not.** Per-SHA grouping gives each `main` push
+  >    its OWN group, and `cancel-in-progress` stays `${{ github.event_name == 'pull_request' }}`.
+  >    Nothing is cancelled on `main` under either key; prior runs still run to completion. The
+  >    audit trail is byte-identically intact, so the property this bullet treated as a blocking
+  >    trade-off was never in tension with the fix.
+  >
+  > What survives is the real cost: the key raises **peak runner concurrency**, on the pool the
+  > measurement identifies as the binding constraint for 76% of runs. That is the declared risk of
+  > #7931 part 1, with a rollback trigger, not an audit-trail concern.
+
 - Balance across the `test-scripts` matrix legs is a positional accident of registration order,
   not an owned fact — it swung 15.09 → 20.70 → 15.09 minutes during this PR's own review purely
   from adding and removing two files. Tracked in the same follow-up.
