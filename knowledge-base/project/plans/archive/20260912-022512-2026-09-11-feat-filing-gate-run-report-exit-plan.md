@@ -480,8 +480,8 @@ None — 65 open `code-review` issues checked against every path above
   capped) — never a title, a body, a label value, or a credential — before
   the marker ships. The raw event reaches only `logger.info` (host-only,
   never Better Stack). No user data path is touched.
-- **Brand-survival threshold:** `single-user incident` (carried forward from
-  the brainstorm; `requires_cpo_signoff: true` — CPO reviewed the brainstorm
+- **Brand-survival threshold:** `single-user incident` — carried forward from
+  the brainstorm; `requires_cpo_signoff: true` (CPO reviewed the brainstorm
   and the assessment is carried forward in §Domain Review).
 
 ## Observability
@@ -519,8 +519,14 @@ logs:
   retention: "Better Stack archive per plan tier"
 
 discoverability_test:
-  command: "grep -c SOLEUR_CRON_FILING_DENY apps/web-platform/server/cron-filing-deny-marker.ts knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-  expected_output: "both files report >= 1 — the marker is emitted by the marker module (the substrate calls `emitCronFilingDenyMarker`, so the literal lives in the module, not the substrate — a review correction of the first draft's grep target) and its runbook recipe exists; the live rows are read with `bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY` under Doppler prd_terraform and decoded under `.message` (zero rows on a healthy week)"
+  command: grep -l SOLEUR_CRON_FILING_DENY apps/web-platform/server/cron-filing-deny-marker.ts knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+  # Both filenames print (grep -l): the marker literal lives in the marker
+  # module (the substrate calls emitCronFilingDenyMarker, so a grep of the
+  # substrate reports 0 — a review correction of the first draft) and the
+  # runbook recipe exists. Live rows: bash scripts/betterstack-query.sh
+  # --since 7d --grep SOLEUR_CRON_FILING_DENY under Doppler prd_terraform,
+  # decoded under .message (zero rows on a healthy week).
+  expected_output: cron-filing-deny-marker.ts or betterstack-log-query.md
 ```
 
 ## Guard Contract
