@@ -2125,6 +2125,7 @@ markdown-table
 markdown-tables
 markdownlint
 marker
+marker-telemetry
 marker-tests
 marker-vocabulary
 marketing
@@ -2573,6 +2574,7 @@ pipefail
 pipeline
 pipeline-gotchas
 pir
+pir-gate
 pivot
 pkce
 placement-gate
@@ -3394,6 +3396,7 @@ sha256
 shallow-fetch
 shape-vs-truth-acs
 shard
+shard-gate
 share
 shared
 shared-documents
