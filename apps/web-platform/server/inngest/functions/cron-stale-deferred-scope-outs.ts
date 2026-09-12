@@ -624,8 +624,8 @@ export async function sweepStaleScopeOuts(args: {
 //     which is what closes the file-and-vanish path a label-only hook exit
 //     would otherwise leave open (ADR-216 addendum);
 //   - a human-touched one (a comment `isAutomationComment` rejects, or a
-//     report a person REOPENED after a prior close — the marker's age says
-//     which), `action-required`, or either kill-switch label;
+//     report a person REOPENED — `state_reason: "reopened"`), `action-required`,
+//     or either kill-switch label;
 //   - campaign-calendar's standing issue or legal-audit's per-gap findings —
 //     rows with `closeAfterDays: null` are never queried.
 // The query is `created:<cutoff`, not `updated:` — triage labelling bumps
@@ -653,12 +653,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // GitHub's secondary rate limit asks for ~1 s between content-generating
 // requests; the first live fire issues up to 50 mutations in one loop.
 const RUN_REPORT_PACE_MS = 1000;
-// An OPEN issue that already carries the marker is one of two things: a replay
-// retry whose PATCH has not landed (marker minutes old) or a report a PERSON
-// reopened after a prior close (marker at least a day old). The query is
-// `created:<cutoff`, so without this discriminator a reopened report is a
-// candidate again every day and is re-closed silently.
-const RUN_REPORT_REOPEN_WINDOW_MS = DAY_MS;
+// A report a PERSON reopened — after a sweeper close, a human bulk close, or
+// anything else — carries `state_reason: "reopened"` (GitHub sets it on every
+// reopen and the search item returns it). The query is `created:<cutoff`, so
+// without this guard a reopened report is a candidate again every day and is
+// re-closed silently. Keyed on state_reason, NOT on the marker's age: a marker
+// whose PATCH failed is a day old by the next fire, and an age discriminator
+// read that as "reopened" and skipped the issue forever — the permanently-
+// commented-never-closed state the retry path exists to avoid.
 // Off-box summary marker (WARN — the Vector filter ships level >= 40 only).
 // Emitted when the arm CHANGED something or could not finish the backlog;
 // a quiet day (nothing closed, nothing deferred) stays silent.
@@ -703,6 +705,7 @@ function buildRunReportQuery(args: { owner: string; repo: string; label: string;
 interface RunReportCandidate extends SweepCandidate {
   createdAt: string;
   body: string;
+  stateReason: string | null;
 }
 
 export async function sweepRunReports(args: {
@@ -741,7 +744,7 @@ export async function sweepRunReports(args: {
       octokit.request("GET /search/issues", { q, per_page: SEARCH_PER_PAGE, page: 1 }),
     );
     const items = (res.data?.items ?? []) as Array<
-      SearchResponseItem & { created_at?: string; body?: string; user?: { login?: string } }
+      SearchResponseItem & { created_at?: string; body?: string; state_reason?: string | null }
     >;
     const candidates: RunReportCandidate[] = [];
     for (const item of items) {
@@ -753,6 +756,7 @@ export async function sweepRunReports(args: {
         createdAt: typeof item.created_at === "string" ? item.created_at : "",
         state: typeof item.state === "string" ? item.state : "open",
         body: typeof item.body === "string" ? item.body : "",
+        stateReason: typeof item.state_reason === "string" ? item.state_reason : null,
         labels: Array.isArray(item.labels)
           ? item.labels
               .filter((l): l is { name: string } => typeof l?.name === "string")
@@ -777,16 +781,17 @@ export async function sweepRunReports(args: {
         skip("failed-report", num, row.label); continue;
       }
       if (c.state !== "open") { skip("not-open", num, row.label); continue; }
+      if (c.stateReason === "reopened") { skip("reopened-by-human", num, row.label); continue; }
       // Cap BEFORE the comments GET, as the scope-out arm does, so the cap
       // bounds reads as well as writes (a deferred candidate costs nothing).
       if (closed >= MAX_RUN_REPORT_CLOSES_PER_RUN) { deferred += 1; continue; }
 
-      // One comments GET answers the human-triage guard, the marker
-      // idempotency check, and the reopen discriminator (same shape as the
-      // scope-out arm's `humanTriaged` / `priorGeneration` block above).
+      // One comments GET answers the human-triage guard and the marker
+      // idempotency check (same shape as the scope-out arm's `humanTriaged`
+      // block above). A marker on an OPEN, never-reopened issue is a retry
+      // whose PATCH did not land: skip the POST, still PATCH.
       let humanTriaged = false;
       let alreadyCommented = false;
-      let reopened = false;
       if (c.comments > 0) {
         try {
           const commentsRes = await withGithubRetry(() =>
@@ -794,16 +799,8 @@ export async function sweepRunReports(args: {
               owner, repo, issue_number: num, per_page: 100,
             }),
           );
-          const body = commentsRes.data as Array<IssueCommentAuthorship & { created_at?: string }>;
-          const markers = body.filter((x) => x.body?.includes(RUN_REPORT_COMMENT_MARKER) ?? false);
-          alreadyCommented = markers.length > 0;
-          if (alreadyCommented) {
-            // Missing/unparseable created_at fails toward "a person reopened
-            // it" (skip), never toward a silent re-close.
-            const ages = markers.map((x) => Date.parse(x.created_at ?? "")).filter((t) => Number.isFinite(t));
-            const newestMarkerAt = ages.length === markers.length ? Math.max(...ages) : Number.NEGATIVE_INFINITY;
-            reopened = newestMarkerAt < now.getTime() - RUN_REPORT_REOPEN_WINDOW_MS;
-          }
+          const body = commentsRes.data as Array<IssueCommentAuthorship>;
+          alreadyCommented = body.some((x) => x.body?.includes(RUN_REPORT_COMMENT_MARKER) ?? false);
           humanTriaged = body.some((x) => !isAutomationComment(x));
         } catch (err) {
           reportSilentFallback(err as Error, {
@@ -816,7 +813,6 @@ export async function sweepRunReports(args: {
         }
       }
       if (humanTriaged) { skip("human-triaged", num, row.label); continue; }
-      if (reopened) { skip("reopened-by-human", num, row.label); continue; }
 
       if (dryRun) continue;
 

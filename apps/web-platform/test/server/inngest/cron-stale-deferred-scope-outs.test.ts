@@ -932,9 +932,11 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
     labels?: string[];
     comments?: number;
     author?: string;
+    stateReason?: string | null;
   }) {
     return {
       number: args.number,
+      state_reason: args.stateReason ?? null,
       title: args.title ?? `[Scheduled] Community Monitor - 2026-08-${String(args.number % 28 + 1).padStart(2, "0")}`,
       created_at: args.createdAt ?? "2026-08-01T08:08:00Z",
       updated_at: args.updatedAt ?? "2026-08-01T08:08:00Z",
@@ -1136,10 +1138,10 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
     expect(f({})).toBe(false);
   });
 
-  it("#12: marker minutes old (replay retry) → skips the POST but still PATCHes the close", async () => {
+  it("#12: marker present on an OPEN, never-reopened issue (a retry whose PATCH failed — even a day later) → skips the POST but still PATCHes", async () => {
     mockSearch(
       { "scheduled-community-monitor": [rrIssue({ number: 7010, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
-      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" }, created_at: "2026-09-12T11:58:00Z" }]),
+      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" }, created_at: "2026-09-10T12:00:00Z" }]),
     );
     const r = await run();
     expect(r.closed).toBe(1);
@@ -1148,24 +1150,24 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
   });
 
   // The query is `created:<cutoff`, so a report a PERSON reopened is a
-  // candidate again every day; the marker's age is what tells "reopened" from
-  // "retry", and a reopen is a keep-open signal (#8074 review).
-  it("marker a day old on an OPEN issue → a person reopened it: skip, never re-close", async () => {
+  // candidate again every day. GitHub stamps `state_reason: "reopened"` on
+  // every reopen — after a sweeper close AND after a human bulk close that
+  // left no marker — and that, not the marker's age, is the discriminator
+  // (#8074 review + ship consult): a reopen is a keep-open signal.
+  it("state_reason reopened (after a sweeper close, marker present) → skip, never re-close", async () => {
     mockSearch(
-      { "scheduled-community-monitor": [rrIssue({ number: 7014, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      { "scheduled-community-monitor": [rrIssue({ number: 7014, createdAt: "2026-09-01T08:00:00Z", comments: 1, stateReason: "reopened" })] },
       withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" }, created_at: "2026-09-10T12:00:00Z" }]),
     );
     const r = await run();
     expect(r.closed).toBe(0);
     expect(closeCalls()).toHaveLength(0);
     expect(r.skippedByReason["reopened-by-human"]).toBe(1);
+    expect(commentsCalls()).toHaveLength(0); // decided from the search item; no comments read spent
   });
 
-  it("marker with no created_at fails toward the reopen skip, not a silent re-close", async () => {
-    mockSearch(
-      { "scheduled-community-monitor": [rrIssue({ number: 7015, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
-      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" } }]),
-    );
+  it("state_reason reopened with NO marker and no comments (reopened after a pre-#8076 human bulk close) → skip", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7015, createdAt: "2026-09-01T08:00:00Z", stateReason: "reopened" })] });
     const r = await run();
     expect(r.closed).toBe(0);
     expect(r.skippedByReason["reopened-by-human"]).toBe(1);

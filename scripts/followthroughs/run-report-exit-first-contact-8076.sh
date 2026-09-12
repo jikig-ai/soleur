@@ -55,7 +55,10 @@ REPO="${REPO:-jikig-ai/soleur}"
 # Merge-time floor: issues created before this are pre-merge and not evidence.
 MERGE_FLOOR="${FT8076_MERGE_FLOOR:-2026-09-12T20:00:00Z}"
 QUERY="${FT8076_QUERY:-scripts/betterstack-query.sh}"
-WINDOW="${FT8076_WINDOW:-4d}"
+# The Better Stack window is anchored to MERGE_FLOOR, not to run time: a probe
+# deferred past floor+4d would otherwise slide the first-contact fires out of
+# a fixed 4d window and read their deny rows as 0 (clean).
+WINDOW="${FT8076_WINDOW:-}"
 DENY_LIMIT="${FT8076_DENY_LIMIT:-200}"
 FAILED_PREFIX="Automated FAILED self-report"
 
@@ -66,31 +69,16 @@ done
 
 fail=0
 numeric() { [[ "$1" =~ ^[0-9]+$ ]]; }
+if [[ -z "$WINDOW" ]]; then
+  floor_s="$(date -u -d "$MERGE_FLOOR" +%s 2>/dev/null || true)"
+  numeric "$floor_s" || { echo "CANNOT ESTABLISH: FT8076_MERGE_FLOOR does not parse: '${MERGE_FLOOR:0:40}'"; exit 3; }
+  now_s="$(date -u +%s)"
+  WINDOW="$(( (now_s - floor_s) / 86400 + 2 ))d"
+fi
 numeric "$DENY_LIMIT" || { echo "CANNOT ESTABLISH: FT8076_DENY_LIMIT is not a number: '${DENY_LIMIT:0:40}'"; exit 3; }
 
-# --- AC18a: the first post-merge run-reports carry ONLY their own label ----------
-for label in scheduled-architecture-diagram-sync scheduled-roadmap-review; do
-  rows="$(gh api "search/issues?q=repo:${REPO}+is:issue+label:${label}+created:>=${MERGE_FLOOR}&per_page=5" \
-            --jq '[.items[] | {number, labels: [.labels[].name]}]' 2>&1)" || {
-    echo "NOT YET: GitHub search failed for ${label}: ${rows:0:200}"; exit 2; }
-  n="$(jq -r 'length' <<<"$rows" 2>/dev/null || true)"
-  bad="$(jq -r '[.[] | select((.labels | index("meta/machinery")) != null)] | length' <<<"$rows" 2>/dev/null || true)"
-  if ! numeric "$n" || ! numeric "$bad"; then
-    echo "NOT YET: could not parse the ${label} search result (n='${n:0:40}', bad='${bad:0:40}')"; exit 2
-  fi
-  if [[ "$n" == "0" ]]; then
-    echo "NOT YET: no ${label} issue created since ${MERGE_FLOOR} yet — the cron has not fired post-merge"
-    exit 2
-  fi
-  if [[ "$bad" != "0" ]]; then
-    echo "FAIL: ${bad} ${label} issue(s) filed since ${MERGE_FLOOR} carry meta/machinery — the cron relabelled instead of using the run-report exit"
-    jq -c '.[]' <<<"$rows"; fail=1
-  else
-    echo "ok: ${n} ${label} issue(s) since ${MERGE_FLOOR}, none relabelled"
-  fi
-done
-
 # --- AC18b: zero SOLEUR_CRON_FILING_DENY rows for those crons, with a control -----
+# Read FIRST: AC18a needs the deny rows to classify a missing report.
 # One decoder for both reads: `-R` + `fromjson?` at BOTH levels, structural
 # field-isolation on `.message.component` (a webhook echo of an issue body
 # quoting the marker name has no such field). `$1` = component, `$2` = jq
@@ -124,6 +112,37 @@ if [[ "$hits" != "0" ]]; then
 else
   echo "ok: 0 SOLEUR_CRON_FILING_DENY rows for the first-contact crons in $WINDOW (control live: ${ctl_n} rows; deny rows total: ${deny_n})"
 fi
+
+# --- AC18a: the first post-merge run-reports carry ONLY their own label ----------
+# (Runs AFTER the deny-row read below so a missing report can be told apart
+# from a denied one.)
+for label in scheduled-architecture-diagram-sync scheduled-roadmap-review; do
+  rows="$(gh api "search/issues?q=repo:${REPO}+is:issue+label:${label}+created:>=${MERGE_FLOOR}&per_page=5" \
+            --jq '[.items[] | {number, labels: [.labels[].name]}]' 2>&1)" || {
+    echo "NOT YET: GitHub search failed for ${label}: ${rows:0:200}"; exit 2; }
+  n="$(jq -r 'length' <<<"$rows" 2>/dev/null || true)"
+  bad="$(jq -r '[.[] | select((.labels | index("meta/machinery")) != null)] | length' <<<"$rows" 2>/dev/null || true)"
+  if ! numeric "$n" || ! numeric "$bad"; then
+    echo "NOT YET: could not parse the ${label} search result (n='${n:0:40}', bad='${bad:0:40}')"; exit 2
+  fi
+  if [[ "$n" == "0" ]]; then
+    # No report yet. Denied-and-did-not-comply looks the same from GitHub
+    # alone; the deny rows (read above) say which it is.
+    fn="cron-${label#scheduled-}"
+    if printf '%s\n' "$deny_all" | grep -qxF "$fn"; then
+      echo "FAIL: no ${label} issue since ${MERGE_FLOOR} AND a SOLEUR_CRON_FILING_DENY row for ${fn} in the window — denied and did not comply"
+      fail=1; continue
+    fi
+    echo "NOT YET: no ${label} issue created since ${MERGE_FLOOR} yet — the cron has not fired post-merge (and no deny row for ${fn})"
+    exit 2
+  fi
+  if [[ "$bad" != "0" ]]; then
+    echo "FAIL: ${bad} ${label} issue(s) filed since ${MERGE_FLOOR} carry meta/machinery — the cron relabelled instead of using the run-report exit"
+    jq -c '.[]' <<<"$rows"; fail=1
+  else
+    echo "ok: ${n} ${label} issue(s) since ${MERGE_FLOOR}, none relabelled"
+  fi
+done
 
 # --- AC19: the sweeper attributed by ITS marker, refused FAILED, left #8027 open --
 # The property is the GUARD, not a count: every marker-closed digest is

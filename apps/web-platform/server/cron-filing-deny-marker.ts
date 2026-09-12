@@ -72,7 +72,8 @@ function filingHead(tokens: string[], shape: "create" | "api"): string {
  * Count the filing-shaped Bash denials in a result event's `permission_denials`.
  * Pure; tolerant of a missing/malformed array (→ 0). One count per denied
  * command carrying a filing segment (any position in a `&&`/`||`/`;` chain);
- * the head of its first filing segment goes into `commands`. NOTE: the array
+ * the head of its first filing segment goes into `commands`; a segment the hook
+ * refused for an unbalanced quote is still counted by its verbs. NOTE: the array
  * carries no deny REASON, so a filing-shaped command denied for another
  * cause (a metachar, an allowlist miss) is counted too — the marker measures
  * "a filing was refused", not "the filing gate refused it".
@@ -89,8 +90,10 @@ export function countFilingDenials(
     const cmd = entry.tool_input?.command;
     if (typeof cmd !== "string") continue;
     for (const segment of splitSegments(cmd)) {
-      const tokens = tokenize(segment) as string[] | null;
-      if (!tokens) continue; // unbalanced quote: not classifiable, not counted
+      // A segment the hook could not tokenize (unbalanced quote — the FR7
+      // apostrophe shape) was STILL a refused filing if its verbs say so; fall
+      // back to a whitespace split for shape detection only, never for values.
+      const tokens = (tokenize(segment) as string[] | null) ?? segment.trim().split(/\s+/);
       const shape = filingShape(tokens) as "create" | "api" | null;
       if (shape === null) continue;
       commands.push(filingHead(tokens, shape));

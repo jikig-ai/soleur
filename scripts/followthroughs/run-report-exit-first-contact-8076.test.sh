@@ -155,6 +155,12 @@ run_probe; rc=$RC; expect_rc "T8 zero marker-closed digests → FAIL" 1 "$rc" "n
 healthy; search_file "$FIX/search-arch.json"
 run_probe; rc=$RC; expect_rc "T9 no post-merge arch issue → NOT YET" 2 "$rc" "has not fired post-merge"
 
+# --- T9a no arch issue AND a deny row for cron-architecture-diagram-sync → FAIL --
+# (denied and did not comply — the case the deny marker exists to catch; a
+# GitHub-only read would call it NOT YET forever)
+healthy; search_file "$FIX/search-arch.json"; deny_row cron-architecture-diagram-sync > "$FIX/bs-SOLEUR_CRON_FILING_DENY.jsonl"
+run_probe; rc=$RC; expect_rc "T9a missing report + deny row for that cron → FAIL (denied and did not comply)" 1 "$rc" "denied and did not comply"
+
 # --- T10 relabelled meta/machinery → FAIL --------------------------------------
 healthy; search_file "$FIX/search-roadmap.json" "$(issue 9002 scheduled-roadmap-review,meta/machinery 'x')"
 run_probe; rc=$RC; expect_rc "T10 relabelled run-report → FAIL" 1 "$rc" "carry meta/machinery"
@@ -167,7 +173,7 @@ healthy; printf 'not json at all\n' > "$FIX/search-arch.json"
 run_probe; rc=$RC; expect_rc "T12 unparseable search result → NOT YET" 2 "$rc" "NOT YET"
 
 printf '\nrun-report-exit-first-contact-8076.test.sh: %d passed, %d failed (%d asserted)\n' "$PASS" "$FAIL" "$ASSERTED"
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=15
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi

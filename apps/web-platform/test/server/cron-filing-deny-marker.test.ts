@@ -64,10 +64,13 @@ describe("countFilingDenials", () => {
     const r = countFilingDenials([
       { tool_name: "Bash", tool_input: { command: `gh api repos/jikig-ai/soleur/issues?title=${long} -X POST` } },
       { tool_name: "Bash", tool_input: { command: "gh issue create --title a; gh issue create --title b" } },
-      { tool_name: "Bash", tool_input: { command: 'gh issue create --title "unbalanced' } },
+      { tool_name: "Bash", tool_input: { command: "gh issue create --title 'Soleur's digest' --label scheduled-community-monitor" } },
     ]);
-    expect(r.commands).toEqual(["gh api repos/jikig-ai/soleur/issues", "gh issue create"]);
-    expect(r.count).toBe(2);
+    // The third is the FR7 apostrophe shape: the hook denies it as an
+    // unbalanced quote, and a denied filing is a denied filing — counted.
+    expect(r.commands).toEqual(["gh api repos/jikig-ai/soleur/issues", "gh issue create", "gh issue create"]);
+    expect(r.count).toBe(3);
+    expect(JSON.stringify(r)).not.toContain("digest");
     expect(JSON.stringify(r)).not.toContain(long.slice(0, 8));
     expect(JSON.stringify(r)).not.toContain(";");
     expect(r.commands.every((h) => h.length <= 64 + "gh api ".length)).toBe(true);
