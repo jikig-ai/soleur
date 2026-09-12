@@ -83,6 +83,7 @@
 6329
 650
 653
+7898
 @ts-expect-error
 a11y
 ab-testing
@@ -974,6 +975,7 @@ credential-isolation
 credential-leak
 credential-oracle
 credential-redaction
+credential-refusal
 credential-rotation
 credential-staleness
 credentials
@@ -3138,6 +3140,7 @@ rtl
 rule
 rule-audit
 rule-budget
+rule-d
 rule-exists-no-gate-enforces-it
 rule-governance
 rule-ids
@@ -3333,6 +3336,7 @@ sentry-deferral-gate
 sentry-monitor
 sentry-noise
 sentry-observability
+sentry-pin
 sentry-scope
 sentry-setuser
 sentry-tag-coverage

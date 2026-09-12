@@ -1366,6 +1366,12 @@ jobs:
       - name: Run resource-monitor.sh tests
         run: bash apps/web-platform/infra/resource-monitor.test.sh
 
+      # #7898 §2: the laptop-run Resend bootstrap's key-shape / path-allowlist /
+      # transport-confinement guards (env -i, fake key, --config fd asserted
+      # in-process).
+      - name: Run resend-inbound-bootstrap.sh tests
+        run: bash apps/web-platform/infra/resend-inbound-bootstrap.test.sh
+
       - name: Run cat-deploy-state.sh tests
         run: bash apps/web-platform/infra/cat-deploy-state.test.sh
 
