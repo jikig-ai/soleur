@@ -42,6 +42,14 @@ function selection(overrides: Partial<EngineSelection> = {}): EngineSelection {
 }
 
 describe("reviewed engine registry", () => {
+  it("exposes a cloned definition for settings validation without authorizing execution", () => {
+    const registry = createEngineRegistry([definition({ id: "claude-code" })]);
+    const first = registry.get("claude-code");
+    expect(first.id).toBe("claude-code");
+    expect(first).not.toBe(registry.get("claude-code"));
+    expect(() => registry.get("missing-engine")).toThrow("engine_unknown");
+  });
+
   it.each(["api-key", "chatgpt"])("selects the requested Codex auth mode: %s", (authMode) => {
     const registry = createEngineRegistry([definition()]);
     expect(registry.resolve(selection({ authMode })).id).toBe("codex");

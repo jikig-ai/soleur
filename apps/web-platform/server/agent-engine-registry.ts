@@ -32,6 +32,11 @@ export function createEngineRegistry(definitions: readonly EngineDefinition[]) {
   }
 
   return {
+    get(engineId: string): EngineDefinition {
+      const definition = entries.get(engineId);
+      if (!definition) throw new EngineEligibilityError("engine_unknown");
+      return structuredClone(definition);
+    },
     resolve(selection: EngineSelection): EngineDefinition {
       const definition = entries.get(selection.engineId);
       if (!definition) throw new EngineEligibilityError("engine_unknown");
