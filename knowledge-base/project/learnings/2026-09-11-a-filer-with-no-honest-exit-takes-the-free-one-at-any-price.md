@@ -11,8 +11,10 @@ tags:
 issue: 8076
 related:
   - knowledge-base/engineering/architecture/decisions/ADR-216-machinery-ledger-and-filing-time-lever.md
+  - knowledge-base/project/learnings/2026-09-08-my-live-verification-could-only-run-where-the-defect-was-invisible.md
+  - knowledge-base/project/learnings/2026-09-04-four-of-my-checks-certified-something-narrower-than-their-names.md
   - knowledge-base/project/learnings/2026-09-10-every-escape-my-mutations-could-not-reach.md
-  - knowledge-base/project/brainstorms/2026-09-11-filing-gate-run-report-exit-brainstorm.md
+  - knowledge-base/project/brainstorms/archive/20260912-022512-2026-09-11-filing-gate-run-report-exit-brainstorm.md
 ---
 
 # Learning: a filer with no honest exit takes the free one at any price
@@ -185,6 +187,132 @@ else was deleted.
 9. **Two `cd /tmp` probes reset the shell CWD; two turns ended on a
    first-person promise while agents ran.** One-offs. **Prevention:**
    absolute paths in probes; declare a wait explicitly.
+
+## Review-time addendum (2026-09-12) — every check I wrote for the exit certified something narrower than its name
+
+A 12-seat panel (the 8-agent code panel with a structural-enumeration seat in
+place of agent-native, plus test-design, user-impact, observability and
+simplicity) returned 45 findings on the implementation, all fixed inline and
+none filed. Four were P1, and every one of the four lived in VERIFICATION,
+not in the mechanism:
+
+1. **The follow-through probe could never FAIL.** It read
+   `.SOLEUR_CRON_FILING_DENY` at the top level of the decoded Better Stack
+   `raw`; every live row nests the pino payload under `.message` (measured:
+   38/40 cost-marker rows, 11/11 daily rows). AC18b was therefore vacuous
+   and the probe would have closed #8076 through a real deny. The reading
+   came from a runbook sentence — "`component` … as a **top-level key** of
+   the decoded `raw`" — written from the plan, never from a row; a sibling
+   probe (`anthropic-admin-key-6297.sh`) had carried the same reading since
+   July and had reported `ZERO_PRODUCER_ROWS` on every sweep while its
+   producer was alive. Both now decode `.message` first, and each has a
+   fixture suite in the LIVE shape whose control and graded absence go
+   through ONE decoder (a top-level reader reds on the control row).
+2. **The probe's directive lacked `GH_TOKEN`.** The sweeper runs probes under
+   `env -i` and forwards only names in `secrets=`; the header's "GH_TOKEN
+   (sweeper default)" was a claim, not a read of `sweep-followthroughs.sh`.
+   Exit 2 forever, rendered as the reassuring heading `NOT YET`.
+3. **AC19's threshold was unreachable.** "≥ 25 closed, 43 eligible" was an
+   open-count. Classifying the 43 through the guards the SAME plan defines
+   gave 36 FAILED-bodied, 3 human-commented, 1 too young — at most 3 closes
+   on first fire, and a deterministic false alarm. The property is the
+   guard (no marker-closed digest is FAILED-bodied), not a count.
+4. **The cron hook allowed a bare `$GH_TOKEN`** in a filing's title while
+   `buildSpawnEnv` places the installation token in the sandbox env
+   (pre-existing: `dangerousMetacharReason` denied `${…}` and `$(…)` only).
+   The run-report exit lowered the bar to reach the create on every run,
+   which is what made the security seat look at the create's argument
+   surface at all.
+
+Three P2 shapes worth naming because they recur:
+
+- **The population is a claim.** The sweeper's human-comment guard
+  (`user.type !== "Bot"`) read PAT-era `**Automated Triage**` comments —
+  posted by a `User` login through the `claude` GitHub App — as human; 75 of
+  117 live candidates were permanently unsweepable, visible only by
+  classifying the real population, not a fixture. Automation is now
+  Bot ∨ known actor ∨ (app-performed ∧ triage's own prefix).
+- **A hand-mirrored predicate is a second pin on one truth.** Four seats
+  independently found the deny marker's `FILING_SHAPE` regex diverging from
+  the hook's `isApiIssue` (method-first, `-f title=` without a method). The
+  fix was not a better regex: the marker now imports the hook's `filingShape`
+  over the hook's tokenizer — one predicate, two consumers, no parity test
+  needed because there is nothing to keep in parity.
+- **A derivation that is a text regex over source is not an execution.**
+  The parity test's call-site regex accepted only `[const x =][await ]f(`
+  and missed `return f(`, `x = f(`, `step.run(() => f(`; the triage test
+  substring-grepped a jq predicate that `and`→`or` left green; the probe
+  had no fixtures. Each became an execution: comment-and-string-stripped
+  extraction proven on a fixture directory, the extracted jq run on a
+  fixture, the probe run on live-shaped rows.
+
+Also fixed: a `created:`-keyed sweeper re-closed a human-reopened report
+every day (the marker's age now distinguishes "retry" from "reopened"); the
+`scheduled-*` triage exclusion over-reached onto legal-audit findings and
+campaign-calendar action items (keyed on the eight sweepable labels from the
+leaf); 80 unpaced mutations on day one (1 s pace); cap checked after the
+comments GET (hoisted); `<<<` here-strings matched the heredoc regex;
+`permission_denials` absent ≡ `[]` (now `capture_status: field-absent`);
+runbook fields that did not exist on the marker (`runId`/`runStartedAt` →
+`run_id` ↔ Sentry `inngest.run_id`); the ADR heading over a four-item list.
+
+**Key insight, review-time.** On a PR whose subject is a guard, the highest
+defect density was in the artifacts that VERIFY the guard — the probe, the
+ACs, the runbook, the tests — and each defect was the same shape: a
+sentence written from what the author intended, standing in for a
+measurement of what the system does. The cheapest instruments found the
+most: one live `betterstack-query.sh | jq` run (row shape), one `gh search`
+classified through the guards (population), one grep of
+`sweep-followthroughs.sh` (secrets). Panels find these too, at ~1.8M tokens;
+the measurement costs seconds and belongs BEFORE the sentence is written.
+
+### Session Errors (review phase)
+
+1. **Design-validity lenses ran concurrently with the panel** rather than as
+   the serial pre-phase the review skill prescribes. Deliberate: the design
+   was operator-decided at plan time (D1, "directive + minimal lifecycle"),
+   so a design pass could not have deleted a mechanism; dedup preserved.
+   **Prevention:** state the deviation and its reason in the classification
+   announcement, as done.
+2. **The shared-context prompt file was blocked by the full-command-line
+   process-grep guard** on a literal flag string inside prose (twice — the
+   second time inside THIS learning's first draft). **Prevention:** describe
+   a forbidden invocation by its flag's NAME, never its spelling, in any text
+   that passes through a heredoc.
+3. **`git rev-parse HEAD origin/<branch>` printed `fatal: Needed a single
+   revision` twice after a push.** Instrument noise (the remote-tracking ref
+   updates on fetch). **Prevention:** `git fetch` before reading
+   `origin/<branch>`; never read a push verdict off a following command.
+4. **shellcheck SC1111/SC1007** on unicode primes in row names and
+   `VAR= func`. One-off, fixed. **Prevention:** ASCII row names; `VAR=''`.
+5. **`gitleaks dir <files>` reported 7 hits from the CWD's gitignored
+   `.env`**, not from the named files. **Prevention:** scan with
+   `gitleaks protect --staged` and `gitleaks git --log-opts=<range>`; `dir`
+   mode walks the directory regardless of the paths given.
+6. **The jq exclusion's first draft rebound `.`** inside
+   `select($n | index(.))` and excluded every issue. Caught by executing the
+   predicate on a six-issue fixture before committing — the same defect
+   class the test-design seat had just flagged in the substring-grep test.
+   **Prevention:** in jq, bind the outer value (`. as $l`) before piping to
+   another value; execute every predicate on a fixture with members on BOTH
+   sides.
+7. **`lint-shell-trace-credential-refusal` flagged the rewritten probe**
+   (binds credentials, no xtrace refusal). Fixed with the lint's own block.
+   **Prevention:** run the repo lints on the fix batch, not only at session
+   start — three of the lints fire only on NEW code.
+8. **The fixture harness's `run_probe` was written as `$(...)`**, so `OUT`
+   never reached the parent shell and all 15 rows reported unbound. One-off.
+   **Prevention:** a runner that sets a verdict variable must not be called
+   in a command substitution; set `RC`/`OUT` as globals.
+9. **Inherited-sentence class:** the runbook's row-shape prose was written
+   from the plan and misled two probes (#1 above). **Prevention:** a
+   sentence about a live artifact's SHAPE is a measurement, not a
+   description — run the query, paste the `jq` line that shows the shape,
+   and give every consumer a fixture in that shape.
+10. **Stale scheduled-wakeup prompts** (plan-phase text) fired twice
+    mid-review. Recognised as stale, not acted on. **Prevention:** a
+    self-authored wakeup should carry the phase it belongs to, so a later
+    phase can discard it on read.
 
 ## Tags
 
