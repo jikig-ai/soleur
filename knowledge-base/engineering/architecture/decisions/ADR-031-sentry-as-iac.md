@@ -869,6 +869,25 @@ rather than tidied up in the same PR.
 Inngest-dispatched schedule and as a post-apply step. It covers what a clean plan cannot: a
 rule that exists, plans clean, and matches nothing.
 
+> **[2026-09-11 — #8050]** The probe's reference is no longer the live capture. #7989 added a
+> rule the 2026-09-09 capture could not contain (a rule cannot be live-captured before it is
+> applied), so the post-apply probe reported a Terraform-managed rule as UNMANAGED and `main`
+> went red after a complete apply — the second time (#7772 → #7985 was the first). The apply
+> job now projects its reference from the plan it applies
+> (`tests/scripts/lib/sentry-alert-projection.jq`, `--arg side tf`); the daily job reads
+> `apps/web-platform/infra/sentry/alert-reference.json`, a committed copy held equal to the
+> plan by `scripts/sentry-alert-reference-gate.sh` in `plan_pr`. Two normalisations bridge
+> provider and API shapes: lifecycle triggers (`{}` → `comparison: true`), and trigger
+> `logicType` — which the provider hard-codes to `any-short` on every write
+> (`resource_alert_impl.go` 803/835 at v0.15.7) while imported single-trigger rules read `all`
+> — projected to a constant for single-trigger rules on both sides. Measured against 28 live
+> rules: 0 mismatches. Rejected: re-capturing from live (re-creates the structural gap on every
+> addition), and having the daily job pull Terraform state (puts the R2 credentials for the
+> shared state bucket into a cron job) — the daily job keeps the write-capable IaC token, used
+> read-only and destination-pinned (#7997), instead. The decision above is unchanged: Terraform
+> is the source of truth; only the probe's reference provenance changed. The captures stay as
+> the Phase 2/3.4 adoption record.
+
 ## Consequences
 
 ### Positive
