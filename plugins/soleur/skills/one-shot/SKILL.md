@@ -163,6 +163,8 @@ cd <worktree-path> && bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-wo
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `/ship` phase will create the PR after implementation commits exist.
 
+**This push pins the branch's base.** `/work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, after which the first `git push` is rejected non-fast-forward. That is expected, not a collision: confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>`. **Why:** #8050 — the rebased branch's push was refused and needed exactly this check.
+
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 
 Spawn a Task general-purpose subagent to run plan and deepen-plan. This creates a compaction boundary -- the subagent's context is discarded after it returns, freeing headroom for implementation.

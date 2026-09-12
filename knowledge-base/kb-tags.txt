@@ -1138,6 +1138,7 @@ derivation-coupling
 derived
 derived-doc-refresh
 derived-population
+derived-reference
 derived-set
 descope
 describe-skipif
@@ -1272,6 +1273,7 @@ drift-detection
 drift-guard
 drift-guards
 drift-prevention
+drift-probe
 drift-remediation
 drift-resistance
 driveable
@@ -1516,6 +1518,7 @@ fixture-design
 fixture-direction
 fixture-fidelity
 fixture-population
+fixture-provenance
 fixture-redaction
 fixture-safety
 fixture-seam
@@ -2939,6 +2942,7 @@ ready-state
 readyz
 realtime
 rebase
+rebase-conflict
 receiver-loss
 recipient
 reconcile
