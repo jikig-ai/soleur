@@ -810,6 +810,15 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
     expect(rr(bash(`gh issue create --title t --label type/bug,${LABEL}`))).toBe("allow");
   });
 
+  it("-F <file> on the create form is --body-file, and the branch that reads it must not throw (no-undef caught by the repo-wide eslint guard at ship)", () => {
+    // `-F` is body-file for `gh issue create` and --raw-field for `gh api`; the
+    // discriminator (`isCreate`) was dropped in a refactor and the branch became
+    // a ReferenceError — a fail-closed "hook internal error" on every -F filing.
+    expect(rr(bash(`gh issue create --title t -F /nonexistent/body.md --label ${LABEL}`))).toBe("allow");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).not.toContain("internal error");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).toContain("filing names no user-visible consequence");
+  });
+
   it("allows the two remaining spellings too (-l=<label>, bare labels[]= field) — every spelling exit 1 reads", () => {
     expect(rr(bash(`gh issue create --title t -l=${LABEL}`))).toBe("allow");
     expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");

@@ -140,6 +140,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // reopened a known route-around at the second of the two chokepoints.
   const shape = filingShape(tokens);
   if (shape === null) return null;
+  const isCreate = shape === "create";
   const isApiIssue = shape === "api";
 
   // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
