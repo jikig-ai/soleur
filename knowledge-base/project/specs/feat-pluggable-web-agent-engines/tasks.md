@@ -39,6 +39,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Routine correlation slice: manual routine dispatch mints an application run id before Inngest send and carries it for downstream reconciliation (10 routine tests green).
   - [x] Agent routine-tool slice: tenant workspace resolution and bind-first dispatch are wired into the agent-facing routine tool (9 routine-tool tests green).
   - [x] Dashboard routine slice: the authenticated Run now route resolves workspace state and binds before dispatch (15 route/tool tests green).
+  - [x] Settings persistence slice: owner-scoped default-engine writes are exposed through the persistence repository (12 persistence/migration tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
