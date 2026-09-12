@@ -49,6 +49,10 @@
 # fail-closed placeholder ships in cloud-init until this lands (git-data-bootstrap.sh).
 
 set -euo pipefail
+# (#7797) this hook handles a live credential; -x would print it.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 reject() {
   # stderr from pre-receive is relayed to the pushing client (the web host),

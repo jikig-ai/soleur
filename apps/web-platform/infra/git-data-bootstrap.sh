@@ -18,6 +18,15 @@
 # the persistent block volume, never tmpfs — a reboot resetting the fence max to 0
 # would let a stale gen=5 writer beat a fresh 0 (git-data-pre-receive.sh header).
 set -euo pipefail
+# (#7797) xtrace would print the Doppler-injected LUKS passphrase; refuse before anything reads it.
+case "$-" in
+  *x*)
+    if [ -n "${GIT_DATA_LUKS_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 # (#6982, W1) Teach the EXISTING log() to speak off-box. Step 7 already asserts every
 # invariant the boot signal needs, fail-loud; the only defect was that `log` went NOWHERE
