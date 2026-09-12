@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-11T21:11:17Z",
+  "generated_at": "2026-09-12T10:56:14Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1121,32 +1121,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "wg-after-a-pr-merges-to-main-verify-all",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 20,
-      "warn_count": 0,
-      "fire_count": 20,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-11T18:05:15Z",
-      "first_seen": "2026-07-17T14:26:30Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-before-shipping-ship-phase-5-5-runs",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 21,
-      "warn_count": 0,
-      "fire_count": 21,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-11T17:42:34Z",
-      "first_seen": "2026-08-13T19:13:15Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-never-write-to-claude-code-memory-claude",
       "section": "Hard Rules",
       "hit_count": 21,
@@ -1160,6 +1134,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "wg-after-a-pr-merges-to-main-verify-all",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 21,
+      "warn_count": 0,
+      "fire_count": 21,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-12T09:51:39Z",
+      "first_seen": "2026-07-17T14:26:30Z",
+      "rule_text_prefix": ""
+    },
+    {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
       "hit_count": 21,
@@ -1170,6 +1157,19 @@
       "prevented_errors": 21,
       "last_hit": "2026-09-11T17:46:13Z",
       "first_seen": "2026-09-11T09:35:31Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-before-shipping-ship-phase-5-5-runs",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 22,
+      "warn_count": 0,
+      "fire_count": 22,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-12T09:58:34Z",
+      "first_seen": "2026-08-13T19:13:15Z",
       "rule_text_prefix": ""
     },
     {
@@ -1203,11 +1203,11 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 50,
+      "applied_count": 52,
       "warn_count": 0,
-      "fire_count": 50,
+      "fire_count": 52,
       "prevented_errors": 0,
-      "last_hit": "2026-09-11T21:00:29Z",
+      "last_hit": "2026-09-12T00:24:28Z",
       "first_seen": "2026-07-20T12:16:48Z",
       "rule_text_prefix": ""
     },
@@ -1227,13 +1227,13 @@
     {
       "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
-      "hit_count": 87,
+      "hit_count": 88,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 87,
-      "prevented_errors": 87,
-      "last_hit": "2026-09-11T14:09:01Z",
+      "fire_count": 88,
+      "prevented_errors": 88,
+      "last_hit": "2026-09-11T22:51:39Z",
       "first_seen": "2026-05-12T07:00:34Z",
       "rule_text_prefix": ""
     },
@@ -1279,13 +1279,13 @@
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 482,
+      "hit_count": 483,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 482,
-      "prevented_errors": 482,
-      "last_hit": "2026-09-11T20:56:16Z",
+      "fire_count": 483,
+      "prevented_errors": 483,
+      "last_hit": "2026-09-12T00:15:10Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1310,10 +1310,10 @@
     "orphan_rule_ids": [],
     "non_corpus_counts": {
       "gdpr-gate-staleness": 4,
-      "net-issue-flow-body-attributed": 27,
-      "net-issue-flow": 388,
-      "monitor-supersede": 121,
-      "post-dispatch-watch-gate": 4400,
+      "net-issue-flow-body-attributed": 30,
+      "net-issue-flow": 397,
+      "monitor-supersede": 131,
+      "post-dispatch-watch-gate": 4455,
       "guardrails-block-recursive-delete": 314,
       "kb-domain-allowlist-guard": 163,
       "guardrails-require-milestone": 496,
@@ -1331,7 +1331,7 @@
       "prod-write-defer-git-push-main": 6,
       "prod-write-defer-doppler-secrets-stdout": 23,
       "prod-write-defer-terraform-apply": 96,
-      "cost-of-filing-flip-inline": 3,
+      "cost-of-filing-flip-inline": 4,
       "cost-of-filing-file": 1,
       "guardrails-worktree-write-guard": 254,
       "skill-security-scan": 27,
@@ -1351,10 +1351,10 @@
         "bypass_count": 8
       }
     ],
-    "gate_override_count": 79,
+    "gate_override_count": 84,
     "gate_timeout_warn_count": 45,
     "gate_failopen_warn_count": 54,
-    "gate_body_attributed_count": 27,
+    "gate_body_attributed_count": 30,
     "gate_undelivered_declaration_count": 0,
     "gate_contradictory_declaration_count": 0,
     "gate_unbalanced_fence_count": 0,

@@ -787,6 +787,12 @@ When filing:
   `Refactor:`, `arch:`, `compound:`, `follow-through:`).
 - Use `gh issue create --body-file <path>` — never `--body "$VAR"` — so
   untrusted finding text (diffs, agent output) cannot shell-interpolate.
+  **Run `gh issue create` as its OWN Bash call, with an ABSOLUTE `--body-file` path and no other
+  command in front of it.** The guardrails filing gate reads the body file (a `$VAR` path it
+  cannot expand is refused) and tokenizes the whole command with `xargs` — a heredoc or an
+  apostrophe elsewhere in the same call breaks the tokenizer, the `--label meta/machinery`
+  you passed becomes invisible, and the deny message asks you to add the flag you just added
+  (#7941/PR #8070, twice in one session).
 
 **Auto-wire deferred-scope-outs into the follow-through sweeper.** When a
 scope-out passes the CONCUR gate AND its `Re-eval by:` trigger is a concrete
