@@ -529,33 +529,26 @@ if exists(.CONTAINER_NAME) {
 .host_name = "@@HOST_NAME@@"
 '''
 
-# ---------------- Transform: host_metrics → flat log shape ----------------
-# Better Stack accepts metrics as logs (its Logs product is metric-aware
-# via tags); this transform flattens the metric event into a single log
-# record per scrape datapoint with a `metric.name` + `metric.value`
-# pair that Better Stack can chart.
+# ---------------- Transform: host_metrics → tag for Better Stack (#6944) ----------------
+# host_metrics events are Metric-typed, not Log-typed. VRL's remap transform only
+# allows writing `.tags.*`, `.name`, `.namespace`, and `.timestamp` on a Metric
+# event — assigning any other top-level path (`.source_kind`, `.host_name`,
+# `.metric.name`, `.metric.value`, as this transform previously did) is a runtime
+# error. With no `drop_on_error`/`drop_on_abort` set, the transform's default
+# behavior on error is to forward the event unmodified, so every prior version of
+# this block was a silent no-op: metrics shipped in native Vector shape
+# (source_kind unset, host under `tags.host`, value under `.gauge.value`), never
+# in the flattened shape the comment claimed. Tag via `.tags.*` instead — the only
+# writable surface — so Better Stack queries can filter host_metrics rows the same
+# way #4293/#6396 already filter journald rows.
 [transforms.tag_metrics]
 type = "remap"
 inputs = ["host_metrics"]
 source = '''
-.source_kind = "host_metrics"
-.shipper = "vector"
+.tags.source_kind = "host_metrics"
+.tags.shipper = "vector"
 # @@HOST_NAME@@ (#6396) — see the tag_journald note above; rendered per-host at install.
-.host_name = "@@HOST_NAME@@"
-
-metric_name = "unknown"
-if exists(.name) {
-    metric_name = to_string(.name) ?? "unknown"
-}
-.metric.name = metric_name
-
-if exists(.gauge.value) {
-    .metric.value = .gauge.value
-} else if exists(.counter.value) {
-    .metric.value = .counter.value
-} else {
-    .metric.value = 0.0
-}
+.tags.host_name = "@@HOST_NAME@@"
 '''
 
 # ---------------- Sink: Better Stack Logs via generic http sink ----------------
