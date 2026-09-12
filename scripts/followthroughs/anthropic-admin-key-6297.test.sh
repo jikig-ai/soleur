@@ -152,6 +152,17 @@ f=$(mktmp -t ft.XXXXXXXX); envelope "$OK_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")
 check "$rc" 0 "healthy ok row → exit 0"
 
+# 1′ — the LIVE row shape: the pino payload nested under `.message` of the
+# decoded raw (measured 2026-09-12). A top-level-only reader reports zero
+# producer rows on every one of these.
+nested() { jq -c -n --argjson m "$1" '{message: $m, source_kind: "app"}'; }
+f=$(mktmp -t ft.XXXXXXXX); envelope "$(nested "$OK_ROW")" > "$f"
+d=$(make_sandbox "$f"); rc=$(run_probe "$d")
+check "$rc" 0 "healthy ok row NESTED under .message (live shape) → exit 0"
+f=$(mktmp -t ft.XXXXXXXX); envelope "$(nested "$DARK_ROW")" > "$f"
+d=$(make_sandbox "$f"); rc=$(run_probe "$d")
+check "$rc" 2 "key-missing row NESTED under .message → exit 2 (read as a producer row, not as zero rows)"
+
 # 2 — still un-minted → TRANSIENT (never PASS, never FAIL)
 f=$(mktmp -t ft.XXXXXXXX); envelope "$DARK_ROW" > "$f"
 d=$(make_sandbox "$f"); rc=$(run_probe "$d")

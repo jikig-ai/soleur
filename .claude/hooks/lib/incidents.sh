@@ -360,7 +360,10 @@ resolve_command_cwd() {
 # The heredoc substitution (step 1) is ONE shared perl fragment, consumed by
 # both strip_command_bodies and strip_heredocs below, so the two cannot drift.
 # shellcheck disable=SC2016  # $1$2$3$5 are perl backreferences, never shell expansions
-_incidents_heredoc_re='s/(<<-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs;'
+# `(?<!<)<<(?!<)`: a here-STRING (`<<<word`) is not a heredoc — without the
+# lookarounds its last two `<` matched as `<<word` and blanked everything up to
+# the next line starting with that word (#8074 review).
+_incidents_heredoc_re='s/((?<!<)<<(?!<)-?\s*["'\'']?)(\w+)(["'\'']?)(.*?)(\n[ \t]*\2\b)/$1$2$3$5/gs;'
 strip_command_bodies() {
   local cmd
   if [[ $# -gt 0 ]]; then cmd="$1"; else cmd="$(cat)"; fi

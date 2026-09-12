@@ -283,14 +283,17 @@ reports). Parity (i) treats it as the one row without a
    first three tokens. Nothing else changes: no `SpawnResult` field, no
    `resolveOutputAwareOk` arg, no caller edits. "Denied and did not comply"
    is the marker **plus** the existing `scheduled-output-missing` Sentry
-   event, which already carries `fn` + `runStartedAt` — the same two keys the
-   marker carries — so correlation is one filter, not a hunt. For crons with
+   event. (Implementation note, 2026-09-12 review: `runStartedAt` is not
+   reachable inside `spawnClaudeEval`, so the marker carries `run_id` and
+   `spawn_started_at`; the join key is `run_id` = the Sentry tag
+   `inngest.run_id` that `sentry-correlation.ts` sets on every event of the
+   run — still one filter, not a hunt.) For crons with
    no verify (legal-audit, D1) the marker alone is the signal and the
    `[cloud-task-silence]` issue is the backstop.
 3. Runbook: add `SOLEUR_CRON_FILING_DENY` to the marker table in
    `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`
    as a two-line recipe: query the marker → filter Sentry
-   `scheduled-output-missing` on `fn` + `runStartedAt`.
+   `scheduled-output-missing` on `inngest.run_id` = the marker's `run_id`.
 4. Tests: `parseClaudeResultLine` — two filing-shaped denials + one
    non-filing denial → `filingDenials: 2`; empty/absent array → 0; the
    marker is emitted once with `count: 2` and not at all when 0.
@@ -376,7 +379,9 @@ reports). Parity (i) treats it as the one row without a
    comment POST only, still PATCH the close (POST and PATCH are separate
    `withGithubRetry` wrappers, L536-560). Then comment + close with
    `state_reason: "completed"`. One cap: `MAX_RUN_REPORT_CLOSES_PER_RUN =
-   25` (the 43 digests drain over two daily fires). Every request through
+   25` (review correction 2026-09-12: the "43 digests" were an open-count —
+   36 of them are FAILED-bodied and 3 more human-commented, so the FIRST
+   fire closes at most 3; the cap governs steady state, not day one). Every request through
    `withGithubRetry`. `PRODUCT_FACING_LABELS` is **not** consulted on this
    arm (inline comment: priority/type/domain on a run-report are daily-triage
    noise — #8027's `p1-high` — and `action-required` is checked explicitly).
@@ -469,10 +474,12 @@ None — 65 open `code-review` issues checked against every path above
   or, the other way, a directive too wide waves audit exhaust past the gate
   and re-inflates the backlog the gate exists to shrink.
 - **If this leaks, the user's [data / workflow / money] is exposed via:** the
-  deny log is written by the hook into the agent-denied `.claude/` directory
-  and carries only the first three command tokens and label tokens — never a
-  body, never a credential; the marker carries counts and reasons. No user
-  data path is touched.
+  hook writes nothing; denials are read from the result event's
+  `permission_denials[]` and reduced by `countFilingDenials` to command HEADS
+  (`gh issue create` / `gh api <endpoint path>`, query string dropped,
+  capped) — never a title, a body, a label value, or a credential — before
+  the marker ships. The raw event reaches only `logger.info` (host-only,
+  never Better Stack). No user data path is touched.
 - **Brand-survival threshold:** `single-user incident` (carried forward from
   the brainstorm; `requires_cpo_signoff: true` — CPO reviewed the brainstorm
   and the assessment is carried forward in §Domain Review).
@@ -488,7 +495,7 @@ liveness_signal:
 
 error_reporting:
   destination: "Sentry (web-platform project, SENTRY_DSN); pino WARN → Vector → Better Stack for the new marker"
-  fail_loud: "a SOLEUR_CRON_FILING_DENY marker whose fn + runStartedAt also appear on a scheduled-output-missing Sentry event is the loud pair: the cron was denied and did not recover; the marker alone means denied-then-complied"
+  fail_loud: "a SOLEUR_CRON_FILING_DENY marker whose run_id equals the inngest.run_id tag of a scheduled-output-missing Sentry event is the loud pair: the cron was denied and did not recover; the marker alone means denied-then-complied"
 
 failure_modes:
   - mode: "directive not delivered (map entry missing / allowlist write failed)"
@@ -498,7 +505,7 @@ failure_modes:
     detection: "SOLEUR_CRON_FILING_DENY count>0 with no scheduled-output-missing event for that run; measurement line 1d rising while 1 is flat"
     alert_route: "weekly measurement issue #8068; Better Stack query"
   - mode: "cron denied and did not comply"
-    detection: "SOLEUR_CRON_FILING_DENY marker AND a scheduled-output-missing Sentry event with the same fn + runStartedAt; heartbeat silence at maxGapDays"
+    detection: "SOLEUR_CRON_FILING_DENY marker AND a scheduled-output-missing Sentry event with the same inngest.run_id; heartbeat silence at maxGapDays"
     alert_route: "Sentry cron monitor + [cloud-task-silence] issue"
   - mode: "sweeper closes a FAILED report"
     detection: "unit tests on the body-prefix and title guards; reopen count in measurement line 2 (marker-attributed)"
@@ -512,8 +519,8 @@ logs:
   retention: "Better Stack archive per plan tier"
 
 discoverability_test:
-  command: "grep -c SOLEUR_CRON_FILING_DENY apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-  expected_output: "both files report >= 1 — the marker is emitted by the substrate and its runbook recipe exists; the live rows are read with `bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY` under Doppler prd_terraform (zero rows on a healthy week)"
+  command: "grep -c SOLEUR_CRON_FILING_DENY apps/web-platform/server/cron-filing-deny-marker.ts knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+  expected_output: "both files report >= 1 — the marker is emitted by the marker module (the substrate calls `emitCronFilingDenyMarker`, so the literal lives in the module, not the substrate — a review correction of the first draft's grep target) and its runbook recipe exists; the live rows are read with `bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY` under Doppler prd_terraform and decoded under `.message` (zero rows on a healthy week)"
 ```
 
 ## Guard Contract
@@ -593,9 +600,12 @@ non-canonical: a digest with `priority/p2-medium, type/bug, domain/operations`
 ### Guard 3 — interactive gate tokenizer and ordering
 
 **Property.** For any command whose real flag tokens carry `--label
-meta/machinery`, the gate passes exit 1 regardless of heredoc-body content
-or the readability of `--body-file`; a command that cannot be tokenized is
-denied with an actionable message, never passed on a guess.
+meta/machinery`, the exit-1 DECISION is taken regardless of heredoc-body
+content or the readability of `--body-file` (the derivable-inputs deny that
+follows every exit still reads the body wherever it lives, heredoc included —
+that is a deny on the filing's claim, not on its quoting); a command that
+cannot be tokenized is denied with an actionable message, never passed on a
+guess.
 
 **Assembly.** `guardrails.sh` L451 tokenizer (one site) feeds both the repo
 check and the filing check; the body-file deny at L616-628 is the only deny
@@ -675,7 +685,7 @@ The ADR amendment lands in Phase 6 of the same PR; nothing is deferred.
 
 - [ ] AC17 `gh run list --workflow=web-platform-release.yml -L 1` green (the container restart on merge delivers the substrate + hook; no separate step); `gh issue view 8068 --json labels --jq '[.labels[].name]'` includes `keep-open` (one-time write done in /work).
 - [ ] AC18 First live contact, verified by the follow-through sweeper: after 2026-09-14T09:00Z `gh issue list --label scheduled-roadmap-review --limit 1 --json labels` shows only `scheduled-roadmap-review` (and after 2026-09-13T02:00Z the same for `scheduled-architecture-diagram-sync`), and `bash scripts/betterstack-query.sh --since 2d --grep SOLEUR_CRON_FILING_DENY` returns 0 rows for `fn: cron-roadmap-review`. Enrolled per Phase 2.9.1: script `scripts/followthroughs/run-report-exit-first-contact-8076.sh` (exit 0 when both hold), directive `<!-- soleur:followthrough script=scripts/followthroughs/run-report-exit-first-contact-8076.sh earliest=2026-09-15 secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->` on #8076 + `follow-through` label; the three secrets are wired into `.github/workflows/scheduled-followthrough-sweeper.yml` if absent.
-- [ ] AC19 After the first 12:00Z sweeper fire post-merge, `gh api "search/issues?q=repo:jikig-ai/soleur+is:issue+is:closed+label:scheduled-community-monitor+%22soleur:auto-close-run-report%22+in:comments" --jq .total_count` ≥ 25 (the per-run cap; 43 eligible today; attributed by the arm's own marker — not an open-count, which any concurrent filing would move) and `gh issue view 8027 --json state --jq .state` = OPEN (FAILED report untouched). Same follow-through script, second assertion.
+- [ ] AC19 After the first 12:00Z sweeper fire post-merge, `gh api "search/issues?q=repo:jikig-ai/soleur+is:issue+is:closed+label:scheduled-community-monitor+%22soleur:auto-close-run-report%22+in:comments" --jq .total_count` ≥ 1 with NO marker-closed digest whose body starts with `Automated FAILED self-report` (the property is the FAILED guard, attributed by the arm's own marker — not an open-count, which any concurrent filing would move; the first draft's "≥ 25, 43 eligible" was unreachable: 36 of the 43 are FAILED-bodied and 3 human-commented, so first-fire closes ≤ 3) and `gh issue view 8027 --json state --jq .state` = OPEN (FAILED report untouched). Same follow-through script, second assertion.
 - [ ] AC20 Next `issue-flow: weekly measurement` update on #8068 shows lines `1c.` and `1d.`, and the drain outcome `before=` excludes #8068.
 
 ## Domain Review
@@ -739,8 +749,8 @@ check, Kieran#3); AC6 keep-open assertion moved post-merge (Kieran#8); phases
 - Hook allows `gh issue create --title t --label scheduled-community-monitor --milestone "Post-MVP / Later"` when the directive is present; denies the identical command when absent (P1, P3).
 - Hook denies `gh issue create --title t --body "run-report-label scheduled-community-monitor"` with the directive present (P2).
 - Substrate self-test aborts the spawn when probe (a) is denied by a mutated hook (Guard 1 #1).
-- Denials: a result event with two filing-shaped `permission_denials` → one `SOLEUR_CRON_FILING_DENY` WARN with `count: 2`; with the issue missing, the existing `scheduled-output-missing` event shares `fn` + `runStartedAt` (P9).
-- Sweeper: 43 eligible digests, cap 25 → 25 closed, 18 reported deferred, all with the marker comment (P7).
+- Denials: a result event with two filing-shaped `permission_denials` → one `SOLEUR_CRON_FILING_DENY` WARN with `count: 2`; with the issue missing, the existing `scheduled-output-missing` event shares the run (`run_id` = `inngest.run_id`) (P9).
+- Sweeper: 26 eligible digests, cap 25 → 25 closed, 1 reported deferred with no comments GET spent on it, all with the marker comment (P7). (Live day-one population per the FAILED and comment guards: 3 closes, not 43.)
 - Sweeper: #8027 fixture (normal title, FAILED body prefix, `p1-high`) → skipped with `reason: failed-report`.
 - Measurement stub: `filed=330`, `1c=54`, `1d=2`; VERDICT line unchanged (P5).
 - Interactive gate: heredoc with apostrophe + real label → allow; exit-1 + missing body file → allow; exit-2 + missing body file → still deny (P12).

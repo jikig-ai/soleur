@@ -58,7 +58,7 @@ FILED="$(api_count "is:issue+created:>=${SINCE}")"
 # Reported as its own line rather than subtracted, so the headline stays a pure
 # count and the floor is visible instead of inferred.
 FILED_AUTOMATION="$(api_count "is:issue+created:>=${SINCE}+author:app/github-actions")"
-# THE SECOND FLOOR (ADR-216 addendum, "the fourth population"). Every cron whose
+# THE SECOND FLOOR (ADR-216 addendum, "the run-report population"). Every cron whose
 # run completion is verified by its own scheduled issue MUST file exactly one
 # run-report per run; the gate reaches those filings (they traverse the cron
 # allowlist hook) but cannot reduce them -- a run without its report is a

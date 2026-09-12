@@ -717,6 +717,57 @@ describe("run-report directive (#8076)", () => {
       }),
     ).toThrow(/run-report/);
   });
+
+  // One fake hook failing (b) AND (c) together leaves each probe individually
+  // deletable (#8074 review, test-design seat). Three hooks, each regressing
+  // exactly ONE probe, pin each probe on its own.
+  const oneRegressionHook = (createVerdictJs: string) =>
+    [
+      "#!/usr/bin/env node",
+      'import { readFileSync } from "node:fs";',
+      'const input = JSON.parse(readFileSync(0, "utf-8"));',
+      "let v = \"deny\";",
+      'if (input.tool_name === "Bash") {',
+      '  const c = String(input.tool_input?.command ?? "");',
+      '  if (/\\/proc\\//.test(c)) v = "deny";',
+      `  else if (c.startsWith("gh issue create")) v = (${createVerdictJs}) ? "allow" : "deny";`,
+      '  else v = "allow";',
+      '} else if (input.tool_name === "Task" || input.tool_name === "Skill") v = "allow";',
+      "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: \"PreToolUse\", permissionDecision: v } }));",
+      "process.exit(0);",
+    ].join("\n");
+  const LABEL = "scheduled-community-monitor";
+  const selfTestWith = (hookSource: string) => () =>
+    runHookSelfTest({
+      spawnCwd: makeSpawnCwd({
+        allow: [...ISSUE_CREATOR_BASH_ALLOWLIST, `run-report-label ${LABEL}`],
+        hookSource,
+      }),
+      cronName: "cron-community-monitor",
+      allow: ISSUE_CREATOR_BASH_ALLOWLIST,
+      runReportLabel: LABEL,
+    });
+
+  it("probe (b) alone: a hook that matches the label as a substring but refuses a suffix is caught by the prose-mention probe", () => {
+    // Allows `--label <L>` and the prose `--body 'run-report-label <L>'`; denies `<L>x` and `$`.
+    const hook = oneRegressionHook(`c.includes("${LABEL}") && !c.includes("${LABEL}x") && !c.includes("$")`);
+    expect(selfTestWith(hook)).toThrow(/named in prose/);
+  });
+
+  it("probe (c) alone: a hook that matches `--label <L>` as a prefix is caught by the suffix probe", () => {
+    // Allows `--label <L>` and `--label <L>x`; denies the prose mention and `$`.
+    const hook = oneRegressionHook(`c.includes("--label ${LABEL}") && !c.includes("$")`);
+    expect(selfTestWith(hook)).toThrow(/suffixed/);
+  });
+
+  it("probe (d) alone: a hook with an exact label token but no $VAR deny is caught by the secret-egress probe", () => {
+    const hook = oneRegressionHook(`c.split(/\\s+/).some((t, i, a) => t === "--label" && a[i + 1] === "${LABEL}")`);
+    expect(selfTestWith(hook)).toThrow(/\$VAR expansion/);
+  });
+
+  it("the real hook passes all four probes for a mapped cron", () => {
+    expect(selfTestWith(readFileSync(REAL_HOOK, "utf-8"))).not.toThrow();
+  });
 });
 });
 
@@ -813,12 +864,21 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     expect(typeof filingDenyMock.mock.calls[0][0].spawn_started_at).toBe("string");
   });
 
-  it("#8076: emits nothing when the result event carries no filing denial", async () => {
+  it("#8076: emits nothing when the result event carries an EMPTY permission_denials array", async () => {
     filingDenyMock.mockReset();
     const resultLine = JSON.stringify({ type: "result", subtype: "success", result: "clean", permission_denials: [] });
     const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
     await runFakeEval(spawnCwd);
     expect(filingDenyMock).not.toHaveBeenCalled();
+  });
+
+  it("#8076: emits capture_status field-absent (count 0) when a clean result event has NO permission_denials array", async () => {
+    filingDenyMock.mockReset();
+    const resultLine = JSON.stringify({ type: "result", subtype: "success", result: "clean" });
+    const spawnCwd = installFakeClaudeBin(`process.stdout.write(${JSON.stringify(resultLine)} + "\\n");`);
+    await runFakeEval(spawnCwd);
+    expect(filingDenyMock).toHaveBeenCalledTimes(1);
+    expect(filingDenyMock.mock.calls[0][0]).toMatchObject({ fn: "cron-test-fake", count: 0, capture_status: "field-absent" });
   });
 
   it("captures a stdout tail and redacts the installation token", async () => {
@@ -985,9 +1045,10 @@ describe("parseClaudeResultLine (AC4 — result-event cost capture)", () => {
     expect(parsed!.filingDenials.commands).toEqual(["gh issue create", "gh api repos/jikig-ai/soleur/issues"]);
   });
 
-  it("filingDenials is 0 when permission_denials is empty or absent", () => {
+  it("filingDenials is 0 when permission_denials is empty or absent — and fieldPresent tells the two apart", () => {
     expect(parseClaudeResultLine(okResultLine)!.filingDenials.count).toBe(0);
-    expect(parseClaudeResultLine(JSON.stringify({ type: "result", permission_denials: [] }))!.filingDenials.count).toBe(0);
+    expect(parseClaudeResultLine(JSON.stringify({ type: "result", permission_denials: [] }))!.filingDenials).toMatchObject({ count: 0, fieldPresent: true });
+    expect(parseClaudeResultLine(JSON.stringify({ type: "result" }))!.filingDenials).toMatchObject({ count: 0, fieldPresent: false });
   });
 });
 describe("resolveEvalCaptureStatus (AC4 — positive marker status)", () => {

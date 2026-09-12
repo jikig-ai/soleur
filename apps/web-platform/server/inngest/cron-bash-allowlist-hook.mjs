@@ -59,8 +59,11 @@ import { fileURLToPath } from "node:url";
 // measured 626:39 engineering-to-product skew. Covering only the interactive
 // path would have left the primary deliverable missing its primary population.
 //
-// The three exits mirror guardrails.sh exactly, so an agent that learns the
-// contract on one surface does not have to relearn it on the other.
+// Exits 1-3 mirror guardrails.sh exactly, so an agent that learns the
+// contract on one surface does not have to relearn it on the other. Exit 0
+// (the substrate-issued run-report directive, ADR-216 addendum) exists on THIS
+// surface only: it is keyed on a file the agent cannot read, which no
+// interactive filer has.
 //
 // This runs AFTER the allowlist match, so it only ever narrows: a cron whose
 // allowlist does not carry `gh issue create` is already denied above and never
@@ -95,6 +98,35 @@ export function labelTokenEquals(tokens, label) {
   return false;
 }
 
+// Which of the two filing shapes a (dequoted) segment is, or null. ONE
+// predicate, shared with the deny-marker (`cron-filing-deny-marker.ts`
+// imports it) so "what the gate denies" and "what the marker counts" cannot
+// drift. The api form: an issues endpoint token — trailing slash and query
+// string included, since gh routes `…/issues?x=1` and `…/issues/` to the same
+// create and a `$`-anchored match let both through (#8074 review) — plus a
+// POST signal in ANY position: `-X POST`, `--method POST`, `-XPOST`,
+// `--method=POST`, `--input <file>` (gh defaults to POST), or a `title=`
+// field (gh defaults to POST whenever a field is given).
+export function filingShape(tokens) {
+  if (tokens[0] !== "gh") return null;
+  if (tokens[1] === "issue" && tokens[2] === "create") return "create";
+  if (tokens[1] !== "api") return null;
+  const endpoint = tokens.some((t) =>
+    /(^|\/)repos\/[^/?]+\/[^/?]+\/issues\/?(\?[^/]*)?$/.test(t),
+  );
+  if (!endpoint) return null;
+  const post = tokens.some(
+    (t, i) =>
+      ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
+      t === "-XPOST" ||
+      t === "--method=POST" ||
+      t === "--input" ||
+      (/^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "")) ||
+      /^(--field=|--raw-field=|-f=)?title=/.test(t),
+  );
+  return post ? "api" : null;
+}
+
 export function filingJustificationReason(tokens, readTaxonomy, runReportLabel = null) {
   // TWO CREATE SHAPES, because this chokepoint's whole reason for existing is
   // the cron population -- and one of the cron allowlists grants the prefix
@@ -106,19 +138,9 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // why -- this repo has a DOCUMENTED instance of an agent filing via `gh api`
   // after the `gh issue create` form was denied -- so leaving it open here
   // reopened a known route-around at the second of the two chokepoints.
-  const isCreate =
-    tokens[0] === "gh" && tokens[1] === "issue" && tokens[2] === "create";
-  const isApiIssue =
-    tokens[0] === "gh" &&
-    tokens[1] === "api" &&
-    tokens.some((t) => /(^|\/)repos\/[^/]+\/[^/]+\/issues$/.test(t)) &&
-    tokens.some(
-      (t, i) =>
-        ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
-        /^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "") ||
-        /^title=/.test(t),
-    );
-  if (!isCreate && !isApiIssue) return null;
+  const shape = filingShape(tokens);
+  if (shape === null) return null;
+  const isApiIssue = shape === "api";
 
   // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
   // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
@@ -302,6 +324,13 @@ function dangerousMetacharReason(command) {
   if (/`/.test(substScan)) return "backtick substitution";
   if (/\$\(/.test(substScan)) return "$(...) substitution";
   if (/\$\{/.test(substScan)) return "${...} expansion";
+  // A BARE `$NAME` expands too (double quotes do not stop it) and the spawn env
+  // carries the installation token and the API key (`buildSpawnEnv`), so
+  // `gh issue create --title "$GH_TOKEN"` would post the secret to the public
+  // repo with no file read at all. Deny any `$` that starts an expansion
+  // (`$name`, `$1`, `$?`, `$$`, `$@`, `$*`, `$#`, `$!`, `$-`); a literal `$`
+  // inside single quotes was stripped above and stays allowed.
+  if (/\$[A-Za-z_0-9?$@*#!-]/.test(substScan)) return "$VAR expansion";
   if (/<\(|>\(/.test(substScan)) return "process substitution";
   // control metachars: literal inside any quote → strip single AND double
   const ctrlScan = stripQuoted(command, { stripDouble: true });

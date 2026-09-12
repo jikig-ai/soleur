@@ -85,6 +85,11 @@ ckc "the zero-pool verdict says it is NOT evidence of a drained backlog" \
 KEEP_OPEN_POOL_QUERIES="$(grep -cE 'is:open\+label:%22meta/machinery%22\+-label:keep-open' "$WF")"
 ck "both pool queries (pre-drain and post-drain) carry -label:keep-open" \
   "$([[ "$KEEP_OPEN_POOL_QUERIES" -ge 2 ]] && echo 'ge2' || echo "$KEEP_OPEN_POOL_QUERIES")" "ge2"
+# ... and the THIRD leg: the standing issue the workflow itself creates must
+# carry the label, or the instrument enters its own pool on the next Monday.
+# Anchored on the create call's flag tokens, not on a comment naming the label.
+ckc "the standing-issue create carries --label keep-open" \
+  '--label meta/machinery --label keep-open' "$WF"
 
 # --- the verdict must reach a DURABLE surface, not just the step log --------
 ckc "the floor step publishes its verdict as an output" \
@@ -95,7 +100,7 @@ ckc "a skipped floor step reads as UNKNOWN, not as clean" \
   'UNKNOWN, not clean' "$WF"
 
 # --- anti-vacuity: report DIRECTLY, never through the helpers being backstopped ---
-MIN_ASSERTIONS=$((14 + 1))  # 14 pre-existing + 1 keep-open pool-query row
+MIN_ASSERTIONS=$((14 + 2))  # 14 pre-existing + keep-open pool-query row + create-label row
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s.\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2
   exit 1

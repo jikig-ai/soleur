@@ -89,7 +89,7 @@ This ordering is binding and comes from the operator: *expiry drains the stock;
 only the filing-time gate touches the rate.* At ~2:1, a 90-day sweep buys a
 one-time drop and the curve then resumes its old slope.
 
-### Three exits, one gate, and deliberately no fourth *narratable* exit
+### Four exits, one gate, and deliberately no fourth *narratable* exit
 
 0. `--label <run-report-label>` where the label equals the `run-report-label`
    directive the substrate wrote into this spawn's `cron-allow.txt` — present
@@ -103,22 +103,28 @@ one-time drop and the curve then resumes its old slope.
 
 An earlier draft added a purpose-named bypass marker. **It is cut.** Exit 1 is
 free and always available; name the filing that must bypass the gate, cannot be
-labelled machinery, and cannot name a user impact — there isn't one. A fourth
-exit on a gate that already has a universal one reproduces exactly the
+labelled machinery, and cannot name a user impact — there isn't one. (> **Superseded
+2026-09-11 (#8076):** there is one — the run-report a cron MUST file to verify
+its own run, which is neither machinery nor a user impact; #8059 relabelled it
+`meta/machinery` to comply. The addendum below is that filing's exit, and it
+stays non-narratable.) A fourth
+narratable exit on a gate that already has a universal one reproduces exactly the
 reflexive-override pathology this repo has measured 98 times. Exit 0 is not
 that exit: an agent cannot take it by writing anything, because the token it
 must match is issued by the substrate per spawn and the agent never sees it.
 The addendum below records why it exists and why it is not the cut marker.
 
-### Addendum 2026-09-11 — the fourth population
+### Addendum 2026-09-11 — the run-report population
 
 **The population.** Every cron whose run completion is verified by its own
 scheduled issue. Mechanically: the nine `resolveOutputAwareOk` callers —
 architecture-diagram-sync, campaign-calendar, community-monitor,
 competitive-analysis, content-generator, growth-audit, growth-execution,
 roadmap-review, seo-aeo-audit — whose handlers call
-`verifyScheduledIssueCreated` and whose persistence handshake refuses to commit
-the run's artifacts until the issue is seen. Plus legal-audit, by operator
+`verifyScheduledIssueCreated` (eight of them persist through the
+`safeCommitAndPr` handshake, which refuses to commit the run's artifacts until
+the issue is seen; roadmap-review commits through its own hook-guarded path
+and verifies the same way). Plus legal-audit, by operator
 decision (D1, plan review 2026-09-11): its issues are per-gap findings rather
 than reports, so it sits in the directive map and never in the sweep. The list
 lives in one leaf, `RUN_REPORT_CRONS` in `_cron-run-reports.ts`; the
@@ -156,7 +162,7 @@ write `cron-allow.txt`, and the line is absent for every cron outside the map,
 so the exit is not narratable: nothing an interactive filer or an off-map cron
 can type reaches it. That is what makes it not the cut marker.
 
-**The file-and-vanish path is closed, not left open.** A finding that borrowed
+**The file-and-vanish path is closed for non-report titles, and counted otherwise.** A finding that borrowed
 the label to pass the gate would still be a `scheduled-*` issue authored by
 `app/soleur-ai`. The sweeper closes only `[Scheduled]`-titled,
 `app/soleur-ai`-authored issues after `closeAfterDays`, so a label-borrowing
@@ -164,6 +170,15 @@ finding with a non-report title is never swept and stays visible; and every
 filing under these labels is counted by measurement line 1c as a second
 irreducible floor — inside the gate's reach, not reducible by it — so a
 residue shows in the weekly numbers rather than vanishing.
+
+**`keep-open` carries one meaning on three surfaces.** It is the sweeper's
+kill-switch (`KILLSWITCH_LABELS`); the machinery drain excludes it from both
+pool counts and applies it to the standing measurement issue it creates; and
+measurement line 1d (`meta/machinery` minus `keep-open`) subtracts EVERY
+`keep-open` machinery filing in the window, not only the standing issue — a
+machinery finding an operator protects from the sweeper also leaves the
+exit-1 count. That is the intended reading: a filing a person chose to keep
+is no longer machinery exhaust the lever is measured against.
 
 **Rejected alternatives, each with its mechanical reason.**
 

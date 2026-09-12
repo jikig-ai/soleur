@@ -219,7 +219,11 @@ cases=$((cases + 1))
 if [[ ! -r "$RUN_REPORTS_TS" ]]; then
   fail "PARITY: $RUN_REPORTS_TS is absent — the script's label array has no producer to mirror"
 else
-  _ts_labels="$(grep -oE 'label: *"scheduled-[a-z-]+"' "$RUN_REPORTS_TS" | grep -oE 'scheduled-[a-z-]+' | sort -u)"
+  # LIVE rows only: the line must START with the row literal (`{ fn:`), so a
+  # commented-out row (`// { fn: …`) is not a member, and the label is taken
+  # from the `label:` field whatever its prefix (a row whose label lacks the
+  # `scheduled-` prefix is a parity FAILURE, not an invisible member).
+  _ts_labels="$(grep -E '^[[:space:]]*\{ fn:' "$RUN_REPORTS_TS" | grep -oE 'label: *"[^"]+"' | sed -E 's/label: *"([^"]+)"/\1/' | sort -u)"
   if [[ -z "$_ts_labels" ]]; then
     fail "PARITY: no 'label: \"scheduled-…\"' strings found in $RUN_REPORTS_TS"
   elif [[ "$_script_labels" == "$_ts_labels" ]]; then

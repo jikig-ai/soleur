@@ -947,6 +947,7 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
   }
 
   // Route the per-label run-report searches; scope-out searches get nothing.
+  // `extra` answers first (return undefined to fall through to the defaults).
   function mockSearch(byLabel: Record<string, unknown[]>, extra?: (route: string, params: Record<string, unknown>) => unknown) {
     octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
       if (route === "GET /search/issues") {
@@ -956,8 +957,11 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
         }
         return { data: { items: [] } };
       }
+      if (extra) {
+        const answer = extra(route, params);
+        if (answer !== undefined) return answer;
+      }
       if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") return { data: [] };
-      if (extra) return extra(route, params);
       return { data: {} };
     });
   }
@@ -978,8 +982,11 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
       now: NOW,
       dryRun: false,
       logger,
+      paceMs: 0,
     });
   }
+  const commentsRoute = "GET /repos/{owner}/{repo}/issues/{issue_number}/comments";
+  const commentsCalls = () => octokitRequestSpy.mock.calls.filter(([route]) => route === commentsRoute);
 
   it("#7: closes a 10-day-old SUCCESS community digest with state_reason completed and its own marker comment", async () => {
     mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 8000, createdAt: "2026-09-02T08:08:00Z" })] });
@@ -1074,54 +1081,140 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
     expect(r.skippedByReason["not-run-report-shape"]).toBe(1);
   });
 
+  const withComments = (comments: unknown[]) => (route: string) =>
+    route === commentsRoute ? { data: comments } : undefined;
+
   it("skips a human-commented report (non-bot comment)", async () => {
     mockSearch(
       { "scheduled-community-monitor": [rrIssue({ number: 7009, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
-      (route) => (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments"
-        ? { data: [{ body: "keep this one", user: { login: "deruelle", type: "User" } }] }
-        : { data: {} }),
+      withComments([{ body: "keep this one", user: { login: "deruelle", type: "User" } }]),
     );
-    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
-      if (route === "GET /search/issues") {
-        return String(params.q).includes('label:"scheduled-community-monitor"')
-          ? { data: { items: [rrIssue({ number: 7009, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] } }
-          : { data: { items: [] } };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
-        return { data: [{ body: "keep this one", user: { login: "deruelle", type: "User" } }] };
-      }
-      return { data: {} };
-    });
     const r = await run();
     expect(r.closed).toBe(0);
     expect(r.skippedByReason["human-triaged"]).toBe(1);
   });
 
-  it("#12: marker already present → skips the POST but still PATCHes the close", async () => {
-    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
-      if (route === "GET /search/issues") {
-        return String(params.q).includes('label:"scheduled-community-monitor"')
-          ? { data: { items: [rrIssue({ number: 7010, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] } }
-          : { data: { items: [] } };
-      }
-      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
-        return { data: [{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" } }] };
-      }
-      return { data: {} };
-    });
+  // Through 2026-09-09 daily triage commented as a PAT-driven `User` login via
+  // the `claude` GitHub App; 75 of the 117 live candidates carry one. Its own
+  // `**Automated Triage**` prefix + `performed_via_github_app` is automation.
+  it("a PAT-era Automated Triage comment (User login, app-performed) is NOT a human comment", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7012, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      withComments([{
+        body: "**Automated Triage**\n\n**Priority:** p3",
+        user: { login: "deruelle", type: "User" },
+        performed_via_github_app: { slug: "claude" },
+      }]),
+    );
+    const r = await run();
+    expect(r.closed).toBe(1);
+    expect(r.skippedByReason["human-triaged"]).toBeUndefined();
+  });
+
+  it("an app-performed comment WITHOUT the triage prefix is still a person (a Claude session is the operator)", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7013, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      withComments([{
+        body: "Leaving this open while I look into the digest.",
+        user: { login: "deruelle", type: "User" },
+        performed_via_github_app: { slug: "claude" },
+      }]),
+    );
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["human-triaged"]).toBe(1);
+  });
+
+  it("isAutomationComment is the ONE predicate both arms share (Bot / known actor / app-performed triage; else a person)", async () => {
+    const { __TESTING__ } = await importModule();
+    const f = __TESTING__.isAutomationComment;
+    expect(f({ user: { type: "Bot", login: "x[bot]" } })).toBe(true);
+    expect(f({ user: { type: "User", login: "github-actions[bot]" } })).toBe(true);
+    expect(f({ body: "**Automated Triage**", user: { type: "User", login: "deruelle" }, performed_via_github_app: {} })).toBe(true);
+    expect(f({ body: "**Automated Triage**", user: { type: "User", login: "deruelle" } })).toBe(false);
+    expect(f({ body: "hi", user: { type: "User", login: "deruelle" }, performed_via_github_app: {} })).toBe(false);
+    expect(f({})).toBe(false);
+  });
+
+  it("#12: marker minutes old (replay retry) → skips the POST but still PATCHes the close", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7010, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" }, created_at: "2026-09-12T11:58:00Z" }]),
+    );
     const r = await run();
     expect(r.closed).toBe(1);
     expect(commentCalls()).toHaveLength(0);
     expect(closeCalls()).toHaveLength(1);
   });
 
-  it("#8: cap — 26 eligible → exactly 25 closed + 1 deferred (asserted as counts)", async () => {
-    const items = Array.from({ length: 26 }, (_, i) => rrIssue({ number: 6000 + i, createdAt: "2026-08-20T08:00:00Z" }));
-    mockSearch({ "scheduled-community-monitor": items });
+  // The query is `created:<cutoff`, so a report a PERSON reopened is a
+  // candidate again every day; the marker's age is what tells "reopened" from
+  // "retry", and a reopen is a keep-open signal (#8074 review).
+  it("marker a day old on an OPEN issue → a person reopened it: skip, never re-close", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7014, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" }, created_at: "2026-09-10T12:00:00Z" }]),
+    );
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(closeCalls()).toHaveLength(0);
+    expect(r.skippedByReason["reopened-by-human"]).toBe(1);
+  });
+
+  it("marker with no created_at fails toward the reopen skip, not a silent re-close", async () => {
+    mockSearch(
+      { "scheduled-community-monitor": [rrIssue({ number: 7015, createdAt: "2026-09-01T08:00:00Z", comments: 1 })] },
+      withComments([{ body: `Auto-closing …\n${RR_MARKER}`, user: { login: "soleur-ai[bot]", type: "Bot" } }]),
+    );
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["reopened-by-human"]).toBe(1);
+  });
+
+  it("#3′: the FAILED title guard is case-insensitive", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7016, createdAt: "2026-09-01T08:00:00Z", title: "[Scheduled] Community Monitor - Failed" })] });
+    const r = await run();
+    expect(r.closed).toBe(0);
+    expect(r.skippedByReason["failed-report"]).toBe(1);
+  });
+
+  it("#8: cap — 26 eligible → exactly 25 closed + 1 deferred (asserted as counts), and the deferred one costs no comments GET", async () => {
+    const items = Array.from({ length: 26 }, (_, i) => rrIssue({ number: 6000 + i, createdAt: "2026-08-20T08:00:00Z", comments: 1 }));
+    mockSearch({ "scheduled-community-monitor": items }, withComments([{ body: "**Automated Triage**", user: { login: "soleur-ai[bot]", type: "Bot" } }]));
     const r = await run();
     expect(r.closed).toBe(25);
     expect(r.deferred).toBe(1);
     expect(closeCalls()).toHaveLength(25);
+    // The cap is checked BEFORE the comments read (bounds reads, not only writes).
+    expect(commentsCalls()).toHaveLength(25);
+  });
+
+  it("the WARN summary marker ships when something closed or was deferred, and stays silent on a quiet run", async () => {
+    const warnSpy = vi.fn();
+    const warnLogger = { ...logger, warn: warnSpy } as typeof logger;
+    const { __TESTING__ } = await importModule();
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7017, createdAt: "2026-09-01T08:00:00Z" })] });
+    await __TESTING__.sweepRunReports({ octokit: { request: octokitRequestSpy } as never, now: NOW, dryRun: false, logger: warnLogger, paceMs: 0 });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatchObject({ [__TESTING__.RUN_REPORT_SWEEP_MARKER]: true, closed: 1, deferred: 0 });
+    warnSpy.mockClear();
+    mockSearch({});
+    await __TESTING__.sweepRunReports({ octokit: { request: octokitRequestSpy } as never, now: NOW, dryRun: false, logger: warnLogger, paceMs: 0 });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("every sweepable row is queried with its OWN created:<cutoff (now − closeAfterDays), all eight of them", async () => {
+    mockSearch({});
+    await run();
+    const { RUN_REPORT_CRONS } = await import("../../../server/inngest/functions/_cron-run-reports");
+    const qs = searchQueries().filter((q) => q.includes('label:"scheduled-'));
+    const sweepable = RUN_REPORT_CRONS.filter((r) => r.closeAfterDays !== null);
+    expect(qs).toHaveLength(sweepable.length);
+    expect(sweepable).toHaveLength(8);
+    for (const row of sweepable) {
+      const cutoff = new Date(NOW.getTime() - (row.closeAfterDays as number) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      expect(qs.some((q) => q.includes(`label:"${row.label}"`) && q.includes(`created:<${cutoff}`))).toBe(true);
+    }
   });
 
   it("H1: an empty search page closes nothing and reports total 0 (not vacuously green)", async () => {
@@ -1157,8 +1250,22 @@ describe("cronStaleDeferredScopeOuts — run-report arm (#8076)", () => {
       cronStaleDeferredScopeOutsHandler({ step, logger, attempt: 1, maxAttempts: 2 } as never),
     ).rejects.toThrow();
     expect(step.calls.some((c) => c.name === "sweep-stale-deferred-scope-outs")).toBe(true);
-    // The scope-out arm ran exactly once (its own step) and the run-report
-    // fault surfaced through the shared sweepFailed path.
+    // The scope-out arm ran exactly once within this invocation and the
+    // run-report fault surfaced through the shared sweepFailed path. (Cross-
+    // attempt memoization is Inngest's contract, not modelled by the fake step.)
     expect(scopeOutSearches).toBe(1);
+    // The run-report arm has its OWN step id — the isolation the row is named for.
+    expect(step.calls.map((c) => c.name)).not.toContain("sweep-run-reports");
+  });
+
+  it("the handler's step is literally `sweep-run-reports` and its result rides on the return value under `runReports`", async () => {
+    mockSearch({ "scheduled-community-monitor": [rrIssue({ number: 7018, createdAt: "2026-09-01T08:00:00Z" })] });
+    const { cronStaleDeferredScopeOutsHandler } = await importModule();
+    const step = makeStep();
+    const out = (await cronStaleDeferredScopeOutsHandler({ step, logger, attempt: 1, maxAttempts: 2 } as never)) as {
+      runReports?: { closed: number };
+    };
+    expect(step.calls.some((c) => c.name === "sweep-run-reports")).toBe(true);
+    expect(out.runReports?.closed).toBe(1);
   });
 });

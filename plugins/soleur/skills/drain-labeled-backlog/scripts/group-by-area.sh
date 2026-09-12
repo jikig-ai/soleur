@@ -121,7 +121,9 @@ fi
 # included: the standing weekly measurement issue is machinery AND `keep-open`,
 # so a machinery drain that honoured only the exclusion above would close its
 # own measurement surface. Applied after the fetch/fixture fork so the fixture
-# path exercises the same filter (ADR-216 addendum).
+# path exercises the same filter. `keep-open` is the sweeper's kill-switch
+# (`KILLSWITCH_LABELS` in cron-stale-deferred-scope-outs.ts); the drain and
+# measurement line 1d honour the same label (#8076).
 ISSUES_JSON="$(jq -c \
   '[.[] | select([.labels[].name] | (index("keep-open") or index("do-not-autoclose")) | not)]' <<<"$ISSUES_JSON")"
 

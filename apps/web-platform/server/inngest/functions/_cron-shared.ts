@@ -845,7 +845,11 @@ export async function verifyScheduledIssueCreated(args: {
     since: sinceIso,
     sort: "updated",
     direction: "desc",
-    per_page: 5,
+    // 30, not 5: the 12:00Z run-report sweeper bumps updated_at on up to 25
+    // same-label issues per fire (#8076), and every one of those is refused
+    // below as closed — a producer retry verifying after the sweep must still
+    // find its own issue on page 1.
+    per_page: 30,
     headers: { "X-GitHub-Api-Version": "2022-11-28" },
   });
 

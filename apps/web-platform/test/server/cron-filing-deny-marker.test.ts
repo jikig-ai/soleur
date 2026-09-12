@@ -32,9 +32,45 @@ describe("countFilingDenials", () => {
     ];
     const r = countFilingDenials(denials);
     expect(r.count).toBe(3);
-    // PII-free: only the command HEAD (first three tokens), never a title/body.
+    // PII-free: only the command HEAD, never a title/body.
     expect(r.commands).toEqual(["gh issue create", "gh api repos/jikig-ai/soleur/issues", "gh issue create"]);
     expect(JSON.stringify(r)).not.toContain("--title");
+  });
+
+  // The counter is the hook's OWN `filingShape` predicate (imported), so every
+  // api spelling the gate denies is counted — the hand-mirrored regex this
+  // replaced missed the first three (#8074 review) and counted the fourth.
+  it("counts every api spelling the hook classifies as a filing, and no non-create endpoint", () => {
+    const filing = [
+      "gh api -X POST repos/jikig-ai/soleur/issues -f title=t",
+      "gh api repos/jikig-ai/soleur/issues -f title=t -f body=b",
+      "gh api --method POST /repos/jikig-ai/soleur/issues -f title=t",
+      "gh api repos/jikig-ai/soleur/issues?labels=x -X POST",
+      "gh api repos/jikig-ai/soleur/issues/ -XPOST",
+      "gh api repos/jikig-ai/soleur/issues --input body.json",
+    ];
+    const notFiling = [
+      "gh api repos/jikig-ai/soleur/issues/123/comments -X POST",
+      "gh api repos/jikig-ai/soleur/issues",
+      "gh api repos/jikig-ai/soleur/issues?state=open --paginate",
+    ];
+    const asDenials = (cmds: string[]) => cmds.map((command) => ({ tool_name: "Bash", tool_input: { command } }));
+    expect(countFilingDenials(asDenials(filing)).count).toBe(filing.length);
+    expect(countFilingDenials(asDenials(notFiling)).count).toBe(0);
+  });
+
+  it("head is the endpoint PATH only — query dropped, capped, one per command, no chain separator", () => {
+    const long = "x".repeat(200);
+    const r = countFilingDenials([
+      { tool_name: "Bash", tool_input: { command: `gh api repos/jikig-ai/soleur/issues?title=${long} -X POST` } },
+      { tool_name: "Bash", tool_input: { command: "gh issue create --title a; gh issue create --title b" } },
+      { tool_name: "Bash", tool_input: { command: 'gh issue create --title "unbalanced' } },
+    ]);
+    expect(r.commands).toEqual(["gh api repos/jikig-ai/soleur/issues", "gh issue create"]);
+    expect(r.count).toBe(2);
+    expect(JSON.stringify(r)).not.toContain(long.slice(0, 8));
+    expect(JSON.stringify(r)).not.toContain(";");
+    expect(r.commands.every((h) => h.length <= 64 + "gh api ".length)).toBe(true);
   });
 
   it("returns 0 on an empty, absent, or malformed array", () => {
@@ -52,6 +88,7 @@ describe("emitCronFilingDenyMarker", () => {
     spawn_started_at: "2026-09-12T08:00:00.000Z",
     count: 2,
     commands: ["gh issue create", "gh issue create"],
+    capture_status: "ok" as const,
   };
 
   it("emits one WARN line with the SOLEUR_CRON_FILING_DENY discriminator + fields", () => {
@@ -62,9 +99,15 @@ describe("emitCronFilingDenyMarker", () => {
     expect(msg).toBe("cron filing denied");
   });
 
-  it("emits nothing at count 0 (the marker is a positive signal, not a heartbeat)", () => {
+  it("emits nothing at count 0 with a healthy capture (the marker is a positive signal, not a heartbeat)", () => {
     emitCronFilingDenyMarker({ ...m, count: 0, commands: [] });
     expect(warnMock).not.toHaveBeenCalled();
+  });
+
+  it("DOES emit at count 0 when the permission_denials field was absent (the deny channel went dark)", () => {
+    emitCronFilingDenyMarker({ ...m, count: 0, commands: [], capture_status: "field-absent" });
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    expect(warnMock.mock.calls[0][0]).toMatchObject({ SOLEUR_CRON_FILING_DENY: true, count: 0, capture_status: "field-absent" });
   });
 
   it("is fail-open: a throwing log.warn does not propagate", () => {

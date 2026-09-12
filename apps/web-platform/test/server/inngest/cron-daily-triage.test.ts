@@ -17,7 +17,8 @@ interface FakeChild extends EventEmitter {
 }
 
 const spawnSpy = vi.fn();
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnSpy,
 }));
 
@@ -173,7 +174,7 @@ describe("cron-daily-triage — T1 happy path", () => {
 });
 
 describe("cron-daily-triage — #8076 run-reports are not triage input", () => {
-  it("the issue-list jq predicate excludes every scheduled-* label (run-reports are liveness tokens, not bugs)", async () => {
+  it("the issue-list jq predicate excludes the eight SWEEPABLE run-report labels, EXECUTED with real jq (not grepped)", async () => {
     // Daily triage labelled 21 of 43 community digests `priority/p1-high,
     // type/bug` and hid #8027's "Credit balance is too low" under them.
     const child = makeChild();
@@ -187,12 +188,30 @@ describe("cron-daily-triage — #8076 run-reports are not triage input", () => {
     const spawnArgs = spawnSpy.mock.calls[0][1] as string[];
     const prompt = spawnArgs[spawnArgs.length - 1];
     // The clause must sit INSIDE the same select(...) as the two existing ones.
-    const m = /--jq 'map\(select\(([^']+)\)\)'/.exec(prompt);
+    const m = /--jq '(map\(select\([^']+\)\))'/.exec(prompt);
     expect(m, "the --jq map(select(...)) predicate is present").toBeTruthy();
-    const predicate = m![1];
-    expect(predicate).toContain('index("ux-audit") | not');
-    expect(predicate).toContain('any(startswith("agent:")) | not');
-    expect(predicate).toContain('any(startswith("scheduled-")) | not');
+    const filter = m![1];
+    // A substring grep of the predicate survived `and`→`or` and a double
+    // negation (#8074 review); run the extracted filter through jq itself.
+    const { RUN_REPORT_CRONS } = await import("../../../server/inngest/functions/_cron-run-reports");
+    const sweepable = RUN_REPORT_CRONS.filter((r) => r.closeAfterDays !== null).map((r) => r.label);
+    const kept = RUN_REPORT_CRONS.filter((r) => r.closeAfterDays === null).map((r) => r.label);
+    expect(sweepable).toHaveLength(8);
+    expect(kept).toEqual(["scheduled-campaign-calendar", "scheduled-legal-audit"]);
+    const issue = (number: number, labels: string[]) => ({ number, title: `#${number}`, labels: labels.map((name) => ({ name })) });
+    const fixture = [
+      ...sweepable.map((l, i) => issue(100 + i, [l])),
+      issue(200, ["type/bug", "scheduled-community-monitor"]), // dual-labelled run-report: excluded
+      ...kept.map((l, i) => issue(300 + i, [l, "action-required"])), // finding-shaped: still triaged
+      issue(400, ["type/bug"]),
+      issue(401, []),
+      issue(402, ["ux-audit"]),
+      issue(403, ["agent:ux-audit"]),
+      issue(404, ["scheduled-strategy-review"]), // a non-run-report scheduled-* label: still triaged
+    ];
+    const { execFileSync } = await import("node:child_process");
+    const out = execFileSync("jq", ["-c", `${filter} | map(.number)`], { input: JSON.stringify(fixture) }).toString().trim();
+    expect(JSON.parse(out)).toEqual([300, 301, 400, 401, 404]);
   });
 });
 

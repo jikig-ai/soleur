@@ -14,12 +14,18 @@
 // Same contract as SOLEUR_CLAUDE_COST (claude-cost-marker.ts): pino WARN
 // (level 40) because the Vector `app_container_warn_filter` ships only
 // level >= 40 to Better Stack; fail-open (never throws); PII-free — the marker
-// carries the command HEAD (first three tokens: `gh issue create`), never a
-// title, body, or label value. "Denied and did not comply" is this marker plus
+// carries the command HEAD (`gh issue create`, or `gh api <endpoint path>`
+// with the query string dropped and the path capped), never a title, body,
+// or label value. "Denied and did not comply" is this marker plus
 // the existing `scheduled-output-missing` Sentry event for the same fn; the
 // marker alone means denied-then-complied (relabelled), which measurement
 // line 1d also counts. Runbook: betterstack-log-query.md.
 import pino from "pino";
+import {
+  filingShape,
+  splitSegments,
+  tokenize,
+} from "./inngest/cron-bash-allowlist-hook.mjs";
 
 const log = pino({ base: { component: "cron-filing-deny" } });
 
@@ -32,20 +38,44 @@ export interface CronFilingDenyMarker {
   spawn_started_at: string;
   /** Filing-shaped denials in this run's result event. */
   count: number;
-  /** Command heads only — first three tokens per denied filing. */
+  /** Command heads only — `gh issue create` / `gh api <path>` per denied filing. */
   commands: string[];
+  /**
+   * `ok`: the result event carried `permission_denials[]`. `field-absent`:
+   * it parsed but the array was missing — the deny channel is dark, so a 0
+   * count is not "no denials". Emitted at count 0 only in that case.
+   */
+  capture_status: "ok" | "field-absent";
 }
 
-// The two filing shapes the gate covers (mirrors `filingJustificationReason`
-// in cron-bash-allowlist-hook.mjs): `gh issue create …` and
-// `gh api …/repos/<o>/<r>/issues … -X POST` — anywhere in a segment chain.
-const FILING_SHAPE =
-  /(^|&&|\|\||;)\s*gh\s+(issue\s+create\b|api\s+\S*repos\/[^/\s]+\/[^/\s]+\/issues\b[^&|;]*(?:-X|--method)\s+POST\b)/;
+// ONE predicate for "is this a filing": the hook's own `filingShape` over the
+// hook's own tokenizer, so what the gate denies and what this counts cannot
+// drift (a hand-mirrored regex here missed `gh api -X POST repos/…/issues`
+// and `-f title=` without a method — #8074 review). The hook file is plain
+// ESM with a CLI entry guard, so importing it runs nothing.
+
+// The api form's endpoint token is agent-controlled and unbounded (a 5 kB
+// `…/issues?title=…` is a valid token), so the head is the PATH ONLY — query
+// string dropped — and capped. `gh issue create` is always its three literals.
+const HEAD_TOKEN_MAX = 64;
+const ENDPOINT_RE = /(^|\/)repos\/[^/?]+\/[^/?]+\/issues\/?(\?[^/]*)?$/;
+
+/** The command head for one denied filing segment: `gh issue create` or `gh api <path>`. */
+function filingHead(tokens: string[], shape: "create" | "api"): string {
+  if (shape === "create") return "gh issue create";
+  const endpoint = tokens.find((t) => ENDPOINT_RE.test(t)) ?? "";
+  const path = endpoint.split("?")[0].slice(0, HEAD_TOKEN_MAX);
+  return `gh api ${path}`;
+}
 
 /**
  * Count the filing-shaped Bash denials in a result event's `permission_denials`.
- * Pure; tolerant of a missing/malformed array (→ 0). Returns command heads
- * (first three whitespace tokens of the matching segment) for the marker.
+ * Pure; tolerant of a missing/malformed array (→ 0). One count per denied
+ * command carrying a filing segment (any position in a `&&`/`||`/`;` chain);
+ * the head of its first filing segment goes into `commands`. NOTE: the array
+ * carries no deny REASON, so a filing-shaped command denied for another
+ * cause (a metachar, an allowlist miss) is counted too — the marker measures
+ * "a filing was refused", not "the filing gate refused it".
  */
 export function countFilingDenials(
   denials: unknown,
@@ -58,22 +88,27 @@ export function countFilingDenials(
     if (entry.tool_name !== "Bash") continue;
     const cmd = entry.tool_input?.command;
     if (typeof cmd !== "string") continue;
-    const m = FILING_SHAPE.exec(cmd);
-    if (!m) continue;
-    const segment = cmd.slice(m.index + m[1].length).trim();
-    commands.push(segment.split(/\s+/).slice(0, 3).join(" "));
+    for (const segment of splitSegments(cmd)) {
+      const tokens = tokenize(segment) as string[] | null;
+      if (!tokens) continue; // unbalanced quote: not classifiable, not counted
+      const shape = filingShape(tokens) as "create" | "api" | null;
+      if (shape === null) continue;
+      commands.push(filingHead(tokens, shape));
+      break;
+    }
   }
   return { count: commands.length, commands };
 }
 
 /**
  * Emit one `SOLEUR_CRON_FILING_DENY` WARN marker. NEVER throws — observability
- * must never break a run. Emits nothing at count 0: this is a positive signal
- * for a deny that happened, not a per-run heartbeat.
+ * must never break a run. Emits nothing at count 0 with a healthy capture:
+ * this is a positive signal for a deny that happened (or for a deny channel
+ * that went dark), not a per-run heartbeat.
  */
 export function emitCronFilingDenyMarker(m: CronFilingDenyMarker): void {
   try {
-    if (!(m.count > 0)) return;
+    if (!(m.count > 0) && m.capture_status === "ok") return;
     log.warn({ SOLEUR_CRON_FILING_DENY: true, ...m }, "cron filing denied");
   } catch {
     // fail-open: a marker-emit failure must never propagate into the caller.

@@ -106,7 +106,7 @@ export interface ParsedEvalResult {
   // #8076 — filing-shaped PreToolUse denials from the event's
   // `permission_denials[]` (a hook deny lands there with the full command —
   // measured 2026-09-11). Command HEADS only; see cron-filing-deny-marker.ts.
-  filingDenials: { count: number; commands: string[] };
+  filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
 }
 
 /**
@@ -142,7 +142,12 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
     permission_denials?: unknown;
   };
   return {
-    filingDenials: countFilingDenials(r.permission_denials),
+    // `fieldPresent` splits "no denials" from "the CLI stopped emitting the
+    // array" — absent and empty both count 0, and only one of them is good news.
+    filingDenials: {
+      ...countFilingDenials(r.permission_denials),
+      fieldPresent: Array.isArray(r.permission_denials),
+    },
     cost: {
       costUsd:
         typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
@@ -635,7 +640,7 @@ export function runHookSelfTest(args: {
     }
   }
 
-  // #8076 — the run-report exit, three probes per spawn that carries the
+  // #8076 — the run-report exit, four probes per spawn that carries the
   // directive: (a) the cron's REQUIRED filing on a real --label token must
   // ALLOW (a lost directive line is what this detects — the same delivery
   // cross-check as the mcp probes); (b) the label merely NAMED in --body must
@@ -665,6 +670,17 @@ export function runHookSelfTest(args: {
       throw new Error(
         `[${cronName}] containment hook self-test FAILED: a suffixed run-report label ` +
           `opened exit 0 (comma anchor lost). Aborting cron.`,
+      );
+    }
+    // (d) the REQUIRED filing with a bare `$VAR` in its title must DENY: the
+    // spawn env carries GH_TOKEN, and exit 0 makes the create reachable on
+    // every run, so the metachar layer's `$VAR` deny is the only thing between
+    // the env and the public tracker (#8074 review).
+    const d = probeCreate(`--label ${runReportLabel} --milestone "Post-MVP / Later" --body "$GH_TOKEN"`);
+    if (!d.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: a bare $VAR expansion inside ` +
+          `the run-report filing was ALLOWED (secret-egress route open). Aborting cron.`,
       );
     }
   }
@@ -992,7 +1008,7 @@ export async function spawnClaudeEval(args: {
   // Stays null until a `{"type":"result",…}` line parses (→ capture_status:"ok").
   let evalCost: ParsedEvalResult["cost"] | null = null;
   // #8076 — filing-gate denials seen in the result event (0 until parsed).
-  let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [] };
+  let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [], fieldPresent: false };
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
   // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
   // `--output-format json`) did NOT yield a usable `result` event — a truncated/
@@ -1131,16 +1147,24 @@ export async function spawnClaudeEval(args: {
             evalCost?.usage?.cache_creation_input_tokens ?? null,
           capture_status: captureStatus,
         });
-        // #8076 — one positive marker per run that had a filing-gate deny;
+        // #8076 — one positive marker per run that had a filing-shaped deny;
         // fail-open like the cost marker, and silent at 0 (a heartbeat would
-        // drown the signal). Correlate with `scheduled-output-missing` on fn.
-        if (evalFilingDenials.count > 0) {
+        // drown the signal). Correlate on `run_id` = the Sentry tag
+        // `inngest.run_id` of the same run's `scheduled-output-missing`.
+        // Also emitted, with `capture_status: "field-absent"`, when a result
+        // event parsed cleanly but carried NO `permission_denials` array: a
+        // CLI that stopped emitting it would otherwise read as "0 denials
+        // forever" (only a parsed result can say this; timeout / no-result /
+        // parse-error runs carry that in the cost marker's capture_status).
+        const denyFieldAbsent = captureStatus === "ok" && !evalFilingDenials.fieldPresent;
+        if (evalFilingDenials.count > 0 || denyFieldAbsent) {
           emitCronFilingDenyMarker({
             fn: cronName,
             run_id: runId ?? cronName,
             spawn_started_at: new Date(startedAt).toISOString(),
             count: evalFilingDenials.count,
             commands: evalFilingDenials.commands,
+            capture_status: denyFieldAbsent ? "field-absent" : "ok",
           });
         }
         resolve(r);

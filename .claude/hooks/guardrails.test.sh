@@ -864,6 +864,35 @@ assert "guard3: heredoc apostrophe without the label still denies" "deny" \
   "$HD_APOS
 gh issue create --title t --body b $MS"
 
+# (a′) the two other heredoc spellings share the same regex: dash-heredoc
+# (`<<-`, tab-indented terminator) and a double-quoted delimiter. Dropping the
+# `-?` or the quote class survived the rows above (#8074 review).
+assert "guard3: <<-'EOF' dash-heredoc apostrophe + real --label allows" "<none>" \
+  "cat > body.md <<-'EOF'
+	Soleur's guard
+	EOF
+gh issue create --title t --body-file body.md --label meta/machinery $MS"
+assert "guard3: <<\"EOF\" double-quoted delimiter apostrophe + real --label allows" "<none>" \
+  "cat > body.md <<\"EOF\"
+Soleur's guard
+EOF
+gh issue create --title t --body-file body.md --label meta/machinery $MS"
+
+# (a″) a here-STRING is not a heredoc: `<<<word` must not blank the rest of
+# the command up to a later line starting with `word` (it did — every real
+# token after it vanished and the leftover quote denied as unbalanced).
+assert "guard3: <<< here-string before a real --label allows" "<none>" \
+  "gh issue create --title t --body \"\$(cat <<<foo)\" --label meta/machinery $MS
+echo foo"
+
+# (a‴) must-DENY: the label as PROSE inside a heredoc body is not a flag —
+# identity stripping (no blanking at all) would read it as one.
+assert "guard3: --label meta/machinery only inside the heredoc body denies" "deny" \
+  "cat > body.md <<'EOF'
+please add --label meta/machinery to this
+EOF
+gh issue create --title t --body-file body.md $MS"
+
 # (b) exit 1 is honoured before the body-file read: the corpus is not needed.
 assert "guard3: exit 1 + nonexistent --body-file allows" "<none>" \
   "gh issue create --title t --body-file /nonexistent/soleur-no-such-body.md --label meta/machinery $MS"
@@ -953,7 +982,7 @@ fi
 # strip_heredocs/strip_command_bodies rows) = 119. Stated as the sum so a
 # sibling PR that adds a row makes this stale LOUDLY (the floor trips) rather
 # than silently.
-MIN_ASSERTIONS=$((106 + 13))
+MIN_ASSERTIONS=$((106 + 17))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

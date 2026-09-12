@@ -548,10 +548,14 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
   # 2026-05-29-net-issue-flow-gate-at-filing-site-not-just-ship.md, where the
   # ship-side surfacing was bypassed precisely because filings happen in /work.
   #
-  # THREE EXITS, ONE GATE, AND DELIBERATELY NO FOURTH. Exit 1 is free and always
-  # available, so a purpose-named bypass marker would buy nothing an honest
-  # `--label meta/machinery` does not, while reproducing the reflexive-override
-  # pathology ADR-155 documents (net-issue-flow has been overridden 98 times).
+  # THREE EXITS ON THIS SURFACE, ONE GATE, AND DELIBERATELY NO FOURTH
+  # NARRATABLE ONE. Exit 1 is free and always available, so a purpose-named
+  # bypass marker would buy nothing an honest `--label meta/machinery` does
+  # not, while reproducing the reflexive-override pathology ADR-155 documents
+  # (net-issue-flow has been overridden 98 times). The cron substrate's mirror
+  # (cron-bash-allowlist-hook.mjs) carries one more, exit 0, keyed on a file
+  # the agent cannot read — not narratable, so not reproducible here (ADR-216
+  # addendum, #8076).
   if [[ "$_our_repo" == 1 || "$_ext_repo" == 0 ]]; then
     _fj_pass=0
 

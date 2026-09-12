@@ -53,6 +53,7 @@ import {
 // Re-export for test parity (cron-daily-triage.test.ts imports via this module).
 export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { sweepableRunReports } from "./_cron-run-reports";
 
 // Inlined verbatim from .github/workflows/scheduled-daily-triage.yml lines
 // 86-140, with one diff at step 3d: prompt enforces IDEMPOTENT search-before-
@@ -61,19 +62,30 @@ import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 // Editing this prompt and the --allowedTools / --max-turns flags below MUST
 // happen together — they form a single agent contract (a permissive tool
 // list with a restrictive prompt is silent agent failure).
+// The triage exclusion is keyed on the SWEEPABLE run-report labels (rows whose
+// reports the 12:00Z sweeper retires), derived from the leaf so a new
+// run-reporter joins the exclusion by existing. Rendered as a JSON array
+// literal inside the jq filter.
+const RUN_REPORT_TRIAGE_EXCLUDED_LABELS_JSON = JSON.stringify(
+  sweepableRunReports().map((r) => r.label),
+);
+
 const DAILY_TRIAGE_PROMPT = String.raw`You are an issue triage agent. Your job is to classify open GitHub issues
 and apply labels. You must NOT write code, create PRs, or modify any files.
 
 ## Instructions
 
-1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not) and (.labels | map(.name) | any(startswith("scheduled-")) | not)))'${"`"}
+1. List open issues: ${"`"}gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not) and ((.labels | map(.name)) as $n | ($n - ${RUN_REPORT_TRIAGE_EXCLUDED_LABELS_JSON} | length) == ($n | length))))'${"`"}
    The --jq filter excludes agent-authored issues (stream tag
-   "ux-audit" and any "agent:*" label) and scheduled run-reports (any
-   "scheduled-*" label): a run-report is a liveness token and audit trail,
-   not a bug — triage labelled 21 daily digests priority/p1-high and hid the
-   one FAILED report among them (#8027, #8076).
+   "ux-audit" and any "agent:*" label) and scheduled run-reports (the eight
+   sweepable run-report labels from _cron-run-reports.ts — NOT every
+   "scheduled-*" label: legal-audit files findings and campaign-calendar files
+   action-required items, and both still want a priority): a run-report is a
+   liveness token and audit trail, not a bug — triage labelled 21 daily
+   digests priority/p1-high and hid the one FAILED report among them
+   (#8027, #8076).
    Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
-   (the scheduled-* clause is triage-specific and lives here only).
+   (the run-report clause is triage-specific and lives here only).
    Governance rationale: plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md.
 2. Filter: skip any issue that already has a label starting with "priority/".
    These have already been triaged.

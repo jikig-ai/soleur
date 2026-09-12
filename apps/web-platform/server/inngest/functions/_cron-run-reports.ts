@@ -3,8 +3,10 @@
 // A cron in this list MUST file a `scheduled-<task>` issue on every run: its
 // handler verifies run completion by that issue's existence
 // (`resolveOutputAwareOk` → `verifyScheduledIssueCreated` in `_cron-shared.ts`),
-// and the persistence handshake refuses to commit the run's artifacts until it
-// is seen. That makes the filing "mandated by construction" — the reasoning
+// and for the eight that persist through `safeCommitAndPr` the handshake
+// refuses to commit the run's artifacts until it is seen (roadmap-review
+// commits through its own hook-guarded path; legal-audit is `resolveBestEffort`
+// — D1 below). That makes the filing "mandated by construction" — the reasoning
 // ADR-216 used to exempt workflow-YAML filings (class 2) — inside the cron
 // substrate the filing gate covers (class 3). First live contact was #8059:
 // eleven hours after the gate merged, cron-community-monitor was denied on its
@@ -27,12 +29,14 @@
 // parity test `cron-run-report-labels-parity.test.ts` greps the call sites.
 //
 // `closeAfterDays` is a LITERAL per row: 3 × the heartbeat's `maxGapDays` where
-// the heartbeat tracks the cron (parity row (iii) asserts it), else 3 × the
-// schedule period + 2 d. `null` means never swept: campaign-calendar
-// comment-bumps ONE standing issue ("Do NOT create a new issue",
-// `_cron-shared.ts` "counts via updated_at"), and legal-audit's issues are
-// per-gap findings, not reports — it is in the directive map by operator
-// decision (D1, plan review 2026-09-11) and never in the sweep.
+// the heartbeat tracks the cron (parity row (iii) asserts it), else
+// 3 × (schedule period + 2 d) — a synthetic maxGapDays, so weekly → 27 and
+// 1st/15th → 51. `null` means never swept: campaign-calendar files per-item
+// `[Content] Overdue:` issues it comment-bumps on later runs ("Do NOT create a
+// new issue", `_cron-shared.ts` "counts via updated_at") plus a
+// create-and-close heartbeat digest, and legal-audit's issues are per-gap
+// findings, not reports — it is in the directive map by operator decision
+// (D1, plan review 2026-09-11) and never in the sweep.
 
 export const RUN_REPORT_TITLE_PREFIX = "[Scheduled] ";
 
