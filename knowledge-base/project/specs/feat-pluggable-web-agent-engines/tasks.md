@@ -83,6 +83,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).
   - [x] Settings persistence slice: workspace defaults now store an explicit auth mode and atomic run binding inherits it (15 persistence/migration tests green).
   - [x] Settings API auth-mode slice: GET exposes the persisted mode and owner PUT validates/authenticates mode selection (10 route tests green).
+  - [x] Settings UI auth-mode slice: owner selector loads, displays, and persists the selected engine auth mode (4 component tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
