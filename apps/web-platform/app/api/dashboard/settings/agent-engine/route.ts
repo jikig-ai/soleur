@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
+import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,8 @@ async function context() {
   let workspaceId: string | null;
   try {
     workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
-  } catch {
+  } catch (error) {
+    reportSilentFallback(error, { feature: "agent-engine-settings", op: "workspace-resolve" });
     return { response: NextResponse.json({ error: "settings_unavailable" }, { status: 503 }) } as const;
   }
   if (!workspaceId) return { response: NextResponse.json({ error: "workspace_unbound" }, { status: 503 }) } as const;
@@ -32,7 +34,8 @@ export async function GET() {
       engines: listReviewedEngineDefinitions().map(({ id, version, transport, authModes, enabledForNewRuns }) =>
         ({ id, version, transport, authModes, enabledForNewRuns })),
     });
-  } catch {
+  } catch (error) {
+    reportSilentFallback(error, { feature: "agent-engine-settings", op: "read" });
     return NextResponse.json({ error: "settings_unavailable" }, { status: 503 });
   }
 }
@@ -61,6 +64,7 @@ export async function PUT(request: Request) {
     if (error instanceof Error && error.message === "engine_unknown") {
       return NextResponse.json({ error: "engine_unknown" }, { status: 400 });
     }
+    reportSilentFallback(error, { feature: "agent-engine-settings", op: "write" });
     return NextResponse.json({ error: "settings_update_failed" }, { status: 503 });
   }
 }
