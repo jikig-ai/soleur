@@ -1,114 +1,43 @@
 # Runbook — birthing the git-data host
 
-> ## ⛔ DO NOT DISPATCH THIS YET
+> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13
 >
-> **Do not assume this banner is backed by a mechanical hold — as of PR #8002 it may not
-> be.** Both gates release once
-> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` is on `main`. From that moment
-> this banner is the ONLY prose hold, and the sole remaining control is the
-> `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
-> with a single reviewer, so **the dispatcher can approve their own deployment.** That is one
-> human clicking twice, not a two-party control. Do not dispatch.
+> This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until
+> the PR that made this edit. It was cleared on the release condition it stated, and nothing
+> else: the rendered template booted **once on a throwaway host** outside the
+> `hcloud_server.git_data` address, and the artifacts were observed **off-box**.
 >
-> #6982 shipped the off-host emitter, so `git_data_birth_readiness_gate` no longer refuses —
-> the sentinel it looks for (`${sentry_dsn}` in non-comment template text) is present. That
-> released the FIRST gate, and for a while this banner really was the only hold, which is the
-> posture ADR-149's own Alternatives table rejects.
->
-> So #6982 also added a SECOND gate: `git_data_rung2_rehearsal_gate` runs in the same
-> dispatch job, before any provider is contacted, and refuses unless
-> `apps/web-platform/infra/git-data-rung2-boot-evidence.env` exists and attests a rung-2 boot
-> rehearsal **of the current template** (the evidence carries a sha256 of
-> `cloud-init-git-data.yml`, so it self-invalidates the moment that file is edited again).
-> **That was true until PR #8002.** Once its evidence file lands on `main` this gate
-> RELEASES and a dispatch no longer exits early. Check the live state rather than trusting
-> this paragraph:
+> - **Rehearsal:** `git-data-rung2-rehearsal.yml` run
+>   [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), dispatched
+>   from `main` `15fd63aff` with `dry_run=false`. Verdict `PASS` — `stage:boot_complete`
+>   reached, no `level:fatal` on Better Stack, source-liveness anchor answered; teardown
+>   verified against the Hetzner API. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (a run-pinned
+>   liveness window on a quiet project — recorded on #8010, which is where that key becomes
+>   load-bearing; the gate ignores it today).
+> - **Evidence:** `apps/web-platform/infra/git-data-rung2-boot-evidence.env`, committed ALONE
+>   in PR #8126 (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
+>   HOLDs on a co-edit with any of the 13 hash-bound inputs). Template sha256
+>   `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
+> - **Gate:** `git_data_rung2_rehearsal_gate` reads `RELEASED`, provenance `PASS`. It
+>   self-invalidates the moment any bound input moves — re-check it rather than trusting
+>   this paragraph:
 >
 > ```bash
-> git cat-file -e origin/main:apps/web-platform/infra/git-data-rung2-boot-evidence.env \
->   && echo 'evidence IS on main — the rung-2 gate is RELEASED' \
->   || echo 'evidence absent — the rung-2 gate still HOLDs'
+> source tests/scripts/lib/git-data-birth-readiness-gate.sh
+> git_data_rung2_rehearsal_gate \
+>   apps/web-platform/infra/cloud-init-git-data.yml \
+>   apps/web-platform/infra/git-data-rung2-boot-evidence.env
 > ```
 >
-> Note what that gate does and does not check: it asserts that a well-formed, template-bound
-> assertion EXISTS. It strips comments before reading, never resolves the Actions run id, and
-> ignores `RUNG2_SENTRY_CROSSCHECK` entirely (#8010). The hash is a staleness detector, not an
-> authorship proof.
+> **What clearing the banner does NOT change.** The sole remaining control on the dispatch is
+> the `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
+> with a single reviewer, so the dispatcher can approve their own deployment (see *"Three
+> things a green boot does NOT mean"* below; that section is unchanged). ADR-149 item 8 is
+> the banner clear itself; the item's history (#6982 → #7025, moved twice by bundling) is why
+> this edit touches one file and nothing else.
 >
-> ### What changed in #7025: the route to produce that evidence now EXISTS
->
-> Until #7025 there was no automation that could produce
-> `git-data-rung2-boot-evidence.env` at all — `rung2` appeared only in the apply workflow
-> and the gate itself. Nothing booted a throwaway host; nothing captured the artifacts. The
-> gate was waiting on something no one could do without a hand-run laptop procedure.
->
-> #7025 shipped the **route, not the run**:
->
-> - `.github/workflows/git-data-rung2-rehearsal.yml` — `workflow_dispatch` only, confirm
->   token `REHEARSE-GIT-DATA`, `dry_run` defaulting to **true**.
-> - `apps/web-platform/infra/rung2-rehearsal/` — a **separate Terraform root** with its own
->   R2 state key, so a rehearsal apply cannot address a production resource through
->   Terraform's managed-resource lifecycle. That boundary is narrower than it sounds and
->   ADR-149 DC-6 spells out what it does NOT cover: the Hetzner credential, the Doppler
->   project, Sentry, the parent root's push trigger, and teardown garbage collection are all
->   shared. State separation bounds the LIFECYCLE, not the AUTHORITY.
-> - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — captures the evidence
->   off-box and writes the file **only** on PASS.
->
-> It shipped **unfired**, and the banner stayed up, for a reason worth internalising: a PR
-> merges **atomically**, so evidence committed in the same PR that builds the harness would
-> be evidence from a rehearsal that never ran. The harness has to exist, merge, and then
-> *run*. Producing evidence is now one gated dispatch, not a procedure.
->
-> **RELEASE CONDITION — clear this banner only when the rehearsal evidence exists.**
-> Every gate #6982 ships is STATIC, and the failure class it defends against
-> (*green apply, dark host*) is only observable at RUNTIME. Mutation arms prove the code
-> CAN go red when neutered; they never prove an event ARRIVES when it is intact. So the
-> condition is not "the code merged" — it is:
->
-> 1. the rendered template booted **once on a throwaway host** outside the
->    `hcloud_server.git_data` address (dispatch the rehearsal workflow with
->    `dry_run=false`), and
-> 2. the artifacts were **observed off-box**, each recorded with the query that retrieved
->    it: a Better Stack **source-liveness anchor**, one `stage:boot_complete` row carrying
->    its four assertion booleans, and **no `level:fatal`** from that host.
->
-> **A CORRECTION TO AN EARLIER VERSION OF THIS LIST**, because it asked for something
-> unsatisfiable. It previously demanded *"a Sentry event from the fatal channel"* from a
-> successful rehearsal. The fatal channel fires **only on failure** — a clean boot emits
-> `info`, never `fatal` — so that clause could be met only by a rehearsal that failed, or
-> by fabricating it. The fatal channel is proven at **rung 1** instead, by
-> `git-data-runcmd-rehearsal.test.sh`, which shows the trap firing and emitting `fatal`.
-> Rung 2's job is the real-host facts rung 1 structurally cannot reach: TLS egress from a
-> real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
->
-> Related measurement, since it shaped the capture script: `stage:bootcmd_start` reaches
-> **Sentry only**. It is a bare `curl` inside `bootcmd`, which runs before `write_files`,
-> so `/usr/local/bin/git-data-emit` does not exist yet. That much still holds.
->
-> **Superseded in part by #7460 (ADR-198).** The rest of this paragraph used to read: "the
-> emitter's Better Stack block is gated on `BETTERSTACK_LOGS_TOKEN`, which is present only
-> under `doppler run`. On a *successful* boot the only Better Stack row a git-data host ever
-> produces is `boot_complete` itself." The token is now baked at `0600` in `user_data`, so
-> EIGHT of the nine stages reach Better Stack and only `bootcmd_start` is Sentry-only.
-> Anchoring a Better Stack query on an early stage is now correct, not a mistake — but
-> `bootcmd_start` specifically still returns zero rows.
->
-> If only the container-harness rung was reached, that is **not** sufficient: the harness
-> cannot exercise `doppler run` against real Doppler, `luksOpen` against a real volume, the
-> private NIC, or whether an event actually lands. The banner-clear PR carries the
-> throwaway-host rung as **its own** precondition.
->
-> **Why the hold outlived the gate:** the interlock is a ONE-BIT LATCH guarding a
-> ten-item checklist, and the bit flips on *threading*, not on *emitting*. It cannot
-> verify the emitter emits. ADR-115 additionally makes several #6982 items unfixable after
-> the birth — git-data is excluded from the reboot primitive, and `user_data` is ForceNew
-> with no `ignore_changes`, so **every** cloud-init edit after birth costs a destructive
-> `git-data-host-replace` of the host holding every user's source code.
->
-> The full release checklist is **ADR-149**, and its per-item disposition table records
-> what #6982 discharged. Clear this banner only when every item is done — including the
-> rehearsal — not merely when the gate stops refusing.
+> The banner's text is preserved in git history:
+> `git log -p --follow -- knowledge-base/engineering/operations/runbooks/git-data-birth.md`.
 
 ---
 
@@ -130,11 +59,11 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 
 | Check | How |
 |---|---|
-| #6982 has shipped and ADR-149's release checklist is complete | The banner above is cleared |
+| #6982 has shipped and ADR-149's release checklist is complete | The release record at the top of this runbook names the rehearsal run and the evidence PR |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
-| **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the banner. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
+| **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
 | The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
