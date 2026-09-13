@@ -24,8 +24,46 @@
 # env (test/host), else `doppler secrets get` (prod host has the prd config).
 # Fails closed if neither yields a secret.
 set -euo pipefail
+# xtrace refusal (#7797): this script binds a live credential (the Doppler token and the
+# INNGEST_MANUAL_TRIGGER_SECRET Bearer) and -x would print it to the webhook's journald stream.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 readonly LOG_TAG="inngest-rearm-reminders"
+
+# --- #7095 re-read for a webhook-executed script -------------------------------------------
+# webhook.service still exports the /etc/default/webhook-deploy DOPPLER_TOKEN, revoked
+# 2026-07-30T11:19:30Z; the fresh credential is re-delivered by terraform apply at
+# /etc/default/soleur-doppler-token (server.tf "WHY THIS FILE EXISTS"). #7095 re-pointed
+# ci-deploy.sh and infra-config-apply.sh; this script kept reading Doppler on the dead token, so
+# every read failed 401 into `2>/dev/null` and the fail-closed branch fired with no reason logged
+# (found live 2026-09-13: op=execute cleared 2.0 for the first time and died at 2.1 capture).
+#
+# PARSED, NOT SOURCED — the file's values are terraform-interpolated and this runs as `deploy`,
+# which holds NOPASSWD sudo on the installers; `. file` would hand `$(...)` to bash. Only
+# DOPPLER_TOKEN is taken, later-wins over the unit's export, and an EMPTY value is skipped so a
+# bare `DOPPLER_TOKEN=` (which the installer's shape check accepts) cannot blank a working one.
+# This copy MUST stay byte-identical to the one in the sibling webhook script —
+# webhook-doppler-token-reread.test.sh pins that, because a helper re-derived per file drifts.
+soleur_refresh_doppler_token() {
+  local f="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}" k v
+  [[ -r "$f" ]] || return 0
+  while IFS='=' read -r k v; do
+    if [[ "$k" == "DOPPLER_TOKEN" && -n "$v" ]]; then export DOPPLER_TOKEN="$v"; fi
+  done < "$f"
+  return 0
+}
+
+# One line to journald (-> Better Stack) saying WHY a Doppler read came back empty, so the next
+# reader does not need SSH to tell a revoked token from a missing binary. The first stderr line
+# only, credential-shaped tokens (dp.xx.…) scrubbed, capped at 160 bytes — never the value.
+soleur_log_doppler_read_failure() {
+  local rc="$1" errfile="$2" f="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}" why state
+  why="$(head -n 1 "$errfile" 2>/dev/null | sed -E 's/dp\.[a-z]{2}\.[A-Za-z0-9._-]+/dp.**.REDACTED/g' | cut -c1-160)"
+  if [[ -r "$f" ]]; then state=present; elif [[ -e "$f" ]]; then state=unreadable; else state=absent; fi
+  logger -t "$LOG_TAG" "doppler read failed rc=${rc} token_file=${state} stderr=${why:-<empty>}" 2>/dev/null || true
+}
 REARM_URL="${SCHEDULE_REMINDER_URL:-http://127.0.0.1:3000/api/internal/schedule-reminder}"
 
 read_secret() {
@@ -36,7 +74,13 @@ read_secret() {
   # INNGEST_REARM_SKIP_DOPPLER lets tests assert the fail-closed path without a
   # doppler binary on PATH.
   if [[ "${INNGEST_REARM_SKIP_DOPPLER:-0}" != "1" ]] && command -v doppler >/dev/null 2>&1; then
-    doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>/dev/null || true
+    soleur_refresh_doppler_token
+    local out="" err rc=0
+    err="$(mktemp)"
+    out="$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>"$err")" || rc=$?
+    if [[ "$rc" -ne 0 || -z "$out" ]]; then soleur_log_doppler_read_failure "$rc" "$err"; fi
+    rm -f "$err"
+    printf '%s' "$out"
   fi
 }
 
@@ -144,7 +188,7 @@ for i in $(seq 0 $((count - 1))); do
   rid=$(echo "$rec" | jq -r '.reminder_id')
   # The route's body is exactly {reminder_id, fire_at, actor, action}.
   body=$(echo "$rec" | jq -c '{reminder_id, fire_at, actor, action}')
-  http_code=$(curl -s --max-time 15 \
+  http_code=$(curl --disable --noproxy '*' -s --max-time 15 \
     -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Content-Type: application/json" \
