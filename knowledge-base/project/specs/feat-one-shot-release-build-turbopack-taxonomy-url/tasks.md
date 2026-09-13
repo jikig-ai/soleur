@@ -27,7 +27,7 @@ Plan: `knowledge-base/project/plans/2026-09-13-fix-release-build-turbopack-taxon
 - [ ] 3.6 AC3: `perl -0777 -ne 'print "$ARGV\n" while /\bnew\s+URL\s*\(\s*["\x27]/g' <hook>` prints nothing
 - [ ] 3.7 Guard mutation matrix: M1, M2, M3, M5 RED; H1, H4 (PATH shim) RED via the `checked` floor; H2 (drop `.mjs` glob), H3 (drop `|new\s+URL`) RED via the `saw_url` floor; P2, P3 PASS — for every row the PR body carries `git diff --stat`, exit code, and the named stdout line (AC8)
 - [ ] 3.8 `bash scripts/test-all.sh scripts` green (AC9)
-- [ ] 3.9 `git diff --name-only origin/main..HEAD` = the two edited files + plan + this tasks.md (+ learning if written) (AC12)
+- [ ] 3.9 `git diff --name-only "$(git merge-base origin/main HEAD)"..HEAD` = the two edited files + plan + this tasks.md + INDEX.md (+ learning if written) (AC12)
 
 ## Phase 4: Ship and verify delivery
 

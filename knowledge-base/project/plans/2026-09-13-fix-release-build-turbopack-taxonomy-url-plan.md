@@ -217,7 +217,7 @@ None — `gh issue list --label code-review --state open --json number,title,bod
 - [ ] AC9 — `bash scripts/test-all.sh scripts` (the scripts shard, which auto-discovers `apps/web-platform/scripts/lib/*.test.sh`) is green with the extended guard included in its suite list.
 - [ ] AC10 — Post-merge: `gh run list --workflow=web-platform-release.yml --commit <merge-sha> --event push --json conclusion --jq '.[0].conclusion'` prints `success`.
 - [ ] AC11 — Post-merge: `SHA=$(curl -sf --max-time 10 https://app.soleur.ai/health | jq -r .build_sha)`; `git fetch -q origin main && git merge-base --is-ancestor <merge-sha> "$SHA"` exits 0 (prod is at the merge commit or a descendant — a later merge deploying first is not a failure) AND `[[ "$SHA" != ef8b987f4* ]]`.
-- [ ] AC12 — `git diff --name-only origin/main..HEAD` lists exactly: the two files in `## Files to Edit`, this plan, `knowledge-base/project/specs/feat-one-shot-release-build-turbopack-taxonomy-url/tasks.md`, and (if `/ship` writes it) a learning file under `knowledge-base/project/learnings/` — nothing else.
+- [ ] AC12 — `git diff --name-only "$(git merge-base origin/main HEAD)"..HEAD` (merge-base, not `origin/main..HEAD` — `main` moves during a session and would pollute the list) lists exactly: the two files in `## Files to Edit`, this plan, `knowledge-base/project/specs/feat-one-shot-release-build-turbopack-taxonomy-url/tasks.md`, the hook-regenerated `knowledge-base/INDEX.md`, and (if `/ship` writes it) a learning file under `knowledge-base/project/learnings/` — nothing else.
 
 ## Guard Contract
 
