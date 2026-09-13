@@ -37,8 +37,9 @@ export interface LiveHeartbeat {
 /**
  * `fed-but-paused` / `absent-live` are the heartbeat classes (a)/(b) below. `logs-alert-paused` /
  * `logs-alert-absent` are the #8097 `logs_alert` arm: a declared `logtail_exploration_alert`
- * that is paused live (the vendor auto-pauses on "complexity issues / too many failures", and the
- * per-merge apply re-arms it, so the untargeted drift plan cannot see the fight) or missing live.
+ * that is paused live or missing live. Why a poller and not the drift plan: see ADR-218 §5 (the
+ * per-merge apply re-arms `paused = false`, and the untargeted plan is already perpetually
+ * non-zero, so a one-line `~ paused` there is not a detector).
  * Every consumer that switches on this union is listed in the scheduled-terraform-drift.yml
  * issue-body decode list (cq-union-widening-grep-three-patterns).
  */
@@ -47,7 +48,12 @@ export type ViolationReason = "fed-but-paused" | "absent-live" | "logs-alert-pau
 export interface Violation {
   resourceName: string;
   liveName: string;
-  /** `paused` for condition (a); `absent` for condition (b); `logs_alert` for the #8097 arm. */
+  /**
+   * `paused` / `absent` are heartbeat live STATES (conditions (a)/(b)); `logs_alert` is a SURFACE
+   * tag for the #8097 arm, whose state is carried by `reason` (`logs-alert-paused|absent`). Two
+   * axes in one field, kept because the marker grammar `live=…` is a wire contract consumed by
+   * scheduled-terraform-drift.yml's decode list and ADR-218.
+   */
   live: "paused" | "absent" | "logs_alert";
   reason: ViolationReason;
   /**
@@ -68,7 +74,8 @@ export interface DiscoveredLogsAlert {
 export interface LiveLogsAlert {
   name: string;
   paused: boolean;
-  pausedReason: string | null;
+  /** Vendor free text; `""` when absent/null (coalesced once, at parse). */
+  pausedReason: string;
 }
 
 /**
@@ -96,11 +103,6 @@ export function stripComments(text: string): string {
     .join("\n");
 }
 
-/**
- * Extract every `betteruptime_heartbeat` block (brace-matched, like the parity parser) with its
- * live name, source-declared paused, and count-gate presence. Throws on an unbalanced block so a
- * malformed source can never silently drop a heartbeat from the reconcile.
- */
 /**
  * Brace-matched extraction of every `resource "<type>" "<name>" {…}` block in comment-stripped
  * HCL. Throws on an unbalanced block so a malformed source can never silently drop a resource.
@@ -132,6 +134,11 @@ function resourceBlocks(stripped: string, type: string): { resourceName: string;
   return out;
 }
 
+/**
+ * Extract every `betteruptime_heartbeat` block (brace-matched, like the parity parser) with its
+ * live name, source-declared paused, and count-gate presence. Throws on an unbalanced block so a
+ * malformed source can never silently drop a heartbeat from the reconcile.
+ */
 export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
   const stripped = stripComments(tfText);
   const out: DiscoveredHeartbeat[] = [];
@@ -189,7 +196,7 @@ export function reconcileLogsAlerts(
         liveName: d.liveName,
         live: "logs_alert",
         reason: "logs-alert-paused",
-        detail: l.pausedReason ?? "",
+        detail: l.pausedReason,
       });
     }
   }

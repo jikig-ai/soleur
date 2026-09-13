@@ -577,7 +577,7 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     const v = reconcileLogsAlerts(
       [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
       [
-        { name: "soleur-monitor-send-failed-prd", paused: false, pausedReason: null },
+        { name: "soleur-monitor-send-failed-prd", paused: false, pausedReason: "" },
         { name: "Output utilization high", paused: true, pausedReason: "Manually paused" },
       ],
     );
@@ -641,7 +641,7 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
     });
   });
 
-  it("present + unpaused → code 0 and the OK marker reports logs_alerts=1", async () => {
+  it("present + unpaused → code 0 and a second OK marker for the logs_alert surface", async () => {
     await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
       const result = await runReconcile(
         dir,
@@ -653,20 +653,71 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
         manifest,
       );
       expect(result.code).toBe(0);
-      expect(result.markers.join("\n")).toMatch(/SOLEUR_HEARTBEAT_RECONCILE_OK .*logs_alerts=1/);
+      expect(result.markers.join("\n")).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=logs_alert declared=1 live=1");
     });
   });
 
   it("no logtail_exploration_alert declared → the alerts endpoint is never read (no new network on legacy roots)", async () => {
     await withInfra({ "hb.tf": HB_TF }, async (dir) => {
       const seen: string[] = [];
+      const base = routed([]);
+      // Record EVERY url — a recorder that only sees unrouted hosts cannot see the alerts read.
+      const fetchImpl = async (url: string) => {
+        seen.push(url);
+        return base(url);
+      };
+      const result = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(0);
+      expect(seen.filter((u) => u.includes("/api/v2/alerts"))).toEqual([]);
+      expect(seen).toEqual(["https://uptime.betterstack.com/api/v2/heartbeats"]);
+    });
+  });
+
+  it("heartbeats endpoint unreachable + alert paused → the arms are independent: UNREACHABLE(heartbeats) + MISMATCH(logs_alert), code 2", async () => {
+    const fetchImpl = async (url: string) => {
+      if (url === "https://telemetry.betterstack.com/api/v2/alerts") {
+        return page([{ attributes: { name: "soleur-monitor-send-failed-prd", paused: true, paused_reason: "too many failures" } }]);
+      }
+      return new Response("upstream", { status: 503 });
+    };
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(2);
+      const out = result.markers.join("\n");
+      expect(out).toContain("SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=heartbeats");
+      expect(out).toContain("live=logs_alert reason=logs-alert-paused");
+    });
+  });
+
+  it("heartbeat MISMATCH + alerts auth failure → ERROR wins: code 1 with both markers present", async () => {
+    const fetchImpl = async (url: string) => {
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", true) }]);
+      return new Response("forbidden", { status: 403 });
+    };
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(1);
+      const out = result.markers.join("\n");
+      expect(out).toContain("reason=fed-but-paused");
+      expect(out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=logs_alert reason=auth");
+    });
+  });
+
+  it("a paused_reason carrying U+2028 / control chars / quotes cannot break the marker line", async () => {
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
       const result = await runReconcile(
         dir,
-        { token: "t", fetchImpl: routed([], (u) => seen.push(u)), sleepImpl: noSleep },
+        {
+          token: "t",
+          fetchImpl: routed([{ attributes: { name: "soleur-monitor-send-failed-prd", paused: true, paused_reason: "too\u2028many\x7f\"failures`" } }]),
+          sleepImpl: noSleep,
+        },
         manifest,
       );
-      expect(result.code).toBe(0);
-      expect(seen).toEqual([]);
+      expect(result.code).toBe(2);
+      const line = result.markers.find((m) => m.includes("live=logs_alert"))!;
+      expect(line).toMatch(/detail="too many failures "$/);
+      expect(line).not.toMatch(/[\u2028\x7f`]/);
     });
   });
 
@@ -691,7 +742,8 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
       if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
       if (url === "https://telemetry.betterstack.com/api/v2/alerts") {
         return new Response(
-          JSON.stringify({ data: [], pagination: { next: "https://telemetry.betterstack.com.evil.example/api/v2/alerts?page=2" } }),
+          // A host sharing the vendor SUFFIX: `endsWith("betterstack.com")` accepts it; only equality refuses.
+          JSON.stringify({ data: [], pagination: { next: "https://evil-telemetry.betterstack.com/api/v2/alerts?page=2" } }),
           { status: 200 },
         );
       }

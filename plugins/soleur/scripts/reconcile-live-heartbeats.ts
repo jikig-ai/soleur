@@ -23,9 +23,14 @@
 // (same token: a global token serves both the Uptime and Telemetry APIs) whenever the infra root
 // declares a `logtail_exploration_alert`, and reports one absent or paused live as
 //   SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=<n> live=logs_alert reason=logs-alert-paused|logs-alert-absent detail="<paused_reason>"
-// Combine rule: ERROR(1) > MISMATCH(2) > OK(0) across both arms; an unreachable alerts endpoint
-// prints SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=logs_alert and never a MISMATCH. The
-// workflow's issue path keys on rc == 2, so the arm MUST contribute rc=2 with its MISMATCH line.
+// Combine rule: ERROR(1) > MISMATCH(2) > OK(0) across both arms, and the arms are INDEPENDENT —
+// the alerts read runs whether or not the heartbeats read answered (different hosts: uptime. vs
+// telemetry.). An unreachable alerts endpoint prints SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE
+// surface=logs_alert and never a MISMATCH. The workflow's issue path keys on rc == 2, so the arm
+// MUST contribute rc=2 with its MISMATCH line. Consequence of the precedence: an arm ERROR (a
+// 401/403 on the Telemetry API) pre-empts the heartbeat MISMATCH issue path for that run — the
+// ops email still carries every MISMATCH line, but the deduped issue is not touched until the
+// error clears.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -70,13 +75,11 @@ function isAllowedLogsAlertsUrl(u: string): boolean {
   return isAllowedUrlFor(LOGS_ALERTS_HOST, u);
 }
 
-export type FetchResult =
-  | { ok: true; live: LiveHeartbeat[] }
+type PagedResult<T> =
+  | { ok: true; live: T[] }
   | { ok: false; kind: "unreachable" | "auth" | "error"; detail?: string };
-
-export type LogsAlertsFetchResult =
-  | { ok: true; live: LiveLogsAlert[] }
-  | { ok: false; kind: "unreachable" | "auth" | "error"; detail?: string };
+export type FetchResult = PagedResult<LiveHeartbeat>;
+export type LogsAlertsFetchResult = PagedResult<LiveLogsAlert>;
 
 export interface FetchOptions {
   token: string;
@@ -112,22 +115,28 @@ export async function fetchLiveHeartbeats(opts: FetchOptions): Promise<FetchResu
 export async function fetchLiveLogsAlerts(opts: FetchOptions): Promise<LogsAlertsFetchResult> {
   return fetchPaged(LOGS_ALERTS_URL, isAllowedLogsAlertsUrl, opts, (attrs) => {
     if (attrs && typeof attrs.name === "string") {
-      const pr = (attrs as { paused_reason?: unknown }).paused_reason;
-      return { name: attrs.name, paused: attrs.paused === true, pausedReason: typeof pr === "string" ? pr : null };
+      // Coalesced ONCE, here: null/absent/non-string → "" so every consumer reads a plain string.
+      return { name: attrs.name, paused: attrs.paused === true, pausedReason: typeof attrs.paused_reason === "string" ? attrs.paused_reason : "" };
     }
     return null;
   });
 }
 
-type PagedResult<T> =
-  | { ok: true; live: T[] }
-  | { ok: false; kind: "unreachable" | "auth" | "error"; detail?: string };
-
+/**
+ * Fetch every page of a Better Stack list endpoint (following `pagination.next`) with
+ * depth-bounded retry. The retry/auth/pagination contract documented on the heartbeat wrapper's
+ * header lives here:
+ * - transient (5xx / 429 / thrown network/abort error): retry up to `maxAttempts` with exponential
+ *   backoff (1s/2s/4s); exhausted -> `unreachable` (the caller must NOT page).
+ * - auth (401/403): NOT transient -> `auth` immediately, no retry.
+ * - other non-2xx, an HTTP 3xx (never followed), or a malformed 200 body: `error`.
+ * `pagination.next` is host-pinned by `isAllowedUrl` before the token is sent to it.
+ */
 async function fetchPaged<T>(
   startUrl: string,
   isAllowedUrl: (u: string) => boolean,
   opts: FetchOptions,
-  mapAttrs: (attrs: { name?: unknown; paused?: unknown } | undefined) => T | null,
+  mapAttrs: (attrs: Record<string, unknown> | undefined) => T | null,
 ): Promise<PagedResult<T>> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const sleepImpl = opts.sleepImpl ?? defaultSleep;
@@ -197,7 +206,7 @@ async function fetchPaged<T>(
         return { ok: false, kind: "error", detail: "response has no `data` array" };
       }
       for (const row of data) {
-        const attrs = (row as { attributes?: { name?: unknown; paused?: unknown } })?.attributes;
+        const attrs = (row as { attributes?: Record<string, unknown> })?.attributes;
         const mapped = mapAttrs(attrs);
         if (mapped !== null) live.push(mapped);
       }
@@ -227,28 +236,23 @@ async function fetchPaged<T>(
   return { ok: true, live };
 }
 
-/** Read every `.tf` file in an infra directory and parse all heartbeat blocks. */
-export function discoverHeartbeatsFromInfra(infraDir: string): DiscoveredHeartbeat[] {
-  const discovered: DiscoveredHeartbeat[] = [];
+/** Read every `.tf` file in an infra directory whose text mentions `needle`, and parse it. */
+function discoverFromInfra<T>(infraDir: string, needle: string, parse: (tf: string) => T[]): T[] {
+  const discovered: T[] = [];
   for (const file of readdirSync(infraDir)) {
     if (!file.endsWith(".tf")) continue;
     const text = readFileSync(join(infraDir, file), "utf8");
-    if (!text.includes("betteruptime_heartbeat")) continue;
-    discovered.push(...parseHeartbeatBlocks(text));
+    if (!text.includes(needle)) continue;
+    discovered.push(...parse(text));
   }
   return discovered;
 }
-
-/** (#8097) Read every `.tf` file in an infra directory and parse all `logtail_exploration_alert` blocks. */
+export function discoverHeartbeatsFromInfra(infraDir: string): DiscoveredHeartbeat[] {
+  return discoverFromInfra(infraDir, "betteruptime_heartbeat", parseHeartbeatBlocks);
+}
+/** (#8097) Every `logtail_exploration_alert` block in the root — the `logs_alert` arm's expected set. */
 export function discoverLogsAlertsFromInfra(infraDir: string): DiscoveredLogsAlert[] {
-  const discovered: DiscoveredLogsAlert[] = [];
-  for (const file of readdirSync(infraDir)) {
-    if (!file.endsWith(".tf")) continue;
-    const text = readFileSync(join(infraDir, file), "utf8");
-    if (!text.includes("logtail_exploration_alert")) continue;
-    discovered.push(...parseLogsAlertBlocks(text));
-  }
-  return discovered;
+  return discoverFromInfra(infraDir, "logtail_exploration_alert", parseLogsAlertBlocks);
 }
 
 /**
@@ -256,7 +260,10 @@ export function discoverLogsAlertsFromInfra(infraDir: string): DiscoveredLogsAle
  * backticks (so a heartbeat name can never break out of the ``` code fence in the auto-filed issue
  * body — defense-in-depth; the names are our own `.tf` `name =` literals, not raw API data).
  */
-const oneLine = (s: string) => s.replace(/[\r\n`]+/g, " ");
+// The logs_alert arm feeds vendor free text (`paused_reason`) through here, so the class covers
+// every line/paragraph separator and control character, not only CR/LF (escapes only —
+// cq-regex-unicode-separators-escape-only).
+const oneLine = (s: string) => s.replace(/[\r\n\u2028\u2029\x00-\x1f\x7f`]+/g, " ");
 
 interface RunResult {
   code: number;
@@ -275,31 +282,35 @@ export async function runReconcile(
     };
   }
 
+  // ── Arm 1: heartbeats (the original #6549 contract, verdict computed but not yet returned) ──
   const discovered = discoverHeartbeatsFromInfra(infraDir);
   const result = await fetchLiveHeartbeats(opts);
-
+  let hbCode = 0;
+  let hbMarkers: string[];
   if (!result.ok) {
     if (result.kind === "unreachable") {
-      return {
-        code: 0,
-        markers: [oneLine(`SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE detail=${result.detail ?? "n/a"}`)],
-      };
+      hbMarkers = [oneLine(`SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=heartbeats detail=${result.detail ?? "n/a"}`)];
+    } else {
+      // auth or malformed -> hard error (exit 1)
+      hbCode = 1;
+      hbMarkers = [oneLine(`SOLEUR_HEARTBEAT_RECONCILE_ERROR reason=${result.kind} detail=${result.detail ?? "n/a"}`)];
     }
-    // auth or malformed -> hard error (exit 1)
-    return {
-      code: 1,
-      markers: [oneLine(`SOLEUR_HEARTBEAT_RECONCILE_ERROR reason=${result.kind} detail=${result.detail ?? "n/a"}`)],
-    };
+  } else {
+    const violations = reconcileHeartbeats(manifest, discovered, result.live);
+    hbCode = violations.length === 0 ? 0 : 2;
+    hbMarkers =
+      violations.length === 0
+        ? [`SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats checked=${discovered.length} live=${result.live.length}`]
+        : violations.map((v) =>
+            oneLine(`SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=${v.liveName} live=${v.live} reason=${v.reason}`),
+          );
   }
 
-  const violations = reconcileHeartbeats(manifest, discovered, result.live);
-
-  // (#8097) The logs_alert arm — only when the root declares one, so a root without Logs alerts
-  // makes no second network read. Additive: it never downgrades a heartbeat verdict.
+  // ── Arm 2 (#8097): declared Logs alerts — INDEPENDENT of arm 1's read (different host), and
+  // only when the root declares one, so a root without Logs alerts makes no second network read.
   const declaredAlerts = discoverLogsAlertsFromInfra(infraDir);
   const armMarkers: string[] = [];
   let armCode = 0;
-  let liveAlerts = 0;
   if (declaredAlerts.length > 0) {
     const alerts = await fetchLiveLogsAlerts(opts);
     if (!alerts.ok) {
@@ -312,9 +323,14 @@ export async function runReconcile(
         );
       }
     } else {
-      liveAlerts = alerts.live.length;
-      for (const v of reconcileLogsAlerts(declaredAlerts, alerts.live)) {
-        armCode = Math.max(armCode, 2);
+      const violations = reconcileLogsAlerts(declaredAlerts, alerts.live);
+      if (violations.length === 0) {
+        armMarkers.push(
+          `SOLEUR_HEARTBEAT_RECONCILE_OK surface=logs_alert declared=${declaredAlerts.length} live=${alerts.live.length}`,
+        );
+      }
+      for (const v of violations) {
+        armCode = 2;
         // Free text ONLY inside the quoted detail; `"` stripped so the quote cannot be closed early.
         const detail = (v.detail ?? "").replace(/"/g, "");
         armMarkers.push(
@@ -324,17 +340,8 @@ export async function runReconcile(
     }
   }
 
-  const hbMarkers =
-    violations.length === 0
-      ? [
-          `SOLEUR_HEARTBEAT_RECONCILE_OK checked=${discovered.length} live=${result.live.length} logs_alerts=${liveAlerts}`,
-        ]
-      : violations.map((v) =>
-          oneLine(`SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=${v.liveName} live=${v.live} reason=${v.reason}`),
-        );
-  const hbCode = violations.length === 0 ? 0 : 2;
   // ERROR(1) > MISMATCH(2) > OK(0) across both arms.
-  const code = hbCode === 1 || armCode === 1 ? 1 : hbCode === 2 || armCode === 2 ? 2 : 0;
+  const code = hbCode === 1 || armCode === 1 ? 1 : Math.max(hbCode, armCode);
   return { code, markers: [...hbMarkers, ...armMarkers] };
 }
 
