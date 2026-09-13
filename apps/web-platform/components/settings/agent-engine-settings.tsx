@@ -7,7 +7,7 @@ type Engine = { id: string; version: string; transport: string; authModes: strin
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);
-  const [selected, setSelected] = useState(DEFAULT_AGENT_ENGINE_ID);
+  const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
 
   useEffect(() => {
