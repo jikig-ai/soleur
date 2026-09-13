@@ -11,11 +11,11 @@ pr_reference: "#8083"
 
 ## X/Twitter Thread
 
-Soleur now runs on Devin CLI — the fourth supported harness alongside Claude Code, Grok Build, and Codex. Type /soleur:go and the matching workflow runs in your session, same pipeline.
+Soleur now runs on Devin CLI — the fourth supported harness alongside Claude Code, Grok Build, and Codex. /soleur:go classifies your request and runs the matching skill in-session.
 
-2/ Install is one command: devin plugins install jikig-ai/soleur#plugins/soleur -y (after devin auth login). /soleur:go, /soleur:sync, and /soleur:help work as native Devin slash commands.
+2/ One command to install: devin plugins install jikig-ai/soleur#plugins/soleur -y (needs devin auth login first). /soleur:go, /soleur:sync, /soleur:help run as native Devin slash commands.
 
-3/ Devin gets the same scaffolding parity as Codex and Grok: a native plugin manifest, session-start hooks, and the full skill set. Update anytime with devin plugins update soleur.
+3/ Devin gets a native plugin manifest, session-start hooks, and the full skill set — the same scaffolding depth as Codex and Grok. Update anytime with devin plugins update soleur.
 
 ## Bluesky
 
