@@ -2011,6 +2011,12 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8076: fixture harness for the run-report-exit first-contact follow-through. Registered
+  # explicitly (orphan-suite class above). Its load-bearing arm is ROW SHAPE: the live Better
+  # Stack row nests the pino payload under `.message` of the decoded `raw`, and the probe's
+  # first draft read the top level, so AC18b could never FAIL (#8074 review). Every fixture is
+  # the live shape; the control and the graded absence go through ONE decoder.
+  run_suite "scripts/run-report-exit-first-contact-8076" bash scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
   # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
   # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
   # ship into the same Better Stack source from the same app container, so a substring-matching
