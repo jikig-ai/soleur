@@ -10,12 +10,19 @@
 > - **Rehearsal:** `git-data-rung2-rehearsal.yml` run
 >   [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), dispatched
 >   from `main` `15fd63aff` with `dry_run=false`. Verdict `PASS` — `stage:boot_complete`
->   reached, no `level:fatal` on Better Stack, source-liveness anchor answered; teardown
->   verified against the Hetzner API. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (a run-pinned
+>   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes`, no
+>   `level:fatal` on Better Stack, the Better Stack source-liveness anchor answered (the Sentry
+>   one did not — next bullet); teardown verified against
+>   the Hetzner API. Read the booleans as the capture script does: they are literals
+>   `git-data-bootstrap.sh` emits after its own `mountpoint`/`test` checks pass, so the PASS
+>   attests that the final stage was REACHED and nothing reported a fatal — not four
+>   independently measured invariants. Each artifact is recorded in the evidence file with
+>   the query that retrieved it. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (a run-pinned
 >   liveness window on a quiet project — recorded on #8010, which is where that key becomes
 >   load-bearing; the gate ignores it today).
 > - **Evidence:** `apps/web-platform/infra/git-data-rung2-boot-evidence.env`, committed ALONE
->   in PR #8126 (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
+>   in PR #8126 — merged to `main` BEFORE this record landed, because ADR-149's #8043
+>   disposition orders "evidence PR, then the banner PR, then the birth" (Guard 4 of `git_data_rung2_rehearsal_gate` reads the evidence's own commit and
 >   HOLDs on a co-edit with any of the 13 hash-bound inputs). Template sha256
 >   `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
 > - **Gate:** `git_data_rung2_rehearsal_gate` reads `RELEASED`, provenance `PASS`. It
@@ -31,10 +38,12 @@
 >
 > **What clearing the banner does NOT change.** The sole remaining control on the dispatch is
 > the `web-platform-infra-apply` environment approval — measured `prevent_self_review: false`
-> with a single reviewer, so the dispatcher can approve their own deployment (see *"Three
-> things a green boot does NOT mean"* below; that section is unchanged). ADR-149 item 8 is
-> the banner clear itself; the item's history (#6982 → #7025, moved twice by bundling) is why
-> this edit touches one file and nothing else.
+> with a single reviewer AND `can_admins_bypass: true`, so the dispatcher can approve their
+> own deployment, and an org admin can skip the approval outright (see *"Three things a green
+> boot does NOT mean"* below). ADR-149 item 8 is
+> the banner clear itself; the item's history (deferred out of #6982 into #7025, then held open
+> again when #8052 voided the first evidence) is why this edit touches the runbook, the ADR-149
+> disposition row that records the clear, and nothing else.
 >
 > The banner's text is preserved in git history:
 > `git log -p --follow -- knowledge-base/engineering/operations/runbooks/git-data-birth.md`.
@@ -59,7 +68,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 
 | Check | How |
 |---|---|
-| #6982 has shipped and ADR-149's release checklist is complete | The release record at the top of this runbook names the rehearsal run and the evidence PR |
+| #6982 has shipped and ADR-149's release checklist is complete | ADR-149's disposition table records item 8 DONE, and the release record at the top of this runbook names the rehearsal run and the evidence PR |
 | You are on `main` | The environment pins `main`; a branch dispatch is refused |
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
@@ -93,12 +102,14 @@ approve it**. Two things to know about that reading: it comes from the live API,
 `prevent_self_review` is declared **nowhere in this repository's Terraform** — so `false` is
 the provider default rather than a setting anyone chose. Every environment here that has
 required reviewers reads the same way, with the same single reviewer: **no approval gate in
-this repo is two-party.** Re-measure rather than trusting this line:
+this repo is two-party.** The same read (2026-09-13) shows `can_admins_bypass: true`, and the
+sole reviewer is an org admin — so for that person the approval is one click, optionally.
+Re-measure rather than trusting this line:
 
 ```bash
 gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
-  --jq '.protection_rules[] | select(.type=="required_reviewers")
-        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}'
+  --jq '{can_admins_bypass, rules: [.protection_rules[] | select(.type=="required_reviewers")
+        | {prevent_self_review, reviewers: [.reviewers[].reviewer.login]}]}'
 ```
 
 One human clicking twice is the real control. Treat it as **one** control, not two.
@@ -113,10 +124,25 @@ fired", never as "four invariants were measured".
 Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
 emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
 `169.254.169.254`), anchored on the metadata address rather than the table name so a table
-whose rule was flushed reads `no`. It read `yes`. It is **not** in
-`git-data-rung2-boot-evidence.env` — that file records the queries, and the capture projects
-only the four hardcoded booleans — so it was read directly from Better Stack and recorded in
-the evidence PR's body.
+whose rule was flushed reads `no`. It is **not** in `git-data-rung2-boot-evidence.env` —
+that file records the queries, and the capture projects only the four hardcoded booleans —
+so it has to be read from Better Stack separately. For the rehearsal that cleared the banner
+(run 34768256297, host `soleur-git-data-rehearsal-34768256297`) it read `yes` on the
+`boot_complete` row at `2026-09-13 16:27:17 UTC`, via:
+
+```bash
+export BS_TABLE=t520508_soleur_git_data_prd_logs
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  "SELECT dt, JSONExtractString(raw,'stage') AS stage,
+          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+   WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data-rehearsal-34768256297'
+   ORDER BY dt ASC FORMAT JSONEachRow"
+```
+
+(An earlier rehearsal's reading, run 33888071954, was recorded in PR #8002's body; that
+attestation was voided and deleted by #8052, so it is not the one this runbook rests on.)
 
 Finally: the authorization-map interlock is a **static** assertion over Terraform source. It
 proves what the production root *renders*, not what a live host *honours*. No live host is
@@ -401,14 +427,18 @@ Art. 30 register carries that distinction explicitly.
 and `user_data` is **ForceNew**. Both of these are inputs to it:
 
 - `apps/web-platform/infra/cloud-init-git-data.yml`
-- `apps/web-platform/infra/git-data-bootstrap.sh` (and the four other scripts, now injected
-  as plain text rather than base64 — #6982)
+- the `file()`-bound payloads `modules/git-data-userdata/main.tf` injects as plain text
+  (`git-data-bootstrap.sh` and its siblings — #6982; `git_data_rung2_bound_files` in
+  `tests/scripts/lib/git-data-birth-readiness-gate.sh` enumerates the current set, 13 inputs
+  with the template and the module's `.tf` files)
 
 **Every byte counts, comments included.** Post-birth, a one-word comment fix in either file
 costs a full `git-data-host-replace`: a destroy-then-create of the host holding every
 connected user's source code, with both volumes and the passphrase preserved *by omission*.
-Pre-birth the same edit costs nothing. The omission is deliberate — it preserves the clean
-replace-to-reprovision path — so this is a residual to respect, not a bug to fix.
+Pre-birth the same edit costs a full re-rehearsal instead — the evidence binds these bytes,
+so any edit re-holds the birth until another paid cpx22 boots and a fresh evidence PR lands.
+The omission is deliberate — it preserves the clean replace-to-reprovision path — so this is a
+residual to respect, not a bug to fix.
 
 There is also a hard **32,768-byte** cap on the rendered `user_data`, gated in CI by
 `apps/web-platform/infra/git-data-userdata-budget.sh`. Measure with Terraform's own

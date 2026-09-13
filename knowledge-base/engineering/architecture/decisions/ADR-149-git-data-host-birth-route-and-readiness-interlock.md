@@ -4,7 +4,7 @@
 - **Date:** 2026-07-27
 - **Issue:** #6977
 - **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27); #7025 (DC-6 — the
-  rung-2 rehearsal route, shipped unfired, 2026-07-29)
+  rung-2 rehearsal route, shipped unfired, 2026-07-29); #8128 (item 8 discharged — 2026-09-13)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -222,6 +222,19 @@ repository. An earlier draft said "impossible"; that overstated it.
     the veto costs one re-dispatch and produces a red run with no Approve button — a legible
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
+
+### Disposition — #8128 (2026-09-13): item 8 discharged — the banner is cleared
+
+| Item | Status |
+|---|---|
+| 8 — clear the banner | **DONE** by PR #8128, on the sequence #8043 prescribed and nothing shorter: a fresh rehearsal dispatched from `main` `15fd63aff` (run [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), `dry_run=false`, environment-approved, verdict PASS — `stage:boot_complete` with `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes nft_metadata_drop=yes`, no `level:fatal`, teardown verified against the Hetzner API); its evidence committed ALONE in PR #8126 (Guard 4 provenance PASS, template sha256 `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`, equal to `main`); then this banner PR. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (run-pinned liveness window on a quiet project; the gate ignores that key — #8010). The runbook now opens with a release record in the banner's place. |
+
+**Checklist effect.** Every item is now DONE, DISCHARGED, or recorded NOT SATISFIABLE AS
+WRITTEN (item 7). Nothing in this change dispatches a birth: the only control left on
+`apply_target=git-data-host-create` is the `web-platform-infra-apply` environment approval,
+measured `prevent_self_review: false`, one reviewer, `can_admins_bypass: true` — one human, not
+two parties — plus the three static interlocks, which self-invalidate the moment a bound input
+moves.
 
 ### Disposition — #8043 (2026-09-11): six hash-bound hardening items, and what they cost the evidence
 
