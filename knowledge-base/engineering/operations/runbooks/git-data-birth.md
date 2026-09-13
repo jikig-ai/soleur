@@ -201,29 +201,37 @@ a deliberate actor with repository write. What compensates is that the same gate
 the live production root on every pull request, so a collapse cannot reach `main` without
 first reddening the required `test` check.
 
-### An undocumented invariant that Article 17 correctness currently rests on
+### The invariant Article 17 correctness rests on — asserted from PR #8052 (#8043 F8)
 
-**`/mnt/git-data` must stay root-owned.** This is not a preference; it is the only thing
-making erasure fail closed today, and nothing asserts it.
+**Erasure and provision refuse to act unless the store is mounted, and never create it.** Until
+2026-09-11 this was an *accident*, and the accident is worth keeping on record because it is
+what the assertion replaced.
 
 `git-data-remove.sh` derives `REPO_ROOT=/mnt/git-data/repositories`, then guards with
-`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified: rc=0, and it
-prints the path), so on a host where the volume failed to mount, both guards pass. The script
-then runs `mkdir -p "$REPO_ROOT"`, finds no repo, prints `not present (no-op)` and **exits 0** —
-reporting Article 17 erasure success over a store nobody looked at.
+`readlink -f`. **`readlink -f` succeeds on a non-existent path whose parents all exist** (verified:
+rc=0, and it prints the path), so on a host where the volume failed to mount, both path guards
+passed. The script then created the repo root, found no repo, printed `not present (no-op)`
+and **exited 0** — reporting Article 17 erasure success over a store nobody looked at.
+`git-data-provision.sh` had the severe half: it ran `git init --bare` onto the root disk, where a
+later successful mount silently hides the user's repository.
 
-What actually prevents that today: the forced command runs as `git`, cloud-init creates
-`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns `$REPO_ROOT` itself and the
-`repositories` symlink, but **never the mountpoint `/mnt/git-data`**. So the `mkdir -p` takes EACCES and `set -euo pipefail`
-(`git-data-remove.sh` line 28) aborts before the false success.
+What prevented it was that the forced command runs as `git`, cloud-init creates `/mnt/git-data`
+as root, and the bootstrap never chowned that mountpoint — so the create took EACCES and
+`set -euo pipefail` aborted before the false success. One unrelated `chown` and erasure would
+have begun silently succeeding over nothing.
 
-That is an **accidental** invariant holding up a statutory guarantee. The moment anyone chowns
-that mountpoint to `git` for an unrelated permissions fix, erasure begins silently succeeding
-over nothing, and the failure is invisible — a no-op and a real erasure produce the same exit
-code and the same message. The assertion that would make it deliberate is a `mountpoint -q`
-check, which cannot land here: `git-data-remove.sh` is one of the payloads bound by
-`RUNG2_TEMPLATE_SHA256`, so editing it voids the rung-2 evidence and buys a fresh paid
-rehearsal. It is tracked with the other hash-bound hardening items.
+**What asserts it now.** Both wrappers assert a second, independently-defaulted seam
+`GIT_DATA_MOUNT_ROOT` (default `/mnt/git-data`) is a mount point — on the mount ROOT, not on
+`REPO_ROOT`, because `mountpoint -q` on the `repositories` subdirectory returns 1 on a healthy
+host and would refuse every erasure — and refuse with a named non-zero exit otherwise;
+`mountpoint(1)` absent from PATH is itself a refusal. The create of the repo root is deleted from
+both. Guard 1 in `git-data-remove.test.sh` / `git-data-provision.test.sh` pins it (mounted store
+still erases; unmounted → refusal with the root still absent; instrument absent → fail closed).
+
+**What this does NOT close, stated so it is not read as closed:** `account-delete.ts` catches the
+refusal, mirrors it to Sentry, and continues the cascade — the user is still told the account
+was deleted. That app-layer boundary is a follow-up deadlined to the `GIT_DATA_STORE_ENABLED`
+cutover (#8043 FR17), not this host's job.
 
 ## Dispatch
 
@@ -403,7 +411,7 @@ boot signal and FAILS the job if it does not arrive, so a green run is now meani
 verify independently if that step warned that its credentials were missing.
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
-(`git-shell` + three `command=`/`no-pty` forced commands, deny-all public ingress).
+(three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
 
 ```bash
 # 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).

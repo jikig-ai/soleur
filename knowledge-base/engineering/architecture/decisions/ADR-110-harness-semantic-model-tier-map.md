@@ -1,7 +1,8 @@
 # ADR-110: Harness semantic model-tier map (Claude Code + Grok Build)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-10
+- **Accepted:** 2026-09-11 (#8064)
 - **Issue:** [#6316](https://github.com/jikig-ai/soleur/issues/6316)
 - **Relates to:** [ADR-053](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md) (workflow pin semantics), [ADR-089](ADR-089-freeze-lock-shared-state-substrate.md) (cross-harness shared substrate), [ADR-083](ADR-083-scoped-strong-model-consult-at-decision-gates.md) (strong-tier consult), #6314 (Grok Build project config)
 
@@ -23,31 +24,37 @@ ADR-053 deliberately chose harness aliases over concrete IDs for workflow pins (
 
 2. **One resolver module** at `plugins/soleur/lib/harness-model-map.ts` maps semantic tier → harness spawn value. Harness detection is centralized (env markers + config presence); skills and workflows call the resolver — never branch on vendor inline.
 
-3. **Workflow pins migrate** from `'sonnet'`/`'haiku'` to `'standard'`/`'cheap'` at the 12 ADR-053 allowlisted call sites. Resolution happens in the workflow `agent()` wrapper immediately before spawn (single choke point per workflow runtime).
+3. **Workflow pins migrate** from `'sonnet'`/`'haiku'` to `'standard'`/`'cheap'` at the 12 ADR-053 allowlisted call sites. Workflow runtime has **no import/filesystem**, so resolution is an inlined copy of `TIER_MAPS` behind `<!-- harness-model-map:start/end -->` plus an IIFE that rebinds host `agent` (`opts.model = resolveWorkflowModel(opts.model)`). Call-site literals stay quoted. `test/harness-model-map.test.ts` asserts the seven fences are byte-identical and match `TIER_MAPS`.
 
-4. **Research agent frontmatter** migrates from `model: haiku` to `model: cheap` once the harness accepts semantic tiers in Task/Agent spawn; until then, spawning skills pass `cheap` explicitly via the resolver at the call site.
+4. **Research agent frontmatter** migrates from `model: haiku` to `model: cheap` once the harness accepts semantic tiers in Task/Agent spawn. Until then, leave the five research agents on `model: haiku` — do **not** pass `cheap` at those call sites.
 
 5. **`workflow-model-pins.test.ts` allowlist** tracks semantic tiers. A parity test asserts every tier resolves to a non-empty harness value for both `claude` and `grok` fixture maps.
 
-6. **Tier tables are versioned config**, not memory. Initial Grok mappings are placeholders validated against `grok inspect` / official xAI docs at implementation time. `model-launch-review` (or a sibling audit row) gains a Grok tier-table freshness check on each xAI model release.
+6. **Tier tables are versioned config**, not memory. Live SKUs sit in `plugins/soleur/lib/harness-model-map.ts` (`TIER_MAPS`). `model-launch-review` (or a sibling audit row) gains a Grok tier-table freshness check on each xAI model release.
 
-### Initial tier map (illustrative — implementation PR validates against live docs)
+### Fixture tier map (confirmed 2026-09-11 — docs.x.ai + `grok models` CLI 1.0.29)
 
 | Semantic | ADR-053 / policy role | Claude Code | Grok Build |
 |---|---|---|---|
-| `cheap` | Mechanical fan-out (workflow pins) | `haiku` | fast/cheap Grok model (TBD) |
-| `standard` | Classify, parse, cluster (workflow pins) | `sonnet` | `grok-build` or successor (TBD) |
-| `strong` | Never-downgrade judgment (review/security/legal/C-suite agents; `agent-native-audit` scoring upgrade) | `opus` | top reasoning model (TBD) |
-| `advisor` | ADR-083 scoped consult **only** — `plan` Step 4.5 + `ship` Phase 5.5; curated payload, not transcript | `fable` (fallback `opus`) | advisor-tier model (TBD; fallback to `strong` map) |
+| `cheap` | Mechanical fan-out (workflow pins) | `haiku` | `grok-4.5` (only non-default CLI spawn slug) |
+| `standard` | Classify, parse, cluster (workflow pins) | `sonnet` | `grok-4.6` |
+| `strong` | Never-downgrade judgment (review/security/legal/C-suite agents; `agent-native-audit` scoring upgrade) | `opus` | `grok-4.6` |
+| `advisor` | ADR-083 scoped consult **only** — `plan` Step 4.5 + `ship` Phase 5.5; curated payload, not transcript | `fable` (fallback `opus`) | `grok-4.6` (fallback `grok-4.6`) |
 | `inherit` | Judgment steps + operator session agency | session model | session model |
+
+Do **not** pin `grok-build-0.1` — it is an xAI API cheap SKU, not a Grok Build CLI spawn slug as of 1.0.29.
 
 Workflow pins (`workflow-model-pins.test.ts`) migrate only `cheap` / `standard` — never `strong`, `advisor`, or `inherit` (existing invariant). `advisor` resolves through the resolver at the two SKILL.md gate spawns; `strong` applies where agents or crons explicitly upgrade to Opus-class judgment.
 
 ## Consequences
 
 - **Positive:** Grok and Claude operators get the same Soleur workflows; ADR-053 cost tiering semantics survive harness switches; one file to update per vendor model generation bump (tier table, not 12 call sites).
-- **Negative / accepted:** Loses ADR-053's "zero repo maintenance" property for Anthropic-only alias retargeting — tier tables must be updated when vendors rename tiers (mitigated by audit skill). Resolver adds a small indirection layer workflows must import.
-- **Migration:** Two PRs — (1) ADR + spec + resolver scaffold, (2) workflow/agent migration + tests. No big-bang: resolver can pass through unrecognized tiers during rollout.
+- **Negative / accepted:** Loses ADR-053's "zero repo maintenance" property for Anthropic-only alias retargeting — tier tables must be updated when vendors rename tiers (mitigated by audit skill). Workflow runtime cannot import the TS module, so the map is copied behind a fence (parity-tested).
+- **Migration:** Resolver + workflow pin migration + advisor-gate rewrite land together in #8064. Research-agent frontmatter stays `model: haiku` until the harness accepts semantic tiers in Task/Agent spawn — do not pass `cheap` at those call sites in this PR.
+
+## Addendum — 2026-09-11 (#8064)
+
+Live Grok SKUs confirmed at `/work` against docs.x.ai Text API catalog and `grok models` on CLI 1.0.29. CLI spawn slugs are only `grok-4.6` (default) and `grok-4.5`. Status flipped Proposed → Accepted in the same PR that ships `harness-model-map.ts`.
 
 ## Alternatives considered
 

@@ -3,6 +3,10 @@ name: postmerge
 description: "This skill should be used when verifying a merged PR deployed correctly and production is healthy."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/postmerge` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:postmerge`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # postmerge Skill
 
 <!-- postmerge-harness-protocol:start -->
@@ -277,22 +281,59 @@ gh pr diff <number> --name-only | grep -qE 'plugins/soleur/skills/(ship|postmerg
 
 If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 
-**Watch the first post-merge release run** (the one Phase 2/3 already identified) for a canary rollback:
+**Watch the first post-merge release run** (the one Phase 2/3 already identified) for a canary rollback.
+
+**Select the DEPLOY arm, not "the latest run".** Since #5806 / ADR-217 `web-platform-release.yml` is split across two triggers, so every merge produces **two** runs of it:
+
+| arm | trigger | jobs |
+|---|---|---|
+| push arm | `on: push` to `main` | `release` only (build + publish) |
+| deploy arm | `on: workflow_run` (CI completed) | `resolve-target`, `migrate`, `verify-migrations`, `verify-doppler-secrets`, `deploy`, `live-verify`, `notify-gated`, `release-outcome` |
+
+`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` does not exist, the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `--event workflow_run`** (cheap and exact — the deploy chain runs only on that arm), plus a job-presence assertion so a wrong selection fails loudly instead of silently.
 
 ```bash
-# The release run triggered by this merge (apps/web-platform/** path filter).
+# The DEPLOY-arm release run for this merge (#5806, ADR-217). --event is what
+# distinguishes it from the push-arm build-and-publish run for the same SHA.
 RELEASE_RUN_ID=$(gh run list --branch main --workflow web-platform-release.yml \
-  --limit 1 --json databaseId --jq '.[0].databaseId')
-# REASON is written by ci-deploy.sh's final_write_state. A canary gate that
-# rejected a HEALTHY host surfaces as one of these.
-RUN_CONCLUSION=$(gh run view "$RELEASE_RUN_ID" --json conclusion --jq '.conclusion')
-ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
-  | grep -oE 'reason=(canary_sandbox_failed|production_start_failed|canary_[a-z_]+)' | head -1)
+  --event workflow_run --limit 1 --json databaseId --jq '.[0].databaseId')
+
+# FAIL LOUDLY, NEVER CLASSIFY AGAINST AN EMPTY LOG. If no deploy-arm run exists
+# yet, or the selected run carries no `deploy` job, this phase has no evidence —
+# say so rather than reporting a verdict.
+DEPLOY_JOB_STATE=absent
+if [[ -n "$RELEASE_RUN_ID" && "$RELEASE_RUN_ID" != "null" ]]; then
+  DEPLOY_JOB_STATE=$(gh run view "$RELEASE_RUN_ID" --json jobs \
+    --jq '[.jobs[] | select(.name == "deploy")] | .[0].conclusion // "absent"')
+fi
+
+if [[ "$DEPLOY_JOB_STATE" == "absent" ]]; then
+  echo "GATE-INDETERMINATE: no web-platform-release run with a deploy job found (run id: ${RELEASE_RUN_ID:-<none>})"
+elif [[ "$DEPLOY_JOB_STATE" == "skipped" ]]; then
+  # NOT a failure, and NOT a validation. Since #5806 the workflow_run trigger
+  # inherits NEITHER path gate (`on.push.paths` nor reusable-release.yml's
+  # `check_changed`), so the deploy arm fires on EVERY ci.yml completion on main
+  # — including docs-only merges, where resolve-target clean-skips and `deploy`
+  # concludes `skipped`. That is the designed behaviour, so it must not read as
+  # an ordinary deploy failure; but no deploy happened, so it cannot validate a
+  # gate either.
+  SKIP_REASON=$(gh run view "$RELEASE_RUN_ID" --json jobs \
+    --jq '[.jobs[] | select(.name == "resolve-target")] | .[0].conclusion // "unknown"')
+  echo "GATE-NOT-EXERCISED: the deploy arm ran and clean-skipped (resolve-target: ${SKIP_REASON}). Nothing was deployed for this merge, so a gate change is still unvalidated." 
+else
+  # REASON is written by ci-deploy.sh's final_write_state. A canary gate that
+  # rejected a HEALTHY host surfaces as one of these.
+  RUN_CONCLUSION=$(gh run view "$RELEASE_RUN_ID" --json conclusion --jq '.conclusion')
+  ROLLBACK_REASON=$(gh run view "$RELEASE_RUN_ID" --log 2>/dev/null \
+    | grep -oE 'reason=(canary_sandbox_failed|production_start_failed|canary_[a-z_]+)' | head -1)
+fi
 ```
 
 **Interpretation:**
 
-- Release **succeeded**: the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
+- `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-217). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
+- `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate.
+- Release **succeeded** (deploy job present and `success`): the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
 - Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
 - Release failed with a non-gate reason (build, migration, unrelated infra): ordinary deploy failure — investigate normally; do not assume the gate.
 
