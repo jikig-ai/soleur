@@ -71,6 +71,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] ADR-217 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence.
   - [x] C4 slice: canonical LikeC4 source and regenerated artifact model registry, binding/event ledger, and Claude adapter boundaries.
   - [x] C4 verification slice: freshness gate passed 3/3 and LikeC4 version-pin suite passed 2/2.
+  - [x] Focused regression slice: the combined engine/settings/routine suite passes 82/82 with typecheck green after widening selectable engine state.
 
 ## Phase 3 — Codex and settings
 
