@@ -70,4 +70,18 @@ describe("agent engine settings route", () => {
     expect(response!.status).toBe(409);
     expect(setDefault).not.toHaveBeenCalled();
   });
+
+  it("fails closed when the workspace binding is unavailable", async () => {
+    workspace.mockResolvedValue(null);
+    const response = await PUT(request({ engineId: "claude-code" }));
+    expect(response!.status).toBe(503);
+    expect(setDefault).not.toHaveBeenCalled();
+  });
+
+  it("maps owner RPC failures to a retryable settings error", async () => {
+    setDefault.mockRejectedValue(new Error("permission denied"));
+    const response = await PUT(request({ engineId: "claude-code" }));
+    expect(response!.status).toBe(503);
+    await expect(response!.json()).resolves.toEqual({ error: "settings_update_failed" });
+  });
 });
