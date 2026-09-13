@@ -4,11 +4,11 @@ Plan: `knowledge-base/project/plans/2026-09-13-fix-release-build-turbopack-taxon
 
 ## Phase 1: RED — extend the guard (`apps/web-platform/scripts/lib/no-cross-context-import.test.sh`)
 
-- [ ] 1.1 Define `PATHSPECS` once as a bash array with `:(glob)` magic for `**/*.ts`, `**/*.tsx`, `**/*.mjs` plus the `:!` excludes (`*.test.*`, `*.spec.*`, `test/**`, `e2e/**`, `public/**`); no `.js` glob
-- [ ] 1.2 Replace the line-based `git grep` producer with the single `(cd "$ROOT" && git ls-files -z -- "${PATHSPECS[@]}" | xargs -0r perl -0777 -ne '…' 2>/dev/null)` scan — regex `\b(from|import|require|new\s+URL)\s*\(?\s*["\x27](\.\.?\/[^"\x27\n]*)["\x27]` (the `\n` in the negated class is load-bearing), prints `$ARGV\t$2\t<import|url>` — fed by process substitution into the existing resolver loop (`read -r file spec kind`)
-- [ ] 1.3 Two zero floors: keep `checked -eq 0 → FAIL: no relative references scanned …`; add `saw_url -eq 0 → FAIL: the new URL(…) arm produced zero hits …` (set `saw_url=1` when `kind == url`); reword `OK:`/`FAIL:` to "reference(s)"/"references"
-- [ ] 1.4 Header comment: #8074 as second guard instance / fourth of the family (#5890, #6852, #7666, #8074); cross-reference `test/docker-context-import-containment.test.ts`; why `perl -0777` and why `[^"\x27\n]`; assembly limits (tracked-only; model is "inside the app dir", `.dockerignore` covered by the sibling for configs); comments are scanned; perl 2-arg open closed by the `apps/` prefix; both floors are the detection path; pre-existing ~7 s `realpath` cost noted
-- [ ] 1.5 Run the guard on the unfixed tree → exit 1 naming the hook and `../../../../.claude/…` (AC7 RED half)
+- [x] 1.1 Define `PATHSPECS` once as a bash array with `:(glob)` magic for `**/*.ts`, `**/*.tsx`, `**/*.mjs` plus the `:!` excludes (`*.test.*`, `*.spec.*`, `test/**`, `e2e/**`, `public/**`); no `.js` glob
+- [x] 1.2 Replace the line-based `git grep` producer with the single `(cd "$ROOT" && git ls-files -z -- "${PATHSPECS[@]}" | xargs -0r perl -0777 -ne '…' 2>/dev/null)` scan — regex `\b(from|import|require|new\s+URL)\s*\(?\s*["\x27](\.\.?\/[^"\x27\n]*)["\x27]` (the `\n` in the negated class is load-bearing), prints `$ARGV\t$2\t<import|url>` — fed by process substitution into the existing resolver loop (`read -r file spec kind`)
+- [x] 1.3 Two zero floors: keep `checked -eq 0 → FAIL: no relative references scanned …`; add `saw_url -eq 0 → FAIL: the new URL(…) arm produced zero hits …` (set `saw_url=1` when `kind == url`); reword `OK:`/`FAIL:` to "reference(s)"/"references"
+- [x] 1.4 Header comment: #8074 as second guard instance / fourth of the family (#5890, #6852, #7666, #8074); cross-reference `test/docker-context-import-containment.test.ts`; why `perl -0777` and why `[^"\x27\n]`; assembly limits (tracked-only; model is "inside the app dir", `.dockerignore` covered by the sibling for configs); comments are scanned; perl 2-arg open closed by the `apps/` prefix; both floors are the detection path; pre-existing ~7 s `realpath` cost noted
+- [x] 1.5 Run the guard on the unfixed tree → exit 1 naming the hook and `../../../../.claude/…` (AC7 RED half)
 
 ## Phase 2: GREEN — the one-file fix (`apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs`)
 
