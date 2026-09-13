@@ -1,0 +1,25 @@
+import { describe, expect, it, vi } from "vitest";
+import { createClaudeCodeAdapter } from "@/server/claude-code-adapter";
+
+describe("Claude Code neutral adapter boundary", () => {
+  it("delegates lifecycle operations without exposing SDK-shaped types", async () => {
+    const transport = {
+      start: vi.fn(async function* () { yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const }; }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createClaudeCodeAdapter(transport);
+    const context = { runId: "run-1", binding: { engineId: "claude-code" } } as never;
+    const events = [];
+    for await (const event of adapter.start(context, { text: "hi", attachmentIds: [] })) events.push(event);
+    await expect(adapter.cancel(context, { resumeHandle: "opaque", sessionId: null })).resolves.toBe("requested");
+    expect(transport.start).toHaveBeenCalledOnce();
+    expect(transport.cancel).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+  });
+});
