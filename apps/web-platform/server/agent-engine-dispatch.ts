@@ -125,6 +125,31 @@ export async function* resumeBoundEngineRun(options: {
   }
 }
 
+export async function respondToApprovalBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "respondToApproval">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  requestId: string;
+  decision: "allow" | "deny";
+}): Promise<void> {
+  const context = await loadBoundContext(options);
+  await options.adapter.respondToApproval(context, options.requestId, options.decision);
+}
+
+export async function eraseBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "erase">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  session: Parameters<EngineAdapter["erase"]>[1];
+}): Promise<ReturnType<EngineAdapter["erase"]>> {
+  const context = await loadBoundContext(options);
+  return options.adapter.erase(context, options.session);
+}
+
 export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;

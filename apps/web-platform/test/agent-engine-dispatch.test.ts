@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("loads the persisted binding before invoking the adapter", async () => {
@@ -123,5 +123,18 @@ describe("dispatchBoundEngineRun", () => {
     })) events.push(event);
     expect(adapter.resumeFromCursor).toHaveBeenCalledWith(expect.anything(), "cursor-2");
     expect(events).toHaveLength(1);
+  });
+
+  it("reloads the binding before approval responses and erasure", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const adapter = {
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+    };
+    const session = { resumeHandle: "opaque", sessionId: null };
+    await respondToApprovalBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, requestId: "approval-1", decision: "allow" });
+    await expect(eraseBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("confirmed");
+    expect(adapter.respondToApproval).toHaveBeenCalledWith(expect.anything(), "approval-1", "allow");
+    expect(repository.getRun).toHaveBeenCalledTimes(2);
   });
 });
