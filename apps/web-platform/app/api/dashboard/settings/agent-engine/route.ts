@@ -4,6 +4,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
+import { CLAUDE_CODE_ENGINE_ID } from "@/server/claude-code-adapter";
 import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export async function GET() {
     const repository = new AgentEnginePersistenceRepository(resolved.supabase as unknown as PersistenceClient);
     return NextResponse.json({
       workspaceId: resolved.workspaceId,
-      defaultEngineId: await repository.getDefaultEngine(resolved.workspaceId) ?? "claude-code",
+      defaultEngineId: await repository.getDefaultEngine(resolved.workspaceId) ?? CLAUDE_CODE_ENGINE_ID,
       engines: listReviewedEngineDefinitions().map(({ id, version, transport, authModes, enabledForNewRuns }) =>
         ({ id, version, transport, authModes, enabledForNewRuns })),
     });
