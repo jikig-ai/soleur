@@ -69,6 +69,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
   - [x] ADR-217 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence.
+  - [x] C4 slice: canonical LikeC4 source and regenerated artifact model registry, binding/event ledger, and Claude adapter boundaries.
 
 ## Phase 3 — Codex and settings
 
