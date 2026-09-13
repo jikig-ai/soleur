@@ -68,6 +68,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] New-run composition slice: bind-first dispatch composes persistence and adapter invocation without client engine selection (3 dispatch tests green).
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
+  - [x] ADR-217 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence.
 
 ## Phase 3 — Codex and settings
 
