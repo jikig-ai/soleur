@@ -72,6 +72,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] C4 slice: canonical LikeC4 source and regenerated artifact model registry, binding/event ledger, and Claude adapter boundaries.
   - [x] C4 verification slice: freshness gate passed 3/3 and LikeC4 version-pin suite passed 2/2.
   - [x] Focused regression slice: the combined engine/settings/routine suite passes 82/82 with typecheck green after widening selectable engine state.
+  - [x] Full focused evidence slice: migration-inclusive engine/settings/routine suite passes 88/88; C4 freshness passes 3/3.
 
 ## Phase 3 — Codex and settings
 
