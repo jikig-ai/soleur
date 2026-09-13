@@ -29,6 +29,24 @@ export interface CodexAuthBoundary {
   logout(): Promise<void>;
 }
 
+function normalizeAuthError(error: unknown): Error {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "invalid_grant" || code === "revoked" || code === "unauthorized") {
+    return Object.assign(new Error("Codex credentials are revoked"), { code: "codex_credentials_revoked" });
+  }
+  return error instanceof Error ? error : new Error("Codex authentication failed");
+}
+
+function validateLease(lease: CodexCredentialLease): CodexCredentialLease {
+  if (!Number.isFinite(lease.expiresAt) || lease.expiresAt <= Date.now()) {
+    throw Object.assign(new Error("Codex credential lease expired"), { code: "codex_credential_expired" });
+  }
+  if (!lease.accessToken.trim()) {
+    throw Object.assign(new Error("Codex credential lease is empty"), { code: "codex_credential_invalid" });
+  }
+  return lease;
+}
+
 /**
  * Keeps Codex credentials behind a mode-stable adapter seam. Callers receive
  * only a short-lived lease; persistence and neutral engine contracts never see
@@ -48,11 +66,11 @@ export function createCodexAuthBoundary(provider: CodexAuthProvider): CodexAuthB
     mode,
     acquire: async () => {
       assertStableMode();
-      return provider.acquire();
+      try { return validateLease(await provider.acquire()); } catch (error) { throw normalizeAuthError(error); }
     },
     refresh: async () => {
       assertStableMode();
-      return provider.refresh();
+      try { return validateLease(await provider.refresh()); } catch (error) { throw normalizeAuthError(error); }
     },
     logout: async () => {
       assertStableMode();

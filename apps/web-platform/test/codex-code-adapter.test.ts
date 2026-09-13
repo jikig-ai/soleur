@@ -41,6 +41,29 @@ describe("Codex auth boundary", () => {
     await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_auth_mode_changed" });
     expect(provider.acquire).not.toHaveBeenCalled();
   });
+
+  it("fails closed for expired or empty leases", async () => {
+    const provider: CodexAuthProvider = {
+      mode: "api-key",
+      acquire: vi.fn(async () => ({ accessToken: "", expiresAt: Date.now() - 1 })),
+      refresh: vi.fn(),
+      logout: vi.fn(),
+    };
+    const boundary = createCodexAuthBoundary(provider);
+    await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_credential_expired" });
+  });
+
+  it("normalizes revoked managed credentials without exposing provider details", async () => {
+    const provider: CodexAuthProvider = {
+      mode: "managed",
+      acquire: vi.fn(async () => { throw Object.assign(new Error("refresh token abc revoked"), { code: "invalid_grant" }); }),
+      refresh: vi.fn(),
+      logout: vi.fn(),
+    };
+    const boundary = createCodexAuthBoundary(provider);
+    await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_credentials_revoked" });
+    await expect(boundary.acquire()).rejects.not.toThrow("refresh token abc");
+  });
 });
 
 describe("Codex neutral adapter boundary", () => {
