@@ -18,8 +18,16 @@ describe("Claude Code neutral adapter boundary", () => {
     const events = [];
     for await (const event of adapter.start(context, { text: "hi", attachmentIds: [] })) events.push(event);
     await expect(adapter.cancel(context, { resumeHandle: "opaque", sessionId: null })).resolves.toBe("requested");
+    await expect(adapter.reconcile(context, { resumeHandle: "opaque", sessionId: null })).resolves.toBe("running");
+    await expect(adapter.erase(context, { resumeHandle: "opaque", sessionId: null })).resolves.toBe("confirmed");
+    await adapter.respondToApproval(context, "approval-1", "deny");
+    await adapter.dispose();
     expect(transport.start).toHaveBeenCalledOnce();
     expect(transport.cancel).toHaveBeenCalledOnce();
+    expect(transport.reconcile).toHaveBeenCalledOnce();
+    expect(transport.erase).toHaveBeenCalledOnce();
+    expect(transport.respondToApproval).toHaveBeenCalledWith(context, "approval-1", "deny");
+    expect(transport.dispose).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
   });
 });
