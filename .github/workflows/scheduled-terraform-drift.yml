@@ -1449,6 +1449,8 @@ jobs:
               echo ""
               echo "- \`reason=fed-but-paused\` — a fed heartbeat is \`paused\` live (the #6537 shape)."
               echo "- \`reason=absent-live\` — a non-count-gated heartbeat is missing live (the #6548 \`git_data\` shape)."
+              echo "- \`live=logs_alert reason=logs-alert-paused detail=\"…\"\` — a declared Better Stack LOGS alert (logtail_exploration_alert, #8097/ADR-218) is paused live; \`detail\` carries the vendor's paused_reason (auto-pause on complexity/too many failures, or a hand pause). The per-merge apply re-arms it, so the drift plan cannot see this — only this arm can."
+              echo "- \`live=logs_alert reason=logs-alert-absent\` — a declared Logs alert is missing live (the main apply never created it, or it was deleted vendor-side)."
               echo ""
               echo "<details><summary>Reconcile markers</summary>"
               echo ""
@@ -1462,7 +1464,8 @@ jobs:
               echo ""
               echo "1. For \`fed-but-paused\`: verify a real ping lands, then unpause via the Better Stack UI/API (#6210 — never unpause an unfed monitor)."
               echo "2. For \`absent-live\`: disposition the heartbeat — build its feeder or delete the monitor (the #6548 build-vs-delete call)."
-              echo "3. Close this issue when every listed heartbeat reconciles; the reconcile re-opens it if a mismatch recurs."
+              echo "3. For \`logs-alert-paused\` / \`logs-alert-absent\`: read \`detail\` — a rejected template SQL is fixed by a .tf edit + merge (the apply re-arms the alert); an absent alert means the merge apply failed before creating it. Runbook: knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md."
+              echo "4. Close this issue when every listed heartbeat / Logs alert reconciles; the reconcile re-opens it if a mismatch recurs."
               echo ""
               echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml) heartbeat-live-reconcile job._"
             } > /tmp/reconcile-body.md

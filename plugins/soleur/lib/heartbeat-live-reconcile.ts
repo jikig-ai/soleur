@@ -34,14 +34,41 @@ export interface LiveHeartbeat {
   paused: boolean;
 }
 
-export type ViolationReason = "fed-but-paused" | "absent-live";
+/**
+ * `fed-but-paused` / `absent-live` are the heartbeat classes (a)/(b) below. `logs-alert-paused` /
+ * `logs-alert-absent` are the #8097 `logs_alert` arm: a declared `logtail_exploration_alert`
+ * that is paused live (the vendor auto-pauses on "complexity issues / too many failures", and the
+ * per-merge apply re-arms it, so the untargeted drift plan cannot see the fight) or missing live.
+ * Every consumer that switches on this union is listed in the scheduled-terraform-drift.yml
+ * issue-body decode list (cq-union-widening-grep-three-patterns).
+ */
+export type ViolationReason = "fed-but-paused" | "absent-live" | "logs-alert-paused" | "logs-alert-absent";
 
 export interface Violation {
   resourceName: string;
   liveName: string;
-  /** `paused` for condition (a); `absent` for condition (b). */
-  live: "paused" | "absent";
+  /** `paused` for condition (a); `absent` for condition (b); `logs_alert` for the #8097 arm. */
+  live: "paused" | "absent" | "logs_alert";
   reason: ViolationReason;
+  /**
+   * Free text carried ONLY for the `logs_alert` arm (the vendor's `paused_reason`). Rendered inside
+   * a quoted `detail="…"` so the k=v marker grammar stays parseable; absent for heartbeat classes.
+   */
+  detail?: string;
+}
+
+/** A `logtail_exploration_alert` block parsed from the infra `.tf` source (#8097). */
+export interface DiscoveredLogsAlert {
+  resourceName: string;
+  /** The `name = "..."` attribute — how the Telemetry API keys the alert. */
+  liveName: string;
+}
+
+/** One alert as reported by `GET telemetry.betterstack.com/api/v2/alerts` (`data[].attributes`). */
+export interface LiveLogsAlert {
+  name: string;
+  paused: boolean;
+  pausedReason: string | null;
 }
 
 /**
@@ -74,10 +101,13 @@ export function stripComments(text: string): string {
  * live name, source-declared paused, and count-gate presence. Throws on an unbalanced block so a
  * malformed source can never silently drop a heartbeat from the reconcile.
  */
-export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
-  const stripped = stripComments(tfText);
-  const header = /resource\s+"betteruptime_heartbeat"\s+"([A-Za-z0-9_]+)"\s*\{/g;
-  const out: DiscoveredHeartbeat[] = [];
+/**
+ * Brace-matched extraction of every `resource "<type>" "<name>" {…}` block in comment-stripped
+ * HCL. Throws on an unbalanced block so a malformed source can never silently drop a resource.
+ */
+function resourceBlocks(stripped: string, type: string): { resourceName: string; body: string }[] {
+  const header = new RegExp(`resource\\s+"${type}"\\s+"([A-Za-z0-9_]+)"\\s*\\{`, "g");
+  const out: { resourceName: string; body: string }[] = [];
   let m: RegExpExecArray | null;
   while ((m = header.exec(stripped)) !== null) {
     const resourceName = m[1];
@@ -95,9 +125,17 @@ export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
       }
     }
     if (end === -1) {
-      throw new Error(`Unbalanced braces for betteruptime_heartbeat.${resourceName}`);
+      throw new Error(`Unbalanced braces for ${type}.${resourceName}`);
     }
-    const body = stripped.slice(openBrace, end + 1);
+    out.push({ resourceName, body: stripped.slice(openBrace, end + 1) });
+  }
+  return out;
+}
+
+export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
+  const stripped = stripComments(tfText);
+  const out: DiscoveredHeartbeat[] = [];
+  for (const { resourceName, body } of resourceBlocks(stripped, "betteruptime_heartbeat")) {
     const nameMatch = /\bname\s*=\s*"([^"]+)"/.exec(body);
     const pausedMatch = /\bpaused\s*=\s*(true|false)\b/.exec(body);
     out.push({
@@ -110,6 +148,52 @@ export function parseHeartbeatBlocks(tfText: string): DiscoveredHeartbeat[] {
     });
   }
   return out;
+}
+
+/** Extract every `logtail_exploration_alert` block's live name (#8097 `logs_alert` arm). */
+export function parseLogsAlertBlocks(tfText: string): DiscoveredLogsAlert[] {
+  const stripped = stripComments(tfText);
+  return resourceBlocks(stripped, "logtail_exploration_alert").map(({ resourceName, body }) => {
+    const nameMatch = /\bname\s*=\s*"([^"]+)"/.exec(body);
+    return { resourceName, liveName: nameMatch ? nameMatch[1] : "" };
+  });
+}
+
+/**
+ * Reconcile the declared Logs alerts against the live Telemetry payload (#8097 / ADR-218).
+ *
+ * - **logs-alert-absent** — a declared `logtail_exploration_alert` missing from the live payload
+ *   (the main apply never created it, or it was deleted vendor-side).
+ * - **logs-alert-paused** — present but `paused` live. Unlike heartbeats there is no fed/unfed
+ *   distinction: every declared alert writes `paused = false` as intent, so a live pause is
+ *   always a vendor-side rejection (`paused_reason` carried as `detail`) or a hand pause.
+ *
+ * Foreign live alerts (not declared in `.tf`) are ignored — the arm only READS.
+ */
+export function reconcileLogsAlerts(
+  declared: readonly DiscoveredLogsAlert[],
+  live: readonly LiveLogsAlert[],
+): Violation[] {
+  const byName = new Map<string, LiveLogsAlert>();
+  for (const a of live) byName.set(a.name, a);
+  const violations: Violation[] = [];
+  for (const d of declared) {
+    const l = byName.get(d.liveName);
+    if (!l) {
+      violations.push({ resourceName: d.resourceName, liveName: d.liveName, live: "logs_alert", reason: "logs-alert-absent" });
+      continue;
+    }
+    if (l.paused) {
+      violations.push({
+        resourceName: d.resourceName,
+        liveName: d.liveName,
+        live: "logs_alert",
+        reason: "logs-alert-paused",
+        detail: l.pausedReason ?? "",
+      });
+    }
+  }
+  return violations;
 }
 
 type ManifestRow = Pick<ManifestEntry, "name" | "feeder" | "arming_pending">;

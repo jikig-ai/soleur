@@ -16,7 +16,9 @@ import {
   type DiscoveredHeartbeat,
   type LiveHeartbeat,
   parseHeartbeatBlocks,
+  parseLogsAlertBlocks,
   reconcileHeartbeats,
+  reconcileLogsAlerts,
   stripComments,
 } from "../lib/heartbeat-live-reconcile";
 import {
@@ -521,5 +523,201 @@ describe("fetchLiveHeartbeats — flake tolerance + auth (network injected)", ()
     const result = await fetchLiveHeartbeats({ token: "t", fetchImpl, sleepImpl: noSleep });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.kind).toBe("error");
+  });
+});
+
+// ─── #8097 / ADR-218: the `logs_alert` arm ───────────────────────────────────────────────────
+// A Better Stack LOGS alert (logtail_exploration_alert) is re-armed by every per-merge apply, so
+// the untargeted drift plan cannot detect a vendor-side pause between merges. This arm reads
+// GET telemetry.betterstack.com/api/v2/alerts through the SAME injected fetchImpl and reports an
+// absent or paused alert as a MISMATCH (rc=2 — the workflow's issue path keys on rc, not on
+// marker text). The alert names are DISCOVERED from the .tf, never listed here.
+describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)", () => {
+  it("parseLogsAlertBlocks extracts every logtail_exploration_alert name, comment-stripped", () => {
+    const tf = [
+      `# resource "logtail_exploration_alert" "in_a_comment" { name = "nope" }`,
+      `resource "logtail_exploration_alert" "monitor_send_failed" {`,
+      `  exploration_id = logtail_exploration.monitor_send_failed.id`,
+      `  name           = "soleur-monitor-send-failed-prd" # trailing`,
+      `  escalation_target { team_name = "Your team" }`,
+      `}`,
+      `resource "logtail_exploration_alert" "second" {\n  name = "soleur-second-prd"\n}`,
+    ].join("\n");
+    expect(parseLogsAlertBlocks(tf)).toEqual([
+      { resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" },
+      { resourceName: "second", liveName: "soleur-second-prd" },
+    ]);
+  });
+
+  it("flags a declared alert that is paused live as logs-alert-paused, carrying paused_reason", () => {
+    const v = reconcileLogsAlerts(
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [{ name: "soleur-monitor-send-failed-prd", paused: true, pausedReason: "complexity issues, too many failures" }],
+    );
+    expect(v).toEqual([
+      {
+        resourceName: "monitor_send_failed",
+        liveName: "soleur-monitor-send-failed-prd",
+        live: "logs_alert",
+        reason: "logs-alert-paused",
+        detail: "complexity issues, too many failures",
+      },
+    ]);
+  });
+
+  it("flags a declared alert missing from the live payload as logs-alert-absent", () => {
+    const v = reconcileLogsAlerts(
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [{ name: "Output utilization high", paused: true, pausedReason: "Manually paused" }],
+    );
+    expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
+  });
+
+  it("returns no violations when every declared alert is present and unpaused (foreign paused alerts ignored)", () => {
+    const v = reconcileLogsAlerts(
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [
+        { name: "soleur-monitor-send-failed-prd", paused: false, pausedReason: null },
+        { name: "Output utilization high", paused: true, pausedReason: "Manually paused" },
+      ],
+    );
+    expect(v).toEqual([]);
+  });
+});
+
+describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)", () => {
+  const noSleep = async () => {};
+  const HB_TF = `resource "betteruptime_heartbeat" "reg" {\n  name = "soleur-reg"\n  paused = false\n}`;
+  const ALERT_TF = `resource "logtail_exploration_alert" "monitor_send_failed" {\n  name = "soleur-monitor-send-failed-prd"\n  paused = false\n}`;
+  const manifest: ManifestRow[] = [fedTimer("reg")];
+
+  const page = (rows: unknown[]) =>
+    new Response(JSON.stringify({ data: rows, pagination: { next: null } }), { status: 200 });
+  // Dispatches on URL so the heartbeat and alert reads are distinguishable — and so a read of
+  // any OTHER host is refused loudly rather than answered.
+  const routed =
+    (alerts: unknown[], onOther?: (u: string) => void) =>
+    async (url: string) => {
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      if (url === "https://telemetry.betterstack.com/api/v2/alerts") return page(alerts);
+      onOther?.(url);
+      return new Response("unexpected host", { status: 500 });
+    };
+
+  const withInfra = async (files: Record<string, string>, fn: (dir: string) => Promise<void>) => {
+    const dir = mkdtempSync(join(tmpdir(), "hb-la-"));
+    try {
+      for (const [n, t] of Object.entries(files)) writeFileSync(join(dir, n), t);
+      await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("paused live alert → code 2 + MISMATCH … live=logs_alert reason=logs-alert-paused detail=\"…\"", async () => {
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(
+        dir,
+        {
+          token: "t",
+          fetchImpl: routed([{ attributes: { name: "soleur-monitor-send-failed-prd", paused: true, paused_reason: "too many failures" } }]),
+          sleepImpl: noSleep,
+        },
+        manifest,
+      );
+      expect(result.code).toBe(2);
+      const out = result.markers.join("\n");
+      expect(out).toContain(
+        'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-monitor-send-failed-prd live=logs_alert reason=logs-alert-paused detail="too many failures"',
+      );
+    });
+  });
+
+  it("absent live alert → code 2 + reason=logs-alert-absent", async () => {
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "t", fetchImpl: routed([]), sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(2);
+      expect(result.markers.join("\n")).toContain("live=logs_alert reason=logs-alert-absent");
+    });
+  });
+
+  it("present + unpaused → code 0 and the OK marker reports logs_alerts=1", async () => {
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(
+        dir,
+        {
+          token: "t",
+          fetchImpl: routed([{ attributes: { name: "soleur-monitor-send-failed-prd", paused: false, paused_reason: null } }]),
+          sleepImpl: noSleep,
+        },
+        manifest,
+      );
+      expect(result.code).toBe(0);
+      expect(result.markers.join("\n")).toMatch(/SOLEUR_HEARTBEAT_RECONCILE_OK .*logs_alerts=1/);
+    });
+  });
+
+  it("no logtail_exploration_alert declared → the alerts endpoint is never read (no new network on legacy roots)", async () => {
+    await withInfra({ "hb.tf": HB_TF }, async (dir) => {
+      const seen: string[] = [];
+      const result = await runReconcile(
+        dir,
+        { token: "t", fetchImpl: routed([], (u) => seen.push(u)), sleepImpl: noSleep },
+        manifest,
+      );
+      expect(result.code).toBe(0);
+      expect(seen).toEqual([]);
+    });
+  });
+
+  it("a heartbeat MISMATCH and an alert MISMATCH combine to one rc=2 run carrying both markers", async () => {
+    const pausedHb = async (url: string) => {
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", true) }]);
+      return page([]);
+    };
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "t", fetchImpl: pausedHb, sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(2);
+      const out = result.markers.join("\n");
+      expect(out).toContain("reason=fed-but-paused");
+      expect(out).toContain("reason=logs-alert-absent");
+    });
+  });
+
+  it("refuses an off-host pagination.next on the ALERTS read — the second host pin is exact, not a suffix", async () => {
+    let tokenLeakedOffHost = false;
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      if (url === "https://telemetry.betterstack.com/api/v2/alerts") {
+        return new Response(
+          JSON.stringify({ data: [], pagination: { next: "https://telemetry.betterstack.com.evil.example/api/v2/alerts?page=2" } }),
+          { status: 200 },
+        );
+      }
+      if (auth) tokenLeakedOffHost = true;
+      return new Response("nope", { status: 200 });
+    };
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "secret", fetchImpl, sleepImpl: noSleep }, manifest);
+      expect(tokenLeakedOffHost).toBe(false);
+      expect(result.code).toBe(1);
+      expect(result.markers.join("\n")).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR");
+    });
+  });
+
+  it("alerts endpoint unreachable (5xx) → UNREACHABLE marker for the arm, never a MISMATCH (no page on a vendor blip)", async () => {
+    const fetchImpl = async (url: string) => {
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      return new Response("upstream", { status: 503 });
+    };
+    await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
+      const result = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: noSleep }, manifest);
+      expect(result.code).toBe(0);
+      const out = result.markers.join("\n");
+      expect(out).toContain("SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE");
+      expect(out).toContain("surface=logs_alert");
+      expect(out).not.toContain("MISMATCH");
+    });
   });
 });
