@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("loads the persisted binding before invoking the adapter", async () => {
@@ -96,5 +96,19 @@ describe("dispatchBoundEngineRun", () => {
     await expect(cancelBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("requested");
     await expect(reconcileBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("running");
     expect(repository.getRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads the binding before continuing a native session", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const adapter = { continue: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-2", sequence: 2, payload: { type: "text", text: "continued" } as const };
+    }) };
+    const events = [];
+    for await (const event of continueBoundEngineRun({
+      repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never,
+      session: { resumeHandle: "opaque", sessionId: null }, input: { text: "next", attachmentIds: [] },
+    })) events.push(event);
+    expect(adapter.continue).toHaveBeenCalledOnce();
+    expect(events[0].payload).toEqual({ type: "text", text: "continued" });
   });
 });

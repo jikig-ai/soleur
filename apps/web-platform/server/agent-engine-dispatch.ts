@@ -96,6 +96,21 @@ export async function reconcileBoundEngineRun(options: {
   return options.adapter.reconcile(context, options.session);
 }
 
+export async function* continueBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "continue">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  session: Parameters<EngineAdapter["continue"]>[1];
+  input: EngineInput;
+}): AsyncGenerator<EngineEvent> {
+  const context = await loadBoundContext(options);
+  for await (const event of options.adapter.continue(context, options.session, options.input)) {
+    yield event;
+  }
+}
+
 export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;
