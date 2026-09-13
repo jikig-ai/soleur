@@ -8,6 +8,9 @@ import type {
 interface BindingRepository {
   getRun(runId: string): Promise<unknown>;
 }
+interface EventSink {
+  appendEvent(event: EngineEvent): Promise<unknown>;
+}
 
 type NewRunRepository = BindingRepository & {
   bind(input: Record<string, unknown>): Promise<unknown>;
@@ -17,6 +20,7 @@ interface DispatchOptions {
   repository: BindingRepository;
   adapter: Pick<EngineAdapter, "start">;
   adapterEngineId?: string;
+  eventSink?: EventSink;
   runId: string;
   input: EngineInput;
   context: EngineRunContext;
@@ -41,6 +45,7 @@ export async function* dispatchBoundEngineRun(
     throw new Error("persisted engine binding does not match adapter");
   }
   for await (const event of options.adapter.start(context, options.input)) {
+    if (options.eventSink) await options.eventSink.appendEvent(event);
     yield event;
   }
 }

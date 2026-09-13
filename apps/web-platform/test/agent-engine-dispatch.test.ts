@@ -55,4 +55,32 @@ describe("dispatchBoundEngineRun", () => {
     expect(repository.getRun).toHaveBeenCalledWith("run-2");
     expect(events).toHaveLength(1);
   });
+
+  it("persists each adapter event before yielding it", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "status", status: "running" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    const events = [];
+    for await (const event of dispatchBoundEngineRun({
+      repository, adapter, eventSink, runId: "run-1",
+      input: { text: "hi", attachmentIds: [] }, context: {} as never,
+    })) events.push(event);
+    expect(eventSink.appendEvent).toHaveBeenCalledWith(events[0]);
+  });
+
+  it("does not yield an event when durable persistence fails", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "secret" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn().mockRejectedValue(new Error("ledger unavailable")) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, eventSink, runId: "run-1",
+        input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("ledger unavailable");
+  });
 });
