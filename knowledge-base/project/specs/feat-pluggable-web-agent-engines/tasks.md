@@ -60,6 +60,7 @@ routine run binds the current default once; retries retain that binding.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
   - [x] Claude adapter boundary slice: provider transport is wrapped behind the neutral lifecycle contract without SDK types crossing it (1 adapter test green).
+  - [x] Claude adapter lifecycle coverage: start, continue, cancel, reconcile, cursor resume, approval, erasure, and disposal delegation are pinned.
   - [x] New-run composition slice: bind-first dispatch composes persistence and adapter invocation without client engine selection (3 dispatch tests green).
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
