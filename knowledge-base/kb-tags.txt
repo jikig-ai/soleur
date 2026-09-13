@@ -1496,6 +1496,7 @@ file-tree
 file-truncation
 files modified on main branch
 filesystem
+filing-gate
 find-and-replace
 find-delete
 fingerprint
@@ -3200,6 +3201,7 @@ schedule-skill
 scheduled-audits
 scheduled-bug-fixer
 scheduled-ci
+scheduled-crons
 scheduled-tasks
 scheduled-workflow
 scheduled-workflows
