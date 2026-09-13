@@ -1734,8 +1734,8 @@ growth-audit
 growth-strategist
 growth-targets
 guard
-guard-3
 guard-2
+guard-3
 guard-building
 guard-building-pr
 guard-contract
