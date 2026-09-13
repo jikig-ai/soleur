@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("loads the persisted binding before invoking the adapter", async () => {
@@ -110,5 +110,18 @@ describe("dispatchBoundEngineRun", () => {
     })) events.push(event);
     expect(adapter.continue).toHaveBeenCalledOnce();
     expect(events[0].payload).toEqual({ type: "text", text: "continued" });
+  });
+
+  it("reloads the binding before resuming from a cursor", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const adapter = { resumeFromCursor: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-3", sequence: 3, payload: { type: "progress", message: "replayed" } as const };
+    }) };
+    const events = [];
+    for await (const event of resumeBoundEngineRun({
+      repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, cursor: "cursor-2",
+    })) events.push(event);
+    expect(adapter.resumeFromCursor).toHaveBeenCalledWith(expect.anything(), "cursor-2");
+    expect(events).toHaveLength(1);
   });
 });

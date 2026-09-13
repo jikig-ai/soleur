@@ -111,6 +111,20 @@ export async function* continueBoundEngineRun(options: {
   }
 }
 
+export async function* resumeBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "resumeFromCursor">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  cursor: string | null;
+}): AsyncGenerator<EngineEvent> {
+  const context = await loadBoundContext(options);
+  for await (const event of options.adapter.resumeFromCursor(context, options.cursor)) {
+    yield event;
+  }
+}
+
 export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;
