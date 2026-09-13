@@ -2011,6 +2011,14 @@ if want_scripts; then
   # isolation against webhook contamination, and withholding the free-text bwrap_err from the
   # public issue comment. Mutation-proved at authoring (5/5 killed).
   run_suite "scripts/bwrap-probe-selfreport-8016" bash scripts/followthroughs/bwrap-probe-selfreport-8016.test.sh
+  # #8097: exit-code harness for the SEND_FAILED-alert readback follow-through. Registered
+  # explicitly (orphan-suite class above). Its exit code is the closure of #8097 (0 closes; 3 =
+  # instrument did not answer / web-1 dark; 5 = a named cause for a human; 1 is NEVER emitted
+  # because to the sweeper 1 reopens a human-closed issue). Load-bearing arms: the alert check
+  # runs FIRST and a paused alert never touches the warehouse; the positive control is web-1
+  # SCOPED (an inngest-only source is channel_dark, never row_absent); incident matching is
+  # anchored on the row's own dt; raw incident objects are projected before they reach stdout.
+  run_suite "scripts/send-failed-alert-probe-8097" bash scripts/followthroughs/send-failed-alert-probe-8097.test.sh
   # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
   # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
   # ship into the same Better Stack source from the same app container, so a substring-matching
