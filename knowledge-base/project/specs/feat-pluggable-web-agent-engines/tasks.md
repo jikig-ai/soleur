@@ -54,6 +54,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Continuation slice: native session continuation reloads and verifies the persisted adapter binding before streaming events (8 dispatch tests green).
   - [x] Cursor resume slice: reconnect/replay dispatch reloads and verifies the persisted binding before adapter cursor replay (9 dispatch tests green).
   - [x] Approval/erasure slice: approval responses and session erasure reload and verify persisted bindings before adapter calls (10 dispatch tests green).
+  - [x] Replay durability slice: continuation and cursor replay persist emitted events before consumers receive them (10 dispatch tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
