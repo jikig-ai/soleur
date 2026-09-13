@@ -44,6 +44,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Settings API slice: authenticated GET/PUT reads and writes the workspace default through reviewed metadata and the owner RPC (7 persistence tests green).
   - [x] Settings UI slice: General settings renders the workspace default selector with owner-only writes and unavailable future engines (14 settings tests green).
   - [x] Settings UI coverage slice: selector loading, save, member read-only, and unavailable-engine behavior are pinned (3 focused component tests green).
+  - [x] Settings API coverage slice: authentication, reads, owner writes, unknown engines, and disabled engines are pinned (5 route tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
