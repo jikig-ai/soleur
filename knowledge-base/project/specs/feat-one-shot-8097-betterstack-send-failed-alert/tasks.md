@@ -1,4 +1,4 @@
-# Tasks: page on SOLEUR_*_SEND_FAILED / _REFUSED rows (Better Stack Logs alert, #8097)
+# Tasks: page on `SOLEUR_*_SEND_FAILED` / `SOLEUR_*_REFUSED` rows (Better Stack Logs alert, #8097)
 
 Plan: `knowledge-base/project/plans/2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md`
 Branch: `feat-one-shot-8097-betterstack-send-failed-alert` — issue #8097 (PR body uses `Ref #8097`; closure is the follow-through's verdict).

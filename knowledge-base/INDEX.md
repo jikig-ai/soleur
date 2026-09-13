@@ -5787,7 +5787,7 @@
 - [tasks](project/specs/feat-one-shot-7917-battery-tag-author-guard/tasks.md)
 - [Tasks — CI concurrency key, aggregator diagnosis, and the workflow_run deploy gate](project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/tasks.md)
 - [Tasks — inngest probe_schema=8 (#8017, #8015, #8013)](project/specs/feat-one-shot-8017-8015-8013-probe-schema-8/tasks.md)
-- [Tasks: page on SOLEUR_*_SEND_FAILED / _REFUSED rows (Better Stack Logs alert, #8097)](project/specs/feat-one-shot-8097-betterstack-send-failed-alert/tasks.md)
+- [Tasks: page on `SOLEUR_*_SEND_FAILED` / `SOLEUR_*_REFUSED` rows (Better Stack Logs alert, #8097)](project/specs/feat-one-shot-8097-betterstack-send-failed-alert/tasks.md)
 - [Tasks — fix: active conversation missing from Recent Conversations rail](project/specs/feat-one-shot-active-conversation-missing-from-nav/tasks.md)
 - [tasks](project/specs/feat-one-shot-adr044-webhook-sessionsync-cutover/tasks.md)
 - [tasks](project/specs/feat-one-shot-aeo-content-fixes-2806-2804-2805/tasks.md)
