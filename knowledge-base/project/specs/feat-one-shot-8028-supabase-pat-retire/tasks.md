@@ -37,18 +37,18 @@ Dissents: `knowledge-base/project/specs/feat-one-shot-8028-supabase-pat-retire/d
 
 ## Phase 3: Live retirement (pipeline-performed, from a scratch script file)
 
-- [ ] 3.1 Write the plan's Phase 3 script to `$SCRATCH/retire-8028.sh` verbatim and run it with `bash` (roots `dev`, `prd` first; one listing per config; positive control on `DOPPLER_CONFIG`; sha256 pin to the `dev` root's value; "proven dead" = `http=401 body={…`; `prd` requires `SUPABASE_ACCESS_TOKEN` present; `doppler secrets delete … --yes >/dev/null`; delete rc captured; re-list; then the eight branches; then `ci`/`cli`/`cli_ops`).
-- [ ] 3.2 Record the thirteen per-config lines and the two `doppler secrets delete rc=` lines for the PR body (AC12); on `probe-failed(...)` re-run; on a hash mismatch stop and file an issue (a genuine override is out of scope); never skip a config.
-- [ ] 3.3 Live negative control: `SUPABASE_ACCESS_TOKEN="sbp_$(printf 'x%.0s' {1..40})" doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --best-effort; echo "rc=$?"` → `rc=2` with `Supabase rejected SUPABASE_ACCESS_TOKEN (HTTP 401)`; record (AC11).
-- [ ] 3.4 AC13 check: `SUPABASE_ACCESS_TOKEN` present in `prd` + six branches, absent elsewhere; `gh secret list` shows exactly one `SUPABASE_ACCESS_TOKEN`.
+- [x] 3.1 Write the plan's Phase 3 script to `$SCRATCH/retire-8028.sh` verbatim and run it with `bash` (roots `dev`, `prd` first; one listing per config; positive control on `DOPPLER_CONFIG`; sha256 pin to the `dev` root's value; "proven dead" = `http=401 body={…`; `prd` requires `SUPABASE_ACCESS_TOKEN` present; `doppler secrets delete … --yes >/dev/null`; delete rc captured; re-list; then the eight branches; then `ci`/`cli`/`cli_ops`).
+- [x] 3.2 Record the thirteen per-config lines and the two `doppler secrets delete rc=` lines for the PR body (AC12); on `probe-failed(...)` re-run; on a hash mismatch stop and file an issue (a genuine override is out of scope); never skip a config.
+- [x] 3.3 Live negative control: `SUPABASE_ACCESS_TOKEN="sbp_$(printf 'x%.0s' {1..40})" doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --best-effort; echo "rc=$?"` → `rc=2` with `Supabase rejected SUPABASE_ACCESS_TOKEN (HTTP 401)`; record (AC11).
+- [x] 3.4 AC13 check: `SUPABASE_ACCESS_TOKEN` present in `prd` + six branches, absent elsewhere; `gh secret list` shows exactly one `SUPABASE_ACCESS_TOKEN`.
 
 ## Phase 4: Documentation sweep
 
-- [ ] 4.1 `apps/web-platform/docs/migration-rollback.md`: `SUPABASE_ACCESS_TOKEN` (prd root, inherited; dev via `prd_terraform` — see `--help`); rejected token exits 2 under `--best-effort`; the runner retries the refresh on every run so a re-run after rotation reloads.
-- [ ] 4.2 `knowledge-base/engineering/operations/runbooks/supabase-db-credential-rotation.md` `## Token`: "`SUPABASE_PAT` was retired in #8028 …".
-- [ ] 4.3 `knowledge-base/engineering/operations/secret-scanning.md` `### SUPABASE_ACCESS_TOKEN`: inherited-from-`prd`-root fan-out + TF-published GH secret + blast-radius line ("rotation failure reds the next prd release; no `dev` config carries this token by design").
-- [ ] 4.4 `knowledge-base/project/learnings/2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md` §Prevention 3: `[Updated 2026-09-13 — #8028]` note; do not re-instruct minting.
-- [ ] 4.5 Residual sweep (plan Phase 4 `git grep` with exclusions) → only the lint, the scrub lib, and the rotate script remain (AC14).
+- [x] 4.1 `apps/web-platform/docs/migration-rollback.md`: `SUPABASE_ACCESS_TOKEN` (prd root, inherited; dev via `prd_terraform` — see `--help`); rejected token exits 2 under `--best-effort`; the runner retries the refresh on every run so a re-run after rotation reloads.
+- [x] 4.2 `knowledge-base/engineering/operations/runbooks/supabase-db-credential-rotation.md` `## Token`: "`SUPABASE_PAT` was retired in #8028 …".
+- [x] 4.3 `knowledge-base/engineering/operations/secret-scanning.md` `### SUPABASE_ACCESS_TOKEN`: inherited-from-`prd`-root fan-out + TF-published GH secret + blast-radius line ("rotation failure reds the next prd release; no `dev` config carries this token by design").
+- [x] 4.4 `knowledge-base/project/learnings/2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md` §Prevention 3: `[Updated 2026-09-13 — #8028]` note; do not re-instruct minting.
+- [x] 4.5 Residual sweep (plan Phase 4 `git grep` with exclusions) → only the lint, the scrub lib, and the rotate script remain (AC14).
 
 ## Phase 5: Verification
 
