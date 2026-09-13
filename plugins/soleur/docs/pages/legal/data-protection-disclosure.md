@@ -34,9 +34,11 @@ permalink: legal/data-protection-disclosure/
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
+**Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code and Grok Build). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
+
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
-- **Jikigai** ("Provider," "we," "us," or "our"), the operator and maintainer of the Soleur Claude Code plugin, accessible at [https://soleur.ai](https://soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
+- **Jikigai** ("Provider," "we," "us," or "our"), the operator and maintainer of the Soleur plugin for supported AI coding CLIs (including Claude Code and Grok Build), accessible at [https://soleur.ai](https://soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
 
 - **You** ("User," "Controller," or "you"), the individual or entity using the Soleur plugin.
 
@@ -60,7 +62,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 **1.5** "Sub-processor" means any Processor engaged by a Processor to carry out Processing activities on behalf of the Controller.
 
-**1.6** "Plugin" means the Soleur Claude Code plugin, including all agents, skills, commands, and the knowledge base it provides.
+**1.6** "Plugin" means the Soleur plugin for supported AI coding CLIs (including Claude Code and Grok Build), including all agents, skills, commands, and the knowledge base it provides.
 
 **1.7** "Local Data" means all files, knowledge-base entries, brainstorms, plans, specs, code, and other data generated or stored on the User's local filesystem through use of the Plugin.
 

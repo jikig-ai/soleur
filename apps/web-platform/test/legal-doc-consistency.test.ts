@@ -138,12 +138,36 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ["gdpr-policy", /Cloudflare R2 \(CLA evidence archive\):/],
       ["gdpr-policy", /FreeTSA \(RFC 3161 Time Stamp Authority\):/],
       ["gdpr-policy", /Article 17\(3\)\(e\)/],
+      // Grok Build Phase 6 — harness-neutral Plugin copy (not Claude-exclusive).
+      ["terms-and-conditions", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
+      ["privacy-policy", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
+      ["data-protection-disclosure", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
+      ["gdpr-policy", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
+      ["acceptable-use-policy", /supported AI coding CLIs/],
     ];
     for (const [doc, pattern] of checks) {
       const source = loadSource(doc);
       const mirror = loadMirror(doc);
       expect(source, `source ${doc} missing ${pattern}`).toMatch(pattern);
       expect(mirror, `mirror ${doc} missing ${pattern}`).toMatch(pattern);
+    }
+  });
+
+  test("cookie-policy and disclaimer stay Claude-exclusive", () => {
+    for (const doc of ["cookie-policy", "disclaimer"] as const) {
+      expect(loadSource(doc)).toMatch(/Claude Code plugin/);
+      expect(loadMirror(doc)).toMatch(/Claude Code plugin/);
+    }
+  });
+
+  test("legal corpus does not invent grok --trust or add xAI as a sub-processor", () => {
+    for (const doc of DOCS) {
+      const source = loadSource(doc);
+      const mirror = loadMirror(doc);
+      expect(source).not.toMatch(/grok --trust/);
+      expect(mirror).not.toMatch(/grok --trust/);
+      expect(source).not.toMatch(/xAI[^\n]{0,80}is a (Jikigai )?(sub-)?processor/i);
+      expect(mirror).not.toMatch(/xAI[^\n]{0,80}is a (Jikigai )?(sub-)?processor/i);
     }
   });
 
