@@ -79,7 +79,10 @@ jobs:
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
 
       - name: Terraform init
-        run: terraform init -input=false
+        # -lockfile=readonly (#8097): the drift plan must resolve providers ONLY from the
+        # committed lockfile, exactly as apply-web-platform-infra.yml does — a new third-party
+        # provider cannot be silently resolved outside it here.
+        run: terraform init -input=false -lockfile=readonly
         working-directory: ${{ matrix.directory }}
 
       - name: Terraform plan (drift detection)

@@ -510,6 +510,43 @@ resource "terraform_data" "disk_monitor_install" {
   }
 }
 
+# (#8097 / ADR-218) Synthetic SEND_FAILED row through web-1's REAL apply path.
+# Proves the last unmeasured link of the paging chain — journald records `logger -p user.crit`
+# as PRIORITY=2 on web-1 and Vector Source 2 ships it — by emitting one row that reuses the
+# real disk-monitor marker (so it inherits the real routing; that IS the test) suffixed
+# `synthetic=1 probe_rev=<rev>` so the readback (scripts/followthroughs/send-failed-alert-probe-8097.sh)
+# and the runbook can tell it from a real failure. Same SSH connection as disk_monitor_install;
+# no `file` provisioner, no filesystem destination.
+#
+# FIRES ONLY WHEN local.monitor_send_failed_probe_rev CHANGES (betterstack-logs-alerts.tf).
+# The SSH apply runs on every push to main, so a per-run nonce (timestamp()/random_*) would
+# page ops on every merge. The trigger is a literal local, never a reference to the logtail_*
+# resources, so the SSH `-target` never drags a non-SSH resource into its plan.
+resource "terraform_data" "send_failed_alert_probe" {
+  triggers_replace = local.monitor_send_failed_probe_rev
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  lifecycle {
+    precondition {
+      condition     = can(regex("^[0-9]+$", local.monitor_send_failed_probe_rev))
+      error_message = "monitor_send_failed_probe_rev must be digits only: it is interpolated into a root shell literal and a ClickHouse LIKE."
+    }
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "logger -p user.crit -t disk-monitor 'SOLEUR_DISK_MONITOR_SEND_FAILED channel=resend http_code=000 rc=7 synthetic=1 probe_rev=${local.monitor_send_failed_probe_rev}'",
+    ]
+  }
+}
+
 # Deploy resource-monitor.sh and systemd timer to the existing server.
 # Cloud-init handles new servers; this provisioner handles the existing one
 # (ignore_changes on user_data means cloud-init changes do not apply to it).

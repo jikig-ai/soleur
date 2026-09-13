@@ -728,6 +728,8 @@ jobs:
               -target=doppler_service_token.web_arm_write \
               -target=github_actions_secret.doppler_token_web_arm \
               -target=betteruptime_team_member.ops \
+              -target=logtail_exploration.monitor_send_failed \
+              -target=logtail_exploration_alert.monitor_send_failed \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key
           rc=$?
@@ -1250,7 +1252,8 @@ jobs:
               -target=terraform_data.private_nic_guard_install \
               -target=terraform_data.zot_consumer_probe_install \
               -target=terraform_data.git_data_probe_install \
-              -target=terraform_data.inngest_consumer_probe_install
+              -target=terraform_data.inngest_consumer_probe_install \
+              -target=terraform_data.send_failed_alert_probe
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
