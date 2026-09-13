@@ -10,6 +10,23 @@ lane: cross-domain
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-13
+**Sections enhanced:** Research Insights (premise validation, publisher/parser contract, publish_date decision), Acceptance Criteria (parser-contract ACs), Risks (stale-flip risk)
+**Research agents used:** none spawnable — this deepen ran inside a pipeline planning subagent with no Task/agent tool; every gate was executed inline with the mechanical checks the skill prescribes (greps, `gh`, `git ls-tree`, `date`). See `## Deepen-Plan Verification` for the per-gate record.
+
+### Key Improvements
+
+1. Fixed an elided learning citation (`2026-06-12-...` → full filename) so every cited path resolves.
+2. Confirmed `publish_date: 2026-09-14` weekday math: 2026-09-13 is Sunday (today's 14:00 UTC cron already fired), 09-15 is the occupied Tuesday slot (grok file), 09-17 would be the next free auto-promotion slot — 09-14 remains the earliest viable and correct choice for a missed announcement.
+3. All halt gates (4.6–4.11) evaluated with their prescribed mechanical checks; results recorded in `## Deepen-Plan Verification`.
+
+### New Considerations Discovered
+
+- Credential-skip is survivable: if `X_*`/`BSKY_*` env vars are unset on the cron host, channels skip individually and a `Published nowhere` action-required issue is filed — the file is never lost, only delayed. No plan change needed; noted in Risks.
+- `channels:` token parsing splits on commas (`content-promotion.ts` `parseContentFrontmatter`) — `x, bluesky` is the canonical form the precedent uses; do not reformat to a YAML list.
+
 ## Overview
 
 > Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed); the spec directory exists but is empty (no spec.md to carry a lane forward).
@@ -35,7 +52,7 @@ Create the missed social announcement for the Devin CLI harness support that mer
 - Liquid/Jinja markers (`{{`, `}}`, `{%`, `%}`) anywhere in the body are rejected twice: lefthook `distribution-content-liquid-guard` at commit (`scripts/lint-distribution-content.sh`) and the publisher's own gate which refuses all channels for the file. The copy must contain none.
 - `validate-tweet-draft.sh` (`scripts/lib/`) is the draft-path structural gate (`status: draft` asserted). This file ships `status: scheduled` directly per the brief and the grok precedent — that validator is context, not a gate — but its structural assertions (non-empty title, `x` + `bluesky` tokens, both sections non-empty) are exactly what the ACs should pin.
 
-**publish_date decision (load-bearing).** Now = 2026-09-13 ~15:04 UTC; today's 14:00 UTC cron already ran. A `publish_date: 2026-09-13` file would never publish — next run it is `publish_date < today` → flipped to `status: stale`. Earliest viable: **2026-09-14** (publishes at Monday 14:00 UTC if merged before then). Auto-promotion (`content-promotion.ts`) assigns *drafts* to Tue/Thu slots skipping occupied dates, and 2026-09-15 is occupied by the grok file — but that Tue/Thu rule binds only the draft-promotion path, not a hand-scheduled file; for a missed announcement the honest move is the earliest viable date per `learnings/2026-06-12-...-decouple-build-from-news-window.md` (news windows decay; ship the honest version now). If merge slips past 2026-09-14 14:00 UTC, the file still must not sit with a past publish_date — /work should verify the date is still `> today` at ship time, or bump it.
+**publish_date decision (load-bearing).** Now = 2026-09-13 ~15:04 UTC; today's 14:00 UTC cron already ran. A `publish_date: 2026-09-13` file would never publish — next run it is `publish_date < today` → flipped to `status: stale`. Earliest viable: **2026-09-14** (publishes at Monday 14:00 UTC if merged before then). Auto-promotion (`content-promotion.ts`) assigns *drafts* to Tue/Thu slots skipping occupied dates, and 2026-09-15 is occupied by the grok file — but that Tue/Thu rule binds only the draft-promotion path, not a hand-scheduled file; for a missed announcement the honest move is the earliest viable date per `learnings/2026-06-12-brainstorm-verify-capability-claims-against-code-and-decouple-build-from-news-window.md` (news windows decay; ship the honest version now). If merge slips past 2026-09-14 14:00 UTC, the file still must not sit with a past publish_date — /work should verify the date is still `> today` at ship time, or bump it.
 
 **Verified copy claims (each traced to merged code/docs — the plan's fact base):**
 
@@ -47,7 +64,7 @@ Create the missed social announcement for the Devin CLI harness support that mer
 **Applicable learnings:**
 
 - `2026-04-17-extract-tweets-numbered-format.md` — pin the numbered-format contract; a broken thread posts only the hook while reporting success.
-- `2026-06-12-brainstorm-verify-capability-claims-against-code-and-decouple-build-from-news-window.md` — every capability claim in the copy must trace to merged code (done above); ship now rather than hold for completeness.
+- `2026-06-12-brainstorm-verify-capability-claims-against-code-and-decouple-build-from-news-window.md` (full name; earlier mention in this file elided) — every capability claim in the copy must trace to merged code (done above); ship now rather than hold for completeness.
 - `2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md` — frontmatter is parsed line-wise by awk/sed; keep `channels: x, bluesky` on one line, values unquoted or double-quoted only.
 - `2026-03-11-multi-platform-publisher-error-propagation.md` — partial failures file fallback issues; correct-by-construction beats post-failure repair.
 - `integration-issues/github-token-pr-no-ci-trigger-ContentPublisher-20260326.md` — bot-authored content PRs have CI-trigger quirks; /ship should confirm checks actually ran on PR #8121.
@@ -170,6 +187,7 @@ Product domain assessed **not relevant** — the plan creates a markdown content
 - **Risk:** PR #8121 merges after 2026-09-14 14:00 UTC → file lands with `publish_date` in the past → publisher flips it to `stale` unposted. Mitigation: AC2's strict-`>` check at ship time + Phase 2.3 bump step.
 - **Risk:** copy drift — an implementer adds unverified claims (star counts, "seamless", unsupported features). Mitigation: AC7 pins claims to the verified list.
 - **Risk:** bot-PR CI quirk (`learnings/integration-issues/github-token-pr-no-ci-trigger-ContentPublisher-20260326.md`) — confirm checks ran on #8121 at ship time.
+- **Risk:** cron-host credentials absent → per-channel skip + `Published nowhere` fallback issue; file is preserved (still `scheduled`), so this degrades to a delay, not a loss. No action needed in this plan.
 - **Non-goals:** no LinkedIn/Discord sections (precedent ships x+bluesky only for feature-launch; adding channels is scope expansion); no changes to `content-publisher.sh`, workflows, or the promotion slot logic; no announcement for the grok file (already scheduled).
 
 ## Sharp Edges
@@ -185,3 +203,19 @@ Product domain assessed **not relevant** — the plan creates a markdown content
 - Authoring contract: `plugins/soleur/skills/social-distribute/SKILL.md`; `scripts/lib/validate-tweet-draft.sh`; `scripts/lint-distribution-content.sh`
 - PRs: #8083, #8084, #8087, #8088, #8089 (merged); #8121 (draft carrier for this work)
 - Learnings: `learnings/bug-fixes/2026-04-17-extract-tweets-numbered-format.md`, `learnings/2026-06-12-brainstorm-verify-capability-claims-against-code-and-decouple-build-from-news-window.md`, `learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md`, `learnings/integration-issues/github-token-pr-no-ci-trigger-ContentPublisher-20260326.md`
+
+## Deepen-Plan Verification
+
+Per-gate record for the 2026-09-13 deepen pass (all gates run inline; no Task subagents available to this planning subagent — skill/research/review fan-outs from deepen-plan Phases 2–5 were substituted with the mechanical checks each gate prescribes):
+
+- **4.5 Network-outage:** no trigger pattern in plan (no SSH/firewall/timeout/terraform-provisioner). Skipped.
+- **4.55 Downtime & Cutover:** no downtime-inducing operation (single new markdown file). Skipped.
+- **4.6 User-Brand Impact:** PASS — section present, non-empty, threshold `aggregate pattern` (valid enum; no sensitive-path scope-out required since threshold ≠ `none`).
+- **4.7 Observability:** pure-docs — `## Files to Edit` is empty and the sole `## Files to Create` path matches `^knowledge-base/`. Skipped per trigger list.
+- **4.8 PAT-shaped variables:** PASS — the prescribed grep returned zero hits.
+- **4.9 UI wireframe:** no UI-surface file in Files to Create/Edit (checked against `ui-surface-terms.md` glob superset). Skipped.
+- **4.10 Encryption Posture:** no `.tf`/`.sql`/`cloud-init`/`docker-compose` file, no store or new connection. Skipped.
+- **4.11 Guard Contract:** no guard-shaped deliverable. Skipped.
+- **4.4 Precedent-diff:** pattern-bound file (distribution-content frontmatter + sections) diffed against TWO precedents — `2026-09-12-grok-build-plugin-workflow-fidelity.md` (scheduled, same channel set) and `2026-07-06-agent-audits-its-own-governance-rulesets.md` (published, numbered thread). Frontmatter key set, section headings, and the `<!-- To publish ... -->` comment match precedent shape exactly; only `issue_reference` is dropped (no issue exists for this work) — `get_frontmatter_field` treats it as optional.
+- **4.45 verify-the-negative (inline):** "no Devin announcement on main" → `git ls-tree origin/main knowledge-base/marketing/distribution-content/` confirms only `soleur-vs-devin.md` (published pillar, different type). "Publisher does not pre-validate X length" → confirmed by reading `post_x_thread` (no char check; X API enforces). "`N/ ` collapse" → confirmed in `extract_tweets` numbered mode.
+- **Quality checks:** all cited PR numbers re-verified live (`gh pr view` states+titles above); cited file paths glob-verified (only the to-be-created deliverable is absent, by design); no SHA/label/secret citations; no rule-ID citations (grep for `(hr|wg|cq|rf|pdr|cm)-` tokens in this file returns none); no grep-AC scans a scope containing this plan or tasks.md (AC8 scopes to `knowledge-base/marketing/distribution-content/` only); weekday math verified with `date -d`.
