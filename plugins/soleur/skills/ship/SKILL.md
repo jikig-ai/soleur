@@ -356,6 +356,16 @@ Then run the full battery:
 TEST_GROUP=all bash scripts/test-all.sh
 ```
 
+**Start it on the FINAL tree, and keep its log outside the session scratchpad.** Any commit you
+can already foresee — the `Reviewed-By-Soleur` trailer, the sync with `origin/main`, a fix the
+advisor consult will obviously demand — invalidates a running battery (dirty tree) and cancels the
+queued PR checks, so batch those first and start the run once. Redirect a detached run's output to
+`/var/tmp/<label>/` (the repo's own `TMPDIR` convention): the harness's per-session scratchpad
+directory was wiped mid-run on PR #8069 and a 60-minute battery's output vanished with it.
+**Why:** #8069 — three restarts (trailer commit, main sync, advisor fix) and one lost log before a
+single authoritative run existed; the final evidence came from the merge commit's `bun-test`
+pre-commit hook, which runs the same `test-all.sh` with `TEST_GROUP` defaulting to `all`.
+
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
 - **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
