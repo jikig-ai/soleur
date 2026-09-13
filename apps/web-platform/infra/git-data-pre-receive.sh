@@ -43,11 +43,16 @@
 # bootstrap mounts $GIT_DATA_ROOT on the block volume; bare repos (and thus
 # $GIT_DIR/fence) live under it.
 #
-# Delivered via the web-platform deploy payload (NOT cloud-init) so this
-# safety-critical, most-likely-to-iterate artifact stays pipeline-iterable; a
+# Delivered by a host replace (cloud-init) or the operator root path the cutover uses —
+# never by a git-uid channel (the hook directory is root:git 0750, the hook root:root,
+# #8043 F9; the "deploy payload" this header once named was never built — ADR-149). A
 # fail-closed placeholder ships in cloud-init until this lands (git-data-bootstrap.sh).
 
 set -euo pipefail
+# (#7797) this hook handles a live credential; -x would print it.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 reject() {
   # stderr from pre-receive is relayed to the pushing client (the web host),
