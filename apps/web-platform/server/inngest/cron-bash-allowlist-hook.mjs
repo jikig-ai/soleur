@@ -87,10 +87,18 @@ import { fileURLToPath } from "node:url";
 // is the documented exit-2-does-not-apply degradation, and the bundle never
 // evaluates a filing anyway -- only the standalone `node <this file>` hook
 // does, from the sandbox's repo checkout.
-const FILING_TAXONOMY_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../../../.claude/hooks/lib/user-surface-taxonomy.txt",
-);
+//
+// Computed LAZILY, not at module load: this file's "never throw" doctrine
+// guards main(), and a module-init throw in a bundle that leaves
+// `import.meta.url` undefined (esbuild's CJS output does) would take down
+// the whole importing route -- every cron -- rather than one hook run. The
+// lazy form throws, if ever, inside the exit-2 try/catch below (#8136 review).
+function filingTaxonomyPath() {
+  return resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../.claude/hooks/lib/user-surface-taxonomy.txt",
+  );
+}
 
 // Does any REAL label token in the (dequoted) segment carry `label`? Six
 // spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
@@ -205,7 +213,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // rather than breaking a cron that files honestly.
   let surfaces = [];
   try {
-    const raw = readTaxonomy ? readTaxonomy(FILING_TAXONOMY_PATH) : "";
+    const raw = readTaxonomy ? readTaxonomy(filingTaxonomyPath()) : "";
     surfaces = String(raw).split("\n").map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
   } catch { surfaces = []; }

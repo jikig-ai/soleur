@@ -777,7 +777,10 @@ jobs:
 
   # Builds the Dockerfile's `builder` stage — the SAME `npm run build` the
   # post-merge release runs, from the SAME context (`apps/web-platform`, minus
-  # `.dockerignore`). It catches non-HTTP exports from `app/**/route.{ts,tsx}`
+  # `.dockerignore`, with `plugins/soleur` vendored in exactly as the release's
+  # "Vendor plugin into build context" step does — release 1edf7a62 failed on
+  # a vendored `.ts` reaching Next's TS pass, a class only a vendored context
+  # can see). It catches non-HTTP exports from `app/**/route.{ts,tsx}`
   # (#2347/#2401 outage) and, since #8074, anything the build can only see
   # from a full checkout: this job used to run `npm run build` on the whole
   # repo, so a server file spelling a path as `new URL("../../../../.claude/…",
@@ -788,17 +791,42 @@ jobs:
   #
   # `load: false` / `push: false`: the image is discarded — this is a build
   # check, not a publish. Placeholder NEXT_PUBLIC_ args: client inlining is
-  # irrelevant to "does it build". No SENTRY_AUTH_TOKEN: the Sentry plugin skips
-  # source-map upload when it is absent (measured locally 2026-09-13).
+  # irrelevant to "does it build". No SENTRY_AUTH_TOKEN: next.config.ts passes
+  # `authToken: undefined` and the Sentry plugin skips source-map upload. No
+  # `cache-from`: the release exports `mode=min` (runner-stage layers only, so
+  # the SENTRY_AUTH_TOKEN-bearing builder layer never reaches the repo-readable
+  # cache), and a `cache-from` on that scope imported a manifest and hit
+  # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
+  # Every run is cold by construction.
   web-platform-build:
-    # 25m — the full-checkout `next build` measured max 2.2m over 10 main runs
-    # (#8020); the builder stage adds `npm ci` inside the image (uncached on a
-    # fresh runner), the dev-signin tripwire and `build:server`. Measured
-    # locally at ~4m with a warm deps layer; >=5x headroom cold.
-    timeout-minutes: 25
+    # 10m — measured 1m52s cold on the first run of this shape (run 34774037658:
+    # buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s for the
+    # full-checkout form it replaced (#8020 measured max 2.2m). >=5x headroom.
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Mirror of reusable-release.yml "Vendor plugin into build context" with
+      # the context fixed to apps/web-platform. The symlink-escape check is kept:
+      # the image is discarded, but a build that ingests an escaping symlink's
+      # CONTENT here would pass a build the release refuses, and this job exists
+      # to disagree with the release as rarely as possible.
+      - name: Vendor plugin into build context (as the release does)
+        run: |
+          set -euo pipefail
+          DEST="apps/web-platform/_plugin-vendored"
+          rm -rf "$DEST"
+          cp -a --no-dereference plugins/soleur "$DEST"
+          DEST_ABS="$(readlink -f "$DEST")"
+          while IFS= read -r link; do
+            target="$(readlink -f "$link" || true)"
+            if [[ -z "$target" ]] || [[ "$target" != "$DEST_ABS"* ]]; then
+              echo "::error::vendor_plugin: symlink escapes vendor tree: $link -> $target"
+              exit 1
+            fi
+          done < <(find "$DEST" -type l)
+          echo "Vendored $(find "$DEST" -type f | wc -l) plugin files into $DEST"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -813,9 +841,6 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
-          # Read-only reuse of the release's deps layer; never written from a
-          # PR run (a PR must not be able to poison the release cache).
-          cache-from: type=gha,scope=web-platform-release
 
   # --- Test matrix: 3 shards + synthetic aggregator ---
   #
@@ -1350,7 +1375,12 @@ jobs:
   # Per-shard `result` is read via env: + quoted "$VAR" per workflow-injection
   # guidance (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/).
   test:
-    needs: [test-webplat, test-bun, test-scripts]
+    # web-platform-build joined the aggregator in #8136: it was the #2347/#2401
+    # gate and had been ADVISORY since creation (never in the ruleset, never in
+    # this needs: list), so a red build could not stop auto-merge — release
+    # 34773058045 broke production past a green `test`. Adding it here is the
+    # one-line-per-site edit the loop below documents; no ruleset change.
+    needs: [test-webplat, test-bun, test-scripts, web-platform-build]
     if: always()
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
@@ -1376,6 +1406,7 @@ jobs:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+          BUILD_RESULT: ${{ needs.web-platform-build.result }}
           # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
@@ -1411,7 +1442,7 @@ jobs:
           # Single colon-delimited list, iterated twice: once to classify each leg,
           # once (inner) to read that leg's siblings. Adding a 4th shard is still a
           # one-line edit here, plus needs: + env:.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" )
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "web-platform-build:$BUILD_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1485,7 +1516,7 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "All three shards green."
+          echo "All four legs green (three shards + web-platform-build)."
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps
   # are pre-installed at the matching Playwright version. Container tag, digest,
