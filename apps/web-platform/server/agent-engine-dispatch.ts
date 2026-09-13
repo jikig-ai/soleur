@@ -16,6 +16,7 @@ type NewRunRepository = BindingRepository & {
 interface DispatchOptions {
   repository: BindingRepository;
   adapter: Pick<EngineAdapter, "start">;
+  adapterEngineId?: string;
   runId: string;
   input: EngineInput;
   context: EngineRunContext;
@@ -36,6 +37,9 @@ export async function* dispatchBoundEngineRun(
     binding: (persisted as { binding?: EngineRunContext["binding"] }).binding ??
       (persisted as unknown as EngineRunContext["binding"]),
   } as EngineRunContext;
+  if (options.adapterEngineId && context.binding.engineId !== options.adapterEngineId) {
+    throw new Error("persisted engine binding does not match adapter");
+  }
   for await (const event of options.adapter.start(context, options.input)) {
     yield event;
   }
@@ -44,6 +48,7 @@ export async function* dispatchBoundEngineRun(
 export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;
+  adapterEngineId?: string;
   binding: Record<string, unknown>;
   input: EngineInput;
   context: EngineRunContext;
@@ -55,6 +60,7 @@ export async function* dispatchNewEngineRun(options: {
   yield* dispatchBoundEngineRun({
     repository: options.repository,
     adapter: options.adapter,
+    adapterEngineId: options.adapterEngineId,
     runId: String((created as { id: unknown }).id),
     input: options.input,
     context: options.context,
