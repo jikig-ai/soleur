@@ -24,13 +24,28 @@ export interface BindRunInput {
 export class AgentEnginePersistenceRepository {
   constructor(private readonly client: PersistenceClient) {}
 
-  async setDefaultEngine(workspaceId: string, engineId: string): Promise<unknown> {
-    const result = await this.client.rpc("set_workspace_default_engine", {
+  async setDefaultEngine(workspaceId: string, engineId: string, authMode?: string): Promise<unknown> {
+    const args: Record<string, unknown> = {
       p_workspace_id: workspaceId,
       p_engine_id: engineId,
+    };
+    if (authMode !== undefined) args.p_auth_mode = authMode;
+    const result = await this.client.rpc("set_workspace_default_engine", {
+      ...args,
     });
     if (result.error) throw new Error(`workspace default engine update failed: ${result.error.message}`);
     return result.data;
+  }
+
+  async getDefaultAuthMode(workspaceId: string): Promise<string | null> {
+    const result = await this.client.from("workspace_engine_settings")
+      .select("default_auth_mode")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    if (result.error) throw new Error(`workspace default auth mode lookup failed: ${result.error.message}`);
+    if (!result.data || typeof result.data !== "object") return null;
+    const value = (result.data as { default_auth_mode?: unknown }).default_auth_mode;
+    return typeof value === "string" ? value : null;
   }
 
   async getDefaultEngine(workspaceId: string): Promise<string | null> {

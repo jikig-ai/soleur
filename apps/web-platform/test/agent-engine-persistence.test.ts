@@ -23,6 +23,30 @@ describe("AgentEnginePersistenceRepository", () => {
     });
   });
 
+  it("persists an explicit auth mode with the workspace default", async () => {
+    const supabase = client();
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await repo.setDefaultEngine("ws-1", "claude-code", "managed");
+    expect(supabase.rpc).toHaveBeenCalledWith("set_workspace_default_engine", {
+      p_workspace_id: "ws-1",
+      p_engine_id: "claude-code",
+      p_auth_mode: "managed",
+    });
+  });
+
+  it("reads the persisted auth mode through the tenant-scoped settings table", async () => {
+    const supabase = client();
+    supabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({ data: { default_auth_mode: "api-key" }, error: null }),
+        }),
+      }),
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.getDefaultAuthMode("ws-1")).resolves.toBe("api-key");
+  });
+
   it("reads a workspace default through the tenant-scoped settings table", async () => {
     const supabase = client();
     supabase.from.mockReturnValueOnce({

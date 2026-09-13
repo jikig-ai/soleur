@@ -6,6 +6,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS public.workspace_engine_settings (
   workspace_id uuid PRIMARY KEY REFERENCES public.workspaces(id) ON DELETE CASCADE,
   default_engine_id text NOT NULL,
+  default_auth_mode text NOT NULL DEFAULT 'managed',
   updated_by uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -67,7 +68,8 @@ CREATE POLICY agent_engine_events_member_select ON public.agent_engine_events
 
 CREATE OR REPLACE FUNCTION public.set_workspace_default_engine(
   p_workspace_id uuid,
-  p_engine_id text
+  p_engine_id text,
+  p_auth_mode text DEFAULT 'managed'
 ) RETURNS public.workspace_engine_settings
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -77,10 +79,11 @@ BEGIN
   IF NOT public.is_workspace_owner(p_workspace_id, auth.uid()) THEN
     RAISE EXCEPTION 'workspace default engine requires owner' USING ERRCODE = '42501';
   END IF;
-  INSERT INTO public.workspace_engine_settings(workspace_id, default_engine_id, updated_by)
-  VALUES (p_workspace_id, p_engine_id, auth.uid())
+  INSERT INTO public.workspace_engine_settings(workspace_id, default_engine_id, default_auth_mode, updated_by)
+  VALUES (p_workspace_id, p_engine_id, p_auth_mode, auth.uid())
   ON CONFLICT (workspace_id) DO UPDATE
     SET default_engine_id = EXCLUDED.default_engine_id,
+        default_auth_mode = EXCLUDED.default_auth_mode,
         updated_by = EXCLUDED.updated_by,
         updated_at = now()
   RETURNING * INTO v_row;
@@ -88,8 +91,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.set_workspace_default_engine(uuid, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_workspace_default_engine(uuid, text, text) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.bind_agent_engine_run(
   p_workspace_id uuid,
@@ -116,8 +119,8 @@ BEGIN
   )
   SELECT p_workspace_id, p_execution_kind, p_conversation_id, p_routine_id,
          p_routine_run_id, COALESCE(s.default_engine_id, 'claude-code'),
-         'unresolved', 'registry-pending', 'queued', p_created_by
-    FROM (SELECT default_engine_id FROM public.workspace_engine_settings
+         COALESCE(s.default_auth_mode, 'managed'), 'registry-pending', 'queued', p_created_by
+    FROM (SELECT default_engine_id, default_auth_mode FROM public.workspace_engine_settings
            WHERE workspace_id = p_workspace_id) s
   RIGHT JOIN (SELECT 1) sentinel ON true
   RETURNING * INTO v_row;
