@@ -54,6 +54,7 @@ function validateLease(lease: CodexCredentialLease): CodexCredentialLease {
  */
 export function createCodexAuthBoundary(provider: CodexAuthProvider): CodexAuthBoundary {
   const mode = provider.mode;
+  let loggedOut = false;
   const assertStableMode = () => {
     if (provider.mode !== mode) {
       throw Object.assign(new Error("Codex auth mode changed during a session"), {
@@ -61,20 +62,29 @@ export function createCodexAuthBoundary(provider: CodexAuthProvider): CodexAuthB
       });
     }
   };
+  const assertActive = () => {
+    if (loggedOut) {
+      throw Object.assign(new Error("Codex credentials have been logged out"), { code: "codex_credentials_logged_out" });
+    }
+  };
 
   return {
     mode,
     acquire: async () => {
       assertStableMode();
+      assertActive();
       try { return validateLease(await provider.acquire()); } catch (error) { throw normalizeAuthError(error); }
     },
     refresh: async () => {
       assertStableMode();
+      assertActive();
       try { return validateLease(await provider.refresh()); } catch (error) { throw normalizeAuthError(error); }
     },
     logout: async () => {
       assertStableMode();
+      if (loggedOut) return;
       await provider.logout();
+      loggedOut = true;
     },
   };
 }

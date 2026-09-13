@@ -64,6 +64,19 @@ describe("Codex auth boundary", () => {
     await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_credentials_revoked" });
     await expect(boundary.acquire()).rejects.not.toThrow("refresh token abc");
   });
+
+  it("does not reacquire credentials after logout", async () => {
+    const provider: CodexAuthProvider = {
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "secret", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    };
+    const boundary = createCodexAuthBoundary(provider);
+    await boundary.logout();
+    await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_credentials_logged_out" });
+    expect(provider.acquire).not.toHaveBeenCalled();
+  });
 });
 
 describe("Codex neutral adapter boundary", () => {
