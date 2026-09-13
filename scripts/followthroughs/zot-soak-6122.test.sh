@@ -138,7 +138,7 @@ OLD
   resolved="$(PATH="$d:$PATH" command -v gh)"
   [[ "$resolved" == "$d/gh" ]] || { echo "FATAL: stub gh did not shadow the real one (got $resolved)" >&2; exit 1; }
   : > "$GH_ARGV_SINK"
-  out="$(PATH="$d:$PATH" SENTRY_AUTH_TOKEN=stub GH_TOKEN=stub \
+  out="$(PATH="$d:$PATH" SENTRY_ACTIONS_RO_TOKEN=stub GH_TOKEN=stub \
         STUB_GH_STATE="$gh_state" STUB_GH_REASON="$gh_reason" STUB_GH_ARGV="$GH_ARGV_SINK" \
         ZOT_SOAK_START="2026-07-01T00:00:00" bash "$soak" 2>&1)"; rc=$?
   rm -rf "$d"
@@ -299,7 +299,7 @@ cp "$SOAK" "$d10/repo/scripts/followthroughs/"
 printf '# TODO: add zot support here one day\n# soleur-boot-emit would report this\nIREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.19\n' \
   > "$d10/repo/apps/web-platform/infra/cloud-init-inngest.yml"
 make_stubs "$d10" "$HEALTHY" CLOSED 200 "" COMPLETED
-out10="$(PATH="$d10:$PATH" SENTRY_AUTH_TOKEN=stub GH_TOKEN=stub \
+out10="$(PATH="$d10:$PATH" SENTRY_ACTIONS_RO_TOKEN=stub GH_TOKEN=stub \
         STUB_GH_STATE=CLOSED STUB_GH_REASON=COMPLETED STUB_GH_ARGV="$GH_ARGV_SINK" \
         ZOT_SOAK_START="2026-07-01T00:00:00" bash "$d10/repo/scripts/followthroughs/$(basename "$SOAK")" 2>&1)"; rc10=$?
 rm -rf "$d10"
