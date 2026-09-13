@@ -62,7 +62,7 @@ export function isExcludedFromContext(relPath: string, lines: string[]): boolean
  * `import`/`export … from`, and `new URL("<rel>", import.meta.url)` — the
  * bundler's static asset-reference syntax, which it resolves exactly like an
  * import. The second form is what broke release 34773058045 (#8074 → #8136):
- * the cron containment hook referenced `../../../../.claude/hooks/lib/…`
+ * the cron containment hook referenced the `.claude/hooks/lib/` taxonomy four levels up
  * that way, the hook joined the server bundle, and `next build` failed in the
  * Docker context while every full-checkout build passed.
  */
