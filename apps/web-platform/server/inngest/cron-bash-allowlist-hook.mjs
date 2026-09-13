@@ -45,6 +45,7 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
@@ -74,9 +75,27 @@ import { fileURLToPath } from "node:url";
 // empty, which degrades exit 2 out of existence while looking like a clean run.
 // The sandbox's CWD is not guaranteed either. Same class as guardrails.sh
 // resolving its copy via ${BASH_SOURCE[0]%/*}.
-const FILING_TAXONOMY_PATH = fileURLToPath(
-  new URL("../../../../.claude/hooks/lib/user-surface-taxonomy.txt", import.meta.url),
-);
+//
+// Resolved lazily via path.resolve over plain strings, never a static
+// `new URL(literal, import.meta.url)`: once this module is bundled
+// (cron-filing-deny-marker.ts imports three pure functions from it), Turbopack
+// treats that form as a build-time asset reference, and .claude/ is outside the
+// Docker build context -- which broke the release build on every push to main
+// from #8074 until this change. `path.resolve` over strings is what fixes the
+// build; laziness only moves the computation inside the existing try/catch
+// layers (readTaxonomy at the call site and main()'s backstop), so a throw here
+// degrades to DENY instead of the module-load fail-open D-new-1 warns about.
+// Valid only under the standalone-CLI identity: in the Next bundle
+// import.meta.url is a getter over the bundle's own path, so a bundled caller of
+// filingJustificationReason would silently get exit 2 = does not apply. Nothing
+// bundled calls it today.
+function filingTaxonomyPath() {
+  return resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../..",
+    ".claude/hooks/lib/user-surface-taxonomy.txt",
+  );
+}
 
 // Does any REAL label token in the (dequoted) segment carry `label`? Six
 // spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
@@ -191,7 +210,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // rather than breaking a cron that files honestly.
   let surfaces = [];
   try {
-    const raw = readTaxonomy ? readTaxonomy(FILING_TAXONOMY_PATH) : "";
+    const raw = readTaxonomy ? readTaxonomy(filingTaxonomyPath()) : "";
     surfaces = String(raw).split("\n").map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
   } catch { surfaces = []; }

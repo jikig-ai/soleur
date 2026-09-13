@@ -12,19 +12,19 @@ Plan: `knowledge-base/project/plans/2026-09-13-fix-release-build-turbopack-taxon
 
 ## Phase 2: GREEN — the one-file fix (`apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs`)
 
-- [ ] 2.1 Add `import { dirname, resolve } from "node:path";`
-- [ ] 2.2 Replace the module-load `FILING_TAXONOMY_PATH` constant with the lazily-called `filingTaxonomyPath()` (`resolve(dirname(fileURLToPath(import.meta.url)), "../../../..", ".claude/hooks/lib/user-surface-taxonomy.txt")`)
-- [ ] 2.3 Change the single reader in `filingJustificationReason` to `readTaxonomy(filingTaxonomyPath())`
-- [ ] 2.4 Add the comment (no `'../` specifier quoted; `path.resolve` over strings is the fix, laziness moves the computation inside the catch layers; `filingTaxonomyPath()` is valid only under the standalone-CLI identity; keep a `function` declaration)
+- [x] 2.1 Add `import { dirname, resolve } from "node:path";`
+- [x] 2.2 Replace the module-load `FILING_TAXONOMY_PATH` constant with the lazily-called `filingTaxonomyPath()` (`resolve(dirname(fileURLToPath(import.meta.url)), "../../../..", ".claude/hooks/lib/user-surface-taxonomy.txt")`)
+- [x] 2.3 Change the single reader in `filingJustificationReason` to `readTaxonomy(filingTaxonomyPath())`
+- [x] 2.4 Add the comment (no `'../` specifier quoted; `path.resolve` over strings is the fix, laziness moves the computation inside the catch layers; `filingTaxonomyPath()` is valid only under the standalone-CLI identity; keep a `function` declaration)
 
 ## Phase 3: Prove it
 
-- [ ] 3.1 Guard → `OK:` exit 0, count > 0 (AC7 GREEN half)
-- [ ] 3.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/cron-filing-deny-marker.test.ts test/server/inngest/cron-claude-eval-substrate.test.ts` → 0 failures (AC4)
-- [ ] 3.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → clean (AC5)
-- [ ] 3.4 Standalone probe from `/tmp` against the worktree hook: allow at 240/9, deny naming ADR-131 at 19/1 (AC6)
+- [x] 3.1 Guard → `OK:` exit 0, count > 0 (AC7 GREEN half)
+- [x] 3.2 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/cron-filing-deny-marker.test.ts test/server/inngest/cron-claude-eval-substrate.test.ts` → 0 failures (AC4)
+- [x] 3.3 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` → clean (AC5)
+- [x] 3.4 Standalone probe from `/tmp` against the worktree hook: allow at 240/9, deny naming ADR-131 at 19/1 (AC6)
 - [ ] 3.5 `cd apps/web-platform && docker build --target builder .` → exit 0, `✓ Compiled successfully`, no `cron-bash-allowlist-hook` diagnostic (AC2); BEFORE log (exit 1, `Can't resolve '../../../../.claude/…'`) recorded for AC1
-- [ ] 3.6 AC3: `perl -0777 -ne 'print "$ARGV\n" while /\bnew\s+URL\s*\(\s*["\x27]/g' <hook>` prints nothing
+- [x] 3.6 AC3: `perl -0777 -ne 'print "$ARGV\n" while /\bnew\s+URL\s*\(\s*["\x27]/g' <hook>` prints nothing
 - [ ] 3.7 Guard mutation matrix: M1, M2, M3, M5 RED; H1, H4 (PATH shim) RED via the `checked` floor; H2 (drop `.mjs` glob), H3 (drop `|new\s+URL`) RED via the `saw_url` floor; P2, P3 PASS — for every row the PR body carries `git diff --stat`, exit code, and the named stdout line (AC8)
 - [ ] 3.8 `bash scripts/test-all.sh scripts` green (AC9)
 - [ ] 3.9 `git diff --name-only "$(git merge-base origin/main HEAD)"..HEAD` = the two edited files + plan + this tasks.md + INDEX.md (+ learning if written) (AC12)
