@@ -685,7 +685,7 @@ The ADR amendment lands in Phase 6 of the same PR; nothing is deferred.
 - [x] AC13 `grep -c SOLEUR_CRON_FILING_DENY knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` ≥ 1.
 - [x] AC14 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean.
 - [x] AC15 `bash plugins/soleur/test/c4-count-parity.test.sh` green (no-C4-impact claim backed by the gate, not by reasoning).
-- [x] AC16 PR body carries `Closes #8076`; #8076 carries the follow-through directive and `follow-through` label (AC18).
+- [x] AC16 PR body carries `Ref #8076` (ship correction 2026-09-13: #8076 IS the follow-through tracker, so a `Closes` keyword would close it at merge and the sweeper would never grade AC18/AC19 — the probe's first PASS closes it); #8076 carries the follow-through directive and `follow-through` label (AC18).
 
 ### Post-merge (automated)
 
