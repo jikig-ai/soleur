@@ -7,6 +7,12 @@
 # drift class one migration earlier than the FK parser, with a self-
 # describing error that names the missing relation.
 #
+# Also covers the post-apply PostgREST reload hook (#8028): the runner
+# invokes postgrest-reload-schema.sh on every run and propagates its exit
+# code, so a rejected credential fails the migration job. A stub hook is
+# planted in every temp tree (plant_reload_stub) so the relocated runner
+# finds one; its exit code is driven by FAKE_RELOAD_HOOK_RC.
+#
 # Run via: bash apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 #
 # Test environment: each test builds a temp tree with a fake `psql` on
@@ -39,6 +45,25 @@ tmp2=$(mktemp -d)
 tmp3=$(mktemp -d)
 trap 'rm -rf "$tmp1" "$tmp2" "$tmp3"' EXIT
 
+# Plant a stub postgrest-reload-schema.sh beside the relocated runner
+# (#8028). The runner now calls the hook on EVERY run, so a tree without
+# one would exit 127 before any assertion. The stub records that it ran
+# (../hook-ran, i.e. $tmp/hook-ran) and exits FAKE_RELOAD_HOOK_RC.
+# The heredoc MUST stay quoted: an unquoted one would expand
+# `$(dirname "$0")` at plant time into THIS test's directory (touching a
+# file inside the live repo) and freeze the rc default to 0, making the
+# hook-failure cases vacuous.
+plant_reload_stub() {
+  local tmp="$1"
+  cat > "$tmp/scripts/postgrest-reload-schema.sh" <<'STUB'
+#!/usr/bin/env bash
+# Stub reload hook for run-migrations-schema-probe.test.sh (#8028).
+touch "$(dirname "$0")/../hook-ran"
+exit "${FAKE_RELOAD_HOOK_RC:-0}"
+STUB
+  chmod +x "$tmp/scripts/postgrest-reload-schema.sh"
+}
+
 # Build a temp tree with the runner relocated and a fake psql.
 #   $tmp/scripts/run-migrations.sh   (copy of real)
 #   $tmp/supabase/migrations/099_test_missing_ref.sql
@@ -48,6 +73,7 @@ make_temp_tree() {
   local bad_table="$2"
   mkdir -p "$tmp/bin" "$tmp/scripts" "$tmp/supabase/migrations"
   cp "$RUNNER" "$tmp/scripts/run-migrations.sh"
+  plant_reload_stub "$tmp"
   cat > "$tmp/supabase/migrations/099_test_missing_ref.sql" <<SQL
 -- Test migration: references a deliberately-missing table.
 CREATE TABLE IF NOT EXISTS public.test_dependent_4338 (
@@ -79,7 +105,9 @@ case "\$sql" in
     # Default: every other to_regclass returns true (table exists)
     echo "t" ;;
   *"count(*) FROM public._schema_migrations WHERE filename"*)
-    echo "0" ;;
+    # FAKE_ALREADY_APPLIED=1 → the migration is already in the ledger, so
+    # the runner applies nothing (applied=0) — the R4 shape (#8028).
+    echo "\${FAKE_ALREADY_APPLIED:-0}" ;;
   *"count(*) FROM public._schema_migrations"*)
     echo "0" ;;
   *)
@@ -181,6 +209,7 @@ fi
 echo "T3: probe enabled, self-referencing CREATE TABLE → does not block"
 mkdir -p "$tmp3/bin" "$tmp3/scripts" "$tmp3/supabase/migrations"
 cp "$RUNNER" "$tmp3/scripts/run-migrations.sh"
+plant_reload_stub "$tmp3"
 # Migration that both CREATES public.parent_4338 AND has an FK to it
 # (mirrors mig 053's workspaces self-reference shape).
 cat > "$tmp3/supabase/migrations/099_test_self_ref.sql" <<'SQL'
@@ -234,6 +263,85 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# --- #8028: the post-apply reload hook runs on every run and its exit ----
+# --- code reaches the runner's exit ---------------------------------------
+# Probe is OFF for R1–R3 (their fixture references a missing table; the
+# hook is what is under test, not the probe). Fake env goes on the env -i
+# line — the harness strips the ambient environment.
+# ------------------------------------------------------------------------
+tmpr1=$(mktemp -d); tmpr2=$(mktemp -d); tmpr3=$(mktemp -d); tmpr4=$(mktemp -d)
+trap 'rm -rf "$tmp1" "$tmp2" "$tmp2b" "$tmp3" "$tmpr1" "$tmpr2" "$tmpr3" "$tmpr4"' EXIT
+
+echo "R1: apply + hook rc 0 → runner exit 0, hook ran, no ::error"
+make_temp_tree "$tmpr1" "nonexistent_xyz_4338"
+set +e
+out=$(env -i PATH="$tmpr1/bin:/usr/bin:/bin" HOME="$HOME" \
+        DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        MIGRATION_SCHEMA_PRECONDITION_PROBE=0 \
+        ALLOW_UNMERGED_DEV_APPLY=1 \
+        FAKE_RELOAD_HOOK_RC=0 \
+        bash "$tmpr1/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "0" ]] && [[ -e "$tmpr1/hook-ran" ]] && ! printf '%s' "$out" | grep -q '::error'; then
+  pass "exit 0, hook ran, no ::error"
+else
+  fail "expected rc=0 + hook-ran + no ::error; got rc=$rc hook-ran=$([[ -e "$tmpr1/hook-ran" ]] && echo yes || echo no) out=$out"
+fi
+
+echo "R2: apply + hook rc 2 (rejected credential) → runner exit 2 with titled error"
+make_temp_tree "$tmpr2" "nonexistent_xyz_4338"
+set +e
+out=$(env -i PATH="$tmpr2/bin:/usr/bin:/bin" HOME="$HOME" \
+        DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        MIGRATION_SCHEMA_PRECONDITION_PROBE=0 \
+        ALLOW_UNMERGED_DEV_APPLY=1 \
+        FAKE_RELOAD_HOOK_RC=2 \
+        bash "$tmpr2/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF '::error title=Supabase rejected the migration credential::'; then
+  pass "exit 2 with the rejected-credential title"
+else
+  fail "expected rc=2 + titled error; got rc=$rc out=$out"
+fi
+
+echo "R3: apply + hook rc 127 (hook missing/bug) → runner exit 127 with the rc in the title"
+make_temp_tree "$tmpr3" "nonexistent_xyz_4338"
+set +e
+out=$(env -i PATH="$tmpr3/bin:/usr/bin:/bin" HOME="$HOME" \
+        DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        MIGRATION_SCHEMA_PRECONDITION_PROBE=0 \
+        ALLOW_UNMERGED_DEV_APPLY=1 \
+        FAKE_RELOAD_HOOK_RC=127 \
+        bash "$tmpr3/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "127" ]] && printf '%s' "$out" | grep -qF '::error title=Schema reload hook failed (rc=127)::'; then
+  pass "exit 127 propagated with the rc in the title"
+else
+  fail "expected rc=127 + titled error; got rc=$rc out=$out"
+fi
+
+echo "R4: nothing applied (already in ledger) + hook rc 2 → hook still runs, runner exit 2"
+make_temp_tree "$tmpr4" "nonexistent_xyz_4338"
+set +e
+out=$(env -i PATH="$tmpr4/bin:/usr/bin:/bin" HOME="$HOME" \
+        DATABASE_URL_POOLER="postgresql://fake@fake/fake" \
+        MIGRATION_SCHEMA_PRECONDITION_PROBE=0 \
+        ALLOW_UNMERGED_DEV_APPLY=1 \
+        FAKE_ALREADY_APPLIED=1 \
+        FAKE_RELOAD_HOOK_RC=2 \
+        bash "$tmpr4/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
+rc=$?
+set -e
+if [[ "$rc" == "2" ]] && [[ -e "$tmpr4/hook-ran" ]] && printf '%s' "$out" | grep -q '0 applied'; then
+  pass "hook ran at applied=0 and its rc 2 failed the run"
+else
+  fail "expected rc=2 + hook-ran + '0 applied'; got rc=$rc hook-ran=$([[ -e "$tmpr4/hook-ran" ]] && echo yes || echo no) out=$out"
+fi
+
+# ------------------------------------------------------------------------
 # --- #7795: the origin/main refresh must not auto-follow tags ------------
 # This suite is why the assertion lives HERE. It copies run-migrations.sh
 # into a tmp tree and runs it WITHOUT cd-ing (four times), so the script's
@@ -265,8 +373,8 @@ echo "Results: $PASS passed, $FAIL failed"
 # Gated on assertions EXECUTED, not on PASS alone: keyed on PASS, one genuinely FAILING arm trips
 # this first and reports "an arm was deleted or short-circuited" for a real defect, which is the
 # wrong haystack to hand an operator (#7795 review). Deleted and failed are now distinguishable.
-if [[ $((PASS + FAIL)) -lt 5 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertion(s) EXECUTED; expected >= 5.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 9 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertion(s) EXECUTED; expected >= 9.\n' "$((PASS + FAIL))" >&2
   printf '        An arm was deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   exit 1
 fi

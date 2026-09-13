@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Assert every hand-maintained required NEXT_PUBLIC_* secret is exported in the
+# Assert every hand-maintained required build/runtime secret is exported in the
 # current environment. Invoke via `doppler run -c prd -- bash <path>` so Doppler
 # populates env before we read it.
 #
@@ -19,6 +19,10 @@ REQUIRED=(
   NEXT_PUBLIC_SENTRY_DSN
   NEXT_PUBLIC_VAPID_PUBLIC_KEY
   NEXT_PUBLIC_GITHUB_APP_SLUG
+  # Management-API token for the post-migration PostgREST reload (#8028).
+  # Lives in the prd root only; its absence is soaked by the reload hook as
+  # "never opted in", so this list is where prd drift goes red.
+  SUPABASE_ACCESS_TOKEN
 )
 
 missing=0
@@ -206,7 +210,7 @@ for key in "${FORBIDDEN_IN_PRD[@]}"; do
 done
 
 if [[ "$missing" -gt 0 ]]; then
-  echo "::error::$missing required NEXT_PUBLIC_* secret(s) missing from Doppler prd"
+  echo "::error::$missing required secret(s) missing from Doppler prd"
   exit 1
 fi
 
@@ -220,7 +224,7 @@ if [[ "$forbidden_present" -gt 0 ]]; then
   exit 1
 fi
 
-echo "::notice::All ${#REQUIRED[@]} required NEXT_PUBLIC_* secrets present in Doppler prd"
+echo "::notice::All ${#REQUIRED[@]} required secrets present in Doppler prd"
 
 # --- env-fallback mirror invariant (ADR-038 §Fallback semantics) -----------
 # Every RUNTIME_FLAG MUST have a corresponding env var in Doppler that mirrors
