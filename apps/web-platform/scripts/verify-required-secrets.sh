@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Refuse to run under xtrace: every required secret is bound in this
+# process and `bash -x` would print it into the job log (see #7797).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # Assert every hand-maintained required build/runtime secret is exported in the
 # current environment. Invoke via `doppler run -c prd -- bash <path>` so Doppler
 # populates env before we read it.

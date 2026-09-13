@@ -154,8 +154,9 @@ payload='{"query":"NOTIFY pgrst, '\''reload schema'\'';"}'
 # Single curl call; capture body + HTTP status using -w. The trailing
 # `\n%{http_code}` lands as the final line; the fake curl in
 # postgrest-reload-schema.test.sh mirrors this contract.
-# The bearer header is piped in on STDIN (`--header @-`) so the token is
-# never in curl's argv (process listings, xtrace); `--disable` FIRST aborts
+# The bearer header is piped in on STDIN (curl reads the header file from
+# `-`) so the token is never in curl's argv (process listings, xtrace);
+# `--disable` FIRST aborts
 # ~/.curlrc parsing and `--noproxy '*'` keeps ALL_PROXY/HTTPS_PROXY from
 # redirecting the request (lint-shell-trace-credential-refusal Rule D).
 # Capture stderr separately to /dev/null so a future flag change (e.g.,
