@@ -22,6 +22,18 @@
 # would print as 4). Detection is identical either way; only the diagnostic file:line differs,
 # and naming the offender accurately is the whole value of the guard.
 #
+# RULE 2 (#7946) -- the RETIRED CREDENTIAL NAME BAN. No file under the target dir -- any name,
+# any depth, executable line or comment -- may name `SENTRY_AUTH_TOKEN`. That is the
+# canonical Sentry env-var name, so a workstation `doppler run -c prd_terraform` binds a
+# PERSONAL, human-account-scoped token under it silently (#7797); the followthroughs consume
+# `SENTRY_ACTIONS_RO_TOKEN`, an org-level read-only integration (ADR-031), which no Doppler
+# config can satisfy by accident. Rule 2 deliberately does NOT apply rule 1's two exemptions:
+# it reads `.test.sh` and every other file (an env stub or a fixture is what the next author
+# copies) and it does NOT strip comments (a name in a comment is what the next author copies).
+# It has its OWN scanned counter (`scanned_rule2`, the file count under the dir) and its own
+# floor, so a broken rule-2 walk cannot hide behind rule 1's count -- and vice versa. Same
+# exit contract.
+#
 # Usage:  lint-followthrough-varq-ban.sh [TARGET_DIR]
 #   no arg      -> scans <repo-root>/scripts/followthroughs (production run; ≥10-file floor)
 #   TARGET_DIR  -> scans that dir verbatim (how the .test.sh points it at a mktemp sandbox)
@@ -67,6 +79,24 @@ for f in "$TARGET_DIR"/*.sh; do
   done < <(grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*:?\?' "$f" | grep -vE '^[0-9]+:[[:space:]]*#')
 done
 
+# RULE 2: the retired credential name in ANY file under the dir, at any depth, comments
+# INCLUDED -- one recursive grep, not a `*.sh` glob, so a fixture, a `.md` note or a
+# subdirectory cannot carry it past the ban. `-F` because the needle is a literal (a
+# superstring such as `MY_SENTRY_AUTH_TOKEN` is caught on purpose: it is the same name with a
+# prefix); `-n` on the RAW file so the cited line is the true one. The `# rule2-grep` marker
+# is what the suite's M5 row deletes to prove this line is the mechanism.
+RETIRED_NAME='SENTRY_AUTH_TOKEN'
+scanned_rule2=$(find "$TARGET_DIR" -type f | wc -l)  # rule2-count
+rule2_hits=""
+rule2_hits=$(grep -rnF -- "$RETIRED_NAME" "$TARGET_DIR" || true)  # rule2-grep
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  # `path:line:text` -- the path is the first field; the line number the second.
+  f="${hit%%:*}"; rest="${hit#*:}"; lineno="${rest%%:*}"
+  echo "$f:$lineno: rule 2: names the retired credential '$RETIRED_NAME' -- use SENTRY_ACTIONS_RO_TOKEN; the retired name binds a personal token under doppler run -c prd_terraform (see ADR-031, #7946). Comments, fixtures and .test.sh stubs count: they are what gets copied." >&2
+  violations=$((violations + 1))
+done <<<"$rule2_hits"
+
 # Minimum-cardinality floor (production run only): a broken glob yielding 0 files must not
 # pass vacuously. Skipped for an explicit sandbox dir (the .test.sh fixtures are few).
 # VARQ_BAN_MIN_PROBES is a TEST-ONLY override so the .test.sh can force a floor breach on the
@@ -77,11 +107,17 @@ if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2
   exit 2
 fi
+# Rule 2's own floor, keyed on ITS counter: a rule-2 walk that resolves nothing must not
+# report clean over nothing, and rule 1's count must not be what vouches for it.
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule2 < MIN_PROBES )); then
+  echo "ERROR: rule 2 (retired-name ban) checked only $scanned_rule2 file(s) in $TARGET_DIR -- its walk resolved nothing; the glob or path is broken" >&2
+  exit 2
+fi
 
 if (( violations > 0 )); then
-  echo "FAILED: $violations banned \${VAR:?}/\${VAR?} occurrence(s) on executable lines. See followthrough-convention.md §Author workflow." >&2
+  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1) and/or the retired credential name (rule 2). See followthrough-convention.md §Author workflow." >&2
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned in $TARGET_DIR)"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR)"
 exit 0
