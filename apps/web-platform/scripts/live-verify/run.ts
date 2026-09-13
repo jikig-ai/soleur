@@ -366,7 +366,18 @@ const EXPECTED_PATHS =
  * (`cq-regex-unicode-separators-escape-only`).
  */
 function scrubLine(v: string): string {
-  return v.replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ");
+  // Codepoint test rather than a regex literal: a character class spanning
+  // \x00-\x1f is exactly what eslint's `no-control-regex` exists to flag, and
+  // that rule carries a ratchet in this repo which only moves DOWN. Same
+  // semantics, no control characters in source, and the separators stay
+  // numeric escapes (cq-regex-unicode-separators-escape-only).
+  let out = "";
+  for (const ch of v) {
+    const c = ch.codePointAt(0) ?? 0;
+    const breaksALine = c < 0x20 || c === 0x7f || c === 0x2028 || c === 0x2029;
+    out += breaksALine ? " " : ch;
+  }
+  return out;
 }
 
 /**
