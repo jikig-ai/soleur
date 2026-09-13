@@ -38,5 +38,6 @@
       "url": "https://mcp.stripe.com",
       "transport": "http"
     }
-  }
+  },
+  "skills": ["./skills", "./devin/skills"]
 }

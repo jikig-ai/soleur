@@ -1,5 +1,13 @@
 # Learning: a detector cron must route its OWN self-failure ops, and a new sentry_issue_alert must be registered in the apply `-target` set
 
+> **Superseded in part (2026-09-11, #8050).** The `-target=` allow-list half of this
+> learning is stale: `apply-sentry-infra.yml` has been a FULL-ROOT plan/apply since
+> #6589, so there is no `-target=` set to register a new resource in (and the test
+> `test-sentry-full-root-apply.sh` T1 asserts none survives). Adding a `sentry_alert`
+> today means a resource block plus a regenerated
+> `apps/web-platform/infra/sentry/alert-reference.json` — see that directory's README
+> §Drift detection. The self-failure-routing half still holds.
+
 ## Problem
 
 Building the #5138 stale-`ci/*` bot-PR watchdog (a daily scan added to

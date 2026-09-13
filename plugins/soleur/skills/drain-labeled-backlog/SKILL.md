@@ -3,6 +3,10 @@ name: drain-labeled-backlog
 description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-labeled-backlog` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-labeled-backlog`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/drain-labeled-backlog.workflow.js`](./workflows/drain-labeled-backlog.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Drain Labeled Backlog
@@ -107,7 +111,7 @@ Pull `## Problem`, `## Proposed Fix`, and `Location:` / file paths from each iss
 
 ### 6. Delegate to one-shot
 
-Use the Skill tool: `skill: soleur:one-shot`, args: `<scope argument built above>`.
+**Claude:** Skill tool `skill: soleur:one-shot`, args: `<scope argument built above>`. **Grok:** Read `plugins/soleur/skills/one-shot/SKILL.md` in this process (`/one-shot` with that scope) — slash names the skill; it is not a nested tool_use.
 
 `/soleur:one-shot` handles worktree creation, plan, deepen, work, review, QA, compound, and ship. This skill does NOT run any lifecycle phases itself — it only assembles scope.
 

@@ -259,10 +259,10 @@ row "ROW5" "$CI_YML" \
 # so per-leg denominators and the epilogue's decline accounting disagree.
 row "ROW7" "$RUNNER" \
   '  _shard_selects || return 0
-  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))' \
-  '  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  '  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))' \
   RED "skip_suite bypasses the shard filter (its registrations land on every leg)"

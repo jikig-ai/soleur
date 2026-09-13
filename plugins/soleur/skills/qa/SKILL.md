@@ -3,6 +3,10 @@ name: qa
 description: "This skill should be used when running functional QA before merge."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/qa` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:qa`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
 <!-- lifecycle-handoff-protocol:end -->
@@ -21,8 +25,11 @@ Verify that features actually work before merge -- not just that pages render, b
 
 ## Usage
 
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/qa`); slash names the skill.
+
 ```bash
-skill: soleur:qa, args: "<plan_file_path>"
+skill: soleur:qa, args: "<plan_file_path>"   # Claude Skill tool
+/qa <plan_file_path>                         # Grok slash (then Read this SKILL.md)
 ```
 
 The skill reads the plan file's `## Test Scenarios` section and executes each scenario.

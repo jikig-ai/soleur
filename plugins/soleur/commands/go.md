@@ -21,14 +21,16 @@ Do not proceed until there is input from the user.
 Before the session-start preamble and before any routing, confirm a usable git repository exists. Run the readiness probe (it decides readiness AND, on failure, emits a `SOLEUR_GIT_REPO_DIAG` forensic line that the server-side telemetry hook mirrors to Better Stack — so a not-ready workspace is self-diagnosable without a manual probe):
 
 ```bash
-if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"; then
+ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
   # Identity is not freshness (#7474): a root that IS ours can still not carry
   # this probe, and the bare invocation would then die with an unattributed
   # interpreter error. The fallback below is already the right behaviour for
   # that case — only the reason differs, so it is reported separately.
-  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" ]; then
-    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
+  if [ -f "${ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" ]; then
+    bash "${ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
   else
     echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=absent-from-verified-root"
     git rev-parse --is-bare-repository 2>/dev/null || true
@@ -38,6 +40,8 @@ else
   # Distinct from a not-ready workspace: the PROBE could not run. Emitting the
   # same marker family keeps this visible to the telemetry hook instead of
   # silently degrading into two git calls that print `true` (#7442).
+  # Empty ROOT (neither GROK_PLUGIN_ROOT nor CLAUDE_PLUGIN_ROOT) stays
+  # plugin-root-unverified — never default to ./plugins/soleur (ADR-179 / #7442).
   echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified"
   git rev-parse --is-bare-repository 2>/dev/null || true
   git rev-parse --is-inside-work-tree 2>/dev/null || true
@@ -50,7 +54,11 @@ The `else` branch runs the bare inline probes when the plugin payload cannot be 
 
 If the output shows `SOLEUR_GIT_REPO_READY=false` (or, on the fallback, **neither** probe printed `true`), the workspace has no usable git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed (the CWD is then a repo-less `/workspaces/<id>`), OR the `.git` is present but git rejects it (a corrupt/masked config — the emitted `SOLEUR_GIT_REPO_DIAG config_parse_rc`/`err=` fields distinguish these). **Every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
 
-> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment. If this keeps happening: if your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
+> Your workspace isn't ready yet — its repository is still being set up, or its setup didn't finish. Please try again in a moment.
+
+**Claude / Concierge:** if this keeps happening and your project lives in a **team workspace**, switch to that workspace and try again; if this is your own workspace, check that a repository is connected in **Settings → Repository**.
+
+**Grok Build:** that Concierge settings path does not apply. Confirm `GROK_PLUGIN_ROOT` or `CLAUDE_PLUGIN_ROOT` points at the Soleur plugin (plugin.json name `soleur`) and that `grok inspect` lists it. Do not invent a Settings → Repository screen.
 
 This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge no-repo session hit.)
 
@@ -59,10 +67,14 @@ This gate is deterministic and fires on the first action, so a not-ready workspa
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
 
 ```bash
-if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
-  # Identity is not freshness (#7474) — see the Step 0.0 probe above.
-  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
-    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
+ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+if [ -n "$ROOT" ] \
+   && [ -f "${ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${ROOT}/.claude-plugin/plugin.json"; then
+  # Identity is not freshness (#7474) — see the Step 0.0 probe above. Preferring
+  # GROK_PLUGIN_ROOT does not weaken the name=soleur check Step 0.0 already runs.
+  if [ -f "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
+    bash "${ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
       git worktree list && \
       git show main:.mcp.json > .mcp.json 2>/dev/null || true
   else
@@ -71,7 +83,7 @@ if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
 else
   # Do not let the session-start gate no-op invisibly: the previous form ended in
   # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json
-  # restore with no output at all (#7442).
+  # restore with no output at all (#7442). Empty ROOT stays plugin-root-unverified.
   echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
 fi
 ```
@@ -86,7 +98,7 @@ Run `pwd`. If the path contains `.worktrees/`, extract the feature name and ment
 
 "You're in worktree **feat-[name]**. Want to continue working on this, or start something new?"
 
-If the user wants to continue the current feature, delegate to `soleur:work` via the **Skill tool** with the user input as arguments. Then stop.
+If the user wants to continue the current feature, delegate to `soleur:work`. **Claude:** Skill tool (`soleur:work`) with the user input as arguments. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process and run it to completion. Then stop.
 
 **Bare-repo CWD guard.** If `pwd` is NOT inside `.worktrees/` AND `git rev-parse --is-bare-repository` returns `true`, the CWD is a bare-repo root with no working tree. Any Edit/Write to files visible at this path lands on stray untracked content not on any branch, and `node_modules` is not hydrated so typecheck/dev-server commands fail. For file-touching intents (the `fix`/`implement`/`drain`/`review` rows in Step 2), do NOT edit in place — route through `/one-shot` (Grok) or `soleur:one-shot` (Claude) so a proper worktree is created via `worktree-manager.sh`. For read-only intents (questions, exploration, `clo-attestation`, `legal-threshold`), proceed without worktree creation. See `knowledge-base/project/learnings/2026-05-19-bare-repo-grep-and-subagent-infra-claim-verification.md`.
 
@@ -113,13 +125,13 @@ Devin exposes Soleur skills as slash commands: `/soleur:<skill>` (e.g. `/soleur:
 
 **Routing contract (never improvise):** when a table row names `soleur:<skill>` or an agent, invoke it via the harness adapter (`invokeSkill` / `spawnAgent` semantics in `harness.ts` — or `routingInstructions()`). Pass the original user input as args/prompt. **Do NOT** improvise workflow steps, explore the filesystem as a substitute, or hand-roll plan/work/review phases when a registered route exists.
 
-**Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Map `soleur:<skill>` → `/<skill>` (strip prefix) at invocation time. **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+**Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Invoke a skill by Reading `plugins/soleur/skills/<name>/SKILL.md` in this process (`/<skill>` names the skill; it is not a nested tool_use). **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Invoke routed skills with the `/soleur:<skill>` slash command. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
-If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` + `grok --trust` (Grok), `claude --plugin-dir ./plugins/soleur` (Claude), or `devin plugins install ./plugins/soleur` (Devin).
+If harness is unknown and Skill/slash tools are unavailable, STOP and suggest `grok inspect` (Grok), `claude --plugin-dir ./plugins/soleur` (Claude), or `devin plugins install ./plugins/soleur` (Devin). Live CLI 1.0.29 has no `grok --trust` — do not invent one.
 
 Analyze the user input and classify intent using semantic assessment:
 
@@ -143,7 +155,7 @@ Analyze the user input and classify intent using semantic assessment:
 When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:brainstorm`, `soleur:drain-labeled-backlog`, `soleur:drain-prs`):
 
 0. **You are still in `/go`, not in the pipeline skill.** Routing is classification + dispatch only. The `/go` handler does **not** run pipeline phases, create worktrees for implementation, or write product code — even if you "know what the skill would do next."
-1. **Your very next action** MUST invoke that skill via the harness adapter — Grok: slash command (`/brainstorm <args>`, `/one-shot <args>`, …); Claude: Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …); Devin: slash command (`/soleur:brainstorm <args>`, `/soleur:one-shot <args>`, …). Do **not** read the skill's SKILL.md and execute a subset of its steps with Write/Edit/Shell yourself.
+1. **Your very next action** MUST invoke that skill via the harness adapter (`plugins/soleur/lib/harness.ts` `invokeSkill()`). **Grok:** Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion — slash `/<name>` names the skill; it is not a nested tool_use. **Claude:** Skill tool (`soleur:brainstorm`, `soleur:one-shot`, …). **Devin:** slash command (`/soleur:brainstorm <args>`, `/soleur:one-shot <args>`, …). Do **not** execute a subset of the skill's steps with Write/Edit/Shell yourself. (Claude must not substitute Read for the Skill tool.)
 2. **Do NOT end your turn** after routing, worktree creation, brainstorm artifacts, or a pushed draft PR. Those are mid-pipeline checkpoints, not deliverables.
 3. **`brainstorm` deliverable:** brainstorm doc + spec + handoff to `/plan` (or `/one-shot` shortcut when requirements are clear). **FORBIDDEN:** product code during brainstorm.
 4. **`one-shot` deliverable:** merged PR + `<promise>DONE</promise>` (Step 8). Pushed code on a draft PR without review/ship is a **protocol violation**, not completion.
@@ -154,10 +166,10 @@ When Step 2 routes to a **pipeline skill** (`soleur:one-shot`, `soleur:brainstor
 If intent is clear, route without confirmation:
 
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
-- **Grok Build:** invoke via **slash command** (`/<skill>` with args appended). Agents: **spawn_subagent** with the agent id and prompt = original user input.
+- **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
 - **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
 
-Map `soleur:<skill>` cells in the table to Grok `/<skill>` at invocation time (strip the `soleur:` prefix). **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
+Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
 
 **PR-vs-issue type resolution (when `#N` or a bare number is the input):** Before evaluating the `clo-attestation` and `review` rows, run `gh issue view N --json body,title,state 2>/dev/null` to determine whether `N` is an issue. If `gh issue view` succeeds AND the body satisfies the `clo-attestation` predicate, route to clo. If `gh issue view` succeeds but no `clo-attestation` match, route to `soleur:review` only after confirming `gh pr view N` ALSO succeeds (otherwise the input is a non-attestation issue — route to default/brainstorm with the issue body as context). This ordering closes the gap that caused `/soleur:go #3998` to mis-route an issue to PR review. See `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`.
 
@@ -171,6 +183,7 @@ If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: B
 - **Worktree-recovery PR-merge probe.** When the user asks to resume/recover a stale worktree (e.g., after a laptop crash, branch switched away, phantom staged files), run `gh pr list --head <branch> --state all --json number,state` BEFORE proposing "reset to remote branch". A remote feature branch existing is NOT proof the work is open — squash merges leave the source branch intact. If `state == MERGED`, the recovery path is clean-and-remove (`git reset --hard HEAD` → `git worktree remove` → `git push origin --delete <branch>`), not reset-to-remote (which would silently re-introduce pre-merge state). See `knowledge-base/project/learnings/workflow-patterns/2026-05-19-worktree-recovery-check-pr-merge-status-first.md`.
 - **An EMPTY worktree is not an ABANDONED one — free-prose entry has no guard at all.** The two sharp edges above are *input-keyed*: NAME-relative detection fires on a `SOL-\d+` Linear ID, worktree-plan-vs-issue fires on a `#N`. A brainstorm entered as plain English carries neither, so **no guard evaluates a name-matching sibling worktree** — the most common entry shape is the uncovered one. Worse, the signals that read as "abandoned scaffold" are identical to the signals of a worktree created *thirty seconds ago*: one `chore: initialize` commit on current `main`, a clean `git status`, and an open `WIP:` draft PR. Before reusing ANY worktree you did not create in this session, run both probes: `gh pr view <n> --json updatedAt,author` (a PR updated minutes ago is a LIVE session, not a leftover) and grep that worktree's `specs/feat-*/spec.md` frontmatter + `plans/*` for an issue number — if it names a DIFFERENT issue, it is a different feature. Reuse loses commits: two sessions on one branch means one hard-resets the other's work away, and both write the same `specs/feat-<name>/spec.md` path. Default to a sibling branch; an extra worktree costs nothing. **Why:** 2026-08-06 — `feat-alpha-onboarding-motion` presented as an abandoned scaffold, was a live session on #7329; it hard-reset the branch and discarded commit `4943757d7`, and a spawned design agent had to recover its `.pen` files from a dangling commit. See `knowledge-base/project/learnings/2026-08-06-an-empty-worktree-is-not-an-abandoned-one.md`.
 - **Worktree-plan-vs-issue alignment (`#N` entry → "Continue in that worktree").** When the input is an issue `#N` and a topically-named worktree already exists, NAME-relevance is NOT issue-relevance. Before offering "Continue in that worktree", grep the worktree's planning artifact (`knowledge-base/project/plans/*`, `specs/feat-*/spec.md` frontmatter `closes:`) for the input issue number. If the worktree's plan targets a DIFFERENT (sibling) issue, surface that mismatch in the `AskUserQuestion` options (offer a fresh worktree for `#N` vs. continuing the existing one for `#M`). Issues that a body explicitly splits into a "separate PR" / "follow-up PR" must not be silently co-located. See `knowledge-base/project/learnings/2026-05-29-brand-hex-commit-gate-and-go-worktree-plan-mismatch.md`.
+- **Grok entry is `/go`, not `/soleur:go`.** If the operator typed `/soleur:go`, continue — that is Claude's slash; Grok's is `/go`. Do not refuse or re-prompt.
 - **Grok Build bypass guard (#6325 class).** If you routed to `soleur:one-shot` and find yourself writing product code or running `git commit` before `/review` and `/ship` ran, STOP — you inlined the pipeline. Invoke `/one-shot <args>` (or continue the active one-shot Steps 3–8), never "implement then report done."
 - **Brainstorm / plan / work bypass guard (#6320 lifecycle).** If you routed to `soleur:brainstorm` and wrote product code, or finished brainstorm/plan artifacts without invoking `/plan` or `/work`, or pushed from `/work` without `/review` → `/ship`, STOP — invoke the mandated successor from `workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`, `IMPLEMENTATION_TAIL`).
 - **Scrub closed `#N` contextual citations before invoking one-shot.** When routing to `soleur:one-shot`, the args you construct must use `#N` form ONLY for OPEN work-target issues. A *contextual* citation of a prior merged PR/issue ("structural causes already fixed in #4577", "supersedes #1234") trips one-shot's Step 0a.5 closed-issue collision abort — the gate cannot distinguish a work target from a citation. Rephrase such citations to date-anchored prose ("the apex-canonical reconciliation merged 2026-05-29") before invoking. **Scrub the QUOTED TITLES too, not just your prose** — a decision-challenge/follow-up issue routinely carries the predecessor `#N` inside its own title (`decision-challenge: … while fixing #6572`), so an args block that quotes that title verbatim to say which issue to close re-imports the closed ref and the gate aborts on args that read as fully scrubbed. Grep your constructed args for `#[0-9]+` and confirm every survivor is an OPEN work target before invoking. **Why:** #6578 — two aborts, prose scrubbed on the first, the title quote missed on both. See `knowledge-base/project/learnings/2026-06-15-gsc-crawled-not-indexed-remediation-is-internal-linking.md` and `knowledge-base/project/learnings/workflow-patterns/2026-05-25-one-shot-closed-issue-gate-fires-on-contextual-refs.md`.

@@ -1333,7 +1333,7 @@ fetch_origin_branch_base() {
   # All progress/warning output goes to stderr — only the chosen ref name is
   # written to stdout so callers can capture it via $(...).
   echo -e "${BLUE}Fetching latest origin/$branch...${NC}" >&2
-  if ! git fetch origin "$branch" 2>/dev/null; then
+  if ! git fetch --no-tags origin "$branch" 2>/dev/null; then
     echo -e "${YELLOW}Warning: Could not fetch origin/$branch -- using cached ref${NC}" >&2
   fi
   if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
@@ -1544,9 +1544,9 @@ update_branch_ref() {
   echo -e "${BLUE}Updating $branch...${NC}"
   if [[ "$IS_BARE" == "true" && "$IS_IN_WORKTREE" != "true" ]]; then
     # Bare repo root: no working tree, so use fetch with refspec
-    if git fetch origin "$branch:$branch" 2>/dev/null; then
+    if git fetch --no-tags origin "$branch:$branch" 2>/dev/null; then
       echo -e "${GREEN}Updated $branch to latest (via fetch)${NC}"
-    elif git fetch origin "$branch" 2>/dev/null; then
+    elif git fetch --no-tags origin "$branch" 2>/dev/null; then
       # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
       # Safe because direct commits to main are prohibited (hook-enforced).
       if git update-ref "refs/heads/$branch" "origin/$branch"; then
@@ -1557,7 +1557,7 @@ update_branch_ref() {
     fi
   else
     git checkout "$branch"
-    git pull origin "$branch" || true
+    git pull --no-tags origin "$branch" || true
   fi
 }
 
@@ -1753,7 +1753,7 @@ heal_stale_branch() {
   # deliberately does NOT reuse fetch_origin_branch_base(): that helper falls back
   # to FETCH_HEAD / the literal branch name (never bails), which would be an unsafe
   # emptiness baseline here — heal must bail, not measure against a wrong base.
-  git fetch origin "$from_branch" >/dev/null 2>&1 || true
+  git fetch --no-tags origin "$from_branch" >/dev/null 2>&1 || true
   local base_ref
   if git rev-parse --verify --quiet "refs/remotes/origin/$from_branch" >/dev/null 2>&1; then
     base_ref="refs/remotes/origin/$from_branch"
@@ -1769,7 +1769,7 @@ heal_stale_branch() {
   # standard `+refs/heads/*:refs/remotes/origin/*` fetch refspec never populate
   # those tracking refs, so relying on them silently skips the heal. The fetch
   # brings the tip's objects local so rev-list can measure it.
-  git fetch origin "$branch" >/dev/null 2>&1 || true
+  git fetch --no-tags origin "$branch" >/dev/null 2>&1 || true
   # Full `refs/heads/<branch>` (not the bare name) so ls-remote's tail-at-slash
   # matching can't false-match a suffix branch (e.g. `sub/<branch>`). The trailing
   # `|| remote_sha=""` keeps a non-zero ls-remote (offline) set -e-safe.
@@ -2728,7 +2728,7 @@ cleanup_merged_worktrees() {
   # distinct lock name does not deadlock with cleanup-merged above.
   local fetch_error
   acquire_lock fetch-prune 30 || headless_or_stderr warn "fetch-prune lock contended; proceeding without"
-  if ! fetch_error=$(git fetch --prune 2>&1); then
+  if ! fetch_error=$(git fetch --no-tags --prune 2>&1); then
     release_lock fetch-prune
     [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not fetch from remote: $fetch_error${NC}"
     return 0
@@ -2974,9 +2974,9 @@ cleanup_merged_worktrees() {
       # Bare repos have no working tree -- use fetch with refspec to update the
       # local main ref directly (plain "fetch origin main" only updates FETCH_HEAD
       # and origin/main, leaving local main stale for new worktree creation)
-      if git fetch origin main:main 2>/dev/null; then
+      if git fetch --no-tags origin main:main 2>/dev/null; then
         echo -e "${GREEN}Updated main to latest${NC}"
-      elif git fetch origin main 2>/dev/null; then
+      elif git fetch --no-tags origin main 2>/dev/null; then
         # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
         # Safe because direct commits to main are prohibited (hook-enforced).
         if git update-ref "refs/heads/main" "origin/main"; then
@@ -3004,7 +3004,7 @@ cleanup_merged_worktrees() {
         git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
       fi
       local pull_output
-      if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
+      if pull_output=$(git -C "$GIT_ROOT" pull --no-tags --ff-only origin main 2>&1); then
         echo -e "${GREEN}Updated main to latest${NC}"
       else
         echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"

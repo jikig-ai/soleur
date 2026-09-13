@@ -223,6 +223,35 @@ Return the structured result.`
 // re-fetch. Stop when unresolved hits zero, a round makes no progress, the
 // round cap is reached, or the budget floor is hit.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 const rounds = []
 let prNumber = prSelector ? Number(prSelector) : null
 let stopReason = null
@@ -237,9 +266,9 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // --- Analyze: fetch the current unresolved threads. -----------------------
   phase('Analyze')
-  if (round === 1) log('tier pins: fetch→haiku, commit→sonnet (mechanical steps per ADR-053; resolvers inherit the session model)')
-  // Pinned 'haiku': gh-api fetch + reformat with small bounded context (ADR-053).
-  const fetched = await agent(fetchPrompt(), { label: `fetch:round-${round}`, phase: 'Analyze', schema: FETCH_SCHEMA, model: 'haiku' })
+  if (round === 1) log('tier pins: fetch→cheap, commit→standard (mechanical steps per ADR-053; resolvers inherit the session model)')
+  // Pinned 'cheap': gh-api fetch + reformat with small bounded context (ADR-053).
+  const fetched = await agent(fetchPrompt(), { label: `fetch:round-${round}`, phase: 'Analyze', schema: FETCH_SCHEMA, model: 'cheap' })
   if (!fetched) {
     stopReason = `fetch agent died on round ${round}; cannot enumerate unresolved threads.`
     log(`⚠ ${stopReason}`)
@@ -312,8 +341,8 @@ for (let round = 1; round <= maxRounds; round++) {
 
   // --- Commit / resolve threads / push (serialized; one agent owns the index).
   phase('Commit')
-  // Pinned 'sonnet': commit + thread-resolution bookkeeping is mechanical (ADR-053).
-  const committed = await agent(commitPrompt(round, toResolve), { label: `commit:round-${round}`, phase: 'Commit', schema: COMMIT_SCHEMA, model: 'sonnet' })
+  // Pinned 'standard': commit + thread-resolution bookkeeping is mechanical (ADR-053).
+  const committed = await agent(commitPrompt(round, toResolve), { label: `commit:round-${round}`, phase: 'Commit', schema: COMMIT_SCHEMA, model: 'standard' })
 
   const resolvedIds = (committed?.threadsResolved || []).map(safeThreadId).filter(Boolean)
   const failedIds = (committed?.threadsFailed || []).map(safeThreadId).filter(Boolean)

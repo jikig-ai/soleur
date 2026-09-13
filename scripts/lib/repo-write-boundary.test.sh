@@ -697,6 +697,7 @@ state "$p"; before="$STATE_OUT"
 # signed/annotated tags here, so a bare `git tag` fails with "no tag message?" and the arm would be
 # measuring a broken fixture rather than the dimension. A fixture that cannot CONTAIN the thing the
 # arm looks for is not a test — so its failure is made a loud FIXTURE error, not a phantom SUT one.
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 git -C "$p" -c tag.gpgSign=false -c tag.forceSignAnnotated=false tag probe-tag 2>/dev/null
 if ! git -C "$p" show-ref --tags --quiet -- refs/tags/probe-tag; then
   printf '[FATAL] fixture setup failed: could not create refs/tags/probe-tag in the probe repo.\n' >&2
@@ -878,9 +879,11 @@ fi
 # Sibling worktrees do not routinely move tags, so tags stay attributable and stay FATAL.
 ck
 p=$(sibling_probe refstag) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 git -C "$p" -c tag.gpgSign=false tag probe-tag
 state "$p"; before="$STATE_OUT"
 git -C "$p" commit -q --allow-empty -m retarget
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 git -C "$p" -c tag.gpgSign=false tag -f probe-tag >/dev/null 2>&1
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
@@ -927,6 +930,7 @@ fi
 ck
 p=$(sibling_probe tagcreate) || exit 2
 state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag v9.9.9
 require_tag "$p" v9.9.9 "the created-tag partition under a shared ref store"
 state "$p"; after="$STATE_OUT"
@@ -949,6 +953,7 @@ fi
 # ONLY FATAL.
 ck
 p=$(sibling_probe tagdelete) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag doomed-tag
 require_tag "$p" doomed-tag "the deleted-tag partition"
 state "$p"; before="$STATE_OUT"
@@ -970,12 +975,15 @@ fi
 # count is unambiguous.
 ck
 p=$(sibling_probe tagmix) || exit 2
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag moved-tag
 require_tag "$p" moved-tag "the per-ref partition"
 pgit -C "$p" commit -q --allow-empty -m second
 mix_c2=$(pgit -C "$p" rev-parse HEAD)
 state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag -f moved-tag "$mix_c2" >/dev/null 2>&1
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag fresh-tag
 require_tag "$p" fresh-tag "the per-ref partition"
 state "$p"; after="$STATE_OUT"
@@ -1004,6 +1012,7 @@ pgit -C "$p" commit -q --allow-empty -m advance
 inc_head=$(pgit -C "$p" rev-parse HEAD)
 state "$p"; before="$STATE_OUT"
 pgit -C "$p" update-ref refs/heads/main "$inc_head"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag v3.258.3
 require_tag "$p" v3.258.3 "the measured incident shape (tag created + default branch moved)"
 state "$p"; after="$STATE_OUT"
@@ -1041,6 +1050,7 @@ _collide() { # _collide <probe> <checkout|-> <tag> <label> [extra-setup-fn]
   else d=$(sibling_probe "$n" "$co") || exit 2; fi
   [[ -n "$setup" ]] && "$setup" "$d"
   state "$d"; local b="$STATE_OUT"
+  # repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
   pgit -C "$d" tag "$t"
   require_tag "$d" "$t" "the collision guard ($lbl)"
   state "$d"; local a="$STATE_OUT"
@@ -1165,6 +1175,7 @@ fi
 ck
 p=$(sibling_probe tagannot) || exit 2
 state "$p"; before="$STATE_OUT"
+# repo-boundary-tag-exempt: deliberate probe tag, created inside a mktemp sandbox this suite owns — this is the suite that TESTS the tag boundary, so a real tag author here is the point. Re-review trigger: this entry is void if the site stops creating its tag inside a sandbox root the suite created.
 pgit -C "$p" tag -a v9.9.7 -m 'annotated release'
 require_tag "$p" v9.9.7 "the object-type independence of the created-tag partition"
 if [[ "$(pgit -C "$p" cat-file -t "$(pgit -C "$p" rev-parse refs/tags/v9.9.7)")" != "tag" ]]; then
