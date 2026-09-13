@@ -675,6 +675,7 @@ ci-infrastructure
 ci-issues
 ci-planning
 ci-release
+ci-required-checks
 ci-required-ruleset
 ci-required-status
 ci-ruleset
@@ -1747,6 +1748,7 @@ guard-itself-dark
 guard-test
 guard-testing
 guard-vacuity
+guard-window
 guardrail
 guardrails
 guards
@@ -1860,6 +1862,7 @@ immutability
 immutable-infra
 implementation-patterns
 import-boundary
+import-meta-url
 import-only-resources
 importlib
 importoriginal
@@ -3919,6 +3922,7 @@ ts2556
 tsc
 tsx
 ttl
+turbopack
 tweets
 two-phase-commit
 two-tier-guard
