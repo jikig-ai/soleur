@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dispatchBoundEngineRun, dispatchNewEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, reconcileBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("loads the persisted binding before invoking the adapter", async () => {
@@ -82,5 +82,19 @@ describe("dispatchBoundEngineRun", () => {
         input: { text: "hi", attachmentIds: [] }, context: {} as never,
       })) { /* no-op */ }
     })()).rejects.toThrow("ledger unavailable");
+  });
+
+  it("reloads the binding before cancellation and reconciliation", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({
+      id: "run-1", binding: { engineId: "claude-code" },
+    }) };
+    const adapter = {
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+    };
+    const session = { resumeHandle: "opaque", sessionId: null };
+    await expect(cancelBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("requested");
+    await expect(reconcileBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("running");
+    expect(repository.getRun).toHaveBeenCalledTimes(2);
   });
 });

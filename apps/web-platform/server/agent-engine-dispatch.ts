@@ -50,6 +50,52 @@ export async function* dispatchBoundEngineRun(
   }
 }
 
+type LifecycleRepository = BindingRepository;
+
+async function loadBoundContext(options: {
+  repository: LifecycleRepository;
+  runId: string;
+  context: EngineRunContext;
+  adapterEngineId?: string;
+}): Promise<EngineRunContext> {
+  const persisted = await options.repository.getRun(options.runId);
+  if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
+  const context = {
+    ...options.context,
+    runId: options.runId,
+    binding: (persisted as { binding?: EngineRunContext["binding"] }).binding ??
+      (persisted as unknown as EngineRunContext["binding"]),
+  } as EngineRunContext;
+  if (options.adapterEngineId && context.binding.engineId !== options.adapterEngineId) {
+    throw new Error("persisted engine binding does not match adapter");
+  }
+  return context;
+}
+
+export async function cancelBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "cancel">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  session: Parameters<EngineAdapter["cancel"]>[1];
+}): Promise<ReturnType<EngineAdapter["cancel"]>> {
+  const context = await loadBoundContext(options);
+  return options.adapter.cancel(context, options.session);
+}
+
+export async function reconcileBoundEngineRun(options: {
+  repository: LifecycleRepository;
+  adapter: Pick<EngineAdapter, "reconcile">;
+  adapterEngineId?: string;
+  runId: string;
+  context: EngineRunContext;
+  session: Parameters<EngineAdapter["reconcile"]>[1];
+}): Promise<ReturnType<EngineAdapter["reconcile"]>> {
+  const context = await loadBoundContext(options);
+  return options.adapter.reconcile(context, options.session);
+}
+
 export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;
