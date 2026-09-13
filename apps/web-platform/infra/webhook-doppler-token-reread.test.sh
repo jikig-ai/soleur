@@ -100,6 +100,7 @@ case "\${DOPPLER_MOCK_MODE:-}" in
   empty) exit 0 ;;
   transport) printf 'Unable to fetch secrets\n\033[31mDoppler Error:\033[0m Get "https://api.doppler.com/v3/configs/config/secret?project=soleur&config=prd&name=INNGEST_MANUAL_TRIGGER_SECRET": dial tcp 104.18.1.1:443: connect: connection refused\n' >&2; exit 1 ;;
   notfound) printf '\033[31mDoppler Error:\033[0m Could not find requested secret: INNGEST_MANUAL_TRIGGER_SECRET\n' >&2; exit 1 ;;
+  partial) printf 'PARTIAL-STDOUT-NOT-A-SECRET\n'; printf '\033[31mDoppler Error:\033[0m Invalid Auth token\n' >&2; exit 1 ;;
 esac
 if [[ "\${DOPPLER_TOKEN:-}" == "$FRESH" ]]; then printf '%s\n' "$SECRET_VALUE"; exit 0; fi
 printf 'Using DOPPLER_CONFIG_DIR from the environment. To disable this, use --no-read-env.\n' >&2
@@ -256,7 +257,7 @@ assert_not_contains "C4 the logged stderr never carries a credential-shaped toke
 assert_contains "C5 the scrub leaves a marker where the token was" "$LOG" "dp.**.REDACTED"
 assert_contains "C5b the line is tagged for Vector's SYSLOG_IDENTIFIER allowlist" "$LOG" "-t inngest-rearm-reminders SOLEUR_DEPLOY_CRED_FAIL"
 assert_contains "C6 the original FATAL line still fires (fail-closed contract unchanged)" "$LOG" "FATAL: INNGEST_MANUAL_TRIGGER_SECRET unavailable"
-assert_contains "C7 the reason ALSO reaches stderr → the hook's response body → the cutover run log" "$(cat "${MOCKBIN}/rearm.err")" "ERROR: SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=1 class=invalid_auth token_file=absent"
+assert_contains "C7 the reason ALSO reaches stderr → the hook's response body → the cutover run log" "$(cat "${MOCKBIN}/rearm.err")" "ERROR: SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=1 class=invalid_auth token_file=absent token_applied=0"
 assert_eq "C8 no Sentry POST when the file (and so the DSN components) is absent" "0" "$(grep -c '/store/' "${MOCKBIN}/curl.log" || true)"
 assert_eq "C9 no reminder POST was made" "0" "$(grep -c 'schedule-reminder' "${MOCKBIN}/curl.log" || true)"
 teardown
@@ -267,7 +268,7 @@ setup; write_token_file "$REVOKED"
 rc=0; run_rearm_capture || rc=$?
 assert_eq "C10 fails closed when the file's token is itself rejected" "1" "$rc"
 LOG="$(cat "${MOCKBIN}/logger.log")"
-assert_contains "C11 …and the line says the file WAS read (token_file=present) so diagnosis goes to the file's token, not to delivery" "$LOG" "token_file=present"
+assert_contains "C11 …and the line says the file WAS read AND its token applied (token_file=present token_applied=1) so diagnosis goes to the file's token, not to delivery" "$LOG" "token_file=present token_applied=1"
 CURL="$(cat "${MOCKBIN}/curl.log")"
 assert_contains "C12 a Sentry event was POSTed to the DSN the file carries" "$CURL" "https://o1.ingest.sentry.io/api/1/store/"
 assert_contains "C13 …with the class enum in its tags" "$CURL" '"class":"invalid_auth"'
@@ -297,6 +298,12 @@ setup; write_token_file "$FRESH"
 rc=0; DOPPLER_MOCK_MODE=empty run_rearm_capture || rc=$?
 assert_eq "C22 an rc-0 EMPTY value fails closed" "1" "$rc"
 assert_contains "C23 …and is classified empty_value with rc=0" "$(cat "${MOCKBIN}/logger.log")" "rc=0 class=empty_value"
+teardown
+# rc≠0 with stdout: whatever a failing CLI (or a shim named doppler) printed must NOT become the secret.
+setup; write_token_file "$FRESH"
+rc=0; DOPPLER_MOCK_MODE=partial run_rearm_capture || rc=$?
+assert_eq "C28 a failing read with partial stdout still fails closed (rc 1)" "1" "$rc"
+assert_eq "C29 …and no POST carried the partial stdout as a Bearer" "0" "$(grep -c 'PARTIAL-STDOUT-NOT-A-SECRET' "${MOCKBIN}/curl.log" || true)"
 teardown
 # binary absent: PATH without the mock doppler (and without the developer's real one).
 setup; write_token_file "$FRESH"; rm -f "${MOCKBIN}/doppler"
@@ -337,6 +344,23 @@ setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s' "$FRESH" > "${MO
 rc=0; run_rearm_capture || rc=$?
 assert_eq "D3 a token on an unterminated final line is still read (the \`|| [[ -n \"\$k\" ]]\` keep)" "0" "$rc"
 teardown
+# CRLF: a `DOPPLER_TOKEN=\r` line is EMPTY, not a one-byte token — must not blank a working env token.
+setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=\r\n' > "${MOCKBIN}/soleur-doppler-token"
+rc=0; run_rearm_capture "$FRESH" || rc=$?
+assert_eq "D4 a CRLF-terminated bare DOPPLER_TOKEN= does not blank a working env token (rc 0)" "0" "$rc"
+teardown
+# A CRLF-terminated REAL token is read with the CR stripped (the file was hand-delivered from Windows).
+setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s\r\n' "$FRESH" > "${MOCKBIN}/soleur-doppler-token"
+rc=0; run_rearm_capture || rc=$?
+assert_eq "D5 a CRLF-terminated token is applied with the CR stripped (rc 0)" "0" "$rc"
+teardown
+# A QUOTED value (systemd EnvironmentFile accepts it; this parser deliberately does not) must be
+# reported as present-but-not-applied, not as a revoked token.
+setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN="%s"\n' "$FRESH" > "${MOCKBIN}/soleur-doppler-token"
+rc=0; run_rearm_capture || rc=$?
+assert_eq "D6 a quoted token is not applied (fails closed on the env token)" "1" "$rc"
+assert_contains "D7 …and the line says token_file=present token_applied=0 — a file-shape fix, not a rotation" "$(cat "${MOCKBIN}/logger.log")" "token_file=present token_applied=0"
+teardown
 
 # --- E. a hostile line is DATA, not code (parsed, not sourced) ---
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s\nSENTRY_PROJECT_ID=$(touch %s/PWNED)\n' "$FRESH" "$MOCKBIN" > "${MOCKBIN}/soleur-doppler-token"
@@ -368,7 +392,7 @@ rc=0; run_wiped || rc=$?
 assert_eq "G4 …and still aborts no_secret when the file is absent and the env token is revoked" "1" "$rc"
 LOG="$(cat "${MOCKBIN}/logger.log")"
 assert_contains "G5 the abort reason is no_secret" "$LOG" "ABORT: no_secret"
-assert_contains "G6 the doppler failure reason is logged there too, under the wiped tag" "$LOG" "-t inngest-wiped-volume-verify SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=1 class=invalid_auth token_file=absent"
+assert_contains "G6 the doppler failure reason is logged there too, under the wiped tag" "$LOG" "-t inngest-wiped-volume-verify SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=1 class=invalid_auth token_file=absent token_applied=0"
 assert_not_contains "G7 the wiped copy's log never carries the token (the scrub is pinned on BOTH copies, not inferred from A3b)" "$LOG" "$REVOKED"
 assert_contains "G8 …and leaves the redaction marker" "$LOG" "dp.**.REDACTED"
 assert_contains "G9 the reason reaches the wiped script's stderr too" "$(cat "${MOCKBIN}/wiped.err")" "ERROR: SOLEUR_DEPLOY_CRED_FAIL"
@@ -412,6 +436,6 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact count, not a floor: a floor with slack equal to one section lets that section vanish
 # green. Bump this in the same commit as any assertion change. Emitted directly (ADR-193), never
 # through the helper it backstops.
-EXPECTED_ASSERTIONS=76
+EXPECTED_ASSERTIONS=82
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then printf 'assertion count drifted: %d != %d (update EXPECTED_ASSERTIONS in the same commit as the assertion change)\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2; exit 1; fi
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

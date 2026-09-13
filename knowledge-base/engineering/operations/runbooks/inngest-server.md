@@ -1230,6 +1230,7 @@ tags `inngest-rearm-reminders` / `inngest-wiped-volume-verify`; the same event r
 | `token_file=absent` | `terraform apply` never delivered `/etc/default/soleur-doppler-token` | dispatch `apply-web-platform-infra.yml`; confirm via `/hooks/deploy-status` (`cat-deploy-state.sh` reports the cred-file state) |
 | `token_file=unreadable` | mode/group drift from `install -m 640 -o root -g deploy` | re-deliver via the same apply (the installer rewrites mode+owner) |
 | `token_file=present class=invalid_auth` | the FILE's token is itself revoked — delivery is stale | mint a new `TF_VAR_doppler_token` and apply; the file is re-rendered |
+| `token_file=present token_applied=0` | the file was read but its `DOPPLER_TOKEN` line is not shape-valid (quoted value, an `export`-prefixed line, empty) — the unit's revoked export was used | re-render the file via the same apply; a hand-edited file must carry a bare `DOPPLER_TOKEN=dp.<family>.<body>` line |
 | `class=secret_not_found` | `INNGEST_MANUAL_TRIGGER_SECRET` missing in `soleur/prd` | provision the secret (inngest.tf owns it) |
 | `class=transport` | the web host cannot reach `api.doppler.com` | egress/DNS on the web host — see the cron-egress runbook |
 | `class=empty_value` | the secret exists but is empty | set a value in Doppler |

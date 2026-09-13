@@ -53,15 +53,25 @@ readonly LOG_TAG="inngest-rearm-reminders"
 # script — webhook-doppler-token-reread.test.sh pins that, because a helper re-derived per
 # file drifts. `SOLEUR_CRED_FILE_STATE` records present|unreadable|absent for the log line.
 SOLEUR_CRED_FILE_STATE=absent
+SOLEUR_CRED_TOKEN_APPLIED=0
 soleur_refresh_doppler_token() {
   local f="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}" k v
   if [[ -r "$f" ]]; then SOLEUR_CRED_FILE_STATE=present; elif [[ -e "$f" ]]; then SOLEUR_CRED_FILE_STATE=unreadable; return 0; else SOLEUR_CRED_FILE_STATE=absent; return 0; fi
+  # `|| return 0` on the loop: a redirect that fails AFTER -r passed (LSM denial, race) must not
+  # abort the enclosing `$(read_secret)` before the reason line is emitted.
   while IFS='=' read -r k v || [[ -n "$k" ]]; do
+    v="${v%$'\r'}"
     case "$k" in
-      DOPPLER_TOKEN|SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
-        if [[ -n "$v" ]]; then printf -v "$k" '%s' "$v"; export "${k?}"; fi ;;
+      DOPPLER_TOKEN)
+        # Applied only when it has the shape server.tf's plan-time gate admits (dp.<family>.<body>);
+        # a quoted value, an `export `-prefixed line or a CRLF-only `KEY=` leaves the unit's export
+        # standing and is reported as token_file=present token_applied=0 — a file-shape defect.
+        if [[ "$v" =~ ^dp\.[a-z]{2,}\.[A-Za-z0-9._-]+$ ]]; then export DOPPLER_TOKEN="$v"; SOLEUR_CRED_TOKEN_APPLIED=1; fi ;;
+      SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+        # Whitespace-only counts as EMPTY (a CRLF-terminated `KEY=` yields $'\r', which `-n` accepts).
+        if [[ -n "${v//[[:space:]]/}" ]]; then printf -v "$k" '%s' "$v"; export "${k?}"; fi ;;
     esac
-  done < "$f"
+  done < "$f" 2>/dev/null || return 0
   return 0
 }
 
@@ -90,24 +100,26 @@ soleur_log_doppler_read_failure() {
   local rc="$1" errfile="$2" out="${3-}" class why="" payload
   class="$(soleur_doppler_read_class "$rc" "$errfile" "$out")"
   if [[ -r "$errfile" ]]; then
-    why="$( { LC_ALL=C grep -a 'Doppler Error:' "$errfile" | head -n 1 | grep -a . || tail -n 1 "$errfile"; } 2>/dev/null \
+    why="$( { LC_ALL=C grep -a -m1 'Doppler Error:' "$errfile" || tail -n 1 "$errfile"; } 2>/dev/null \
       | LC_ALL=C sed -E 's/\x1b\[[0-9;]*m//g' \
       | LC_ALL=C tr -c '[:print:]' ' ' \
       | LC_ALL=C tr '"' "'" \
       | LC_ALL=C sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]+/dp.**.REDACTED/g' \
       | LC_ALL=C cut -c1-160 )" || why=""
   fi
-  local line="SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=${rc} class=${class} token_file=${SOLEUR_CRED_FILE_STATE} err=\"${why:-<empty>}\""
-  logger -t "$LOG_TAG" "$line" 2>/dev/null || true
+  # token_applied=0 with token_file=present means the file was read but carried no usable
+  # DOPPLER_TOKEN (quoted value, `export ` prefix, empty) — a different fix from a revoked one.
+  local line="SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=${rc} class=${class} token_file=${SOLEUR_CRED_FILE_STATE} token_applied=${SOLEUR_CRED_TOKEN_APPLIED} err=\"${why:-<empty>}\""
+  logger -t "${LOG_TAG:-webhook-script}" "$line" 2>/dev/null || true
   printf 'ERROR: %s\n' "$line" >&2
   # Destination pinned by SHAPE (#7873): the three values are parsed from a root-owned file, but a
   # credentialed request must refuse any host that is not a Sentry ingest domain regardless.
   local dom="${SENTRY_INGEST_DOMAIN:-}" pid="${SENTRY_PROJECT_ID:-}"
   if [[ "$dom" =~ ^[a-z0-9]+\.ingest\.([a-z]{2}\.)?sentry\.io$ && "$pid" =~ ^[0-9]+$ && -n "${SENTRY_PUBLIC_KEY:-}" ]] && command -v jq >/dev/null 2>&1; then
-    payload="$(jq -nc --arg logger "$LOG_TAG" --arg class "$class" --arg rc "$rc" --arg tf "$SOLEUR_CRED_FILE_STATE" \
+    payload="$(jq -nc --arg logger "${LOG_TAG:-webhook-script}" --arg class "$class" --arg rc "$rc" --arg tf "$SOLEUR_CRED_FILE_STATE" --arg ta "$SOLEUR_CRED_TOKEN_APPLIED" \
       '{message: ("doppler read failed for INNGEST_MANUAL_TRIGGER_SECRET (" + $class + ")"), level: "error", platform: "other", logger: $logger,
         tags: {feature: "inngest-cutover", op: "doppler-read-failed", class: $class},
-        extra: {rc: $rc, token_file: $tf}}')" || payload=""
+        extra: {rc: $rc, token_file: $tf, token_applied: $ta}}')" || payload=""
     if [[ -n "$payload" ]]; then
       curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
         "https://${dom}/api/${pid}/store/" \
@@ -134,8 +146,9 @@ read_secret() {
     # same); degrade to /dev/null so a missing scratch file loses the stderr, never the read.
     err="$(mktemp 2>/dev/null)" || err=/dev/null
     out="$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>"$err")" || rc=$?
-    if [[ "$rc" -ne 0 || -z "$out" ]]; then soleur_log_doppler_read_failure "$rc" "$err" "$out"; fi
+    if [[ "$rc" -ne 0 || -z "$out" ]]; then soleur_log_doppler_read_failure "$rc" "$err" "$out"; out=""; fi
     [[ "$err" == /dev/null ]] || rm -f "$err"
+    # Only an rc-0 value is the secret: partial stdout from a failed CLI must never be returned.
     printf '%s' "$out"
   fi
 }
