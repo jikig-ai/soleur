@@ -92,7 +92,11 @@ resource "logtail_exploration" "monitor_send_failed" {
   query {
     query_type      = "sql_expression"
     source_variable = "source"
-    sql_query       = local.monitor_send_failed_sql
+    # Collapsed to ONE line at the resource site: the provider mirrors `sql_query` back verbatim
+    # with no DiffSuppressFunc (v11.2.0 resource_exploration.go), so a heredoc's indentation and
+    # trailing newline would be a perpetual diff if the API normalises whitespace. Every provider
+    # example is single-line; the local above stays readable, the API sees the flat form.
+    sql_query = replace(trimspace(local.monitor_send_failed_sql), "/\\s+/", " ")
   }
 
   variable {
