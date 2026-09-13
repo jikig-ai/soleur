@@ -249,7 +249,7 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 15 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the 17 SSH provisioners below stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
   # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
   # until #7000 measured it; the scoping is now mechanically enforced by
@@ -518,10 +518,11 @@ resource "terraform_data" "disk_monitor_install" {
 # and the runbook can tell it from a real failure. Same SSH connection as disk_monitor_install;
 # no `file` provisioner, no filesystem destination.
 #
-# FIRES ONLY WHEN local.monitor_send_failed_probe_rev CHANGES (betterstack-logs-alerts.tf).
-# The SSH apply runs on every push to main, so a per-run nonce (timestamp()/random_*) would
-# page ops on every merge. The trigger is a literal local, never a reference to the logtail_*
-# resources, so the SSH `-target` never drags a non-SSH resource into its plan.
+# FIRES ONLY WHEN local.monitor_send_failed_probe_rev CHANGES — see betterstack-logs-alerts.tf
+# §CHANGED THE SQL? BUMP THE REV for the trigger contract (and the one exception: a failed
+# provisioner taints this resource, so the next apply re-runs it at the same rev). The trigger
+# is a literal local, never a reference to the logtail_* resources, so the SSH `-target` never
+# drags a non-SSH resource into its plan.
 resource "terraform_data" "send_failed_alert_probe" {
   triggers_replace = local.monitor_send_failed_probe_rev
 

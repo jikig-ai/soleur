@@ -102,9 +102,14 @@ below proves.
    scripts themselves. The row reuses the real marker so it inherits the real routing (that *is*
    the test); the `synthetic=1 probe_rev=` suffix keeps it decodable. Its **only trigger is
    `local.monitor_send_failed_probe_rev`**, a digits-only literal (`lifecycle.precondition`): the
-   SSH apply runs on every push to `main`, so a per-run nonce would page ops on every merge, and
-   a predicate hash would page on a cosmetic heredoc re-flow. *Changed the SQL? Bump the rev.* A
-   bump performs zero Better Stack API writes.
+   SSH apply runs on every push to `main` that touches this root (`on.push.paths`), so a per-run
+   nonce would page ops on every infra merge, and a predicate hash would page on a cosmetic heredoc
+   re-flow. *Changed the SQL? Bump the rev.* A bump performs zero Better Stack API writes. The one
+   re-fire without a bump: a failed provisioner taints the resource and the next apply re-runs it
+   at the same rev. The exploration hands the API a **single-line** `sql_query`
+   (`replace(trimspace(local…), "/\\s+/", " ")`) because the provider mirrors the string back with
+   no diff suppression; whether the API normalises whitespace was NOT measured (AC9 stays a
+   post-merge reading of the drift plan), so the flat form is the conservative choice.
    `scripts/followthroughs/send-failed-alert-probe-8097.sh` (daily via
    `scheduled-followthrough-sweeper.yml`) then reads back, in order — alert present and
    unpaused → **web-1-scoped** positive control over the same 14-day hot ∪ archive window
@@ -144,12 +149,15 @@ reconcile arm covers only the alert's own health, not its firings.
 
 - **Drift guard + battery.** `apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh`
   pins the predicate's three anchors and its needle **set**, discovers every `emit_refusal()`
-  definer under `infra/` and holds each to `logger -p user.crit` — or to a named non-crit
+  definer under `infra/` (a census of every crit-level `logger`/`systemd-cat` line across the
+  non-test `infra/*.sh` and `cloud-init*.yml`, each classified as emit_refusal-routed, allowlisted
+  non-paging, or unclassified — the last two red) and holds each to `logger -p user.crit` — or to a named non-crit
   allowlist with a reason (`resend-inbound-bootstrap.sh` defines `emit_refusal()` without
   `logger`; it runs in CI, so the plan's "four definers" was one short) — asserts every
   `SKIPPED` / `_HALT` literal matches no needle, pins the source id to `vector.toml`'s sink and
-  the probe line's severity. Its mutation battery (19 rows, incl. the floor's RED/GREEN pair) is
-  registered in `infra-validation.yml`; an unrun battery is a claim.
+  the probe line's severity. Its mutation battery (every row attributed by FAIL string, incl. the
+  floor's RED/GREEN pair; the row count is pinned inside the battery, not here) is registered in
+  `infra-validation.yml`; an unrun battery is a claim.
 - **`-target` allow-lists.** Two main-plan targets (`logtail_exploration.*`,
   `logtail_exploration_alert.*`) and one SSH-apply target (`terraform_data.send_failed_alert_probe`)
   in `apply-web-platform-infra.yml`; the #5566 guard (`terraform-target-parity.test.ts`) reds on
@@ -174,7 +182,9 @@ reconcile arm covers only the alert's own health, not its firings.
 - **Quota.** The probe adds one PRIORITY-2 row per rev bump. The alert consumes no log quota. The
   free-tier Telemetry alert-count cap is undocumented; one pre-existing paused onboarding alert
   stays unmanaged (same class as the unmanaged monitor in #7884). A plan-limit error fails the
-  apply loudly through the "Email ops on a non-green apply run" step.
+  apply loudly through the "Email ops on a non-green apply run" step; recovery is deleting the
+  paused onboarding alert (Telemetry API, `DELETE /api/v2/alerts/<id>`) or the paid tier — the
+  `.tf` needs no change, the next infra merge re-applies.
 - **Runbook.** `knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md`;
   `betterstack-log-query.md` §"Standing alarms over this source" gains the native-alert row and
   corrects the provider-gap parenthetical. `model.c4`'s `betterstack` element gains one clause.

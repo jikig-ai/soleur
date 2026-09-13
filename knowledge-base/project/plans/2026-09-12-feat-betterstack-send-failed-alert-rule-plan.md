@@ -286,7 +286,7 @@ error_reporting:
 failure_modes:
   - mode: "alert created but the template SQL is rejected, or later auto-paused by Better Stack"
     detection: "follow-through step (1) → verdict alert_paused (one-shot); reconcile-live-heartbeats.ts logs_alert arm → SOLEUR_HEARTBEAT_RECONCILE_MISMATCH row (twice daily, survives the per-merge re-arm) — layer 6: scheduled-followthrough-sweeper.yml / scheduled-terraform-drift.yml workflow run log"
-    alert_route: "sweeper ACTION REQUIRED comment on #8097; the existing deduped heartbeat-reconcile-mismatch issue"
+    alert_route: "sweeper ACTION REQUIRED comment on #8097 (no page — the operator reads the sweeper comment or the drift workflow's deduped heartbeat-reconcile-mismatch issue and files the .tf fix)"
   - mode: "web-1's live Vector does not ship PRIORITY-2 rows (H2)"
     detection: "follow-through verdict row_absent with the web-1-scoped positive control present (surface under test is layer 3, Vector Source 2; detection is layer 6: sweeper workflow run log + ACTION REQUIRED comment)"
     alert_route: "#8097 stays open; a vector.toml-delivery issue is filed with the readback evidence"
@@ -296,6 +296,15 @@ failure_modes:
   - mode: "global token lacks Telemetry write authority"
     detection: "apply step fails with HTTP 403 on POST /api/v2/explorations — layer 6: apply-web-platform-infra.yml workflow run log"
     alert_route: "non-green apply email; fallback path in Technical Considerations"
+  - mode: "reconcile logs_alert arm UNREACHABLE (telemetry API 5xx/timeout twice daily)"
+    detection: "SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=logs_alert, rc 1 — layer 6: scheduled-terraform-drift.yml run log; the drift workflow keys an issue only on rc 2, so rc 1 is a red run, not an issue"
+    alert_route: "no page; the red scheduled run is the signal (existing workflow-failure email); a persistent UNREACHABLE leaves the alert's pause state unobserved between infra merges"
+  - mode: "SSH apply gate skips green (ssh_token_gate false) so the probe never fires"
+    detection: "apply-web-platform-infra.yml notify-ops-email step on the skipped SSH job; follow-through verdict row_absent after the rev bump (control row present)"
+    alert_route: "ops email from the apply run; sweeper ACTION REQUIRED comment on #8097 naming row_absent"
+  - mode: "BETTERSTACK_API_TOKEN_READONLY / query secret unset or revoked for the sweeper"
+    detection: "follow-through exit 3 channel_dark daily (paged_get refusal names the host only) — layer 6: scheduled-followthrough-sweeper.yml run log + CANNOT ESTABLISH comment"
+    alert_route: "no page; #8097 stays open with a daily CANNOT ESTABLISH comment until the secret is restored"
 
 logs:
   where: "Better Stack Logs source 2457081 (rows, read via betterstack-query.sh); Better Stack incidents via GET uptime.betterstack.com/api/v2/incidents with the READONLY token (pages — the runbook's step 2 curl, never the UI); apply-web-platform-infra.yml run log (provisioning)"
@@ -388,7 +397,7 @@ exception:
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh` → `=== Summary: N passed, 0 failed (N cases) ===` with `SEND_FAILED_ALERT_MIN_CASES=6`; `bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh` green (9 RED rows each attributed by FAIL string, H1a RED, H1b GREEN, H2-H4 PASS) — a committed battery, not PR-body evidence.
+- [ ] AC1 `bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh` → `=== Summary: N passed, 0 failed (N cases) ===` with `SEND_FAILED_ALERT_MIN_CASES=6`; `bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh` green (every RED row attributed by FAIL string — 36 rows as landed, `EXPECTED_ROWS` pinned in the battery; H1a RED, H1b GREEN, H2-H5 PASS) — a committed battery, not PR-body evidence.
 - [ ] AC2 `grep -c 'run: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh' .github/workflows/infra-validation.yml` ≥ 1 and `bash scripts/lint-orphan-test-suites.test.sh` green.
 - [ ] AC3 `cd apps/web-platform/infra && terraform fmt -check -recursive . && terraform init -backend=false -input=false && terraform validate` green; `.terraform.lock.hcl` has a `registry.terraform.io/betterstackhq/logtail` block with `version = "11.2.0"` and exactly the same `h1:` platform count (2) as the `better-uptime` block; every sibling block is byte-unchanged (`git diff --stat -- apps/web-platform/infra/.terraform.lock.hcl` shows additions only).
 - [ ] AC4 `grep -c -- '-target=logtail_exploration_alert.monitor_send_failed' .github/workflows/apply-web-platform-infra.yml` = 1, same for `logtail_exploration.monitor_send_failed`; `grep -c -- '-target=terraform_data.send_failed_alert_probe'` = 1 and it sits inside the "Terraform apply (SSH-provisioned resources, over the bridge)" step; `bun test plugins/soleur/test/terraform-target-parity.test.ts` and `bash apps/web-platform/infra/web-host-provisioner-parity.test.sh` green.

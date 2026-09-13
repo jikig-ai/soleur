@@ -97,9 +97,12 @@ unit reads (`/etc/default/<unit>` on the host is written by `server.tf`'s provis
 
 ```bash
 curl -s -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform --plain)" \
-  https://uptime.betterstack.com/api/v2/incidents \
+  'https://uptime.betterstack.com/api/v2/incidents?page=1' \
   | jq '.data[] | select(.attributes.cause | test("SOLEUR_")) | {id, name: .attributes.name, cause: .attributes.cause, started_at: .attributes.started_at, resolved_at: .attributes.resolved_at}'
 ```
+
+The list is newest-first, 10 per page; `page=1` is the most recent incidents. Walk
+`pagination.next` only when the incident predates the first page.
 
 ## Synthetic rows
 
@@ -117,7 +120,9 @@ what closes #8097 (`verdict=pass`), or names the one cause that stopped the chai
 **Re-verification = bump the rev and merge.** Change `monitor_send_failed_probe_rev = "1"` to
 `"2"` (digits only; a `lifecycle.precondition` refuses anything else) and merge. Every
 re-verification pages once — the intended cost. Changed the SQL? Bump the rev. A rev bump performs
-zero Better Stack API writes, so it never perturbs the alert under test.
+zero Better Stack API writes, so it never perturbs the alert under test. One re-fire without a
+bump: a failed provisioner (SSH down mid-apply) taints the resource, and the next apply re-runs it
+at the same rev — a page carrying the old `probe_rev` right after a red apply run is that retry.
 
 ## Alert self-health
 

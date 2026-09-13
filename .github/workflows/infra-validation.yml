@@ -791,8 +791,9 @@ jobs:
       - name: Run Better Stack SEND_FAILED alert drift guard (#8097)
         run: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh
 
-      # Its battery: 12 invariant-breaking rows attributed by FAIL string, the floor's
-      # H1a-RED / H1b-GREEN pair, and three legitimate-edit controls. An unrun battery is a claim.
+      # Its battery: every invariant-breaking row attributed by FAIL string (the count is pinned
+      # inside the battery as EXPECTED_ROWS), the floor's H1a-RED / H1b-GREEN pair, and the
+      # legitimate-edit controls. An unrun battery is a claim.
       - name: Run Better Stack SEND_FAILED alert MUTATION battery (#8097 the guard can actually fail)
         run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 

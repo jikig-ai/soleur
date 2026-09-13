@@ -14,8 +14,9 @@
 # Decision: knowledge-base/engineering/architecture/decisions/ADR-218-native-better-stack-logs-alerts-are-terraform-managed-via-the-logtail-provider.md
 # Drift guard: apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh (+ its mutation battery)
 #
-# WHY `SOLEUR_*_SEND_SKIPPED` NEVER PAGES. The four units emit SEND_SKIPPED for a deliberate
-# skip (cooldown, jq missing, a channel's env unset) as its own marker class "so a future alert
+# WHY `SOLEUR_*_SEND_SKIPPED` NEVER PAGES. Two of the four units (cron-egress-alarm,
+# container-restart-monitor) emit SEND_SKIPPED for a deliberate skip (cooldown, jq missing, a
+# channel's env unset) as its own marker class "so a future alert
 # rule on SEND_FAILED never pages on configuration" (cron-egress-alarm.sh). The predicate below
 # uses `multiSearchAny` with LITERAL needles and no LIKE wildcard, so `_SEND_SKIPPED` matches
 # neither `_SEND_FAILED` nor `_REFUSED` by construction; the drift guard asserts that against
@@ -30,9 +31,11 @@
 # uptime-alerts.tf, in the alert's escalation_target shape.
 #
 # CHANGED THE SQL? BUMP THE REV. `monitor_send_failed_probe_rev` is the ONLY trigger of
-# terraform_data.send_failed_alert_probe (server.tf): the SSH apply runs on every push to main,
-# so a per-run nonce would page ops on every merge. The probe fires exactly when the rev changes
-# and never otherwise; a rev bump performs zero Better Stack API writes, so re-verification never
+# terraform_data.send_failed_alert_probe (server.tf): the SSH apply runs on every push to main
+# that touches this root (on.push.paths), so a per-run nonce would page ops on every infra merge.
+# The probe fires exactly when the rev changes and never otherwise — with ONE exception: a failed
+# provisioner (SSH down mid-apply) taints the resource, and the next apply re-runs it at the SAME
+# rev, so a page after a red apply run is the retry, not a second failure; a rev bump performs zero Better Stack API writes, so re-verification never
 # perturbs the alert under test. Digits only (interpolated into a root shell literal and a
 # ClickHouse LIKE) — enforced by the probe's lifecycle.precondition and by the guard.
 #

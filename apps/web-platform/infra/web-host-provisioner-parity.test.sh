@@ -17,7 +17,7 @@
 #   * ADR-114 ("Load-bearing constraint for any I2 implementation") ALREADY records this:
 #     "do NOT repoint the ... terraform_data.* connection { host } blocks ... every
 #     provisioner dies — and those are -targeted by the per-PR merge apply, so main wedges."
-#     (ADR-114 says 12; the real count in this file is 17.) This guard MECHANISES a
+#     (ADR-114's 2026-07-27 amendment says 15; the count in this file is 17 as of #8097.) This guard MECHANISES a
 #     constraint the architecture already carried in prose.
 #   * The plan's Phase 5 (2026-07-24-feat-web-active-active-cluster-iac-plan.md §5.3(c))
 #     REMOVES these provisioners once web-1 is cattle. It does not extend them.
@@ -142,7 +142,7 @@ bootstrap = strip_comments(read("soleur-host-bootstrap.sh"))
 # three (the previous version had three and documented one). Value is the reason, which is
 # mandatory. Adding an entry is a reviewable diff.
 #
-# This was "deliberately empty" until #7539, on the claim that every destination the 15 write
+# This was "deliberately empty" until #7539, on the claim that every destination the 17 write
 # has a real fresh-boot counterpart. That stopped being true when #7539 added a rotation
 # backup, and the sentence is corrected here rather than left to read as still-surveyed --
 # a claim that silently outlives the set it described is the exact defect #7539 fixes.
@@ -257,7 +257,7 @@ else:
 # ── §2. Destination sweep: the load-bearing invariant ────────────────────────────────
 # ASYMMETRY (the v2 defect, and the reason this is shaped the way it is). The two halves of
 # the derivation fail in OPPOSITE directions:
-#   * EXTRACTION ("what do the 15 write?") -- a miss is SILENT: the destination never enters
+#   * EXTRACTION ("what do the 17 write?") -- a miss is SILENT: the destination never enters
 #     the set, so nothing is checked and the guard reports a clean sweep. Enumerating write
 #     verbs here is therefore fail-OPEN, which is exactly how v2 shipped: `mv`, `dd of=`,
 #     `curl -o`, `python3 - /path`, and any quoted path all walked past it. So this half is

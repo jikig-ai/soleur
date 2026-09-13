@@ -29,7 +29,7 @@ signals + the operator-surface reasons documented there).
 Live standing alarms over this source:
 
 - **`logtail_exploration_alert.monitor_send_failed`** (#8097 / ADR-218, evaluated every 60 s over
-  a 300 s window) — the ONE native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
+  a 300 s window) — the one Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
   (team email; `betteruptime_policy.uptime` on the paid tier) on any PRIORITY-2 row whose message
   starts `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` — a web-1 monitor unit's own Resend/
   Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
