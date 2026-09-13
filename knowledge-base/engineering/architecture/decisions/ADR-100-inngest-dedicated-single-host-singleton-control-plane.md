@@ -990,3 +990,139 @@ audited under #6167): a branch config under `prd` resolves the whole root, which
 **130** names (measured). It is the right reason to bound `git-data-gc` **before** the host is ever
 born — cheaper then than after — but it is a pre-birth hardening item, not a live exposure, and it
 must not be described as one. The **live** members of this set are the three web-host units.
+
+## Addendum — 2026-09-11 (#8054) — "host dark" is a positive reading, and `op=execute` 2.0 accepts it
+
+The 2026-08-25 addendum decided that *"host dark" is not "query finds nothing"*. This is its
+continuation: what a positive reading of darkness IS, and that the cutover's own pre-flight now
+accepts one. Eight records, each measured on 2026-09-10/11 against host 165451537
+(`boot_id=402c0d5b…`, `probe_schema=8`) unless stated otherwise.
+
+### 1. The P1-5 guard and 2.0 were written against different worlds — the guard is right
+
+`op=execute` step 2.0 required the webhook's GQL forward to the dedicated host to answer HTTP 200
+with `registry_empty=true`. `inngest-server-flip-guard.sh` (P1-5) refuses a prod-URI start while
+`INNGEST_CUTOVER_FLIP ∉ {armed, flipping, flushed, done}`; every pre-arm value is outside that set,
+and the flag leaves it only via `op=arm`, which runs AFTER execute. So on the first execute of a
+cutover the host is dark BY DESIGN and 2.0 exited 1 (run 34529824513: `HTTP 500 …
+errors=["__FETCH_FAILED__"]`; the host's own line: `BLOCK: prod Postgres URI with cutover
+flag='aborted' not in {armed,flipping,flushed,done}`). 2.0's remediation step (2) — "stop the dark
+inngest-server so nothing re-syncs functions" — presumed a running-but-unarmed host, the world
+before P1-5. The guard is the correct component; 2.0 was never updated to match it. Same class as
+#8017: a predicate written against a world the surrounding guards later changed, failing closed and
+so going unnoticed until someone ran it.
+
+### 2. 2.0's property, restated
+
+*The dedicated host is not carrying a function registry that could double-fire.* Two readings
+satisfy it: the host **answered and reported an empty registry** (the pre-existing arm, unchanged
+and still reachable — the wiring suite renders it), or the host is **positively dark** — it cannot
+start, so it cannot register anything. Silence satisfies neither: a host that emits nothing has an
+UNKNOWN state, and 2.0 refuses it (`silent`) exactly as Guard 2 of the recut does.
+
+### 3. The probe row's own `cutover_flag` is the P1-5 cause, without a join
+
+`SOLEUR_INNGEST_SERVER_PROBE` at `probe_schema=8` carries, on ONE row, `http_code=000`,
+`server_active` (measured `activating` — the refuse loop never settles to `inactive`),
+`registry_fns=__UNREADABLE__` and `cutover_flag`. The flag is graded as a **positive allowlist**
+`{aborted, rolled-back}`; the arm set `{armed, flipping, flushed, done}` names its own remedy
+(`flag_armed`); anything else — `unknown`, `rollback`, empty, absent — is `flag_unreadable`. The
+G20 lesson applies: the empty string was once an accepting value in this lib. The allowlist is
+defined ONCE (`_erg_flag_class`) and the wiring suite asserts it set-equal to the flip guard's own
+`case` arm, because the partition already drifted once (#6553 added `flushed`).
+
+### 4. The flip FSM's heartbeat is the freshness bridge — freshness, not corroboration
+
+The probe row is hourly, so alone it proves darkness as of up to 90 minutes ago.
+`inngest-cutover-flip.timer` fires every 30 s and the FSM emits one JSON line per tick on EVERY
+flag, terminal ones included (P0-1/P0-2), carrying the journald `_BOOT_ID` envelope (measured: 500
+rows/24 h at the limit, ~1–2/min, all `_BOOT_ID=402c0d5b…`, `.message` an OBJECT
+`{flag, reason, guard, exit_code, start_ts}` in the warehouse). **Who parses it matters for the
+remedy:** the FSM logs a JSON *string* (`logger -t inngest-cutover-flip "$json"`), Vector ships it
+as a string (`vector.toml` ends every transform in `encode_json`), and it is **Better Stack's
+ingest-side parse** that yields the object the gate selects on. If that parse stopped, every
+heartbeat would be present and unreadable — a warehouse read-path change, which the gate reports
+as `fsm_unreadable` ("do not replace the host for it"), never as `fsm_silent`. Joined on
+`_BOOT_ID == strip_hyphens(boot_id)`,
+the NEWEST same-boot heartbeat within 15 minutes upgrades the probe's stale darkness to a fresh
+one. Its value is FRESHNESS: the probe's flag and the heartbeat's flag may legitimately differ
+(`aborted` on the hourly row, `rolled-back` a minute ago) and the gate does not require them to
+agree — it grades each against the allowlist. Only the newest same-boot heartbeat is graded, never
+"any arm-set flag in the window": the real post-abort trace holds an `armed` row minutes before
+the `aborted` one, and a gate that over-rejected it would refuse the exact state `op=execute` meets
+after a failed arm.
+
+### 4b. The dark arm is admitted only by the host's OWN refusal signature
+
+A non-200 from the webhook is not, by itself, evidence about the host: a CF Access 403, a WAF 5xx,
+`webhook.service` down, or a GQL error from a *reachable* server all arrive as non-200. The one
+non-200 that IS evidence is the web-host probe's own `inngest-registry-probe: FATAL … errors=
+["__FETCH_FAILED__"]` (HTTP 500 through the hook's error passthrough), emitted when its fetch of
+`10.0.1.40:8288/v0/gql` **failed** — refused, connect-timed-out, or reset; the probe discards
+curl's rc, so this is "the endpoint did not answer the web host just now", not specifically
+"refused" — the only *synchronous* reading this step ever gets, and the one thing the hourly probe
+row (≤90 min old) and the heartbeat (a flag, not a port) cannot supply. So 2.0 enters the dark arm
+only on that signature and refuses every other non-200 as `webhook_path` (remedy:
+`op=registry-probe`), **without reading Better Stack at all** — a stale dark row and a fresh
+heartbeat must not be consulted when the live path said nothing about the host. 2.1 capture uses
+the same webhook path, so this costs nothing in reachability. (Found at review, 2026-09-11; the
+"connection-refused" overstatement in the first cut of this section was corrected the same day.)
+
+### 4c. The probe row must postdate the newest FSM transition (E14)
+
+The hourly probe row can be up to 90 minutes old, and the FSM can change the host's state inside
+that window: an `op=arm` starts the server, `verify_or_abort` fails, the flag is driven to
+`aborted` — the FSM's own text names the case "a prod scheduler is STILL RUNNING on this host
+under a terminal flag" when `stop_server` also fails. A probe row from before that arm says
+`http_code=000`; a heartbeat from after it says `aborted`; both are true and the host may be
+bound. So the execute gate also requires the graded probe row to POSTDATE the newest same-boot
+heartbeat whose `reason` is not `noop-*` (a transition row — `verify-*`, `rolled-back`,
+`flip-complete`, `unexpected-exit`…), refusing `stale_row` otherwise. The cost is a wait of one
+probe period after any FSM transition; the next probe row then reads `http_code=200` if the server
+is in fact bound and E9 refuses `host_serving`. (Found at review, 2026-09-11.)
+
+### 5. The `BLOCK:`-stream design was measured unsatisfiable and is REJECTED
+
+The first design corroborated darkness from `inngest-server-flip-guard`'s `BLOCK:` line. Measured:
+that line is emitted only when systemd attempts a start, so after any `stop_server` (the 5.4-day
+post-stop state the plan found) the stream is silent while the host is perfectly dark — the
+corroboration was unsatisfiable in exactly the state it was meant to certify. Recorded so it is not
+proposed again. The heartbeat (§4) has no such gap: it is emitted on every tick regardless of the
+unit's state.
+
+### 6. Two streams, two reads — never one `--grep`
+
+An OR-combined read (`--grep 'SOLEUR_INNGEST_SERVER_PROBE|inngest-cutover-flip'`) was measured
+returning 500 rows and **zero** probe rows: the refuse-loop and `doppler run` wrapper noise fill a
+500-row window in ~13 minutes and starve the hourly probe row out of the limit. `_bs_query_rows`
+takes exactly one term; 2.0 calls it twice; the wiring suite asserts one term per call and distinct
+terms. Host isolation happens after decoding, never in `--grep`.
+
+### 7. The deliberate G8/E10 divergence
+
+Guard 2 (`inngest_host_dark_gate`) requires `server_active == "inactive"`. The execute gate
+(`inngest_execute_registry_gate`) requires `server_active != "active"`. Under the P1-5 refuse loop
+the unit sits in `activating` indefinitely, so **G8 refuses today's live host as `host_serving`** —
+the same defect class as this addendum — and is tracked as **#8078** rather than changed under a
+destroy-authorizing gate here. E1–E7 and G1–G7 are one shared helper (`_ihdg_graded_row`); the
+suite's mutation harness runs every shared-helper mutation row through `mutate_both` (asserted:
+any single-consumer `mutate ERG-*` row must be function-scoped) so a tightening that reddens only
+one consumer is visible. **One tightening this extraction applied to the recut gate too,
+recorded here rather than left to be rediscovered:** E7 requires the probe row's `boot_id` to be
+the `/proc/sys/kernel/random/boot_id` UUID shape (it is the E13 join key after hyphen-stripping),
+so a `boot_id=unknown` row — the emitter's read-failed fallback — now refuses BOTH gates as
+`unreadable`, where Guard 2 previously required only presence. Safe direction; the recut battery
+stayed green.
+
+### 8. The reachable-arm asymmetry is deferred
+
+A dedicated host that ANSWERS pre-arm is out of sequence (P1-5 should keep it dark), yet its empty
+registry still satisfies 2.0. The arm now prints a `::warning::` naming this and proceeds; whether
+it should instead refuse is **#8072**.
+
+**Where the code is.** Gate: `tests/scripts/lib/inngest-host-dark-gate.sh` (second entry point,
+E-table in the file). Consumer: `scripts/cutover-inngest.sh`, `execute)` 2.0. Suites:
+`tests/scripts/test-inngest-host-dark-gate.sh` (predicates + mutation harness, both entry points)
+and `apps/web-platform/infra/cutover-inngest-workflow.test.sh` (wiring, rendered arms,
+`mutate_file` rows). No emitter, guard, FSM or workflow-secret change — no image bump, no host
+replace.
