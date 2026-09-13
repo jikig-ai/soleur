@@ -100,6 +100,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
+- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`) — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the].
 
 Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
 
