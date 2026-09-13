@@ -5,25 +5,25 @@ Dissents: `knowledge-base/project/specs/feat-one-shot-8028-supabase-pat-retire/d
 
 ## Phase 0: Preconditions (probes, no edits)
 
-- [ ] 0.1 `bash apps/web-platform/scripts/postgrest-reload-schema.test.sh` → 15 passed; `bash apps/web-platform/scripts/run-migrations-schema-probe.test.sh` → 5 passed (baselines).
-- [ ] 0.2 `python3 scripts/lint-shell-trace-credential-refusal.py apps/web-platform/scripts/postgrest-reload-schema.sh` → 2 violations (Rule A + Rule D) — the state to remediate.
-- [ ] 0.3 `curl --version | head -1` ≥ 7.55.
-- [ ] 0.4 Thirteen-config presence sweep (one `doppler secrets --only-names --json … | jq -r 'keys[]'` per config) + liveness probes (bearer on stdin, body captured, values never printed): every `SUPABASE_PAT` → `401` with body `{"message":"Unauthorized"}`; `SUPABASE_ACCESS_TOKEN` from the `prd` root → 200. Abort Phase 3 otherwise.
+- [x] 0.1 `bash apps/web-platform/scripts/postgrest-reload-schema.test.sh` → 15 passed; `bash apps/web-platform/scripts/run-migrations-schema-probe.test.sh` → 5 passed (baselines).
+- [x] 0.2 `python3 scripts/lint-shell-trace-credential-refusal.py apps/web-platform/scripts/postgrest-reload-schema.sh` → 2 violations (Rule A + Rule D) — the state to remediate.
+- [x] 0.3 `curl --version | head -1` ≥ 7.55.
+- [x] 0.4 Thirteen-config presence sweep (one `doppler secrets --only-names --json … | jq -r 'keys[]'` per config) + liveness probes (bearer on stdin, body captured, values never printed): every `SUPABASE_PAT` → `401` with body `{"message":"Unauthorized"}`; `SUPABASE_ACCESS_TOKEN` from the `prd` root → 200. Abort Phase 3 otherwise.
 
 ## Phase 1: postgrest-reload-schema.sh + test (RED → GREEN)
 
-- [ ] 1.1 Test RED: add T15 (401 + JSON body containing a 24-char `sbp_` fixture, `--best-effort` → exit 2, `::error::` + `Supabase rejected SUPABASE_ACCESS_TOKEN` + `sbp_REDACTED`, no raw fixture, no `skipping`), T15b (403 + JSON → 2), T15c (403 + HTML: strict → 1 `without an API JSON body`; `--best-effort` → 0 warn), T16 (404 + JSON, token set, `--best-effort` → 2), T16b (URL unset, token set, `--best-effort` → 2); `make_fake_curl` drains stdin to `${CURL_STDIN_FILE:-/dev/null}` FIRST (comment: SIGPIPE guard); T4 asserts bearer in stdin capture, `--header` `@-` in argv, bearer absent from argv; T9 asserts `-c prd_terraform --plain`; `</dev/null` on every `bash "$SCRIPT"` invocation.
-- [ ] 1.2 Rename `SUPABASE_PAT` → `SUPABASE_ACCESS_TOKEN` in all remaining fixtures/assertions (T1–T14); T2 keeps asserting `warn|skip`.
-- [ ] 1.3 Script: xtrace preamble after `set -euo pipefail` (rotate-script shape, exit 78).
-- [ ] 1.4 Script header: `Required environment:` → `SUPABASE_ACCESS_TOKEN` (prd root, inherited by every `prd_*` branch; no `dev` config by design); `Examples:` → prd form + the dev one-liner reading from `prd_terraform`; `--best-effort` description = soft-fail ONLY for absence (notice) and transience (warning), everything else with a token exits 2; `Exit codes` note.
-- [ ] 1.5 Script `scrub_pat` → `printf '%s' "${1:0:512}" | tr -d '\r\n\f\v\033\177' | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'` (+ comment: `::` runner commands, octal escapes only).
-- [ ] 1.6 Script `fail_or_skip` → the single soak rule: soft iff `best_effort == 1 && (code == 1 || SUPABASE_ACCESS_TOKEN unset)`; unset → `::notice::… (best-effort: skipping — no SUPABASE_ACCESS_TOKEN in this environment)`, transient → `::warning::… (best-effort: skipping)`; else `::error::` + `exit "$code"`. Delete `soft_warn`.
-- [ ] 1.7 Script precondition message names `DOPPLER_CONFIG` and points to `--help`; update the `# Scrub bearer tokens` / `# Endpoint is pinned` comments.
-- [ ] 1.8 Script curl call → `printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" | curl --disable --noproxy '*' --silent --show-error --request POST --url "$endpoint" --header @- --header "Content-Type: application/json" --data "$payload" --max-time 15 -w $'\n%{http_code}' 2>/dev/null`.
-- [ ] 1.9 Script `401|403)` arm: `[[ "$body" =~ ^[[:space:]]*\{ ]]` → `fail_or_skip 2 "Supabase rejected SUPABASE_ACCESS_TOKEN (HTTP …) from Doppler config '…'. Rotate it per knowledge-base/engineering/operations/secret-scanning.md §SUPABASE_ACCESS_TOKEN. … Response: ${body}"`; else `fail_or_skip 1 "auth endpoint answered HTTP … without an API JSON body (edge/WAF?). Retry. …"`. Other arms unchanged.
-- [ ] 1.10 GREEN: `bash apps/web-platform/scripts/postgrest-reload-schema.test.sh` → 20 passed.
-- [ ] 1.11 Lint: explicit-path shell-trace lint → OK; regenerate baselines with `--write-baseline` and `--write-baseline-d` (full tree); diff = one removed row each; full-tree lint clean.
-- [ ] 1.12 Live endpoint probe (dev, strict): `SUPABASE_ACCESS_TOKEN="$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd_terraform --plain)" doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh` → `reload acknowledged (ref=mlwiodleouzwniehynfz, HTTP 2xx)`; record for the PR body (AC11).
+- [x] 1.1 Test RED: add T15 (401 + JSON body containing a 24-char `sbp_` fixture, `--best-effort` → exit 2, `::error::` + `Supabase rejected SUPABASE_ACCESS_TOKEN` + `sbp_REDACTED`, no raw fixture, no `skipping`), T15b (403 + JSON → 2), T15c (403 + HTML: strict → 1 `without an API JSON body`; `--best-effort` → 0 warn), T16 (404 + JSON, token set, `--best-effort` → 2), T16b (URL unset, token set, `--best-effort` → 2); `make_fake_curl` drains stdin to `${CURL_STDIN_FILE:-/dev/null}` FIRST (comment: SIGPIPE guard); T4 asserts bearer in stdin capture, `--header` `@-` in argv, bearer absent from argv; T9 asserts `-c prd_terraform --plain`; `</dev/null` on every `bash "$SCRIPT"` invocation.
+- [x] 1.2 Rename `SUPABASE_PAT` → `SUPABASE_ACCESS_TOKEN` in all remaining fixtures/assertions (T1–T14); T2 keeps asserting `warn|skip`.
+- [x] 1.3 Script: xtrace preamble after `set -euo pipefail` (rotate-script shape, exit 78).
+- [x] 1.4 Script header: `Required environment:` → `SUPABASE_ACCESS_TOKEN` (prd root, inherited by every `prd_*` branch; no `dev` config by design); `Examples:` → prd form + the dev one-liner reading from `prd_terraform`; `--best-effort` description = soft-fail ONLY for absence (notice) and transience (warning), everything else with a token exits 2; `Exit codes` note.
+- [x] 1.5 Script `scrub_pat` → `printf '%s' "${1:0:512}" | tr -d '\r\n\f\v\033\177' | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'` (+ comment: `::` runner commands, octal escapes only).
+- [x] 1.6 Script `fail_or_skip` → the single soak rule: soft iff `best_effort == 1 && (code == 1 || SUPABASE_ACCESS_TOKEN unset)`; unset → `::notice::… (best-effort: skipping — no SUPABASE_ACCESS_TOKEN in this environment)`, transient → `::warning::… (best-effort: skipping)`; else `::error::` + `exit "$code"`. Delete `soft_warn`.
+- [x] 1.7 Script precondition message names `DOPPLER_CONFIG` and points to `--help`; update the `# Scrub bearer tokens` / `# Endpoint is pinned` comments.
+- [x] 1.8 Script curl call → `printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" | curl --disable --noproxy '*' --silent --show-error --request POST --url "$endpoint" --header @- --header "Content-Type: application/json" --data "$payload" --max-time 15 -w $'\n%{http_code}' 2>/dev/null`.
+- [x] 1.9 Script `401|403)` arm: `[[ "$body" =~ ^[[:space:]]*\{ ]]` → `fail_or_skip 2 "Supabase rejected SUPABASE_ACCESS_TOKEN (HTTP …) from Doppler config '…'. Rotate it per knowledge-base/engineering/operations/secret-scanning.md §SUPABASE_ACCESS_TOKEN. … Response: ${body}"`; else `fail_or_skip 1 "auth endpoint answered HTTP … without an API JSON body (edge/WAF?). Retry. …"`. Other arms unchanged.
+- [x] 1.10 GREEN: `bash apps/web-platform/scripts/postgrest-reload-schema.test.sh` → 20 passed.
+- [x] 1.11 Lint: explicit-path shell-trace lint → OK; regenerate baselines with `--write-baseline` and `--write-baseline-d` (full tree); diff = one removed row each; full-tree lint clean.
+- [x] 1.12 Live endpoint probe (dev, strict): `SUPABASE_ACCESS_TOKEN="$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd_terraform --plain)" doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh` → `reload acknowledged (ref=mlwiodleouzwniehynfz, HTTP 2xx)`; record for the PR body (AC11).
 
 ## Phase 2: run-migrations.sh + harness + required-secrets (RED → GREEN)
 
