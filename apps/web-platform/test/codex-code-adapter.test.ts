@@ -3,6 +3,7 @@ import {
   CODEX_ENGINE_ID,
   createCodexCodeAdapter,
   createCodexAuthBoundary,
+  normalizeCodexUsageEvent,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -105,5 +106,35 @@ describe("Codex neutral adapter boundary", () => {
     for await (const event of adapter.start({} as never, { text: "hi", attachmentIds: [] })) events.push(event);
     expect(events).toHaveLength(1);
     expect(transport.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Codex usage normalization", () => {
+  it("preserves native token units and marks absent pricing unavailable", () => {
+    expect(normalizeCodexUsageEvent("run-1", "usage-1", 2, {
+      inputTokens: 12,
+      outputTokens: 8,
+    })).toEqual({
+      runId: "run-1",
+      eventId: "usage-1",
+      sequence: 2,
+      payload: {
+        type: "usage",
+        usage: {
+          native: [{ unit: "input_tokens", value: 12 }, { unit: "output_tokens", value: 8 }],
+          cost: { provenance: "unavailable" },
+        },
+      },
+    });
+  });
+
+  it("retains provider-reported cost provenance", () => {
+    const event = normalizeCodexUsageEvent("run-1", "usage-2", 3, {
+      inputTokens: 1,
+      outputTokens: 2,
+      cost: { amount: 0.04, currency: "USD" },
+    });
+    expect(event.payload.type).toBe("usage");
+    if (event.payload.type === "usage") expect(event.payload.usage.cost).toEqual({ provenance: "reported", amount: 0.04, currency: "USD" });
   });
 });

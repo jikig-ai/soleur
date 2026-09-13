@@ -15,6 +15,37 @@ export interface CodexCredentialLease {
   readonly expiresAt: number;
 }
 
+export interface CodexUsageSnapshot {
+  inputTokens: number;
+  outputTokens: number;
+  cost?: { amount: number; currency: string };
+}
+
+export function normalizeCodexUsageEvent(
+  runId: string,
+  eventId: string,
+  sequence: number,
+  snapshot: CodexUsageSnapshot,
+): EngineEvent {
+  return {
+    runId,
+    eventId,
+    sequence,
+    payload: {
+      type: "usage",
+      usage: {
+        native: [
+          { unit: "input_tokens", value: snapshot.inputTokens },
+          { unit: "output_tokens", value: snapshot.outputTokens },
+        ],
+        cost: snapshot.cost
+          ? { provenance: "reported", amount: snapshot.cost.amount, currency: snapshot.cost.currency }
+          : { provenance: "unavailable" },
+      },
+    },
+  };
+}
+
 export interface CodexAuthProvider {
   mode: CodexAuthMode;
   acquire(): Promise<CodexCredentialLease>;
