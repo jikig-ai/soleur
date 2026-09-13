@@ -23,6 +23,19 @@ describe("AgentEnginePersistenceRepository", () => {
     });
   });
 
+  it("reads a workspace default through the tenant-scoped settings table", async () => {
+    const supabase = client();
+    supabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({ data: { default_engine_id: "codex" }, error: null }),
+        }),
+      }),
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.getDefaultEngine("ws-1")).resolves.toBe("codex");
+  });
+
   it("uses the atomic bind RPC and never derives the engine from client input", async () => {
     const supabase = client();
     const repo = new AgentEnginePersistenceRepository(supabase);

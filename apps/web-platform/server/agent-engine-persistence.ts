@@ -33,6 +33,17 @@ export class AgentEnginePersistenceRepository {
     return result.data;
   }
 
+  async getDefaultEngine(workspaceId: string): Promise<string | null> {
+    const result = await this.client.from("workspace_engine_settings")
+      .select("default_engine_id")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    if (result.error) throw new Error(`workspace default engine lookup failed: ${result.error.message}`);
+    if (!result.data || typeof result.data !== "object") return null;
+    const value = (result.data as { default_engine_id?: unknown }).default_engine_id;
+    return typeof value === "string" ? value : null;
+  }
+
   async bind(input: BindRunInput): Promise<unknown> {
     const result = await this.client.rpc("bind_agent_engine_run", {
       p_workspace_id: input.workspaceId,
