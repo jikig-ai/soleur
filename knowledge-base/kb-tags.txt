@@ -1738,6 +1738,7 @@ growth-strategist
 growth-targets
 guard
 guard-2
+guard-3
 guard-building
 guard-building-pr
 guard-contract
@@ -1745,6 +1746,7 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-residue
 guard-test
 guard-testing
 guard-vacuity
@@ -1899,6 +1901,7 @@ infrastructure
 infrastructure-issues
 ingress
 inheritance
+inherited-claims
 inherited-framing
 initial
 initialization
@@ -3151,6 +3154,7 @@ rtl
 rule
 rule-audit
 rule-budget
+rule-c
 rule-d
 rule-exists-no-gate-enforces-it
 rule-governance

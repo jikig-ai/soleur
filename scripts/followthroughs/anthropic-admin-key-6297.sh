@@ -32,8 +32,8 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
@@ -130,32 +130,24 @@ if (( ROWS == 0 )); then
   # Stack shows nothing, the producer is alive and the SHIPPING path is broken
   # — a real fault the Sentry cron monitor cannot see (its check-in succeeded,
   # so it stays GREEN in exactly this mode).
-  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-    echo "  Sentry cross-check skipped: SENTRY_AUTH_TOKEN not set."
+  if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+    echo "  Sentry cross-check skipped: SENTRY_ACTIONS_RO_TOKEN not set."
   else
-    SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
-    SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
-    # Destination pins (#7797 class, lint-shell-trace-credential-refusal): the
-    # bearer token below goes wherever these two variables point, and both are
-    # env-settable, so refuse anything but the one org this probe was written
-    # for rather than let a stray environment redirect the credential.
-    if [[ "$SENTRY_HOST" != "jikigai-eu.sentry.io" ]]; then
-      echo "  Sentry cross-check refused: SENTRY_API_HOST is not the expected destination (jikigai-eu.sentry.io)."
-      SENTRY_HOST=""
-    fi
-    if [[ "$SENTRY_ORG" != "jikigai-eu" ]]; then
-      echo "  Sentry cross-check refused: SENTRY_ORG is not the expected organization (jikigai-eu)."
-      SENTRY_ORG=""
+    readonly SENTRY_HOST_PINNED="jikigai-eu.sentry.io"
+    readonly SENTRY_ORG_PINNED="jikigai-eu"
+    SENTRY_HOST="${SENTRY_API_HOST:-$SENTRY_HOST_PINNED}"
+    SENTRY_ORG="${SENTRY_ORG:-$SENTRY_ORG_PINNED}"
+    # Rule D pin (ADR-202): both are env-settable and carry a live credential, so each is
+    # adjudicated against the ONE literal it may take before the credentialed call.
+    if [[ "$SENTRY_HOST" != "$SENTRY_HOST_PINNED" || "$SENTRY_ORG" != "$SENTRY_ORG_PINNED" ]]; then
+      echo "TRANSIENT: refusing an unpinned Sentry destination (host=${SENTRY_HOST} org=${SENTRY_ORG}; pinned to ${SENTRY_HOST_PINNED} / ${SENTRY_ORG_PINNED})" >&2
+      exit 2
     fi
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
-    # --disable FIRST: it aborts ~/.curlrc, which could otherwise re-point a
-    # credentialed request (proxy, --location) before any flag here applies;
-    # --noproxy '*' keeps ALL_PROXY/HTTPS_PROXY from redirecting it either.
-    [[ -n "$SENTRY_HOST" && -n "$SENTRY_ORG" ]] && \
     SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+      -H "Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
       --data-urlencode 'statsPeriod=48h' \

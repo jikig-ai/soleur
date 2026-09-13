@@ -55,6 +55,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "cq-assert-anchor-not-bare-token",
       "section": "Code Quality",
       "hit_count": 0,
@@ -224,6 +237,32 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "cq-write-failing-tests-before",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-all-infrastructure-provisioning-servers",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-always-read-a-file-before-editing-it",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -251,6 +290,19 @@
     },
     {
       "id": "hr-before-asserting-github-issue-status",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-before-shipping-ship-phase-5-5-runs",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -341,6 +393,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-github-api-endpoints-with-enum",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -393,6 +458,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-monitor-not-run-in-background-for-polling",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-multi-step-post-merge-bootstrap-script",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -407,6 +485,19 @@
     },
     {
       "id": "hr-never-git-add-a-in-user-repo-agents",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -458,6 +549,32 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-never-write-to-claude-code-memory-claude",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-new-skills-agents-or-user-facing",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-no-dashboard-eyeball-pull-data-yourself",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -472,6 +589,19 @@
     },
     {
       "id": "hr-no-ssh-fallback-in-runbooks",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-observability-as-plan-quality-gate",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -524,6 +654,19 @@
     },
     {
       "id": "hr-ship-message-no-operator-checklist",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-ssh-diagnosis-verify-firewall",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -628,6 +771,32 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -770,8 +939,47 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "rf-never-skip-qa-review-before-merging",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "rf-review-finding-default-fix-inline",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "rf-when-a-reviewer-or-user-says-to-keep-a",
       "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-after-a-pr-merges-to-main-verify-all",
+      "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
       "applied_count": 0,
@@ -823,6 +1031,19 @@
     },
     {
       "id": "wg-at-session-start-run-bash-plugins-soleur",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-block-pr-ready-on-undeferred-operator-steps",
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
@@ -914,6 +1135,45 @@
     },
     {
       "id": "wg-plan-prescribed-skills-must-run-inline",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-pm-class-followthrough-for-operator-dogfood",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-record-recurring-vendor-expense-before-ready",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-ship-push-before-merge",
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,

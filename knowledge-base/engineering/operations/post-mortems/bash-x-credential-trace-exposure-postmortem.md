@@ -535,3 +535,52 @@ evidenced rather than anticipated. It is **not** the CLEAN path that would let
 The ADR-031 migration is undone — the org-token surface is empty, so this
 credential class is still a personal token and the next rotation is still gated
 at an interactive login. That remains the durable fix.
+
+## Addendum — 2026-09-11 (#7946): the ADR-031 migration is done for every repo-side consumer
+
+Append-only. Nothing above is rewritten; this section supersedes the parts it
+names. Frontmatter is untouched: the `art_33_*` / `art_34_*` fields describe the
+determination, which this addendum does not amend.
+
+**Supersedes `### Still open` (2026-09-08 addendum).** The org-level migration
+that section called "the durable fix" has shipped. Sixteen files under
+`scripts/followthroughs/` (thirteen Sentry readers, one emitter that only refused
+under xtrace, two `.test.sh` stubs) no longer name `SENTRY_AUTH_TOKEN`; the
+readers consume `SENTRY_ACTIONS_RO_TOKEN`, the token of a dedicated Internal Integration
+`actions-read-prd` on `jikigai-eu` with exactly `[event:read, org:read,
+project:read]` (measured post-mint), stored as one GitHub repository secret and
+deliberately not mirrored into Doppler — so no `doppler run` config can bind a
+personal token under it by accident. `fresh-host-boot-trail.sh`, the last
+repo-side reader of the personal value via Doppler, binds the same secret from
+both provisioning jobs and makes no Doppler read at all. The next rotation is
+agent-drivable per
+`knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`,
+with one honest handoff (the browser session's login + 2FA when it has expired;
+the mint form itself has no human gate). The premise that "the org-token surface
+is empty" conflated Organization Auth Tokens with Internal Integrations — the
+org carries five of the latter; ADR-031's 2026-09-11 amendment records the
+distinction and the class.
+
+**Supersedes the 2026-09-07 addendum's ADR-031 sentence** ("off the *user* auth
+token onto an org-level Internal Integration (ADR-031's `iac-terraform-prd`
+shape), which would make the next rotation agent-doable"): the shape adopted is
+a *dedicated read-only* integration, not the IaC token's — DC-3 on #7993 was
+decided on a measurement (the cron check-in endpoint 403s under the
+`inline-read-prd` scope set), and the alternative of binding the IaC token under
+the new name was rejected for carrying `project:admin` / `alerts:write` on a
+GET-only class. ADR-031 holds the record.
+
+**Still open after this addendum, tracked.** The personal token's *value* under
+the canonical name in Doppler `soleur/prd_terraform` is still live: it has no
+repo-side reader via Doppler any more, but the Terraform provider, sentry-cli and
+`next.config.ts` keep the name, and five workstation scripts bind it under
+`doppler run -c prd_terraform`: `apps/web-platform/infra/cutover-verify.sh`,
+`scripts/sentry-alert-live-fidelity.sh`, and under `apps/web-platform/scripts/`
+`sentry-monitors-audit.sh`, `configure-sentry-alerts.sh` and
+`assert-byok-rules-exist.sh`. Its replacement with the `iac-terraform-prd`
+value and revocation is **#8090**. Separately, the sweeper's silent
+missing-secret path (a directive naming an absent credential was skipped with
+stderr only under a green run) and a pre-existing command injection in the same
+loop (`secrets=a[$(cmd)]` was expanded before validation) were closed in the same
+PR — both found while rewiring this credential, neither part of the original
+incident.
