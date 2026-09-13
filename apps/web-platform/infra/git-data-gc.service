@@ -66,4 +66,9 @@ Environment=HOME=/root
 ProtectSystem=strict
 PrivateTmp=yes
 NoNewPrivileges=yes
-ReadWritePaths=/mnt/git-data /var/lock
+ReadWritePaths=/mnt/git-data
+# (#8043 review) The gc lock lives here (git-data-gc.sh LOCK), not under /var/lock: that
+# directory is world-writable, and a git-uid pre-created lock file makes root's open fail
+# under fs.protected_regular. systemd creates this root-owned and writable under
+# ProtectSystem=strict; nothing else needs /var/lock.
+RuntimeDirectory=git-data-gc
