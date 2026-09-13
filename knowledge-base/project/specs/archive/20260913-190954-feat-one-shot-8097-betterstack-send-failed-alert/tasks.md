@@ -46,7 +46,7 @@ Branch: `feat-one-shot-8097-betterstack-send-failed-alert` — issue #8097 (PR b
 
 ## Phase 5: Verification (pre-merge ACs)
 
-- [ ] 5.1 AC1 guard green with `SEND_FAILED_ALERT_MIN_CASES=6`; the registered mutation battery green (36 RED rows by FAIL string, H1a RED, H1b GREEN, H2-H5 PASS).
+- [x] 5.1 AC1 guard green with `SEND_FAILED_ALERT_MIN_CASES=6`; the registered mutation battery green (36 RED rows by FAIL string, H1a RED, H1b GREEN, H2-H5 PASS).
 - [ ] 5.2 AC2-AC8a per plan (`actionlint` on the two touched workflows; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`; `git diff --stat` on the lockfile shows additions only).
 - [ ] 5.3 PR body `Ref #8097`; `decision-challenges.md` (UC-1, T-1, T-2) rendered by /ship Phase 6.
 

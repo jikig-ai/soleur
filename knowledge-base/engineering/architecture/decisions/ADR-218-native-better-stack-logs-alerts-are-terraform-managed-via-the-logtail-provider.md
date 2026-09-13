@@ -215,4 +215,4 @@ reconcile arm covers only the alert's own health, not its firings.
   `docs/resources/exploration.md`, `exploration_alert.md`; `internal/provider/alert_shared.go`,
   `resource_source.go`. Vendor: `betterstack.com/docs/logs/api/getting-started/` (global tokens
   accepted on the Telemetry API).
-- Plan: `knowledge-base/project/plans/2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20260913-190954-2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md`.

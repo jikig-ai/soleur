@@ -9,7 +9,7 @@
 # Better Stack precisely because the thing being detected IS the Sentry/Resend path — this is the
 # exit that survives a Sentry-side outage (model.c4 `betterstack -> founder`).
 #
-# Plan: knowledge-base/project/plans/2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md
+# Plan: knowledge-base/project/plans/archive/20260913-190954-2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md
 # Runbook: knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md
 # Decision: knowledge-base/engineering/architecture/decisions/ADR-218-native-better-stack-logs-alerts-are-terraform-managed-via-the-logtail-provider.md
 # Drift guard: apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh (+ its mutation battery)
