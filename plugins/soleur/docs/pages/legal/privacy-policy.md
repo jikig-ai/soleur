@@ -331,6 +331,8 @@ The Soleur Plugin is designed to work with the AI provider of the CLI you run it
 - Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic.
 - Anthropic's handling of your data is governed by [Anthropic's Privacy Policy](https://www.anthropic.com/privacy) and their Terms of Service.
 
+When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials. That provider is not a Jikigai processor.
+
 **This section describes the locally-installed Plugin only.** Jikigai separately operates its own automated jobs that send content to Anthropic PBC under a **Jikigai-held API key**, for which Jikigai is the controller and Anthropic is its processor. The three bullets above — in particular "Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic" — do **not** describe that processing and must not be read as covering it. See Section 4.4, which sets out what is collected, where it is sent, and what has been republished. *(Clarification added 2026-07-31, ref #7100: the scoping was previously implicit, which left this section reading as a statement about all Anthropic egress, contradicting Section 4.4.)*
 
 **Operator-assisted sessions are a second exception.** If you ask us to help you run Soleur against your own material, and we do that using our machine or our API key, content from that session is sent to our AI provider under **our** credentials rather than yours. The bullets above do not describe those sessions either, and must not be read as covering them. See Section 4.2 and the Data Protection Disclosure, Section 2.1c.

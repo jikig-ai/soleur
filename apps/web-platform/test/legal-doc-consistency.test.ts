@@ -144,6 +144,9 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ["data-protection-disclosure", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
       ["gdpr-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
       ["acceptable-use-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["cookie-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["disclaimer", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["privacy-policy", /When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials/],
     ];
     for (const [doc, pattern] of checks) {
       const source = loadSource(doc);
@@ -153,11 +156,9 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
     }
   });
 
-  test("cookie-policy and disclaimer stay Claude-exclusive", () => {
-    for (const doc of ["cookie-policy", "disclaimer"] as const) {
-      expect(loadSource(doc)).toMatch(/Claude Code plugin/);
-      expect(loadMirror(doc)).toMatch(/Claude Code plugin/);
-    }
+  test("cookie-policy still says the plugin does not use cookies", () => {
+    expect(loadSource("cookie-policy")).toMatch(/does not use cookies/);
+    expect(loadMirror("cookie-policy")).toMatch(/does not use cookies/);
   });
 
   test("legal corpus does not invent grok --trust or add xAI as a sub-processor", () => {
