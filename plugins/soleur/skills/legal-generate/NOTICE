@@ -1,0 +1,241 @@
+---
+upstream: github.com/General-Legal/legal-templates
+pinned-commit: 0f7c7bfabf1be77a2bf52eef80815e24c93a190a
+last-verified: 2026-09-13
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  # Each entry pins TWO blob SHAs:
+  #   upstream-blob-sha — the file as it exists upstream at `pinned-commit`.
+  #     Used by the drift workflow to detect upstream content changes.
+  #   local-blob-sha    — the file as it exists in this repo (after the
+  #     line-1 attribution header). Used by the lefthook
+  #     `vendor-pin-integrity` gate to detect silent local edits. Computed
+  #     via `git hash-object --no-filters`.
+  - path: references/templates/advisor-agreement/template.md
+    upstream-path: templates/advisor-agreement/template.md
+    upstream-blob-sha: 7cfe4fb5ee5c6b4d573f1988225668db1644d92b
+    local-blob-sha: 19642371c8f36352625c9f61f1277dc5c4a2cfcf
+    status: active-verbatim
+  - path: references/templates/business-associate-agreement/template.md
+    upstream-path: templates/business-associate-agreement/template.md
+    upstream-blob-sha: 0fd33c2912181681461f9dda77ce3d7aa93bb150
+    local-blob-sha: de95b9ed292bcbb497dfb653fbf4d07638760ff4
+    status: active-verbatim
+  - path: references/templates/cookie-notice/template.md
+    upstream-path: templates/cookie-notice/template.md
+    upstream-blob-sha: 46a11db821f763d392665ec2993648977c7c03cb
+    local-blob-sha: 58d178cd29092ff32204848e1b74add181baba17
+    status: active-verbatim
+  - path: references/templates/dpa-global/template.md
+    upstream-path: templates/dpa-global/template.md
+    upstream-blob-sha: d2ead2224e9434bfaf7fe1521fcd5d84fe5013e5
+    local-blob-sha: f01db862a723afc78209c3b12b8eac5eca6e849d
+    status: active-verbatim
+  - path: references/templates/dpa-us/template.md
+    upstream-path: templates/dpa-us/template.md
+    upstream-blob-sha: 2b7a8711a859847a957d136a148a12b6edf53530
+    local-blob-sha: 8f4fe8763a87d684a21d6c0b838e1fa552195018
+    status: active-verbatim
+  - path: references/templates/employee-offer-letter/template.md
+    upstream-path: templates/employee-offer-letter/template.md
+    upstream-blob-sha: 9deee17d7b716d4e4550c57c6d14af2c63cf56df
+    local-blob-sha: fff760e7aa88c1c6a6772d1d9c6b07b138c1c64a
+    status: active-verbatim
+  - path: references/templates/master-services-agreement/template.md
+    upstream-path: templates/master-services-agreement/template.md
+    upstream-blob-sha: 08fc16fd6fbe614673ea55fa4d354b69733ef1c7
+    local-blob-sha: b3d052421cc14db85a6d5e2a54a7e93cd955045c
+    status: active-verbatim
+  - path: references/templates/mutual-nda/template.md
+    upstream-path: templates/mutual-nda/template.md
+    upstream-blob-sha: 4ad55af5d3da9a3fd08b38e49ea4ec12e6a0e8b9
+    local-blob-sha: 83d29a6851484249e8c36826eeaa517c3d30d261
+    status: active-verbatim
+  - path: references/templates/one-way-nda/template.md
+    upstream-path: templates/one-way-nda/template.md
+    upstream-blob-sha: d8f32b85ea4ff593c78c5a4e518cd7010c9870d0
+    local-blob-sha: 96b0704174a9944dc1215fa4816cee0ddf8f026d
+    status: active-verbatim
+  - path: references/templates/privacy-policy-gdpr/template.md
+    upstream-path: templates/privacy-policy-gdpr/template.md
+    upstream-blob-sha: 6f008a229225e7e21d010cf735073d9d65013d02
+    local-blob-sha: cbbbbe13f296913be8db5b07b50437be3b5ced16
+    status: active-verbatim
+  - path: references/templates/privacy-policy-us/template.md
+    upstream-path: templates/privacy-policy-us/template.md
+    upstream-blob-sha: 3981a0f5fa9f4b2121dddbe411d072953c67a6a3
+    local-blob-sha: 8ff77dd199f6b5f2b4400d0cad4fb0cd5ae47f81
+    status: active-verbatim
+  - path: references/templates/terms-of-use/template.md
+    upstream-path: templates/terms-of-use/template.md
+    upstream-blob-sha: 98867f87a7ebbaa97e5e7dc93c5ee3d208b163de
+    local-blob-sha: 459b96a133f6f2a77743a222dceb4a007b262623
+    status: active-verbatim
+soleur-authored:
+  # Reference files written from scratch for this plugin. Same record shape and
+  # same `local-blob-sha` tamper check as `lifted-files` above, but NO upstream
+  # provenance. Declared as an explicit empty list: every `references/**/*.md`
+  # file in this bundle is vendored, so nothing registers here today. Any future
+  # `.md` added under `references/` MUST be registered in exactly one of the two
+  # registries (the symmetric-difference walk enforces).
+  []
+---
+
+# NOTICE
+
+The frontmatter above is the canonical machine-readable form; the table below is the human-readable form. Drift between them is a bug.
+
+`legal-generate` lifts twelve legal-document templates from [General-Legal/legal-templates](https://github.com/General-Legal/legal-templates) under the CC0-1.0 license. The lifted files carry a per-file attribution header and are listed below with upstream blob SHAs pinned at commit `0f7c7bfabf1be77a2bf52eef80815e24c93a190a` (verified 2026-09-13 — upstream `main` HEAD unchanged).
+
+The templates are vendored verbatim (modulo the line-1 attribution header): each retains the upstream trailing credit paragraph naming General Legal, PC for provenance. That credit, and the header, are stripped deterministically at the document emit path (`scripts/strip-vendor-credit.sh`) — emitted documents carry no vendor marks. Two templates (`employee-offer-letter`, `terms-of-use`) also embed an "OPTION B" arbitration clause naming DecisionLayer, a General-Legal-affiliated arbitration provider; the clause is a user-selectable alternative to the default JAMS option and is surfaced — not defaulted — at fill time.
+
+Upstream `docx-originals/`, per-template `README.md` files, and upstream `scripts/` are NOT vendored.
+
+## General-Legal/legal-templates (CC0-1.0)
+
+Pinned commit: `0f7c7bfabf1be77a2bf52eef80815e24c93a190a` (verified 2026-09-13)
+
+Upstream: <https://github.com/General-Legal/legal-templates>
+
+| Lifted file (Soleur) | Upstream path | Blob SHA | Status |
+|---|---|---|---|
+| `references/templates/advisor-agreement/template.md` | `templates/advisor-agreement/template.md` | `7cfe4fb5ee5c6b4d573f1988225668db1644d92b` | active (verbatim) |
+| `references/templates/business-associate-agreement/template.md` | `templates/business-associate-agreement/template.md` | `0fd33c2912181681461f9dda77ce3d7aa93bb150` | active (verbatim) |
+| `references/templates/cookie-notice/template.md` | `templates/cookie-notice/template.md` | `46a11db821f763d392665ec2993648977c7c03cb` | active (verbatim) |
+| `references/templates/dpa-global/template.md` | `templates/dpa-global/template.md` | `d2ead2224e9434bfaf7fe1521fcd5d84fe5013e5` | active (verbatim) |
+| `references/templates/dpa-us/template.md` | `templates/dpa-us/template.md` | `2b7a8711a859847a957d136a148a12b6edf53530` | active (verbatim) |
+| `references/templates/employee-offer-letter/template.md` | `templates/employee-offer-letter/template.md` | `9deee17d7b716d4e4550c57c6d14af2c63cf56df` | active (verbatim) |
+| `references/templates/master-services-agreement/template.md` | `templates/master-services-agreement/template.md` | `08fc16fd6fbe614673ea55fa4d354b69733ef1c7` | active (verbatim) |
+| `references/templates/mutual-nda/template.md` | `templates/mutual-nda/template.md` | `4ad55af5d3da9a3fd08b38e49ea4ec12e6a0e8b9` | active (verbatim) |
+| `references/templates/one-way-nda/template.md` | `templates/one-way-nda/template.md` | `d8f32b85ea4ff593c78c5a4e518cd7010c9870d0` | active (verbatim) |
+| `references/templates/privacy-policy-gdpr/template.md` | `templates/privacy-policy-gdpr/template.md` | `6f008a229225e7e21d010cf735073d9d65013d02` | active (verbatim) |
+| `references/templates/privacy-policy-us/template.md` | `templates/privacy-policy-us/template.md` | `3981a0f5fa9f4b2121dddbe411d072953c67a6a3` | active (verbatim) |
+| `references/templates/terms-of-use/template.md` | `templates/terms-of-use/template.md` | `98867f87a7ebbaa97e5e7dc93c5ee3d208b163de` | active (verbatim) |
+
+## License
+
+Upstream CC0-1.0 license terms (verbatim copy):
+
+```
+Creative Commons Legal Code
+
+CC0 1.0 Universal
+
+    CREATIVE COMMONS CORPORATION IS NOT A LAW FIRM AND DOES NOT PROVIDE
+    LEGAL SERVICES. DISTRIBUTION OF THIS DOCUMENT DOES NOT CREATE AN
+    ATTORNEY-CLIENT RELATIONSHIP. CREATIVE COMMONS PROVIDES THIS
+    INFORMATION ON AN "AS-IS" BASIS. CREATIVE COMMONS MAKES NO WARRANTIES
+    REGARDING THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS
+    PROVIDED HEREUNDER, AND DISCLAIMS LIABILITY FOR DAMAGES RESULTING FROM
+    THE USE OF THIS DOCUMENT OR THE INFORMATION OR WORKS PROVIDED
+    HEREUNDER.
+
+Statement of Purpose
+
+The laws of most jurisdictions throughout the world automatically confer
+exclusive Copyright and Related Rights (defined below) upon the creator
+and subsequent owner(s) (each and all, an "owner") of an original work of
+authorship and/or a database (each, a "Work").
+
+Certain owners wish to permanently relinquish those rights to a Work for
+the purpose of contributing to a commons of creative, cultural and
+scientific works ("Commons") that the public can reliably and without fear
+of later claims of infringement build upon, modify, incorporate in other
+works, reuse and redistribute as freely as possible in any form whatsoever
+and for any purposes, including without limitation commercial purposes.
+These owners may contribute to the Commons to promote the ideal of a free
+culture and the further production of creative, cultural and scientific
+works, or to gain reputation or greater distribution for their Work in
+part through the use and efforts of others.
+
+For these and/or other purposes and motivations, and without any
+expectation of additional consideration or compensation, the person
+associating CC0 with a Work (the "Affirmer"), to the extent that he or she
+is an owner of Copyright and Related Rights in the Work, voluntarily
+elects to apply CC0 to the Work and publicly distribute the Work under its
+terms, with knowledge of his or her Copyright and Related Rights in the
+Work and the meaning and intended legal effect of CC0 on those rights.
+
+1. Copyright and Related Rights. A Work made available under CC0 may be
+protected by copyright and related or neighboring rights ("Copyright and
+Related Rights"). Copyright and Related Rights include, but are not
+limited to, the following:
+
+  i. the right to reproduce, adapt, distribute, perform, display,
+     communicate, and translate a Work;
+ ii. moral rights retained by the original author(s) and/or performer(s);
+iii. publicity and privacy rights pertaining to a person's image or
+     likeness depicted in a Work;
+ iv. rights protecting against unfair competition in regards to a Work,
+     subject to the limitations in paragraph 4(a), below;
+  v. rights protecting the extraction, dissemination, use and reuse of data
+     in a Work;
+ vi. database rights (such as those arising under Directive 96/9/EC of the
+     European Parliament and of the Council of 11 March 1996 on the legal
+     protection of databases, and under any national implementation
+     thereof, including any amended or successor version of such
+     directive); and
+vii. other similar, equivalent or corresponding rights throughout the
+     world based on applicable law or treaty, and any national
+     implementations thereof.
+
+2. Waiver. To the greatest extent permitted by, but not in contravention
+of, applicable law, Affirmer hereby overtly, fully, permanently,
+irrevocably and unconditionally waives, abandons, and surrenders all of
+Affirmer's Copyright and Related Rights and associated claims and causes
+of action, whether now known or unknown (including existing as well as
+future claims and causes of action), in the Work (i) in all territories
+worldwide, (ii) for the maximum duration provided by applicable law or
+treaty (including future time extensions), (iii) in any current or future
+medium and for any number of copies, and (iv) for any purpose whatsoever,
+including without limitation commercial, advertising or promotional
+purposes (the "Waiver"). Affirmer makes the Waiver for the benefit of each
+member of the public at large and to the detriment of Affirmer's heirs and
+successors, fully intending that such Waiver shall not be subject to
+revocation, rescission, cancellation, termination, or any other legal or
+equitable action to disrupt the quiet enjoyment of the Work by the public
+as contemplated by Affirmer's express Statement of Purpose.
+
+3. Public License Fallback. Should any part of the Waiver for any reason
+be judged legally invalid or ineffective under applicable law, then the
+Waiver shall be preserved to the maximum extent permitted taking into
+account Affirmer's express Statement of Purpose. In addition, to the
+extent the Waiver is so judged Affirmer hereby grants to each affected
+person a royalty-free, non transferable, non sublicensable, non exclusive,
+irrevocable and unconditional license to exercise Affirmer's Copyright and
+Related Rights in the Work (i) in all territories worldwide, (ii) for the
+maximum duration provided by applicable law or treaty (including future
+time extensions), (iii) in any current or future medium and for any number
+of copies, and (iv) for any purpose whatsoever, including without
+limitation commercial, advertising or promotional purposes (the
+"License"). The License shall be deemed effective as of the date CC0 was
+applied by Affirmer to the Work. Should any part of the License for any
+reason be judged legally invalid or ineffective under applicable law, such
+partial invalidity or ineffectiveness shall not invalidate the remainder
+of the License, and in such case Affirmer hereby affirms that he or she
+will not (i) exercise any of his or her remaining Copyright and Related
+Rights in the Work or (ii) assert any associated claims and causes of
+action with respect to the Work, in either case contrary to Affirmer's
+express Statement of Purpose.
+
+4. Limitations and Disclaimers.
+
+ a. No trademark or patent rights held by Affirmer are waived, abandoned,
+    surrendered, licensed or otherwise affected by this document.
+ b. Affirmer offers the Work as-is and makes no representations or
+    warranties of any kind concerning the Work, express, implied,
+    statutory or otherwise, including without limitation warranties of
+    title, merchantability, fitness for a particular purpose, non
+    infringement, or the absence of latent or other defects, accuracy, or
+    the present or absence of errors, whether or not discoverable, all to
+    the greatest extent permissible under applicable law.
+ c. Affirmer disclaims responsibility for clearing rights of other persons
+    that may apply to the Work or any use thereof, including without
+    limitation any person's Copyright and Related Rights in the Work.
+    Further, Affirmer disclaims responsibility for obtaining any necessary
+    consents, permissions or other rights required for any use of the
+    Work.
+ d. Affirmer understands and acknowledges that Creative Commons is not a
+    party to this document and has no duty or obligation with respect to
+    this CC0 or use of the Work.
+```
