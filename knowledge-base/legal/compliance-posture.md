@@ -66,7 +66,7 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Article 33(5) Breach Register | `knowledge-base/legal/breach-register.md` | — | 2026-09-03 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | — | 2026-03-29 | Active |
 | GDPR Policy | `docs/legal/gdpr-policy.md` | — | 2026-08-09 | Active |
-| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-08-11 | Active |
+| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-09-13 | Active |
 | Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | — | 2026-08-09 | Active |
 | LinkedIn Page LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` | — | 2026-05-19 | Draft (counsel review pending) |
 | Operator Inbox Triage LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md` | — | 2026-06-11 | Draft (counsel review pending) |
