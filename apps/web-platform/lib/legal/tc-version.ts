@@ -32,7 +32,7 @@ export const TC_VERSION = "2.5.1";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "a66b7fa8e9bd2687ee17a151262eb81c4a50393c74a9f4376b2b626343be0144";
+  "8d33c47b143b6690dcd581799baacaf1b4c1c084a356fb0d5383a9c661984007";
 
 /**
  * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "September 13, 2026",
-  substantiveChange: "Plugin definition is harness-neutral: supported AI coding CLIs including Claude Code and Grok Build",
+  substantiveChange: "Plugin definition is harness-neutral: supported AI coding CLIs including Claude Code, Grok Build, Codex, and Devin CLI",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

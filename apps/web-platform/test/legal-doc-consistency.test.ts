@@ -139,11 +139,11 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ["gdpr-policy", /FreeTSA \(RFC 3161 Time Stamp Authority\):/],
       ["gdpr-policy", /Article 17\(3\)\(e\)/],
       // Grok Build Phase 6 — harness-neutral Plugin copy (not Claude-exclusive).
-      ["terms-and-conditions", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
-      ["privacy-policy", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
-      ["data-protection-disclosure", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
-      ["gdpr-policy", /supported AI coding CLIs \(including Claude Code and Grok Build\)/],
-      ["acceptable-use-policy", /supported AI coding CLIs/],
+      ["terms-and-conditions", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["privacy-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["data-protection-disclosure", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["gdpr-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["acceptable-use-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
     ];
     for (const [doc, pattern] of checks) {
       const source = loadSource(doc);

@@ -26,13 +26,13 @@ generated-date: 2026-02-20
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
-**Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code and Grok Build). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
+**Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
 ---
 
 ## 1. Introduction
 
-This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a locally installed plugin for supported AI coding CLIs (including Claude Code and Grok Build), providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — for solo founders and technical builders.
+This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI), providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — for solo founders and technical builders.
 
 This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, Web Platform (app.soleur.ai), documentation site, and GitHub repository.
 
