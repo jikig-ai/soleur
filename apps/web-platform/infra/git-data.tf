@@ -29,11 +29,11 @@
 # --- In-band transport keypair (ED25519) ------------------------------------
 # DEDICATED key — NOT reused from tls_private_key.ci_ssh. Mirrors the ci-ssh-key.tf
 # shape (tls_private_key.ci_ssh + the trimspace() local + doppler_secret). The
-# public half goes onto the git-data host (cloud-init authorized_keys, git-shell
-# forced-command); the private half goes to Doppler for git-auth.ts to consume.
+# public half goes onto the git-data host (cloud-init authorized_keys, transport-
+# wrapper forced command); the private half goes to Doppler for git-auth.ts to consume.
 #
 # Intentionally a single throwaway shared key (the Phase-2 floor: one web host,
-# git-shell-scoped). Phase 3's per-workspace_id mTLS (ADR-068 §6) REPLACES it; it
+# scoped by its forced command). Phase 3's per-workspace_id mTLS (ADR-068 §6) REPLACES it; it
 # is NOT a cluster-wide mount credential, so the Phase-3 swap is additive-then-
 # remove (the Phase-3 plan must plan its removal).
 resource "tls_private_key" "git_transport" {
@@ -44,10 +44,11 @@ resource "tls_private_key" "git_transport" {
 # A SECOND, dedicated key — SEPARATE from tls_private_key.git_transport (ADR-068
 # amendment 2026-07-01 "PR B bare-repo provisioning"). Its cloud-init forced
 # command is the FIXED `git-data-provision.sh` (idempotent `git init --bare`),
-# NEVER git-shell. Provisioning authority and ref-write authority are separate
+# never a shell. Provisioning authority and ref-write authority are separate
 # credentials with separate blast radii (ADR-068 §6): a leaked transport key
 # cannot fabricate repos, and a leaked provision key cannot write refs. Same OS
-# `git` user (per-key command= overrides the login shell). Same throwaway-shape as
+# `git` user (sshd runs each key's command= BY the login shell as `<shell> -c`; the
+# confinement is the forced-command map, not the shell — #8043). Same throwaway-shape as
 # git_transport; Phase 3's per-workspace_id mTLS replaces both.
 resource "tls_private_key" "git_provision" {
   algorithm = "ED25519"
@@ -56,11 +57,11 @@ resource "tls_private_key" "git_provision" {
 # --- In-band REMOVE keypair (ED25519) ---------------------------------------
 # A THIRD, dedicated key — SEPARATE from git_transport AND git_provision (#5274
 # Phase 3, ADR-068 GDPR Art. 17 / CLO DL-1). Its cloud-init forced command is the
-# FIXED `git-data-remove.sh` (idempotent `rm -rf <id>.git`), NEVER git-shell.
+# FIXED `git-data-remove.sh` (idempotent `rm -rf <id>.git`), never a shell.
 # Provisioning, ref-write, and ERASURE authority are three separate credentials
 # with separate blast radii (ADR-068 §6): a leaked transport/provision key cannot
 # delete repos, and a leaked remove key cannot write refs. Same OS `git` user
-# (per-key command= overrides the login shell). Same throwaway-shape as the
+# (command= run BY the login shell; the map is the confinement — #8043). Same throwaway-shape as the
 # siblings; Phase 3's per-workspace_id posture replaces all three.
 resource "tls_private_key" "git_remove" {
   algorithm = "ED25519"
