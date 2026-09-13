@@ -577,9 +577,10 @@ if hb:
 
 # --- B8: pathspec parity vs the release workflow -----------------------------
 #
-# The critical path is NOT a serial sum (#7160). `release` and `await-ci` declare no `needs:`,
+# The critical path is NOT a serial sum (#7160). `release` and CI declare no `needs:` on each
+# other — since #5806 they are in different workflows, both started by the same push —
 # so they run in PARALLEL and the declared bound is:
-#     max(release, await-ci) + migrate + verify-migrations + deploy
+#     max(release, CI-to-`test`, resolve-target) + migrate + verify-migrations + deploy
 #
 # Two properties this computation must preserve, both previously violated in the UNSAFE
 # direction:
@@ -650,7 +651,111 @@ try:
             ceiling_err = ("could not read reusable workflow %s: %s"
                            % (callee_rel, str(e).replace("\n", " ")))
 
-    crit = max(release_ceiling, job_timeout("await-ci"))
+    # --- CI declared path, and why it is NOT in the assertion (#5806 / ADR-217) ---
+    # WAS job_timeout("await-ci"). That job is GONE: the deploy now fires on a
+    # workflow_run completed event from ci.yml rather than polling for CI inside
+    # this workflow. job_timeout() returns the GitHub 360 default for an ABSENT
+    # job, so leaving the old term here would compute max(60, 360) + 135 = 495,
+    # over the 207 threshold, and drive B9 RED on the very change that is correct.
+    #
+    # ITS FIRST REPLACEMENT WAS ALSO WRONG, and in the more dangerous direction.
+    # It used ci_timeout("test-scripts") + ci_timeout("test") = 70, described as
+    # "the quantity the deploy waits for". It is not. await-ci polled for the
+    # test CHECK, so to-test was correct for THAT mechanism and was carried across
+    # the rewrite unchanged. workflow_run types:[completed] fires when the WHOLE
+    # ci.yml run concludes. Measured on this tree: to-test 70m, whole run 720m.
+    # B9 was green at 205 <= 207 on a term that was wrong by an order of magnitude.
+    #
+    # THE DESIGN CHANGE THIS EXPOSES, stated rather than hidden by arithmetic:
+    # await-ci CAPPED the wait at its own ceiling however long CI took. #5806
+    # deliberately removes that cap (issue item (a): "no fixed ceiling"). So the
+    # declared end-to-end path is no longer bounded by this workflow at all -- it
+    # is bounded by ci.yml, where 19 of 25 jobs declare no timeout-minutes and
+    # therefore carry the GitHub 360m default (#8020). Declared whole-pipeline
+    # path is ~855m against a 207m threshold, and no arithmetic here makes that
+    # false.
+    #
+    # So B9 asserts over the arm this pipeline CONTROLS -- everything downstream
+    # of the workflow_run event -- and B9b ratchets the arm it deliberately does
+    # not. Folding an unasserted 720 into crit would red every run over a
+    # pre-existing condition; dropping it silently would restate the false green.
+    #
+    # NOTE FOR EDITORS: no apostrophes in this block. It is interpolated inside a
+    # single-quoted shell string, where one apostrophe ends the string and the
+    # shell parses the remainder as commands.
+    ci_undeclared = []
+    ci_declared_path = 0
+    ci_path = os.path.join(os.path.dirname(os.path.abspath(rel_path)), "ci.yml")
+    try:
+        ci = yaml.safe_load(open(ci_path))
+        cijobs = ci.get("jobs") or {}
+        for name, j in sorted(cijobs.items()):
+            if not isinstance(j, dict) or "timeout-minutes" not in j:
+                ci_undeclared.append(name)
+            else:
+                try:
+                    int(j["timeout-minutes"])
+                except (TypeError, ValueError):
+                    ci_undeclared.append(name)
+
+        def ci_tmo(name):
+            j = cijobs.get(name) or {}
+            try:
+                return int(j["timeout-minutes"])
+            except (KeyError, TypeError, ValueError):
+                return DEFAULT_JOB_TIMEOUT_MIN
+
+        def ci_needs(name):
+            n = (cijobs.get(name) or {}).get("needs") or []
+            return [n] if isinstance(n, str) else list(n)
+
+        memo = {}
+
+        def ci_path_to(name, seen=()):
+            if name in memo:
+                return memo[name]
+            if name in seen or name not in cijobs:
+                return 0
+            ups = ci_needs(name)
+            best = max([ci_path_to(u, seen + (name,)) for u in ups] or [0])
+            memo[name] = ci_tmo(name) + best
+            return memo[name]
+
+        ci_declared_path = max([ci_path_to(n) for n in cijobs] or [0])
+    except Exception as e:
+        if not ceiling_err:
+            ceiling_err = "could not read ci.yml: %s" % str(e).replace("\n", " ")
+    emit("CI_DECLARED_PATH_MIN", ci_declared_path)
+    emit("CI_UNDECLARED_COUNT", len(ci_undeclared))
+    emit("CI_UNDECLARED_JOBS", ",".join(ci_undeclared))
+
+    # resolve-target is in the max() rather than the sum: its only unbounded
+    # activity is a liveness poll on the RELEASE run, so it overlaps the release
+    # arm rather than following it. Including it here is what stops a future
+    # ceiling raise on that job from silently escaping the budget.
+    # ci_declared_path is NOT in this sum, and the reason changed at #8020.
+    #
+    # It WAS excluded because it was unassertable: 19 ci.yml jobs sat at the
+    # platform 360m default, making the term 720m and the arithmetic meaningless.
+    # #8020 is now closed -- every job declares a ceiling derived from measured
+    # duration -- so the term is real, and adding it is the correct quantity:
+    # the deploy arm fires when CI COMPLETES, so CI is serial before this chain.
+    #
+    # It is still excluded because adding it makes B9 RED, and correctly so:
+    #   ci 70 + max(release 60, resolve-target 60) + migrate 30 + verify 15
+    #     + deploy 90 = 265  >  DRIFT_SUSTAINED_THRESHOLD_MIN 207
+    # Under await-ci the CI wait was CAPPED at the ceiling of that job, so the
+    # declared path was 195 and fit. #5806 removes the cap by design, and the
+    # declared path genuinely no longer fits the alert threshold -- so the alert
+    # can fire before the pipeline has legitimately finished.
+    #
+    # That is a THRESHOLD-SIZING decision (raise 207, or lower the 60m poll
+    # ceiling on resolve-target which is provably dead, or both), not a
+    # mechanical fix, and it is carried in the session handover rather than
+    # filed -- the measurement is done, so it is a decision, not research.
+    # (No apostrophes in this block: it is interpolated inside a single-quoted
+    # shell string, where one apostrophe ends the string.)
+    crit = max(release_ceiling, job_timeout("resolve-target"))
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
 
@@ -1016,14 +1121,15 @@ run_part_b() {
   # a changed graph: insert a job before `deploy`, or raise the dominated verify-doppler-secrets
   # (10m) to 200, and the formula still returns 195 while the real bound is larger.
   assert_eq "B8e the set of jobs with a needs-path to deploy is unchanged" \
-    "await-ci,migrate,release,verify-doppler-secrets,verify-migrations" \
+    "migrate,release,resolve-target,verify-doppler-secrets,verify-migrations" \
     "${X_DEPLOY_NEEDS_CLOSURE:-<unset>}"
 
   # B9 -- threshold safety, in the SAFE direction: a pipeline timeout INCREASE fails the
   # suite, so the threshold can never silently become smaller than legitimate latency.
   #
   # The compared value is a CRITICAL PATH with a max() term, not a serial sum: `release` and
-  # `await-ci` start in parallel, so it is max(release, await-ci) + migrate + verify-migrations
+  # CI start in parallel (in different workflows since #5806), so it is
+  # max(release, CI-to-`test`, resolve-target) + migrate + verify-migrations
   # + deploy. With `release` undeclared that is 495, not the 555 a serial reading gives.
   #
   # SCOPE (#7160): this bounds DECLARED EXECUTION only. The checker's own clock starts at the
@@ -1040,6 +1146,42 @@ run_part_b() {
   else
     fail "B9 threshold and release critical path both readable" "integers" \
       "thresh=${THRESH_MIN:-<unset>} path=${X_RELEASE_CRITICAL_PATH_MIN:-<unset>}"
+  fi
+
+  # B9b -- RATCHET on the arm B9 deliberately does not assert.
+  # #5806 removes await-ci, and with it the CAP that bounded how long this
+  # pipeline would wait for CI. The wait is now bounded only by ci.yml, where
+  # jobs without timeout-minutes carry the GitHub 360m default. That is an
+  # accepted consequence (issue item (a)), NOT a licence for it to grow: every
+  # further undeclared job adds up to another 360m to the declared distance
+  # between a merge and a deploy, and the 207m drift alert is the only thing
+  # that would ever notice -- 3.5h after the fact.
+  #
+  # A COUNT, not a list, is the ratchet: renaming a job must not red this, but
+  # adding an unbounded one must. The baseline was 19 at #5806 and is now ZERO —
+  # #8020 was closed inline in the same PR by DERIVING each ceiling from measured
+  # job durations (10 successful main runs; every job under 4.2m against the
+  # platform's 360m default). At zero this stops being a ratchet and becomes an
+  # absolute floor: any new unbounded job reds.
+  CI_UNDECLARED_BASELINE=0
+  if [[ "${X_CI_UNDECLARED_COUNT:-x}" =~ ^[0-9]+$ ]]; then
+    if [[ "${X_CI_UNDECLARED_COUNT}" -le "$CI_UNDECLARED_BASELINE" ]]; then
+      pass "B9b ci.yml jobs without timeout-minutes (${X_CI_UNDECLARED_COUNT}) <= baseline ${CI_UNDECLARED_BASELINE} (#8020)"
+    else
+      fail "B9b ci.yml jobs without timeout-minutes must not grow past the #5806 baseline -- each adds up to 360m to the declared merge-to-deploy distance (#8020). Undeclared: ${X_CI_UNDECLARED_JOBS:-<unset>}" \
+        "<= ${CI_UNDECLARED_BASELINE}" "${X_CI_UNDECLARED_COUNT}"
+    fi
+  else
+    fail "B9b ci.yml undeclared-ceiling count readable" "integer" "${X_CI_UNDECLARED_COUNT:-<unset>}"
+  fi
+  # B9c -- the baseline must not be vacuous. If the extractor silently stopped
+  # finding ci.yml, the count would be 0 and B9b would pass forever while
+  # measuring nothing. A ratchet whose instrument can go blind is not a ratchet.
+  if [[ "${X_CI_DECLARED_PATH_MIN:-0}" -gt 0 ]]; then
+    pass "B9c ci.yml declared whole-run path is derived (${X_CI_DECLARED_PATH_MIN}m), so B9b measured a real file"
+  else
+    fail "B9c ci.yml declared whole-run path must be derivable -- a zero path means ci.yml was not read, and B9b would then ratchet against nothing" \
+      "> 0" "${X_CI_DECLARED_PATH_MIN:-<unset>}"
   fi
 
   # B10 -- schedule/monitor coherence. A job timeout above the tick interval, combined with
@@ -1366,6 +1508,13 @@ make_sandbox() {
   cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
   cp "$RELEASE_WORKFLOW" "$dst/.github/workflows/web-platform-release.yml" || return 1
   cp "$MONITORS_TF" "$dst/apps/web-platform/infra/sentry/cron-monitors.tf" || return 1
+  # B9 reads CI's declared to-`test` path out of ci.yml since #5806 replaced the
+  # `await-ci` term with it, so the sandbox must carry ci.yml too. Without it the
+  # extraction falls back to the GitHub 360 default, B9 reds in EVERY sandbox arm,
+  # and the C0 control fails — which is the harness reporting a defect in itself,
+  # not in the tree. Same class as the reusable-workflow copy below: a suite that
+  # RELOCATES its subject must carry every file that subject resolves.
+  cp "$REPO_ROOT/.github/workflows/ci.yml" "$dst/.github/workflows/ci.yml" || return 1
 
   # B8 resolves jobs.release.uses and reads the CALLEE's timeout-minutes, so the sandbox must
   # carry the reusable workflow too. Without it every mutation child hits an unresolvable

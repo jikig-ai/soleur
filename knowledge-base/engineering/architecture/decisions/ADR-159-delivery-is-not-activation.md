@@ -19,7 +19,10 @@
 > immediately preceded merge, and the gate reddened again.
 >
 > Both collisions were invisible on the un-rebased branch — `check-adr-ordinals.sh` sees only the
-> local tree, so it stayed green here and would have gone red on `main` post-squash. The `/work`-time
+> local tree, so it stayed green here and would have gone red on `main` post-squash [correction,
+> #7941: `adr-ordinals` was already a required check when this was written (IaC row since #6050), so
+> the collision would have blocked the merge on the PR, never landed on `main`; the re-check's value
+> is catching it a CI cycle earlier]. The `/work`-time
 > note this replaces called the ordinal provisional and named the re-check; the re-check is what
 > caught it, both times. The generalisation: an ordinal is not claimed until the branch is merged,
 > so re-run the check after EVERY sync, not once at ship entry — a single re-check is a snapshot of

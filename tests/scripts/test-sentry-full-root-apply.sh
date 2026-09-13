@@ -437,7 +437,49 @@ t_scope_guard_reads_tf
 t_scope_guard_fails_on_empty
 t_scope_guard_catches_state_only_uncovered_type
 t_filter_counts_removed_block
+# T14 (#8050) — THE APPLY JOB'S FIDELITY WIRING, which no other suite reads.
+# The post-apply probe must (a) read a reference the plan step projected from
+# THE PLAN BEING APPLIED (never the committed copy), (b) pin fixture mode off,
+# (c) run only when the plan step succeeded (and still after a failed apply /
+# red AC17), and the reference gate must have exactly ONE call site — in
+# `plan_pr`, never in `apply`. A dropped env line would silently revert the
+# probe to the committed copy with every other check green.
+t_apply_job_fidelity_wiring() {
+  local out rc=0
+  out=$(python3 - "$WORKFLOW" <<'PYEOF' 2>&1) || rc=$?
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+jobs = d["jobs"]
+apply = jobs["apply"]["steps"]; plan_pr = jobs["plan_pr"]["steps"]
+bad = []
+fid = [s for s in apply if s.get("id") == "fidelity"]
+if len(fid) != 1: sys.exit(f"expected one apply step id=fidelity, found {len(fid)}")
+env = fid[0].get("env") or {}
+if env.get("SENTRY_REFERENCE_FILE") != "${{ runner.temp }}/sentry-alert-reference.json":
+    bad.append(f"fidelity SENTRY_REFERENCE_FILE={env.get('SENTRY_REFERENCE_FILE')!r} (want the runner.temp projection)")
+if env.get("SENTRY_FIXTURE_RULES", None) != "":
+    bad.append(f"fidelity SENTRY_FIXTURE_RULES={env.get('SENTRY_FIXTURE_RULES')!r} (want pinned empty)")
+if " ".join((fid[0].get("if") or "").split()) != "always() && steps.plan.outcome == 'success'":
+    bad.append(f"fidelity if={fid[0].get('if')!r}")
+plan = [s for s in apply if s.get("id") == "plan"]
+if len(plan) != 1: sys.exit("expected one apply step id=plan")
+run = plan[0]["run"]
+proj = [l for l in run.splitlines() if l.lstrip().startswith("jq -S --arg side tf -f") and "/tmp/sentry-apply-plan.json" in l and '"${RUNNER_TEMP}/sentry-alert-reference.json"' in l]
+if len(proj) != 1: bad.append(f"plan step projection line count {len(proj)} (want 1)")
+def gate_calls(steps):
+    return sum(l.lstrip().startswith('bash "${GITHUB_WORKSPACE}/scripts/sentry-alert-reference-gate.sh"') for s in steps for l in (s.get("run") or "").splitlines())
+if gate_calls(plan_pr) != 1: bad.append(f"plan_pr gate calls={gate_calls(plan_pr)} (want 1)")
+if gate_calls(apply) != 0: bad.append(f"apply gate calls={gate_calls(apply)} (want 0 — the apply job projects its own reference)")
+if bad: sys.exit("; ".join(bad))
+PYEOF
+  if [[ "$rc" -eq 0 ]]; then
+    _report "T14 apply job: probe reads the plan-step projection with fixture mode pinned off, runs iff the plan step succeeded; the reference gate has exactly one call site (plan_pr)" ok
+  else
+    _report "T14 apply-job fidelity wiring" fail "$out"
+  fi
+}
 t_no_unbracketed_status_capture
+t_apply_job_fidelity_wiring
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

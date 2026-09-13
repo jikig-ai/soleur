@@ -3,8 +3,8 @@
 #
 # Rendered by templatefile() in git-data.tf. Installs ONLY the durable substrate
 # (git, the transport user + its restricted key, the volume mount, the bootstrap,
-# the fail-closed placeholder hook). The real CAS fence hook ships later via the
-# web-platform deploy pipeline. NO SSH provisioner runs against this host
+# the fail-closed placeholder hook). The real CAS fence hook lands by host replace or
+# the cutover's operator root path (never git-uid; ADR-149 F9). NO SSH provisioner runs against this host
 # (cloud-init-only) — the CI runner cannot SSH either host, so a remote-exec would
 # hang the merge-triggered auto-apply.
 package_update: true
@@ -54,15 +54,25 @@ bootcmd:
             -d '{"message":"git-data boot stage","level":"info","tags":{"stage":"bootcmd_start","host_name":"${host_name}"}}' \
             >/dev/null 2>&1 || true ) || true
 
-# Dedicated transport user for git over the private net. Its login shell is
-# git-shell (no arbitrary commands), and the authorized_keys forced-command below
-# is defense-in-depth on top of that. cloud-init's `ssh_authorized_keys:`
+# Dedicated transport user for git over the private net. Its login shell is a REAL
+# shell, on purpose — and it used to be git-shell, which would have killed every
+# forced command on the host (#8043 review, measured in the pinned ubuntu-24.04
+# image): sshd runs a `command=` as `<login shell> -c "<command>"`, and git-shell
+# accepts only its four built-ins or a bare name under ~/git-shell-commands, so
+# `git-shell -c /usr/local/bin/git-data-transport-wrapper.sh` exits 128
+# `fatal: unrecognized command` — transport, provision AND the Art. 17 erasure all
+# unreachable. Nobody had connected to the host, so nothing had measured it. The
+# confinement is the authorized_keys map itself: every key carries a fixed
+# `command=` plus no-pty/no-forwarding, and git_data_authorization_map_gate refuses
+# a birth unless exactly those three fenced lines exist (ADR-068; #8009). A
+# restricted login shell adds nothing once every key is forced — it only decides
+# whether the forced command can run at all. cloud-init's `ssh_authorized_keys:`
 # directive cannot carry per-key options (command=...), so the key is written via
 # write_files instead.
 users:
   - default
   - name: git
-    shell: /usr/bin/git-shell
+    shell: /bin/sh
     lock_passwd: true
 
 write_files:
@@ -85,6 +95,7 @@ write_files:
       ClientAliveCountMax 2
       MaxStartups 10:30:60
       MaxSessions 4
+      AuthorizedKeysFile .ssh/authorized_keys
     owner: root:root
     permissions: '0644'
 
@@ -92,23 +103,36 @@ write_files:
   # amendment 2026-07-01 "PR B bare-repo provisioning" + #5274 Phase 3 Art. 17):
   #   1. TRANSPORT (git-data-transport-wrapper.sh, Sub-PR 3.D): an allowlist forced
   #      command that permits ONLY git-upload-pack / git-receive-pack and adds the
-  #      CWE-22 canonicalize-under-root fence git-shell lacks — never an interactive
-  #      shell (replaces the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"`).
+  #      CWE-22 canonicalize-under-root fence — never an interactive shell (replaced
+  #      the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"`; with the login shell /bin/sh
+  #      this map is the WHOLE confinement — see the users: block).
   #   2. PROVISION (git-data-provision.sh): a FIXED wrapper that idempotently
-  #      `git init --bare`s ONE per-workspace repo (git-shell -c cannot run init).
+  #      `git init --bare`s ONE per-workspace repo (the transport allowlist cannot run init).
   #   3. REMOVE (git-data-remove.sh): a FIXED wrapper that idempotently
   #      `rm -rf`s ONE per-workspace repo + its in-repo fence (GDPR Art. 17).
   # Separate keys ⇒ provisioning, ref-write, and erasure authority have separate
   # blast radii. A bare dollar-var (no braces) is left literal by terraform
   # templatefile() — only dollar-brace interpolates. `defer: true` writes after the
-  # `git` user exists; git-data-bootstrap.sh fixes the .ssh perms so sshd accepts.
+  # `git` user exists.
+  #
+  # (#8043 F7) ROOT-OWNED, 0644, AND THE ONLY AUTHORIZATION FILE. The map was `git:git 0600`,
+  # so the constrained principal OWNED it and could rewrite it in place — the shortest
+  # persistence path for code execution as `git`. Now `root:root`, inside a `root:git 0750`
+  # .ssh inside a `root:git 0750` home (both set by git-data-bootstrap.sh, the last writer,
+  # because git_data_authorization_map_gate refuses this literal anywhere outside this
+  # write_files entry). 0644 and NOT 0600: sshd opens authorized_keys under the TARGET USER's
+  # uid — measured in the pinned ubuntu-24.04 image, `root:root 0600` is "Permission denied"
+  # and every push is refused; `root:root 0644` authenticates. StrictModes permits a
+  # root-owned file. `AuthorizedKeysFile .ssh/authorized_keys` above drops the stock
+  # `.ssh/authorized_keys2` fallback: with .ssh root-owned nothing can create it, so the pin
+  # is defence in depth against an ownership regression, not the control that closes the hole.
   - path: /home/git/.ssh/authorized_keys
     content: |
       command="/usr/local/bin/git-data-transport-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_transport_pubkey}
       command="/usr/local/bin/git-data-provision.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_provision_pubkey}
       command="/usr/local/bin/git-data-remove.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${git_remove_pubkey}
-    owner: git:git
-    permissions: '0600'
+    owner: root:root
+    permissions: '0644'
     defer: true
 
   # --- (#7460) The BAKED Better Stack ingest token, at 0600 root:root.
@@ -724,14 +748,74 @@ runcmd:
       printf '%s\n' "$_sshd_t_err" >&2
       exit 1
     fi
+    # (#8043 F11) ASSERT THE EFFECTIVE CONFIG — HERE, BEFORE THE UNIT ACTION. Nothing measured
+    # whether 01-hardening.conf was in effect at all; the drop-in is written by write_files and
+    # read by the daemon at its first start, but "written" is not "in effect" (sshd_config.d is
+    # first-match-wins per keyword and a stray drop-in can shadow it). `sshd -T` prints the
+    # EFFECTIVE config. It runs here, immediately after `sshd -t` created /run/sshd, and NOT
+    # after the action below: ssh.service declares RuntimeDirectory=sshd, so systemd tears
+    # /run/sshd down on a failed start, and a probe placed after the action would exit 255
+    # ("Missing privilege separation directory") in exactly the failure it exists to catch.
+    # Only the two directives whose absence is dangerous are compared, as whole lowercase
+    # lines against the lowercased dump — walking all nine would import three normalization
+    # traps (`prohibit-password` renders as `without-password`; `AcceptEnv LANG LC_*` prints as
+    # two lines; keywords are lowercased) for no additional property. A -T that could not run
+    # (126/127, or 255 from a torn-down privsep dir) is could-not-measure — reported as such,
+    # never as "directives absent". Emits on the EXISTING literal stage sshd_config_warn at
+    # level warning: a new STAGE= would re-point the top-armed fatal trap at a value no rule
+    # routes, and a fatal here would fail the rung-2 gate closed on a first-outing instrument.
+    _sshd_T_rc=0
+    _sshd_T_raw="$(/usr/sbin/sshd -T 2>/dev/null)" || _sshd_T_rc=$?
+    if [ "$_sshd_T_rc" -eq 0 ]; then
+      _sshd_T_dump="$(printf '%s\n' "$_sshd_T_raw" | tr '[:upper:]' '[:lower:]')"
+      _sshd_absent=""
+      printf '%s\n' "$_sshd_T_dump" | grep -qx "passwordauthentication no" || _sshd_absent="passwordauthentication no; "
+      printf '%s\n' "$_sshd_T_dump" | grep -qxE "permitrootlogin (prohibit-password|without-password)" || _sshd_absent="$${_sshd_absent}permitrootlogin prohibit-password; "
+      if [ -n "$_sshd_absent" ]; then
+        _sshd_T_detail=/run/git-data-sshd-T.err
+        ( umask 077; printf 'absent from sshd -T effective config: %s\n' "$_sshd_absent" > "$_sshd_T_detail" ) 2>/dev/null || true
+        [ -s "$_sshd_T_detail" ] || _sshd_T_detail="absent from sshd -T effective config: $_sshd_absent"
+        /usr/local/bin/git-data-emit "git-data sshd hardening directive absent from effective config" \
+          sshd_config_warn warning "$_sshd_T_detail" || true
+        echo "[git-data] WARN: sshd hardening directive(s) absent from the effective config: $_sshd_absent" >&2
+      fi
+    else
+      # Same detail discipline as the `sshd -t` probe above (#7227 / R3): the SOURCE is a
+      # guarded file carrying the instrument's own stderr, with a literal fallback only when
+      # nothing was captured. Re-running `-T` for its stderr is deterministic and cheap.
+      _sshd_T_err="$(/usr/sbin/sshd -T 2>&1 >/dev/null)" || true
+      _sshd_T_detail=/run/git-data-sshd-T.err
+      ( umask 077; printf 'git-data sshd -T rc=%s: effective config not measured\n%s\n' "$_sshd_T_rc" "$_sshd_T_err" > "$_sshd_T_detail" ) 2>/dev/null || true
+      [ -s "$_sshd_T_detail" ] || _sshd_T_detail="git-data sshd -T rc=$_sshd_T_rc: effective config not measured; no stderr captured"
+      /usr/local/bin/git-data-emit "git-data sshd -T could not run" sshd_config_warn warning \
+        "$_sshd_T_detail" "rc=$_sshd_T_rc" || true
+      echo "[git-data] WARN: sshd -T unavailable (rc=$_sshd_T_rc) — effective config not measured; continuing." >&2
+    fi
     # (#7227) THE RESTART WARNING GETS ITS OWN CAUSE; it shipped `detail=""`. It does NOT
     # reuse $_sshd_detail: reaching here means `sshd -t` PASSED, so that file is empty and
     # its literal would blame the config check that succeeded. SUBSTITUTION, not `2>>` on the
     # command — the same rule as the probe above. A `2>>` here makes a REDIRECT failure
     # indistinguishable from a restart failure, and would emit "restart failed (config valid)"
-    # for a boot where the restart never ran. Caught by S1, whose systemctl stub exits 0.
+    # for a boot where the restart never ran. Caught by S1, whose systemctl stub is
+    # programmable (#8043) and answers as the image does.
+    #
+    # (#8043 F11) THE UNIT IS `ssh`, NOT `sshd`. ubuntu-24.04 ships ssh socket-activated:
+    # ssh.socket is Accept=no (one long-lived `sshd -D`, so there is no per-connection re-read
+    # that would make the drop-in effective anyway), and `Alias=sshd.service` is instantiated
+    # only when ssh.service is ENABLED — which under socket activation it never is. So
+    # `systemctl restart sshd` failed rc=5 "Unit sshd.service not found." on EVERY boot
+    # (measured on rehearsal host -rehearsal-33888071954), fail-open, boot_complete all-yes.
+    # Why keep an action at all: write_files precedes runcmd and the daemon reads the drop-in at
+    # its first start regardless, so the action is not what loads the config — it starts the
+    # daemon DETERMINISTICALLY here, where the boot is instrumented, instead of lazily at first
+    # connection where nothing watches. Two facts that make the rename safe on a console-less
+    # host: ssh.socket carries no Conflicts=ssh.service, so the listener stays bound and a
+    # failed start does not close port 22; and Type=notify + ExecStartPre=sshd -t means this
+    # call now blocks on a systemd job bounded by DefaultTimeoutStartSec (90 s) where the old
+    # call returned instantly at rc=5 — a new bounded wait above the LUKS stage, read from the
+    # fresh rehearsal's boot wall-clock delta.
     _sshd_r_rc=0
-    _sshd_r_err="$(systemctl restart sshd 2>&1)" || _sshd_r_rc=$?
+    _sshd_r_err="$(systemctl restart ssh 2>&1)" || _sshd_r_rc=$?
     if [ "$_sshd_r_rc" -ne 0 ]; then
       _sshd_r_detail=/run/git-data-sshd-restart.err
       [ -z "$_sshd_r_err" ] || ( umask 077; printf '%s\n' "$_sshd_r_err" > "$_sshd_r_detail" ) 2>/dev/null || true
@@ -845,7 +929,7 @@ runcmd:
     # umask 077, not the inherited 022: cloud-init's default would create this 0644 on a
     # host that has a real local `git` account, and the file receives a dmesg tail that
     # kernel.dmesg_restrict=1 deliberately withholds from non-root. Defense-in-depth (the
-    # account is git-shell-confined), one subshell.
+    # account is confined to its three forced commands), one subshell.
     ( umask 077; : > "$GIT_DATA_LUKS_DETAIL" ) || true
     luks_err() {
       rc=$?

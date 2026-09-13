@@ -332,10 +332,39 @@ function budgetOk() {
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Parse')
-log('tier pins: parse→sonnet (mechanical step per ADR-053; research + merge inherit the session model)')
-// Pinned 'sonnet': plan→section-manifest extraction is mechanical; splice anchors must be exact (ADR-053).
-const parsed = await agent(parsePrompt, { label: 'parse', phase: 'Parse', schema: PARSE_SCHEMA, model: 'sonnet' })
+log('tier pins: parse→standard (mechanical step per ADR-053; research + merge inherit the session model)')
+// Pinned 'standard': plan→section-manifest extraction is mechanical; splice anchors must be exact (ADR-053).
+const parsed = await agent(parsePrompt, { label: 'parse', phase: 'Parse', schema: PARSE_SCHEMA, model: 'standard' })
 
 if (!parsed || !parsed.exists) {
   return {

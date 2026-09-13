@@ -21,7 +21,7 @@ Soleur gives a single founder the leverage of a full organization. **68 agents**
 devin plugins install jikig-ai/soleur#plugins/soleur -y
 ```
 
-Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and run `bash scripts/setup-devin.sh` to install from the local checkout.
 
 Update to the latest version with `devin plugins update soleur`, or `devin plugins update` to refresh all installed plugins. If you see a transient "content could not be fetched" warning, Devin will retry automatically; run the update command again if it persists.
 
@@ -180,6 +180,15 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:go` | Unified entry point -- routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
 
 ### Workflow Skills
 
