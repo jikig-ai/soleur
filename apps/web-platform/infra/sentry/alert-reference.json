@@ -686,7 +686,7 @@
             "comparison": {
               "key": "stage",
               "match": "in",
-              "value": "betterstack_ingest,gitdata_nftables_metadata_warn"
+              "value": "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report"
             },
             "type": "tagged_event"
           }

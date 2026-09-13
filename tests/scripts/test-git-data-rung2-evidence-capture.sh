@@ -24,6 +24,18 @@ SUT="${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
 TMP="$(mktemp -d -t gdr2cap.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
+# (#8043 Guard 4) THE FIXTURE GIT ENVIRONMENT, sourced BEFORE the fixture tree is created. The
+# rung-2 gate's provenance arm reads `git log` on the evidence file, so the producer/consumer row
+# below must hand it evidence that is TRACKED in a repository whose last touch of it is an
+# evidence-only commit — the shape the release path prescribes (commit the evidence ALONE). A
+# plain temp dir HOLDs on "not inside a git work tree", which is the gate being right and the
+# fixture being wrong. Same chokepoint as the birth-gate suite (#7849: refuses an inherited
+# GIT_DIR so a fixture `git init` cannot land commits on the developer's live branch).
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { printf 'FATAL: could not source the fixture git environment\n' >&2; exit 2; }
+git_fixture_env "$TMP" || { printf 'FATAL: git_fixture_env refused the fixture root %s\n' "$TMP" >&2; exit 2; }
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
@@ -72,6 +84,10 @@ _payloads=(git-data-bootstrap.sh git-data-provision.sh git-data-transport-wrappe
   printf '  })\n}\n'
 } > "$FIX/modules/git-data-userdata/main.tf"
 for _p in "${_payloads[@]}"; do printf '#!/usr/bin/env bash\ntrue\n' > "$FIX/$_p"; done
+# The bound tree is committed ONCE, before any evidence exists, so the evidence's own commit
+# (below) touches none of the 13 roster files — the only shape ARM 1 releases.
+git -C "$FIX" init -q && git -C "$FIX" add -A && git -C "$FIX" commit -q -m "bound tree" \
+  || { printf 'FATAL: could not commit the fixture bound tree in %s\n' "$FIX" >&2; exit 2; }
 
 # ── The stub ──────────────────────────────────────────────────────────────────────
 #
@@ -185,7 +201,17 @@ if [[ -f "$OUT" ]]; then pass "PASS writes the evidence file"; else
 if [[ -f "$OUT" ]]; then
   # shellcheck source=/dev/null
   source "${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-  if gate_out="$(git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT" 2>&1)"; then
+  # The evidence is committed ALONE into the fixture repository (the release path's own shape,
+  # see git-data-rung2-rehearsal.md "commit evidence first"), and the gate is asked about the
+  # TRACKED copy. The bytes are the SUT's, unmodified: `cmp` pins that below so a fixture that
+  # quietly rewrote the evidence could not make the row pass.
+  OUT_TRACKED="$FIX/git-data-rung2-boot-evidence.env"
+  cp "$OUT" "$OUT_TRACKED"
+  git -C "$FIX" add -- git-data-rung2-boot-evidence.env && git -C "$FIX" commit -q -m "evidence alone" \
+    || fail "the evidence could be committed alone into the fixture repository" "1" "git commit failed"
+  if cmp -s "$OUT" "$OUT_TRACKED"; then pass "the tracked evidence is byte-identical to what the SUT wrote"; else
+    fail "the tracked evidence is byte-identical to what the SUT wrote" "1" "cmp differs"; fi
+  if gate_out="$(git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT_TRACKED" 2>&1)"; then
     pass "the written evidence RELEASES the rung-2 gate (producer/consumer are bound)"
   else
     fail "the written evidence does not satisfy the gate it exists to release" "1" "$gate_out"
@@ -1293,7 +1319,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=75  # 73 + the instrument self-test + the #7898 §6 egress-reachability row
+_FLOOR=76  # 73 + the instrument self-test + the #7898 §6 egress-reachability row + the #8043 Guard 4 tracked-copy cmp row
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
