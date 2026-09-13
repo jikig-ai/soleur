@@ -99,6 +99,7 @@ export async function reconcileBoundEngineRun(options: {
 export async function* continueBoundEngineRun(options: {
   repository: LifecycleRepository;
   adapter: Pick<EngineAdapter, "continue">;
+  eventSink?: EventSink;
   adapterEngineId?: string;
   runId: string;
   context: EngineRunContext;
@@ -107,6 +108,7 @@ export async function* continueBoundEngineRun(options: {
 }): AsyncGenerator<EngineEvent> {
   const context = await loadBoundContext(options);
   for await (const event of options.adapter.continue(context, options.session, options.input)) {
+    if (options.eventSink) await options.eventSink.appendEvent(event);
     yield event;
   }
 }
@@ -114,6 +116,7 @@ export async function* continueBoundEngineRun(options: {
 export async function* resumeBoundEngineRun(options: {
   repository: LifecycleRepository;
   adapter: Pick<EngineAdapter, "resumeFromCursor">;
+  eventSink?: EventSink;
   adapterEngineId?: string;
   runId: string;
   context: EngineRunContext;
@@ -121,6 +124,7 @@ export async function* resumeBoundEngineRun(options: {
 }): AsyncGenerator<EngineEvent> {
   const context = await loadBoundContext(options);
   for await (const event of options.adapter.resumeFromCursor(context, options.cursor)) {
+    if (options.eventSink) await options.eventSink.appendEvent(event);
     yield event;
   }
 }

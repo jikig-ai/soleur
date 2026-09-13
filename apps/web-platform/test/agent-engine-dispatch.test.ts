@@ -103,12 +103,14 @@ describe("dispatchBoundEngineRun", () => {
     const adapter = { continue: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-2", sequence: 2, payload: { type: "text", text: "continued" } as const };
     }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
     const events = [];
     for await (const event of continueBoundEngineRun({
-      repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never,
+      repository, adapter, eventSink, adapterEngineId: "claude-code", runId: "run-1", context: {} as never,
       session: { resumeHandle: "opaque", sessionId: null }, input: { text: "next", attachmentIds: [] },
     })) events.push(event);
     expect(adapter.continue).toHaveBeenCalledOnce();
+    expect(eventSink.appendEvent).toHaveBeenCalledWith(events[0]);
     expect(events[0].payload).toEqual({ type: "text", text: "continued" });
   });
 
@@ -117,11 +119,13 @@ describe("dispatchBoundEngineRun", () => {
     const adapter = { resumeFromCursor: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-3", sequence: 3, payload: { type: "progress", message: "replayed" } as const };
     }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
     const events = [];
     for await (const event of resumeBoundEngineRun({
-      repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, cursor: "cursor-2",
+      repository, adapter, eventSink, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, cursor: "cursor-2",
     })) events.push(event);
     expect(adapter.resumeFromCursor).toHaveBeenCalledWith(expect.anything(), "cursor-2");
+    expect(eventSink.appendEvent).toHaveBeenCalledWith(events[0]);
     expect(events).toHaveLength(1);
   });
 
