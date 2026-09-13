@@ -258,10 +258,39 @@ Return only \`after\` = that count. Do not modify any issue.`
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.6', strong: 'grok-4.6', advisor: 'grok-4.6', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Cluster')
-log('tier pins: cluster→sonnet, report→sonnet (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
-// Pinned 'sonnet': issue clustering from a structured list is mechanical (ADR-053).
-const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA, model: 'sonnet' })
+log('tier pins: cluster→standard, report→standard (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
+// Pinned 'standard': issue clustering from a structured list is mechanical (ADR-053).
+const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA, model: 'standard' })
 
 // Fail-fast on invalid label/milestone — mirror the helper's exit 2 paths.
 if (!clustered || !clustered.labelValid || !clustered.milestoneValid) {
@@ -354,8 +383,8 @@ const results = drainResults.filter(Boolean)
 phase('Report')
 let after = null
 if (!dryRun && results.some((r) => r.status === 'merged')) {
-  // Pinned 'sonnet': markdown report assembly from structured data is mechanical (ADR-053).
-  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA, model: 'sonnet' })
+  // Pinned 'standard': markdown report assembly from structured data is mechanical (ADR-053).
+  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA, model: 'standard' })
   after = delta?.after ?? null
 }
 

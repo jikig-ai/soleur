@@ -6,6 +6,16 @@ A full AI organization across engineering, finance, marketing, legal, operations
 
 Install the plugin:
 
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
+
+**Claude Code (marketplace):**
+
 ```bash
 claude plugin marketplace add jikig-ai/soleur-marketplace
 claude plugin install soleur@soleur-marketplace
@@ -18,6 +28,11 @@ then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
 and use `$soleur:go <intent>`. Codex shares the same skills and agent
 definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
 
+**Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. To work
+on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
+and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
+[compatibility instructions](devin/INSTRUCTIONS.md).
+
 The recommended way to use Soleur is through the unified entry point:
 
 ```text
@@ -26,7 +41,16 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-The 6-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+
+The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
 
 ```text
 brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
@@ -48,7 +72,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 68 |
 | Commands | 3 |
-| Skills | 95 |
+| Skills | 98 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -333,6 +357,14 @@ agent-browser install  # Downloads Chrome for Testing
 The `agent-browser` skill provides comprehensive documentation on usage.
 
 ## Installation
+
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
 
 **From the marketplace (recommended):**
 

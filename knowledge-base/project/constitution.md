@@ -300,6 +300,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 ## Testing
 
 ### Always
+- A lint cited as the oracle for a guard is proven by a RED, never a green: on a scratch copy delete the guard and run the lint; if it still passes, the guard needs its own harness row and the lint citation is a comment. Same for any code shape a plan justifies as "what the linter needs" — measure it with the guard deleted (2026-09-11, #7898 §2 — the prescribed shape was the one that disarmed the linter)
 
 - Run `bun test` before merging changes that affect parsing, conversion, or output
 - All markdown files must pass markdownlint checks before commit
@@ -316,6 +317,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - When introducing `requestAnimationFrame`/`queueMicrotask`/timer-like batching in a tested component, sweep test helpers in the same edit -- `vi.useFakeTimers({ shouldAdvanceTime: true })` mocks rAF and does NOT auto-advance in synchronous `act()`; assertions fail until the helper calls `vi.advanceTimersByTime(<frame-ms>)` (ex-`cq-raf-batching-sweep-test-helpers`)
 - When a component gains a pre-flight fetch (HEAD, OPTIONS), sweep `global.fetch` mocks in the same edit -- single-response `mockResolvedValue` returns the GET shape for HEAD too, breaking contract; rewrite as method-aware `vi.fn((_url, init) => init?.method === "HEAD" ? ... : ...)` (ex-`cq-preflight-fetch-sweep-test-mocks`)
 - Before extracting a constant for drift-resistance, identify downstream tests that fully `vi.mock()` the source module -- such tests cannot `import { CONST } from "module"` (the import resolves to the mock factory, often `undefined`); either include the constant in the mock factory return, extract to a separate non-mocked module, or verbatim copy with sync-comment in that one test file (ex-`cq-test-mocked-module-constant-import`)
+- When a full-gate run is refused or skipped (contention rc=4, reaped, out of budget), derive the per-suite coverage list from the CONSUMERS of every changed file (`git grep -l <basename> -- '*.test.sh'` over the registered suites) and run each -- never from memory of what you edited. A suite that reds is disproportionately one that reaches your change through a shared lib you never opened. (PR #8052: a registered gate-lib consumer was 78/1 on the branch behind a "seventeen suites green" report.)
 
 ### Never
 

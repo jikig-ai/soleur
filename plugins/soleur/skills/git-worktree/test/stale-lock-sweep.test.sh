@@ -58,7 +58,7 @@ rm -rf "$SEED"
 
 LOCAL="$TMP/local.git"
 git init --bare -b main "$LOCAL" >/dev/null
-( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 # For a bare repo, `ensure_bare_config` resolves git_dir == GIT_ROOT (the bare
 # dir itself), so the config locks live directly under $LOCAL.

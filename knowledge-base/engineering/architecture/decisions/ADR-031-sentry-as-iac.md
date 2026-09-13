@@ -224,8 +224,19 @@ calls return 404).
 > unchanged is the recommendation: the org-subdomain is required because `eu.sentry.io`
 > rewrites `-eu`-suffixed slugs, which this correction does not touch.
  The canonical EU API base_url is therefore
-`https://eu.sentry.io/api/` — set on the Terraform provider config in
-`apps/web-platform/infra/sentry/main.tf` whenever `var.sentry_region = "de"`.
+`https://<org-slug>.sentry.io/api/` — set on the Terraform provider config in
+`apps/web-platform/infra/sentry/main.tf`, which reads
+`base_url = "https://${var.sentry_org}.sentry.io/api/"`.
+
+> **Corrected 2026-09-10 (#7997).** This sentence previously named
+> `https://eu.sentry.io/api/`. That contradicted both the `Cluster / Host
+> Glossary` MUST above it and the Terraform it claims to describe: the regional
+> host rewrites slugs ending in `-eu`, so it is wrong for every slug-scoped
+> path, which is the whole reason the glossary requires the org subdomain.
+> One credentialed call in this repo is deliberately slug-LESS and therefore
+> works against the regional hosts: the `/users/me/` region-discovery probe in
+> `apps/web-platform/scripts/sentry-monitors-audit.sh`. It is the only one, and
+> it is why that script's candidate set is wider than the org subdomain alone.
 See `Cluster / Host Glossary` above for the full host-class split and the
 Sentry-residency cascade learning at
 `knowledge-base/project/learnings/2026-05-16-brainstorm-premise-cascade-and-playwright-handoff-discipline.md`
@@ -857,6 +868,25 @@ rather than tidied up in the same PR.
 `scripts/sentry-alert-live-fidelity.sh` diffs all 27 against the committed capture on a daily
 Inngest-dispatched schedule and as a post-apply step. It covers what a clean plan cannot: a
 rule that exists, plans clean, and matches nothing.
+
+> **[2026-09-11 — #8050]** The probe's reference is no longer the live capture. #7989 added a
+> rule the 2026-09-09 capture could not contain (a rule cannot be live-captured before it is
+> applied), so the post-apply probe reported a Terraform-managed rule as UNMANAGED and `main`
+> went red after a complete apply — the second time (#7772 → #7985 was the first). The apply
+> job now projects its reference from the plan it applies
+> (`tests/scripts/lib/sentry-alert-projection.jq`, `--arg side tf`); the daily job reads
+> `apps/web-platform/infra/sentry/alert-reference.json`, a committed copy held equal to the
+> plan by `scripts/sentry-alert-reference-gate.sh` in `plan_pr`. Two normalisations bridge
+> provider and API shapes: lifecycle triggers (`{}` → `comparison: true`), and trigger
+> `logicType` — which the provider hard-codes to `any-short` on every write
+> (`resource_alert_impl.go` 803/835 at v0.15.7) while imported single-trigger rules read `all`
+> — projected to a constant for single-trigger rules on both sides. Measured against 28 live
+> rules: 0 mismatches. Rejected: re-capturing from live (re-creates the structural gap on every
+> addition), and having the daily job pull Terraform state (puts the R2 credentials for the
+> shared state bucket into a cron job) — the daily job keeps the write-capable IaC token, used
+> read-only and destination-pinned (#7997), instead. The decision above is unchanged: Terraform
+> is the source of truth; only the probe's reference provenance changed. The captures stay as
+> the Phase 2/3.4 adoption record.
 
 ## Consequences
 

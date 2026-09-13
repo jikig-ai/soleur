@@ -1,0 +1,23 @@
+# Rules that MOVED out of AGENTS.rules.md into a skill-local home.
+#
+# Format: <rule-id> | <date> | <PR> | <new home>
+#
+# These are ACTIVE rules, not retired ones. The distinction matters because the
+# corpus previously had only two states -- "a body in AGENTS.rules.md" or
+# "retired" -- and every consumer keyed on the first. A migrated rule is in
+# neither: still enforced, still emitting telemetry, but no longer in the file
+# those consumers read.
+#
+# Consumers that MUST treat these as valid:
+#   .claude/hooks/rule-incident-marker-capture.sh  (else SOLEUR_RULE_APPLIED
+#       markers for these ids are dropped with no sentinel -- silent telemetry
+#       loss, caught by that hook's producer/consumer parity test)
+#   scripts/rule-metrics-aggregate.sh              (else the orphan gate exits 5
+#       BEFORE jsonl rotation, disarming the write path)
+#
+# Keep this file, not two ad-hoc allowlists, as the single source of truth.
+wg-record-recurring-vendor-expense-before-ready | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Recurring-Vendor-Expense Gate (mandatory)
+rf-review-finding-default-fix-inline | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Review-Findings Exit Gate (mandatory)
+wg-when-fixing-a-workflow-gates-detection | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Retroactive Gate Application (conditional)
+cq-ac-must-not-depend-on-concurrent-sessions | 2026-09-10 | #8034 | plugins/soleur/skills/plan-review/SKILL.md :: ## Standing panel checks (every review, no relevance gate)
+wg-architecture-decision-is-a-plan-deliverable | 2026-09-10 | #8034 | plugins/soleur/skills/plan/SKILL.md :: ### 2.10. Architecture Decision (ADR / C4) Gate

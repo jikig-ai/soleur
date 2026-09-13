@@ -3,6 +3,10 @@ name: compound
 description: "This skill should be used when documenting a recently solved problem to compound your team's knowledge."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/compound` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:compound`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
 <!-- lifecycle-handoff-protocol:end -->
@@ -19,10 +23,14 @@ Captures problem solutions while context is fresh, creating structured documenta
 
 ## Usage
 
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/compound`); slash names the skill.
+
 ```bash
-skill: soleur:compound               # Document the most recent fix
-skill: soleur:compound [brief context]  # Provide additional context hint
-skill: soleur:compound --headless    # Headless mode: auto-approve all prompts
+skill: soleur:compound               # Claude — document the most recent fix
+skill: soleur:compound [brief context]
+skill: soleur:compound --headless
+/compound                            # Grok slash (then Read this SKILL.md)
+/compound --headless
 ```
 
 ## Headless Mode Detection
@@ -300,7 +308,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
        fi
        unused=$(jq -r '.summary.rules_unused_over_8w // "unknown"' "$OUT" 2>/dev/null || echo unknown)
        if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
-         echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
+         echo "[INFO] $unused rules had no ENFORCEMENT event (warn/deny/bypass/applied) in 8 weeks — a shortlist to investigate, NOT evidence of disuse: an obeyed rule emits nothing. Run /soleur:sync rule-prune to surface candidates."
        fi
      else
        # The aggregator's orphan gate exits AFTER writing (CI forensic context),

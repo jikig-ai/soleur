@@ -3,6 +3,10 @@ name: brainstorm
 description: "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/brainstorm` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:brainstorm`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- brainstorm-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
@@ -10,7 +14,7 @@ You are the **exploration orchestrator**. Whether entered via `/go` (default rou
 
 - **FORBIDDEN:** Product code (Write/Edit/Shell on implementation files). Brainstorm answers **WHAT**, not **HOW**.
 - **FORBIDDEN:** Ending after spec/brainstorm doc without a lifecycle handoff — artifacts alone are not deliverables.
-- **REQUIRED (Grok Build):** Invoke successors via slash commands — `/plan` (default) or `/one-shot` (when requirements are already clear). Do not read their SKILL.md and improvise.
+- **REQUIRED (Grok Build):** Invoke successors via slash commands — `/plan` (default) or `/one-shot` (when requirements are already clear). Read each successor's SKILL.md in this process and run it to completion — do not improvise a subset.
 - **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `/plan`, `/one-shot`; Claude uses Skill tool (`soleur:plan`, `soleur:one-shot`).
 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).

@@ -10,7 +10,7 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
-      platform, platform.webapp, platform.engine, platform.infra.supabase,
+      platform, platform.webapp, platform.engine, platform.grokBuild, platform.infra.supabase,
       // platform.plugin is included explicitly so the delivery edges from
       // soleurMarketplace have a rendered target — without it the marketplace
       // renders as a disconnected box (ADR-182, #7471).
@@ -29,7 +29,7 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
-      platform.webapp, platform.engine, platform.plugin, platform.infra,
+      platform.webapp, platform.engine, platform.grokBuild, platform.plugin, platform.infra,
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,

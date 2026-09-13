@@ -5,9 +5,11 @@
 # Idempotent. Installs the DURABLE SUBSTRATE for the multi-host /workspaces
 # split's git-data store: the block-volume mount, git + flock, the dedicated
 # `git` transport user's .ssh perms, the bare-repo root, and a FAIL-CLOSED
-# PLACEHOLDER pre-receive hook. The REAL CAS fence (git-data-pre-receive.sh)
-# ships later via the web-platform deploy pipeline — the most-likely-to-iterate,
-# safety-critical artifact stays pipeline-iterable (CI cannot SSH either host).
+# PLACEHOLDER pre-receive hook. The REAL CAS fence (git-data-pre-receive.sh) is
+# delivered by a host replace (cloud-init) or the operator root path the cutover
+# uses — NEVER by a git-uid channel: $HOOKS_DIR is root:git 0750 and the hook root:root
+# (#8043 F9), and the "web-platform deploy pipeline" this header once named was never
+# built (ADR-149, F9 disposition). CI cannot SSH either host.
 #
 # DELIVERY: embedded into cloud-init-git-data.yml via base64encode(file()) and
 # run once from runcmd on first boot (mirrors inngest-redis-bootstrap.sh).
@@ -16,6 +18,15 @@
 # the persistent block volume, never tmpfs — a reboot resetting the fence max to 0
 # would let a stale gen=5 writer beat a fresh 0 (git-data-pre-receive.sh header).
 set -euo pipefail
+# (#7797) xtrace would print the Doppler-injected LUKS passphrase; refuse before anything reads it.
+case "$-" in
+  *x*)
+    if [ -n "${GIT_DATA_LUKS_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 # (#6982, W1) Teach the EXISTING log() to speak off-box. Step 7 already asserts every
 # invariant the boot signal needs, fail-loud; the only defect was that `log` went NOWHERE
@@ -125,7 +136,8 @@ if [ "$_luks_src" != "$LUKS_MAPPER" ]; then
   exit 1
 fi
 
-# 2. git + flock (util-linux) + git-shell. cloud-init `packages:` installs git;
+# 2. git + flock (util-linux), and the git account's LOGIN SHELL (not git-shell — see the
+#    assertion below). cloud-init `packages:` installs git;
 #    assert + self-heal idempotently so a transient apt drop on first boot fails
 #    LOUD, not silent.
 if ! command -v git >/dev/null 2>&1; then
@@ -142,30 +154,64 @@ command -v flock >/dev/null 2>&1 || {
   log "FATAL: flock (util-linux) missing — fence lock would be unenforceable"
   exit 1
 }
-command -v git-shell >/dev/null 2>&1 || {
-  log "FATAL: git-shell missing — transport user shell unenforceable"
-  exit 1
-}
-
-# 3. The dedicated `git` transport user (created by cloud-init `users:`). Lock down
-#    its .ssh so sshd accepts the forced-command authorized_keys cloud-init wrote.
+# 3. The dedicated `git` transport user (created by cloud-init `users:`). (#8043 F7) THE
+#    ACCOUNT MUST NOT OWN ITS OWN AUTHORIZATION MAP, nor the directory holding it, nor the
+#    home that directory sits in — owning any one of the three lets `git` rewrite the map
+#    (in place, or by replacing .ssh, or by replacing the home). This block is the LAST
+#    WRITER of those paths: it runs in runcmd, AFTER write_files declared `owner:` on the
+#    map, so what it sets is what boots. It used to `chown -R git:git .ssh`, which reverted
+#    cloud-init's declaration on every boot (learning 2026-03-20: a recursive chown placed
+#    after a targeted one silently reverts it, and cloud-init exits 0). There is NO correct
+#    position for a `-R` over .ssh once the map is root-owned, so it is deleted, not moved.
+#    Three targeted, non-recursive calls, ordered home -> .ssh -> file. Modes are chosen so
+#    the account can still WORK: sshd chdir()s into the home for the forced command and
+#    traverses .ssh to read the map, so both are `root:git 0750` (`root:root 0750` would be
+#    untraversable — the trap step 4 avoids for $HOOKS_DIR). The map itself is `root:root
+#    0644`, NOT 0600: sshd opens it under the target user's uid (measured in the pinned
+#    ubuntu-24.04 image — 0600 is "Permission denied" and every push is refused).
 id "$GIT_USER" >/dev/null 2>&1 || {
   log "FATAL: $GIT_USER user absent (cloud-init users: stage did not run)"
   exit 1
 }
-mkdir -p "$GIT_HOME/.ssh"
-chmod 700 "$GIT_HOME/.ssh"
-[[ -f "$GIT_HOME/.ssh/authorized_keys" ]] && chmod 600 "$GIT_HOME/.ssh/authorized_keys"
-chown -R "$GIT_USER:$GIT_USER" "$GIT_HOME/.ssh"
+# (#8043) THE TRANSPORT USER'S LOGIN SHELL MUST BE A REAL SHELL. sshd runs a forced
+# `command=` as `<login shell> -c "<command>"`; git-shell refuses anything but its four
+# built-ins (measured in the pinned image: rc=128 "fatal: unrecognized command"), so a
+# git-shell login would kill transport, provision and the Art. 17 erasure alike. The
+# confinement is the forced-command map, not the shell. Read the shell back from the
+# account rather than trusting the template's declaration. AFTER the `id` guard above: under
+# `set -eo pipefail` a `getent` on an absent account fails the pipeline and exits here with
+# no message, hiding the named "user absent" FATAL written for exactly that case.
+_git_shell="$(getent passwd "$GIT_USER" | cut -d: -f7)"
+case "$_git_shell" in
+  /bin/sh|/bin/bash|/usr/bin/sh|/usr/bin/bash) : ;;
+  *)
+    log "FATAL: $GIT_USER login shell is '$_git_shell' — must be a real shell, or every forced command dies at '<shell> -c'"
+    exit 1 ;;
+esac
 
-# 4. Bare-repo root + hooks dir on the volume, owned by the transport user. chown
-#    immediately after mkdir (the five-bug-cascade learning, inngest-redis-bootstrap).
+mkdir -p "$GIT_HOME/.ssh"
+chown "root:$GIT_USER" "$GIT_HOME"
+chmod 0750 "$GIT_HOME"
+chown "root:$GIT_USER" "$GIT_HOME/.ssh"
+chmod 0750 "$GIT_HOME/.ssh"
+if [[ -f "$GIT_HOME/.ssh/authorized_keys" ]]; then
+  chown root:root "$GIT_HOME/.ssh/authorized_keys"
+  chmod 0644 "$GIT_HOME/.ssh/authorized_keys"
+fi
+
+# 4. Bare-repo root + hooks dir on the volume. chown immediately after mkdir (the
+#    five-bug-cascade learning, inngest-redis-bootstrap). (#8043 F9) TWO OWNERS, NOT ONE:
+#    $REPO_ROOT stays git-owned (git-data-provision.sh inits repos there as `git`), but
+#    $HOOKS_DIR is `root:git 0750` — not writable by the account whose pushes the hook in it
+#    fences, still traversable because `git` runs receive-pack, which execs the hook.
 mkdir -p "$REPO_ROOT" "$HOOKS_DIR"
-chown "$GIT_USER:$GIT_USER" "$REPO_ROOT" "$HOOKS_DIR"
-chmod 0750 "$REPO_ROOT" "$HOOKS_DIR"
+chown "$GIT_USER:$GIT_USER" "$REPO_ROOT"
+chmod 0750 "$REPO_ROOT"
+chown "root:$GIT_USER" "$HOOKS_DIR"
+chmod 0750 "$HOOKS_DIR"
 
 # 4b. Repo-root reconcile (ADR-068 amendment 2026-07-01 "PR B bare-repo
-#     provisioning"). The git-shell TRANSPORT resolves push URL paths relative to
+#     provisioning"). The TRANSPORT forced command resolves push URL paths relative to
 #     the git user's HOME ($GIT_HOME), while the PROVISION wrapper writes absolute
 #     paths under $REPO_ROOT (/mnt/git-data/repositories). Symlink so a push URL of
 #     `.../repositories/<id>.git` and the provisioned `/mnt/git-data/repositories/
@@ -177,11 +223,22 @@ chown -h "$GIT_USER:$GIT_USER" "$GIT_HOME/repositories"
 
 # 5. Install the FAIL-CLOSED placeholder pre-receive. Staged to /tmp by cloud-init
 #    (base64). core.hooksPath (step 6) points every per-workspace bare repo at it,
-#    so a push is rejected until the real fence hook lands via the deploy pipeline.
+#    so a push is rejected until the real fence hook lands by host replace (see header).
 #    Re-runnable: skip the staged install only when the hook is already in place.
+#    (#8043 F9) ROOT-OWNED, not git-owned. A root-owned $HOOKS_DIR alone does not close the
+#    property: truncating an existing file needs write permission on the FILE, so a git-owned
+#    0755 pre-receive inside a root-owned directory is still a fence the fenced account can
+#    overwrite. `git` needs only x (other) to exec it from receive-pack.
+#    The staged copy must be ROOT'S: /tmp is sticky and world-writable, so on any re-run after
+#    /tmp was cleared a git-uid file at this path would be installed root:root 0755 as the
+#    fence. cloud-init writes it root-owned at first boot; anything else is refused.
 if [[ -f "$PLACEHOLDER_STAGED" ]]; then
   assert_not_symlink "$PLACEHOLDER_STAGED"
-  install -o "$GIT_USER" -g "$GIT_USER" -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
+  [[ "$(stat -c %U "$PLACEHOLDER_STAGED")" == root ]] || {
+    log "FATAL: staged placeholder $PLACEHOLDER_STAGED is owned by $(stat -c %U "$PLACEHOLDER_STAGED"), not root — refusing to install it as the fence"
+    exit 1
+  }
+  install -o root -g root -m 0755 "$PLACEHOLDER_STAGED" "$PRE_RECEIVE"
 elif [[ ! -f "$PRE_RECEIVE" ]]; then
   log "FATAL: placeholder hook not staged at $PLACEHOLDER_STAGED and $PRE_RECEIVE absent"
   exit 1
@@ -240,6 +297,10 @@ git config --system core.bigFileThreshold 32m
 # reflog-expire, repack and prune ALL fail per repo, and because the script exits 0 on
 # per-repo failures systemd reports the unit successful. ADR-068's D-SIZE sizing argument
 # rests on this maintenance path actually running.
+# (#8043 review) THIS LINE ALONE IS NOT ENOUGH on the pinned image: the trailing `/*` form
+# needs git >= 2.46 and ubuntu-24.04 ships 2.43.0, where it matches nothing (measured, rc 128
+# per repo). git-data-gc.sh therefore passes `-c safe.directory="$repo"` per command; this
+# system value is kept as the documented intent and becomes effective on a newer git.
 git config --system safe.directory "$REPO_ROOT/*"
 
 # 7. Liveness assert — fail LOUD if any invariant is unmet (the post-merge
@@ -257,6 +318,30 @@ mountpoint -q "$LUKS_ROOT" || {
   log "FATAL: pre-receive hook missing/not executable"
   exit 1
 }
+# (#8043 F7/F9) OWNERSHIP IS READ BACK, NOT ASSUMED. Each path is compared as a literal
+# `user:group mode` so this proves the ABSENCE of the reverted state (a later recursive
+# chown, a re-added `-o git` install), not merely that a chown line exists above.
+# The table IS the contract: one row per path, `path expected-owner expected-mode why`.
+# The model these literals were chosen against (git is in group git and no other; a path is
+# traversable iff owner-x/group-x/other-x reaches git, writable iff the same with w) only
+# holds if the group membership holds, so that is asserted first.
+_own() { stat -c '%U:%G %a' "$1"; }
+[[ "$(id -Gn "$GIT_USER")" == "$GIT_USER" ]] || {
+  log "FATAL: $GIT_USER is in groups '$(id -Gn "$GIT_USER")', expected only '$GIT_USER' — a supplementary group makes the root:git 0750 model wrong"
+  exit 1
+}
+while read -r _p _o _m _why; do
+  [[ "$(_own "$_p" 2>/dev/null || echo absent)" == "$_o $_m" ]] || {
+    log "FATAL: $_p is $(_own "$_p" 2>/dev/null || echo absent), expected $_o $_m ($_why)"
+    exit 1
+  }
+done <<EOF
+$GIT_HOME root:$GIT_USER 750 git could replace .ssh, or sshd cannot chdir
+$GIT_HOME/.ssh root:$GIT_USER 750 git could create authorized_keys2, or sshd cannot traverse
+$GIT_HOME/.ssh/authorized_keys root:root 644 git could rewrite the map, or sshd cannot read it
+$HOOKS_DIR root:$GIT_USER 750 git could write the hook dir, or cannot traverse it
+$PRE_RECEIVE root:root 755 git could overwrite the fence it is fenced by
+EOF
 [[ "$(git config --system core.hooksPath)" == "$HOOKS_DIR" ]] || {
   log "FATAL: core.hooksPath not set to $HOOKS_DIR"
   exit 1
