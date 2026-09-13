@@ -63,6 +63,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Claude adapter lifecycle coverage: start, continue, cancel, reconcile, cursor resume, approval, erasure, and disposal delegation are pinned.
   - [x] Claude identity slice: the adapter exports a single immutable engine ID for dispatch selection and registry alignment.
   - [x] Catalog identity slice: reviewed engine definitions consume the Claude adapter identity constant rather than duplicating it (21 registry/adapter tests green).
+  - [x] Settings identity slice: API fallback defaults reuse the Claude adapter identity constant.
   - [x] New-run composition slice: bind-first dispatch composes persistence and adapter invocation without client engine selection (3 dispatch tests green).
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
