@@ -230,7 +230,10 @@ repository. An earlier draft said "impossible"; that overstated it.
 | 8 — clear the banner | **DONE** by PR #8128, on the sequence #8043 prescribed and nothing shorter: a fresh rehearsal dispatched from `main` `15fd63aff` (run [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), `dry_run=false`, environment-approved, verdict PASS — `stage:boot_complete` with `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes nft_metadata_drop=yes`, no `level:fatal`, teardown verified against the Hetzner API); its evidence committed ALONE in PR #8126 (Guard 4 provenance PASS, template sha256 `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`, equal to `main`); then this banner PR. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (run-pinned liveness window on a quiet project; the gate ignores that key — #8010). The runbook now opens with a release record in the banner's place. |
 
 **Checklist effect.** Every item is now DONE, DISCHARGED, or recorded NOT SATISFIABLE AS
-WRITTEN (item 7). Nothing in this change dispatches a birth: the only control left on
+WRITTEN (item 7). #7025's second checkbox reads "tick ADR-149 checklist item 7" — written
+before the #6982 disposition recorded item 7 as not satisfiable; the item that checkbox
+describes (the banner clear) is item 8, and this row is its tick. Nothing in this change
+dispatches a birth: the only control left on
 `apply_target=git-data-host-create` is the `web-platform-infra-apply` environment approval,
 measured `prevent_self_review: false`, one reviewer, `can_admins_bypass: true` — one human, not
 two parties — plus the three static interlocks, which self-invalidate the moment a bound input
