@@ -775,31 +775,47 @@ jobs:
         run: node scripts/eslint-vacuity-floor.mjs
         working-directory: apps/web-platform
 
-  # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
-  # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
-  # of inside the post-merge Docker build (#2347/#2401 outage).
+  # Builds the Dockerfile's `builder` stage — the SAME `npm run build` the
+  # post-merge release runs, from the SAME context (`apps/web-platform`, minus
+  # `.dockerignore`). It catches non-HTTP exports from `app/**/route.{ts,tsx}`
+  # (#2347/#2401 outage) and, since #8074, anything the build can only see
+  # from a full checkout: this job used to run `npm run build` on the whole
+  # repo, so a server file spelling a path as `new URL("../../../../.claude/…",
+  # import.meta.url)` — a static asset reference to the bundler — passed here
+  # and failed the release's Docker build with "Module not found" (run
+  # 34773058045), leaving production on the prior image. A full-checkout build
+  # cannot see a context difference; only the context can.
+  #
+  # `load: false` / `push: false`: the image is discarded — this is a build
+  # check, not a publish. Placeholder NEXT_PUBLIC_ args: client inlining is
+  # irrelevant to "does it build". No SENTRY_AUTH_TOKEN: the Sentry plugin skips
+  # source-map upload when it is absent (measured locally 2026-09-13).
   web-platform-build:
-    # 15m — measured max 2.2m over 10 successful main runs (#8020);
-    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
-    timeout-minutes: 15
+    # 25m — the full-checkout `next build` measured max 2.2m over 10 main runs
+    # (#8020); the builder stage adds `npm ci` inside the image (uncached on a
+    # fresh runner), the dev-signin tripwire and `build:server`. Measured
+    # locally at ~4m with a warm deps layer; >=5x headroom cold.
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build the Dockerfile builder stage (the release's own `npm run build`)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web-platform/package-lock.json
-
-      - name: Install web-platform dependencies
-        working-directory: apps/web-platform
-        run: npm ci --ignore-scripts
-
-      - name: Build (next build runs the route-file validator)
-        working-directory: apps/web-platform
-        run: npm run build
+          context: apps/web-platform
+          target: builder
+          push: false
+          load: false
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+          # Read-only reuse of the release's deps layer; never written from a
+          # PR run (a PR must not be able to poison the release cache).
+          cache-from: type=gha,scope=web-platform-release
 
   # --- Test matrix: 3 shards + synthetic aggregator ---
   #

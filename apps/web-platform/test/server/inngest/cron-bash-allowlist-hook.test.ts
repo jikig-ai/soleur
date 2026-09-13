@@ -4,7 +4,7 @@
 // panel surfaced (P0-A secret-read, P0-B argument injection, P1-F quoted-pipe)
 // has a case here. `decide()` is pure (JSON in → decision out), so no spawn.
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decide, tokenize, splitSegments } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
@@ -883,5 +883,24 @@ describe("Bash — run-report exit (class 3, #8076)", () => {
   it("the api form honours the directive via -f labels[]=", () => {
     expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
     expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}x`))).toBe("deny");
+  });
+});
+
+describe("bundle safety — the hook is in the Next.js server bundle (#8074 post-merge)", () => {
+  it("never spells a path as `new URL(…, import.meta.url)`, the bundler's static asset-reference syntax", () => {
+    // `cron-filing-deny-marker.ts` imports `filingShape` from the hook, so the
+    // hook is compiled by `next build` (Turbopack; webpack reads the spelling
+    // the same way). That spelling makes the bundler RESOLVE the referenced
+    // file as a module; the taxonomy lives four levels above the Docker build
+    // context, and release run 34773058045 failed at `npm run build` with
+    // "Module not found" while every full-checkout CI build passed.
+    // Comment-stripped so the explanation in the source is not what trips this.
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/cron-bash-allowlist-hook.mjs"),
+      "utf-8",
+    ).replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(src).not.toMatch(/new\s+URL\s*\([^)]*import\.meta\.url/);
+    // Non-vacuity: the path is still resolved from the module location.
+    expect(src).toMatch(/dirname\(fileURLToPath\(import\.meta\.url\)\)/);
   });
 });
