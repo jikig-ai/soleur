@@ -67,7 +67,10 @@ export function isExcludedFromContext(relPath: string, lines: string[]): boolean
  * Docker context while every full-checkout build passed.
  */
 function relativeImports(file: string): string[] {
-  const src = fs.readFileSync(file, "utf8");
+  // Full-line `//` comments are dropped so a commented-out reference is not a
+  // finding; the `import`/`export` regex is line-anchored and immune already,
+  // the `new URL` one is not.
+  const src = fs.readFileSync(file, "utf8").replace(/^[ \t]*\/\/[^\n]*/gm, "");
   const out: string[] = [];
   const res = [
     /^\s*(?:import|export)[^'"]*?from\s+["'](\.[^"']+)["']/gm,
@@ -85,7 +88,10 @@ const SOURCE_EXT = /\.(m?ts|tsx|mjs)$/;
 
 function resolveToRepoRelative(configFile: string, spec: string): string | null {
   const base = path.resolve(APP_ROOT, path.dirname(configFile), spec);
-  for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}.mjs`, path.join(base, "index.ts")]) {
+  for (const cand of [
+    base, `${base}.ts`, `${base}.tsx`, `${base}.mts`, `${base}.mjs`,
+    path.join(base, "index.ts"), path.join(base, "index.mjs"),
+  ]) {
     if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
       return path.relative(APP_ROOT, cand);
     }

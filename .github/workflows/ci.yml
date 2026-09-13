@@ -1383,7 +1383,7 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts, web-platform-build]
     if: always()
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
+    # Bounds a HUNG job (#7902). This job only reads four `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
