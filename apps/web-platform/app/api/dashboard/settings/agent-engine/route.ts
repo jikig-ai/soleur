@@ -32,6 +32,7 @@ export async function GET() {
     return NextResponse.json({
       workspaceId: resolved.workspaceId,
       defaultEngineId: await repository.getDefaultEngine(resolved.workspaceId) ?? DEFAULT_AGENT_ENGINE_ID,
+      defaultAuthMode: await repository.getDefaultAuthMode(resolved.workspaceId) ?? "managed",
       engines: listReviewedEngineDefinitions().map(({ id, version, transport, authModes, enabledForNewRuns }) =>
         ({ id, version, transport, authModes, enabledForNewRuns })),
     });
@@ -46,7 +47,7 @@ export async function PUT(request: Request) {
   if (!valid) return rejectCsrf("api/dashboard/settings/agent-engine", origin);
   const resolved = await context();
   if ("response" in resolved) return resolved.response;
-  let body: { engineId?: unknown };
+  let body: { engineId?: unknown; authMode?: unknown };
   try { body = (await request.json()) as typeof body; } catch {
     return NextResponse.json({ error: "malformed_json" }, { status: 400 });
   }
@@ -58,9 +59,14 @@ export async function PUT(request: Request) {
     if (!definition.enabledForNewRuns) {
       return NextResponse.json({ error: "engine_disabled" }, { status: 409 });
     }
+    const authMode = body.authMode === undefined ? undefined : body.authMode;
+    if (authMode !== undefined && (typeof authMode !== "string" || !definition.authModes.includes(authMode))) {
+      return NextResponse.json({ error: "auth_mode_unsupported" }, { status: 400 });
+    }
     const repository = new AgentEnginePersistenceRepository(resolved.supabase as unknown as PersistenceClient);
-    await repository.setDefaultEngine(resolved.workspaceId, definition.id);
-    return NextResponse.json({ defaultEngineId: definition.id });
+    if (authMode === undefined) await repository.setDefaultEngine(resolved.workspaceId, definition.id);
+    else await repository.setDefaultEngine(resolved.workspaceId, definition.id, authMode);
+    return NextResponse.json({ defaultEngineId: definition.id, ...(authMode ? { defaultAuthMode: authMode } : {}) });
   } catch (error) {
     if (error instanceof Error && error.message === "engine_unknown") {
       return NextResponse.json({ error: "engine_unknown" }, { status: 400 });

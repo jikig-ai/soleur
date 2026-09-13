@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUser, getDefault, setDefault, workspace } = vi.hoisted(() => ({
+const { getUser, getDefault, getAuthMode, setDefault, workspace } = vi.hoisted(() => ({
   getUser: vi.fn(),
   getDefault: vi.fn(),
+  getAuthMode: vi.fn(),
   setDefault: vi.fn(),
   workspace: vi.fn(),
 }));
@@ -14,6 +15,7 @@ vi.mock("@/server/workspace-resolver", () => ({ readWorkspaceIdFromDb: workspace
 vi.mock("@/server/agent-engine-persistence", () => ({
   AgentEnginePersistenceRepository: class {
     getDefaultEngine = getDefault;
+    getDefaultAuthMode = getAuthMode;
     setDefaultEngine = setDefault;
   },
 }));
@@ -31,11 +33,13 @@ function request(body?: unknown, origin?: string) {
 beforeEach(() => {
   getUser.mockReset();
   getDefault.mockReset();
+  getAuthMode.mockReset();
   setDefault.mockReset();
   workspace.mockReset();
   getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
   workspace.mockResolvedValue("ws-1");
   getDefault.mockResolvedValue("claude-code");
+  getAuthMode.mockResolvedValue("managed");
   setDefault.mockResolvedValue({ id: "setting-1" });
 });
 
@@ -50,7 +54,20 @@ describe("agent engine settings route", () => {
     expect(response!.status).toBe(200);
     await expect(response!.json()).resolves.toEqual(expect.objectContaining({
       workspaceId: "ws-1", defaultEngineId: "claude-code",
+      defaultAuthMode: "managed",
     }));
+  });
+
+  it("writes a validated auth mode with the owner default", async () => {
+    const response = await PUT(request({ engineId: "claude-code", authMode: "api-key" }));
+    expect(response!.status).toBe(200);
+    expect(setDefault).toHaveBeenCalledWith("ws-1", "claude-code", "api-key");
+  });
+
+  it("rejects unsupported auth modes before the RPC", async () => {
+    const response = await PUT(request({ engineId: "claude-code", authMode: "device-code" }));
+    expect(response!.status).toBe(400);
+    expect(setDefault).not.toHaveBeenCalled();
   });
 
   it("writes a validated owner default", async () => {
