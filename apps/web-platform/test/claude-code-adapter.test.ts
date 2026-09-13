@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createClaudeCodeAdapter } from "@/server/claude-code-adapter";
+import { CLAUDE_CODE_ENGINE_ID, createClaudeCodeAdapter } from "@/server/claude-code-adapter";
 
 describe("Claude Code neutral adapter boundary", () => {
   it("delegates lifecycle operations without exposing SDK-shaped types", async () => {
+    expect(CLAUDE_CODE_ENGINE_ID).toBe("claude-code");
     const transport = {
       start: vi.fn(async function* () { yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const }; }),
       continue: vi.fn(async function* () { yield* []; }),

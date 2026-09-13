@@ -18,6 +18,8 @@ export interface ClaudeCodeAdapterTransport {
   dispose(): Promise<void>;
 }
 
+export const CLAUDE_CODE_ENGINE_ID = "claude-code" as const;
+
 /** Claude-specific transport stays behind this adapter; the web contract does not import SDK messages. */
 export function createClaudeCodeAdapter(transport: ClaudeCodeAdapterTransport): EngineAdapter {
   return {
