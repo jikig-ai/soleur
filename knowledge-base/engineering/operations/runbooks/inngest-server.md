@@ -1209,6 +1209,32 @@ empty the dark registry and re-run (all no-SSH):
    backend), then re-dispatch `op=execute`. The 2.0 probe must report `registry_empty:true`
    before the SEAM is reachable.
 
+### 2.1 capture `HTTP 500: INNGEST_MANUAL_TRIGGER_SECRET unavailable` triage
+
+The web host's `inngest-rearm-reminders.sh` reads the Bearer secret from Doppler, re-reading the
+re-delivered credential in `/etc/default/soleur-doppler-token` first (#7095 class; the unit's own
+`DOPPLER_TOKEN` was revoked 2026-07-30). On a failed read it emits ONE classified line to journald
+and to the hook's response body — the `::error::2.1 capture returned HTTP 500: …` text in the run log
+already carries it — so no SSH is needed:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_DEPLOY_CRED_FAIL
+```
+
+Decode `class=` / `token_file=` from that line (layer: Better Stack via Vector's journald source,
+tags `inngest-rearm-reminders` / `inngest-wiped-volume-verify`; the same event reaches Sentry as
+`op=doppler-read-failed` when the file's three DSN components were read):
+
+| line | meaning | fix (no SSH) |
+|---|---|---|
+| `token_file=absent` | `terraform apply` never delivered `/etc/default/soleur-doppler-token` | dispatch `apply-web-platform-infra.yml`; confirm via `/hooks/deploy-status` (`cat-deploy-state.sh` reports the cred-file state) |
+| `token_file=unreadable` | mode/group drift from `install -m 640 -o root -g deploy` | re-deliver via the same apply (the installer rewrites mode+owner) |
+| `token_file=present class=invalid_auth` | the FILE's token is itself revoked — delivery is stale | mint a new `TF_VAR_doppler_token` and apply; the file is re-rendered |
+| `class=secret_not_found` | `INNGEST_MANUAL_TRIGGER_SECRET` missing in `soleur/prd` | provision the secret (inngest.tf owns it) |
+| `class=transport` | the web host cannot reach `api.doppler.com` | egress/DNS on the web host — see the cron-egress runbook |
+| `class=empty_value` | the secret exists but is empty | set a value in Doppler |
+| `class=binary_absent` | `doppler` is not on the webhook unit's PATH | host-image defect; re-provision |
+
 ### nftables web-host allowlist parity (#6608)
 
 `inngest-host.tf` `local.web_host_private_ips` is rendered into the dedicated host's nftables
