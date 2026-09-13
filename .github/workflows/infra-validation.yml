@@ -31,6 +31,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
       # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
       # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
@@ -42,6 +45,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       - ".github/workflows/infra-validation.yml"
       # (#6454) The render-then-validate gate and its fixture suite. Without these,
       # editing the validator would not run the validator's own tests — the job that
@@ -776,6 +782,19 @@ jobs:
       # guard cannot score a clean run. Same shape as the LUKS G4 mutation battery below.
       - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
         run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
+
+      # (#8097 / ADR-218) The Better Stack Logs alert that pages on SOLEUR_*_SEND_FAILED /
+      # _REFUSED rows. Pins the predicate's three anchors + needle SET, discovers every
+      # emit_refusal() definer and holds it to `logger -p user.crit` (or a named non-crit
+      # allowlist entry), asserts every SKIPPED/_HALT literal matches no needle, pins the
+      # exploration's source id to vector.toml's sink and the probe line in server.tf.
+      - name: Run Better Stack SEND_FAILED alert drift guard (#8097)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh
+
+      # Its battery: 12 invariant-breaking rows attributed by FAIL string, the floor's
+      # H1a-RED / H1b-GREEN pair, and three legitimate-edit controls. An unrun battery is a claim.
+      - name: Run Better Stack SEND_FAILED alert MUTATION battery (#8097 the guard can actually fail)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
