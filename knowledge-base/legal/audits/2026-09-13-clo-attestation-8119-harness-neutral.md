@@ -7,7 +7,7 @@ pr: 8119
 status: SIGNED-OFF (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-09-13
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
-disposition: "DISCHARGED — condition met, then re-attested for a parenthetical-only inventory expansion at 8216d6276. F1 landed at 959bc2f26 (GDPR §2.2 scoped 'When you use Claude Code:' plus Grok analogue; xAI is not a Jikigai processor). 8216d6276 widens the supported-CLI parenthetical to 'including Claude Code, Grok Build, Codex, and Devin CLI' on the five lockstep docs + Eleventy, matching plugins/soleur/lib/harness.ts (Harness = claude | grok | codex | devin). No Devin/Cognition inference-path sentence. No Codex/OpenAI inference-path sentence. No processor-table row for Cognition, OpenAI, or xAI. Cookie-policy and disclaimer not in the diff. TC_VERSION stays 2.5.1 (still clarifying; unmerged PR). SHA pins re-hashed and equal the literals. No grok --trust. No Art. 33 / Art. 34 duty arises."
+disposition: "DISCHARGED — condition met; re-attested at 8216d6276 (Codex/Devin parenthetical inventory) and again at 12ee4c610 (cookie/disclaimer identity + Privacy §5.1 generic other-CLI sentence). F1 remains discharged (GDPR §2.2 scoped). 12ee4c610 lifts cookie/disclaimer Claude-exclusivity for identity language only: both surfaces now use the same supported-CLI parenthetical; cookie §3.1 still says the plugin does not use cookies; disclaimer liability/warranty text and Last Updated line are unchanged. Privacy §5.1 (canonical + Eleventy) adds 'When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials. That provider is not a Jikigai processor.' — no named Devin/Cognition or Codex/OpenAI path, no processor-table row. SHA pins match. TC_VERSION stays 2.5.1. No grok --trust. No Art. 33 / Art. 34 duty arises."
 condition_discharged_at: 2026-09-13
 condition_discharged_by: "Applied in-PR at 959bc2f26 before merge; GDPR §2.2 canonical and Eleventy now match the Privacy Policy §5.1 Claude Code scoping, plus a Grok analogue that states the user's own CLI relationship and the processor denial."
 blocking_findings: []
@@ -16,20 +16,25 @@ required_before_merge_DISCHARGED:
   - "F1 (mandatory) — GDPR Policy §2.2 first bullet (canonical + Eleventy) still asserted that running the Soleur plugin sends requests to Anthropic's Claude API. After this PR's Plugin-definition expansion that statement was false of Grok Build. Scoped to 'When you use Claude Code:' and a Grok analogue added; LEGAL_DOC_SHAS[\"gdpr-policy\"] re-pinned. Evidence: docs/legal/gdpr-policy.md §2.2 first bullet; plugins/soleur/docs/pages/legal/gdpr-policy.md the same bullet; apps/web-platform/lib/legal/legal-doc-shas.ts gdpr-policy pin d82f2f84d62ed3fd465ee7f1c27ad5dd9c9fb13c465d2945a95967f980cdf19d equals sha256sum of the canonical."
 recommended_before_merge_APPLIED:
   - "O1 — GDPR Policy §4.2 table row 'Prompts, code context | Anthropic (via Claude API)' qualified 'when used with Claude Code' on both surfaces."
+  - "O2 — Privacy Policy §5.1 generic other-CLI sentence landed at 12ee4c610 (canonical + Eleventy): 'When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials. That provider is not a Jikigai processor.' Does not name Cognition or OpenAI."
   - "O3 — knowledge-base/legal/compliance-posture.md Acceptable Use Policy Last Updated cell 2026-08-11 → 2026-09-13."
 optional_precision_notes:
-  - "O2 (optional, non-blocking) — Privacy Policy §5.1 names xAI through Grok Build in the lead sentence, then spells the 'your own API key / Soleur does not intermediate' bullets only under 'When you use Claude Code:'. GDPR §2.2 now carries the Grok analogue in operative body. Privacy is not false as written; a matching 'When you use Grok Build:' bullet list would be belt-and-braces only."
+  - "O4 (optional, non-blocking) — Disclaimer Last Updated remains 11 August 2026; only the identity sentence moved. Liability/warranty text is the August 11 substance; the identity alignment is the same clarifying class as the five lockstep docs. Cookie Policy has no body Last-Updated line by design (NO_BODY_LAST_UPDATED)."
 attests:
   - docs/legal/terms-and-conditions.md
   - docs/legal/privacy-policy.md
   - docs/legal/data-protection-disclosure.md
   - docs/legal/gdpr-policy.md
   - docs/legal/acceptable-use-policy.md
+  - docs/legal/cookie-policy.md (identity sentences + §3.1 no-cookies claim only)
+  - docs/legal/disclaimer.md (identity sentence only; liability/warranty not re-opened)
   - plugins/soleur/docs/pages/legal/terms-and-conditions.md
   - plugins/soleur/docs/pages/legal/privacy-policy.md
   - plugins/soleur/docs/pages/legal/data-protection-disclosure.md
   - plugins/soleur/docs/pages/legal/gdpr-policy.md
   - plugins/soleur/docs/pages/legal/acceptable-use-policy.md
+  - plugins/soleur/docs/pages/legal/cookie-policy.md
+  - plugins/soleur/docs/pages/legal/disclaimer.md
   - apps/web-platform/lib/legal/tc-version.ts
   - apps/web-platform/lib/legal/legal-doc-shas.ts
   - knowledge-base/legal/compliance-posture.md (T&C row 2.5.1 / 2026-09-13; AUP Last Updated 2026-09-13; Completed-Compliance-Work row for this PR)
@@ -39,15 +44,15 @@ art_33_limb_applied: "Art. 33(1) is not engaged. Art. 33 is conditioned on a per
 carve_outs:
   - "NOT ATTESTED — the engineering design of Grok Build plugin fidelity (Phases 1–5 of #8064). This review attests only whether the legal prose describes the Plugin as the code and the live CLI actually behave."
   - "NOT ATTESTED — ACP #6547 (xAI as a Jikigai processor / sub-processor). Parked. This PR correctly does not unpark it."
-  - "NOT ATTESTED — a Devin/Cognition or Codex/OpenAI inference path. Operator-locked unmeasured. The parenthetical names the shipped CLIs; it does not describe where those two CLIs send prompts. Inventing that path would be the #4353/#4558 drift class."
-  - "NOT ATTESTED — cookie-policy.md and disclaimer.md remaining Claude Code exclusive. That was a locked constraint; they were not edited; the exclusivity is recorded, not re-justified."
+  - "NOT ATTESTED — a named Devin/Cognition or Codex/OpenAI inference path. Still unmeasured and still unnamed. Privacy §5.1's generic other-CLI sentence is attested as a class claim (user credentials; not a Jikigai processor), not as a measured description of Devin's cloud fetcher or Codex's provider."
+  - "NOT ATTESTED — cookie categories, Docs-Site/Web-Platform cookie tables, or Disclaimer §§3.1–3.2 liability/warranty. 12ee4c610 is identity language only."
   - "NOT ATTESTED — pre-existing #7465 canonical↔mirror Last-Updated drift on privacy / DPD / GDPR. This PR correctly left those Last Updated lines untouched and used an Amended: September 13, 2026 line instead."
   - "NOT PROMOTED — external counsel review. This is the v1 internal sign-off under the Soleur-as-tenant-zero posture."
 re_evaluation_triggers:
   - "ACP #6547 unparks, or any path is added on which Jikigai holds an xAI credential or intermediates xAI traffic — xAI then becomes a Jikigai processor / sub-processor and this PR's denial sentences become false."
   - "A Devin/Cognition or Codex/OpenAI inference path is measured (or Jikigai holds a Cognition/OpenAI credential / intermediates that traffic) — the parenthetical inventory then under-describes a live data path and a disclosure, not an invented one, is owed."
   - "Live `grok --help` grows a `--trust` (or equivalent) flag — none exists on CLI 1.0.29; inventing one was a locked non-goal."
-  - "Cookie Policy or Disclaimer is expanded off Claude Code exclusivity."
+  - "Cookie Policy or Disclaimer is expanded beyond identity language (cookie categories, a claim that the plugin uses cookies, or a change to Disclaimer liability/warranty)."
   - "First arms-length (non-Jikigai-affiliate) Grok Build, Codex, or Devin CLI user of the Plugin — v1 attestation rests on Soleur-as-tenant-zero."
   - "Any data subject outside the EEA/UK, or in a regulated industry."
 related:
@@ -69,7 +74,7 @@ related:
 
 **Authority.** Soleur v1 CLO-attestation, ship Phase 5.5 Counsel-Review CLO-Attestation Gate, brand-survival threshold `single-user incident`. This is the internal sign-off performed by the CLO agent, not by the non-lawyer operator. The operator retains an optional veto. External counsel re-review is reserved for the frontmatter `re_evaluation_triggers`.
 
-**Method.** Attested against the working-tree prose, not the PR description. Known drift class: legal prose hallucinated against the code (PR #4353 / #4558); gates measure agreement, not truth (#7349). First pass HEAD `fd8131a05` (BLOCKED on F1). Re-review HEAD `959bc2f26` (DISCHARGED). Parenthetical inventory expansion HEAD `8216d6276`. Live CLI checked: `grok` 1.0.29.
+**Method.** Attested against the working-tree prose, not the PR description. Known drift class: legal prose hallucinated against the code (PR #4353 / #4558); gates measure agreement, not truth (#7349). First pass HEAD `fd8131a05` (BLOCKED on F1). Re-review HEAD `959bc2f26` (DISCHARGED). Parenthetical inventory expansion HEAD `8216d6276`. Cookie/disclaimer identity + Privacy §5.1 generic sentence HEAD `12ee4c610`. Live CLI checked: `grok` 1.0.29.
 
 ## Inventory
 
@@ -80,22 +85,22 @@ related:
 | `docs/legal/data-protection-disclosure.md` + Eleventy | yes | Provider blurb + §1.6 Plugin definition; Last Updated **not** touched; **Amended:** 13 September 2026 on both surfaces |
 | `docs/legal/gdpr-policy.md` + Eleventy | yes | Intro definition + Amended line. **§2.2 first bullet scoped — F1 discharged at 959bc2f26.** §4.2 table qualified (O1) |
 | `docs/legal/acceptable-use-policy.md` + Eleventy | yes | Intro + Anthropic/Claude third-party bullet names Grok/xAI with a denial; Last Updated 13 September 2026 |
-| `docs/legal/cookie-policy.md` + Eleventy | **no** | Still "Claude Code plugin". Constraint honoured (not in `fd8131a05`, `959bc2f26`, or `8216d6276`) |
-| `docs/legal/disclaimer.md` + Eleventy | **no** | Still "Claude Code plugin". Constraint honoured |
+| `docs/legal/cookie-policy.md` + Eleventy | yes (`12ee4c610`) | Identity parenthetical now harness-neutral on both surfaces. §3.1 still: plugin **does not use cookies** |
+| `docs/legal/disclaimer.md` + Eleventy | yes (`12ee4c610`) | Identity sentence now harness-neutral. Liability/warranty and Last Updated 11 August 2026 untouched |
 | `LEGAL_DOC_SHAS` + `TC_DOCUMENT_SHA` | yes | Pins match `sha256sum` of the five edited canonicals after `8216d6276`; cookie + disclaimer pins unchanged |
 | `TC_VERSION` 2.5.0 → 2.5.1 | yes | Seed scripts (`seed-dev-users.sh`, `seed-live-verify-user.sh`, `seed-qa-user.sh`) match |
 | `compliance-posture.md` T&C + AUP rows | yes | T&C 2.5.1 / 2026-09-13; AUP Last Updated 2026-09-13 (O3 discharged) |
 | `article-30-register.md` | **no** | Correct: no new processing activity |
 
-SHA pins re-hashed on this tree (`8216d6276`) and equal the literals:
+SHA pins re-hashed on this tree (`12ee4c610`) and equal the literals:
 
-- T&C `TC_DOCUMENT_SHA` = `8d33c47b143b6690dcd581799baacaf1b4c1c084a356fb0d5383a9c661984007`
-- privacy-policy = `6a872fff105eebb39764cb9b2fff85e20790eb49e7da07f7e2c33183fd307ce2`
-- data-protection-disclosure = `cf2a1acba67b75cff75289108b66c12dc1ab5d051d47e202911977e83c5b9663`
-- gdpr-policy = `8a879987bd18d8f49b3f94cec9b7058201f6ad82fd0eb700dfee525a1b0da397`
-- acceptable-use-policy = `bc2c38315b6669a1186151cdbffe8b39ca3223903da89a7db0f2c2a9b382eb92`
-- cookie-policy (unchanged) = `e2ac3ba184bf3e29d94a5702e48b85447748d749f28c00664ee94b170b84417e`
-- disclaimer (unchanged) = `312432f3a536685d6a21e7720a4e925f8dcc24ddc1f178dc0ad67ff682679809`
+- T&C `TC_DOCUMENT_SHA` = `8d33c47b143b6690dcd581799baacaf1b4c1c084a356fb0d5383a9c661984007` (unchanged this commit)
+- privacy-policy = `3019f5d5ca91cd0e2ccf5570468142148e1f1f6fac218200125cbd2c962d5251`
+- data-protection-disclosure = `cf2a1acba67b75cff75289108b66c12dc1ab5d051d47e202911977e83c5b9663` (unchanged this commit)
+- gdpr-policy = `8a879987bd18d8f49b3f94cec9b7058201f6ad82fd0eb700dfee525a1b0da397` (unchanged this commit)
+- acceptable-use-policy = `bc2c38315b6669a1186151cdbffe8b39ca3223903da89a7db0f2c2a9b382eb92` (unchanged this commit)
+- cookie-policy = `ff889cbc7937d207374781dca15894292d1f6eaf63c66e6b6f1575f653c4e3c5`
+- disclaimer = `8b9373e78afa1aa67126b901e60d040167116bf423d262449e6c4cc6096f09c2`
 
 Local gates on this HEAD: `check-tc-document-sha.sh` exit 0 (includes `BODY_EQUIVALENCE_DOCS` for T&C, AUP, disclaimer).
 
@@ -103,9 +108,9 @@ Local gates on this HEAD: `check-tc-document-sha.sh` exit 0 (includes `BODY_EQUI
 
 The Plugin **is** a locally installed plugin for the four harnesses `plugins/soleur/lib/harness.ts` already names: `Harness = "claude" | "grok" | "codex" | "devin"`. Grok markers are `GROK_HOME` / `GROK_AGENT` / `GROK_DEFAULT_MODEL` / `GROK_SUBAGENTS`. CONTRIBUTING.md and `knowledge-base/engineering/grok-onboarding.md` describe the same in-repo plugin loading locally via `.grok/config.toml`. Plugin-local Grok traffic is a user-CLI relationship, not Jikigai intermediating xAI. Codex and Devin are inventoried as supported CLIs only; their inference paths are unmeasured and are **not** described.
 
-Locked constraints, re-verified on `8216d6276`:
+Locked constraints, re-verified on `12ee4c610`:
 
-- Cookie-policy and disclaimer were not in `fd8131a05`, `959bc2f26`, or `8216d6276`. Both still contain "Claude Code plugin" on canonical and mirror.
+- Cookie-policy and disclaimer identity exclusivity is **lifted** (operator lock update). `git grep 'Claude Code plugin'` over those four files: none. Cookie §3.1 still: the plugin **does not use cookies**. Disclaimer liability/warranty (the August 11 §3.1 / §3.2 substance) was not in the diff. `check-tc-document-sha.sh` exit 0 (disclaimer is in `BODY_EQUIVALENCE_DOCS`).
 - `git grep xAI docs/legal/` returns denial sentences, the Privacy Policy §5.1 lead, the AUP Anthropic/Claude bullet, and the new GDPR §2.2 Grok analogue. No processor-table row names xAI (`git grep` of table rows in DPD and GDPR: zero xAI hits). DPD §4.2 processor table is unchanged (Anthropic PBC remains a Jikigai processor for Jikigai-keyed jobs; the "Direct customer of Anthropic" inference row is the user's own relationship).
 - `git grep 'grok --trust'` over `docs/legal/` and Eleventy legal pages: none. Live `grok --help` on CLI 1.0.29 has no `--trust` flag.
 - T&C and AUP normalised bodies still match (SHA-guard body-equivalence step exit 0). Privacy / DPD / GDPR `**Last Updated:**` lines were not edited (pre-existing #7465 drift). `**Amended:** September 13, 2026` is present on both surfaces of those three. T&C and AUP Last Updated lines are 13 September 2026 on both surfaces (T&C Eleventy hero included).
@@ -130,7 +135,7 @@ The Anthropic claim is now scoped. The Grok sentence states the user's own CLI r
 
 O1 (recommended) also landed: GDPR §4.2 table row is now `Anthropic (via Claude API), when used with Claude Code` on both surfaces.
 
-O2 remains optional: Privacy §5.1 still names xAI in the lead and does not spell a Grok bullet list. Not a false statement.
+O2 landed at `12ee4c610` as a generic other-CLI sentence rather than a Grok-specific bullet list. See §2c.
 
 ## §2b — Parenthetical inventory expansion (`8216d6276`) — attested, not a new F1
 
@@ -146,6 +151,18 @@ Verified against the files, not the commit message:
 - `git grep 'grok --trust'` over `docs/legal/` and Eleventy legal pages: none.
 
 This is not a recurrence of F1. F1 was an **unqualified false statement** (the Plugin as redefined still "sends requests to Anthropic"). After F1 the Anthropic claim is scoped. Naming two further shipped CLIs in an `including` list, without describing unmeasured inference, does not make the scoped Anthropic sentence false.
+
+## §2c — Cookie/disclaimer identity + Privacy §5.1 generic sentence (`12ee4c610`)
+
+Operator lock update: cookie/disclaimer exclusivity lifted for **identity language only**. Still no `grok --trust`. Still no Cognition/OpenAI as Jikigai processors. `TC_VERSION` stays 2.5.1.
+
+Verified against the files:
+
+- Cookie Policy intro and §3.1 (canonical + Eleventy) now use the supported-CLI parenthetical / "locally installed plugin for supported AI coding CLIs". §3.1 still: **does not use cookies**; does not set, read, or transmit cookies of any kind. Consistency test retargeted to that no-cookies claim.
+- Disclaimer identity sentence (canonical + Eleventy) now uses the same parenthetical. `git show 12ee4c610 -- docs/legal/disclaimer.md` is that one sentence plus the Eleventy twin. Sections 3.1 / 3.2 liability-and-cap text and the **Last Updated:** 11 August 2026 line are untouched.
+- Privacy Policy §5.1, after the Claude Code bullets, now reads: "When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials. That provider is not a Jikigai processor." Parallel on the Eleventy mirror. `git grep -iE 'Cognition|OpenAI' docs/legal/` : none. No processor-table row. The sentence is a class claim (user credentials; not Jikigai as processor), the same shape as the Grok analogue, without naming the unmeasured providers. "Plugin-local inference" here means inference **from** the locally installed plugin, as already used in GDPR §2.2 for Grok, not on-device model execution.
+- `git grep 'grok --trust'` over `docs/legal/` and Eleventy legal pages: none.
+- SHA pins for cookie-policy, disclaimer, and privacy-policy equal `sha256sum` of the canonicals. T&C SHA unchanged; `TC_VERSION` still `2.5.1`. Clarifying identity/example language on an unmerged PATCH PR; a further bump is not owed.
 
 ## §3 — TC_VERSION classification
 
@@ -167,4 +184,4 @@ Confirmed. See `art_33_limb_applied`. Description change of the Plugin; no new p
 
 ## §5 — Disposition
 
-**DISCHARGED. Condition met.** F1, O1 and O3 landed at `959bc2f26`. The `8216d6276` parenthetical expansion is attested inventory of shipped harnesses; it does not invent a Cognition or OpenAI inference path and does not require a further `TC_VERSION` bump. O2 is recorded as optional precision and does not block merge.
+**DISCHARGED. Condition met.** F1, O1 and O3 landed at `959bc2f26`. The `8216d6276` parenthetical expansion is attested inventory of shipped harnesses. `12ee4c610` attests cookie/disclaimer identity alignment (no-cookies claim and liability text preserved) and Privacy §5.1's generic other-CLI sentence (O2 applied; no named Cognition/OpenAI path). No further `TC_VERSION` bump. O4 (Disclaimer date line) does not block merge.
