@@ -48,6 +48,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Settings failure slice: unbound workspaces and owner RPC failures remain explicit retryable errors (7 route tests green).
   - [x] Settings resolver slice: workspace lookup failures are sanitized to retryable 503 responses (8 route tests green).
   - [x] Settings observability slice: sanitized resolver/read/write failures mirror through the shared fallback reporter.
+  - [x] Dispatch identity slice: persisted bindings are checked against the selected adapter before provider invocation (4 dispatch tests green).
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
