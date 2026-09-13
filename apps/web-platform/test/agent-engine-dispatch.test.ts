@@ -70,6 +70,22 @@ describe("dispatchBoundEngineRun", () => {
     expect(eventSink.appendEvent).toHaveBeenCalledWith(events[0]);
   });
 
+  it("carries event persistence through new-run composition", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-2", eventId: "evt-1", sequence: 1, payload: { type: "status", status: "queued" } as const };
+    }) };
+    const repository = {
+      bind: vi.fn().mockResolvedValue({ id: "run-2", binding: { engineId: "claude-code" } }),
+      getRun: vi.fn().mockResolvedValue({ id: "run-2", binding: { engineId: "claude-code" } }),
+    };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    for await (const _event of dispatchNewEngineRun({
+      repository, adapter, eventSink, binding: {},
+      input: { text: "hi", attachmentIds: [] }, context: {} as never,
+    })) { /* no-op */ }
+    expect(eventSink.appendEvent).toHaveBeenCalledOnce();
+  });
+
   it("does not yield an event when durable persistence fails", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "secret" } as const };

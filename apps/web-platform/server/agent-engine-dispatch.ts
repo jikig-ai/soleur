@@ -158,6 +158,7 @@ export async function* dispatchNewEngineRun(options: {
   repository: NewRunRepository;
   adapter: Pick<EngineAdapter, "start">;
   adapterEngineId?: string;
+  eventSink?: EventSink;
   binding: Record<string, unknown>;
   input: EngineInput;
   context: EngineRunContext;
@@ -170,6 +171,7 @@ export async function* dispatchNewEngineRun(options: {
     repository: options.repository,
     adapter: options.adapter,
     adapterEngineId: options.adapterEngineId,
+    eventSink: options.eventSink,
     runId: String((created as { id: unknown }).id),
     input: options.input,
     context: options.context,
