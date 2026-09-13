@@ -78,6 +78,13 @@ describe("agent engine settings route", () => {
     expect(setDefault).not.toHaveBeenCalled();
   });
 
+  it("sanitizes workspace resolver failures", async () => {
+    workspace.mockRejectedValue(new Error("database unavailable"));
+    const response = await GET();
+    expect(response!.status).toBe(503);
+    await expect(response!.json()).resolves.toEqual({ error: "settings_unavailable" });
+  });
+
   it("maps owner RPC failures to a retryable settings error", async () => {
     setDefault.mockRejectedValue(new Error("permission denied"));
     const response = await PUT(request({ engineId: "claude-code" }));

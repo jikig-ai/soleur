@@ -11,7 +11,12 @@ async function context() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) } as const;
-  const workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+  let workspaceId: string | null;
+  try {
+    workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+  } catch {
+    return { response: NextResponse.json({ error: "settings_unavailable" }, { status: 503 }) } as const;
+  }
   if (!workspaceId) return { response: NextResponse.json({ error: "workspace_unbound" }, { status: 503 }) } as const;
   return { supabase, user, workspaceId } as const;
 }
