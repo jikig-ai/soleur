@@ -2,6 +2,7 @@
  * Native protocol types and credentials stay inside adapters and their leases.
  */
 export type AgentEngineId = string;
+export const DEFAULT_AGENT_ENGINE_ID = "claude-code" as const;
 export type EngineCapability =
   | "streaming" | "approvals" | "platform-tools" | "continuation"
   | "cancellation" | "attachments" | "workspace" | "usage" | "artifacts";

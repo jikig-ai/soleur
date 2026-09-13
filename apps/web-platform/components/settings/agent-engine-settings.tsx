@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
 
 type Engine = { id: string; version: string; transport: string; authModes: string[]; enabledForNewRuns: boolean };
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);
-  const [selected, setSelected] = useState("claude-code");
+  const [selected, setSelected] = useState(DEFAULT_AGENT_ENGINE_ID);
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 onChange={() => void save(engine.id)}
               />
               <span>
-                <span className="block font-medium">{engine.id === "claude-code" ? "Claude Code" : engine.id}</span>
+                <span className="block font-medium">{engine.id === DEFAULT_AGENT_ENGINE_ID ? "Claude Code" : engine.id}</span>
                 <span className="block text-xs text-soleur-text-secondary">
                   {engine.enabledForNewRuns ? `${engine.transport} · ${engine.authModes.join(" or ")}` : "Coming soon"}
                 </span>
