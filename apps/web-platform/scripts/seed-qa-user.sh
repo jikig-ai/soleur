@@ -12,6 +12,10 @@
 # Outputs the conversation URL ready for Playwright navigation.
 set -euo pipefail
 
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # Refuse to seed anything but the dev Supabase project. The env var names are
 # identical in the prd Doppler config, so without this gate a stray `-c prd`
 # would create a live prod account with a publicly committed password.
@@ -25,7 +29,7 @@ fi
 QA_EMAIL="qa-test@example.com"
 QA_PASSWORD="qa-test-local-2026"
 # TC_VERSION must match lib/legal/tc-version.ts
-TC_VERSION="2.5.0"
+TC_VERSION="2.5.1"
 # Must match the migration-053 backfill sentinel (also used by
 # server/agent-runner.ts and server/cc-dispatcher.ts message writes).
 TEMPLATE_ID="default_legacy"
@@ -47,7 +51,7 @@ header_json="Content-Type: application/json"
 echo "=== Seeding QA user: $QA_EMAIL ==="
 
 # 1. Find or create the QA user
-USER_ID=$(curl -sf "$SB_URL/auth/v1/admin/users" \
+USER_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
   -H "$header_auth" -H "$header_api" | \
   python3 -c "
 import sys, json
@@ -58,7 +62,7 @@ print(match[0]['id'] if match else '')
 
 if [[ -z "$USER_ID" ]]; then
   echo "Creating user..."
-  USER_ID=$(curl -sf "$SB_URL/auth/v1/admin/users" \
+  USER_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -d "{\"email\":\"$QA_EMAIL\",\"password\":\"$QA_PASSWORD\",\"email_confirm\":true}" | \
     python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
@@ -66,14 +70,14 @@ if [[ -z "$USER_ID" ]]; then
 else
   echo "Found existing user: $USER_ID"
   # Ensure password is set
-  curl -sf "$SB_URL/auth/v1/admin/users/$USER_ID" \
+  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users/$USER_ID" \
     -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
     -d "{\"password\":\"$QA_PASSWORD\"}" > /dev/null
 fi
 
 # 2. Provision user row (tc_accepted, workspace, repo)
 echo "Provisioning user row..."
-curl -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "{
@@ -86,7 +90,7 @@ curl -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
 echo "  tc_accepted_version=$TC_VERSION, workspace=ready, repo=ready"
 
 # 3. Ensure a dummy API key exists
-EXISTING_KEY=$(curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$USER_ID&provider=eq.anthropic&select=id" \
+EXISTING_KEY=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$USER_ID&provider=eq.anthropic&select=id" \
   -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
 
 if [[ -z "$EXISTING_KEY" ]]; then
@@ -94,7 +98,7 @@ if [[ -z "$EXISTING_KEY" ]]; then
   # iv/auth_tag are NOT NULL (migration 004). The values are decrypt-poisoned
   # by design: GCM verification can never succeed on them, so the row drives
   # the "key on file" UI state but any real agent dispatch fails decryption.
-  curl -sf "$SB_URL/rest/v1/api_keys" \
+  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "{
@@ -116,7 +120,7 @@ fi
 # user id (migration 053 handle_new_user, ADR-038). conversations.workspace_id
 # and messages.workspace_id are NOT NULL since migration 059;
 # messages.template_id is NOT NULL since migration 053.
-WORKSPACE_ID=$(curl -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$USER_ID&role=eq.owner&select=workspace_id&limit=1" \
+WORKSPACE_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$USER_ID&role=eq.owner&select=workspace_id&limit=1" \
   -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['workspace_id'] if d else '')")
 if [[ -z "$WORKSPACE_ID" ]]; then
   echo "ERROR: no owned workspace membership for QA user $USER_ID" >&2
@@ -126,24 +130,24 @@ fi
 # Mirror repo readiness to the workspace row: post-ADR-044 (migrations
 # 079/080/081) the KB/sync read path gates on workspaces.repo_status, not
 # users.repo_status — without this the seeded user is split-brain.
-curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$WORKSPACE_ID" \
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$WORKSPACE_ID" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "{\"repo_status\": \"ready\"}" > /dev/null
 
-CONV_ID=$(curl -sf "$SB_URL/rest/v1/conversations?user_id=eq.$USER_ID&select=id&order=created_at.asc&limit=1" \
+CONV_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/conversations?user_id=eq.$USER_ID&select=id&order=created_at.asc&limit=1" \
   -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
 if [[ -n "$CONV_ID" ]]; then
   echo "  Conversation already exists: $CONV_ID"
 else
   echo "Creating conversation with sample messages..."
   CONV_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-  curl -sf "$SB_URL/rest/v1/conversations" \
+  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/conversations" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "{\"id\":\"$CONV_ID\",\"user_id\":\"$USER_ID\",\"workspace_id\":\"$WORKSPACE_ID\"}" > /dev/null
 
-  curl -sf "$SB_URL/rest/v1/messages" \
+  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/messages" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "[
@@ -167,7 +171,7 @@ echo "Chat URL: http://localhost:$PORT/dashboard/chat/$CONV_ID"
 echo ""
 
 # Output session cookie value for Playwright
-SESSION=$(curl -sf "$SB_URL/auth/v1/token?grant_type=password" \
+SESSION=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/token?grant_type=password" \
   -H "apikey: $ANON" -H "$header_json" \
   -d "{\"email\":\"$QA_EMAIL\",\"password\":\"$QA_PASSWORD\"}")
 
