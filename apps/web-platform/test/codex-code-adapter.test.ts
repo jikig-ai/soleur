@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_ENGINE_ID,
+  createCodexCodeAdapter,
   createCodexAuthBoundary,
   type CodexAuthProvider,
   type CodexAuthMode,
@@ -39,5 +40,34 @@ describe("Codex auth boundary", () => {
     provider.mode = "managed";
     await expect(boundary.acquire()).rejects.toMatchObject({ code: "codex_auth_mode_changed" });
     expect(provider.acquire).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex neutral adapter boundary", () => {
+  it("acquires an isolated lease before lifecycle transport calls", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "opaque", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const transport = {
+      start: vi.fn(async function* (_context: never, _input: never, lease: never) {
+        expect(lease).toEqual(expect.objectContaining({ accessToken: "opaque" }));
+        yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(transport, auth);
+    const events = [];
+    for await (const event of adapter.start({} as never, { text: "hi", attachmentIds: [] })) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(transport.start).toHaveBeenCalledOnce();
   });
 });

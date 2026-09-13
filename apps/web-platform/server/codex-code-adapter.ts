@@ -1,4 +1,11 @@
-import type { EngineAdapter } from "./agent-engine-contract";
+import type {
+  EngineAdapter,
+  EngineEvent,
+  EngineInput,
+  EngineRunContext,
+  EngineRunStatus,
+  NativeSessionReference,
+} from "./agent-engine-contract";
 
 export const CODEX_ENGINE_ID = "codex" as const;
 export type CodexAuthMode = "api-key" | "managed";
@@ -54,5 +61,35 @@ export function createCodexAuthBoundary(provider: CodexAuthProvider): CodexAuthB
   };
 }
 
-/** Adapter transport remains a later GREEN-05 seam; Codex stays disabled until qualification. */
+export interface CodexCodeAdapterTransport {
+  start(context: EngineRunContext, input: EngineInput, lease: CodexCredentialLease): AsyncIterable<EngineEvent>;
+  continue(context: EngineRunContext, session: NativeSessionReference, input: EngineInput, lease: CodexCredentialLease): AsyncIterable<EngineEvent>;
+  cancel(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"requested" | "confirmed">;
+  reconcile(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<EngineRunStatus>;
+  resumeFromCursor(context: EngineRunContext, cursor: string | null, lease: CodexCredentialLease): AsyncIterable<EngineEvent>;
+  respondToApproval(context: EngineRunContext, requestId: string, decision: "allow" | "deny", lease: CodexCredentialLease): Promise<void>;
+  erase(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"confirmed" | "unsupported">;
+  dispose(): Promise<void>;
+}
+
+/** Codex stays disabled until qualification; this wrapper only defines the provider seam. */
+export function createCodexCodeAdapter(
+  transport: CodexCodeAdapterTransport,
+  auth: CodexAuthBoundary,
+): EngineAdapter {
+  async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>): AsyncIterable<EngineEvent> {
+    yield* await load();
+  }
+  return {
+    start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire())),
+    continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire())),
+    cancel: async (context, session) => transport.cancel(context, session, await auth.acquire()),
+    reconcile: async (context, session) => transport.reconcile(context, session, await auth.acquire()),
+    resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire())),
+    respondToApproval: async (context, requestId, decision) => transport.respondToApproval(context, requestId, decision, await auth.acquire()),
+    erase: async (context, session) => transport.erase(context, session, await auth.acquire()),
+    dispose: () => transport.dispose(),
+  };
+}
+
 export type CodexCodeAdapter = EngineAdapter;
