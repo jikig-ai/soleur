@@ -176,6 +176,18 @@ describe("Bash — chaining / substitution / redirection bypass", () => {
   it("denies command substitution even inside double quotes", () => {
     expect(reason(bash('gh issue create --body "$(cat .git/config)"'))).toContain("metachar");
   });
+  // A BARE `$NAME` expands inside double quotes too, and the spawn env carries
+  // GH_TOKEN / ANTHROPIC_API_KEY (`buildSpawnEnv`): `--title "$GH_TOKEN"` was
+  // an ALLOW that would post the installation token to the public repo with
+  // no file read (#8074 review, security seat). Both quoted and bare forms.
+  it("denies bare $VAR expansion (a secret in the env reaches gh without a read)", () => {
+    expect(reason(bash('gh issue create --title "$GH_TOKEN" --label meta/machinery'))).toContain("$VAR expansion");
+    expect(verdict(bash("gh issue create --title $ANTHROPIC_API_KEY --label meta/machinery"))).toBe("deny");
+    expect(verdict(bash("gh issue list --label $1"))).toBe("deny");
+    expect(verdict(bash("gh issue list --search $?"))).toBe("deny");
+    // A literal `$` inside single quotes is data, not an expansion.
+    expect(verdict(bash("gh issue list --search 'costs $5'"))).toBe("allow");
+  });
   it("denies backtick substitution", () => {
     expect(verdict(bash("gh issue create --body `cat .git/config`"))).toBe("deny");
   });
@@ -724,5 +736,152 @@ describe("Bash — filing justification (class 3)", () => {
       (d.hookSpecificOutput as { permissionDecisionReason?: string })
         .permissionDecisionReason,
     ).toMatch(/not allowlisted/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8076 — the run-report exit (exit 0). A cron whose run completion is verified
+// by its own scheduled issue (`resolveOutputAwareOk` callers) MUST file that
+// issue; ADR-216 said no such filing existed and #8059 (community-monitor,
+// eleven hours after merge) took `meta/machinery` for a community digest. The
+// substrate writes `run-report-label scheduled-<task>` into the per-spawn
+// cron-allow.txt — the agent can neither read nor write that file — and the
+// hook honours it iff a REAL --label token equals it. Label only: a title-shape
+// half was cut because campaign-calendar's REQUIRED filings are
+// `[Content] Overdue: …`. Guard Contract: plan §Guard 1.
+// ---------------------------------------------------------------------------
+describe("Bash — the api filing shape is order- and spelling-agnostic (#8074 review)", () => {
+  // Every spelling gh routes to the create endpoint must reach the gate; a
+  // `$`-anchored endpoint match let `…/issues?x=1` and `…/issues/` through as
+  // total bypasses, and a path-then-method order requirement missed
+  // the method-less `-f title=` form (a method-FIRST spelling is stopped
+  // earlier by the allowlist prefix, but the shared predicate covers it for
+  // the deny-marker, which sees commands after any deny).
+  const shapes = [
+    "gh api repos/jikig-ai/soleur/issues?x=1 -X POST -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues/ -X POST -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues -f title=spam",
+    "gh api repos/jikig-ai/soleur/issues --method=POST -f body=b",
+    "gh api repos/jikig-ai/soleur/issues -XPOST",
+    "gh api repos/jikig-ai/soleur/issues --input body.json",
+  ];
+  it.each(shapes)("denies without a justification exit: %s", (cmd) => {
+    expect(reason(bash(cmd))).toContain("filing names no user-visible consequence");
+  });
+  it("still allows a non-create endpoint under the same prefix (comments POST, issues GET)", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues/123/comments -X POST -f body=b"))).toBe("allow");
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues?state=open"))).toBe("allow");
+  });
+  it("passes exit 1 on the api form with the method after the fields", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues -f title=t -f labels[]=meta/machinery -X POST"))).toBe("allow");
+  });
+  it("a method-FIRST spelling never reaches the gate: the allowlist prefix (`gh api repos/…/`) denies it first", () => {
+    expect(reason(bash("gh api -X POST repos/jikig-ai/soleur/issues -f title=spam"))).toContain("not allowlisted");
+  });
+});
+
+describe("Bash — run-report exit (class 3, #8076)", () => {
+  const LABEL = "scheduled-community-monitor";
+  const ALLOW_RR = [...ALLOW, `run-report-label ${LABEL}`];
+  const rr = (input: unknown) =>
+    decide(input, ALLOW_RR).hookSpecificOutput.permissionDecision;
+  const rrReason = (input: unknown) =>
+    (decide(input, ALLOW_RR).hookSpecificOutput as { permissionDecisionReason?: string })
+      .permissionDecisionReason ?? "";
+
+  it("parseAllowlist reads the directive into runReportLabel and keeps it out of bash", async () => {
+    const { parseAllowlist } = await import(
+      "../../../server/inngest/cron-bash-allowlist-hook.mjs"
+    );
+    const parsed = parseAllowlist(ALLOW_RR) as {
+      bash: string[];
+      runReportLabel: string | null;
+    };
+    expect(parsed.runReportLabel).toBe(LABEL);
+    expect(parsed.bash).not.toContain(`run-report-label ${LABEL}`);
+    expect((parseAllowlist(ALLOW) as { runReportLabel: string | null }).runReportLabel).toBeNull();
+  });
+
+  it("allows the REQUIRED filing on a real --label token (H2: --label, --label=, -l, comma-joined)", () => {
+    expect(rr(bash(`gh issue create --title "[Scheduled] Community Monitor - 2026-09-12" --label ${LABEL} --milestone "Post-MVP / Later"`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t -l ${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label ${LABEL},type/bug`))).toBe("allow");
+    expect(rr(bash(`gh issue create --title t --label type/bug,${LABEL}`))).toBe("allow");
+  });
+
+  it("-F <file> on the create form is --body-file, and the branch that reads it must not throw (no-undef caught by the repo-wide eslint guard at ship)", () => {
+    // `-F` is body-file for `gh issue create` and --raw-field for `gh api`; the
+    // discriminator (`isCreate`) was dropped in a refactor and the branch became
+    // a ReferenceError — a fail-closed "hook internal error" on every -F filing.
+    expect(rr(bash(`gh issue create --title t -F /nonexistent/body.md --label ${LABEL}`))).toBe("allow");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).not.toContain("internal error");
+    expect(reason(bash("gh issue create --title t -F /nonexistent/body.md"))).toContain("filing names no user-visible consequence");
+  });
+
+  it("allows the two remaining spellings too (-l=<label>, bare labels[]= field) — every spelling exit 1 reads", () => {
+    expect(rr(bash(`gh issue create --title t -l=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t labels[]=${LABEL}`))).toBe("allow");
+  });
+
+  it("denies a DIFFERENT valid run-report label (no cross-cron borrowing) and the meta/machinery exit still stands", () => {
+    expect(rr(bash("gh issue create --title t --label scheduled-roadmap-review"))).toBe("deny");
+    expect(rr(bash("gh issue create --title t --label meta/machinery"))).toBe("allow");
+  });
+
+  it("H2: campaign-calendar's [Content] Overdue: shape passes on its label (no title-shape half)", () => {
+    const ALLOW_CC = [...ALLOW, "run-report-label scheduled-campaign-calendar"];
+    const d = decide(
+      bash('gh issue create --title "[Content] Overdue: x (was scheduled for 2026-09-01)" --label action-required,scheduled-campaign-calendar --milestone "Post-MVP / Later"'),
+      ALLOW_CC,
+    );
+    expect(d.hookSpecificOutput.permissionDecision).toBe("allow");
+  });
+
+  it("H3: the same segment inside a && chain after an allowlisted command passes", () => {
+    expect(rr(bash(`gh issue list --label ${LABEL} && gh issue create --title t --label ${LABEL}`))).toBe("allow");
+  });
+
+  it("#2: the label NAMED in prose (--body) does not open exit 0", () => {
+    expect(rr(bash(`gh issue create --title t --body 'run-report-label ${LABEL}'`))).toBe("deny");
+    expect(rr(bash(`gh issue create --title t --body 'use --label ${LABEL}'`))).toBe("deny");
+  });
+
+  it("#3: comma-anchored — a suffix or a path-prefixed lookalike does not open exit 0", () => {
+    expect(rr(bash(`gh issue create --title t --label ${LABEL}x`))).toBe("deny");
+    expect(rr(bash(`gh issue create --title t --label foo/${LABEL}`))).toBe("deny");
+  });
+
+  it("#5/P3: without the directive the identical filing is denied exactly as today", () => {
+    expect(verdict(bash(`gh issue create --title t --label ${LABEL}`))).toBe("deny");
+    expect(reason(bash(`gh issue create --title t --label ${LABEL}`))).toMatch(
+      /names no user-visible consequence/,
+    );
+  });
+
+  it("#4/TR2: narrowing-only — a cron whose allowlist omits gh issue create stays denied", () => {
+    const NO_CREATE = ALLOW_RR.filter((l) => l !== "gh issue create");
+    const d = decide(bash(`gh issue create --title t --label ${LABEL}`), NO_CREATE);
+    expect(d.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(
+      (d.hookSpecificOutput as { permissionDecisionReason?: string }).permissionDecisionReason,
+    ).toMatch(/not allowlisted/);
+  });
+
+  it("deny text names the cron's own label when a directive exists", () => {
+    expect(rrReason(bash("gh issue create --title t --body b"))).toMatch(
+      new RegExp(`run-report label ${LABEL}`),
+    );
+  });
+
+  it("#8: exit 1 still works beside exit 0 (labelTokenEquals shared matcher)", () => {
+    expect(rr(bash("gh issue create --title t --label meta/machinery"))).toBe("allow");
+    expect(rr(bash("gh issue create --title t --label type/bug,meta/machinery"))).toBe("allow");
+  });
+
+  it("the api form honours the directive via -f labels[]=", () => {
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}`))).toBe("allow");
+    expect(rr(bash(`gh api repos/jikig-ai/soleur/issues -X POST -f title=t -f labels[]=${LABEL}x`))).toBe("deny");
   });
 });

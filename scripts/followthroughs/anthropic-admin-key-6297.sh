@@ -99,6 +99,12 @@ fi
 # `fromjson? | .raw | fromjson?` inside ONE filter keeps the decoded value a
 # single jq value: the trailing garbage makes `fromjson` fail, and `?` drops
 # the row closed. Do not split this back into two stages.
+# The pino payload sits under `.message` of the decoded `raw` on the live
+# source (measured 2026-09-12: 11/11 DAILY rows nested, 0 at the top level),
+# so the producer fields are read from `.message` when it is an object and
+# from the top level otherwise. Reading only the top level made this probe
+# report ZERO_PRODUCER_ROWS on every sweep while the producer was alive
+# (#8074 review).
 # Emit "<dt>\t<status>" and sort on dt HERE rather than trusting the query's
 # output order. betterstack-query.sh does emit an outer `ORDER BY dt ASC`
 # today, but that is a cross-script coupling held by a comment with no
@@ -106,7 +112,7 @@ fi
 # the OLDEST row, so an active key revocation (ok newest → dark) would invert
 # into PASS and auto-close #6297. The rows already carry dt; use it.
 PRODUCER=$(printf '%s\n' "$OUT" \
-  | jq -R -r 'fromjson? | . as $r | ($r.raw // empty | fromjson? | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown") as $s | "\($r.dt)\t\($s)"' 2>/dev/null \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw // empty | fromjson? | ((.message | select(type == "object")) // .) | select(.SOLEUR_CLAUDE_COST_DAILY == true and .component == "claude-cost") | .status // "unknown") as $s | "\($r.dt)\t\($s)"' 2>/dev/null \
   | LC_ALL=C sort \
   || true)
 
@@ -129,17 +135,33 @@ if (( ROWS == 0 )); then
   else
     SENTRY_HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
     SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
+    # Destination pins (#7797 class, lint-shell-trace-credential-refusal): the
+    # bearer token below goes wherever these two variables point, and both are
+    # env-settable, so refuse anything but the one org this probe was written
+    # for rather than let a stray environment redirect the credential.
+    if [[ "$SENTRY_HOST" != "jikigai-eu.sentry.io" ]]; then
+      echo "  Sentry cross-check refused: SENTRY_API_HOST is not the expected destination (jikigai-eu.sentry.io)."
+      SENTRY_HOST=""
+    fi
+    if [[ "$SENTRY_ORG" != "jikigai-eu" ]]; then
+      echo "  Sentry cross-check refused: SENTRY_ORG is not the expected organization (jikigai-eu)."
+      SENTRY_ORG=""
+    fi
     # --fail is load-bearing: without it curl exits 0 on 4xx and jq's
     # `(.data[0]["count()"] // 0)` maps an {"detail":"Invalid token"} body to
     # "0" — so an auth failure would be reported as a substantive zero events.
-    SC=$(curl -sS --fail --max-time 25 -G \
+    # --disable FIRST: it aborts ~/.curlrc, which could otherwise re-point a
+    # credentialed request (proxy, --location) before any flag here applies;
+    # --noproxy '*' keeps ALL_PROXY/HTTPS_PROXY from redirecting it either.
+    [[ -n "$SENTRY_HOST" && -n "$SENTRY_ORG" ]] && \
+    SC=$(curl --disable --noproxy '*' -sS --fail --max-time 25 -G \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       --data-urlencode 'field=count()' \
       --data-urlencode 'query=op:anthropic-admin-key-missing' \
       --data-urlencode 'statsPeriod=48h' \
       "https://${SENTRY_HOST}/api/0/organizations/${SENTRY_ORG}/events/" 2>/dev/null \
       | jq -r '(.data[0]["count()"] // 0) | tostring' 2>/dev/null || echo "")
-    if [[ -z "$SC" ]]; then
+    if [[ -z "${SC:-}" ]]; then
       echo "  Sentry cross-check inconclusive (query failed)."
     elif [[ "$SC" == "0" ]]; then
       # Do NOT conclude "the producer is not running". This tag is emitted ONLY
