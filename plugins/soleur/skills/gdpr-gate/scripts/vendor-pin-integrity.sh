@@ -49,7 +49,12 @@ set -- "${ARGS[@]}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PARSER="$SCRIPT_DIR/notice-frontmatter.sh"
-SKILL_PREFIX="plugins/soleur/skills/gdpr-gate"
+# SKILL_PREFIX + NOTICE_FILE env overrides parameterize the script for a
+# second vendored bundle (ADR-095 shared-engine precedent: the scripts stay
+# gdpr-gate-owned; each bundle's lefthook stanza and CI step export both).
+# The --verify-upstream arm reads only NOTICE_FILE + the NOTICE-internal
+# upstream coordinate, so it needs no SKILL_PREFIX.
+SKILL_PREFIX="${SKILL_PREFIX:-plugins/soleur/skills/gdpr-gate}"
 
 if (( VERIFY_UPSTREAM )); then
   UPSTREAM=$(bash "$PARSER" field upstream 2>/dev/null || true)
