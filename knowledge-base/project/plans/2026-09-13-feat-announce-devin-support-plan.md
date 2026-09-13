@@ -140,14 +140,14 @@ One open code-review issue touches the `distribution-content` surface: #3649 ("m
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `knowledge-base/marketing/distribution-content/2026-09-13-devin-cli-harness-support.md` exists, starts with `---`, and has a terminated frontmatter block.
-- [ ] AC2 — Frontmatter carries `type: feature-launch`, `status: scheduled`, `channels: x, bluesky`, `pr_reference: "#8083"`, a non-empty `title:`, and `publish_date` strictly later than `date -u +%F` at ship time.
-- [ ] AC3 — `## X/Twitter Thread` and `## Bluesky` headings each exist (exact strings) with non-empty bodies; running the publisher's `extract_section` awk against each returns content.
-- [ ] AC4 — Thread format is well-formed: hook paragraph un-prefixed and each subsequent tweet begins `N/ ` with N sequential from 2 (labeled format equally acceptable if every tweet carries a `**Tweet N` label); an `extract_tweets`-equivalent run yields the authored count, not 1.
-- [ ] AC5 — Each extracted tweet is `≤280` chars (`wc -m`); the `## Bluesky` body is `≤300` chars.
-- [ ] AC6 — `bash scripts/lint-distribution-content.sh <file>` exits 0 (no Liquid markers in body).
-- [ ] AC7 — The copy contains the exact string `devin plugins install jikig-ai/soleur#plugins/soleur -y` and `devin plugins update soleur`, matching `README.md:21`/`README.md:26` verbatim; no claim in the file lacks a source in the "Verified copy claims" list.
-- [ ] AC8 — `git log origin/main --oneline -- knowledge-base/marketing/distribution-content/` confirms no pre-existing Devin announcement file (no double-post).
+- [x] AC1 — `knowledge-base/marketing/distribution-content/2026-09-13-devin-cli-harness-support.md` exists, starts with `---`, and has a terminated frontmatter block.
+- [x] AC2 — Frontmatter carries `type: feature-launch`, `status: scheduled`, `channels: x, bluesky`, `pr_reference: "#8083"`, a non-empty `title:`, and `publish_date` strictly later than `date -u +%F` at ship time.
+- [x] AC3 — `## X/Twitter Thread` and `## Bluesky` headings each exist (exact strings) with non-empty bodies; running the publisher's `extract_section` awk against each returns content.
+- [x] AC4 — Thread format is well-formed: hook paragraph un-prefixed and each subsequent tweet begins `N/ ` with N sequential from 2 (labeled format equally acceptable if every tweet carries a `**Tweet N` label); an `extract_tweets`-equivalent run yields the authored count, not 1.
+- [x] AC5 — Each extracted tweet is `≤280` chars (`wc -m`); the `## Bluesky` body is `≤300` chars.
+- [x] AC6 — `bash scripts/lint-distribution-content.sh <file>` exits 0 (no Liquid markers in body).
+- [x] AC7 — The copy contains the exact string `devin plugins install jikig-ai/soleur#plugins/soleur -y` and `devin plugins update soleur`, matching `README.md:21`/`README.md:26` verbatim; no claim in the file lacks a source in the "Verified copy claims" list.
+- [x] AC8 — `git log origin/main --oneline -- knowledge-base/marketing/distribution-content/` confirms no pre-existing Devin announcement file (no double-post).
 
 ## Domain Review
 
