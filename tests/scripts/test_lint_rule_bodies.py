@@ -484,12 +484,12 @@ MIGRATED_ID = "hr-never-dangerous"
 MIGRATED_LINE = next(ln for ln in RULES.splitlines() if f"[id: {MIGRATED_ID}]" in ln)
 
 
-def _row(rid: str, body_text: str) -> str:
+def _row(rid: str, body_text: str, loc: str = "plugins/soleur/skills/x/SKILL.md :: ## Home") -> str:
     """A registry row whose hash is computed independently of the gate."""
     import hashlib
 
     h = hashlib.sha256(" ".join(body_text.split()).encode("utf-8")).hexdigest()
-    return f"{rid} | 2026-09-14 | #1 | plugins/soleur/skills/x/SKILL.md :: ## Home | {h}"
+    return f"{rid} | 2026-09-14 | #1 | {loc} | {h}"
 
 
 def _write_registry(repo: Path, rows: list[str]) -> None:
@@ -600,6 +600,34 @@ class TestMigratedRows(unittest.TestCase):
             _git(repo, "commit", "-qam", "drop-row-wrong-token")
             r = self._check(repo, base)
             self.assertNotEqual(r.returncode, 0)
+
+    def test_home_relocation_blocks_without_ack_and_passes_with_one(self):
+        import hashlib
+
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            new_loc = "plugins/soleur/skills/obscure/reference.md :: ## Elsewhere"
+            _write_registry(repo, [_row(MIGRATED_ID, MIGRATED_LINE[2:], new_loc)])
+            _git(repo, "commit", "-qam", "relocate")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated rule {MIGRATED_ID} moved home", r.stderr)
+            token = "RELOCATED-" + hashlib.sha256(new_loc.encode("utf-8")).hexdigest()[:16]
+            _append_ack(repo, f"{MIGRATED_ID}|{token}|{date.today().isoformat()}|#2|moved on purpose")
+            _git(repo, "commit", "-qam", "relocate-acked")
+            r = self._check(repo, base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_head_row_without_hash_column_blocks(self):
+        with _RepoFixture() as repo:
+            base = self._migrated_base(repo)
+            (repo / "scripts" / "migrated-rule-ids.txt").write_text(
+                f"{MIGRATED_ID} | 2026-09-14 | #1 | plugins/soleur/skills/x/SKILL.md :: ## Home\n"
+            )
+            _git(repo, "commit", "-qam", "demote-row")
+            r = self._check(repo, base)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"migrated row {MIGRATED_ID} in scripts/migrated-rule-ids.txt has no body-sha256", r.stderr)
 
     def test_legacy_unhashed_base_row_accepts_a_backfill(self):
         with _RepoFixture() as repo:

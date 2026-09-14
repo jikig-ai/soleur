@@ -31,9 +31,13 @@
 # Not checked here, deliberately: "absent from AGENTS.rules.md" — scripts/lint-rule-ids.py fails
 # it at the same pre-commit hook.
 #
-# NOT COVERED, by construction: text adjacent to a callout but outside its blockquote (an
-# "Exception:" paragraph after a blank line). Hashing whole sections would freeze skill docs that
-# change weekly; a reviewer of the home file is the control for that, as for AGENTS.rules.md.
+# NOT COVERED, by construction: any text that is not the body line(s). That is (a) text adjacent
+# to a callout but outside its blockquote (an "Exception:" paragraph after a blank line), and (b)
+# the callout's own preamble — the banner and the domain-scope sentence between the banner and
+# the `[id:` line, which sit INSIDE the blockquote but are not the rule and are not hashed, so a
+# qualifying sentence inserted there is also invisible. Hashing them would break the verbatim-move
+# check (the row hash equals the corpus body's hash); a reviewer of the home file is the control,
+# as it is for the prose around a rule in AGENTS.rules.md.
 #
 # Root and floor follow the sibling lints: LINT_MIGRATED_RULE_IDS_ROOT (fixture root, floor 1),
 # otherwise the script's own location (never `git rev-parse`: GIT_DIR is exported under lefthook
@@ -314,6 +318,18 @@ while IFS= read -r hit; do
   if [[ -z "${REGISTERED[$bid]:-}" ]]; then
     finding "no registry row for migrated banner $bid ($HIT_FILE:$HIT_LINE) — its SOLEUR_RULE_APPLIED telemetry is dropped"
   fi
+done < <(scan_md -F "$CANON")
+
+# A banner carrying a real id but not written as a top-level blockquote line (no `> `, or a
+# nested `> > `) is invisible to the extraction above, so it would satisfy nothing and be
+# reported by nothing. A `<id>` placeholder in prose is not an id and does not match.
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  split_hit "$hit" || continue
+  printf '%s' "$HIT_TEXT" | grep -qE '^ {0,3}> \*\*Rule `[a-z0-9][a-z0-9-]*` — migrated out of' && continue
+  lid="$(printf '%s' "$HIT_TEXT" | sed -n 's/.*\*\*Rule `\([a-z0-9][a-z0-9-]*\)` — migrated out of `AGENTS\.rules\.md` on.*/\1/p')"
+  [[ -z "$lid" ]] && continue
+  finding "migration banner for $lid at $HIT_FILE:$HIT_LINE is not a top-level blockquote line (\`> **Rule\`) — no check can read it"
 done < <(scan_md -F "$CANON")
 
 while IFS= read -r hit; do

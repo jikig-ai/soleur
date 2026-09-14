@@ -95,6 +95,7 @@ pre-commit:
       # rule-id-lint, which validates the paired retired rows. Takes no positional args.
       glob:
         - "scripts/migrated-rule-ids.txt"
+        - "scripts/retired-rule-ids.txt"
         - "AGENTS.rules.md"
         - "plugins/soleur/**/*.md"
         - "scripts/lint-migrated-rule-ids.sh"

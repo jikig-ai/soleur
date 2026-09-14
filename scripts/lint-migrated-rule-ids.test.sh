@@ -401,6 +401,19 @@ r="$(new_root c19)"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "19 NBSP in a body" "$r" "non-ASCII whitespace"
 
+# --- 20: a banner not written as a top-level blockquote line ---------------------------------
+r="$(new_root c20a)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+mkdir -p "$r/plugins/soleur/skills/other"
+printf '# Other\n\n**Rule `zz-fixture-orphan`%s\n' "$BANNER_TAIL" >"$r/plugins/soleur/skills/other/SKILL.md"
+expect_red "20a banner without a blockquote marker" "$r" "migration banner for zz-fixture-orphan at plugins/soleur/skills/other/SKILL.md:3 is not a top-level blockquote line"
+
+r="$(new_root c20b)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+mkdir -p "$r/plugins/soleur/skills/other"
+printf '# Other\n\n> > **Rule `zz-fixture-orphan`%s\n' "$BANNER_TAIL" >"$r/plugins/soleur/skills/other/SKILL.md"
+expect_red "20b nested blockquote banner" "$r" "migration banner for zz-fixture-orphan at plugins/soleur/skills/other/SKILL.md:3 is not a top-level blockquote line"
+
 # --- L: live registry, no override ------------------------------------------------------------
 CASES=$((CASES + 1))
 bash "$GUARD" >"$OUT" 2>&1
@@ -415,8 +428,8 @@ fi
 
 # --- floor + conservation (reported directly, never through fail()) --------------------------
 printf '\nRESULT: %s passed, %s failed, %s cases\n' "$PASS" "$FAIL" "$CASES"
-if [[ "$CASES" -lt 45 ]]; then
-  printf 'FAIL: vacuity floor: only %s cases ran; expected >= 45\n' "$CASES" >&2
+if [[ "$CASES" -lt 47 ]]; then
+  printf 'FAIL: vacuity floor: only %s cases ran; expected >= 47\n' "$CASES" >&2
   exit 1
 fi
 if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then

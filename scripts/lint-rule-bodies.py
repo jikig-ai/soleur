@@ -273,7 +273,7 @@ def load_acks(path: Path) -> dict[str, set[str]]:
 MIGRATED_REL = Path("scripts") / "migrated-rule-ids.txt"
 MIGRATED_ROW_RE = re.compile(
     r"^([a-z0-9][a-z0-9-]{2,79})\s*\|\s*\d{4}-\d{2}-\d{2}\s*\|\s*#\d+\s*\|"
-    r"\s*.+ :: #{1,6} .+\|\s*([0-9a-f]{64})\s*$"
+    r"\s*(.+ :: #{1,6} .+?)\s*\|\s*([0-9a-f]{64})\s*$"
 )
 # Pre-#8175 rows carried no hash column; such a base row is an id with no anchor.
 MIGRATED_LEGACY_ROW_RE = re.compile(r"^([a-z0-9][a-z0-9-]{2,79})\s*\|")
@@ -283,9 +283,9 @@ MIGRATED_LEGACY_ROW_RE = re.compile(r"^([a-z0-9][a-z0-9-]{2,79})\s*\|")
 MIGRATED_ROW_DELETED_TOKEN = "MIGRATED-ROW-DELETED"
 
 
-def parse_migrated_rows(text: str) -> tuple[dict[str, str], set[str]]:
-    """Return ({id: body_sha256} for hashed rows, {every id with a row})."""
-    hashed: dict[str, str] = {}
+def parse_migrated_rows(text: str) -> tuple[dict[str, tuple[str, str]], set[str]]:
+    """Return ({id: (body_sha256, "path :: heading")} for hashed rows, {every id with a row})."""
+    hashed: dict[str, tuple[str, str]] = {}
     ids: set[str] = set()
     for line in text.splitlines():
         line = line.rstrip("\r")
@@ -293,7 +293,7 @@ def parse_migrated_rows(text: str) -> tuple[dict[str, str], set[str]]:
             continue
         m = MIGRATED_ROW_RE.match(line)
         if m:
-            hashed[m.group(1)] = m.group(2)
+            hashed[m.group(1)] = (m.group(3), " ".join(m.group(2).split()))
             ids.add(m.group(1))
             continue
         legacy = MIGRATED_LEGACY_ROW_RE.match(line)
@@ -340,14 +340,36 @@ def check_migrated_rows(
             file=sys.stderr,
         )
 
-    for rid, head_hash in head_rows.items():
+    # Every HEAD row carries a hash. The legacy carve-out below is for BASE rows only; a HEAD
+    # row demoted to four fields would otherwise be neither changed nor removed here.
+    for rid in sorted(head_ids - set(head_rows)):
+        errors.append(
+            f"::error::rule-body-lint: migrated row {rid} in {MIGRATED_REL} has no body-sha256 "
+            "column. Every row carries one; print it with "
+            f"`bash scripts/lint-migrated-rule-ids.sh --print-hash {rid}`."
+        )
+
+    for rid, (head_hash, head_loc) in head_rows.items():
         if rid in base_rows:
-            if base_rows[rid] != head_hash:
+            base_hash, base_loc = base_rows[rid]
+            if base_loc != head_loc:
+                # Moving a body away from the skill that enforces it breaks the premise the
+                # migration was accepted on, with the body hash unchanged. The token names the
+                # destination so a later, different move needs its own ack.
+                token = "RELOCATED-" + _sha256(head_loc)[:16]
+                review(rid, f"moved home ({base_loc} -> {head_loc})")
+                if token not in new_acks(rid):
+                    errors.append(
+                        f"::error::rule-body-lint: migrated rule {rid} moved home "
+                        f"({base_loc} -> {head_loc}) without an ack. Add "
+                        f"`{rid}|{token}|<date>|{pr_ref}|<reason>` to {ACKS_REL}."
+                    )
+            if base_hash != head_hash:
                 review(rid, "body changed at its home")
                 if head_hash not in new_acks(rid):
                     errors.append(
                         f"::error::rule-body-lint: migrated rule {rid} body hash changed "
-                        f"({base_rows[rid]} -> {head_hash}) without an ack. A migrated body "
+                        f"({base_hash} -> {head_hash}) without an ack. A migrated body "
                         "is governed exactly like an AGENTS.rules.md body: add "
                         f"`{rid}|{head_hash}|<date>|{pr_ref}|<reason>` to {ACKS_REL} in THIS diff."
                     )
