@@ -260,6 +260,37 @@ describe("dispatchBoundEngineRun", () => {
     })()).rejects.toThrow("ledger unavailable");
   });
 
+  it("rejects transport events for a different run before persistence", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "other-run", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "cross-run" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, eventSink, runId: "run-1",
+        input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("event does not match bound run");
+    expect(eventSink.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale transport sequences before exposing the duplicate event", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "first" } as const };
+      yield { runId: "run-1", eventId: "evt-2", sequence: 1, payload: { type: "text", text: "duplicate" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, eventSink, runId: "run-1",
+        input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("event sequence is stale or duplicated");
+    expect(eventSink.appendEvent).toHaveBeenCalledOnce();
+  });
+
   it("reloads the binding before cancellation and reconciliation", async () => {
     const repository = { getRun: vi.fn().mockResolvedValue({
       id: "run-1", binding: { engineId: "claude-code" },

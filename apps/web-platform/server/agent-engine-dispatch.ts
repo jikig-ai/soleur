@@ -29,6 +29,22 @@ type NewRunRepository = BindingRepository & {
   bind(input: Record<string, unknown>): Promise<unknown>;
 };
 
+function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence: number): void {
+  if (
+    !event ||
+    event.runId !== runId ||
+    typeof event.eventId !== "string" ||
+    event.eventId.length === 0 ||
+    !Number.isInteger(event.sequence) ||
+    event.sequence < 1
+  ) {
+    throw new Error("engine event does not match bound run");
+  }
+  if (event.sequence <= lastSequence) {
+    throw new Error("engine event sequence is stale or duplicated");
+  }
+}
+
 interface DispatchOptions {
   repository: BindingRepository;
   adapter: Pick<EngineAdapter, "start">;
@@ -182,7 +198,10 @@ export async function* dispatchBoundEngineRun(
   };
   observability.emit("engine_dispatch_started", metadata);
   try {
+    let lastSequence = 0;
     for await (const event of options.adapter.start(context, options.input)) {
+      validateDispatchedEvent(event, options.runId, lastSequence);
+      lastSequence = event.sequence;
       observability.emit("engine_dispatch_progress", { ...metadata, sequence: event.sequence, status: event.payload.type });
       if (options.eventSink) await options.eventSink.appendEvent(event);
       yield event;
