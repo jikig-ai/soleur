@@ -11,9 +11,9 @@ triggers:
   - operator ran a credential-carrying script under `bash -x` to debug a failing guard
 art_33_triggered: false
 art_34_triggered: false
-art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. If the open evidentiary limb resolves to BREACH, a fresh 72h runs from awareness of THAT finding, not retroactively from this anchor."
+art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. No open limb since 2026-09-14; re-opens on any later evidence of use, with a fresh 72h from awareness of that evidence (determination 2026-09-14 addendum §Re-opener), not retroactively from this anchor."
 art_33_determination: "knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md"
-art_33_determination_status: "final — no Art. 33 duty, no Art. 34 duty. Integrity/write limb CLEAN (org audit log, 2026-09-08, full-window coverage, single known actor). Confidentiality/read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14: the controller declined the last instrument (vendor support, #7945) — NOT a CLEAN measurement and NOT exhaustion (processor assistance under Art. 28(3)(f) was available and not used). No Art. 33(1) duty on the EDPB 9/2022 awareness standard. Re-opens on any later evidence of use, with a fresh 72h from awareness of that evidence and vendor escalation as the first step. See the 2026-09-14 addendum and the determination's 2026-09-14 addendum."
+art_33_determination_status: "final — no Art. 33 duty, no Art. 34 duty. Write limb CLEAN 2026-09-08; read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14 (#7945; not a CLEAN, not exhaustion). Canonical reasoning and re-opener: knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md, 2026-09-14 addendum"
 ---
 
 ## Actor key
@@ -75,6 +75,13 @@ not an availability one, which is precisely why nothing alarmed.
 | agent | 2026-09-04 | Review found the guard narrower than its own property in nine ways; all fixed. |
 | human | pending | Rotate `SENTRY_AUTH_TOKEN` — the remaining half, a genuine credential-entry gate. |
 | human | 2026-09-14 | **Declined** the vendor-support escalation of the read limb (#7945). The limb closed INCONCLUSIVE-BY-DECISION; disposition FINAL. No contact with Sentry was made. See the 2026-09-14 addendum. |
+
+> **Superseded 2026-09-14 (#7945):** the row *"human | pending | Rotate
+> SENTRY_AUTH_TOKEN …"* above, and the header lines *"End time (recovered):
+> partial — … Sentry outstanding"* and *"Duration (MTTR): open"*, describe the
+> state before the 2026-09-08 rotation. The rotation is done (2026-09-08T10:34Z,
+> see the 2026-09-08 addendum §Remediation); the end time is 2026-09-08T10:34Z
+> and the MTTR ~4 days 19 hours. The rows are left as written per append-only.
 
 ## Participants and Systems Involved
 
@@ -593,50 +600,54 @@ incident.
 ## Addendum — 2026-09-14 (#7945): the read limb closed by decision, not by measurement
 
 Append-only. Nothing above is rewritten. Frontmatter `art_33_determination_status`
-was updated in place, for the reason the 2026-09-08 addendum gave.
+and `art_33_deadline` were updated in place, for the reason the 2026-09-08
+addendum gave. The canonical reasoning — the decision and its reasons, why the
+verdict is neither a CLEAN nor exhaustion, why no Art. 33(1) duty arises, why
+"provisional" drops, and the re-opener — lives in one place:
+`knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md`,
+2026-09-14 addendum. This section records the verdict and repairs the sentences
+above that it leaves dangling.
 
-**Supersedes "### Still open" (2026-09-08 addendum) and the #7945 pointer in the
-action-row banner.** The vendor-support escalation that the 2026-09-08 Finding 3
-named as the only instrument that "could resolve it further" was **declined by
-the operator on 2026-09-14**. It was not attempted; no contact with Sentry was
-made. The CLO had recommended sending; the fully prepared request, the channel,
-and the pre-decided outcomes are retained un-sent in the determination's
-2026-09-14 addendum so that a future re-opener does not re-derive them.
+**Supersedes, in the 2026-09-08 addendum §Finding 3:** *"Only vendor support
+could resolve it further."* and *"It is **not** the CLEAN path that would let
+`art_33_determination_status` drop 'provisional'."* — the operator **declined**
+vendor support on 2026-09-14; nothing remains to run, and the status drops
+"provisional" on the by-decision branch, not the CLEAN one. The `### Still open`
+paragraph that follows Finding 3 concerns ADR-031, was already superseded by the
+2026-09-11 addendum, and is **not** touched here.
 
-**Verdict on the read limb: INCONCLUSIVE-BY-DECISION.** Stated the way
-`runbooks/breach-access-log-investigation.md` §Recording the outcome requires,
-as one block:
+**Supersedes, in §GDPR Art. 4(12) determination:** `PROVISIONAL, on one named
+open limb.` → FINAL, read limb closed by decision; `which indexes this
+determination with the limb marked open` → the register's 2026-09-03 row was
+amended in-cell on 2026-09-14 (`knowledge-base/legal/breach-register.md`
+§Corrections — 2026-09-14); and `**The open limb.** … it has not been run` →
+the write half was run 2026-09-08 (CLEAN) and the read half was closed by
+decision 2026-09-14.
+
+**Supersedes, elsewhere above, by the 2026-09-08 rotation rather than by this
+decision** (recorded here because the new timeline row now sits beside them):
+*"human | pending | Rotate SENTRY_AUTH_TOKEN …"*, *"End time (recovered):
+partial — … Sentry outstanding"*, *"Duration (MTTR): open"*, §Resolution *"The
+Sentry half is open and will be until `SENTRY_AUTH_TOKEN` is rotated."*, and
+§Recovery verification *"Sentry: pending."* All are pre-rotation state; the
+2026-09-08 addendum §Remediation is the record that closed them.
+
+**Verdict on the read limb.** Stated the way
+`knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+§Recording the outcome requires, as one block, with the qualifier written as a
+sub-state per that runbook's 2026-09-14 addendum:
 
 | | |
 |---|---|
 | Window requested | 2026-09-03T15:30Z → 2026-09-08T10:34Z |
 | Window actually covered (reads) | **none** — no read instrument exists on any surface reachable to the controller (Finding 1), and the vendor instrument was declined |
-| Window actually covered (writes) | 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z, no pagination gap; CLEAN (Finding 3) |
-| Per-source instrumentation | token last-used: **does not exist**; org audit log: **run, writes only**; vendor request logs: **available, declined 2026-09-14** |
-| Verdict | reads INCONCLUSIVE-BY-DECISION; writes CLEAN |
+| Window actually covered (writes) | 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z, no pagination gap; CLEAN on the event classes the org audit log records (Finding 3; scope stated in the determination's 2026-09-14 addendum, reason 3) |
+| Per-source instrumentation | token last-used: **does not exist**; org audit log: **run, writes only**; vendor support (Art. 28(3)(f) assistance): **available, declined 2026-09-14**; whether Sentry holds request logs for the window is unknown (determination reason 2) |
+| Verdict | reads **INCONCLUSIVE (sub-state BY-DECISION, #7945)** — not a CLEAN, not exhaustion; writes CLEAN |
 
-It is **not a CLEAN**: nothing measured reads. It is **not exhaustion**: processor
-assistance under GDPR Art. 28(3)(f) was available and was not used, which is a
-weaker ground than the one the determination had prepared for a vendor that
-declines or cannot answer. The four reasons the operator gave — revocation
-preceded escalation, contrary to the action row's order; vendor retention over
-an eleven-day-old window is uncertain; the write limb is CLEAN on full coverage;
-the exposure was to operator-controlled local output with no evidence it left
-that environment — are recorded in the determination, together with the
-distinction between declining an instrument on those grounds and declining it
-in order not to know.
-
-**Why the status drops "provisional".** "Provisional" meant held open behind an
-instrument still to be run. None remains that the controller will run, so the
-disposition is **FINAL — no Art. 33 duty, no Art. 34 duty**, on the EDPB
-Guidelines 9/2022 awareness standard (no reasonable degree of certainty that the
-security incident led to personal data being compromised), with the thinness of
-the ground named in the same field rather than hidden behind the old label.
-
-**Re-opener.** Any later evidence of use of token `6680231` in the window starts a
-**fresh 72h** from awareness of that evidence; vendor escalation with the
-retained request becomes the first step; Art. 33 and Art. 34 are re-run; external
-counsel is engaged per `knowledge-base/legal/recommended-tools.md#breach-notice-triage`.
+Disposition: **FINAL — no Art. 33 duty, no Art. 34 duty**, per the determination's
+2026-09-14 addendum §Why the disposition drops "provisional" and §Why no Art. 33(1)
+duty arises on this record. Re-opener per its §Re-opener.
 
 **Two open items this addendum does not touch.** #8090 (the personal token's
 value under the canonical name in Doppler `soleur/prd_terraform`, still live for
