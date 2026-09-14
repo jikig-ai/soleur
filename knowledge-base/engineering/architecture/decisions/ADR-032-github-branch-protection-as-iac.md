@@ -682,3 +682,54 @@ model): the CLA ruleset is a GitHub-side CI/governance control on the existing
 `engine -> github` build-plane edge, not a modeled runtime element. Checked
 `model.c4` / `views.c4` / `spec.c4` — no `ruleset`/`branch protection` elements.
 No new external actor/system, container/data-store, or access relationship.
+
+## Amendment — 2026-09-14 (#8149): the queue stays off — capacity factor and reopener (iii)
+
+The 2026-07-01 ruling above stands unchanged: `codeql-action#1537` is still
+open (verified 2026-09-14 via `gh api repos/github/codeql-action/issues/1537
+--jq .state`; last upstream comment 2026-05-22), so `CodeQL@57789` still
+cannot post on a `merge_group` ref and the queue cannot be enabled without
+making CodeQL advisory. This amendment does not restate the deadlock — see the
+2026-06-30 amendment and the PIR it links — it records one factor the earlier
+ruling did not have, a third reopener, and the wiring inventory as of this
+date. What was done *instead* of a queue is in ADR-216's 2026-09-14 addendum.
+
+**The capacity factor (new).** Even with #1537 resolved, a queue would add load
+to the resource that already binds. A queue dispatches a full `merge_group` run
+per candidate — ~57 declared jobs across the `merge_group`-wired producers — on
+top of the `pull_request` run and the `push` run: three full runs per merged PR
+instead of two. The organisation is on the GitHub Free plan (20 concurrent
+hosted jobs), and `ci.yml`'s dispatch note records runner availability as the
+binding constraint on 76% of `main` CI runs (29-run cohort). The brief that
+motivated this re-evaluation diagnosed queue depth as the thing inflating
+effective CI time; a merge queue would deepen it. The recorded
+`check_response_timeout_minutes` of 15 (table above) was sized on an ~8-minute
+critical path; the same dispatch note measured a **28-minute** maximum start
+spread on a drained group (1708 s), so the timeout would have to be re-derived
+above that before enablement or it dequeues green PRs — the starvation the
+queue exists to remove.
+
+**Re-adoption triggers, now three.** The 2026-07-01 list — (a) `#1537` closes
+with native `merge_group` status reporting, or (b) a deliberate operator
+decision to make CodeQL advisory — gains **(iii) an organisation plan change
+that lifts the concurrent-job pool (Free 20 → Team 60)**, which removes the
+capacity factor. (a) or (b) remains necessary; (iii) is what makes the queue
+worth having once one of them holds. None of the three is a technical fork this
+pipeline can take on its own.
+
+**Watcher.** `codeql-1537-revisit-watch.yml` still polls `#1537` monthly. It
+finds its tracking issue by the `merge-queue-revisit` **label** (#5840 today),
+not by number — the 2026-06-30 text's "pings issue #5840" describes the current
+resolution of that label, not a hardcoded id.
+
+**Producer / `merge_group` inventory as of 2026-09-14.** No trigger work is
+outstanding. Every producer of the 22 `@15368` contexts in ruleset 14145388 —
+`ci.yml`, `pr-quality-guards.yml`, `secret-scan.yml`, `dependency-review.yml`,
+`legal-doc-cross-document-gate.yml`, `tenant-integration.yml`,
+`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml` — carries
+`merge_group:` (PR-1, #5784). The CLA ruleset's two producers (`cla.yml`,
+`cla-evidence.yml`) do not, by design — the removed
+`merge-queue-cla-synthetics.yml` covered them and is on the restore list above.
+`CodeQL@57789` cannot. `infra/github/ruleset-ci-required.tf` still carries the
+`merge_queue` block deliberately absent under its "Merge queue REVERTED"
+comment; nothing in #8149 touches the ruleset.
