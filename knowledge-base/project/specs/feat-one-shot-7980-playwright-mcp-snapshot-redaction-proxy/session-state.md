@@ -23,3 +23,26 @@
 ### Components Invoked
 - Skills: soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan
 - Agents: repo-research-analyst, learnings-researcher, cto, clo, cpo, spec-flow-analyzer, advisor consult; plan-review: dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist; deepen: security-sentinel, test-design-reviewer, observability-coverage-reviewer, git-history-analyzer, framework-docs-researcher, general-purpose sweeps
+
+## Work Phase
+- Status: in progress (Phase 2–5 implemented; Phase 6 gates green; final commits pending)
+- Commits: 0fd5a6657 (plan), 7c8bb2bb9 (captures + redactor contract), 000202ede (cron-ux-audit), 1bd16da9c (ADR-213 + C4), b47d503e2 (proxy + suite + .mcp.json)
+
+### Errors
+- `test-all.sh` REFUSED (rc=4) twice — sibling full-gate runs in other worktrees; targeted suites substituted (proxy suite, redactor suite, lint suites, vacuity floor, legal registers, C4 gates, vitest rows) and recorded under `runs/phase6-gates.log`.
+- The first Phase 4 commit was reported "completed (exit code 0)" by the harness while HEAD had not moved: the pre-commit `bun-test` job runs the FULL battery for any staged `.ts`, the foreground call hit the 600 s tool timeout, and the trailing `git log` made the wrapper's exit 0. The `/tmp` output file was swept before it could be read. Re-run with the hook log kept in the worktree (`runs/commit-phase4.log`) and `RC=$?` written immediately after `git commit`.
+- Suite row 37 first drove a line of EXACTLY 64 MiB, which parses and is caught by the 4 MiB result cap instead of the line cap (see `phase-0-measurement.md` §Line-cap boundary) — the row now drives 65 MiB.
+- First suite runs had two instrument defects, both caught by the run rather than by inspection: mutants were written to a directory with no sibling redactor, so every mutant refused to start and rows whose RED signal is an absence read as "caught" (fixed: the redactor is copied beside the mutants, `leaks`/`started` helpers require a DELIVERED response); and `mutant()`'s `ok` line was captured by `$(...)` into the path variable (fixed: verdict lines go to fd 3).
+- The Guard 2 executable row had its env assignments on `sleep 5 | bash -c …` applied to `sleep` only (pipeline prefix scoping) — the shim never saw `SHIM_ARGV_OUT`; fixed with `export`.
+- Live verification first ran `--isolated` together with `--user-data-dir`, which 0.0.78 rejects; the proxy relayed the child's rc=1 correctly. Re-run without `--isolated` (`runs/live-verify.md`).
+- `rm -rf` on scratch dirs under `/var/tmp` is blocked by the protected-location guard when written as a glob loop; individual paths were left for the session sweep.
+- `guard-vacuity-floor` ratchet grew 47 → 48 with the new suite in a deferred directory; resolved by PROMOTING the file (measured control/neutered/floor-raised), not by raising the ratchet.
+
+### Decisions
+- FR13 vs B3 conflict resolved by exempting the module docstring and the `self_test` body from the literal scan (recorded in `phase-0-measurement.md`).
+- FR17 population is six files, not five (`agent-browser/SKILL.md` names `mcp__playwright__browser_snapshot` in its verify sentence, so it is in S2's population and carries the canonical sentence).
+- CLO attestation correction C1 applied in-cell to the PA-8 bracket: the skills carry no affirmative "never relaunch unwrapped" prohibition, so the register now describes the prescription that ships; skills not widened in this PR.
+
+### Components Invoked
+- Agents: general-purpose (Phase 3.3 agent A; Phase 4 agent B; Phase 5.1/5.3 agent C), clo (Phase 5.4 attestation)
+- Pre-commit `bun-test` (full battery) excluded for commit 8ffa2c22c by operator decision after 40 min queued behind a sibling worktree's run; CI runs the battery on push (ADR-183). Recorded in the commit body and to be named in the PR body.
