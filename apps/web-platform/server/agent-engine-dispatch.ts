@@ -10,6 +10,7 @@ import {
   type EngineDataEgressEvidence,
 } from "./agent-engine-data-egress-policy";
 import type { EngineSelection } from "./agent-engine-contract";
+import { createEngineObservability, type EngineObservability } from "./agent-engine-observability";
 
 interface BindingRepository {
   getRun(runId: string): Promise<unknown>;
@@ -27,6 +28,7 @@ interface DispatchOptions {
   adapter: Pick<EngineAdapter, "start">;
   adapterEngineId?: string;
   eventSink?: EventSink;
+  observability?: EngineObservability;
   runId: string;
   input: EngineInput;
   context: EngineRunContext;
@@ -36,6 +38,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   repository: BindingRepository;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
   eventSink?: EventSink;
+  observability?: EngineObservability;
   egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
   runId: string;
   input: EngineInput;
@@ -57,6 +60,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
     adapter,
     adapterEngineId: binding.engineId,
     eventSink: options.eventSink,
+    observability: options.observability,
     runId: options.runId,
     input: options.input,
     context: options.context,
@@ -81,9 +85,32 @@ export async function* dispatchBoundEngineRun(
   if (options.adapterEngineId && context.binding.engineId !== options.adapterEngineId) {
     throw new Error("persisted engine binding does not match adapter");
   }
-  for await (const event of options.adapter.start(context, options.input)) {
-    if (options.eventSink) await options.eventSink.appendEvent(event);
-    yield event;
+  const observability = options.observability ?? createEngineObservability();
+  const metadata = {
+    engineId: context.binding.engineId,
+    workspaceId: context.binding.workspaceId,
+    runId: context.runId,
+    adapterVersion: context.binding.adapterVersion,
+    ...(context.binding.execution?.kind === "conversation"
+      ? { conversationId: context.binding.execution.conversationId }
+      : context.binding.execution?.kind === "routine"
+        ? { routineId: context.binding.execution.routineId, routineRunId: context.binding.execution.routineRunId }
+        : {}),
+  };
+  observability.emit("engine_dispatch_started", metadata);
+  try {
+    for await (const event of options.adapter.start(context, options.input)) {
+      observability.emit("engine_dispatch_progress", { ...metadata, sequence: event.sequence, status: event.payload.type });
+      if (options.eventSink) await options.eventSink.appendEvent(event);
+      yield event;
+    }
+    observability.emit("engine_dispatch_completed", metadata);
+  } catch (error) {
+    observability.emit("engine_dispatch_failed", {
+      ...metadata,
+      failureClass: error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "provider_error",
+    });
+    throw error;
   }
 }
 
@@ -125,12 +152,20 @@ export async function reconcileBoundEngineRun(options: {
   repository: LifecycleRepository;
   adapter: Pick<EngineAdapter, "reconcile">;
   adapterEngineId?: string;
+  observability?: EngineObservability;
   runId: string;
   context: EngineRunContext;
   session: Parameters<EngineAdapter["reconcile"]>[1];
 }): Promise<ReturnType<EngineAdapter["reconcile"]>> {
   const context = await loadBoundContext(options);
-  return options.adapter.reconcile(context, options.session);
+  const status = await options.adapter.reconcile(context, options.session);
+  (options.observability ?? createEngineObservability()).emit("engine_session_reconciled", {
+    engineId: context.binding.engineId,
+    workspaceId: context.binding.workspaceId,
+    runId: context.runId,
+    status,
+  });
+  return status;
 }
 
 export async function* continueBoundEngineRun(options: {

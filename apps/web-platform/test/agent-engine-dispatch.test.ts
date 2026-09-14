@@ -13,6 +13,24 @@ describe("dispatchBoundEngineRun", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("emits start, progress, and completion telemetry without event payloads", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "private" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: {
+      engineId: "claude-code", workspaceId: "workspace-1", adapterVersion: "claude-v1",
+      execution: { kind: "conversation", conversationId: "conversation-1" },
+    } }) };
+    const observability = { emit: vi.fn() };
+    for await (const _event of dispatchBoundEngineRun({
+      repository, adapter, observability, runId: "run-1", input: { text: "private", attachmentIds: [] }, context: {} as never,
+    })) { /* no-op */ }
+    expect(observability.emit.mock.calls.map(([name]) => name)).toEqual([
+      "engine_dispatch_started", "engine_dispatch_progress", "engine_dispatch_completed",
+    ]);
+    expect(observability.emit.mock.calls[1][1]).not.toHaveProperty("text");
+  });
+
   it("fails closed on incomplete egress evidence before invoking a provider", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "should-not-run" } as const };
@@ -147,8 +165,10 @@ describe("dispatchBoundEngineRun", () => {
       reconcile: vi.fn().mockResolvedValue("running" as const),
     };
     const session = { resumeHandle: "opaque", sessionId: null };
+    const observability = { emit: vi.fn() };
     await expect(cancelBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("requested");
-    await expect(reconcileBoundEngineRun({ repository, adapter, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("running");
+    await expect(reconcileBoundEngineRun({ repository, adapter, observability, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, session })).resolves.toBe("running");
+    expect(observability.emit).toHaveBeenCalledWith("engine_session_reconciled", expect.objectContaining({ runId: "run-1", status: "running" }));
     expect(repository.getRun).toHaveBeenCalledTimes(2);
   });
 
