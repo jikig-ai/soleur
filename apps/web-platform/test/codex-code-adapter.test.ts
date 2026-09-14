@@ -5,6 +5,7 @@ import {
   createCodexAuthBoundary,
   normalizeCodexUsageEvent,
   runWithCodexRecovery,
+  sanitizeCodexError,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -167,5 +168,21 @@ describe("Codex credential recovery", () => {
     const operation = vi.fn().mockRejectedValue(failure);
     await expect(runWithCodexRecovery(auth, operation)).rejects.toBe(failure);
     expect(operation).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Codex error sanitization", () => {
+  it("removes credential-shaped details while retaining a stable code", () => {
+    const error = sanitizeCodexError(Object.assign(
+      new Error("request failed with sk-live-abcdef1234567890 at https://api.example.test"),
+      { code: "provider_timeout" },
+    ));
+    expect(error).toMatchObject({ code: "provider_timeout", message: "Codex provider request failed" });
+    expect(error.message).not.toContain("sk-live");
+    expect(error.message).not.toContain("api.example");
+  });
+
+  it("maps unknown thrown values to a generic provider error", () => {
+    expect(sanitizeCodexError("token=secret")).toMatchObject({ code: "codex_provider_error", message: "Codex provider request failed" });
   });
 });

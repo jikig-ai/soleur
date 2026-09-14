@@ -21,6 +21,14 @@ export interface CodexUsageSnapshot {
   cost?: { amount: number; currency: string };
 }
 
+export function sanitizeCodexError(error: unknown): Error {
+  const candidate = error as { code?: unknown } | null;
+  const code = typeof candidate?.code === "string" && /^[a-z0-9_-]{1,64}$/i.test(candidate.code)
+    ? candidate.code
+    : "codex_provider_error";
+  return Object.assign(new Error("Codex provider request failed"), { code });
+}
+
 export function normalizeCodexUsageEvent(
   runId: string,
   eventId: string,
@@ -152,16 +160,19 @@ export function createCodexCodeAdapter(
   auth: CodexAuthBoundary,
 ): EngineAdapter {
   async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>): AsyncIterable<EngineEvent> {
-    yield* await load();
+    try { yield* await load(); } catch (error) { throw sanitizeCodexError(error); }
   }
+  const call = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try { return await operation(); } catch (error) { throw sanitizeCodexError(error); }
+  };
   return {
     start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire())),
     continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire())),
-    cancel: async (context, session) => transport.cancel(context, session, await auth.acquire()),
-    reconcile: async (context, session) => transport.reconcile(context, session, await auth.acquire()),
+    cancel: async (context, session) => call(async () => transport.cancel(context, session, await auth.acquire())),
+    reconcile: async (context, session) => call(async () => transport.reconcile(context, session, await auth.acquire())),
     resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire())),
-    respondToApproval: async (context, requestId, decision) => transport.respondToApproval(context, requestId, decision, await auth.acquire()),
-    erase: async (context, session) => transport.erase(context, session, await auth.acquire()),
+    respondToApproval: async (context, requestId, decision) => call(async () => transport.respondToApproval(context, requestId, decision, await auth.acquire())),
+    erase: async (context, session) => call(async () => transport.erase(context, session, await auth.acquire())),
     dispose: () => transport.dispose(),
   };
 }
