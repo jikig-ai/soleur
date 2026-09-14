@@ -9,6 +9,7 @@ import {
   validateCodexEvent,
   assertCodexEndpoint,
   codexAuthMetadata,
+  normalizeCodexCancellation,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -221,5 +222,13 @@ describe("Codex DSAR metadata", () => {
       expiresAt: 123,
     });
     expect(codexAuthMetadata("managed", { accessToken: "secret-token", expiresAt: 123 })).not.toHaveProperty("accessToken");
+  });
+});
+
+describe("Codex cancellation normalization", () => {
+  it("confirms only an explicit terminal acknowledgement", () => {
+    expect(normalizeCodexCancellation("cancelled")).toBe("confirmed");
+    expect(normalizeCodexCancellation("accepted")).toBe("requested");
+    expect(normalizeCodexCancellation("unknown")).toBe("requested");
   });
 });

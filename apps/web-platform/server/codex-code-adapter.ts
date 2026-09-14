@@ -19,6 +19,10 @@ export function codexAuthMetadata(mode: CodexAuthMode, lease: CodexCredentialLea
   return { mode, expiresAt: lease.expiresAt };
 }
 
+export function normalizeCodexCancellation(result: "cancelled" | "accepted" | "unknown"): "requested" | "confirmed" {
+  return result === "cancelled" ? "confirmed" : "requested";
+}
+
 export interface CodexUsageSnapshot {
   inputTokens: number;
   outputTokens: number;
