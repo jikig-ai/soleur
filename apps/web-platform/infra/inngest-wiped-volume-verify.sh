@@ -182,9 +182,14 @@ read_secret() {
     # A bare `mktemp` is an abort vector under `set -e` on a full /tmp (ci-deploy.sh notes the
     # same); degrade to /dev/null so a missing scratch file loses the stderr, never the read.
     err="$(mktemp 2>/dev/null)" || err=/dev/null
+    # The RETURN trap owns the scratch file (lint-trap-tempfile-ownership rule c): it is removed
+    # on every exit from this function, including an abort between allocation and the rm below.
+    # shellcheck disable=SC2064  # $err is expanded at trap-registration time on purpose
+    if [[ "$err" != /dev/null ]]; then
+      trap "rm -f -- '$err'" RETURN
+    fi
     out="$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>"$err")" || rc=$?
     if [[ "$rc" -ne 0 || -z "$out" ]]; then soleur_log_doppler_read_failure "$rc" "$err" "$out"; out=""; fi
-    [[ "$err" == /dev/null ]] || rm -f "$err"
     # Only an rc-0 value is the secret: partial stdout from a failed CLI must never be returned.
     printf '%s' "$out"
   fi

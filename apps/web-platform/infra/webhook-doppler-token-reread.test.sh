@@ -85,6 +85,9 @@ REVOKED="dp.st.revoked_synthetic_token_00000000000000000000000000000000000000"
 SECRET_VALUE="synthetic-bearer-secret-for-tests"
 
 MOCKBIN=""
+# The EXIT trap owns whatever mock dir is live when the suite dies between setup and teardown
+# (lint-trap-tempfile-ownership rule c); teardown() still removes it on the normal path.
+trap '[[ -n "$MOCKBIN" ]] && rm -rf -- "$MOCKBIN"' EXIT
 setup() {
   MOCKBIN=$(mktemp -d)
   assert_fixture_dir "$MOCKBIN"
