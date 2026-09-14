@@ -36,23 +36,29 @@ it was written.
    capped retries.
 3. **The feature worktree vanished minutes after the merge.** A sibling session's
    `cleanup-merged` reaped it (correctly: the branch was gone), so my next
-   `cd <worktree> && …` failed. Verification continued from the repository root with
+   `cd <worktree> && …` failed. The first post-merge Monitor had been started from that worktree
+   too. Ship Phase 7 already forbids both ("run every Monitor with its shell in the MAIN
+   checkout … never `cd`'d into the feature worktree", citing #8136). I violated a documented rule;
+   this is not a new one. Verification continued from the repository root with
    `gh … -R jikig-ai/soleur`.
 
 ## Solution
 
-- (2) Never fold a fetch failure into an empty result. Capture the command's own exit status
-  and emit a distinct line: `if ! j=$(gh …); then echo "FETCH-ERROR …"; …; fi`.
-- (3) After merge, run post-merge verification from the repo root with explicit `-R`, never
-  from the feature worktree.
+- (2) My Monitor was an ad hoc `gh run list` loop, not ship Phase 7 Step 3's documented poll,
+  which already carries `2>&1 … || r="fetch-error: $r"` for exactly this case. Use the documented
+  idiom rather than re-deriving it.
+- (3) Follow ship Phase 7's existing rule (#8136): start every post-merge Monitor from the main
+  checkout or `/var/tmp`.
 - (1) No fix is applied here, deliberately. See Key Insight.
 
 ## Key Insight
 
 **Stopping the battery was a deviation from written guidance, not a response to a gap.** Ship
 Phase 4 already covers this exact state. It says to loop on `--capacity`'s `measured_runs`
-until 0, launch detached, and re-wait on rc 4, and records that #8135's loop needed more than
-three hours before it launched cleanly. My reasons were true:
+until 0, launch detached, and re-wait on rc 4. Its #8135 record: two fixed-iteration Monitors
+timed out still contended after three hours, then the one-script loop launched cleanly on its
+first `measured_runs=0`. So the prescribed loop is the one that eventually gets a clean start,
+and my Monitor was that loop, stopped before its clean start came. My reasons were true:
 - CI had the same coverage on the same head;
 - a battery run beside three siblings on a starved `/var/tmp` produces REDs nobody can
   interpret.
@@ -76,11 +82,12 @@ body, is acceptable when the required `test` context is green on the exact head 
    wait itself is the problem, raise it with the gate's owner rather than deciding it per PR.
 2. **Post-merge Monitor's `|| echo '[]'` made a `gh` failure read as zero runs.** Recovery:
    restarted the Monitor with an explicit `FETCH-ERROR` branch and `-R`.
-   **Prevention:** in any polling Monitor, an instrument failure must print a line no success
-   path can print.
+   **Prevention:** ship Phase 7 Step 3 already prescribes `2>&1 … || r="fetch-error: $r"`. The
+   defect was an ad hoc loop that skipped the documented idiom, so use the documented loop.
 3. **The merged branch's worktree was reaped by a sibling session's `cleanup-merged`, and a
    subsequent `cd` into it failed.** Recovery: ran verification from the repo root with `-R`.
-   **Prevention:** treat the feature worktree as gone once the PR is MERGED.
+   **Prevention:** not a new rule. Ship Phase 7 already says never to run a post-merge Monitor
+   `cd`'d into the feature worktree (#8136). Follow it as written.
 
 ## Tags
 
