@@ -16,3 +16,7 @@ Vitest's multi-project config also rejects a relative file filter when the
 project selector cannot reconcile it with the project root. Use an absolute
 worktree file path with `--project unit` or `--project component` for focused
 app tests.
+
+The `apply_patch` wrapper resolves relative paths from the bare checkout even
+when the shell is in a worktree. Invoke it through `exec_command` with the
+worktree as `workdir` so edits land in the active checkout.
