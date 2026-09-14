@@ -73,7 +73,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
-| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
+| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step FAILS because they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 

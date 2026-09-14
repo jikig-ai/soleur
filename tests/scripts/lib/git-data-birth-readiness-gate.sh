@@ -190,15 +190,16 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2), and clearing the runbook banner — is NOT machine-checked here. The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2) — is NOT machine-checked here (the runbook banner that used to close the list was cleared 2026-09-13). The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
   return 0
 }
 
 # ── THE SECOND INTERLOCK: rung-2 boot evidence (#6982 A3) ─────────────────────────────
 #
 # WHY THIS EXISTS. #6982 shipped the emitter, so the sentinel gate above now RELEASES. That
-# retired the ONLY mechanical hold on the birth route, leaving the dispatch held by prose:
-# the DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149 checklist. ADR-149's own
+# retired the ONLY mechanical hold on the birth route at the time, leaving the dispatch held
+# by prose: the (since-cleared) DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149
+# checklist. ADR-149's own
 # Alternatives table rejects exactly that posture — "a capability held only by prose is held
 # until the first person who reads the runbook and not the plan" — and the workflow's own
 # comment now reads "THE BIRTH-READINESS INTERLOCK IS RELEASED", which INVITES the dispatch
