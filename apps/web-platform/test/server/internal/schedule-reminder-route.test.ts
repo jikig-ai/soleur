@@ -77,6 +77,7 @@ describe("POST /api/internal/schedule-reminder — cutover quiesce (#5450)", () 
     const res = await POST(makeRequest(validBody()));
     expect(res.status).toBe(503);
     expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("cutover-quiesce");
     expect(mockInngestSend).not.toHaveBeenCalled();
   });
 
@@ -180,6 +181,9 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
     const res = await POST(makeRequest(validBody()));
     expect(res.status).toBe(503);
     expect(res.headers.get("Retry-After")).toBe("120");
+    // Distinct from the INNGEST_CUTOVER_QUIESCE 503 so inngest-rearm-reminders.sh does not
+    // send the operator to clear a flag that is not set.
+    expect(res.headers.get("X-Soleur-Unavailable")).toBe("backend-refused");
     expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
   });
 
@@ -189,6 +193,20 @@ describe("POST /api/internal/schedule-reminder — backend refusing connections"
     const res = await POST(makeRequest(validBody()));
     expect(res.status).toBe(502);
     expect(res.headers.get("Retry-After")).toBeNull();
+  });
+
+  it("stays 502 when the cause code is ECONNRESET even if its message mentions ECONNREFUSED", async () => {
+    const cause = Object.assign(new Error("read ECONNRESET (after ECONNREFUSED)"), { code: "ECONNRESET" });
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(502);
+    expect(res.headers.get("X-Soleur-Unavailable")).toBeNull();
+  });
+
+  it("stays 502 for a non-TypeError whose cause carries code ECONNREFUSED", async () => {
+    const err = Object.assign(new Error("wrapped"), { cause: { code: "ECONNREFUSED" } });
+    mockSendInngestWithRetry.mockRejectedValueOnce(err);
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
   });
 
   it("stays 502 for a non-TypeError carrying ECONNREFUSED text only in its message", async () => {

@@ -47,6 +47,11 @@ function isCutoverQuiesced(): boolean {
   return v === "1" || v === "true";
 }
 
+// Both 503s carry X-Soleur-Unavailable so a consumer (inngest-rearm-reminders.sh) can tell
+// "operator paused arming" from "the backend is not listening". Retry-After is a poll hint,
+// not the window length.
+const RETRY_AFTER_S = "120";
+
 // inngest.send surfaces a refused loopback as TypeError("fetch failed") with the
 // errno on `cause` (measured, inngest 3.54.2) — match the code, never message text.
 function isConnectionRefused(err: unknown): boolean {
@@ -86,7 +91,7 @@ export async function POST(request: Request) {
   if (isCutoverQuiesced()) {
     return NextResponse.json(
       { error: "Reminder arming temporarily paused (Inngest backend cutover in progress)" },
-      { status: 503, headers: { "Retry-After": "120" } },
+      { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "cutover-quiesce" } },
     );
   }
 
@@ -158,7 +163,7 @@ export async function POST(request: Request) {
     if (isConnectionRefused(err)) {
       return NextResponse.json(
         { error: "Reminder arming temporarily unavailable (Inngest backend not accepting connections)" },
-        { status: 503, headers: { "Retry-After": "120" } },
+        { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "backend-refused" } },
       );
     }
     return NextResponse.json({ error: "Dispatch failed" }, { status: 502 });
