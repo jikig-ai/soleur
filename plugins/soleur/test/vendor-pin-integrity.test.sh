@@ -519,6 +519,99 @@ else
 fi
 echo ""
 
+# --- TS15: multi-bundle — legal-generate via SKILL_PREFIX/NOTICE_FILE -----
+# The second vendored bundle (#8122) runs the SAME script parameterized by
+# env, not a forked copy (ADR-095 shared-engine precedent). These cases pin
+# that parameterization end to end: registry re-rooting, lefthook stanza
+# coverage, a corrupted pin naming the file, and the symmetric-difference
+# walk over the second bundle's references tree.
+echo "TS15: legal-generate bundle — env-parameterized integrity over its own NOTICE"
+LEGAL_DIR="$REPO_ROOT/plugins/soleur/skills/legal-generate"
+LEGAL_NOTICE_FILE="$LEGAL_DIR/NOTICE"
+assert_file_exists "$LEGAL_NOTICE_FILE" "legal-generate NOTICE exists"
+
+# TS15a: every lifted file passes under the env overrides.
+LG_PATHS=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  LG_PATHS+=("$LEGAL_DIR/${line%%:*}")
+done < <(NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" lifted-files)
+
+if (( ${#LG_PATHS[@]} < 12 )); then
+  printf '[FAIL]: anti-vacuity floor tripped — legal-generate registry yielded %d lifted paths (expected >= 12); the registry read is broken, this is NOT a pass.\n' "${#LG_PATHS[@]}" >&2
+  exit 1
+fi
+
+set +e
+( cd "$REPO_ROOT" && SKILL_PREFIX="plugins/soleur/skills/legal-generate" \
+    NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$INTEGRITY" "${LG_PATHS[@]}" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 for legal-generate bundle under SKILL_PREFIX/NOTICE_FILE overrides"
+echo ""
+
+# TS15b: a corrupted local-blob-sha fails naming the file (second bundle is
+# not silently weaker than the first).
+echo "TS15b: corrupted legal-generate pin → exit 1 naming the file"
+TMP_LG_NOTICE="$(mktemp)"
+sed '0,/local-blob-sha: [0-9a-f]\{40\}/s//local-blob-sha: 0000000000000000000000000000000000000000/' \
+  "$LEGAL_NOTICE_FILE" > "$TMP_LG_NOTICE"
+set +e
+STDERR=$( ( cd "$REPO_ROOT" && SKILL_PREFIX="plugins/soleur/skills/legal-generate" \
+    NOTICE_FILE="$TMP_LG_NOTICE" bash "$INTEGRITY" \
+    "$LEGAL_DIR/references/templates/advisor-agreement/template.md" ) 2>&1 1>/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 on corrupted legal-generate pin"
+assert_contains "$STDERR" "advisor-agreement/template.md" "stderr names the corrupted legal-generate file"
+rm -f "$TMP_LG_NOTICE"
+echo ""
+
+# TS15c: symmetric-difference walk — disk(references/**) == lifted ∪ soleur-authored
+# for the second bundle too (its soleur-authored block is an explicit empty
+# list; the walk must still close).
+echo "TS15c: legal-generate disk(references/**) == lifted-files U soleur-authored"
+LG_DISK=()
+while IFS= read -r f; do
+  LG_DISK+=("${f#"$LEGAL_DIR"/}")
+done < <(find "$LEGAL_DIR/references" -type f -name '*.md' | sort)
+
+LG_REG=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  LG_REG+=("${line%%:*}")
+done < <(NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" lifted-files; \
+         NOTICE_FILE="$LEGAL_NOTICE_FILE" bash "$PARSER" soleur-authored)
+
+if (( ${#LG_DISK[@]} < 12 )); then
+  printf '[FAIL]: anti-vacuity floor tripped — legal-generate disk walk yielded %d files (expected >= 12); harness defect, not a clean registry.\n' "${#LG_DISK[@]}" >&2
+  exit 1
+fi
+
+LG_DIFF=$(diff <(printf '%s\n' "${LG_DISK[@]}") <(printf '%s\n' "${LG_REG[@]}" | sort -u) || true)
+assert_eq "" "$LG_DIFF" "legal-generate symmetric difference is empty"
+echo ""
+
+# TS15d: the legal-generate lefthook stanza exists and covers the bundle.
+echo "TS15d: lefthook.yml declares the legal-generate integrity stanza"
+if grep -qE '^[[:space:]]+vendor-pin-integrity-legal-generate:' "$LEFTHOOK"; then
+  echo "  PASS: lefthook.yml has vendor-pin-integrity-legal-generate stanza"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: lefthook.yml is missing vendor-pin-integrity-legal-generate"
+  FAIL=$((FAIL + 1))
+fi
+for pat in '"plugins/soleur/skills/legal-generate/references/**"' '"plugins/soleur/skills/legal-generate/NOTICE"'; do
+  if grep -qF -- "$pat" "$LEFTHOOK"; then
+    echo "  PASS: lefthook glob declares $pat"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: lefthook glob is missing $pat"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
 # Anti-vacuity floor (Guard 1 harness row i). Without a floor,
 # print_results greens on `FAIL -eq 0` and nothing on `PASS > 0`, so
 # replacing assert_eq with a stub that always passes reported
