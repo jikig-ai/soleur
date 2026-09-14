@@ -106,6 +106,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] DSAR metadata slice: audit/export metadata contains auth mode and expiry only; credential values are excluded (17 adapter tests green).
   - [x] Adapter factory slice: reviewed registry state gates adapter creation for unknown, disabled, or unavailable engines (2 factory tests green).
   - [x] Registry dispatch slice: bound-run dispatch resolves the adapter from persisted engine identity through the reviewed factory (12 dispatch tests green).
+  - [x] Registry injection dispatch slice: conversation, routine, and bound-run dispatch accept an explicit reviewed registry so future engines can cross the same binding boundary (24 dispatch tests green).
   - [x] Adapter composition slice: injected Claude/Codex transports compose into reviewed factories, with Codex omitted until auth dependencies exist (2 composition tests green).
   - [x] Cancellation slice: Codex cancellation normalization confirms only explicit terminal acknowledgement (18 adapter tests green).
   - [x] Egress policy slice: server-side endpoint, data-class, DPA, transfer-geography, deletion-support, and approval evidence fail closed before registry dispatch; synthetic qualification may proceed without erasure evidence, while customer data requires verified deletion support (9 policy tests and 1 dispatch integration test green).

@@ -4,7 +4,7 @@ import type {
   EngineInput,
   EngineRunContext,
 } from "./agent-engine-contract";
-import { createReviewedEngineAdapter, type EngineAdapterFactory } from "./agent-engine-adapter-factory";
+import { createReviewedEngineAdapter, type EngineAdapterFactory, type ReviewedEngineRegistry } from "./agent-engine-adapter-factory";
 import {
   authorizeEngineDataEgress,
   type EngineDataEgressEvidence,
@@ -80,6 +80,7 @@ interface DispatchOptions {
 export async function* dispatchBoundEngineRunFromRegistry(options: {
   repository: BindingRepository;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
+  registry?: ReviewedEngineRegistry;
   eventSink?: EventSink;
   observability?: EngineObservability;
   egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
@@ -98,7 +99,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
     }
     authorizeEngineDataEgress(options.egress.selection, options.egress.evidence);
   }
-  const adapter = createReviewedEngineAdapter(binding.engineId, options.factories, "existing-run");
+  const adapter = createReviewedEngineAdapter(binding.engineId, options.factories, "existing-run", options.registry);
   yield* dispatchBoundEngineRun({
     repository: options.repository,
     adapter,
@@ -115,6 +116,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
 export async function* dispatchConversationEngineRun(options: {
   repository: ConversationBindingRepository;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
+  registry?: ReviewedEngineRegistry;
   eventSink?: EventSink;
   observability?: EngineObservability;
   egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
@@ -138,6 +140,7 @@ export async function* dispatchConversationEngineRun(options: {
   yield* dispatchBoundEngineRunFromRegistry({
     repository: options.repository,
     factories: options.factories,
+    registry: options.registry,
     eventSink: options.eventSink,
     observability: options.observability,
     egress: options.egress,
@@ -151,6 +154,7 @@ export async function* dispatchConversationEngineRun(options: {
 export async function* dispatchRoutineEngineRun(options: {
   repository: RoutineBindingRepository;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
+  registry?: ReviewedEngineRegistry;
   eventSink?: EventSink;
   observability?: EngineObservability;
   egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
@@ -179,6 +183,7 @@ export async function* dispatchRoutineEngineRun(options: {
   yield* dispatchBoundEngineRunFromRegistry({
     repository: options.repository,
     factories: options.factories,
+    registry: options.registry,
     eventSink: options.eventSink,
     observability: options.observability,
     egress: options.egress,

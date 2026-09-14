@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, dispatchConversationEngineRun, dispatchRoutineEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { createEngineRegistry } from "@/server/agent-engine-registry";
 
 describe("dispatchBoundEngineRun", () => {
   it("resolves a conversation binding before selecting its adapter", async () => {
@@ -113,6 +114,33 @@ describe("dispatchBoundEngineRun", () => {
     const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
     const events = [];
     for await (const event of dispatchBoundEngineRunFromRegistry({ repository, factories: { "claude-code": () => adapter as never }, runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never })) events.push(event);
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+  });
+
+  it("resolves future engines through an explicit reviewed registry", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-grok-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    }) };
+    const registry = createEngineRegistry([{
+      id: "grok-build",
+      version: "grok-build-v1",
+      transport: "remote",
+      enabledForNewRuns: true,
+      enabledForExistingRuns: true,
+      authModes: ["managed"],
+      qualifications: [],
+    }]);
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-grok-1", binding: { engineId: "grok-build" } }) };
+    const events = [];
+    for await (const event of dispatchBoundEngineRunFromRegistry({
+      repository,
+      factories: { "grok-build": () => adapter as never },
+      registry,
+      runId: "run-grok-1",
+      input: { text: "hi", attachmentIds: [] },
+      context: {} as never,
+    })) events.push(event);
     expect(adapter.start).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
   });

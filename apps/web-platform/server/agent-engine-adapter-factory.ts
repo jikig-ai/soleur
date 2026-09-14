@@ -2,12 +2,13 @@ import type { EngineAdapter } from "./agent-engine-contract";
 import { reviewedEngineRegistry } from "./agent-engine-reviewed-definitions";
 
 export type EngineAdapterFactory = () => EngineAdapter;
+export type ReviewedEngineRegistry = Pick<typeof reviewedEngineRegistry, "get">;
 
 export function createReviewedEngineAdapter(
   engineId: string,
   factories: Readonly<Record<string, EngineAdapterFactory>>,
   operation: "new-run" | "existing-run" = "new-run",
-  registry: Pick<typeof reviewedEngineRegistry, "get"> = reviewedEngineRegistry,
+  registry: ReviewedEngineRegistry = reviewedEngineRegistry,
 ): EngineAdapter {
   let definition;
   try {
