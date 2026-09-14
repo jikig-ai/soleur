@@ -74,7 +74,11 @@ STUB
   cat > "$T/bin/docker" <<'STUB'
 #!/usr/bin/env bash
 echo "docker $*" >> "$STUB_STATE/docker.log"
-if [[ "$*" == *" -i "* ]]; then cat >/dev/null; echo 2; else echo 1; fi
+if [[ "$*" == *" -i "* ]]; then
+  cat >/dev/null
+  [[ -n "${STUB_SWEEP_FAIL:-}" ]] && { echo "ERROR:  permission denied" >&2; exit 3; }
+  echo 2
+else echo 1; fi
 STUB
   chmod +x "$T/bin/"*
 }
@@ -107,6 +111,14 @@ echo "== T2: a failed PATCH exits 6 and leaves Doppler untouched"
 setup; STUB_PATCH_CODE=422; export STUB_PATCH_CODE; run --config dev; unset STUB_PATCH_CODE
 cases=$((cases + 1)); [[ "$rc" -eq 6 ]] && pass "exit 6" || fail "exit $rc (want 6)"
 cases=$((cases + 1)); [[ "$(newpw_of DATABASE_URL_POOLER)" == "$OLDPW" ]] && pass "Doppler unchanged" || fail "Doppler modified after failed PATCH"
+rm -rf "$T"
+
+echo "== T3: a failed --leaked sweep is loud (exit 8) and leaves no recovery file"
+setup; STUB_SWEEP_FAIL=1; export STUB_SWEEP_FAIL; run --config dev --leaked; unset STUB_SWEEP_FAIL
+cases=$((cases + 1)); [[ "$rc" -eq 8 ]] && pass "exit 8" || { fail "exit $rc (want 8)"; sed 's/^/       | /' "$T/out"; }
+cases=$((cases + 1)); grep -q 'session sweep FAILED' "$T/out" && pass "failure is named" || fail "sweep failure not reported"
+cases=$((cases + 1)); ! grep -q '^==> DONE' "$T/out" && pass "does not claim DONE" || fail "claimed DONE after a failed sweep"
+cases=$((cases + 1)); [[ -z "$(ls -A "$T/tmpdir" | grep soleur-rotation-recovery || true)" ]] && pass "no recovery file left behind" || fail "recovery file left behind"
 rm -rf "$T"
 
 echo
