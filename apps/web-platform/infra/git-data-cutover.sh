@@ -42,6 +42,14 @@
 #   stdin (`--key-file -`) — NEVER argv, NEVER this script's environment. All host
 #   reach is over the private net via the workflow's CF Tunnel SSH bridge.
 #
+# ACCESS PATH (ADR-220, #6680): the bridge exports WEB_HOST_SSH (root on web-1). There
+#   is no route and no authorized CI credential for git-data (10.0.1.20) on its own:
+#   git-data is reached through web-1 (`ssh -W`, a direct-tcpip channel — no key and no
+#   agent socket lands on web-1), and GIT_DATA_SSH is supplied only once #8189
+#   provisions the root key. access_gate runs FIRST on the forward path and exits 3,
+#   naming the missing piece, before any host-mutating step. There are no `ssh`
+#   fallbacks: an unset invocation fails closed instead of dialing a bare `ssh`.
+#
 # FAIL-LOUD + AUTO-RECOVERY: every step logs and every guard aborts non-zero. An
 # EXIT trap auto-rolls-back a mid-flip failure (flag off) and ALWAYS releases the
 # write-freeze (un-drains both hosts) on abort — no stranded writers, no split-brain.
@@ -77,21 +85,30 @@ DRY_RUN="${DRY_RUN:-0}"
 CONFIRM_WIPE="${CONFIRM_WIPE:-0}"
 ROLLBACK="${ROLLBACK:-0}"
 
-# ssh helpers. The workflow exports GIT_DATA_SSH / WEB_HOST_SSH as the exact ssh
-# invocation (key + bridge ProxyCommand) — this script holds NO key material inline.
-gd_ssh()  { ${GIT_DATA_SSH:-ssh} "$1" "$2"; }        # gd_ssh <host> <remote-cmd>
-web_ssh() { ${WEB_HOST_SSH:-ssh} "$1" "$2"; }        # web_ssh <host> <remote-cmd>
+# ssh helpers. WEB_HOST_SSH / GIT_DATA_SSH are the exact ssh invocations (see ACCESS
+# PATH above) — this script holds NO key material inline. Unset -> rc 97, never a bare
+# `ssh` (a fallback is where a never-satisfied export contract hides, learning 2026-07-18).
+gd_ssh() {  # gd_ssh <host> <remote-cmd>
+  [ -n "${GIT_DATA_SSH:-}" ] || { echo "[git-data-cutover] GIT_DATA_SSH unset" >&2; return 97; }
+  $GIT_DATA_SSH "$1" "$2"
+}
+web_ssh() { # web_ssh <host> <remote-cmd>
+  [ -n "${WEB_HOST_SSH:-}" ] || { echo "[git-data-cutover] WEB_HOST_SSH unset" >&2; return 97; }
+  $WEB_HOST_SSH "$1" "$2"
+}
 
 # --- Recovery state (read by the EXIT trap) ----------------------------------
 FREEZE_HELD=0
 FLIP_DONE=0
 CANARY_OK=0
+ACCESS_TMP=""   # probe capture dir of the access gate; removed on every exit
 
 # Auto-recovery: on ANY non-zero exit, roll back a completed/partial flip (flag
 # off + reload) and ALWAYS release the freeze (un-drain both hosts).
 cleanup() {
   local rc=$?
   trap - EXIT
+  [ -z "$ACCESS_TMP" ] || rm -rf "$ACCESS_TMP"
   if [ "$rc" -eq 0 ]; then exit 0; fi
   log "ABORT (rc=$rc) — auto-recovery: rollback (if flipped) + release freeze"
   [ "$FLIP_DONE" = "1" ]   && rollback
@@ -103,6 +120,101 @@ trap cleanup EXIT
 # Read/write the flag from Doppler prd (the workflow injects the token).
 read_flag() { doppler secrets get "$FLAG_NAME" --plain -p soleur -c prd 2>/dev/null || echo ""; }
 set_flag()  { doppler secrets set "$FLAG_NAME" "$1" --silent --no-interactive -p soleur -c prd; }
+
+# A recovery step (rollback / freeze release) that could not run: logged AND annotated, so
+# a partial recovery is visible in the annotations API, not only in the log.
+recovery_warn() { echo "::warning title=git-data-cutover recovery::step=$1 rc=$2"; }
+
+# ============================================================================
+# access_gate — every host reachable and authorized BEFORE any mutation (ADR-220)
+# ============================================================================
+# Three probes, strictly ordered; each runs only after the previous one read ok:
+#   web            every WEB_HOSTS member runs `true` over WEB_HOST_SSH.
+#   git-data-jump  `ssh -W <git-data>:22 <first web host>` must return git-data's
+#                  `SSH-2.0-` banner as its FIRST line: web-1's sshd forwards and
+#                  git-data's sshd answers, with NO git-data credential. The verdict keys
+#                  on that line, never the pipeline rc (banner + more bytes can be 141).
+#   git-data-auth  root login over GIT_DATA_SSH; unset -> git_data_root_key_absent.
+# Non-ok exits 3 from THIS body (die exits 1). Keep the call a plain statement: inside
+# $(...) or an || list `set -e` is suspended and a failed probe could fall through.
+# Probe bytes are chosen by the edge or web-1 while host keys are unverified (#7226), and
+# the runner parses workflow commands on stdout AND stderr. So every probe writes to a
+# file, the -W line is only compared, and a failed probe's stderr is printed printable-ASCII
+# only, behind a fixed prefix, inside a ::stop-commands:: span keyed on a random token.
+# Hosts must be dotted-numeric: a value starting with `-` would become an ssh option.
+# ssh keeps the FIRST value of a repeated -o, so the appended options can add, never override.
+_access_emit() { # <role> <host> <verdict> [rc]
+  local detail="role=$1 host=$2 verdict=$3${4:+ rc=$4}"
+  log "ACCESS ${detail}"
+  if [ "$3" = ok ]; then
+    echo "::notice title=git-data-cutover access::role=$1 verdict=ok"
+  else
+    echo "::error title=git-data-cutover access::role=$1 verdict=$3${4:+ rc=$4}"
+  fi
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf -- '- `ACCESS %s`\n' "$detail" >> "$GITHUB_STEP_SUMMARY" || true
+  fi
+}
+_access_stderr() { # <captured-stderr-file>
+  [ -s "$1" ] || return 0
+  local tok l
+  tok="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  echo "::stop-commands::${tok}"
+  LC_ALL=C tr -cd '\12\40-\176' < "$1" | while IFS= read -r l; do
+    printf '[git-data-cutover] probe-stderr: %s\n' "$l"
+  done
+  echo "::${tok}::"
+}
+access_gate() {
+  step "access gate (ADR-220): web -> git-data-jump -> git-data-auth, before any host mutation"
+  local h rc first jump=""
+  local -a hosts inv gdinv
+  if [ -z "${WEB_HOST_SSH:-}" ]; then _access_emit web "-" web_host_ssh_unset; exit 3; fi
+  read -ra hosts <<< "$WEB_HOSTS"
+  if [ "${#hosts[@]}" -eq 0 ]; then _access_emit web "-" web_roster_empty; exit 3; fi
+  for h in "${hosts[@]}"; do
+    [[ "$h" =~ ^[0-9.]+$ ]] || { _access_emit web "<invalid>" invalid_host; exit 3; }
+  done
+  [[ "$GIT_DATA_HOST" =~ ^[0-9.]+$ ]] || { _access_emit git-data-jump "<invalid>" invalid_host; exit 3; }
+  read -ra inv <<< "$WEB_HOST_SSH"
+  ACCESS_TMP="$(mktemp -d)" || die "access gate: mktemp failed"
+
+  for h in "${hosts[@]}"; do
+    rc=0
+    timeout 30 "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$h" true \
+      >"$ACCESS_TMP/web.out" 2>"$ACCESS_TMP/web.err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      _access_emit web "$h" failed "$rc"; _access_stderr "$ACCESS_TMP/web.err"; exit 3
+    fi
+    _access_emit web "$h" ok
+    [ -n "$jump" ] || jump="$h"
+  done
+
+  rc=0
+  first="$(timeout 25 "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 -W "${GIT_DATA_HOST}:22" "$jump" \
+    </dev/null 2>"$ACCESS_TMP/jump.err" | head -n 1)" || rc=$?
+  first="${first%$'\r'}"
+  case "$first" in
+    SSH-2.0-*) _access_emit git-data-jump "$GIT_DATA_HOST" ok ;;
+    *) _access_emit git-data-jump "$GIT_DATA_HOST" failed "$rc"; _access_stderr "$ACCESS_TMP/jump.err"; exit 3 ;;
+  esac
+
+  if [ -z "${GIT_DATA_SSH:-}" ]; then
+    _access_emit git-data-auth "$GIT_DATA_HOST" git_data_root_key_absent
+    log "no credential is authorized for root on the git-data host yet (ADR-220); #8189 provisions it."
+    log "the transport is proven (web + git-data-jump ok) — this stop is expected until #8189 lands."
+    exit 3
+  fi
+  read -ra gdinv <<< "$GIT_DATA_SSH"
+  rc=0
+  timeout 30 "${gdinv[@]}" -o BatchMode=yes "$GIT_DATA_HOST" true \
+    >"$ACCESS_TMP/auth.out" 2>"$ACCESS_TMP/auth.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _access_emit git-data-auth "$GIT_DATA_HOST" failed "$rc"; _access_stderr "$ACCESS_TMP/auth.err"; exit 3
+  fi
+  _access_emit git-data-auth "$GIT_DATA_HOST" ok
+  rm -rf "$ACCESS_TMP"; ACCESS_TMP=""
+}
 
 # ============================================================================
 # prepare_luks_target — idempotent luksOpen + mount at FRESH_ROOT (GAP-2 fix)
@@ -213,15 +325,27 @@ acquire_freeze() {
   log "write-freeze ENGAGED (sentinel active + both hosts drained); pre-receive denies stragglers"
 }
 
-release_freeze() {
+# --ignore-dry-run: ROLLBACK-only mode passes it. The dispatch input dry_run DEFAULTS to
+# true, so without it a default rollback dispatch returned here and never released a
+# freeze an earlier real run left held (#6680 review, wall 6).
+release_freeze() { # [--ignore-dry-run]
   step "release write-freeze (remove sentinel + un-drain both web hosts)"
-  if [ "$DRY_RUN" = "1" ]; then log "DRY_RUN: no freeze to release"; return 0; fi
-  gd_ssh "$GIT_DATA_HOST" "rm -f '$FREEZE_SENTINEL'" \
-    || log "WARNING: could not remove freeze sentinel $FREEZE_SENTINEL — remove it manually"
+  if [ "$DRY_RUN" = "1" ] && [ "${1:-}" != "--ignore-dry-run" ]; then log "DRY_RUN: no freeze to release"; return 0; fi
+  local h rc=0
+  gd_ssh "$GIT_DATA_HOST" "rm -f '$FREEZE_SENTINEL'" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "WARNING: could not remove freeze sentinel $FREEZE_SENTINEL — remove it manually"
+    recovery_warn freeze_sentinel_rm "$rc"
+  fi
   for h in $WEB_HOSTS; do
-    web_ssh "$h" 'systemctl stop soleur-drain.service' \
-      || log "WARNING: could not un-drain web host $h — un-drain it manually"
-    log "un-drained web host $h"
+    rc=0
+    web_ssh "$h" 'systemctl stop soleur-drain.service' || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      log "WARNING: could not un-drain web host $h — un-drain it manually"
+      recovery_warn web_undrain "$rc"
+    else
+      log "un-drained web host $h"
+    fi
   done
   FREEZE_HELD=0
   log "write-freeze RELEASED"
@@ -357,10 +481,19 @@ flip_flag_and_reload() {
 # those git-data-only post-flip writes are reconciled — origin does NOT hold them.
 rollback() {
   step "ROLLBACK: $FLAG_NAME -> off + reload both hosts"
-  set_flag "false" || log "WARNING: could not write $FLAG_NAME=false — set it manually in Doppler prd NOW"
+  local h rc=0
+  set_flag "false" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "WARNING: could not write $FLAG_NAME=false — set it manually in Doppler prd NOW"
+    recovery_warn set_flag "$rc"
+  fi
   for h in $WEB_HOSTS; do
-    web_ssh "$h" 'systemctl restart soleur-web.service' \
-      || log "WARNING: could not reload $h during rollback — reload it manually"
+    rc=0
+    web_ssh "$h" 'systemctl restart soleur-web.service' || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      log "WARNING: could not reload $h during rollback — reload it manually"
+      recovery_warn web_restart "$rc"
+    fi
   done
   FLIP_DONE=0
   log "ROLLBACK complete — both hosts back on the pre-cutover read path."
@@ -440,16 +573,18 @@ old_volume_wipe() {
 # ============================================================================
 main() {
   # Rollback-only recovery mode (workflow_dispatch rollback=true). Reverts the flag
-  # and ensures the freeze is released; ignores DRY_RUN.
+  # and ensures the freeze is released; ignores DRY_RUN. No access probe runs here:
+  # the flag-off write needs no SSH and must never wait on one.
   if [ "$ROLLBACK" = "1" ]; then
     step "ROLLBACK-ONLY mode (operator-invoked recovery)"
     rollback
-    release_freeze
+    release_freeze --ignore-dry-run
     log "rollback-only complete"
     exit 0
   fi
 
   log "starting git-data LUKS cutover (DRY_RUN=$DRY_RUN, CONFIRM_WIPE=$CONFIRM_WIPE)"
+  access_gate
   prepare_luks_target        # GAP-2: unlock+mount the LUKS volume (cloud-init won't on a running host)
   preconditions
   bulk_rsync                 # writers live
