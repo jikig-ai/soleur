@@ -5,6 +5,11 @@ import type {
   EngineRunContext,
 } from "./agent-engine-contract";
 import { createReviewedEngineAdapter, type EngineAdapterFactory } from "./agent-engine-adapter-factory";
+import {
+  authorizeEngineDataEgress,
+  type EngineDataEgressEvidence,
+} from "./agent-engine-data-egress-policy";
+import type { EngineSelection } from "./agent-engine-contract";
 
 interface BindingRepository {
   getRun(runId: string): Promise<unknown>;
@@ -31,6 +36,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   repository: BindingRepository;
   factories: Readonly<Record<string, EngineAdapterFactory>>;
   eventSink?: EventSink;
+  egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
   runId: string;
   input: EngineInput;
   context: EngineRunContext;
@@ -39,6 +45,12 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
   const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
     (persisted as unknown as EngineRunContext["binding"]);
+  if (options.egress) {
+    if (options.egress.selection.engineId !== binding.engineId) {
+      throw new Error("egress selection does not match persisted engine binding");
+    }
+    authorizeEngineDataEgress(options.egress.selection, options.egress.evidence);
+  }
   const adapter = createReviewedEngineAdapter(binding.engineId, options.factories, "existing-run");
   yield* dispatchBoundEngineRun({
     repository: options.repository,
