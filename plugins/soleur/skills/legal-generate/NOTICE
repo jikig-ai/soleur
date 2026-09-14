@@ -1,5 +1,6 @@
 ---
 upstream: github.com/General-Legal/legal-templates
+license: CC0-1.0
 pinned-commit: 0f7c7bfabf1be77a2bf52eef80815e24c93a190a
 last-verified: 2026-09-13
 registry: knowledge-base/engineering/policies/content-vendoring.md

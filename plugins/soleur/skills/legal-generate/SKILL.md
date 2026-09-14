@@ -166,6 +166,27 @@ below.
           echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
           exit 2; }
    bash "$SENTINEL" "$DRAFT"
+   sentinel_rc=$?
+
+   # Vendor-residue audit — MUST run in THIS fence: the trap above deletes
+   # "$DRAFT" at block exit, so any audit in a later fence greps a dead path
+   # and can never evaluate true. All greps print hits; any hit halts.
+   residue=0
+   grep -inE 'general[-.[:space:]]?legal' "$DRAFT" && residue=1            # vendor marks
+   grep -inE 'attorney[- ]draft|prepared by[^.]{0,30}(attorney|law firm)|reviewed by[^.]{0,30}attorney' "$DRAFT" && residue=1  # credential-claim leakage
+   grep -nE '<mark' "$DRAFT" && residue=1                                 # unfilled substrate slots
+   grep -nP '\[[^\]]+\](?!\()' "$DRAFT" && residue=1                      # bare-bracket remnants (markdown links excluded)
+   grep -nE 'OPTION [AB]|\[Select one|TEMPLATE ' "$DRAFT" && residue=1    # un-deleted decision constructs / scaffold rows
+   # Advisory (cannot hard-halt): a legitimately chosen Option B carries
+   # "DecisionLayer" text. Print hits for the operator; the OPTION/[Select
+   # grep above already halts on an UNRESOLVED choice construct.
+   grep -inE 'decisionlayer|decision science research' "$DRAFT" || true
+   if (( residue )); then
+     echo "SOLEUR_LEGAL_GENERATE_HALT reason=vendor-residue draft=[$DRAFT]"
+     echo "legal-generate: the draft still carries substrate/vendor residue — see the lines above; do not present." >&2
+     exit 2
+   fi
+   exit "$sentinel_rc"
    ```
 
    The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).
@@ -179,15 +200,7 @@ No un-scanned draft ever crosses the transcript or lands on disk.
 
 ## Phase 3: Output
 
-Before presenting, self-audit the draft — all three greps must return zero hits:
-
-```bash
-grep -icE 'general[-.[:space:]]?legal' "$DRAFT"            # vendor marks (general.legal / General Legal / General-Legal)
-grep -icE 'attorney[- ]draft|prepared by[^.]{0,30}(attorney|law firm)|reviewed by[^.]{0,30}attorney' "$DRAFT"  # credential-claim leakage
-grep -cE '<mark|\[FIELD\]' "$DRAFT"                        # unfilled substrate slots
-```
-
-Any hit → do not present; report the residue. (The agent already runs this on the template-fill arm — this is the skill-level double-check.)
+The vendor-residue audit ran inside the Phase 2.5 fence — `$DRAFT` is deleted by the trap when that block exits, so nothing here may re-grep it. If the fence exited 2 with `reason=vendor-residue`, do not present; report the residue lines it printed.
 
 <decision_gate>
 

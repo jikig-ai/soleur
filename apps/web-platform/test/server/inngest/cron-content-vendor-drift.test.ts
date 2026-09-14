@@ -6,7 +6,7 @@
 //   2. Source-shape anchors — verbatim strings from the implementation that
 //      must survive silent refactoring.
 //   3. Exported constants (SYNTHETIC_CHECK_NAMES, MAX_RUN_DURATION_MS,
-//      ISSUE_EXIT_CODES, NOTICE_FILE_REL, CLASSIFIER_REL, PARSER_REL).
+//      ISSUE_EXIT_CODES, NOTICE_FILENAME, CLASSIFIER_REL, PARSER_REL).
 //   4. Trust-model routing: ISSUE_EXIT_CODES set shape.
 
 import { describe, expect, it, vi } from "vitest";
@@ -753,7 +753,7 @@ describe("classifyFileComparison — Guard 3 row 2 (the false-clean arm)", () =>
 });
 
 // =============================================================================
-// Multi-bundle — schema-keyed enrollment + per-bundle identity (ADR-218)
+// Multi-bundle — schema-keyed enrollment + per-bundle identity (ADR-219)
 // =============================================================================
 
 describe("isSchemaConformingNotice — the shared enrollment predicate", () => {

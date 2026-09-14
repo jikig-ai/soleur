@@ -5,7 +5,7 @@
 # but unenrolled drifts silently: no lefthook pin-integrity, no PR-time
 # upstream verify, no cron comparison.
 #
-# The enrollment predicate is THE SAME ONE the cron uses (ADR-218): a NOTICE
+# The enrollment predicate is THE SAME ONE the cron uses (ADR-219): a NOTICE
 # enrolls its skill iff the parser reads non-empty `upstream` AND
 # `pinned-commit` from it. This suite derives the conforming set with the
 # real parser — not a glob — so `incident/NOTICE` (prose attribution, no
@@ -84,19 +84,40 @@ echo "TS4: every conforming bundle is enrolled in lefthook + vendor-pin-verify +
 for slug in "${CONFORMING[@]}"; do
   prefix="plugins/soleur/skills/$slug"
 
-  if grep -qF "$prefix/NOTICE" "$LEFTHOOK"; then
+  # Scope to glob LIST ITEMS (`- "..."`) — the stanza's `run:` line also names
+  # the NOTICE path (NOTICE_FILE=...) and must NOT satisfy this check: deleting
+  # the glob while the run line remains has to go RED. Verified against the
+  # test's own predicate: `grep -qF "$prefix/NOTICE"` alone matches both lines.
+  if grep -E '^[[:space:]]+-[[:space:]]' "$LEFTHOOK" | grep -qF "$prefix/NOTICE"; then
     echo "  PASS: $slug NOTICE covered by a lefthook glob"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: $prefix/NOTICE not covered by any lefthook glob"
+    echo "  FAIL: $prefix/NOTICE not covered by any lefthook glob (run: line does not count)"
     FAIL=$((FAIL + 1))
   fi
 
-  if grep -qF "$prefix/references/" "$LEFTHOOK"; then
+  if grep -E '^[[:space:]]+-[[:space:]]' "$LEFTHOOK" | grep -qF "$prefix/references/"; then
     echo "  PASS: $slug references/ covered by a lefthook glob"
     PASS=$((PASS + 1))
   else
     echo "  FAIL: $prefix/references/ not covered by any lefthook glob"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # The stanza must actually DO something: a `run:` line invoking
+  # vendor-pin-integrity.sh that is wired to THIS bundle — either the bundle's
+  # NOTICE is exported via NOTICE_FILE= (required for every non-default
+  # bundle; without it the script validates the bundle's files against the
+  # WRONG registry) or the script lives under the bundle's own skill dir
+  # (the default bundle — its built-in NOTICE is that bundle's). `run: true`
+  # or a dropped NOTICE_FILE fails here.
+  run_lines="$(grep -E '^[[:space:]]+run:.*vendor-pin-integrity\.sh' "$LEFTHOOK" || true)"
+  if printf '%s\n' "$run_lines" | grep -qF "NOTICE_FILE=\"$prefix/NOTICE\"" \
+     || printf '%s\n' "$run_lines" | grep -qF "skills/$slug/scripts/vendor-pin-integrity.sh"; then
+    echo "  PASS: $slug lefthook run: invokes vendor-pin-integrity.sh against its own NOTICE"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: no run: line wires vendor-pin-integrity.sh to $slug's NOTICE"
     FAIL=$((FAIL + 1))
   fi
 
@@ -120,16 +141,23 @@ echo ""
 
 # --- Skipped NOTICEs must NOT appear in enforcement surfaces ---
 echo "TS6: skipped (non-conforming) NOTICEs are not enrolled anywhere"
-for slug in "${NONCONFORMING[@]:-}"; do
-  prefix="plugins/soleur/skills/$slug"
-  if grep -qF "$prefix/NOTICE" "$LEFTHOOK" || grep -qF "$prefix/NOTICE" "$VERIFY"; then
-    echo "  FAIL: $prefix/NOTICE is non-conforming but enrolled in lefthook/verify"
-    FAIL=$((FAIL + 1))
-  else
-    echo "  PASS: $slug correctly unenrolled"
-    PASS=$((PASS + 1))
-  fi
-done
+# `${arr[@]:-}` expands an EMPTY array to one empty element — the loop would
+# run once on slug="" and manufacture a phantom "correctly unenrolled" pass.
+if ((${#NONCONFORMING[@]} == 0)); then
+  echo "  FAIL: no non-conforming NOTICE found — incident/NOTICE missing or the walk broke"
+  FAIL=$((FAIL + 1))
+else
+  for slug in "${NONCONFORMING[@]}"; do
+    prefix="plugins/soleur/skills/$slug"
+    if grep -qF "$prefix/NOTICE" "$LEFTHOOK" || grep -qF "$prefix/NOTICE" "$VERIFY"; then
+      echo "  FAIL: $prefix/NOTICE is non-conforming but enrolled in lefthook/verify"
+      FAIL=$((FAIL + 1))
+    else
+      echo "  PASS: $slug correctly unenrolled"
+      PASS=$((PASS + 1))
+    fi
+  done
+fi
 echo ""
 
-print_results
+print_results 19

@@ -1,8 +1,11 @@
 // TR9 Phase-2 — Migrated from the GHA scheduled-content-vendor-drift
 // workflow (deleted in the same PR per TR9 I-13 hygiene). Weekly upstream
-// content drift detector. Parses NOTICE files in plugins/soleur/skills/*/
-// NOTICE.md, fetches upstream blobs, detects SHA drift, runs 3-way merge.
-// Opens PR for low-risk drift, issue for security/license drift.
+// content drift detector. Parses schema-conforming NOTICE files under
+// plugins/soleur/skills/<slug>/NOTICE (multi-bundle discovery, ADR-219),
+// fetches upstream blobs, detects SHA drift. Routes security-relevant drift
+// to an issue; the low-risk auto-PR route (classifier rc 13) currently opens
+// no artifact — the re-vendor write is unimplemented and the arm reports
+// unhealthy rather than silent-green (see prArtifactMissing).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — Octokit + node:fs reads called INSIDE step.run (replay memoization).
@@ -46,7 +49,11 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
-import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import {
+  SYNTHETIC_CHECK_NAMES,
+  safeCommitAndPr,
+  type SafeCommitResult,
+} from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -72,7 +79,7 @@ const TOKEN_MIN_LIFETIME_MS = 20 * 60 * 1000;
 /**
  * Bundle discovery root. Every `plugins/soleur/skills/<slug>/NOTICE` whose
  * frontmatter parses AND declares non-empty `upstream` + `pinned-commit` is
- * a vendored bundle (schema-keyed enrollment, ADR-218). Prose attribution
+ * a vendored bundle (schema-keyed enrollment, ADR-219). Prose attribution
  * NOTICEs without the schema — `incident/NOTICE` exists on the tree today —
  * match the bare glob but are skip-with-warn, never enrolled.
  */
@@ -160,7 +167,6 @@ const CATEGORY_LABELS: Record<string, string[]> = {
 /** Exit codes that route to issue (security-relevant). */
 export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
 
-/**
 /** Repository-level state of the upstream, observed once per run. */
 export type UpstreamRepoState = "ok" | "archived" | "renamed" | "unreachable";
 
@@ -393,7 +399,7 @@ interface DetectResult extends ComparisonTotals {
  */
 interface BundleOutcome {
   slug: string;
-  status: string;
+  status: "failed" | "no-drift" | "detected" | "skipped-open-pr";
   route: "pr" | "issue" | "none" | null;
   healthy: boolean;
   attestationOutcome: string;
@@ -405,8 +411,6 @@ interface BundleOutcome {
 interface HandlerResult {
   ok: boolean;
   status: string;
-  route?: "pr" | "issue" | "none";
-  labels?: string[];
   bundles?: BundleOutcome[];
 }
 
@@ -614,7 +618,11 @@ export function classifyBranchOwner(
 ): string | null {
   if (!ref.startsWith(`${prefix}-`)) return null;
   const rest = ref.slice(prefix.length + 1);
-  for (const slug of slugs) {
+  // Longest-match-first: when one slug is a hyphenated prefix of another
+  // (`legal` vs `legal-generate`), iterating the sorted slug list would hand
+  // `ci/content-vendor-drift-legal-generate-<ts>` to `legal` — suppressing the
+  // longer slug's dedup and misattributing its artifacts.
+  for (const slug of [...slugs].sort((a, b) => b.length - a.length)) {
     if (rest.startsWith(`${slug}-`)) return slug;
   }
   return LEGACY_BUNDLE_SLUG;
@@ -1413,8 +1421,14 @@ async function runBundleArm(deps: {
   // Branch becomes ci/content-vendor-drift-<slug>-<ts> via the per-bundle
   // cronName (helper derivation, #5111) — the detect step's open-PR dedup
   // classifies this namespace by slug and was updated in lockstep.
+  // `pr` route honesty: the result is CAPTURED, not discarded. Nothing in the
+  // detect step writes vendored content into the worktree (the re-vendor write
+  // is unimplemented — tracked follow-up), so today this step always lands
+  // `no-changes`. A pr-route arm with no committed artifact is NOT healthy —
+  // the heartbeat must not read `route !== "none"` as "artifact produced".
+  let prStepResult: SafeCommitResult | null = null;
   if (detectResult.route === "pr") {
-    await step.run(`safe-commit-pr-${bundle.slug}`, async () =>
+    prStepResult = await step.run(`safe-commit-pr-${bundle.slug}`, async () =>
       safeCommitAndPr({
         spawnCwd: repoRoot,
         installationToken,
@@ -1460,10 +1474,17 @@ async function runBundleArm(deps: {
       // Idempotency, scoped PER BUNDLE: titles carry `[<slug>]`, and legacy
       // titles with no slug token classify as LEGACY_BUNDLE_SLUG's — an open
       // bundle-A issue must not suppress bundle-B's filing.
+      // Dedup on the TITLE PHRASE alone — the label conjunct would miss the
+      // four non-security drift classes (license/archived/renamed/rollback
+      // carry vendor/license-changed, vendor/upstream-archived and
+      // vendor/upstream-rollback, NOT vendor/pin-drift), so an unresolved
+      // issue in any of those classes was invisible to this query and the
+      // run re-filed a duplicate every week. Bundle ownership is still
+      // partitioned client-side by classifyIssueOwner on the [<slug>] token.
       const { data: existing } = await octokit.request(
         "GET /search/issues",
         {
-          q: `is:issue is:open repo:${REPO_OWNER}/${REPO_NAME} label:vendor/pin-drift "security-relevant drift" in:title`,
+          q: `is:issue is:open repo:${REPO_OWNER}/${REPO_NAME} "security-relevant drift" in:title`,
           per_page: 20,
         },
       );
@@ -1767,12 +1788,24 @@ async function runBundleArm(deps: {
   // line is the accountability artifact ADR-203 relies on — duplicating it
   // corrupts the evidence it exists to be. Same for the Sentry mirror
   // below (#7710 review).
-  const bundleHealthy = heartbeatOk(
-    measurementFailed,
-    attestationEligible,
-    observedAgeDays,
-    detectResult.route,
-  );
+  // A `pr` route that produced no committed artifact reads as "none" for
+  // health purposes — the dedup-and-skip path aside, `route !== "none"` is the
+  // heartbeat's "the run produced an artifact" signal, and a discarded
+  // `no-changes` result must not satisfy it. This is also what makes the
+  // unimplemented re-vendor write VISIBLE the day an upstream drifts into the
+  // auto-PR class: red check-in + Sentry event instead of a silent green.
+  const prArtifactMissing =
+    detectResult.route === "pr" && prStepResult?.status !== "committed";
+  if (prArtifactMissing) {
+    attestationOutcome = `pr-route-no-artifact(${prStepResult?.status ?? "no-step"})`;
+  }
+  const bundleHealthy =
+    heartbeatOk(
+      measurementFailed,
+      attestationEligible,
+      observedAgeDays,
+      detectResult.route,
+    ) && !prArtifactMissing;
   await step.run(`attestation-summary-${bundle.slug}`, async () => {
     // WARN, not info. Measured: `logger.info` reaches no observability
     // layer — the Sentry breadcrumb mirror keeps >= warn

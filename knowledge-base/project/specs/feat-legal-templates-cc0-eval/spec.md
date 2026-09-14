@@ -81,7 +81,7 @@ No new skill — templates live under the existing `legal-generate` skill dir (l
 
 ## Implementation Status (2026-09-13)
 
-- Brainstorm gap G1 (multi-bundle vendored registry) — **filled**: schema-keyed `discoverBundles`, per-bundle step IDs/branches/dedup/env, typed per-bundle failures, AND-aggregated health (ADR-218).
+- Brainstorm gap G1 (multi-bundle vendored registry) — **filled**: schema-keyed `discoverBundles`, per-bundle step IDs/branches/dedup/env, typed per-bundle failures, AND-aggregated health (ADR-219).
 - `legal-generate` — **partial**: 14 types supported; 11 substrate-backed (US/EU per routing table), from-scratch retained for uncovered types and non-US/UK jurisdictions; gated types are request-only.
 - `legal-audit` — **partial**: unchanged by this feature; audits generated output but carries no template-provenance awareness. Periodic corpus re-audit tracked as a follow-up (TR3).
 - Corpus audit retained both spec-gated templates verbatim — `knowledge-base/legal/audits/2026-09-13-legal-templates-cc0-corpus-audit.md`.

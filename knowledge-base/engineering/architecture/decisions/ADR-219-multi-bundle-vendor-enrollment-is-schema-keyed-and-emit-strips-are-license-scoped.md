@@ -1,5 +1,5 @@
 ---
-title: "ADR-218: Multi-bundle vendor enrollment is schema-keyed, and emit strips are license-scoped"
+title: "ADR-219: Multi-bundle vendor enrollment is schema-keyed, and emit strips are license-scoped"
 status: Accepted
 date: 2026-09-13
 supersedes: []
@@ -7,7 +7,7 @@ amends: []
 tags: [vendoring, cron, legal, licensing]
 ---
 
-# ADR-218: Multi-bundle vendor enrollment is schema-keyed, and emit strips are license-scoped
+# ADR-219: Multi-bundle vendor enrollment is schema-keyed, and emit strips are license-scoped
 
 ## Status
 
@@ -74,7 +74,8 @@ path may exist at all (see `content-vendoring.md` §9a).
   cron/workflow/lefthook edits beyond the file-glob coverage Guard 2 asserts.
 - The shared single monitor is a deliberate trade-off: one Sentry heartbeat
   covering the AND of all bundles. Per-bundle failure detail lives in the
-  handler result and `vendor/cron-failure` issues, not in separate monitors.
+  handler result and the `reportSilentFallback` Sentry event each arm emits
+  (`op=bundle-arm`), not in separate monitors or filed issues.
 - Known limitation: the drift classifier's path handling is anchored on
   `references/`/`layers/` shapes; a bundle vendoring under a different
   directory shape needs a classifier audit before enrollment.

@@ -402,7 +402,7 @@ true of the shipped feature.
 - `content-vendoring.md`: standing "emit-strip doctrine" section — vendored content may carry
   upstream promotional surfaces; corpus retains them for provenance/diff-fidelity; emit paths
   strip deterministically and fail loud on unexpected shape; **the doctrine applies only to
-  no-attribution licenses** (a CC-BY bundle would require attribution — scoped in ADR-218 and
+  no-attribution licenses** (a CC-BY bundle would require attribution — scoped in ADR-219 and
   the descriptor via `license`/`strip-permitted`).
 - Follow-up issues: "UK legal-template coverage" (generator fallback; re-evaluate on demand);
   "periodic legal-currency re-audit" (TR3 mechanism above); "split cron-content-vendor-drift
@@ -471,8 +471,8 @@ logs:
   retention:       "Inngest dashboard retention"
 
 discoverability_test:
-  command:         "bash -c 'for n in plugins/soleur/skills/*/NOTICE; do d=$(NOTICE_FILE=\"$n\" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh days-stale); echo \"$n: $d days\"; done'"
-  expected_output: "one line per discovered NOTICE (>=2), each reporting < 30 days on a healthy tree"
+  command:         "bash -c 'for n in plugins/soleur/skills/*/NOTICE; do u=$(NOTICE_FILE=\"$n\" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field upstream 2>/dev/null || true); p=$(NOTICE_FILE=\"$n\" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field pinned-commit 2>/dev/null || true); [ -z \"$u\" ] || [ -z \"$p\" ] && { echo \"$n: non-conforming (skipped)\"; continue; }; d=$(NOTICE_FILE=\"$n\" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh days-stale); echo \"$n: $d days\"; done'"
+  expected_output: "one line per schema-conforming NOTICE (>=2), each reporting < 30 days on a healthy tree; non-conforming NOTICEs (e.g. incident/NOTICE) print 'non-conforming (skipped)' and must NOT report a days figure"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -482,7 +482,7 @@ resolver/trust-boundary change to a compliance enforcement stack.
 
 ### ADR
 
-Create `knowledge-base/engineering/architecture/decisions/ADR-218-multi-bundle-vendored-content-registry.md`
+Create `knowledge-base/engineering/architecture/decisions/ADR-219-multi-bundle-vendored-content-registry.md`
 (ordinal **provisional** — re-verify next-free against all `origin/*` refs immediately before
 merge per the ADR-155/#7418 collisions). Decision: vendored-content enforcement is
 registry-driven — every `plugins/soleur/skills/*/NOTICE` is auto-enrolled in drift cron,
@@ -675,14 +675,14 @@ carried forward (no user-facing copy surface).
   (case-insensitive, all three written forms) appears outside an explicit allowlist —
   `plugins/soleur/skills/legal-generate/references/templates/**` (corpus), the legal-generate
   `NOTICE`, `content-vendoring.md`, `compliance-posture.md`, `recommended-tools.md`,
-  ADR-218, and the vendoring runbook (`hr-third-party-content-grep-on-undertaking`).
+  ADR-219, and the vendoring runbook (`hr-third-party-content-grep-on-undertaking`).
 - [ ] AC19: `plugins/soleur/README.md` skill-table prose updated (14 document types — the
   `:252` "(8 document types, 3 jurisdictions)" line).
 - [ ] AC20: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`
   generalized per-bundle (issue-title/path literals parameterized; the stale "dispatch the
   workflow" line at :87 referencing the deleted GHA workflow fixed).
 - [ ] AC21: `content-vendoring.md` carries the standing emit-strip doctrine section scoped to
-  no-attribution licenses; ADR-218 records the schema-keyed enrollment contract, the
+  no-attribution licenses; ADR-219 records the schema-keyed enrollment contract, the
   license-scoped strip doctrine, the shared-monitor trade-off, and the `layers/`-anchored
   classifier limitation for `templates/` upstream paths.
 
@@ -770,7 +770,7 @@ None — queried 65 open `code-review` issues; zero bodies mention any planned f
 - `plugins/soleur/test/vendor-bundle-coverage.test.sh`
 - `apps/web-platform/test/server/inngest/cron-content-vendor-drift.test.ts` additions —
   cross-bundle masking test (may live inside the existing file's describe blocks)
-- `knowledge-base/engineering/architecture/decisions/ADR-218-multi-bundle-vendored-content-registry.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-219-multi-bundle-vendored-content-registry.md` (ordinal provisional)
 - `knowledge-base/legal/audits/<date>-general-legal-corpus-audit.md` (auditor output — audits/ is the clo-path convention, clo.md:68)
 
 ## Files to Edit

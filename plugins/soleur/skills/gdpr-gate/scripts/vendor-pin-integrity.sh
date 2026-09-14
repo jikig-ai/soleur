@@ -73,20 +73,29 @@ if (( VERIFY_UPSTREAM )); then
     exit 1
   fi
   fails=0
+  checked=0
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     upstream_path="${line%%:*}"
     upstream_sha="${line##*:}"
+    checked=$((checked + 1))
     if ! gh api "repos/$OWNER_REPO/git/blobs/$upstream_sha" --silent 2>/dev/null; then
       echo "vendor-pin-integrity: upstream blob $upstream_sha (path $upstream_path) not fetchable from $OWNER_REPO — NOTICE may have been tampered with" >&2
       fails=$((fails + 1))
     fi
   done < <(bash "$PARSER" upstream-files)
+  # "0 checked, 0 failed" must NOT read as success — an empty lifted-files
+  # registry (or a parser that yields nothing) would otherwise print the
+  # verified message and exit 0 having verified no blob at all.
+  if (( checked == 0 )); then
+    echo "vendor-pin-integrity: NOTICE declares no lifted-files records — nothing was verified; refusing to pass vacuously" >&2
+    exit 1
+  fi
   if (( fails > 0 )); then
     echo "vendor-pin-integrity: $fails upstream blob(s) failed verification" >&2
     exit 1
   fi
-  echo "vendor-pin-integrity: all NOTICE upstream-blob-sha values verified against $OWNER_REPO"
+  echo "vendor-pin-integrity: all $checked NOTICE upstream-blob-sha values verified against $OWNER_REPO"
   exit 0
 fi
 
@@ -94,7 +103,10 @@ fi
 #
 # TWO registries feed this map, with the same record shape and opposite
 # provenance (#7710):
-#   lifted-files    — upstream-derived, pinned against goSprinto MIT content.
+#   lifted-files    — upstream-derived, pinned against the NOTICE's declared
+#                     upstream (goSprinto MIT for gdpr-gate; General-Legal CC0
+#                     for legal-generate via the SKILL_PREFIX/NOTICE_FILE
+#                     overrides).
 #   soleur-authored — written from scratch for this plugin, no upstream.
 # Both are tamper-checked identically; only the ORIGIN map below differs, and
 # it exists so a mismatch names the list the file actually belongs to. Before

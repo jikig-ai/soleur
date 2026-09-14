@@ -17,7 +17,7 @@
 | 5 | Generator agent: substrate selection + `<mark>` field-collection contract + gates | 4 |
 | 6 | SKILL.md + README: menu mechanics, fill arm, staleness pre-step, word-neutral description | 5 |
 | 7 | Legal: Disclaimer §2.3 amendment only (canonical+mirror, sha256 repin, Last-Updated, posture cell) | 5 |
-| 8 | Closures: recommended-tools, ADR-218, C4, corpus audit, runbook, policy doctrine, follow-up issues, spec/#3786 | 7 |
+| 8 | Closures: recommended-tools, ADR-219, C4, corpus audit, runbook, policy doctrine, follow-up issues, spec/#3786 | 7 |
 
 ---
 
@@ -203,7 +203,7 @@ SHA re-pin only, no version machinery.
   licenses.
 - `vendor-pin-drift-resolution.md` — per-bundle generalization + fix stale :87 (deleted GHA
   workflow reference).
-- `ADR-218` — ordinal re-verified vs `origin/*` pre-merge; records schema-keyed enrollment,
+- `ADR-219` — ordinal re-verified vs `origin/*` pre-merge; records schema-keyed enrollment,
   license-scoped strip doctrine, shared-monitor trade-off, `layers/`-anchored classifier
   limitation on `templates/` paths.
 - `model.c4` — extend `github` external-system description for second upstream; c4 tests green.

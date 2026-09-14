@@ -16,7 +16,14 @@
 //      hyphenated `General-Legal` header and spaced `General Legal` credit.
 
 import { describe, test, expect } from "bun:test";
-import { readdirSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -43,11 +50,11 @@ const CLAIM_TOKENS =
 
 const CORPUS_FLOOR = 12;
 
-function corpusFiles(): string[] {
-  if (!existsSync(TEMPLATES_DIR)) return [];
-  return readdirSync(TEMPLATES_DIR, { withFileTypes: true })
+function corpusFiles(dir: string = TEMPLATES_DIR): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
     .filter((d) => d.isDirectory())
-    .map((d) => join(TEMPLATES_DIR, d.name, "template.md"))
+    .map((d) => join(dir, d.name, "template.md"))
     .filter((p) => existsSync(p))
     .sort();
 }
@@ -84,26 +91,25 @@ describe("Guard 1 — vendored-template emit surface", () => {
     // If the deletion logic were removed, every file would fail this suite.
     // Proving the UNSCRUBBED input flags is what makes the stripped green mean
     // something.
-    const { readFileSync } = require("node:fs");
     const flagged = files.filter((f) =>
       VENDOR_MARK.test(readFileSync(f, "utf8")),
     );
     expect(flagged.length).toBe(files.length);
   });
 
-  test("mutation row 2 — empty corpus fixture trips the floor", () => {
+  test("mutation row 2 — the walk itself yields below-floor on an empty corpus", () => {
+    // Exercises the REAL corpusFiles() walk against an empty fixture dir: a
+    // vacuous walk (wrong glob, renamed dir) returns 0 and the floor at the
+    // corpus-count test is what fires — this proves the walk can produce 0.
     const empty = mkdtempSync(join(tmpdir(), "legal-corpus-empty-"));
-    const walked = readdirSync(empty, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => join(empty, d.name, "template.md"))
-      .filter((p) => existsSync(p));
-    expect(walked.length).toBeLessThan(CORPUS_FLOOR);
+    expect(corpusFiles(empty).length).toBe(0);
+    expect(corpusFiles(empty).length).toBeLessThan(CORPUS_FLOOR);
   });
 
   test("mutation row 3 — a synthetic template whose marks survive stripping flags", () => {
     const dir = mkdtempSync(join(tmpdir(), "legal-corpus-synth-"));
     const synth = join(dir, "synthetic", "template.md");
-    require("node:fs").mkdirSync(join(dir, "synthetic"), { recursive: true });
+    mkdirSync(join(dir, "synthetic"), { recursive: true });
     writeFileSync(
       synth,
       [
@@ -140,5 +146,92 @@ describe("Guard 1 — vendored-template emit surface", () => {
     ].join("\n");
     expect(narrow.test(fixture)).toBe(false); // proves the narrow form is blind
     expect(VENDOR_MARK.test(fixture)).toBe(true); // and the widened form is not
+  });
+});
+
+// The strip script and these regexes are only half the guard — the ROUTING
+// instruction that carries substrate → stripper lives in the generator doc,
+// and the runtime double-check lives in SKILL.md's Phase-2.5 fence. Both are
+// prose an agent executes; nothing else tests them. These anchors pin the
+// contract's load-bearing steps so a doc edit can't silently delete the strip
+// step, the scratch-copy step, or a residue token.
+describe("Guard 1b — protocol anchors (the prose the corpus guard depends on)", () => {
+  const GENERATOR = readFileSync(
+    resolve(REPO_ROOT, "plugins/soleur/agents/legal/legal-document-generator.md"),
+    "utf8",
+  );
+  const SKILL = readFileSync(
+    resolve(REPO_ROOT, "plugins/soleur/skills/legal-generate/SKILL.md"),
+    "utf8",
+  );
+
+  test("generator doc routes substrate fills through a scratch copy — never in-place corpus edits", () => {
+    // In-place edits corrupt the pin AND pollute every later run on an
+    // installed plugin (cross-user contamination). The contract must forbid
+    // them and prescribe the working copy.
+    expect(GENERATOR).toMatch(/Never edit `references\/templates/);
+    expect(GENERATOR).toMatch(/scratch file|scratch copy/i);
+    expect(GENERATOR).toMatch(/strip-vendor-credit\.sh`? on the filled/);
+  });
+
+  test("generator doc enumerates BOTH placeholder grammars — <mark> AND bare [bracket]", () => {
+    // The corpus's real placeholder vocabulary is <mark> + bare [X] +
+    // instruction lines. A <mark>-only enumeration leaves signature blocks,
+    // [ADD] cells and [Select one…] instructions unfilled-and-unscanned.
+    expect(GENERATOR).toMatch(/<mark>\[^<\]\+<\/mark>|<mark>…<\/mark>/);
+    expect(GENERATOR).toMatch(/\[BRACKET\]|bare `?\[/i);
+  });
+
+  test("generator emit scan covers the full residue set — not just vendor marks", () => {
+    // Each token below is a defect class that has shipped-or-nearly-shipped:
+    // bare brackets (signature blocks), un-deleted option constructs
+    // (OPTION A/B + [Select one]), scaffold rows (TEMPLATE), and the
+    // vendor-affiliated DecisionLayer clause.
+    for (const token of [
+      "general[-.[:space:]]?legal",
+      "attorney[- ]draft",
+      "<mark",
+      "OPTION [AB]",
+      "Select one",
+      "TEMPLATE",
+      "decisionlayer",
+    ]) {
+      expect(GENERATOR).toContain(token);
+    }
+    // Augment-after-strip ordering is load-bearing: the strip drops the vendor
+    // header only when it is line 1.
+    expect(GENERATOR).toMatch(/Augment the stripped output|strip.*before.*augment|augmentation goes ON TOP/i);
+  });
+
+  test("DecisionLayer is a required surfaced choice with the JAMS-A default", () => {
+    expect(GENERATOR).toMatch(/AskUserQuestion/);
+    expect(GENERATOR).toMatch(/default to Option A \(JAMS\)/);
+    expect(GENERATOR).toMatch(/affiliated with the template vendor/);
+  });
+
+  test("SKILL.md residue audit lives INSIDE the $DRAFT fence and covers the same token set", () => {
+    // $DRAFT is trap-deleted at fence exit — an audit in a later fence greps a
+    // dead path. Pin the audit's tokens AND that they sit before the fence's
+    // closing exit inside the same block as the trap registration.
+    const fenceStart = SKILL.indexOf("trap 'rm -f \"$DRAFT\"'");
+    const fenceEnd = SKILL.indexOf("exit \"$sentinel_rc\"");
+    expect(fenceStart).toBeGreaterThan(-1);
+    expect(fenceEnd).toBeGreaterThan(fenceStart);
+    const fence = SKILL.slice(fenceStart, fenceEnd);
+    for (const token of [
+      "general[-.[:space:]]?legal",
+      "attorney[- ]draft",
+      "<mark",
+      "OPTION [AB]",
+      "Select one",
+      "TEMPLATE ",
+      "decisionlayer",
+      "vendor-residue",
+    ]) {
+      expect(fence).toContain(token);
+    }
+    // And no audit may live OUTSIDE the fence on $DRAFT (the dead-grep bug).
+    const afterFence = SKILL.slice(fenceEnd);
+    expect(afterFence).not.toMatch(/grep[^\n]*\$DRAFT/);
   });
 });

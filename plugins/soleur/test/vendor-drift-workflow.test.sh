@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 
-# Tests for .github/workflows/scheduled-content-vendor-drift.yml.
+# Tests for apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
+# (the Inngest function that replaced the deleted
+# .github/workflows/scheduled-content-vendor-drift.yml).
 # Run: bash plugins/soleur/test/vendor-drift-workflow.test.sh
 #
-# The drift workflow runs weekly, reads NOTICE frontmatter, fetches upstream
-# blob SHAs via `gh api`, classifies any drift, opens a re-vendor PR via the
-# bot-pr-with-synthetic-checks composite, and files an issue on cron failure.
+# The drift cron runs weekly, discovers schema-conforming NOTICE bundles,
+# fetches upstream blob SHAs via Octokit, classifies any drift, routes
+# security-relevant classes to a deduplicated issue, and reports a typed
+# per-bundle outcome to the run-level Sentry heartbeat. The auto-PR re-vendor
+# route is registered but produces no artifact today (see ADR-219).
 #
 # This integration test does NOT execute the workflow against real upstream
 # (no GH credentials in test env). Instead it asserts structural invariants
