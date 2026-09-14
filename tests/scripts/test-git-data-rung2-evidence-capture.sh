@@ -276,6 +276,19 @@ for _case in "t520508_override_prd_logs::<derived by betterstack-query.sh>" \
     fail "evidence follows an overridden table pair (${_t})" "n/a" "$(grep -n 'TABLE' "$OUT_OVR" 2>/dev/null || echo '<no TABLE line>')"
   fi
 done
+# A non-identifier table name is refused as an INPUT error (64), never TRANSIENT (2, which the
+# rehearsal workflow retries), and nothing is written. The stub ignores the table, so only the
+# SUT's own guard can refuse it.
+OUT_BAD="$TMP/evidence-pass-table-bad.env"
+out="$(env -u BS_TABLE -u BS_TABLE_S3 BS_TABLE='t520508_bad;x_logs' \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_BAD" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "a non-identifier table name => exit 64 (input error, not TRANSIENT)"; else
+  fail "a non-identifier table name => exit 64 (input error, not TRANSIENT)" "$rc" "$out"; fi
+if [[ ! -f "$OUT_BAD" ]]; then pass "a refused table name writes NO evidence file"; else
+  fail "a refused table name writes NO evidence file" "$rc" "an evidence file was written"; fi
 
 # ── ARM 2: the FAIL path — a fatal from this host ─────────────────────────────────
 #
@@ -1364,7 +1377,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=84  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard
+_FLOOR=86  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

@@ -653,25 +653,30 @@ describe("git_data_host_create: the boot-signal poll is gated on the apply outco
     expect(m).not.toBeNull();
     // Dedent the YAML block scalar so bash sees the script as the runner would.
     const block = m![0].split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
-    const table: Array<[string, string, number]> = [
-      ["success", "success", 0],
-      ["success", "failure", 0],
-      ["success", "skipped", 1],
-      ["success", "cancelled", 1],
-      ["skipped", "skipped", 0],
-      ["failure", "failure", 0],
-      ["failure", "skipped", 0],
-      ["cancelled", "skipped", 0],
-      ["", "", 1],
-      ["success", "", 1],
-      ["", "skipped", 1],
+    // [apply, poll, rc, annotation stdout must contain ("" = must print nothing)]. The
+    // annotation column is what tells the cancelled arm from the `*` default, which share rc 0.
+    const table: Array<[string, string, number, string]> = [
+      ["success", "success", 0, ""],
+      ["success", "failure", 0, ""],
+      ["success", "skipped", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["success", "cancelled", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["skipped", "skipped", 0, "::notice::boot-signal poll SKIPPED"],
+      ["failure", "failure", 0, ""],
+      ["failure", "skipped", 0, ""],
+      ["cancelled", "skipped", 0, "::warning::apply was cancelled mid-flight"],
+      ["neutral", "skipped", 0, "::warning::unrecognised outcome pair"],
+      ["", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["success", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["", "skipped", 1, "::error::apply/poll outcome is EMPTY"],
     ];
-    for (const [a, p, rc] of table) {
+    for (const [a, p, rc, note] of table) {
       const r = spawnSync("bash", ["-eo", "pipefail", "-c", block], {
         env: { PATH: process.env.PATH ?? "/usr/bin:/bin", APPLY_OUTCOME: a, POLL_OUTCOME: p },
         encoding: "utf8",
       });
       expect(`${a}/${p} -> rc=${r.status}`).toBe(`${a}/${p} -> rc=${rc}`);
+      if (note === "") expect(`${a}/${p} -> [${r.stdout}]`).toBe(`${a}/${p} -> []`);
+      else expect(`${a}/${p} -> ${r.stdout}`).toContain(note);
     }
   });
 });
