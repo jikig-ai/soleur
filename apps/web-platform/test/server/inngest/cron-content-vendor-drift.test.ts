@@ -6,7 +6,7 @@
 //   2. Source-shape anchors — verbatim strings from the implementation that
 //      must survive silent refactoring.
 //   3. Exported constants (SYNTHETIC_CHECK_NAMES, MAX_RUN_DURATION_MS,
-//      ISSUE_EXIT_CODES, NOTICE_FILE_REL, CLASSIFIER_REL, PARSER_REL).
+//      ISSUE_EXIT_CODES, NOTICE_FILENAME, CLASSIFIER_REL, PARSER_REL).
 //   4. Trust-model routing: ISSUE_EXIT_CODES set shape.
 
 import { describe, expect, it, vi } from "vitest";
@@ -21,10 +21,16 @@ import {
   cronContentVendorDrift,
   MAX_RUN_DURATION_MS,
   ISSUE_EXIT_CODES,
-  NOTICE_FILE_REL,
+  SKILLS_DIR_REL,
+  NOTICE_FILENAME,
+  DRIFT_BRANCH_PREFIX,
+  ATTEST_BRANCH_PREFIX,
+  LEGACY_BUNDLE_SLUG,
   PARSER_REL,
   CLASSIFIER_REL,
-  SKILL_PREFIX,
+  isSchemaConformingNotice,
+  classifyBranchOwner,
+  classifyIssueOwner,
 } from "@/server/inngest/functions/cron-content-vendor-drift";
 // #5111: consolidated into the safe-commit helper (was a per-cron copy).
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
@@ -81,7 +87,8 @@ describe("registration source-shape anchors", () => {
 describe("handler source-shape anchors", () => {
   it.each([
     ["scheduled-content-vendor-drift", "Sentry monitor slug"],
-    ["plugins/soleur/skills/gdpr-gate/NOTICE", "NOTICE file path"],
+    ["plugins/soleur/skills", "skills discovery root"],
+    ["discover-bundles", "schema-keyed bundle discovery step"],
     [
       "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh",
       "parser script path",
@@ -91,8 +98,8 @@ describe("handler source-shape anchors", () => {
       "classifier script path",
     ],
     [
-      "chore(vendor-drift): re-vendor gosprinto/compliance-skills",
-      "commit message",
+      "chore(vendor-drift): re-vendor ${bundle.upstreamName}",
+      "per-bundle commit message",
     ],
     ["vendor-pin-drift-resolution.md", "runbook reference"],
     ["mintInstallationToken", "token minting"],
@@ -126,10 +133,11 @@ describe("handler-side persistence (#5111)", () => {
     expect(SUT_SOURCE).toContain("syntheticChecks");
     expect(SUT_SOURCE).toContain("prLabels: detectResult.labels");
     // Directory allowlist entry carries the trailing slash the helper's
-    // startsWith matching requires; NOTICE is an exact-file entry.
-    expect(SUT_SOURCE).toContain(
-      "allowedPaths: [`${SKILL_PREFIX}/NOTICE`, `${SKILL_PREFIX}/references/`]",
-    );
+    // startsWith matching requires; NOTICE is an exact-file entry. Both are
+    // per-bundle — a re-vendor PR for bundle A must not be able to carry
+    // bundle B's corpus.
+    expect(SUT_SOURCE).toContain("`${bundle.skillPrefix}/NOTICE`");
+    expect(SUT_SOURCE).toContain("`${bundle.skillPrefix}/references/`");
     // The private staging pipeline must not return.
     expect(SUT_SOURCE).not.toContain("spawnGitChecked");
   });
@@ -160,10 +168,6 @@ describe("exported constants", () => {
     ]);
   });
 
-  it("NOTICE_FILE_REL points to gdpr-gate NOTICE", () => {
-    expect(NOTICE_FILE_REL).toBe("plugins/soleur/skills/gdpr-gate/NOTICE");
-  });
-
   it("PARSER_REL points to notice-frontmatter.sh", () => {
     expect(PARSER_REL).toBe(
       "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh",
@@ -176,8 +180,17 @@ describe("exported constants", () => {
     );
   });
 
-  it("SKILL_PREFIX is plugins/soleur/skills/gdpr-gate", () => {
-    expect(SKILL_PREFIX).toBe("plugins/soleur/skills/gdpr-gate");
+  it("SKILLS_DIR_REL is the bundle discovery root", () => {
+    expect(SKILLS_DIR_REL).toBe("plugins/soleur/skills");
+    expect(NOTICE_FILENAME).toBe("NOTICE");
+  });
+
+  it("DRIFT_BRANCH_PREFIX / ATTEST_BRANCH_PREFIX / LEGACY_BUNDLE_SLUG pin the dedup namespaces", () => {
+    // Per-bundle branches are `<prefix>-<slug>-<ts>`; unsuffixed legacy
+    // refs classify as LEGACY_BUNDLE_SLUG's.
+    expect(DRIFT_BRANCH_PREFIX).toBe("ci/content-vendor-drift");
+    expect(ATTEST_BRANCH_PREFIX).toBe("ci/vendor-attest");
+    expect(LEGACY_BUNDLE_SLUG).toBe("gdpr-gate");
   });
 });
 
@@ -524,7 +537,7 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     // Slice BOUNDED to the attest step. Running to EOF also swallows the
     // drift route's own `mergeMode: "direct"`, so the assertion could be
     // satisfied by the wrong call site (found while mutation-proving).
-    const attestStart = src.indexOf('step.run("attest-freshness"');
+    const attestStart = src.indexOf("`attest-freshness-${bundle.slug}`");
     const attestEnd = src.indexOf("attestationPrNumber = attestation.pr");
     expect(attestStart).toBeGreaterThan(-1);
     expect(attestEnd).toBeGreaterThan(attestStart);
@@ -534,9 +547,10 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     // contains a comment quoting `mergeMode: "direct"`, so a bare match
     // survives changing the actual option (measured during #7710 review).
     expect(step).toMatch(/^\s*mergeMode: "direct",$/m);
-    // allowedPaths must be the NOTICE alone — an attestation must not be able
-    // to carry a content change in on the same commit.
-    expect(step).toMatch(/allowedPaths: \[`\$\{SKILL_PREFIX\}\/NOTICE`\]/);
+    // allowedPaths must be THIS bundle's NOTICE alone — an attestation must
+    // not be able to carry a content change in on the same commit, nor write
+    // a sibling bundle's registry.
+    expect(step).toMatch(/allowedPaths: \[`\$\{bundle\.skillPrefix\}\/NOTICE`\]/);
   });
 
   it("contains no raw push to the default branch", () => {
@@ -560,7 +574,7 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
   it("emits the accountability summary at a level the sinks keep", () => {
     // logger.info reaches no layer: the Sentry breadcrumb mirror keeps
     // >= warn and the Vector pipeline drops pino level < 40.
-    const sum = src.slice(src.indexOf('step.run("attestation-summary"'));
+    const sum = src.slice(src.indexOf("`attestation-summary-${bundle.slug}`"));
     expect(sum).toMatch(/logger\.warn\(/);
     expect(sum).not.toMatch(/logger\.info\(/);
   });
@@ -609,22 +623,25 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
   });
 
   it("opens the attestation PR OUTSIDE the drift dedup namespace", () => {
-    // The detect step dedups the re-vendor route on `ci/content-vendor-drift-`.
-    // An attestation PR on that same prefix — the ordinary state, since the
-    // direct merge normally falls back to armed auto-merge — would make the
-    // next genuine-drift run return `skipped-open-pr` and open nothing, with a
-    // green heartbeat. Two reviewers converged on this independently.
+    // The detect step dedups the re-vendor route on `ci/content-vendor-drift-`
+    // (DRIFT_BRANCH_PREFIX). An attestation PR on that same prefix — the
+    // ordinary state, since the direct merge normally falls back to armed
+    // auto-merge — would make the next genuine-drift run return
+    // `skipped-open-pr` and open nothing, with a green heartbeat. Two
+    // reviewers converged on this independently.
     expect(src).toMatch(
       /ATTEST_BRANCH_PREFIX = "ci\/vendor-attest"/,
     );
-    expect(src).toMatch(/branchName: `\$\{ATTEST_BRANCH_PREFIX\}-/);
-    // The dedup query must still key on the drift prefix, not the attest one.
-    expect(src).toMatch(/head:ci\/content-vendor-drift-/);
+    // Per-bundle: `ci/vendor-attest-<slug>-<ts>`.
+    expect(src).toMatch(/branchName: `\$\{ATTEST_BRANCH_PREFIX\}-\$\{bundle\.slug\}-/);
+    // The dedup must classify the drift prefix per bundle, not the attest one.
+    expect(src).toMatch(/classifyBranchOwner\(ref, DRIFT_BRANCH_PREFIX, slugs\)/);
+    expect(src).toMatch(/classifyBranchOwner\(ref, ATTEST_BRANCH_PREFIX, slugs\)/);
   });
 
   it("refuses to stack attestation PRs", () => {
-    const step = src.slice(src.indexOf('step.run("attest-freshness"'));
-    expect(step).toMatch(/head:\$\{ATTEST_BRANCH_PREFIX\}-/);
+    const step = src.slice(src.indexOf("`attest-freshness-${bundle.slug}`"));
+    expect(step).toMatch(/ATTEST_BRANCH_PREFIX/);
     expect(step).toMatch(/attest-pr-already-open/);
   });
 
@@ -632,7 +649,7 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     // Nothing asserted this before: a mutation hoisting the step out of the
     // conditional left every predicate test and every source-shape test green.
     const guardIdx = src.indexOf("if (attestationEligible) {");
-    const stepIdx = src.indexOf('step.run("attest-freshness"');
+    const stepIdx = src.indexOf("`attest-freshness-${bundle.slug}`");
     expect(guardIdx).toBeGreaterThan(-1);
     expect(stepIdx).toBeGreaterThan(guardIdx);
   });
@@ -666,7 +683,7 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     // The repo squash-merges with COMMIT_MESSAGES, so the PR body never lands
     // on main — and ADR-203's Art. 5(2) argument rests on the commit being
     // the record.
-    const step = src.slice(src.indexOf('step.run("attest-freshness"'));
+    const step = src.slice(src.indexOf("`attest-freshness-${bundle.slug}`"));
     const cm = step.slice(step.indexOf("commitMessage:"), step.indexOf("branchName:"));
     expect(cm).toMatch(/filesSame/);
     expect(cm).toMatch(/filesDrifted/);
@@ -732,5 +749,197 @@ describe("classifyFileComparison — Guard 3 row 2 (the false-clean arm)", () =>
         expect(classifyFileComparison(pinned, upstream)).toBe("error");
       }
     }
+  });
+});
+
+// =============================================================================
+// Multi-bundle — schema-keyed enrollment + per-bundle identity (ADR-219)
+// =============================================================================
+
+describe("isSchemaConformingNotice — the shared enrollment predicate", () => {
+  it("enrolls a NOTICE with both vendoring fields", () => {
+    expect(
+      isSchemaConformingNotice("github.com/General-Legal/legal-templates", "abc123"),
+    ).toBe(true);
+  });
+
+  // incident/NOTICE is a prose attribution file that matches the bare
+  // `skills/*/NOTICE` glob but has no vendoring schema. Weakening this
+  // predicate so prose counts would enroll it and red the cron every run.
+  it("excludes a prose NOTICE — both fields absent", () => {
+    expect(isSchemaConformingNotice("", "")).toBe(false);
+  });
+
+  it("excludes a half-schema NOTICE — upstream without pinned-commit", () => {
+    expect(isSchemaConformingNotice("github.com/x/y", "")).toBe(false);
+    expect(isSchemaConformingNotice("", "abc123")).toBe(false);
+  });
+
+  it("trims whitespace-only fields", () => {
+    expect(isSchemaConformingNotice("  ", "abc")).toBe(false);
+  });
+
+  it("is the predicate the cron's discovery calls", () => {
+    expect(SUT_SOURCE).toMatch(/isSchemaConformingNotice\(upstream, pinnedCommit\)/);
+    // Discovery enumerates the skills dir inside a step, not at module level.
+    expect(SUT_SOURCE).toMatch(/step\.run\("discover-bundles"/);
+    expect(SUT_SOURCE).toMatch(/readdir\(skillsDir/);
+  });
+});
+
+describe("classifyBranchOwner — cross-bundle dedup masking", () => {
+  const slugs = ["gdpr-gate", "legal-generate"];
+
+  it("assigns a slugged drift branch to its own bundle", () => {
+    expect(
+      classifyBranchOwner(
+        "ci/content-vendor-drift-legal-generate-2026-09-14T11-17-00",
+        DRIFT_BRANCH_PREFIX,
+        slugs,
+      ),
+    ).toBe("legal-generate");
+  });
+
+  it("assigns a slugged attest branch to its own bundle", () => {
+    expect(
+      classifyBranchOwner(
+        "ci/vendor-attest-gdpr-gate-2026-09-14T11-17-00",
+        ATTEST_BRANCH_PREFIX,
+        slugs,
+      ),
+    ).toBe("gdpr-gate");
+  });
+
+  // THE masking property: an open bundle-A PR must not satisfy bundle-B's
+  // dedup. This is the regression test for the shape where an unscoped
+  // `head:ci/content-vendor-drift-` query lets a GDPR PR suppress a
+  // legal-generate re-vendor forever.
+  it("does NOT let a sibling's open PR satisfy this bundle's dedup", () => {
+    const gdprPr = "ci/content-vendor-drift-gdpr-gate-2026-09-14T11-17-00";
+    expect(classifyBranchOwner(gdprPr, DRIFT_BRANCH_PREFIX, slugs)).toBe(
+      "gdpr-gate",
+    );
+    expect(classifyBranchOwner(gdprPr, DRIFT_BRANCH_PREFIX, slugs)).not.toBe(
+      "legal-generate",
+    );
+  });
+
+  // Transition semantics: pre-multi-bundle artifacts carry no slug and are
+  // LEGACY_BUNDLE_SLUG's — a still-open legacy gdpr-gate PR must keep
+  // suppressing gdpr-gate duplicates rather than being orphaned.
+  it("classifies legacy unsuffixed refs as the legacy bundle's", () => {
+    expect(
+      classifyBranchOwner(
+        "ci/content-vendor-drift-2026-09-08T11-17-00",
+        DRIFT_BRANCH_PREFIX,
+        slugs,
+      ),
+    ).toBe("gdpr-gate");
+    expect(
+      classifyBranchOwner(
+        "ci/vendor-attest-2026-09-08T11-17-00",
+        ATTEST_BRANCH_PREFIX,
+        slugs,
+      ),
+    ).toBe("gdpr-gate");
+  });
+
+  it("returns null for refs outside the prefix", () => {
+    expect(
+      classifyBranchOwner("feat/whatever", DRIFT_BRANCH_PREFIX, slugs),
+    ).toBeNull();
+  });
+
+  it("a timestamp-only remainder cannot collide with a slug", () => {
+    // Slugs are alphabetic-hyphen; timestamps start with digits — a ref that
+    // starts `<slug>-` is unambiguous.
+    const ts = "ci/content-vendor-drift-2026-09-14";
+    expect(classifyBranchOwner(ts, DRIFT_BRANCH_PREFIX, slugs)).toBe(
+      LEGACY_BUNDLE_SLUG,
+    );
+  });
+});
+
+describe("classifyIssueOwner — per-bundle issue dedup", () => {
+  const slugs = ["gdpr-gate", "legal-generate"];
+
+  it("assigns a slugged title to its bundle", () => {
+    expect(
+      classifyIssueOwner(
+        "[vendor-drift][legal-generate] security-relevant drift on 2026-09-14 (classifier rc=10)",
+        slugs,
+      ),
+    ).toBe("legal-generate");
+  });
+
+  it("assigns a legacy un-slugged title to the legacy bundle", () => {
+    expect(
+      classifyIssueOwner(
+        "[vendor-drift] security-relevant drift on 2026-09-08 (classifier rc=10)",
+        slugs,
+      ),
+    ).toBe("gdpr-gate");
+  });
+
+  it("does not let a sibling's open issue suppress this bundle's filing", () => {
+    expect(
+      classifyIssueOwner(
+        "[vendor-drift][gdpr-gate] security-relevant drift on 2026-09-14 (classifier rc=10)",
+        slugs,
+      ),
+    ).not.toBe("legal-generate");
+  });
+});
+
+describe("per-bundle identity — source-shape anchors", () => {
+  it("suffixes every bundle-local step.run ID with the slug", () => {
+    // Inngest memoizes by step ID: an unsuffixed ID replays bundle A's
+    // memoized result for bundle B. Run-level steps stay unsuffixed.
+    for (const id of [
+      "reset-worktree-",
+      "detect-drift-",
+      "safe-commit-pr-",
+      "open-drift-issue-",
+      "read-attestation-age-",
+      "attest-freshness-",
+      "attestation-summary-",
+    ]) {
+      expect(SUT_SOURCE).toContain(`${id}\${bundle.slug}`);
+    }
+  });
+
+  it("resets the worktree to origin/main per arm before any write step", () => {
+    // safeCommitAndPr's `checkout -B` branches from HEAD — without the reset,
+    // bundle B's PR would carry bundle A's unmerged commits.
+    expect(SUT_SOURCE).toContain("`reset-worktree-${bundle.slug}`");
+    expect(SUT_SOURCE).toMatch(
+      /spawnGit\(\s*\["checkout", "-f", "-B", "main", "origin\/main"\]/,
+    );
+  });
+
+  it("spawns the shared parser with a per-bundle NOTICE_FILE", () => {
+    // Without NOTICE_FILE the parser defaults to gdpr-gate's NOTICE and
+    // bundle B attests onto bundle A's registry.
+    expect(SUT_SOURCE).toContain("NOTICE_FILE: noticeAbs");
+  });
+
+  it("derives the per-bundle cronName so drift branches carry the slug", () => {
+    expect(SUT_SOURCE).toContain(
+      "`cron-content-vendor-drift-${bundle.slug}`",
+    );
+  });
+
+  it("fetches upstream blobs on the repo's default branch, not a literal", () => {
+    expect(SUT_SOURCE).toMatch(/ref: upstreamRef/);
+    expect(SUT_SOURCE).toMatch(/upstreamRef = repoMeta\.default_branch/);
+  });
+
+  it("aggregates health across bundles — no sibling masking", () => {
+    expect(SUT_SOURCE).toMatch(/outcomes\.every\(\(o\) => o\.healthy\)/);
+  });
+
+  it("treats zero discovered bundles as a measurement failure, not clean", () => {
+    expect(SUT_SOURCE).toContain('status: "no-bundles"');
+    expect(SUT_SOURCE).toMatch(/bundles\.length === 0/);
   });
 });

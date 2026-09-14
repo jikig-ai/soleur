@@ -282,6 +282,18 @@ pre-commit:
         - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
         - "plugins/soleur/skills/gdpr-gate/NOTICE"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
+    # Second vendored bundle (#8122). `references/**` — NOT
+    # `references/templates/**`: a future `.md` outside `templates/` must
+    # still trip the gate (the stanza above documents that `*` already
+    # crosses `/` in lefthook's gobwas matcher, so `references/**` covers
+    # every depth including templates/<name>/template.md). The shared
+    # gdpr-gate script is parameterized by SKILL_PREFIX + NOTICE_FILE.
+    vendor-pin-integrity-legal-generate:
+      priority: 6
+      glob:
+        - "plugins/soleur/skills/legal-generate/references/**"
+        - "plugins/soleur/skills/legal-generate/NOTICE"
+      run: SKILL_PREFIX="plugins/soleur/skills/legal-generate" NOTICE_FILE="plugins/soleur/skills/legal-generate/NOTICE" bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
     # skill-security-scan advisory hook (#2719).
     # ALWAYS exits 0 — prints a one-line stderr breadcrumb on HIGH-RISK
     # without override artifact. Belt-and-suspenders for IDE / manual
