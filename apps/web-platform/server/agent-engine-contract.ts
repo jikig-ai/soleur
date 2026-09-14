@@ -33,7 +33,7 @@ export interface EngineDefinition {
 export type EngineSettingsMetadata = Pick<
   EngineDefinition,
   "id" | "version" | "transport" | "authModes" | "enabledForNewRuns"
-> & { rolloutEnabled: boolean };
+> & { rolloutEnabled?: boolean };
 
 /** Constructed by shared policy from authenticated context and persisted state;
  * never from a client-provided dispatch configuration.

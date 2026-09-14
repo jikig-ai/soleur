@@ -45,6 +45,22 @@ describe("AgentEngineSettings", () => {
     expect(await findByLabelText(/codex/)).toBeDisabled();
   });
 
+  it("keeps legacy Claude payloads usable while missing rollout metadata stays fail-closed for future engines", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        defaultEngineId: "claude-code",
+        engines: [
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
+          { id: "grok-build", version: "grok-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true },
+        ],
+      }),
+    });
+    const { findByLabelText } = render(<AgentEngineSettings isOwner />);
+    expect(await findByLabelText(/Claude Code/)).not.toBeDisabled();
+    expect(await findByLabelText(/grok-build/)).toBeDisabled();
+  });
+
   it("keeps the auth selector disabled for a persisted Codex default while rollout is off", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

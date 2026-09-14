@@ -11,7 +11,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [authMode, setAuthMode] = useState<string>("managed");
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
   const isEngineSelectable = (engine: Engine): boolean =>
-    engine.enabledForNewRuns && engine.rolloutEnabled;
+    engine.enabledForNewRuns && (engine.rolloutEnabled ?? engine.id === DEFAULT_AGENT_ENGINE_ID);
   const selectedEngine = engines.find((engine) => engine.id === selected);
 
   useEffect(() => {

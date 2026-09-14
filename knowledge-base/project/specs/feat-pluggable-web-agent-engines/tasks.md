@@ -118,6 +118,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Generic rollout metadata slice: reviewed engines expose identity-aware `rolloutEnabled` metadata, settings UI consumes the server decision, and unmapped engines fail closed until explicitly registered (11 route, 6 settings, and 3 feature-flag tests green).
   - [x] Settings contract slice: API and UI share the neutral `EngineSettingsMetadata` projection instead of duplicating engine fields (11 route and 6 settings tests green).
   - [x] Adapter composition extensibility slice: additional reviewed-engine factories register through an additive map without changing Claude/Codex composition control flow (3 composition tests green).
+  - [x] Rollout metadata compatibility slice: missing metadata preserves the always-on Claude option while future-engine options remain disabled until explicitly enabled (7 settings tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
