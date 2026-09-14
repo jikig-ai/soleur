@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-14T09:49:53Z",
+  "generated_at": "2026-09-14T10:04:19Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1108,19 +1108,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "wg-block-pr-ready-on-undeferred-operator-steps",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 20,
-      "warn_count": 0,
-      "fire_count": 20,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-14T09:16:55Z",
-      "first_seen": "2026-05-22T07:01:41Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-never-write-to-claude-code-memory-claude",
       "section": "Hard Rules",
       "hit_count": 21,
@@ -1131,6 +1118,19 @@
       "prevented_errors": 21,
       "last_hit": "2026-09-09T15:29:31Z",
       "first_seen": "2026-05-27T09:47:26Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-block-pr-ready-on-undeferred-operator-steps",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 21,
+      "warn_count": 0,
+      "fire_count": 21,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-14T09:59:59Z",
+      "first_seen": "2026-05-22T07:01:41Z",
       "rule_text_prefix": ""
     },
     {
@@ -1164,11 +1164,11 @@
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 28,
+      "applied_count": 29,
       "warn_count": 0,
-      "fire_count": 28,
+      "fire_count": 29,
       "prevented_errors": 0,
-      "last_hit": "2026-09-14T09:16:35Z",
+      "last_hit": "2026-09-14T09:58:52Z",
       "first_seen": "2026-08-13T19:13:15Z",
       "rule_text_prefix": ""
     },
@@ -1279,13 +1279,13 @@
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 487,
+      "hit_count": 488,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 487,
-      "prevented_errors": 487,
-      "last_hit": "2026-09-14T08:24:49Z",
+      "fire_count": 488,
+      "prevented_errors": 488,
+      "last_hit": "2026-09-14T09:51:24Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1309,8 +1309,8 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
+      "net-issue-flow": 419,
       "monitor-supersede": 138,
-      "net-issue-flow": 418,
       "post-dispatch-watch-gate": 4504,
       "guardrails-block-recursive-delete": 319,
       "kb-domain-allowlist-guard": 164,
