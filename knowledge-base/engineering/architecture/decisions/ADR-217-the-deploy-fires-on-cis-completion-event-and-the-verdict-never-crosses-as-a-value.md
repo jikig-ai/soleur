@@ -238,7 +238,8 @@ ceilings downstream of it.
 > green. So: the invariant is computed **only** when every job declares a
 > ceiling; while any does not, the step emits a `::warning::` naming them. B9
 > asserts over the arm this pipeline *controls* (downstream of the event,
-> 195 ≤ 207) and says at the site why the CI term is absent. B9b ratchets the
+> 195 ≤ 207) and says at the site why the CI term is absent — ~~superseded
+> 2026-09-14: the CI term is IN B9, see the addendum below~~. B9b ratchets the
 > count of unbounded jobs so it can only fall, and B9c stops B9b going vacuous —
 > verified by probe: blinding the extractor makes B9b report `0 ≤ 19` and pass
 > forever. Ceiling gap filed as **#8020**.
@@ -300,6 +301,19 @@ ceilings downstream of it.
 > measure-first, out of scope. (d) accepting the gap — leaves a guard green on
 > a quantity it knows is short, the exact class the 2026-09-10 learning names.
 > 270 — pays 45 m of alert latency for a 13-second job's ceiling.
+>
+> **Pinned at review (#8149).** The formula's three unstated assumptions are
+> now assertions: B9d — `verify-doppler-secrets`, which runs alongside the
+> `resolve-target → migrate → verify-migrations` chain, stays dominated by it
+> (raising it past 60 m would make the parallel branch the critical path with
+> the sum unchanged); B9e — no `ci.yml` job serialises a matrix with
+> `strategy.max-parallel` (a per-leg ceiling times a leg count that no per-job
+> `timeout-minutes` read can see); B8f — the callee's `jobs.release` has no
+> `needs:` predecessor (the extractor reads that one job's ceiling and nothing
+> else in `reusable-release.yml`). Outside the formula and named as such at
+> the site: runner-queue wait and every back-to-back-merge concurrency group
+> (`release-<component>`, `migrate-web-platform`,
+> `verify-migrations-web-platform`, `web-1-swap`).
 
 Every input is read from the tree, so the numbers move when a ceiling moves.
 

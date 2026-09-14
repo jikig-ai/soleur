@@ -88,7 +88,7 @@ raise does not loosen it (CI's share stays 75 m; soft ceiling 52.5 m).
 queue (option (a)) is not adoptable.** Twenty-three workflows declare a `pull_request` trigger;
 roughly 56 declared jobs run on every PR push; the organisation is on the GitHub Free plan (20
 concurrent hosted jobs), and the runner pool is the binding constraint on 76% of `main` CI runs. A
-merge queue was enabled on 2026-06-30 (PR #5800) and deadlocked `main` within five minutes
+merge queue was enabled on 2026-06-30 (PR #5800) and deadlocked `main` within minutes (each queue entry stalled `AWAITING_CHECKS` to the 15-min timeout)
 because CodeQL default setup never posts a status on `merge_group` refs; `github/codeql-action#1537`
 is still open (verified 2026-09-14), the advanced-setup workaround was prototyped and removed
 (#5811/#5812), and ADR-032's 2026-07-01 amendment records the standing decision. This plan
@@ -703,7 +703,7 @@ discoverability_test:
   # Parts AB run in ~2 s. Check 10 substring-matches expected_output, so no grep is needed.
   # Deployed state == main's tree (scheduled-prod-version-drift.yml runs the checker from
   # checkout), so this probe of the tree IS the probe of the live checker.
-post_merge_confirmation: "gh run view <next scheduled-prod-version-drift run id> --log | grep 'threshold 225m' (emitted only when an undeployed commit exists; /soleur:postmerge reads it — credentialed, so outside Check 10)"
+post_merge_confirmation: "gh run view <next scheduled-prod-version-drift run id> --log | grep -E '225m' — DRIFT_SUSTAINED prints 'threshold 225m', PENDING prints 'within the 225m release cycle', and a CLEAN tick (nothing undeployed) prints neither, so 0 lines on a CLEAN tick is the expected reading, not a miss; /soleur:postmerge reads it — credentialed, so outside Check 10"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -762,10 +762,15 @@ resolved callee, or every Part C child reads the 360 default (B9c reds on a blin
 | 6 | `jobs.release` → `70` (green1) | must PASS (`max(70,70)` absorbs it; 220 ≤ 225) — non-canonical green |
 | 7 | `test-scripts` → the derived boundary value (65 today; green2) | must PASS (225 ≤ 225); 130 is the RED edge axis13 proves |
 | 8 | harness row: in the test, change B9's `-ge` to `-le` | RED — the live tree (225 vs 220) fails B9 (verified once at work time) |
+| 9 | review (#8149): `verify-doppler-secrets` → serial branch + 1 (axis16) | RED — `FAIL: B9d` (the parallel branch the sum assumes dominated) |
+| 10 | review: drop `migrate` from the extractor's `crit` sum (test-design S1) | RED — `FAIL: C-tail` (the tail is now read raw from the YAML, not from the emit) |
+| 11 | review: `fail()` rewritten to take the pass branch (S2) | exit 2 at the instrument self-test, before Part A |
+| 12 | review: add `strategy.max-parallel` to a `ci.yml` job / add `needs:` to the callee's `jobs.release` | RED — `B9e` / `B8f` |
 
-Rows 1–3, 6, 7 ship as Part C rows. Rows 4, 5, 8 are one-time verifications during the work
-phase, recorded in the PR body; they are not shipped because they mutate the harness itself or
-re-prove pre-existing behaviour.
+Rows 1–3, 6, 7, 9 ship as Part C rows (10–12 are covered by the B-rows the same suite asserts
+on the live tree, driven RED once on a sandbox copy at review). Rows 4, 5, 8 are one-time
+verifications during the work phase, recorded in the PR body; they are not shipped because they
+mutate the harness itself or re-prove pre-existing behaviour.
 
 ### Guard 2 — PR fan-out ledger
 
@@ -801,9 +806,16 @@ derived independently — the real set never comes from the ledger's own row cou
 | 9 | must PASS: add `zz-closed.yml` with `types: [closed]` and no row (a landed diff, mirroring `cleanup-unmerged-bot-branches.yml`) | PASS — `PASS: A1 … firing / … ledgered` unchanged |
 | 10 | must PASS: `ci.yml` row set to 25 while the file declares 22 | PASS — the row is an upper bound |
 | 11 | harness row: in the test, make A1 compare against the ledger's own set instead of the enumerator | RED — row 1 goes green, proving the enumerator is load-bearing |
+| 6e | review (#8149): group `${{ github.ref }}-${{ github.sha }}` with cancel `true`, row `yes` | RED — A4b (a per-run token in the group means the key never collides) |
+| 6f | review: `secret-scan.yml` group → `secret-scan-${{ github.ref }}` with the ternary form | RED — A6 (a ternary-form block must carry `ci.yml`'s group byte-for-byte) |
+| 7b | review: strip `no cancel:` from a `cancel=no` row's consequence | RED — A5 |
+| 12 | review: `zz-chain.yml` with `on: workflow_run: {workflows: [CI]}` and no `branches:`, no row | RED — A1 names it (transitive per-PR generator, the `fix-constraints-stage-b.yml` shape) |
+| 13 | review: one `ci.yml` job body replaced by `uses: ./…/zz-reusable.yml` (4 callee jobs) | RED — A3 `25 declared, row allows 22` (a `uses:` job counts its callee's jobs) |
+| 14 | must PASS: `zz-main-chain.yml`, the same `workflow_run` with `branches: [main]` | PASS — A1 summary unchanged |
+| 15 | harness row: `A6`'s `printf '%s'` without a trailing newline (found by 6f on its first run) | the comparison loop never executed and A6 was vacuously green — fixed with `printf '%s\n'` plus a row-count guard |
 
-Rows 1–10 (with 6b–6d) ship as Part B of the suite; row 11 is a one-time verification during
-the work phase, recorded in the PR body.
+Rows 1–10 (with 6b–6f, 7b, 12–14) ship as Part B of the suite; rows 11 and 15 are one-time
+verifications, recorded in the PR body.
 
 ### Guard 3 — workflow CI-budget partition
 
@@ -824,7 +836,11 @@ into `$W/budget.blk` and greps the call forms.
 | 1 | drop `- RT` from the `CI_BUDGET_MIN` arithmetic | RED — the partition-shape row |
 | 2 | delete the `job_ceiling "$REL" resolve-target` call (second member after the three compliant reads) | RED — G5-21 names `resolve-target` |
 | 3 | delete the whole budget step (own dispatch) | RED — G5 "derivation step was not found" |
-| 4 | replace `THRESHOLD=$(read_threshold)` with `THRESHOLD=225` | RED — G5-18 |
+| 4 | replace `THRESHOLD=$(read_threshold)` with `THRESHOLD=225` | RED — G5-18 (at review this row SURVIVED: the step's own comment quoted the call and an un-stripped grep matched it — G5 now greps a comment-stripped `budget.code`) |
+| 5 | review (#8149): append `+ RT` after `- D` (the pre-#8149 partition, re-introduced) | RED — G5-18 (the closing `))` is part of the anchor) |
+| 6 | review: `RT=0 # job_ceiling "$REL" resolve-target)` (call moved into a trailing comment) | RED — G5-21 |
+| 7 | review: a second `RT=0` / `THRESHOLD=9999` between the reads and the arithmetic | RED — G5-22 (exactly one binding per budget variable) |
+| 8 | review: a decoy `- name: Derive the CI budget (decoy)` step above the real one | RED — G5-23 (exactly one step of that name in the file) |
 
 ## Alternatives Considered
 
@@ -866,7 +882,7 @@ into `$W/budget.blk` and greps the call forms.
 - [x] AC5 `awk '/^  resolve-target:/{f=1} f&&/^    timeout-minutes:/{print $2; exit}' .github/workflows/web-platform-release.yml` → `15`.
 - [x] AC6 `awk '/- name: Derive the CI budget/{f=1} f&&/^      - name: /&&!/Derive the CI budget/{exit} f&&/^  [a-zA-Z0-9_-]+:$/{exit} f' .github/workflows/web-platform-release.yml | grep -cE 'CI_BUDGET_MIN=\$\(\(\s*THRESHOLD - RT - M - V - D'` → `1` (the job-boundary exit mirrors G5's own extractor).
 - [x] AC7 `bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh 2>&1 | tail -3` → `0 failed`; `grep -c 'for jobname in migrate verify-migrations deploy resolve-target' plugins/soleur/test/workflow-run-deploy-invariants.test.sh` → `1`; `grep -c 'THRESHOLD - RT - M - V - D' plugins/soleur/test/workflow-run-deploy-invariants.test.sh` → `1`.
-- [x] AC8 `python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/ci.yml'));j=d['jobs'];print(len(j), 'encryption-posture' in j, all(k not in j for k in ['readme-counts','lint-conversations-update-callsites','rule-metrics-shape']))"` → `22 True True`; `awk '/^  lint-bot-statuses:/{f=1} f&&/^  [a-z]/&&!/lint-bot-statuses/{exit} f' .github/workflows/ci.yml | grep -cE '^      - name: (readme-counts|lint-conversations-update-callsites|rule-metrics-shape)'` → `3`; the same awk piped to `grep -c 'METRICS_FILE: knowledge-base/project/rule-metrics.json'` → `1`; piped to `grep -c 'if: \${{ !cancelled() }}'` → `3`.
+- [x] AC8 `python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/ci.yml'));j=d['jobs'];print(len(j), 'encryption-posture' in j, all(k not in j for k in ['readme-counts','lint-conversations-update-callsites','rule-metrics-shape']))"` → `22 True True`; `awk '/^  lint-bot-statuses:/{f=1} f&&/^  [a-z]/&&!/lint-bot-statuses/{exit} f' .github/workflows/ci.yml | grep -cE '^      - name: "?(readme-counts|lint-conversations-update-callsites|rule-metrics-shape)'` → `3` (the `"?` was added at review: an unquoted `, #8149)` tail starts a YAML comment mid-scalar and truncated the parsed names — the scalars are quoted, and the AC was amended rather than quietly satisfied by a looser grep); the same awk piped to `grep -c 'METRICS_FILE: knowledge-base/project/rule-metrics.json'` → `1`; piped to `grep -c 'if: \${{ !cancelled() }}'` → `3`.
 - [x] AC9 for each of `pr-quality-guards secret-scan dependency-review legal-doc-cross-document-gate skill-security-scan-pr-trailer`: `python3 -c "import yaml,sys;d=yaml.safe_load(open('.github/workflows/'+sys.argv[1]+'.yml'));c=yaml.safe_load(open('.github/workflows/ci.yml'))['concurrency'];print(d['concurrency']==c)" <name>` → `True` (group AND cancel byte-equal to ci.yml's — a `github.ref`-only group on `secret-scan.yml`'s `push: main` arm would re-serialise `main`, the #7931 class).
 - [x] AC10 `test -e .github/workflows/claude-code-review.yml && grep -c $'^claude-code-review.yml\t' scripts/pr-fanout-ledger.txt` → `1` (kept and ledgered).
 - [x] AC11 `bash plugins/soleur/test/pr-fanout-ledger.test.sh 2>&1 | tail -3` → `Failed: 0`, ≥ 15 Part A rows and ≥ 13 Part B mutants reported caught; `bash scripts/guard-vacuity-floor.test.sh 2>&1 | tail -2` → green with the new suite in its population (`MIN_FIRING_SUITES=39`).

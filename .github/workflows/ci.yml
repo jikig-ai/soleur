@@ -162,7 +162,13 @@ jobs:
     # 2026-09-14 (#8149): the readme-counts, lint-conversations-update-callsites and
     # rule-metrics-shape jobs (each 0.2m measured over the same 10 runs, no `needs:`)
     # were folded in as three steps — the job goes from 11 to 14 named steps; the
-    # 15m ceiling is unchanged and still >=3x the folded max.
+    # 15m ceiling is unchanged and still >=3x the folded max. The three carry
+    # `if: ${{ !cancelled() }}` and the pre-existing eleven do not: they were
+    # independent jobs and keep reporting after an earlier advisory lint reds,
+    # which is what `gh run view --log-failed` shows the operator; the eleven
+    # keep the bucket's original stop-on-first-red shape. Their names keep the
+    # old job name as the leading token and are quoted because ` #` would
+    # otherwise start a YAML comment mid-scalar.
     timeout-minutes: 15
     runs-on: ubuntu-latest
     # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
@@ -254,13 +260,13 @@ jobs:
       # a blind extractor prints "0 violations" and looks exactly like a clean repo.
       - name: Ratchet Supabase Management API call-site coverage (advisory)
         run: bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater
-      - name: readme-counts (README component counts match filesystem, #8149)
+      - name: "readme-counts (README component counts match filesystem, #8149)"
         if: ${{ !cancelled() }}
         run: bash scripts/sync-readme-counts.sh --check
-      - name: lint-conversations-update-callsites (R8, #8149)
+      - name: "lint-conversations-update-callsites (R8, #8149)"
         if: ${{ !cancelled() }}
         run: bash scripts/lint-conversations-update-callsites.sh
-      - name: rule-metrics-shape (validate rule-metrics.json, #8149)
+      - name: "rule-metrics-shape (validate rule-metrics.json, #8149)"
         if: ${{ !cancelled() }}
         env:
           METRICS_FILE: knowledge-base/project/rule-metrics.json

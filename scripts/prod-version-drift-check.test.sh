@@ -65,16 +65,21 @@ FAIL=0
 # below, so a block that degrades into a single failing assertion can never trip one. They are
 # a tripwire against a block being REMOVED, and nothing more -- do not read a green floor as
 # evidence that the assertions still mean what they meant.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-156}"
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-161}"
 MIN_A="${DRIFT_MIN_A:-57}"
 # 49 -> 81 (#7304): B14 both-direction execution x3 arms + self-check, B14b,
 # B15/B15b/B15c, B16/B16b/B16c, B17/B17b/B17c.
-MIN_B="${DRIFT_MIN_B:-81}"
+# 81 -> 84 (#8149 review): B8f (callee jobs.release has no needs: the extractor cannot
+# see), B9d (verify-doppler-secrets dominated by the serial branch), B9e (no
+# strategy.max-parallel in ci.yml -- a serialised matrix the extractor cannot see).
+MIN_B="${DRIFT_MIN_B:-84}"
 # 11 -> 13 (#7304): axis11 (errexit clear) + axis12 (outcome conjunct).
 # 13 -> 18 (#8149): axis13/14/15 (B9 honest merge-to-deploy path: CI term, additive
 # resolve-target, release in the max) + green1/green2 (must-PASS rows: release absorbed by
 # the max, test-scripts at the derived boundary).
-MIN_C="${DRIFT_MIN_C:-18}"
+# 18 -> 20 (#8149 review): C-tail (the additive tail read raw, independent of the
+# extractor under test) + axis16 (verify-doppler-secrets raised past the serial branch).
+MIN_C="${DRIFT_MIN_C:-20}"
 COUNT_A=0
 COUNT_B=0
 COUNT_C=0
@@ -87,6 +92,16 @@ fail() {
   FAIL=$((FAIL + 1))
 }
 assert_eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1" "$2" "$3"; fi; }
+# Instrument self-test (#8149 review): drive both helpers once and require both
+# counters to move, reported by a direct exit. A fail() rewritten to take the
+# pass branch keeps every per-part floor intact, so nothing else here sees it.
+_p0=$PASS; _f0=$FAIL
+pass "instrument" >/dev/null; fail "instrument" >/dev/null
+if [[ "$PASS" -ne $((_p0 + 1)) || "$FAIL" -ne $((_f0 + 1)) ]]; then
+  echo "FAIL: instrument self-test -- pass()/fail() did not move their counters" >&2
+  exit 2
+fi
+PASS=$_p0; FAIL=$_f0
 assert_contains() {
   # assert_contains <desc> <needle-ERE> <haystack>
   if printf '%s' "$3" | grep -Eq -- "$2"; then pass "$1"; else fail "$1" "matches /$2/" "$3"; fi
@@ -642,6 +657,11 @@ try:
         try:
             callee = yaml.safe_load(open(callee_path))
             cjob = ((callee.get("jobs") or {}).get("release") or {})
+            # The formula reads ONLY jobs.release of the callee. A needs: predecessor
+            # inside the callee would run before it, unread; B8f pins that there is none.
+            cneeds = cjob.get("needs") or []
+            cneeds = [cneeds] if isinstance(cneeds, str) else list(cneeds)
+            emit("RELEASE_CALLEE_NEEDS", ",".join(str(x) for x in cneeds))
             if "timeout-minutes" not in cjob:
                 release_ceiling = DEFAULT_JOB_TIMEOUT_MIN
             else:
@@ -729,6 +749,12 @@ try:
             return memo[name]
 
         ci_declared_path = max([ci_path_to(n) for n in cijobs] or [0])
+        # A serialised matrix (strategy.max-parallel) multiplies a job ceiling by its
+        # leg count, which no per-job timeout-minutes read can see; B9e pins absence.
+        ci_max_parallel = [name for name, j in sorted(cijobs.items())
+                           if isinstance(j, dict) and isinstance(j.get("strategy"), dict)
+                           and "max-parallel" in j["strategy"]]
+        emit("CI_MAX_PARALLEL_JOBS", ",".join(ci_max_parallel))
     except Exception as e:
         if not ceiling_err:
             ceiling_err = "could not read ci.yml: %s" % str(e).replace("\n", " ")
@@ -737,33 +763,24 @@ try:
     emit("CI_UNDECLARED_JOBS", ",".join(ci_undeclared))
 
     # DECISION (2026-09-14, #8149, ADR-217 D4 addendum): option (a) -- the CI term IS in
-    # this sum. Until #8149 this line read max(release, resolve-target) + migrate + verify
-    # + deploy = 195 and a comment explained that ci_declared_path was NOT in the sum because
-    # adding it made B9 red (265 > 207). That was a green on a quantity the suite knew was
-    # short. The physically correct model under ADR-217 D3(b) is: the deploy arm is
-    # dispatched by CI completion and queues behind the push-arm release run on a shared
-    # concurrency group, so it waits for whichever of CI and release finishes last, and THEN
-    # runs resolve-target serially before migrate, verify-migrations and deploy. One formula,
-    # stated at every site (the .sh header, this block, the CI_BUDGET_MIN step and the
-    # resolve-target/deploy job comments in web-platform-release.yml, the COUPLED note in
-    # reusable-release.yml):
+    # this sum since #8149 (DECISION 2026-09-14, option (a); the reasoning -- why the
+    # additive and three-way-max forms were both wrong, and what stays outside the formula
+    # -- lives ONCE in ADR-217 Decision 4 addendum; do not restate it here). One formula:
     #     crit = max(ci_declared_path, release) + resolve-target + migrate
     #            + verify-migrations + deploy
     # ci_declared_path is the memoised longest needs: path over every ci.yml job (360 default
-    # for an undeclared job) and enters the max() alongside release; resolve-target is
-    # ADDITIVE, not a max() member -- its old 60 was sized "= the release ceiling" only because
-    # it sat inside a max() this formula voids, and it now carries a ceiling sized on its own
-    # measured execution. Rejected: (d) keep CI out and stay green on a short quantity; the
-    # additive form ci + max(release, resolve-target) + ..., which under-counts whenever both
-    # release and resolve-target exceed CI; and the .sh header former max(ci, release,
-    # resolve-target), which put resolve-target in parallel with CI, impossible under
-    # workflow_run dispatch. Two serialisers stay OUTSIDE the formula by design and are named
-    # at B9: the release-<component> concurrency group and runner-queue wait.
+    # for an undeclared job); resolve-target is ADDITIVE, not a max() member. B9d asserts
+    # the one assumption this sum makes (verify-doppler-secrets, which runs alongside the
+    # chain, is dominated by it).
     # (No apostrophes in this block: it is interpolated inside a single-quoted shell string,
     # where one apostrophe ends the string.)
     crit = max(ci_declared_path, release_ceiling) + job_timeout("resolve-target")
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
+    # Every term the formula summed, plus the parallel branch it assumes dominated, so
+    # B9 can print the vector on failure and B9d can assert the dominance (#8149 review).
+    for j in ("resolve-target", "migrate", "verify-migrations", "deploy", "verify-doppler-secrets"):
+        emit("CEILING_" + j.upper().replace("-", "_") + "_MIN", job_timeout(j))
 
     # Emitted AFTER every job_timeout call, not before. job_timeout also writes ceiling_err (an
     # expression-valued timeout-minutes on any of the four caller-side jobs), so emitting above
@@ -1134,6 +1151,12 @@ run_part_b() {
     "migrate,release,resolve-target,verify-doppler-secrets,verify-migrations" \
     "${X_DEPLOY_NEEDS_CLOSURE:-<unset>}"
 
+  # B8f -- the callee topology the formula does not read. release_ceiling is the callee's
+  # jobs.release.timeout-minutes and nothing else; a needs: predecessor added inside
+  # reusable-release.yml would run before it, unread, and the declared path would be short.
+  assert_eq "B8f callee jobs.release declares no needs: (the release ceiling is its whole declared path)" \
+    "" "${X_RELEASE_CALLEE_NEEDS-<unset>}"
+
   # B9 -- threshold safety, in the SAFE direction: a pipeline timeout INCREASE fails the
   # suite, so the threshold can never silently become smaller than legitimate latency.
   #
@@ -1144,13 +1167,12 @@ run_part_b() {
   #   max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy.
   # With `release` undeclared the max() reads 360, not the sum a serial reading gives.
   #
-  # OUTSIDE the formula, deliberately, and not covered by the 5 m slack in the constant: the
-  # `release-<component>` concurrency group in reusable-release.yml (cancel-in-progress:
-  # false -- release N+1 queues behind release N, and the deploy arm inherits that wait), and
-  # runner-queue wait. SCOPE (#7160): this bounds DECLARED EXECUTION only. The checker's own
-  # clock starts at the oldest undeployed commit's committer epoch, and runner queue wait,
-  # concurrency serialization between back-to-back merges, and push-to-start latency all sit
-  # outside any job timeout. The threshold's tolerance for those remains empirical.
+  # OUTSIDE the formula, deliberately, and not covered by the 5 m slack in the constant:
+  # concurrency-group serialisation between back-to-back merges (reusable-release.yml's
+  # `release-<component>`, and the deploy arm's `migrate-web-platform`,
+  # `verify-migrations-web-platform` and `web-1-swap` groups) and runner-queue wait -- the
+  # list and the SCOPE (#7160) reasoning are in the .sh header, ADR-217 D4 addendum owns the
+  # why. This bounds DECLARED EXECUTION only.
   #
   # The `B9 threshold` PREFIX is load-bearing: Part C matches `FAIL: B9 threshold` by prefix
   # and axis13 reads this FAIL label out of the live test text, so renaming it reds there.
@@ -1160,7 +1182,21 @@ run_part_b() {
     else
       fail "B9 threshold >= declared merge-to-deploy critical path" \
         ">= ${X_RELEASE_CRITICAL_PATH_MIN}" "$THRESH_MIN"
-      echo "    remedy: raise DRIFT_SUSTAINED_THRESHOLD_MIN in scripts/prod-version-drift-check.sh to >= ${X_RELEASE_CRITICAL_PATH_MIN}m in the SAME commit as the ceiling raise and add a dated line to its header; the workflow re-derives CI_BUDGET_MIN from it, no other edit"
+      # Print the vector the total was summed from (a total alone cannot say WHICH term
+      # moved), and pick the remedy by cause: a deploy-arm term reading the 360 default
+      # is a DELETED ceiling, and raising the threshold to cover it is the wrong fix.
+      local _b9_terms="ci=${X_CI_DECLARED_PATH_MIN:-?} release=${X_RELEASE_CEILING_MIN:-?} resolve-target=${X_CEILING_RESOLVE_TARGET_MIN:-?} migrate=${X_CEILING_MIGRATE_MIN:-?} verify-migrations=${X_CEILING_VERIFY_MIGRATIONS_MIN:-?} deploy=${X_CEILING_DEPLOY_MIN:-?}"
+      local _b9_undeclared="" _t
+      for _t in "resolve-target:${X_CEILING_RESOLVE_TARGET_MIN:-}" "migrate:${X_CEILING_MIGRATE_MIN:-}" \
+                "verify-migrations:${X_CEILING_VERIFY_MIGRATIONS_MIN:-}" "deploy:${X_CEILING_DEPLOY_MIN:-}"; do
+        [[ "${_t#*:}" == "360" ]] && _b9_undeclared="${_b9_undeclared} ${_t%%:*}"
+      done
+      echo "    terms: ${_b9_terms} (a 360 is the GitHub default for a job with NO timeout-minutes)"
+      if [[ -n "$_b9_undeclared" ]]; then
+        echo "    remedy: restore timeout-minutes on:${_b9_undeclared} in .github/workflows/web-platform-release.yml -- the ceiling was deleted, do NOT raise the threshold to cover a 360"
+      else
+        echo "    remedy: raise DRIFT_SUSTAINED_THRESHOLD_MIN in scripts/prod-version-drift-check.sh to >= ${X_RELEASE_CRITICAL_PATH_MIN}m in the SAME commit as the ceiling raise and add a dated line to its header; the workflow re-derives CI_BUDGET_MIN from it, no other edit"
+      fi
     fi
   else
     fail "B9 threshold and merge-to-deploy critical path both readable" "integers" \
@@ -1202,6 +1238,31 @@ run_part_b() {
     fail "B9c ci.yml declared whole-run path must be derivable -- a zero path means ci.yml was not read, and B9b would then ratchet against nothing" \
       "> 0" "${X_CI_DECLARED_PATH_MIN:-<unset>}"
   fi
+
+  # B9d -- the parallel branch the formula assumes DOMINATED. deploy needs both the serial
+  # chain (resolve-target -> migrate -> verify-migrations) and verify-doppler-secrets, which
+  # has no needs: and runs alongside that chain. The formula sums only the chain, so it is
+  # exact iff verify-doppler-secrets <= resolve-target + migrate + verify-migrations. B8e pins
+  # the SET of deploy prerequisites; this pins the ceiling the set membership alone cannot.
+  if [[ "${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN:-x}" =~ ^[0-9]+$ && "${X_CEILING_RESOLVE_TARGET_MIN:-x}" =~ ^[0-9]+$ \
+        && "${X_CEILING_MIGRATE_MIN:-x}" =~ ^[0-9]+$ && "${X_CEILING_VERIFY_MIGRATIONS_MIN:-x}" =~ ^[0-9]+$ ]]; then
+    local _serial=$(( X_CEILING_RESOLVE_TARGET_MIN + X_CEILING_MIGRATE_MIN + X_CEILING_VERIFY_MIGRATIONS_MIN ))
+    if [[ "$X_CEILING_VERIFY_DOPPLER_SECRETS_MIN" -le "$_serial" ]]; then
+      pass "B9d verify-doppler-secrets (${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN}m) is dominated by the serial branch (${_serial}m), so the formula is exact"
+    else
+      fail "B9d verify-doppler-secrets must stay <= resolve-target + migrate + verify-migrations -- above it the parallel branch, not the summed chain, is the critical path and B9 under-counts" \
+        "<= ${_serial}" "${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN}"
+    fi
+  else
+    fail "B9d deploy-arm ceilings readable" "integers" \
+      "verify-doppler-secrets=${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN:-<unset>} resolve-target=${X_CEILING_RESOLVE_TARGET_MIN:-<unset>} migrate=${X_CEILING_MIGRATE_MIN:-<unset>} verify-migrations=${X_CEILING_VERIFY_MIGRATIONS_MIN:-<unset>}"
+  fi
+
+  # B9e -- no ci.yml job serialises its matrix. strategy.max-parallel multiplies a leg
+  # ceiling by the leg count and no per-job timeout-minutes read can see it; extend the
+  # extractor before adding one.
+  assert_eq "B9e no ci.yml job declares strategy.max-parallel (a serialised matrix the path extractor cannot see)" \
+    "" "${X_CI_MAX_PARALLEL_JOBS-<unset>}"
 
   # B10 -- schedule/monitor coherence. A job timeout above the tick interval, combined with
   # cancel-in-progress: false, would queue every subsequent tick behind a wedged run.
@@ -1573,28 +1634,42 @@ PY
 # assertion as the label. The B9 axes use it for the expected `>= <crit>` figure: a label
 # alone says "B9 went red", which a mutation landing on the WRONG job (or the wrong formula)
 # also satisfies; the figure says B9 went red for the intended term at the intended size.
-mutate_and_assert_red() {
-  local axis="$1" rel="$2" mutator="$3" expect_label="${4:-}" expect_re="${5:-}"
-  local sbx="$TMP/mut-$axis"
+# mutate_into_sandbox <row> <target-relative-path> <python-mutator>
+#
+# The prologue both verdict helpers share (#8149 review: it was duplicated verbatim): build
+# the sandbox, keep a pristine copy of the target, run the mutator, and REQUIRE the mutation
+# to have landed -- a no-op sed that scores as "caught" is how a battery becomes the false
+# confidence it exists to remove. Returns 1 (after recording the FAIL) on any setup defect;
+# on success MUT_SBX names the sandbox and the caller runs the child.
+MUT_SBX=""
+mutate_into_sandbox() {
+  local row="$1" rel="$2" mutator="$3"
+  local sbx="$TMP/mut-$row"
+  MUT_SBX=""
   rm -rf "$sbx"
   if ! make_sandbox "$sbx"; then
-    fail "C-$axis sandbox setup" "cp/mkdir rc=0" "setup failed (disk full?)"
-    return 0
+    fail "C-$row sandbox setup" "cp/mkdir rc=0" "setup failed (disk full?)"
+    return 1
   fi
   local target="$sbx/$rel"
-  local pristine="$TMP/pristine-$axis"
-  cp "$target" "$pristine" || { fail "C-$axis pristine copy" "rc=0" "cp failed"; return 0; }
-
-  if ! python3 -c "$mutator" "$target" 2>"$TMP/mut-err-$axis"; then
-    fail "C-$axis mutator ran" "rc=0" "$(cat "$TMP/mut-err-$axis")"
-    return 0
+  local pristine="$TMP/pristine-$row"
+  cp "$target" "$pristine" || { fail "C-$row pristine copy" "rc=0" "cp failed"; return 1; }
+  if ! python3 -c "$mutator" "$target" 2>"$TMP/mut-err-$row"; then
+    fail "C-$row mutator ran" "rc=0" "$(cat "$TMP/mut-err-$row")"
+    return 1
   fi
-  # THE MUTATION MUST HAVE LANDED. A no-op sed that scores as "caught" is how a battery
-  # becomes the false confidence it exists to remove.
   if diff -q "$pristine" "$target" >/dev/null 2>&1; then
-    fail "C-$axis mutation LANDED (file actually changed)" "a differing file" "byte-identical"
-    return 0
+    fail "C-$row mutation LANDED (file actually changed)" "a differing file" "byte-identical"
+    return 1
   fi
+  MUT_SBX="$sbx"
+  return 0
+}
+
+mutate_and_assert_red() {
+  local axis="$1" rel="$2" mutator="$3" expect_label="${4:-}" expect_re="${5:-}"
+  mutate_into_sandbox "$axis" "$rel" "$mutator" || return 0
+  local sbx="$MUT_SBX"
 
   local child_out
   child_out="$(run_child "$sbx")"
@@ -1632,23 +1707,8 @@ mutate_and_assert_red() {
 # the formula absorbed the mutation for the wrong reason.
 mutate_and_assert_green() {
   local row="$1" rel="$2" mutator="$3" expect_crit="$4"
-  local sbx="$TMP/mut-$row"
-  rm -rf "$sbx"
-  if ! make_sandbox "$sbx"; then
-    fail "C-$row sandbox setup" "cp/mkdir rc=0" "setup failed (disk full?)"
-    return 0
-  fi
-  local target="$sbx/$rel"
-  local pristine="$TMP/pristine-$row"
-  cp "$target" "$pristine" || { fail "C-$row pristine copy" "rc=0" "cp failed"; return 0; }
-  if ! python3 -c "$mutator" "$target" 2>"$TMP/mut-err-$row"; then
-    fail "C-$row mutator ran" "rc=0" "$(cat "$TMP/mut-err-$row")"
-    return 0
-  fi
-  if diff -q "$pristine" "$target" >/dev/null 2>&1; then
-    fail "C-$row mutation LANDED (file actually changed)" "a differing file" "byte-identical"
-    return 0
-  fi
+  mutate_into_sandbox "$row" "$rel" "$mutator" || return 0
+  local sbx="$MUT_SBX"
   local child_out
   child_out="$(run_child "$sbx")"
   local rc=$?
@@ -1666,9 +1726,9 @@ mutate_and_assert_green() {
 #
 # VALUE-AGNOSTIC, KEY-ANCHORED. It matches the `timeout-minutes:` KEY inside the `^  <job>:`
 # block (the block ends at the next 2-space-indented line) and writes the new value, so the
-# axis lands whatever the tree currently declares. A bare-text match on `timeout-minutes: 60`
-# can land in prose: the resolve-target block carries that literal in a comment 200 lines
-# below the real key. `re.subn` with count=1 and `assert n == 1` makes a non-landing mutation
+# axis lands whatever the tree currently declares. A bare-text match on `timeout-minutes:`
+# can land in prose: job comments in the same block name the key. `re.subn` with count=1
+# and `assert n == 1` makes a non-landing mutation
 # fail the MUTATOR, never the byte-diff. (No apostrophes: single-quoted shell string.)
 ceiling_mutator() {
   printf '%s\n' \
@@ -1907,12 +1967,16 @@ open(p,"w").write("\n".join(ls))' "B17"
   # ceiling move does not turn a must-PASS row into a confusing red.
   local CI=".github/workflows/ci.yml"
   local REL=".github/workflows/web-platform-release.yml"
-  local ctl_crit ctl_ci ctl_rel ctl_thr rt ts rel_callee_rel
+  local ctl_crit ctl_ci ctl_rel ctl_thr rt mg vm dp vds ts rel_callee_rel
   ctl_crit="$(child_emit "$TMP/control" RELEASE_CRITICAL_PATH_MIN)"
   ctl_ci="$(child_emit "$TMP/control" CI_DECLARED_PATH_MIN)"
   ctl_rel="$(child_emit "$TMP/control" RELEASE_CEILING_MIN)"
   ctl_thr="$({ grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' "$SUT" || true; } | { grep -oE '[0-9]+$' || true; } | head -1)"
   rt="$(yaml_job_timeout "$TMP/control/$REL" resolve-target)"
+  mg="$(yaml_job_timeout "$TMP/control/$REL" migrate)"
+  vm="$(yaml_job_timeout "$TMP/control/$REL" verify-migrations)"
+  dp="$(yaml_job_timeout "$TMP/control/$REL" deploy)"
+  vds="$(yaml_job_timeout "$TMP/control/$REL" verify-doppler-secrets)"
   ts="$(yaml_job_timeout "$TMP/control/$CI" test-scripts)"
   rel_callee_rel="$(python3 - "$TMP/control/$REL" <<'PYCALLEE'
 import sys, yaml
@@ -1921,76 +1985,105 @@ u = ((d.get("jobs") or {}).get("release") or {}).get("uses") or ""
 print(u.removeprefix("./") if u.startswith("./") else "")
 PYCALLEE
   )"
-  local b9_rows="axis13-raise-ci-test-scripts-ceiling axis14-raise-resolve-target-ceiling axis15-raise-release-ceiling green1-release-absorbed-by-max green2-test-scripts-at-boundary"
+  local b9_rows="C-tail axis13-raise-ci-test-scripts-ceiling axis14-raise-resolve-target-ceiling axis15-raise-release-ceiling axis16-raise-verify-doppler-secrets-ceiling green1-release-absorbed-by-max green2-test-scripts-at-boundary"
   if ! [[ "$ctl_crit" =~ ^[0-9]+$ && "$ctl_ci" =~ ^[0-9]+$ && "$ctl_rel" =~ ^[0-9]+$ \
-          && "$ctl_thr" =~ ^[0-9]+$ && "$rt" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && -n "$rel_callee_rel" ]]; then
+          && "$ctl_thr" =~ ^[0-9]+$ && "$rt" =~ ^[0-9]+$ && "$mg" =~ ^[0-9]+$ && "$vm" =~ ^[0-9]+$ \
+          && "$dp" =~ ^[0-9]+$ && "$vds" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && -n "$rel_callee_rel" ]]; then
     local row
     for row in $b9_rows; do
       fail "C-$row expected figure derivable from the control child emits and the sandbox YAML" \
-        "integers for crit/ci/release/threshold/resolve-target/test-scripts and a local release callee" \
-        "crit=${ctl_crit:-<unset>} ci=${ctl_ci:-<unset>} release=${ctl_rel:-<unset>} threshold=${ctl_thr:-<unset>} resolve-target=${rt:-<unset>} test-scripts=${ts:-<unset>} callee=${rel_callee_rel:-<unset>}"
+        "integers for crit/ci/release/threshold/resolve-target/migrate/verify-migrations/deploy/verify-doppler-secrets/test-scripts and a local release callee" \
+        "crit=${ctl_crit:-<unset>} ci=${ctl_ci:-<unset>} release=${ctl_rel:-<unset>} threshold=${ctl_thr:-<unset>} resolve-target=${rt:-<unset>} migrate=${mg:-<unset>} verify-migrations=${vm:-<unset>} deploy=${dp:-<unset>} verify-doppler-secrets=${vds:-<unset>} test-scripts=${ts:-<unset>} callee=${rel_callee_rel:-<unset>}"
     done
     return 0
   fi
-  # The additive tail (resolve-target + migrate + verify-migrations + deploy) is what is left of
-  # the control crit once the max() head is removed. Under the formula it is 150 on the
-  # 2026-09-14 tree; under the pre-#8149 formula it read 125, which is exactly why the RED-first
-  # run of these rows reported figure mismatches alongside the two SURVIVED axes.
-  local head tail
-  head=$(( ctl_ci > ctl_rel ? ctl_ci : ctl_rel ))
-  tail=$(( ctl_crit - head ))
+  # The additive tail (resolve-target + migrate + verify-migrations + deploy) is read RAW out
+  # of the sandbox YAML, independent of the extractor under test; the control crit minus the
+  # max() head must equal it (C-tail). Deriving the tail from the emit alone let a SUT that
+  # dropped a term keep every row green (#8149 review, mutant S1): the expected figures
+  # would have shifted with the defect.
+  local max_head add_tail emit_tail
+  max_head=$(( ctl_ci > ctl_rel ? ctl_ci : ctl_rel ))
+  add_tail=$(( rt + mg + vm + dp ))
+  emit_tail=$(( ctl_crit - max_head ))
+  if [[ "$emit_tail" -eq "$add_tail" ]]; then
+    pass "C-tail control crit minus max(ci, release) equals the four raw ceilings summed (${add_tail}m)"
+  else
+    fail "C-tail control crit minus max(ci, release) equals resolve-target + migrate + verify-migrations + deploy read raw from the sandbox YAML -- a term is missing from, or doubled in, the formula" \
+      "$add_tail" "$emit_tail"
+  fi
+  # Every mutated value is DERIVED so the row keeps proving its claim whatever the tree
+  # declares (a pinned 130 stopped proving "CI is in the sum" once release exceeded it):
+  #   axis13: the smallest test-scripts that (a) lifts ci above release, so the max() takes
+  #           the CI arm, and (b) lifts crit past the threshold, so B9 reds;
+  #   axis14: the smallest resolve-target that lifts crit past the threshold by one;
+  #   axis15: the smallest release that (a) exceeds ci and (b) lifts crit past the threshold;
+  #   axis16: verify-doppler-secrets one above the serial branch it must stay under;
+  #   green1: release == ci, absorbed by the max() exactly (crit unchanged);
+  #   green2: test-scripts at the value that puts crit EXACTLY at the threshold.
   # ci_declared_path with test-scripts moved to <v>: the memoised longest path shifts by the
   # same delta, because test-scripts is on that path (B9c reads it as test-scripts + test).
-  local ci13 exp13 exp14 ci15 exp15 rel1 exp1 v2 exp2
-  ci13=$(( ctl_ci - ts + 130 ))
-  exp13=$(( (ci13 > ctl_rel ? ci13 : ctl_rel) + tail ))
-  exp14=$(( ctl_crit - rt + 70 ))
-  ci15=$(( ctl_ci > 130 ? ctl_ci : 130 ))
-  exp15=$(( ci15 + tail ))
-  rel1=$(( ctl_ci > 70 ? ctl_ci : 70 ))
-  exp1=$(( rel1 + tail ))
-  # green2: the test-scripts value that puts crit EXACTLY at the threshold --
-  #   DRIFT_SUSTAINED_THRESHOLD_MIN - (resolve-target + migrate + verify-migrations + deploy)
-  #     - (ci_declared_path - test-scripts)
-  # = 65 on the 2026-09-14 tree (225 - 150 - 10). 130 is the RED edge axis13 proves.
-  v2=$(( ctl_thr - tail - (ctl_ci - ts) ))
-  exp2=$(( ctl_thr ))
+  local ci_base v13 ci13 exp13 v14 exp14 v15 exp15 exp1 v2 exp2 v16
+  ci_base=$(( ctl_ci - ts ))
+  v13=$(( ctl_rel - ci_base + 1 ))
+  [[ $(( ctl_thr - add_tail - ci_base + 1 )) -gt "$v13" ]] && v13=$(( ctl_thr - add_tail - ci_base + 1 ))
+  ci13=$(( ci_base + v13 ))
+  exp13=$(( ci13 + add_tail ))
+  v14=$(( rt + ctl_thr - ctl_crit + 1 ))
+  exp14=$(( ctl_crit - rt + v14 ))
+  v15=$(( ctl_ci + 1 ))
+  [[ $(( ctl_thr - add_tail + 1 )) -gt "$v15" ]] && v15=$(( ctl_thr - add_tail + 1 ))
+  exp15=$(( v15 + add_tail ))
+  exp1=$(( ctl_ci + add_tail ))
+  v2=$(( ctl_thr - add_tail - ci_base ))
+  exp2=$ctl_thr
+  v16=$(( rt + mg + vm + 1 ))
 
   # Axis 13 -- raise the CI leg. GREEN before #8149 (the CI term was absent from the sum):
   # proves the term is IN the sum. Its expected label is read out of the LIVE test text rather
   # than restated, and the prefix is asserted: every B9 axis matches `FAIL: B9 threshold` by
   # prefix, so a rename of the label un-couples the battery loudly here instead of silently.
-  local b9_pat b9_label
-  b9_pat='fail "B9 threshold >= '
-  b9_label="$({ grep -oE "${b9_pat}"'[^"]*"' "$SCRIPT_DIR/prod-version-drift-check.test.sh" || true; } | head -1 | sed -E 's/^fail "//; s/"$//')"
-  if [[ -z "$b9_label" ]]; then
-    fail "C-axis13-raise-ci-test-scripts-ceiling B9 FAIL label keeps the B9 threshold prefix (every B9 axis matches FAIL: B9 threshold by prefix)" \
-      'a fail "B9 threshold >= ..." call in the live test' "none found"
+  # Anchored on the CALL SITE (line-leading whitespace then `fail "B9 threshold >= `), never on
+  # the bare phrase: this file also quotes the phrase in prose, and a bare grep took the first
+  # occurrence by file ORDER (#8149 review). Exactly one call site must match.
+  local b9_pat b9_label b9_n
+  b9_pat='^[[:space:]]+fail "B9 threshold >= '
+  b9_label="$({ grep -oE "${b9_pat}"'[^"]*"' "$SCRIPT_DIR/prod-version-drift-check.test.sh" || true; } | sed -E 's/^[[:space:]]+fail "//; s/"$//')"
+  b9_n="$(printf '%s' "$b9_label" | grep -c . || true)"
+  if [[ "$b9_n" != "1" ]]; then
+    fail "C-axis13-raise-ci-test-scripts-ceiling exactly one fail call site carries the B9 threshold prefix (every B9 axis matches FAIL: B9 threshold by prefix)" \
+      "1 call site" "$b9_n: ${b9_label//$'\n'/;}"
   else
     mutate_and_assert_red "axis13-raise-ci-test-scripts-ceiling" "$CI" \
-      "$(ceiling_mutator test-scripts 130)" "$b9_label" "^    expected: >= ${exp13}( |\$)"
+      "$(ceiling_mutator test-scripts "$v13")" "$b9_label" "^    expected: >= ${exp13}( |\$)"
   fi
 
   # Axis 14 -- raise resolve-target. GREEN before #8149 (max(60,70) + 135 = 205 <= 207: the
   # term sat inside the max()): proves the term is ADDITIVE.
   mutate_and_assert_red "axis14-raise-resolve-target-ceiling" "$REL" \
-    "$(ceiling_mutator resolve-target 70)" "B9 threshold" "^    expected: >= ${exp14}( |\$)"
+    "$(ceiling_mutator resolve-target "$v14")" "B9 threshold" "^    expected: >= ${exp14}( |\$)"
 
   # Axis 15 -- raise the release ceiling on the CALLEE past the CI leg: a second max() member
   # after a compliant first. Already caught before #8149; the FIGURE is what changed.
   mutate_and_assert_red "axis15-raise-release-ceiling" "$rel_callee_rel" \
-    "$(ceiling_mutator release 130)" "B9 threshold" "^    expected: >= ${exp15}( |\$)"
+    "$(ceiling_mutator release "$v15")" "B9 threshold" "^    expected: >= ${exp15}( |\$)"
+
+  # Axis 16 -- raise verify-doppler-secrets one minute past the serial branch: B9d reds.
+  # crit does not move (the formula sums the chain, not this branch), which is exactly why
+  # the dominance needs its own assertion.
+  mutate_and_assert_red "axis16-raise-verify-doppler-secrets-ceiling" "$REL" \
+    "$(ceiling_mutator verify-doppler-secrets "$v16")" "B9d verify-doppler-secrets" "^    expected: <= $(( rt + mg + vm ))( |\$)"
 
   # green1 -- release raised to the CI leg must PASS: max() absorbs it. An additive form would
   # have read 275 and reddened. (A "lower a term" row was considered and dropped: lowering a
   # term of a monotone sum can never red a green control, so it discriminates nothing.)
   mutate_and_assert_green "green1-release-absorbed-by-max" "$rel_callee_rel" \
-    "$(ceiling_mutator release 70)" "$exp1"
+    "$(ceiling_mutator release "$ctl_ci")" "$exp1"
 
   # green2 -- test-scripts at the derived boundary must PASS with crit == threshold.
   if [[ "$v2" -le 0 ]]; then
     fail "C-green2-test-scripts-at-boundary derived boundary value is positive (DRIFT_SUSTAINED_THRESHOLD_MIN - resolve-target - migrate - verify-migrations - deploy - (ci_declared_path - test-scripts))" \
-      "> 0" "$v2 (threshold=$ctl_thr tail=$tail ci=$ctl_ci test-scripts=$ts)"
+      "> 0" "$v2 (threshold=$ctl_thr tail=$add_tail ci=$ctl_ci test-scripts=$ts)"
   else
     mutate_and_assert_green "green2-test-scripts-at-boundary" "$CI" \
       "$(ceiling_mutator test-scripts "$v2")" "$exp2"

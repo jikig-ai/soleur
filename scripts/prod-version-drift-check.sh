@@ -93,8 +93,11 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # formula and the workflow's CI_BUDGET_MIN partition: B9 asserts threshold >= path and the
 # workflow asserts CI_DECLARED_PATH <= CI_BUDGET_MIN, so a split would red one side in
 # between. The 5 m slack covers rounding of the declared terms ONLY; it is not a bound on
-# runner-queue wait or on `release-<component>` group serialisation (release N+1 queues behind
-# release N and the deploy arm inherits that wait) — those stay empirical, per SCOPE below.
+# runner-queue wait or on concurrency-group serialisation — reusable-release.yml's
+# `release-<component>` (release N+1 queues behind release N and the deploy arm inherits that
+# wait) and the deploy arm's own `migrate-web-platform`, `verify-migrations-web-platform` and
+# `web-1-swap` groups (the last serialises the 90 m `deploy` term) — those stay empirical,
+# per SCOPE below.
 # The cost is 18 minutes of worst-case drift-alert latency, inside this probe's own measured
 # 61-243 minute delivery interval. Not harvested to exactly 220: that re-creates the #7902
 # trap one layer out. Confirmed by a green B9, never by re-deriving the arithmetic here.
@@ -106,7 +109,8 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # in one commit is what keeps B9 from ever being red; a two-commit split would red it in between.
 # The cost is 12 minutes of drift-alert latency, which sits inside this probe's own measured
 # 61-243 minute delivery interval.
-# (verify-doppler-secrets, 10 min, also runs in parallel and is dominated.)
+# (verify-doppler-secrets runs in parallel with resolve-target -> migrate -> verify-migrations
+# and is dominated by that chain; B9d asserts the dominance, so the formula stays exact.)
 #
 # SCOPE (#7160): those ceilings bound EXECUTION only. This constant is compared against an age
 # measured from the oldest undeployed commit's committer epoch, and runner queue wait,

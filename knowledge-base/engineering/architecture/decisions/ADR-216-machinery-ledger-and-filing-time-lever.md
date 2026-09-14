@@ -340,19 +340,28 @@ lever to the moment the generator acts.
   superseded push left their runs orphaned on the pool; they now carry
   `ci.yml`'s exact block (per-ref on `pull_request`, per-SHA otherwise, cancel
   only on `pull_request`) — up to 19 orphaned jobs reclaimed per superseded
-  push. Three workflows are excluded, each for a stated reason:
+  push. Four workflows are excluded, each for a stated reason:
   `tenant-integration.yml` holds the dev-Supabase mutex and a mid-run cancel
   can leave fixture residue; `infra-validation.yml` and
   `apply-sentry-infra.yml` run terraform against a remote backend and a cancel
   mid-plan can leave a state lock; `constraint-gates.yml` is parity-locked to
-  the constraint-scaffold template.
+  the constraint-scaffold template. One accepted cost, recorded only here and
+  in the ledger row: `secret-scan.yml`'s weekly `schedule` arm keys on `main`
+  HEAD's SHA and so shares the push-arm group, so a same-SHA re-run of the push
+  run can drop a pending weekly scan (the workflow has no heartbeat; the next
+  push or the next week re-covers it).
 
 **The filing-time lever.** `scripts/pr-fanout-ledger.txt` lists every workflow
 that fires on a PR push with its declared job count, path filter, cancel
 behaviour and a consequence; `plugins/soleur/test/pr-fanout-ledger.test.sh`
 enumerates the tree and reds the `test` check when a firing workflow has no
-row, a row's workflow no longer fires, a declared job count exceeds its row, or
-a `paths` / `cancel` flag disagrees with the file. The discipline is the issue
+row, a row's workflow no longer fires, a declared job count exceeds its row,
+a `paths` / `cancel` flag disagrees with the file, or a block copied with
+`ci.yml`'s cancel ternary does not carry `ci.yml`'s group. "Fires on a PR
+push" includes the transitive case — a `workflow_run` chained off a firing
+workflow with no branch filter (`fix-constraints-stage-b.yml`) — and a
+`uses:` job counts its local callee's jobs, since it dispatches them. The
+ledger's column definitions are the single source; the test implements them. The discipline is the issue
 gate's: a shape check — the consequence must be non-empty and at least four
 words — not a semantic one. It cannot tell a true consequence from a written
 one; what it removes is the free filing, so no workflow can add a per-PR trigger

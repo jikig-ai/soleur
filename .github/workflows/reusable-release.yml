@@ -98,11 +98,12 @@ jobs:
     # (one formula at every site since #8149; `resolve-target` is additive, run serially after
     # whichever of CI and release finishes last). Naming the jobs rather than their total is
     # deliberate: a literal would silently stale the moment any one of them changes. The CI
-    # term WAS `await-ci` at 60; that job was deleted by #5806 and replaced by CI's own
-    # declared longest needs: path, currently 70, which is the DOMINANT max() member. So
-    # `release` at 60 is dominated either way: every value <= 70 yields an identical bound. 60
-    # is kept because it is 2.5x the worst run observed here and raising it buys nothing; the
-    # first minute above 70 would force the threshold up.
+    # term WAS `await-ci` (deleted by #5806) and is now CI's own declared longest needs:
+    # path, the dominant max() member on today's tree. So `release` is dominated: every value
+    # at or below the CI term yields an identical bound. 60 is kept because it is 2.5x the
+    # worst run observed here and raising it buys nothing; past the CI term it becomes the
+    # max() member and B9 reds unless the threshold moves with it (the 5 m slack in the
+    # constant covers rounding, not a release ceiling raise).
     #
     # WHAT THIS ACTUALLY BUYS. Its main value is not tidier arithmetic. This workflow declares
     # a workflow-level `concurrency: release-${{ inputs.component }}` with

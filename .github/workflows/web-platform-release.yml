@@ -224,7 +224,7 @@ jobs:
     # construction under ADR-217 D3(b) (this arm queues behind the release run on the shared
     # concurrency group, so the release is done before this job starts). If a future edit
     # ever un-couples the arms and makes that poll live again, this job fails closed on any
-    # release over 15 m (observed max ~24 m against the 60 m callee ceiling): release-outcome
+    # release over 15 m (observed max ~24 m, well under the callee's own ceiling): release-outcome
     # classifies it as non-delivery and emails the operator — a FALSE non-delivery alarm, and
     # that is the intended loud warning ADR-217 D3 said was absent, in place of an hour of
     # silent waiting.
@@ -448,9 +448,11 @@ jobs:
           # before reaching here). It is kept because reason 2 is a property of the
           # concurrency key, not of this job: change that key so the arms stop
           # sharing a group — which a future edit might do to parallelise them —
-          # and this loop becomes live again with no other warning.
+          # and this loop becomes live again -- and the only warning is this job's
+          # `timeout-minutes` (declared above, sized for the dead poll) tripping
+          # as a false non-delivery email.
           #
-          # Job-level `timeout-minutes: 60` bounds it regardless; GitHub starts that
+          # Job-level `timeout-minutes` bounds it regardless; GitHub starts that
           # clock when the job STARTS, so queueing behind the push arm does not
           # consume it.
           attempt=0
@@ -725,8 +727,8 @@ jobs:
           # `test` aggregator does. The predecessor quantity — `test-scripts` +
           # `test` — was correct for `await-ci`, which polled for the `test`
           # CHECK, and it was carried across the rewrite unchanged. It is the
-          # wrong quantity here by an order of magnitude: measured on this tree,
-          # to-`test` is 70m while the whole-run declared path is 720m.
+          # wrong quantity whenever any job is undeclared: to-`test` stops at
+          # the aggregator while the whole-run path carries every 360m default.
           CI_UNDECLARED=$(undeclared_jobs .github/workflows/ci.yml)
           N_UNDECLARED=$(printf '%s' "$CI_UNDECLARED" | grep -c . || true)
           # 0.7 — the same factor ADR-212 Decision 4 chose for the ceiling this
@@ -742,9 +744,11 @@ jobs:
           # The statement that makes the budget hold is "CI's declared path fits
           # in the share the pipeline budget allows it". Asserting it requires
           # every job on the run to DECLARE a ceiling. While any job does not,
-          # GitHub's 360m default applies to it, and the declared path is 720m
-          # against a 72m share — so the invariant is FALSE, and the previous
-          # `70 <= 72` green was an artifact of measuring to-`test` instead.
+          # GitHub's 360m default applies to it and the declared path dwarfs
+          # CI_BUDGET_MIN (measured at #8020 time: two undeclared jobs on the
+          # longest path made it 360m x 2 against a share under 80m) — so the
+          # invariant is FALSE, and the earlier to-`test` green was an artifact
+          # of measuring the wrong quantity.
           #
           # As of #8020 (closed inline in this PR) every ci.yml job declares a
           # ceiling derived from measured duration, so this branch is not taken
@@ -759,12 +763,15 @@ jobs:
             # Every job declares. Now the arithmetic means something, so assert it.
             CI_DECLARED_PATH_MIN=$(run_declared_path .github/workflows/ci.yml)
             emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
-            if [ -z "$CI_DECLARED_PATH_MIN" ]; then
-              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed — the budget would be underived"
+            # `-gt 0`, not just non-empty: the awk prints 0 when the `jobs:`
+            # header never matched and under-counts a quoted needs: list, and a
+            # 0 passes the `-gt $CI_BUDGET_MIN` compare below silently.
+            if ! [ "${CI_DECLARED_PATH_MIN:-0}" -gt 0 ] 2>/dev/null; then
+              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed (read '${CI_DECLARED_PATH_MIN:-}') — the budget would be underived"
               exit 1
             fi
             if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
-              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus resolve-target ${RT} + migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
+              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus resolve-target ${RT} + migrate ${M} + verify-migrations ${V} + deploy ${D}). Remedies: lower a ci.yml ceiling on the longest needs: path; or lower one of the deploy-arm ceilings named above; or raise DRIFT_SUSTAINED_THRESHOLD_MIN in scripts/prod-version-drift-check.sh and add a dated line to its header, in the same commit as the ceiling change -- check B9 in scripts/prod-version-drift-check.test.sh must stay green either way."
               exit 1
             fi
           fi

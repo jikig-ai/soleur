@@ -493,9 +493,23 @@ fi
 if grep -qE '^  [a-zA-Z0-9_-]+:$' "$W/budget.blk"; then
   fail "G5 the budget extraction crossed a JOB boundary ($(grep -cE '^  [a-zA-Z0-9_-]+:$' "$W/budget.blk") job header(s) inside it, $(wc -l < "$W/budget.blk") lines) — every jobname row below could then be satisfied by a foreign job"
 else pass; fi
+# COMMENT-STRIPPED (#8149 review). Every G5 row below greps the CODE of the step, never
+# its prose: the step's own comments quote `THRESHOLD=$(read_threshold)` and the
+# job_ceiling calls, so an un-stripped grep was satisfied by a comment while the real line
+# read a literal (mutants S5/S6). Whole-line comments are deleted; a trailing ` # ...`
+# (whitespace before the `#`, so `${pair#*:}` survives) is cut.
+sed -e '/^[[:space:]]*#/d' -e 's/[[:space:]]\{1,\}#.*$//' "$W/budget.blk" > "$W/budget.code"
+if [ -s "$W/budget.code" ] && [ "$(grep -c . "$W/budget.code")" -ge 40 ]; then pass; else
+  fail "G5 the comment-stripped budget step is empty or implausibly short ($(grep -c . "$W/budget.code" 2>/dev/null || echo 0) code lines) — every anchored row below would pass vacuously"
+fi
+# ONE step of this name in the file: the extractor takes the FIRST match, so a decoy step
+# inserted above the real one would be the thing every row reads.
+if [ "$(grep -c -- '- name: Derive the CI budget' "$REL")" -eq 1 ]; then pass; else
+  fail "G5-23 exactly one step named 'Derive the CI budget' exists in $REL ($(grep -c -- '- name: Derive the CI budget' "$REL") found) — the extractor reads the first, so a second one is a decoy every row below would score"
+fi
 # I3's successor: DERIVED from a read value, never a literal.
-if grep -qE 'THRESHOLD=\$\(read_threshold\)' "$W/budget.blk"; then pass; else
-  fail "G5-18 the pipeline threshold is not READ from the tree — a restated literal drifts silently the moment DRIFT_SUSTAINED_THRESHOLD_MIN moves"
+if grep -qE '^\s*THRESHOLD=\$\(read_threshold\)\s*$' "$W/budget.code"; then pass; else
+  fail "G5-18 the pipeline threshold is not READ from the tree — a restated literal drifts silently the moment DRIFT_SUSTAINED_THRESHOLD_MIN moves (expected the code line THRESHOLD=\$(read_threshold) in .github/workflows/web-platform-release.yml step 'Derive the CI budget and check for creep')"
 fi
 # THE PARTITION IS THE PROPERTY (#8149). CI's share is DRIFT_SUSTAINED_THRESHOLD_MIN minus
 # every job that follows CI on the deploy arm — resolve-target, migrate, verify-migrations,
@@ -503,8 +517,19 @@ fi
 # max(ci, release). The order is pinned deliberately: dropping any one term (the
 # `- RT` that was missing before #8149 loosened the soft ceiling on a bare threshold raise)
 # must red here by name, not survive as a looser regex.
-if grep -qE 'CI_BUDGET_MIN=\$\(\(\s*THRESHOLD - RT - M - V - D' "$W/budget.blk"; then pass; else
-  fail "G5-18 CI_BUDGET_MIN is not derived as THRESHOLD minus resolve-target, migrate, verify-migrations, deploy (RT, M, V, D — every ceiling that follows CI on the deploy arm; the order is pinned deliberately because the partition is the property)"
+if grep -qE '^\s*CI_BUDGET_MIN=\$\(\(\s*THRESHOLD - RT - M - V - D\s*\)\)\s*$' "$W/budget.code"; then pass; else
+  fail "G5-18 CI_BUDGET_MIN is not derived as THRESHOLD minus resolve-target, migrate, verify-migrations, deploy (RT, M, V, D — every ceiling that follows CI on the deploy arm; the order is pinned deliberately because the partition is the property; the closing )) is part of the anchor so a trailing '+ RT' cannot re-add a term) — expected the code line CI_BUDGET_MIN=\$(( THRESHOLD - RT - M - V - D )) in .github/workflows/web-platform-release.yml step 'Derive the CI budget and check for creep'"
+fi
+# EXACTLY ONE BINDING per input and per derived value (#8149 review, mutant S7). A grep
+# that asserts a line is PRESENT is satisfied while a later `RT=0` or `THRESHOLD=9999`
+# overrides it before the arithmetic; the property is that the derivation IS the value.
+_multi=""
+for var in THRESHOLD RT M V D CI_BUDGET_MIN CI_DECLARED_PATH_MIN SOFT_CEILING_S; do
+  _n="$(grep -cE "^\s*${var}=" "$W/budget.code" || true)"
+  [ "$_n" -eq 1 ] || _multi="${_multi}${var}(${_n}) "
+done
+if [ -z "$_multi" ]; then pass; else
+  fail "G5-22 each budget variable is bound exactly once in the step's code: ${_multi}— a second assignment after the derivation silently replaces the derived value, and a presence grep cannot see it"
 fi
 # THE FIFTH INPUT. Without it, lowering test-scripts' ceiling silently stops the
 # detector tracking the thing it detects.
@@ -517,23 +542,25 @@ fi
 # workflow) and were replaced by a whole-run closure.
 _missing=""
 for jobname in migrate verify-migrations deploy resolve-target; do
-  grep -qF -- "job_ceiling \"\$REL\" ${jobname})" "$W/budget.blk" \
+  grep -qF -- "job_ceiling \"\$REL\" ${jobname})" "$W/budget.code" \
     || _missing="${_missing}${jobname} "
 done
 for helper in undeclared_jobs run_declared_path; do
-  grep -qE "^\s*${helper}\(\) \{" "$W/budget.blk" || _missing="${_missing}${helper}() "
+  grep -qE "^\s*${helper}\(\) \{" "$W/budget.code" || _missing="${_missing}${helper}() "
 done
-grep -qE 'undeclared_jobs \.github/workflows/ci\.yml' "$W/budget.blk" \
+grep -qE 'undeclared_jobs \.github/workflows/ci\.yml' "$W/budget.code" \
   || _missing="${_missing}undeclared_jobs(ci.yml)-call "
+grep -qE '^\s*CI_DECLARED_PATH_MIN=\$\(run_declared_path \.github/workflows/ci\.yml\)' "$W/budget.code" \
+  || _missing="${_missing}run_declared_path(ci.yml)-call "
 if [ -z "$_missing" ]; then pass; else
   fail "G5-21 the derivation does not read these inputs by their CALL form: ${_missing}— each is a ceiling the creep detector tracks, and a bare-name grep here was satisfied by the step's own error-message prose"
 fi
 # I3b's successor: the warning must fire BELOW its reference, not at or above.
-if grep -qE '\* 60 \* 7 / 10' "$W/budget.blk"; then pass; else
+if grep -qE '\* 60 \* 7 / 10' "$W/budget.code"; then pass; else
   fail "G5-19 the soft ceiling is not 0.7x its reference — a factor at or above 1.0 means the warning never fires before the budget is already blown"
 fi
 # The headroom invariant is asserted, not assumed.
-if grep -qE 'CI_DECLARED_PATH_MIN.*-gt.*CI_BUDGET_MIN' "$W/budget.blk"; then pass; else
+if grep -qE 'CI_DECLARED_PATH_MIN.*-gt.*CI_BUDGET_MIN' "$W/budget.code"; then pass; else
   fail "G5 the CI_DECLARED_PATH <= CI_BUDGET_MIN headroom is not asserted — the two quantities were conflated once already and nothing would catch it recurring"
 fi
 # I4's successor: the emitted signal HAS a consumer.
@@ -1052,11 +1079,13 @@ TOTAL=$((passes + fails))
 # + 3 G12 arm-parity (extraction, emptiness, coherence)
 # + 1 G3-13b carried-value non-vacuity + 1 G9b ci_not_green arm
 # + 2 G3 DISPATCH_SHA read-scope (span located, no read outside it)
-# + 2 G13 ordering-guard coverage (floor, and no ungated acting step) = 67
+# + 2 G13 ordering-guard coverage (floor, and no ungated acting step)
+# + 3 G5 #8149 review (comment-stripper self-test, G5-23 one budget step, G5-22
+#   exactly-one binding) = 70
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=67
+MIN_ROWS=70
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

@@ -10,18 +10,26 @@
 # and nothing else in the tree notices. This suite is the thing that notices.
 #
 # ASSEMBLY. The chokepoint is the PyYAML enumerator below over
-# `${PR_FANOUT_WORKFLOWS_DIR:-.github/workflows}/*.yml`. A file FIRES when
-# `on.pull_request` or `on.pull_request_target` is present (dict, list or string
-# form of `on:`; PyYAML parses a bare `on` key as boolean True) and `types` is
-# absent or contains `synchronize`. `jobs` is `len(jobs)`. `paths` is the
-# presence of `paths`/`paths-ignore` under that trigger. `cancel` is yes only
-# when BOTH halves hold on SOME concurrency mapping (workflow-level or
-# job-level): the cancel FORM is `true` or ci.yml's
-# `${{ github.event_name == 'pull_request' }}` ternary, AND the GROUP SHAPE
-# references `github.ref`, `github.head_ref`, `github.ref_name`,
-# `github.event.number` or `github.event.pull_request.number` (a per-SHA group
-# never cancels a superseded push). Any other cancel-in-progress spelling fails
-# closed (A4c) so a new expression cannot be silently scored either way.
+# `${PR_FANOUT_WORKFLOWS_DIR:-.github/workflows}/*.yml`. The column
+# definitions live ONCE, in the ledger header (scripts/pr-fanout-ledger.txt);
+# the enumerator implements them and this comment only names what it reaches:
+#   - direct triggers: `on.pull_request` / `on.pull_request_target` (dict, list
+#     or string form of `on:`; PyYAML parses a bare `on` key as True), unless
+#     `types:` is present and omits `synchronize`;
+#   - TRANSITIVE triggers: `on.workflow_run` naming a firing workflow's `name:`
+#     with no `branches`/`branches-ignore` filter fires once per PR push too
+#     (fix-constraints-stage-b.yml), so it is enumerated to a fixpoint;
+#   - `jobs`: `len(jobs)`, where a `uses: ./.github/workflows/<callee>` job
+#     counts the callee's declared jobs (it dispatches them), not 1;
+#   - `cancel`: yes only when the enumerator can PROVE it — cancel form is
+#     `true` or ci.yml's `${{ github.event_name == 'pull_request' }}` ternary
+#     AND the group is keyed on a per-PR ref AND carries no per-run/per-SHA
+#     token (`github.sha`, `run_id`, `head.sha`, ... — a group that mixes both
+#     never collides across pushes, so it never cancels). Any other
+#     cancel-in-progress spelling fails closed (A4c);
+#   - A6: every block using the ternary form must carry ci.yml's group
+#     expression byte-for-byte, so a copy regressed to a per-ref-only group
+#     (the #7931 class on a `push: main` arm) cannot hide behind cancel=yes.
 #
 # BOTH SIDES ARE DERIVED INDEPENDENTLY. The real set never comes from the
 # ledger's own row count — see Part B row 11 in the plan (a one-time harness
@@ -30,7 +38,9 @@
 # PART A runs against the tree. PART B (mutation battery) re-invokes Part A
 # against a FRESH temp copy per mutant, with the assertion floor disabled, and
 # requires each mutant to fail on the NAMED row. Every Part A row is driven RED
-# at least once there.
+# at least once there. Mutants name live workflows (ci.yml, pr-quality-guards,
+# secret-scan, infra-validation, cla) on purpose: a rename reds the HARNESS
+# (assert_landed) rather than the guard, which is the loud direction.
 #
 # Env overrides: PR_FANOUT_WORKFLOWS_DIR, PR_FANOUT_LEDGER, PR_FANOUT_PARTS
 # (default AB; children run A), PR_FANOUT_MIN_CASES (the A7 floor; children
@@ -55,6 +65,11 @@ trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$SCRIPT_DIR/test-helpers.sh"   # PASS / FAIL / SKIPPED counters + print_results
+# test-helpers.sh opens with `set -euo pipefail`; this suite is accumulate-then-
+# exit (a failing lookup must print a FAIL line, not abort before A7), so errexit
+# is switched back off right after the source. Neither sibling battery sources
+# the helpers; this one does, for print_results only.
+set +e
 
 python3 -c 'import yaml' 2>/dev/null || { echo "FAIL: PyYAML is required" >&2; exit 2; }
 
@@ -62,6 +77,7 @@ WF_DIR="${PR_FANOUT_WORKFLOWS_DIR:-$REPO_ROOT/.github/workflows}"
 LEDGER="${PR_FANOUT_LEDGER:-$REPO_ROOT/scripts/pr-fanout-ledger.txt}"
 PARTS="${PR_FANOUT_PARTS:-AB}"
 SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+A0_FLOOR=15
 
 # CASES is incremented at every CALL SITE, never inside pass()/fail(), so the A7
 # floor moves independently of the verdict machinery it backstops (ADR-193).
@@ -73,23 +89,51 @@ fail() {
   [[ $# -ge 3 ]] && echo "    actual:   $3"
   FAIL=$((FAIL + 1))
 }
+# Instrument self-test: drive both helpers once and require both counters to
+# move, reported by a direct exit. A neutered fail() that takes the pass branch
+# leaves CASES and the A7 floor intact, so nothing else here can see it.
+_p0=$PASS; _f0=$FAIL
+pass "instrument" >/dev/null; fail "instrument" >/dev/null
+if [[ "$PASS" -ne $((_p0 + 1)) || "$FAIL" -ne $((_f0 + 1)) ]]; then
+  echo "FAIL: instrument self-test — pass()/fail() did not move their counters" >&2
+  exit 2
+fi
+PASS=$_p0; FAIL=$_f0
 
-ACCEPTED_SPELLINGS="true | false | \${{ github.event_name == 'pull_request' }}"
-GROUP_SHAPES="github.ref | github.head_ref | github.ref_name | github.event.number | github.event.pull_request.number"
+# The accepted spellings and group shapes are emitted by the enumerator itself
+# (SPEC records) so the messages below cannot drift from the scorer.
+ACCEPTED_SPELLINGS=""
+GROUP_SHAPES=""
 
 # ── The enumerator ───────────────────────────────────────────────────────────
 # Emits one TSV record per *.yml / *.yaml in WF_DIR:
-#   FIRE <file> <jobs> <paths> <cancel> <bad-forms>     a firing workflow
-#   SYM  <file>                                          a symlink (rejected via lstat)
-#   ERR  <file> <message>                                unparseable / not a mapping
+#   SPEC spellings <text>                                 the accepted cancel-in-progress spellings
+#   SPEC shapes <text>                                    the accepted per-PR group shapes
+#   FIRE <file> <jobs> <paths> <cancel> <bad-forms> <tgroup>  a firing workflow
+#   SYM  <file>                                           a symlink (rejected via lstat)
+#   ERR  <file> <message>                                 unparseable / not a mapping
 # <bad-forms> is `-` or a `|`-joined list of `<scope>=<expr>` for every
-# cancel-in-progress value that is none of the accepted spellings.
+# cancel-in-progress value that is none of the accepted spellings. <tgroup> is
+# `-` or the US(0x1f)-joined group expressions of every block using the ternary
+# form (A6 compares them to ci.yml's; `|` cannot be the joiner, the idiom
+# itself contains `||`).
 enumerate() { # <dir> -> TSV on stdout
-  WF_DIR="$1" python3 - <<'PY'
+  PR_FANOUT_ENUM_DIR="$1" python3 - <<'PY'
 import os, re, sys, yaml
-d = os.environ["WF_DIR"]
+d = os.environ["PR_FANOUT_ENUM_DIR"]
 TERNARY = "${{ github.event_name == 'pull_request' }}"
-GROUP_RE = re.compile(r"github\.(ref|head_ref|ref_name|event\.number|event\.pull_request\.number)\b")
+SPELLINGS = "true | false | " + TERNARY
+SHAPES = ("github.ref | github.head_ref | github.ref_name | github.event.number"
+          " | github.event.pull_request.number | github.event.pull_request.head.ref")
+GROUP_RE = re.compile(r"github\.(ref|head_ref|ref_name|event\.number|event\.pull_request\.number|event\.pull_request\.head\.ref)\b")
+# A per-run / per-SHA token anywhere in the group makes the key unique per
+# push, so the group never collides and a superseded push is never cancelled,
+# whatever else the expression mentions.
+PERSHA_RE = re.compile(r"github\.(sha|run_id|run_number|run_attempt|event\.pull_request\.head\.sha|event\.workflow_run\.head_sha|event\.after)\b")
+# ci.yml's idiom `event_name == 'pull_request' && <per-PR ref> || github.sha` keys
+# per-ref ON pull_request and per-SHA elsewhere; the sha arm is not a per-run
+# token on the PR path, so it is folded to its ref arm before the check.
+TERNARY_GROUP_RE = re.compile(r"github\.event_name == 'pull_request' && (github\.[A-Za-z_.]+) \|\| github\.sha")
 
 def norm_on(on):
     if on is None:
@@ -102,7 +146,7 @@ def norm_on(on):
         return on
     return {}
 
-def fires(on):
+def direct(on):
     for k in ("pull_request", "pull_request_target"):
         if k not in on:
             continue
@@ -118,6 +162,19 @@ def fires(on):
             return True, v
     return False, None
 
+def chained(on, firing_names):
+    # on.workflow_run naming a firing workflow with no branch filter fires
+    # once per run of that workflow, i.e. once per PR push.
+    v = on.get("workflow_run")
+    if not isinstance(v, dict):
+        return False
+    if "branches" in v or "branches-ignore" in v:
+        return False
+    w = v.get("workflows") or []
+    if isinstance(w, str):
+        w = [w]
+    return any(str(x) in firing_names for x in w)
+
 def cancel_form(v):
     if v is None or v is False:
         return "false"
@@ -128,7 +185,8 @@ def cancel_form(v):
         return s.lower()
     return s
 
-out = []
+docs = {}
+out = ["SPEC\tspellings\t" + SPELLINGS, "SPEC\tshapes\t" + SHAPES]
 for f in sorted(os.listdir(d)):
     if not (f.endswith(".yml") or f.endswith(".yaml")):
         continue
@@ -149,10 +207,42 @@ for f in sorted(os.listdir(d)):
     if not isinstance(doc, dict):
         out.append("ERR\t%s\tdocument is not a mapping" % f)
         continue
-    on = norm_on(doc.get("on", doc.get(True)))
-    ok, trig = fires(on)
-    if not ok:
-        continue
+    docs[f] = doc
+
+firing = {}   # file -> trigger dict (paths live there) or {} for chained
+for f, doc in docs.items():
+    ok, trig = direct(norm_on(doc.get("on", doc.get(True))))
+    if ok:
+        firing[f] = trig
+changed = True
+while changed:
+    changed = False
+    names = {str(docs[f].get("name", "")) for f in firing}
+    for f, doc in docs.items():
+        if f in firing:
+            continue
+        if chained(norm_on(doc.get("on", doc.get(True))), names):
+            firing[f] = {}
+            changed = True
+
+def job_count(doc):
+    jobs = doc.get("jobs") or {}
+    if not isinstance(jobs, dict):
+        return 0
+    n = 0
+    for j in jobs.values():
+        uses = j.get("uses") if isinstance(j, dict) else None
+        callee = None
+        if isinstance(uses, str) and uses.startswith("./"):
+            callee = docs.get(os.path.basename(uses.split("@", 1)[0]))
+        if isinstance(callee, dict) and isinstance(callee.get("jobs"), dict):
+            n += len(callee["jobs"])
+        else:
+            n += 1
+    return n
+
+for f in sorted(firing):
+    doc, trig = docs[f], firing[f]
     jobs = doc.get("jobs") or {}
     if not isinstance(jobs, dict):
         jobs = {}
@@ -164,10 +254,10 @@ for f in sorted(os.listdir(d)):
         if isinstance(j, dict) and j.get("concurrency") is not None:
             blocks.append((str(jn), j["concurrency"]))
     cancel = "no"
-    bad = []
+    bad, tgroups = [], []
     for scope, c in blocks:
         if isinstance(c, dict):
-            grp = str(c.get("group", ""))
+            grp = re.sub(r"\s+", " ", str(c.get("group", "")).strip())
             form = cancel_form(c.get("cancel-in-progress"))
         else:
             grp = str(c)          # string shorthand: group only, cancel defaults false
@@ -175,10 +265,15 @@ for f in sorted(os.listdir(d)):
         if form not in ("true", "false", TERNARY):
             bad.append("%s=%s" % (scope, form))
             continue
-        if form != "false" and GROUP_RE.search(grp):
+        if form == TERNARY:
+            tgroups.append(grp)
+        folded = TERNARY_GROUP_RE.sub(r"\1", grp)
+        if form != "false" and GROUP_RE.search(folded) and not PERSHA_RE.search(folded):
             cancel = "yes"
-    out.append("FIRE\t%s\t%d\t%s\t%s\t%s" % (f, len(jobs), paths, cancel, "|".join(bad) if bad else "-"))
-sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+    out.append("FIRE\t%s\t%d\t%s\t%s\t%s\t%s" % (
+        f, job_count(doc), paths, cancel,
+        "|".join(bad) if bad else "-", "\x1f".join(tgroups) if tgroups else "-"))
+sys.stdout.write("\n".join(out) + "\n")
 PY
 }
 
@@ -191,6 +286,8 @@ run_part_a() {
     echo "FAIL: enumerator exited $rc over $WF_DIR — fail closed" >&2
     exit 1
   fi
+  ACCEPTED_SPELLINGS="$(awk -F'\t' '$1=="SPEC" && $2=="spellings"{print $3}' "$enum")"
+  GROUP_SHAPES="$(awk -F'\t' '$1=="SPEC" && $2=="shapes"{print $3}' "$enum")"
 
   # A-sym / A-err: a symlinked or unparseable workflow is never silently skipped.
   local f msg
@@ -213,12 +310,12 @@ run_part_a() {
     echo "FAIL: A0 enumerator count is not a number: '$found'" >&2
     exit 1
   fi
-  if [[ "$found" -lt 15 ]]; then
-    echo "FAIL: A0 vacuity floor: $found firing workflows found in $WF_DIR ($found < 15) — the tree is unreadable or the enumerator broke; this is not a clean ledger" >&2
+  if [[ "$found" -lt "$A0_FLOOR" ]]; then
+    echo "FAIL: A0 vacuity floor: $found firing workflows found in $WF_DIR ($found < $A0_FLOOR) — the tree is unreadable or the enumerator broke; this is not a clean ledger" >&2
     exit 1
   fi
   CASES=$((CASES + 1))
-  pass "A0 enumerator found $found firing workflows ($found >= 15)"
+  pass "A0 enumerator found $found firing workflows ($found >= $A0_FLOOR)"
 
   # A-parse — every non-comment ledger line has exactly 5 TAB-separated fields.
   if [[ ! -f "$LEDGER" ]]; then
@@ -228,15 +325,13 @@ run_part_a() {
   local rows="$SUITE_TMP/rows.$$.tsv" ln nf
   # Comment lines are leading-# only; blank lines are ignored.
   awk -F'\t' '!/^#/ && NF>0 {print NR"\t"NF"\t"$0}' "$LEDGER" > "$rows"
-  local example
-  example="$(awk -F'\t' '!/^#/ && NF==5 {print; exit}' "$LEDGER")"
   while IFS=$'\t' read -r ln nf _rest; do
     CASES=$((CASES + 1))
     if [[ "$nf" -eq 5 ]]; then
       pass "A-parse line $ln: 5 TAB-separated columns"
     else
       fail "A-parse line $ln: expected 5 TAB-separated columns, got $nf (spaces are not separators)" \
-        "<workflow><TAB><jobs><TAB><paths><TAB><cancel><TAB><consequence>, e.g. ${example//$'\t'/<TAB>}" \
+        "<workflow><TAB><jobs><TAB><paths><TAB><cancel><TAB><consequence>" \
         "$(sed -n "${ln}p" "$LEDGER")"
     fi
   done < "$rows"
@@ -246,17 +341,19 @@ run_part_a() {
   awk -F'\t' '!/^#/ && NF==5' "$LEDGER" > "$lrows"
 
   # A1 — every firing workflow has a row. One summary line prints both counts
-  # (AC12); each missing file is its own FAIL naming the three honest exits.
-  local firing ledgered missing=0
+  # (AC12); each missing file is its own FAIL that prints the ENUMERATOR'S OWN
+  # reading of the file as the row to add (jobs/paths/cancel already derived),
+  # so the reader supplies only the consequence.
+  local firing ledgered missing=0 ej ep ec
   firing="$found"
   ledgered="$(wc -l < "$lrows" | tr -d '[:space:]')"
-  while IFS=$'\t' read -r f; do
+  while IFS=$'\t' read -r f ej ep ec; do
     if ! awk -F'\t' -v w="$f" '$1==w{found=1} END{exit !found}' "$lrows"; then
       missing=$((missing + 1))
       CASES=$((CASES + 1))
-      fail "A1 $f fires on a PR push but has no ledger row in $(basename "$LEDGER") — three honest exits: (1) add a row naming the consequence, e.g. ${example//$'\t'/<TAB>}; (2) drop pull_request from its on: block; (3) gate types: to opened/closed only"
+      fail "A1 $f fires on a PR push but has no ledger row in $(basename "$LEDGER") — three honest exits: (1) add the row ${f}<TAB>${ej}<TAB>${ep}<TAB>${ec}<TAB><consequence: what breaks if it does not run on every PR push>; (2) drop pull_request from its on: block (or add branches: to its workflow_run); (3) gate types: to opened/closed only"
     fi
-  done < <(awk -F'\t' '$1=="FIRE"{print $2}' "$enum")
+  done < <(awk -F'\t' '$1=="FIRE"{print $2"\t"$3"\t"$4"\t"$5}' "$enum")
   CASES=$((CASES + 1))
   if [[ "$missing" -eq 0 ]]; then
     pass "A1 $firing firing / $ledgered ledgered — every firing workflow has a row"
@@ -264,8 +361,13 @@ run_part_a() {
     fail "A1 $firing firing / $ledgered ledgered — $missing firing workflow(s) have no row"
   fi
 
-  # A2..A5 — per row.
-  local w jobs paths cancel cons declared fpaths fcancel bad nwords
+  # ci.yml's ternary group is the reference every other ternary block must equal.
+  local ci_tgroup
+  ci_tgroup="$(awk -F'\t' '$1=="FIRE" && $2=="ci.yml"{print $7; exit}' "$enum")"
+
+  # A2..A6 — per row, a fixed 8 cases each (A-parse above, A2, A3, A4, A4b, A4c,
+  # A5, A6) so the A7 floor derives from the row count.
+  local w jobs paths cancel cons declared fpaths fcancel bad tgroup nwords g
   while IFS=$'\t' read -r w jobs paths cancel cons; do
     # A2 — the row names a file that exists AND fires.
     CASES=$((CASES + 1))
@@ -278,14 +380,14 @@ run_part_a() {
       continue
     fi
     pass "A2 $w exists and fires"
-    IFS=$'\t' read -r declared fpaths fcancel bad < <(awk -F'\t' -v w="$w" '$1=="FIRE" && $2==w{print $3"\t"$4"\t"$5"\t"$6; exit}' "$enum")
+    IFS=$'\t' read -r declared fpaths fcancel bad tgroup < <(awk -F'\t' -v w="$w" '$1=="FIRE" && $2==w{print $3"\t"$4"\t"$5"\t"$6"\t"$7; exit}' "$enum")
 
     # A3 — declared jobs <= the row (the row is a CEILING).
     CASES=$((CASES + 1))
     if [[ "$jobs" =~ ^[0-9]+$ ]] && [[ "$declared" -le "$jobs" ]]; then
       pass "A3 $w: $declared declared <= row $jobs"
     else
-      fail "A3 $w: $declared declared, row allows $jobs — raise the row and name why; do not delete the job to satisfy the ledger"
+      fail "A3 $w: $declared declared, row allows $jobs — fold the new job into an existing job as a step (as #8149 did), or raise the row and name why; do not delete the job to satisfy the ledger"
     fi
 
     # A4 — paths flag equality.
@@ -296,6 +398,14 @@ run_part_a() {
       fail "A4 $w: row says paths=$paths, the trigger says paths=$fpaths — edit the row or the file, and name why"
     fi
 
+    # A4b — cancel flag equality (form AND group shape AND no per-run token).
+    CASES=$((CASES + 1))
+    if [[ "$cancel" == "$fcancel" ]]; then
+      pass "A4b $w: cancel=$cancel"
+    else
+      fail "A4b $w: row says cancel=$cancel, the file says cancel=$fcancel — cancel=yes needs ALL of: the form (cancel-in-progress in: $ACCEPTED_SPELLINGS, not false), a group keyed on one of: $GROUP_SHAPES, and no per-run token in the group (github.sha, run_id, head.sha, ...); edit the row or the file, and name why"
+    fi
+
     # A4c — an unrecognised cancel-in-progress spelling fails closed.
     CASES=$((CASES + 1))
     if [[ "$bad" == "-" ]]; then
@@ -304,21 +414,39 @@ run_part_a() {
       fail "A4c $w: cancel-in-progress '$bad' is not an accepted spelling — accepted verbatim: $ACCEPTED_SPELLINGS; the enumerator cannot score it either way"
     fi
 
-    # A4b — cancel flag equality (form AND group shape).
-    CASES=$((CASES + 1))
-    if [[ "$cancel" == "$fcancel" ]]; then
-      pass "A4b $w: cancel=$cancel"
-    else
-      fail "A4b $w: row says cancel=$cancel, the file says cancel=$fcancel — cancel=yes needs BOTH the form (cancel-in-progress in: $ACCEPTED_SPELLINGS, not false) AND a group shape keyed on one of: $GROUP_SHAPES; edit the row or the file, and name why"
-    fi
-
-    # A5 — consequence >= 4 words.
+    # A5 — consequence >= 4 words, and a cancel=no row says why (the header's
+    # definition: "or why cancel is no").
     CASES=$((CASES + 1))
     nwords="$(printf '%s' "$cons" | wc -w | tr -d '[:space:]')"
-    if [[ "$nwords" -ge 4 ]]; then
-      pass "A5 $w: consequence has $nwords words"
-    else
+    if [[ "$nwords" -lt 4 ]]; then
       fail "A5 $w: consequence has $nwords word(s), need >= 4 — a row with no consequence is a row that should not exist"
+    elif [[ "$cancel" == "no" ]] && ! printf '%s' "$cons" | grep -qi 'no cancel'; then
+      fail "A5 $w: cancel=no but the consequence never says why (expected the phrase 'no cancel: <reason>') — a superseded push leaves this run on the pool; name the state it holds or the rollout it awaits"
+    else
+      pass "A5 $w: consequence has $nwords words"
+    fi
+
+    # A6 — every block using ci.yml's ternary form carries ci.yml's GROUP too.
+    # A4b scores the group semantically, so a copy regressed to a per-ref-only
+    # group with the ternary (the #7931 class on a push: main arm) would still
+    # read cancel=yes; this pins the replicated block to its source.
+    CASES=$((CASES + 1))
+    if [[ "$tgroup" == "-" ]]; then
+      pass "A6 $w: no ternary-form concurrency block (n/a)"
+    elif [[ -z "$ci_tgroup" || "$ci_tgroup" == "-" ]]; then
+      fail "A6 $w: uses the ternary cancel form but ci.yml's reference group could not be read — fail closed"
+    else
+      local a6_ok=1
+      # printf '%s\n': without the trailing newline `read` skips the final line
+      # and the comparison never runs (caught by B6f on first run).
+      local a6_n=0
+      while IFS= read -r g; do a6_n=$((a6_n + 1)); [[ "$g" == "$ci_tgroup" ]] || a6_ok=0; done < <(printf '%s\n' "$tgroup" | tr '\037' '\n')
+      [[ "$a6_n" -ge 1 ]] || a6_ok=0
+      if [[ "$a6_ok" -eq 1 ]]; then
+        pass "A6 $w: ternary-form block carries ci.yml's group verbatim"
+      else
+        fail "A6 $w: ternary-form concurrency block does not carry ci.yml's group" "$ci_tgroup" "$tgroup"
+      fi
     fi
   done < "$lrows"
 }
@@ -359,9 +487,9 @@ assert_landed() { # <row> <copy-dir>
   pass "$row mutation landed"
 }
 
-# assert_red <row> <copy> <rc> <out> <grep-ERE-1> [<grep-ERE-2> ...]
+# assert_red <row> <rc> <out> <grep-ERE-1> [<grep-ERE-2> ...]
 assert_red() {
-  local row="$1" m="$2" rc="$3" out="$4"; shift 4
+  local row="$1" rc="$2" out="$3"; shift 3
   local pat
   CASES=$((CASES + 1))
   if [[ "$rc" -eq 0 ]]; then
@@ -390,6 +518,15 @@ assert_green() {
     return
   fi
   pass "$row green: $(grep -E -m1 -- "$pat" "$out")"
+}
+
+# red_mutant <row> <copy> <grep-ERE-1> [<grep-ERE-2> ...] — landed -> child -> red.
+red_mutant() {
+  local row="$1" m="$2"; shift 2
+  local out="$m/child.out" rc=0
+  assert_landed "$row" "$m" || return 0
+  run_child "$m" "$out" || rc=$?
+  assert_red "$row" "$rc" "$out" "$@"
 }
 
 # Rewrites <copy>/workflows/<file> through PyYAML with a one-line python edit
@@ -434,68 +571,82 @@ run_part_b() {
   ci_declared="$(enumerate "$WF_DIR" | awk -F'\t' '$1=="FIRE" && $2=="ci.yml"{print $3}')"
   ci_allowed="$(ledger_row "$PRISTINE" ci.yml | cut -f2)"
 
-  # B1 — unledgered firing workflow (string-form `on:`).
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  # B1 — unledgered firing workflow (string-form `on:`); A1 prints the
+  # enumerator's own reading (1 job, paths=no, cancel=no) as the row to add.
+  m="$(make_copy)"
   printf 'name: zz-new\non: pull_request\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-new.yml"
-  assert_landed B1 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B1 "$m" "$rc" "$out" '^  FAIL: A1 zz-new\.yml fires' 'add a row naming the consequence' 'drop pull_request' 'gate types:'; }
+  red_mutant B1 "$m" '^  FAIL: A1 zz-new\.yml fires' 'add the row zz-new\.yml<TAB>1<TAB>no<TAB>no<TAB>' 'drop pull_request' 'gate types:'
 
   # B2 — ci.yml grows past its row: add (allowed - declared + 1) jobs so the
   # file declares allowed+1 whatever the current declared count is.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   local k=$(( ci_allowed - ci_declared + 1 ))
   mutate_yaml "$m" ci.yml "for i in range($k): doc['jobs']['zz-mutant-%d' % i] = {'runs-on': 'ubuntu-latest', 'steps': [{'run': 'true'}]}"
-  assert_landed B2 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B2 "$m" "$rc" "$out" "^  FAIL: A3 ci\.yml: $((ci_allowed + 1)) declared, row allows $ci_allowed" 'do not delete the job'; }
+  red_mutant B2 "$m" "^  FAIL: A3 ci\.yml: $((ci_allowed + 1)) declared, row allows $ci_allowed" 'fold the new job' 'do not delete the job'
 
   # B3 — delete the pr-quality-guards.yml row.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   sed -i '/^pr-quality-guards\.yml\t/d' "$m/ledger.txt"
-  assert_landed B3 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B3 "$m" "$rc" "$out" '^  FAIL: A1 pr-quality-guards\.yml fires' '^  FAIL: A1 [0-9]+ firing / [0-9]+ ledgered'; }
+  red_mutant B3 "$m" '^  FAIL: A1 pr-quality-guards\.yml fires' '^  FAIL: A1 [0-9]+ firing / [0-9]+ ledgered'
 
   # B4 — delete secret-scan.yml from the copy, keep its row (ghost row).
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   rm -f "$m/workflows/secret-scan.yml"
-  assert_landed B4 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B4 "$m" "$rc" "$out" '^  FAIL: A2 row for secret-scan\.yml but .*does not exist' 'delete the row'; }
+  red_mutant B4 "$m" '^  FAIL: A2 row for secret-scan\.yml but .*does not exist' 'delete the row'
 
   # B5 — flip infra-validation.yml's paths flag to no in the ledger.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   awk -F'\t' -v OFS='\t' '!/^#/ && $1=="infra-validation.yml"{$3="no"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
-  assert_landed B5 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B5 "$m" "$rc" "$out" '^  FAIL: A4 infra-validation\.yml: row says paths=no, the trigger says paths=yes' 'name why'; }
+  red_mutant B5 "$m" '^  FAIL: A4 infra-validation\.yml: row says paths=no, the trigger says paths=yes' 'name why'
 
-  # B6 — no concurrency block in the file, cancel=yes in the row. The block is
-  # stripped from the copy (a no-op while the file has none) AND the row is set
-  # to yes (a no-op once the tree has flipped it), so the mutant lands on either
-  # side of the 2026-09-14 concurrency rollout.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  # B6 — no concurrency block in the file while the row says cancel=yes.
+  m="$(make_copy)"
   mutate_yaml "$m" pr-quality-guards.yml "doc.pop('concurrency', None); [j.pop('concurrency', None) for j in doc['jobs'].values() if isinstance(j, dict)]"
-  awk -F'\t' -v OFS='\t' '!/^#/ && $1=="pr-quality-guards.yml"{$4="yes"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
-  assert_landed B6 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B6 "$m" "$rc" "$out" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'group shape'; }
+  red_mutant B6 "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'group keyed on'
 
   # B6b — per-SHA group with cancel-in-progress true, row cancel=yes (group shape).
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.event.pull_request.head.sha || github.sha }}', 'cancel-in-progress': True}"
-  awk -F'\t' -v OFS='\t' '!/^#/ && $1=="pr-quality-guards.yml"{$4="yes"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
-  assert_landed B6b "$m" && { run_child "$m" "$out" || rc=$?; assert_red B6b "$m" "$rc" "$out" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'github\.event\.pull_request\.number'; }
+  red_mutant B6b "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'github\.event\.pull_request\.number'
+
+  # B6e — a per-PR ref AND a per-run token in one group: the key never collides
+  # across pushes, so nothing is ever cancelled; a presence check on the ref
+  # alone would score it yes.
+  m="$(make_copy)"
+  mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.ref }}-\${{ github.sha }}', 'cancel-in-progress': True}"
+  red_mutant B6e "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'no per-run token'
 
   # B6c — an unrecognised cancel-in-progress expression fails closed (A4c).
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.ref }}', 'cancel-in-progress': \"\${{ github.event_name != 'push' }}\"}"
-  assert_landed B6c "$m" && { run_child "$m" "$out" || rc=$?; assert_red B6c "$m" "$rc" "$out" "^  FAIL: A4c pr-quality-guards[.]yml: cancel-in-progress 'workflow=" "github[.]event_name != 'push' [}][}]' is not an accepted spelling" "accepted verbatim: true [|] false [|] [$][{][{] github[.]event_name == 'pull_request' [}][}];"; }
+  red_mutant B6c "$m" "^  FAIL: A4c pr-quality-guards[.]yml: cancel-in-progress 'workflow=" "github[.]event_name != 'push' [}][}]' is not an accepted spelling" "accepted verbatim: true [|] false [|] [$][{][{] github[.]event_name == 'pull_request' [}][}];"
 
   # B6d — a row's TABs replaced with spaces: A-parse names the line.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
-  lno="$(grep -n $'^cla\.yml\t' "$PRISTINE/ledger.txt" | cut -d: -f1 | head -1)"
+  m="$(make_copy)"
+  lno="$({ grep -n $'^cla\.yml\t' "$PRISTINE/ledger.txt" || true; } | cut -d: -f1 | head -1)"
   sed -i "${lno}s/\t/ /g" "$m/ledger.txt"
-  assert_landed B6d "$m" && { run_child "$m" "$out" || rc=$?; assert_red B6d "$m" "$rc" "$out" "^  FAIL: A-parse line $lno: expected 5 TAB-separated columns, got 1 \\(spaces are not separators\\)"; }
+  red_mutant B6d "$m" "^  FAIL: A-parse line $lno: expected 5 TAB-separated columns, got 1 \\(spaces are not separators\\)"
+
+  # B6f — a ternary-form copy whose group is per-ref only (the #7931 class on a
+  # push: main arm): A4b still says yes, A6 pins it to ci.yml's group.
+  m="$(make_copy)"
+  mutate_yaml "$m" secret-scan.yml "doc['concurrency'] = {'group': 'secret-scan-\${{ github.ref }}', 'cancel-in-progress': \"\${{ github.event_name == 'pull_request' }}\"}"
+  red_mutant B6f "$m" '^  FAIL: A6 secret-scan\.yml: ternary-form concurrency block does not carry ci\.yml' 'github\.workflow'
 
   # B7 — blank the consequence on cla.yml's row.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   awk -F'\t' -v OFS='\t' '!/^#/ && $1=="cla.yml"{$5=""} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
-  assert_landed B7 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B7 "$m" "$rc" "$out" '^  FAIL: A5 cla\.yml: consequence has 0 word\(s\), need >= 4'; }
+  red_mutant B7 "$m" '^  FAIL: A5 cla\.yml: consequence has 0 word\(s\), need >= 4'
+
+  # B7b — a cancel=no row whose consequence no longer says why.
+  m="$(make_copy)"
+  awk -F'\t' -v OFS='\t' '!/^#/ && $1=="cla.yml"{$5="CLA Required ruleset context cla-check via pull_request_target"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
+  red_mutant B7b "$m" '^  FAIL: A5 cla\.yml: cancel=no but the consequence never says why'
 
   # B8 — an empty workflows dir: A0 exits 1 directly with `0 < 15`.
   m="$(make_copy)"; out="$m/child.out"; rc=0
   rm -rf "$m/workflows" && mkdir -p "$m/workflows"
-  assert_landed B8 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B8 "$m" "$rc" "$out" '^FAIL: A0 vacuity floor: 0 firing workflows found in .* \(0 < 15\)'; }
+  assert_landed B8 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B8 "$rc" "$out" "^FAIL: A0 vacuity floor: 0 firing workflows found in .* \\(0 < $A0_FLOOR\\)"; }
   CASES=$((CASES + 1))
   if [[ "$rc" -eq 1 ]] && ! grep -Eq '^=== Results ===' "$out"; then
     pass "B8 A0 exited 1 directly — print_results never reached"
@@ -504,15 +655,34 @@ run_part_b() {
   fi
 
   # B-sym — a symlinked *.yml is rejected via lstat, not followed.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"
   ln -s ci.yml "$m/workflows/zz-link.yml"
-  assert_landed B-sym "$m" && { run_child "$m" "$out" || rc=$?; assert_red B-sym "$m" "$rc" "$out" '^  FAIL: A-sym zz-link\.yml is a symlink'; }
+  red_mutant B-sym "$m" '^  FAIL: A-sym zz-link\.yml is a symlink'
+
+  # B11 — a workflow_run chained off a firing workflow with no branch filter
+  # fires once per PR push and has no row (the fix-constraints-stage-b shape).
+  m="$(make_copy)"
+  printf 'name: zz-chain\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-chain.yml"
+  red_mutant B11 "$m" '^  FAIL: A1 zz-chain\.yml fires' 'add the row zz-chain\.yml<TAB>2<TAB>no<TAB>no<TAB>' 'add branches: to its workflow_run'
+
+  # B12 — a `uses:` job dispatches its local callee's jobs: one ci.yml job body
+  # replaced by a 4-job reusable workflow declares allowed+3 slots, not allowed.
+  m="$(make_copy)"
+  printf 'name: zz-reusable\non:\n  workflow_call:\njobs:\n  r1:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r2:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r3:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r4:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n' > "$m/workflows/zz-reusable.yml"
+  mutate_yaml "$m" ci.yml "k = sorted(doc['jobs'])[0]; doc['jobs'][k] = {'uses': './.github/workflows/zz-reusable.yml'}"
+  red_mutant B12 "$m" "^  FAIL: A3 ci\.yml: $((ci_declared + 3)) declared, row allows $ci_allowed"
 
   # B9 — must PASS: a closed-only workflow with no row (mirrors
   # cleanup-unmerged-bot-branches.yml); the A1 summary is unchanged.
   m="$(make_copy)"; out="$m/child.out"; rc=0
   printf 'name: zz-closed\non:\n  pull_request:\n    types: [closed]\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-closed.yml"
   assert_landed B9 "$m" && { run_child "$m" "$out" || rc=$?; assert_green B9 "$rc" "$out" "^${CONTROL_OUT}\$"; }
+
+  # B9b — must PASS: a workflow_run chained off a firing workflow BUT filtered
+  # to main (post-merge-monitor.yml's shape) is not a per-PR generator.
+  m="$(make_copy)"; out="$m/child.out"; rc=0
+  printf 'name: zz-main-chain\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n    branches: [main]\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-main-chain.yml"
+  assert_landed B9b "$m" && { run_child "$m" "$out" || rc=$?; assert_green B9b "$rc" "$out" "^${CONTROL_OUT}\$"; }
 
   # B10 — must PASS: the ci.yml row is an upper bound (row = declared + 3).
   m="$(make_copy)"; out="$m/child.out"; rc=0
@@ -526,7 +696,7 @@ run_part_b() {
     pass "B-A7 control reported $CONTROL_CASES cases"
     m="$(make_copy)"; out="$m/child.out"; rc=0
     run_child "$m" "$out" "$((CONTROL_CASES + 1))" || rc=$?
-    assert_red "B-A7+1" "$m" "$rc" "$out" "^FAIL: only $CONTROL_CASES assertions ran \\(floor $((CONTROL_CASES + 1))\\)"
+    assert_red "B-A7+1" "$rc" "$out" "^FAIL: only $CONTROL_CASES assertions ran \\(floor $((CONTROL_CASES + 1))\\)"
     m="$(make_copy)"; out="$m/child.out"; rc=0
     run_child "$m" "$out" "$((CONTROL_CASES - 1))" || rc=$?
     assert_green "B-A7-1" "$rc" "$out" "^A7 $CONTROL_CASES assertions ran \\(floor $((CONTROL_CASES - 1))\\)"
@@ -546,16 +716,23 @@ echo "=== pr-fanout-ledger.test.sh ==="
 # builds its mutant from exactly the MIN_CASES + if block below, so those lines
 # stay adjacent and the default stays a literal).
 #
-# Derivation: A0 admits >= 15 firing workflows; each ledgered row contributes 7
-# Part A cases (A-parse, A2, A3, A4, A4c, A4b, A5) and the singletons (A0, A1)
-# add 2 -> 15 x 7 + 2 = 107 for Part A alone; Part B contributes >= 32 (control,
-# 12 landed + 12 verdict rows, B8 direct-exit, B-A7 x 3) -> 139 for a full run.
-# Measured on the 2026-09-14 tree (21 firing): 149 Part A + 35 Part B. A Part-A-only
-# run (PR_FANOUT_PARTS=A) gets the Part A floor; children pass 0.
+# Derivation: A0 admits >= A0_FLOOR (15) firing workflows; each ledgered row
+# contributes 8 Part A cases (A-parse, A2, A3, A4, A4b, A4c, A5, A6) and the
+# singletons (A0, A1) add 2 -> 15 x 8 + 2 = 122 for Part A alone. Part B: 17
+# RED mutants (B1-B8, B6b, B6c, B6d, B6e, B6f, B7b, B-sym, B11, B12) x (landed +
+# verdict) = 34, 3 must-PASS rows (B9, B9b, B10) x 2 = 6, plus B0, the B8
+# direct-exit check and B-A7 x 3 = 5 -> 45; 122 + 45 = 167 for a full run.
+# Measured on the 2026-09-14 tree (22 firing): 178 Part A + 45 Part B = 223 (the
+# figure is read from the run, never hand-summed). A Part-A-only run
+# (PR_FANOUT_PARTS=A) gets the Part A floor; children pass 0.
 if [[ -z "${PR_FANOUT_MIN_CASES:-}" ]]; then
-  if [[ "$PARTS" == *B* ]]; then PR_FANOUT_MIN_CASES=139; else PR_FANOUT_MIN_CASES=107; fi
+  if [[ "$PARTS" == *B* ]]; then PR_FANOUT_MIN_CASES=167; else PR_FANOUT_MIN_CASES=122; fi
 fi
-MIN_CASES="${PR_FANOUT_MIN_CASES:-139}"
+# The `:-167` default duplicates the full-run literal above on purpose: the
+# meta-guard constructs its mutant from a LITERAL bound adjacent to the `if`
+# below, and an env-only bound is unconstructible (measured: it dropped this
+# suite into the uncovered set).
+MIN_CASES="${PR_FANOUT_MIN_CASES:-167}"
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   echo "FAIL: only $CASES assertions ran (floor $MIN_CASES)" >&2
   exit 1
