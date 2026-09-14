@@ -36,6 +36,18 @@ export function validateCodexEvent(event: EngineEvent, expectedRunId: string): E
   return event;
 }
 
+export function assertCodexEndpoint(endpoint: string, allowedHosts: readonly string[]): string {
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== "https:" || url.username || url.password || !allowedHosts.some((host) => host.toLowerCase() === url.hostname.toLowerCase())) {
+      throw new Error("Codex egress denied");
+    }
+    return url.toString();
+  } catch {
+    throw Object.assign(new Error("Codex egress denied"), { code: "codex_egress_denied" });
+  }
+}
+
 export function normalizeCodexUsageEvent(
   runId: string,
   eventId: string,

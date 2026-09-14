@@ -7,6 +7,7 @@ import {
   runWithCodexRecovery,
   sanitizeCodexError,
   validateCodexEvent,
+  assertCodexEndpoint,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -197,5 +198,17 @@ describe("Codex event boundary", () => {
   it("rejects cross-run and stale sequence events", () => {
     const event = { runId: "run-2", eventId: "evt-1", sequence: 0, payload: { type: "text", text: "replay" } as const };
     expect(() => validateCodexEvent(event, "run-1")).toThrowError(expect.objectContaining({ code: "codex_event_invalid" }));
+  });
+});
+
+describe("Codex egress boundary", () => {
+  it("accepts only HTTPS endpoints on the configured host allowlist", () => {
+    expect(assertCodexEndpoint("https://api.openai.com/v1/responses", ["api.openai.com"])).toBe("https://api.openai.com/v1/responses");
+  });
+
+  it("rejects insecure, unparseable, and unallowlisted endpoints", () => {
+    for (const endpoint of ["http://api.openai.com", "https://evil.example.test", "not-a-url"]) {
+      expect(() => assertCodexEndpoint(endpoint, ["api.openai.com"])).toThrowError(expect.objectContaining({ code: "codex_egress_denied" }));
+    }
   });
 });

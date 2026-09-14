@@ -88,6 +88,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Recovery integration slice: authorization failures trigger at most one refreshed-lease retry; other failures propagate unchanged (10 adapter tests green).
   - [x] Error sanitization slice: Codex transport errors cross the neutral boundary with stable codes and generic messages (12 adapter tests green).
   - [x] Replay boundary slice: Codex streams reject cross-run, missing-id, and non-positive-sequence events before ledger handoff (14 adapter tests green).
+  - [x] Egress boundary slice: Codex endpoints require HTTPS and an exact configured host allowlist (16 adapter tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
