@@ -4,6 +4,7 @@ import type {
   EngineInput,
   EngineRunContext,
 } from "./agent-engine-contract";
+import { createReviewedEngineAdapter, type EngineAdapterFactory } from "./agent-engine-adapter-factory";
 
 interface BindingRepository {
   getRun(runId: string): Promise<unknown>;
@@ -24,6 +25,30 @@ interface DispatchOptions {
   runId: string;
   input: EngineInput;
   context: EngineRunContext;
+}
+
+export async function* dispatchBoundEngineRunFromRegistry(options: {
+  repository: BindingRepository;
+  factories: Readonly<Record<string, EngineAdapterFactory>>;
+  eventSink?: EventSink;
+  runId: string;
+  input: EngineInput;
+  context: EngineRunContext;
+}): AsyncGenerator<EngineEvent> {
+  const persisted = await options.repository.getRun(options.runId);
+  if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
+  const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
+    (persisted as unknown as EngineRunContext["binding"]);
+  const adapter = createReviewedEngineAdapter(binding.engineId, options.factories, "existing-run");
+  yield* dispatchBoundEngineRun({
+    repository: options.repository,
+    adapter,
+    adapterEngineId: binding.engineId,
+    eventSink: options.eventSink,
+    runId: options.runId,
+    input: options.input,
+    context: options.context,
+  });
 }
 
 /** Dispatch is binding-first: no persisted run means no provider invocation. */

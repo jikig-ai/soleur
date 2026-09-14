@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
+  it("resolves the adapter from the persisted engine binding", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const events = [];
+    for await (const event of dispatchBoundEngineRunFromRegistry({ repository, factories: { "claude-code": () => adapter as never }, runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never })) events.push(event);
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+  });
   it("loads the persisted binding before invoking the adapter", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
