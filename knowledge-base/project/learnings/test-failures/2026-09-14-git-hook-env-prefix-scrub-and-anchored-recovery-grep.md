@@ -78,6 +78,13 @@ Two sibling defects in operator/developer tooling, fixed in one PR (#8154, closi
 - **Recovery:** Plan's Research Reconciliation re-targeted both before implementation.
 - **Prevention:** Re-derive issue premises against current `main` at plan time — filed issues age.
 
+**Ship-time advisor consult found the recipe's `git show` lacked its `:path` (post-review, post-QA)**
+
+The Guard-2 recipe ran `git show $(…)` on the bare tag — dumping the commit, not the bootstrap script — so `^probe_schema=` could never match and the promised `1` was unreachable (always read as `0`, "don't replace"). QA's AC6 run had verified the *intended* `tag:path` form, not the recipe's verbatim bytes; nine review seats missed it because no pin covered the `git show` operand itself.
+
+- **Recovery:** `git show "${TAG:?…}:apps/web-platform/infra/inngest-bootstrap.sh"`; `${EXPECTED:?}`/`${TAG:?}` make the prose's "an ERROR instead of a count" literally true; pins 6i (`git show .*:path`) and 6j (`:?` guards) added; Row 6g gained the `^[[:space:]]*` it claimed to pin.
+- **Prevention:** A recovery recipe embedded in an error string must be *executed verbatim* against a real fixture (the pinned tag), not verified by paraphrase — and every operand of the recipe (`git show` spec, extraction pipeline, count) needs its own pin, not just the final grep.
+
 ## Solution
 
 **#8051 — two-layer prefix scrub (name-prefix, not name-list):**
