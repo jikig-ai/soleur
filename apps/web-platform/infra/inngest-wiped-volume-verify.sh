@@ -36,8 +36,111 @@
 # INNGEST_VERIFY_MARKER_ID, INNGEST_VERIFY_STATE, INNGEST_VERIFY_SETTLE_SECS,
 # INNGEST_MANUAL_TRIGGER_SECRET; mock curl/systemctl/sudo on PATH.
 set -euo pipefail
+# xtrace refusal (#7797): this script binds a live credential (the Doppler token and the
+# INNGEST_MANUAL_TRIGGER_SECRET Bearer) and -x would print it to the webhook's journald stream.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 readonly LOG_TAG="inngest-wiped-volume-verify"
+
+# --- #7095 re-read for a webhook-executed script -------------------------------------------
+# webhook.service still exports the /etc/default/webhook-deploy DOPPLER_TOKEN, revoked
+# 2026-07-30T11:19:30Z; the fresh credential is re-delivered by terraform apply at
+# /etc/default/soleur-doppler-token (server.tf "WHY THIS FILE EXISTS"). #7095 re-pointed
+# ci-deploy.sh (the only other doppler-reading hook target, via its parsed CRED_FILE_STATE
+# block) and four long-running units via EnvironmentFile=- drop-ins; infra-config-apply.sh
+# DELIVERS the file and never reads Doppler. This script kept reading Doppler on the dead
+# token, so every read failed 401 into `2>/dev/null` and the fail-closed branch fired with no
+# reason logged (found live 2026-09-13: op=execute cleared 2.0 for the first time and died
+# at 2.1 capture).
+#
+# PARSED, NOT SOURCED — the file's values are terraform-interpolated and this runs as `deploy`,
+# which holds NOPASSWD sudo on the installers; `. file` would hand `$(...)` to bash. Four keys
+# are taken (the token plus the three baked Sentry DSN components the same file carries, so a
+# read failure can page), later-wins over the unit's export, and an EMPTY value is skipped so a
+# bare `KEY=` (which the installer's shape check accepts) cannot blank a working one. The
+# `|| [[ -n "$k" ]]` keeps a final line without a trailing newline (ci-deploy.sh drops it).
+# Every function in this block MUST stay byte-identical to the copy in the sibling webhook
+# script — webhook-doppler-token-reread.test.sh pins that, because a helper re-derived per
+# file drifts. `SOLEUR_CRED_FILE_STATE` records present|unreadable|absent for the log line.
+SOLEUR_CRED_FILE_STATE=absent
+SOLEUR_CRED_TOKEN_APPLIED=0
+soleur_refresh_doppler_token() {
+  local f="${SOLEUR_DOPPLER_TOKEN_FILE:-/etc/default/soleur-doppler-token}" k v
+  if [[ -r "$f" ]]; then SOLEUR_CRED_FILE_STATE=present; elif [[ -e "$f" ]]; then SOLEUR_CRED_FILE_STATE=unreadable; return 0; else SOLEUR_CRED_FILE_STATE=absent; return 0; fi
+  # `|| return 0` on the loop: a redirect that fails AFTER -r passed (LSM denial, race) must not
+  # abort the enclosing `$(read_secret)` before the reason line is emitted.
+  while IFS='=' read -r k v || [[ -n "$k" ]]; do
+    v="${v%$'\r'}"
+    case "$k" in
+      DOPPLER_TOKEN)
+        # Applied only when it has the shape server.tf's plan-time gate admits (dp.<family>.<body>);
+        # a quoted value, an `export `-prefixed line or a CRLF-only `KEY=` leaves the unit's export
+        # standing and is reported as token_file=present token_applied=0 — a file-shape defect.
+        if [[ "$v" =~ ^dp\.[a-z]{2,}\.[A-Za-z0-9._-]+$ ]]; then export DOPPLER_TOKEN="$v"; SOLEUR_CRED_TOKEN_APPLIED=1; fi ;;
+      SENTRY_INGEST_DOMAIN|SENTRY_PROJECT_ID|SENTRY_PUBLIC_KEY)
+        # Whitespace-only counts as EMPTY (a CRLF-terminated `KEY=` yields $'\r', which `-n` accepts).
+        if [[ -n "${v//[[:space:]]/}" ]]; then printf -v "$k" '%s' "$v"; export "${k?}"; fi ;;
+    esac
+  done < "$f" 2>/dev/null || return 0
+  return 0
+}
+
+# Classify a failed/empty Doppler read into a closed vocabulary. The real CLI prints its cause
+# LAST (`Unable to fetch secrets` then `Doppler Error: …`, coloured, behind two `Using
+# DOPPLER_* from the environment` notices under this unit), so the head line is a constant.
+soleur_doppler_read_class() {
+  local rc="$1" errfile="$2" out="$3"
+  if [[ "$rc" == 127 ]]; then printf 'binary_absent'; return 0; fi
+  if [[ -r "$errfile" ]] && LC_ALL=C grep -qa 'Invalid Auth token' "$errfile"; then printf 'invalid_auth'; return 0; fi
+  if [[ -r "$errfile" ]] && LC_ALL=C grep -qa 'Could not find requested secret' "$errfile"; then printf 'secret_not_found'; return 0; fi
+  if [[ -r "$errfile" ]] && LC_ALL=C grep -qaE 'dial tcp|no such host|i/o timeout|TLS handshake|connection refused|Get "https' "$errfile"; then printf 'transport'; return 0; fi
+  if [[ "$rc" == 0 && -z "$out" ]]; then printf 'empty_value'; return 0; fi
+  printf 'other'
+}
+
+# One line to journald (-> Better Stack) AND to stderr (-> the hook's response body -> the
+# cutover run log) saying WHY a Doppler read came back empty, so the next reader does not need
+# SSH to tell a revoked token from a missing binary. The `Doppler Error:` line if present, else
+# the LAST stderr line; control/ANSI bytes stripped in the C locale; credential-shaped tokens
+# scrubbed with ci-deploy.sh's `dp\.[a-z]{2,}\.` shape; 160 bytes — never the value. Then a
+# Sentry event (class enum only, never stderr) when the three DSN components were read. This
+# runs INSIDE `$(read_secret)`, whose stdout IS the secret — so nothing here may write stdout
+# (the beacon's curl is `>/dev/null`; a mock curl that printed its status code proved the point).
+soleur_log_doppler_read_failure() {
+  local rc="$1" errfile="$2" out="${3-}" class why="" payload
+  class="$(soleur_doppler_read_class "$rc" "$errfile" "$out")"
+  if [[ -r "$errfile" ]]; then
+    why="$( { LC_ALL=C grep -a -m1 'Doppler Error:' "$errfile" || tail -n 1 "$errfile"; } 2>/dev/null \
+      | LC_ALL=C sed -E 's/\x1b\[[0-9;]*m//g' \
+      | LC_ALL=C tr -c '[:print:]' ' ' \
+      | LC_ALL=C tr '"' "'" \
+      | LC_ALL=C sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]+/dp.**.REDACTED/g' \
+      | LC_ALL=C cut -c1-160 )" || why=""
+  fi
+  # token_applied=0 with token_file=present means the file was read but carried no usable
+  # DOPPLER_TOKEN (quoted value, `export ` prefix, empty) — a different fix from a revoked one.
+  local line="SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=${rc} class=${class} token_file=${SOLEUR_CRED_FILE_STATE} token_applied=${SOLEUR_CRED_TOKEN_APPLIED} err=\"${why:-<empty>}\""
+  logger -t "${LOG_TAG:-webhook-script}" "$line" 2>/dev/null || true
+  printf 'ERROR: %s\n' "$line" >&2
+  # Destination pinned by SHAPE (#7873): the three values are parsed from a root-owned file, but a
+  # credentialed request must refuse any host that is not a Sentry ingest domain regardless.
+  local dom="${SENTRY_INGEST_DOMAIN:-}" pid="${SENTRY_PROJECT_ID:-}"
+  if [[ "$dom" =~ ^[a-z0-9]+\.ingest\.([a-z]{2}\.)?sentry\.io$ && "$pid" =~ ^[0-9]+$ && -n "${SENTRY_PUBLIC_KEY:-}" ]] && command -v jq >/dev/null 2>&1; then
+    payload="$(jq -nc --arg logger "${LOG_TAG:-webhook-script}" --arg class "$class" --arg rc "$rc" --arg tf "$SOLEUR_CRED_FILE_STATE" --arg ta "$SOLEUR_CRED_TOKEN_APPLIED" \
+      '{message: ("doppler read failed for INNGEST_MANUAL_TRIGGER_SECRET (" + $class + ")"), level: "error", platform: "other", logger: $logger,
+        tags: {feature: "inngest-cutover", op: "doppler-read-failed", class: $class},
+        extra: {rc: $rc, token_file: $tf, token_applied: $ta}}')" || payload=""
+    if [[ -n "$payload" ]]; then
+      curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
+        "https://${dom}/api/${pid}/store/" \
+        -H "Content-Type: application/json" \
+        -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+        -d "$payload" >/dev/null 2>&1 || true
+    fi
+  fi
+}
 readonly MARKER_PREFIX="__wiped-volume-verify-"
 readonly NOOP_CHECK="__cutover-verify-noop__"
 
@@ -72,8 +175,23 @@ abort() {
 
 read_secret() {
   if [[ -n "${INNGEST_MANUAL_TRIGGER_SECRET:-}" ]]; then printf '%s' "$INNGEST_MANUAL_TRIGGER_SECRET"; return 0; fi
-  if [[ "${INNGEST_REARM_SKIP_DOPPLER:-0}" != "1" ]] && command -v doppler >/dev/null 2>&1; then
-    doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>/dev/null || true
+  if [[ "${INNGEST_REARM_SKIP_DOPPLER:-0}" != "1" ]]; then
+    soleur_refresh_doppler_token
+    if ! command -v doppler >/dev/null 2>&1; then soleur_log_doppler_read_failure 127 /dev/null ""; return 0; fi
+    local out="" err rc=0
+    # A bare `mktemp` is an abort vector under `set -e` on a full /tmp (ci-deploy.sh notes the
+    # same); degrade to /dev/null so a missing scratch file loses the stderr, never the read.
+    err="$(mktemp 2>/dev/null)" || err=/dev/null
+    # The RETURN trap owns the scratch file (lint-trap-tempfile-ownership rule c): it is removed
+    # on every exit from this function, including an abort between allocation and the rm below.
+    # shellcheck disable=SC2064  # $err is expanded at trap-registration time on purpose
+    if [[ "$err" != /dev/null ]]; then
+      trap "rm -f -- '$err'" RETURN
+    fi
+    out="$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain 2>"$err")" || rc=$?
+    if [[ "$rc" -ne 0 || -z "$out" ]]; then soleur_log_doppler_read_failure "$rc" "$err" "$out"; out=""; fi
+    # Only an rc-0 value is the secret: partial stdout from a failed CLI must never be returned.
+    printf '%s' "$out"
   fi
 }
 
@@ -105,7 +223,7 @@ MARKER_ID="${INNGEST_VERIFY_MARKER_ID:-${MARKER_PREFIX}$(date +%s%N)__}"
 FIRE_AT=$(date -u -d "+90 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 marker_body=$(jq -nc --arg id "$MARKER_ID" --arg fa "$FIRE_AT" --arg chk "$NOOP_CHECK" \
   '{reminder_id:$id, fire_at:$fa, actor:"platform", action:{type:"named-check", check:$chk, report_to_issue:1}}')
-arm_code=$(curl -s --max-time 15 -o /dev/null -w '%{http_code}' \
+arm_code=$(curl --disable --noproxy '*' -s --max-time 15 -o /dev/null -w '%{http_code}' \
   -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ${SECRET}" \
   --data-binary "$marker_body" "$REARM_URL" || echo "000")
 [[ "$arm_code" == "202" ]] || abort "marker_arm_failed" "could not arm throwaway marker (HTTP $arm_code)"

@@ -1495,6 +1495,15 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 
 ### Sharp Edges: Review Agent Limitations
 
+- **Spawn prompts MUST forbid live credentialed probes, and the probe shape must use an INVALID credential, never an
+  EMPTY one.** `DOPPLER_TOKEN= doppler secrets get <prd secret>` does not fail authentication — an empty token falls
+  through to the operator's local Doppler login, and the live value lands in the agent's transcript. Write "probe
+  vendor error shapes with a deliberately invalid token (`dp.st.invalid…`) against a NON-existent secret name; never
+  read a real secret" into every security/observability spawn. **Why:** PR #8135 — an observability agent measuring
+  doppler's stderr printed the live `INNGEST_MANUAL_TRIGGER_SECRET` into its own output file. Companion trap the same
+  panel hit: `grep -q` behind a pipe under `pipefail` SIGPIPEs the upstream writer on a long input and the `if` reads
+  FALSE — a set-membership guard silently dropped `ci-deploy.sh` (4,000 lines) and counted 2 members of 3. Use
+  `grep … >/dev/null`.
 - **When a diff adds an import edge from BUNDLED code to a file that was a standalone script or CLI, re-review that file as if it were new — its reader changed.** A comment like "importing it runs nothing" is a claim about load time; the question is what the BUNDLER now interprets. Enumerate the file's bundler-visible idioms — `new URL("<rel>", import.meta.url)` (a static asset reference to Turbopack and webpack alike), `require.resolve`, `import.meta.resolve`, `__dirname`/`import.meta.url` climbs above the app root — and check each against the build CONTEXT (`apps/web-platform` minus `.dockerignore`), not the checkout. A full-checkout `next build` is structurally blind to that difference, so "CI is green" is not evidence here. **Why:** #8074 — a 12-seat review accepted the deny-marker importing the cron containment hook; the hook's taxonomy path was `new URL("../../../../.claude/…", import.meta.url)`, every CI build passed, and release 34773058045 failed with `Module not found`, leaving production on the prior image. See `knowledge-base/project/learnings/2026-09-13-the-gate-built-to-catch-docker-only-failures-never-ran-in-docker.md`.
 - **When the diff adds a MATCHER for a defect (a regex over a predicate, a banned-name walk, a name validator), review it against the GRAMMAR, not the one spelling it was written for.** Enumerate the language's other spellings of the same defect — `[`/`[[`/`test`, `! -z` for `-n`, the bare `[ "" ]`, an empty alternate `${V:+}`, the inverted `-z "${V:+x}"`, a limb surviving in a comment, a non-`.sh` file in a subdirectory, a locale-dependent `[A-Z]`, a well-formed but reserved name — and require a fixture per spelling; the panel found four to five per guard on #7946 and none needed a new idea. See `knowledge-base/project/learnings/2026-09-11-every-sentence-my-runbook-inherited-was-false-when-measured.md`.
 
