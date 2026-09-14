@@ -38,8 +38,9 @@
 # SCHEDULE REALITY. `*/30` is a REQUEST, not a guarantee, and on this repo the gap between it and
 # delivery is large enough to matter when tuning anything here: 59 consecutive scheduled runs of
 # the `*/30` sibling measured min 61 / median 114 / max 243 minutes apart, and the `*/15` sibling
-# delivers the SAME ~11 runs/day. So end-to-end detection is ~5h typical (threshold 195m + up to
-# one delivered interval), not the 3.25h the cron line implies, and tightening the cron would buy
+# delivers the SAME ~11 runs/day. So end-to-end detection is typically the threshold
+# (`DRIFT_SUSTAINED_THRESHOLD_MIN` in scripts/prod-version-drift-check.sh) + up to one delivered
+# interval, not the threshold + 30 min the cron line implies, and tightening the cron would buy
 # nothing. This is also why the staleness clock reads an immutable commit timestamp instead of
 # counting ticks — tick-counting here would measure an interval that does not exist.
 #

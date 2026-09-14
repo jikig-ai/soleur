@@ -205,8 +205,10 @@ ceilings downstream of it.
 
 **Two quantities, previously conflated, now pinned to separate subjects:**
 
-- `CI_BUDGET_MIN = 207 − (30 + 15 + 90) = 72` — what the budget *allows* CI. The
-  soft ceiling derives from this.
+- ~~`CI_BUDGET_MIN = 207 − (30 + 15 + 90) = 72`~~ — superseded 2026-09-14, see
+  the addendum below: the subtraction omitted the `resolve-target` ceiling that
+  runs serially after CI, and the threshold is now 225. What the budget *allows*
+  CI. The soft ceiling derives from this.
 
 - `CI_DECLARED_PATH` — what CI *declares* for itself. **Corrected at review; the
   first version of this decision got it wrong and the error is instructive.**
@@ -236,10 +238,82 @@ ceilings downstream of it.
 > green. So: the invariant is computed **only** when every job declares a
 > ceiling; while any does not, the step emits a `::warning::` naming them. B9
 > asserts over the arm this pipeline *controls* (downstream of the event,
-> 195 ≤ 207) and says at the site why the CI term is absent. B9b ratchets the
+> 195 ≤ 207) and says at the site why the CI term is absent — ~~superseded
+> 2026-09-14: the CI term is IN B9, see the addendum below~~. B9b ratchets the
 > count of unbounded jobs so it can only fall, and B9c stops B9b going vacuous —
 > verified by probe: blinding the extractor makes B9b report `0 ≤ 19` and pass
 > forever. Ceiling gap filed as **#8020**.
+
+> **Addendum (2026-09-14).** Option (a) of #8149: the CI term goes into B9 and
+> the threshold rises to cover it, rather than leaving a guard green on a
+> quantity it knows is short.
+>
+> **One formula, every site.** The declared merge-to-deploy critical path is
+> `crit = max(ci_declared_path, release_ceiling) + resolve-target + migrate +
+> verify-migrations + deploy`. Two earlier forms were both wrong. The brief's
+> additive form (`ci + max(release, resolve-target) + 135`) under-counts when
+> both `release` and `resolve-target` exceed CI. The `.sh` header's
+> `max(ci, release, resolve-target) + 135` put `resolve-target` in *parallel*
+> with CI, which `workflow_run` dispatch makes impossible: the deploy arm queues
+> behind the push-arm release run on the shared `web-platform-release-<sha>`
+> group (Decision 3(b)) and is dispatched by CI's completion, then
+> `resolve-target` runs serially after it. The `.sh` header, B9's Python, the
+> workflow's `CI_BUDGET_MIN` step, the `resolve-target` and `deploy` job
+> comments and `reusable-release.yml`'s "COUPLED (#7160)" note now all state
+> this formula by term name.
+>
+> **The numbers.** `resolve-target`'s ceiling drops 60 → 15: measured 12–14 s
+> on every one of the last nine `workflow_run`-arm runs; its 60 was sized "= the
+> release ceiling" only because it sat inside a `max()` the formula above voids,
+> and 15 is ≥ 60x measured (the #8020 floor). If a future edit un-couples the
+> arms and makes the liveness poll live again, a release over 15 m (observed
+> max ~24 m) trips this ceiling and surfaces as a false non-delivery email —
+> the loud warning Decision 3 said was absent, by design. So
+> `crit = max(70, 60) + 15 + 30 + 15 + 90 = 220`;
+> `DRIFT_SUSTAINED_THRESHOLD_MIN` 207 → **225** (220 + 5);
+> `CI_BUDGET_MIN = 225 − 15 − 30 − 15 − 90 = 75` (the step now subtracts the
+> `resolve-target` term too, so the raise does not loosen the creep detector);
+> soft ceiling `0.7 × 75 = 52.5 m` (was 50.4 m).
+>
+> **The cost.** 18 minutes of worst-case alert latency on a probe whose own
+> delivery interval was measured at 61–243 minutes (schedule jitter, recorded
+> in the `.sh` header), and whose declared path is ~4–6x every observed run.
+> The fast non-delivery channels (Decision 3's `ci_not_green` email + Slack)
+> are unchanged.
+>
+> **What the 5 m slack is, and is not.** It covers rounding of the declared
+> terms only. Two serialisers sit OUTSIDE the formula and are named as such at
+> the B9 comment and here: runner-queue wait (the `.sh` header's `SCOPE (#7160)`
+> paragraph) and `reusable-release.yml`'s `release-<component>` concurrency
+> group (`cancel-in-progress: false` — release N+1 queues behind release N and
+> the deploy arm inherits that wait). 225 is not a bound on either. Harvesting
+> to exactly 220 was rejected for the reason the header gives about 207: it
+> re-creates the #7902 trap one layer out.
+>
+> **Same-commit rule.** B9 asserts `threshold ≥ crit`; the workflow asserts
+> `CI_DECLARED_PATH <= CI_BUDGET_MIN`. Both read the same constant, so a change
+> that lands one side without the other reds one of them — the threshold, the
+> ceilings and the budget step move in one commit.
+>
+> **Rejected.** (b) lowering `ci.yml`'s 70 m declared path (the 60 m
+> `test-scripts` leg) — #8006 territory, measure-first on `TEST_TIMING_LOG`.
+> (c) lowering the pre-existing 60 m release / 90 m deploy ceilings —
+> measure-first, out of scope. (d) accepting the gap — leaves a guard green on
+> a quantity it knows is short, the exact class the 2026-09-10 learning names.
+> 270 — pays 45 m of alert latency for a 13-second job's ceiling.
+>
+> **Pinned at review (#8149).** The formula's three unstated assumptions are
+> now assertions: B9d — `verify-doppler-secrets`, which runs alongside the
+> `resolve-target → migrate → verify-migrations` chain, stays dominated by it
+> (raising it past 60 m would make the parallel branch the critical path with
+> the sum unchanged); B9e — no `ci.yml` job serialises a matrix with
+> `strategy.max-parallel` (a per-leg ceiling times a leg count that no per-job
+> `timeout-minutes` read can see); B8f — the callee's `jobs.release` has no
+> `needs:` predecessor (the extractor reads that one job's ceiling and nothing
+> else in `reusable-release.yml`). Outside the formula and named as such at
+> the site: runner-queue wait and every back-to-back-merge concurrency group
+> (`release-<component>`, `migrate-web-platform`,
+> `verify-migrations-web-platform`, `web-1-swap`).
 
 Every input is read from the tree, so the numbers move when a ceiling moves.
 

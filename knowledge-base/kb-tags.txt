@@ -794,6 +794,7 @@ commands/brainstorm
 comment-drift
 comment-mutability
 comment-rot
+comment-stripped-grep
 comments
 commit-discipline
 commit-format
@@ -1112,6 +1113,7 @@ delegations
 delete
 delete-path
 deletion-sweep
+delimiter-collision
 delivery
 demotion
 deny-by-default
@@ -1182,6 +1184,7 @@ diagnosability
 diagnosis
 diagnostic
 diagnostic-discipline
+diagnostics
 diff-predicate
 diff-range
 diff-scoping
@@ -1334,6 +1337,7 @@ empirical-verification
 enable
 encrypted-key
 encryption
+encryption-ledger
 endpoint-swap
 endpoints
 enforcement
@@ -2439,6 +2443,7 @@ operator-mint
 operator-only-step
 operator-override
 operator-precedence
+operator-recovery
 operator-role
 operator-steps
 operator-truthfulness
@@ -2750,6 +2755,7 @@ pr-6266
 pr-body
 pr-creation
 pr-d
+pr-fanout
 pr-g
 pr-hygiene
 pr-naming-collisions
@@ -2792,6 +2798,7 @@ premise-verification
 premises
 prescribed
 presence-guard
+presence-vs-exclusivity
 pretooluse
 pretooluse-hook
 pretooluse-hooks
@@ -2801,6 +2808,7 @@ prevention-infrastructure
 pricing-page
 pricing-source
 primitive
+printf-newline-read
 prior-art
 prior-art-discovery
 prior-decision-recovery
@@ -2830,6 +2838,7 @@ processing-register
 prod-probe
 prod-safety
 prod-state
+prod-version-drift
 prod-write-safety
 producer-consumer
 product domain without coordinator
@@ -2873,6 +2882,7 @@ prose-claims
 prose-conventions
 prose-counts
 prose-guard
+prose-sweep
 prospect-anchored features
 protecthome
 protocol
@@ -3286,6 +3296,7 @@ sdk-read-tool
 sdk-router
 sdk-shape
 sdk-tooling
+seam
 seam-guard
 search
 search-path-injection
@@ -4046,6 +4057,7 @@ vacuous-tests
 validate-csp
 validation
 validation-gate
+value-pin
 vapid
 variable-fonts
 vault
@@ -4176,6 +4188,7 @@ widening
 wire-path
 wire-protocol
 wire-schema
+wire-vs-endpoints
 withisolationscope
 without
 woff2

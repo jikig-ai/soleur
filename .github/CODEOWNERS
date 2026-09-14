@@ -51,6 +51,8 @@
 # is a tracked operator follow-up — see this file's header.)
 /AGENTS.rules.md                                        @deruelle
 /scripts/lint-rule-bodies.py                            @deruelle
+/scripts/pr-fanout-ledger.txt                           @deruelle
+/plugins/soleur/test/pr-fanout-ledger.test.sh           @deruelle
 /scripts/_agents_md_sections.py                         @deruelle
 /.claude/rule-body-hashes.txt                          @deruelle
 /.claude/rule-weakening-acks.txt                        @deruelle

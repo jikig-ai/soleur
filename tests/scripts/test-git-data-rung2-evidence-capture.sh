@@ -232,6 +232,64 @@ else
   fail "evidence records the queries that produced it" "n/a" "$(cat "$OUT" 2>/dev/null)"
 fi
 
+# (#8010 item 1) …and WITH THE TABLE PAIR THE QUERY RAN AGAINST, BY VALUE. Pasting a recorded
+# query into betterstack-query.sh with no BS_TABLE exported returns rc=0 and zero rows from
+# the inngest DEFAULT table — which reads as "dark boot" on a perfectly good birth. The pin
+# asserts the value, not presence: a presence pin would pass a wrong derivation
+# (`${BS_TABLE}_s3` -> `…prd_logs_s3`, a collection that does not exist). This arm runs the
+# SUT under `env -u BS_TABLE -u BS_TABLE_S3` so an inherited shell export cannot flake it.
+# shellcheck source=/dev/null
+source "${ROOT}/scripts/lib/betterstack-sources.sh"
+OUT_TABLE="$TMP/evidence-pass-table.env"
+env -u BS_TABLE -u BS_TABLE_S3 \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_TABLE" >/dev/null 2>&1 || true
+if grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT_TABLE" 2>/dev/null; then
+  pass "evidence records the table pair it queried by value"
+else
+  fail "evidence records the table pair it queried by value" "n/a" "$(grep -n 'TABLE' "$OUT_TABLE" 2>/dev/null || echo '<no TABLE line>')"
+fi
+# The default arm's expected value is the lib CONSTANT, so a SUT printing the constant instead
+# of the live table would pass it (measured: mutant M3). Two override arms make the pin follow
+# the INPUT: BS_TABLE pinned alone records the placeholder (this file cannot see what
+# betterstack-query.sh derived); BS_TABLE + BS_TABLE_S3 pinned records the pair verbatim.
+# And the default arm is only meaningful if the constant has the git-data shape.
+if [[ "$BS_GIT_DATA_TABLE" =~ ^t[0-9]+_.*_logs$ ]]; then
+  pass "sources lib names a git-data-shaped table (default arm non-vacuous)"
+else
+  fail "sources lib names a git-data-shaped table (default arm non-vacuous)" "n/a" "$BS_GIT_DATA_TABLE"
+fi
+for _case in "t520508_override_prd_logs::<derived by betterstack-query.sh>" \
+             "t520508_x_metrics:t520508_x_archive:t520508_x_archive"; do
+  IFS=: read -r _t _s3in _s3want <<<"$_case"
+  OUT_OVR="$TMP/evidence-pass-table-$_t.env"
+  env -u BS_TABLE -u BS_TABLE_S3 ${_s3in:+BS_TABLE_S3="$_s3in"} BS_TABLE="$_t" \
+    BETTERSTACK_QUERY_SH="$STUB" \
+    BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+    bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+      --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_OVR" >/dev/null 2>&1 || true
+  if grep -q "^# TABLE: BS_TABLE=${_t} BS_TABLE_S3=${_s3want}$" "$OUT_OVR" 2>/dev/null; then
+    pass "evidence follows an overridden table pair (${_t})"
+  else
+    fail "evidence follows an overridden table pair (${_t})" "n/a" "$(grep -n 'TABLE' "$OUT_OVR" 2>/dev/null || echo '<no TABLE line>')"
+  fi
+done
+# A non-identifier table name is refused as an INPUT error (64), never TRANSIENT (2, which the
+# rehearsal workflow retries), and nothing is written. The stub ignores the table, so only the
+# SUT's own guard can refuse it.
+OUT_BAD="$TMP/evidence-pass-table-bad.env"
+out="$(env -u BS_TABLE -u BS_TABLE_S3 BS_TABLE='t520508_bad;x_logs' \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_BAD" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "a non-identifier table name => exit 64 (input error, not TRANSIENT)"; else
+  fail "a non-identifier table name => exit 64 (input error, not TRANSIENT)" "$rc" "$out"; fi
+if [[ ! -f "$OUT_BAD" ]]; then pass "a refused table name writes NO evidence file"; else
+  fail "a refused table name writes NO evidence file" "$rc" "an evidence file was written"; fi
+
 # ── ARM 2: the FAIL path — a fatal from this host ─────────────────────────────────
 #
 # (#7025, R5) THE FAIL ARM IS `level=fatal`, NOT a `\bno\b` MATCH ON THE BOOLEANS.
@@ -1319,7 +1377,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=76  # 73 + the instrument self-test + the #7898 §6 egress-reachability row + the #8043 Guard 4 tracked-copy cmp row
+_FLOOR=86  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
