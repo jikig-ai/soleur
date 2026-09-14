@@ -16,13 +16,28 @@ set -uo pipefail
 # invocation, which is the documented inner loop while editing the subject, gets the bare /tmp.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# #8051 — a suite about the environment must own the environment it starts from. git exports
+# GIT_* variables into every hook process (measured from a real hook env: GIT_DIR,
+# GIT_INDEX_FILE, GIT_AUTHOR_*, GIT_COMMITTER_*, GIT_EDITOR, GIT_EXEC_PATH, GIT_PREFIX,
+# GIT_TERMINAL_PROMPT), and every `bash -c` child below would inherit them — tripwires fire and
+# identity probes read "from anywhere" values. Strip by prefix, before any child spawns: a
+# hand-listed name set is a claim about which variables git honours and goes stale the day git
+# adds one (2026-09-04 learning; the five-name `env -u` chain this replaces was itself that
+# shape). GIT_LOCATION_VARS is exempted only defensively — nothing sets it before this file is
+# sourced, but the lib's own list idiom keeps it anyway.
+for _v in ${!GIT_@}; do
+  [[ "$_v" == "GIT_LOCATION_VARS" ]] && continue
+  unset "$_v"
+done
+unset _v
+
 REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 LIB="$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 
 PASS=0; FAIL=0; ASSERTIONS=0
 # The verdict reads an APPEND-ONLY ledger, not the counters (see the exit trap below). A counter is
 # one assignment away from lying; a ledger line has to be deleted to disappear.
-readonly MIN_ASSERTIONS=24
+readonly MIN_ASSERTIONS=25
 _VERDICT_LEDGER="$(mktemp "$TMPDIR/gfe-verdict.XXXXXXXX")" || {
   printf '[FATAL] mktemp failed for the verdict ledger\n' >&2; exit 2; }
 ok()  { printf '  [ok]   %s\n' "$1"; printf 'ok\n'   >>"$_VERDICT_LEDGER"; PASS=$((PASS+1)); ASSERTIONS=$((ASSERTIONS+1)); }
@@ -182,16 +197,22 @@ printf '\n=== git_fixture_env: an unenforceable ceiling FAILS, and exports nothi
 # env is the silent degradation this file exists to prevent.
 REL_BASE="$(mkfixture)"; mkdir -p "$REL_BASE/sub" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
 for bad_dir in "/tmp" "relative/path" "$TMPDIR/has:colon/repo"; do
-  # `env -u` is load-bearing, and its absence was a latent hermeticity defect. This probe asserts
-  # the BUILDER exported nothing before refusing, but it reads the builder's own signature variable
-  # out of an environment it never cleared — so it conflated "the builder exported this" with "this
-  # variable has a value from anywhere". It therefore passed only while the ambient environment
-  # happened to be empty, i.e. for a reason unrelated to the property it names, and reddened for any
-  # developer carrying GIT_CONFIG_KEY_0 for an unrelated purpose (a gpg workaround, a direnv). #7917
-  # was the first thing in this repo to set it, which is how it surfaced.
-  probe=$(env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
-    -u GIT_CEILING_DIRECTORIES -u GIT_AUTHOR_NAME \
-    bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true; echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"' _ "$LIB" "$bad_dir" 2>&1)
+  # The probe's in-child prefix scrub is load-bearing, and its absence was a latent hermeticity
+  # defect. This probe asserts the BUILDER exported nothing before refusing, but it reads the
+  # builder's own signature variables out of an environment it never cleared — so it conflated
+  # "the builder exported this" with "this variable has a value from anywhere". It therefore
+  # passed only while the ambient environment happened to be empty, i.e. for a reason unrelated
+  # to the property it names, and reddened for any developer carrying GIT_CONFIG_KEY_0 for an
+  # unrelated purpose (a gpg workaround, a direnv). #7917 was the first thing in this repo to set
+  # it, which is how it surfaced. #8051: the child scrubs GIT_* by prefix BEFORE source — the
+  # ambient scrub at the top of this file already emptied the ambient env, so this second layer
+  # is what keeps the probe honest if the suite's own scrub is ever deleted (the mutation this
+  # arm exists to detect).
+  probe=$(bash -c '
+    for _v in ${!GIT_@}; do unset "$_v"; done
+    source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true
+    echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"' \
+    _ "$LIB" "$bad_dir" 2>&1)
   r=$(bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1' _ "$LIB" "$bad_dir"; echo $?)
   if [[ "$r" != "0" ]]; then ok "refuses an unenforceable ceiling for [$bad_dir]"
   else bad "ACCEPTED an unenforceable ceiling for [$bad_dir]"; fi
@@ -292,6 +313,27 @@ if [[ "$iout" == *"GOT=/tmp/sentinel-root"* ]]; then
   ok "INCIDENTS_REPO_ROOT survives git_fixture_env (the ledger sink is not swept away)"
 else
   bad "INCIDENTS_REPO_ROOT did NOT survive: $iout"
+fi
+
+printf '\n=== the suite is green under a hook-shaped environment (#8051 regression) ===\n'
+# The 2026-09-04 learning's "a fixture that spawns git must be run once with GIT_DIR deliberately
+# set", self-contained so CI (which never has a real hook env) exercises it. The flag is not a
+# GIT_* name, so the inner run's own ambient scrub cannot strip it and recursion cannot restart.
+if [[ "${_GFE_HOOK_ENV_REPLAY:-0}" == "1" ]]; then
+  ok "inner replay run (the outer invocation supplied the hook env)"
+else
+  _replay_rc=0
+  _GFE_HOOK_ENV_REPLAY=1 \
+    GIT_DIR="/tmp/gfe-hostile-gitdir" GIT_INDEX_FILE="/tmp/gfe-hostile-index" \
+    GIT_AUTHOR_NAME="Hook Inherited" GIT_AUTHOR_EMAIL="hook@example.com" \
+    GIT_COMMITTER_NAME="Hook Inherited" GIT_EDITOR=":" GIT_PREFIX="sub/" \
+    GIT_TERMINAL_PROMPT=0 GIT_EXEC_PATH="/usr/lib/git-core" \
+    bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || _replay_rc=$?
+  if [[ "$_replay_rc" == "0" ]]; then
+    ok "suite exits 0 under an inherited hook env (GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_*)"
+  else
+    bad "suite exited $_replay_rc under an inherited hook env -- the ambient prefix scrub regressed"
+  fi
 fi
 
 printf '\n=== summary ===\n'
