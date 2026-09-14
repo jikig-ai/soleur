@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Ran Playwright code\n```js\nawait page.goto('http://127.0.0.1:32809/page.html');\n```\n### Page\n- Page URL: http://127.0.0.1:32809/page.html\n- Page Title: probe 7980\n### Snapshot\n- [Snapshot](outdir/page-2026-09-14T09-50-16-855Z.yml)\n### Events\n- New console entries: ../../../../../../../var/tmp/cap7980-default.Amz0Yi/outdir/console-2026-09-14T09-50-15-918Z.log#L1"
+      }
+    ]
+  }
+}
