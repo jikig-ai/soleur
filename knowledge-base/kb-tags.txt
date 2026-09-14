@@ -518,6 +518,7 @@ brand-workshop
 branded-types
 branding
 bre
+breach-register
 breadcrumb
 breadcrumbs
 bridge
@@ -1164,6 +1165,7 @@ destructive-tests
 destructive-tools
 detection
 detector-design
+determination
 determinism
 deterministic
 dev-db
@@ -1872,6 +1874,7 @@ importlib
 importoriginal
 imports
 in-band-mint
+in-cell-correction
 in-component-state
 in-filter
 in-flight-feature-refresh
@@ -2432,6 +2435,7 @@ operator-precedence
 operator-role
 operator-steps
 operator-truthfulness
+operator-veto
 ops
 ops-directory
 ops-provisioner

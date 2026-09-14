@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-14T09:06:40Z",
+  "generated_at": "2026-09-14T09:11:01Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1099,11 +1099,11 @@
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 10,
+      "applied_count": 11,
       "warn_count": 0,
-      "fire_count": 10,
+      "fire_count": 11,
       "prevented_errors": 0,
-      "last_hit": "2026-09-14T08:40:08Z",
+      "last_hit": "2026-09-14T09:06:43Z",
       "first_seen": "2026-08-19T17:31:09Z",
       "rule_text_prefix": ""
     },
