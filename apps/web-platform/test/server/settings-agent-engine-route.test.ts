@@ -61,6 +61,10 @@ describe("agent engine settings route", () => {
     await expect(response!.json()).resolves.toEqual(expect.objectContaining({
       workspaceId: "ws-1", defaultEngineId: "claude-code",
       defaultAuthMode: "managed",
+      engines: expect.arrayContaining([
+        expect.objectContaining({ id: "claude-code", rolloutEnabled: true }),
+        expect.objectContaining({ id: "codex", rolloutEnabled: false }),
+      ]),
     }));
   });
 

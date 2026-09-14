@@ -2,18 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
-import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
-type Engine = { id: string; version: string; transport: string; authModes: string[]; enabledForNewRuns: boolean };
+type Engine = { id: string; version: string; transport: string; authModes: string[]; enabledForNewRuns: boolean; rolloutEnabled?: boolean };
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
-  const codexRolloutEnabled = useOptionalFeatureFlag("codex-engine");
   const [engines, setEngines] = useState<Engine[]>([]);
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
   const [authMode, setAuthMode] = useState<string>("managed");
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
   const isEngineSelectable = (engine: Engine): boolean =>
-    engine.enabledForNewRuns && (engine.id !== "codex" || codexRolloutEnabled);
+    engine.enabledForNewRuns && (engine.rolloutEnabled ?? true);
   const selectedEngine = engines.find((engine) => engine.id === selected);
 
   useEffect(() => {

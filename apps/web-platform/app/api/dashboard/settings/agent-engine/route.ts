@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resolveIdentity } from "@/lib/feature-flags/identity";
-import { isCodexEngineEnabled } from "@/lib/feature-flags/server";
+import { isEngineRolloutEnabled } from "@/lib/feature-flags/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
 import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
-import { CODEX_ENGINE_ID } from "@/server/codex-code-adapter";
 import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
@@ -38,8 +37,8 @@ export async function GET() {
       workspaceId: resolved.workspaceId,
       defaultEngineId: await repository.getDefaultEngine(resolved.workspaceId) ?? DEFAULT_AGENT_ENGINE_ID,
       defaultAuthMode: await repository.getDefaultAuthMode(resolved.workspaceId) ?? "managed",
-      engines: listReviewedEngineDefinitions().map(({ id, version, transport, authModes, enabledForNewRuns }) =>
-        ({ id, version, transport, authModes, enabledForNewRuns })),
+      engines: await Promise.all(listReviewedEngineDefinitions().map(async ({ id, version, transport, authModes, enabledForNewRuns }) =>
+        ({ id, version, transport, authModes, enabledForNewRuns, rolloutEnabled: await isEngineRolloutEnabled(id, resolved.identity.orgId, resolved.identity) }))),
     });
   } catch (error) {
     reportSilentFallback(error, { feature: "agent-engine-settings", op: "read" });
@@ -64,7 +63,7 @@ export async function PUT(request: Request) {
     if (!definition.enabledForNewRuns) {
       return NextResponse.json({ error: "engine_disabled" }, { status: 409 });
     }
-    if (definition.id === CODEX_ENGINE_ID && !(await isCodexEngineEnabled(resolved.identity.orgId, resolved.identity))) {
+    if (!(await isEngineRolloutEnabled(definition.id, resolved.identity.orgId, resolved.identity))) {
       return NextResponse.json({ error: "engine_rollout_disabled" }, { status: 409 });
     }
     const authMode = body.authMode === undefined ? undefined : body.authMode;

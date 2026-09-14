@@ -1,27 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 
-const useOptionalFeatureFlagMock = vi.hoisted(() => vi.fn(() => false));
-vi.mock("@/components/feature-flags/provider", () => ({
-  useOptionalFeatureFlag: useOptionalFeatureFlagMock,
-}));
-
 import { AgentEngineSettings } from "@/components/settings/agent-engine-settings";
 
 const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
-  useOptionalFeatureFlagMock.mockReset();
-  useOptionalFeatureFlagMock.mockReturnValue(false);
   fetchMock.mockResolvedValue({
     ok: true,
     json: async () => ({
       defaultEngineId: "claude-code",
       defaultAuthMode: "managed",
       engines: [
-        { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
-        { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: false },
+        { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
+        { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: false, rolloutEnabled: false },
       ],
     }),
   });
@@ -43,8 +36,8 @@ describe("AgentEngineSettings", () => {
       json: async () => ({
         defaultEngineId: "claude-code",
         engines: [
-          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
-          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true },
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: false },
         ],
       }),
     });
@@ -59,8 +52,8 @@ describe("AgentEngineSettings", () => {
         defaultEngineId: "codex",
         defaultAuthMode: "managed",
         engines: [
-          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
-          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true },
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: false },
         ],
       }),
     });
@@ -69,14 +62,13 @@ describe("AgentEngineSettings", () => {
   });
 
   it("saves a changed default for an owner", async () => {
-    useOptionalFeatureFlagMock.mockReturnValue(true);
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         defaultEngineId: "claude-code",
         engines: [
-          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
-          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true },
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true, rolloutEnabled: true },
         ],
       }),
     });
@@ -100,7 +92,7 @@ describe("AgentEngineSettings", () => {
       json: async () => ({
         defaultEngineId: "claude-code",
         defaultAuthMode: "managed",
-        engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true }],
+        engines: [{ id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true }],
       }),
     });
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
