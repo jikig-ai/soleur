@@ -1126,3 +1126,98 @@ E-table in the file). Consumer: `scripts/cutover-inngest.sh`, `execute)` 2.0. Su
 and `apps/web-platform/infra/cutover-inngest-workflow.test.sh` (wiring, rendered arms,
 `mutate_file` rows). No emitter, guard, FSM or workflow-secret change — no image bump, no host
 replace.
+
+## Amendment (2026-09-14, Ref #6921/#8077) — the quiesced unit shape is the cutover's quiesce signal
+
+Extends the [2026-07-12 no-SSH quiesce/re-enable amendment](#amendment-2026-07-12-ref-6178--no-ssh-web-host-scheduler-quiescere-enable).
+Two defects made the documented loop `op=execute` → `op=quiesce-web` → `op=execute` → `op=arm`
+undrivable from CI: the second `op=execute` re-enumerated a scheduler the quiesce had just stopped
+and failed at 2.1 (#6921), and the `*/15` watchdog read the deliberately stopped unit as
+`inngest_down` and dispatched a restart that started it again (#8077). Both came from the same gap:
+nothing on the host distinguished a deliberate quiesce from a fault.
+
+**Decision — one on-host signal.** The web scheduler is *quiesced* exactly when
+`systemctl is-active inngest-server.service` prints `inactive` or `failed` AND
+`systemctl is-enabled inngest-server.service` prints `disabled`. Both states of `is-active` count
+because a stop that ends in SIGKILL at `TimeoutStopSec` leaves the unit `failed`. `disabled` is the
+discriminator: a crashed unit that is still enabled cycles through `activating` under
+`Restart=on-failure` and never settles `disabled`. The shape needs no new state, survives a reboot
+(a disabled unit does not start) and is not touched by deploys.
+
+**Writers.** Exactly one handler writes the shape and exactly one clears it:
+
+- `quiesce inngest` (`op=quiesce-web`) writes it: disable, then stop.
+- `enable inngest` (`op=rollback`) clears it: enable, then start.
+
+**Gated start writers.** Every other path on a web host that can start the unit refuses the shape:
+
+| Start writer | Refusal |
+|---|---|
+| `ci-deploy.sh` `restart` handler | deploy-status `inngest_quiesced_restart_refused`, journald `INNGEST_RESTART_REFUSED` |
+| `ci-deploy.sh` `deploy inngest <tag>` arm (its `inngest-bootstrap.sh` enables and restarts the unit) | `inngest_quiesced_deploy_refused`, before the image pull |
+| `inngest-wiped-volume-verify.sh` | abort `quiesced_refused`, before its stop/wipe/start |
+| `workspaces-cutover.sh` luks resume reconcile and its dead-man `sh -c` remount arm | start skipped whenever `is-enabled` = `disabled` (the reconcile logs `SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced`; the dead-man string skips without a log line) |
+
+This closes the residue the 2026-07-12 amendment recorded as arch P2-4 (a pure `restart` on a web
+host STARTS the disabled unit). `restart` stays pure — it still never re-enables — and now also
+never starts a quiesced unit. Only the deliberate `enable` verb re-arms.
+
+**Consumers.**
+
+- **Watchdog — a non-remediable verdict.** On the shape (and `/health` != 200) `inngest-inventory.sh`
+  answers `inngest-inventory: QUIESCED host_id=… unit=… enabled=disabled` in both liveness and full
+  modes, with journald `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced`.
+  `scripts/inngest-liveness-classify.sh` maps it to `inngest_quiesced`, which is not in the restart
+  family. `scheduled-inngest-health.yml` prints `::notice::expected after cutover: web scheduler
+  QUIESCED …` and records no failure: no restart, no issue, Sentry check-in `ok`, pool probe and
+  healthy auto-close unchanged. `inngest_quiesced` is deliberately NOT a failure mode — that would
+  skip the pool probe for as long as the unit stays quiesced, which post-cutover is permanent.
+- **2.2 certifies the shape.** The `op=execute` 2.2 hard gate passes only when every probe is
+  non-200 AND at least one body carries the QUIESCED sentinel. Any 200 is STILL RUNNING; non-200
+  without the sentinel is UNKNOWN (fail-closed). Before this, any stable non-200 passed, including
+  a crash-looping enabled unit that could come back mid-flip.
+- **2.1 resumes from the capture.** On the shape, `inngest-rearm-reminders.sh` capture mode returns
+  the persisted `/var/lib/inngest/cutover-capture.json` (`source=persisted`, `captured_at`) instead of
+  enumerating a stopped scheduler; with no valid file it fails with `nothing to resume from`. Off
+  the shape it enumerates live, and a failed live enumeration still fails.
+
+**Capture before stop.** When the unit is `active`, `quiesce inngest` captures the still-armed
+reminders (bounded, `timeout --kill-after=5` 120 s) before disabling and stopping. A failed or
+timed-out capture stops nothing and reports `quiesce_capture_failed` (journald
+`INNGEST_QUIESCE_CAPTURE_FAILED rc= stderr_tail=`). Stopping an uncaptured scheduler is the loss
+this feature exists to prevent, so the refusal is fail-closed. Capture mode needs no Bearer secret
+(it reads loopback GQL and writes a file), so a Doppler outage cannot block a quiesce. An active
+unit whose GQL is dead can never be captured; it is still enabled, so not quiesced, so a
+`restart-inngest-server.yml` dispatch followed by a new `op=quiesce-web` is the escape. No override
+flag ships.
+
+**Standing notes.**
+
+1. `inngest-bootstrap.sh` tolerates a failed `systemctl enable inngest-server.service` (`|| true`).
+   That is the one way `inactive`+`disabled` could arise without a quiesce, and changing it is a
+   baked-image change outside this amendment. Until then the detector is an audit: a
+   `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced` row in Better Stack with no `op=quiesce-web` in
+   the prior 24 h.
+2. A web-1 REPLACED under `web_colocate_inngest=false` has no `inngest-server.service`. `is-enabled`
+   is then not `disabled`, so the shape does not hold, the probe reads `FATAL`, and the watchdog
+   churns `inngest_down` restarts into its age gate. This is pre-existing and not changed here;
+   retiring or repointing the web-liveness arm is pinned to #7674/#6178.
+3. The cattle web-2 (`10.0.1.11`, #6969, ADR-143) was born with `web_colocate_inngest=false` and has
+   no unit either. The quiesce/enable fan-out to it is a tolerated no-op, and there is no web-2
+   freeze/recreate step.
+
+**Correction to the 2026-07-12 amendment (appended, not edited in place).** Its rejected-alternative
+paragraph describes a `restart-inngest-server.yml` restart as "LB-routed to a web host". It is not
+load-balanced. The `deploy.` tunnel ingress is origin-relative to web-1 (`tunnel.tf`, service
+`http://${var.web_hosts["web-1"].private_ip}:9000`) and the `restart` handler does not fan out to
+peers, so a restart only ever reaches web-1. The conclusion of that paragraph is unchanged.
+
+**Alternatives considered.**
+
+| Alternative | Why rejected |
+|---|---|
+| Read `INNGEST_CUTOVER_FLIP` in the watchdog and suppress while armed/flipping/flushed | `op=arm` writes the flag AFTER the quiesce→execute window, so during the window it still holds its pre-arm value and cannot tell a deliberate quiesce from a fault. |
+| `op=quiesce-web` writes a repo variable or Doppler marker honoured for a bounded window | New mutable state written by an op with no reviewer gate, a second fuse (the marker can expire while the window is still open), and a clear-on-rollback path to keep in sync; the systemd shape already has all three properties for free. |
+| Read `/hooks/deploy-status` `reason=quiesced` in the watchdog | A single slot overwritten by the next deploy or restart — a merge to main during the window would erase the signal and reopen the fuse. |
+| Gate the healthy auto-close on a separate `web_scheduler=quiesced` output | Gating the whole step stops pool issues from ever auto-closing post-cutover; gating only the liveness closes adds a second output beside the single-source `failure_mode` contract, which is fail-open for a future consumer. A deliberate stop+disable resolves a "web scheduler down" issue, so the unchanged auto-close is correct. |
+| Also treat `deactivating`+`disabled` as quiesced | Two predicates (lenient watchdog, strict gate) for a stop window that disable-before-stop already shrinks, whose worst case is one false `inngest_down` tick per window that the refusal and the next tick's auto-close absorb. |

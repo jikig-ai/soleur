@@ -52,7 +52,7 @@ Plan: `knowledge-base/project/plans/2026-09-14-fix-inngest-cutover-loop-drivable
 ## Phase 5: ADR-100 amendment + follow-up issues
 
 - [ ] 5.1 Direct append (the architecture skill has no amend sub-command): `### Amendment (2026-09-14, Ref #6921/#8077)` to ADR-100 — the quiesced shape as the signal; the start writers (restart, bootstrap deploy arm, wiped-volume verify, luks reconcile + dead-man) and their gates, the two-state `inactive|failed` ∧ `disabled` shape; watchdog non-remediable verdict; 2.2 certification; capture-before-stop; `enable || true` note; replaced-web-1 unit-less note pinned to #7674/#6178; corrected "LB-routed" clause; Alternatives Considered (flip flag, repo-var/Doppler marker, deploy-status slot, auto-close gating).
-- [ ] 5.2 File the FR16 follow-up issue(s): `schedule-reminder` connection-refused → `503 + Retry-After`; (no clamp issue — FR13 resolved FIRES LATE). Reference the numbers in the runbook.
+- [x] 5.2 (superseded by plan C14 — fixed inline in route.ts; no issue filed) File the FR16 follow-up issue(s): `schedule-reminder` connection-refused → `503 + Retry-After`; (no clamp issue — FR13 resolved FIRES LATE). Reference the numbers in the runbook.
 
 ## Phase 6: Verification gates
 

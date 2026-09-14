@@ -375,6 +375,47 @@ unconfirmed state fails loud (`UNVERIFIED`, exit 1). Marker (tag `ci-deploy`):
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
 ```
 
+### Web scheduler QUIESCED — expected after cutover (NO restart) — #8077
+
+**What it means.** `op=quiesce-web` stopped and disabled the web-1 scheduler for the dedicated-host
+cutover, so the unit is in the quiesced shape (`is-active` ∈ {`inactive`, `failed`} AND
+`is-enabled` = `disabled`; see §op=quiesce-web). The liveness probe answers
+`inngest-inventory: QUIESCED host_id=… unit=… enabled=disabled`, the classifier maps it to
+`inngest_quiesced`, and the watchdog run log prints:
+
+```text
+::notice::expected after cutover: web scheduler QUIESCED …
+```
+
+The watchdog records **no failure**: no restart is dispatched, no `[ci/inngest-down]` is filed, the
+Sentry check-in stays `ok`, and the pool probe still runs. The healthy auto-close still runs on that
+tick, so a `[ci/inngest-down]` left open from before the quiesce closes. After the cutover the web
+unit stays quiesced for good, so this notice repeats every `*/15` tick and is not a warning.
+
+**Expected once per window.** A tick that lands inside the ≤ 180 s stop reads the unit mid-stop
+and files one `[ci/inngest-down]` with one Sentry `error` check-in and one restart that the handler
+refuses; the next QUIESCED tick closes it (§op=quiesce-web).
+
+**What pages post-cutover.** This notice files nothing. The dedicated-host arm of the same workflow
+files `[ci/inngest-dedicated-host]`, but the Sentry check-in reads only the web arm's
+`failure_mode`, so it stays `ok`. A dead dedicated scheduler is paged by the ADR-117 Better
+Stack consumer heartbeat (`inngest_consumer`, fed from web-1 against `10.0.1.40:8288`). That monitor
+is still `arming_pending` on #7462 in `plugins/soleur/lib/heartbeat-manifest.ts`; confirm it reads
+live `up` before relying on it.
+
+**Audit for a false suppression.** The shape requires `disabled`, which only the quiesce handler
+writes, so a crashed scheduler cannot read QUIESCED. The audit is a `mode=quiesced` verdict (tag `inngest-inventory`)
+with no `op=quiesce-web` in the prior 24 h — the quiesce handler logs `SUCCESS: quiesce inngest`
+under tag `ci-deploy`:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep 'SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced' --limit 20
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 48h --grep 'SUCCESS: quiesce inngest' --limit 20
+```
+
+If QUIESCED rows appear and no quiesce preceded them, find what disabled the unit before trusting
+the notice; dispatch `op=rollback` to re-arm the web scheduler if it is meant to serve.
+
 ## Key rotation
 
 Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_id` resources.
@@ -822,25 +863,63 @@ FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler wr
 write** — it is the no-SSH **`op=arm`** dispatch (a prod-write behind explicit dispatch + the
 `inngest-cutover` GitHub Environment required-reviewer gate, which satisfies
 `hr-menu-option-ack-not-prod-write-auth`: the dispatch + approval IS the ack). The remaining true
-operator seams are **2.2a** (web-2 freeze/recreate lifecycle) and **2.4** (app-repoint, a code
-merge) — both printed in the SEAM as an out-of-band hand-off.
+operator seam is **2.4** (app-repoint, a code merge), printed in the SEAM as an out-of-band
+hand-off. There is no 2.2a web-2 freeze/recreate seam any more — see §1a.
+
+The first `op=execute` stops at 2.2 `STILL RUNNING` by design (the web scheduler is still up), so
+the loop as driven from CI is **`op=execute` → `op=quiesce-web` → `op=execute` → `op=arm`** (#6921).
+The second `op=execute` resumes its 2.1 capture from the file the quiesce persisted, and the
+watchdog leaves the quiesced unit alone (#8077).
 
 > **`op=quiesce-web` (#6178) — the no-SSH remediation when the 2.2 gate reports STILL
-> RUNNING.** The `op=execute` 2.2 gate only CHECKS (inventory non-200 = quiesced); it has no
-> path to actually STOP the old co-located scheduler. When the gate fails with
+> RUNNING.** The `op=execute` 2.2 gate only CHECKS (it certifies the quiesced unit shape — see
+> §1); it has no path to actually STOP the old co-located scheduler. When the gate fails with
 > `2.2 QUIESCE HARD GATE FAILED / STILL RUNNING`, run `op=quiesce-web` (below) to
 > stop+disable inngest across the host-set over the private net (HMAC + CF-Access, **no
 > SSH**), then re-run `op=execute`. Operators have no SSH — this replaces the old operator
 > host-shell stop-and-disable step (`hr-no-ssh-fallback-in-runbooks`). op=quiesce-web POLLS
 > `/hooks/deploy-status` for each host's synchronous `quiesced` verdict (not-serving AND
 > unit-inactive AND not-enabled) — it does NOT immediate-probe (the unit's
-> `TimeoutStopSec=180` means the async stop can lag the 202). Its own failure verdicts each
-> print a no-SSH forward action: `inngest_still_serving`/`inngest_still_enabled` (persistent
-> = the unit is being RESURRECTED → pull `reason=` from `/hooks/deploy-status` + Better Stack
-> `logger -t ci-deploy` and investigate what restarts/re-enables it — do **not** SSH);
+> `TimeoutStopSec=180` means the async stop can lag the 202).
+>
+> **What the handler writes (#6921/#8077).** When the unit is `active`, the `quiesce inngest`
+> handler first captures the still-armed reminders to `/var/lib/inngest/cutover-capture.json`
+> (bounded: 120 s, `timeout --kill-after=5`), THEN disables, THEN stops. The end state is the
+> **quiesced unit shape**: `systemctl is-active inngest-server.service` ∈ {`inactive`, `failed`}
+> AND `systemctl is-enabled inngest-server.service` = `disabled`. Only this handler writes that
+> shape and only `op=rollback`'s `enable inngest` clears it. On it, the liveness probe answers
+> `inngest-inventory: QUIESCED host_id=… unit=… enabled=disabled` instead of `FATAL`, the
+> watchdog prints a notice and dispatches nothing (see
+> [§ Web scheduler QUIESCED](#web-scheduler-quiesced--expected-after-cutover-no-restart--8077)),
+> and every start path except `enable` refuses it — `restart` (`inngest_quiesced_restart_refused`),
+> `deploy inngest <tag>` (`inngest_quiesced_deploy_refused`), the wiped-volume verify
+> (`quiesced_refused`) and the luks-cutover starts (skipped on `disabled`).
+> Rationale: ADR-100, amendment 2026-09-14. When the unit is not `active` (already stopped, a
+> re-dispatch, or web-2 with no unit) the capture is skipped and any existing file is kept.
+>
+> Its own failure verdicts each print a no-SSH forward action (the full reason → remedy table
+> is [deploy-status-debugging.md](../../../../plugins/soleur/skills/postmerge/references/deploy-status-debugging.md#reason-taxonomy)):
+> `quiesce_capture_failed` (the capture failed or timed out, **nothing was stopped** — read
+> `INNGEST_QUIESCE_CAPTURE_FAILED rc= stderr_tail=` in Better Stack, tag `ci-deploy`; if the unit is
+> active but its GQL is dead the capture can never succeed, and because the unit is still enabled
+> it is not quiesced, so dispatch `restart-inngest-server.yml` and then re-dispatch
+> `op=quiesce-web` — there is no override flag); `inngest_still_serving`/`inngest_still_enabled`
+> (persistent = the unit is being RESURRECTED → pull `reason=` from `/hooks/deploy-status` + Better
+> Stack `logger -t ci-deploy` and investigate what restarts/re-enables it — do **not** SSH);
 > `quiesced_peer_fanout_unaccepted` (a peer 202 was not accepted → check the peer host + the
-> web→web:9000 firewall + re-dispatch); UNKNOWN/000 (webhook unreachable → check
-> CF-Access/HMAC + re-dispatch). NB the two "quiesce" meanings differ:
+> web→web:9000 firewall, **and grep Better Stack for `FANOUT: webhook secret unavailable` first**:
+> that line means the originating host could not read its own `deploy-peer` secret, and a
+> re-dispatch will not converge; otherwise re-dispatch — stop/disable are idempotent); UNKNOWN/000
+> (webhook unreachable → check CF-Access/HMAC + re-dispatch).
+>
+> **Expected once per window: one false `[ci/inngest-down]`.** The stop can take up to
+> `TimeoutStopSec=180`. A `*/15` watchdog tick that lands inside that window reads the unit
+> mid-stop, before the shape exists, and produces one `[ci/inngest-down]` issue, one Sentry
+> `error` check-in and one restart dispatch that the handler refuses (or that loses the flock as
+> the benign `lock_contention`). The next tick reads
+> QUIESCED and the healthy auto-close closes the issue. Nothing to do.
+>
+> NB the two "quiesce" meanings differ:
 > `INNGEST_CUTOVER_QUIESCE` (Doppler arming-quiesce, blocks new reminders into the old
 > SQLite — the same-host cutover above) vs `op=quiesce-web` (stop-and-disable the scheduler
 > **process**).
@@ -848,6 +927,18 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 > ```bash
 > gh workflow run cutover-inngest.yml --field op=quiesce-web   # no-SSH stop+disable across the host-set; poll deploy-status for reason=quiesced
 > ```
+
+> **`op=quiesce-web` opens the founder-visible window — stage 2.4 BEFORE dispatching it.** From
+> the moment the web scheduler stops until the 2.4 app-repoint (`INNGEST_BASE_URL`) merges and
+> redeploys, no cron fires, and `POST /api/internal/schedule-reminder` answers **`503` with
+> `Retry-After: 120`** (`Reminder arming temporarily unavailable (Inngest backend not accepting
+> connections)`) because the send is refused. Nothing is persisted for such a request: a caller
+> must retry after the window, and `op=rearm` cannot recover a reminder that was never armed — it
+> re-arms only what the quiesce captured. So, before `op=quiesce-web`:
+>
+> 1. **Pre-stage the 2.4 PR green** (checks passed, ready to merge) so the window lasts one merge
+>    and one redeploy, not an authoring session.
+> 2. **Announce the window** to users before it opens.
 
 > **Pre-flight scans are bounded + observable (#6258, ADR-106).** The `op=inventory` /
 > `op=verify` sub-probe scans (`inngest-inventory`, `inngest-registry-probe`,
@@ -868,50 +959,54 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    It runs: **2.0** empty-registry pre-flight (aborts if the dark registry is non-empty — see
    remediation below); **2.1** capture of still-armed reminders (records persist on-host;
    `Σcaptured` + `reminder_id`s only in the log); **2.2** quiesce followed by a **QUIESCE HARD
-   GATE** that re-inventories the **LB-reachable host** and **fails loud + withholds the SEAM**
-   if inngest still serves there. If the gate fails (`STILL RUNNING`), run **`op=quiesce-web`**
-   (the no-SSH stop+disable across the host-set — see the op-order note above) and re-run
-   `op=execute`; the gate is a CHECK, `op=quiesce-web` is the ACT. When the gate passes it
-   prints the SEAM with the exact operator steps below, then exits 0. Read the SEAM from the
-   run log:
+   GATE** that re-inventories web-1 (the origin of the `deploy.` ingress) and **fails loud +
+   withholds the SEAM** unless the scheduler there is in the quiesced shape. If the gate fails
+   (`STILL RUNNING`), run **`op=quiesce-web`** (the no-SSH stop+disable across the host-set — see
+   the op-order note above) and re-run `op=execute`; the gate is a CHECK, `op=quiesce-web` is the
+   ACT. When the gate passes it prints the SEAM with the exact operator steps below, then exits 0.
+
+   **2.1 `source` (#6921).** The capture notice reads
+   `2.1 capture: Σcaptured=N source=<live|persisted> [captured_at=<ISO>]`:
+   - `source=live` — the unit is not quiesced; the script enumerated the running scheduler (the
+     first `op=execute`).
+   - `source=persisted captured_at=…` — the unit is quiesced; the script resumed from
+     `/var/lib/inngest/cutover-capture.json`, which the quiesce wrote just before it stopped the
+     scheduler (the second `op=execute`). Read `captured_at` before `op=arm`.
+   - `nothing to resume from` (exit 1) — the unit is quiesced but there is no valid capture file.
+     Dispatch **`op=rollback`** to reopen scheduling, then re-run `op=execute`.
+
+   A serving host whose enumeration fails still fails; it never falls back to a stale file.
+
+   **2.2 verdicts.** Every probe of `/hooks/inngest-inventory` is read:
+   - **PASSED** — every probe non-200 AND at least one body carries the `inngest-inventory: QUIESCED`
+     sentinel.
+   - **STILL RUNNING** — any probe returned 200. Dispatch `op=quiesce-web`.
+   - **UNKNOWN** (fail-closed, SEAM withheld) — every probe non-200 but no QUIESCED sentinel. The run
+     prints the first 120 characters of the last body, and one remedy chosen by this run's 2.1
+     `source`:
+     - `source=persisted` → the on-host `inngest-inventory.sh` predates the QUIESCED verdict (the
+       rearm script, delivered by the same push, already saw the quiesced shape). Confirm the
+       infra-config push for the merge landed (`apply-deploy-pipeline-fix.yml` run), then re-dispatch
+       `op=execute`. Do **not** re-run `op=quiesce-web`.
+     - `source=live` → the unit is not in the quiesced shape. Dispatch `op=quiesce-web`.
+
+   Read the SEAM from the run log:
 
    ```bash
    gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
    ```
 
-   > **DI-C3 LIMITATION — web-2 is NOT auto-verified (tracked #6227).** Both 2.1
-   > capture and the 2.2 gate reach inngest via a web-host webhook that resolves over the **load
-   > balancer** to `127.0.0.1:8288` on **whichever host the LB routed to** — there is no
-   > host-targeting mechanism today (no firewall rule for web→web:8288 + no host-targeting
-   > inventory/capture hook; that per-host fan-out infra is DEFERRED, see the tracking issue).
-   > So `op=execute` positively confirms only the **LB-reachable** host. The **weight-0 warm-
-   > standby web-2 (10.0.1.11)** self-arms oneshots into its **own** Redis independent of LB
-   > weight, and is **neither captured nor quiesce-verified** by CI. **Step 1a below (web-2
-   > quiesce) is MANDATORY, not advisory** — skipping it can (a) silently drop a reminder that
-   > web-2 self-armed into its local Redis, and (b) leave a surviving web-2 scheduler
-   > double-firing against prod Postgres that `op=verify` cannot detect (it reads only the
-   > dedicated host's runs).
-
-> **SUPERSEDED (#6538, 2026-07-17): web-2 was retired and destroyed; `var.web_hosts` is now
-> web-1 only.** There is no warm-standby scheduler left to self-arm reminders or double-fire, so
-> step 1a and the DI-C3 limitation above are **historical** — the cutover now runs against a
-> single-host web set (web-1, `10.0.1.10`), which `op=execute` fully captures + quiesce-verifies.
-> Skip 1a unless a second self-arming web host is ever re-provisioned before the cutover. (#6230
-> — the web-2 quiesce action-required — was closed as obviated by this retirement.)
-
-1a. **[HISTORICAL — web-2 retired #6538] Quiesce web-2 (was MANDATORY — DI-C3, before arming the flip).** `op=quiesce-web` (when run)
-   now stop+disables web-2's SCHEDULER too (an ACT over the private net — a real improvement
-   over operator-only web-2 handling), **but the freeze/recreate lifecycle STILL REMAINS
-   MANDATORY**: CI cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never
-   captured (2.1 capture is also LB-scoped) — a fan-out stop does not capture/re-arm them, and
-   web-2 self-arms oneshots into its OWN Redis independent of LB weight. So do **not** read a
-   green `op=quiesce-web` as "web-2 handled." Recreate web-2 per the plan's **web-2
-   freeze/recreate lifecycle** (§Bounded-outage / Downtime): take web-2 **out of the warm-standby
-   rotation and recreate it onto the post-cutover config** so no surviving web-2 scheduler
-   self-arms a reminder into its local Redis. This is a lifecycle action (freeze → recreate),
-   **not** an `ssh`/host-shell step (`hr-no-ssh-fallback-in-runbooks`). Do **not** proceed to
-   step 2 until web-2 is recreated. Tracks #6227 (real per-host web→web fan-out to auto-verify
-   web-2).
+1a. **web-2 needs no cutover step (corrected 2026-09-14, #6921).** web-2 (`10.0.1.11`, hel1
+   cattle, running since 2026-07-27 — #6969, ADR-143) was born with `web_colocate_inngest=false`: it
+   has no `inngest-server.service`, runs no scheduler and holds no local reminders. `var.web_hosts`
+   carries both keys and `CUTOVER_HOSTS` lists both IPs, so the `op=quiesce-web` and `op=rollback`
+   fan-out reaches web-2, where it is a tolerated no-op on an absent unit. There is **no web-2
+   freeze/recreate step**: nothing on web-2 for 2.1 to capture, for 2.2 to certify, or for
+   `op=verify` to catch double-firing. This replaces the former DI-C3 limitation and the former
+   mandatory "quiesce web-2" step, both written for a different machine — the fsn1 weight-0 warm
+   standby that self-armed oneshots into its own Redis (#6227). That host was destroyed on
+   2026-07-17 (#6538), and #6230 was closed as obviated by its retirement. The "single-host web
+   set" note that followed was true only until the cattle web-2 was born.
 
 2. **Arm the flip (2.2b/2.3) — dispatch the no-SSH `op=arm` verb (#6369).** This REPLACES the
    former three manual Doppler writes. `op=arm` performs all three writes on
@@ -1038,9 +1133,14 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    # (a) mint a fresh key + orphan the old one (propagates to the env secret in the same apply):
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
      terraform -chdir=apps/web-platform/infra apply -replace=doppler_service_token.inngest_arm_write
-   # (b) revoke the orphaned key so no standing prod-DSN read handle survives:
-   doppler configs tokens revoke --project soleur-inngest --config prd --slug <orphaned-token-slug> --yes
+   # (b) confirm the orphaned key is revoked so no standing prod-DSN read handle survives:
+   doppler configs tokens revoke --project soleur-inngest --config prd --slug <slug>
    ```
+
+   `-replace` in (a) destroys the old `doppler_service_token`, which already revokes its slug, so
+   (b) is a confirmation, not the revocation itself. Its own flags on CLI v3.75.3 are `--project`,
+   `--config` and `--slug`; an earlier version of this step also passed `--yes`, which the CLI
+   rejected (#6921).
 
    The next per-merge apply keeps a fresh `inngest-cutover` env secret available for a future
    cutover; the required-reviewer gate means it cannot be used without an approved dispatch.
@@ -1088,7 +1188,15 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 
    It precondition-checks 2.4 (registry non-empty), consumes the on-host capture, and
    reconciles `Σcaptured == rearmed`; a delta **fails loud** with the missing `reminder_id`s and
-   offers a retry (in-window ticks are not auto-backfilled).
+   offers a retry (in-window ticks are not auto-backfilled). An empty capture reconciles too: it
+   prints `re-armed=0 failed=0 total=0`.
+
+   **A reminder whose `fire_at` fell inside the window FIRES LATE — it runs immediately on
+   re-arm — and is never dropped.** The re-arm sends the event with its original, now-past `ts`.
+   Inngest schedules at `max(now, ts)` (`inngest/inngest@v1.19.4`,
+   `pkg/execution/executor/executor.go`: `if evtTs.After(at) { at = evtTs }`), and the only `ts`
+   rejection is outside 1980–2100 (`pkg/event/event.go` `Validate`); both retrieved 2026-09-14.
+   Dedup is on the event `id` per function for 24 h, not on `ts`.
 
 6. **`op=verify`** (exactly-once):
 
@@ -1106,11 +1214,11 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    fell in the quiesce→register gap (P2-16). Re-fire that list via `soleur:trigger-cron`.
 
    > **`op=verify` caveats — read before trusting the verdict:**
-   > - **NOT a web-2 double-fire detector (P2-a / DI-C3).** The doublefire-probe reads **only the
-   >   dedicated host's** (`10.0.1.40`) run history. A surviving weight-0 web-2 scheduler fires
-   >   against prod Postgres via its **own loopback backend PRE-repoint**, whose runs never appear
-   >   on the dedicated host — so `op=verify` cannot see a web-2 double-fire. The **operator's
-   >   mandatory web-2 quiesce (step 1a)** is the control; `op=verify` does not substitute for it.
+   > - **Reads only the dedicated host (P2-a).** The doublefire-probe reads **only the dedicated
+   >   host's** (`10.0.1.40`) run history, so a scheduler on a web host would be invisible to it.
+   >   The web-1 scheduler is covered by the 2.2 gate (quiesced shape); web-2 runs no scheduler
+   >   (step 1a). The earlier "mandatory web-2 quiesce" control named here belonged to the fsn1
+   >   web-2 destroyed in #6538.
    > - **Single global `CRON_PERIOD` (P2-c).** One `CUTOVER_CRON_PERIOD_SECONDS` (default 3600)
    >   buckets **every** function. The exactly-once verdict is sound **only if every registered
    >   cron period ≥ `CRON_PERIOD` and hour-aligned**; a cron firing faster than the period yields
@@ -1245,6 +1353,9 @@ so the roster is web-1 (`10.0.1.10`) only; the literal was corrected to match (#
 **drift-guarded** by `inngest-host.test.sh` §6b (the allowlist IP set must byte-equal the
 `var.web_hosts` private_ip set — the edge to `var.web_hosts` the roster previously lacked, so a
 future roster change red-lines CI until the allowlist follows).
+*(Superseding note, 2026-09-14: the roster has two keys again — a cattle web-2 was born at `.11`
+on 2026-07-27, #6969 — and the literal in `inngest-host.tf` is `10.0.1.10,10.0.1.11`. The §6b
+guard is what keeps the two equal.)*
 
 **Apply path — the literal is baked into `user_data`, so the edit force-replaces the host.**
 `hcloud_server.inngest` deliberately carries **no** `lifecycle.ignore_changes=[user_data]`
@@ -1295,8 +1406,8 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
    scheduler survives a reboot — **no operator `systemctl` step is needed** (this is the no-SSH
    reverse of `op=quiesce-web`; there is deliberately no two-POST enable+restart, which would
    race the `flock -n` and could leave the unit enabled-but-stopped reported as success).
-   web-2 is re-enabled by the fan-out but its verdict is acceptance-only (DI-C3) — confirm web-2
-   via its freeze/recreate lifecycle. On `inngest_enable_failed` / `inngest_start_failed` /
+   The fan-out to web-2 is acceptance-only (DI-C3) and a tolerated no-op there: web-2 has no
+   `inngest-server.service` to enable (step 1a), so there is nothing to confirm on it. On `inngest_enable_failed` / `inngest_start_failed` /
    `inngest_reenable_unverified` / `enabled_peer_fanout_unaccepted`, pull `reason=` from
    `/hooks/deploy-status` + Better Stack (`logger -t ci-deploy`) — do **not** SSH the host.
 
@@ -1312,6 +1423,13 @@ The capture file is retained on-host for a later retry. Rollback is data-safe on
 > prod Postgres (double-fire), independent of any enable-folding — the `inngest-server`
 > `ExecStartPre` flip-guard blocks only the DEDICATED host, not web hosts. The only web verb to
 > touch post-cutover is `op=quiesce-web` (forward) / `op=rollback` (reverse), never `restart`.
+>
+> **Superseding note (2026-09-14, #8077).** The hazard above is now closed in code: `restart`
+> refuses a unit in the quiesced shape (`inngest_quiesced_restart_refused`), and so does every
+> other start path except `enable` (see §op=quiesce-web). The instruction stands — never use
+> `restart` on a web host post-cutover — but a stray dispatch no longer starts a second
+> scheduler. Also, `restart-inngest-server.yml` is not load-balanced: the `deploy.` ingress is
+> origin-relative to web-1, so it only ever reaches web-1.
 
 <!-- lint-infra-ignore start -->
 
