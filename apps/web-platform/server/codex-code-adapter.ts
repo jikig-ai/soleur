@@ -15,6 +15,10 @@ export interface CodexCredentialLease {
   readonly expiresAt: number;
 }
 
+export function codexAuthMetadata(mode: CodexAuthMode, lease: CodexCredentialLease): { mode: CodexAuthMode; expiresAt: number } {
+  return { mode, expiresAt: lease.expiresAt };
+}
+
 export interface CodexUsageSnapshot {
   inputTokens: number;
   outputTokens: number;

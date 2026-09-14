@@ -8,6 +8,7 @@ import {
   sanitizeCodexError,
   validateCodexEvent,
   assertCodexEndpoint,
+  codexAuthMetadata,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -210,5 +211,15 @@ describe("Codex egress boundary", () => {
     for (const endpoint of ["http://api.openai.com", "https://evil.example.test", "not-a-url"]) {
       expect(() => assertCodexEndpoint(endpoint, ["api.openai.com"])).toThrowError(expect.objectContaining({ code: "codex_egress_denied" }));
     }
+  });
+});
+
+describe("Codex DSAR metadata", () => {
+  it("exports auth mode and expiry without credential material", () => {
+    expect(codexAuthMetadata("managed", { accessToken: "secret-token", expiresAt: 123 })).toEqual({
+      mode: "managed",
+      expiresAt: 123,
+    });
+    expect(codexAuthMetadata("managed", { accessToken: "secret-token", expiresAt: 123 })).not.toHaveProperty("accessToken");
   });
 });
