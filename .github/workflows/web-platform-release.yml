@@ -1687,6 +1687,38 @@ jobs:
         # env vars are deliberately left unset here so run.ts uses the bundled
         # chromium that ubuntu-latest installs cleanly.
         run: npx playwright install --with-deps chromium
+      # #7969: keep the synthetic principal CURRENT before verifying with it.
+      # The harness failed for weeks because the principal sat at T&C 2.3.0
+      # against a gate requiring 2.5.1 — the seed's version literal was correct
+      # when written and nothing re-ran it after the bump. Seeding here makes a
+      # TC_VERSION bump self-healing instead of needing someone to notice.
+      #
+      # Deliberately NOT continue-on-error: that pins a step's `conclusion` to
+      # success and makes a real failure unreadable from the API. This captures
+      # its own rc and reports on the ANNOTATION surface instead, then exits 0 —
+      # a seeding hiccup must not fail a release, but it must not be silent.
+      #
+      # A failure here is not fatal to the run: live-verify still executes and
+      # its own diagnostic reports what the principal actually hit (it names the
+      # redirect path), so the two signals corroborate rather than mask.
+      - name: Refresh the synthetic principal (idempotent)
+        if: steps.gate.outputs.triggered == '1'
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          set +e
+          # Redacted for the same reason the harness step is: this writes to a
+          # public run log and the script talks to the auth admin API.
+          doppler run -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh 2>&1 \
+            | bun run apps/web-platform/scripts/live-verify/redact-stdin.ts
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=live-verify principal may be stale::seed-live-verify-user.sh exited ${rc}. If live-verify reports a CANT-RUN naming /accept-terms or /setup-key, this is why — the principal was not refreshed."
+          else
+            echo "::notice::synthetic principal refreshed (T&C version derived from lib/legal/tc-version.ts)"
+          fi
+          exit 0
+
       - name: Run live-verify harness (report-only)
         id: harness
         if: steps.gate.outputs.triggered == '1'

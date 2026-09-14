@@ -256,6 +256,55 @@ else
   echo "  ok: seed no longer PATCHes tc_accepted_version directly"
 fi
 
+# --- #7969: the release workflow must RUN this seed before live-verify ---
+#
+# Deriving the version only makes the NEXT run correct; it does not make a run
+# happen. The harness broke because nothing re-ran the seed after a TC_VERSION
+# bump, so the wiring is the load-bearing half and must not be deletable in
+# silence. Parsed as YAML, not grepped: step ORDER is the property.
+WF_F="$(cd "$(dirname "$SEED")" && pwd)/../../../.github/workflows/web-platform-release.yml"
+if [[ -f "$WF_F" ]]; then
+  wf_report="$(python3 - "$WF_F" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["live-verify"]["steps"]
+seed = harness = None
+for i, st in enumerate(steps):
+    run = st.get("run") or ""
+    if "seed-live-verify-user.sh" in run:
+        seed = (i, st)
+    if "live-verify/run.ts" in run:
+        harness = (i, st)
+if seed is None:
+    print("FAIL:the live-verify job does not run seed-live-verify-user.sh")
+elif harness is None:
+    print("FAIL:could not locate the harness step to compare against")
+else:
+    si, sst = seed
+    hi, _ = harness
+    if si >= hi:
+        print(f"FAIL:seed step (index {si}) must precede the harness (index {hi})")
+    elif sst.get("continue-on-error"):
+        # continue-on-error pins `conclusion` to success, making a real failure
+        # unreadable from the API — the step reports via its own rc instead.
+        print("FAIL:seed step uses continue-on-error, which hides its own failure")
+    elif "steps.gate.outputs.triggered" not in str(sst.get("if") or ""):
+        print("FAIL:seed step is not gated on the same trigger as the harness")
+    else:
+        print(f"OK:seed step at index {si} precedes the harness at {hi}, same trigger, honest rc")
+PYEOF
+)"
+  if [[ "$wf_report" == OK:* ]]; then
+    echo "  ok: release workflow runs the seed before live-verify (${wf_report#OK:})"
+  else
+    echo "  FAIL: ${wf_report#FAIL:}" >&2
+    fail=1
+  fi
+else
+  echo "  FAIL: could not locate web-platform-release.yml at $WF_F" >&2
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "seed-live-verify-user.test.sh: FAILED" >&2
   exit 1
