@@ -80,6 +80,10 @@ routine run binds the current default once; retries retain that binding.
   - [x] Focused regression slice: the combined engine/settings/routine suite passes 82/82 with typecheck green after widening selectable engine state.
   - [x] Full focused evidence slice: migration-inclusive engine/settings/routine suite passes 88/88; C4 freshness passes 3/3.
 
+## Phase 2 — Deterministic remote adapter
+
+- [x] Test-only remote lifecycle slice: a network-free adapter models queued, running, waiting, terminal, delayed cancellation, unavailable cost, and duplicate-sequence behavior through the neutral dispatch boundary (3 adapter tests green).
+
 ## Phase 3 — Codex and settings
 
 - [ ] RED-05: API-key and managed ChatGPT login isolation, refresh, logout, revoked credentials, approvals, recovery, usage, and cancellation.
