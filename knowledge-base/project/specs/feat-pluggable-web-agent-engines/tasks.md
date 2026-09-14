@@ -103,6 +103,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Full-gate failure slice: migration tables were added to the DSAR allowlist and explicit anon/authenticated RPC revokes; focused guards now pass 17/17.
   - [x] DSAR worker slice: engine settings, runs, and events are exported with owner or parent-run scoping; DSAR worker and grant guards pass 15/15.
   - [x] Full web-platform gate: 1,085 files and 13,556 tests pass (54 skipped, 1 existing todo) after DSAR integration fixes.
+  - [x] Full web-platform gate after egress/observability slices: app-local Vitest passes 1,087 files and 13,569 tests (54 skipped, 1 existing todo).
   - [x] Review fix slice: service-role binding now verifies `p_created_by` membership when `auth.uid()` is unavailable (migration/grant tests pass 12/12).
   - [x] QA checkpoint: plan has no executable `## Test Scenarios` section, so browser/API scenarios were skipped per QA workflow; diff does not touch structural nav-state paths. Full web-platform and focused migration/settings/routine suites remain green.
   - [x] GDPR evidence checkpoint: regulated-path scan examined 53 changed files and matched 4; no new Art. 9 finding. The pre-existing >90-day corpus posture signal remains tracked by #7710, with the inert cron binding tracked by #7255.
