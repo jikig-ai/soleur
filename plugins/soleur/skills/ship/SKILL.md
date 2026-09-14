@@ -377,6 +377,8 @@ until 0, launch detached with the rc to a file, and if that file reads `4` go ba
 #8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
 contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
 
+**Identify the runner by the pid you launched, never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), record `$!`, and watch that pid: `while kill -0 <pid> && [[ "$(readlink /proc/<pid>/cwd)" == "$PWD" ]]; do sleep 15; done`. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_LOCK_TIMEOUT + 10800))`): the wait is charged against the ceiling, so `10800` under the 14400 s default leaves 3600 s of execution, under the contended readings the lib records. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
+
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
 - **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
@@ -1926,6 +1928,11 @@ green. `gh pr checks` then reports "all checks settled, zero failures" over zero
 **"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
 produces the first without the second. Assert the checks you *expect* are **present**, not merely
 non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
+The same ref is also why AC17 (`INDEX.md` `Total files`) can go red with a clean local regeneration: GitHub
+merges `refs/pull/N/merge` without the `kb-index` driver named in `.gitattributes`, so when main gained a KB
+file after your last sync the merge ref's count is one short while your head is self-consistent. Do not chase
+it on the branch head — `pre-merge-rebase.sh`'s `git merge origin/main` on `gh pr merge` runs the driver and
+pushes (#8137).
 
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
