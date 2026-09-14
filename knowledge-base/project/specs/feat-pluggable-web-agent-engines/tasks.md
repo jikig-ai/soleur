@@ -101,6 +101,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] DSAR worker slice: engine settings, runs, and events are exported with owner or parent-run scoping; DSAR worker and grant guards pass 15/15.
   - [x] Full web-platform gate: 1,085 files and 13,556 tests pass (54 skipped, 1 existing todo) after DSAR integration fixes.
   - [x] Review fix slice: service-role binding now verifies `p_created_by` membership when `auth.uid()` is unavailable (migration/grant tests pass 12/12).
+  - [x] QA checkpoint: plan has no executable `## Test Scenarios` section, so browser/API scenarios were skipped per QA workflow; diff does not touch structural nav-state paths. Full web-platform and focused migration/settings/routine suites remain green.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
