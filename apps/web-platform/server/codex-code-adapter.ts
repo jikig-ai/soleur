@@ -189,6 +189,32 @@ export interface CodexCodeAdapterTransport {
   dispose(): Promise<void>;
 }
 
+function normalizeCodexThreadId(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 256 ||
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint <= 0x1f || codePoint === 0x7f || codePoint === 0x2028 || codePoint === 0x2029;
+    })
+  ) {
+    throw Object.assign(new Error("Codex thread identity is invalid"), { code: "codex_thread_invalid" });
+  }
+  return value;
+}
+
+/** Preserve App Server thread.id and thread.sessionId as separate opaque values. */
+export function normalizeCodexThreadReference(thread: unknown): NativeSessionReference {
+  if (!thread || typeof thread !== "object") {
+    throw Object.assign(new Error("Codex thread identity is invalid"), { code: "codex_thread_invalid" });
+  }
+  const record = thread as { id?: unknown; sessionId?: unknown };
+  const resumeHandle = normalizeCodexThreadId(record.id);
+  const sessionId = record.sessionId == null ? null : normalizeCodexThreadId(record.sessionId);
+  return { resumeHandle, sessionId };
+}
+
 /** Codex stays disabled until qualification; this wrapper only defines the provider seam. */
 export function createCodexCodeAdapter(
   transport: CodexCodeAdapterTransport,

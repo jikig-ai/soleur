@@ -10,6 +10,7 @@ import {
   assertCodexEndpoint,
   codexAuthMetadata,
   normalizeCodexCancellation,
+  normalizeCodexThreadReference,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -87,6 +88,32 @@ describe("Codex auth boundary", () => {
 });
 
 describe("Codex neutral adapter boundary", () => {
+  it("keeps the App Server resume handle and live session identity distinct", () => {
+    expect(normalizeCodexThreadReference({ id: "thread-1", sessionId: "session-root-1" })).toEqual({
+      resumeHandle: "thread-1",
+      sessionId: "session-root-1",
+    });
+  });
+
+  it("does not derive a session identity when the provider omits it", () => {
+    expect(normalizeCodexThreadReference({ id: "thread-2" })).toEqual({
+      resumeHandle: "thread-2",
+      sessionId: null,
+    });
+  });
+
+  it("rejects malformed thread identifiers before persistence", () => {
+    for (const thread of [
+      {},
+      { id: "thread\n1", sessionId: "session-1" },
+      { id: "thread-1", sessionId: "session\u2028root" },
+    ]) {
+      expect(() => normalizeCodexThreadReference(thread)).toThrowError(
+        expect.objectContaining({ code: "codex_thread_invalid" }),
+      );
+    }
+  });
+
   it("acquires an isolated lease before lifecycle transport calls", async () => {
     const auth = createCodexAuthBoundary({
       mode: "managed",
