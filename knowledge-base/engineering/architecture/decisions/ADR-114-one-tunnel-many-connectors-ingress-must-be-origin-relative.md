@@ -190,6 +190,7 @@ not a fix. Tracked in #6441; the audit of what may already have been written to 
 
 **Load-bearing constraint for any I2 implementation.** Do **NOT** repoint the 12
 <!-- AMENDED 2026-07-27 (#7000): the count is 15, not 12 — `server.tf` carries 15 SSH-connected
+     (17 as of #8097 / 2026-09-13: `inngest_consumer_probe_install` and `send_failed_alert_probe` joined; the zero-slack floor in `web-host-provisioner-parity.test.sh` is the mechanised count)
      `terraform_data` provisioners today (a 16th, `terraform_data.root_authorized_keys`, lives in
      ci-ssh-key.tf and is outside this file's scope). The constraint below is unchanged and was
      re-confirmed at #7000: it is why that issue's prescribed `for_each` fan-out was withdrawn

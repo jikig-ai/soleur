@@ -249,7 +249,7 @@ resource "hcloud_server" "web" {
   # host; its name/server_type/location come from var.web_hosts pinned to current
   # state so the `moved` migration below is 0-destroy (a location change would
   # force-REPLACE the live prod host). web-2 is fresh — provisioned entirely by
-  # cloud-init at boot (the 15 SSH provisioners below stay web-1-scoped, mirroring
+  # cloud-init at boot (the 17 SSH provisioners below stay web-1-scoped, mirroring
   # the git-data host's cloud-init-only shape, so a web-2 that is not yet
   # SSH-reachable never hangs the merge-triggered auto-apply). The count said 11
   # until #7000 measured it; the scoping is now mechanically enforced by
@@ -506,6 +506,45 @@ resource "terraform_data" "disk_monitor_install" {
       "systemctl daemon-reload",
       "systemctl enable --now disk-monitor.timer",
       "systemctl list-timers disk-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# (#8097 / ADR-218) Synthetic SEND_FAILED row through web-1's REAL apply path.
+# Proves the last unmeasured link of the paging chain — journald records `logger -p user.crit`
+# as PRIORITY=2 on web-1 and Vector Source 2 ships it — by emitting one row that reuses the
+# real disk-monitor marker (so it inherits the real routing; that IS the test) suffixed
+# `synthetic=1 probe_rev=<rev>` so the readback (scripts/followthroughs/send-failed-alert-probe-8097.sh)
+# and the runbook can tell it from a real failure. Same SSH connection as disk_monitor_install;
+# no `file` provisioner, no filesystem destination.
+#
+# FIRES ONLY WHEN local.monitor_send_failed_probe_rev CHANGES — see betterstack-logs-alerts.tf
+# §CHANGED THE SQL? BUMP THE REV for the trigger contract (and the one exception: a failed
+# provisioner taints this resource, so the next apply re-runs it at the same rev). The trigger
+# is a literal local, never a reference to the logtail_* resources, so the SSH `-target` never
+# drags a non-SSH resource into its plan.
+resource "terraform_data" "send_failed_alert_probe" {
+  triggers_replace = local.monitor_send_failed_probe_rev
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+  }
+
+  lifecycle {
+    precondition {
+      condition     = can(regex("^[0-9]+$", local.monitor_send_failed_probe_rev))
+      error_message = "monitor_send_failed_probe_rev must be digits only: it is interpolated into a root shell literal and a ClickHouse LIKE."
+    }
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "logger -p user.crit -t disk-monitor 'SOLEUR_DISK_MONITOR_SEND_FAILED channel=resend http_code=000 rc=7 synthetic=1 probe_rev=${local.monitor_send_failed_probe_rev}'",
     ]
   }
 }

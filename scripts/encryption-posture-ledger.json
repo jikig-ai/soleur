@@ -29,6 +29,8 @@
     "betteruptime_monitor",
     "betteruptime_policy",
     "betteruptime_team_member",
+    "logtail_exploration",
+    "logtail_exploration_alert",
     "cloudflare_api_token",
     "cloudflare_bot_management",
     "cloudflare_list",

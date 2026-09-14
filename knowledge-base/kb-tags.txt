@@ -162,6 +162,7 @@ advisory-vs-blocking
 aeo
 aeo-score
 after
+after_unknown
 aftereach
 against
 agent
@@ -517,6 +518,7 @@ brand-workshop
 branded-types
 branding
 bre
+breach-register
 breadcrumb
 breadcrumbs
 bridge
@@ -773,6 +775,7 @@ collapses
 collision
 collision-check
 collision-gate
+collision-preflight
 color-scheme
 column-grant
 column-level-security
@@ -1162,6 +1165,7 @@ destructive-tests
 destructive-tools
 detection
 detector-design
+determination
 determinism
 deterministic
 dev-db
@@ -1870,6 +1874,7 @@ importlib
 importoriginal
 imports
 in-band-mint
+in-cell-correction
 in-component-state
 in-filter
 in-flight-feature-refresh
@@ -2110,6 +2115,7 @@ log-injection
 logic-error
 logic-errors
 login
+logtail-provider
 loop
 loopback-gate
 loopback-gating
@@ -2430,6 +2436,7 @@ operator-precedence
 operator-role
 operator-steps
 operator-truthfulness
+operator-veto
 ops
 ops-directory
 ops-provisioner
@@ -2610,6 +2617,7 @@ plan-gate
 plan-gates
 plan-guard-as-prose
 plan-inventory
+plan-json
 plan-literalism
 plan-phase
 plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker
@@ -2856,6 +2864,7 @@ prop-wiring
 propagation
 prose-claims
 prose-conventions
+prose-counts
 prose-guard
 prospect-anchored features
 protecthome
