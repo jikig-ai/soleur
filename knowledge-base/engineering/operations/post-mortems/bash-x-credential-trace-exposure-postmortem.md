@@ -64,6 +64,7 @@ not an availability one, which is precisely why nothing alarmed.
 - **Start time (detected):** 2026-09-03T15:33:16Z (issue #7797 filed)
 - **End time (recovered):** partial — Better Stack 2026-09-03T20:10Z; Sentry outstanding
 - **Duration (MTTR):** open
+  > **Superseded 2026-09-08 / 2026-09-14:** the Sentry half closed 2026-09-08T10:34Z (token revoked and replaced — see the 2026-09-08 addendum); the read limb closed by decision 2026-09-14 (#7945). Both header lines above describe the pre-rotation state and are retained as written.
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
