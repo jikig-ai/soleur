@@ -4,13 +4,15 @@ import { createCodexAuthBoundary, createCodexCodeAdapter, type CodexAuthProvider
 import type { EngineAdapterFactory } from "./agent-engine-adapter-factory";
 
 export function composeReviewedEngineFactories(options: {
+  /** Additive registrations for reviewed engines beyond the built-in adapters. */
+  additionalFactories?: Readonly<Record<string, EngineAdapterFactory>>;
   claudeTransport?: ClaudeCodeAdapterTransport;
   codexTransport?: CodexCodeAdapterTransport;
   codexAuth?: CodexAuthProvider;
   createClaude?: (transport: ClaudeCodeAdapterTransport) => EngineAdapter;
   createCodex?: (transport: CodexCodeAdapterTransport, auth: ReturnType<typeof createCodexAuthBoundary>) => EngineAdapter;
 }): Partial<Record<string, EngineAdapterFactory>> {
-  const factories: Partial<Record<string, EngineAdapterFactory>> = {};
+  const factories: Partial<Record<string, EngineAdapterFactory>> = { ...options.additionalFactories };
   if (options.claudeTransport) {
     const create = options.createClaude ?? createClaudeCodeAdapter;
     factories["claude-code"] = () => create(options.claudeTransport!);

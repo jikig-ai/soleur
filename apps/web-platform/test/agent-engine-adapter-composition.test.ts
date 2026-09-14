@@ -20,4 +20,12 @@ describe("reviewed adapter composition", () => {
     const factories = composeReviewedEngineFactories({ claudeTransport: {} as never, createClaude: vi.fn(() => ({} as never)) });
     expect(factories.codex).toBeUndefined();
   });
+
+  it("registers a future engine through an additive factory map", () => {
+    const grok = {} as never;
+    const factories = composeReviewedEngineFactories({
+      additionalFactories: { "grok-build": () => grok },
+    });
+    expect(factories["grok-build"]!()).toBe(grok);
+  });
 });
