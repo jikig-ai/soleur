@@ -176,7 +176,7 @@
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
 1	apps/web-platform/scripts/postgrest-reload-schema.test.sh
-3	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
+4	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
 10	apps/web-platform/scripts/sentry-monitors-audit.test.sh

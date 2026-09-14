@@ -1423,6 +1423,10 @@ jobs:
       - name: Run inngest-wiped-volume-verify.sh tests
         run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 
+      # #7095 re-read in the two webhook scripts above (found live 2026-09-13 at op=execute 2.1).
+      - name: Run webhook-doppler-token-reread tests
+        run: bash apps/web-platform/infra/webhook-doppler-token-reread.test.sh
+
       - name: Run cat-inngest-verify-state.sh tests
         run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
 
