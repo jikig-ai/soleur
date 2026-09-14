@@ -26,6 +26,8 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/p_event_id IS NULL OR length\(p_event_id\) NOT BETWEEN 1 AND 256/);
     expect(code).toMatch(/p_sequence IS NULL OR p_sequence < 1/);
     expect(code).toMatch(/p_payload IS NULL/);
+    expect(code).toMatch(/EXCEPTION WHEN unique_violation/);
+    expect(code).toMatch(/event key already maps to a different event/);
   });
 
   it("pins the owner RPC search path and qualifies public relations", () => {

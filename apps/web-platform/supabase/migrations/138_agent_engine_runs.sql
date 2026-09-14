@@ -94,9 +94,24 @@ BEGIN
     END IF;
     RETURN v_row;
   END IF;
-  INSERT INTO public.agent_engine_events(run_id, event_id, sequence, payload)
-  VALUES (p_run_id, p_event_id, p_sequence, p_payload)
-  RETURNING * INTO v_row;
+  -- A concurrent exact retry can lose the initial read race. Handle the
+  -- event-key uniqueness conflict by returning the committed duplicate while
+  -- preserving sequence conflicts for a different event as errors.
+  BEGIN
+    INSERT INTO public.agent_engine_events(run_id, event_id, sequence, payload)
+    VALUES (p_run_id, p_event_id, p_sequence, p_payload)
+    RETURNING * INTO v_row;
+  EXCEPTION WHEN unique_violation THEN
+    SELECT e.* INTO v_row
+      FROM public.agent_engine_events e
+     WHERE e.run_id = p_run_id AND e.event_id = p_event_id;
+    IF NOT FOUND THEN
+      RAISE;
+    END IF;
+    IF v_row.sequence IS DISTINCT FROM p_sequence OR v_row.payload IS DISTINCT FROM p_payload THEN
+      RAISE EXCEPTION 'event key already maps to a different event' USING ERRCODE = '23P01';
+    END IF;
+  END;
   RETURN v_row;
 END;
 $$;
