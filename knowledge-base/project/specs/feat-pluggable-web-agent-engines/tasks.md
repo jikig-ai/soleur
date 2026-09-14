@@ -124,7 +124,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Rollout metadata compatibility slice: missing metadata preserves the always-on Claude option while future-engine options remain disabled until explicitly enabled (7 settings tests green).
   - [x] Owner authorization slice: settings RPC error code `42501` is preserved and returned as an explicit 403 owner-required response (22 persistence/route tests green).
   - [x] Full app-local gate after settings authorization: 1,088 files and 13,585 tests pass (54 skipped, 358 expected skipped cases, 1 existing todo).
-  - [x] Production build gate after settings authorization: `npm run build` passes with Next.js 16.3.1/Turbopack; generated `tsconfig.json` include changes were reverted, and existing Sentry/Next tracing warnings remain documented in the build log.
+  - [x] Production build gate after settings authorization: `npm run build` passes with Next.js 16.3.1/Turbopack; generated `tsconfig.json` include changes were reverted, and existing Sentry/Next tracing warnings are summarized in the verification evidence below.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
