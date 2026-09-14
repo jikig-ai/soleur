@@ -216,3 +216,48 @@ public issue.
   `discoverability_test.command` would have FAILed on a missing file, not on the property. Replaced
   with the real credentialed read under `credentials_required` (SKIP-DECLARED), old command kept in a
   superseded note.
+
+## Addendum — 2026-09-13 (merge tail of PR #8026, recorded after the fact)
+
+The 2026-09-11 addendum was committed before the merge itself ran; these happened after it.
+
+### Session errors, merge tail
+
+- **A full-gate pre-commit hook was reaped by the host memory watchdog twice, and the notification
+  said nothing about the verdict.** `bun-test` runs `SOLEUR_ALLOW_FULL_GATE=1 scripts/test-all.sh`
+  (~30 min) on any `.ts` change; with sibling sessions in flight the host killed it at ~10 min both
+  times. Neither attempt left a surviving hook process (checked before retrying — two writers on one
+  index is the #7912 shape). The commit landed with `LEFTHOOK_EXCLUDE=bun-test`, stated in the commit
+  message, on the grounds that CI's required `test` context runs the same battery. Record the
+  exclusion where the next reader will see it; never let a reaped hook read as a passed one.
+- **`</dev/null` on a command fed by a heredoc blanks the heredoc.** `gh issue comment --body-file -
+  <<'EOF' … </dev/null` posted nothing ("Body cannot be blank"). The stdin-closing habit adopted for
+  `gh` calls that might prompt is wrong for any command whose input IS stdin; write the body to a
+  file first.
+- **A follow-through `earliest=` set to "deploy + 7d" collided with a pre-marker rollback row
+  inside the 7-day query window.** v0.268.3 rolled back at 2026-09-11T15:43Z under the OLD probe,
+  found only in the pre-apply state read of the deploy-pipeline-fix run. With `earliest=09-18T12:00Z`
+  and `--since 7d`, the first sweep would have fired arm (a) on a row that names nothing. Moved
+  `earliest` to 16:00Z so the row ages out first. Rule: when a window and a gate are both derived
+  from the deploy time, check for events between the two on the OLD emitter before choosing either.
+- **The release-run monitor treated a single `fetch-error` as terminal** and exited on one transient
+  "error connecting to api.github.com". The Phase 7 template's `grep -qE "^(completed|fetch-error)"`
+  is written for *chronic* failure; a one-shot break loses the watch silently. Count consecutive
+  errors and break on ≥5, emit each one.
+- **`Apply deploy-pipeline-fix` went red on a transient HTTP 502** from `/hooks/deploy-status` in the
+  post-apply seccomp `loaded==committed` assertion — after `files_written=20/20`. The step correctly
+  refused to assert blind; the workflow's own header names `workflow_dispatch` as the re-run path
+  (input `reason` is required). The re-run went green. Read the failing STEP before reading the run
+  as a delivery failure.
+- **Two monitors reported timeout events and were still listed as live by the supersede hook** when
+  a third was armed; `TaskStop` on them returned "no task found". The hook reads liveness from the
+  transcript, which lags. Not actionable beyond knowing the listing can be stale.
+- **The feature worktree was reaped by a sibling session's `cleanup-merged` mid-postmerge**, and the
+  scratchpad was swept overnight. Both are expected; postmerge ran from the main checkout and the
+  scratchpad was recreated with `mkdir -p`.
+
+### Measured after the merge
+
+Better Stack, 60h to 2026-09-13: 14 `SANDBOX_PROBE_OK` rows (`ms` 72–127, median 106, every
+`err_chars=0 bwrap_err="<empty>"`), zero post-marker rollbacks. The deploy-gate change is validated on
+real deploys; the class it exists to diagnose has not recurred since it could be diagnosed.
