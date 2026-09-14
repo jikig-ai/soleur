@@ -26,6 +26,11 @@ SCHEME=postgresql
 POOL="${SCHEME}://postgres.${REF}:${OLDPW}@pooler.invalid:6543/postgres"
 DIRECT="${SCHEME}://postgres:${OLDPW}@db.${REF}.invalid:5432/postgres"
 
+# One owning trap: T names the current case's dir; each case rm's its own on the
+# happy path, and this catches a case that dies mid-run.
+T=""
+trap 'rm -rf "${T:-}"' EXIT INT TERM HUP
+
 setup() {
   T="$(mktemp -d)"
   mkdir -p "$T/bin" "$T/tmpdir"
