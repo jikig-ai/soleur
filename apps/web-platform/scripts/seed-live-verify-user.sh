@@ -142,9 +142,23 @@ header_auth="Authorization: Bearer $SRK"
 header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
 
-# TC_VERSION must match lib/legal/tc-version.ts (middleware redirects to
-# /accept-terms on mismatch). Keep this literal in sync with that file.
-TC_VERSION="2.5.1"
+# DERIVED from lib/legal/tc-version.ts, never restated. A hand-kept literal
+# with a "keep this in sync" comment is the drift shape this repo documents
+# repeatedly, and it drifted here: the principal sat at 2.3.0 against a gate
+# requiring 2.5.1, so `live-verify` redirected to /accept-terms and timed out
+# on a page that could never contain the composer (#7969). The literal was
+# CORRECT at the time — what broke was that nothing re-derived it after the
+# bump. Extraction failure is fatal: a silently-empty version would PATCH the
+# gate column to "" and re-break the harness in the same way.
+_seed_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TC_SRC="$_seed_dir/../lib/legal/tc-version.ts"
+[[ -f "$TC_SRC" ]] || { echo "::error::tc-version.ts not found at $TC_SRC"; exit 1; }
+TC_VERSION="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC")"
+TC_DOCUMENT_SHA="$(sed -n 's/^  "\([0-9a-f]\{64\}\)";$/\1/p' "$TC_SRC" | head -1)"
+[[ "$TC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || { echo "::error::derived TC_VERSION '\''$TC_VERSION'\'' is not a semver — the extraction is broken"; exit 1; }
+[[ "$TC_DOCUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "::error::derived TC_DOCUMENT_SHA is not a sha256 — the extraction is broken"; exit 1; }
 
 EMAIL="live-verify@soleur.ai"
 # Synthetic, non-resolvable sentinel repo URL. Never cloned/fetched — the app
@@ -185,16 +199,29 @@ else
   echo "  Updated."
 fi
 
-# public.users ladder — clears /accept-terms + /setup-key middleware gates.
+# public.users ladder — clears /setup-key + workspace middleware gates.
+# NOTE: tc_accepted_version is deliberately NOT set here. Consent goes through
+# public.accept_terms below, the same RPC /api/accept-terms calls, because that
+# is what also writes the public.tc_acceptances ledger row. PATCHing the column
+# directly records consent with no audit row — measured in prod on the synthetic
+# principal: tc_accepted_version set since 2026-06-17, ledger EMPTY (#7969).
 echo "  Provisioning public.users row..."
 curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc \
-    --arg tc "$TC_VERSION" \
-    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg wp "/workspaces/$user_id" \
-    '{tc_accepted_version: $tc, tc_accepted_at: $ts, workspace_status: "ready", repo_status: "ready", workspace_path: $wp}')" \
+    '{workspace_status: "ready", repo_status: "ready", workspace_path: $wp}')" \
+  > /dev/null
+
+# Consent via the RPC the application uses. Idempotent in SQL: the users UPDATE
+# is a no-op when the version already matches, and the ledger INSERT is
+# ON CONFLICT (user_id, version) DO NOTHING.
+echo "  Recording T&C acceptance (v$TC_VERSION) via public.accept_terms..."
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/rpc/accept_terms" \
+  -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  -d "$(jq -nc --arg uid "$user_id" --arg v "$TC_VERSION" --arg sha "$TC_DOCUMENT_SHA" \
+    '{p_user_id: $uid, p_version: $v, p_doc_sha: $sha}')" \
   > /dev/null
 
 # Resolve the solo workspace (handle_new_user trigger sets id == user.id; the

@@ -110,13 +110,19 @@ fi
 #   constraint (mig 011_repo_connection.sql) admits only
 #   not_connected|cloning|ready|error — a "connected" literal 23514s
 #   (check-constraint violation) and aborts the seed. Target the
-#   tc_accepted_version-bearing object line specifically so this does NOT
-#   conflate with the workspaces PATCH, which legitimately also carries
-#   repo_status: "ready".
-if grep -qE 'tc_accepted_version.*repo_status: "ready"' "$SEED"; then
+#   users PATCH specifically so this does NOT conflate with the workspaces
+#   PATCH, which legitimately also carries repo_status: "ready".
+#
+#   RE-ANCHORED (#7969): the discriminator used to be `tc_accepted_version`,
+#   which is no longer on this line — consent moved to the accept_terms RPC so
+#   the Art. 7(1) ledger row gets written. The anchor was coupled to a field
+#   unrelated to what it asserts, so a correct change to that field broke it
+#   (cq-assert-anchor-not-bare-token). `workspace_path` is the users PATCH's
+#   own payload key and is absent from the workspaces PATCH.
+if grep -qE 'workspace_status: "ready", repo_status: "ready", workspace_path' "$SEED"; then
   echo "  ok: public.users PATCH uses repo_status: \"ready\""
 else
-  echo "  FAIL: public.users PATCH (tc_accepted_version line) does not carry repo_status: \"ready\"" >&2
+  echo "  FAIL: public.users PATCH (workspace_path line) does not carry repo_status: \"ready\"" >&2
   fail=1
 fi
 
@@ -183,6 +189,71 @@ if [[ -n "$uss_line" && -n "$wm_line" && "$uss_line" -gt "$wm_line" ]]; then
 else
   echo "  FAIL: user_session_state upsert must come after the workspace_members owner lookup (uss=$uss_line wm=$wm_line)" >&2
   fail=1
+fi
+
+# --- #7969: the T&C version must be DERIVED, and consent must go through the RPC ---
+#
+# The principal sat at tc_accepted_version 2.3.0 against a gate requiring 2.5.1,
+# so live-verify redirected to /accept-terms and timed out on a page that could
+# never contain the composer. The literal in this script was correct when it was
+# written; nothing re-derived it after the bump.
+
+TC_SRC_F="$(cd "$(dirname "$SEED")" && pwd)/../lib/legal/tc-version.ts"
+SSOT_VER="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC_F")"
+
+# (a) No restated version literal. A hardcoded semver here is the drift shape.
+if grep -nE '^[[:space:]]*TC_VERSION=["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$SEED"; then
+  echo "  FAIL: seed RESTATES a TC_VERSION literal — derive it from lib/legal/tc-version.ts" >&2
+  fail=1
+else
+  echo "  ok: seed does not restate a TC_VERSION literal"
+fi
+
+# (b) It derives from the source of truth, and the derivation actually works.
+derived="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC_F")"
+if [[ -n "$derived" && "$derived" == "$SSOT_VER" ]]; then
+  echo "  ok: TC_VERSION derives from tc-version.ts (got $derived)"
+else
+  echo "  FAIL: the TC_VERSION extraction yields '$derived' — it is broken" >&2
+  fail=1
+fi
+
+# (c) NON-VACUITY CONTROL: the extraction must FAIL on a file that lacks the
+# export. Without this, a `sed` that matches nothing looks identical to success.
+tmp_ssot="$(mktemp)"; printf 'export const SOMETHING_ELSE = "x";\n' > "$tmp_ssot"
+neg="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$tmp_ssot")"
+rm -f "$tmp_ssot"
+if [[ -z "$neg" ]]; then
+  echo "  ok: extraction yields empty on a file without the export (control fires)"
+else
+  echo "  FAIL: extraction returned '$neg' from a file with no TC_VERSION — it matches too much" >&2
+  fail=1
+fi
+
+# (d) The seed must REFUSE rather than proceed on a broken extraction — an empty
+# version would PATCH the gate column to "" and re-break the harness identically.
+if grep -qE 'is not a semver' "$SEED"; then
+  echo "  ok: seed refuses a non-semver derived version"
+else
+  echo "  FAIL: seed does not validate the derived TC_VERSION — an empty value would ship" >&2
+  fail=1
+fi
+
+# (e) Consent goes through public.accept_terms, not a bare users PATCH. The RPC
+# is what writes the Art. 7(1) tc_acceptances ledger row; PATCHing the column
+# alone records consent with no audit row (observed in prod: column set since
+# 2026-06-17, ledger EMPTY).
+if grep -q 'rpc/accept_terms' "$SEED"; then
+  echo "  ok: consent routed through public.accept_terms (writes the ledger row)"
+else
+  echo "  FAIL: seed does not call rpc/accept_terms — the tc_acceptances ledger row would be missing" >&2
+  fail=1
+fi
+if grep -qE 'tc_accepted_version:[[:space:]]*\$tc' "$SEED"; then
+  echo "  FAIL: seed still PATCHes tc_accepted_version directly — that bypasses the ledger" >&2
+  fail=1
+else
+  echo "  ok: seed no longer PATCHes tc_accepted_version directly"
 fi
 
 if [[ "$fail" -ne 0 ]]; then
