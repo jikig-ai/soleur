@@ -115,10 +115,11 @@ describe("Codex neutral adapter boundary", () => {
   });
 
   it("rejects stale or duplicate sequence numbers within one provider stream", async () => {
+    const refresh = vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 }));
     const auth = createCodexAuthBoundary({
       mode: "api-key",
       acquire: vi.fn(async () => ({ accessToken: "opaque", expiresAt: Date.now() + 60_000 })),
-      refresh: vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 })),
+      refresh,
       logout: vi.fn(async () => undefined),
     });
     const transport = {
@@ -141,6 +142,7 @@ describe("Codex neutral adapter boundary", () => {
       for await (const event of events) collected.push(event);
       return collected;
     })()).rejects.toMatchObject({ code: "codex_event_sequence_invalid" });
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("refreshes once when a promise lifecycle call reports an expired lease", async () => {
@@ -167,6 +169,35 @@ describe("Codex neutral adapter boundary", () => {
       .resolves.toBe("confirmed");
     expect(transport.cancel).toHaveBeenCalledTimes(2);
     expect(transport.cancel.mock.calls[1][2]).toEqual(expect.objectContaining({ accessToken: "second" }));
+  });
+
+  it("refreshes once for an authorization failure before a stream emits events", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "api-key",
+      acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    let attempts = 0;
+    const transport = {
+      start: vi.fn(async function* () {
+        attempts += 1;
+        if (attempts === 1) throw Object.assign(new Error("expired"), { code: "codex_credentials_revoked" });
+        yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(transport, auth);
+    const events = [];
+    for await (const event of adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] })) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(transport.start).toHaveBeenCalledTimes(2);
   });
 });
 

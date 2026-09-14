@@ -186,20 +186,34 @@ export function createCodexCodeAdapter(
   transport: CodexCodeAdapterTransport,
   auth: CodexAuthBoundary,
 ): EngineAdapter {
-  async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>, runId: string): AsyncIterable<EngineEvent> {
+  async function* stream<T extends AsyncIterable<EngineEvent>>(load: (lease: CodexCredentialLease) => Promise<T>, runId: string): AsyncIterable<EngineEvent> {
+    let lease: CodexCredentialLease;
+    try { lease = await auth.acquire(); } catch (error) { throw sanitizeCodexError(error); }
+    let refreshed = false;
     let lastSequence = 0;
-    try {
-      for await (const event of await load()) {
-        const validated = validateCodexEvent(event, runId);
-        if (validated.sequence <= lastSequence) {
-          throw Object.assign(new Error("Codex event sequence is stale or duplicated"), {
-            code: "codex_event_sequence_invalid",
-          });
+    while (true) {
+      try {
+        for await (const event of await load(lease)) {
+          const validated = validateCodexEvent(event, runId);
+          if (validated.sequence <= lastSequence) {
+            throw Object.assign(new Error("Codex event sequence is stale or duplicated"), {
+              code: "codex_event_sequence_invalid",
+            });
+          }
+          lastSequence = validated.sequence;
+          yield validated;
         }
-        lastSequence = validated.sequence;
-        yield validated;
+        return;
+      } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        if (!refreshed && lastSequence === 0 && (code === "codex_credential_expired" || code === "codex_credentials_revoked")) {
+          try { lease = await auth.refresh(); } catch (refreshError) { throw sanitizeCodexError(refreshError); }
+          refreshed = true;
+          continue;
+        }
+        throw sanitizeCodexError(error);
       }
-    } catch (error) { throw sanitizeCodexError(error); }
+    }
   }
   const call = async <T>(operation: (lease: CodexCredentialLease) => Promise<T>): Promise<T> => {
     try {
@@ -207,11 +221,11 @@ export function createCodexCodeAdapter(
     } catch (error) { throw sanitizeCodexError(error); }
   };
   return {
-    start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire()), context.runId),
-    continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire()), context.runId),
+    start: (context, input) => stream(async (lease) => transport.start(context, input, lease), context.runId),
+    continue: (context, session, input) => stream(async (lease) => transport.continue(context, session, input, lease), context.runId),
     cancel: async (context, session) => call((lease) => transport.cancel(context, session, lease)),
     reconcile: async (context, session) => call((lease) => transport.reconcile(context, session, lease)),
-    resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire()), context.runId),
+    resumeFromCursor: (context, cursor) => stream(async (lease) => transport.resumeFromCursor(context, cursor, lease), context.runId),
     respondToApproval: async (context, requestId, decision) => call((lease) => transport.respondToApproval(context, requestId, decision, lease)),
     erase: async (context, session) => call((lease) => transport.erase(context, session, lease)),
     dispose: () => transport.dispose(),
