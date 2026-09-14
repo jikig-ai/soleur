@@ -19,6 +19,31 @@ describe("Claude SDK message translator", () => {
     ]);
   });
 
+  it("preserves assistant-level provider failures as sanitized retryable errors", () => {
+    expect(translateClaudeSdkMessage({
+      type: "assistant",
+      uuid: "msg-auth",
+      error: "rate_limit",
+      message: { content: [] },
+    })).toEqual([
+      {
+        sourceId: "msg-auth:error",
+        payload: { type: "error", code: "rate_limit", retryable: true },
+      },
+    ]);
+    expect(translateClaudeSdkMessage({
+      type: "assistant",
+      uuid: "msg-unknown",
+      error: "token=secret",
+      message: { content: [] },
+    })).toEqual([
+      {
+        sourceId: "msg-unknown:error",
+        payload: { type: "error", code: "claude_provider_error", retryable: false },
+      },
+    ]);
+  });
+
   it("translates tool progress without exposing raw provider fields", () => {
     expect(translateClaudeSdkMessage({
       type: "tool_progress",

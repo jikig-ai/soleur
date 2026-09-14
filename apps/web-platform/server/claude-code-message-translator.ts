@@ -47,19 +47,45 @@ function usagePayload(message: RecordLike): EngineEventPayload | null {
   };
 }
 
+const CLAUDE_ASSISTANT_ERROR_CODES = new Set([
+  "authentication_failed",
+  "oauth_org_not_allowed",
+  "billing_error",
+  "rate_limit",
+  "overloaded",
+  "invalid_request",
+  "model_not_found",
+  "server_error",
+  "unknown",
+  "max_output_tokens",
+]);
+const CLAUDE_RETRYABLE_ERRORS = new Set(["rate_limit", "overloaded", "server_error"]);
+
 function translateAssistant(message: RecordLike, sourceId: string): ClaudeTranslatedEvent[] {
+  const events: ClaudeTranslatedEvent[] = [];
+  const providerError = nonEmptyString(message.error);
+  if (providerError) {
+    const code = CLAUDE_ASSISTANT_ERROR_CODES.has(providerError)
+      ? providerError
+      : "claude_provider_error";
+    events.push({
+      sourceId: `${sourceId}:error`,
+      payload: { type: "error", code, retryable: CLAUDE_RETRYABLE_ERRORS.has(providerError) },
+    });
+  }
   const envelope = asRecord(message.message);
   const content = envelope?.content;
-  if (!Array.isArray(content)) return [];
+  if (!Array.isArray(content)) return events;
 
-  return content.flatMap((candidate, index) => {
+  events.push(...content.flatMap((candidate, index) => {
     const block = asRecord(candidate);
     if (block?.type !== "text") return [];
     const text = nonEmptyString(block.text);
     return text === null
       ? []
       : [{ sourceId: `${sourceId}:text:${index}`, payload: { type: "text", text } as const }];
-  });
+  }));
+  return events;
 }
 
 function translateToolProgress(message: RecordLike, sourceId: string): ClaudeTranslatedEvent[] {
