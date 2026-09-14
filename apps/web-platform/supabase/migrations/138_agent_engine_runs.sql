@@ -92,6 +92,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.set_workspace_default_engine(uuid, text, text) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.set_workspace_default_engine(uuid, text, text) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.bind_agent_engine_run(
@@ -129,6 +130,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) TO authenticated, service_role;
 
 COMMIT;
