@@ -89,8 +89,14 @@ fi
 #     (output captured into a var, never reaches the terminal — the canonical
 #     seed-dev-users.sh idiom). So we flag echo/printf of a secret var only when
 #     it is NOT piped into a decode/transform tool.
+#   - `::add-mask::` is the ONE echo of a secret that exists to PROTECT it:
+#     the directive must carry the value for Actions to register it, and it is
+#     emitted before first use so everything downstream is masked. Excluding it
+#     is not a hole in this check — a rule that forbade it would forbid the
+#     repo's own masking precedent (registry-pull-path-health.sh).
 secret_echo=$(grep -nE '(echo|printf)[^|]*\$\{?(LIVE_VERIFY_USER_PASSWORD|SUPABASE_SERVICE_ROLE_KEY|SRK)\b' "$SEED" \
-  | grep -vE '\|[[:space:]]*(tr|cut|base64|wc|jq|openssl)' || true)
+  | grep -vE '\|[[:space:]]*(tr|cut|base64|wc|jq|openssl)' \
+  | grep -vF '::add-mask::' || true)
 if [[ -n "$secret_echo" ]]; then
   echo "  FAIL: seed displays a secret variable:" >&2
   printf '%s\n' "$secret_echo" >&2
@@ -268,7 +274,14 @@ fi
 # bump, so the wiring is the load-bearing half and must not be deletable in
 # silence. Parsed as YAML, not grepped: step ORDER is the property.
 WF_F="$(cd "$(dirname "$SEED")" && pwd)/../../../.github/workflows/web-platform-release.yml"
-if [[ -f "$WF_F" ]]; then
+# This suite is auto-discovered by scripts/test-all.sh's `apps/web-platform/scripts/*.test.sh`
+# glob and runs in the BLOCKING `test-scripts` CI job, which installs no python
+# packages. PyYAML therefore comes from the runner image, and image drift would
+# otherwise surface as an unexplained bare FAIL on an unrelated PR. Name it.
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "  FAIL: PyYAML missing — cannot verify the release-workflow wiring" >&2
+  fail=1
+elif [[ -f "$WF_F" ]]; then
   wf_report="$(python3 - "$WF_F" <<'PYEOF'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
@@ -308,6 +321,19 @@ PYEOF
 else
   echo "  FAIL: could not locate web-platform-release.yml at $WF_F" >&2
   fail=1
+fi
+
+# ANTI-VACUITY FLOOR. The registration lint proves this FILE is discovered; it
+# says nothing about whether the file still asserts anything, and the runner
+# finds it by glob — so a gutted suite would report green indefinitely. Counts
+# concluded verdicts, and emits with printf + exit DIRECTLY: routing this
+# through `fail` would dispatch the detector through the thing it detects.
+# Set to the MEASURED count from a green run, not a guessed one: slack between
+# a floor and the real value is budget an edit can spend silently.
+_concluded="$(grep -cE '^[[:space:]]*echo "  (ok|FAIL):' "$0" || true)"
+if [[ "${_concluded:-0}" -lt 39 ]]; then
+  printf 'FATAL: only %s verdict site(s) remain in this suite; expected >= 39.\n' "${_concluded:-0}" >&2
+  exit 1
 fi
 
 if [[ "$fail" -ne 0 ]]; then

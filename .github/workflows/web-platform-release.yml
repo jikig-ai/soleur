@@ -1712,6 +1712,14 @@ jobs:
           doppler run -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh 2>&1 \
             | bun run apps/web-platform/scripts/live-verify/redact-stdin.ts
           rc=${PIPESTATUS[0]}
+          redact_rc=${PIPESTATUS[1]}
+          # The redactor is fail-CLOSED on leakage (it buffers to EOF, then
+          # scrubs, then writes once — a throw writes nothing). But an unchecked
+          # crash is indistinguishable from a clean quiet run, and the notice
+          # below would still say "refreshed" over an empty log.
+          if [ "${redact_rc:-0}" -ne 0 ]; then
+            echo "::warning title=live-verify seed log not scrubbed::redact-stdin exited ${redact_rc}; the seed's output was suppressed rather than published. Its own exit code is reported separately below."
+          fi
           if [ "$rc" -ne 0 ]; then
             echo "::error title=live-verify principal may be stale::seed-live-verify-user.sh exited ${rc}. If live-verify reports a CANT-RUN naming /accept-terms or /setup-key, this is why — the principal was not refreshed."
           else

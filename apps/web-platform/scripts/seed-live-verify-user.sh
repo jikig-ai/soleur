@@ -4,8 +4,16 @@
 # signs in as this user against the DEPLOYED app to catch the realtime/
 # server-commit-timing bug class mock e2e structurally cannot (#5391/#5421/#5436).
 #
-# Usage (agent-run LOCALLY, ONE-TIME — NEVER wired into CI; keeps prod
-# service-role out of GitHub Actions, security P0-1):
+# Usage: run LOCALLY, or automatically before live-verify on a triggering
+# release (web-platform-release.yml, #7969 — operator-approved).
+#
+# SUPERSEDES the original "NEVER wired into CI; keeps prod service-role out of
+# GitHub Actions" note. That claim was already inaccurate when written: the
+# sibling live-verify harness step runs under `doppler run -c prd`, which
+# injects the whole prd config — SUPABASE_SERVICE_ROLE_KEY included — into an
+# Actions process. Wiring this in does not widen what a compromised
+# DOPPLER_TOKEN_PRD reaches; it makes an already-present capability routine,
+# which is why the masking below is not optional.
 #
 #   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh
 #
@@ -91,10 +99,34 @@ url_host="${url_host%%/*}"
 is_custom_domain=0
 if [[ "$url_host" == "api.soleur.ai" ]]; then
   is_custom_domain=1
+elif [[ "$DOPPLER_CONFIG" == "prd" && -n "${GITHUB_ACTIONS:-}" ]]; then
+  # IDENTITY, not internal consistency (#7969 review). The other gates prove the
+  # config is NAMED prd, the URL has a valid SHAPE, and the key admins whatever
+  # project that URL names — a coherent-but-wrong set (a dev URL + its own key,
+  # under any Doppler project carrying a config called `prd`) satisfies all
+  # three and would seed the wrong database. hr-dev-prd-distinct-supabase-projects
+  # is a hard rule, and automation is what promotes this from theoretical:
+  # an operator would notice a wrong ref in the pre-flight notice, a release job
+  # will not. So the refusal is scoped to UNATTENDED runs: locally the canonical
+  # path still works, which is what it was designed for and what the JWT-branch
+  # fixtures exercise.
+  echo "::error::DOPPLER_CONFIG=prd but NEXT_PUBLIC_SUPABASE_URL host is \"$url_host\","
+  echo "::error::not the prod custom domain (api.soleur.ai) — refusing to seed."
+  exit 1
 elif [[ ! "$SB_URL" =~ $CANONICAL_RE ]]; then
   echo "::error::NEXT_PUBLIC_SUPABASE_URL=\"$SB_URL\" is neither the prod custom domain"
   echo "::error::(api.soleur.ai) nor the canonical 20-char ref shape — refusing to seed."
   exit 1
+fi
+
+# MASK BEFORE FIRST USE (#7969 review). Actions masks `secrets.*` only, so
+# everything `doppler run` injects is unmasked in a PUBLIC log. redact-stdin.ts
+# is the primary control and these are defence in depth — a directive survives
+# that pipe unchanged, and GHA parses workflow commands from step stdout.
+# Emitted only under Actions so a local run is unaffected.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  printf '::add-mask::%s\n' "$SRK"
+  [[ -n "${LIVE_VERIFY_USER_PASSWORD:-}" ]] && printf '::add-mask::%s\n' "$LIVE_VERIFY_USER_PASSWORD"
 fi
 
 # Assert the key grants service-role ON THIS PROJECT.
@@ -206,7 +238,22 @@ _seed_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TC_SRC="$_seed_dir/../lib/legal/tc-version.ts"
 [[ -f "$TC_SRC" ]] || { echo "::error::tc-version.ts not found at $TC_SRC"; exit 1; }
 TC_VERSION="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC")"
-TC_DOCUMENT_SHA="$(sed -n 's/^  "\([0-9a-f]\{64\}\)";$/\1/p' "$TC_SRC" | head -1)"
+# Anchored on the DECLARATION, not on "a 64-hex literal somewhere in the file",
+# and ambiguity is a REFUSAL rather than `head -1`. A second 64-hex constant
+# (a TC_PREVIOUS_DOCUMENT_SHA, a formatter reorder) would otherwise yield a
+# wrong-but-valid sha256 that the shape check below CANNOT reject — and
+# accept_terms writes it into tc_acceptances.document_sha, which is WORM:
+# UPDATE is refused outright and the re-run is an ON CONFLICT no-op, so the
+# false attestation would be permanent and uncorrectable.
+_sha_matches="$(sed -n '/^export const TC_DOCUMENT_SHA/,/;/p' "$TC_SRC" \
+  | sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p')"
+_sha_count="$(printf '%s\n' "$_sha_matches" | grep -c . || true)"
+if [[ "$_sha_count" -ne 1 ]]; then
+  echo "::error::TC_DOCUMENT_SHA extraction matched $_sha_count literals, expected exactly 1 —"
+  echo "::error::refusing rather than guessing: a wrong SHA lands in a WORM consent ledger."
+  exit 1
+fi
+TC_DOCUMENT_SHA="$_sha_matches"
 [[ "$TC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || { echo "::error::derived TC_VERSION '\''$TC_VERSION'\'' is not a semver — the extraction is broken"; exit 1; }
 [[ "$TC_DOCUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] \
@@ -382,8 +429,13 @@ fi
 echo ""
 echo "::notice::Synthetic prod principal provisioned (tc=$TC_VERSION, workspace=ready,"
 echo "::notice::repo_url sentinel set, dummy anthropic key, NO scope_grants)."
+# Only for a human at a terminal. Under Actions these publish the prod project
+# ref and the principal UID to a PUBLIC log, and redact.ts has no rule for a
+# 20-char ref; the custom domain is precisely what keeps that origin private.
+if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
 echo "::notice::Set these Doppler prd values for the harness allowlist code-gate:"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_UID=$user_id -p soleur -c prd"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_REF=$ref -p soleur -c prd"
+fi
 echo "LIVE_VERIFY_EXPECTED_UID=$user_id"
 echo "LIVE_VERIFY_EXPECTED_REF=$ref"
