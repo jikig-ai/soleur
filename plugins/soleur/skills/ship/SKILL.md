@@ -350,6 +350,8 @@ sibling run. It takes no lock, runs no suite and always exits 0.
 worktree to wait for — it does not authorise shipping without the battery. The blocking form of this
 verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
+- **Two sharp edges when `--capacity` lists ≥2 sibling runs (#8137 merge tail).** (a) Export `TC_LOCK_TIMEOUT` above its 3600 s default before launching — the default was sized for a ~45-minute holder, and a run that times out on the lock has produced no evidence at all (measured: a 96-minute holder with four queued worktrees expired it by construction; `10800` acquired after 23 min). (b) Launch with `setsid nohup … &`, record the **runner's** pid, and watch that pid (`while kill -0 <pid>; do sleep 15; done` in a Monitor) — an rc file written by a wrapper shell describes the wrapper: rc=143 with `bash scripts/test-all.sh` still alive under systemd is not a run result, and relaunching on it starts a second battery beside the live one.
+
 Then run the full battery:
 
 ```bash
@@ -1965,6 +1967,8 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
 6. If still `CONFLICTING` after resolution: stop and ask the user for help.
 
 **If `mergeable` is `UNKNOWN`:** Wait 5 seconds and re-check (GitHub may still be computing). After 3 retries, warn and continue.
+
+- **CI tests `refs/pull/N/merge`, not your head (#8137 merge tail).** A `pull_request` run checks out the head merged with *current* `origin/main`, so "the KB index / lockfile / baseline is fresh on my branch" is not the property CI checks: an AC17-class failure (`INDEX.md` one file short) with a clean local regeneration means main moved after your last sync — typically during the Phase 4 lock wait. Merge `origin/main` again after any long wait and confirm `mergeStateStatus` is not `BEHIND` immediately before `gh pr ready`.
 
 ### CI Status Check
 

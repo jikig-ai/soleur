@@ -1990,6 +1990,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index-drift
 kb-layout
 kb-pdf
 kb-reader
@@ -2194,6 +2195,7 @@ merge-queue
 merge-ref
 merge-semantics
 merge-strategy
+merge-tail
 merge-time-timebomb
 merge-time-verification
 message
@@ -2996,6 +2998,7 @@ refactoring
 reference-files
 referrer-policy
 refreshsession
+refs-pull-merge
 regex
 regex-concurrency
 regex-fidelity
@@ -3758,6 +3761,7 @@ tasks-drift
 tautology
 taxonomy
 tc-acceptance
+tc-lock-timeout
 tdd
 tdd-edge-cases
 tdd-test-fixtures
