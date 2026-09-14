@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-14T11:16:24Z",
+  "generated_at": "2026-09-14T12:37:32Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1164,11 +1164,11 @@
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 29,
+      "applied_count": 30,
       "warn_count": 0,
-      "fire_count": 29,
+      "fire_count": 30,
       "prevented_errors": 0,
-      "last_hit": "2026-09-14T09:58:52Z",
+      "last_hit": "2026-09-14T11:45:27Z",
       "first_seen": "2026-08-13T19:13:15Z",
       "rule_text_prefix": ""
     },
@@ -1268,11 +1268,11 @@
       "section": "Workflow Gates",
       "hit_count": 98,
       "bypass_count": 0,
-      "applied_count": 14,
+      "applied_count": 15,
       "warn_count": 0,
-      "fire_count": 112,
+      "fire_count": 113,
       "prevented_errors": 98,
-      "last_hit": "2026-09-14T09:32:24Z",
+      "last_hit": "2026-09-14T11:47:19Z",
       "first_seen": "2026-05-21T21:08:12Z",
       "rule_text_prefix": ""
     },
@@ -1310,8 +1310,8 @@
     "orphan_rule_ids": [],
     "non_corpus_counts": {
       "net-issue-flow": 423,
-      "monitor-supersede": 140,
-      "post-dispatch-watch-gate": 4507,
+      "monitor-supersede": 141,
+      "post-dispatch-watch-gate": 4509,
       "guardrails-block-recursive-delete": 323,
       "kb-domain-allowlist-guard": 164,
       "guardrails-require-milestone": 500,
@@ -1320,7 +1320,7 @@
       "git-commit-secret-scan": 206,
       "pre-ask-technical-fork-gate": 2,
       "net-issue-flow-timeout": 45,
-      "guardrails-block-commit-on-main": 64,
+      "guardrails-block-commit-on-main": 68,
       "pre-merge-auto-close-scan": 66,
       "net-issue-flow-mandated-filing--hr-never-git-stash-in-worktrees": 1,
       "guardrails-block-delete-branch": 119,
