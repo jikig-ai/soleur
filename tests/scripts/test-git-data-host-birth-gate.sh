@@ -70,14 +70,19 @@ source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
 # edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
 gate_harness_selftest || true
 
-# rc_update <address> <type> <before-json> <after-json>
+# rc_update <address> <type> <before-json> <after-json> [after_unknown-json]
 #
 # The one shape rc_entry cannot express: it hardcodes before:null, the create/delete edge.
 # The reboot and firewall-content arms both compare before against after, so they need
-# both sides populated.
+# both sides populated. `after_unknown` defaults to `{}` — Terraform emits the object on
+# every update (sparse: known fields omitted) — because the firewall-unreadable arm refuses
+# an entry with no `after_unknown` at all; the firewall-content row passes the shape the
+# provider gives a fully-known rule element.
 rc_update() {
-  printf '{"address":%s,"type":%s,"change":{"actions":["update"],"before":%s,"after":%s}}' \
-    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3" "$4"
+  local unknown="${5:-}"
+  [[ -n "$unknown" ]] || unknown='{}'
+  printf '{"address":%s,"type":%s,"change":{"actions":["update"],"before":%s,"after":%s,"after_unknown":%s}}' \
+    "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)" "$3" "$4" "$unknown"
 }
 
 # rc_fw_attach <actions-json> <server_ids-json> [firewall_id-json]
@@ -98,6 +103,25 @@ rc_fw_attach() {
     printf '{"address":"hcloud_firewall_attachment.git_data","type":"hcloud_firewall_attachment","change":{"actions":%s,"before":null,"after":{"server_ids":%s},"after_unknown":{"firewall_id":true}}}' "$acts" "$sids"
   fi
 }
+
+# mk_plan_cfg <file> <resource_changes-json> <configuration.root_module-json>
+mk_plan_cfg() {
+  local f="$1" changes="$2" cfg="$3"
+  printf '{"format_version":"1.2","resource_changes":%s,"configuration":{"root_module":%s}}\n' "$changes" "$cfg" > "$f"
+}
+# The configuration block: the attachment references exactly this plan's server; the
+# server declares NO firewall_ids expression.
+cfg_real() {
+  printf '{"resources":[{"address":"hcloud_firewall_attachment.git_data","mode":"managed","type":"hcloud_firewall_attachment","name":"git_data","expressions":{"firewall_id":{"references":["hcloud_firewall.git_data.id","hcloud_firewall.git_data"]},"server_ids":{"references":["hcloud_server.git_data.id","hcloud_server.git_data"]}}},{"address":"hcloud_server.git_data","mode":"managed","type":"hcloud_server","name":"git_data","expressions":{"name":{"constant_value":"soleur-git-data"},"server_type":{"references":["var.git_data_server_type"]}}}]}'
+}
+# EVERY plan Terraform emits carries a `configuration` block. A plan without one is a
+# fixture artifact, not a provider shape — the exact class this suite exists to close — and
+# the attachment arm now REQUIRES the configuration reference on the known branch too (a
+# known one-element `server_ids` can bind the firewall to some other pre-existing host). So
+# this suite's `mk_plan` shadows the harness's with `cfg_real` attached by default, and the
+# ONE row that asserts the no-configuration refusal builds its plan with `mk_plan_nocfg`.
+mk_plan() { mk_plan_cfg "$1" "$2" "$(cfg_real)"; }
+mk_plan_nocfg() { printf '{"format_version":"1.2","resource_changes":%s}\n' "$2" > "$1"; }
 
 # rc_firewall <actions-json> — hcloud_firewall.git_data as the provider serialises it on
 # create, update and no-op alike: `after.rule` is PRESENT as `[]` (zero rule blocks) and
@@ -380,7 +404,8 @@ mk_plan "$TMP/fw-rules.json" "$(printf '[%s,%s,%s,%s]' \
     "$(rc_entry 'random_password.git_data_luks' 'random_password' '["create"]')" \
     "$(rc_entry 'doppler_secret.git_data_luks_key' 'doppler_secret' '["create"]')")" \
   "$(rc_update 'hcloud_firewall.git_data' 'hcloud_firewall' \
-      '{"rule":[]}' '{"rule":[{"direction":"in","port":"22","protocol":"tcp","source_ips":["0.0.0.0/0"]}]}')")"
+      '{"rule":[]}' '{"rule":[{"direction":"in","port":"22","protocol":"tcp","source_ips":["0.0.0.0/0"]}]}' \
+      '{"apply_to":[],"labels":{},"rule":[{"destination_ips":[],"source_ips":[false]}]}')")"
 check "an UPDATE adding inbound rules to the deny-all firewall => ABORT" 1 "FIREWALL" "$TMP/fw-rules.json"
 check "the firewall abort names the rule count it refused" 1 "1 inbound rule" "$TMP/fw-rules.json"
 
@@ -405,8 +430,8 @@ mk_plan "$TMP/fw-born-with-rules.json" "$(printf '[%s,%s,%s]' \
     "$(rc_entry 'doppler_secret.git_data_luks_key' 'doppler_secret' '["create"]')" \
     "$(rc_entry 'doppler_secret.git_data_ssh_host' 'doppler_secret' '["create"]')" \
     "$(rc_entry 'doppler_secret.git_data_betterstack_logs_token' 'doppler_secret' '["create"]')" \
-    '{"address":"hcloud_firewall.git_data","type":"hcloud_firewall","change":{"actions":["create"],"before":null,"after":{"rule":[{"direction":"in","port":"22","protocol":"tcp"}]}}}')")"
-check "a firewall CREATED carrying inbound rules => ABORT" 1 "FIREWALL" "$TMP/fw-born-with-rules.json"
+    '{"address":"hcloud_firewall.git_data","type":"hcloud_firewall","change":{"actions":["create"],"before":null,"after":{"apply_to":[],"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[{"direction":"in","port":"22","protocol":"tcp","source_ips":["0.0.0.0/0"]}]},"after_unknown":{"apply_to":[],"id":true,"labels":{},"rule":[{"destination_ips":[],"source_ips":[false]}]}}}')")"
+check "a firewall CREATED carrying inbound rules => ABORT" 1 "FIREWALL CONTENT:" "$TMP/fw-born-with-rules.json"
 
 # A volume RESIZE riding the birth is a mis-scope signal, not a birth.
 mk_plan "$TMP/vol-resize.json" "$(printf '[%s,%s,%s]' \
@@ -526,6 +551,21 @@ mk_plan "$TMP/fw-rule-element-unknown.json" "$(printf '[%s,%s,%s]' \
   "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":[{"direction":"in","port":null,"protocol":"tcp"}]} | .change.after_unknown = {"apply_to":[],"id":true,"rule":[{"port":true}]} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "a rule ELEMENT with an undisclosed field => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rule-element-unknown.json"
 
+# `after.rule: null` is no shape the provider emits (create, update and no-op all serialise
+# `rule: []`), and the previous revision tolerated it as zero rules while saying so. Refused.
+mk_plan "$TMP/fw-rule-null.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.git_data' 'hcloud_server' '["create"]')" \
+  "$(entailed_four)" \
+  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after.rule = null else . end]' | sed 's/^\[//; s/\]$//')")"
+check "after.rule null rather than an array => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rule-null.json"
+# No `after_unknown` at all is not a disclosure either: Terraform emits the object on every
+# create, update and no-op. A fixture that omits it (the old rc_entry shape) is refused.
+mk_plan "$TMP/fw-no-after-unknown.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.git_data' 'hcloud_server' '["create"]')" \
+  "$(entailed_four)" \
+  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then del(.change.after_unknown) else . end]' | sed 's/^\[//; s/\]$//')")"
+check "the firewall entry with no after_unknown key => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-no-after-unknown.json"
+
 # One FULLY-KNOWN rule (the provider mirrors a known element as `[{"destination_ips":[],
 # "source_ips":[false]}]` — `false` leaves, no `true`): readable, refused by the CONTENT arm
 # with its rule count. Pins the `false`-on-known-elements branch of has_unknown: a predicate
@@ -549,11 +589,6 @@ check "one FULLY-KNOWN rule (false leaves only) => readable, refused by the CONT
 # plan's `configuration` block, which discloses what the HCL references. `rc_fw_attach`'s
 # known `[9001]` is a shape no birth can produce; these rows pin the shape a birth DOES.
 #
-# mk_plan_cfg <file> <resource_changes-json> <configuration.root_module-json>
-mk_plan_cfg() {
-  local f="$1" changes="$2" cfg="$3"
-  printf '{"format_version":"1.2","resource_changes":%s,"configuration":{"root_module":%s}}\n' "$changes" "$cfg" > "$f"
-}
 # The attachment as the provider plans it on a first birth.
 rc_fw_attach_real() {
   printf '{"address":"hcloud_firewall_attachment.git_data","type":"hcloud_firewall_attachment","change":{"actions":["create"],"before":null,"after":{"label_selectors":null},"after_unknown":{"firewall_id":true,"id":true,"server_ids":true}}}'
@@ -561,11 +596,6 @@ rc_fw_attach_real() {
 # The server as the provider plans it: firewall_ids computed, unknown, NOT set by the HCL.
 rc_server_real() {
   printf '{"address":"hcloud_server.git_data","type":"hcloud_server","change":{"actions":["create"],"before":null,"after":{"name":"soleur-git-data","server_type":"cpx22","ignore_remote_firewall_ids":false},"after_unknown":{"firewall_ids":true,"id":true,"ipv4_address":true}}}'
-}
-# The configuration block: the attachment references exactly this plan's server; the
-# server declares NO firewall_ids expression.
-cfg_real() {
-  printf '{"resources":[{"address":"hcloud_firewall_attachment.git_data","mode":"managed","type":"hcloud_firewall_attachment","name":"git_data","expressions":{"firewall_id":{"references":["hcloud_firewall.git_data.id","hcloud_firewall.git_data"]},"server_ids":{"references":["hcloud_server.git_data.id","hcloud_server.git_data"]}}},{"address":"hcloud_server.git_data","mode":"managed","type":"hcloud_server","name":"git_data","expressions":{"name":{"constant_value":"soleur-git-data"},"server_type":{"references":["var.git_data_server_type"]}}}]}'
 }
 entailed_three_real() {
   printf '%s,%s,%s,%s' \
@@ -585,7 +615,7 @@ check "unknown server_ids whose config references TWO servers => ABORT" 1 "bound
 
 # Unknown server_ids with NO configuration block at all: the gate cannot see what the
 # attachment binds, so it must refuse rather than trust the unknown.
-mk_plan "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")"
+mk_plan_nocfg "$TMP/real-attach-noconfig.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")"
 check "unknown server_ids with no configuration to read => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-noconfig.json"
 
 # Unknown server_ids whose config is a LITERAL list (constant_value, no references): the
@@ -593,6 +623,21 @@ check "unknown server_ids with no configuration to read => ABORT" 1 "bound to ex
 mk_plan_cfg "$TMP/real-attach-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
   "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[111]} else . end)')"
 check "unknown server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/real-attach-literal.json"
+
+# The KNOWN branch is not identity evidence either. `server_ids = [hcloud_server.web.id]`
+# — a host that already exists in this same root — is a known one-element list, so the
+# pre-fix length-only arm PASSED it while the deny-all firewall bound the WRONG host and
+# git-data booted naked. The configuration reference is required on both branches.
+mk_plan_cfg "$TMP/attach-known-other-server.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_fifteen)")" \
+  "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.web.id","hcloud_server.web"] else . end)')"
+check "KNOWN one-element server_ids whose config references some OTHER host => ABORT" 1 "bound to exactly one server" "$TMP/attach-known-other-server.json"
+mk_plan_cfg "$TMP/attach-known-literal.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_four)" "$(rest_fifteen)")" \
+  "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids = {"constant_value":[9001]} else . end)')"
+check "KNOWN one-element server_ids whose config is a literal list => ABORT" 1 "bound to exactly one server" "$TMP/attach-known-literal.json"
+# Reference ORDER is not load-bearing: the same two references reversed still pass.
+mk_plan_cfg "$TMP/real-first-birth-refs-reversed.json" "$(printf '[%s,%s,%s]' "$(rc_server_real)" "$(entailed_three_real)" "$(rest_fifteen)")" \
+  "$(cfg_real | jq -c '.resources |= map(if .address == "hcloud_firewall_attachment.git_data" then .expressions.server_ids.references = ["hcloud_server.git_data","hcloud_server.git_data.id"] else . end)')"
+check "the REAL first-birth shape with the two references in the other order => PASS" 0 "PASS" "$TMP/real-first-birth-refs-reversed.json"
 
 # The server's firewall_ids is unknown (computed) AND the HCL sets it inline — the deny-all
 # firewall's own id plus a known permissive one collapses the whole set to unknown, so
@@ -1013,9 +1058,20 @@ mutate_and_check "server-inline-firewall guard (config half)" \
 # "unknown is fine" must let the fan-out and literal fixtures PASS; reverting to the
 # pre-fix length-only predicate must refuse the REAL first birth. Both directions.
 mutate_and_check "firewall-attachment guard (unknown server_ids: fan-out)" \
-  's/and (\$refs == \["hcloud_server.git_data.id", "hcloud_server.git_data"\])/and true/' "$TMP/real-attach-fanout.json"
+  's/(\$refs == \["hcloud_server.git_data", "hcloud_server.git_data.id"\])/true/' "$TMP/real-attach-fanout.json"
 mutate_and_check "firewall-attachment guard (unknown server_ids: literal)" \
-  's/and (\$refs == \["hcloud_server.git_data.id", "hcloud_server.git_data"\])/and true/' "$TMP/real-attach-literal.json"
+  's/(\$refs == \["hcloud_server.git_data", "hcloud_server.git_data.id"\])/true/' "$TMP/real-attach-literal.json"
+# The KNOWN branch: with the reference check neutered, a known one-element list bound to
+# some other host PASSES again (the pre-fix fail-open).
+mutate_and_check "firewall-attachment guard (known server_ids: other host)" \
+  's/(\$refs == \["hcloud_server.git_data", "hcloud_server.git_data.id"\])/true/' "$TMP/attach-known-other-server.json"
+
+# SOLE-GUARD: the two disclosure-shape refusals in the unreadable arm. Each fixture is
+# otherwise a clean birth, so neutering its clause is the only thing between it and PASS.
+mutate_and_check "firewall-unreadable guard (after.rule null)" \
+  's/or ((\.change\.after\.rule | type) != "array"))/or false)/' "$TMP/fw-rule-null.json"
+mutate_and_check "firewall-unreadable guard (after_unknown absent)" \
+  's/or ((\.change\.after_unknown | type) != "object")/or false/' "$TMP/fw-no-after-unknown.json"
 
 # LAYERED: the volume-update arm — the one arm the first revision of this battery never
 # mutated at all, while the header claimed "each is mutation-proven". On a single-entry
@@ -1080,9 +1136,9 @@ mutate_layered "named volume-destroy guard" \
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 106 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 106. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 114. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 106)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 114)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

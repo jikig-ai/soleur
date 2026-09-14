@@ -187,19 +187,23 @@ git_data_host_birth_gate() {
   # boolean `true` leaf anywhere under the key (non-boolean leaves are known by
   # construction; a `false` leaf is a KNOWN set element). A plan carrying `after` as an
   # object but no `rule` key is no shape the provider emits (create, update and no-op all
-  # serialise `rule: []`), so it is refused rather than read as zero rules. `after_unknown`
-  # itself is read through `has_unknown` too, so a boolean `after_unknown: true` aborts on
-  # its own and does not depend on the `after`-arm short-circuiting first. The suite's
-  # REAL-provider-shape row pins the `[]` case; its rule-ELEMENT row pins that a `true`
-  # nested inside a non-empty array still aborts.
+  # serialise `rule: []`), so it is refused rather than read as zero rules — and so is a
+  # `rule` whose value is null rather than an array, which the previous revision tolerated
+  # while its own comment said the provider never emits it. `after_unknown` must be an
+  # OBJECT: Terraform emits one on every create, update and no-op (`{}` on a no-op), so a
+  # missing or boolean `after_unknown` is not a disclosure and aborts before the `.rule`
+  # read (jq's `or` short-circuits, which is what keeps the boolean case from erroring
+  # into an empty counter). The suite's REAL-provider-shape row pins the `[]` case; its
+  # rule-ELEMENT row pins that a `true` nested inside a non-empty array still aborts.
   firewall_unreadable=$(jq "$has_unknown_def"'
     [.resource_changes[]
     | select(.address == "hcloud_firewall.git_data")
     | select(.change.actions | any(. != "read"))
     | select(((.change.after | type) != "object")
           or ((.change.after | has("rule")) | not)
-          or ((.change.after_unknown | if type == "object" then (.rule // false) else . end) | has_unknown)
-          or (((.change.after.rule // null) != null) and ((.change.after.rule | type) != "array")))] | length' < "$plan_json" 2>/dev/null)
+          or ((.change.after_unknown | type) != "object")
+          or ((.change.after_unknown.rule // false) | has_unknown)
+          or ((.change.after.rule | type) != "array"))] | length' < "$plan_json" 2>/dev/null)
 
   # F5: the attachment's IDENTITY, not just the firewall's content. Nothing else in this
   # gate reads which firewall the attachment binds, nor whether the server carries inline
@@ -382,7 +386,7 @@ git_data_host_birth_gate() {
   fi
 
   if [[ "$firewall_unreadable" -ne 0 ]]; then
-    echo "git_data_host_birth_gate: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose hcloud_firewall.git_data's rule set (after is not an object, after_unknown.rule carries an unknown leaf, or after.rule is not an array). That is the shape a computed \`dynamic \"rule\"\` block produces. Fail-closed: an undisclosed rule set is not evidence of a deny-all firewall, and this firewall plus its attachment are the entire public-exposure defense for a store holding every user's source code."
+    echo "git_data_host_birth_gate: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose hcloud_firewall.git_data's rule set (after is not an object or has no rule key, after_unknown is not an object or its rule carries an unknown leaf, or after.rule is not an array). That is the shape a computed \`dynamic \"rule\"\` block produces. Fail-closed: an undisclosed rule set is not evidence of a deny-all firewall, and this firewall plus its attachment are the entire public-exposure defense for a store holding every user's source code."
     return 1
   fi
 
@@ -531,22 +535,29 @@ git_data_host_birth_gate() {
   # plan text: `server_ids = (known after apply)`; the same on a re-birth UPDATE). A known
   # `server_ids` of length 1 exists only when the server already exists, which `creates == 1`
   # refuses, so the length-1 arm alone made PASS unreachable on every real birth. The
-  # decidable signal for the unknown case is the plan's CONFIGURATION: the attachment's
-  # `server_ids` expression must reference exactly this plan's own server (Terraform emits
-  # both `hcloud_server.git_data.id` and `hcloud_server.git_data` for a `.id` reference). A
-  # fan-out shows extra references, a literal list shows `constant_value` and no references,
-  # and a plan with no configuration block cannot be read — all three refuse.
+  # decidable signal is the plan's CONFIGURATION: the attachment's `server_ids` expression
+  # must reference exactly this plan's own server (Terraform emits both
+  # `hcloud_server.git_data.id` and `hcloud_server.git_data` for a `.id` reference; compared
+  # sorted so reference ORDER is not load-bearing). A fan-out shows extra references, a
+  # literal list shows `constant_value` and no references, and a plan with no configuration
+  # block cannot be read — all three refuse. The reference check is REQUIRED on the known
+  # branch too, not only the unknown one: a known one-element `server_ids` is not identity
+  # evidence, because `server_ids = [hcloud_server.web.id]` — a host that already exists in
+  # this same root — is a known one-element list that binds the deny-all firewall to the
+  # WRONG host while git-data boots naked. The value only says HOW MANY; the configuration
+  # says WHICH. (A plan with no configuration block also leaves `server_inline_firewalls`
+  # blind; this arm's refusal is what covers that plan.)
   fw_attach_ok=$(jq '
-    ([.configuration.root_module.resources[]? | select(.address == "hcloud_firewall_attachment.git_data") | (.expressions.server_ids.references // [])] | first // []) as $refs
+    ([.configuration.root_module.resources[]? | select(.address == "hcloud_firewall_attachment.git_data") | (.expressions.server_ids.references // [])] | first // [] | sort) as $refs
     | [.resource_changes[]
     | select(.address == "hcloud_firewall_attachment.git_data")
     | select(.change.actions | all(. == "create" or . == "update" or . == "no-op"))
-    | select(((.change.after.server_ids // []) | length == 1)
-          or (((.change.after_unknown.server_ids // false) == true)
-              and ($refs == ["hcloud_server.git_data.id", "hcloud_server.git_data"])))] | length' < "$plan_json" 2>/dev/null)
+    | select(($refs == ["hcloud_server.git_data", "hcloud_server.git_data.id"])
+          and ((((.change.after.server_ids // []) | length) == 1)
+               or ((.change.after_unknown.server_ids // false) == true)))] | length' < "$plan_json" 2>/dev/null)
   plan_gate_assert_numeric "git_data_host_birth_gate" "fw_attach_ok=${fw_attach_ok}" || return 1
   if [[ "$fw_attach_ok" -eq 0 ]]; then
-    echo "git_data_host_birth_gate: ABORT — hcloud_firewall_attachment.git_data does not end this plan bound to exactly one server. It is the ONLY thing binding the zero-rule deny-all hcloud_firewall.git_data to the host, so without it the store boots NAKED on its public IPv4/IPv6 with every connected user's source code on it. This arm asserts the OUTCOME (server_ids ends at length 1) rather than a verb, because the attachment's terraform ID is the FIREWALL's id: when a host is destroyed outside terraform the attachment survives refresh with server_ids emptied, so a legitimate re-birth plans an UPDATE here, not a create. When server_ids is still unknown at plan time (every first birth), the plan's configuration must show the attachment referencing exactly hcloud_server.git_data — a fan-out, a literal list, or a plan with no configuration block all fail this check, as does an omitted attachment."
+    echo "git_data_host_birth_gate: ABORT — hcloud_firewall_attachment.git_data does not end this plan bound to exactly one server. It is the ONLY thing binding the zero-rule deny-all hcloud_firewall.git_data to the host, so without it the store boots NAKED on its public IPv4/IPv6 with every connected user's source code on it. This arm asserts the OUTCOME (server_ids ends at length 1) rather than a verb, because the attachment's terraform ID is the FIREWALL's id: when a host is destroyed outside terraform the attachment survives refresh with server_ids emptied, so a legitimate re-birth plans an UPDATE here, not a create. Whether or not server_ids is known at plan time (it is unknown on every first birth), the plan's configuration must show the attachment referencing exactly hcloud_server.git_data — a fan-out, a literal list, a reference to some other pre-existing host, or a plan with no configuration block all fail this check, as does an omitted attachment."
     return 1
   fi
 
