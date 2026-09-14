@@ -177,8 +177,9 @@ interpolation in cloud-init-git-data.yml, which item 1 above still requires. Not
 replacement asserts a different fact than item 1 does, so item 1's threading check is not
 automatically covered by it.
 
-THEN clear the DO-NOT-DISPATCH banner at the top of
-knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+THEN re-read the release record at the top of
+knowledge-base/engineering/operations/runbooks/git-data-birth.md (the DO-NOT-DISPATCH
+banner it replaced was cleared 2026-09-13).
 
 Do NOT work around this by applying from a laptop. An untargeted apply runs neither the
 destroy-guard nor the stock preflight, and a plan of that shape taken 2026-07-27 carried
@@ -917,10 +918,10 @@ git_data_rung2_rehearsal_gate: HOLD — the git-data birth route is INTERLOCKED 
 
 WHY: no rung-2 boot evidence at ${evidence}.
 
-The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. That was
-the only MECHANICAL hold on this route. What still holds it is the DO-NOT-DISPATCH banner in
-knowledge-base/engineering/operations/runbooks/git-data-birth.md — prose, in a different
-file from this button. This gate exists so that hold is mechanical too.
+The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. This gate
+IS the mechanical hold on the route now: it holds until boot evidence for the CURRENT
+template is committed. The release record and the dispatch procedure live in
+knowledge-base/engineering/operations/runbooks/git-data-birth.md.
 
 WHAT IS MISSING: the rendered cloud-init has never been booted on real hardware. #6982
 reached rung 1 only — a CONTAINER harness that never boots the rendered template — and that

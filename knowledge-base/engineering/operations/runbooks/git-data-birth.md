@@ -362,8 +362,11 @@ channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-H
 ## After the birth — verify the host actually booted (#6982)
 
 **A green apply is not a green boot.** The dispatch's own post-apply step polls for the
-boot signal and FAILS the job if it does not arrive, so a green run is now meaningful — but
-verify independently if that step warned that its credentials were missing.
+boot signal and FAILS the job if it does not arrive, so a green run is now meaningful; the
+poll runs only after the apply step actually ran (green or failed) — a run refused at the
+gate skips it, so a skipped poll is not a verdict on the host. A RED job whose summary shows
+`apply outcome: success` is a failed VERIFICATION, not a failed birth: run the query below;
+do not re-dispatch (the gate refuses a zero-create plan).
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
 (three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
