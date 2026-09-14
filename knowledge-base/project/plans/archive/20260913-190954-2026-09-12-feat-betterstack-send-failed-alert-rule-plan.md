@@ -311,8 +311,9 @@ logs:
   retention: "warehouse hot window ~40 min, archive per source retention (betterstack-log-query.md); incidents indefinitely; workflow logs 90 days"
 
 discoverability_test:
-  command: "bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh"
-  expected_output: "=== Summary: N passed, 0 failed === with the predicate anchors, the four emitter files and the SKIPPED-exclusion constant check all PASS (no credentials: the suite reads repo files only)"
+  command: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh
+  expected_output: "0 failed"
+  # 2026-09-14 (#8097 ship, preflight Check 10): the command was YAML-double-quoted (parsed verbatim -> rc 127 in the sandbox) and expected_output carried a placeholder N; both corrected to the executable form. The guard prints `=== Summary: 58 passed, 0 failed (6 cases) ===` and reads only repo files.
 ```
 
 ## Encryption Posture
