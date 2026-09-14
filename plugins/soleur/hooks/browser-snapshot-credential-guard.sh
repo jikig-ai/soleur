@@ -19,9 +19,12 @@
 #   * The Playwright MCP renders BOTH in clear.
 #
 # This hook covers the Bash path only. Property P7 ("the guards hold without the
-# acting agent having to remember them") is achieved HERE and is NOT achieved on
-# the Playwright-MCP runtime path, where the interceptor is deferred. That gap is
-# stated rather than implied.
+# acting agent having to remember them") holds on the Bash path via this
+# interceptor AND on a Playwright-MCP registration routed through
+# skills/agent-browser/scripts/playwright-mcp-redact-proxy.py (#7980), which
+# rewrites every tool result through the same redactor at the stdio boundary.
+# An unwrapped Playwright-MCP registration remains uncovered (a customer
+# registration is #8156). That gap is stated rather than implied.
 #
 # Disposition is DENY, not rewrite: ADR-162 permits exactly one PreToolUse
 # rewriter and grep-rewrite.sh holds it. Two hooks emitting updatedInput for the

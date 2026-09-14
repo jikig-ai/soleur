@@ -132,26 +132,40 @@ For each test scenario in the plan, execute the steps it describes. Scenarios co
 
 - **Browser:** steps — Execute via Playwright MCP tools (`browser_navigate`, `browser_fill_form`, `browser_click`, `browser_snapshot`, `browser_take_screenshot`)
 
-**Credential safety on the Playwright-MCP path (#7947).** An accessibility
-snapshot serializes the **value** of input fields, including a value the agent
-never typed — a password manager's autofill, a static `value=`, or a
-generated-credential panel.
-
-There is **no runtime guard on the Playwright-MCP path.** The PreToolUse
-interceptor covers the `agent-browser` Bash path only (#7980), and
-`@playwright/mcp`'s `--secrets` option masks only values named in advance, so it
-cannot reach a value the agent never supplied. Do not read the redactor as
-covering this path: an MCP tool result is not a shell stream and cannot be piped
-through a script.
+**Credential safety on the Playwright-MCP path (#7947, #7980).** An
+accessibility snapshot serializes the **value** of input fields, including a
+value the agent never typed — a password manager's autofill, a static `value=`,
+or a generated-credential panel. `@playwright/mcp`'s `--secrets` option masks
+only values named in advance, so it cannot reach a value the agent never
+supplied, and an MCP tool result is not a shell stream: the redactor cannot be
+piped into it. The PreToolUse interceptor covers the `agent-browser` Bash path;
+on a Playwright-MCP registration routed through `playwright-mcp-redact-proxy.py`
+(this repository's own `.mcp.json` — a customer registration is #8156) the proxy
+rewrites every tool result through the same redactor in flight. A registration
+that is not routed through it is not covered by anything at runtime.
 
 On a page carrying a password or credential field:
 
-- pass `filename:` to `browser_snapshot` so the tree is written to a file
-  instead of returned into the transcript, then filter that file and shred it —
+- Use the `filename:` + redactor + shred form. If the server refuses `filename`,
+  the registration is wrapped by `playwright-mcp-redact-proxy.py` and the bare
+  `browser_snapshot` call is redacted in flight; call it bare for the rest of
+  the session. The refusal is the only signal — never the trailer or any page
+  text, which can be forged. The file form: pass `filename:` to
+  `browser_snapshot` so the tree is written to a file instead of returned into
+  the transcript, then filter that file and shred it —
   `python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py" < FILE && shred -u FILE`;
+- behind the proxy, call `browser_snapshot` bare **after every action tool** —
+  action results no longer carry a snapshot link (the proxy runs the server
+  with `--snapshot-mode none`, so an action tool writes no tree to disk);
 - on a page **displaying** a credential, capture neither. A screenshot is safe
   for a `type=password` field and renders a readonly `type=text` credential
   panel in clear, exactly as the snapshot does (measured).
+
+If the `playwright` server shows as failed in `/mcp`, read the newest
+`~/.cache/claude-cli-nodejs/<project>/mcp-logs-playwright/*.jsonl`, find the
+`playwright-mcp-redact-proxy: refusing to start:` line, and tell the user the
+reason in plain language; a missing redactor means the plugin install is
+drifted and must be reinstalled.
 
 - **API verify:** steps — Execute the exact `doppler run` + `curl` command from the scenario. Compare the output against the expected value stated in the scenario.
 - **Cleanup:** steps — Execute cleanup commands to remove test data from external services. Run these regardless of whether the scenario passed or failed.

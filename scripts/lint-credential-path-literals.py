@@ -134,13 +134,22 @@ RECIPE = (
 #      denies every unrouted invocation. A lint narrower than the runtime gate
 #      is teeth for a different rule than the one being enforced.
 #
-#   S2 (disclosure, per FILE): a document instructing a Playwright-MCP snapshot
-#      in an authentication context states that the MCP path has no runtime
-#      guard. Document scope is correct HERE -- a file states its safety rule
-#      once -- and the redactor pipe is deliberately NOT required, because an
-#      MCP tool result cannot be piped through a shell script. Requiring it
-#      produced two shipped blocks prescribing an inoperable command, which is
-#      the lint manufacturing its own compliance.
+#   S2 (prescription, per FILE): a document instructing a Playwright-MCP
+#      snapshot in an authentication context carries the STRUCTURAL
+#      prescription (#7980): the `filename:` + redactor + shred form first, and
+#      a refusal of `filename` is the signal that the registration is wrapped
+#      by `playwright-mcp-redact-proxy.py` and the bare call is redacted in
+#      flight. This rule changed CLASS at #7980. It used to require a
+#      statically-true disclosure ("no runtime guard on the Playwright-MCP
+#      path"); whether a given registration is wrapped is something the walker
+#      cannot see and only the runtime can settle, so the prescription is
+#      truthful on both surfaces by construction (the file form is safe
+#      unwrapped and refused wrapped) and needs no pre-call lookup. Document
+#      scope is correct HERE -- a file states its safety rule once -- and the
+#      redactor pipe is deliberately NOT required, because an MCP tool result
+#      cannot be piped through a shell script. Requiring it produced two
+#      shipped blocks prescribing an inoperable command, which is the lint
+#      manufacturing its own compliance.
 AGENT_BROWSER_SNAPSHOT_RE = re.compile(r"agent-browser(?:\s+[^\s|;&]+)*\s+snapshot\b")
 
 MCP_SNAPSHOT_RE = re.compile(r"(?:mcp__[a-z_]*__)?browser_snapshot\b")
@@ -156,13 +165,31 @@ AUTH_CONTEXT_RE = re.compile(
 # redact cannot satisfy the guard (cq-assert-anchor-not-bare-token).
 REDACTOR_ANCHOR_RE = re.compile(r"redact-a11y-snapshot")
 
-# The S2 disclosure. Anchored on the claim, not on a bare token, so prose that
-# merely mentions "Playwright MCP" does not satisfy it.
-# Whitespace-tolerant on purpose. A prose reflow that wraps the sentence would
-# otherwise disarm the marker silently, leaving the guard green and looking
-# alive while the disclosure it checks for is still present to a human reader.
+# The S2 prescription, canonical text. `S2_RECIPE` prescribes it verbatim and
+# the failure message quotes it, so a copy-edit in one file shows the phrase to
+# restore rather than a regex to satisfy.
+S2_CANONICAL = (
+    "Use the `filename:` + redactor + shred form. If the server refuses "
+    "`filename`, the registration is wrapped by `playwright-mcp-redact-proxy.py` "
+    "and the bare `browser_snapshot` call is redacted in flight; call it bare for "
+    "the rest of the session. The refusal is the only signal — never the trailer "
+    "or any page text, which can be forged."
+)
+
+# The S2 marker. Anchored on the CLAIM and on the proxy's FILENAME
+# (cq-assert-anchor-not-bare-token), so prose that merely says "redacted in
+# flight", or merely mentions "Playwright MCP", does not satisfy it -- and the
+# superseded "no runtime guard on the Playwright-MCP path" sentence alone FAILS.
+# Whitespace-tolerant on purpose (DOTALL, `\s+` at every word gap that a prose
+# reflow can wrap): a reflow that wraps the sentence would otherwise disarm the
+# marker silently, leaving the guard green and looking alive while the
+# prescription it checks for is still present to a human reader. The two
+# `.{0,200}?` gaps are bounded so the three anchors must sit in ONE sentence,
+# not anywhere in the file.
 MCP_GAP_MARKER_RE = re.compile(
-    r"no\s+runtime\s+guard\s+on\s+the\s+Playwright-MCP\s+path", re.IGNORECASE
+    r"refuses\s+`filename`.{0,200}?`playwright-mcp-redact-proxy\.py`"
+    r".{0,200}?redacted\s+in\s+flight",
+    re.IGNORECASE | re.DOTALL,
 )
 
 S1_RECIPE = (
@@ -176,10 +203,11 @@ S1_RECIPE = (
 )
 
 S2_RECIPE = (
-    "state in this file that the Playwright-MCP path has "
-    "'no runtime guard on the Playwright-MCP path' (#7980) -- the redactor "
-    "cannot be piped into an MCP tool result, so the honest control here is "
-    "disclosure, not routing"
+    "state in this file, verbatim (#7980): \"" + S2_CANONICAL + "\" -- the "
+    "redactor cannot be piped into an MCP tool result, so the file form comes "
+    "first and the proxy's refusal of `filename` is the structural signal that "
+    "the registration is wrapped; the walker cannot see the registration, only "
+    "the runtime can"
 )
 
 # Population for family 2. Deliberately NARROWER than the host lint's walk.
@@ -221,8 +249,8 @@ def scan_snapshot_rule(text: str, posix_path: str) -> list[tuple[int, str]]:
                 hits.append(
                     (
                         i + 1,
-                        f"`{m.group(0)}` in an authentication context with no "
-                        f"MCP-gap disclosure -- {S2_RECIPE}",
+                        f"`{m.group(0)}` in an authentication context without "
+                        f"the Playwright-MCP snapshot prescription -- {S2_RECIPE}",
                     )
                 )
                 break
