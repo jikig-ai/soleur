@@ -199,3 +199,27 @@ describe("#5676 — npx registry-probe silenced at source (intended-drop, ADR-05
     expect(SUT_SOURCE).toContain('command: "npx"');
   });
 });
+
+describe("#7980 — fleet overlay writes no raw accessibility tree to disk (PA-31 §(g))", () => {
+  // Measured 2026-09-14 on the pinned @playwright/mcp@0.0.75 (Phase 0 step 4,
+  // the fleet-copy row): `browser_navigate` — which cron-ux-audit holds, along
+  // with Read/Glob/Grep — writes the raw accessibility tree (input values
+  // included) to <cwd>/.playwright-mcp/page-*.yml and returns a link. The
+  // fleet overlay is NOT routed through playwright-mcp-redact-proxy.py, so the
+  // flag is the remedy here. Whitespace-tolerant so a prettier reflow of the
+  // args array does not false-RED a behavior-intact config.
+  it("appends --snapshot-mode none as the last two elements of the per-fire playwright args", () => {
+    expect(SUT_SOURCE).toMatch(
+      /`--user-data-dir=\$\{playwrightProfileDir\}`,\s*"--snapshot-mode",\s*"none"/,
+    );
+  });
+
+  it("surfaces a zero-screenshot run as a queryable WARNING (the cron monitor is liveness, not success)", () => {
+    // If the pinned server rejected the flag the MCP server would fail to
+    // connect, `claude -p` would still exit 0, and the audit would run with
+    // zero screenshots at a green monitor. The `logger.info({ screenshotCount })`
+    // line is INFO and Vector's WARN+ filter drops it — so the upload step must
+    // mirror the zero case via warnSilentFallback (layer 2 pino→Sentry).
+    expect(SUT_SOURCE).toMatch(/op:\s*"zero-screenshots"/);
+  });
+});
