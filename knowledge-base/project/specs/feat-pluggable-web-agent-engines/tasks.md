@@ -132,6 +132,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Generic rollout metadata slice: reviewed engines expose identity-aware `rolloutEnabled` metadata, settings UI consumes the server decision, and unmapped engines fail closed until explicitly registered (11 route, 6 settings, and 3 feature-flag tests green).
   - [x] Settings contract slice: API and UI share the neutral `EngineSettingsMetadata` projection instead of duplicating engine fields (11 route and 6 settings tests green).
   - [x] Adapter composition extensibility slice: additional reviewed-engine factories register through an additive map without changing Claude/Codex composition control flow (3 composition tests green).
+  - [x] Injected reviewed registry slice: adapter creation accepts an explicit reviewed registry for future engines while preserving the built-in catalog default (3 factory tests green).
   - [x] Rollout metadata compatibility slice: missing metadata preserves the always-on Claude option while future-engine options remain disabled until explicitly enabled (7 settings tests green).
   - [x] Owner authorization slice: settings RPC error code `42501` is preserved and returned as an explicit 403 owner-required response (22 persistence/route tests green).
   - [x] Full app-local gate after settings authorization: 1,088 files and 13,585 tests pass (54 skipped, 358 expected skipped cases, 1 existing todo).

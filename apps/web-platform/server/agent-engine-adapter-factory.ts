@@ -7,10 +7,11 @@ export function createReviewedEngineAdapter(
   engineId: string,
   factories: Readonly<Record<string, EngineAdapterFactory>>,
   operation: "new-run" | "existing-run" = "new-run",
+  registry: Pick<typeof reviewedEngineRegistry, "get"> = reviewedEngineRegistry,
 ): EngineAdapter {
   let definition;
   try {
-    definition = reviewedEngineRegistry.get(engineId);
+    definition = registry.get(engineId);
   } catch {
     throw new Error("engine_unknown");
   }
