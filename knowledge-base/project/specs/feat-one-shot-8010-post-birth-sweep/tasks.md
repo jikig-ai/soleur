@@ -11,9 +11,9 @@ Derived from `knowledge-base/project/plans/2026-09-14-chore-git-data-post-birth-
 
 - [ ] 1.1 `.github/workflows/apply-web-platform-infra.yml`, job `git_data_host_create`: add `id: apply` to `- name: Terraform apply (git-data birth)`.
 - [ ] 1.2 Poll step `if:` → `${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}`; rewrite the two `if: always()` rationale comment lines above it.
-- [ ] 1.3 Add `APPLY_OUTCOME: ${{ steps.apply.outcome }}` to the poll step env; replace the "The apply may be green while the host booted DARK" clause with the outcome-reading sentence; append `(apply outcome: ${APPLY_OUTCOME})` to the "boot signal received" line.
-- [ ] 1.4 Add `APPLY_OUTCOME` env + one echo line to the `Dispatch summary` step.
-- [ ] 1.5 `knowledge-base/engineering/operations/runbooks/git-data-birth.md` "After the birth" section: extend the poll sentence; keep the fragment `not a verdict on the host` on one physical line (AC9 pins it).
+- [ ] 1.3 Add `id: poll` and `APPLY_OUTCOME: ${{ steps.apply.outcome }}` to the poll step; replace the "The apply may be green while the host booted DARK" clause with the outcome-reading sentence (failure arm softened: "if the server was created…"); append `(apply outcome: ${APPLY_OUTCOME})` to the "boot signal received" line; rewrite the two unreadable-path messages so `success` says "do NOT re-dispatch — run the runbook query" and `failure` keeps the re-dispatch advice.
+- [ ] 1.4 `Dispatch summary`: add `APPLY_OUTCOME` + `POLL_OUTCOME: ${{ steps.poll.outcome }}` env; add the four-arm `case "${APPLY_OUTCOME}/${POLL_OUTCOME}"` (`success/success` nothing; `skipped/skipped` `::notice::`; `success/skipped|success/cancelled` `::error::` + `exit 1`; `cancelled/*` `::warning::`); fix "If the poll step warned" → "FAILED with…". Edit by line range inside `git_data_host_create` only.
+- [ ] 1.5 `knowledge-base/engineering/operations/runbooks/git-data-birth.md` "After the birth": replace the false "verify independently if that step warned…" clause with the skipped-poll + red-job-with-`apply outcome: success`-is-a-failed-verification guidance; keep `not a verdict on the host` on one physical line (AC9).
 - [ ] 1.6 `actionlint -ignore 'SC2140' .github/workflows/apply-web-platform-infra.yml` exits 0 (SC2140 is a pre-existing baseline warning); `bun test plugins/soleur/test/terraform-target-parity.test.ts` (194/0); `bash tests/scripts/test-web-host-birth-gate.sh` (34/0).
 
 ## Phase 2 — Items 7 and 8 (operator-visible text)
@@ -22,13 +22,13 @@ Derived from `knowledge-base/project/plans/2026-09-14-chore-git-data-post-birth-
 - [ ] 2.2 Job header comment: "The banner stays up until #7025 lands the evidence." → evidence landed (PR #8126, run 34768256297), banner cleared (PR #8128).
 - [ ] 2.3 `tests/scripts/lib/git-data-birth-readiness-gate.sh` sentinel HOLD: reword "THEN clear the DO-NOT-DISPATCH banner…" keeping `git-data-birth.md` on its own line and `#6982`, `sentry_dsn`, `ADR-149`, `laptop` intact.
 - [ ] 2.4 Rung-2 no-evidence HOLD: reword "What still holds it is the DO-NOT-DISPATCH banner…" (this gate IS the mechanical hold; the runbook carries the release record); keep the path.
-- [ ] 2.5 `tests/scripts/test-git-data-birth-readiness-gate.sh`: rename the "names the runbook banner to clear" check label (needle stays `git-data-birth.md`); add one `r2check … 1 "git-data-birth.md" "$R2/ci.yml" "$R2/absent.env"`. No pin on fresh wording.
+- [ ] 2.5 `tests/scripts/test-git-data-birth-readiness-gate.sh`: rename the "names the runbook banner to clear" check label (needle stays `git-data-birth.md`); add `r2check "the no-evidence HOLD names the runbook" 1 "git-data-birth.md" "$R2/ci.yml" "$R2/absent.env"`; bump the anti-vacuity floor 149 → 150. No pin on fresh wording.
 - [ ] 2.6 `bash tests/scripts/test-git-data-birth-readiness-gate.sh` → 150/0; `bash tests/scripts/test-git-data-rung2-evidence-capture.sh` still 80/0 (it sources the readiness lib).
 
 ## Phase 3 — Items 1, 12, 18
 
 - [ ] 3.1 `scripts/followthroughs/git-data-rung2-evidence-capture.sh`: derive `_bs_s3` above the writer block (`${BS_TABLE_S3:-}`, else `${BS_TABLE%_logs}_s3` only when `BS_TABLE` ends in `_logs` — betterstack-query.sh's guard); add `printf '# TABLE: BS_TABLE=%s BS_TABLE_S3=%s\n' "$BS_TABLE" "$_bs_s3"` before the ARTIFACT 1 `# QUERY:` line.
-- [ ] 3.2 `tests/scripts/test-git-data-rung2-evidence-capture.sh`: add the value pin `grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT"` (source `scripts/lib/betterstack-sources.sh`); suite → ≥ 81/0.
+- [ ] 3.2 `tests/scripts/test-git-data-rung2-evidence-capture.sh`: `source "${ROOT}/scripts/lib/betterstack-sources.sh"` (suite is `set -u`; unsourced = rc 127 mid-run), run the SUT for this arm under `env -u BS_TABLE -u BS_TABLE_S3`, add the value pin `grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT"` via `pass`/`fail`; bump `_FLOOR=76` → 77; suite → ≥ 81/0.
 - [ ] 3.3 `scripts/encryption-posture-ledger.json` `hcloud_volume.rehearsal_luks`: `live_verification` → `"available"` (bare); append the evidence pointer sentence to `evidence`; floor stays 1.
 - [ ] 3.4 `python3 scripts/lint-encryption-posture.py --repo-sweep` → PASS; `bash scripts/lint-encryption-posture.test.sh` green.
 - [ ] 3.5 `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh`: rewrite the "has never been born" comment (hermetic-suite reason); `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` green.
@@ -45,11 +45,12 @@ Derived from `knowledge-base/project/plans/2026-09-14-chore-git-data-post-birth-
 ## Phase 5 — Verification
 
 - [ ] 5.1 `git fetch origin main`; AC1 (gate RELEASED, same sha256; roster ∩ diff = ∅).
-- [ ] 5.2 AC2–AC14 per the plan; every suite at or above baseline.
+- [ ] 5.2 AC2–AC14 per the plan (AC6's `grep -cF` uses the escaped `\${{`; `actionlint -ignore 'SC2140'`); every suite at or above baseline; Scenario 7 (summary `case` under `bash -c`) exercised once.
 - [ ] 5.3 `git merge-tree --write-tree origin/main HEAD` clean before review and before `gh pr ready`.
 
 ## Phase 6 — Ship deliverables
 
 - [ ] 6.1 PR body `Ref #8010`; label `semver:patch`; squash merge; decision-challenges rendered by ship Phase 6.
-- [ ] 6.2 Comment on #8010: taken / not-taken items with reasons (incl. variables.tf verified accurate; items 5, 14, 16, 17; the two unflipped ledger rows).
-- [ ] 6.3 Postmerge: release run for the merge SHA exists, `deploy` job `success`, `/health` `build_sha` == merge SHA; state the redeploy landed. Dispatch `web-platform-release.yml` (bump_type=patch) ONLY if no run exists for the merge SHA. Merge-triggered infra apply run green.
+- [ ] 6.2 Comment on #8010: taken / not-taken items with reasons (incl. variables.tf verified accurate; items 5, 14, 16, 17; the two unflipped ledger rows; the 2-hour `host_name` false-green window; the `timeout-minutes` budget; the `# TABLE:` S3-derivation duplication).
+- [ ] 6.3 Before `gh pr ready`: `gh pr checks <n> --json name,state --jq '.[]|select(.name|test("Encryption posture"))'` reads success (not a required check).
+- [ ] 6.4 Postmerge: release run for the merge SHA exists, `deploy` job `success`, `/health` `build_sha` == merge SHA; state the redeploy landed. Dispatch `web-platform-release.yml` (bump_type=patch) ONLY if no run exists for the merge SHA. Merge-triggered infra apply run green.
