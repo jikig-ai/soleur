@@ -34,6 +34,18 @@ permissions:
   contents: read
   pull-requests: read
 
+# CONCURRENCY: ci.yml's exact block (ADR-217 Decision 1; #7931 part 1), added
+# 2026-09-14 (#8149). Per-ref on pull_request so a superseded PR push collapses
+# the run it replaces; per-SHA otherwise; cancel-in-progress ONLY on
+# pull_request, so `main` / merge_group / scheduled runs always run to completion.
+# This workflow is stateless (lint/scan only) — a mid-run cancel leaves nothing
+# half-written. scripts/pr-fanout-ledger.txt carries this workflow's row with
+# cancel=yes; plugins/soleur/test/pr-fanout-ledger.test.sh reddens if that flag
+# and this block ever disagree.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   enforce:
     runs-on: ubuntu-latest

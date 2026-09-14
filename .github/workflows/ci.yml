@@ -75,16 +75,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  readme-counts:
-    # 15m — measured max 0.2m over 10 successful main runs (#8020);
-    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Verify README component counts match filesystem
-        run: bash scripts/sync-readme-counts.sh --check
-
   # detect-changes: drives the if:-gate on critical-css-gate. Mirrors the
   # infra-validation.yml pattern (single boolean output instead of matrix).
   # Cheap (one checkout + one git diff). See #3624.
@@ -169,6 +159,10 @@ jobs:
   lint-bot-statuses:
     # 15m — measured max 0.7m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    # 2026-09-14 (#8149): the readme-counts, lint-conversations-update-callsites and
+    # rule-metrics-shape jobs (each 0.2m measured over the same 10 runs, no `needs:`)
+    # were folded in as three steps — the job goes from 11 to 14 named steps; the
+    # 15m ceiling is unchanged and still >=3x the folded max.
     timeout-minutes: 15
     runs-on: ubuntu-latest
     # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
@@ -260,6 +254,28 @@ jobs:
       # a blind extractor prints "0 violations" and looks exactly like a clean repo.
       - name: Ratchet Supabase Management API call-site coverage (advisory)
         run: bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater
+      - name: readme-counts (README component counts match filesystem, #8149)
+        if: ${{ !cancelled() }}
+        run: bash scripts/sync-readme-counts.sh --check
+      - name: lint-conversations-update-callsites (R8, #8149)
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-conversations-update-callsites.sh
+      - name: rule-metrics-shape (validate rule-metrics.json, #8149)
+        if: ${{ !cancelled() }}
+        env:
+          METRICS_FILE: knowledge-base/project/rule-metrics.json
+        run: |
+          if [[ ! -f "$METRICS_FILE" ]]; then
+            echo "No $METRICS_FILE yet — skipping shape check."
+            exit 0
+          fi
+          jq empty "$METRICS_FILE"
+          jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
+          jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
+          # Per-rule fields (applied_count/warn_count/fire_count) added for
+          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
+          # not enforced here because the committed artifact lags the
+          # aggregator until the first post-merge Sunday run.
       # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
       #
       # actionlint pipes every `run:` body into shellcheck over a pipe. When a body exceeds
@@ -348,16 +364,6 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Encryption posture — Layer A repo-sweep (ADR-140)
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
-
-  lint-conversations-update-callsites:
-    # 15m — measured max 0.2m over 10 successful main runs (#8020);
-    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Lint conversations update callsites (R8 wrapper enforcement)
-        run: bash scripts/lint-conversations-update-callsites.sh
 
   # Guard 4 (#7493) — validates the marketplace manifest SOURCE that
   # `infra/github/` publishes to jikig-ai/soleur-marketplace. This job's name IS
@@ -485,29 +491,6 @@ jobs:
           git fetch --no-tags --quiet origin main
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
-
-  rule-metrics-shape:
-    # 15m — measured max 0.2m over 10 successful main runs (#8020);
-    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Validate rule-metrics.json shape
-        env:
-          METRICS_FILE: knowledge-base/project/rule-metrics.json
-        run: |
-          if [[ ! -f "$METRICS_FILE" ]]; then
-            echo "No $METRICS_FILE yet — skipping shape check."
-            exit 0
-          fi
-          jq empty "$METRICS_FILE"
-          jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
-          jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
-          # Per-rule fields (applied_count/warn_count/fire_count) added for
-          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
-          # not enforced here because the committed artifact lags the
-          # aggregator until the first post-merge Sunday run.
 
   # Regenerates apps/web-platform/package-lock.json under a pinned npm
   # major and diffs against the committed file. Catches the `bun add`
@@ -1055,7 +1038,7 @@ jobs:
     # labelled the upper bound 14:22Z, ~6.5h wider than the data it cites). "Group occupied at creation" = the predecessor run's `test` had not yet
     # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
     # (they never acquired a runner, so they say nothing about availability). "Start spread" is
-    # measured over the 23 jobs with NO `needs:` — a group release starts those simultaneously, so
+    # measured over the 23 jobs with NO `needs:` (20 after the 2026-09-14 fold) — a group release starts those simultaneously, so
     # any spread across them is runner availability by construction. `test` and `critical-css-gate`
     # have `needs:` and are excluded from spread for that reason.
     #
