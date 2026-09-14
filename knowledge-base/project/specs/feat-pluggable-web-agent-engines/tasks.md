@@ -114,6 +114,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Regression correction: tenant-isolation teardown expectation now covers all 22 anonymization RPCs before auth deletion.
   - [x] Full app-local gate after rollout flag and teardown updates: 1,088 files and 13,575 tests pass (54 skipped, 1 existing todo).
   - [x] Repository lint gate after settings rollout: ESLint exits cleanly with 0 errors; the 191 warnings are pre-existing and none originate in the changed rollout files.
+  - [x] Server settings rollout guard slice: PUT re-resolves the workspace identity and rejects Codex when a reviewed definition is enabled but the identity-aware rollout flag is off (11 route tests and 6 settings tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.

@@ -1,17 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getUser, getDefault, getAuthMode, setDefault, workspace } = vi.hoisted(() => ({
+const { getUser, getDefault, getAuthMode, setDefault, workspace, identity } = vi.hoisted(() => ({
   getUser: vi.fn(),
   getDefault: vi.fn(),
   getAuthMode: vi.fn(),
   setDefault: vi.fn(),
   workspace: vi.fn(),
+  identity: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser }, from: vi.fn() }),
 }));
 vi.mock("@/server/workspace-resolver", () => ({ readWorkspaceIdFromDb: workspace }));
+vi.mock("@/lib/feature-flags/identity", () => ({ resolveIdentity: identity }));
 vi.mock("@/server/agent-engine-persistence", () => ({
   AgentEnginePersistenceRepository: class {
     getDefaultEngine = getDefault;
@@ -36,12 +38,16 @@ beforeEach(() => {
   getAuthMode.mockReset();
   setDefault.mockReset();
   workspace.mockReset();
+  identity.mockReset();
   getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
   workspace.mockResolvedValue("ws-1");
+  identity.mockResolvedValue({ userId: "user-1", role: "prd", orgId: "org-1" });
   getDefault.mockResolvedValue("claude-code");
   getAuthMode.mockResolvedValue("managed");
   setDefault.mockResolvedValue({ id: "setting-1" });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("agent engine settings route", () => {
   it("requires authentication", async () => {
@@ -85,6 +91,28 @@ describe("agent engine settings route", () => {
   it("rejects disabled engines before the RPC", async () => {
     const response = await PUT(request({ engineId: "codex" }));
     expect(response!.status).toBe(409);
+    expect(setDefault).not.toHaveBeenCalled();
+  });
+
+  it("keeps Codex blocked by the rollout flag when a reviewed definition is enabled", async () => {
+    const { reviewedEngineRegistry } = await import("@/server/agent-engine-reviewed-definitions");
+    const originalGet = reviewedEngineRegistry.get.bind(reviewedEngineRegistry);
+    vi.spyOn(reviewedEngineRegistry, "get").mockImplementation((engineId) =>
+      engineId === "codex"
+        ? {
+            id: "codex",
+            version: "codex-v1",
+            transport: "remote",
+            enabledForNewRuns: true,
+            enabledForExistingRuns: true,
+            authModes: ["managed", "api-key"],
+            qualifications: [],
+          }
+        : originalGet(engineId),
+    );
+    const response = await PUT(request({ engineId: "codex", authMode: "managed" }));
+    expect(response!.status).toBe(409);
+    await expect(response!.json()).resolves.toEqual({ error: "engine_rollout_disabled" });
     expect(setDefault).not.toHaveBeenCalled();
   });
 

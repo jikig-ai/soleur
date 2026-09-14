@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { resolveIdentity } from "@/lib/feature-flags/identity";
+import { isCodexEngineEnabled } from "@/lib/feature-flags/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
 import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
+import { CODEX_ENGINE_ID } from "@/server/codex-code-adapter";
 import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
@@ -14,14 +17,16 @@ async function context() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { response: NextResponse.json({ error: "unauthorized" }, { status: 401 }) } as const;
   let workspaceId: string | null;
+  let identity: Awaited<ReturnType<typeof resolveIdentity>>;
   try {
     workspaceId = await readWorkspaceIdFromDb(user.id, supabase);
+    identity = await resolveIdentity(supabase);
   } catch (error) {
     reportSilentFallback(error, { feature: "agent-engine-settings", op: "workspace-resolve" });
     return { response: NextResponse.json({ error: "settings_unavailable" }, { status: 503 }) } as const;
   }
   if (!workspaceId) return { response: NextResponse.json({ error: "workspace_unbound" }, { status: 503 }) } as const;
-  return { supabase, user, workspaceId } as const;
+  return { supabase, user, workspaceId, identity } as const;
 }
 
 export async function GET() {
@@ -58,6 +63,9 @@ export async function PUT(request: Request) {
     const definition = reviewedEngineRegistry.get(body.engineId);
     if (!definition.enabledForNewRuns) {
       return NextResponse.json({ error: "engine_disabled" }, { status: 409 });
+    }
+    if (definition.id === CODEX_ENGINE_ID && !(await isCodexEngineEnabled(resolved.identity.orgId, resolved.identity))) {
+      return NextResponse.json({ error: "engine_rollout_disabled" }, { status: 409 });
     }
     const authMode = body.authMode === undefined ? undefined : body.authMode;
     if (authMode !== undefined && (typeof authMode !== "string" || !definition.authModes.includes(authMode))) {
