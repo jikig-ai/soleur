@@ -9,11 +9,14 @@
 # Postgres+Redis backend after the cutover.
 #
 # Why route through schedule-reminder (not a raw inngest.send): the route is the
-# existing, validated arming surface — it recomputes the inngest dedup keys
-# `id`(=reminder_id) + `ts`(=Date.parse(fire_at)) from the body, so re-arming an
-# event that ALSO survived in inngest state dedups instead of double-firing a
-# non-idempotent comment (B2-i). It enforces `actor:"platform"` (B2-ii) and the
-# action allowlist. Feeding back {reminder_id,fire_at,actor,action} is sufficient.
+# existing, validated arming surface — it derives the event `id`(=reminder_id) and the
+# delivery `ts`(=Date.parse(fire_at)) from the body. Inngest dedups on the event `id`
+# ALONE (per function, 24 h; `ts` is not part of the key), so re-arming an event that
+# ALSO survived in the SAME backend's state within that window dedups instead of
+# double-firing a non-idempotent comment (B2-i); a fresh backend holds no keys from
+# the old one, so a cutover re-arm is not deduped against runs there. It enforces
+# `actor:"platform"` (B2-ii) and the action allowlist. Feeding back
+# {reminder_id,fire_at,actor,action} is sufficient.
 #
 # ORDERING GUARD (B2-iii): the route returns 503 while INNGEST_CUTOVER_QUIESCE is
 # set. Re-arm MUST run AFTER the operator clears the flag (cutover step 6). If we
@@ -22,7 +25,9 @@
 #
 # Read path for the Bearer secret: $INNGEST_MANUAL_TRIGGER_SECRET if already in
 # env (test/host), else `doppler secrets get` (prod host has the prd config).
-# Fails closed if neither yields a secret.
+# Fails closed if neither yields a secret. Only the two RE-ARM modes read it: `capture`
+# exits before the read (#6921), because it only enumerates loopback GQL and writes a
+# file — a Doppler outage must not block the quiesce-time capture.
 set -euo pipefail
 # xtrace refusal (#7797): this script binds a live credential (the Doppler token and the
 # INNGEST_MANUAL_TRIGGER_SECRET Bearer) and -x would print it to the webhook's journald stream.
@@ -158,13 +163,6 @@ read_secret() {
   fi
 }
 
-SECRET="$(read_secret)"
-if [[ -z "$SECRET" ]]; then
-  logger -t "$LOG_TAG" "FATAL: INNGEST_MANUAL_TRIGGER_SECRET unavailable — refusing to re-arm" 2>/dev/null || true
-  echo "ERROR: INNGEST_MANUAL_TRIGGER_SECRET unavailable (env + doppler both empty)" >&2
-  exit 1
-fi
-
 # Source the re-arm records. DEFAULT (webhook path): self-enumerate on the host
 # via inngest-enumerate-reminders.sh — adnanh/webhook does NOT pipe the request
 # body to the command's stdin, so relying on stdin here would hang; self-enumerate
@@ -194,7 +192,43 @@ ENUMERATE_CMD="${INNGEST_ENUMERATE_CMD:-$(cd "$(dirname "${BASH_SOURCE[0]}")" &&
 MODE="${INNGEST_REARM_MODE:-rearm}"
 CAPTURE_FILE="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}"
 
+# Quiesced scheduler shape (#6921): `is-active` ∈ {inactive, failed} AND `is-enabled` == disabled.
+# Only the ci-deploy `quiesce` handler writes it (stop + disable) and only `enable` clears it; a
+# stop that ended in SIGKILL leaves `failed`, while a crashed ENABLED unit cycles `activating`, so
+# `disabled` is the discriminator. `|| true` is load-bearing: is-active exits 3 on inactive/failed,
+# is-enabled exits 1 on disabled and 4 on not-found. `systemctl` is resolved from PATH (test seam).
+# Writes nothing to stdout.
+unit_quiesced() {
+  local a e
+  a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  [[ ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ]]
+}
+
 if [[ "$MODE" == "capture" ]]; then
+  # A second op=execute after op=quiesce-web lands here with the scheduler STOPPED: the loopback
+  # GQL is gone, so a live enumeration can only fail. In the quiesced shape the file persisted by
+  # the earlier capture (or by the quiesce handler's capture-before-stop) IS the capture — return
+  # it untouched. Outside that shape we always enumerate live: a merely /health-down or crash-
+  # looping host must never be answered from a stale file (Guard 4).
+  if unit_quiesced; then
+    if [[ ! -s "$CAPTURE_FILE" ]] || ! jq -e 'type == "array"' < "$CAPTURE_FILE" >/dev/null 2>&1; then
+      logger -t "$LOG_TAG" "FATAL: capture: scheduler quiesced and no valid persisted capture at $CAPTURE_FILE" 2>/dev/null || true
+      echo "ERROR: capture: scheduler quiesced and no persisted capture at $CAPTURE_FILE — nothing to resume from; dispatch op=rollback to reopen scheduling, then re-run op=execute" >&2
+      exit 1
+    fi
+    cap_mtime="$(stat -c %Y "$CAPTURE_FILE")" || { echo "ERROR: capture: cannot stat $CAPTURE_FILE" >&2; exit 1; }
+    captured_at="$(date -u -d "@${cap_mtime}" +%FT%TZ)" || { echo "ERROR: capture: cannot format mtime of $CAPTURE_FILE" >&2; exit 1; }
+    cap_count="$(jq 'length' < "$CAPTURE_FILE")" || { echo "ERROR: capture: cannot count $CAPTURE_FILE" >&2; exit 1; }
+    cap_ids="$(jq -r '[.[].reminder_id] | join(",")' < "$CAPTURE_FILE")" || { echo "ERROR: capture: $CAPTURE_FILE records carry no reminder_id list" >&2; exit 1; }
+    logger -t "$LOG_TAG" "resumed persisted capture: $cap_count reminder(s) captured_at=$captured_at (scheduler quiesced)" 2>/dev/null || true
+    # Same purity contract as the live status object (ids only, NEVER comment bodies), plus the
+    # two fields CI reads: `source` (absent on the live path; CI reads `.source // "live"`) and
+    # `captured_at` (so the run log names how old the resumed capture is).
+    jq -nc --argjson n "$cap_count" --arg ids "$cap_ids" --arg f "$CAPTURE_FILE" --arg at "$captured_at" \
+      '{captured: $n, reminder_ids: ($ids | split(",") | map(select(length > 0)) | sort), capture_file: $f, source: "persisted", captured_at: $at}'
+    exit 0
+  fi
   cap="$("$ENUMERATE_CMD")" || { echo "ERROR: capture: enumeration failed; nothing persisted" >&2; exit 1; }
   if ! echo "$cap" | jq -e 'type == "array"' >/dev/null 2>&1; then
     echo "ERROR: capture: enumerate did not return a JSON array" >&2
@@ -216,6 +250,14 @@ if [[ "$MODE" == "capture" ]]; then
   jq -nc --argjson n "$cap_count" --arg ids "$cap_ids" --arg f "$CAPTURE_FILE" \
     '{captured: $n, reminder_ids: ($ids | split(",") | map(select(length > 0)) | sort), capture_file: $f}'
   exit 0
+fi
+
+# The two re-arm modes POST with the Bearer secret; capture has already exited above (#6921).
+SECRET="$(read_secret)"
+if [[ -z "$SECRET" ]]; then
+  logger -t "$LOG_TAG" "FATAL: INNGEST_MANUAL_TRIGGER_SECRET unavailable — refusing to re-arm" 2>/dev/null || true
+  echo "ERROR: INNGEST_MANUAL_TRIGGER_SECRET unavailable (env + doppler both empty)" >&2
+  exit 1
 fi
 
 # Records source by mode. stdin (test/manual) overrides everything.
@@ -249,6 +291,10 @@ count=$(echo "$records" | jq 'length')
 if [[ "$count" -eq 0 ]]; then
   logger -t "$LOG_TAG" "no reminders to re-arm (empty record set)" 2>/dev/null || true
   echo "inngest-rearm-reminders: nothing to re-arm" >&2
+  # The canonical tally line, on the same stream as the non-empty path's, so the CI parser
+  # (`re-armed=N failed=F total=K`) reconciles Σ=0 instead of failing "could not parse" and
+  # pointing at a capture this branch is about to delete (#6921 D1c). Emitted BEFORE the rm.
+  echo "inngest-rearm-reminders: re-armed=0 failed=0 total=0" >&2
   # A fully-consumed empty capture is a clean no-op success — remove it so it does
   # not linger as an orphan for a later re-arm.
   if [[ "$FROM_CAPTURE" == "1" ]]; then rm -f "$CAPTURE_FILE"; fi

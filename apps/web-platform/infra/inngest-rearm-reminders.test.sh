@@ -3,17 +3,36 @@
 # (#5450, AC2/B2). Consumes the enumeration records (stdin) and re-POSTs each to
 # POST /api/internal/schedule-reminder so a dropped reminder fires against the
 # fresh backend. Verifies: the POST body carries reminder_id/fire_at/actor/action
-# (the route recomputes the inngest dedup id/ts so no double-fire); a 503 (quiesce
+# (the route derives the event id from reminder_id, which inngest dedups on, and the
+# delivery ts from fire_at, which is NOT part of the dedup key); a 503 (quiesce
 # still set) ABORTS LOUD (ordering guard, B2-iii) rather than silently dropping;
 # a non-202/503 is a hard failure.
 #
 # Test seam: a mock `curl` on PATH records the request + returns a scripted HTTP
 # code (MOCK_HTTP_CODE). INNGEST_MANUAL_TRIGGER_SECRET is set directly so no
-# Doppler call is made.
+# Doppler call is made. A mock `systemctl` (MOCK_SYSTEMCTL_ACTIVE printed by
+# is-active, MOCK_SYSTEMCTL_ENABLED_STATE printed by is-enabled, each verb appended
+# to systemctl.verbs.log) drives the capture branch's quiesced-shape predicate
+# (#6921), and a mock `doppler` is a TRIPWIRE: it prints nothing, logs its call and
+# exits 1, so a secret-less row can never reach the developer's real Doppler CLI.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="$SCRIPT_DIR/inngest-rearm-reminders.sh"
+
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical). Executed as a statement before every write under
+# "$MOCKBIN" in the #6921 rows so the P1b relative-operand ratchet can see the operand is absolute.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 PASS=0
 FAIL=0
@@ -52,6 +71,37 @@ done
 printf '%s' "${http_code}"
 MOCK
   chmod +x "${MOCKBIN}/curl"
+  # Mock systemctl (#6921): the real verbs' stdout AND exit codes, because the predicate reads
+  # stdout under `|| true` and a mock that exited 0 for every state would hide an rc-keyed rewrite.
+  # is-active: `active` rc 0, anything else rc 3. is-enabled: `enabled` rc 0, `not-found` rc 4
+  # (unit absent, systemd >= 253), anything else (`disabled`) rc 1. Defaults are the SERVING shape.
+  cat > "${MOCKBIN}/systemctl" <<MOCK
+#!/usr/bin/env bash
+echo "\$*" >> "${MOCKBIN}/systemctl.verbs.log"
+case "\$1" in
+  is-active)
+    st="\${MOCK_SYSTEMCTL_ACTIVE:-active}"; printf '%s\n' "\$st"
+    [[ "\$st" == active ]] && exit 0; exit 3 ;;
+  is-enabled)
+    st="\${MOCK_SYSTEMCTL_ENABLED_STATE:-enabled}"; printf '%s\n' "\$st"
+    case "\$st" in enabled) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac ;;
+esac
+exit 0
+MOCK
+  chmod +x "${MOCKBIN}/systemctl"
+  # Mock logger: records what would have gone to journald.
+  cat > "${MOCKBIN}/logger" <<MOCK
+#!/usr/bin/env bash
+echo "\$*" >> "${MOCKBIN}/logger.log"
+MOCK
+  chmod +x "${MOCKBIN}/logger"
+  # Doppler TRIPWIRE: shadows any real CLI on the developer's PATH; never prints a value.
+  cat > "${MOCKBIN}/doppler" <<MOCK
+#!/usr/bin/env bash
+echo "ARGS=\$*" >> "${MOCKBIN}/doppler.log"
+exit 1
+MOCK
+  chmod +x "${MOCKBIN}/doppler"
 }
 teardown_mock_curl() { rm -rf "$MOCKBIN"; MOCKBIN=""; }
 
@@ -79,8 +129,8 @@ test_happy_rearm() {
   local n; n=$(grep -c '^BODY:' "$REQ_LOG")
   assert_eq "one POST per record" "2" "$n"
   local bodies; bodies=$(grep '^BODY:' "$REQ_LOG")
-  assert_contains "body carries reminder_id (route recomputes dedup id)" "$bodies" '"reminder_id":"rem-1"'
-  assert_contains "body carries fire_at (route recomputes dedup ts)" "$bodies" '"fire_at":"2026-06-18T12:00:00Z"'
+  assert_contains "body carries reminder_id (route derives the dedup event id)" "$bodies" '"reminder_id":"rem-1"'
+  assert_contains "body carries fire_at (route derives the delivery ts)" "$bodies" '"fire_at":"2026-06-18T12:00:00Z"'
   assert_contains "body carries actor:platform (route 400s without it)" "$bodies" '"actor":"platform"'
   assert_contains "body carries the action object" "$bodies" '"named-check"'
   local args; args=$(grep '^ARGS:' "$REQ_LOG" | head -1)
@@ -291,6 +341,191 @@ test_rearm_from_capture_empty_array_noop() {
   teardown_mock_curl
 }
 
+# --- #6921 capture-resume rows (Guard 4) -----------------------------------------------------
+# write_enum_stub <records|FAIL>: an enumerate stub that touches enum.invoked (so a row can prove
+# the live enumeration was, or was NOT, attempted) then prints the records or exits 99.
+write_enum_stub() {
+  assert_fixture_dir "$MOCKBIN"
+  if [[ "$1" == FAIL ]]; then
+    printf '#!/usr/bin/env bash\ntouch "%s/enum.invoked"\nexit 99\n' "$MOCKBIN" > "${MOCKBIN}/enum.sh"
+  else
+    printf '#!/usr/bin/env bash\ntouch "%s/enum.invoked"\nprintf '"'"'%%s'"'"' '"'"'%s'"'"'\n' "$MOCKBIN" "$1" > "${MOCKBIN}/enum.sh"
+  fi
+  chmod +x "${MOCKBIN}/enum.sh"
+}
+# run_capture <is-active> <is-enabled>: capture mode against the mock unit; stdout -> cap.out,
+# stderr -> cap.err. The secret IS set, so the predicate is the only variable under test.
+run_capture() {
+  local rc=0
+  assert_fixture_dir "$MOCKBIN"
+  PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    MOCK_SYSTEMCTL_ACTIVE="$1" MOCK_SYSTEMCTL_ENABLED_STATE="$2" \
+    INNGEST_REARM_MODE=capture \
+    INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" \
+    INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+    bash "$TARGET" </dev/null >"${MOCKBIN}/cap.out" 2>"${MOCKBIN}/cap.err" || rc=$?
+  return "$rc"
+}
+REC2='[{"reminder_id":"rem-p1","fire_at":"2026-09-20T12:00:00Z","actor":"platform","action":{"type":"x"}},{"reminder_id":"rem-p2","fire_at":"2026-09-21T12:00:00Z","actor":"platform","action":{"type":"x"}}]'
+seed_capture() {
+  assert_fixture_dir "$MOCKBIN"
+  printf '%s' "$1" > "${MOCKBIN}/capture.json"
+  touch -d '2026-09-13T10:11:12Z' "${MOCKBIN}/capture.json"
+}
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+exists() { [[ -e "$1" ]] && echo 1 || echo 0; }
+
+test_capture_resumes_persisted_when_quiesced() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture "$REC2"
+  local before rc=0; before=$(sha_of "${MOCKBIN}/capture.json")
+  run_capture inactive disabled || rc=$?
+  local out; out=$(cat "${MOCKBIN}/cap.out")
+  assert_eq "quiesced resume: exits 0" "0" "$rc"
+  assert_eq "quiesced resume: source is persisted" "persisted" "$(printf '%s' "$out" | jq -r '.source // "live"' 2>/dev/null)"
+  assert_eq "quiesced resume: captured counts the persisted records" "2" "$(printf '%s' "$out" | jq -r '.captured' 2>/dev/null)"
+  assert_eq "quiesced resume: reminder_ids are the persisted ids" "rem-p1,rem-p2" "$(printf '%s' "$out" | jq -r '.reminder_ids | join(",")' 2>/dev/null)"
+  assert_eq "quiesced resume: captured_at is the file mtime, ISO-8601 UTC" "2026-09-13T10:11:12Z" "$(printf '%s' "$out" | jq -r '.captured_at' 2>/dev/null)"
+  assert_eq "quiesced resume: capture_file names the persisted file" "${MOCKBIN}/capture.json" "$(printf '%s' "$out" | jq -r '.capture_file' 2>/dev/null)"
+  assert_eq "quiesced resume: live enumeration NOT invoked (stub marker absent)" "0" "$(exists "${MOCKBIN}/enum.invoked")"
+  assert_eq "quiesced resume: persisted file unchanged (sha256)" "$before" "$(sha_of "${MOCKBIN}/capture.json")"
+  assert_eq "quiesced resume: the predicate read the MOCK systemctl (verb log exists)" "1" "$(exists "${MOCKBIN}/systemctl.verbs.log")"
+  assert_contains "quiesced resume: journald line names count + captured_at" "$(cat "${MOCKBIN}/logger.log" 2>/dev/null)" "resumed persisted capture: 2 reminder(s) captured_at=2026-09-13T10:11:12Z (scheduler quiesced)"
+  assert_eq "quiesced resume: no re-arm POST" "0" "$(grep -c '^BODY:' "$REQ_LOG" 2>/dev/null || true)"
+  teardown_mock_curl
+}
+
+test_capture_failed_disabled_resumes_persisted() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture "$REC2"
+  local rc=0; run_capture failed disabled || rc=$?
+  assert_eq "failed+disabled (post-SIGKILL quiesce) resume: exits 0" "0" "$rc"
+  assert_eq "failed+disabled resume: source is persisted" "persisted" "$(jq -r '.source // "live"' "${MOCKBIN}/cap.out" 2>/dev/null)"
+  assert_eq "failed+disabled resume: live enumeration NOT invoked" "0" "$(exists "${MOCKBIN}/enum.invoked")"
+  teardown_mock_curl
+}
+
+test_capture_quiesced_empty_array_is_valid() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture '[]'
+  local rc=0; run_capture inactive disabled || rc=$?
+  assert_eq "quiesced [] persisted: exits 0 (an empty capture is a capture)" "0" "$rc"
+  assert_eq "quiesced [] persisted: captured 0" "0" "$(jq -r '.captured' "${MOCKBIN}/cap.out" 2>/dev/null)"
+  assert_eq "quiesced [] persisted: source persisted" "persisted" "$(jq -r '.source // "live"' "${MOCKBIN}/cap.out" 2>/dev/null)"
+  teardown_mock_curl
+}
+
+test_capture_quiesced_without_file_fails_with_remedy() {
+  setup_mock_curl 202
+  write_enum_stub FAIL
+  local rc=0; run_capture inactive disabled || rc=$?
+  local err; err=$(cat "${MOCKBIN}/cap.err")
+  assert_eq "quiesced, no file: exits 1" "1" "$rc"
+  assert_contains "quiesced, no file: says nothing to resume from" "$err" "nothing to resume from"
+  assert_contains "quiesced, no file: names op=rollback as the remedy" "$err" "op=rollback"
+  assert_eq "quiesced, no file: live enumeration NOT attempted" "0" "$(exists "${MOCKBIN}/enum.invoked")"
+  assert_eq "quiesced, no file: no file fabricated" "0" "$(exists "${MOCKBIN}/capture.json")"
+  teardown_mock_curl
+}
+
+test_capture_quiesced_corrupt_file_fails() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture '{}'
+  local rc=0; run_capture inactive disabled || rc=$?
+  assert_eq "quiesced, non-array file ({}): exits 1" "1" "$rc"
+  assert_contains "quiesced, non-array file: nothing to resume from" "$(cat "${MOCKBIN}/cap.err")" "nothing to resume from"
+  assert_eq "quiesced, non-array file: never returned as a capture (no persisted status)" "0" "$(grep -c 'persisted' "${MOCKBIN}/cap.out" || true)"
+  teardown_mock_curl
+}
+
+test_capture_serving_enumerates_live() {
+  setup_mock_curl 202
+  write_enum_stub '[{"reminder_id":"rem-live","fire_at":"2026-09-22T00:00:00Z","actor":"platform","action":{"type":"x"}}]'
+  seed_capture "$REC2"
+  local rc=0; run_capture active enabled || rc=$?
+  assert_eq "serving: exits 0" "0" "$rc"
+  assert_eq "serving: source reads live (field absent; CI reads .source // \"live\")" "live" "$(jq -r '.source // "live"' "${MOCKBIN}/cap.out" 2>/dev/null)"
+  assert_eq "serving: live response shape unchanged (no source/captured_at keys)" "capture_file,captured,reminder_ids" "$(jq -r 'keys | join(",")' "${MOCKBIN}/cap.out" 2>/dev/null)"
+  assert_eq "serving: live enumeration invoked" "1" "$(exists "${MOCKBIN}/enum.invoked")"
+  assert_contains "serving: persisted file overwritten with the enumerated record" "$(cat "${MOCKBIN}/capture.json")" '"reminder_id":"rem-live"'
+  assert_eq "serving: stale records gone from the file" "0" "$(grep -c 'rem-p1' "${MOCKBIN}/capture.json" || true)"
+  teardown_mock_curl
+}
+
+test_capture_health_down_but_enabled_does_not_resume() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture "$REC2"
+  local rc=0; run_capture inactive enabled || rc=$?
+  assert_eq "inactive+ENABLED (crash loop): exits 1" "1" "$rc"
+  assert_contains "inactive+ENABLED: enumeration failed (no stale-file resume)" "$(cat "${MOCKBIN}/cap.err")" "enumeration failed"
+  assert_eq "inactive+ENABLED: live enumeration attempted" "1" "$(exists "${MOCKBIN}/enum.invoked")"
+  assert_eq "inactive+ENABLED: no persisted status emitted" "0" "$(grep -c 'persisted' "${MOCKBIN}/cap.out" || true)"
+  teardown_mock_curl
+}
+
+test_capture_unit_not_found_does_not_resume() {
+  setup_mock_curl 202
+  write_enum_stub FAIL; seed_capture "$REC2"
+  local rc=0; run_capture inactive not-found || rc=$?
+  assert_eq "inactive+not-found (unit absent, rc 4): exits 1" "1" "$rc"
+  assert_eq "inactive+not-found: live enumeration attempted (never the file)" "1" "$(exists "${MOCKBIN}/enum.invoked")"
+  assert_eq "inactive+not-found: no persisted status emitted" "0" "$(grep -c 'persisted' "${MOCKBIN}/cap.out" || true)"
+  teardown_mock_curl
+}
+
+test_capture_needs_no_secret() {
+  setup_mock_curl 202
+  write_enum_stub '[{"reminder_id":"rem-ns","fire_at":"2026-09-22T00:00:00Z","actor":"platform","action":{"type":"x"}}]'
+  local rc=0
+  assert_fixture_dir "$MOCKBIN"
+  env -u INNGEST_MANUAL_TRIGGER_SECRET -u INNGEST_REARM_SKIP_DOPPLER -u DOPPLER_TOKEN \
+    PATH="${MOCKBIN}:$PATH" \
+    SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/no-such-token-file" \
+    MOCK_SYSTEMCTL_ACTIVE=active MOCK_SYSTEMCTL_ENABLED_STATE=enabled \
+    INNGEST_REARM_MODE=capture \
+    INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" \
+    INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+    bash "$TARGET" </dev/null >"${MOCKBIN}/cap.out" 2>"${MOCKBIN}/cap.err" || rc=$?
+  assert_eq "capture without any secret: exits 0" "0" "$rc"
+  assert_contains "capture without any secret: file written" "$(cat "${MOCKBIN}/capture.json" 2>/dev/null)" '"reminder_id":"rem-ns"'
+  assert_eq "capture without any secret: doppler never invoked (tripwire log absent)" "0" "$(exists "${MOCKBIN}/doppler.log")"
+  teardown_mock_curl
+}
+
+test_rearm_still_fails_closed_without_secret() {
+  setup_mock_curl 202
+  seed_capture "$REC2"
+  local rc=0
+  assert_fixture_dir "$MOCKBIN"
+  env -u INNGEST_MANUAL_TRIGGER_SECRET -u DOPPLER_TOKEN PATH="${MOCKBIN}:$PATH" INNGEST_REARM_SKIP_DOPPLER=1 \
+    INNGEST_REARM_MODE=rearm-from-capture \
+    INNGEST_ENUMERATE_CMD=/bin/false \
+    INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+    bash "$TARGET" </dev/null >"${MOCKBIN}/cap.out" 2>"${MOCKBIN}/cap.err" || rc=$?
+  assert_eq "rearm-from-capture without a secret: exits 1 (fail closed)" "1" "$rc"
+  assert_contains "rearm-from-capture without a secret: names the secret" "$(cat "${MOCKBIN}/cap.err")" "INNGEST_MANUAL_TRIGGER_SECRET unavailable"
+  assert_eq "rearm-from-capture without a secret: no POST" "0" "$(grep -c '^BODY:' "$REQ_LOG" 2>/dev/null || true)"
+  assert_eq "rearm-from-capture without a secret: capture retained" "1" "$(exists "${MOCKBIN}/capture.json")"
+  teardown_mock_curl
+}
+
+test_rearm_empty_capture_emits_canonical_line() {
+  setup_mock_curl 202
+  seed_capture '[]'
+  local rc=0
+  assert_fixture_dir "$MOCKBIN"
+  PATH="${MOCKBIN}:$PATH" INNGEST_MANUAL_TRIGGER_SECRET="test-secret" \
+    INNGEST_REARM_MODE=rearm-from-capture \
+    INNGEST_ENUMERATE_CMD=/bin/false \
+    INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+    bash "$TARGET" </dev/null >"${MOCKBIN}/cap.out" 2>"${MOCKBIN}/cap.err" || rc=$?
+  assert_eq "Σ=0 re-arm: exits 0" "0" "$rc"
+  assert_contains "Σ=0 re-arm: stderr carries the canonical parseable line" "$(cat "${MOCKBIN}/cap.err")" "inngest-rearm-reminders: re-armed=0 failed=0 total=0"
+  assert_eq "Σ=0 re-arm: canonical line is NOT on stdout (same stream as the non-empty path)" "0" "$(grep -c 're-armed=' "${MOCKBIN}/cap.out" || true)"
+  assert_eq "Σ=0 re-arm: consumed capture removed" "0" "$(exists "${MOCKBIN}/capture.json")"
+  teardown_mock_curl
+}
+
 test_happy_rearm
 test_503_aborts_loud
 test_other_failure
@@ -304,7 +539,25 @@ test_rearm_from_capture_missing_is_fatal
 test_rearm_from_capture_corrupt_is_fatal
 test_steady_state_rearm_ignores_orphan_capture
 test_rearm_from_capture_empty_array_noop
+test_capture_resumes_persisted_when_quiesced
+test_capture_failed_disabled_resumes_persisted
+test_capture_quiesced_empty_array_is_valid
+test_capture_quiesced_without_file_fails_with_remedy
+test_capture_quiesced_corrupt_file_fails
+test_capture_serving_enumerates_live
+test_capture_health_down_but_enabled_does_not_resume
+test_capture_unit_not_found_does_not_resume
+test_capture_needs_no_secret
+test_rearm_still_fails_closed_without_secret
+test_rearm_empty_capture_emits_canonical_line
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+# Exact assertion-count floor (ADR-193): reported via printf + exit, never through
+# pass()/fail(), so a neutered helper or a vanished test function cannot read green.
+EXPECTED_ASSERTIONS=90
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf 'ASSERTION FLOOR: executed %d assertion(s), expected exactly %d\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2
+  exit 1
+fi
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0
