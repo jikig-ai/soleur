@@ -370,6 +370,13 @@ the pre-#8070 `bun-test` pre-commit hook on a conflict-resolved sync commit, one
 that merged — a path `9832d1d39` has since closed (`bun-test` skips merge commits); do not plan on
 it. The battery you start on the final tree is the only local run there will be.
 
+**Under contention, wait, launch and retry in ONE Monitor script — never probe in one tool call and launch
+in the next.** The window between `CAPACITY_OK` and the launch is exactly where a sibling worktree's run
+starts, and `test-all.sh` then refuses yours with rc 4 (no verdict). Loop on `--capacity`'s `measured_runs`
+until 0, launch detached with the rc to a file, and if that file reads `4` go back to waiting. **Why:** PR
+#8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
+contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
+
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
 - **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.

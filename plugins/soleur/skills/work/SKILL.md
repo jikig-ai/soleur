@@ -182,6 +182,13 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 7. If a plan file was provided (check 5 passed), scan for a `## Domain Review` or `## UX Review` heading (both are accepted for backward compatibility). If NEITHER heading found: scan the plan content for UI file patterns (page.tsx, layout.tsx, template.tsx, .jsx, .vue, .svelte, .astro, +page.svelte, app/, pages/, components/, layouts/, routes/). If UI patterns found, WARN: "Plan references UI files but has no Domain Review section. Consider running /soleur:plan to add domain review before implementing." If either heading IS present: pass silently.
 
 6.5. **Baselined-file lint drawdown.** If any file in `git diff --name-only origin/main...HEAD` (or named in the plan's Files to Edit) appears in [lint-shell-trace-credential-refusal.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal.baseline.txt) or [lint-shell-trace-credential-refusal-d.baseline.txt](../../../../scripts/lint-shell-trace-credential-refusal-d.baseline.txt), run [lint-shell-trace-credential-refusal.py](../../../../scripts/lint-shell-trace-credential-refusal.py) with `--changed --base origin/main` NOW and treat its count as scope: CI runs that exact `--changed` form, which bypasses both baselines for every touched file, so a one-line edit to a baselined script owes its whole debt in the same PR. **Why:** #8054 — the cutover orchestrator script (a baselined file) carried 25 pre-existing violations (no xtrace refusal; 24 unconfined credentialed curls) that surfaced only at the work phase's exit gate and had to be paid down unplanned. See `knowledge-base/project/learnings/2026-09-11-the-gate-i-built-for-a-dark-host-was-blind-to-the-byte-shape-of-nothing.md` §Session Errors 12.
+6.6. **New `*.test.sh` ⇒ run the fixture ratchets before its first commit.** A new shell suite that writes under a
+   `mktemp -d` root from OUTSIDE the function that bound it adds rows to the P1b ratchet
+   (`plugins/soleur/test/fixture-relative-assert.test.sh`, row-by-row baseline) that the suite's own green run cannot
+   see; run it plus `fixture-dir-operand-assert.test.sh` and `python3 scripts/lint-shell-capture-exit.py --baseline
+   scripts/lint-shell-capture-exit.baseline.txt <file>` on the new file, and guard each writing window with the canonical
+   `assert_fixture_dir` rather than regenerating the baseline. **Why:** #8056 and #8135 — the same miss on consecutive
+   days, each caught only by the full battery or the review panel.
 
 **Design artifact checks:**
 
