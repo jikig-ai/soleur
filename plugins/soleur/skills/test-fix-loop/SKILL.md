@@ -3,6 +3,10 @@ name: test-fix-loop
 description: "This skill should be used when autonomously iterating on test failures: runs the suite, diagnoses, applies minimal fixes, re-runs with checkpoint commit isolation until all tests pass."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Test-Fix Loop
 
 Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply fixes to implementation code, and re-run until all tests pass or a termination condition is met. This is a recovery mechanism for unexpected failures -- not a replacement for RED/GREEN/REFACTOR (use `atdd-developer` for TDD discipline).

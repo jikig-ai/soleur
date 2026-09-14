@@ -3,6 +3,10 @@ name: gdpr-gate
 description: "This skill should be used when auditing diffs or plans for GDPR/CCPA/HIPAA compliance gaps."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # GDPR / CCPA / HIPAA pre-generation gate
 
 `gdpr-gate` is an **advisory** code-level gate that fires inline during `/soleur:plan` Phase 2.7 and at `/soleur:work` Phase 2 exit. It scans plan prose, schema migrations, and diffs for regulated-data gaps under GDPR (Articles 5/6/9/17/20/25/30/32/33/35), with secondary coverage for CCPA / CPRA and HIPAA. It never blocks. Critical findings (Article 9 special-category data) prompt operator acknowledgment + GitHub issue creation; the gate never auto-writes to `compliance-posture.md`.

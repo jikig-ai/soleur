@@ -69,6 +69,77 @@ If you see a transient warning such as "plugin ... is in your settings but its c
 Soleur skills are exposed as Devin slash commands (`/soleur:<skill>`). When a slash command is invoked, Devin loads the skill's `SKILL.md` and treats its body as the prompt. Follow the skill's full workflow and referenced files; do not stop after reading it, reproduce it selectively, or ask the user to run the next stage.
 Treat `$ARGUMENTS` as the supplied request (the text following the slash command), never as an environment variable that needs shell interpolation.
 
+## Cloud Mode (Devin Cloud sessions)
+
+Soleur runs in two Devin environments with different enforcement surfaces:
+
+| Surface | Local CLI/Desktop | Devin Cloud session |
+| --- | --- | --- |
+| Skills (`/soleur:*`) | yes | yes |
+| Plugin `AGENTS.md` rules | yes | yes |
+| MCP servers | yes | yes (auth via the web-app connection) |
+| Plugin subagents (`agents/**/*.md`) | yes | **no — local-only** |
+| Plugin hooks: `SessionStart` / `SessionEnd` | yes | **no — never fire in cloud** |
+| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | documented yes — verify per-matcher |
+| Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | undocumented — verify empirically |
+| `.devin/config.json` `requiredPlugins` | yes | honored from each cloned repository |
+
+**Detection:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` prints
+`local` or `not-local:<reason>` (`sentinel-absent`, `foreign-host`,
+`non-plugin-source`, `malformed`, `no-devin-env`). The classifier is
+sentinel-based: the SessionStart hook writes `.devin/soleur-local-session`
+(`{host, ts, hook_source}`) on local sessions, and SessionStart never fires in
+cloud. A session is `local` only when the sentinel exists, its `host` matches
+the current hostname, and `hook_source` is `plugin`. Every other outcome fails
+closed to `not-local` — a repo-level SessionStart firing in cloud produces a
+`non-plugin-source` sentinel, not a false local.
+
+**In a `not-local` session, all four rules apply:**
+
+1. **Banner.** Emit `cloud-detect.sh --banner` (stderr) at the start of
+   pipeline work so the degraded capability state is visible, not silent.
+2. **Sequential fallback.** Plugin subagents do not exist in cloud. A skill
+   that fans out executes each role definition sequentially inline, with the
+   same definition, and discloses: deliverables and PR trailers carry
+   `Reviewed-Coverage: sequential-fallback` (via
+   `emit-review-trailer.sh --mode sequential-fallback`). Never claim an
+   independent review ran when it did not. `/ship` blocks a
+   `single-user incident` plan carrying `sequential-fallback` coverage unless
+   the operator explicitly acknowledges.
+3. **Acknowledgement gate.** Before any secrets read, production mutation,
+   Doppler action, Terraform production action, mutating GitHub API call, or
+   other credential-bearing operation, require an explicit session-scoped
+   acknowledgement. The ack lives in conversation context only — no persisted
+   ack file (a stale file replays into a new session). If the session is
+   unattended and no answer is obtainable, defer or abort the secrets/prod
+   step with a documented alternative; never continue silently.
+4. **Absent guardrails.** SessionStart rule injection and any hook that does
+   not fire are gone. `precommit-guard.sh` is invoked directly by
+   work/ship/one-shot so commit-on-main still refuses without hook execution;
+   every other repo guardrail is **not restored** in cloud — treat the
+   session as running without hook backstops.
+
+**Guardrails NOT restored in cloud** (repo `.claude/hooks/`; cloud execution
+undocumented, absent entirely in user repos): prod-write-defer-gate,
+worktree-write-guard, git-commit-secret-scan, guardrails (all arms except the
+commit-on-main check precommit-guard.sh restores), memory-backstop,
+iac-plan-write-guard, freeze-lock, brand-hex-commit-gate, context-reviewed-gate,
+doppler-secrets-delete-redirect, ship-*-gate family, pre-merge-rebase,
+monitor-supersede-guard, post-dispatch-watch-gate, and the remaining
+`.claude/hooks/` corpus. The DONE-marker stop-gate is likewise not restored —
+it reads hook-stdin transcript data a standalone script cannot see.
+
+**Upstream requests** (capability gaps only Cognition can close):
+
+- **#8160** — plugin subagents (`agents/**/*.md`) and plugin
+  `SessionStart`/`SessionEnd` hooks in cloud sessions; per-matcher binding for
+  plugin `command` hooks (`Bash` vs `exec`).
+- **Repo-level `.devin/config.json` hooks + `requiredPlugins`** — behavior in
+  cloud sessions is undocumented; tracked as probe items (#8172) until measured.
+- **Unattended `ask_user_question` semantics** — documented answer needed for
+  whether an ask auto-approves, stalls, or times out distinguishably (freezes
+  the ack-gate mechanism).
+
 ## Domain agents
 
 Canonical definitions live in `agents/<domain>/**/*.md`. Find an agent by

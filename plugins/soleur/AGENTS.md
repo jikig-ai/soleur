@@ -304,6 +304,18 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 7. Update AGENTS.md (directory tree, domain leader table) and README.md (agent section, counts)
 8. PR must have `semver:minor` label and `## Changelog` section (CI handles version bump at merge time)
 
+## Cloud Sessions (Devin Cloud)
+
+Soleur skills load in Devin Cloud sessions, but the enforcement surface differs from the local CLI — this file is a guaranteed-load surface, so the rules live here:
+
+- [id: cloud-detect-before-pipeline] — Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work; `local` proceeds normally, `not-local:<reason>` activates Cloud Mode for the whole session (fail-closed — every non-`local` result is cloud).
+- [id: cloud-banner-on-not-local] — In a `not-local` session, emit `cloud-detect.sh --banner` (stderr) at the start of pipeline work so the degraded surface is visible, never silent.
+- [id: cloud-sequential-fallback] — Plugin subagents are local-only. A skill that fans out executes each role sequentially inline with the same definition, discloses `Reviewed-Coverage: sequential-fallback` in deliverables and PR trailers, and never claims an independent review ran. `/ship` blocks `sequential-fallback` coverage on a `single-user incident` plan without explicit acknowledgement.
+- [id: cloud-ack-before-secrets] — In a `not-local` session, no secrets read, production mutation, Doppler action, Terraform prod action, or mutating GitHub API call proceeds without an explicit session-scoped acknowledgement (context-held only — never a persisted ack file; an unanswered or headless session defers/aborts the step with a documented alternative).
+- [id: cloud-guardrail-disclosure] — SessionStart rule injection and non-firing hooks are absent in cloud; `precommit-guard.sh` is skill-invoked so commit-on-main still refuses without hook execution, and every other repo guardrail is disclosed as not restored — never implied parity.
+
+Canonical contract: `devin/INSTRUCTIONS.md` §Cloud Mode (capability matrix, detection semantics, consumer behavior).
+
 ## Documentation
 
 Version is derived from git tags via GitHub Releases. See the `version-bump-and-release.yml` workflow for details.

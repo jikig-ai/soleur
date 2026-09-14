@@ -26,6 +26,8 @@ generated-date: 2026-02-20
 
 **Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
+**Corrected September 14, 2026 (#8159).** Statements describing the Plugin as running entirely or exclusively on your local machine (Sections 3, 4.1, 4.2 and 11) are now scoped to the plugin-local configuration, and the scope notes in this policy now name a third configuration — the **provider-operated session** (a third-party machine, for example a Devin Cloud session on a Cognition-managed VM, under your own credentials for your own purposes), in which no limb is Jikigai's. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)* Output marked draft-requiring-professional-review.
+
 ## 1. Introduction
 
 This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI) providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").
@@ -36,7 +38,7 @@ We are committed to protecting your privacy. This Policy explains what data is a
 
 **Soleur** is a source-available project maintained by **Jikigai**, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Jikigai is the data controller for the processing activities described in this Policy.
 
-**Our role is not the same in every configuration.** For the processing described in this policy Jikigai is the data controller. One such configuration is an **operator-assisted session** — where you have asked us to help you run Soleur using our machine or our API key — in which we act as your processor for the work you instruct us to do, and as a controller only for our own product-learning purpose. Our role also differs in the configurations described in Sections 4.7, 4.10 and 4.11. See Section 4.2 and the Data Protection Disclosure, Section 2.1c.
+**Our role is not the same in every configuration.** For the processing described in this policy Jikigai is the data controller. One such configuration is an **operator-assisted session** — where you have asked us to help you run Soleur using our machine or our API key — in which we act as your processor for the work you instruct us to do, and as a controller only for our own product-learning purpose. Our role also differs in the configurations described in Sections 4.7, 4.10 and 4.11. See Section 4.2 and the Data Protection Disclosure, Section 2.1c. A third configuration — the provider-operated session, in which the Plugin runs on a third party's machine under your own credentials for your own purposes — involves no Jikigai role at all and is described in the same place.
 
 The Soleur source code is available at the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
@@ -44,7 +46,7 @@ For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Priva
 
 ## 3. What the Plugin Does
 
-Soleur is a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). It provides specialist AI agents, skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via a supported AI coding CLI and runs entirely on your local machine.
+Soleur is a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). It provides specialist AI agents, skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via a supported AI coding CLI and, in the plugin-local configuration, runs entirely on your local machine. In a provider-operated session — for example a Devin Cloud session on a Cognition-managed VM — the Plugin instead runs on that provider's machine, under your own credentials; see the Data Protection Disclosure, Section 2.1c.
 
 ## 4. Data We Collect
 
@@ -52,22 +54,22 @@ Soleur is a locally installed plugin for supported AI coding CLIs (including Cla
 
 The Soleur **Plugin** (the locally installed plugin for supported AI coding CLIs) **does not collect, transmit, or store any personal data on external servers**. Specifically:
 
-- The Plugin runs entirely on your local machine.
-- All knowledge-base files -- including plans, brainstorms, specifications, and learnings -- are stored exclusively on your local filesystem.
+- In the plugin-local configuration, the Plugin runs entirely on your local machine.
+- In the plugin-local configuration, all knowledge-base files -- including plans, brainstorms, specifications, and learnings -- are stored on your local filesystem.
 - The Plugin does not phone home, send telemetry, or transmit analytics to Jikigai-operated servers.
 - We do not have access to your files, your code, or your usage patterns.
 
-This section applies to the Plugin only. For data collected by the Soleur Web Platform (app.soleur.ai), see Section 4.7 below. For operator-assisted sessions — where you have asked us to help you run Soleur using our machine or our API key — see Section 4.2 below and the Data Protection Disclosure, Section 2.1c. The same applies if you have given us access to one of your repositories.
+This section applies to the Plugin only. For data collected by the Soleur Web Platform (app.soleur.ai), see Section 4.7 below. For operator-assisted sessions — where you have asked us to help you run Soleur using our machine or our API key — see Section 4.2 below and the Data Protection Disclosure, Section 2.1c. The same applies if you have given us access to one of your repositories. Nor does it describe a provider-operated session — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under your own credentials for your own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 4.2 Data Processed Locally
 
-The Plugin creates and manages files on your local filesystem as part of its normal operation. These may include:
+In the plugin-local configuration, the Plugin creates and manages files on your local filesystem as part of its normal operation. These may include:
 
 - **Knowledge-base files:** Plans, brainstorms, specs, learnings, and other structured documents stored in the `knowledge-base/` directory.
 - **Configuration files:** Plugin settings and workflow state stored locally.
 - **Git artifacts:** Branches, commits, and worktrees created as part of development workflows.
 
-All of this data remains on your machine. We have no access to it.
+In the plugin-local configuration, all of this data remains on your machine. We have no access to it.
 
 **Operator-assisted sessions are the exception to the sentence above.** If you ask us to help you run Soleur against your own material, and we do that using our machine or our API key, then during that session we do read the files described above — including your `knowledge-base/` directory and your git history — and their content is sent to our AI provider under **our** credentials rather than yours.
 
@@ -85,9 +87,9 @@ the access lasts. You can end it at any time by
 withdrawing the access, and you can object to the processing at any time — see Section 8.1 and GDPR
 Policy Section 3.14.
 
-Neither exception applies unless you have asked us for an operator-assisted session or granted us
-access. Absent both, the paragraphs above apply as written: the data listed above stays on your
-machine and we have no access to it.
+**A provider-operated session is a third exception to "remains on your machine" — but not to "we have no access."** If you run the Plugin on a third party's machine — for example a Devin Cloud session on a Cognition-managed VM — the files described above are created and held on that provider's machine, governed by the provider's own terms, under your own credentials and for your own purposes. No limb of that configuration is ours: we still have no access to the data, and we are neither controller nor processor for it. See the Data Protection Disclosure, Section 2.1c.
+
+The two Jikigai-side exceptions apply only if you have asked us for an operator-assisted session or granted us access, and the provider-operated exception applies only if you choose to run the Plugin on a third party's machine. Absent all three, the paragraphs above apply as written: the data listed above stays on your machine and we have no access to it.
 
 ### 4.3 Data Collected by the Docs Site
 
@@ -484,7 +486,7 @@ For users in the European Union or European Economic Area:
 
 Because the Plugin itself does not collect or process personal data, no legal basis for processing is required for Plugin usage.
 
-**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a provider-operated session — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under your own credentials for your own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 For the Web Platform (app.soleur.ai), the legal basis for processing account data, workspace data, and subscription data is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the user signed up for. For payment processing via Stripe, the legal basis is also contract performance -- processing is necessary to fulfill the subscription agreement. For technical data processed by Cloudflare (IP addresses, request headers -- see Section 5.8), the legal basis is contract performance for authenticated users and **legitimate interest** (Article 6(1)(f) GDPR) for unauthenticated traffic.
 
@@ -597,7 +599,7 @@ The Soleur Plugin and Docs Site are not directed at children under the age of 16
 
 The Plugin operates locally and does not transfer data internationally.
 
-**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a provider-operated session — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under your own credentials for your own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer. To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>.
 
@@ -627,7 +629,7 @@ For the LinkedIn Company Page publication (see Section 4.10 and Sections 5.12–
 
 ## 11. Security
 
-Because the Plugin runs locally and does not transmit data to our servers, the security of Plugin-generated files depends on your local machine's security posture. We recommend:
+Because the Plugin does not transmit data to our servers, the security of Plugin-generated files depends on the security posture of the machine running it. We recommend:
 
 - Keeping your operating system and development tools up to date.
 - Using appropriate access controls on your local filesystem.

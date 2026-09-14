@@ -28,6 +28,8 @@ generated-date: 2026-02-20
 
 **Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
+**Corrected September 14, 2026 (#8159).** The plugin-local scope notes throughout this policy now name a third configuration — the **provider-operated session** (a third-party machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes), in which no limb is Jikigai's — and Section 2.1's local-machine statement is scoped to the plugin-local configuration. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)* Output marked draft-requiring-professional-review.
+
 ---
 
 ## 1. Introduction
@@ -42,11 +44,11 @@ This policy applies to all individuals located in the European Economic Area ("E
 
 ### 2.1 Soleur's Role
 
-The Soleur **Plugin** operates as a **locally installed CLI extension**. All data generated, processed, and stored by the Plugin resides exclusively on the user's local machine. The Plugin does not collect, transmit, receive, or store any personal data on external servers.
+The Soleur **Plugin** operates as a **locally installed CLI extension**. In the plugin-local configuration, all data generated, processed, and stored by the Plugin resides exclusively on the user's local machine. The Plugin does not collect, transmit, receive, or store any personal data on external servers.
 
 As a result, **the Plugin does not act as a data processor** within the meaning of Article 4(8) of the GDPR with respect to user content, knowledge-base files, or any data created through the Plugin's operation.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** The paragraphs above describe **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Jikigai acts as a **data controller** for: (a) the documentation site hosted on GitHub Pages, where standard web server logs (IP addresses, browser metadata) are collected via GitHub's infrastructure, (b) the GitHub repository, where issue reports and contributions involve processing of GitHub profile data, and (c) the Soleur Web Platform (app.soleur.ai), where user account data, workspace data, and subscription data are processed on Jikigai-operated infrastructure via third-party processors (Supabase, Stripe, Hetzner, Cloudflare), and (d) operator-assisted sessions and repository access granted to Jikigai, for Jikigai's own product-learning and programme-measurement purposes, as described in the Data Protection Disclosure, Section 2.1c, with the lawful basis at Section 3.14. That list is not exhaustive: for the instructed part of an operator-assisted session Jikigai acts as a **processor** on the User's instructions rather than as a controller.
 
@@ -87,7 +89,7 @@ Users should be aware that interacting with Soleur may involve third-party servi
 
 Because Soleur processes all data locally on the user's device and does not transmit personal data to Soleur-controlled infrastructure, there is no personal data processing by Soleur that requires a lawful basis under Article 6 of the GDPR.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 3.2 Documentation Site
 
@@ -352,7 +354,7 @@ The Soleur **Plugin** does not collect, store, or process the following categori
 - Financial or payment information
 - Content generated through the plugin (knowledge-base files, brainstorms, plans, code)
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 **Note:** The Docs Site collects email addresses from visitors who voluntarily subscribe to the newsletter (see Section 3.6). This data is processed by Buttondown, not by the Plugin.
 
@@ -417,7 +419,7 @@ Under the GDPR, data subjects in the EEA have the following rights. For data pro
 - **Right to Erasure of Local Data:** Because all Soleur plugin data is stored on your local machine, you have full and immediate control over its deletion. Uninstalling the plugin and deleting the plugin directory removes all associated data.
 - **Right to Access Local Data:** All knowledge-base files, plans, brainstorms, and other artifacts are stored as plaintext files on your filesystem and are fully accessible to you at all times.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses how Jikigai assists the User in responding to requests from data subjects in respect of that processing.
 
@@ -490,7 +492,7 @@ The Soleur Plugin itself does not transfer personal data internationally. Howeve
 
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
-**Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer. To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>.
 
@@ -500,7 +502,7 @@ Where an operator-assisted session has taken place, the written instrument agree
 
 ### 7.1 Local Security
 
-Because Soleur operates entirely on the user's local machine:
+In the plugin-local configuration, Soleur operates entirely on the user's local machine:
 
 - All data remains within the user's filesystem security perimeter.
 
@@ -508,7 +510,7 @@ Because Soleur operates entirely on the user's local machine:
 - Users are responsible for securing their own devices, including filesystem permissions, disk encryption, and access controls.
 - API keys (e.g., Anthropic API keys) are managed locally by the user and are never collected or stored by Soleur.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 7.2 Recommendations for Users
 
@@ -536,7 +538,7 @@ under the terms applying to Jikigai's own account, for a period Jikigai does not
 shorten once the content has been sent; deletion of the local files does not reach that copy.
 Retention for such a session is addressed in the written instrument agreed with the User before it
 takes place. Operator-assisted processing is described in the Data Protection Disclosure,
-Section 2.1c.
+Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 8.2 Legal and GDPR Inquiry Correspondence
 
@@ -578,7 +580,7 @@ This assessment will be revisited if processing activities expand significantly 
 
 **Important for users:** If you use Soleur's AI agents to process personal data of third parties (e.g., including personal data in knowledge-base files, feeding personal data to the Anthropic API via agent prompts), **you** may be required to conduct a DPIA under Article 35. This is your responsibility as the data controller for locally processed data.
 
-**Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
+**Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ---
 

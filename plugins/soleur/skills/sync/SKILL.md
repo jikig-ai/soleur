@@ -4,6 +4,10 @@ description: This skill analyzes the codebase and populates the knowledge-base w
 argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # /soleur:sync (Devin CLI entry point)
 
 You are the `/soleur:sync` slash command for the Soleur plugin on Devin CLI.

@@ -3,6 +3,10 @@ name: ux-audit
 description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to ux-design-lead audit mode, dedupes, files capped issues.
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # ux-audit
 
 Recurring UX-review agent loop. Scheduled via `.github/workflows/scheduled-ux-audit.yml` on push to `main` under `apps/web-platform/{app,components}/**` and a monthly `0 9 1 * *` cron. Can be run locally in dry-run mode for calibration.

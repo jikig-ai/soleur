@@ -3,6 +3,10 @@ name: growth
 description: "This skill should be used when performing content strategy analysis, keyword research, content auditing, content gap analysis, or AI agent consumability auditing. Sub-commands: auditing, planning, applying fixes."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Growth Strategy
 
 Analyze content for keyword alignment, plan content to capture search traffic, audit AI agent consumability, and apply content fixes. This skill delegates to the growth-strategist agent for content-level analysis and execution.
