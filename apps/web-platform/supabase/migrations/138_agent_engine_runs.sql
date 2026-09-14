@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS agent_engine_runs_workspace_created_idx
 CREATE TABLE IF NOT EXISTS public.agent_engine_events (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   run_id uuid NOT NULL REFERENCES public.agent_engine_runs(id) ON DELETE CASCADE,
-  event_id text NOT NULL,
+  event_id text NOT NULL CHECK (length(event_id) BETWEEN 1 AND 256),
   sequence integer NOT NULL CHECK (sequence > 0),
   payload jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -65,6 +65,15 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE v_row public.agent_engine_events;
 BEGIN
+  IF p_event_id IS NULL OR length(p_event_id) NOT BETWEEN 1 AND 256 THEN
+    RAISE EXCEPTION 'event id is invalid' USING ERRCODE = '22023';
+  END IF;
+  IF p_sequence IS NULL OR p_sequence < 1 THEN
+    RAISE EXCEPTION 'event sequence is invalid' USING ERRCODE = '22023';
+  END IF;
+  IF p_payload IS NULL THEN
+    RAISE EXCEPTION 'event payload is required' USING ERRCODE = '22023';
+  END IF;
   IF auth.role() <> 'service_role' AND NOT EXISTS (
     SELECT 1 FROM public.agent_engine_runs r
     WHERE r.id = p_run_id AND public.is_workspace_member(r.workspace_id, auth.uid())

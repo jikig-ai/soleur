@@ -35,6 +35,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Schema contract slice: migration 138 defines settings, live runs, immutable bindings, idempotent events, RLS, and owner RPC (5 migration tests green).
   - [x] Repository contract slice: atomic bind RPC, tenant run lookup, and idempotent event append (2 repository tests green).
   - [x] Durable event-conflict slice: event append uses a membership-scoped RPC that returns exact retries and rejects divergent sequence or payload reuse (18 persistence/migration tests green).
+  - [x] Durable event-shape slice: the event table and append RPC reject empty/oversized IDs, non-positive sequences, and null payloads before persistence (140 focused regression tests green).
   - [x] Conversation binding lookup slice: the persistence repository resolves the unique immutable run by conversation ID and normalizes it into the neutral contract (11 persistence tests green).
   - [x] Routine binding lookup slice: the persistence repository resolves the unique immutable run by routine ID and application run ID, and the dispatch layer fails closed before adapter selection (30 persistence/dispatch tests green).
   - [x] Conversation composition slice: websocket conversation creation binds the trusted workspace default before first-turn dispatch; authenticated RPC execution is identity-bound (10 focused tests green).
