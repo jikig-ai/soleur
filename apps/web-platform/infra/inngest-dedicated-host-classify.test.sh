@@ -283,6 +283,8 @@ assert "#8077 the Auto-dispatch inngest restart step's if: was located (non-vacu
   "[[ -n \"\$DISP_IF_NC\" ]] && grep -qF \"failure_mode == 'inngest_down'\" <<<\"\$DISP_IF_NC\""
 assert "#8077 the restart dispatch if: never names a quiesced mode" \
   "! grep -qF 'quiesced' <<<\"\$DISP_IF_NC\""
+assert "#8077 the restart dispatch if: never names the disabled-unattributed mode" \
+  "! grep -qF 'unattributed' <<<\"\$DISP_IF_NC\""
 DISP_OR_N=$(grep -oF '||' <<<"$DISP_IF_NC" | wc -l | tr -d '[:space:]')
 assert "#8077 the restart dispatch if: carries exactly one || (got $DISP_OR_N)" "[[ '$DISP_OR_N' -eq 1 ]]"
 
@@ -292,7 +294,7 @@ assert "#8077 the restart dispatch if: carries exactly one || (got $DISP_OR_N)" 
 # derivation (zero modes) cannot pass by iterating nothing.
 MODES=$(grep -v '^[[:space:]]*#' "$CLASSIFIER" | grep -oE 'echo "[a-z_]+"' | sed -E 's/^echo "([a-z_]+)"$/\1/' | sort -u | grep -vx 'healthy') || true
 MODE_N=$(printf '%s\n' "$MODES" | grep -c .) || true
-assert "#8077 classifier modes derived excluding healthy (>=6, got $MODE_N: $(tr '\n' ' ' <<<"$MODES"))" "[[ '$MODE_N' -ge 6 ]]"
+assert "#8077 classifier modes derived excluding healthy (>=7, got $MODE_N: $(tr '\n' ' ' <<<"$MODES"))" "[[ '$MODE_N' -ge 7 ]]"
 for m in $MODES; do
   assert "#8077 the probe case has an arm for classifier mode '$m' (else *) → probe_unavailable)" \
     "grep -qE '^ *${m}\\)' '$CASE_NC'"
@@ -303,26 +305,192 @@ assert "#6374 the probe case's *) default arm still exists and maps to probe_una
 assert "#8077 the healthy mode is handled by the if [[ \"\$MODE\" == \"healthy\" ]] branch" \
   "grep -qF 'if [[ \"\$MODE\" == \"healthy\" ]]; then' '$PROBE_NC'"
 
-# Declaration row (Guard 1 #6): web_quiesced is read by the post-loop record_failure guard, so it
-# must be declared on the SAME line as fail_mode="" — OUTSIDE `if [[ -z "$fail_mode" ]]`. Declared
-# inside that block, the secret_unset path never assigns it and any later read under `set -u`
-# kills the step before it writes failure_mode.
+# Declaration row (Guard 1 #6): web_quiesced_since is read by the post-loop record_failure guard and
+# by the output block, so it must be declared on the SAME line as fail_mode="" — OUTSIDE
+# `if [[ -z "$fail_mode" ]]`. Declared inside that block, the secret_unset path never assigns it and
+# the output block's read under `set -u` kills the step before it writes failure_mode. (The executed
+# rows in (g) are what catch the mutation; this row names the invariant.)
 DECL_LN=$(grep -nF 'fail_mode=""; fail_detail=""' "$PROBE_NC" | head -1 | cut -d: -f1) || true
 assert "#8077 the fail_mode=\"\" declaration line was located (non-vacuity)" "[[ -n '$DECL_LN' ]]"
 DECL_TXT=$(sed -n "${DECL_LN:-0}p" "$PROBE_NC" 2>/dev/null) || true
-assert "#8077 web_quiesced=\"no\" is declared on the fail_mode=\"\" line" \
-  "grep -qF 'web_quiesced=\"no\"' <<<\"\$DECL_TXT\""
-FIRST_WQ_LN=$(grep -nE 'web_quiesced=' "$PROBE_NC" | head -1 | cut -d: -f1) || true
-assert "#8077 no web_quiesced= assignment precedes that declaration (first at ${FIRST_WQ_LN:-none}, decl ${DECL_LN:-none})" \
+assert "#8077 web_quiesced_since=\"\" is declared on the fail_mode=\"\" line" \
+  "grep -qF 'web_quiesced_since=\"\"' <<<\"\$DECL_TXT\""
+FIRST_WQ_LN=$(grep -nE 'web_quiesced_since=' "$PROBE_NC" | head -1 | cut -d: -f1) || true
+assert "#8077 no web_quiesced_since= assignment precedes that declaration (first at ${FIRST_WQ_LN:-none}, decl ${DECL_LN:-none})" \
   "[[ -n '$FIRST_WQ_LN' && '$FIRST_WQ_LN' == '$DECL_LN' ]]"
+
+# (vi) The disabled-unattributed alarm has its own file-issue arm — it must never fall to the
+# file-issue step's `*)` default, which maps to the `down` class (a false [ci/inngest-down] P1 that
+# also claims a restart this workflow never dispatches for that mode).
+# shellcheck disable=SC2034  # read inside the assert eval string below
+FILE_CASE_NC=$(awk '/^      - name: File or comment tracking issue \(failure\)/{f=1; next} f && /^ *case "\$FAIL_MODE" in$/{g=1; next} g && /^ *esac$/{exit} g' "$WF_NC")
+assert "#8077 the file-issue step's case \"\$FAIL_MODE\" block was located (non-vacuity)" \
+  "grep -qE '^ *\\*\\) +ISSUE_CLASS=\"down\"' <<<\"\$FILE_CASE_NC\""
+assert "#8077 the file-issue step routes inngest_disabled_unattributed to its own class (not *) → down)" \
+  "grep -qE '^ *inngest_disabled_unattributed\\) +ISSUE_CLASS=\"disabled-unattributed\"' <<<\"\$FILE_CASE_NC\""
+assert "#8077 the disabled-unattributed issue title carries [ci/inngest-disabled-unattributed] and remedy op=rollback" \
+  "grep -qF 'ISSUE_TITLE=\"[ci/inngest-disabled-unattributed]' '$WF_NC' && awk '/ISSUE_CLASS\" == \"disabled-unattributed\"/{f=1} f&&/op=rollback/{print; exit}' '$WF_NC' | grep -q ."
+# (vii) The Sentry check-in is `ok` only when the no-live-scheduler alarm did not fire.
+# shellcheck disable=SC2034  # read inside the assert eval string below
+CHECKIN_NC=$(grep -E '^ *status: \$\{\{ \(steps\.effmode\.outcome' "$WF_NC" | head -1)
+assert "#8077 the Sentry check-in status expression was located (non-vacuity)" "[[ -n \"\$CHECKIN_NC\" ]]"
+assert "#8077 the Sentry check-in ok requires steps.nolive.outputs.alarm != 'true'" \
+  "grep -qF \"steps.effmode.outcome == 'success' && steps.nolive.outputs.alarm != 'true' && (\" <<<\"\$CHECKIN_NC\""
+
+# --- (g) THE PROBE STEP AND THE NOLIVE STEP, EXECUTED (#8077 review) ---------------------------
+# The rows in (f) assert TEXT, and the panel drove four workflow mutations through them that all
+# stayed green: W1 the quiesced arm's body replaced by `last_mode="inngest_down"`, W2 the arm
+# calling record_failure, W3 the web_quiesced_since declaration moved into a comment, W4 the
+# post-loop guard reverted to `[[ "$healthy" == "no" ]] && record_failure`. So the real `run:`
+# blocks are extracted by their step anchors and EXECUTED the way Actions runs them
+# (`bash --noprofile --norc -eo pipefail`), against a stub curl serving scripted (code, body)
+# sequences, the REAL classifier at the path the step sources, and a fake $GITHUB_OUTPUT.
+extract_run() { # $1 = awk regex of the step's first line; prints the de-indented run: body
+  awk -v start="$1" '$0 ~ start {f=1; next} f && /^      - /{exit} f' "$WF" \
+    | awk '/^        run: \|$/{g=1; next} g' | sed 's/^          //'
+}
+PROBE_BODY="$(mktemp)"; SCRATCH+=("$PROBE_BODY")
+extract_run '^      - id: probe$' > "$PROBE_BODY"
+PROBE_BODY_N=$(wc -l < "$PROBE_BODY" | tr -d '[:space:]')
+assert "#8077 the probe step's run body extracted non-vacuously (>100 lines, got $PROBE_BODY_N)" "[[ '$PROBE_BODY_N' -gt 100 ]]"
+# The step writes its body to a fixed /tmp path; redirect it into scratch (and prove it was there).
+PROBE_WS="$(mktemp -d)"; SCRATCH+=("$PROBE_WS")
+HB_N=$(grep -cF '/tmp/health-body' "$PROBE_BODY") || true
+assert "#8077 the probe body names its /tmp/health-body scratch (>=2 uses, got $HB_N)" "[[ '$HB_N' -ge 2 ]]"
+sed -i "s#/tmp/health-body#$PROBE_WS/health-body#g" "$PROBE_BODY"
+mkdir -p "$PROBE_WS/scripts" "$PROBE_WS/bin"
+cp "$REPO_ROOT/scripts/inngest-liveness-classify.sh" "$PROBE_WS/scripts/"
+cat > "$PROBE_WS/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# Serve the Nth scripted response (or the last one) — $SEQ_DIR/<n>.code + <n>.body.
+n=$(( $(cat "$SEQ_DIR/calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$SEQ_DIR/calls"
+k=$n; while [[ ! -f "$SEQ_DIR/$k.code" && $k -gt 1 ]]; do k=$((k - 1)); done
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+[[ -n "$out" ]] && cat "$SEQ_DIR/$k.body" > "$out"
+cat "$SEQ_DIR/$k.code"
+STUB
+printf '#!/usr/bin/env bash\nexit 0\n' > "$PROBE_WS/bin/sleep"
+printf '#!/usr/bin/env bash\ncat >/dev/null; echo "SHA2-256(stdin)= 00"\n' > "$PROBE_WS/bin/openssl"
+chmod +x "$PROBE_WS/bin/curl" "$PROBE_WS/bin/sleep" "$PROBE_WS/bin/openssl"
+
+PROBE_RC=0; PROBE_OUT=""; PROBE_CALLS=0
+run_probe() { # $1 = "secrets"|"nosecrets"; then pairs: <code> <body> ... served in order
+  local mode="$1"; shift
+  local seq out i=0; seq="$(mktemp -d)"; out="$(mktemp)"; SCRATCH+=("$seq" "$out")
+  while [[ $# -ge 2 ]]; do i=$((i + 1)); printf '%s' "$1" > "$seq/$i.code"; printf '%s' "$2" > "$seq/$i.body"; shift 2; done
+  PROBE_RC=0
+  (
+    export GITHUB_OUTPUT="$out" GITHUB_WORKSPACE="$PROBE_WS" SEQ_DIR="$seq" PATH="$PROBE_WS/bin:$PATH"
+    if [[ "$mode" == secrets ]]; then export WEBHOOK_SECRET=x CF_ACCESS_CLIENT_ID=x CF_ACCESS_CLIENT_SECRET=x
+    else unset WEBHOOK_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; fi
+    bash --noprofile --norc -eo pipefail "$PROBE_BODY"
+  ) >/dev/null 2>&1 || PROBE_RC=$?
+  PROBE_OUT="$out"; PROBE_CALLS=$(cat "$seq/calls" 2>/dev/null || echo 0)
+}
+# Prints the LAST value written for key $1, or the literal <absent> when the key was never written.
+out_val() {
+  if grep -qE "^$1=" "$PROBE_OUT" 2>/dev/null; then grep -E "^$1=" "$PROBE_OUT" | tail -1 | cut -d= -f2-; else printf '<absent>'; fi
+}
+
+B_Q='inngest-inventory: QUIESCED host_id=soleur-web-1 unit=inactive enabled=disabled quiesced_since=1789000000 capture=present rebooted_since_quiesce=false — deliberate stop+disable (op=quiesce-web); no restart'
+B_Q_NOSINCE='inngest-inventory: QUIESCED host_id=soleur-web-1 unit=inactive enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart'
+B_F='inngest-inventory: FATAL host_id=soleur-web-1 /v0/gql functions query failed or non-array (errors=["connection refused"]); is inngest-server.service up?'
+B_U='inngest-inventory: DISABLED_UNATTRIBUTED host_id=soleur-web-1 unit=inactive enabled=disabled — scheduler disabled with no valid quiesce marker; not a deliberate quiesce; dispatch op=rollback'
+B_OK='{"functions":["cron-a"],"event_names":[],"armed_reminders":[],"durability_state":"durable","host_id":"soleur-web-1"}'
+
+run_probe secrets 503 "$B_Q"
+assert "#8077 probe EXECUTED: QUIESCED body → rc 0 (got $PROBE_RC)" "[[ '$PROBE_RC' -eq 0 ]]"
+assert "#8077 probe EXECUTED: QUIESCED body → failure_mode='' (got '$(out_val failure_mode)')" "[[ \"\$(out_val failure_mode)\" == '' ]]"
+assert "#8077 probe EXECUTED: QUIESCED body → web_quiesced_since=1789000000 (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '1789000000' ]]"
+assert "#8077 probe EXECUTED: QUIESCED breaks the retry loop (1 curl, got $PROBE_CALLS)" "[[ '$PROBE_CALLS' -eq 1 ]]"
+
+run_probe secrets 503 "$B_Q_NOSINCE"
+assert "#8077 probe EXECUTED: QUIESCED line without a parseable since → web_quiesced_since=unknown (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == 'unknown' ]]"
+assert "#8077 probe EXECUTED: …and still failure_mode='' (got '$(out_val failure_mode)')" "[[ \"\$(out_val failure_mode)\" == '' ]]"
+
+run_probe secrets 503 "${B_Q}"$'\n'"${B_Q/1789000000/1799999999}"
+assert "#8077 probe EXECUTED: since is read from the FIRST QUIESCED line (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '1789000000' ]]"
+
+run_probe secrets 500 "$B_F"
+assert "#8077 probe EXECUTED: FATAL body → failure_mode=inngest_down (got '$(out_val failure_mode)', rc $PROBE_RC)" "[[ \"\$(out_val failure_mode)\" == 'inngest_down' && '$PROBE_RC' -eq 0 ]]"
+assert "#8077 probe EXECUTED: FATAL body → web_quiesced_since='' (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '' ]]"
+assert "#8077 probe EXECUTED: FATAL retried 3 times (got $PROBE_CALLS)" "[[ '$PROBE_CALLS' -eq 3 ]]"
+
+run_probe secrets 503 "$B_U"
+assert "#8077 probe EXECUTED: DISABLED_UNATTRIBUTED → failure_mode=inngest_disabled_unattributed (got '$(out_val failure_mode)')" "[[ \"\$(out_val failure_mode)\" == 'inngest_disabled_unattributed' ]]"
+assert "#8077 probe EXECUTED: DISABLED_UNATTRIBUTED → web_quiesced_since='' (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '' ]]"
+
+run_probe nosecrets 200 "$B_OK"
+assert "#8077 probe EXECUTED: secrets unset → rc 0 (got $PROBE_RC)" "[[ '$PROBE_RC' -eq 0 ]]"
+assert "#8077 probe EXECUTED: secrets unset → failure_mode=secret_unset, no curl (got '$(out_val failure_mode)', calls $PROBE_CALLS)" "[[ \"\$(out_val failure_mode)\" == 'secret_unset' && '$PROBE_CALLS' -eq 0 ]]"
+assert "#8077 probe EXECUTED: secrets unset → web_quiesced_since written empty (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '' ]]"
+
+run_probe secrets 500 "$B_F" 503 "$B_Q"
+assert "#8077 probe EXECUTED: FATAL then QUIESCED → failure_mode='' (got '$(out_val failure_mode)')" "[[ \"\$(out_val failure_mode)\" == '' ]]"
+assert "#8077 probe EXECUTED: FATAL then QUIESCED → web_quiesced_since=1789000000 (got '$(out_val web_quiesced_since)')" "[[ \"\$(out_val web_quiesced_since)\" == '1789000000' ]]"
+
+run_probe secrets 200 "$B_OK"
+assert "#8077 probe EXECUTED: healthy body → failure_mode='' and web_quiesced_since='' (got '$(out_val failure_mode)'/'$(out_val web_quiesced_since)')" \
+  "[[ \"\$(out_val failure_mode)\" == '' && \"\$(out_val web_quiesced_since)\" == '' && '$PROBE_CALLS' -eq 1 ]]"
+# PROBE HARNESS CANARY: a wrong expectation must fail, then subtract.
+_P_P=$PASS; _P_F=$FAIL
+run_probe secrets 500 "$B_F"
+assert "probe harness canary: FATAL must NOT read as failure_mode='' (expected FAIL below)" "[[ \"\$(out_val failure_mode)\" == '' ]]"
+if [[ "$FAIL" -ne $((_P_F + 1)) || "$PASS" -ne "$_P_P" ]]; then
+  echo "  FATAL: run_probe/out_val do not observe the executed step — every executed probe row is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))
+echo "  (probe harness canary OK — deliberate FAIL above is expected and subtracted)"
+
+# The nolive step: alarm iff web quiesced AND the dedicated host is not healthy AND the quiesce is
+# older than the grace (or its epoch is unknown). It must ALWAYS write alarm=true|false.
+NOLIVE_BODY="$(mktemp)"; SCRATCH+=("$NOLIVE_BODY")
+extract_run '^        id: nolive$' > "$NOLIVE_BODY"
+NOLIVE_N=$(wc -l < "$NOLIVE_BODY" | tr -d '[:space:]')
+assert "#8077 the nolive step's run body extracted non-vacuously (>10 lines, got $NOLIVE_N)" "[[ '$NOLIVE_N' -gt 10 ]]"
+GRACE=$(awk '/^        id: nolive$/{f=1; next} f && /^      - /{exit} f && /^ +INNGEST_QUIESCE_GRACE_MIN: /{print $2; exit}' "$WF" | tr -d "'\"")
+assert "#8077 the nolive step's env pins INNGEST_QUIESCE_GRACE_MIN: 60 (got '${GRACE:-<none>}')" "[[ '$GRACE' == '60' ]]"
+NOW_S=$(date -u +%s)
+nolive_case() { # $1 desc, $2 WEB_QUIESCED_SINCE, $3 DEDICATED_VERDICT, $4 expected alarm
+  local out got; out="$(mktemp)"; SCRATCH+=("$out")
+  ( export GITHUB_OUTPUT="$out" WEB_QUIESCED_SINCE="$2" DEDICATED_VERDICT="$3" INNGEST_QUIESCE_GRACE_MIN="$GRACE"
+    bash --noprofile --norc -eo pipefail "$NOLIVE_BODY" ) >/dev/null 2>&1
+  got="$(grep -E '^alarm=' "$out" 2>/dev/null | tail -1 | cut -d= -f2-)"
+  assert "#8077 nolive EXECUTED: $1 → alarm=$4 (got '${got:-<absent>}')" "[[ '$got' == '$4' ]]"
+}
+OLD=$((NOW_S - 2 * 3600)); FRESH=$((NOW_S - 10 * 60))
+nolive_case "quiesced 2h ago + dedicated stopped-by-brake"   "$OLD"   "stopped-by-brake"  true
+nolive_case "quiesced 2h ago + dedicated probe-unavailable"  "$OLD"   "probe-unavailable" true
+nolive_case "quiesced 2h ago + dedicated verdict empty"      "$OLD"   ""                  true
+nolive_case "quiesced 2h ago + dedicated not-serving"        "$OLD"   "not-serving"       true
+nolive_case "quiesced 10m ago (within grace) + brake"        "$FRESH" "stopped-by-brake"  false
+nolive_case "quiesced 2h ago + dedicated healthy"            "$OLD"   "healthy"           false
+nolive_case "quiesce epoch unknown + brake"                  "unknown" "stopped-by-brake" true
+nolive_case "web not quiesced (since '') + brake"            ""       "stopped-by-brake"  false
+_N_P=$PASS; _N_F=$FAIL
+nolive_case "harness canary: a wrong expectation MUST fail (expected FAIL below)" "$OLD" "healthy" true
+if [[ "$FAIL" -ne $((_N_F + 1)) || "$PASS" -ne "$_N_P" ]]; then
+  echo "  FATAL: nolive_case does not observe the executed step — every nolive row is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))
+echo "  (nolive harness canary OK — deliberate FAIL above is expected and subtracted)"
+assert "#8077 the no-live-scheduler issue step keys on steps.nolive.outputs.alarm == 'true' and labels action-required" \
+  "awk '/^      - name: File or comment no-live-scheduler issue/{f=1} f&&/^      - name: /&&!/no-live-scheduler issue/{exit} f' '$WF_NC' | grep -qF \"if: always() && steps.nolive.outputs.alarm == 'true'\" && grep -qF '[ci/inngest-no-live-scheduler]' '$WF_NC'"
+assert "#8077 a close step closes [ci/inngest-no-live-scheduler] on alarm == 'false'" \
+  "grep -qF \"steps.nolive.outputs.alarm == 'false'\" '$WF_NC'"
 
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
-# WHOLE-SUITE ANTI-DELETION FLOOR. The only merge gate is `FAIL -gt 0`, so a deleted or skipped
-# assertion is otherwise indistinguishable from a clean run.
-if [[ "$PASS" -lt 48 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 48 — an assertion was removed or skipped."
+# WHOLE-SUITE EXACT FLOOR. The only merge gate is `FAIL -gt 0`, so a deleted or skipped assertion
+# is otherwise indistinguishable from a clean run; an exact count also catches a row that silently
+# stopped dispatching (the canaries above subtract their deliberate FAILs before this point).
+readonly EXPECTED_ASSERTIONS=104
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf '  FAIL: suite dispatched %s assertions, expected exactly %s — an assertion was added, removed or skipped.\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
-echo "  PASS: anti-deletion floor ($PASS >= 48 assertions dispatched)"
+printf '  PASS: exact assertion floor (%s dispatched)\n' "$EXPECTED_ASSERTIONS"

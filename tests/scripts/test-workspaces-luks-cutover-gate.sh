@@ -294,11 +294,12 @@ q_rw_n=$(wc -l < "$Q_TMP/rw.sh" | tr -d '[:space:]')
 if [ "$q_rw_n" -gt 20 ]; then pass; else fail "Q1a: resume_writers body not extracted (got $q_rw_n lines) — every Q1 row below would be vacuous"; fi
 q_start_ln=$(grep -nF 'systemctl start inngest-server.service' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
 q_guard_ln=$(grep -nE '"\$\(systemctl is-enabled inngest-server\.service 2>/dev/null( \|\| true)?\)" = disabled' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
-q_skip_ln=$(grep -nF 'logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced"' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+Q_MARK='SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'
+q_skip_ln=$(grep -nF "logger -t \"\$LUKS_LOG_TAG\" -- \"$Q_MARK" "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
 if [ -n "$q_start_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_start_ln" ]; then pass
 else fail "Q1b: resume_writers' inngest-server start (line ${q_start_ln:-none}) is not preceded by the is-enabled = disabled guard (line ${q_guard_ln:-none})"; fi
 if [ -n "$q_skip_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_skip_ln" ]; then pass
-else fail "Q1c: the quiesced skip is not logged as 'SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced' on \$LUKS_LOG_TAG after the guard"; fi
+else fail "Q1c: the quiesced skip is not logged as '$Q_MARK' on \$LUKS_LOG_TAG after the guard"; fi
 
 # Q2 — resume_writers EXECUTED (sourced; guard => functions only) with a stub systemctl.
 q_resume() {  # $1 = is-enabled answer -> call log at $Q_TMP/rw-$1.log
@@ -325,13 +326,13 @@ q_resume() {  # $1 = is-enabled answer -> call log at $Q_TMP/rw-$1.log
 q_resume disabled
 if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/rw-disabled.log" \
    && ! grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-disabled.log" \
-   && grep -qF 'SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced' "$Q_TMP/rw-disabled.log"; then pass
+   && grep -qF "$Q_MARK" "$Q_TMP/rw-disabled.log"; then pass
 else fail "Q2a: resume_writers on a DISABLED inactive inngest-server must query is-enabled, log the skip, and never start it"; fi
 if grep -qF 'systemctl start webhook.service' "$Q_TMP/rw-disabled.log"; then pass
 else fail "Q2b: the quiesced skip must not suppress the rest of resume_writers (webhook.service not restarted)"; fi
 q_resume enabled
 if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-enabled.log" \
-   && ! grep -qF 'inngest_start_skipped' "$Q_TMP/rw-enabled.log"; then pass
+   && ! grep -qF 'INNGEST_START_SKIPPED' "$Q_TMP/rw-enabled.log"; then pass
 else fail "Q2c: an inactive but ENABLED inngest-server must still be reconciled (started)"; fi
 
 # Q3 — the dead-man string (source, comment-stripped): its only inngest-server start is guarded inline.
@@ -340,6 +341,10 @@ q_dm_starts=$(printf '%s' "$q_dm_src" | grep -oF 'systemctl start inngest-server
 q_dm_guarded=$(printf '%s' "$q_dm_src" | grep -oF '[ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service' | wc -l | tr -d '[:space:]')
 if [ -n "$q_dm_src" ] && [ "$q_dm_starts" -ge 1 ] && [ "$q_dm_starts" -eq "$q_dm_guarded" ]; then pass
 else fail "Q3: the dead-man sh -c string starts inngest-server unguarded (starts=$q_dm_starts guarded=$q_dm_guarded) — the unattended path would re-arm a quiesced scheduler"; fi
+# Q3b — the dead-man skip carries the SAME contract marker as the reconcile (one grep finds both).
+q_dm_skip=$(printf '%s' "$q_dm_src" | grep -oF "= disabled ] && logger -t \${LUKS_LOG_TAG} -- '$Q_MARK'" | wc -l | tr -d '[:space:]')
+if [ "$q_dm_skip" -eq 1 ]; then pass
+else fail "Q3b: the dead-man sh -c string does not log '$Q_MARK' behind the is-enabled = disabled test (got $q_dm_skip)"; fi
 
 # Q4 — the dead-man string RENDERED by the real arm_dead_man, parsed and EXECUTED under sh.
 (
@@ -380,10 +385,14 @@ if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/dm-exec.log" \
    && grep -qF 'systemctl start webhook.service' "$Q_TMP/dm-exec.log" \
    && grep -qF 'result=ok reason=plaintext_remounted' "$Q_TMP/dm-exec.log"; then pass
 else fail "Q4c: executed dead-man with a DISABLED inngest-server must skip only its start (and still restore webhook + log result=ok)"; fi
+# Q4e — …and the rendered skip reaches logger as ONE argv carrying the exact marker (quoting intact).
+if grep -qxF "logger -t luks-monitor -- $Q_MARK" "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4e: executed dead-man with a DISABLED inngest-server did not log '$Q_MARK' via logger -t luks-monitor"; fi
 : > "$Q_TMP/dm-exec.log"
 Q_EN=enabled PATH="$Q_TMP/bin:$PATH" sh -c "$q_dm_cmd" >/dev/null 2>&1 || true
-if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log"; then pass
-else fail "Q4d: executed dead-man with an ENABLED inngest-server must still start it"; fi
+if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && ! grep -qF 'INNGEST_START_SKIPPED' "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4d: executed dead-man with an ENABLED inngest-server must still start it (and log no skip)"; fi
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -399,14 +408,16 @@ else fail "Q4d: executed dead-man with an ENABLED inngest-server must still star
 # floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
 # floor that depends on the thing it guards is not a floor.
 #
-# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
-# suite on every legitimately-added assertion and train people to bump it unread.
+# EXACT, NOT A FLOOR (#8077 review) — a row that silently stops dispatching (an early `exit`, an
+# arm whose `if` never reaches pass/fail) keeps a `-lt` floor green while the count drops by one.
+# The cost is deliberate: adding a row means bumping this number in the same diff.
+readonly EXPECTED_ASSERTIONS=34
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 18 ]]; then
+if [[ "$_ran" -ne "$EXPECTED_ASSERTIONS" ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 18. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: %s assertions ran, expected exactly %s. Arms were added, deleted, skipped, or the suite exited early.\n' "$_ran" "$EXPECTED_ASSERTIONS"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 18)\n' "$_ran"
+  printf '  ok   anti-vacuity: exactly %s assertions ran\n' "$_ran"
 fi
 
 echo ""

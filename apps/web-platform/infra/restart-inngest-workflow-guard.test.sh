@@ -78,27 +78,111 @@ assert "the job set is exactly {restart} (a new job must be added to the guard d
 # by the glob arm and its exact ::error:: text) over COMMENT-STRIPPED text, so prose mentioning the
 # reason cannot satisfy it.
 DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-inngest-image.yml"
-quiesced_arm_present() {  # $1 = workflow file → "yes" iff the arm follows a `case "$REASON" in` opener
-  grep -v '^[[:space:]]*#' "$1" | awk '
-    /^[[:space:]]*case "\$REASON" in[[:space:]]*$/ { opener = NR; next }
-    opener && NR == opener + 1 && index($0, "inngest_quiesced_*_refused) echo \"::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it\" ;;") { found = 1 }
-    END { print (found ? "yes" : "no") }'
+POLL_CLASSIFIER="$REPO_ROOT/scripts/inngest-restart-poll-classify.sh"
+# shellcheck disable=SC2034  # read inside the assert eval string below
+Q_TXT='inngest_quiesced_*_refused) echo "::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it" ;;'
+# shellcheck disable=SC2034  # read inside the assert eval string below
+U_TXT='inngest_disabled_unattributed_*_refused) echo "::error::the web inngest unit is disabled with no valid quiesce marker (not a deliberate op=quiesce-web) — dispatch op=rollback to re-arm it" ;;'
+# branch_probe <workflow> <step name> <mode> [<arm text>] — parses the YAML, takes the named step's
+# `run:` body, drops comment lines, and answers yes/no:
+#   in_fail_branch  the arm text sits INSIDE the failure branch — for the restart workflow the
+#                   `terminal_fail)` arm of `case "$verdict"` (up to its lone `;;`); for the deploy
+#                   workflow the fresh-inngest `if` inside the `*)` arm of `case "$EXIT_CODE"` (up to
+#                   its `fi`) — and directly after a `case "$REASON" in` opener. The panel's WG1
+#                   mutation moved the arm into the `success)` branch and the old whole-file row
+#                   stayed green; position is the property, so position is what is asserted.
+#   verdict_arms    every verdict classify_restart_frame can echo (derived from the classifier) has
+#                   an arm in `case "$verdict"` (a missing arm is a silent no-op frame).
+#   success_reason  the deploy workflow's `0)` success exit requires an inngest START success reason.
+branch_probe() {
+  python3 - "$1" "$2" "$3" "${4:-}" "$POLL_CLASSIFIER" <<'PY2'
+import re, sys, yaml
+wf, step_name, mode, arm, classifier = sys.argv[1:6]
+doc = yaml.safe_load(open(wf)) or {}
+run = ""
+for job in (doc.get("jobs") or {}).values():
+    for st in job.get("steps") or []:
+        if st.get("name") == step_name:
+            run = st.get("run", "")
+lines = [l for l in run.splitlines() if not re.match(r"^\s*#", l)]
+def block(start_re, end_re):
+    for i, l in enumerate(lines):
+        if re.match(start_re, l):
+            for j in range(i + 1, len(lines)):
+                if re.match(end_re, lines[j]):
+                    return lines[i + 1:j]
+            return None
+    return None
+ok = False
+if mode == "in_fail_branch":
+    if "restart-inngest-server" in wf:
+        body = block(r"^\s*terminal_fail\)\s*$", r"^\s*;;\s*$")
+    else:
+        star = block(r"^\s*\*\)\s*$", r"^\s*;;\s*$")
+        body = None
+        if star:
+            for i, l in enumerate(star):
+                if re.search(r'if \[ "\$COMPONENT" = "inngest" \] && \[ "\$START_TS" -ge "\$FRESH_FLOOR" \]; then', l):
+                    for j in range(i + 1, len(star)):
+                        if re.match(r"^\s*fi\s*$", star[j]):
+                            body = star[i + 1:j]; break
+                    break
+    if body:
+        for i, l in enumerate(body):
+            if l.strip() == arm:
+                ok = any(re.match(r'^\s*case "\$REASON" in\s*$', body[k]) for k in range(max(0, i - 3), i))
+                break
+elif mode == "verdict_arms":
+    src = [l for l in open(classifier).read().splitlines() if not re.match(r"^\s*#", l)]
+    verdicts = sorted(set(m.group(1) for l in src for m in [re.search(r'echo "([a-z_]+)"', l)] if m and m.group(1) not in ("yes", "no")))
+    # Nesting-aware: terminal_fail) carries its own `case "$REASON" … esac`, so the first `esac`
+    # is NOT the end of the verdict case — only arms at depth 1 count.
+    arms, depth, inside = set(), 0, False
+    for l in lines:
+        if not inside:
+            inside = bool(re.match(r'^\s*case "\$verdict" in\s*$', l)); depth = 1 if inside else 0
+            continue
+        if re.search(r"\bcase\b.*\bin\s*$", l): depth += 1; continue
+        if re.match(r"^\s*esac\s*$", l):
+            depth -= 1
+            if depth == 0: break
+            continue
+        m = re.match(r"^\s*([a-z_]+)\)\s*$", l)
+        if m and depth == 1: arms.add(m.group(1))
+    ok = len(verdicts) >= 9 and set(verdicts) <= arms
+elif mode == "success_reason":
+    zero = block(r"^\s*0\)\s*$", r"^\s*;;\s*$") or []
+    ok = any(re.search(r'if \[ "\$COMPONENT" = "inngest" \] && \[ "\$START_TS" -ge "\$FRESH_FLOOR" \] && \{ \[ "\$REASON" = "success" \] \|\| \[ "\$REASON" = "success_degraded_durability" \]; \}; then', l) for l in zero)
+print("yes" if ok else "no")
+PY2
 }
-assert "#8077 restart-inngest-server.yml terminal_fail names an inngest_quiesced_*_refused reason (case arm)" \
-  "[[ \$(quiesced_arm_present '$WF') == 'yes' ]]"
-assert "#8077 deploy-inngest-image.yml failure print names an inngest_quiesced_*_refused reason (case arm)" \
-  "[[ \$(quiesced_arm_present '$DEPLOY_WF') == 'yes' ]]"
+RESTART_STEP="Verify restart completion"
+DEPLOY_STEP="Verify deploy completion"
+assert "#8077 restart-inngest-server.yml: the quiesced arm sits INSIDE terminal_fail) after case \"\$REASON\" in" \
+  "[[ \$(branch_probe '$WF' '$RESTART_STEP' in_fail_branch \"\$Q_TXT\") == 'yes' ]]"
+assert "#8077 restart-inngest-server.yml: the disabled-unattributed arm (op=rollback) sits INSIDE terminal_fail)" \
+  "[[ \$(branch_probe '$WF' '$RESTART_STEP' in_fail_branch \"\$U_TXT\") == 'yes' ]]"
+assert "#8077 deploy-inngest-image.yml: the quiesced arm sits INSIDE the fresh-inngest failure branch" \
+  "[[ \$(branch_probe '$DEPLOY_WF' '$DEPLOY_STEP' in_fail_branch \"\$Q_TXT\") == 'yes' ]]"
+assert "#8077 deploy-inngest-image.yml: the disabled-unattributed arm (op=rollback) sits INSIDE the fresh-inngest failure branch" \
+  "[[ \$(branch_probe '$DEPLOY_WF' '$DEPLOY_STEP' in_fail_branch \"\$U_TXT\") == 'yes' ]]"
+assert "#8077 restart-inngest-server.yml: every classify_restart_frame verdict (incl. other_op) has a case \"\$verdict\" arm" \
+  "[[ \$(branch_probe '$WF' '$RESTART_STEP' verdict_arms) == 'yes' ]]"
+assert "#8077 deploy-inngest-image.yml: the 0) success exit requires an inngest START success reason (not quiesced/enabled)" \
+  "[[ \$(branch_probe '$DEPLOY_WF' '$DEPLOY_STEP' success_reason) == 'yes' ]]"
+# PROBE CANARY: the position probe must say `no` for an arm text that is NOT in the branch.
+assert "probe canary: an absent arm text is not found in terminal_fail) (the probe can say no)" \
+  "[[ \$(branch_probe '$WF' '$RESTART_STEP' in_fail_branch 'no_such_reason) echo x ;;') == 'no' ]]"
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
 
-# ANTI-VACUITY FLOOR — see the sibling note in registry-zot-inventory-workflow-guard.test.sh.
-# Measured: removing all 6 assert calls left this file reporting "0/0 passed" and exiting 0.
-# A FLOOR, never an equality. Raise in lockstep when assertions are added.
-MIN_ASSERTIONS=8
-if (( PASS + FAIL < MIN_ASSERTIONS )); then
-  echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
-  echo "      Treat this as UN-RUN, not as a pass."
+# EXACT ASSERTION COUNT (#8077 review) — see the sibling note in registry-zot-inventory-workflow-guard.test.sh
+# for why a count gate exists at all. Exact rather than a floor: a row that silently stops
+# dispatching keeps a floor green. Adding a row means bumping this in the same diff.
+EXPECTED_ASSERTIONS=13
+if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
+  printf 'FAIL: %s assertions ran, expected exactly %s — treat this as UN-RUN, not as a pass.\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
   exit 1
 fi
 

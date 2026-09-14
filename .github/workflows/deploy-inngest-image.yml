@@ -106,21 +106,26 @@ jobs:
             START_TS=$(echo "$BODY" | jq -r '.start_ts // 0')
             case "$EXIT_CODE" in
               0)
-                if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ]; then
+                # #8077 review: exit 0 alone is not "this deploy succeeded" — op=quiesce-web (`quiesced`)
+                # and op=rollback (`enabled`) write component=inngest exit 0 too. Only a START success
+                # reason (mirrors is_inngest_start_success_reason in scripts/inngest-restart-poll-classify.sh).
+                if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ] && { [ "$REASON" = "success" ] || [ "$REASON" = "success_degraded_durability" ]; }; then
                   echo "::notice::Inngest deploy ${TAG} completed (reason=$REASON)"
                   echo "$BODY" | jq .; exit 0
                 fi
-                echo "Attempt $i/$MAX_POLLS: not this run's terminal inngest state yet (component=$COMPONENT start_ts=$START_TS floor=$FRESH_FLOOR)"
+                echo "Attempt $i/$MAX_POLLS: not this run's terminal inngest state yet (component=$COMPONENT reason=$REASON start_ts=$START_TS floor=$FRESH_FLOOR)"
                 ;;
               -1) echo "Attempt $i/$MAX_POLLS: deploy still running (reason=$REASON)" ;;
               -2) echo "Attempt $i/$MAX_POLLS: no prior deploy recorded" ;;
               -3) echo "Attempt $i/$MAX_POLLS: corrupt state read, retrying" ;;
               *)
                 if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ]; then
-                  # #6921/#8077: the bootstrap arm refuses a unit op=quiesce-web stopped+disabled
-                  # (inngest-bootstrap.sh enables then restarts it) — not a bootstrap/health fault.
+                  # #6921/#8077: the bootstrap arm refuses a stopped+disabled unit (inngest-bootstrap.sh
+                  # enables then restarts it) — `quiesced` when op=quiesce-web's marker attributes it,
+                  # `disabled_unattributed` when nothing does. Not a bootstrap/health fault.
                   case "$REASON" in
                     inngest_quiesced_*_refused) echo "::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it" ;;
+                    inngest_disabled_unattributed_*_refused) echo "::error::the web inngest unit is disabled with no valid quiesce marker (not a deliberate op=quiesce-web) — dispatch op=rollback to re-arm it" ;;
                     *) echo "::error::Inngest deploy ${TAG} FAILED (exit_code=$EXIT_CODE, reason=$REASON) — likely inngest-redis-bootstrap or verify_inngest_health" ;;
                   esac
                   echo "$BODY" | jq .; exit 1

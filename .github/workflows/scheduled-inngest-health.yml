@@ -68,7 +68,7 @@ jobs:
               | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
-          fail_mode=""; fail_detail=""; dstate=""; web_quiesced="no"
+          fail_mode=""; fail_detail=""; dstate=""; web_quiesced_since=""
           record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
 
           if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
@@ -131,12 +131,26 @@ jobs:
                 inngest_unhealthy)
                   last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but no functions array: ${cause}" ;;
                 inngest_quiesced)
-                  # #6921/#8077: op=quiesce-web stopped+disabled the web unit (the QUIESCED sentinel
-                  # is printed only for is-active inactive|failed AND is-enabled disabled). DELIBERATE:
-                  # record NO failure — failure_mode stays empty, so the pool probe still runs, no
-                  # restart is dispatched (a restart would START the disabled unit), no issue is filed
-                  # and the check-in stays ok. web_quiesced is declared beside fail_mode="" (set -u).
-                  web_quiesced="yes"; echo "::notice::expected after cutover: web scheduler QUIESCED (unit inactive|failed+disabled — op=quiesce-web, #8077): deliberate, no restart dispatched, no [ci/inngest-down] filed; only op=rollback re-arms it"; break ;;
+                  # #6921/#8077: op=quiesce-web stopped+disabled the web unit AND wrote its marker (the
+                  # QUIESCED sentinel needs both). DELIBERATE: record NO failure — failure_mode stays
+                  # empty, so no restart is dispatched (a restart would START the disabled unit), no
+                  # issue is filed and the check-in stays ok. The ONE thing carried forward is the
+                  # quiesce epoch, for the `nolive` step (a quiesced web scheduler is only safe while
+                  # the dedicated host serves). Parsed from the FIRST QUIESCED line only, by an
+                  # anchored sed over the fixed-vocabulary region before ` — ` (contract §4/§8); the
+                  # untrusted remainder is never read. Unparseable → `unknown` (nolive alarms on it).
+                  # web_quiesced_since is declared beside fail_mode="" (set -u).
+                  q_line="$(grep -m1 -E '^inngest-inventory: QUIESCED ' <<<"$BODY" || true)"
+                  web_quiesced_since="$(sed -n 's/^inngest-inventory: QUIESCED host_id=[^ ]* unit=[a-z]* enabled=disabled quiesced_since=\([0-9]\{9,11\}\) .*$/\1/p' <<<"$q_line")"
+                  [[ "$web_quiesced_since" =~ ^[0-9]{9,11}$ ]] || web_quiesced_since="unknown"
+                  echo "::notice::expected after cutover: web scheduler QUIESCED since ${web_quiesced_since} (op=quiesce-web, #8077): deliberate, no restart dispatched, no [ci/inngest-down] filed; only op=rollback re-arms it"; break ;;
+                inngest_disabled_unattributed)
+                  # #8077 review: the quiesced unit SHAPE (inactive|failed + disabled) with NO valid
+                  # op=quiesce-web marker (or one voided by a later start). Nobody attributed this stop,
+                  # so it is an alarm — but NOT restart family (a restart would START a disabled unit
+                  # and hide who disabled it): its own [ci/inngest-disabled-unattributed] issue, remedy
+                  # op=rollback, check-in error. A stable state, so no retry.
+                  record_failure "inngest_disabled_unattributed" "attempt ${attempt}/3: web inngest-server.service is disabled with no valid quiesce marker (not a deliberate op=quiesce-web) — dispatch op=rollback to re-arm it: ${cause:-<empty body>}"; break ;;
                 probe_unavailable)
                   last_mode="probe_unavailable"; last_detail="attempt ${attempt}/3: liveness probe path unavailable (HTTP ${CODE}, not a well-formed down) — deploy-race window or CF-Access/webhook.service degrade: ${cause:-<empty body>}" ;;
                 *)
@@ -145,13 +159,15 @@ jobs:
               echo "Probe attempt ${attempt}/3: ${MODE}; retrying…"
               [[ "$attempt" -lt 3 ]] && sleep 8
             done
-            [[ "$healthy" == "no" && "$web_quiesced" == "no" ]] && record_failure "$last_mode" "$last_detail"
+            [[ "$healthy" == "no" && -z "$web_quiesced_since" ]] && record_failure "$last_mode" "$last_detail"
           fi
 
           fail_mode_safe=$(strip_log_injection "$fail_mode")
           fail_detail_safe=$(strip_log_injection "$fail_detail")
           dstate_safe=$(strip_log_injection "${dstate:-}")
-          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; } >> "$GITHUB_OUTPUT"
+          # web_quiesced_since is digits | unknown | '' by construction (the arm above); its ONLY reader
+          # is the `nolive` step.
+          { echo "failure_mode=${fail_mode_safe}"; echo "failure_detail=${fail_detail_safe}"; echo "durability_state=${dstate_safe}"; echo "web_quiesced_since=${web_quiesced_since}"; } >> "$GITHUB_OUTPUT"
           if [[ -n "$fail_mode_safe" ]]; then
             echo "::error::Inngest health probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
           elif [[ "$dstate_safe" == "absent" ]]; then
@@ -432,16 +448,44 @@ jobs:
           #                   the age gate is never polluted. MANDATORY arm BEFORE the `*)→down`
           #                   default: without it a functions_query_degraded verdict falls through
           #                   to `down` → a false [ci/inngest-down] P1 (the exact #6407 regression).
+          #   disabled-unattributed → [ci/inngest-disabled-unattributed] the web unit is stopped+disabled
+          #                   with NO valid op=quiesce-web marker (#8077 review). NOT restart family and
+          #                   never `down` (that body claims a restart this mode never dispatches); remedy
+          #                   op=rollback. action-required so operator-digest harvests it.
           case "$FAIL_MODE" in
             pool_pressure|pool_exhausted)    ISSUE_CLASS="pool" ;;
             pool_probe_unavailable)          ISSUE_CLASS="pool-probe" ;;
             probe_unavailable|secret_unset)  ISSUE_CLASS="liveness-probe" ;;
             functions_query_degraded)        ISSUE_CLASS="functions-degraded" ;;
+            inngest_disabled_unattributed)   ISSUE_CLASS="disabled-unattributed" ;;
             *)                               ISSUE_CLASS="down" ;;
           esac
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
-          if [[ "$ISSUE_CLASS" == "liveness-probe" ]]; then
+          if [[ "$ISSUE_CLASS" == "disabled-unattributed" ]]; then
+            ISSUE_TITLE="[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"
+            ISSUE_SEARCH='in:title "[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"'
+            gh label create "ci/inngest-disabled-unattributed" --repo "$GH_REPO" \
+              --description "External watchdog: web inngest-server stopped+disabled with no valid op=quiesce-web marker — dispatch op=rollback" --color "B60205" 2>/dev/null || true
+            gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
+              --description "Needs an operator decision or action" 2>/dev/null || true
+            {
+              printf '## Web inngest scheduler disabled without a quiesce marker\n\n'
+              printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+              printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+              printf -- '- **Detected at:** %s\n' "$NOW"
+              printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+              printf '### Not a deliberate quiesce — and NOT restarted\n\n`inngest-server.service` on the web host is stopped and **disabled**, but there is no valid `op=quiesce-web` marker (`/var/lib/inngest/quiesced-by-op`), or the unit started after the marker was written. Nothing attributes this stop, so the web scheduler may be down with no live replacement. No restart is dispatched: a restart would START a disabled unit and bury who disabled it.\n\n'
+              printf '### Remediation\n\nDispatch the cutover workflow with **op=rollback** — it retires any stale capture, removes the marker, enables and starts the web unit. If a cutover is genuinely in progress, re-run **op=quiesce-web** afterwards to take a fresh capture and marker. See `knowledge-base/engineering/operations/runbooks/inngest-server.md` (no-SSH).\n'
+            } > "$BODY_FILE"
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+            if [[ -n "$EXISTING" ]]; then
+              gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still disabled with no quiesce marker at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. NO restart dispatched; remedy op=rollback. Run: ${RUN_URL}"
+            else
+              gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+                --label "ci/inngest-disabled-unattributed" --label "action-required" --label "priority/p1-high" --body-file "$BODY_FILE"
+            fi
+          elif [[ "$ISSUE_CLASS" == "liveness-probe" ]]; then
             # #6374 Defect 2: the LIVENESS probe path is unavailable (deploy-race window
             # before /hooks/inngest-liveness lands, or a CF-Access / webhook.service
             # degrade). SOFT — NO restart dispatched, and a title DISTINCT from
@@ -603,17 +647,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WEB_QUIESCED_SINCE: ${{ steps.probe.outputs.web_quiesced_since }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2016  # literal single-quoted GitHub search strings are intentional
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # #8077 review (L4): an empty failure_mode ALSO covers a deliberately QUIESCED web scheduler.
+          # Closing [ci/inngest-down] with "healthy again" would then claim a recovery that did not
+          # happen — say what actually closed it. WEB_QUIESCED_SINCE is digits|unknown|'' (probe step).
+          if [[ -n "${WEB_QUIESCED_SINCE:-}" ]]; then
+            STATE_TXT="Web inngest scheduler QUIESCED by op=quiesce-web (since epoch ${WEB_QUIESCED_SINCE}) at ${NOW} — deliberate stop, not a recovery; the dedicated host is watched by the no-live-scheduler check"
+          else
+            STATE_TXT="Inngest healthy again at ${NOW}"
+          fi
           # Healthy means BOTH liveness AND pool are fine. Close each class's issue
           # with its OWN title search — never a union search (a union close-search
           # would close the wrong issue; #5562 plan R5 / union-AC trap).
           STALE_DOWN=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-down] Inngest health watchdog failed"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_DOWN" ]]; then
-            gh issue close "$STALE_DOWN" --repo "$GH_REPO" --comment "Inngest healthy again at ${NOW}. Run: ${RUN_URL}"
+            gh issue close "$STALE_DOWN" --repo "$GH_REPO" --comment "${STATE_TXT}. Run: ${RUN_URL}"
           fi
           STALE_POOL=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"' --json number --jq '.[0].number // empty')
@@ -630,7 +683,7 @@ jobs:
           STALE_LIVENESS_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_LIVENESS_PROBE" ]]; then
-            gh issue close "$STALE_LIVENESS_PROBE" --repo "$GH_REPO" --comment "Inngest liveness probe reachable + healthy again at ${NOW}. Run: ${RUN_URL}"
+            gh issue close "$STALE_LIVENESS_PROBE" --repo "$GH_REPO" --comment "Inngest liveness probe reachable again — ${STATE_TXT}. Run: ${RUN_URL}"
           fi
           # #6407: close the functions-degraded issue once the /v0/gql functions read is
           # healthy again (the transient blip cleared). Without this close the soft issue rots
@@ -638,7 +691,14 @@ jobs:
           STALE_FUNCTIONS_DEGRADED=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_FUNCTIONS_DEGRADED" ]]; then
-            gh issue close "$STALE_FUNCTIONS_DEGRADED" --repo "$GH_REPO" --comment "Inngest /v0/gql functions query healthy again at ${NOW}. Run: ${RUN_URL}"
+            gh issue close "$STALE_FUNCTIONS_DEGRADED" --repo "$GH_REPO" --comment "Inngest /v0/gql functions query no longer degraded — ${STATE_TXT}. Run: ${RUN_URL}"
+          fi
+          # #8077 review: close the disabled-unattributed alarm once the web unit is serving again or
+          # carries a valid op=quiesce-web marker (both read as an empty failure_mode).
+          STALE_UNATTRIBUTED=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_UNATTRIBUTED" ]]; then
+            gh issue close "$STALE_UNATTRIBUTED" --repo "$GH_REPO" --comment "No longer disabled-unattributed — ${STATE_TXT}. Run: ${RUN_URL}"
           fi
 
       # --- #5553: continuous between-deploy durability detector ---------------
@@ -917,6 +977,94 @@ jobs:
               --comment "Dedicated inngest host is serving again (server_active=active, http_code=200). Auto-closed by ${RUN_URL}." || true
           done
 
+      # #8077 review — NO LIVE SCHEDULER. A QUIESCED web unit is the deliberate cutover state and
+      # records no failure above; it is only safe while the DEDICATED host serves. Quiesced web x a
+      # dedicated host that is not `healthy` (a standing brake, not-serving, unreadable, or a crashed
+      # consumer) means nothing fires crons or reminders. Grace INNGEST_QUIESCE_GRACE_MIN minutes after
+      # the quiesce epoch covers the cutover's own stop→start window; an unparseable epoch (`unknown`)
+      # alarms at once. Pure: reads two step OUTPUTS via env, no gh, ALWAYS writes alarm=true|false
+      # (the executed rows in inngest-dedicated-host-classify.test.sh drive this run block).
+      - name: No live scheduler check (web quiesced x dedicated host, #8077)
+        id: nolive
+        if: always()
+        env:
+          WEB_QUIESCED_SINCE: ${{ steps.probe.outputs.web_quiesced_since }}
+          DEDICATED_VERDICT: ${{ steps.dedicated.outputs.verdict }}
+          INNGEST_QUIESCE_GRACE_MIN: 60
+        run: |
+          set -uo pipefail
+          since="${WEB_QUIESCED_SINCE:-}"
+          verdict="${DEDICATED_VERDICT:-}"
+          # Both are this job's own outputs, but shape-check before any echo (the header contract).
+          [[ "$verdict" =~ ^[a-z-]{0,32}$ ]] || verdict="unrecognized"
+          grace_min="${INNGEST_QUIESCE_GRACE_MIN:-60}"
+          [[ "$grace_min" =~ ^[0-9]{1,5}$ ]] || grace_min=60
+          alarm=false; detail=""
+          if [[ -n "$since" && "$verdict" != "healthy" ]]; then
+            if [[ ! "$since" =~ ^[0-9]{9,11}$ ]]; then
+              alarm=true
+              detail="web scheduler QUIESCED (quiesce epoch unknown) and dedicated host verdict='${verdict:-<none>}' — no live scheduler can be confirmed"
+            else
+              now=$(date -u +%s)
+              age_min=$(( (now - since) / 60 ))
+              if (( now - since > grace_min * 60 )); then
+                alarm=true
+                detail="web scheduler QUIESCED ${age_min} min ago (grace ${grace_min} min) and dedicated host verdict='${verdict:-<none>}' — nothing is firing crons or reminders"
+              else
+                detail="web scheduler QUIESCED ${age_min} min ago, within the ${grace_min}-min cutover grace (dedicated verdict='${verdict:-<none>}')"
+              fi
+            fi
+          fi
+          { echo "alarm=${alarm}"; echo "detail=${detail}"; } >> "$GITHUB_OUTPUT"
+          if [[ "$alarm" == "true" ]]; then
+            echo "::error::#8077 no live inngest scheduler: ${detail}. Remedy: restore the dedicated host, or dispatch op=rollback to re-arm the web scheduler."
+          elif [[ -n "$detail" ]]; then
+            echo "::notice::#8077 ${detail}"
+          fi
+
+      - name: File or comment no-live-scheduler issue (#8077)
+        if: always() && steps.nolive.outputs.alarm == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DETAIL: ${{ steps.nolive.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE="[ci/inngest-no-live-scheduler] No live inngest scheduler (web quiesced, dedicated host not serving)"
+          gh label create "ci/inngest-no-live-scheduler" --repo "$GH_REPO" --color B60205 \
+            --description "Web inngest quiesced by op=quiesce-web while the dedicated host is not serving" 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
+            --description "Needs an operator decision or action" 2>/dev/null || true
+          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          BODY="$(printf '%s\n' \
+            "${DETAIL}" "" \
+            "Run: ${RUN_URL}" "" \
+            "The web scheduler was stopped deliberately by op=quiesce-web, so this watchdog files nothing for it — but the dedicated host that should have taken over is not serving. Restore the dedicated host (see the [ci/inngest-dedicated-host] issue), or dispatch op=rollback to re-arm the web scheduler.")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || \
+              echo "::warning::#8077 could not comment on issue #${EXISTING}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-no-live-scheduler --label action-required --label priority/p1-high \
+              --body "$BODY" || echo "::warning::#8077 could not file the no-live-scheduler issue"
+          fi
+
+      # `steps.probe.outcome == 'success'` for the same reason as the healthy auto-close (#7242): a
+      # crashed probe writes no web_quiesced_since, which reads as "not quiesced" → alarm=false.
+      - name: Auto-close no-live-scheduler issue (#8077)
+        if: always() && steps.nolive.outputs.alarm == 'false' && steps.probe.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[].number' 2>/dev/null || true); do
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "A live inngest scheduler is back (the web unit is no longer quiesced, or the dedicated host is serving). Auto-closed by ${RUN_URL}." || true
+          done
+
       - name: Sentry check-in (final)
         if: always()
         continue-on-error: true
@@ -940,7 +1088,9 @@ jobs:
           # at all) checked in `ok` and this monitor reported the Inngest scheduler that
           # dispatches every ADR-033 cron as healthy while its probe was dead. The soft
           # arms are unchanged; they now only apply when the step actually ran.
-          status: ${{ (steps.effmode.outcome == 'success' && (steps.effmode.outputs.failure_mode == '' || steps.effmode.outputs.failure_mode == 'probe_unavailable' || steps.effmode.outputs.failure_mode == 'functions_query_degraded')) && 'ok' || 'error' }}
+          # #8077 review: a quiesced web scheduler reads failure_mode='' — `ok` only while the nolive
+          # alarm did not fire (quiesced web x dedicated host not serving past the grace pages).
+          status: ${{ (steps.effmode.outcome == 'success' && steps.nolive.outputs.alarm != 'true' && (steps.effmode.outputs.failure_mode == '' || steps.effmode.outputs.failure_mode == 'probe_unavailable' || steps.effmode.outputs.failure_mode == 'functions_query_degraded')) && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

@@ -634,11 +634,14 @@ resume_writers() {
   # cutover's stop+disable; only op=rollback's `enable` re-arms it). `start` runs a disabled unit,
   # so the reconcile must SKIP it — re-arming the web scheduler mid-cutover double-fires crons.
   # `|| true`: is-enabled exits 1 on `disabled`; stdout is the verdict. Mirrors the dead-man guard.
+  # `disabled` alone suffices HERE (not the full inactive|failed + disabled shape) because this runs
+  # only inside the `! is-active` branch — the unit is already known not to be serving.
   systemctl reset-failed inngest-server.service 2>/dev/null || true
   systemctl is-active --quiet inngest-server.service 2>/dev/null || {
     if [ "$(systemctl is-enabled inngest-server.service 2>/dev/null || true)" = disabled ]; then
       log "inngest-server.service is inactive + disabled (quiesced by op=quiesce-web) — reconcile start skipped; only op=rollback re-arms it"
-      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced" 2>/dev/null || true
+      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced" 2>/dev/null || true
+      echo "SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced"
     else
       systemctl start inngest-server.service 2>/dev/null || true
       systemctl is-active --quiet inngest-server.service 2>/dev/null || {
@@ -827,7 +830,10 @@ arm_dead_man() {
     `# #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —` \
     `# a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same` \
     `# guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.` \
-    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
+    `# The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a` \
+    `# logger failure can never turn into a start). disabled alone suffices here: skipping the start of` \
+    `# an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.` \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
     2>/dev/null || true
   # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
   # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
