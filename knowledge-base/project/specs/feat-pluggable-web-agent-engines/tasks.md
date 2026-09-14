@@ -164,3 +164,9 @@ deprecation, multi-lockfile workspace-root, middleware-convention, dynamic-modul
 and dynamic-filesystem tracing warnings; these do not appear in the feature diff or
 change the successful exit status. Do not mark an entire phase complete from an
 isolated helper suite.
+
+The latest full-gate rerun (2026-09-14) reached 1,081 passing suites and 54
+skipped, but ended with 10 failures outside this diff: import-hook, Bun, PDF,
+and email timer timeouts; an untracked `probe-octokit.ts` lint-baseline increase;
+and a cron fixture expectation mismatch. The changed engine/settings/routine
+focused gate remains green at 13 files and 117 tests.
