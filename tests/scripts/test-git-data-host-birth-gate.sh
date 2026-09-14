@@ -105,8 +105,24 @@ rc_fw_attach() {
 }
 
 # mk_plan_cfg <file> <resource_changes-json> <configuration.root_module-json>
+# Byte-identical copy of the repo-wide fixture-containment guard. It is duplicated per file
+# rather than sourced because the consumers are standalone scripts; the P1a suite asserts every
+# tracked copy is identical, so do not reformat it. `mk_plan_cfg` writes a plan from a
+# caller-supplied path, and a RELATIVE path there would write into the caller's live checkout
+# instead of the temp root — the containment class fixture-relative-assert.test.sh ratchets.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 mk_plan_cfg() {
   local f="$1" changes="$2" cfg="$3"
+  assert_fixture_dir "$f"
   printf '{"format_version":"1.2","resource_changes":%s,"configuration":{"root_module":%s}}\n' "$changes" "$cfg" > "$f"
 }
 # The configuration block: the attachment references exactly this plan's server; the
