@@ -110,6 +110,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Synthetic qualification record: Codex API-key and managed ChatGPT modes have deterministic evidence recorded separately from pending customer-content vendor/CLO approval (`codex-qualification-record.md`).
   - [x] Account-erasure slice: migration 138 anonymizes engine setting/run identity through a service-role-only RPC before auth deletion; lineage/events remain, tenant-isolation teardown parity is updated, and cascade coverage passes 35/35.
   - [x] Codex rollout flag slice: identity-aware `codex-engine` runtime flag is default-off, requires a matching workspace identity, and remains independent from registry capability, authorization, and qualification checks (34 feature-flag tests green).
+  - [x] Settings rollout slice: the workspace selector keeps Codex disabled when the identity-aware rollout flag is off, even if the API advertises the engine as available (5 settings component tests green).
   - [x] Regression correction: tenant-isolation teardown expectation now covers all 22 anonymization RPCs before auth deletion.
   - [x] Full app-local gate after rollout flag and teardown updates: 1,088 files and 13,575 tests pass (54 skipped, 1 existing todo).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.

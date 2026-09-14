@@ -1,11 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
+
+const useOptionalFeatureFlagMock = vi.hoisted(() => vi.fn(() => false));
+vi.mock("@/components/feature-flags/provider", () => ({
+  useOptionalFeatureFlag: useOptionalFeatureFlagMock,
+}));
+
 import { AgentEngineSettings } from "@/components/settings/agent-engine-settings";
 
 const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
+  useOptionalFeatureFlagMock.mockReset();
+  useOptionalFeatureFlagMock.mockReturnValue(false);
   fetchMock.mockResolvedValue({
     ok: true,
     json: async () => ({
@@ -29,7 +37,23 @@ describe("AgentEngineSettings", () => {
     expect((await findByLabelText(/codex/)) as HTMLInputElement).toBeDisabled();
   });
 
+  it("keeps Codex unavailable when the rollout flag is off", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        defaultEngineId: "claude-code",
+        engines: [
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed"], enabledForNewRuns: true },
+        ],
+      }),
+    });
+    const { findByLabelText } = render(<AgentEngineSettings isOwner />);
+    expect(await findByLabelText(/codex/)).toBeDisabled();
+  });
+
   it("saves a changed default for an owner", async () => {
+    useOptionalFeatureFlagMock.mockReturnValue(true);
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({

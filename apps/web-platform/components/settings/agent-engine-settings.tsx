@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
+import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 
 type Engine = { id: string; version: string; transport: string; authModes: string[]; enabledForNewRuns: boolean };
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
+  const codexRolloutEnabled = useOptionalFeatureFlag("codex-engine");
   const [engines, setEngines] = useState<Engine[]>([]);
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
   const [authMode, setAuthMode] = useState<string>("managed");
@@ -48,14 +50,17 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
         </p>
         {status === "error" && <p role="alert" className="mb-3 text-sm text-red-400">Engine settings are unavailable.</p>}
         <div className="space-y-3">
-          {engines.map((engine) => (
+          {engines.map((engine) => {
+            const rolloutEnabled = engine.id !== "codex" || codexRolloutEnabled;
+            const selectable = engine.enabledForNewRuns && rolloutEnabled;
+            return (
             <label key={engine.id} className="flex items-start gap-3 text-sm text-soleur-text-primary">
               <input
                 type="radio"
                 name="agent-engine"
                 value={engine.id}
                 checked={selected === engine.id}
-                disabled={!isOwner || status === "loading" || status === "saving" || !engine.enabledForNewRuns}
+                disabled={!isOwner || status === "loading" || status === "saving" || !selectable}
                 onChange={() => {
                   const nextMode = engine.authModes.includes(authMode) ? authMode : engine.authModes[0] ?? "managed";
                   setAuthMode(nextMode);
@@ -65,11 +70,12 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
               <span>
                 <span className="block font-medium">{engine.id === DEFAULT_AGENT_ENGINE_ID ? "Claude Code" : engine.id}</span>
                 <span className="block text-xs text-soleur-text-secondary">
-                  {engine.enabledForNewRuns ? `${engine.transport} · ${engine.authModes.join(" or ")}` : "Coming soon"}
+                  {selectable ? `${engine.transport} · ${engine.authModes.join(" or ")}` : "Coming soon"}
                 </span>
               </span>
             </label>
-          ))}
+            );
+          })}
         </div>
         {engines.find((engine) => engine.id === selected)?.authModes.length ? (
           <label className="mt-5 block text-sm text-soleur-text-primary">
