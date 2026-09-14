@@ -156,6 +156,43 @@ describe("POST /api/internal/schedule-reminder — validation", () => {
     mockSendInngestWithRetry.mockRejectedValueOnce(new Error("inngest down"));
     const res = await POST(makeRequest(validBody()));
     expect(res.status).toBe(502);
+    expect(res.headers.get("Retry-After")).toBeNull();
     expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
+  });
+});
+
+// Cutover window (#6921 FR16): op=quiesce-web stops the scheduler the app sends
+// to, so inngest.send's fetch is REFUSED until the INNGEST_BASE_URL repoint
+// redeploys. Error shape captured against a closed loopback port with the
+// pinned SDK (inngest 3.54.2, 2026-09-14): TypeError "fetch failed" whose
+// `cause` is an Error with code ECONNREFUSED — not a top-level code.
+function refusedFetchError(): TypeError {
+  const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8288"), {
+    code: "ECONNREFUSED",
+    errno: -111,
+  });
+  return new TypeError("fetch failed", { cause });
+}
+
+describe("POST /api/internal/schedule-reminder — backend refusing connections", () => {
+  it("503 + Retry-After (retry later) when the send is refused, still mirrored to Sentry", async () => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(refusedFetchError());
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(mockReportSilentFallback.mock.calls[0][1].op).toBe("dispatch");
+  });
+
+  it("stays 502 for a fetch failure whose cause is NOT a refusal (e.g. DNS)", async () => {
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND x"), { code: "ENOTFOUND" });
+    mockSendInngestWithRetry.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+    const res = await POST(makeRequest(validBody()));
+    expect(res.status).toBe(502);
+    expect(res.headers.get("Retry-After")).toBeNull();
+  });
+
+  it("stays 502 for a non-TypeError carrying ECONNREFUSED text only in its message", async () => {
+    mockSendInngestWithRetry.mockRejectedValueOnce(new Error("upstream said ECONNREFUSED"));
+    expect((await POST(makeRequest(validBody()))).status).toBe(502);
   });
 });
