@@ -35,11 +35,13 @@ permalink: legal/gdpr-policy/
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
+**Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
+
 ---
 
 ## 1. Introduction
 
-This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — for solo founders and technical builders.
+This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI), providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — for solo founders and technical builders.
 
 This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, Web Platform (app.soleur.ai), documentation site, and GitHub repository.
 
@@ -61,7 +63,7 @@ Jikigai acts as a **data controller** for: (a) the documentation site hosted on 
 
 Users should be aware that interacting with Soleur may involve third-party services that have their own data controller or processor roles:
 
-- **Anthropic (Claude API) — locally-installed Soleur plugin:** When you run the Soleur **plugin** on your own machine and invoke its agents and skills, requests are sent to Anthropic's Claude API using **your own** API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. For that path, Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic.
+- **Anthropic (Claude API) — locally-installed Soleur plugin:** When you use Claude Code: when you run the Soleur **plugin** on your own machine and invoke its agents and skills, requests are sent to Anthropic's Claude API using **your own** API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. For that path, Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic. When you use Grok Build, plugin-local inference is sent to xAI under your own CLI credentials; xAI is not a Jikigai processor.
 - **Anthropic (Claude API) — Jikigai-operated processing:** Separately, Jikigai runs its own automated jobs that send content to Anthropic PBC (United States) under a **Jikigai-held API key**, not yours. For that processing **Jikigai is the controller and Anthropic PBC is its processor** under a data processing agreement. This covers automated monitoring of publicly visible repository activity, our Discord community and public Hacker News discussions; and automated checks that run in our continuous-integration pipeline, which send contributor-authored source and pull-request content to Anthropic. See Section 3.3 below and Section 4.4 of the Privacy Policy. **[Correction, 2026-07-31 (#7100): this entry previously stated, without qualification, that requests are sent "using the user's own API key" and that "Soleur does not intermediate, intercept, or store any data exchanged between the user and Anthropic". That was accurate for the locally-installed plugin and **affirmatively false** for the Jikigai-operated processing described above, which has been running since at least 2026-02-19. The two paths are now stated separately.]**
 - **Operator-assisted sessions and repository access granted to Jikigai.** Where Jikigai, at a
   User's request, runs Soleur against that User's own material using a Jikigai machine or a
@@ -360,7 +362,7 @@ The following data may be processed by third-party services when users interact 
 | Category | Third Party | Purpose |
 |---|---|---|
 | IP address, browser metadata | GitHub (via GitHub Pages) | Hosting documentation site |
-| Prompts, code context | Anthropic (via Claude API) | Powering AI agent responses (user authenticates with own credentials) |
+| Prompts, code context | Anthropic (via Claude API), when used with Claude Code | Powering AI agent responses (user authenticates with own credentials) |
 | Repository, Discord, Hacker News, X and Bluesky activity; repository source; PR and issue content | Anthropic PBC (via Claude API), as **Jikigai's processor** under a **Jikigai-held** key | Automated community-awareness summaries (PA-31, PA-32) and continuous-integration checks (PA-33). Distinct from the row above, which covers the locally-installed plugin under **your own** credentials. *(Row added 2026-07-31, ref #7100: this table previously described Anthropic egress as user-authenticated only.)* |
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (<legal@jikigai.com>) |
