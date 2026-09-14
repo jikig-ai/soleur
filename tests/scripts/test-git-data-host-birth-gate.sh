@@ -492,6 +492,28 @@ mk_plan "$TMP/fw-rules-unknown.json" "$(printf '[%s,%s,%s]' \
   "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":null} | .change.after_unknown = {"rule":true} else . end]' | sed 's/^\[//; s/\]$//')")"
 check "an UNDISCLOSED firewall rule set => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rules-unknown.json"
 
+# THE SHAPE THE REAL PROVIDER EMITS (hcloud 1.63.0, captured from an offline `terraform plan`
+# of the zero-rule deny-all firewall, and the shape run 34822248580 refused on 2026-09-14):
+# `after.rule` is `[]` — fully disclosed, zero rules — and `after_unknown` carries EVERY
+# nested block as an EMPTY array (`"apply_to":[],"rule":[]`), meaning "no unknown elements".
+# rc_entry never emits an `after_unknown` key, so no fixture above ever showed the gate this
+# shape, and `(.after_unknown.rule // false) != false` read `[]` as "unknown". This row is
+# the real birth plan's firewall and MUST PASS.
+mk_plan "$TMP/fw-real-provider-shape.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.git_data' 'hcloud_server' '["create"]')" \
+  "$(entailed_four)" \
+  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"id":null,"labels":{"app":"soleur-web-platform"},"name":"soleur-git-data","rule":[]} | .change.after_unknown = {"apply_to":[],"id":true,"labels":{},"rule":[]} else . end]' | sed 's/^\[//; s/\]$//')")"
+check "the REAL provider shape (after.rule=[] + after_unknown.rule=[]) => PASS" 0 "PASS" "$TMP/fw-real-provider-shape.json"
+
+# The element-level unknown: one rule whose content is not disclosed. `after_unknown.rule`
+# is then a NON-EMPTY array carrying a `true` leaf. Still unreadable, still ABORT — the fix
+# for the row above must not collapse into "only `true` at the top level is unknown".
+mk_plan "$TMP/fw-rule-element-unknown.json" "$(printf '[%s,%s,%s]' \
+  "$(rc_entry 'hcloud_server.git_data' 'hcloud_server' '["create"]')" \
+  "$(entailed_four)" \
+  "$(printf '[%s]' "$(rest_fifteen)" | jq -c '[.[] | if .address == "hcloud_firewall.git_data" then .change.after = {"rule":[{"direction":"in","port":null,"protocol":"tcp"}]} | .change.after_unknown = {"apply_to":[],"id":true,"rule":[{"port":true}]} else . end]' | sed 's/^\[//; s/\]$//')")"
+check "a rule ELEMENT with an undisclosed field => ABORT" 1 "FIREWALL CONTENT UNREADABLE" "$TMP/fw-rule-element-unknown.json"
+
 # Inline firewall_ids on the server bypasses the attachment the gate inspects entirely.
 mk_plan "$TMP/server-inline-fw.json" "$(printf '[%s,%s,%s]' \
   '{"address":"hcloud_server.git_data","type":"hcloud_server","change":{"actions":["create"],"before":null,"after":{"firewall_ids":[111]}}}' \

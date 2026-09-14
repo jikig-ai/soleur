@@ -169,11 +169,22 @@ git_data_host_birth_gate() {
       elif (.change.after.rule | type) != "array" then 0
       else (.change.after.rule | length) end] | add // 0' < "$plan_json" 2>/dev/null)
 
-  firewall_unreadable=$(jq '[.resource_changes[]
+  # `after_unknown.rule` is NOT a boolean. Terraform's plan JSON mirrors the value's SHAPE:
+  # `true` when the whole set is unknown, otherwise an array parallel to `after.rule` whose
+  # elements carry `true` leaves for the fields not known at plan time — and for a create
+  # with ZERO rule blocks that array is EMPTY (`"rule": []`, alongside `"apply_to": []`),
+  # which is the real deny-all birth plan (hcloud 1.63.0, run 34822248580, 2026-09-14).
+  # `(.after_unknown.rule // false) != false` read that `[]` as unknown and refused every
+  # birth of the firewall this gate exists to protect. "Unknown" is: any `true` leaf
+  # anywhere under the key. The suite's REAL-provider-shape row pins the `[]` case; its
+  # rule-ELEMENT row pins that a `true` nested inside a non-empty array still aborts.
+  firewall_unreadable=$(jq '
+    def has_unknown: if type == "boolean" then . elif type == "array" or type == "object" then any(.[]; has_unknown) else false end;
+    [.resource_changes[]
     | select(.address == "hcloud_firewall.git_data")
     | select(.change.actions | any(. != "read"))
     | select(((.change.after | type) != "object")
-          or ((.change.after_unknown.rule // false) != false)
+          or ((.change.after_unknown.rule // false) | has_unknown)
           or (((.change.after.rule // null) != null) and ((.change.after.rule | type) != "array")))] | length' < "$plan_json" 2>/dev/null)
 
   # F5: the attachment's IDENTITY, not just the firewall's content. Nothing else in this
@@ -347,7 +358,7 @@ git_data_host_birth_gate() {
   fi
 
   if [[ "$firewall_unreadable" -ne 0 ]]; then
-    echo "git_data_host_birth_gate: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose hcloud_firewall.git_data's rule set (after is not an object, after_unknown.rule is set, or after.rule is not an array). That is the shape a computed \`dynamic \"rule\"\` block produces. Fail-closed: an undisclosed rule set is not evidence of a deny-all firewall, and this firewall plus its attachment are the entire public-exposure defense for a store holding every user's source code."
+    echo "git_data_host_birth_gate: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose hcloud_firewall.git_data's rule set (after is not an object, after_unknown.rule carries an unknown leaf, or after.rule is not an array). That is the shape a computed \`dynamic \"rule\"\` block produces. Fail-closed: an undisclosed rule set is not evidence of a deny-all firewall, and this firewall plus its attachment are the entire public-exposure defense for a store holding every user's source code."
     return 1
   fi
 
