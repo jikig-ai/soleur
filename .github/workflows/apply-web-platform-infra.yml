@@ -248,8 +248,8 @@ on:
           rung-2 rehearsal interlock (released once the boot evidence for the current
           template landed), and the authorization-map interlock (#8009). An earlier version
           of this text said a dispatch exits 1 before planning; that stopped being true when
-          the evidence merged. What holds the route now is the runbook banner and the
-          environment approval -- and that approval reports prevent_self_review:false with a
+          the evidence merged. What holds the route now is the environment approval alone
+          (the runbook banner was cleared by PR #8128, merged 2026-09-14) -- and that approval reports prevent_self_review:false with a
           single reviewer, so the dispatcher can approve their own deployment. (That attribute
           is declared nowhere in this repo's Terraform, so false is the provider default, not
           a choice; every gated environment here reads the same way.) Read
@@ -294,8 +294,9 @@ on:
           # cloud-init-git-data.yml has no off-host emitter, because for this host a green
           # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
           # gate now RELEASES — it remains armed as a regression check, not as a hold.
-          # Dispatch is still held by the runbook's DO-NOT-DISPATCH banner (rung-2 rehearsal
-          # evidence, #7025). See the git_data_host_create job and
+          # The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
+          # merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
+          # 2026-09-14. See the git_data_host_create job and
           # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
@@ -5793,8 +5794,9 @@ jobs:
     # not enumerate per-target tokens — it accreted one clause per target until no operator
     # read it. The token lives here and in the runbook.)
     #
-    # WHY THIS JOB EXISTS. `soleur-git-data` is declared in IaC and has never existed. An
-    # authenticated `terraform state list` returns 201 addresses and ZERO git-data members.
+    # WHY THIS JOB EXISTS. Until 2026-09-14 `soleur-git-data` was declared in IaC and had
+    # never existed: an authenticated `terraform state list` returned 201 addresses and ZERO
+    # git-data members (it was born by this job on run 34836141887 / replaced by 34861860722).
     # No automated route could create it: git-data-host-replace requires
     # actions ⊇ {delete,create} so a first CREATE fails its server_replaced arm, its
     # luks_passphrase_touched arm fires on a create too, and its 5-member allow-set cannot
@@ -5812,8 +5814,9 @@ jobs:
     # An earlier version of this header read "STILL HELD, BY TWO GATES". That inverted the
     # moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
     # a live verdict invites -- so it now states what the gates ARE rather than what they
-    # currently answer. What holds the route today is the runbook's DO-NOT-DISPATCH banner
-    # and the environment approval; the banner may be the only prose hold, and the approval
+    # currently answer. What held the route before the birth was the runbook's
+    # DO-NOT-DISPATCH banner (cleared by PR #8128, merged 2026-09-14) and the environment approval;
+    # the approval is the remaining hold, and it
     # reports prevent_self_review:false with a single reviewer (declared nowhere in this
     # repo's Terraform, so that is the provider default rather than a chosen setting).
     #
@@ -5825,9 +5828,9 @@ jobs:
     #   grep -vE '^[[:space:]]*#' apps/web-platform/infra/cloud-init-git-data.yml \
     #     | grep -c 'sentry_dsn'          # => 2 (was 0; the gate's sentinel, non-comment)
     #
-    # (2) The RUNG-2 REHEARSAL interlock HOLDS. Releasing (1) retired the only mechanical
-    # hold on this route, which left the birth held by the runbook's DO-NOT-DISPATCH banner
-    # alone — prose, in a different file from this button, and an earlier revision of THIS
+    # (2) The RUNG-2 REHEARSAL interlock HELD until the evidence landed. Releasing (1)
+    # retired the only mechanical hold on this route, which left the birth held by the
+    # runbook's DO-NOT-DISPATCH banner alone — prose, in a different file from this button, and an earlier revision of THIS
     # COMMENT said "the interlock is released", inviting the dispatch the banner forbids.
     # ADR-149's own Alternatives table rejects a capability held only by prose. So the rung-2
     # precondition is now enforced here: git_data_rung2_rehearsal_gate requires committed boot
@@ -5838,7 +5841,8 @@ jobs:
     # hcloud_server.git_data address — is carried as #7025's own precondition and was
     # deliberately NOT inherited as a pass from #6982's rung-1 container rehearsal. See
     # ADR-149's release checklist and its #6982 disposition table for what each item
-    # delivered. The banner stays up until #7025 lands the evidence.
+    # delivered. The evidence landed (PR #8126, run 34768256297) and the banner was
+    # cleared (PR #8128).
     #
     # DELTAS FROM web_host_create, each evidenced rather than inherited:
     #   • SINGLETON, not a for_each map — no host key input, and the gate's `def allow:`
@@ -6145,6 +6149,7 @@ jobs:
           grep -E '^Plan:' tfplan.txt || true
 
       - name: Terraform apply (git-data birth)
+        id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -6174,16 +6179,24 @@ jobs:
       # pattern is a poll INSIDE the birth job — "the job now waits for a bad outcome,
       # which is what makes it a signal rather than a step".
       #
-      # `if: always()` so a FAILED apply still reports what the host did or did not say —
-      # a partial birth is exactly when the boot evidence matters most.
+      # Runs after a green OR a failed apply, never after a skipped one: a partial birth is
+      # exactly when the boot evidence matters most, but a plan the gate REFUSED has no host
+      # to hear from (measured on run 34822248580: a refused plan left this step polling for
+      # its full 10-minute budget and then telling the operator to "re-dispatch once the query
+      # path works" over a run where no apply happened). `!cancelled()` rather than `always()` so a cancelled run does not
+      # spend the budget either. Enumerated (`== 'success' || == 'failure'`) rather than
+      # `!= 'skipped'`: a renamed `apply` id resolves to '', and only the enumerated form
+      # fails closed on that (the idiom's rationale in apply-deploy-pipeline-fix.yml).
       #
       # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
       # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
       # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
       # event:read), while the BETTERSTACK_QUERY_* credentials are already available.
       - name: Poll for the git-data boot-completion signal
-        if: always()
+        id: poll
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
@@ -6195,7 +6208,7 @@ jobs:
           # credentials live in prd_terraform already, so their absence is a repo-config
           # bug, not an expected operating condition.
           if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
-            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets and re-dispatch (the birth is additive; a re-dispatch is the normal remedy)."
+            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets; then, apply outcome ${APPLY_OUTCOME}: on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query; on failure re-dispatch is the normal remedy (the birth is additive)."
             exit 1
           fi
 
@@ -6278,11 +6291,11 @@ jobs:
             # EVERY poll failed to reach Better Stack, so this run learned NOTHING about the
             # host. Saying "the host booted dark" here would be a confident mis-blame of the
             # same shape the rung-2 capture step's wrapper-failure class exists to prevent.
-            echo "::error::Could not read the boot signal at all: all 20 polls failed to query Better Stack (last rc=${rc}). This says NOTHING about whether soleur-git-data booted — check BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and the source's availability, NOT the host. The birth is UNVERIFIED; re-dispatch once the query path works."
+            echo "::error::Could not read the boot signal at all: all 20 polls failed to query Better Stack (last rc=${rc}). This says NOTHING about whether soleur-git-data booted — check BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and the source's availability, NOT the host. The birth is UNVERIFIED (apply outcome ${APPLY_OUTCOME}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query once the query path works; on failure re-dispatch once it works."
             exit 1
           fi
           if [[ -z "$found" ]]; then
-            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes (the query path answered, so this IS a statement about the host). The apply may be green while the host booted DARK — that is precisely the state this interlock exists to catch. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes (the query path answered, so this IS a statement about the host). The apply step's outcome was ${APPLY_OUTCOME}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
             exit 1
           fi
 
@@ -6321,7 +6334,7 @@ jobs:
           elif ! printf '%s' "$found" | grep -q '"nft_metadata_drop":"yes"'; then
             echo "::warning::boot_complete carried no nft_metadata_drop assertion — the emit contract and this reader have drifted. The birth stands; the hardening control's state is UNKNOWN, which is not the same as absent."
           fi
-          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
+          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive (apply outcome: ${APPLY_OUTCOME})."
 
       - name: Dispatch summary
         if: always()
@@ -6335,18 +6348,20 @@ jobs:
         env:
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          POLL_OUTCOME: ${{ steps.poll.outcome }}
         run: |
           {
             echo "## git-data-host-create"
             echo ""
-            echo "- outcome: ${JOB_STATUS}"
+            echo "- outcome: ${JOB_STATUS} (apply outcome: ${APPLY_OUTCOME}; poll outcome: ${POLL_OUTCOME})"
             echo "- reason: ${REASON:-n/a}"
             echo ""
             echo "### What a green run gives you — and what it does not"
             echo ""
             echo "It gives you: the twenty-address fan-out CREATED IN TERRAFORM — the server, both volumes, both attachments, the private NIC, the deny-all firewall attachment, and (#6982) the GIT_DATA_SSH_HOST + Better Stack ingest secrets."
             echo ""
-            echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step warned that BETTERSTACK_QUERY_* was absent, you are back to the old state and must verify manually before trusting this birth."
+            echo "The APPLY alone does not prove the host booted, that git-data-bootstrap.sh ran, or that the LUKS volume mounted. Since #6982 that gap is closed by the boot-signal poll step above, NOT by the apply: the host emits stage:boot_complete with its four assertions, and this job fails if that signal does not arrive or arrives with any assertion false. If the poll step FAILED with the credentials-absent or unreadable-signal error, you are back to the old state and must verify manually before trusting this birth."
             echo ""
             echo "It does NOT give you:"
             echo "- a serving store — \`GIT_DATA_STORE_ENABLED\` is still absent from Doppler prd, so the feature stays dark;"
@@ -6356,6 +6371,31 @@ jobs:
             echo ""
             echo "Next: knowledge-base/engineering/operations/runbooks/git-data-birth.md"
           } >> "$GITHUB_STEP_SUMMARY"
+          # After the summary is written (so it survives a RED verdict): the apply/poll outcome pair decides whether this run VERIFIED
+          # anything. A green apply whose poll never ran is an UNVERIFIED birth and must not
+          # leave the job green — annotations reach `gh run view`; a grey step does not.
+          # An EMPTY outcome means a step id was renamed or mis-keyed (actionlint cannot see it;
+          # the same backstop exists in apply-deploy-pipeline-fix.yml). Nothing downstream can
+          # read it, so fail closed rather than let the case fall through green.
+          if [[ -z "$APPLY_OUTCOME" || -z "$POLL_OUTCOME" ]]; then
+            echo "::error::apply/poll outcome is EMPTY (apply='${APPLY_OUTCOME}' poll='${POLL_OUTCOME}') — a step id was renamed or mis-keyed; this birth is UNVERIFIED"
+            exit 1
+          fi
+          # A green apply whose poll did not SUCCEED is unverified whatever the poll's outcome —
+          # the catch-all `success/*` covers skipped, cancelled and anything GitHub adds later.
+          # Today that arm is reachable only under cancellation (the poll predicate runs the
+          # poll after every non-cancelled green apply), so it is defence-in-depth against the
+          # predicate being edited back, plus a useful annotation on a cancelled run.
+          # `success/failure` is the poll's own RED and needs no second verdict here.
+          case "${APPLY_OUTCOME}/${POLL_OUTCOME}" in
+            success/success) ;;
+            success/failure) ;;
+            success/*) echo "::error::apply succeeded but the boot-signal poll did not run to a verdict (poll outcome '${POLL_OUTCOME}') — the birth is UNVERIFIED; run the runbook's 'After the birth' query"; exit 1 ;;
+            skipped/skipped) echo "::notice::boot-signal poll SKIPPED — no apply ran (an earlier step failed or the run was cancelled); this is not a verdict on the host" ;;
+            cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project for a half-created fan-out before any re-dispatch; a re-dispatch after a landed server is refused" ;;
+            failure/*) ;;
+            *) echo "::warning::unrecognised outcome pair '${APPLY_OUTCOME}/${POLL_OUTCOME}' — read the step log; do not treat this run as verified" ;;
+          esac
 
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
   #
