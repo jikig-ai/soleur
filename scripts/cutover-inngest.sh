@@ -871,7 +871,7 @@ case "$OP" in
       echo "::notice::doublefire-probe: ZERO runs on the dedicated host — its scheduler has executed nothing in the window."
     fi
     # Scope caveat carried VERBATIM from op=verify 2.6 (P2-a / DI-C3).
-    echo "::notice::doublefire-probe SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — this probe cannot substitute for it."
+    echo "::notice::doublefire-probe SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false, so the web scheduler host is the only colocated scheduler; op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — this probe cannot substitute for it."
     # NO-GO must be red. Every sibling arm in this workflow exits non-zero on
     # its adverse verdict (re-arm precondition, re-arm PARTIAL, wiped-volume
     # verify); a green run whose annotation says "DOUBLE-FIRE detected" is the
@@ -1430,16 +1430,20 @@ case "$OP" in
       echo "::warning::2.0: a dedicated host that ANSWERS pre-arm is out of sequence (P1-5 should keep it dark); the empty registry still satisfies 2.0 — see #8072"
     fi
 
-    # ---- 2.1 capture (HONESTY-SCOPED, DI-C3, tracked #6227). This
-    # is a SINGLE LB-routed POST to the inngest-rearm-reminders hook — it captures
-    # ONLY the LB-reachable host's local Redis. There is NO per-host fan-out today
-    # (no firewall rule for web→web:8288 + no host-targeting capture hook — that
-    # infra is DEFERRED, see the tracking issue), so the weight-0 warm-standby web-2
-    # (10.0.1.11), which self-arms oneshots into its OWN Redis independent of LB
-    # weight, is NOT captured here. web-2's reminders are covered by the OPERATOR
-    # web-2 freeze/recreate step in the SEAM below — NOT by this capture. The host
-    # script persists the still-armed records on-host; only counts + reminder_ids
-    # surface here (P2-sec-a / AC-NOBODY). Σcaptured feeds the D.4 rearm reconciliation.
+    # ---- 2.1 capture (LB-routed, DI-C3, tracked #6227). This is a SINGLE POST to the
+    # inngest-rearm-reminders hook on the LB-routed web scheduler host. The host script
+    # persists the still-armed records on-host; only counts + reminder_ids surface here
+    # (P2-sec-a / AC-NOBODY). Σcaptured feeds the D.4 rearm reconciliation.
+    #   SCOPE: web-2 (10.0.1.11) is a scheduler-less cattle standby born with
+    # web_colocate_inngest=false — no inngest-server.service, no local reminders — so there
+    # is nothing on it to capture, and no per-host capture fan-out is needed for it.
+    #   RESUME (#6921): after op=quiesce-web the web scheduler is stopped, so a live
+    # enumeration is impossible. The quiesce handler captured the still-armed reminders
+    # BEFORE it stopped the unit; while the unit is in the quiesced shape the host answers
+    # from that persisted capture with source:"persisted" + captured_at. A serving host
+    # answers live and carries no `source` field, so the absent field IS the live marker.
+    # A serving host whose enumeration fails still fails here (never a stale-file fallback).
+    # SOURCE is kept for 2.2: its UNKNOWN remedy branches on it.
     PAYLOAD='{"mode":"capture"}'
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     rm -f /tmp/exec-capture
@@ -1456,45 +1460,56 @@ case "$OP" in
       echo "::error::2.1 capture returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
     fi
     SIGMA_CAPTURED=$(echo "$BODY" | jq -r '.captured // 0')
-    echo "::notice::2.1 capture: Σcaptured=$SIGMA_CAPTURED across host-set [$CUTOVER_HOSTS] (records on-host; reminder_ids-only surfaced)"
+    SOURCE=$(echo "$BODY" | jq -r '.source // "live"')
+    CAPTURED_AT=$(echo "$BODY" | jq -r '.captured_at // ""')
+    CAPTURED_AT_NOTE=""
+    if [[ "$SOURCE" == "persisted" ]]; then
+      CAPTURED_AT_NOTE=" captured_at=$CAPTURED_AT"
+    fi
+    echo "::notice::2.1 capture: Σcaptured=$SIGMA_CAPTURED source=$SOURCE${CAPTURED_AT_NOTE} across host-set [$CUTOVER_HOSTS] (records on-host; reminder_ids-only surfaced)"
 
-    # ---- 2.2 QUIESCE HARD GATE (P1-7) — HONESTY-SCOPED (DI-C3, tracked
-    # #6227). The old web-host scheduler MUST be provably down BEFORE
-    # the SEAM is printed — arming the flip while an old scheduler survives creates a
-    # second live scheduler on prod Postgres (the double-fire).
-    #   LIMITATION (DI-C3): this gate reads inngest state via the inngest-inventory
-    # web-host hook, which resolves over the LOAD BALANCER to 127.0.0.1:8288 on
-    # WHICHEVER host the LB routed the webhook to. There is NO host-targeting
-    # mechanism today (no firewall rule for web→web:8288 + no host-targeting
-    # inventory hook — that per-host fan-out infra is DEFERRED; see the tracking
-    # issue). So this gate can only POSITIVELY confirm the LB-REACHABLE host(s); it
-    # CANNOT individually probe the weight-0 warm-standby web-2 (10.0.1.11), which
-    # self-arms oneshots into its OWN Redis independent of LB weight. Iterating
-    # $CUTOVER_HOSTS here would re-probe the SAME LB-routed host every time and
-    # falsely imply per-host coverage, so we DO NOT loop the host-set and we DO NOT
-    # claim "zero inngest across all $CUTOVER_HOSTS". web-2 quiesce is a MANDATORY
-    # OPERATOR step (the SEAM below, via the plan's web-2 freeze/recreate lifecycle)
-    # — NOT auto-verified here.
-    # Classification of the LB-reachable probe (fail-CLOSED), re-probed
-    # CUTOVER_QUIESCE_PROBES (default 3) times so a TRANSIENT non-200 from a surviving
-    # scheduler cannot slip through as "quiesced":
-    #   * HTTP 200 (any probe)             → inngest SERVING the GQL → STILL RUNNING → block.
-    #   * a STABLE real webhook non-200    → the inventory hook ran and reported inngest
-    #     across every probe (no 200)        DOWN (inngest-inventory.sh exits 1 → non-200
-    #                                        when the GQL is unreachable) → quiesced.
-    #   * transport failure / unreadable   → UNKNOWN → FAIL-CLOSED: we cannot PROVE it is
-    #     (000) only                          quiesced, so we do NOT arm.
+    # ---- 2.2 QUIESCE HARD GATE (P1-7) — LB-routed (DI-C3, tracked #6227). The web-host
+    # scheduler MUST be provably quiesced BEFORE the SEAM is printed — arming the flip while
+    # an old scheduler survives creates a second live scheduler on prod Postgres (the
+    # double-fire).
+    #   SCOPE: the inngest-inventory hook resolves over the LOAD BALANCER to 127.0.0.1:8288
+    # on the LB-routed web scheduler host. web-2 (10.0.1.11) is a scheduler-less cattle
+    # standby born with web_colocate_inngest=false — no inngest-server.service, no local
+    # reminders — so there is no web-2 scheduler to probe, and op=quiesce-web's stop+disable
+    # fan-out to it is a tolerated no-op on an absent unit. Iterating $CUTOVER_HOSTS here
+    # would re-probe the SAME LB-routed host every time and falsely imply per-host coverage,
+    # so we DO NOT loop the host-set.
+    #   WHAT IS CERTIFIED (#6921, Guard 3): not a "stable non-200" proxy — a crash-looping
+    # still-ENABLED unit or a broken inventory script also answers non-200, and an enabled
+    # scheduler can come back mid-flip. The gate certifies the quiesced UNIT SHAPE
+    # (is-active inactive|failed AND is-enabled disabled), which only op=quiesce-web's
+    # quiesce handler writes and only op=rollback's enable handler clears; the on-host
+    # inventory script reports it as a body line starting `inngest-inventory: QUIESCED`.
+    # Classification, re-probed CUTOVER_QUIESCE_PROBES (default 3) times (fail-CLOSED):
+    #   * HTTP 200 (any probe)                → inngest SERVING the GQL → STILL RUNNING → block.
+    #   * every probe non-200 AND ≥1 non-200  → the host reported the quiesced shape → PASSED.
+    #     body carries the anchored sentinel
+    #   * every probe non-200, NO sentinel    → not serving but NOT certified → UNKNOWN → block.
+    #                                           The remedy branches on 2.1's SOURCE: persisted
+    #                                           proves the rearm script (same config push)
+    #                                           already saw the quiesced shape, so the
+    #                                           inventory script is stale; live means the unit
+    #                                           is not in the shape yet.
+    #   * transport failure only (000)        → UNREADABLE → UNKNOWN → block.
+    # The loop never stops on a sentinel: a 200 on a LATER probe still wins.
     # STILL_RUNNING **and** UNKNOWN both withhold the SEAM + exit non-zero. On the
-    # DEDICATED host the inngest-server ExecStartPre flip-guard (P1-5) additionally
-    # blocks a second prod scheduler on a dedicated-host restart — but it does NOT stop
-    # a surviving WEB-host scheduler, so this gate + the no-SSH op=quiesce-web
-    # stop+disable + the operator web-2 freeze/recreate are what cover the web hosts.
+    # DEDICATED host the inngest-server ExecStartPre flip-guard (P1-5) additionally blocks a
+    # second prod scheduler on a dedicated-host restart — but it does NOT stop a surviving
+    # WEB-host scheduler, so this gate + the no-SSH op=quiesce-web stop+disable are what
+    # cover the web host.
     GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
     STILL_RUNNING=0
     UNKNOWN_COUNT=0
     serving=false
     reached_non200=false
+    quiesced_seen=false
+    INV_LAST_BODY=""
     for _probe in $(seq 1 "$QUIESCE_PROBES"); do
       rm -f /tmp/exec-inv
       ICODE=$(curl --disable --noproxy '*' -s --max-time 30 -o /tmp/exec-inv -w '%{http_code}' \
@@ -1503,45 +1518,69 @@ case "$OP" in
         -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
         -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         "$BASE/inngest-inventory" || echo "000")
+      INV_LAST_BODY=$(cat /tmp/exec-inv 2>/dev/null || echo "")
       if [[ "$ICODE" == "200" ]]; then
         serving=true; break
       elif [[ "$ICODE" =~ ^[1-5][0-9][0-9]$ ]]; then
-        # A real HTTP answer that is not 200 → the inventory hook ran and reported
-        # inngest not serving (down) on the LB-reachable host.
+        # A real HTTP answer that is not 200 → the inventory hook ran and reported inngest
+        # not serving on the LB-routed host. Only an ANCHORED sentinel line certifies the
+        # quiesced shape — a FATAL body that merely mentions the word does not.
         reached_non200=true
+        if grep -qE '^inngest-inventory: QUIESCED' /tmp/exec-inv; then
+          quiesced_seen=true
+        fi
       fi
-      # ICODE=000 (transport failure / unreadable) leaves both flags false here.
+      # ICODE=000 (transport failure / unreadable) leaves the flags as they were.
     done
+    # What the host said, for the run log: the LAST body, CR/LF-stripped (one line — a body
+    # line can never start a workflow command) and cut to 120 chars. Plain echo, never an
+    # annotation.
+    INV_EXCERPT="${INV_LAST_BODY//[$'\n\r']/ }"
+    INV_EXCERPT="${INV_EXCERPT:0:120}"
+    GATE_REMEDY=""
     if [[ "$serving" == true ]]; then
       STILL_RUNNING=1
+      GATE_REMEDY="run 'gh workflow run cutover-inngest.yml --field op=quiesce-web' (stop+disables inngest across the host-set over the private net, no SSH), confirm it reports 'quiesced', then re-run op=execute"
       echo "quiesce check (LB-reachable host): inngest STILL RUNNING (inventory HTTP 200)"
+    elif [[ "$reached_non200" == true && "$quiesced_seen" == true ]]; then
+      echo "quiesce check (LB-reachable host): inngest QUIESCED — no HTTP 200 across ${QUIESCE_PROBES} probe(s) and the host reported the quiesced unit shape (inngest-inventory: QUIESCED)"
     elif [[ "$reached_non200" == true ]]; then
-      echo "quiesce check (LB-reachable host): inngest not serving (stable webhook non-200 across ${QUIESCE_PROBES} probe(s)) — quiesced"
+      UNKNOWN_COUNT=1
+      if [[ "${SOURCE:-live}" == "persisted" ]]; then
+        GATE_REMEDY="the on-host inngest-inventory.sh predates the QUIESCED verdict; confirm the config push for the merge landed, then re-dispatch op=execute (do NOT re-run quiesce-web)"
+      else
+        GATE_REMEDY="the unit is not in the quiesced shape — dispatch op=quiesce-web"
+      fi
+      echo "quiesce check (LB-reachable host): UNKNOWN, fail-closed — inngest not serving (non-200 across ${QUIESCE_PROBES} probe(s)) but NO body carried the inngest-inventory: QUIESCED sentinel (2.1 source=${SOURCE:-live}); last body: ${INV_EXCERPT:-<empty body>}"
     else
       UNKNOWN_COUNT=1
+      GATE_REMEDY="the webhook was unreachable (UNKNOWN 000) — check CF-Access/HMAC + the run log, then re-dispatch op=execute"
       echo "quiesce check (LB-reachable host): UNREADABLE (no HTTP answer across ${QUIESCE_PROBES} probe(s)) — UNKNOWN, fail-closed"
     fi
     if [[ "$STILL_RUNNING" -gt 0 || "$UNKNOWN_COUNT" -gt 0 ]]; then
       if [[ "$STILL_RUNNING" -gt 0 ]]; then
         # THE WARNING COMES BEFORE THE VERB. An operator reads top-down; the remedy below names
         # `op=quiesce-web`, and that op STOPS production scheduling for every user (crons and
-        # reminders) on both web hosts — it opens the maintenance window, with no reviewer gate of
-        # its own. Say so first, at warning level, and say what the sequence can and cannot do today.
-        echo "::warning::2.2: On the first execute of a cutover this is the designed stop and the run is red by design. op=quiesce-web STOPS production scheduling on both web hosts (it opens the maintenance window) and has no reviewer gate; scheduled-inngest-health.yml auto-restarts the web scheduler within 15 minutes of seeing it down (#8077). KNOWN GAP (#6921): a second op=execute after quiesce-web currently FAILS at 2.1 capture, because the capture enumerates the web scheduler you just stopped — the execute -> quiesce -> execute loop is not yet drivable end to end, and the capture file left by THIS run is the one a later op=rearm would replay (reminders armed between this capture and the quiesce are not in it). Do not dispatch op=quiesce-web until #6921 lands or you are prepared to run op=rollback to reopen scheduling."
+        # reminders) on the web scheduler host — it opens the maintenance window, with no reviewer
+        # gate of its own. Say so first, at warning level, and say what the loop does next: the
+        # quiesce handler captures before it stops, a second op=execute resumes 2.1 from that
+        # capture, and neither the watchdog nor a restart/bootstrap deploy starts a quiesced unit.
+        echo "::warning::2.2: On the first execute of a cutover this is the designed stop and the run is red by design. op=quiesce-web STOPS production scheduling (every user's crons and reminders) on the web scheduler host — it opens the maintenance window — and has no reviewer gate. Its quiesce handler captures the still-armed reminders BEFORE it stops the unit (a failed capture stops nothing), so a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary, and 2.2 then certifies the QUIESCED unit shape. scheduled-inngest-health.yml reads that state as QUIESCED and leaves a quiesced unit alone (no restart is dispatched); only op=rollback re-arms scheduling. If you are not ready to open the window, do not dispatch op=quiesce-web yet."
       fi
-      echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed). NO-SSH REMEDIATION: run 'gh workflow run cutover-inngest.yml --field op=quiesce-web' (stop+disables inngest across the host-set over the private net, no SSH), confirm it reports 'quiesced', then re-run op=execute. If UNKNOWN (000) the webhook was unreachable — check CF-Access/HMAC + the run log and re-dispatch. Arming the flip now could create a second live scheduler on prod Postgres. Do NOT SSH the host."
+      echo "::error::2.2 QUIESCE HARD GATE FAILED (P1-7): the LB-reachable host is still-running=$STILL_RUNNING / UNKNOWN=$UNKNOWN_COUNT. WITHHOLDING THE SEAM (fail-closed). NO-SSH REMEDIATION: $GATE_REMEDY. Arming the flip now could create a second live scheduler on prod Postgres. Do NOT SSH the host."
       exit 1
     fi
-    echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-REACHABLE host(s) POSITIVELY confirmed not-serving (fail-closed). SCOPE (DI-C3, tracked #6227): this LB-routed path did NOT individually probe the weight-0 warm-standby web-2 (10.0.1.11). op=quiesce-web (when run) now stop+disables web-2's scheduler too (an ACT), but CI still cannot VERIFY web-2 AND web-2's local reminders were never captured — the MANDATORY web-2 freeze/recreate step in the SEAM below is NOT superseded; do NOT read a green op=quiesce-web as 'web-2 handled'."
+    echo "::notice::2.2 QUIESCE HARD GATE PASSED: the LB-routed web scheduler host reported the QUIESCED unit shape (inactive|failed + disabled — written only by op=quiesce-web) with no HTTP 200 across ${QUIESCE_PROBES} probe(s) (fail-closed). SCOPE (DI-C3): web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false — no inngest-server.service, no local reminders — so it needs no quiesce and no capture; op=quiesce-web's fan-out to it is a tolerated no-op."
 
     # ---- SEAM: operator maintenance-window steps. As of #6369 the 2.2b/2.3 arm-flip is NO
     # LONGER an out-of-band Doppler write — it is the no-SSH `op=arm` dispatch (a prod-write
     # behind explicit dispatch + the inngest-cutover environment required-reviewer gate, which
     # satisfies hr-menu-option-ack-not-prod-write-auth: the dispatch + approval IS the ack).
-    # The remaining true operator seams are 2.2a (web-2 lifecycle) and 2.4 (app-repoint).
+    # The remaining true operator seam is 2.4 (app-repoint). 2.2a is a statement, not a step:
+    # web-2 is a scheduler-less cattle standby, so there is nothing on it to quiesce.
     # This block still echoes only step text; no secrets / bodies / connection strings (AC-NOBODY).
-    echo "::notice::SEAM — operator maintenance-window steps (2.2a web-2 lifecycle + 2.4 app-repoint are operator; 2.2b/2.3 arm-flip is now the no-SSH op=arm dispatch):"
-    echo "  2.2a WEB-2 QUIESCE — MANDATORY, NOT AUTO-VERIFIED (DI-C3, tracked #6227). op=quiesce-web (when run) now stop+disables web-2's SCHEDULER over the private net (an ACT — a real improvement over operator-only web-2 handling), BUT CI still cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were NEVER captured (2.1 capture is also LB-scoped). The weight-0 warm-standby web-2 (10.0.1.11) self-arms oneshots into its OWN Redis independent of LB weight. So the web-2 freeze/recreate lifecycle REMAINS MANDATORY — do NOT read a green op=quiesce-web as 'web-2 handled'. Before arming the flip you MUST recreate web-2 onto the post-cutover config: take web-2 OUT of the warm-standby rotation and recreate it so no surviving web-2 scheduler self-arms a reminder into its local Redis. RISK IF SKIPPED: a reminder self-armed on an un-quiesced web-2 is silently dropped at cutover (its local Redis is never captured/re-armed). This is a lifecycle action (freeze → recreate), NOT a host shell step (AC-NOSSH). Do NOT proceed to arm the flip until web-2 is recreated. Tracks #6227 (real per-host fan-out to auto-verify web-2)."
+    echo "::notice::SEAM — operator maintenance-window steps (2.4 app-repoint is operator; 2.2a web-2 needs no step; 2.2b/2.3 arm-flip is now the no-SSH op=arm dispatch):"
+    echo "  2.2a WEB-2 — NO STEP. web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false: it has no inngest-server.service and holds no local reminders, so there is nothing on it to quiesce, capture or re-arm. op=quiesce-web's stop+disable fan-out to it (and op=rollback's enable fan-out) is a tolerated no-op on an absent unit, and there is no web-2 freeze or recreate step before arming the flip."
     echo "  2.2b+2.3 ARM THE FLIP — NO LONGER a manual Doppler write. Dispatch the no-SSH op=arm verb: it writes the 3 values on soleur-inngest/prd (INNGEST_POSTGRES_URI + INNGEST_HEARTBEAT_URL read-through from prd_terraform, then INNGEST_CUTOVER_FLIP=armed LAST — the enabled 30s poll timer picks it up), then CONFIRMS the on-host FSM reached done (exit_code:0) via Better Stack. No secret is echoed (AC-NOBODY; #6369). Run: gh workflow run cutover-inngest.yml --field op=arm  (then APPROVE the inngest-cutover environment required-reviewer gate — that approval IS the prod-write ack)."
     echo "  2.4 APP-REPOINT — merge the ci-deploy.sh INNGEST_BASE_URL → http://10.0.1.40:8288 change (canary + prod sites) and redeploy so functions re-sync onto the dedicated host."
     echo "  THEN: op=rearm (re-arm the Σ=$SIGMA_CAPTURED captured reminders; gated on registry-non-empty) → op=verify (exactly-once)."
@@ -1845,7 +1884,7 @@ case "$OP" in
     if [[ "${#HOSTS[@]}" -lt 1 ]]; then
       echo "::error::CUTOVER_HOSTS parsed to zero hosts (value: '$CUTOVER_HOSTS')"; exit 1
     fi
-    echo "::warning::quiesce-web: this STOPS production scheduling (every user's crons and reminders) on host-set [$CUTOVER_HOSTS] — the maintenance window opens NOW. scheduled-inngest-health.yml will auto-restart the web scheduler within ~15 minutes (#8077); a second op=execute currently fails at 2.1 capture against the stopped scheduler (#6921). If you did not mean to open the window, dispatch op=rollback."
+    echo "::warning::quiesce-web: this STOPS production scheduling (every user's crons and reminders) on host-set [$CUTOVER_HOSTS] — the maintenance window opens NOW. The quiesce handler captures the still-armed reminders BEFORE it stops the unit (a failed or timed-out capture stops nothing and reports quiesce_capture_failed), so a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary. scheduled-inngest-health.yml reads the stopped+disabled unit as QUIESCED and leaves a quiesced unit alone — nothing restarts it until op=rollback. If you did not mean to open the window, dispatch op=rollback."
     echo "::notice::quiesce-web: stop+disabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — no-SSH remediation for the 2.2 gate"
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
     SIG=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
@@ -1871,9 +1910,10 @@ case "$OP" in
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
     GSIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-    # Poll window ≥ host quiesce worst case (verify attempts × (interval+5) +
-    # TimeoutStopSec 180 + margin) — drift-guarded by ci-deploy.test.sh (#6178). The
-    # distinct QMAX_POLLS/QPOLL_INTERVAL names keep that grep unambiguous. 120×5=600s.
+    # Poll window ≥ host quiesce worst case (the 120 s quiesce capture bound + 5 s kill-after
+    # that runs BEFORE the stop (#6921) + verify attempts × (interval+5) + TimeoutStopSec 180
+    # + margin, ~445 s) — drift-guarded by ci-deploy.test.sh (#6178). The distinct
+    # QMAX_POLLS/QPOLL_INTERVAL names keep that grep unambiguous. 120×5=600s.
     QMAX_POLLS=120
     QPOLL_INTERVAL=5
     QUIESCED=0
@@ -1933,14 +1973,18 @@ case "$OP" in
       -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
       -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
       "$BASE/inngest-inventory" || echo "000")
+    # It also reports whether the body carried the anchored QUIESCED sentinel — the exact
+    # signal op=execute 2.2 certifies, so a missing sentinel here predicts 2.2's UNKNOWN.
     if [[ "$ICODE" == "200" ]]; then
       echo "::warning::quiesce-web: SECONDARY inventory read still returns HTTP 200 on the LB-reachable host — the host-side deploy-status reported quiesced but the LB may have routed this read to a still-serving host. Re-run op=execute's 2.2 gate to re-confirm before arming."
+    elif grep -qE '^inngest-inventory: QUIESCED' /tmp/quiesce-inv 2>/dev/null; then
+      echo "::notice::quiesce-web: SECONDARY inventory confirm HTTP $ICODE (non-200), QUIESCED sentinel=present on the LB-reachable host — the quiesced unit shape op=execute 2.2 certifies (DI-C3 LB-scoped)."
     else
-      echo "::notice::quiesce-web: SECONDARY inventory confirm HTTP $ICODE (non-200) on the LB-reachable host — consistent with quiesced (DI-C3 LB-scoped)."
+      echo "::warning::quiesce-web: SECONDARY inventory confirm HTTP $ICODE (non-200), QUIESCED sentinel=absent on the LB-reachable host — not serving, but op=execute 2.2 will read UNKNOWN until the host reports the quiesced shape (an on-host inngest-inventory.sh that predates the QUIESCED verdict answers FATAL; confirm the config push for the merge landed)."
     fi
-    # DI-C3 / web-2 scope (spec-flow Finding 4): the fan-out ACTs on web-2 but CI
-    # cannot VERIFY web-2 (LB-scoped) AND web-2's local reminders were never captured.
-    echo "::notice::quiesce-web complete (LB-reachable host verified quiesced via deploy-status). SCOPE (DI-C3): op=quiesce-web now stop+disables web-2's scheduler (an ACT), but CI cannot VERIFY web-2 AND web-2's local reminders were never captured — the operator web-2 freeze/recreate lifecycle (op=execute 2.2a) REMAINS MANDATORY. Do NOT read this green as 'web-2 handled'. Now re-run op=execute."
+    # web-2 scope (DI-C3): web-2 (10.0.1.11) is a scheduler-less cattle standby — the
+    # fan-out to it acts on an absent unit (a tolerated no-op); there is nothing to verify.
+    echo "::notice::quiesce-web complete (LB-routed web scheduler host verified quiesced via deploy-status). SCOPE (DI-C3): web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false — the fan-out to it is a tolerated no-op and it needs no further step. Now re-run op=execute: 2.1 resumes from the persisted capture and 2.2 certifies the QUIESCED unit shape."
     ;;
 
   verify)
@@ -2128,7 +2172,7 @@ case "$OP" in
     else
       echo "::notice::2.6 exactly-once VERIFIED: every (functionID, tick-bucket) has exactly one run (no double-fire), over $RUN_COUNT run(s) anchored on the flip-FSM transition (anchor_source=$DF_ANCHOR_SOURCE, from=$DF_FROM) — SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s and hour-aligned (see the CRON_PERIOD caveat above; P2-c)"
     fi
-    echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-2 double-fire detector — a surviving weight-0 web-2 scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The operator's MANDATORY web-2 quiesce (op=execute SEAM, web-2 freeze/recreate) is the control against a web-2 double-fire — op=verify cannot substitute for it."
+    echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false, so the web scheduler host is the only colocated scheduler; op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — op=verify cannot substitute for it."
 
     # ---- Missed-tick auto-enumeration (P2-16): ticks that fell in the
     # quiesce→register gap have no run; AUTO-emit a ready-to-run soleur:trigger-cron
@@ -2395,9 +2439,9 @@ case "$OP" in
     if [[ "$ENABLED" -ne 1 ]]; then
       echo "::error::rollback did not reach the terminal 'enabled' verdict within $((RMAX_POLLS * RPOLL_INTERVAL))s. If the webhook was unreachable, re-dispatch; otherwise pull reason= from /hooks/deploy-status + Better Stack. Do NOT SSH the host."; exit 1
     fi
-    # web-2 is ACTed by the fan-out but its verdict is acceptance-only (DI-C3, same
-    # honesty as quiesce) — the LB-reachable host is the only one CI positively verified.
-    echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 is re-enabled by the fan-out but not individually VERIFIED here — confirm web-2 via its freeze/recreate lifecycle."
+    # web-2 scope (DI-C3): web-2 is a scheduler-less cattle standby — the enable fan-out
+    # to it is a tolerated no-op; the LB-routed web scheduler host is the one CI verified.
+    echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false — the enable fan-out to it is a tolerated no-op and it needs no further step."
     ;;
 
   resume)
