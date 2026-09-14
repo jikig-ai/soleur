@@ -25,7 +25,10 @@
 #                      inngest-server IS serving; #6407) — SOFT, NO restart, own soft issue
 #                      class. A sustained degraded state escalates to inngest_down in the
 #                      watchdog (persistence-escalation ceiling), not here.
-#   probe_unavailable  non-200 WITHOUT our FATAL/DEGRADED sentinel (404 undeployed hook, 000
+#   inngest_quiesced   any code + the inngest-inventory.sh QUIESCED sentinel (functions query
+#                      failed, /health != 200, unit inactive|failed AND disabled — the shape
+#                      only op=quiesce-web writes; #6921/#8077) — deliberate, NO restart, no issue
+#   probe_unavailable  non-200 WITHOUT our FATAL/DEGRADED/QUIESCED sentinel (404 undeployed hook, 000
 #                      conn refused, 403 CF-Access, gateway 5xx) — soft alert, NO restart
 
 # $1 = HTTP status code (string; "000" for a curl transport failure), $2 = response body.
@@ -55,8 +58,15 @@ classify_liveness_mode() {
   # newline-scrubbed by inngest-inventory.sh's _pf_scrub, so it can never start a line; anchoring
   # to ^ means only a genuine sentinel line (which begins with its own prefix) matches. The FATAL
   # line begins with "inngest-inventory: FATAL", so ^inngest-inventory: DEGRADED cannot match it.
+  #
+  # QUIESCED (#6921/#8077) is checked BEFORE FATAL: inngest-inventory.sh prints it INSTEAD of
+  # FATAL when /health != 200 AND the unit is in the shape only op=quiesce-web writes
+  # (is-active inactive|failed + is-enabled disabled). A deliberate stop — never a restart.
+  # Anchored like the others, so a FATAL line whose errors payload embeds the substring stays down.
   if printf '%s' "$body" | grep -qE '^inngest-inventory: DEGRADED'; then
     echo "functions_query_degraded"
+  elif printf '%s' "$body" | grep -qE '^inngest-inventory: QUIESCED'; then
+    echo "inngest_quiesced"
   elif printf '%s' "$body" | grep -qE '^inngest-inventory: FATAL'; then
     echo "inngest_down"
   else

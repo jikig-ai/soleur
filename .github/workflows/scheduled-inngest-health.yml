@@ -68,7 +68,7 @@ jobs:
               | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
           }
 
-          fail_mode=""; fail_detail=""; dstate=""
+          fail_mode=""; fail_detail=""; dstate=""; web_quiesced="no"
           record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
 
           if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
@@ -130,6 +130,13 @@ jobs:
                   last_mode="functions_query_degraded"; last_detail="attempt ${attempt}/3: /v0/gql functions transiently unreachable but /health=200 (inngest-server serving) — soft, no restart: ${cause:-<empty body>}" ;;
                 inngest_unhealthy)
                   last_mode="inngest_unhealthy"; last_detail="attempt ${attempt}/3: liveness 200 but no functions array: ${cause}" ;;
+                inngest_quiesced)
+                  # #6921/#8077: op=quiesce-web stopped+disabled the web unit (the QUIESCED sentinel
+                  # is printed only for is-active inactive|failed AND is-enabled disabled). DELIBERATE:
+                  # record NO failure — failure_mode stays empty, so the pool probe still runs, no
+                  # restart is dispatched (a restart would START the disabled unit), no issue is filed
+                  # and the check-in stays ok. web_quiesced is declared beside fail_mode="" (set -u).
+                  web_quiesced="yes"; echo "::notice::expected after cutover: web scheduler QUIESCED (unit inactive|failed+disabled — op=quiesce-web, #8077): deliberate, no restart dispatched, no [ci/inngest-down] filed; only op=rollback re-arms it"; break ;;
                 probe_unavailable)
                   last_mode="probe_unavailable"; last_detail="attempt ${attempt}/3: liveness probe path unavailable (HTTP ${CODE}, not a well-formed down) — deploy-race window or CF-Access/webhook.service degrade: ${cause:-<empty body>}" ;;
                 *)
@@ -138,7 +145,7 @@ jobs:
               echo "Probe attempt ${attempt}/3: ${MODE}; retrying…"
               [[ "$attempt" -lt 3 ]] && sleep 8
             done
-            [[ "$healthy" == "no" ]] && record_failure "$last_mode" "$last_detail"
+            [[ "$healthy" == "no" && "$web_quiesced" == "no" ]] && record_failure "$last_mode" "$last_detail"
           fi
 
           fail_mode_safe=$(strip_log_injection "$fail_mode")

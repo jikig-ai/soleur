@@ -23,6 +23,14 @@ TARGET="$SCRIPT_DIR/inngest-inventory.sh"
 # own value inline (a local assignment wins over this export).
 export SOLEUR_HOST_ID_OVERRIDE="hetzner-test-1"
 
+# #6921/#8077: the functions-query failure branch reads the inngest-server unit shape
+# (`systemctl is-active` / `is-enabled`) to tell a deliberate op=quiesce-web (QUIESCED) from a
+# real down (FATAL). Pin a NON-quiesced default so every pre-existing FATAL row is deterministic
+# regardless of the runner's systemd state; the quiesced rows set their own values inline, and
+# the PATH-stub rows `env -u` these to exercise the real `systemctl` exec path.
+export INVENTORY_UNIT_ACTIVE="active"
+export INVENTORY_UNIT_ENABLED="enabled"
+
 PASS=0
 FAIL=0
 
@@ -718,7 +726,8 @@ STUB
   # `env "$@"` — an expanded "$@" token is NOT recognized as an assignment prefix (bash
   # decides assignment-vs-command at parse time, before expansion), so pass extra KEY=VAL
   # seams through `env`, which DOES apply them (with $@ empty, `env bash …` is a clean no-op).
-  STDOUT_CAP=$(PATH="$bindir:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
+  # EXTRA_BIN (optional): a dir of further stubs (e.g. `systemctl`) searched after the logger stub.
+  STDOUT_CAP=$(PATH="$bindir${EXTRA_BIN:+:$EXTRA_BIN}:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" INVENTORY_FUNCTIONS_FIXTURE="$ff" \
     INVENTORY_NOW_MS="$NOW_MS" env "$@" bash "$TARGET" 2>/dev/null) || RC=$?
   MARKERS_CAP=$(cat "$logout")
   rm -rf "$bindir" "$logout"
@@ -885,6 +894,107 @@ test_marker_tag_in_vector_allowlist() {
   else echo "  FAIL: inngest-inventory tag NOT in vector.toml (marker would not ship to Better Stack)"; FAIL=$((FAIL+1)); fi
 }
 
+# ===========================================================================
+# #6921/#8077 — QUIESCED verdict. op=quiesce-web leaves inngest-server.service in the shape
+# `is-active ∈ {inactive, failed}` AND `is-enabled == disabled`. On a functions-query failure
+# with /health != 200 that shape must print the QUIESCED sentinel (classifier → inngest_quiesced,
+# never a restart) INSTEAD of FATAL, in BOTH liveness-only and full-inventory modes (2.2 calls the
+# full-mode hook). Serving (/health=200) beats shape; any other shape keeps today's FATAL.
+# ===========================================================================
+
+# A PATH `systemctl` stub with systemd's real exit codes (is-active: 0 active / 3 otherwise;
+# is-enabled: 0 enabled / 1 disabled / 4 + stdout `not-found` for an absent unit, systemd ≥ 253).
+# Stubs the process the code execs — not the env seam. $1=dir $2=active $3=enabled-state
+make_systemctl_stub() {
+  cat > "$1/systemctl" <<STUB
+#!/usr/bin/env bash
+case "\$1:\${2:-}" in
+  is-active:inngest-server.service) echo "$2"; [[ "$2" == active ]] && exit 0; exit 3 ;;
+  is-enabled:inngest-server.service)
+    echo "$3"
+    case "$3" in enabled|enabled-runtime) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac ;;
+  *) exit 3 ;;
+esac
+STUB
+  chmod +x "$1/systemctl"
+}
+
+assert_quiesced_body() {  # $1=desc $2=expected unit= value
+  assert_eq "$1: exits 1 (hook returns the body non-200)" "1" "$RC"
+  case "$STDOUT_CAP" in
+    "inngest-inventory: QUIESCED host_id=hetzner-777 unit=$2 enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart"*)
+      echo "  PASS: $1: QUIESCED sentinel starts the body, host_id before any variable text, unit=$2"; PASS=$((PASS+1));;
+    *) echo "  FAIL: $1: no QUIESCED sentinel at body start"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+  if [[ "$STDOUT_CAP" == *"inngest-inventory: FATAL"* ]]; then echo "  FAIL: $1: FATAL also emitted (watchdog would restart the quiesced unit)"; FAIL=$((FAIL+1));
+  else echo "  PASS: $1: no FATAL sentinel"; PASS=$((PASS+1)); fi
+  case "$MARKERS_CAP" in
+    *"SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced health_code="*" functions=0 durability="*" host_id=hetzner-777"*)
+      echo "  PASS: $1: journald VERDICT mode=quiesced marker"; PASS=$((PASS+1));;
+    *) echo "  FAIL: $1: no VERDICT mode=quiesced marker"; echo "    markers: $MARKERS_CAP"; FAIL=$((FAIL+1));;
+  esac
+}
+
+assert_fatal_not_quiesced() {  # $1=desc
+  assert_eq "$1: exits 1" "1" "$RC"
+  case "$STDOUT_CAP" in
+    "inngest-inventory: FATAL host_id=hetzner-777 "*) echo "  PASS: $1: FATAL sentinel unchanged"; PASS=$((PASS+1));;
+    *) echo "  FAIL: $1: expected FATAL"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+  if [[ "$STDOUT_CAP" == *"QUIESCED"* ]]; then echo "  FAIL: $1: QUIESCED emitted outside the quiesced shape (would suppress a real restart)"; FAIL=$((FAIL+1));
+  else echo "  PASS: $1: no QUIESCED"; PASS=$((PASS+1)); fi
+}
+
+test_quiesced_verdict() {
+  local d; d=$(mktemp -d); local ff; ff=$(mktemp); local sb; sb=$(mktemp -d)
+  trap 'rm -rf "$d" "$ff" "$sb"' RETURN
+  make_page false "" "[]" > "$d/page-1.json"
+  printf '%s' '{"errors":[{"message":"__FETCH_FAILED__"}],"data":null}' > "$ff"
+
+  run_inv_logcap "$d" "$ff" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=000 \
+    INVENTORY_UNIT_ACTIVE=inactive INVENTORY_UNIT_ENABLED=disabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_quiesced_body "liveness-only quiesced" "inactive"
+
+  run_inv_logcap "$d" "$ff" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=500 \
+    INVENTORY_UNIT_ACTIVE=inactive INVENTORY_UNIT_ENABLED=enabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_fatal_not_quiesced "liveness-only inactive but ENABLED"
+
+  run_inv_logcap "$d" "$ff" INVENTORY_INNGEST_HEALTH_CODE=000 \
+    INVENTORY_UNIT_ACTIVE=inactive INVENTORY_UNIT_ENABLED=disabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_quiesced_body "full-inventory quiesced" "inactive"
+
+  run_inv_logcap "$d" "$ff" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=000 \
+    INVENTORY_UNIT_ACTIVE=failed INVENTORY_UNIT_ENABLED=disabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_quiesced_body "failed+disabled (post-SIGKILL stop)" "failed"
+
+  run_inv_logcap "$d" "$ff" INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=200 \
+    INVENTORY_UNIT_ACTIVE=inactive INVENTORY_UNIT_ENABLED=disabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_eq "health=200 + quiesced shape exits 1" "1" "$RC"
+  case "$STDOUT_CAP" in
+    "inngest-inventory: DEGRADED host_id=hetzner-777 "*) echo "  PASS: health=200 + quiesced shape → DEGRADED (serving beats shape)"; PASS=$((PASS+1));;
+    *) echo "  FAIL: health=200 + quiesced shape did not emit DEGRADED"; echo "    body: $STDOUT_CAP"; FAIL=$((FAIL+1));;
+  esac
+  if [[ "$STDOUT_CAP" == *"QUIESCED"* ]]; then echo "  FAIL: health=200 emitted QUIESCED (a serving scheduler is never quiesced)"; FAIL=$((FAIL+1));
+  else echo "  PASS: health=200 did NOT emit QUIESCED"; PASS=$((PASS+1)); fi
+
+  run_inv_logcap "$d" "$ff" INVENTORY_INNGEST_HEALTH_CODE=200 \
+    INVENTORY_UNIT_ACTIVE=inactive INVENTORY_UNIT_ENABLED=disabled SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_fatal_not_quiesced "full-inventory health=200 + quiesced shape (serving beats shape)"
+
+  # --- Through a PATH `systemctl` stub (real exit codes: is-active 3, is-enabled 1) ---
+  make_systemctl_stub "$sb" inactive disabled
+  EXTRA_BIN="$sb" run_inv_logcap "$d" "$ff" -u INVENTORY_UNIT_ACTIVE -u INVENTORY_UNIT_ENABLED \
+    INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=000 SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_quiesced_body "PATH systemctl stub inactive(rc3)+disabled(rc1)" "inactive"
+
+  # Absent unit: is-enabled prints `not-found` rc 4 — NOT the quiesced shape → FATAL.
+  make_systemctl_stub "$sb" inactive not-found
+  EXTRA_BIN="$sb" run_inv_logcap "$d" "$ff" -u INVENTORY_UNIT_ACTIVE -u INVENTORY_UNIT_ENABLED \
+    INVENTORY_LIVENESS_ONLY=1 INVENTORY_INNGEST_HEALTH_CODE=000 SOLEUR_HOST_ID_OVERRIDE=hetzner-777
+  assert_fatal_not_quiesced "PATH systemctl stub not-found rc4 (absent unit)"
+}
+
+test_quiesced_verdict
 test_liveness_only_skips_eventsv2
 test_liveness_only_durability_enum
 test_liveness_only_fails_loud_on_down

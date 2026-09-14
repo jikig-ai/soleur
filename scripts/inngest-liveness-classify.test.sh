@@ -53,6 +53,21 @@ assert_eq "500 + inventory DEGRADED sentinel → functions_query_degraded (soft,
 assert_eq "FATAL line whose errors payload embeds the DEGRADED substring → inngest_down (anchored, not masked)" "inngest_down" \
   "$(classify_liveness_mode 500 'inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=["backend said inngest-inventory: DEGRADED once"]); is inngest-server.service up?')"
 
+# #6921/#8077: op=quiesce-web leaves the web unit inactive|failed + disabled; inngest-inventory.sh
+# then prints the QUIESCED sentinel instead of FATAL. It is a DELIBERATE state — never restart.
+assert_eq "500 + QUIESCED sentinel → inngest_quiesced (no restart)" "inngest_quiesced" \
+  "$(classify_liveness_mode 500 'inngest-inventory: QUIESCED host_id=soleur-web-1 unit=inactive enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart')"
+
+# Anchored: a FATAL line whose untrusted errors payload embeds the QUIESCED substring must stay
+# a genuine down (an unanchored match would mask a wedged scheduler as deliberate → no restart).
+assert_eq "FATAL line embedding QUIESCED → inngest_down (anchored)" "inngest_down" \
+  "$(classify_liveness_mode 500 'inngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=["x inngest-inventory: QUIESCED host_id=y"]); is inngest-server.service up?')"
+
+# Must-PASS non-canonical: trailing diagnostic text, a different host_id and the post-SIGKILL
+# `unit=failed` form still classify quiesced.
+assert_eq "QUIESCED with trailing text + different host_id → inngest_quiesced" "inngest_quiesced" \
+  "$(classify_liveness_mode 503 'inngest-inventory: QUIESCED host_id=soleur-web-9 unit=failed enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart (extra diagnostic tail: health_code=000)')"
+
 # Deploy race / broken probe path: non-200 WITHOUT our FATAL sentinel — the hook is
 # not deployed yet (404), CF-Access/webhook.service degrade (403/000), gateway 5xx.
 # Must be probe_unavailable → NO restart (closes the relocated false-positive).
@@ -71,6 +86,8 @@ assert_eq "is_restart_family inngest_unhealthy → yes" "yes" "$(is_restart_fami
 assert_eq "is_restart_family probe_unavailable → no" "no" "$(is_restart_family probe_unavailable && echo yes || echo no)"
 # #6407: functions_query_degraded is SOFT — excluded from the restart family (no churn).
 assert_eq "is_restart_family functions_query_degraded → no" "no" "$(is_restart_family functions_query_degraded && echo yes || echo no)"
+# #8077: the deliberate quiesce is never remediated by the watchdog.
+assert_eq "is_restart_family inngest_quiesced → no" "no" "$(is_restart_family inngest_quiesced && echo yes || echo no)"
 assert_eq "is_restart_family cold_start → no" "no" "$(is_restart_family cold_start && echo yes || echo no)"
 assert_eq "is_restart_family healthy → no" "no" "$(is_restart_family healthy && echo yes || echo no)"
 

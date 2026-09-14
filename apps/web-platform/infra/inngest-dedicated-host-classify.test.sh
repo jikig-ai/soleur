@@ -257,6 +257,65 @@ fi
 FAIL=$((FAIL - 1))
 echo "  (arm_case harness canary OK — deliberate FAIL above is expected and subtracted)"
 
+# --- (f) #6921/#8077 QUIESCED: classifier mode set <-> probe-step case arms (cross-file) --------
+# op=quiesce-web leaves the web unit inactive|failed + disabled; inngest-inventory.sh prints the
+# QUIESCED sentinel and classify_liveness_mode maps it to inngest_quiesced. A mode the classifier
+# can print but the probe `case` has no arm for falls to `*) → probe_unavailable` (#6374 trap):
+# for a quiesced unit that files a soft alert every 15 minutes forever post-cutover. Every grep
+# below runs over COMMENT-STRIPPED text, so a commented-out arm/branch cannot satisfy a row.
+CLASSIFIER="$REPO_ROOT/scripts/inngest-liveness-classify.sh"
+WF_NC="$(mktemp)"; SCRATCH+=("$WF_NC")
+grep -v '^[[:space:]]*#' "$WF" > "$WF_NC"
+PROBE_NC="$(mktemp)"; SCRATCH+=("$PROBE_NC")
+awk '/^      - id: probe$/{f=1; print; next} f && /^      - /{exit} f' "$WF_NC" > "$PROBE_NC"
+PROBE_N=$(wc -l < "$PROBE_NC" | tr -d '[:space:]')
+assert "#8077 the probe step extracted non-vacuously (>60 non-comment lines, got $PROBE_N)" "[[ '$PROBE_N' -gt 60 ]]"
+CASE_NC="$(mktemp)"; SCRATCH+=("$CASE_NC")
+awk '/^ *case "\$MODE" in$/{f=1; next} f && /^ *esac$/{exit} f' "$PROBE_NC" > "$CASE_NC"
+CASE_N=$(wc -l < "$CASE_NC" | tr -d '[:space:]')
+assert "#8077 the probe step's case \"\$MODE\" block extracted non-vacuously (>8 lines, got $CASE_N)" "[[ '$CASE_N' -gt 8 ]]"
+
+# (ii) The restart dispatch `if:` is an allowlist of exactly two restart-family modes: it must
+# never name the quiesced mode, and a second `||` member is the natural way one gets wired in.
+# (The row in (b) only proves the line exists; this negative row is the sole producer.)
+DISP_IF_NC=$(awk '/^      - name: Auto-dispatch inngest restart/{f=1; next} f && /^ *if: /{print; exit} f && /^      - /{exit}' "$WF_NC")
+assert "#8077 the Auto-dispatch inngest restart step's if: was located (non-vacuity)" \
+  "[[ -n \"\$DISP_IF_NC\" ]] && grep -qF \"failure_mode == 'inngest_down'\" <<<\"\$DISP_IF_NC\""
+assert "#8077 the restart dispatch if: never names a quiesced mode" \
+  "! grep -qF 'quiesced' <<<\"\$DISP_IF_NC\""
+DISP_OR_N=$(grep -oF '||' <<<"$DISP_IF_NC" | wc -l | tr -d '[:space:]')
+assert "#8077 the restart dispatch if: carries exactly one || (got $DISP_OR_N)" "[[ '$DISP_OR_N' -eq 1 ]]"
+
+# (v) Every mode classify_liveness_mode can print — derived from the classifier, never listed
+# here — has a probe `case` arm. `healthy` is excluded: it is handled by the `if` branch before
+# the case (asserted to exist below). The derived-set floor runs BEFORE the loop, so a broken
+# derivation (zero modes) cannot pass by iterating nothing.
+MODES=$(grep -v '^[[:space:]]*#' "$CLASSIFIER" | grep -oE 'echo "[a-z_]+"' | sed -E 's/^echo "([a-z_]+)"$/\1/' | sort -u | grep -vx 'healthy') || true
+MODE_N=$(printf '%s\n' "$MODES" | grep -c .) || true
+assert "#8077 classifier modes derived excluding healthy (>=6, got $MODE_N: $(tr '\n' ' ' <<<"$MODES"))" "[[ '$MODE_N' -ge 6 ]]"
+for m in $MODES; do
+  assert "#8077 the probe case has an arm for classifier mode '$m' (else *) → probe_unavailable)" \
+    "grep -qE '^ *${m}\\)' '$CASE_NC'"
+done
+DEFAULT_ARM=$(awk '/^ *\*\)/{f=1} f{print} f && /;;/{exit}' "$CASE_NC")
+assert "#6374 the probe case's *) default arm still exists and maps to probe_unavailable" \
+  "grep -qF 'last_mode=\"probe_unavailable\"' <<<\"\$DEFAULT_ARM\""
+assert "#8077 the healthy mode is handled by the if [[ \"\$MODE\" == \"healthy\" ]] branch" \
+  "grep -qF 'if [[ \"\$MODE\" == \"healthy\" ]]; then' '$PROBE_NC'"
+
+# Declaration row (Guard 1 #6): web_quiesced is read by the post-loop record_failure guard, so it
+# must be declared on the SAME line as fail_mode="" — OUTSIDE `if [[ -z "$fail_mode" ]]`. Declared
+# inside that block, the secret_unset path never assigns it and any later read under `set -u`
+# kills the step before it writes failure_mode.
+DECL_LN=$(grep -nF 'fail_mode=""; fail_detail=""' "$PROBE_NC" | head -1 | cut -d: -f1) || true
+assert "#8077 the fail_mode=\"\" declaration line was located (non-vacuity)" "[[ -n '$DECL_LN' ]]"
+DECL_TXT=$(sed -n "${DECL_LN:-0}p" "$PROBE_NC" 2>/dev/null) || true
+assert "#8077 web_quiesced=\"no\" is declared on the fail_mode=\"\" line" \
+  "grep -qF 'web_quiesced=\"no\"' <<<\"\$DECL_TXT\""
+FIRST_WQ_LN=$(grep -nE 'web_quiesced=' "$PROBE_NC" | head -1 | cut -d: -f1) || true
+assert "#8077 no web_quiesced= assignment precedes that declaration (first at ${FIRST_WQ_LN:-none}, decl ${DECL_LN:-none})" \
+  "[[ -n '$FIRST_WQ_LN' && '$FIRST_WQ_LN' == '$DECL_LN' ]]"
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # WHOLE-SUITE ANTI-DELETION FLOOR. The only merge gate is `FAIL -gt 0`, so a deleted or skipped

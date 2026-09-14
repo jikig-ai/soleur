@@ -18,7 +18,8 @@
 # inngest-redis.service`, mirroring the canonical ci-deploy.sh:277-287 verdict (pinned by
 # a cross-file drift-guard test). Only the ENUM is emitted — never the ExecStart string
 # (the $VAR-form connection refs stay on-host; #5503 purity). Test seams:
-# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE (CI has no systemd).
+# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE, INVENTORY_UNIT_ACTIVE, INVENTORY_UNIT_ENABLED
+# (CI has no systemd; the last two feed the #6921/#8077 QUIESCED verdict).
 #
 # Read-only: no writes, no service restart. Safe to call anytime.
 #
@@ -442,6 +443,24 @@ derive_durability_state() {
   echo "sqlite_only"
 }
 
+# #6921/#8077 — the quiesced unit shape: `is-active ∈ {inactive, failed}` AND `is-enabled ==
+# disabled`. Only op=quiesce-web's `quiesce` handler writes it (stop + disable); only op=rollback's
+# `enable` clears it. `failed` is accepted because a stop that ends in SIGKILL at TimeoutStopSec
+# leaves the unit failed+disabled (ci-deploy.sh verify_inngest_quiesced already calls that
+# quiesced). `disabled` is the discriminator: a crashed ENABLED unit loops `activating` under
+# Restart=on-failure, never settles disabled. An absent unit (`not-found`, rc 4) is NOT quiesced.
+# Each read tolerates the non-zero exit (`is-active` rc 3 on inactive, `is-enabled` rc 1 on
+# disabled) — stdout is the verdict, never the rc. Read-only, no sudo. Sets UNIT_ACTIVE_STATE.
+# Test seams: INVENTORY_UNIT_ACTIVE / INVENTORY_UNIT_ENABLED (unset-only, like INVENTORY_REDIS_ACTIVE).
+UNIT_ACTIVE_STATE=""
+unit_quiesced() {
+  local a e
+  a="${INVENTORY_UNIT_ACTIVE-$(systemctl is-active inngest-server.service 2>/dev/null || true)}"
+  e="${INVENTORY_UNIT_ENABLED-$(systemctl is-enabled inngest-server.service 2>/dev/null || true)}"
+  UNIT_ACTIVE_STATE="$a"
+  [[ ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ]]
+}
+
 run_inventory() {
   # --- START marker: the LITERAL first action, before any network call (Finding 8) ---
   PREFLIGHT_START_S=$(date +%s)
@@ -465,7 +484,7 @@ run_inventory() {
     fn_keys=$(echo "$fn_body" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
     _pf_timeout_marker gql_error 0 0 0
     logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
-    # #6407 Defect A — /health corroboration (LIVENESS_ONLY only). The external watchdog's
+    # #6407 Defect A — /health corroboration. The external watchdog's
     # cheap /v0/gql functions curl can transiently fail (a transport blip → the
     # __FETCH_FAILED__ envelope) while inngest-server is UP and processing events. Before
     # declaring a hard down (→ inngest_down → restart + [ci/inngest-down] P1), corroborate
@@ -473,14 +492,30 @@ run_inventory() {
     # verify_inngest_health gates on):
     #   /health=200  → the HTTP server IS serving; the GQL read blipped → emit a SOFT DEGRADED
     #                  sentinel (classifier → functions_query_degraded → NO restart). #6407.
-    #   /health !=200 → wedged/stopped → keep the FATAL sentinel (inngest_down → restart, which
-    #                  recovers a wedge). is-active/ExecStart are NOT specificity-correct here
-    #                  (both read for a wedged/stopped unit); /health is the only same-signal-
-    #                  class corroborator. The full-inventory (non-liveness) caller keeps the
-    #                  original fail-loud FATAL — corroboration is a liveness-verdict concern only.
+    #                  LIVENESS_ONLY only — the full-inventory caller keeps its fail-loud FATAL.
+    #   /health !=200 + quiesced unit shape → QUIESCED (#6921/#8077, BOTH modes — see below).
+    #   /health !=200 otherwise → wedged/stopped → keep the FATAL sentinel (inngest_down →
+    #                  restart, which recovers a wedge). is-active/ExecStart alone are NOT
+    #                  specificity-correct here (both read for a wedged/stopped unit); /health is
+    #                  the only same-signal-class corroborator of SERVING.
+    # HOISTED out of the LIVENESS_ONLY gate (#6921 C3): the cutover 2.2 hard gate calls the FULL
+    # mode hook (/hooks/inngest-inventory), so the QUIESCED verdict must be reachable there too.
+    # Cost: one ≤5 s loopback curl, on this failure branch only.
+    local health_code durability_state_dg verdict_mode
+    health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
+    # #6921/#8077 — QUIESCED: /health != 200 AND the unit is in the shape ONLY op=quiesce-web's
+    # `quiesce` handler writes (stop + disable) and only op=rollback's `enable` clears. It is a
+    # DELIBERATE stop, not a down: the watchdog must never restart it (a restart STARTS a
+    # disabled unit — #8077). Serving (/health=200) beats shape: a serving scheduler is never
+    # reported quiesced. host_id precedes any variable-length text (#6425 400-char truncation).
+    if [[ "$health_code" != "200" ]] && unit_quiesced; then
+      durability_state_dg=$(derive_durability_state)
+      logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced health_code=$health_code functions=0 durability=$durability_state_dg host_id=$HOST_ID" 2>/dev/null || true
+      echo "inngest-inventory: QUIESCED host_id=$HOST_ID unit=$UNIT_ACTIVE_STATE enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart"
+      echo "QUIESCED: host_id=$HOST_ID inngest-server.service unit=$UNIT_ACTIVE_STATE enabled=disabled (op=quiesce-web; only op=rollback re-arms)" >&2
+      exit 1
+    fi
     if [[ -n "$LIVENESS_ONLY" ]]; then
-      local health_code durability_state_dg verdict_mode
-      health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
       durability_state_dg=$(derive_durability_state)
       if [[ "$health_code" == "200" ]]; then verdict_mode="degraded"; else verdict_mode="down"; fi
       # #6407 Defect C — SOLEUR_INNGEST_LIVENESS_VERDICT marker (journald-only; tag
