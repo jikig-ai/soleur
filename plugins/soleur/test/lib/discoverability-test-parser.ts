@@ -558,5 +558,9 @@ export async function classifyDiscoverabilityResult(
 }
 
 function stripQuotes(value: string): string {
-  return value.replace(/^["'](.*)["']$/, "$1");
+  // SYMMETRIC pair only, mirroring the runtime's `case` in SKILL.md Step 10.4
+  // (`"…"` or `'…'`). The earlier `^["'](.*)["']$` also stripped a MISMATCHED
+  // pair (`"…'`), which no YAML parser accepts — the mirror was looser than the
+  // string of record and would have PASSed a plan the runtime cannot run.
+  return value.replace(/^"(.*)"$|^'(.*)'$/, (_m, d, s) => d ?? s);
 }

@@ -1501,6 +1501,7 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 
 ### Sharp Edges: Review Agent Limitations
 
+- **A reviewer-prescribed simplification that deletes a LITERAL is a claim to check against every guard that reads the file's SHAPE, and the comment above the literal usually names that guard.** [guard-vacuity-floor.test.sh](../../../../scripts/guard-vacuity-floor.test.sh) constructs its mutant from a literal bound adjacent to a floor's `if`; replacing `MIN_CASES="${VAR:-139}"` with `MIN_CASES="$VAR"` on a "dead default" finding dropped the suite into the meta-guard's unconstructible set (rc=1) while the in-file comment two lines above said "the default stays a literal". Before applying a dead-code finding, read the comment above the line and run the guard it names. **Why:** #8149 — see `knowledge-base/project/learnings/2026-09-14-every-guard-i-shipped-had-a-narrower-window-than-its-name-and-my-first-mutant-caught-my-own-guard.md`.
 - **Spawn prompts MUST forbid live credentialed probes, and the probe shape must use an INVALID credential, never an
   EMPTY one.** `DOPPLER_TOKEN= doppler secrets get <prd secret>` does not fail authentication — an empty token falls
   through to the operator's local Doppler login, and the live value lands in the agent's transcript. Write "probe

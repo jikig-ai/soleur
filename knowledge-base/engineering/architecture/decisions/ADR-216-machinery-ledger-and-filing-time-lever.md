@@ -311,6 +311,74 @@ and because its failure mode is silence rather than a false pass. Recorded as
 the one place the design contradicts its own stated principle. The weekly rate measurement is the backstop: if the rate does not
 fall, the gate is being gamed, and that is visible within four weeks.
 
+### Addendum 2026-09-14 — the second instance: the per-PR workflow generator
+
+The issue backlog was the first generator this ADR named. #8149 records a
+second with the same shape, beside it:
+
+| Generator | Finite resource | Symptom (measured) |
+|---|---|---|
+| Adversarial review agents filing issues | operator attention / closing capacity | 1,455 open, +571 net over 8 weeks (Context above) |
+| 23 workflows declaring a `pull_request` trigger | the GitHub Free-plan runner pool (20 concurrent hosted jobs); runner availability binds 76% of `main` CI runs | 186 jobs queued / 6 running on 2026-09-10; ~56 declared jobs per PR push |
+
+The merge queue was re-evaluated as the fix and re-rejected — ADR-032's
+2026-09-14 amendment carries that ruling and the new capacity factor. What
+ships instead follows this ADR's ordering: reduce the stock once, then move the
+lever to the moment the generator acts.
+
+**The one-time reductions.**
+
+- *Fold.* `readme-counts`, `lint-conversations-update-callsites` and
+  `rule-metrics-shape` — each checkout + one script, 0.2 m measured, no
+  `needs:`, not a required context — become three steps of the existing
+  `lint-bot-statuses` advisory-lint bucket: −3 declared jobs per push, PR and
+  `main` alike; `ci.yml` 25 → 22 jobs. `encryption-posture` is deliberately
+  kept standalone on its #6901 / #6907 soak.
+- *PR-only `cancel-in-progress`.* `pr-quality-guards.yml`, `secret-scan.yml`,
+  `dependency-review.yml`, `legal-doc-cross-document-gate.yml` and
+  `skill-security-scan-pr-trailer.yml` had no concurrency block, so a
+  superseded push left their runs orphaned on the pool; they now carry
+  `ci.yml`'s exact block (per-ref on `pull_request`, per-SHA otherwise, cancel
+  only on `pull_request`) — up to 19 orphaned jobs reclaimed per superseded
+  push. Four workflows are excluded, each for a stated reason:
+  `tenant-integration.yml` holds the dev-Supabase mutex and a mid-run cancel
+  can leave fixture residue; `infra-validation.yml` and
+  `apply-sentry-infra.yml` run terraform against a remote backend and a cancel
+  mid-plan can leave a state lock; `constraint-gates.yml` is parity-locked to
+  the constraint-scaffold template. One accepted cost, recorded only here and
+  in the ledger row: `secret-scan.yml`'s weekly `schedule` arm keys on `main`
+  HEAD's SHA and so shares the push-arm group, so a same-SHA re-run of the push
+  run can drop a pending weekly scan (the workflow has no heartbeat; the next
+  push or the next week re-covers it).
+
+**The filing-time lever.** `scripts/pr-fanout-ledger.txt` lists every workflow
+that fires on a PR push with its declared job count, path filter, cancel
+behaviour and a consequence; `plugins/soleur/test/pr-fanout-ledger.test.sh`
+enumerates the tree and reds the `test` check when a firing workflow has no
+row, a row's workflow no longer fires, a declared job count exceeds its row,
+a `paths` / `cancel` flag disagrees with the file, or a block copied with
+`ci.yml`'s cancel ternary does not carry `ci.yml`'s group. "Fires on a PR
+push" includes the transitive case — a `workflow_run` chained off a firing
+workflow with no branch filter (`fix-constraints-stage-b.yml`) — and a
+`uses:` job counts its local callee's jobs, since it dispatches them. The
+ledger's column definitions are the single source; the test implements them. The discipline is the issue
+gate's: a shape check — the consequence must be non-empty and at least four
+words — not a semantic one. It cannot tell a true consequence from a written
+one; what it removes is the free filing, so no workflow can add a per-PR trigger
+without naming what it costs.
+
+**Deliberately not done, and ledgered with the reason.**
+
+- Path-filtering `constraint-gates.yml`. Its body is parity-locked to the
+  constraint-scaffold template (`parity.test.sh` check 4), and always-run is
+  the template's stated design — promotable to a required check without a
+  pending-forever `paths:` deadlock.
+- Deleting the disabled `claude-code-review.yml`. It has been
+  `disabled_manually` on GitHub's side since 2026-02-12 — a state invisible in
+  the tree — but `knowledge-base/legal/article-30-register.md` PA-33 carries a
+  dated member snapshot that counts it, with no parity test to catch the
+  stale. The ledger row makes the off-tree disablement visible instead.
+
 ## Consequences
 
 - `--milestone` alone no longer allows a `gh issue create`. It is necessary but

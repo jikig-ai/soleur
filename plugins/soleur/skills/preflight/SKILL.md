@@ -845,6 +845,22 @@ harness only compares the GATE, so this divergence was invisible to it.
 CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
 CMD="${CMD#"${CMD%%[![:space:]]*}"}"
 CMD="${CMD%"${CMD##*[![:space:]]}"}"
+# A YAML-quoted inline scalar (`command: "bash scripts/x.sh"`) IS the string inside
+# the quotes, but parse-form-a.awk prints the line verbatim, so the quotes reached
+# `bash -c` as part of the first word and every quoted command died rc=127 — a
+# program named `bash scripts/x.sh` does not exist. Measured on #8149's plan:
+# the verb gate PASSED (it matches a dequoted COPY) and the exec returned 127,
+# reported by row 10b as "not on the sandbox PATH". The TypeScript mirror's
+# stripQuotes() had modelled this all along; the runtime had not. Symmetric pair,
+# single-line scalars only — the same idiom credentials_required uses below.
+# (`$CMD` unquoted on purpose: the wiring test's shell-active anchor is
+# `^if [[ "$CMD` + a `$'\n'` token, and this guard must not collide with it.)
+if [[ $CMD != *$'\n'* ]]; then
+  case "$CMD" in
+    \"*\") CMD="${CMD#\"}"; CMD="${CMD%\"}" ;;
+    \'*\') CMD="${CMD#\'}"; CMD="${CMD%\'}" ;;
+  esac
+fi
 ```
 
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
