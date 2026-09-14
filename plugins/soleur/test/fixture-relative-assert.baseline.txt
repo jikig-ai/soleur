@@ -286,11 +286,12 @@
 1	scripts/domain-model-drift.test.sh
 1	scripts/expenses-verify-by-check.test.sh
 1	scripts/follow-through-closure-guard.test.sh
-23	scripts/followthroughs/anthropic-admin-key-6297.test.sh
+25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
 1	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
+1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
 2	scripts/followthroughs/zot-soak-6122.test.sh
@@ -309,7 +310,7 @@
 4	scripts/lint-diagnosis-claims.test.sh
 10	scripts/lint-dual-lockfile.test.sh
 1	scripts/lint-encryption-posture.test.sh
-6	scripts/lint-followthrough-varq-ban.test.sh
+19	scripts/lint-followthrough-varq-ban.test.sh
 1	scripts/lint-guard-contract.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
@@ -345,7 +346,7 @@
 1	scripts/skill-freshness-aggregate.test.sh
 10	scripts/skill-security-scan-step-body.test.sh
 1	scripts/sweep-followthroughs.sh
-5	scripts/sweep-followthroughs.test.sh
+19	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

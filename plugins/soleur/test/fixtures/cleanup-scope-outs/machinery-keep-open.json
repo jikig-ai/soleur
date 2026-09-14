@@ -1,0 +1,32 @@
+[
+  {
+    "number": 8068,
+    "title": "issue-flow: weekly measurement",
+    "body": "Standing weekly issue-flow measurement. Updated in place, never re-filed.\n\nFile: scripts/issue-flow-measure.sh",
+    "labels": [{"name": "meta/machinery"}, {"name": "keep-open"}]
+  },
+  {
+    "number": 8101,
+    "title": "gate: a finding someone parked",
+    "body": "## Problem\n\nFile: scripts/issue-flow-measure.sh\n\nparked",
+    "labels": [{"name": "meta/machinery"}, {"name": "do-not-autoclose"}]
+  },
+  {
+    "number": 8102,
+    "title": "gate: the drain floor counts its own ledger",
+    "body": "## Problem\n\nFile: scripts/issue-flow-measure.sh\n\nreal",
+    "labels": [{"name": "meta/machinery"}]
+  },
+  {
+    "number": 8103,
+    "title": "gate: the pool query is off by one",
+    "body": "## Problem\n\nFile: scripts/issue-flow-measure.sh\n\nreal",
+    "labels": [{"name": "meta/machinery"}]
+  },
+  {
+    "number": 8104,
+    "title": "gate: the verdict reads WAIVED forever",
+    "body": "## Problem\n\nFile: scripts/issue-flow-measure.sh\n\nreal",
+    "labels": [{"name": "meta/machinery"}]
+  }
+]

@@ -83,7 +83,7 @@ import {
 } from "@/server/inngest/functions/_cron-shared";
 import type { Octokit } from "@octokit/core";
 
-function octokitReturning(issues: Array<{ updated_at: string }>) {
+function octokitReturning(issues: Array<{ updated_at: string; created_at?: string; state?: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
   // The helper only ever calls `.request`; cast through unknown so the
   // stub satisfies the structural param type without the full Octokit API.
@@ -318,6 +318,59 @@ describe("verifyScheduledIssueCreated", () => {
       octokit,
     });
     expect(result).toBe(true);
+  });
+
+  // #8076 — the run-report sweeper (cron-stale-deferred-scope-outs, 12:00Z)
+  // CLOSES old SUCCESS run-reports, and a close bumps updated_at. Without a
+  // state guard that close would be credited as producer output during a
+  // verify-caller's retry window (seo-aeo-audit fires Mon 11:00Z). A CLOSED
+  // issue updated in-window is not evidence the producer ran.
+  it("#8076: does NOT credit a CLOSED issue whose updated_at moved into the window (sweeper close)", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-31T12:00:05.000Z", created_at: "2026-05-01T09:00:00.000Z", state: "closed" },
+    ]);
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-seo-aeo-audit",
+      sinceIso: RUN_START,
+      octokit,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("#8076: still credits an OPEN comment-bumped issue and a created-in-window issue (closed or not)", async () => {
+    const bumped = octokitReturning([
+      { updated_at: "2026-05-31T09:31:00.000Z", created_at: "2026-05-01T09:00:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-campaign-calendar", sinceIso: RUN_START, octokit: bumped })).toBe(true);
+    const createdThenClosed = octokitReturning([
+      { updated_at: "2026-05-31T09:40:00.000Z", created_at: "2026-05-31T09:30:08.000Z", state: "closed" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-roadmap-review", sinceIso: RUN_START, octokit: createdThenClosed })).toBe(true);
+  });
+
+  it("#8076: both timestamp bounds are inclusive at exactly `since` (>=, not >)", async () => {
+    const createdAtSince = octokitReturning([
+      { updated_at: "2026-05-01T09:00:00.000Z", created_at: RUN_START, state: "closed" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-roadmap-review", sinceIso: RUN_START, octokit: createdAtSince })).toBe(true);
+    const bumpedAtSince = octokitReturning([
+      { updated_at: RUN_START, created_at: "2026-05-01T09:00:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-campaign-calendar", sinceIso: RUN_START, octokit: bumpedAtSince })).toBe(true);
+  });
+
+  it("#8076: reads 30 per page — the 12:00Z sweeper bumps up to 25 same-label issues, all refused as closed, and the real one must still be on page 1", async () => {
+    const closes = Array.from({ length: 25 }, (_, i) => ({
+      updated_at: `2026-05-31T12:00:${String(i).padStart(2, "0")}.000Z`,
+      created_at: "2026-04-01T09:00:00.000Z",
+      state: "closed",
+    }));
+    const octokit = octokitReturning([
+      ...closes,
+      { updated_at: "2026-05-31T09:31:00.000Z", created_at: "2026-05-31T09:30:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-content-generator", sinceIso: RUN_START, octokit })).toBe(true);
+    expect(octokit.request.mock.calls[0][1]).toMatchObject({ per_page: 30 });
   });
 
   it("passes the GitHub `since` param so the server filters by updated_at", async () => {

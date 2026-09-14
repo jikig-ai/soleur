@@ -2019,6 +2019,12 @@ if want_scripts; then
   # SCOPED (an inngest-only source is channel_dark, never row_absent); incident matching is
   # anchored on the row's own dt; raw incident objects are projected before they reach stdout.
   run_suite "scripts/send-failed-alert-probe-8097" bash scripts/followthroughs/send-failed-alert-probe-8097.test.sh
+  # #8076: fixture harness for the run-report-exit first-contact follow-through. Registered
+  # explicitly (orphan-suite class above). Its load-bearing arm is ROW SHAPE: the live Better
+  # Stack row nests the pino payload under `.message` of the decoded `raw`, and the probe's
+  # first draft read the top level, so AC18b could never FAIL (#8074 review). Every fixture is
+  # the live shape; the control and the graded absence go through ONE decoder.
+  run_suite "scripts/run-report-exit-first-contact-8076" bash scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
   # #6297: exit-code harness for the Anthropic admin-key follow-through. Registered explicitly
   # (orphan-suite class above). Its load-bearing arm is CONTAMINATION: GitHub webhook payloads
   # ship into the same Better Stack source from the same app container, so a substring-matching
