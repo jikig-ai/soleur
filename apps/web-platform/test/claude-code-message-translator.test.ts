@@ -120,6 +120,16 @@ describe("Claude SDK message translator", () => {
     expect(translateClaudeSdkMessage({ type: "status", uuid: "msg-7" })).toEqual([]);
     expect(translateClaudeSdkMessage({ type: "result", subtype: "success", uuid: "" })).toEqual([]);
     expect(translateClaudeSdkMessage(null)).toEqual([]);
+    expect(translateClaudeSdkMessage({
+      type: "assistant",
+      uuid: "x".repeat(129),
+      message: { content: [{ type: "text", text: "hidden" }] },
+    })).toEqual([]);
+    expect(translateClaudeSdkMessage({
+      type: "assistant",
+      uuid: "msg-\n-injection",
+      message: { content: [{ type: "text", text: "hidden" }] },
+    })).toEqual([]);
   });
 
   it("wraps translated messages with run identity and contiguous sequences", async () => {

@@ -16,6 +16,16 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function safeSourceId(value: unknown): string | null {
+  const candidate = nonEmptyString(value);
+  if (!candidate || candidate.length > 128) return null;
+  if ([...candidate].some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  })) return null;
+  return candidate;
+}
+
 function finiteNonNegative(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -130,7 +140,7 @@ function translateResult(message: RecordLike, sourceId: string): ClaudeTranslate
  */
 export function translateClaudeSdkMessage(message: unknown): ClaudeTranslatedEvent[] {
   const record = asRecord(message);
-  const sourceId = nonEmptyString(record?.uuid);
+  const sourceId = safeSourceId(record?.uuid);
   const type = nonEmptyString(record?.type);
   if (!record || !sourceId || !type) return [];
 
