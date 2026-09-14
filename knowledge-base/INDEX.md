@@ -2544,6 +2544,7 @@
 - [The gate built to catch Docker-only build failures never ran in Docker, and nothing it said could block a merge](project/learnings/2026-09-13-the-gate-built-to-catch-docker-only-failures-never-ran-in-docker.md)
 - [The guard pinned the names the plan listed, and the readback read every page unpinned](project/learnings/2026-09-13-the-guard-pinned-the-names-the-plan-listed-and-the-readback-read-every-page-unpinned.md)
 - [The mock that answered in one line certified a constant — and the beacon I added inside `$(read_secret)` would have become the secret](project/learnings/2026-09-13-the-mock-that-answered-in-one-line-certified-a-constant-and-my-beacons-stdout-was-the-secret.md)
+- [A systemd unit state used as a coordination signal had no provenance or time — so a resume replayed a stale capture and a crash read as a deliberate quiesce](project/learnings/2026-09-14-a-systemd-state-used-as-a-signal-had-no-provenance-and-replayed-a-stale-capture.md)
 - [closing a limb by decision is not closing it clean and the cell still has to change](project/learnings/2026-09-14-closing-a-limb-by-decision-is-not-closing-it-clean-and-the-cell-still-has-to-change.md)
 - [every guard i shipped had a narrower window than its name and my first mutant caught my own guard](project/learnings/2026-09-14-every-guard-i-shipped-had-a-narrower-window-than-its-name-and-my-first-mutant-caught-my-own-guard.md)
 - [i tested both endpoints and left the wire between them unpinned](project/learnings/2026-09-14-i-tested-both-endpoints-and-left-the-wire-between-them-unpinned.md)
