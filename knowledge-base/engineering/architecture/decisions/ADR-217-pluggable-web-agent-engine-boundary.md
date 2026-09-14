@@ -30,6 +30,11 @@ reloads the persisted binding, verifies adapter identity, persists emitted event
 before yielding them, and fails closed on missing bindings, mismatches, or event
 ledger errors. Provider SDK types remain inside adapters and transport seams.
 
+The Claude extraction uses a provider-facing SDK message source wrapped by a
+translator and neutral transport bridge. The source retains permission,
+session, approval, and cancellation behavior; only validated text, progress,
+usage, and terminal result payloads cross into the shared event contract.
+
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
 settings metadata lookup never grants execution authorization.

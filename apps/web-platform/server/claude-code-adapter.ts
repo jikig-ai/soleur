@@ -6,6 +6,7 @@ import type {
   EngineRunStatus,
   NativeSessionReference,
 } from "./agent-engine-contract";
+import { translateClaudeSdkStream } from "./claude-code-message-translator";
 
 export interface ClaudeCodeAdapterTransport {
   start(context: EngineRunContext, input: EngineInput): AsyncIterable<EngineEvent>;
@@ -13,6 +14,20 @@ export interface ClaudeCodeAdapterTransport {
   cancel(context: EngineRunContext, session: NativeSessionReference): Promise<"requested" | "confirmed">;
   reconcile(context: EngineRunContext, session: NativeSessionReference): Promise<EngineRunStatus>;
   resumeFromCursor(context: EngineRunContext, cursor: string | null): AsyncIterable<EngineEvent>;
+  respondToApproval(context: EngineRunContext, requestId: string, decision: "allow" | "deny"): Promise<void>;
+  erase(context: EngineRunContext, session: NativeSessionReference): Promise<"confirmed" | "unsupported">;
+  dispose(): Promise<void>;
+}
+
+type ClaudeSdkMessageStream = AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+
+/** Provider-facing source used while extracting the existing Claude runner. */
+export interface ClaudeCodeSdkMessageSource {
+  start(context: EngineRunContext, input: EngineInput): ClaudeSdkMessageStream;
+  continue(context: EngineRunContext, session: NativeSessionReference, input: EngineInput): ClaudeSdkMessageStream;
+  cancel(context: EngineRunContext, session: NativeSessionReference): Promise<"requested" | "confirmed">;
+  reconcile(context: EngineRunContext, session: NativeSessionReference): Promise<EngineRunStatus>;
+  resumeFromCursor(context: EngineRunContext, cursor: string | null): ClaudeSdkMessageStream;
   respondToApproval(context: EngineRunContext, requestId: string, decision: "allow" | "deny"): Promise<void>;
   erase(context: EngineRunContext, session: NativeSessionReference): Promise<"confirmed" | "unsupported">;
   dispose(): Promise<void>;
@@ -33,6 +48,26 @@ export function validateClaudeEvent(event: EngineEvent, expectedRunId: string): 
     throw Object.assign(new Error("Claude event does not match the bound run"), { code: "claude_event_invalid" });
   }
   return event;
+}
+
+/**
+ * Adapt an SDK-shaped message source without importing SDK types into the
+ * neutral transport. Lifecycle side effects remain owned by the source.
+ */
+export function createClaudeCodeSdkTransport(source: ClaudeCodeSdkMessageSource): ClaudeCodeAdapterTransport {
+  async function* stream(load: () => ClaudeSdkMessageStream, runId: string): AsyncIterable<EngineEvent> {
+    yield* translateClaudeSdkStream(await load(), runId);
+  }
+  return {
+    start: (context, input) => stream(() => source.start(context, input), context.runId),
+    continue: (context, session, input) => stream(() => source.continue(context, session, input), context.runId),
+    cancel: (context, session) => source.cancel(context, session),
+    reconcile: (context, session) => source.reconcile(context, session),
+    resumeFromCursor: (context, cursor) => stream(() => source.resumeFromCursor(context, cursor), context.runId),
+    respondToApproval: (context, requestId, decision) => source.respondToApproval(context, requestId, decision),
+    erase: (context, session) => source.erase(context, session),
+    dispose: () => source.dispose(),
+  };
 }
 
 /** Claude-specific transport stays behind this adapter; the web contract does not import SDK messages. */

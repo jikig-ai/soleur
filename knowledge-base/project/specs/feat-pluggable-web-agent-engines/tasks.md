@@ -70,6 +70,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Claude adapter lifecycle coverage: start, continue, cancel, reconcile, cursor resume, approval, erasure, and disposal delegation are pinned.
   - [x] Claude neutral-boundary slice: stream identity/sequence validation and generic provider-error sanitization protect every lifecycle method (3 adapter tests green).
   - [x] Claude message translation slice: SDK assistant text, tool progress, usage, and terminal results translate into neutral payloads with stable source IDs; malformed provider shapes fail closed (6 translator tests green).
+  - [x] Claude SDK transport bridge slice: an SDK-shaped lifecycle source can be wrapped behind the neutral Claude transport while preserving source-owned permissions, session, approval, and cancellation behavior (10 adapter/translator tests green).
   - [x] Claude identity slice: the adapter exports a single immutable engine ID for dispatch selection and registry alignment.
   - [x] Catalog identity slice: reviewed engine definitions consume the Claude adapter identity constant rather than duplicating it (21 registry/adapter tests green).
   - [x] Settings identity slice: API fallback defaults reuse the Claude adapter identity constant.

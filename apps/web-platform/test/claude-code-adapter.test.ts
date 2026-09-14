@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLAUDE_CODE_ENGINE_ID, createClaudeCodeAdapter } from "@/server/claude-code-adapter";
+import {
+  CLAUDE_CODE_ENGINE_ID,
+  createClaudeCodeAdapter,
+  createClaudeCodeSdkTransport,
+} from "@/server/claude-code-adapter";
 
 describe("Claude Code neutral adapter boundary", () => {
   it("delegates lifecycle operations without exposing SDK-shaped types", async () => {
@@ -69,5 +73,34 @@ describe("Claude Code neutral adapter boundary", () => {
     const adapter = createClaudeCodeAdapter(transport);
     await expect(adapter.cancel({ runId: "run-1" } as never, { resumeHandle: "opaque", sessionId: null }))
       .rejects.toMatchObject({ code: "provider_timeout", message: "Claude provider request failed" });
+  });
+
+  it("bridges SDK-shaped message streams through the neutral adapter", async () => {
+    const source = {
+      start: vi.fn(async function* () {
+        yield { type: "assistant", uuid: "sdk-1", message: { content: [{ type: "text", text: "hello" }] } };
+        yield { type: "result", subtype: "success", uuid: "sdk-2", is_error: false, usage: {} };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createClaudeCodeAdapter(createClaudeCodeSdkTransport(source));
+    const events = [];
+    for await (const event of adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] })) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { runId: "run-1", eventId: "claude:sdk-1:text:0", sequence: 1, payload: { type: "text", text: "hello" } },
+      { runId: "run-1", eventId: "claude:sdk-2:usage", sequence: 2, payload: { type: "usage", usage: { native: [], cost: { provenance: "unavailable" } } } },
+      { runId: "run-1", eventId: "claude:sdk-2:status", sequence: 3, payload: { type: "status", status: "completed" } },
+    ]);
+    await expect(adapter.cancel({ runId: "run-1" } as never, { resumeHandle: "opaque", sessionId: null })).resolves.toBe("requested");
+    expect(source.start).toHaveBeenCalledOnce();
+    expect(source.cancel).toHaveBeenCalledOnce();
   });
 });
