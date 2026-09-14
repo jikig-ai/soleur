@@ -35,6 +35,12 @@ translator and neutral transport bridge. The source retains permission,
 session, approval, and cancellation behavior; only validated text, progress,
 usage, and terminal result payloads cross into the shared event contract.
 
+The Codex boundary follows the same shape for App Server events. Its thread
+resume handle (`thread.id`) and live session identity (`thread.sessionId`) are
+normalized as separate opaque fields; streamed message deltas, approvals,
+usage, and terminal states are translated to contiguous neutral events. Missing
+or malformed provider identities fail closed before persistence.
+
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
 settings metadata lookup never grants execution authorization.

@@ -101,6 +101,7 @@ routine run binds the current default once; retries retain that binding.
 - [ ] RED-05: API-key and managed ChatGPT login isolation, refresh, logout, revoked credentials, approvals, recovery, usage, and cancellation.
   - [x] Auth boundary slice: API-key and managed modes have explicit, mode-stable credential leases (2 tests green).
   - [x] Thread identity slice: Codex App Server thread IDs normalize into separate resume-handle and live-session fields without deriving or persisting malformed identifiers (25 adapter tests green).
+  - [x] Event translation slice: Codex App Server message deltas, approval requests, usage, and terminal states normalize into contiguous neutral events with fail-closed identities (5 translator tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).
