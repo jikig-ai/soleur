@@ -158,6 +158,14 @@ export async function* translateClaudeSdkStream(
   if (!safeSourceId(runId)) throw new Error("claude_run_id_invalid");
   let sequence = 0;
   for await (const message of messages) {
+    const record = asRecord(message);
+    const type = nonEmptyString(record?.type);
+    if (
+      (type === "assistant" || type === "tool_progress" || type === "result")
+      && !safeSourceId(record?.uuid)
+    ) {
+      throw new Error("claude_message_invalid");
+    }
     for (const translated of translateClaudeSdkMessage(message)) {
       sequence += 1;
       yield {

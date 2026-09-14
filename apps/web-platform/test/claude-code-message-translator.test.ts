@@ -160,4 +160,13 @@ describe("Claude SDK message translator", () => {
       for await (const _event of translateClaudeSdkStream(messages, "bad\nrun")) { /* no-op */ }
     })()).rejects.toThrowError("claude_run_id_invalid");
   });
+
+  it("fails closed on a recognized SDK message with an invalid source identity", async () => {
+    const messages = (async function* () {
+      yield { type: "assistant", uuid: "bad\nmessage", message: { content: [] } };
+    })();
+    await expect((async () => {
+      for await (const _event of translateClaudeSdkStream(messages, "run-2")) { /* no-op */ }
+    })()).rejects.toThrowError("claude_message_invalid");
+  });
 });
