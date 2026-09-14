@@ -15,6 +15,27 @@ lane: cross-domain
 
 # Plan: a CI access path from git-data-cutover.yml to the git-data host
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-15
+**Sections enhanced:** Research Reconciliation, ADR-220 decisions 2–5, Technical Approach (verdicts, sanitization, argument hygiene, measured probe form, precedent-diff), Observability, Guard Contract, Test Scenarios, Acceptance Criteria (AC1–AC5, AC11), Infrastructure (IaC), Alternatives, Hypotheses (network deep-dive)
+**Agents used:** security-sentinel, test-design-reviewer, observability-coverage-reviewer, a verify-the-negative + dropped-symbol sweep (12/12 current-code claims confirmed, no stale prescriptions); mechanical gates 4.5–4.11 run inline; a real-OpenSSH container measurement of the probe form
+
+### Key Improvements
+
+1. **Custody rule (security, HIGH):** the git-data root private half must never live in the web-platform root state — PR-branch `terraform plan` runs read that state, and it already holds the web-1 root key and CF Access token. The follow-up uses a separate root; token delivery is OIDC-first.
+2. **Workflow-command injection closed:** probe bytes are attacker-chosen once host keys are unverified; they now never reach the runner's command parser unsanitized (stop-commands span, printable-ASCII filter, verdicts only from script-emitted lines).
+3. **Probe form measured, not assumed:** OpenSSH 9.6p1 in a container — banner on the first line 20/20 with `</dev/null`, discriminating empty-line failures for forwarding refused / target closed / key refused.
+4. **Guard suite de-vacuated:** a single `$TL` timeline replaces cross-stream ordering, a structural plain-statement check (H5), argument hygiene (`invalid_host`), and a CI-required real-sshd runtime arm.
+5. **Verdicts are liveness, not authenticity:** #7226 host-key pinning becomes a precondition for the credential decision's `accepted` status.
+
+### New Considerations Discovered
+
+- `infra-validation.yml`'s PR-only `plan` job exposes the web-platform root state to anyone with write access (pre-existing; bounded here by the custody rule, not changed).
+- The workflow header's "Inngest dispatches this workflow" claim is false; corrected in this PR.
+- Once the follow-up adds a `main`-only deployment policy, the proving dry-run can only run after that PR merges.
+- Downtime gate (4.55): not triggered — nothing in this PR drains, restarts or replaces a serving host; the AC11 dry-run runs only `true` on web-1 and reads git-data's banner.
+
 ## Overview
 
 The git-data LUKS cutover workflow needs an SSH session to two private hosts: web-1 (10.0.1.10) and
@@ -50,7 +71,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 - **P1** A `dry_run=true` dispatch of `git-data-cutover.yml` establishes an authenticated root SSH session to web-1 over the existing tunnel.
 - **P2** The same dispatch establishes (or, where not provisionable, proves the route to) an SSH session to the git-data host without adding an internet-edge ingress for it.
 - **P3** When root on git-data is not authorized, the run stops BEFORE any host-mutating step with a machine-readable reason naming the missing credential — never a silent fallback, never a timeout that names nothing.
-- **P4** The root credential for git-data is minted by Terraform (no operator mint), is not a credential already held by other workflows, and never lands on web-1.
+- **P4** The root credential for git-data is minted by Terraform (no operator mint), is not a credential already held by other workflows or readable from the web-platform root state, and never lands on web-1.
 - **P5** Existing bridge callers (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`, `workspaces-luks-cutover.yml`, `workspaces-luks-verify.yml`) observe no change to any export they consume (the only removed export, the bogus `GIT_DATA_SSH`, has exactly one consumer: `git-data-cutover.sh › gd_ssh`).
 - **P6** No hash-bound birth input, no rung-2 evidence, no terraform target lockstep, no Doppler `prd_git_data` hand-creation changes in this PR.
 - **P7** The access-path decision is recorded in an ADR and in the C4 model in the same PR.
@@ -111,8 +132,8 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 | The bridge already exports a usable `GIT_DATA_SSH` | It exports the web-1 invocation under that name; `git-data-cutover.yml` never passes `server-ip` | Pass `server-ip`; delete the bogus export (its one consumer is `gd_ssh`) |
 | `ssh -J` through web-1 | `ssh -J` does not carry a command-line `-i` to the jump hop (man ssh) | The follow-up's auth path uses an `ssh_config` `ProxyCommand ssh -F <cfg> -W %h:%p 10.0.1.10`; this PR's transport probe is `$WEB_HOST_SSH -W 10.0.1.20:22 10.0.1.10`, where web-1 IS the destination, so the existing `-i` applies |
 | Address the jump as `HostName 127.0.0.1` / `Port 2222` (CTO) | For `server-ip` callers `SERVER_IP` is the input (10.0.1.10), so the NAT rule DOES match (`workspaces-luks-cutover.yml` run 29995797567 reached web-1 this way); a second route would give one host two SSH identities for #7226 to pin (architecture review) | Keep one route: 10.0.1.10 through the existing NAT rule, for both the probe and the follow-up's jump |
-| Key custody separates git-data root from ci_ssh (earlier draft) | Any `tls_private_key` private half lives in `web-platform/terraform.tfstate`, beside `tls_private_key.ci_ssh` — but that state ALREADY holds `random_password.git_data_luks` (the store's LUKS passphrase) and the three git forced-command keys, so state custody adds no new exposure class (architecture review) | ADR-220 names state as the at-rest custody; separation is at the CONSUMER surface (which job can read the key) |
-| A GitHub repo secret for the key (earlier draft) | AP-008 "Doppler for all secrets"; the TF GitHub App gets 403 writing environment secrets (`inngest-arm-write-token.tf`) | ADR-220: key in a dedicated Doppler config `prd_git_data_root`; a dedicated read-only service token published as a repo secret and injected only into the reviewer-gated cutover job; the token is minted for a cutover window and revoked after — the `inngest-cutover` precedent |
+| Key custody separates git-data root from ci_ssh (earlier draft) | Any `tls_private_key` private half lives in `web-platform/terraform.tfstate` (architecture review). That state is readable without any reviewer: `infra-validation.yml`'s `plan` job runs `terraform plan` on PR-branch code with `prd_terraform` backend credentials (security review, verified). It already holds `tls_private_key.ci_ssh` (web-1 root) and the CF Access token, so adding a git-data root key would turn "read state" into "remote root on the store" — the LUKS passphrase comparison does not hold, because the passphrase is useless without the disk | ADR-220: the git-data root private half must NEVER be readable by a credential that reads the web-platform root state. The follow-up keeps the keypair in a separate Terraform root with its own isolated state location and credentials (held only in `prd_git_data_root`) and hands the main root only the public half (`data "hcloud_ssh_key"`) |
+| A GitHub repo secret for the key (earlier draft) | AP-008 "Doppler for all secrets"; the TF GitHub App gets 403 writing environment secrets (`inngest-arm-write-token.tf`) | ADR-220: key in a dedicated Doppler config `prd_git_data_root`; read via a Doppler OIDC identity bound to the `git-data-cutover` environment where the provider supports it, else a repo-secret token with a single-reference CI lint, a `main`-only deployment policy and a mint-time expiry (security review: an `environment:` gate binds only the jobs that declare it) |
 | Key destroyed after each window (CPO condition, earlier draft) | The authorized public key persists until a replace; destroying the private half would make every rotation cutover require a host replace first, which ADR-068 D10 never weighed (architecture review) | Consumer-side bound instead: the read token exists only for a cutover window; host-side revocation is the next replace. Rotation cutovers need no replace |
 | Wire the key input into the bridge now (earlier draft) | Nothing can supply or exercise it until the follow-up; passing `secrets.X` from an ungated job would hand store root to any dispatch the moment the follow-up creates the secret (spec-flow P1-b) | No key input, no secret reference in this PR; the follow-up adds the secret, the `environment:` gate and the auth wiring together |
 | A dry-run proves `git-data-auth ok` after the follow-up (earlier draft) | If the key reached only the reviewer-gated real-cutover mode, dry-runs could never authenticate (spec-flow P1-a) | ADR-220: the reviewer-gated environment covers every dispatch mode, so a dry-run carries the key and is the proof |
@@ -147,7 +168,16 @@ credential CI holds.
    hash, so NOT a hash-bound edit; reaches the host only at a git-data replace) → private half in
    Doppler `prd_git_data_root` (AP-008), read by a dedicated service token published as a repo secret
    and injected only into the reviewer-gated `git-data-cutover` environment, which covers every
-   dispatch mode. At-rest custody is Terraform state, which already holds the store's LUKS passphrase.
+   dispatch mode. **Custody rule:** the private half must never be readable by any credential that reads
+   the web-platform root state (that state is readable from PR-branch `terraform plan` runs and already holds
+   the web-1 root key and the CF Access token). The follow-up therefore mints the keypair in a separate
+   Terraform root with its own isolated state location and credentials held only in `prd_git_data_root`,
+   and the main root references only the public half via `data "hcloud_ssh_key"`. **Token delivery:**
+   prefer a Doppler OIDC identity bound to the `git-data-cutover` environment's `sub` (no stored secret);
+   if the pinned Doppler provider cannot express it, a repo secret with (i) a CI lint that only
+   `git-data-cutover.yml` references it, (ii) a `main`-only deployment policy on the environment, and
+   (iii) an expiry set at mint time rather than a revoke after the soak — an `environment:` gate only
+   binds jobs that declare it, while any workflow file on any branch can name a repo secret.
    **Rejected:** reusing ci_ssh (held by `apply-web-platform-infra.yml`'s TF_VAR,
    `apply-deploy-pipeline-fix.yml` and both workspaces-luks workflows); a root `ssh_authorized_keys:`,
    a 4th `git` forced-command key, or an SSH CA in the template (hash-bound, still needs a replace,
@@ -156,16 +186,22 @@ credential CI holds.
    `hcloud rebuild` (`hr-prod-host-config-change-immutable-redeploy`; rescue also needs the reboot
    ADR-115 bars); the personal Hetzner key copied into Doppler (a human mint, and it is root on every
    host). Born-on-LUKS is ADR-068 D10's rejected alternative, not re-litigated.
-3. **Lifetime** — consumer-side: the read token is minted for a cutover window (rehearsal, cutover or
-   rotation) and revoked after its soak verdict; host-side: revocation is the next replace. The #8009
+3. **Lifetime** — consumer-side: the read credential exists only for a cutover window (rehearsal, cutover
+   or rotation) and expires on its own; host-side: revocation is the next replace. The #8009
    authorization accounting and PA-36 record the root authority while a token exists.
 4. **Residuals, bounded** — host keys are accepted unverified on both hops (#7226): a compromised
    web-1 cannot log in to git-data but could impersonate it and receive cutover commands. Accepted only
    while #6976 holds (store empty by construction at the initial cutover); any rotation against a
    populated store is gated on #7226. git-data reach now depends on web-1's sshd and the single
-   connector (ADR-114 I1); any #6441 rework must keep the jump working.
+   connector (ADR-114 I1); any #6441 rework must keep the jump working. **Verdicts are liveness checks,
+   not authenticity checks:** a compromised web-1 can answer `-W` with a forged `SSH-2.0-` line (a false
+   `git-data-jump ok`, harmless in this PR because nothing supplies `GIT_DATA_SSH`) and, once a key exists,
+   could run a fake sshd that accepts any login. Pinning git-data's host key (#7226) is therefore a
+   precondition for the credential decision becoming `accepted`, not just for populated-store rotation.
 5. **Statuses** — the transport decision is `accepted` once AC11 measures `git-data-jump ok`; the
-   credential decision is `proposed` until the follow-up's dry-run reads `git-data-auth ok`.
+   credential decision is `proposed` until #7226 pins git-data's host key AND the follow-up's dry-run reads
+   `git-data-auth ok`. With a `main`-only deployment policy, that proving dry-run can only run after the
+   follow-up merges.
 6. **Sequencing** — this PR: ADR-220, the ADR-068 D10 amendment note, the workflow/bridge/script
    wiring, the fail-closed access gate, tests, C4, runbook line. **Follow-up** (issue filed in /work
    Phase 0, milestone `Post-MVP / Later`, scheduled with the cutover rehearsal, **blocked by walls 4,
@@ -195,14 +231,48 @@ logged separately with CR/LF stripped; it holds no credential.
 
 | role | verdict | rule |
 |---|---|---|
-| `web` | `ok` / `failed` (with `rc=<n>`) / `web_roster_empty` | per `WEB_HOSTS` member: `timeout 30 $WEB_HOST_SSH -o BatchMode=yes -o ConnectTimeout=20 "$h" true`; rc 0 → ok |
-| `git-data-jump` | `ok` / `failed` (with `rc=<n>`) | `timeout 25 $WEB_HOST_SSH -o BatchMode=yes -o ConnectTimeout=20 -W "$GIT_DATA_HOST:22" "$jump" < <(sleep 5) 2>"$errf" \| head -n 1`, jump = first `WEB_HOSTS` member; **ok iff the captured line begins `SSH-2.0-`, whatever the rc** (the pipeline's rc is 124/141/255 on success paths) |
-| `git-data-auth` | `ok` / `failed` (with `rc=<n>`) / `git_data_root_key_absent` | only after `git-data-jump=ok`; `GIT_DATA_SSH` unset → key absent (nothing in the repo sets it after this PR); set → `timeout 30 $GIT_DATA_SSH -o BatchMode=yes "$GIT_DATA_HOST" true` |
+| `web` | `ok` / `failed` (with `rc=<n>`) / `web_roster_empty` / `web_host_ssh_unset` / `invalid_host` | `WEB_HOST_SSH` empty → `web_host_ssh_unset` (checked with `${WEB_HOST_SSH:-}` first, because a bare expansion under `set -u` kills the script with no verdict); then per `WEB_HOSTS` member: `timeout 30 $WEB_HOST_SSH -o BatchMode=yes -o ConnectTimeout=20 "$h" true`; rc 0 → ok |
+| `git-data-jump` | `ok` / `failed` (with `rc=<n>`) | `timeout 25 $WEB_HOST_SSH -o BatchMode=yes -o ConnectTimeout=20 -W "$GIT_DATA_HOST:22" "$jump" </dev/null 2>"$errf" \| head -n 1`, jump = the FIRST `WEB_HOSTS` member; **ok iff the first captured line (CR stripped) begins `SSH-2.0-`, whatever the rc** (a banner followed by more output can yield 141) |
+| `git-data-auth` | `ok` / `failed` (with `rc=<n>`) / `git_data_root_key_absent` | only after `web` and `git-data-jump` are both ok; `GIT_DATA_SSH` unset → key absent (nothing in the repo sets it after this PR); set → `timeout 30 $GIT_DATA_SSH -o BatchMode=yes "$GIT_DATA_HOST" true` |
 
 Options are appended before the destination, so `WEB_HOST_SSH`'s bytes stay untouched. `timeout` is the
 external binary applied to the expanded invocation, never to the `web_ssh`/`gd_ssh` shell functions.
 A non-ok verdict exits 3 from `access_gate` itself (not `die`, which exits 1). `access_gate` is called as
 a plain statement — never inside `$(…)` or an `||` list, where `set -e` would be suspended.
+`ok` verdicts emit `::notice title=git-data-cutover access::role=<r> verdict=ok`; every other verdict emits
+`::error title=git-data-cutover access::role=<r> verdict=<v>`. Only role, host and verdict reach an annotation.
+
+**Untrusted bytes never reach the runner's command parser (security review).** The runner interprets
+workflow commands on stdout AND stderr, and every byte a probe returns (the `-W` first line, a pre-login
+`Banner`, ssh's stderr) is chosen by the edge or web-1 once host keys are unverified. So: every probe's
+stdout and stderr go to files, never the terminal; the `-W` first line is only compared, never printed; a
+failed probe's stderr is printed only between `::stop-commands::<per-run random token>` and `::<token>::`,
+after `LC_ALL=C tr -cd '\40-\176'` and behind a fixed `[git-data-cutover] probe-stderr:` prefix. The
+script also appends the three verdict lines to `$GITHUB_STEP_SUMMARY` when that variable is set.
+
+**Argument hygiene.** `WEB_HOST_SSH` / `GIT_DATA_SSH` are split once with `read -ra` into arrays (no glob
+expansion); every `WEB_HOSTS` member and `GIT_DATA_HOST` must match `^[0-9.]+$` before use, so a value
+beginning with `-` can never become an ssh option (`-oProxyCommand=…` would execute on the runner);
+violations are verdict `invalid_host`. ssh keeps the FIRST value of a repeated `-o`, so the appended
+`BatchMode`/`ConnectTimeout` can add but never override an option the bridge already set. Each probe's
+capture uses `out=$(…) || rc=$?`, so a non-zero pipeline rc can never trip `set -e` on a success path.
+
+#### Research Insights (deepen-plan 2026-09-15)
+
+- **The probe form is measured, not assumed.** In a throwaway `ubuntu:24.04` container (OpenSSH 9.6p1, the
+  GitHub `ubuntu-24.04` runner's version) with three local sshds: allowing-jump → `SSH-2.0-OpenSSH_9.6p1…`
+  as the first line in ~0 s with `</dev/null` stdin, **20/20 runs** (no stdin-EOF race), rc 0 even under
+  `pipefail`; `AllowTcpForwarding no` → empty line + stderr `channel 0: open failed: administratively
+  prohibited: open failed`; closed target → empty line + `channel 0: open failed: connect failed: Connection
+  refused`; jump key refused → empty line + `root@127.0.0.1: Permission denied (publickey).` All non-ok
+  shapes yield an empty first line, so the banner rule discriminates without parsing stderr.
+- **Precedent-diff (Phase 4.4).** No `ssh -W` banner probe exists in the repo — the pattern is novel. Nearest
+  precedents: `workspaces-luks-verify.yml` bounds every call by appending
+  `-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4` to `WEB_HOST_SSH` (same
+  append-options shape adopted here); `web-git-data-probe.sh` proves web-1 → 10.0.1.20:22 with a TCP
+  connect-and-close from ON the host (it cannot prove web-1's sshd permits forwarding, which is the new
+  fact this probe measures); `git-data-ownership.test.sh` runs a real sshd in a pinned `ubuntu:24.04`
+  image with a CI-required runtime arm — the precedent for Guard 1's runtime rows R1–R4.
 
 ### Files to Edit
 
@@ -218,7 +288,9 @@ a plain statement — never inside `$(…)` or an `||` list, where `set -e` woul
   - new `Tear down cloudflared SSH bridge` step (`if: always()`) placed after the Run step and before
     `Cutover summary`, copied from `workspaces-luks-cutover.yml`;
   - header "Reach model" rewritten: the jump, the credential boundary, ADR-220, and that no secret for
-    git-data is referenced until the follow-up adds the reviewer-gated environment.
+    git-data is referenced until the follow-up adds the reviewer-gated environment; the "Inngest-dispatches-GHA"
+    paragraph is corrected — no such Inngest function exists (`git grep` over `apps/web-platform/server` finds
+    none), and a scheduled dispatcher would need a Sentry-mirrored alarm like `workspaces-luks-verify.yml`'s.
 - `apps/web-platform/infra/git-data-cutover.sh`
   - `gd_ssh`/`web_ssh`: drop the `:-ssh` fallbacks; when the invocation is unset, print `…_SSH unset`
     to stderr and return 97;
@@ -226,7 +298,9 @@ a plain statement — never inside `$(…)` or an `||` list, where `set -e` woul
     `main()`; the remedy line for `git_data_root_key_absent` names ADR-220 and the follow-up issue
     number (not the ADR ordinal alone, so a renumber touches docs only);
   - ROLLBACK branch unchanged in order (`set_flag false` needs no SSH and must never wait on a probe);
-    its SSH calls now fail closed through the existing `|| log "WARNING…"` arms;
+    its SSH calls now fail closed through the existing `|| log "WARNING…"` arms, each of which also emits
+    `::warning title=git-data-cutover rollback::step=<name> rc=<n>` so a partial rollback is visible in the
+    annotations API;
   - "INVOCATION BOUNDARY" header comment updated.
 - `.github/workflows/infra-validation.yml` — register the new suite beside the workspaces-luks workflow suites.
 - `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md` — dated amendment note under D10: the access path and root credential are decided in ADR-220, and rotation cutovers inherit its lifetime rule (no replace per rotation).
@@ -244,14 +318,14 @@ a plain statement — never inside `$(…)` or an `||` list, where `set -e` woul
 
 1. Re-derive the ADR ordinal across every pushed ref (`for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do git ls-tree -r --name-only "$r" -- knowledge-base/engineering/architecture/decisions; done | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n -u | tail -1`); 219 was the max on 2026-09-14.
 2. File four issues (labels verified: `domain/engineering`, `type/security`, `priority/p2-medium`; milestone `Post-MVP / Later`):
-   - **Follow-up**: "git-data root access (ADR-220): Terraform-minted root key, Doppler `prd_git_data_root` + window-scoped read token, reviewer-gated environment, gate allow-sets, #8009 C1 re-approval, replace git-data" — body: the decision list above, "blocked by walls 4–6", "gated on #7226 before any rotation against a populated store", PA-36 update (gdpr-gate Art. 32 suggestion), the note that once the key lands a dry-run is no longer non-mutating (it runs `luksOpen`, mount, `rsync --delete` into FRESH), and the CPO ask to assert store emptiness at run time before a first cutover.
+   - **Follow-up**: "git-data root access (ADR-220): Terraform-minted root key in a separate root, Doppler `prd_git_data_root` + environment-bound read credential, reviewer-gated environment, gate allow-sets, #8009 C1 re-approval, replace git-data" — body: the decision list above incl. the custody rule (private half never readable by web-platform-state readers; the separate root needs its own R2 backend per `hr-every-new-terraform-root-must-include-an`) and OIDC-first token delivery, "blocked by walls 4–6", "#7226 host-key pinning is a precondition for the credential decision becoming accepted", PA-36 update (gdpr-gate Art. 32 suggestion), the note that once the key lands a dry-run is no longer non-mutating (it runs `luksOpen`, mount, `rsync --delete` into FRESH), and the CPO ask to assert store emptiness at run time before a first cutover.
    - **Wall 4**: "git-data-cutover.sh reads and writes Doppler prd under a prd_terraform-scoped token — read_flag() fails open and set_flag() cannot flip or roll back".
    - **Wall 5**: "git-data-cutover.yml drains and restarts web-1 but serializes against neither web-1-swap nor git-data-state".
    - **Wall 6**: "git-data-cutover.sh ROLLBACK never releases a held freeze on a default (dry_run=true) dispatch".
 
 #### Phase 1 — Tests first (RED)
 
-Write `git-data-cutover-access.test.sh` from the Guard Contract; confirm the behavioral cases fail against `origin/main`'s bytes.
+Write `git-data-cutover-access.test.sh` from the Guard Contract (unit rows over the `$TL` timeline, the H5 structural check, and the docker runtime arm R1–R4 with the pinned `UBUNTU_BASE` from `git-data-ownership.test.sh`); confirm the behavioral cases fail against `origin/main`'s bytes. Save the runtime arm's real stderr as the shim fixtures.
 
 #### Phase 2 — Script
 
@@ -285,7 +359,8 @@ AC9; `git merge-tree --write-tree origin/main HEAD` clean before review and befo
 | root key in `cloud-init-git-data.yml` / 4th forced-command key / SSH CA | no Hetzner key object | hash-bound (re-holds rung-2), still needs the replace, breaks the three-key map gate |
 | in-place key delivery (remote-exec, rescue, reset_password console, rebuild) | no replace | `hr-prod-host-config-change-immutable-redeploy`; ADR-115 |
 | personal Hetzner key in Doppler | works today | a human mint; root on every host |
-| GitHub repo secret holding the key | fewer moving parts | AP-008; the token-in-repo-secret + key-in-Doppler precedent already exists |
+| GitHub repo secret holding the key | fewer moving parts | AP-008; any workflow on any branch can name a repo secret |
+| keypair in the web-platform root state | one root, simplest Terraform | that state is readable by PR-branch `terraform plan` runs and already holds the web-1 root key + CF Access token, so it would become remote root on the store |
 | destroy the key after each window | strongest bound | every rotation would need a host replace first; state versions and the authorized public key persist anyway |
 | born-on-LUKS (no cutover SSH) | removes the need | ADR-068 D10 decision; rotation still needs the cutover |
 | key input + `ssh_config` writer in this PR | follow-up is Terraform only | dead and untestable until the secret exists; an ungated secret reference would arm itself when the follow-up creates it |
@@ -293,7 +368,7 @@ AC9; `git merge-tree --write-tree origin/main HEAD` clean before review and befo
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** (1) nothing directly while `GIT_DATA_STORE_ENABLED` stays off — the cutover stays blocked; (2) if the shared bridge edit regresses, `apply-web-platform-infra.yml` SSH applies, `apply-deploy-pipeline-fix.yml`, `workspaces-luks-cutover.yml` and the daily `workspaces-luks-verify.yml` (the evidence behind the published Article 32 LUKS claim for every user's workspace) stop — deploys and infra fixes for all users stall and the at-rest claim loses its daily verification.
-- **If this leaks, the user's data is exposed via:** (1) the future git-data root key — root on the store holding every connected user's source code; (2) one compromise of CI secrets or Terraform state yielding both the web-1 route and the store key (bounded by the window-scoped token and the reviewer-gated environment; state already holds the store's LUKS passphrase); (3) an unverified git-data host key letting a compromised web-1 receive cutover traffic (accepted only while #6976 holds; #7226 gates any populated-store rotation).
+- **If this leaks, the user's data is exposed via:** (1) the future git-data root key — root on the store holding every connected user's source code; (2) one compromise of CI secrets or Terraform state yielding both the web-1 route and the store key — closed by the custody rule (the private half lives outside the web-platform root state, which PR-branch plan runs can read) plus a window-scoped, environment-bound read credential; (3) an unverified git-data host key letting a compromised web-1 receive cutover traffic (accepted only while #6976 holds; #7226 gates any populated-store rotation).
 - **Brand-survival threshold:** `single-user incident`
 
 CPO sign-off (plan time, 2026-09-14): **yes**, with conditions — unchanged consumed exports for all four bridge callers (P5), key custody outside `prd_terraform`, a bounded key lifetime, C1 re-approval in the follow-up. The lifetime condition is met as a window-scoped read token plus revocation at replace (the architecture review showed per-window key destruction would force a replace before every rotation). `user-impact-reviewer` runs at review.
@@ -312,25 +387,31 @@ error_reporting:
 failure_modes:
   - mode: "cloudflared forward down or CF Access rejects ci_ssh"
     detection: "the bridge's existing liveness gate (ci_ssh_access_denied / ci_ssh_liveness_unverifiable), or role=web verdict=failed with its rc and logged stderr"
-    alert_route: "failed run, named annotation"
+    alert_route: "layer 6: workflow run log + ::error:: annotation (the bridge's own ::error:: lines for forward/NAT/liveness failures)"
   - mode: "web-1 refuses the CI key"
     detection: "role=web verdict=failed rc=255, stderr line logged"
-    alert_route: "failed run, named annotation"
+    alert_route: "layer 6: workflow run log + ::error:: annotation"
   - mode: "web-1 sshd refuses direct-tcpip, or git-data sshd unreachable from web-1"
     detection: "role=git-data-jump verdict=failed (no SSH-2.0- banner), stderr line logged"
-    alert_route: "failed run, named annotation; halts the PR at AC11"
+    alert_route: "layer 6: workflow run log + ::error:: annotation; halts the PR at AC11"
   - mode: "root key not provisioned (expected until the follow-up)"
     detection: "role=git-data-auth verdict=git_data_root_key_absent"
-    alert_route: "failed run, named annotation naming ADR-220 and the follow-up issue"
+    alert_route: "layer 6: workflow run log + ::error:: annotation naming ADR-220 and the follow-up issue"
   - mode: "a key is supplied but not authorized on the host"
     detection: "role=git-data-auth verdict=failed rc=255, reachable only after git-data-jump=ok"
-    alert_route: "failed run, named annotation"
+    alert_route: "layer 6: workflow run log + ::error:: annotation"
+  - mode: "WEB_HOST_SSH not exported (bridge regression)"
+    detection: "role=web verdict=web_host_ssh_unset"
+    alert_route: "layer 6: workflow run log + ::error:: annotation"
+  - mode: "partial rollback (a git-data or web-1 step could not run)"
+    detection: "::warning title=git-data-cutover rollback::step=<name> rc=<n> per failed step"
+    alert_route: "layer 6: workflow run log + ::warning:: annotation"
 logs:
   where: "GitHub Actions run log for git-data-cutover.yml"
   retention: "the repository's Actions log retention setting (GitHub default 90 days)"
 discoverability_test:
   command: "bash -c 'id=$(curl -s --max-time 15 \"https://api.github.com/repos/jikig-ai/soleur/actions/workflows/git-data-cutover.yml/runs?per_page=1\" | jq -r \".workflow_runs[0].id // empty\"); [ -n \"$id\" ] || { echo no-runs; exit 0; }; curl -s --max-time 15 \"https://api.github.com/repos/jikig-ai/soleur/actions/runs/$id/jobs\" | jq -r \".jobs[0].check_run_url\" | xargs -I{} curl -s --max-time 15 {}/annotations | jq -r \".[].message\" | grep -o \"role=[a-z-]* verdict=[a-z_]*\"'"
-  expected_output: "no-runs before AC11; after AC11 and until the follow-up: role=web verdict=ok, role=git-data-jump verdict=ok, role=git-data-auth verdict=git_data_root_key_absent (public repo, unauthenticated API)"
+  expected_output: "no-runs before AC11; after AC11 and until the follow-up: role=web verdict=ok, role=git-data-jump verdict=ok, role=git-data-auth verdict=git_data_root_key_absent (public repo, unauthenticated API; host= values are not grepped because the bridge add-masks 10.0.1.10; if the newest run is a rollback or died in the bridge, grep finds no verdict and exits 1 — read that as \"no access verdict in the newest run\", not as a pass)"
 ```
 
 ## Encryption Posture
@@ -368,52 +449,58 @@ exception:
 
 ### Guard 1 — the access gate precedes every host mutation on the forward path
 
-**Property.** In a forward (non-ROLLBACK) run of `git-data-cutover.sh`, no remote command other than the access probes reaches any host unless `web` (every roster member), `git-data-jump` and `git-data-auth` returned `ok` in that order; in a ROLLBACK run the probes never delay or prevent the flag-off write.
+**Property.** In a forward (non-ROLLBACK) run of `git-data-cutover.sh`, no remote command other than the access probes reaches any host unless `web` (every roster member), `git-data-jump` and `git-data-auth` returned `ok` in that order; in a ROLLBACK run the probes never delay or prevent the flag-off write; and no byte a probe returns can reach the runner's workflow-command parser unsanitized.
 
-**Assembly.** Every remote dial flows through three chokepoints: `web_ssh()`, `gd_ssh()`, and the probe invocations inside `access_gate()` (which expand `$WEB_HOST_SSH` / `$GIT_DATA_SSH` directly). Their callers: `main()`'s forward path (`prepare_luks_target` … `old_volume_wipe`), `main()`'s ROLLBACK branch (`rollback`, `release_freeze`), and the EXIT trap `cleanup()`. Roster: `WEB_HOSTS` (a list) + `GIT_DATA_HOST`. The suite observes through a `PATH`-shimmed `ssh` (scenario-driven stdout/stderr/rc, argv appended to a log) and a shimmed `doppler`; the forward-path cases run with `GIT_DATA_SSH` SET (auth probe scripted to refuse, or to succeed) so a mis-ordered gate would visibly send `prepare_luks_target`'s remote through the shim.
+**Assembly.** Every remote dial flows through three chokepoints: `web_ssh()`, `gd_ssh()`, and the probe invocations inside `access_gate()` (arrays split from `$WEB_HOST_SSH` / `$GIT_DATA_SSH`). Their callers: `main()`'s forward path (`prepare_luks_target` … `old_volume_wipe`), `main()`'s ROLLBACK branch (`rollback`, `release_freeze`), and the EXIT trap `cleanup()`. Roster: `WEB_HOSTS` (a list) + `GIT_DATA_HOST`. The suite observes through ONE timeline file `$TL`: `PATH` shims for `ssh`, `doppler` and a pass-through `timeout` each append their argv to `$TL`, so probe calls (recognizable by `true` / `-W` argv) and mutating calls (`cryptsetup`, `mountpoint`, `rsync`, `systemctl`, `secrets set`) are ordered within a single stream. Forward-path cases run with `GIT_DATA_SSH` SET unless the case is about its absence, so a mis-ordered gate visibly sends `prepare_luks_target`'s remote through the shim. The shim refuses an empty destination. A second, structural assembly member is `main()`'s text: the gate's call site and its `exit 3`.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the `access_gate` call from `main()` (GIT_DATA_SSH set, auth scripted to refuse) | RED — the shim log records a `cryptsetup`/`mountpoint` remote and no exit 3 |
-| 2 | REORDER: move `access_gate` after `prepare_luks_target` | RED — a `cryptsetup` remote precedes the first `ACCESS` line in the shim log |
-| 3 | Own dispatch: `WEB_HOSTS=""` | RED unless the run exits 3 with `role=web verdict=web_roster_empty` |
-| 4 | Second member: `WEB_HOSTS="10.0.1.10 10.0.1.11"`, only the second refuses | RED unless the run exits 3 with `host=10.0.1.11 verdict=failed` |
-| 5 | Re-introduce `${GIT_DATA_SSH:-ssh}` | RED — with `GIT_DATA_SSH` unset the shim log gains a bare `ssh 10.0.1.20` invocation |
-| 6 | Run the auth probe before the jump probe | RED — jump scripted to fail with a key present must report `role=git-data-jump verdict=failed`, never an auth verdict |
-| 7 | Make the jump verdict depend on rc instead of the banner | RED — scenario "banner printed, rc=124" must read `verdict=ok` |
-| 8 | Call `access_gate` from the ROLLBACK branch before `rollback` | RED — with web scripted to hang, the `doppler` shim must record the `false` write before any `ssh` invocation |
+| 1 | Delete the `access_gate` call from `main()` (`GIT_DATA_SSH` set, auth scripted to refuse) | RED — `$TL` gains a `cryptsetup`/`mountpoint` remote and the run does not exit 3 |
+| 2 | REORDER: move `access_gate` after `prepare_luks_target` | RED — in `$TL` a `cryptsetup` remote precedes the web probe line |
+| 3 | Own dispatch: delete the empty-roster branch (`WEB_HOSTS=""`) | RED — the run must exit 3 with `role=web verdict=web_roster_empty`, not reach the jump through an empty destination |
+| 4 | Second member: iterate only the first roster member (`WEB_HOSTS="10.0.1.10 10.0.1.11"`, second refuses) | RED unless the run exits 3 with `host=10.0.1.11 verdict=failed` |
+| 5 | Re-introduce `${WEB_HOST_SSH:-ssh}` or `${GIT_DATA_SSH:-ssh}` (ROLLBACK=1, DRY_RUN=0, both unset) | RED — `$TL` gains an `ssh` line without the fixture's `-i` marker |
+| 6 | Run the auth probe before the jump probe (key set, jump scripted to fail) | RED — the verdict must be `role=git-data-jump verdict=failed`; no auth-probe line in `$TL` |
+| 7 | Key the jump verdict on rc instead of the first-line banner (scenario: banner then extra output, rc 141) | RED — must read `verdict=ok` |
+| 8 | Call `access_gate` from the ROLLBACK branch before `rollback` (web scripted to refuse) | RED — `$TL` must contain the `secrets set GIT_DATA_STORE_ENABLED false` line, and it must precede every `ssh` line |
+| 9 | Print the `-W` first line or raw probe stderr to stdout (shim stderr contains `::error title=git-data-cutover access::role=git-data-jump verdict=ok`) | RED — no line of script output may start with `::error`/`::notice`/`::add-mask`/`::stop-commands` except the script's own verdict annotations, and the forged text must appear only inside the stop-commands span with `::` intact-but-inert |
+| 10 | Jump dials the LAST roster member | RED — the `-W` line in `$TL` must target the first member |
 
 **Harness rows:**
 
 | # | Suite edit / input | Expected |
 |---|---|---|
-| H1 | Suite edit: the `ssh` shim ignores its scenario and always exits 0 with a banner | the refusal cases (rows 1, 4, 6) go RED |
-| H2 | Suite edit: the shim stops logging argv | rows 1, 2, 5 go RED (each case asserts ≥1 logged invocation) |
-| H3 | must-PASS, non-canonical: two-host roster, all probes ok, `DRY_RUN=1` | passes the gate; the `prepare_luks_target` remote appears AFTER all four `ACCESS … verdict=ok` lines |
-| H4 | Suite floor: fail on `0 passed` or fewer cases than declared | an emptied case list goes RED |
+| H1 | Suite edit: the `ssh` shim ignores its scenario and always exits 0 with a banner | rows 1, 4, 6 go RED |
+| H2 | Suite edit: the shims stop appending to `$TL` | rows 1, 2, 5, 8, 10 go RED (each case asserts ≥1 `$TL` line) |
+| H3 | must-PASS, non-canonical: two-host roster, all probes ok, key set, `DRY_RUN=1`, banner ending `\r\n` | passes the gate; in `$TL` the `prepare_luks_target` remote follows the two web probes, the jump and the auth probe |
+| H4 | Suite floor: fail on `0 passed` or fewer cases than declared; under `CI=true` a skipped runtime arm is a failure | an emptied case list or a missing docker goes RED |
+| H5 | Structural: extract `main()` (comments stripped); after the ROLLBACK `fi`, the first statement other than `log` must match `^[[:space:]]*access_gate[[:space:]]*$`; exactly one `access_gate` call outside its definition; the definition contains `exit 3` and no `return 3` | adding `\|\| true`, `$(…)`, `if !` or a second call site goes RED |
+
+**Runtime arm (real OpenSSH, `git-data-ownership.test.sh` precedent: same pinned `UBUNTU_BASE`, CI-required).** One container, three sshds with a synthesized key: a "web" sshd allowing forwarding on `127.0.0.1:2201`, a "web" sshd with `AllowTcpForwarding no` on `127.0.0.1:2202`, and a "git-data" sshd on `127.0.0.2:22` (the script dials port 22); `WEB_HOST_SSH` carries `-p`. R1: allowing sshd, `GIT_DATA_SSH` unset → exit 3, `jump ok`, `auth git_data_root_key_absent`, elapsed under 20 s (bounded, not pinned). R2: `AllowTcpForwarding no` → `jump failed`; the captured stderr is saved as the shim fixture text for the unit rows. R3: git-data sshd stopped → `jump failed`. R4 (negative control): a non-SSH listener on `127.0.0.2:22` → `jump failed`.
 
 ### Guard 2 — the bridge's `server-ip` export set
 
 **Property.** The bridge's "Decode CI SSH private key" step exports exactly `{CI_SSH_KEYFILE, WEB_HOST_SSH}` on the `server-ip` branch (with `WEB_HOST_SSH` byte-equal to its pre-change value) and exactly `{TF_VAR_ci_ssh_private_key}` on the terraform branch.
 
-**Assembly.** One writer: that step's `run:` body in `.github/actions/cf-tunnel-ssh-bridge/action.yml`. The suite extracts it by YAML parse, executes it once per branch with a `PATH`-shimmed `doppler` returning a synthesized ed25519 key (`ssh-keygen` in scratch, `cq-test-fixtures-synthesized-only`), captures `$GITHUB_ENV` to a temp file, and compares the key set and the `WEB_HOST_SSH` value.
+**Assembly.** One writer: that step's `run:` body in `.github/actions/cf-tunnel-ssh-bridge/action.yml`. The suite extracts it by YAML parse, executes it once per branch with a `PATH`-shimmed `doppler` returning a synthesized ed25519 key (`ssh-keygen` in scratch, `cq-test-fixtures-synthesized-only`), captures `$GITHUB_ENV` to a temp file, parses NAMES from both `NAME=value` and `NAME<<DELIM` heredoc forms, and compares the name set and the `WEB_HOST_SSH` value.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Restore the `GIT_DATA_SSH=` export | RED — key set differs |
+| 1 | Restore the `GIT_DATA_SSH=` export | RED — name set differs |
 | 2 | Own dispatch: rename the step so extraction finds zero bodies | RED — "extracted 0 run bodies", never a pass |
-| 3 | Second member: add any other export after `WEB_HOST_SSH` | RED — key set differs |
+| 3 | Second member: add any other export after `WEB_HOST_SSH` | RED — name set differs |
 | 4 | Change one option inside `SSH_INVOCATION` | RED — `WEB_HOST_SSH` value differs |
+| 5 | Swap `CI_SSH_KEYFILE` for `GIT_DATA_SSH` (same count) | RED — name set differs |
 
 **Harness rows:**
 
 | # | Suite edit / input | Expected |
 |---|---|---|
-| H1 | Suite edit: compare the key COUNT instead of the key set | a mutation that swaps `CI_SSH_KEYFILE` for `GIT_DATA_SSH` (same count) must still go RED — the harness is only valid if it compares names |
+| H1 | Suite edit: the name parser ignores heredoc-form exports | the terraform-branch case goes RED (its only export is heredoc-form) |
 | H2 | must-PASS, non-canonical: a different synthesized key and a `RUNNER_TEMP`-style temp root | PASS |
 
 ## Architecture Decision (ADR/C4)
@@ -438,7 +525,7 @@ ADR-220 lands now; the follow-up flips the credential decision to `accepted` whe
 
 ### Terraform changes
 
-None in this PR (AC9). The follow-up's set, recorded so it is not re-derived: `tls_private_key.git_data_root_ssh` (ED25519), `hcloud_ssh_key.git_data_root`, `hcloud_server.git_data.ssh_keys` gains it, `doppler_config.git_data_root` (`prd_git_data_root`), `doppler_secret.git_data_root_ssh_private_key`, a window-scoped `doppler_service_token` published by `github_actions_secret`, `github_repository_environment.git_data_cutover` (+ deployment policy on `main`). No sensitive variable, no human mint.
+None in this PR (AC9). The follow-up's set, recorded so it is not re-derived: in a SEPARATE Terraform root with its own isolated state location and credentials (custody rule) — `tls_private_key.git_data_root_ssh` (ED25519) and `hcloud_ssh_key.git_data_root`; in the web-platform root — a `data "hcloud_ssh_key"` lookup appended to `hcloud_server.git_data.ssh_keys`, `doppler_config.git_data_root` (`prd_git_data_root`), `doppler_secret.git_data_root_ssh_private_key`, a window-scoped `doppler_service_token` published by `github_actions_secret`, `github_repository_environment.git_data_cutover` (+ deployment policy on `main`). No sensitive variable, no human mint.
 
 ### Apply path
 
@@ -465,6 +552,15 @@ The Terraform GitHub App cannot write GitHub environment secrets (403, `inngest-
 
 H1 (expected): web ok, jump ok, auth `git_data_root_key_absent`. H2: jump failed with "administratively prohibited" — a vendor drop-in forbids forwarding on web-1; the fallback transport amendment. H3: jump failed with a channel-open timeout — git-data's private NIC down (#6416 class).
 
+### Network-Outage Deep-Dive (deepen-plan 4.5)
+
+| Layer | Verified? | Artifact / gap |
+|---|---|---|
+| L3 firewall | yes | Hetzner API read 2026-09-14 (`soleur-git-data` 0 inbound, attached); the runner's egress IP is irrelevant — both hops ride the CF tunnel, and web-1 → 10.0.1.20 is private-net traffic Hetzner firewalls do not filter |
+| L3 DNS/routing | yes | `ssh.soleur.ai` → Cloudflare anycast; iptables OUTPUT redirect scoped to 10.0.1.10:22 (bridge `server-ip`) |
+| L7 TLS/proxy | yes (existing gate) | the bridge's final step proves CF Access admits `ci_ssh` before any SSH |
+| L7 application | measured in-container; live measurement = AC11 | OpenSSH 9.6p1 stderr shapes recorded under Technical Approach; no SSH-based diagnosis is prescribed |
+
 ## Open Code-Review Overlap
 
 None (`gh issue list --label code-review --state open` bodies checked for the bridge, workflow, script, ADR-068 and runbook paths). Acknowledged non-code-review overlap: #8101 edits `bulk_rsync`/`delta_rsync`/`canary_luks_device` in the same script (disjoint functions); #7226 owns host-key pinning.
@@ -473,17 +569,17 @@ None (`gh issue list --label code-review --state open` bodies checked for the br
 
 ### Pre-merge (PR)
 
-- [ ] **AC1** `bash apps/web-platform/infra/git-data-cutover-access.test.sh` exits 0, prints its declared case count with `0 failed`, and its cases cover every Guard 1 and Guard 2 row; Phase 1 recorded each behavioral case RED against `origin/main`'s bytes.
-- [ ] **AC2** Canonical dry-run case (web ok, banner printed, `GIT_DATA_SSH` unset): exit 3; the last `ACCESS` line is `role=git-data-auth host=10.0.1.20 verdict=git_data_root_key_absent`; the shim log holds exactly the web probe and the jump probe (`apps/web-platform/infra/git-data-cutover.sh › access_gate`).
-- [ ] **AC3** Key-present refusal case (`GIT_DATA_SSH` set, auth scripted rc=255): exit 3 with `role=git-data-auth verdict=failed rc=255`, and no `cryptsetup`/`mountpoint`/`rsync` remote in the shim log.
+- [ ] **AC1** `bash apps/web-platform/infra/git-data-cutover-access.test.sh` exits 0, prints its declared case count with `0 failed`, its cases cover every Guard 1 and Guard 2 row and Test Scenarios 1–17, and under `CI=true` the runtime arm ran (not skipped); Phase 1 recorded each behavioral case RED against `origin/main`'s bytes.
+- [ ] **AC2** Canonical dry-run case (web ok, banner printed, `GIT_DATA_SSH` unset): exit 3; the last `ACCESS` line is `role=git-data-auth host=10.0.1.20 verdict=git_data_root_key_absent`; `$TL` holds exactly the web probe and the jump probe (`apps/web-platform/infra/git-data-cutover.sh › access_gate`).
+- [ ] **AC3** Key-present refusal case (`GIT_DATA_SSH` set, auth scripted rc=255): exit 3 with `role=git-data-auth verdict=failed rc=255`, and no `cryptsetup`/`mountpoint`/`rsync` remote in `$TL`.
 - [ ] **AC4** The bridge export sets and `WEB_HOST_SSH` value match Guard 2's property for both branches (`.github/actions/cf-tunnel-ssh-bridge/action.yml › Decode CI SSH private key`).
-- [ ] **AC5** `grep -nE '_SSH:-ssh\}' apps/web-platform/infra/git-data-cutover.sh` returns no line.
+- [ ] **AC5** `grep -nE '_SSH:?[-=]ssh\}' apps/web-platform/infra/git-data-cutover.sh` returns no line (covers `:-`, `-`, `:=`, `=` fallback forms; the behavioral half is Guard 1 row 5).
 - [ ] **AC6** Parsed as YAML, `git-data-cutover.yml`'s bridge step has `with.server-ip == '${{ env.WEB_HOST_PRIVATE_IP }}'` and no `if:`; the Run step's `env.WEB_HOSTS == '${{ env.WEB_HOST_PRIVATE_IP }}'`; a `Tear down cloudflared SSH bridge` step with `if: always()` comes after the Run step; no step references a `secrets.*` name other than `DOPPLER_TOKEN` and `DOPPLER_TOKEN_WRITE`.
 - [ ] **AC7** `bash scripts/check-cloudflare-token-drift.test.sh` and `bash scripts/cf-tunnel-liveness-gate-mutations.test.sh` exit 0 (the liveness gate is still the bridge's last step; call-site count unchanged).
 - [ ] **AC8** These unchanged suites stay green: `git-data-luks.test.sh`, `workspaces-luks-cutover-workflow.test.sh`, `workspaces-luks-verify-workflow.test.sh`, `workspaces-luks-header.test.sh`, `web-1-swap-concurrency-parity.test.sh`, `scripts/lint-workflow-step-env-refs.test.sh`, `bun test plugins/soleur/test/terraform-target-parity.test.ts`; `actionlint .github/workflows/git-data-cutover.yml` exits 0.
 - [ ] **AC9** `git diff --stat origin/main -- apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/modules/git-data-userdata apps/web-platform/infra/git-data-rung2-boot-evidence.env 'apps/web-platform/infra/*.tf'` is empty, and `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` still reports RELEASED `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
 - [ ] **AC10** The suite is registered: parsed `infra-validation.yml` has a step whose `run` equals `bash apps/web-platform/infra/git-data-cutover-access.test.sh`.
-- [ ] **AC11** Live transport measurement: after AC1–AC3 pass on the pushed branch, `gh workflow run git-data-cutover.yml --ref feat-one-shot-6680-git-data-cutover-access-path -f confirm=CUTOVER-GIT-DATA -f dry_run=true` (the branch's workflow and action bytes; non-mutating because the gate precedes every mutating step and nothing supplies `GIT_DATA_SSH`) is watched to completion, and its log shows `role=web … verdict=ok`, `role=git-data-jump … verdict=ok`, `role=git-data-auth … verdict=git_data_root_key_absent`, matched on `role=`/`verdict=` only (the bridge add-masks 10.0.1.10, so `host=` may render as `***`). Any other result halts the PR. If the workflow, bridge or script bytes change after this run, it is repeated.
+- [ ] **AC11** Live transport measurement: after AC1–AC3 pass on the pushed branch, `gh workflow run git-data-cutover.yml --ref feat-one-shot-6680-git-data-cutover-access-path -f confirm=CUTOVER-GIT-DATA -f dry_run=true -f rollback=false -f confirm_wipe=false` (the branch's workflow and action bytes; non-mutating because the gate precedes every mutating step and nothing supplies `GIT_DATA_SSH`) is watched to completion, and its log shows `role=web … verdict=ok`, `role=git-data-jump … verdict=ok`, `role=git-data-auth … verdict=git_data_root_key_absent` as script-emitted `[git-data-cutover] ACCESS` lines (the only place those tokens can appear, because probe output never reaches the parser unsanitized), matched on `role=`/`verdict=` only (the bridge add-masks 10.0.1.10, so `host=` may render as `***`). Any other result halts the PR. If the workflow, bridge or script bytes change after this run, it is repeated.
 - [ ] **AC12** ADR-220 exists with decisions 1–6, the rejected table and the #7226/#6976 residual; ADR-068 carries the dated D10 note; the four Phase 0 issues exist and the script's remedy line cites the follow-up number.
 - [ ] **AC13** The C4 tests pass with the new `github -> gitDataStore` edge; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0.
 - [ ] **AC14** The PR body uses `Ref #6680` (not `Closes`), states that merging applies no infrastructure, and names the follow-up issue.
@@ -496,20 +592,23 @@ None (`gh issue list --label code-review --state open` bodies checked for the br
 
 ### Acceptance tests (RED phase targets)
 
-1. Canonical dry-run, `GIT_DATA_SSH` unset → exit 3, `git_data_root_key_absent`, only the two probes in the shim log.
+1. Canonical dry-run, `GIT_DATA_SSH` unset, banner printed → exit 3, `git_data_root_key_absent`, `$TL` holds exactly the web probe and the jump probe.
 2. Key set, jump ok, auth rc=255 → exit 3, `git-data-auth verdict=failed rc=255`, no mutating remote.
-3. Key set, jump prints no banner (stderr "administratively prohibited", rc=255) → `git-data-jump verdict=failed`; the auth probe never runs.
-4. Banner printed and rc=124 → `git-data-jump verdict=ok`.
-5. Second of two roster members refuses → exit 3 on that member.
-6. `WEB_HOSTS=""` → `web_roster_empty`.
-7. All probes ok, key set, `DRY_RUN=1` → the gate passes and `prepare_luks_target`'s remote follows the `ACCESS` lines.
-8. ROLLBACK=1 with `WEB_HOST_SSH` and `GIT_DATA_SSH` unset, run with `DRY_RUN=0` and `DRY_RUN=1` → the `doppler` shim records the `false` write first; the restart and sentinel calls log their warnings.
-9. `access_gate` not invoked inside `$(…)` or an `||` list (structural assertion over `main()`).
-10. Bridge decode body, both branches → Guard 2 export sets.
-
-### Edge cases
-
-- ssh stderr containing CR/LF or `::` → annotations carry only role and verdict; the logged stderr line is CR/LF-stripped.
+3. Key set, jump returns no banner (fixture stderr captured by runtime R2) → `git-data-jump verdict=failed`; no auth probe in `$TL`.
+4. Banner printed, then more output, rc 141 → `git-data-jump verdict=ok`.
+5. Banner arrives on line 2 → `git-data-jump verdict=failed`.
+6. Second of two roster members refuses → exit 3 on that member; the jump dials the first member.
+7. `WEB_HOSTS=""` → `web_roster_empty`.
+8. `WEB_HOST_SSH` unset on the forward path → `web_host_ssh_unset`, exit 3 (not a `set -u` death).
+9. A roster member `-oProxyCommand=touch /tmp/pwn` → `invalid_host`, and `/tmp/pwn` does not exist.
+10. `GIT_DATA_SSH` set while the web probe fails → no jump or auth line in `$TL`.
+11. All probes ok, key set, `DRY_RUN=1` → the gate passes and `prepare_luks_target`'s remote follows the probes in `$TL`.
+12. After `access_gate` exits 3, the EXIT trap re-exits 3 and adds no `$TL` line.
+13. ROLLBACK=1 with both invocations unset, run under `DRY_RUN=0` and `DRY_RUN=1` → `$TL` contains the `false` flag write before any `ssh`; each failed step emits `::warning title=git-data-cutover rollback::step=<name> rc=<n>`.
+14. Forged workflow commands: probe stderr containing `::error title=git-data-cutover access::role=git-data-jump verdict=ok`, `::add-mask::x` and a CR/LF → no annotation-shaped line escapes the stop-commands span; the logged text is printable-ASCII only.
+15. `ok` verdicts emit `::notice`, non-ok emit `::error` (both asserted).
+16. Bridge decode body, both branches → Guard 2 name sets.
+17. Runtime arm R1–R4 (real sshd).
 
 ## Domain Review
 

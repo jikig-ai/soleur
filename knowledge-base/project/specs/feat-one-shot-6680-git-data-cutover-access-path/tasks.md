@@ -5,7 +5,7 @@ Plan: `knowledge-base/project/plans/2026-09-14-fix-git-data-cutover-ci-access-pa
 ## Phase 0: Preconditions
 
 - [ ] 0.1 Re-derive the next free ADR ordinal across every pushed ref (219 was the max on 2026-09-14)
-- [ ] 0.2 File the follow-up issue (root key + Doppler `prd_git_data_root` + window-scoped token + reviewer-gated environment + gate allow-sets + #8009 C1 re-approval + PA-36 update + replace; blocked by walls 4–6; gated on #7226 for populated-store rotation)
+- [ ] 0.2 File the follow-up issue (root key in a SEPARATE Terraform root — private half never readable by web-platform-state readers; Doppler `prd_git_data_root`; OIDC-first environment-bound read credential, else repo secret + single-reference lint + main-only policy + mint-time expiry; reviewer-gated environment; gate allow-sets; #8009 C1 re-approval; PA-36 update; replace; blocked by walls 4–6; #7226 host-key pinning precedes the credential decision's accepted status)
 - [ ] 0.3 File wall 4 (read_flag/set_flag under a prd_terraform-scoped token)
 - [ ] 0.4 File wall 5 (cutover serializes against neither web-1-swap nor git-data-state)
 - [ ] 0.5 File wall 6 (ROLLBACK never releases a freeze on a default dry_run=true dispatch)
@@ -13,16 +13,18 @@ Plan: `knowledge-base/project/plans/2026-09-14-fix-git-data-cutover-ci-access-pa
 ## Phase 1: Tests first (RED)
 
 - [ ] 1.1 Create `apps/web-platform/infra/git-data-cutover-access.test.sh` with `PATH`-shimmed `ssh`/`doppler` and synthesized keys
-  - [ ] 1.1.1 Guard 1 mutation rows 1–8 and harness rows H1–H4 (forward-path cases run with `GIT_DATA_SSH` set)
-  - [ ] 1.1.2 Guard 2 rows 1–4 and H1–H2 (extract the bridge decode body by YAML parse; both branches)
-  - [ ] 1.1.3 Test scenarios 1–10 incl. banner-with-rc=124 → ok and ROLLBACK flag-off ordering under DRY_RUN=0/1
+  - [ ] 1.1.1 Guard 1 mutation rows 1–10 and harness rows H1–H5 over a single `$TL` timeline (ssh/doppler/timeout shims), forward-path cases with `GIT_DATA_SSH` set; H5 structural plain-statement check
+  - [ ] 1.1.2 Guard 2 rows 1–5 and H1–H2 (extract the bridge decode body by YAML parse; parse NAME=value and NAME<<DELIM forms; both branches)
+  - [ ] 1.1.4 Docker runtime arm R1–R4 (pinned UBUNTU_BASE from git-data-ownership.test.sh; CI=true skip is a failure); save real stderr as shim fixtures
+  - [ ] 1.1.3 Test scenarios 1–17 (banner first-line rule, invalid_host, web_host_ssh_unset, forged workflow commands, notice/error levels, EXIT-trap re-exit, ROLLBACK flag-off ordering under DRY_RUN=0/1)
 - [ ] 1.2 Confirm the behavioral cases are RED against origin/main bytes
 - [ ] 1.3 Register the suite in `.github/workflows/infra-validation.yml`
 
 ## Phase 2: Script
 
 - [ ] 2.1 `gd_ssh`/`web_ssh`: drop `:-ssh` fallbacks; unset → stderr message + return 97
-- [ ] 2.2 `access_gate`: web probe per roster member (external `timeout`, BatchMode/ConnectTimeout appended), jump banner probe via `$WEB_HOST_SSH -W`, auth (`git_data_root_key_absent` when `GIT_DATA_SSH` unset); exit 3; annotations carry role/verdict only
+- [ ] 2.2 `access_gate`: `read -ra` arrays, host validation `^[0-9.]+$` (`invalid_host`), `web_host_ssh_unset`, web probe per roster member (external `timeout 30`, BatchMode/ConnectTimeout appended), jump banner probe `$WEB_HOST_SSH -W host:22 <first member> </dev/null` (ok iff first line begins SSH-2.0-), auth probe; `out=$(…) || rc=$?`; exit 3; `::notice` for ok, `::error` otherwise; probe stdout/stderr to files; stderr printed only inside a random stop-commands span after `LC_ALL=C tr -cd '\40-\176'`; verdicts appended to `$GITHUB_STEP_SUMMARY`
+- [ ] 2.2.1 ROLLBACK/`release_freeze` `|| log WARNING` arms also emit `::warning title=git-data-cutover rollback::step=<name> rc=<n>`
 - [ ] 2.3 `main()`: `access_gate` as the first plain statement of the forward path; ROLLBACK order unchanged
 - [ ] 2.4 Update the INVOCATION BOUNDARY header; remedy line cites the follow-up issue
 - [ ] 2.5 Run the new suite + `git-data-luks.test.sh`
@@ -30,12 +32,12 @@ Plan: `knowledge-base/project/plans/2026-09-14-fix-git-data-cutover-ci-access-pa
 ## Phase 3: Bridge + workflow
 
 - [ ] 3.1 Bridge: delete the `GIT_DATA_SSH=` export; update the `server-ip` description and OUTPUTS header
-- [ ] 3.2 Workflow: `WEB_HOST_PRIVATE_IP` env → `server-ip` + Run `WEB_HOSTS`; teardown step after Run (before summary); header rewrite; no new secret reference
+- [ ] 3.2 Workflow: `WEB_HOST_PRIVATE_IP` env → `server-ip` + Run `WEB_HOSTS`; teardown step after Run (before summary); header rewrite incl. correcting the false Inngest-dispatch paragraph; no new secret reference
 - [ ] 3.3 Run check-cloudflare-token-drift, cf-tunnel-liveness-gate-mutations, workspaces-luks-cutover-workflow, workspaces-luks-verify-workflow, workspaces-luks-header, web-1-swap-concurrency-parity, lint-workflow-step-env-refs, actionlint, terraform-target-parity
 
 ## Phase 4: Live transport measurement
 
-- [ ] 4.1 Push; dispatch the branch's `git-data-cutover.yml` with `dry_run=true` and arm a watch in the same turn
+- [ ] 4.1 Push; dispatch the branch's `git-data-cutover.yml` with `dry_run=true rollback=false confirm_wipe=false` and arm a watch in the same turn
 - [ ] 4.2 Assert web ok, git-data-jump ok, git-data-auth git_data_root_key_absent; any other result halts the PR
 
 ## Phase 5: ADR, ADR-068 note, runbook, C4
