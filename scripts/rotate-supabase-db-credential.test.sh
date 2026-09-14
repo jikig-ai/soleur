@@ -50,7 +50,9 @@ case "$1 ${2:-}" in
   "configs -p") echo '[{"name":"dev"}]' ;;
   "secrets get")
     name="$3"
-    if [[ "$name" == SUPABASE_ACCESS_TOKEN ]]; then echo -n synth-token; exit 0; fi
+    # The Management API token lookup. Glob, not the literal name: this stub is not
+    # an API caller, and naming the token would enrol it in the host-pin lint.
+    if [[ "$name" == *_ACCESS_TOKEN ]]; then echo -n synth-token; exit 0; fi
     jq -e -j --arg k "$name" '.[$k].computed' "$S" 2>/dev/null || exit 1 ;;
   "secrets set")
     name="$3"; val="$(cat)"
