@@ -373,10 +373,22 @@ if grep -qE '^[[:space:]]*if ! inngest_volume_recut_gate ' "$WF"; then pass; els
 # every test here passes.
 if grep -qE '^[[:space:]]*if ! inngest_volume_recut_gate "[^"]+" "\$\{?EXPECTED_INNGEST_VOLUME_ID' "$WF"; then pass; else fail "Row 6c: the workflow does not pass expected_inngest_volume_id to the gate"; fi
 # #8053: the Guard-2 recovery instruction greps the probe evidence for the assignment line, but an
-# UNANCHORED pattern also counts the four comment lines that mention `probe_schema=$EXPECTED` — it
-# printed 5 where its prose promised 0 or 1. Pin the anchored form; `grep -qF` (fixed string) so
-# this assertion cannot itself be satisfied by a differently-shaped grep.
-if grep -qF 'grep -c "^probe_schema=\$EXPECTED"' "$WF"; then pass; else fail "Row 6d: the Guard-2 recovery grep is not anchored (#8053) — it counts comment lines"; fi
+# UNANCHORED pattern also counts the four comment lines that mention `probe_schema=<n>` — it
+# printed 5 where its prose promised 0 or 1. Pin the anchored, right-bounded form on a NON-COMMENT
+# line (`^[[:space:]]*[^#[:space:]]` — the first non-blank char may not be `#`, so a `#`-quoted
+# copy cannot satisfy it the way a bare `grep -qF` could), and pin the unanchored shape absent.
+if grep -qE '^[[:space:]]*[^#[:space:]].*grep -c "\^probe_schema=\\\$EXPECTED\$"' "$WF"; then pass; else fail "Row 6d: the Guard-2 recovery grep is not anchored (#8053) — it counts comment lines"; fi
+if grep -qE 'grep -c ["'"'"']probe_schema=' "$WF"; then fail "Row 6e: an UNANCHORED probe_schema= count grep survives in the workflow (#8053)"; else pass; fi
+# The sibling recovery instruction in the cutover script had the identical unanchored grep —
+# pin it anchored too, or the class fix applies to one message and not the other.
+CUT="${REPO_ROOT}/scripts/cutover-inngest.sh"
+if grep -qF 'grep -c "^probe_schema=${_IHDG_EXPECTED_SCHEMA}$"' "$CUT"; then pass; else fail "Row 6f: the cutover stale_schema recovery grep is not anchored (#8053 sibling)"; fi
+# The tag extraction in the same message must reach the pin from the IREF= assignment line only —
+# an unanchored `soleur-inngest-bootstrap:v` match can pick a comment's version token (#8053 class).
+if grep -qF 'IREF=[^[:space:]]*soleur-inngest-bootstrap:v' "$WF"; then pass; else fail "Row 6g: the bootstrap-tag extraction is not anchored to the IREF= line"; fi
+# The recipe must FAIL-LOUD on a failed extraction: `git show ... > file && grep -c` separates a
+# real 0 from an unfetched tag / empty EXPECTED, which otherwise collapse to a printed 0 (#8017 shape).
+if grep -qF '&& grep -c "^probe_schema=\$EXPECTED$" /tmp/ib-probe.sh' "$WF"; then pass; else fail "Row 6h: the recovery count is not guarded against a failed extraction — a git show error prints 0"; fi
 
 # ── The guard's OWN operands (the axis every other row misses) ────────────────────
 # Every row above mutates the PLAN and confirms the guard REDS. None asks how the guard fails OPEN.
@@ -401,13 +413,13 @@ check "OPERAND: a DIRECTORY as the plan path => fail-closed" 1 "ABORT" "$TMP" "$
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the suite on
 # every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 54 ]]; then
+if [[ "$_ran" -lt 58 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 54. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 58. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-volume-recut-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 54)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 58)\n' "$_ran"
 fi
 
 echo ""
