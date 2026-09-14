@@ -40,6 +40,8 @@ resume handle (`thread.id`) and live session identity (`thread.sessionId`) are
 normalized as separate opaque fields; streamed message deltas, approvals,
 usage, and terminal states are translated to contiguous neutral events. Missing
 or malformed provider identities fail closed before persistence.
+An injectable App Server source owns credentials and lifecycle side effects;
+the transport bridge only translates its event stream.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

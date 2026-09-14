@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_ENGINE_ID,
   createCodexCodeAdapter,
+  createCodexAppServerTransport,
   createCodexAuthBoundary,
   normalizeCodexUsageEvent,
   runWithCodexRecovery,
@@ -88,6 +89,38 @@ describe("Codex auth boundary", () => {
 });
 
 describe("Codex neutral adapter boundary", () => {
+  it("bridges App Server-shaped streams into the neutral adapter", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "opaque", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const source = {
+      start: vi.fn(async function* () {
+        yield { method: "item/agentMessage/delta", params: { itemId: "item-bridge", delta: "hello" } };
+        yield { method: "turn/completed", params: { turnId: "turn-bridge", status: "completed" } };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(createCodexAppServerTransport(source), auth);
+    const events = [];
+    for await (const event of adapter.start({ runId: "run-bridge" } as never, { text: "hi", attachmentIds: [] })) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { runId: "run-bridge", eventId: "codex:item:item-bridge:delta", sequence: 1, payload: { type: "text", text: "hello" } },
+      { runId: "run-bridge", eventId: "codex:turn:turn-bridge:status", sequence: 2, payload: { type: "status", status: "completed" } },
+    ]);
+    expect(source.start).toHaveBeenCalledOnce();
+  });
+
   it("keeps the App Server resume handle and live session identity distinct", () => {
     expect(normalizeCodexThreadReference({ id: "thread-1", sessionId: "session-root-1" })).toEqual({
       resumeHandle: "thread-1",

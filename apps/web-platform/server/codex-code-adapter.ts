@@ -6,6 +6,7 @@ import type {
   EngineRunStatus,
   NativeSessionReference,
 } from "./agent-engine-contract";
+import { translateCodexAppServerStream } from "./codex-code-message-translator";
 
 export const CODEX_ENGINE_ID = "codex" as const;
 export type CodexAuthMode = "api-key" | "managed";
@@ -187,6 +188,37 @@ export interface CodexCodeAdapterTransport {
   respondToApproval(context: EngineRunContext, requestId: string, decision: "allow" | "deny", lease: CodexCredentialLease): Promise<void>;
   erase(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"confirmed" | "unsupported">;
   dispose(): Promise<void>;
+}
+
+type CodexAppServerEventStream = AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+
+/** Provider-facing source used to isolate the App Server protocol from the neutral adapter. */
+export interface CodexAppServerEventSource {
+  start(context: EngineRunContext, input: EngineInput, lease: CodexCredentialLease): CodexAppServerEventStream;
+  continue(context: EngineRunContext, session: NativeSessionReference, input: EngineInput, lease: CodexCredentialLease): CodexAppServerEventStream;
+  cancel(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"requested" | "confirmed">;
+  reconcile(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<EngineRunStatus>;
+  resumeFromCursor(context: EngineRunContext, cursor: string | null, lease: CodexCredentialLease): CodexAppServerEventStream;
+  respondToApproval(context: EngineRunContext, requestId: string, decision: "allow" | "deny", lease: CodexCredentialLease): Promise<void>;
+  erase(context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"confirmed" | "unsupported">;
+  dispose(): Promise<void>;
+}
+
+/** Translate App Server notifications while leaving lifecycle side effects to the source. */
+export function createCodexAppServerTransport(source: CodexAppServerEventSource): CodexCodeAdapterTransport {
+  async function* stream(load: () => CodexAppServerEventStream, runId: string): AsyncIterable<EngineEvent> {
+    yield* translateCodexAppServerStream(await load(), runId);
+  }
+  return {
+    start: (context, input, lease) => stream(() => source.start(context, input, lease), context.runId),
+    continue: (context, session, input, lease) => stream(() => source.continue(context, session, input, lease), context.runId),
+    cancel: (context, session, lease) => source.cancel(context, session, lease),
+    reconcile: (context, session, lease) => source.reconcile(context, session, lease),
+    resumeFromCursor: (context, cursor, lease) => stream(() => source.resumeFromCursor(context, cursor, lease), context.runId),
+    respondToApproval: (context, requestId, decision, lease) => source.respondToApproval(context, requestId, decision, lease),
+    erase: (context, session, lease) => source.erase(context, session, lease),
+    dispose: () => source.dispose(),
+  };
 }
 
 function normalizeCodexThreadId(value: unknown): string {
