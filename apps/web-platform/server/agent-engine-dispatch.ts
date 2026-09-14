@@ -18,6 +18,9 @@ interface BindingRepository {
 interface ConversationBindingRepository extends BindingRepository {
   getConversationRun(conversationId: string): Promise<unknown>;
 }
+interface RoutineBindingRepository extends BindingRepository {
+  getRoutineRun(routineId: string, routineRunId: string): Promise<unknown>;
+}
 interface EventSink {
   appendEvent(event: EngineEvent): Promise<unknown>;
 }
@@ -93,6 +96,47 @@ export async function* dispatchConversationEngineRun(options: {
   const runId = (persisted as { id?: unknown }).id;
   if (typeof runId !== "string" || runId.length === 0) {
     throw new Error("persisted conversation engine binding has no run id");
+  }
+  yield* dispatchBoundEngineRunFromRegistry({
+    repository: options.repository,
+    factories: options.factories,
+    eventSink: options.eventSink,
+    observability: options.observability,
+    egress: options.egress,
+    runId,
+    input: options.input,
+    context: options.context,
+  });
+}
+
+/** Resolve a routine's immutable binding before selecting any provider adapter. */
+export async function* dispatchRoutineEngineRun(options: {
+  repository: RoutineBindingRepository;
+  factories: Readonly<Record<string, EngineAdapterFactory>>;
+  eventSink?: EventSink;
+  observability?: EngineObservability;
+  egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
+  routineId: string;
+  routineRunId: string;
+  input: EngineInput;
+  context: EngineRunContext;
+}): AsyncGenerator<EngineEvent> {
+  const persisted = await options.repository.getRoutineRun(options.routineId, options.routineRunId);
+  if (!persisted || typeof persisted !== "object") {
+    throw new Error("persisted routine engine binding not found");
+  }
+  const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
+    (persisted as unknown as EngineRunContext["binding"]);
+  if (
+    binding.execution?.kind !== "routine" ||
+    binding.execution.routineId !== options.routineId ||
+    binding.execution.routineRunId !== options.routineRunId
+  ) {
+    throw new Error("persisted routine engine binding does not match routine");
+  }
+  const runId = (persisted as { id?: unknown }).id;
+  if (typeof runId !== "string" || runId.length === 0) {
+    throw new Error("persisted routine engine binding has no run id");
   }
   yield* dispatchBoundEngineRunFromRegistry({
     repository: options.repository,

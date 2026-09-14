@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, dispatchConversationEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, dispatchConversationEngineRun, dispatchRoutineEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
   it("resolves a conversation binding before selecting its adapter", async () => {
@@ -49,6 +49,59 @@ describe("dispatchBoundEngineRun", () => {
         context: {} as never,
       })) { /* no-op */ }
     })()).rejects.toThrow("persisted conversation engine binding not found");
+    expect(repository.getRun).not.toHaveBeenCalled();
+    expect(adapterFactory).not.toHaveBeenCalled();
+  });
+
+  it("resolves a routine binding before selecting its adapter", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-routine-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    }) };
+    const persisted = {
+      id: "run-routine-1",
+      binding: {
+        workspaceId: "ws-1",
+        execution: { kind: "routine" as const, routineId: "cron-daily-triage", routineRunId: "routine-run-1" },
+        engineId: "claude-code",
+        authMode: "managed",
+        adapterVersion: "claude-v1",
+        boundAt: "2026-09-14T20:00:00Z",
+      },
+    };
+    const repository = {
+      getRoutineRun: vi.fn().mockResolvedValue(persisted),
+      getRun: vi.fn().mockResolvedValue(persisted),
+    };
+    const events = [];
+    for await (const event of dispatchRoutineEngineRun({
+      repository,
+      factories: { "claude-code": () => adapter as never },
+      routineId: "cron-daily-triage",
+      routineRunId: "routine-run-1",
+      input: { text: "run", attachmentIds: [] },
+      context: {} as never,
+    })) events.push(event);
+    expect(repository.getRoutineRun).toHaveBeenCalledWith("cron-daily-triage", "routine-run-1");
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+  });
+
+  it("fails closed when a routine has no persisted binding", async () => {
+    const adapterFactory = vi.fn();
+    const repository = {
+      getRoutineRun: vi.fn().mockResolvedValue(null),
+      getRun: vi.fn(),
+    };
+    await expect((async () => {
+      for await (const _event of dispatchRoutineEngineRun({
+        repository,
+        factories: { "claude-code": adapterFactory },
+        routineId: "cron-daily-triage",
+        routineRunId: "routine-missing",
+        input: { text: "run", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("persisted routine engine binding not found");
     expect(repository.getRun).not.toHaveBeenCalled();
     expect(adapterFactory).not.toHaveBeenCalled();
   });

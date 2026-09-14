@@ -4,11 +4,15 @@ import type { EngineEvent } from "./agent-engine-contract";
 // Promises. PromiseLike keeps this repository compatible with both builders
 // and the small promise based test doubles used by the server tests.
 type QueryResult<T> = PromiseLike<{ data: T; error: { message: string } | null }>;
+type SelectBuilder = {
+  eq(column: string, value: unknown): SelectBuilder;
+  maybeSingle(): QueryResult<unknown>;
+};
 export type PersistenceClient = {
   rpc(name: string, args: Record<string, unknown>): QueryResult<unknown>;
   from(table: string): {
     insert(row: Record<string, unknown>, options?: Record<string, unknown>): QueryResult<unknown>;
-    select(columns?: string): { eq(column: string, value: unknown): { maybeSingle(): QueryResult<unknown> } };
+    select(columns?: string): SelectBuilder;
   };
 };
 
@@ -125,6 +129,16 @@ export class AgentEnginePersistenceRepository {
       .eq("conversation_id", conversationId)
       .maybeSingle();
     if (result.error) throw new Error(`conversation engine run lookup failed: ${result.error.message}`);
+    return normalizeRun(result.data);
+  }
+
+  async getRoutineRun(routineId: string, routineRunId: string): Promise<unknown> {
+    const result = await this.client.from("agent_engine_runs")
+      .select("*")
+      .eq("routine_id", routineId)
+      .eq("routine_run_id", routineRunId)
+      .maybeSingle();
+    if (result.error) throw new Error(`routine engine run lookup failed: ${result.error.message}`);
     return normalizeRun(result.data);
   }
 }

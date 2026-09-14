@@ -185,4 +185,41 @@ describe("AgentEnginePersistenceRepository", () => {
     expect(eq).toHaveBeenCalledWith("conversation_id", "conv-1");
     expect(maybeSingle).toHaveBeenCalledOnce();
   });
+
+  it("loads the unique routine binding by routine and application run id", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: "run-routine-1",
+        workspace_id: "ws-1",
+        execution_kind: "routine",
+        routine_id: "cron-daily-triage",
+        routine_run_id: "routine-run-1",
+        engine_id: "claude-code",
+        auth_mode: "managed",
+        adapter_version: "claude-v1",
+        created_at: "2026-09-14T20:00:00Z",
+      },
+      error: null,
+    });
+    const routineRunEq = vi.fn().mockReturnValue({ maybeSingle });
+    const eq = vi.fn().mockReturnValueOnce({ eq: routineRunEq });
+    const supabase = client();
+    supabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({ eq }),
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.getRoutineRun("cron-daily-triage", "routine-run-1")).resolves.toEqual({
+      id: "run-routine-1",
+      binding: {
+        workspaceId: "ws-1",
+        execution: { kind: "routine", routineId: "cron-daily-triage", routineRunId: "routine-run-1" },
+        engineId: "claude-code",
+        authMode: "managed",
+        adapterVersion: "claude-v1",
+        boundAt: "2026-09-14T20:00:00Z",
+      },
+    });
+    expect(eq).toHaveBeenCalledWith("routine_id", "cron-daily-triage");
+    expect(routineRunEq).toHaveBeenCalledWith("routine_run_id", "routine-run-1");
+  });
 });
