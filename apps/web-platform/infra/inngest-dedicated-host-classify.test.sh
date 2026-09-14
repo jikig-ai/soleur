@@ -487,9 +487,12 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # WHOLE-SUITE EXACT FLOOR. The only merge gate is `FAIL -gt 0`, so a deleted or skipped assertion
 # is otherwise indistinguishable from a clean run; an exact count also catches a row that silently
 # stopped dispatching (the canaries above subtract their deliberate FAILs before this point).
-readonly EXPECTED_ASSERTIONS=104
-if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then
-  printf '  FAIL: suite dispatched %s assertions, expected exactly %s — an assertion was added, removed or skipped.\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS"
+# Written as `<` OR `>` (not `!=`) with a plain assignment directly above the `if`:
+# scripts/guard-vacuity-floor.test.sh recognises a floor only by an ordered comparison and binds
+# the threshold only from contiguous simple assignments, and this suite is on its PROMOTED_FILES pin.
+EXPECTED_ASSERTIONS=104
+if (( PASS + FAIL < EXPECTED_ASSERTIONS )) || (( PASS + FAIL > EXPECTED_ASSERTIONS )); then
+  printf '  FAIL: suite dispatched %s assertions, expected exactly %s — an assertion was added, removed or skipped.\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
