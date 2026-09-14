@@ -1336,6 +1336,7 @@ empirical-verification
 enable
 encrypted-key
 encryption
+encryption-ledger
 endpoint-swap
 endpoints
 enforcement
@@ -2879,6 +2880,7 @@ prose-claims
 prose-conventions
 prose-counts
 prose-guard
+prose-sweep
 prospect-anchored features
 protecthome
 protocol
@@ -4050,6 +4052,7 @@ vacuous-tests
 validate-csp
 validation
 validation-gate
+value-pin
 vapid
 variable-fonts
 vault

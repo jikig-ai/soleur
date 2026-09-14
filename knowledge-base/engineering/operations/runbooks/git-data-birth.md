@@ -1,6 +1,6 @@
 # Runbook — birthing the git-data host
 
-> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13
+> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
 > This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until
 > the PR that made this edit. It was cleared on the release condition it stated, and nothing
@@ -73,7 +73,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
-| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step warns they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing". |
+| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step FAILS because they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
@@ -362,8 +362,11 @@ channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-H
 ## After the birth — verify the host actually booted (#6982)
 
 **A green apply is not a green boot.** The dispatch's own post-apply step polls for the
-boot signal and FAILS the job if it does not arrive, so a green run is now meaningful — but
-verify independently if that step warned that its credentials were missing.
+boot signal and FAILS the job if it does not arrive, so a green run is now meaningful; the
+poll runs only after the apply step actually ran (green or failed) — a run refused at the
+gate skips it, so a skipped poll is not a verdict on the host. A RED job whose summary shows
+`apply outcome: success` is a failed VERIFICATION, not a failed birth: run the query below;
+do not re-dispatch (the gate refuses a zero-create plan).
 
 No SSH appears below, and none is possible: git-data has no human SSH path by design
 (three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).

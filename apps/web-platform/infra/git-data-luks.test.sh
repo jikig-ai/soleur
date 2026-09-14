@@ -226,14 +226,14 @@ p_doppler_arch_url() {
   # full revert to the hardcoded arm64 build (cq-assert-anchor-not-bare-token).
   local src
   src="$(sed 's/#.*//' "$1")"
-  printf '%s\n' "$src" | grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' || { echo 0; return; }
+  grep -qF 'doppler_$${DOPPLER_VERSION}_linux_${doppler_arch}.tar.gz' <<<"$src" || { echo 0; return; }
+  grep -qF 'DOPPLER_SHA256="${doppler_sha256}"' <<<"$src" || { echo 0; return; }
   # The digest must be CONSUMED, not merely assigned. Without this, deleting the
   # verification line entirely leaves the whole A14/A15 apparatus green: a correct
   # checksum is proven computed and proven assigned, and nothing proves it is ever
   # compared against the downloaded tarball.
-  printf '%s\n' "$src" | grep -qF 'echo "$${DOPPLER_SHA256}' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -qF 'sha256sum -c -' || { echo 0; return; }
+  grep -qF 'echo "$${DOPPLER_SHA256}' <<<"$src" || { echo 0; return; }
+  grep -qF 'sha256sum -c -' <<<"$src" || { echo 0; return; }
   echo 1
 }
 
@@ -280,7 +280,7 @@ p_doppler_checksum_parity() {
   # Non-vacuity: every side must be a fully-formed normalized binding. Without this an
   # empty extraction on all three would compare "" == "" and fake a clean parity.
   for p in "$gd_pair" "$ing_pair" "$zot_pair"; do
-    printf '%s' "$p" | grep -qE '^amd64=[0-9a-f]{64};arm64=[0-9a-f]{64}$' || { echo 0; return; }
+    grep -qE '^amd64=[0-9a-f]{64};arm64=[0-9a-f]{64}$' <<<"$p" || { echo 0; return; }
   done
   if [ "$gd_pair" = "$ing_pair" ] && [ "$gd_pair" = "$zot_pair" ]; then echo 1; else echo 0; fi
 }
@@ -294,8 +294,8 @@ p_doppler_checksum_parity() {
 p_templatefile_wiring() {
   local src
   src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
-  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.git_data_arch[[:space:]]*$' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.git_data_doppler_sha256[[:space:]]*$' || { echo 0; return; }
+  grep -qE '^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.git_data_arch[[:space:]]*$' <<<"$src" || { echo 0; return; }
+  grep -qE '^[[:space:]]*doppler_sha256[[:space:]]*=[[:space:]]*local\.git_data_doppler_sha256[[:space:]]*$' <<<"$src" || { echo 0; return; }
   echo 1
 }
 
@@ -309,8 +309,8 @@ p_templatefile_wiring() {
 p_tripwire_edge() {
   local src cond
   src="$(sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1")"
-  printf '%s\n' "$src" | grep -qE '^data "hcloud_server_type" "git_data"' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -qE '^[[:space:]]*precondition[[:space:]]*\{' || { echo 0; return; }
+  grep -qE '^data "hcloud_server_type" "git_data"' <<<"$src" || { echo 0; return; }
+  grep -qE '^[[:space:]]*precondition[[:space:]]*\{' <<<"$src" || { echo 0; return; }
   # THREE LINES, NOT FOUR. The 4th line of this window is `error_message`, which interpolates
   # `data.hcloud_server_type.git_data.architecture` — so the clause below was satisfiable by the
   # MESSAGE. Measured (#7066 review): re-pointing the CONDITION to
@@ -320,18 +320,18 @@ p_tripwire_edge() {
   # prose-satisfaction for COMMENTS throughout; `error_message` is prose the comment-stripper
   # cannot see.
   cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
-  printf '%s' "$cond" | grep -qF 'data.hcloud_server_type.git_data.architecture' || { echo 0; return; }
+  grep -qF 'data.hcloud_server_type.git_data.architecture' <<<"$cond" || { echo 0; return; }
   # The enums MUST be mapped, never compared: hcloud emits x86/arm, the derived token is
   # amd64/arm64, so a direct compare is false on every plan forever and wedges the root.
-  printf '%s' "$cond" | grep -qF '"arm"' || { echo 0; return; }
-  printf '%s' "$cond" | grep -qF '"x86"' || { echo 0; return; }
+  grep -qF '"arm"' <<<"$cond" || { echo 0; return; }
+  grep -qF '"x86"' <<<"$cond" || { echo 0; return; }
   # Re-pointed at the module output with the R7 follow-through. This clause names the thing
   # the condition may not be compared against directly, so it goes VACUOUS the moment that
   # thing is renamed: while it still said `local.git_data_arch` — a reference git-data.tf no
   # longer contains — it was unmatchable, and would have reported clean against the very
   # regression it exists for. A negative assertion fails OPEN, so it is only ever as live as
   # its anchor; the mutation arm on A19 below now pins that.
-  printf '%s' "$cond" | grep -qE 'architecture[[:space:]]*==[[:space:]]*module\.git_data_userdata\.arch' && { echo 0; return; }
+  grep -qE 'architecture[[:space:]]*==[[:space:]]*module\.git_data_userdata\.arch' <<<"$cond" && { echo 0; return; }
   echo 1
 }
 
@@ -526,9 +526,12 @@ p_delivery_assert() {
   # only (rc 2) — a blanket `if ! emit` would make a Sentry 429 a permanent boot abort.
   local src
   src="$(sed 's/#.*//' "$1")"
-  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*if \[ ! -x /usr/local/bin/git-data-emit \]; then' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*_emit_rc=\$\?$' || { echo 0; return; }
-  printf '%s\n' "$src" | grep -Eq '^[[:space:]]*if \[ "\$_emit_rc" -eq 2 \]; then' || { echo 0; return; }
+  # Herestrings, not `printf | grep -q`: $src is ~76 KB (over the 64 KiB pipe buffer), so an
+  # early `-q` match closes the pipe, printf takes SIGPIPE, and `pipefail` turns a MATCH into a
+  # FAIL under load — measured as a spurious A23 red inside a pre-commit battery (#8171).
+  grep -Eq '^[[:space:]]*if \[ ! -x /usr/local/bin/git-data-emit \]; then' <<<"$src" || { echo 0; return; }
+  grep -Eq '^[[:space:]]*_emit_rc=\$\?$' <<<"$src" || { echo 0; return; }
+  grep -Eq '^[[:space:]]*if \[ "\$_emit_rc" -eq 2 \]; then' <<<"$src" || { echo 0; return; }
   echo 1
 }
 
@@ -555,7 +558,7 @@ p_set_e_before_checksum() {
   [ -n "$l_sete" ] && [ -n "$l_sum" ] && [ "$l_sete" -lt "$l_sum" ] || { echo 0; return; }
   # And the checksum must not be TOLERATED. `set -e` before a `|| true`-suffixed command
   # aborts nothing; the ordering alone is not the property.
-  printf '%s\n' "$src" | grep -E 'sha256sum -c -' | grep -qE '\|\|[[:space:]]*true' && { echo 0; return; }
+  grep -E 'sha256sum -c -' <<<"$src" | grep -qE '\|\|[[:space:]]*true' && { echo 0; return; }
   echo 1
 }
 
@@ -759,12 +762,12 @@ p_precondition_arch_source() {
   # `module.git_data_userdata.arch` three times (cq-assert-anchor-not-bare-token).
   cond="$(printf '%s\n' "$src" | grep -A 2 -E '^[[:space:]]*condition[[:space:]]*=' | head -3)"
   # Non-vacuity: a missing or truncated extraction must fail loudly, never assert on nothing.
-  printf '%s\n' "$cond" | grep -qE '^[[:space:]]*condition[[:space:]]*=' || { echo 0; return; }
-  printf '%s\n' "$cond" | grep -qF 'module.git_data_userdata.arch' || { echo 0; return; }
+  grep -qE '^[[:space:]]*condition[[:space:]]*=' <<<"$cond" || { echo 0; return; }
+  grep -qF 'module.git_data_userdata.arch' <<<"$cond" || { echo 0; return; }
   # Negative space: NO second derivation in the caller. Anchored on the ASSIGNMENT at
   # line-start, so neither the module reference above nor the locals block's explanation of
   # why the local is absent can satisfy it.
-  printf '%s\n' "$src" | grep -qE '^[[:space:]]*git_data_arch[[:space:]]*=' && { echo 0; return; }
+  grep -qE '^[[:space:]]*git_data_arch[[:space:]]*=' <<<"$src" && { echo 0; return; }
   echo 1
 }
 # AND THIS ARM IS WHAT KEEPS A19'S NEGATIVE CLAUSE ALIVE — the coupling is load-bearing and
