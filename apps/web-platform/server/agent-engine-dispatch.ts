@@ -15,6 +15,9 @@ import { createEngineObservability, type EngineObservability } from "./agent-eng
 interface BindingRepository {
   getRun(runId: string): Promise<unknown>;
 }
+interface ConversationBindingRepository extends BindingRepository {
+  getConversationRun(conversationId: string): Promise<unknown>;
+}
 interface EventSink {
   appendEvent(event: EngineEvent): Promise<unknown>;
 }
@@ -62,6 +65,42 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
     eventSink: options.eventSink,
     observability: options.observability,
     runId: options.runId,
+    input: options.input,
+    context: options.context,
+  });
+}
+
+/** Resolve a conversation's immutable binding before selecting any provider adapter. */
+export async function* dispatchConversationEngineRun(options: {
+  repository: ConversationBindingRepository;
+  factories: Readonly<Record<string, EngineAdapterFactory>>;
+  eventSink?: EventSink;
+  observability?: EngineObservability;
+  egress?: { selection: EngineSelection; evidence?: EngineDataEgressEvidence };
+  conversationId: string;
+  input: EngineInput;
+  context: EngineRunContext;
+}): AsyncGenerator<EngineEvent> {
+  const persisted = await options.repository.getConversationRun(options.conversationId);
+  if (!persisted || typeof persisted !== "object") {
+    throw new Error("persisted conversation engine binding not found");
+  }
+  const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
+    (persisted as unknown as EngineRunContext["binding"]);
+  if (binding.execution?.kind !== "conversation" || binding.execution.conversationId !== options.conversationId) {
+    throw new Error("persisted conversation engine binding does not match conversation");
+  }
+  const runId = (persisted as { id?: unknown }).id;
+  if (typeof runId !== "string" || runId.length === 0) {
+    throw new Error("persisted conversation engine binding has no run id");
+  }
+  yield* dispatchBoundEngineRunFromRegistry({
+    repository: options.repository,
+    factories: options.factories,
+    eventSink: options.eventSink,
+    observability: options.observability,
+    egress: options.egress,
+    runId,
     input: options.input,
     context: options.context,
   });

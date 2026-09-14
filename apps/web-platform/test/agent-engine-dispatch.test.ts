@@ -1,7 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
-import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
+import { cancelBoundEngineRun, continueBoundEngineRun, dispatchBoundEngineRun, dispatchNewEngineRun, dispatchBoundEngineRunFromRegistry, dispatchConversationEngineRun, eraseBoundEngineRun, reconcileBoundEngineRun, respondToApprovalBoundEngineRun, resumeBoundEngineRun } from "@/server/agent-engine-dispatch";
 
 describe("dispatchBoundEngineRun", () => {
+  it("resolves a conversation binding before selecting its adapter", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-conv-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    }) };
+    const persisted = {
+      id: "run-conv-1",
+      binding: {
+        workspaceId: "ws-1",
+        execution: { kind: "conversation" as const, conversationId: "conv-1" },
+        engineId: "claude-code",
+        authMode: "managed",
+        adapterVersion: "claude-v1",
+        boundAt: "2026-09-14T20:00:00Z",
+      },
+    };
+    const repository = {
+      getConversationRun: vi.fn().mockResolvedValue(persisted),
+      getRun: vi.fn().mockResolvedValue(persisted),
+    };
+    const events = [];
+    for await (const event of dispatchConversationEngineRun({
+      repository,
+      factories: { "claude-code": () => adapter as never },
+      conversationId: "conv-1",
+      input: { text: "hi", attachmentIds: [] },
+      context: {} as never,
+    })) events.push(event);
+    expect(repository.getConversationRun).toHaveBeenCalledWith("conv-1");
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(1);
+  });
+
+  it("fails closed when a conversation has no persisted binding", async () => {
+    const adapterFactory = vi.fn();
+    const repository = {
+      getConversationRun: vi.fn().mockResolvedValue(null),
+      getRun: vi.fn(),
+    };
+    await expect((async () => {
+      for await (const _event of dispatchConversationEngineRun({
+        repository,
+        factories: { "claude-code": adapterFactory },
+        conversationId: "conv-missing",
+        input: { text: "hi", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("persisted conversation engine binding not found");
+    expect(repository.getRun).not.toHaveBeenCalled();
+    expect(adapterFactory).not.toHaveBeenCalled();
+  });
+
   it("resolves the adapter from the persisted engine binding", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };

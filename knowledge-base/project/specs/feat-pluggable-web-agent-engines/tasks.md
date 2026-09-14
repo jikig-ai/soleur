@@ -60,6 +60,7 @@ routine run binds the current default once; retries retain that binding.
 - [ ] RED-04: current Claude behavior and denied platform tools through neutral adapter.
 - [ ] GREEN-04 (blockedBy RED-04): extract Claude adapter and wire all inventoried dispatch paths.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
+  - [x] Conversation dispatch wiring slice: the neutral dispatch layer resolves a unique conversation binding before selecting an adapter and fails closed when it is absent (16 dispatch tests green).
   - [x] Claude adapter boundary slice: provider transport is wrapped behind the neutral lifecycle contract without SDK types crossing it (1 adapter test green).
   - [x] Claude adapter lifecycle coverage: start, continue, cancel, reconcile, cursor resume, approval, erasure, and disposal delegation are pinned.
   - [x] Claude neutral-boundary slice: stream identity/sequence validation and generic provider-error sanitization protect every lifecycle method (3 adapter tests green).
