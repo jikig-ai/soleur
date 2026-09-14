@@ -455,6 +455,37 @@ assert_redacted 'json shape: tree under data.diff, not data.snapshot' \
   "$(printf -- '{"ok":true,"data":{"diff":"+- textbox \\"Token\\" [ref=e1]: %s"}}' "$SENTINEL")"
 
 # ---------------------------------------------------------------------------
+# Provider contract (#7980). playwright-mcp-redact-proxy.py loads this file by
+# path and binds exactly these four names at startup. The contract is tested
+# where it is provided: a rename of any of them must red THIS suite, not only
+# the proxy's refuse-to-start arm. The row increments `cases` itself because it
+# uses neither assert helper.
+# ---------------------------------------------------------------------------
+cases=$((cases + 1))
+_contract_out=$(python3 - "$FILTER" <<'PY' 2>&1 || true
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("redact_a11y_snapshot", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+names = ["redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED"]
+missing = [n for n in names if not hasattr(mod, n)]
+if missing or mod.__all__ != names:
+    print("CONTRACT-BROKEN missing=%s __all__=%s" % (missing, getattr(mod, "__all__", None)))
+elif not mod.looks_like_a11y_tree('- textbox "Token" [ref=e1]: x') or mod.looks_like_a11y_tree("### Page\n- Page URL: x"):
+    print("CONTRACT-BROKEN looks_like_a11y_tree verdicts")
+elif mod._looks_like_a11y_tree is not mod.looks_like_a11y_tree:
+    print("CONTRACT-BROKEN alias")
+else:
+    print("CONTRACT-OK")
+PY
+)
+if [[ "$_contract_out" == "CONTRACT-OK" ]]; then
+  ok  "provider contract: the four consumer names are exported, __all__ pins them, alias intact"
+else
+  bad "provider contract: $_contract_out"
+fi
+
+# ---------------------------------------------------------------------------
 # Verdict. Reported with printf + exit, never through ok()/bad() — the floor
 # must not be dispatched through the helpers it backstops (ADR-193).
 # ---------------------------------------------------------------------------

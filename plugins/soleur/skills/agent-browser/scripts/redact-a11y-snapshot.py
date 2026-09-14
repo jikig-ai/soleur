@@ -41,8 +41,9 @@ closing them):
   * a credential rendered outside a text-input role (a status region, a
     validation message, a `<pre>` block);
   * a value split across segmented single-character inputs;
-  * every node on the Playwright-MCP runtime path, which this filter can only
-    reach if a human pipes a saved snapshot through it.
+  * every node on a Playwright-MCP registration NOT routed through
+    `playwright-mcp-redact-proxy.py` (the sibling transport proxy, #7980), which
+    this filter can only reach if a human pipes a saved snapshot through it.
 
 FAIL-CLOSED CONTRACT (ADR-095 shape): on refusal, exit 2 with stdout EMPTY and
 a reason on stderr that never quotes the offending input.
@@ -55,6 +56,15 @@ import re
 import sys
 
 REDACTED = "<redacted>"
+
+# CONSUMER CONTRACT (#7980). `playwright-mcp-redact-proxy.py` loads this file by
+# path with `importlib.util.spec_from_file_location` and binds exactly these
+# four names at startup -- ALL FOUR, so a refactor that renames one fails loud
+# at the proxy's exit 2 instead of as a per-result withhold that reads like an
+# outage. The contract is declared and tested HERE, where it is provided
+# (redact-a11y-snapshot.test.sh carries the import row); the proxy defines no
+# predicate of its own -- this module is the one predicate for both surfaces.
+__all__ = ["redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED"]
 
 # 4 MiB. A real snapshot is kilobytes; anything at this size is not a snapshot,
 # and refusing is cheaper than trying to redact it correctly.
@@ -304,7 +314,7 @@ def redact_text(text: str) -> str:
     return "\n".join(out)
 
 
-def _looks_like_a11y_tree(value: str) -> bool:
+def looks_like_a11y_tree(value: str) -> bool:
     """True when a JSON string value carries an accessibility tree.
 
     Keying on the field NAME was the defect: `snapshot --json` puts the tree
@@ -324,12 +334,17 @@ def _looks_like_a11y_tree(value: str) -> bool:
     return False
 
 
+
+
+# Alias kept for the pre-#7980 private name so in-repo callers and suites that
+# reach it by the old spelling keep working; the public name is the contract.
+_looks_like_a11y_tree = looks_like_a11y_tree
 def _redact_json_in_place(node: object) -> object:
     """Redact any string field carrying an a11y tree, at any depth."""
     if isinstance(node, dict):
         return {
             k: (redact_text(v)
-                if isinstance(v, str) and (k == "snapshot" or _looks_like_a11y_tree(v))
+                if isinstance(v, str) and (k == "snapshot" or looks_like_a11y_tree(v))
                 else _redact_json_in_place(v))
             for k, v in node.items()
         }
