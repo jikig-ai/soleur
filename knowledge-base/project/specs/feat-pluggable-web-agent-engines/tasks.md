@@ -121,6 +121,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Rollout metadata compatibility slice: missing metadata preserves the always-on Claude option while future-engine options remain disabled until explicitly enabled (7 settings tests green).
   - [x] Owner authorization slice: settings RPC error code `42501` is preserved and returned as an explicit 403 owner-required response (22 persistence/route tests green).
   - [x] Full app-local gate after settings authorization: 1,088 files and 13,585 tests pass (54 skipped, 358 expected skipped cases, 1 existing todo).
+  - [x] Production build gate after settings authorization: `npm run build` passes with Next.js 16.3.1/Turbopack; generated `tsconfig.json` include changes were reverted, and existing Sentry/Next tracing warnings remain documented in the build log.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
@@ -137,7 +138,10 @@ routine run binds the current default once; retries retain that binding.
 ## Verification evidence
 
 Evidence so far: the RED-01a import failure was observed before implementation;
-the registry suite now passes 19/19. The repository full gate was attempted by
-the pre-commit hook and completed 397/404 suites with two failures while sibling
-gates were active; those failures are not yet isolated. Do not mark an entire
-phase complete from an isolated helper suite.
+the registry suite now passes 19/19. The current app-local full gate passes 1,088
+files and 13,585 tests (54 skipped, 358 expected skipped cases, 1 existing todo),
+and the production Next.js build passes. The build still reports existing Sentry
+deprecation, multi-lockfile workspace-root, middleware-convention, dynamic-module,
+and dynamic-filesystem tracing warnings; these do not appear in the feature diff or
+change the successful exit status. Do not mark an entire phase complete from an
+isolated helper suite.
