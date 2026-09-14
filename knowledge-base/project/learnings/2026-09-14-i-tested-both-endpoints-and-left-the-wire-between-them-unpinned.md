@@ -69,14 +69,19 @@ wrong half.
 
 ### 3. Repo-global ratchets are invisible to file-based suite selection
 
-Twice this session, CI reddened on a ratchet that every targeted suite missed:
-`no-control-regex 19→20` here, and three on #7997 (`guard-vacuity-floor`,
+Twice this session, CI reddened on a ratchet that the selected suites missed:
+`no-control-regex 19→20` here, and three on #7997/PR #8023 (`guard-vacuity-floor`,
 `lint-diagnosis-claims`, `fixture-relative-assert`).
 
 The cause is structural, not carelessness. Targeted suites are chosen by
 grepping which suites *reference the changed files*. A ratchet counts a property
-across the whole tree and references **nothing** — so that selection method can
-never find one. It is a blind spot of the method, not of the effort.
+across the whole tree, so at SELECTION time it references none of them and the
+method cannot return it. A blind spot of the method, not of the effort.
+
+Note the asymmetry that makes this hard to re-check later: `guard-vacuity-floor`
+names `sentry-monitors-audit.test.sh` **today**, because promoting that suite was
+the remedy. Grep it now and the claim looks false. The reference did not exist
+when the selection ran (`git grep -c … a97d3f7fd^` → 0) — the fix created it.
 
 Practical rule: a change that adds a test, a floor, an assertion, a regex, or an
 operator-facing message should expect to move a repo-global counter, and the
@@ -101,19 +106,26 @@ now redden, including reverting the call site and reverting the redaction.
 
 **1. I inferred a commit rate from a count.** Seeing "17 commits behind" I
 concluded main moved ~17 commits/hour and called auto-merge structurally unable
-to converge. Measured: **0.4 commits/hour**, 43-minute median gap, CI 26–39 min.
+to converge. Measured: **0.45 commits/hour over the trailing ~65 h** (the rate is
+window-dependent — 0.75/h over the last 20 commits, 1.26/h over the last 10), and
+a **median gap of 42–49 min that is robust across every window**. CI 26–39 min.
 The commits had accumulated over two days.
-**Prevention:** a count is not a rate; divide by a measured span before diagnosing.
+**Prevention:** a count is not a rate — divide by a measured span, and QUOTE the
+span, because a bare rate a reader re-derives on a different window contradicts
+you. (I then shipped a bare "0.4/hour" in the first draft of this very file.)
 
 **2. I claimed path truncation guards against a credential in the URL.** It
 guards the query and fragment. A path SEGMENT can itself be the credential
 (`/shared/<token>`), and no redaction rule matches those.
 **Prevention:** name the component the control actually covers, not "the URL".
 
-**3. I claimed `redact()` backstops `?code=`.** Its rules cover
-`access_token|refresh_token|provider_token|apikey` — **not** `code=`, which is
-what Supabase PKCE uses. The path cut was the sole control, described as a
-second line of defence.
+**3. I claimed `redact()` backstops `?code=`, then got the rule list wrong while
+correcting it.** The rules are
+`access_token|refresh_token|provider_token|apikey|token` — I dropped the final
+`|token` in my own correction, which INVERTS its point: `?token=` **is**
+backstopped, so the path cut is the sole control for **`code=` specifically**
+(what Supabase PKCE uses), not for query credentials generally. Caught by the
+review of this very learning.
 **Prevention:** read the rule list before citing it as a backstop.
 
 **4. I called `rail` noise in the composer context.** It is the most
