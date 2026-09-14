@@ -384,6 +384,21 @@ describe("dispatchBoundEngineRun", () => {
     expect(eventSink.appendEvent).toHaveBeenCalledOnce();
   });
 
+  it("rejects a repeated event ID even when its sequence advances", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "first" } as const };
+      yield { runId: "run-1", eventId: "evt-1", sequence: 2, payload: { type: "text", text: "replayed" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, eventSink, runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("engine event ID is duplicated");
+    expect(eventSink.appendEvent).toHaveBeenCalledOnce();
+  });
+
   it("reloads the binding before cancellation and reconciliation", async () => {
     const repository = { getRun: vi.fn().mockResolvedValue({
       id: "run-1", binding: { engineId: "claude-code" },

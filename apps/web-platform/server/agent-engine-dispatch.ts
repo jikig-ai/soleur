@@ -65,7 +65,12 @@ function isEngineEventPayload(value: unknown): value is EngineEvent["payload"] {
   }
 }
 
-function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence: number): void {
+function validateDispatchedEvent(
+  event: EngineEvent,
+  runId: string,
+  lastSequence: number,
+  seenEventIds: Set<string>,
+): void {
   if (
     !event ||
     event.runId !== runId ||
@@ -82,6 +87,10 @@ function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence
   if (event.sequence <= lastSequence) {
     throw new Error("engine event sequence is stale or duplicated");
   }
+  if (seenEventIds.has(event.eventId)) {
+    throw new Error("engine event ID is duplicated");
+  }
+  seenEventIds.add(event.eventId);
 }
 
 function assertPersistedRunId(persisted: object, runId: string): void {
@@ -97,8 +106,9 @@ async function* persistAndYieldEvents(
   eventSink: EventSink | undefined,
 ): AsyncGenerator<EngineEvent> {
   let lastSequence = 0;
+  const seenEventIds = new Set<string>();
   for await (const event of events) {
-    validateDispatchedEvent(event, runId, lastSequence);
+    validateDispatchedEvent(event, runId, lastSequence, seenEventIds);
     lastSequence = event.sequence;
     if (eventSink) await eventSink.appendEvent(event);
     yield event;
@@ -270,8 +280,9 @@ export async function* dispatchBoundEngineRun(
   observability.emit("engine_dispatch_started", metadata);
   try {
     let lastSequence = 0;
+    const seenEventIds = new Set<string>();
     for await (const event of options.adapter.start(context, options.input)) {
-      validateDispatchedEvent(event, options.runId, lastSequence);
+      validateDispatchedEvent(event, options.runId, lastSequence, seenEventIds);
       lastSequence = event.sequence;
       observability.emit("engine_dispatch_progress", { ...metadata, sequence: event.sequence, status: event.payload.type });
       if (options.eventSink) await options.eventSink.appendEvent(event);

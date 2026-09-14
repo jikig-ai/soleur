@@ -53,7 +53,8 @@ routine run binds the current default once; retries retain that binding.
   - [x] Dispatch identity slice: persisted bindings are checked against the selected adapter before provider invocation (4 dispatch tests green).
   - [x] Persisted run identity slice: initial, continuation, replay, cancellation, and reconciliation reloads fail closed when a keyed lookup returns another run (23 dispatch tests green).
   - [x] Neutral event authenticity slice: generic dispatch rejects cross-run, malformed, and stale transport events before ledger persistence or consumer delivery across start, continuation, and cursor replay (22 dispatch tests green).
-  - [x] Runtime payload validation slice: dispatch rejects unknown statuses and malformed lifecycle payload fields before persistence or consumer delivery (25 dispatch tests green).
+  - [x] Runtime payload validation slice: dispatch rejects unknown statuses and malformed lifecycle payload fields before persistence or consumer delivery (27 dispatch tests green).
+  - [x] Event ID uniqueness slice: initial, continuation, and cursor streams reject repeated event IDs even when provider sequences advance (27 dispatch tests green).
   - [x] Event lifecycle slice: dispatch persists adapter events before exposing them to consumers and fails closed on ledger errors (6 dispatch tests green).
   - [x] Cancellation/reconciliation slice: lifecycle helpers reload persisted bindings and enforce adapter identity before cancel/reconcile calls (7 dispatch tests green).
   - [x] Continuation slice: native session continuation reloads and verifies the persisted adapter binding before streaming events (8 dispatch tests green).
