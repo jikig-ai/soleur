@@ -17,6 +17,22 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 # fix: hosted ship clone deepen, kb-index DIRTY race, markdown-lint gc race
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-14
+**Sections enhanced:** Proposed Solution / Phase 2 GREEN, Technical Considerations, SpecFlow, Observability (no schema change)
+**Research agents used:** in-process (repo grep, `git fetch --help`, `git merge-tree --help`, measured unshallow exit codes, Context7 library id `/git/htmldocs` unused beyond resolve, c4-count-parity, probe-verb-gate, PAT/observability/user-brand halt gates)
+
+### Key Improvements
+1. Pinned the unshallow already-complete arm to the measured fatal `fatal: --unshallow on a complete repository does not make sense` (exit 128), not a paraphrased `complete repository` substring that could match unrelated stderr.
+2. Pinned `git merge-tree --write-tree` conflict semantics from `git merge-tree --help`: the command writes a tree SHA on stdout and exits 1 when there were conflicts — `spawnSimple` discards stdout, so DIRTY handling must key on **exit code only**.
+3. Confirmed the negative claim that `setupEphemeralWorkspace` does not run `install-kb-merge-driver` (zero hits in the substrate file).
+
+### New Considerations Discovered
+- A second `git fetch --unshallow` after a successful first one is rc=128 with that exact fatal. The continue-arm is not hypothetical: it fires on retry and if `gh pr checkout` already unshallowed.
+- `c4-count-parity.test.sh` is green (10/10); no C4 count drift from this plan.
+- Halt gates 4.6–4.11: User-Brand present with `none` + scope-out; Observability 5 fields + probe-verb `bash` accepted; no PAT hits; no UI `.pen` required; no encryption store; no new Guard Contract (tests, not a new lint).
+
 ## Overview
 
 Restore three independent operator-machinery invariants in one PR:
@@ -182,7 +198,7 @@ TDD order is load-bearing. Do not implement a GREEN edit before its RED tests fa
 **GREEN**
 
 - In `event-ship-merge.ts` `checkout-pr`, after a successful `gh pr checkout`, same `cwd`/`env` as the checkout spawn:
-  1. `spawnSimple("git", ["fetch", "--unshallow", "origin"], { cwd })`. Exit 0 → continue. Non-zero whose stderr contains `complete repository` (already not shallow; `gh pr checkout` may have deepened) → continue. Any other non-zero → throw with `redactToken(stderr)`, same shape as clone-failure. Do not switch on `rev-parse --is-shallow-repository`: `spawnSimple` discards stdout.
+  1. `spawnSimple("git", ["fetch", "--unshallow", "origin"], { cwd })`. Exit 0 → continue. Non-zero whose stderr contains the measured fatal `fatal: --unshallow on a complete repository does not make sense` (exit 128; reproduced 2026-09-14 on a file:// clone after a successful unshallow, and on a never-shallow clone) → continue. Any other non-zero → throw with `redactToken(stderr)`, same shape as clone-failure (`git clone failed (exit …)` in `setupEphemeralWorkspace`). Do not switch on `rev-parse --is-shallow-repository`: `spawnSimple` discards stdout.
   2. Always then `spawnSimple("git", ["merge-base", "origin/main", "HEAD"], { cwd })`. Exit ≠ 0 → throw `no merge-base origin/main HEAD after unshallow`.
   3. `logger.info({ fn: FUNCTION_NAME, prNumber, mergeBaseOk: true }, "ship-merge workspace has origin/main...HEAD merge-base")`.
 - Do not edit `_cron-claude-eval-substrate.ts` clone args.
@@ -205,7 +221,7 @@ TDD order is load-bearing. Do not implement a GREEN edit before its RED tests fa
 **GREEN**
 
 - `shouldResyncBeforePoll`: true for `BEHIND` or `DIRTY`.
-- `sync-pr-behind.sh`: treat `*BEHIND*` **or** `*DIRTY*` as sync-needed. After fetch, run `git merge-tree --write-tree origin/main HEAD >/dev/null`. Non-zero → print conflict paths, `git merge --abort` if needed, exit 6. Zero → existing merge --no-edit + push. Structured stdout must still contain `[pr-behind-sync]` and `auto-sync` so AwaitShell patterns keep matching. Add a `DIRTY` token so the issue re-eval `grep -c DIRTY` ≥ 1.
+- `sync-pr-behind.sh`: treat `*BEHIND*` **or** `*DIRTY*` as sync-needed. After fetch, run `git merge-tree --write-tree origin/main HEAD >/dev/null`. Git's own help: `NEWTREE=$(git merge-tree --write-tree $BRANCH1 $BRANCH2) || { echo "There were conflicts..."; exit 1; }`. Non-zero (conflicts) → print conflict paths, `git merge --abort` if needed, exit 6. Zero → existing merge --no-edit + push. Do not parse merge-tree stdout (`spawnSimple` and this script both treat the tree SHA as unused). Structured stdout must still contain `[pr-behind-sync]` and `auto-sync` so AwaitShell patterns keep matching. Add a `DIRTY` token so the issue re-eval `grep -c DIRTY` ≥ 1.
 - Phase 7 poll DIRTY arm (ship + merge-pr mirror): fetch + merge-tree; rc=0 → set state as BEHIND and fall through to the existing BEHIND auto-sync (counts against `MAX_BEHIND_SYNCS`); rc≠0 → existing dirty exit. Do **not** route DIRTY into the admin-merge hatch.
 - Re-eval: `grep -c 'DIRTY' plugins/soleur/scripts/sync-pr-behind.sh` ≥ 1.
 
@@ -315,6 +331,25 @@ No soak / time-gated close criterion — no follow-through enrollment.
 - Hosted ship Phase 5.5 no longer halts with merge-base unavailable on non-newest PRs (AC1–AC4, AC-PM1).
 - Operator DIRTY-but-locally-clean loops collapse to the existing BEHIND sync (AC5–AC9).
 - Required markdown-lint mutation suite stops racing gc (AC10).
+
+## Precedent-Diff (deepen-plan Phase 4.4)
+
+| Behavior | Precedent | Plan |
+|---|---|---|
+| Clone/spawn failure throw with redacted stderr | `setupEphemeralWorkspace` `git clone failed (exit ${cloneResult.exitCode}, signal ${cloneResult.signal})` + `redactToken` | Unshallow/merge-base throws the same shape from `checkout-pr`. |
+| `gc.auto=0` on a git that must not side-effect-gc | `apps/web-platform/infra/git-data-bootstrap.sh` `git config --system gc.auto 0`; `scripts/followthroughs/ccla-representative-icla-7922.sh` `git -c gc.auto=0 fetch` | Fixture uses `git config gc.auto 0` after `git init` (persistent for the sandbox repo, covers add+commit). |
+| BEHIND fetch/merge/push | `sync-pr-behind.sh` and ship Phase 7 poll BEHIND arm | DIRTY-clean reuses that arm after merge-tree rc=0. |
+| merge-tree as DIRTY discriminator | 2026-09-09 learning: `git merge-tree --write-tree` rc=0 on stale DIRTY | Script and poll both key on merge-tree exit, matching `git merge-tree --help`. |
+
+No novel pattern. No new scheduled job (ADR-033 check N/A).
+
+### Verify-the-negative (Phase 4.45)
+
+| Claim | Verdict | Citation |
+|---|---|---|
+| `setupEphemeralWorkspace` does not register `merge.kb-index.driver` | confirms | `git grep install-kb-merge-driver origin/main -- apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts` → 0 hits |
+| `spawnSimple` discards stdout | confirms | `_cron-claude-eval-substrate.ts` `stdio: ["ignore", "ignore", "pipe"]` |
+| trigger-cron cannot fire `ship-merge.manual-trigger` | confirms | `MANUAL_TRIGGER_EVENTS` = `EXPECTED_CRON_FUNCTIONS.map(manualTriggerEventFor)` only |
 
 ## Dependencies & Risks
 

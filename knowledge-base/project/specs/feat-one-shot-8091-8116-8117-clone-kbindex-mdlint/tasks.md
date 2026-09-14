@@ -23,7 +23,7 @@ TDD order is load-bearing. Do not implement a GREEN edit before its RED tests fa
 - [ ] 3.2 RED: add source-shape anchors in `apps/web-platform/test/server/inngest/event-ship-merge.test.ts` for `--unshallow` and `merge-base`.
 - [ ] 3.3 GREEN: in `event-ship-merge.ts` `checkout-pr`, after successful `gh pr checkout`:
   - `spawnSimple("git", ["fetch", "--unshallow", "origin"], { cwd })`
-  - exit 0 continue; non-zero whose stderr contains `complete repository` continue; other non-zero throw redacted
+  - exit 0 continue; non-zero whose stderr contains `fatal: --unshallow on a complete repository does not make sense` continue; other non-zero throw redacted
   - `spawnSimple("git", ["merge-base", "origin/main", "HEAD"], { cwd })`; non-zero throw
   - `logger.info({ fn, prNumber, mergeBaseOk: true }, ...)`
 - [ ] 3.4 Do not edit `_cron-claude-eval-substrate.ts` clone `"--depth=1"`.
