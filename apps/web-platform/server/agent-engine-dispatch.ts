@@ -152,7 +152,13 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
     }
     authorizeEngineDataEgress(options.egress.selection, options.egress.evidence);
   }
-  const adapter = createReviewedEngineAdapter(binding.engineId, options.factories, "existing-run", options.registry);
+  const adapter = createReviewedEngineAdapter(
+    binding.engineId,
+    options.factories,
+    "existing-run",
+    options.registry,
+    options.egress?.selection,
+  );
   yield* dispatchBoundEngineRun({
     repository: options.repository,
     adapter,

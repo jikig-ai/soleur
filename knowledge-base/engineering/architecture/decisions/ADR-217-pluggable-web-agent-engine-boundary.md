@@ -35,7 +35,10 @@ engine/auth/workflow/capability combinations are qualified for execution. A
 settings metadata lookup never grants execution authorization.
 
 Factory and dispatch entry points accept an explicit reviewed registry when a
-deployment or deterministic test catalog needs additional engines. The built-in
+deployment or deterministic test catalog needs additional engines. When a
+dispatch supplies a trusted egress selection, factory creation passes that
+selection through registry qualification; a registry without `resolve` fails
+closed rather than treating metadata lookup as authorization. The built-in
 catalog remains the default, so future providers can be added through reviewed
 definitions and additive factories without changing provider control flow.
 

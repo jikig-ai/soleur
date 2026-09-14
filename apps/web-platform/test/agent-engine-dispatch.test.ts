@@ -145,6 +145,53 @@ describe("dispatchBoundEngineRun", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("applies reviewed qualification to an egress-selected engine before start", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-grok-qualified", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    }) };
+    const registry = createEngineRegistry([{
+      id: "grok-build",
+      version: "grok-build-v1",
+      transport: "remote",
+      enabledForNewRuns: true,
+      enabledForExistingRuns: true,
+      authModes: ["managed"],
+      qualifications: [],
+    }]);
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-grok-qualified", binding: { engineId: "grok-build", authMode: "managed" } }) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRunFromRegistry({
+        repository,
+        factories: { "grok-build": () => adapter as never },
+        registry,
+        egress: {
+          selection: {
+            engineId: "grok-build",
+            authMode: "managed",
+            operation: "existing-run",
+            workflow: "interactive",
+            dataClass: "synthetic",
+            requiredCapabilities: [],
+            now: 1_800_000_000_000,
+          },
+          evidence: {
+            endpoint: "https://grok.example.test/execute",
+            allowedHosts: ["grok.example.test"],
+            acceptedDataClasses: ["synthetic"],
+            vendorDpaStatus: "verified",
+            transferGeography: "eea",
+            deletionSupport: "unsupported",
+            approvalRequired: false,
+          },
+        },
+        runId: "run-grok-qualified",
+        input: { text: "hi", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrowError("engine_unqualified");
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
   it("emits start, progress, and completion telemetry without event payloads", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "private" } as const };
