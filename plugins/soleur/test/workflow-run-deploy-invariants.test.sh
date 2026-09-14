@@ -497,8 +497,14 @@ else pass; fi
 if grep -qE 'THRESHOLD=\$\(read_threshold\)' "$W/budget.blk"; then pass; else
   fail "G5-18 the pipeline threshold is not READ from the tree — a restated literal drifts silently the moment DRIFT_SUSTAINED_THRESHOLD_MIN moves"
 fi
-if grep -qE 'CI_BUDGET_MIN=\$\(\(\s*THRESHOLD' "$W/budget.blk"; then pass; else
-  fail "G5-18 CI_BUDGET_MIN is not derived from THRESHOLD minus the downstream ceilings"
+# THE PARTITION IS THE PROPERTY (#8149). CI's share is DRIFT_SUSTAINED_THRESHOLD_MIN minus
+# every job that follows CI on the deploy arm — resolve-target, migrate, verify-migrations,
+# deploy — the same terms B9 in scripts/prod-version-drift-check.test.sh adds to
+# max(ci, release). The order is pinned deliberately: dropping any one term (the
+# `- RT` that was missing before #8149 loosened the soft ceiling on a bare threshold raise)
+# must red here by name, not survive as a looser regex.
+if grep -qE 'CI_BUDGET_MIN=\$\(\(\s*THRESHOLD - RT - M - V - D' "$W/budget.blk"; then pass; else
+  fail "G5-18 CI_BUDGET_MIN is not derived as THRESHOLD minus resolve-target, migrate, verify-migrations, deploy (RT, M, V, D — every ceiling that follows CI on the deploy arm; the order is pinned deliberately because the partition is the property)"
 fi
 # THE FIFTH INPUT. Without it, lowering test-scripts' ceiling silently stops the
 # detector tracking the thing it detects.
@@ -510,7 +516,7 @@ fi
 # and test were the wrong quantity (see the CI_DECLARED_PATH comment in the
 # workflow) and were replaced by a whole-run closure.
 _missing=""
-for jobname in migrate verify-migrations deploy; do
+for jobname in migrate verify-migrations deploy resolve-target; do
   grep -qF -- "job_ceiling \"\$REL\" ${jobname})" "$W/budget.blk" \
     || _missing="${_missing}${jobname} "
 done
