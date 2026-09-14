@@ -42,6 +42,17 @@ terraform {
       source  = "BetterStackHQ/better-uptime"
       version = "~> 0.20"
     }
+    # #8097 / ADR-218 — Better Stack's SECOND provider. `better-uptime` covers
+    # monitors/heartbeats/policies and has no Logs-alert resource; `logtail`
+    # exposes `logtail_exploration` + `logtail_exploration_alert`, the native
+    # per-bucket count alert used by betterstack-logs-alerts.tf. Both share
+    # var.betterstack_api_token (a global token; Telemetry read authority
+    # GET-probed 200 at plan time). Pin `~> 11.2`: v11.0.0 replaced chart-level
+    # variables with per-alert `variable_value`, so nothing below it is usable.
+    logtail = {
+      source  = "BetterStackHQ/logtail"
+      version = "~> 11.2"
+    }
     # PR-H (#3244) — github_actions_secret resource for the kb-drift cron
     # workflow's DOPPLER_TOKEN_KB_DRIFT publish. Provider write surface is
     # limited to that one resource type in this root.
@@ -69,6 +80,12 @@ provider "doppler" {
 }
 
 provider "betteruptime" {
+  api_token = var.betterstack_api_token
+}
+
+# Same credential as `betteruptime` above (#8097 / ADR-218): one global token
+# serves both the Uptime and the Telemetry (Logs) APIs.
+provider "logtail" {
   api_token = var.betterstack_api_token
 }
 

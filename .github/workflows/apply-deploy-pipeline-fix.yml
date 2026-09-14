@@ -262,7 +262,9 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
-        run: terraform init -input=false
+        # -lockfile=readonly (#8097): every writer over this root resolves providers ONLY from
+        # the committed lockfile, matching apply-web-platform-infra.yml and the drift cron.
+        run: terraform init -input=false -lockfile=readonly
 
       # --- #4844: CF Tunnel SSH bridge (extracted to a shared composite action) ---
       # Brings up cloudflared + iptables NAT redirect so terraform's Go SSH client
