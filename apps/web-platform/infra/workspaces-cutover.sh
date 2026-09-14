@@ -30,6 +30,9 @@
 # workspaces-luks-emit.sh (feature=workspaces-luks / op=workspaces-luks-drift). Verdict is read from
 # Sentry + the Better Stack heartbeat, NEVER by SSH-eyeballing (hr-no-ssh-fallback-in-runbooks).
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 log()  { echo "[workspaces-cutover] $*"; }
 step() { echo; echo "[workspaces-cutover] ===== $* ====="; }
@@ -630,18 +633,30 @@ resume_writers() {
   # inngest-server reconcile — never STOPPED by the freeze (it cannot write $MOUNT), but the redis
   # outage window can crash-loop it into `failed`, which outlives the run. Zero freeze cost: this
   # runs after the mount is back. Only start it if it is not already active (no redundant restart).
+  # #6921/#8077: a not-active unit that is DISABLED was quiesced by op=quiesce-web (the inngest
+  # cutover's stop+disable; only op=rollback's `enable` re-arms it). `start` runs a disabled unit,
+  # so the reconcile must SKIP it — re-arming the web scheduler mid-cutover double-fires crons.
+  # `|| true`: is-enabled exits 1 on `disabled`; stdout is the verdict. Mirrors the dead-man guard.
+  # `disabled` alone suffices HERE (not the full inactive|failed + disabled shape) because this runs
+  # only inside the `! is-active` branch — the unit is already known not to be serving.
   systemctl reset-failed inngest-server.service 2>/dev/null || true
   systemctl is-active --quiet inngest-server.service 2>/dev/null || {
-    systemctl start inngest-server.service 2>/dev/null || true
-    systemctl is-active --quiet inngest-server.service 2>/dev/null || {
-      # NEVER let emit_drift be a path's only channel: it returns 0 silently when the Sentry DSN
-      # cannot be resolved, which is exactly the FIRST-cutover case (the DSN EnvironmentFile is
-      # installed after the canary). Local evidence first, remote best-effort second.
-      emit_drift inngest_server_not_active
-      log "WARN: inngest-server.service is not active after reconcile"
-      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service host=$(hostname 2>/dev/null)" 2>/dev/null || true
-      echo "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service"
-    }
+    if [ "$(systemctl is-enabled inngest-server.service 2>/dev/null || true)" = disabled ]; then
+      log "inngest-server.service is inactive + disabled (quiesced by op=quiesce-web) — reconcile start skipped; only op=rollback re-arms it"
+      logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced" 2>/dev/null || true
+      echo "SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced"
+    else
+      systemctl start inngest-server.service 2>/dev/null || true
+      systemctl is-active --quiet inngest-server.service 2>/dev/null || {
+        # NEVER let emit_drift be a path's only channel: it returns 0 silently when the Sentry DSN
+        # cannot be resolved, which is exactly the FIRST-cutover case (the DSN EnvironmentFile is
+        # installed after the canary). Local evidence first, remote best-effort second.
+        emit_drift inngest_server_not_active
+        log "WARN: inngest-server.service is not active after reconcile"
+        logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service host=$(hostname 2>/dev/null)" 2>/dev/null || true
+        echo "SOLEUR_WORKSPACES_LUKS_RESUME_DEGRADED feature=workspaces-luks op=workspaces-luks-resume-degraded unit=inngest-server.service"
+      }
+    fi
   }
   # `restart`, not `start`: on a RE-dispatch the timer already exists, and a plain `start` on an
   # already-active unit is a no-op — so the host would keep running the STALE in-memory definition
@@ -815,7 +830,13 @@ arm_dead_man() {
     `# emitted no marker on any channel (only the close-EBUSY branch did). It fires at the TOP (the` \
     `# event is "the backstop engaged" regardless of outcome), on the remount-failed else (the host` \
     `# is now serving a bare mountpoint), and on success. logger -t luks-monitor is Vector-allowlisted.` \
-    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
+    `# #6921/#8077: the inngest-server start is guarded by an ESCAPED is-enabled = disabled test —` \
+    `# a disabled unit was quiesced by op=quiesce-web and only op=rollback may re-arm it (the same` \
+    `# guard as resume_writers). The backslash escapes render to plain quotes inside the sh -c string.` \
+    `# The skip logs the SAME INNGEST_START_SKIPPED marker as resume_writers (a separate test, so a` \
+    `# logger failure can never turn into a start). disabled alone suffices here: skipping the start of` \
+    `# an ACTIVE+disabled unit changes nothing, since start on an active unit is a no-op.` \
+    /bin/sh -c "logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fired reason=timer_elapsed'; ${stops} docker stop -t 30 ${CONTAINER} 2>/dev/null; umount ${MOUNT} 2>/dev/null; umount ${STAGING} 2>/dev/null; cryptsetup close ${MAPPER_NAME} || logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=mapper_close_failed'; if mount ${dev:-/dev/disk/by-label/workspaces_plain} ${MOUNT}; then docker start ${CONTAINER} 2>/dev/null; ${starts} systemctl reset-failed inngest-server.service 2>/dev/null; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] && logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'; [ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service 2>/dev/null; ${tstarts} logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=ok reason=plaintext_remounted'; else logger -t ${LUKS_LOG_TAG} -- 'SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman result=fail reason=remount_failed'; fi" \
     2>/dev/null || true
   # ARM marker: the timer is now set. Pairs with the disarm marker so a cutover that armed but never
   # disarmed (the 2026-07-20 shape — abort at app_canary before disarm_dead_man) is visible as an
