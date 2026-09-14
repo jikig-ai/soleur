@@ -4,6 +4,7 @@ import {
   createCodexCodeAdapter,
   createCodexAuthBoundary,
   normalizeCodexUsageEvent,
+  runWithCodexRecovery,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -136,5 +137,35 @@ describe("Codex usage normalization", () => {
     });
     expect(event.payload.type).toBe("usage");
     if (event.payload.type === "usage") expect(event.payload.usage.cost).toEqual({ provenance: "reported", amount: 0.04, currency: "USD" });
+  });
+});
+
+describe("Codex credential recovery", () => {
+  it("refreshes once after an authorization failure", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const operation = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("expired"), { code: "codex_credential_expired" }))
+      .mockResolvedValue("ok");
+    await expect(runWithCodexRecovery(auth, operation)).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(operation.mock.calls[1][0]).toEqual(expect.objectContaining({ accessToken: "second" }));
+  });
+
+  it("does not retry non-auth failures", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "api-key",
+      acquire: vi.fn(async () => ({ accessToken: "key", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(),
+      logout: vi.fn(async () => undefined),
+    });
+    const failure = new Error("provider unavailable");
+    const operation = vi.fn().mockRejectedValue(failure);
+    await expect(runWithCodexRecovery(auth, operation)).rejects.toBe(failure);
+    expect(operation).toHaveBeenCalledOnce();
   });
 });

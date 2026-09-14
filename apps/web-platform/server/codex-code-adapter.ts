@@ -60,6 +60,21 @@ export interface CodexAuthBoundary {
   logout(): Promise<void>;
 }
 
+export async function runWithCodexRecovery<T>(
+  auth: CodexAuthBoundary,
+  operation: (lease: CodexCredentialLease) => Promise<T>,
+): Promise<T> {
+  let lease = await auth.acquire();
+  try {
+    return await operation(lease);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code !== "codex_credential_expired" && code !== "codex_credentials_revoked") throw error;
+    lease = await auth.refresh();
+    return operation(lease);
+  }
+}
+
 function normalizeAuthError(error: unknown): Error {
   const code = (error as { code?: unknown } | null)?.code;
   if (code === "invalid_grant" || code === "revoked" || code === "unauthorized") {
