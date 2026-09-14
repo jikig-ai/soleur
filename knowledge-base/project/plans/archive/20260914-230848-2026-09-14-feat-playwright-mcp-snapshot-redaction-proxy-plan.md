@@ -558,7 +558,7 @@ discoverability_test:
 ### Quality Gates
 
 - [ ] QG1 — `bash scripts/test-all.sh --print-suite-globs` lists `plugins/soleur/skills/*/test/*.test.sh`; the new suite runs in the scripts shard and reports its floor.
-- [ ] QG2 — `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md` exits 0.
+- [ ] QG2 — `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/archive/20260914-230848-2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md` exits 0.
 - [ ] QG3 — `bash scripts/guard-vacuity-floor.test.sh` classifies the new suite's floor as constructible (not UNCLASSIFIED).
 - [ ] QG4 — `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0.
 - [ ] QG5 — Every RED row in Guards 1–3 was driven against the pre-fix artefact and observed RED; the observation table is in `phase-0-measurement.md`.
