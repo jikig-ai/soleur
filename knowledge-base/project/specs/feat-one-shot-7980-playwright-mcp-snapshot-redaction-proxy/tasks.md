@@ -1,6 +1,6 @@
 # Tasks: P7 on the Playwright-MCP path — redacting stdio proxy (#7980)
 
-Plan: `knowledge-base/project/plans/2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md`. Each task cites the plan phase it implements; the plan's Guard Contract rows and FR/NFR/QG numbers are the acceptance surface.
+Plan: `knowledge-base/project/plans/archive/20260914-230848-2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md`. Each task cites the plan phase it implements; the plan's Guard Contract rows and FR/NFR/QG numbers are the acceptance surface.
 
 ## Phase 0: Preconditions and measurement (gate)
 

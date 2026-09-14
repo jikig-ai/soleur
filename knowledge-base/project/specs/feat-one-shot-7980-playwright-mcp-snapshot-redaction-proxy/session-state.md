@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: knowledge-base/project/plans/2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260914-230848-2026-09-14-feat-playwright-mcp-snapshot-redaction-proxy-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 - Draft PR: #8150
@@ -97,3 +97,8 @@
 - Relayed server messages are rebuilt from method and ids alone, and `plain_id` drops a request id or `requestId` carrying a tree row or a redactable value (CLO: a `notifications/cancelled` `reason` was forwarded verbatim). Rows 54/55 and mutants 54/55; mutants 44/45 now observe the method name, since a rebuilt message no longer carries the tree. Suite 280/280 (55 mutants), passthrough 161/121.
 - `filename` on `browser_evaluate`, `browser_console_messages`, `browser_network_requests` and `browser_network_request` is not refused (CLO item 2): `cf-token-scope` and `work` prescribe `browser_evaluate(filename:)` precisely to keep a vendor token out of the conversation, so refusing it would move the value in-band. It stays a recorded residual.
 - A proxy crash with a regular-file stdin (CLO item 4) is not reachable under Claude Code, which always gives the server a pipe; not changed.
+
+## Compound Phase
+
+- Learning: `knowledge-base/project/learnings/2026-09-14-my-proxy-allowlisted-the-messages-it-relayed-and-relayed-them-verbatim.md`; routed bullets to `clo` (cite code by name; never overwrite cited run records), `security-sentinel` (rebuild allowlisted messages), `test-design-reviewer` (group reaper + hygiene row for signal-ignoring fixtures).
+- Archival: the plan is archived. This spec directory is deliberately NOT archived: the Art. 30 register (PA-8 §(g), 7 citations), the CLO attestation (4) and ADR-213 cite `runs/*.txt` under this path, and moving it would break citations inside signed legal records.
