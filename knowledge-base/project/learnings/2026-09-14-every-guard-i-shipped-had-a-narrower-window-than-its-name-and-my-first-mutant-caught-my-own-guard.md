@@ -213,6 +213,30 @@ an unregistered lint with standing findings nobody sees.
 - **Prevention:** a lint that is not registered in CI is documentation; register it or
   retire it.
 
+**Preflight Check 10 returned rc=127 on the plan's own probe** — `command: "bash scripts/…"`
+is a YAML-quoted scalar; the runtime shipped the quotes to `bash -c` while the verb gate
+passed on a dequoted copy, so the probe was reported as "not on the sandbox PATH".
+
+- **Recovery:** fixed inline in `preflight/SKILL.md` Step 10.4 (symmetric-pair strip after
+  the trim, before the gate) + the TypeScript mirror + an F1d wiring pin; re-ran Check 10 →
+  PASS.
+- **Prevention:** when a gate's mirror and runtime are separate texts, a fixture that the
+  mirror accepts must be executed through the runtime once — the parity harness compared
+  only the gate, so a divergence in the normalize step was invisible to it.
+
+**The consumer-derived substitute suite set missed a corpus ratchet** — the pre-commit
+battery (the only full `test-all.sh` that ran) reddened `fixture-relative-assert.test.sh`
+on 11 `never-bound` sandbox operands in the new ledger suite; the 80-suite consumer set was
+built by grepping for consumers of the changed files, and a corpus scanner consumes every
+`*.sh` without naming any.
+
+- **Recovery:** `assert_fixture_dir "$m"` after every `make_copy` binding (and on both
+  `run_child` operands); ratchet back to 62/62 with the baseline untouched.
+- **Prevention:** when a PR ADDS a `*.sh` test file, a substitute set must include the
+  corpus-ratchet suites by name (`fixture-relative-assert`, `fixture-dir-operand-assert`,
+  `guard-vacuity-floor`, `battery-tag-authorship`) — they are consumers of the file's
+  existence, which no grep for its content finds.
+
 ## Solution
 
 **Guard 1 — assert the assumptions, read the tail raw.** The extractor now emits every

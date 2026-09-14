@@ -471,6 +471,7 @@ make_copy() { # -> prints the copy dir; workflows in <dir>/workflows, ledger at 
 
 run_child() { # <copy-dir> <out-file> [MIN_CASES] -> rc
   local m="$1" out="$2" mc="${3:-0}" rc=0
+  assert_fixture_dir "$m"; assert_fixture_dir "$out"   # P1b: both operands provably absolute before the redirect
   PR_FANOUT_PARTS=A PR_FANOUT_MIN_CASES="$mc" \
   PR_FANOUT_WORKFLOWS_DIR="$m/workflows" PR_FANOUT_LEDGER="$m/ledger.txt" \
     bash "$SELF" > "$out" 2>&1 || rc=$?
@@ -552,9 +553,10 @@ run_part_b() {
   echo "=== PART B: mutation battery ==="
   local m out rc lno
   PRISTINE="$(make_copy)" || { echo "FAIL: could not build the pristine copy" >&2; exit 1; }
+  assert_fixture_dir "$PRISTINE"
 
   # B0 — control: an unmutated copy is green and prints the A1 summary.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
   run_child "$m" "$out" || rc=$?
   CASES=$((CASES + 1))
   if [[ "$rc" -eq 0 ]] && grep -Eq '^  PASS: A1 [0-9]+ firing / [0-9]+ ledgered' "$out"; then
@@ -573,78 +575,78 @@ run_part_b() {
 
   # B1 — unledgered firing workflow (string-form `on:`); A1 prints the
   # enumerator's own reading (1 job, paths=no, cancel=no) as the row to add.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   printf 'name: zz-new\non: pull_request\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-new.yml"
   red_mutant B1 "$m" '^  FAIL: A1 zz-new\.yml fires' 'add the row zz-new\.yml<TAB>1<TAB>no<TAB>no<TAB>' 'drop pull_request' 'gate types:'
 
   # B2 — ci.yml grows past its row: add (allowed - declared + 1) jobs so the
   # file declares allowed+1 whatever the current declared count is.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   local k=$(( ci_allowed - ci_declared + 1 ))
   mutate_yaml "$m" ci.yml "for i in range($k): doc['jobs']['zz-mutant-%d' % i] = {'runs-on': 'ubuntu-latest', 'steps': [{'run': 'true'}]}"
   red_mutant B2 "$m" "^  FAIL: A3 ci\.yml: $((ci_allowed + 1)) declared, row allows $ci_allowed" 'fold the new job' 'do not delete the job'
 
   # B3 — delete the pr-quality-guards.yml row.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   sed -i '/^pr-quality-guards\.yml\t/d' "$m/ledger.txt"
   red_mutant B3 "$m" '^  FAIL: A1 pr-quality-guards\.yml fires' '^  FAIL: A1 [0-9]+ firing / [0-9]+ ledgered'
 
   # B4 — delete secret-scan.yml from the copy, keep its row (ghost row).
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   rm -f "$m/workflows/secret-scan.yml"
   red_mutant B4 "$m" '^  FAIL: A2 row for secret-scan\.yml but .*does not exist' 'delete the row'
 
   # B5 — flip infra-validation.yml's paths flag to no in the ledger.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   awk -F'\t' -v OFS='\t' '!/^#/ && $1=="infra-validation.yml"{$3="no"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
   red_mutant B5 "$m" '^  FAIL: A4 infra-validation\.yml: row says paths=no, the trigger says paths=yes' 'name why'
 
   # B6 — no concurrency block in the file while the row says cancel=yes.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   mutate_yaml "$m" pr-quality-guards.yml "doc.pop('concurrency', None); [j.pop('concurrency', None) for j in doc['jobs'].values() if isinstance(j, dict)]"
   red_mutant B6 "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'group keyed on'
 
   # B6b — per-SHA group with cancel-in-progress true, row cancel=yes (group shape).
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.event.pull_request.head.sha || github.sha }}', 'cancel-in-progress': True}"
   red_mutant B6b "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'github\.event\.pull_request\.number'
 
   # B6e — a per-PR ref AND a per-run token in one group: the key never collides
   # across pushes, so nothing is ever cancelled; a presence check on the ref
   # alone would score it yes.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.ref }}-\${{ github.sha }}', 'cancel-in-progress': True}"
   red_mutant B6e "$m" '^  FAIL: A4b pr-quality-guards\.yml: row says cancel=yes, the file says cancel=no' 'no per-run token'
 
   # B6c — an unrecognised cancel-in-progress expression fails closed (A4c).
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   mutate_yaml "$m" pr-quality-guards.yml "doc['concurrency'] = {'group': 'pqg-\${{ github.ref }}', 'cancel-in-progress': \"\${{ github.event_name != 'push' }}\"}"
   red_mutant B6c "$m" "^  FAIL: A4c pr-quality-guards[.]yml: cancel-in-progress 'workflow=" "github[.]event_name != 'push' [}][}]' is not an accepted spelling" "accepted verbatim: true [|] false [|] [$][{][{] github[.]event_name == 'pull_request' [}][}];"
 
   # B6d — a row's TABs replaced with spaces: A-parse names the line.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   lno="$({ grep -n $'^cla\.yml\t' "$PRISTINE/ledger.txt" || true; } | cut -d: -f1 | head -1)"
   sed -i "${lno}s/\t/ /g" "$m/ledger.txt"
   red_mutant B6d "$m" "^  FAIL: A-parse line $lno: expected 5 TAB-separated columns, got 1 \\(spaces are not separators\\)"
 
   # B6f — a ternary-form copy whose group is per-ref only (the #7931 class on a
   # push: main arm): A4b still says yes, A6 pins it to ci.yml's group.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   mutate_yaml "$m" secret-scan.yml "doc['concurrency'] = {'group': 'secret-scan-\${{ github.ref }}', 'cancel-in-progress': \"\${{ github.event_name == 'pull_request' }}\"}"
   red_mutant B6f "$m" '^  FAIL: A6 secret-scan\.yml: ternary-form concurrency block does not carry ci\.yml' 'github\.workflow'
 
   # B7 — blank the consequence on cla.yml's row.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   awk -F'\t' -v OFS='\t' '!/^#/ && $1=="cla.yml"{$5=""} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
   red_mutant B7 "$m" '^  FAIL: A5 cla\.yml: consequence has 0 word\(s\), need >= 4'
 
   # B7b — a cancel=no row whose consequence no longer says why.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   awk -F'\t' -v OFS='\t' '!/^#/ && $1=="cla.yml"{$5="CLA Required ruleset context cla-check via pull_request_target"} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
   red_mutant B7b "$m" '^  FAIL: A5 cla\.yml: cancel=no but the consequence never says why'
 
   # B8 — an empty workflows dir: A0 exits 1 directly with `0 < 15`.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
   rm -rf "$m/workflows" && mkdir -p "$m/workflows"
   assert_landed B8 "$m" && { run_child "$m" "$out" || rc=$?; assert_red B8 "$rc" "$out" "^FAIL: A0 vacuity floor: 0 firing workflows found in .* \\(0 < $A0_FLOOR\\)"; }
   CASES=$((CASES + 1))
@@ -655,37 +657,37 @@ run_part_b() {
   fi
 
   # B-sym — a symlinked *.yml is rejected via lstat, not followed.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   ln -s ci.yml "$m/workflows/zz-link.yml"
   red_mutant B-sym "$m" '^  FAIL: A-sym zz-link\.yml is a symlink'
 
   # B11 — a workflow_run chained off a firing workflow with no branch filter
   # fires once per PR push and has no row (the fix-constraints-stage-b shape).
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   printf 'name: zz-chain\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-chain.yml"
   red_mutant B11 "$m" '^  FAIL: A1 zz-chain\.yml fires' 'add the row zz-chain\.yml<TAB>2<TAB>no<TAB>no<TAB>' 'add branches: to its workflow_run'
 
   # B12 — a `uses:` job dispatches its local callee's jobs: one ci.yml job body
   # replaced by a 4-job reusable workflow declares allowed+3 slots, not allowed.
-  m="$(make_copy)"
+  m="$(make_copy)"; assert_fixture_dir "$m"
   printf 'name: zz-reusable\non:\n  workflow_call:\njobs:\n  r1:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r2:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r3:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n  r4:\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n' > "$m/workflows/zz-reusable.yml"
   mutate_yaml "$m" ci.yml "k = sorted(doc['jobs'])[0]; doc['jobs'][k] = {'uses': './.github/workflows/zz-reusable.yml'}"
   red_mutant B12 "$m" "^  FAIL: A3 ci\.yml: $((ci_declared + 3)) declared, row allows $ci_allowed"
 
   # B9 — must PASS: a closed-only workflow with no row (mirrors
   # cleanup-unmerged-bot-branches.yml); the A1 summary is unchanged.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
   printf 'name: zz-closed\non:\n  pull_request:\n    types: [closed]\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-closed.yml"
   assert_landed B9 "$m" && { run_child "$m" "$out" || rc=$?; assert_green B9 "$rc" "$out" "^${CONTROL_OUT}\$"; }
 
   # B9b — must PASS: a workflow_run chained off a firing workflow BUT filtered
   # to main (post-merge-monitor.yml's shape) is not a per-PR generator.
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
   printf 'name: zz-main-chain\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n    branches: [main]\njobs:\n  one:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n' > "$m/workflows/zz-main-chain.yml"
   assert_landed B9b "$m" && { run_child "$m" "$out" || rc=$?; assert_green B9b "$rc" "$out" "^${CONTROL_OUT}\$"; }
 
   # B10 — must PASS: the ci.yml row is an upper bound (row = declared + 3).
-  m="$(make_copy)"; out="$m/child.out"; rc=0
+  m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
   awk -F'\t' -v OFS='\t' -v n="$((ci_declared + 3))" '!/^#/ && $1=="ci.yml"{$2=n} {print}' "$PRISTINE/ledger.txt" > "$m/ledger.txt"
   assert_landed B10 "$m" && { run_child "$m" "$out" || rc=$?; assert_green B10 "$rc" "$out" "^  PASS: A3 ci\\.yml: $ci_declared declared <= row $((ci_declared + 3))\$"; }
 
@@ -694,10 +696,10 @@ run_part_b() {
   CASES=$((CASES + 1))
   if [[ "$CONTROL_CASES" =~ ^[0-9]+$ ]] && [[ "$CONTROL_CASES" -gt 1 ]]; then
     pass "B-A7 control reported $CONTROL_CASES cases"
-    m="$(make_copy)"; out="$m/child.out"; rc=0
+    m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
     run_child "$m" "$out" "$((CONTROL_CASES + 1))" || rc=$?
     assert_red "B-A7+1" "$rc" "$out" "^FAIL: only $CONTROL_CASES assertions ran \\(floor $((CONTROL_CASES + 1))\\)"
-    m="$(make_copy)"; out="$m/child.out"; rc=0
+    m="$(make_copy)"; assert_fixture_dir "$m"; out="$m/child.out"; rc=0
     run_child "$m" "$out" "$((CONTROL_CASES - 1))" || rc=$?
     assert_green "B-A7-1" "$rc" "$out" "^A7 $CONTROL_CASES assertions ran \\(floor $((CONTROL_CASES - 1))\\)"
   else
