@@ -350,8 +350,6 @@ sibling run. It takes no lock, runs no suite and always exits 0.
 worktree to wait for — it does not authorise shipping without the battery. The blocking form of this
 verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
-- **Two sharp edges when `--capacity` lists ≥2 sibling runs (#8137 merge tail).** (a) Export `TC_LOCK_TIMEOUT` above its 3600 s default before launching — the default was sized for a ~45-minute holder, and a run that times out on the lock has produced no evidence at all (measured: a 96-minute holder with four queued worktrees expired it by construction; `10800` acquired after 23 min). (b) Launch with `setsid nohup … &`, record the **runner's** pid, and watch that pid (`while kill -0 <pid>; do sleep 15; done` in a Monitor) — an rc file written by a wrapper shell describes the wrapper: rc=143 with `bash scripts/test-all.sh` still alive under systemd is not a run result, and relaunching on it starts a second battery beside the live one.
-
 Then run the full battery:
 
 ```bash
@@ -378,6 +376,8 @@ starts, and `test-all.sh` then refuses yours with rc 4 (no verdict). Loop on `--
 until 0, launch detached with the rc to a file, and if that file reads `4` go back to waiting. **Why:** PR
 #8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
 contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
+
+**If you deliberately queue INSIDE the lock instead (`SOLEUR_ALLOW_FULL_GATE=1`, which is what lets a launch past the rc-4 sibling refusal), the budget is yours to size.** `TC_LOCK_TIMEOUT` defaults to 3600 s, sized for a ~45-minute holder; on expiry `tc_acquire` does not abort, it prints `LOCK_CONTENDED_PROCEEDING` and runs the battery unserialized beside the holder — the sibling-contention false RED the lock exists to prevent. Export it above the longest holder `--capacity` shows, and raise `TC_RUNTIME_CEILING_S` with it (`$((TC_LOCK_TIMEOUT + 10800))`): the wait is charged against the ceiling (`_RUN_START_EPOCH` is stamped before `tc_acquire`), so `TC_LOCK_TIMEOUT=10800` under the 14400 s default leaves 3600 s of execution, below the uncontended baseline. Launch with `setsid nohup … &` and record the **runner's** pid: an rc file written by a wrapper shell describes the wrapper, and it becomes the run's verdict only once the runner is gone — watch `while kill -0 <pid> && [[ "$(readlink /proc/<pid>/cwd)" == "$PWD" ]]; do sleep 15; done` in a Monitor (the cwd check guards pid reuse). rc=143 with `bash scripts/test-all.sh` still alive under systemd is not a run result, and relaunching on it starts a second battery beside the live one. **Why:** #8137 merge tail — a 96-minute holder with four queued worktrees expired the default by construction (no suite ran, no `LOCK_CONTENDED_PROCEEDING` written); `10800` acquired after 23 min and ran 412/416 green; the wrapper's rc=143 was read while the runner lived on.
 
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
@@ -1928,6 +1928,11 @@ green. `gh pr checks` then reports "all checks settled, zero failures" over zero
 **"No failures" and "the checks ran" are different claims**, and a conflicting PR silently
 produces the first without the second. Assert the checks you *expect* are **present**, not merely
 non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)" --jq '[.workflow_runs[].name]'`.
+The same ref is also why AC17 (`INDEX.md` `Total files`) can go red with a clean local regeneration: GitHub
+merges `refs/pull/N/merge` without the `kb-index` driver named in `.gitattributes`, so when main gained a KB
+file after your last sync the merge ref's count is one short while your head is self-consistent. Do not chase
+it on the branch head — `pre-merge-rebase.sh`'s `git merge origin/main` on `gh pr merge` runs the driver and
+pushes (#8137).
 
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
@@ -1967,8 +1972,6 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
 6. If still `CONFLICTING` after resolution: stop and ask the user for help.
 
 **If `mergeable` is `UNKNOWN`:** Wait 5 seconds and re-check (GitHub may still be computing). After 3 retries, warn and continue.
-
-- **CI tests `refs/pull/N/merge`, not your head (#8137 merge tail).** A `pull_request` run checks out the head merged with *current* `origin/main`, so "the KB index / lockfile / baseline is fresh on my branch" is not the property CI checks: an AC17-class failure (`INDEX.md` one file short) with a clean local regeneration means main moved after your last sync — typically during the Phase 4 lock wait. Merge `origin/main` again after any long wait and confirm `mergeStateStatus` is not `BEHIND` immediately before `gh pr ready`.
 
 ### CI Status Check
 
