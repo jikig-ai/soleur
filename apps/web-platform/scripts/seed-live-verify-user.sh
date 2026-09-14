@@ -281,6 +281,29 @@ SENTINEL_REPO_URL="https://github.com/soleur-synthetic/verify-harness-sentinel"
 # must never be reachable by looking at only part of the list.
 find_user_by_email() {
   local email="$1" per_page=200 page=1 total id
+  # BIND BY UID WHERE WE HAVE ONE (#7969 CLO ruling E3). The walk below pages
+  # the ENTIRE auth.users admin list; run inside a GitHub-hosted runner on every
+  # release, that puts every production account holder's email address on
+  # infrastructure the Art. 30 register does not list as a recipient for PA-1
+  # (whose §(e) presently reads "No transfer for the Supabase + Hetzner plane").
+  # LIVE_VERIFY_EXPECTED_UID is already a Doppler prd value that run.ts requires,
+  # so resolve the one record directly and enumerate nothing. The full walk stays
+  # for the LOCAL bootstrap path, where the UID does not exist yet.
+  if [[ -n "${LIVE_VERIFY_EXPECTED_UID:-}" ]]; then
+    local by_uid
+    by_uid=$(curl --disable --noproxy '*' -sf \
+      "$SB_URL/auth/v1/admin/users/$LIVE_VERIFY_EXPECTED_UID" \
+      -H "$header_auth" -H "$header_api" \
+      | jq -r --arg e "$email" 'if .email == $e then .id else "" end' 2>/dev/null) || by_uid=""
+    if [[ -n "$by_uid" ]]; then printf '%s' "$by_uid"; return 0; fi
+    # A set UID that does not resolve to this email is a MISMATCH, not a cue to
+    # go enumerate: under Actions that would reintroduce exactly what this
+    # avoids, and locally it means the pinned UID is stale.
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      echo "::error::LIVE_VERIFY_EXPECTED_UID did not resolve to $email — refusing to enumerate the user list" >&2
+      return 1
+    fi
+  fi
   total=$(curl --disable --noproxy '*' -sfD - -o /dev/null \
     "$SB_URL/auth/v1/admin/users?per_page=1" -H "$header_auth" -H "$header_api" \
     | tr -d '\r' | sed -n 's/^[Xx]-[Tt]otal-[Cc]ount: *//p' | head -1)
@@ -436,6 +459,10 @@ if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
 echo "::notice::Set these Doppler prd values for the harness allowlist code-gate:"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_UID=$user_id -p soleur -c prd"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_REF=$ref -p soleur -c prd"
-fi
+
+# Inside the guard too. These two were left OUTSIDE it, so the UID still
+# published on every run under Actions — and redact.ts has no rule for a bare
+# UUID or a 20-char project ref, which is exactly why the guard exists.
 echo "LIVE_VERIFY_EXPECTED_UID=$user_id"
 echo "LIVE_VERIFY_EXPECTED_REF=$ref"
+fi
