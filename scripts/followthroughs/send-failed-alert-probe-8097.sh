@@ -272,7 +272,7 @@ fi
 # The rev must be TERMINATED: `probe_rev=1` is a prefix of `probe_rev=12`.
 row="$(printf '%s' "$rows" | jq -c -s --arg re "synthetic=1 probe_rev=${REV}($|[[:space:]])" '[.[] | select(.msg != null and (.msg | test($re)))] | first // empty')"
 if [[ -z "$row" ]]; then
-  action "the synthetic row (${MARKER}) is not in the warehouse although web-1 shipped ${control_n} rows in ${WINDOW_DAYS}d (newest ${control_max}). Candidate causes — this script cannot read the apply run (no GH_TOKEN) and does not pick one: (a) the SSH stage was green-skipped by the ssh_token_gate arm (#7539), so the probe never ran; (b) the main apply failed AFTER creating the exploration and the job stopped before the SSH step; (c) a journald PRIORITY / Vector Source-2 match fault on web-1 (the last unmeasured link). Check the merge run first; re-fire = bump probe_rev."
+  action "the synthetic row (${MARKER}) is not in the warehouse although web-1 shipped ${control_n} rows in ${WINDOW_DAYS}d (newest ${control_max}). Candidate causes — this script cannot read the apply run (it holds no GitHub credential) and does not pick one: (a) the SSH stage was green-skipped by the ssh_token_gate arm (#7539), so the probe never ran; (b) the main apply failed AFTER creating the exploration and the job stopped before the SSH step; (c) a journald PRIORITY / Vector Source-2 match fault on web-1 (the last unmeasured link). Check the merge run first; re-fire = bump probe_rev."
   emit row_absent "marker=${MARKER} control_rows_web1=${control_n} control_min_dt=${control_min// /T} control_max_dt=${control_max// /T}"
   exit 5
 fi

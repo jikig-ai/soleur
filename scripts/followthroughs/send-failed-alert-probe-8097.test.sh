@@ -359,8 +359,15 @@ else fail "xtrace refusal -- expected 78 got $rc"; fi
 # 16. never exit 1: a shell error inside the script must not surface as FAIL. Missing BQ → 3.
 run_case "missing BQ path -> CANNOT ESTABLISH (3), not 1" 3 SEND_FAILED_PROBE_BQ="$WORK/nope.sh"
 
-# Exact baseline, no slack (a whole case can otherwise vanish silently).
+# Exact baseline, no slack (a whole case can otherwise vanish silently). The `-lt` floor comes
+# first and on its own block so `guard-vacuity-floor.test.sh` can slice it into a mutant (it
+# recognises -lt/-le/-ge, not -ne) and measure that it FIRES under a neutered verdict helper;
+# the `-ne` pin below is the exact-count backstop.
 MIN_CASES=75
+if [[ "$total" -lt "$MIN_CASES" ]]; then
+  printf 'FATAL: only %s assertions ran, floor is %s (assertion floor)\n' "$total" "$MIN_CASES" >&2
+  exit 1
+fi
 if [[ "$total" -ne "$MIN_CASES" ]]; then printf 'FATAL: %s assertions ran, expected exactly %s (re-pin MIN_CASES after a deliberate change)\n' "$total" "$MIN_CASES" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then echo "FAILED: $fails of $total case(s)" >&2; exit 1; fi
 echo "OK: all $total send-failed-alert-probe-8097 arms passed"
