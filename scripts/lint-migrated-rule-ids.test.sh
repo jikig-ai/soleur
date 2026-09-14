@@ -129,7 +129,7 @@ canonical_home() {
 }
 
 # --- 0: positive control, dispatched first --------------------------------------------------
-r="$(new_root c0)"; canonical_home "$r" zz-fixture-alpha
+new_root c0 >/dev/null; r="$TMPROOT/c0"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_green "0 canonical fixture" "$r" "lint-migrated-rule-ids: OK (1 rows checked, 1 banners matched)"
 if [[ "$FAIL" -ne 0 ]]; then
@@ -141,9 +141,9 @@ fi
 # pass()/fail() are self-tested above; expect_green/expect_red own their own verdicts, so a
 # helper rewritten to always pass would leave every counter balanced. Drive each in BOTH
 # directions against a known-green and a known-red root, then unwind the counters.
-vg="$(new_root vg)"; canonical_home "$vg" zz-fixture-alpha
+new_root vg >/dev/null; vg="$TMPROOT/vg"; canonical_home "$vg" zz-fixture-alpha
 add_row "$vg" zz-fixture-alpha "$HOME_REL" "### Gate A"
-vr="$(new_root vr)"; canonical_home "$vr" zz-fixture-alpha
+new_root vr >/dev/null; vr="$TMPROOT/vr"; canonical_home "$vr" zz-fixture-alpha
 add_row "$vr" zz-fixture-alpha "$HOME_REL" "### Gate Missing"
 p0=$PASS; f0=$FAIL; c0=$CASES
 {
@@ -160,22 +160,22 @@ fi
 PASS=$p0; FAIL=$f0; CASES=$c0
 
 # --- 1 / 1b: placement is section-scoped ---------------------------------------------------
-r="$(new_root c1)"
+new_root c1 >/dev/null; r="$TMPROOT/c1"
 { printf '# Fixture\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; printf '\n### Gate A\n\nNothing here.\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "1 callout above its heading" "$r" "not inside section" "zz-fixture-alpha"
 
-r="$(new_root c1b)"
+new_root c1b >/dev/null; r="$TMPROOT/c1b"
 { printf '# Fixture\n\n### Gate A\n\nProse mentions [id: zz-fixture-alpha] [skill-enforced: x] in passing.\n\n### Gate B\n\n'
   callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "1b prose token in section, callout elsewhere" "$r" "not inside section"
 
 # --- 2 / 2b: floors -------------------------------------------------------------------------
-r="$(new_root c2)"; printf '# comment only\n#\n' >"$r/scripts/migrated-rule-ids.txt"
+new_root c2 >/dev/null; r="$TMPROOT/c2"; printf '# comment only\n#\n' >"$r/scripts/migrated-rule-ids.txt"
 expect_red "2 comment-only registry under fixture root" "$r" "0 rows checked < floor 1"
 
-r="$(new_root c2b)"; canonical_home "$r" zz-fixture-alpha
+new_root c2b >/dev/null; r="$TMPROOT/c2b"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 cp "$GUARD" "$r/scripts/lint-migrated-rule-ids.sh"
 CASES=$((CASES + 1))
@@ -189,79 +189,79 @@ else
 fi
 
 # --- 3 / 3b / 3c / 3d: heading resolution ----------------------------------------------------
-r="$(new_root c3)"; canonical_home "$r" zz-fixture-alpha
+new_root c3 >/dev/null; r="$TMPROOT/c3"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 add_row "$r" zz-fixture-beta "$HOME_REL" "### Gate Missing"
 expect_red "3 second row's heading absent" "$r" "heading not found" "zz-fixture-beta" "zz-fixture-alpha"
 
-r="$(new_root c3b)"
+new_root c3b >/dev/null; r="$TMPROOT/c3b"
 { printf '# Fixture\n\n### Pre-Ship Domain Review (conditional)\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Pre-Ship Domain Review"
 expect_red "3b registry heading is a strict prefix" "$r" "heading not found"
 
-r="$(new_root c3c)"
+new_root c3c >/dev/null; r="$TMPROOT/c3c"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; printf '\n### Gate A\n\nDuplicate.\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "3c ambiguous heading" "$r" "ambiguous heading"
 
-r="$(new_root c3d)"
+new_root c3d >/dev/null; r="$TMPROOT/c3d"
 { printf '# Fixture\n\n(xxy)\n\n### (x|y).*\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### (x|y).*"
 expect_green "3d regex metacharacters are literal" "$r"
 
 # --- 5b: banner without its body line --------------------------------------------------------
-r="$(new_root c5b)"
+new_root c5b >/dev/null; r="$TMPROOT/c5b"
 { printf '# Fixture\n\n### Gate A\n\n> **Rule `zz-fixture-alpha`%s\n> Banner sentence only.\n\nPlain paragraph [id: zz-fixture-alpha] [x].\n' "$BANNER_TAIL"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "5b banner with no body line in its blockquote" "$r" "body line missing after banner"
 
 # Escape check (plan): correct banner, but the body line names a DIFFERENT rule id.
-r="$(new_root c5e)"
+new_root c5e >/dev/null; r="$TMPROOT/c5e"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-other)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "5e escape: body line names another rule" "$r" "body line missing after banner"
 
 # --- 6 / 6b / 10: reverse scan ----------------------------------------------------------------
-r="$(new_root c6)"; canonical_home "$r" zz-fixture-alpha
+new_root c6 >/dev/null; r="$TMPROOT/c6"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 { printf '# Other\n\n### X\n\n'; callout zz-fixture-orphan "$(body_for zz-fixture-orphan)"; } >"$r/plugins/soleur/skills/other/SKILL.md"
 expect_red "6 banner for an id with no registry row" "$r" "no registry row" "zz-fixture-orphan"
 
-r="$(new_root c6b)"; canonical_home "$r" zz-fixture-alpha
+new_root c6b >/dev/null; r="$TMPROOT/c6b"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 printf '# Other\n\n> **Rule `zz-fixture-orphan` - migrated out of AGENTS.rules.md on 2026-09-14.**\n' >"$r/plugins/soleur/skills/other/SKILL.md"
 expect_red "6b non-canonical banner" "$r" "non-canonical migration banner" "other/SKILL.md"
 
-r="$(new_root c10)"; canonical_home "$r" zz-fixture-alpha
+new_root c10 >/dev/null; r="$TMPROOT/c10"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 printf '# Other\n\n- CI workflow edits. These were migrated out of AGENTS.md in an earlier pass.\n' >"$r/plugins/soleur/skills/other/SKILL.md"
 expect_green "10 prose about AGENTS.md (not .rules.md) is not a banner" "$r"
 
 # --- 7a / 7b / 8 / 9: section-boundary scanning ---------------------------------------------
-r="$(new_root c7a)"
+new_root c7a >/dev/null; r="$TMPROOT/c7a"
 { printf '# Fixture\n\n#### Deep Gate\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; printf '\n#### Next Deep\n\nx\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "#### Deep Gate"
 expect_green "7a level-4 heading section" "$r"
 
-r="$(new_root c7b)"; canonical_home "$r" zz-fixture-alpha
+new_root c7b >/dev/null; r="$TMPROOT/c7b"; canonical_home "$r" zz-fixture-alpha
 printf 'zz-fixture-alpha|2026-09-14|#8175|%s :: ### Gate A|%s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >"$r/scripts/migrated-rule-ids.txt"
 retired_row "$r" zz-fixture-alpha
 expect_green "7b pipes without surrounding spaces" "$r"
 
-r="$(new_root c8)"
+new_root c8 >/dev/null; r="$TMPROOT/c8"
 { printf '# Fixture\n\n### Gate A\n\n#### Sub-heading\n\nIntro.\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; printf '\n### Gate B\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_green "8 lower-level sub-heading does not close the section" "$r"
 
-r="$(new_root c9)"
+new_root c9 >/dev/null; r="$TMPROOT/c9"
 { printf '# Fixture\n\n### Gate A\n\n```bash\n## not a heading\n```\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_green "9a backtick fence with info string hides a heading line" "$r"
 
-r="$(new_root c9b)"
+new_root c9b >/dev/null; r="$TMPROOT/c9b"
 { printf '# Fixture\n\n### Gate A\n\n~~~\n## not a heading\n~~~\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_green "9b tilde fence hides a heading line" "$r"
@@ -269,61 +269,61 @@ expect_green "9b tilde fence hides a heading line" "$r"
 # 9c: a 4-space-indented ``` is CONTENT, not a fence opener — so a real heading after it still
 # closes the section. Discriminates in the RED direction: a guard that wrongly opened a fence
 # here would swallow `### Gate B`, extend Gate A to EOF, and pass a misplaced callout.
-r="$(new_root c9c)"
+new_root c9c >/dev/null; r="$TMPROOT/c9c"
 { printf '# Fixture\n\n### Gate A\n\n    ```\n    indented code\n\n### Gate B\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "9c indented backticks do not open a fence" "$r" "not inside section"
 
 # --- 11 / 12 / 13 / 14: grammar, confinement, fail-closed, accumulation -----------------------
-r="$(new_root c11)"; canonical_home "$r" zz-fixture-alpha
+new_root c11 >/dev/null; r="$TMPROOT/c11"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 printf 'zz-fixture-garbage | not a row\n' >>"$r/scripts/migrated-rule-ids.txt"
 expect_red "11 malformed row" "$r" "malformed row" "line 2"
 
-r="$(new_root c12a)"; add_row "$r" zz-fixture-alpha "../outside.md" "### Gate A"
+new_root c12a >/dev/null; r="$TMPROOT/c12a"; add_row "$r" zz-fixture-alpha "../outside.md" "### Gate A"
 expect_red "12a parent-relative path" "$r" "path escapes root"
 
-r="$(new_root c12b)"; add_row "$r" zz-fixture-alpha "/abs/path.md" "### Gate A"
+new_root c12b >/dev/null; r="$TMPROOT/c12b"; add_row "$r" zz-fixture-alpha "/abs/path.md" "### Gate A"
 expect_red "12b absolute path" "$r" "path escapes root"
 
-r="$(new_root c12c)"; canonical_home "$r" zz-fixture-alpha
+new_root c12c >/dev/null; r="$TMPROOT/c12c"; canonical_home "$r" zz-fixture-alpha
 ln -s "$r/$HOME_REL" "$r/plugins/soleur/skills/fixture/LINK.md"
 add_row "$r" zz-fixture-alpha "plugins/soleur/skills/fixture/LINK.md" "### Gate A"
 expect_red "12c symlinked home" "$r" "symlink"
 
-r="$(new_root c12d)"; mkdir -p "$r/docs"
+new_root c12d >/dev/null; r="$TMPROOT/c12d"; mkdir -p "$r/docs"
 { printf '# Doc\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$r/docs/home.md"
 add_row "$r" zz-fixture-alpha "docs/home.md" "### Gate A"
 expect_red "12d home outside plugins/soleur" "$r" "outside plugins/soleur"
 
-r="$(new_root c13a)"; rm -f "$r/scripts/migrated-rule-ids.txt"
+new_root c13a >/dev/null; r="$TMPROOT/c13a"; rm -f "$r/scripts/migrated-rule-ids.txt"
 expect_red "13a registry absent" "$r" "registry not found" "" "No such file"
 
-r="$(new_root c13b)"; add_row "$r" zz-fixture-alpha "plugins/soleur/skills/fixture/GONE.md" "### Gate A"
+new_root c13b >/dev/null; r="$TMPROOT/c13b"; add_row "$r" zz-fixture-alpha "plugins/soleur/skills/fixture/GONE.md" "### Gate A"
 expect_red "13b home file absent" "$r" "home file not found" "" "No such file"
 
-r="$(new_root c14)"; canonical_home "$r" zz-fixture-alpha
+new_root c14 >/dev/null; r="$TMPROOT/c14"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-beta "$HOME_REL" "### Nope One"
 add_row "$r" zz-fixture-gamma "$HOME_REL" "### Nope Two"
 expect_red "14 two bad rows named in one run" "$r" "zz-fixture-beta" "zz-fixture-gamma"
 
 # --- 15 / 15b / 15c: body integrity ---------------------------------------------------------
-r="$(new_root c15)"
+new_root c15 >/dev/null; r="$TMPROOT/c15"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha | sed 's/Fixture body/Fixture bodyX/')"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "15 one word of the body edited, row hash unchanged" "$r" "body hash mismatch" "zz-fixture-alpha"
 
-r="$(new_root c15b)"
+new_root c15b >/dev/null; r="$TMPROOT/c15b"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha | sed 's/Fixture body for/Fixture   body  for/; s/\*\*Why:\*\* fixture/**Why:**    fixture/')"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_green "15b whitespace-only change is normalised" "$r"
 
-r="$(new_root c15c)"; canonical_home "$r" zz-fixture-alpha
+new_root c15c >/dev/null; r="$TMPROOT/c15c"; canonical_home "$r" zz-fixture-alpha
 printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A\n' "$HOME_REL" >"$r/scripts/migrated-rule-ids.txt"
 expect_red "15c row missing its hash field" "$r" "malformed row"
 
 # --- 16: an intermediate directory symlink, and --print-hash ----------------------------------
-r="$(new_root c16a)"; outside="$TMPROOT/c16a-outside"; mkdir -p "$outside/evil"
+new_root c16a >/dev/null; r="$TMPROOT/c16a"; outside="$TMPROOT/c16a-outside"; mkdir -p "$outside/evil"
 { printf '# Evil\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$outside/evil/SKILL.md"
 ln -s "$outside" "$r/plugins/soleur/skills/linked"
 add_row "$r" zz-fixture-alpha "plugins/soleur/skills/linked/evil/SKILL.md" "### Gate A"
@@ -338,7 +338,7 @@ expect_cmd() {
   local o; o="$(cat "$OUT")"
   if [[ "$RC" -eq "$want" && "$o" == *"$needle"* ]]; then pass "$name"; else fail "$name" "rc=$RC out=$(printf '%s' "$o" | tr '\n' '|' | cut -c1-300)"; fi
 }
-r="$(new_root c16b)"; canonical_home "$r" zz-fixture-alpha
+new_root c16b >/dev/null; r="$TMPROOT/c16b"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_cmd "16b --print-hash equals the independent oracle" 0 "$(body_hash "$(body_for zz-fixture-alpha)")" -- \
   env LINT_MIGRATED_RULE_IDS_ROOT="$r" bash "$GUARD" --print-hash zz-fixture-alpha
@@ -348,67 +348,67 @@ expect_cmd "16d --print-hash with no id" 2 "needs an id" -- \
   env LINT_MIGRATED_RULE_IDS_ROOT="$r" bash "$GUARD" --print-hash
 
 # --- 17: uniqueness — one row, one banner, one tagged body -----------------------------------
-r="$(new_root c17a)"; canonical_home "$r" zz-fixture-alpha
+new_root c17a >/dev/null; r="$TMPROOT/c17a"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A | %s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >>"$r/scripts/migrated-rule-ids.txt"
 expect_red "17a duplicate registry row" "$r" "duplicate row for zz-fixture-alpha"
 
-r="$(new_root c17b)"
+new_root c17b >/dev/null; r="$TMPROOT/c17b"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"
   printf '\n'; callout zz-fixture-alpha "Weaker copy [id: zz-fixture-alpha] [skill-enforced: fixture Gate]. Optional."
   printf '\n### Gate B\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "17b second banner for the same id inside the section" "$r" "migration banner for zz-fixture-alpha occurs 2 times"
 
-r="$(new_root c17c)"; canonical_home "$r" zz-fixture-alpha
+new_root c17c >/dev/null; r="$TMPROOT/c17c"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 { printf '# Other\n\n### Y\n\n'; callout zz-fixture-alpha "Weaker copy [id: zz-fixture-alpha] [x]. Optional."; } >"$r/plugins/soleur/skills/other/SKILL.md"
 expect_red "17c second banner for the same id in another file" "$r" "second migration banner for zz-fixture-alpha" "other/SKILL.md"
 
-r="$(new_root c17d)"; canonical_home "$r" zz-fixture-alpha
+new_root c17d >/dev/null; r="$TMPROOT/c17d"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/.claude/hooks"
 { printf '# Orphan\n\n'; callout zz-fixture-orphan "$(body_for zz-fixture-orphan)"; } >"$r/.claude/hooks/notes.md"
 expect_red "17d banner outside plugins/soleur is scanned" "$r" "outside plugins/soleur/ (.claude/hooks/notes.md:3)" "no registry row for migrated banner zz-fixture-orphan"
 
-r="$(new_root c17e)"; canonical_home "$r" zz-fixture-alpha
+new_root c17e >/dev/null; r="$TMPROOT/c17e"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/knowledge-base/project/plans"
 { printf '# Plan\n\n'; callout zz-fixture-quoted "$(body_for zz-fixture-quoted)"; } >"$r/knowledge-base/project/plans/p.md"
 expect_green "17e a plan quoting a banner is not a home" "$r"
 
-r="$(new_root c17f)"
+new_root c17f >/dev/null; r="$TMPROOT/c17f"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"
   printf '\n### Gate B\n\n- Relaxed restatement [id: zz-fixture-alpha]: optional under deadline pressure.\n'; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "17f a second tagged copy of the body elsewhere in the home" "$r" "[id: zz-fixture-alpha] occurs 2 times"
 
 # --- 18: identity against retired-rule-ids.txt -----------------------------------------------
-r="$(new_root c18a)"; canonical_home "$r" zz-fixture-alpha
+new_root c18a >/dev/null; r="$TMPROOT/c18a"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 retired_row "$r" zz-fixture-dropped
 expect_red "18a a migration row whose registry row was dropped" "$r" "zz-fixture-dropped has a 'NOT a retirement of the RULE' row"
 
-r="$(new_root c18b)"; canonical_home "$r" zz-fixture-alpha
+new_root c18b >/dev/null; r="$TMPROOT/c18b"; canonical_home "$r" zz-fixture-alpha
 printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A | %s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >"$r/scripts/migrated-rule-ids.txt"
 printf 'zz-fixture-alpha | 2026-09-14 | #8175 | an ordinary retirement, no marker\n' >"$r/scripts/retired-rule-ids.txt"
 expect_red "18b a registry row with no migration row (a swapped-in id)" "$r" "zz-fixture-alpha has a row in scripts/migrated-rule-ids.txt but no"
 
 # --- 19: non-ASCII whitespace the two normalisers disagree on --------------------------------
-r="$(new_root c19)"
+new_root c19 >/dev/null; r="$TMPROOT/c19"
 { printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha | sed $'s/Fixture body/Fixture\xc2\xa0body/')"; } >"$r/$HOME_REL"
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 expect_red "19 NBSP in a body" "$r" "non-ASCII whitespace"
 
 # --- 20: a banner not written as a top-level blockquote line ---------------------------------
-r="$(new_root c20a)"; canonical_home "$r" zz-fixture-alpha
+new_root c20a >/dev/null; r="$TMPROOT/c20a"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 printf '# Other\n\n**Rule `zz-fixture-orphan`%s\n' "$BANNER_TAIL" >"$r/plugins/soleur/skills/other/SKILL.md"
 expect_red "20a banner without a blockquote marker" "$r" "migration banner for zz-fixture-orphan at plugins/soleur/skills/other/SKILL.md:3 is not a top-level blockquote line"
 
-r="$(new_root c20b)"; canonical_home "$r" zz-fixture-alpha
+new_root c20b >/dev/null; r="$TMPROOT/c20b"; canonical_home "$r" zz-fixture-alpha
 add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
 mkdir -p "$r/plugins/soleur/skills/other"
 printf '# Other\n\n> > **Rule `zz-fixture-orphan`%s\n' "$BANNER_TAIL" >"$r/plugins/soleur/skills/other/SKILL.md"

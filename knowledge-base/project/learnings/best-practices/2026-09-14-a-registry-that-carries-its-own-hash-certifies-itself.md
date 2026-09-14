@@ -156,6 +156,19 @@ Two corollaries:
     **Prevention:** when a PR retracts a claim, sweep every producer of text that states it,
     whether or not that producer currently fires.
 
+15. **CI `test-scripts (1/3)` failed on `fixture-relative-assert`.** The new guard suite added 34
+    redirect operands of the form `r="$(new_root c1)"`, and the scanner cannot prove a
+    function-returned path is absolute. No local run had included that corpus-wide suite.
+    Recovery: assigned `r="$TMPROOT/c1"` directly (0 sites) rather than baselining the author.
+    **Prevention:** after adding any `*.sh` test file, run every repo-level lint/guard suite in
+    the `scripts` shard. They are cheap, and they are the instrument that sees corpus-wide rules
+    a per-file suite cannot. Both CI failures in this session came from that class.
+16. **CI `test-scripts (3/3)` failed on `lint-shell-capture-exit`.** The review-fix assertion
+    added to `test-sync-rule-prune.sh` captured a `grep | head` with no decision about the grep's
+    no-match exit. Recovery: `|| true`.
+    **Prevention:** same as 15. A review-fix commit is new code and needs the same deterministic
+    lints as the original change.
+
 ## Tags
 
 category: best-practices

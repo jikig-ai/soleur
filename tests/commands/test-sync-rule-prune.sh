@@ -354,7 +354,7 @@ tp5b_title_format() {
   # The body must not present a zero-event count as retirement evidence (#8030): an obeyed
   # rule emits nothing, so this list nominates the best-obeyed rules first.
   local body
-  body=$(grep -E '^::rule-prune-pr-body::' "$root/out.txt" | head -n 1)
+  body=$(grep -E '^::rule-prune-pr-body::' "$root/out.txt" | head -n 1 || true)
   if [[ "$body" == *"not retirement evidence"* && "$body" == *"editorial reason"* ]]; then
     _report "tp5b: body says the shortlist is not retirement evidence" ok
   else
