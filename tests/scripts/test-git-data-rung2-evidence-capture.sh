@@ -232,6 +232,26 @@ else
   fail "evidence records the queries that produced it" "n/a" "$(cat "$OUT" 2>/dev/null)"
 fi
 
+# (#8010 item 1) …and WITH THE TABLE PAIR THE QUERY RAN AGAINST, BY VALUE. Pasting a recorded
+# query into betterstack-query.sh with no BS_TABLE exported returns rc=0 and zero rows from
+# the inngest DEFAULT table — which reads as "dark boot" on a perfectly good birth. The pin
+# asserts the value, not presence: a presence pin would pass a wrong derivation
+# (`${BS_TABLE}_s3` -> `…prd_logs_s3`, a collection that does not exist). This arm runs the
+# SUT under `env -u BS_TABLE -u BS_TABLE_S3` so an inherited shell export cannot flake it.
+# shellcheck source=/dev/null
+source "${ROOT}/scripts/lib/betterstack-sources.sh"
+OUT_TABLE="$TMP/evidence-pass-table.env"
+env -u BS_TABLE -u BS_TABLE_S3 \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_TABLE" >/dev/null 2>&1 || true
+if grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT_TABLE" 2>/dev/null; then
+  pass "evidence records the table pair it queried by value"
+else
+  fail "evidence records the table pair it queried by value" "n/a" "$(grep -n 'TABLE' "$OUT_TABLE" 2>/dev/null || echo '<no TABLE line>')"
+fi
+
 # ── ARM 2: the FAIL path — a fatal from this host ─────────────────────────────────
 #
 # (#7025, R5) THE FAIL ARM IS `level=fatal`, NOT a `\bno\b` MATCH ON THE BOOLEANS.
@@ -1319,7 +1339,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=76  # 73 + the instrument self-test + the #7898 §6 egress-reachability row + the #8043 Guard 4 tracked-copy cmp row
+_FLOOR=77  # 73 + the instrument self-test + the #7898 §6 egress-reachability row + the #8043 Guard 4 tracked-copy cmp row + the #8010 `# TABLE:` value pin
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

@@ -257,11 +257,11 @@
       },
       "at_rest": {
         "mechanism": "luks",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data.",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml, anchored on content not line numbers (cq-cite-content-anchor-not-line-number): the SAME `cryptsetup luksFormat --batch-mode --type luks2 --key-file -` and `cryptsetup luksOpen --key-file - \"$DEV\" git-data` calls the production host runs, because the rehearsal renders from modules/git-data-userdata and boots the identical template. Key: random_password.rehearsal_luks + doppler_secret.rehearsal_luks_key (rung2-rehearsal/rehearsal.tf), written into a SCRATCH Doppler config, never prd_git_data. Observed twice: rung-2 rehearsal run 34768256297 (2026-09-13, evidence PR #8126) and the production birth (`boot_complete` 2026-09-14T15:27:24Z, `luks_mounted=yes`, Better Stack table t520508_soleur_git_data_prd_logs, host_name soleur-git-data, run 34861860722) — the same rendered template's luksOpen stage on real hardware; scripts/followthroughs/git-data-rung2-evidence-capture.sh writes evidence only after stage:boot_complete with luks_mounted=yes.",
         "defends_against": "a seized/RMA'd or snapshot-imaged rehearsal block volume between creation and teardown: unreadable without the throwaway Doppler-held passphrase",
         "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:no rehearsal has been dispatched yet — #7025 ships the ROUTE unfired. The rehearsal IS the live verification when it runs: scripts/followthroughs/git-data-rung2-evidence-capture.sh requires stage:boot_complete with luks_mounted=yes before writing evidence, and writes nothing otherwise. Recorded as unavailable rather than available because a capability that has never executed is not an observation."
+        "live_verification": "available"
       }
     },
     {
