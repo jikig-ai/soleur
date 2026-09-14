@@ -2222,6 +2222,21 @@ run_faithful_sandbox_canary() {
   return 0
 }
 
+# _atomic_write <dest> <content>: temp file in the SAME directory as <dest> (so the rename is atomic
+# on one filesystem), then `mv -f` — <dest> holds the old bytes or the new bytes, never a torn write.
+# Returns 1 (temp removed) on any failure; callers decide whether that is fatal (the quiesce marker)
+# or best-effort (write_seccomp_profile_hash). One helper, so the mktemp+redirect+rename shape lives
+# in one place instead of being re-spelled at every durable write.
+_atomic_write() {
+  local dest="$1" content="$2" tmp
+  tmp="$(mktemp "${dest}.XXXXXX" 2>/dev/null)" || return 1
+  if ! printf '%s\n' "$content" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$dest" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
 # write_seccomp_profile_hash: record the sha256 of the seccomp profile the prod
 # container was JUST started with (#5875 item 4 / ADR-079). The container loads
 # the profile at `docker run --security-opt seccomp=<host file>`, so the sha256 of
@@ -2231,7 +2246,7 @@ run_faithful_sandbox_canary() {
 # "applied ≠ loaded" gap that let a #5874-style recovery fix "apply" without ever
 # loading. Always returns 0: recording the hash must never abort a succeeded deploy.
 write_seccomp_profile_hash() {
-  local host_path="${1:-$SECCOMP_PROFILE_HOST_PATH}" sha="" tmp now
+  local host_path="${1:-$SECCOMP_PROFILE_HOST_PATH}" sha="" content now
   now="$(date +%s)"
   # cut the leading 64-hex field from `sha256sum`; empty (→ JSON "") if the
   # profile file is absent (e.g. a host predating docker_seccomp_config, or the
@@ -2242,11 +2257,9 @@ write_seccomp_profile_hash() {
     sha="$(sha256sum "$host_path" 2>/dev/null | cut -d' ' -f1 || true)"
   fi
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || sha=""
-  tmp="$(mktemp "${SECCOMP_PROFILE_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
-  jq -nc --arg sha "$sha" --argjson ts "$now" \
-    '{seccomp_profile_sha256:$sha, loaded_at:$ts}' \
-    > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SECCOMP_PROFILE_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  content="$(jq -nc --arg sha "$sha" --argjson ts "$now" \
+    '{seccomp_profile_sha256:$sha, loaded_at:$ts}' 2>/dev/null)" || return 0
+  _atomic_write "$SECCOMP_PROFILE_STATE_FILE" "$content" || true
   return 0
 }
 
@@ -2410,20 +2423,50 @@ inngest_unit_enabled() {
   esac
 }
 
-# Single-source "is the unit in the QUIESCED shape op=quiesce-web writes?" (#8077): is-active ∈
-# {inactive, failed} AND is-enabled == disabled. Only the `quiesce` handler writes it (stop +
-# disable) and only `enable` (op=rollback) clears it; the `restart` handler and the `deploy
-# inngest` arm refuse it, because a restart STARTS a disabled unit. `failed` counts: a stop that
-# ends in SIGKILL at TimeoutStopSec leaves failed+disabled, while a crashed ENABLED unit cycles
-# `activating` — `disabled` is the discriminator. STRICTER than verify_inngest_quiesced's
-# not-enabled test (static/masked/empty are benign THERE): here only the exact shape quiesce
-# writes counts, so an absent unit (`not-found`, rc 4) or a no-[Install] unit is never refused.
-# `|| true` is load-bearing: is-active exits 3 on inactive/failed, is-enabled 1 on disabled.
-inngest_unit_quiesced() {
-  local a e
+# Quiesce state of the web inngest unit (ADR-100 amendment 2026-09-14, CTO ruling): the
+# systemd shape says "must not be started"; the marker says "a deliberate op=quiesce-web".
+# Prints exactly one of: quiesced | disabled_unattributed | not_quiesced. Byte-identical in
+# ci-deploy.sh, inngest-inventory.sh and inngest-rearm-reminders.sh (parity test pins it).
+inngest_quiesce_state() {
+  local a e m me ae ae_epoch
   a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
   e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
-  [[ ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ]]
+  if [[ ! ( ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ) ]]; then
+    echo not_quiesced
+    return 0
+  fi
+  m="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  me="$(jq -r 'if (.v == 1 and (.epoch | type) == "number") then (.epoch | floor | tostring) else "" end' "$m" 2>/dev/null || true)"
+  if [[ ! "$me" =~ ^[0-9]{9,11}$ ]]; then
+    echo disabled_unattributed
+    return 0
+  fi
+  ae="$(systemctl show -p ActiveEnterTimestamp --value inngest-server.service 2>/dev/null || true)"
+  if [[ -n "$ae" && "$ae" != "n/a" ]]; then
+    ae_epoch="$(date -d "$ae" +%s 2>/dev/null || true)"
+    if [[ "$ae_epoch" =~ ^[0-9]+$ ]] && (( ae_epoch > me )); then
+      echo disabled_unattributed
+      return 0
+    fi
+  fi
+  echo quiesced
+}
+
+# _quiesce_err_scrub: redact connection strings + credentials from UNTRUSTED capture stderr before
+# it reaches journald (tag ci-deploy → Vector → Better Stack). Mirrors _pf_scrub in
+# inngest-inventory.sh: URIs, user:pass@host, password= (quoted and bare), and multi-key libpq DSN
+# key=value runs. Control chars become spaces first so tokens are not welded together. Runs AFTER
+# _cred_err_tail (contract §6) and also BEFORE it: the tail keeps only the last 200 chars, and a
+# cut through a URI would otherwise strip the scheme and leave a password fragment no rule matches.
+# Reads stdin, writes stdout.
+_quiesce_err_scrub() {
+  LC_ALL=C tr '\000-\037\177' '[ *]' \
+    | sed -E -e 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]"]*#<uri-redacted>#g' \
+             -e 's#[A-Za-z0-9._%+-]+:[^[:space:]"@/]*@[A-Za-z0-9.-]+#<cred-redacted>#g' \
+             -e 's#(password|pgpassword)[[:space:]]*=[[:space:]]*\\*"[^"\\]*\\*"#\1=<redacted>#gI' \
+             -e "s#(password|pgpassword)[[:space:]]*=[[:space:]]*'[^']*'#\\1=<redacted>#gI" \
+             -e 's#(password|pgpassword)[[:space:]]*=[^[:space:]",;\\]*#\1=<redacted>#gI' \
+             -e 's#(^|[[:space:]])(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*(([[:space:]]|\\[nrt])+(host|hostaddr|port|dbname|user|password|sslmode|sslrootcert|connect_timeout|application_name|target_session_attrs)=[^[:space:]"]*)+#\1<dsn-redacted>#g'
 }
 
 # Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
@@ -2669,11 +2712,20 @@ write_state "$EXIT_RUNNING" "running"
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
   # #8077: a quiesced unit (op=quiesce-web's stop+disable) is deliberate — the watchdog's restart
-  # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb.
-  if inngest_unit_quiesced; then
-    logger -t "$LOG_TAG" "INNGEST_RESTART_REFUSED: unit inactive+disabled (quiesced) — only op=rollback re-arms"
-    echo "Error: inngest-server.service is quiesced (inactive+disabled); only op=rollback re-arms it" >&2
-    final_write_state 1 "inngest_quiesced_restart_refused"
+  # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb. The SHAPE is the
+  # signal (contract §3): a disabled not-running unit with no valid quiesce marker is refused too
+  # (a restart STARTS a disabled unit), under its own reason so the two are told apart off-host.
+  _qs_state="$(inngest_quiesce_state)"
+  if [[ "$_qs_state" != not_quiesced ]]; then
+    _qs_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+    _qs_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+    logger -t "$LOG_TAG" "INNGEST_RESTART_REFUSED: state=$_qs_state unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>} — only op=rollback re-arms"
+    echo "Error: inngest-server.service is $_qs_state (unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>}); only op=rollback re-arms it" >&2
+    if [[ "$_qs_state" == quiesced ]]; then
+      final_write_state 1 "inngest_quiesced_restart_refused"
+    else
+      final_write_state 1 "inngest_disabled_unattributed_restart_refused"
+    fi
     exit 1
   fi
   echo "Restarting inngest-server.service..."
@@ -2706,33 +2758,84 @@ fi
 # an hr-observability-as-plan-quality-gate regression). Mirrors the restart handler's
 # set +e/-e-around-verify pattern verbatim.
 if [[ "$ACTION" == "quiesce" ]]; then
-  # #6921 D1b: capture the still-armed reminders BEFORE the scheduler stops, so the persisted
-  # capture a later op=execute resumes from is taken at the quiesce boundary. Only an ACTIVE unit
-  # is captured (a stopped scheduler cannot be enumerated — a re-dispatch after a transient peer
-  # failure, a failed/activating unit, or a host with no unit skips it and keeps the existing file).
-  # Fail-closed: stopping a scheduler whose reminders were not captured is the loss this prevents,
-  # so a failed or timed-out capture stops NOTHING. The escape hatch for an active-but-GQL-dead
-  # unit is a restart, then re-dispatch op=quiesce-web.
-  # Bounded: `timeout` (no --foreground, so it signals its own process group and the capture's
-  # curl dies with it) plus a SIGKILL grace; the drift guard in ci-deploy.test.sh adds both to the
-  # op=quiesce-web poll window. `200>&-` (#5062) so an orphaned child cannot hold the deploy flock.
-  if [[ "$(systemctl is-active inngest-server.service 2>/dev/null || true)" == active ]]; then
+  # Entry is decided by the unit's observed state (contract §6), BEFORE anything is touched:
+  #   is-active=active       → capture → hash+count → marker (atomic) → disable → stop → verify
+  #   state=quiesced         → re-dispatch: no capture, marker UNTOUCHED (its epoch must not move)
+  #   unit absent            → no capture, no marker (a host with no scheduler — the web-2 path)
+  #   anything else          → quiesce_capture_unavailable, NOTHING disabled/stopped: a failed,
+  #                            activating, deactivating or inactive+enabled unit cannot be enumerated
+  #                            (its reminders would be lost), and a disabled unit with no valid
+  #                            marker was not stopped by this op (op=rollback, then re-dispatch).
+  _q_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  _q_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  _q_st="$(inngest_quiesce_state)"
+  _q_marker="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  _q_cap_file="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}"
+  if [[ "$_q_a" == active ]]; then
+    _q_path=capture
+  elif [[ "$_q_st" == quiesced ]]; then
+    _q_path=redispatch
+  elif [[ ( "$_q_e" == not-found || -z "$_q_e" ) && "$_q_a" == inactive ]]; then
+    _q_path=absent
+  else
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit=$_q_a enabled=$_q_e state=$_q_st"
+    echo "Error: inngest-server.service is not capturable (unit=${_q_a:-<empty>} enabled=${_q_e:-<empty>} state=$_q_st) — nothing stopped" >&2
+    final_write_state 1 "quiesce_capture_unavailable"
+    exit 1
+  fi
+  logger -t "$LOG_TAG" "INNGEST_QUIESCE: entry path=$_q_path unit=${_q_a:-<empty>} enabled=${_q_e:-<empty>} state=$_q_st"
+
+  if [[ "$_q_path" == capture ]]; then
+    # #6921 D1b: capture the still-armed reminders BEFORE the scheduler stops, so the persisted
+    # capture a later op=execute resumes from is taken at the quiesce boundary. Fail-closed: stopping
+    # a scheduler whose reminders were not captured is the loss this prevents, so a failed or
+    # timed-out capture stops NOTHING. The escape hatch for an active-but-GQL-dead unit is a
+    # restart, then re-dispatch op=quiesce-web.
+    # Bounded: `timeout` (no --foreground, so it signals its own process group and the capture's
+    # curl dies with it) plus a SIGKILL grace; the drift guard in ci-deploy.test.sh adds both to the
+    # op=quiesce-web poll window. `200>&-` (#5062) so an orphaned child cannot hold the deploy flock.
+    # No EXIT trap for the stderr file: every path below removes it explicitly.
     echo "Capturing armed reminders before quiesce..."
     cap_err="$(mktemp 2>/dev/null || echo /dev/null)"
-    # Chain the stderr-file cleanup onto the state-writing EXIT trap (the ENV_FILE precedent in the
-    # web-platform arm) — replacing it would lose the "unhandled" reason capture.
-    trap 'rc=$?; if [ "${cap_err:-/dev/null}" != /dev/null ]; then rm -f "$cap_err"; fi; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
     cap_rc=0
-    timeout --kill-after=5 "${QUIESCE_CAPTURE_TIMEOUT:-120}" env INNGEST_REARM_MODE=capture "${INNGEST_REARM_CMD:-/usr/local/bin/inngest-rearm-reminders.sh}" >/dev/null 2>"$cap_err" 200>&- || cap_rc=$?
+    timeout --kill-after=5 "${QUIESCE_CAPTURE_TIMEOUT:-120}" env INNGEST_REARM_MODE=capture INNGEST_CUTOVER_CAPTURE_FILE="$_q_cap_file" "${INNGEST_REARM_CMD:-/usr/local/bin/inngest-rearm-reminders.sh}" >/dev/null 2>"$cap_err" 200>&- || cap_rc=$?
+    cap_raw="$(cat "$cap_err" 2>/dev/null || true)"
+    if [[ "$cap_err" != /dev/null ]]; then rm -f "$cap_err" 2>/dev/null || true; fi
     if [[ "$cap_rc" -ne 0 ]]; then
-      cap_tail="$(_cred_err_tail "$(cat "$cap_err" 2>/dev/null || true)")"
+      cap_tail="$(_cred_err_tail "$(printf '%s' "$cap_raw" | _quiesce_err_scrub)")"
+      cap_tail="$(printf '%s' "$cap_tail" | _quiesce_err_scrub)"
       logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_FAILED rc=$cap_rc stderr_tail=${cap_tail:-<empty>}"
       echo "Error: reminder capture failed (rc=$cap_rc) — inngest-server.service left running" >&2
       final_write_state 1 "quiesce_capture_failed"
       exit 1
     fi
-    if [[ "$cap_err" != /dev/null ]]; then rm -f "$cap_err" 2>/dev/null || true; fi
-    logger -t "$LOG_TAG" "INNGEST_QUIESCE: reminders captured before stop"
+    unset cap_raw
+    # The marker binds the capture it was taken with (sha256 + record count): rearm refuses a
+    # capture whose hash no longer matches. An unreadable/non-array capture is a failed capture.
+    _q_sha="$(sha256sum "$_q_cap_file" 2>/dev/null | awk '{print $1}' || true)"
+    _q_count="$(jq -e 'if type == "array" then length else error("not an array") end' "$_q_cap_file" 2>/dev/null || true)"
+    if [[ ! "$_q_sha" =~ ^[0-9a-f]{64}$ || ! "$_q_count" =~ ^[0-9]+$ ]]; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_FAILED rc=0 stderr_tail=capture file missing or not a JSON array"
+      echo "Error: reminder capture produced no valid capture file — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_capture_failed"
+      exit 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: reminders captured before stop (count=$_q_count sha256=$_q_sha)"
+
+    # Atomic marker write (mktemp in the SAME directory, then mv -f): a torn marker would read as
+    # disabled_unattributed after the stop. Written BEFORE the stop so a crash between the two
+    # leaves a running unit plus a marker — which inngest_quiesce_state reads as not_quiesced.
+    _q_boot="$(tr -cd 'A-Za-z0-9-' 2>/dev/null < "${INNGEST_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" || true)"
+    _q_json="$(jq -nc --argjson epoch "$(date +%s)" --arg boot "${_q_boot:-unknown}" --arg host "${HOST_ID:-}" \
+      --arg run "${SOLEUR_DEPLOY_HOOK_ID:-unset}-${START_TS}-$$" --arg sha "$_q_sha" --argjson n "$_q_count" \
+      '{v:1, epoch:$epoch, boot_id:$boot, host_id:$host, run_id:$run, capture_sha256:$sha, capture_count:$n}' 2>/dev/null || true)"
+    if [[ -z "$_q_json" ]] || ! _atomic_write "$_q_marker" "$_q_json"; then
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_MARKER_WRITE_FAILED marker=$_q_marker — nothing stopped"
+      echo "Error: could not write the quiesce marker $_q_marker — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_marker_write_failed"
+      exit 1
+    fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: marker written $_q_marker (capture_count=$_q_count)"
   fi
 
   # disable BEFORE stop: the final shape is order-independent, but disabling first shrinks the
@@ -2763,6 +2866,19 @@ if [[ "$ACTION" == "quiesce" ]]; then
       ;;
   esac
 
+  # The verify accepts any not-enabled shape (static/masked are benign for "a reboot cannot re-arm
+  # it"), but every downstream reader — the inventory probe, rearm, the restart refusal — recognises
+  # ONLY inactive|failed + disabled + a valid marker. A present unit that ends in any other shape
+  # would read as not_quiesced / disabled_unattributed there, so it is not declared quiesced here.
+  if [[ "$_q_path" != absent ]]; then
+    _q_final="$(inngest_quiesce_state)"
+    if [[ "$_q_final" != quiesced ]]; then
+      logger -t "$LOG_TAG" "FAILED: quiesce — final shape not recognised (state=$_q_final unit=$(systemctl is-active inngest-server.service 2>/dev/null || true) enabled=$(systemctl is-enabled inngest-server.service 2>/dev/null || true))"
+      final_write_state 1 "quiesced_shape_unrecognized"
+      exit 1
+    fi
+  fi
+
   # Fan the SAME `quiesce inngest _ _` out to every peer web host over the private net
   # (mirrors the deploy fan-out; peers receive on /hooks/deploy-peer → no re-fan). A peer
   # 202 is SPAWN-ACCEPTANCE only, NOT proof the peer quiesced (the peer's own verdict lands
@@ -2791,6 +2907,26 @@ fi
 # pre-existing INNGEST_START (#5450) grant — a restart is not needed because quiesce stopped
 # the unit.
 if [[ "$ACTION" == "enable" ]]; then
+  # Retire the quiesce artefacts BEFORE enable/start (contract §6): once the unit runs, the capture
+  # no longer describes the armed set and the marker no longer describes the unit. Retired, not
+  # deleted — the capture is the only record of what the quiesce saw. Best-effort: a failure is
+  # logged and does not block the re-arm (a stale marker is voided by the unit's
+  # ActiveEnterTimestamp once it starts).
+  # Operands spelled as the inline `${VAR:-/absolute}` form so the fixture-relative scanner can see
+  # they are absolute (a variable holding the same expansion reads as an unresolvable root).
+  _e_retired=none
+  _e_epoch="$(date +%s)"
+  if [[ -e "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}" ]]; then
+    if mv -f "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}" "${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}.retired-${_e_epoch}" 2>/dev/null; then
+      _e_retired="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}.retired-${_e_epoch}"
+    else
+      _e_retired=retire_failed
+    fi
+  fi
+  _e_marker_removed=false
+  if [[ -e "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" ]] && rm -f "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" 2>/dev/null \
+      && [[ ! -e "${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}" ]]; then _e_marker_removed=true; fi
+  logger -t "$LOG_TAG" "INNGEST_ENABLE: retired capture=${_e_retired:-none} marker_removed=$_e_marker_removed"
   echo "Re-enabling inngest-server.service (enable + start)..."
   if ! sudo /usr/bin/systemctl enable inngest-server.service; then
     logger -t "$LOG_TAG" "FAILED: systemctl enable inngest-server.service"
@@ -3355,7 +3491,14 @@ case "$COMPONENT" in
         if [[ -n "$inngest_health" ]]; then
           logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: ok"
         else
-          logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
+          # #8077: a quiesced (or disabled) unit is SUPPOSED to be down — the restart hint would
+          # point the reader at the one workflow the restart handler refuses on this shape.
+          _qs_state="$(inngest_quiesce_state)"
+          if [[ "$_qs_state" != not_quiesced ]]; then
+            logger -t "$LOG_TAG" "INNGEST_HEALTH_CHECK: quiesced ($_qs_state) — no restart hint"
+          else
+            logger -t "$LOG_TAG" "INNGEST_WARN: inngest-server not reachable after deploy — consider running restart-inngest-server.yml workflow"
+          fi
         fi
 
         # bwrap userns drift detector (#4927/#4928; follow-up to #4932/#4941).
@@ -3418,10 +3561,17 @@ case "$COMPONENT" in
     # #8077: refuse a quiesced unit BEFORE the pull. The bootstrap this arm runs enables and then
     # restarts inngest-server.service, which would re-arm the web scheduler op=quiesce-web stopped
     # (reachable from the hand-dispatched deploy-inngest-image.yml). Only op=rollback re-arms.
-    if inngest_unit_quiesced; then
-      logger -t "$LOG_TAG" "INNGEST_DEPLOY_REFUSED: unit inactive+disabled (quiesced) — only op=rollback re-arms"
-      echo "Error: inngest-server.service is quiesced (inactive+disabled); refusing the bootstrap deploy — only op=rollback re-arms it" >&2
-      final_write_state 1 "inngest_quiesced_deploy_refused"
+    _qs_state="$(inngest_quiesce_state)"
+    if [[ "$_qs_state" != not_quiesced ]]; then
+      _qs_a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+      _qs_e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+      logger -t "$LOG_TAG" "INNGEST_DEPLOY_REFUSED: state=$_qs_state unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>} — only op=rollback re-arms"
+      echo "Error: inngest-server.service is $_qs_state (unit=${_qs_a:-<empty>} enabled=${_qs_e:-<empty>}); refusing the bootstrap deploy — only op=rollback re-arms it" >&2
+      if [[ "$_qs_state" == quiesced ]]; then
+        final_write_state 1 "inngest_quiesced_deploy_refused"
+      else
+        final_write_state 1 "inngest_disabled_unattributed_deploy_refused"
+      fi
       exit 1
     fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
