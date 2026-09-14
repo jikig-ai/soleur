@@ -574,8 +574,11 @@ a re-enrollment on next login.
 ### `SUPABASE_ACCESS_TOKEN` (CLI / `sbp_`)
 
 1. <https://supabase.com/dashboard/account/tokens> → revoke compromised token.
-2. Generate new token; update the Doppler `prd` **root** (inherited by every
-   `prd_*` branch, including `prd_terraform` for the Terraform provider) AND
+2. Generate new token; update the Doppler `prd` **root** — its current home,
+   inherited by every `prd_*` branch including `prd_terraform` for the Terraform
+   provider; #7716 item 6 moves the migrate job onto the GH secret and removes
+   the root copy, because `ci-deploy.sh resolve_env_file()` downloads the whole
+   root into the app container env and nothing in app code reads this token — AND
    any local `~/.zshrc` exports. The GitHub Actions secret of the same name is
    Terraform-published: `terraform apply` of
    `github_actions_secret.supabase_access_token` rewrites it from the

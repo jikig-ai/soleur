@@ -125,7 +125,7 @@ state" — but no equivalent gate fires today.
    then `doppler secrets set SUPABASE_PAT=… -p soleur -c dev` and `-c prd`).
    Falls back to the natural ~10-minute schema poll if the API is unreachable.
    [Updated 2026-09-13 — #8028] The token is now `SUPABASE_ACCESS_TOKEN`
-   (Doppler `prd` root; a dev target reads it from `prd_terraform` — see the
+   (Doppler `prd` root today — #7716 item 6 sources the migrate job from the GH secret; a dev target reads it from `prd_terraform` — see the
    script's `--help`); `SUPABASE_PAT` was dead in every config and has been
    deleted. `--best-effort` soaks only a missing token or a transient error
    (5xx, network, 408/429, a 401/403 without an API JSON body); with a token

@@ -31,7 +31,8 @@ The Management API runs the SQL on a Supabase-side connection that shares
 backend identity with PostgREST's LISTEN, so the NOTIFY actually reaches.
 
 Examples:
-  # prd (token lives in the prd root, inherited by every prd_* branch):
+  # prd (token currently in the prd root, inherited by every prd_* branch; least-privilege
+  # move tracked in #7716 item 6):
   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
   # dev target (no dev config carries the token by design; read it from prd_terraform,
   # value never expanded in the caller's shell):
@@ -42,8 +43,9 @@ Examples:
 Required environment:
   SUPABASE_ACCESS_TOKEN     Supabase Management-API token (sbp_…), the same
                             account-scoped token the supabase CLI reads.
-                            Doppler: prd root only (inherited by prd_*);
-                            absent from every dev config by design (#8028).
+                            Doppler: currently the prd root (inherited by prd_*;
+                            least-privilege move → #7716 item 6); absent from
+                            every dev config by design (#8028).
                             Rotation: knowledge-base/engineering/operations/secret-scanning.md
   NEXT_PUBLIC_SUPABASE_URL  Project URL; ref is parsed from it.
 
@@ -113,7 +115,7 @@ fail_or_skip() {
 command -v curl >/dev/null 2>&1 || fail_or_skip 2 "curl not found on PATH. Install via 'apt install curl' / 'brew install curl'."
 
 if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-  fail_or_skip 2 "SUPABASE_ACCESS_TOKEN is not set (Doppler config: ${DOPPLER_CONFIG:-none}). It lives in the prd root only; for a dev target read it from prd_terraform — run with --help for the one-liner."
+  fail_or_skip 2 "SUPABASE_ACCESS_TOKEN is not set (Doppler config: ${DOPPLER_CONFIG:-none}). It is currently in the prd root (see #7716 item 6); for a dev target read it from prd_terraform — run with --help for the one-liner."
 fi
 
 if [[ -z "${NEXT_PUBLIC_SUPABASE_URL:-}" ]]; then

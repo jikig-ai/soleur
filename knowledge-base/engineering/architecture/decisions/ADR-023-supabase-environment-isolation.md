@@ -132,10 +132,13 @@ no `pull_request` job injects it from GitHub secrets. Consequence accepted:
 dev CI's post-migration PostgREST reload (`postgrest-reload-schema.sh`) takes
 the absence-soak (`::notice::`, exit 0) and dev relies on PostgREST's ~10-min
 schema poll; an operator forces the reload by hand with the token read from
-`prd_terraform` (the script's `--help` carries the one-liner). The token lives
-in the `prd` root, inherited by every `prd_*` branch, plus the one
+`prd_terraform` (the script's `--help` carries the one-liner). The token is
+currently in the `prd` root, inherited by every `prd_*` branch, plus the one
 Terraform-published GitHub Actions secret consumed only by `push`/`schedule`/
-`workflow_dispatch` workflows.
+`workflow_dispatch` workflows. The root placement is NOT by design: the deploy
+script materialises the whole root into the app container env and no app code
+reads this token — #7716 item 6 moves the migrate job onto the GH secret and
+removes the root copy (the reopen trigger below is unaffected).
 
 **Enforcement.** `tenant-integration.yml`'s "Assert Doppler config resolves to
 environment=dev" step also asserts the name is absent from `dev_scheduled`

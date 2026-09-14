@@ -26,8 +26,11 @@ REQUIRED=(
   NEXT_PUBLIC_VAPID_PUBLIC_KEY
   NEXT_PUBLIC_GITHUB_APP_SLUG
   # Management-API token for the post-migration PostgREST reload (#8028).
-  # Lives in the prd root only; its absence is soaked by the reload hook as
-  # "never opted in", so this list is where prd drift goes red.
+  # Currently in the prd root; its absence is soaked by the reload hook as
+  # "never opted in", so this list is where prd drift goes red. REQUIRED only
+  # while the migrate job reads it from the prd root — #7716 item 6 sources the
+  # job from the GH secret and flips this entry to FORBIDDEN_IN_PRD (the token
+  # has no app-code reader and should not ride in the container env).
   SUPABASE_ACCESS_TOKEN
 )
 
