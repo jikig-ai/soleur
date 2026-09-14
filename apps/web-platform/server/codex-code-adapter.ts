@@ -187,8 +187,18 @@ export function createCodexCodeAdapter(
   auth: CodexAuthBoundary,
 ): EngineAdapter {
   async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>, runId: string): AsyncIterable<EngineEvent> {
+    let lastSequence = 0;
     try {
-      for await (const event of await load()) yield validateCodexEvent(event, runId);
+      for await (const event of await load()) {
+        const validated = validateCodexEvent(event, runId);
+        if (validated.sequence <= lastSequence) {
+          throw Object.assign(new Error("Codex event sequence is stale or duplicated"), {
+            code: "codex_event_sequence_invalid",
+          });
+        }
+        lastSequence = validated.sequence;
+        yield validated;
+      }
     } catch (error) { throw sanitizeCodexError(error); }
   }
   const call = async <T>(operation: () => Promise<T>): Promise<T> => {

@@ -113,6 +113,35 @@ describe("Codex neutral adapter boundary", () => {
     expect(events).toHaveLength(1);
     expect(transport.start).toHaveBeenCalledOnce();
   });
+
+  it("rejects stale or duplicate sequence numbers within one provider stream", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "api-key",
+      acquire: vi.fn(async () => ({ accessToken: "opaque", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "refreshed", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const transport = {
+      start: vi.fn(async function* () {
+        yield { runId: "run-1", eventId: "evt-1", sequence: 2, payload: { type: "text", text: "first" } as const };
+        yield { runId: "run-1", eventId: "evt-2", sequence: 2, payload: { type: "text", text: "duplicate" } as const };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(transport, auth);
+    const events = adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] });
+    await expect((async () => {
+      const collected = [];
+      for await (const event of events) collected.push(event);
+      return collected;
+    })()).rejects.toMatchObject({ code: "codex_event_sequence_invalid" });
+  });
 });
 
 describe("Codex usage normalization", () => {
