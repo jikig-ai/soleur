@@ -2437,6 +2437,7 @@ operator-mint
 operator-only-step
 operator-override
 operator-precedence
+operator-recovery
 operator-role
 operator-steps
 operator-truthfulness
