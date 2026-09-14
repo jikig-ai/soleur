@@ -95,6 +95,15 @@ export interface CodexAuthBoundary {
   logout(): Promise<void>;
 }
 
+function isCodexAuthRecoveryError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "codex_credential_expired"
+    || code === "codex_credentials_revoked"
+    || code === "unauthorized"
+    || code === "invalid_grant"
+    || code === "revoked";
+}
+
 export async function runWithCodexRecovery<T>(
   auth: CodexAuthBoundary,
   operation: (lease: CodexCredentialLease) => Promise<T>,
@@ -103,8 +112,7 @@ export async function runWithCodexRecovery<T>(
   try {
     return await operation(lease);
   } catch (error) {
-    const code = (error as { code?: unknown } | null)?.code;
-    if (code !== "codex_credential_expired" && code !== "codex_credentials_revoked") throw error;
+    if (!isCodexAuthRecoveryError(error)) throw error;
     lease = await auth.refresh();
     return operation(lease);
   }
@@ -205,8 +213,7 @@ export function createCodexCodeAdapter(
         }
         return;
       } catch (error) {
-        const code = (error as { code?: unknown } | null)?.code;
-        if (!refreshed && lastSequence === 0 && (code === "codex_credential_expired" || code === "codex_credentials_revoked")) {
+        if (!refreshed && lastSequence === 0 && isCodexAuthRecoveryError(error)) {
           try { lease = await auth.refresh(); } catch (refreshError) { throw sanitizeCodexError(refreshError); }
           refreshed = true;
           continue;

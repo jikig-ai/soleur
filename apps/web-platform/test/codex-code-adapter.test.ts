@@ -259,6 +259,20 @@ describe("Codex credential recovery", () => {
     await expect(runWithCodexRecovery(auth, operation)).rejects.toBe(failure);
     expect(operation).toHaveBeenCalledOnce();
   });
+
+  it("refreshes once for a raw transport unauthorized code", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const operation = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("401"), { code: "unauthorized" }))
+      .mockResolvedValue("ok");
+    await expect(runWithCodexRecovery(auth, operation)).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("Codex error sanitization", () => {

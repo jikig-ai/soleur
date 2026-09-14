@@ -88,6 +88,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Recovery integration slice: authorization failures trigger at most one refreshed-lease retry; other failures propagate unchanged (10 adapter tests green).
   - [x] Promise lifecycle recovery slice: Codex cancellation, reconciliation, approval, and erasure calls use the one-refresh recovery boundary before error sanitization (20 adapter tests green).
   - [x] Pre-event stream recovery slice: Codex start/continue/cursor streams retry one authorization failure before the first event and fail closed after partial delivery (21 adapter tests green).
+  - [x] Raw auth-code recovery slice: transport `unauthorized`, `invalid_grant`, and `revoked` failures share the one-refresh recovery policy (22 adapter tests green).
   - [x] Error sanitization slice: Codex transport errors cross the neutral boundary with stable codes and generic messages (12 adapter tests green).
   - [x] Replay boundary slice: Codex streams reject cross-run, missing-id, and non-positive-sequence events before ledger handoff (14 adapter tests green).
   - [x] Sequence monotonicity slice: Codex streams reject stale or duplicate sequence numbers within a provider stream before ledger handoff (19 adapter tests green).
