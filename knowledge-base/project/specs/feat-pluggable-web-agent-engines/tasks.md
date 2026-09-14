@@ -34,6 +34,7 @@ routine run binds the current default once; retries retain that binding.
 - [ ] GREEN-03 (blockedBy RED-03): migration, durable run/event records, scoped RPCs and repositories.
   - [x] Schema contract slice: migration 138 defines settings, live runs, immutable bindings, idempotent events, RLS, and owner RPC (5 migration tests green).
   - [x] Repository contract slice: atomic bind RPC, tenant run lookup, and idempotent event append (2 repository tests green).
+  - [x] Conversation binding lookup slice: the persistence repository resolves the unique immutable run by conversation ID and normalizes it into the neutral contract (11 persistence tests green).
   - [x] Conversation composition slice: websocket conversation creation binds the trusted workspace default before first-turn dispatch; authenticated RPC execution is identity-bound (10 focused tests green).
   - [x] Binding normalization slice: persisted snake_case rows are translated to the neutral execution contract before adapter dispatch (8 focused tests green).
   - [x] Routine correlation slice: manual routine dispatch mints an application run id before Inngest send and carries it for downstream reconciliation (10 routine tests green).

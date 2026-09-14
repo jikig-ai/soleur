@@ -12,6 +12,25 @@ export type PersistenceClient = {
   };
 };
 
+function normalizeRun(data: unknown): unknown {
+  if (!data || typeof data !== "object") return null;
+  const row = data as Record<string, unknown>;
+  const execution = row.execution_kind === "conversation"
+    ? { kind: "conversation" as const, conversationId: String(row.conversation_id) }
+    : { kind: "routine" as const, routineId: String(row.routine_id), routineRunId: String(row.routine_run_id) };
+  return {
+    id: String(row.id),
+    binding: {
+      workspaceId: String(row.workspace_id),
+      execution,
+      engineId: String(row.engine_id),
+      authMode: String(row.auth_mode),
+      adapterVersion: String(row.adapter_version),
+      boundAt: String(row.created_at),
+    },
+  };
+}
+
 export interface BindRunInput {
   workspaceId: string;
   executionKind: "conversation" | "routine";
@@ -97,21 +116,15 @@ export class AgentEnginePersistenceRepository {
   async getRun(runId: string): Promise<unknown> {
     const result = await this.client.from("agent_engine_runs").select("*").eq("id", runId).maybeSingle();
     if (result.error) throw new Error(`engine run lookup failed: ${result.error.message}`);
-    if (!result.data || typeof result.data !== "object") return null;
-    const row = result.data as Record<string, unknown>;
-    const execution = row.execution_kind === "conversation"
-      ? { kind: "conversation" as const, conversationId: String(row.conversation_id) }
-      : { kind: "routine" as const, routineId: String(row.routine_id), routineRunId: String(row.routine_run_id) };
-    return {
-      id: String(row.id),
-      binding: {
-        workspaceId: String(row.workspace_id),
-        execution,
-        engineId: String(row.engine_id),
-        authMode: String(row.auth_mode),
-        adapterVersion: String(row.adapter_version),
-        boundAt: String(row.created_at),
-      },
-    };
+    return normalizeRun(result.data);
+  }
+
+  async getConversationRun(conversationId: string): Promise<unknown> {
+    const result = await this.client.from("agent_engine_runs")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+    if (result.error) throw new Error(`conversation engine run lookup failed: ${result.error.message}`);
+    return normalizeRun(result.data);
   }
 }

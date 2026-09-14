@@ -150,4 +150,39 @@ describe("AgentEnginePersistenceRepository", () => {
       },
     });
   });
+
+  it("loads the unique conversation binding by conversation id", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({
+      data: {
+        id: "run-conv-1",
+        workspace_id: "ws-1",
+        execution_kind: "conversation",
+        conversation_id: "conv-1",
+        engine_id: "claude-code",
+        auth_mode: "managed",
+        adapter_version: "claude-v1",
+        created_at: "2026-09-14T20:00:00Z",
+      },
+      error: null,
+    });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const supabase = client();
+    supabase.from.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({ eq }),
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.getConversationRun("conv-1")).resolves.toEqual({
+      id: "run-conv-1",
+      binding: {
+        workspaceId: "ws-1",
+        execution: { kind: "conversation", conversationId: "conv-1" },
+        engineId: "claude-code",
+        authMode: "managed",
+        adapterVersion: "claude-v1",
+        boundAt: "2026-09-14T20:00:00Z",
+      },
+    });
+    expect(eq).toHaveBeenCalledWith("conversation_id", "conv-1");
+    expect(maybeSingle).toHaveBeenCalledOnce();
+  });
 });
