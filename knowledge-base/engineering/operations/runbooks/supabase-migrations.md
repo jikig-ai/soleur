@@ -28,6 +28,13 @@ cd apps/web-platform
 doppler run -p soleur -c dev -- bash scripts/run-migrations.sh
 ```
 
+The post-apply PostgREST reload is a no-op in dev (no dev config carries
+`SUPABASE_ACCESS_TOKEN` by design — #8028 DC-1), so a freshly-added table can
+`PGRST205` for up to ~10 min. To force the reload, run
+`postgrest-reload-schema.sh` with the token read from `prd_terraform` — the
+`--help` text carries the exact one-liner; see `apps/web-platform/docs/migration-rollback.md`
+§PostgREST reload.
+
 Verify with the REST probe in §1 below against
 `doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c dev --plain`
 — a 200 confirms the migration applied to the dev project.
