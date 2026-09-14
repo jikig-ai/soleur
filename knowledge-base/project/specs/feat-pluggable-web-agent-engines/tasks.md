@@ -99,6 +99,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] C4 composition slice: adapter factory and provider composition boundaries are modeled and regenerated; freshness 3/3 and version pin 2/2 pass.
   - [x] Full-gate failure slice: migration tables were added to the DSAR allowlist and explicit anon/authenticated RPC revokes; focused guards now pass 17/17.
   - [x] DSAR worker slice: engine settings, runs, and events are exported with owner or parent-run scoping; DSAR worker and grant guards pass 15/15.
+  - [x] Full web-platform gate: 1,085 files and 13,556 tests pass (54 skipped, 1 existing todo) after DSAR integration fixes.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
