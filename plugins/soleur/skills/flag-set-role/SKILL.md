@@ -3,6 +3,10 @@ name: flag-set-role
 description: "This skill should be used to flip a flag's per-role or per-org state in Flagsmith, mirroring prd flips to Doppler."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # flag-set-role
 
 Flips one role-segment's enablement on a runtime feature flag in Flagsmith, or manages per-org segment membership. The skill is the **only** approved path for mutating Flagsmith segment overrides and per-feature org-segment rules — direct UI/curl edits break the fallback-fidelity contract documented in ADR-038 v2 §"Fallback semantics".

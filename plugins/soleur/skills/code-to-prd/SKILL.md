@@ -3,6 +3,10 @@ name: code-to-prd
 description: "This skill should be used when generating a PRD from a Next.js codebase for buyer/investor/agent handoff. Walks tracked files, redacts secrets, writes structured markdown to knowledge-base/product/prd/."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Code-to-PRD
 
 Reverse-engineer a Next.js codebase (App Router + Pages Router) into a PRD markdown document the founder can hand to a buyer, investor, or coding agent. Output lands at `knowledge-base/product/prd/<project>-prd.md`. v1 ships Next.js-only; Rails/Django and exhaustive field inventory deferred to v2 (#3794).

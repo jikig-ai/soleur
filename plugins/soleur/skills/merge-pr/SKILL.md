@@ -3,6 +3,10 @@ name: merge-pr
 description: "This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # merge-pr Skill
 
 **Purpose:** Automate the merge pipeline for a single PR -- replacing the manual execution of `/ship` Phases 3.5-8. Runs lights-out: merge main, resolve conflicts, push, create PR, wait for CI, merge, and cleanup.

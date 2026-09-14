@@ -68,3 +68,8 @@ Devin plugins load in cloud sessions (skills + plugin `AGENTS.md` rules + MCP se
 - **SC3.** A prod-mutating skill invoked in cloud halts at the ack gate when unanswered.
 - **SC4.** `devin plugins info soleur` + a fresh cloud session on a repo lacking personal-manifest sync loads skills via `requiredPlugins`.
 - **SC5.** CLO signs off on the three-doc disclosure update and the Art. 30 rescoping (register limbs documented).
+
+## Implementation Notes (recorded 2026-09-14, post-plan-review)
+
+- **FR1 landed in `plugins/soleur/scripts/cloud-detect.sh`, not `lib/harness.ts`.** Plan-review found `harness.ts` functions are only consumed by tests — the bash script is the sole runtime detector, so the "sibling lib" reading of FR1 resolves to `scripts/`. The sentinel also gained `hook_source` (a repo-level SessionStart firing on a cloud VM would otherwise write a matching-host sentinel → false-local) and the classifier is tri-state fail-closed (`local` / `not-local:<reason>`).
+- **NG5 narrowed by the doc correction:** plugin `command` hooks are now documented cloud-capable for every event except `SessionStart`/`SessionEnd`, so `hooks.json` still needs no restructuring — but `PostCompaction` (documented cloud-capable, unused today) is a probe-conditional follow-up, tracked under #8172.

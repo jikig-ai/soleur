@@ -3,6 +3,10 @@ name: seo-aeo
 description: "This skill should be used when auditing, fixing, or validating SEO and AEO (AI Engine Optimization) for Eleventy documentation sites. It provides sub-commands for running audits, applying fixes, and validating build output."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # SEO & AEO for Eleventy Docs
 
 Audit, fix, and validate SEO and AEO (AI Engine Optimization) for Eleventy documentation sites. This skill routes to sub-commands for analysis, remediation, and CI validation.
