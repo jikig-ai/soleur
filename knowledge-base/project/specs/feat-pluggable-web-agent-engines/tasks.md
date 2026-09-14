@@ -92,6 +92,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] DSAR metadata slice: audit/export metadata contains auth mode and expiry only; credential values are excluded (17 adapter tests green).
   - [x] Adapter factory slice: reviewed registry state gates adapter creation for unknown, disabled, or unavailable engines (2 factory tests green).
   - [x] Registry dispatch slice: bound-run dispatch resolves the adapter from persisted engine identity through the reviewed factory (12 dispatch tests green).
+  - [x] Adapter composition slice: injected Claude/Codex transports compose into reviewed factories, with Codex omitted until auth dependencies exist (2 composition tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
