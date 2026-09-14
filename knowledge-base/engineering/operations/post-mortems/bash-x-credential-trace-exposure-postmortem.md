@@ -13,7 +13,7 @@ art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. If the open evidentiary limb resolves to BREACH, a fresh 72h runs from awareness of THAT finding, not retroactively from this anchor."
 art_33_determination: "knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md"
-art_33_determination_status: "provisional — the evidentiary limb was RUN 2026-09-08: integrity/write CLEAN (audit log, full window coverage, single known actor); confidentiality/read INCONCLUSIVE (no last-used instrument exists on this surface, see addendum finding 1)"
+art_33_determination_status: "final — no Art. 33 duty, no Art. 34 duty. Integrity/write limb CLEAN (org audit log, 2026-09-08, full-window coverage, single known actor). Confidentiality/read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14: the controller declined the last instrument (vendor support, #7945) — NOT a CLEAN measurement and NOT exhaustion (processor assistance under Art. 28(3)(f) was available and not used). No Art. 33(1) duty on the EDPB 9/2022 awareness standard. Re-opens on any later evidence of use, with a fresh 72h from awareness of that evidence and vendor escalation as the first step. See the 2026-09-14 addendum and the determination's 2026-09-14 addendum."
 ---
 
 ## Actor key
@@ -74,6 +74,7 @@ not an availability one, which is precisely why nothing alarmed.
 | agent | 2026-09-04 | ADR-202 recorded; commit-time lint built; 22 further scripts remediated. |
 | agent | 2026-09-04 | Review found the guard narrower than its own property in nine ways; all fixed. |
 | human | pending | Rotate `SENTRY_AUTH_TOKEN` — the remaining half, a genuine credential-entry gate. |
+| human | 2026-09-14 | **Declined** the vendor-support escalation of the read limb (#7945). The limb closed INCONCLUSIVE-BY-DECISION; disposition FINAL. No contact with Sentry was made. See the 2026-09-14 addendum. |
 
 ## Participants and Systems Involved
 
@@ -310,6 +311,10 @@ review.
 > The escalation to vendor support, which the row places last, is now the only
 > remaining instrument and is tracked at **#7945**. Full reasoning in the
 > 2026-09-08 addendum below.
+>
+> **Outcome 2026-09-14 (#7945):** the escalation was **declined** by the operator.
+> The read limb closed INCONCLUSIVE-BY-DECISION and the determination is FINAL.
+> See the 2026-09-14 addendum below.
 
 ## Addendum — 2026-09-07 (#7797)
 
@@ -584,3 +589,57 @@ stderr only under a green run) and a pre-existing command injection in the same
 loop (`secrets=a[$(cmd)]` was expanded before validation) were closed in the same
 PR — both found while rewiring this credential, neither part of the original
 incident.
+
+## Addendum — 2026-09-14 (#7945): the read limb closed by decision, not by measurement
+
+Append-only. Nothing above is rewritten. Frontmatter `art_33_determination_status`
+was updated in place, for the reason the 2026-09-08 addendum gave.
+
+**Supersedes "### Still open" (2026-09-08 addendum) and the #7945 pointer in the
+action-row banner.** The vendor-support escalation that the 2026-09-08 Finding 3
+named as the only instrument that "could resolve it further" was **declined by
+the operator on 2026-09-14**. It was not attempted; no contact with Sentry was
+made. The CLO had recommended sending; the fully prepared request, the channel,
+and the pre-decided outcomes are retained un-sent in the determination's
+2026-09-14 addendum so that a future re-opener does not re-derive them.
+
+**Verdict on the read limb: INCONCLUSIVE-BY-DECISION.** Stated the way
+`runbooks/breach-access-log-investigation.md` §Recording the outcome requires,
+as one block:
+
+| | |
+|---|---|
+| Window requested | 2026-09-03T15:30Z → 2026-09-08T10:34Z |
+| Window actually covered (reads) | **none** — no read instrument exists on any surface reachable to the controller (Finding 1), and the vendor instrument was declined |
+| Window actually covered (writes) | 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z, no pagination gap; CLEAN (Finding 3) |
+| Per-source instrumentation | token last-used: **does not exist**; org audit log: **run, writes only**; vendor request logs: **available, declined 2026-09-14** |
+| Verdict | reads INCONCLUSIVE-BY-DECISION; writes CLEAN |
+
+It is **not a CLEAN**: nothing measured reads. It is **not exhaustion**: processor
+assistance under GDPR Art. 28(3)(f) was available and was not used, which is a
+weaker ground than the one the determination had prepared for a vendor that
+declines or cannot answer. The four reasons the operator gave — revocation
+preceded escalation, contrary to the action row's order; vendor retention over
+an eleven-day-old window is uncertain; the write limb is CLEAN on full coverage;
+the exposure was to operator-controlled local output with no evidence it left
+that environment — are recorded in the determination, together with the
+distinction between declining an instrument on those grounds and declining it
+in order not to know.
+
+**Why the status drops "provisional".** "Provisional" meant held open behind an
+instrument still to be run. None remains that the controller will run, so the
+disposition is **FINAL — no Art. 33 duty, no Art. 34 duty**, on the EDPB
+Guidelines 9/2022 awareness standard (no reasonable degree of certainty that the
+security incident led to personal data being compromised), with the thinness of
+the ground named in the same field rather than hidden behind the old label.
+
+**Re-opener.** Any later evidence of use of token `6680231` in the window starts a
+**fresh 72h** from awareness of that evidence; vendor escalation with the
+retained request becomes the first step; Art. 33 and Art. 34 are re-run; external
+counsel is engaged per `knowledge-base/legal/recommended-tools.md#breach-notice-triage`.
+
+**Two open items this addendum does not touch.** #8090 (the personal token's
+value under the canonical name in Doppler `soleur/prd_terraform`, still live for
+five workstation scripts) and the ADR-031 migration state recorded in the
+2026-09-11 addendum are unchanged; neither bears on the read limb, which
+concerns the *revoked* token only.

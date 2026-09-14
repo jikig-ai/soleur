@@ -480,3 +480,47 @@ CLEAN and the read limb did not close at all. The one remaining instrument is
 vendor support, tracked at **#7945**. If it returns a third-party read, Art. 33
 is re-run from awareness of **that** finding, on a fresh 72h clock — not
 retroactively from the 2026-09-03 anchor.
+
+## Corrections — 2026-09-14 (#7945)
+
+Same append-only convention as the two sections above: the 2026-09-03 row is left
+exactly as written, and the superseded clauses are quoted here with what replaced
+them. This section records a **controller decision**, not a new measurement.
+
+<!-- -->
+> **Superseded 2026-09-14 (#7945):** in the 2026-09-03 row, the "Evidentiary
+> limbs inconclusive?" cell opens *"**Yes — the Art. 33(1) likelihood limb.**"*,
+> and the 2026-09-08 correction above left the read limb open behind "the one
+> remaining instrument", vendor support. On 2026-09-14 the operator **declined**
+> that instrument. It was not attempted and no contact with Sentry was made. The
+> cell now reads: **No — closed by decision.** Integrity/write limb CLEAN
+> (2026-09-08, full-window audit coverage, single known actor).
+> Confidentiality/read limb closed **INCONCLUSIVE-BY-DECISION 2026-09-14** —
+> **not** a CLEAN (nothing measured reads) and **not** exhaustion (processor
+> assistance under Art. 28(3)(f) was available and not used). Reasons and the
+> un-sent request are held in the canonical source's 2026-09-14 addendum.
+
+<!-- -->
+> **Superseded 2026-09-14 (#7945):** in the same row, the "Determination" cell's
+> *"REACHABILITY-ONLY, no notifiable breach — PROVISIONAL"* and the "Art. 33
+> engaged?" cell's *"No — provisional"*. Both drop "provisional": **FINAL —
+> REACHABILITY-ONLY, no notifiable breach; read limb closed
+> INCONCLUSIVE-BY-DECISION 2026-09-14.** `art_33_triggered` stays `false` on the
+> EDPB Guidelines 9/2022 awareness standard — the controller has no reasonable
+> degree of certainty that the security incident led to personal data being
+> compromised — and `art_34_triggered` stays `false` on its own facts. The
+> label drops because "provisional" in this register means *held open behind an
+> instrument still to be run*, and none remains that the controller will run; a
+> disposition that cannot change on any planned step is not provisional.
+
+**Re-opener, carried on the row.** Any later evidence of use of token `6680231`
+in the window 2026-09-03T15:30Z → 2026-09-08T10:34Z re-opens the limb on the
+BREACH path: a fresh 72h Art. 33(1) clock from awareness of that evidence, vendor
+escalation as the first step, Art. 33 and Art. 34 re-run, external counsel
+engaged per `knowledge-base/legal/recommended-tools.md#breach-notice-triage`.
+
+**Standing rule this section applies.** The register must not assert a
+disposition it has not reached (§Excluded records). A limb closed by decision is
+recorded as closed by decision, with the ground's thinness in the same cell —
+not upgraded to CLEAN because the outcome is the same, and not left
+"provisional" because that would misstate the state.
