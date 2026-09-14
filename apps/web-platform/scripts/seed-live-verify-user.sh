@@ -19,8 +19,11 @@
 # (server/ws-handler.ts) aborts if `workspaces.repo_url` is null — so this seeds:
 #   - auth user (email_confirm:true) → handle_new_user trigger (mig 053, ADR-038)
 #     auto-provisions a solo workspace whose id == user.id + owner membership
-#   - public.users ladder: tc_accepted_version (= lib/legal/tc-version.ts),
-#     workspace_status=ready, repo_status=ready, workspace_path
+#   - public.users ladder: workspace_status + repo_status (consent is recorded
+#     separately via the public.accept_terms RPC, which also writes the ledger),
+#     NOTE: workspace_path was DROPPED from public.users by migration 112
+#     (112_drop_legacy_users_repo_columns.sql). PATCHing it returns 42703 and
+#     aborted every run — measured against prd.
 #   - workspaces row: repo_status=ready AND repo_url=<synthetic sentinel> (the
 #     seed-qa-user.sh gap; getCurrentRepoUrl reads workspaces.repo_url, not
 #     users.repo_url — server/current-repo-url.ts:58-62)
@@ -94,38 +97,75 @@ elif [[ ! "$SB_URL" =~ $CANONICAL_RE ]]; then
   exit 1
 fi
 
-# Decode the service-role JWT payload and assert role + derive ref.
-if [[ "$(printf '%s' "$SRK" | tr -cd '.' | wc -c)" -ne 2 ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY is not a 3-segment JWT"
-  exit 1
-fi
-payload=$(printf '%s' "$SRK" | cut -d. -f2)
-pad=$(( (4 - ${#payload} % 4) % 4 ))
-if [[ $pad -gt 0 ]]; then
-  padded="$payload$(printf '=%.0s' $(seq 1 $pad))"
+# Assert the key grants service-role ON THIS PROJECT.
+#
+# Two key formats exist and only one can be decoded:
+#   * legacy  — a 3-segment JWT carrying `role` and `ref` claims
+#   * current — an opaque `sb_secret_…` secret key (Supabase's newer format)
+#
+# The prd key is the OPAQUE form, and this block used to require a JWT
+# unconditionally. That is why the seed had been unrunnable in prd since the
+# key rotated: it exited 1 at the segment count before writing anything, so the
+# synthetic principal silently stopped being refreshed and drifted behind the
+# T&C gate — the root cause of #7969. The literal `TC_VERSION` was a symptom;
+# this was the disease.
+#
+# The two properties the JWT decode bought are preserved, and one is
+# strengthened. A JWT's `role` is a SELF-ASSERTED claim this script never
+# verified against the server; an authenticated probe is the server's own
+# verdict, and it proves BOTH properties at once:
+#   P1 the key really grants service-role  — /auth/v1/admin/* is 401 for anon
+#   P2 the key belongs to the project the URL resolves to — the probe targets
+#      $SB_URL, so a key for another project cannot answer 200 here
+ref=""
+if [[ "$(printf '%s' "$SRK" | tr -cd '.' | wc -c)" -eq 2 ]]; then
+  # Legacy JWT: keep the decode, which additionally yields the ref for the
+  # canonical-host cross-check below.
+  payload=$(printf '%s' "$SRK" | cut -d. -f2)
+  pad=$(( (4 - ${#payload} % 4) % 4 ))
+  if [[ $pad -gt 0 ]]; then
+    padded="$payload$(printf '=%.0s' $(seq 1 $pad))"
+  else
+    padded="$payload"
+  fi
+  json=$(printf '%s' "$padded" | tr '_-' '/+' | base64 -d 2>/dev/null) || {
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY payload is not valid base64url"
+    exit 1
+  }
+  ref=$(printf '%s' "$json" | jq -r '.ref // ""')
+  role=$(printf '%s' "$json" | jq -r '.role // ""')
+  if [[ "$role" != "service_role" ]]; then
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY role=\"$role\", expected \"service_role\""
+    exit 1
+  fi
+  if [[ -z "$ref" ]]; then
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY carries no ref claim — cannot bind project"
+    exit 1
+  fi
+  key_form="jwt"
 else
-  padded="$payload"
-fi
-json=$(printf '%s' "$padded" | tr '_-' '/+' | base64 -d 2>/dev/null) || {
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY payload is not valid base64url"
-  exit 1
-}
-ref=$(printf '%s' "$json" | jq -r '.ref // ""')
-role=$(printf '%s' "$json" | jq -r '.role // ""')
-
-if [[ "$role" != "service_role" ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY role=\"$role\", expected \"service_role\""
-  exit 1
-fi
-if [[ -z "$ref" ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY carries no ref claim — cannot bind project"
-  exit 1
+  # Opaque key. Refuse anything that is not recognisably a SECRET key before
+  # sending it anywhere — `sb_publishable_…` is the anon-equivalent and must
+  # never reach a seeding path.
+  case "$SRK" in
+    sb_secret_*) ;;
+    sb_publishable_*)
+      echo "::error::SUPABASE_SERVICE_ROLE_KEY is a PUBLISHABLE key (sb_publishable_…), not a secret key"
+      exit 1 ;;
+    *)
+      echo "::error::SUPABASE_SERVICE_ROLE_KEY is neither a 3-segment JWT nor an sb_secret_… key"
+      exit 1 ;;
+  esac
+  key_form="opaque"
 fi
 
-# On the canonical 20-char URL, the host first-label IS the ref — cross-check.
-# On the custom domain (api.soleur.ai) the host carries no 20-char label, so we
-# trust the JWT ref as the source of truth (mirrors validate-anon-key.ts).
-if [[ "$is_custom_domain" -eq 0 ]]; then
+# Retained from the original preflight, NOT dropped as a side effect of the
+# compat fix: on a canonical 20-char URL the host's first label IS the ref, so
+# a JWT whose ref disagrees is refused before any probe. The probe below
+# subsumes this (a foreign key cannot answer 200 against this URL), but a
+# security check should not disappear because an unrelated bug was fixed.
+# Only reachable on the JWT path; an opaque key carries no ref to compare.
+if [[ -n "$ref" && "$is_custom_domain" -eq 0 ]]; then
   url_ref="${url_host%%.*}"
   if [[ "$ref" != "$url_ref" ]]; then
     echo "::error::JWT ref=\"$ref\" does not match URL canonical ref=\"$url_ref\""
@@ -134,7 +174,19 @@ if [[ "$is_custom_domain" -eq 0 ]]; then
   fi
 fi
 
-echo "::notice::Pre-flight OK (DOPPLER_CONFIG=prd, service_role, ref=$ref, host=$url_host)"
+# Behavioural proof, run for BOTH formats: a JWT's role claim is self-asserted,
+# so the probe is what actually establishes the privilege. Read-only.
+probe_code=$(curl --disable --noproxy '*' --proto '=https' -g -sS -o /dev/null \
+  -w '%{http_code}' --max-time 20 \
+  -H "Authorization: Bearer $SRK" -H "apikey: $SRK" \
+  "$SB_URL/auth/v1/admin/users?per_page=1" || echo "000")
+if [[ "$probe_code" != "200" ]]; then
+  echo "::error::service-role probe against $url_host returned HTTP $probe_code (expected 200)."
+  echo "::error::The key does not grant admin access to THIS project — refusing to seed."
+  exit 1
+fi
+
+echo "::notice::Pre-flight OK (DOPPLER_CONFIG=prd, key=$key_form, admin-probe=200, ref=${ref:-<opaque>}, host=$url_host)"
 
 # --- Seed ----------------------------------------------------------------
 
@@ -167,11 +219,38 @@ EMAIL="live-verify@soleur.ai"
 # zero benefit.
 SENTINEL_REPO_URL="https://github.com/soleur-synthetic/verify-harness-sentinel"
 
+# The `email=` query parameter is IGNORED by this endpoint — measured against
+# prd: `?email=<addr>&per_page=1` returns byte-identical results to `?per_page=1`
+# (the first user overall, not the match). The filtering was therefore happening
+# CLIENT-side over a ONE-ITEM page, so the lookup found the principal only when
+# it happened to sort first and otherwise reported "not found" — at which point
+# the caller below tries to CREATE it. With 17 users in prd that is a ~1-in-17
+# chance of working, and the failure mode is an attempted duplicate of a
+# production principal, stopped only by the server rejecting it.
+#
+# So: page through the whole set and match client-side, which is what the code
+# already believed it was doing. `x-total-count` bounds the walk, and a set
+# larger than the walk is a REFUSAL rather than a silent miss — "not found"
+# must never be reachable by looking at only part of the list.
 find_user_by_email() {
-  local email="$1"
-  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
-    -H "$header_auth" -H "$header_api" \
-    | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
+  local email="$1" per_page=200 page=1 total id
+  total=$(curl --disable --noproxy '*' -sfD - -o /dev/null \
+    "$SB_URL/auth/v1/admin/users?per_page=1" -H "$header_auth" -H "$header_api" \
+    | tr -d '\r' | sed -n 's/^[Xx]-[Tt]otal-[Cc]ount: *//p' | head -1)
+  [[ "$total" =~ ^[0-9]+$ ]] || {
+    echo "::error::admin users listing returned no x-total-count — cannot bound the search" >&2
+    return 1
+  }
+  local pages=$(( (total + per_page - 1) / per_page ))
+  while (( page <= pages )); do
+    id=$(curl --disable --noproxy '*' -sf \
+      "$SB_URL/auth/v1/admin/users?per_page=$per_page&page=$page" \
+      -H "$header_auth" -H "$header_api" \
+      | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""')
+    [[ -n "$id" ]] && { printf '%s' "$id"; return 0; }
+    page=$(( page + 1 ))
+  done
+  printf ''
 }
 
 user_id=$(find_user_by_email "$EMAIL")
@@ -210,8 +289,7 @@ curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc \
-    --arg wp "/workspaces/$user_id" \
-    '{workspace_status: "ready", repo_status: "ready", workspace_path: $wp}')" \
+    '{workspace_status: "ready", repo_status: "ready"}')" \
   > /dev/null
 
 # Consent via the RPC the application uses. Idempotent in SQL: the users UPDATE
