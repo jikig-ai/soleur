@@ -42,6 +42,8 @@ usage, and terminal states are translated to contiguous neutral events. Missing
 or malformed provider identities fail closed before persistence.
 An injectable App Server source owns credentials and lifecycle side effects;
 the transport bridge only translates its event stream.
+Protocol request builders keep initialize, thread, turn, and approval envelopes
+server-owned and map neutral approval decisions to the provider vocabulary.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
