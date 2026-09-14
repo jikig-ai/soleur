@@ -20,11 +20,24 @@ cron poller**, NOT a native Better Stack alert — query via `betterstack-query.
 in a `scripts/` checker → deduped `action-required` GitHub issue → Sentry self-liveness heartbeat.
 This is the reusable **"Pattern: Better Stack log-content alarms"** recorded in
 [`ADR-096` §Consequences](../../architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)
-(the `better-uptime` TF provider has no log-alert resource, and the Telemetry v2 SQL-alert API is
-rejected for stateful/newest-scoped signals + the operator-surface reasons documented there).
+(the `better-uptime` TF provider has no log-alert resource — the sibling `BetterStackHQ/logtail`
+provider does, and [ADR-218](../../architecture/decisions/ADR-218-native-better-stack-logs-alerts-are-terraform-managed-via-the-logtail-provider.md)
+uses it for the one signal class ADR-096 exempts: a pure stateless per-bucket count with an
+email-acceptable surface; the Telemetry v2 SQL-alert route stays rejected for stateful/newest-scoped
+signals + the operator-surface reasons documented there).
 
 Live standing alarms over this source:
 
+- **`logtail_exploration_alert.monitor_send_failed`** (#8097 / ADR-218, evaluated every 60 s over
+  a 300 s window) — the one Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
+  (team email; `betteruptime_policy.uptime` on the paid tier) on any PRIORITY-2 row whose message
+  starts `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` — a web-1 monitor unit's own Resend/
+  Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
+  path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
+  self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
+  [`monitor-send-failed-alert.md`](./monitor-send-failed-alert.md). Readback (never
+  `--grep PRIORITY=2`): the runbook's step-1 SQL with `JSONExtractString(raw,'PRIORITY') = '2'`.
 - **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -215,16 +228,102 @@ doppler run -p soleur -c prd_terraform -- \
     is used rather than a `source_kind` filter because it holds regardless of
     which Vector source an echo arrives on. A trustworthy producer row has `component` =
     `claude-cost` (the pino base field from `claude-cost-marker.ts`) as a
-    **top-level key** of the decoded `raw`, not as nested string content. Match
-    structurally (decode `raw`, then check top-level keys) rather than by
-    substring; `scripts/followthroughs/anthropic-admin-key-6297.sh` is the
-    worked example, and its fixture suite mutation-proves the guard.
+    key of the decoded `raw`'s **`.message` object** (measured 2026-09-12: the
+    app-container line is stored as `{"message": {…pino fields…}}`, so the
+    fields are one level down, never at the top level), not as nested string
+    content. Match structurally (decode `raw`, then check `.message.component`)
+    rather than by substring;
+    `scripts/followthroughs/run-report-exit-first-contact-8076.sh` is the
+    worked example (its fixture suite pins the live shape and reds on a
+    top-level reader); `anthropic-admin-key-6297.sh` reads `.message` first
+    and falls back to the top level.
   - **Expect a permanently-dark surface until an account-tier decision is made.**
     The Admin API is unavailable to individual accounts, and the operator's org is
     one — `platform.claude.com/settings/admin-keys` returns "Page not found".
     Until the org is converted to a team organization, `key-missing` is the
     steady state, not a transient mint window. See ADR-108 §Consequences and
     issue #6297.
+
+### `SOLEUR_CRON_FILING_DENY` — a cron run was denied a filing
+
+Emitted by `apps/web-platform/server/cron-filing-deny-marker.ts` (called from
+`_cron-claude-eval-substrate.ts` `finish()`) at pino **WARN** (same
+`app_container_warn_filter`, same path as the cost markers, no
+`betterstack-query.sh` change) when a cron run's result event carried
+filing-shaped `permission_denials` — a `gh issue create` or
+`gh api …/issues` create the containment hook refused (ADR-216 addendum, the
+run-report population). The substrate reads `permission_denials[]` from the
+result event itself; there is no hook-written deny log to look for.
+
+Fields: `fn` (Inngest function id), `run_id` (the Inngest run id — the join
+key below), `spawn_started_at` (the claude-eval child's spawn instant; NOT the
+handler's memoized `runStartedAt`, which is minutes earlier), `count` (denied
+filing commands in the run), `commands` (command HEADS — `gh issue create` or
+`gh api <endpoint path>`, query string dropped, capped — never a title, a
+body, or a credential), `capture_status` (`ok`, or `field-absent` when the
+result event parsed but carried no `permission_denials` array: count 0 then
+means "the deny channel went dark", not "no denials").
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_CRON_FILING_DENY \
+  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(.component == "cron-filing-deny") | [.fn, .run_id, .count, .capture_status] | @tsv'
+```
+
+Three caveats before reading a zero as clean:
+
+- **Row shape.** The pino payload sits under `.message` of the decoded `raw`
+  (measured 2026-09-12: 38/40 live rows), so field-isolate on
+  `.message.component`, never on top-level keys — a top-level reader returns
+  nothing on every row and looks exactly like "no denials".
+- **Capture.** A run killed at `maxTurnDurationMs`, OOM-killed, or whose
+  stdout was truncated has NO result event and therefore no deny marker even
+  if it was denied. Its `SOLEUR_CLAUDE_COST` row carries
+  `capture_status != ok`; treat such a run's deny status as UNKNOWN.
+- **Shape, not reason.** `permission_denials[]` carries the command, not the
+  deny reason, so a filing-shaped command refused for another cause (a
+  metachar, an allowlist miss) is counted too. The marker measures "a filing
+  was refused", which is the operator question; it does not attribute the
+  refusal to the filing gate specifically.
+
+A deny alone does not say whether the run recovered. Discriminate the two
+outcomes by joining the marker's `run_id` to the Sentry tag `inngest.run_id`
+(set by `sentry-correlation.ts` on every event in the run):
+
+- **Denied and vanished** — a Sentry `scheduled-output-missing` event exists
+  for that `fn` with the same `inngest.run_id`: the cron never filed its
+  run-report, the persistence handshake refused the artifacts, and the
+  heartbeat reads the run as silence. This is the #8059 shape and the reason
+  exit 0 exists. (`cron-legal-audit` is the exception: it is
+  `resolveBestEffortEvalOk` and emits no `scheduled-output-missing`; its only
+  backstop is the heartbeat's `maxGapDays`, so a deny-then-abandon there reads
+  as "denied then complied" until the gap trips.)
+- **Denied then complied** — no matching `scheduled-output-missing`: the agent
+  retried under an exit (usually exit 1, `meta/machinery`) and the run-report
+  landed. Check measurement line 1d for the residue and the sweeper for a
+  mis-labelled report.
+
+The marker is the deny-side half of that join; the Sentry event is the
+outcome-side half. Neither alone is the answer.
+
+### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
+
+Emitted by `cron-stale-deferred-scope-outs.ts` `sweepRunReports` at pino
+**WARN** on any fire that CLOSED at least one run-report or DEFERRED one past
+the 25-per-run cap; a quiet fire (nothing closed, nothing deferred) is silent.
+Fields: `total`, `closed`, `skipped`, `deferred`, `closedByLabel` (per
+`scheduled-*` label), `skippedByReason` (`failed-report`, `human-triaged`,
+`reopened-by-human`, `action-required`, kill-switch label, `too-young`,
+`not-run-report-shape`, `not-open`, `triage-read-failed`), `dryRun`. A run
+with `deferred > 0` has a backlog the next fire drains; a `closed` count on a
+label whose reports are FAILED-bodied is the regression the FAILED guard
+exists to stop and the follow-through for #8076 grades it from GitHub.
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 7d --grep SOLEUR_RUN_REPORT_SWEEP \
+  | jq -R -r 'fromjson? | .raw | fromjson? | .message | select(.SOLEUR_RUN_REPORT_SWEEP == true) | [.closed, .deferred, (.closedByLabel | tojson)] | @tsv'
+```
 
 Ranked SQL (run against `remote(t520508_..._logs)`):
 

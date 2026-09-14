@@ -153,7 +153,7 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 #   2. cloudflare_record.app.content is hcloud_server.web["web-1"].ipv4_address (dns.tf).
 #      Replacing web-1 without re-pointing it leaves app.soleur.ai resolving to a destroyed
 #      host — a total outage of the product.
-#   3. all 15 terraform_data.* SSH provisioners in server.tf pin connection.host to web-1;
+#   3. all 17 terraform_data.* SSH provisioners in server.tf pin connection.host to web-1;
 #      `-target` is upstream-only so none is pulled into the plan, and a replaced web-1
 #      leaves every one of them un-run against a dead IP.
 #   4. DECISIVE, and not a plan property at all: /mnt/data pins BY-ID to

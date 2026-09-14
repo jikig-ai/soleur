@@ -11,9 +11,9 @@ triggers:
   - operator ran a credential-carrying script under `bash -x` to debug a failing guard
 art_33_triggered: false
 art_34_triggered: false
-art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. If the open evidentiary limb resolves to BREACH, a fresh 72h runs from awareness of THAT finding, not retroactively from this anchor."
+art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. No open limb since 2026-09-14; re-opens on any later evidence of use, with a fresh 72h from awareness of that evidence (determination 2026-09-14 addendum §Re-opener), not retroactively from this anchor."
 art_33_determination: "knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md"
-art_33_determination_status: "provisional — the evidentiary limb was RUN 2026-09-08: integrity/write CLEAN (audit log, full window coverage, single known actor); confidentiality/read INCONCLUSIVE (no last-used instrument exists on this surface, see addendum finding 1)"
+art_33_determination_status: "final — no Art. 33 duty, no Art. 34 duty. Write limb CLEAN 2026-09-08; read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14 (#7945; not a CLEAN, not exhaustion). Canonical reasoning and re-opener: knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md, 2026-09-14 addendum"
 ---
 
 ## Actor key
@@ -64,6 +64,7 @@ not an availability one, which is precisely why nothing alarmed.
 - **Start time (detected):** 2026-09-03T15:33:16Z (issue #7797 filed)
 - **End time (recovered):** partial — Better Stack 2026-09-03T20:10Z; Sentry outstanding
 - **Duration (MTTR):** open
+  > **Superseded 2026-09-08 / 2026-09-14:** the Sentry half closed 2026-09-08T10:34Z (token revoked and replaced — see the 2026-09-08 addendum); the read limb closed by decision 2026-09-14 (#7945). Both header lines above describe the pre-rotation state and are retained as written.
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
@@ -74,6 +75,14 @@ not an availability one, which is precisely why nothing alarmed.
 | agent | 2026-09-04 | ADR-202 recorded; commit-time lint built; 22 further scripts remediated. |
 | agent | 2026-09-04 | Review found the guard narrower than its own property in nine ways; all fixed. |
 | human | pending | Rotate `SENTRY_AUTH_TOKEN` — the remaining half, a genuine credential-entry gate. |
+| human | 2026-09-14 | **Declined** the vendor-support escalation of the read limb (#7945). The limb closed INCONCLUSIVE-BY-DECISION; disposition FINAL. No contact with Sentry was made. See the 2026-09-14 addendum. |
+
+> **Superseded 2026-09-14 (#7945):** the row *"human | pending | Rotate
+> SENTRY_AUTH_TOKEN …"* above, and the header lines *"End time (recovered):
+> partial — … Sentry outstanding"* and *"Duration (MTTR): open"*, describe the
+> state before the 2026-09-08 rotation. The rotation is done (2026-09-08T10:34Z,
+> see the 2026-09-08 addendum §Remediation); the end time is 2026-09-08T10:34Z
+> and the MTTR ~4 days 19 hours. The rows are left as written per append-only.
 
 ## Participants and Systems Involved
 
@@ -310,6 +319,10 @@ review.
 > The escalation to vendor support, which the row places last, is now the only
 > remaining instrument and is tracked at **#7945**. Full reasoning in the
 > 2026-09-08 addendum below.
+>
+> **Outcome 2026-09-14 (#7945):** the escalation was **declined** by the operator.
+> The read limb closed INCONCLUSIVE-BY-DECISION and the determination is FINAL.
+> See the 2026-09-14 addendum below.
 
 ## Addendum — 2026-09-07 (#7797)
 
@@ -535,3 +548,110 @@ evidenced rather than anticipated. It is **not** the CLEAN path that would let
 The ADR-031 migration is undone — the org-token surface is empty, so this
 credential class is still a personal token and the next rotation is still gated
 at an interactive login. That remains the durable fix.
+
+## Addendum — 2026-09-11 (#7946): the ADR-031 migration is done for every repo-side consumer
+
+Append-only. Nothing above is rewritten; this section supersedes the parts it
+names. Frontmatter is untouched: the `art_33_*` / `art_34_*` fields describe the
+determination, which this addendum does not amend.
+
+**Supersedes `### Still open` (2026-09-08 addendum).** The org-level migration
+that section called "the durable fix" has shipped. Sixteen files under
+`scripts/followthroughs/` (thirteen Sentry readers, one emitter that only refused
+under xtrace, two `.test.sh` stubs) no longer name `SENTRY_AUTH_TOKEN`; the
+readers consume `SENTRY_ACTIONS_RO_TOKEN`, the token of a dedicated Internal Integration
+`actions-read-prd` on `jikigai-eu` with exactly `[event:read, org:read,
+project:read]` (measured post-mint), stored as one GitHub repository secret and
+deliberately not mirrored into Doppler — so no `doppler run` config can bind a
+personal token under it by accident. `fresh-host-boot-trail.sh`, the last
+repo-side reader of the personal value via Doppler, binds the same secret from
+both provisioning jobs and makes no Doppler read at all. The next rotation is
+agent-drivable per
+`knowledge-base/engineering/operations/runbooks/sentry-actions-ro-token-rotation.md`,
+with one honest handoff (the browser session's login + 2FA when it has expired;
+the mint form itself has no human gate). The premise that "the org-token surface
+is empty" conflated Organization Auth Tokens with Internal Integrations — the
+org carries five of the latter; ADR-031's 2026-09-11 amendment records the
+distinction and the class.
+
+**Supersedes the 2026-09-07 addendum's ADR-031 sentence** ("off the *user* auth
+token onto an org-level Internal Integration (ADR-031's `iac-terraform-prd`
+shape), which would make the next rotation agent-doable"): the shape adopted is
+a *dedicated read-only* integration, not the IaC token's — DC-3 on #7993 was
+decided on a measurement (the cron check-in endpoint 403s under the
+`inline-read-prd` scope set), and the alternative of binding the IaC token under
+the new name was rejected for carrying `project:admin` / `alerts:write` on a
+GET-only class. ADR-031 holds the record.
+
+**Still open after this addendum, tracked.** The personal token's *value* under
+the canonical name in Doppler `soleur/prd_terraform` is still live: it has no
+repo-side reader via Doppler any more, but the Terraform provider, sentry-cli and
+`next.config.ts` keep the name, and five workstation scripts bind it under
+`doppler run -c prd_terraform`: `apps/web-platform/infra/cutover-verify.sh`,
+`scripts/sentry-alert-live-fidelity.sh`, and under `apps/web-platform/scripts/`
+`sentry-monitors-audit.sh`, `configure-sentry-alerts.sh` and
+`assert-byok-rules-exist.sh`. Its replacement with the `iac-terraform-prd`
+value and revocation is **#8090**. Separately, the sweeper's silent
+missing-secret path (a directive naming an absent credential was skipped with
+stderr only under a green run) and a pre-existing command injection in the same
+loop (`secrets=a[$(cmd)]` was expanded before validation) were closed in the same
+PR — both found while rewiring this credential, neither part of the original
+incident.
+
+## Addendum — 2026-09-14 (#7945): the read limb closed by decision, not by measurement
+
+Append-only. Nothing above is rewritten. Frontmatter `art_33_determination_status`
+and `art_33_deadline` were updated in place, for the reason the 2026-09-08
+addendum gave. The canonical reasoning — the decision and its reasons, why the
+verdict is neither a CLEAN nor exhaustion, why no Art. 33(1) duty arises, why
+"provisional" drops, and the re-opener — lives in one place:
+`knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md`,
+2026-09-14 addendum. This section records the verdict and repairs the sentences
+above that it leaves dangling.
+
+**Supersedes, in the 2026-09-08 addendum §Finding 3:** *"Only vendor support
+could resolve it further."* and *"It is **not** the CLEAN path that would let
+`art_33_determination_status` drop 'provisional'."* — the operator **declined**
+vendor support on 2026-09-14; nothing remains to run, and the status drops
+"provisional" on the by-decision branch, not the CLEAN one. The `### Still open`
+paragraph that follows Finding 3 concerns ADR-031, was already superseded by the
+2026-09-11 addendum, and is **not** touched here.
+
+**Supersedes, in §GDPR Art. 4(12) determination:** `PROVISIONAL, on one named
+open limb.` → FINAL, read limb closed by decision; `which indexes this
+determination with the limb marked open` → the register's 2026-09-03 row was
+amended in-cell on 2026-09-14 (`knowledge-base/legal/breach-register.md`
+§Corrections — 2026-09-14); and `**The open limb.** … it has not been run` →
+the write half was run 2026-09-08 (CLEAN) and the read half was closed by
+decision 2026-09-14.
+
+**Supersedes, elsewhere above, by the 2026-09-08 rotation rather than by this
+decision** (recorded here because the new timeline row now sits beside them):
+*"human | pending | Rotate SENTRY_AUTH_TOKEN …"*, *"End time (recovered):
+partial — … Sentry outstanding"*, *"Duration (MTTR): open"*, §Resolution *"The
+Sentry half is open and will be until `SENTRY_AUTH_TOKEN` is rotated."*, and
+§Recovery verification *"Sentry: pending."* All are pre-rotation state; the
+2026-09-08 addendum §Remediation is the record that closed them.
+
+**Verdict on the read limb.** Stated the way
+`knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+§Recording the outcome requires, as one block, with the qualifier written as a
+sub-state per that runbook's 2026-09-14 addendum:
+
+| | |
+|---|---|
+| Window requested | 2026-09-03T15:30Z → 2026-09-08T10:34Z |
+| Window actually covered (reads) | **none** — no read instrument exists on any surface reachable to the controller (Finding 1), and the vendor instrument was declined |
+| Window actually covered (writes) | 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z, no pagination gap; CLEAN on the event classes the org audit log records (Finding 3; scope stated in the determination's 2026-09-14 addendum, reason 3) |
+| Per-source instrumentation | token last-used: **does not exist**; org audit log: **run, writes only**; vendor support (Art. 28(3)(f) assistance): **available, declined 2026-09-14**; whether Sentry holds request logs for the window is unknown (determination reason 2) |
+| Verdict | reads **INCONCLUSIVE (sub-state BY-DECISION, #7945)** — not a CLEAN, not exhaustion; writes CLEAN |
+
+Disposition: **FINAL — no Art. 33 duty, no Art. 34 duty**, per the determination's
+2026-09-14 addendum §Why the disposition drops "provisional" and §Why no Art. 33(1)
+duty arises on this record. Re-opener per its §Re-opener.
+
+**Two open items this addendum does not touch.** #8090 (the personal token's
+value under the canonical name in Doppler `soleur/prd_terraform`, still live for
+five workstation scripts) and the ADR-031 migration state recorded in the
+2026-09-11 addendum are unchanged; neither bears on the read limb, which
+concerns the *revoked* token only.

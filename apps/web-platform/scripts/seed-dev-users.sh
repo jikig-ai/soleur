@@ -22,6 +22,15 @@
 
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${SUPABASE_SERVICE_ROLE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- Pre-flight ----------------------------------------------------------
 
 if [[ "${DOPPLER_CONFIG:-}" != "dev" ]]; then
@@ -91,7 +100,7 @@ header_json="Content-Type: application/json"
 # TC_VERSION must match `lib/legal/tc-version.ts`. If that file's literal
 # changes, bump this string too — middleware redirects to /accept-terms
 # when the user's tc_accepted_version doesn't match the literal.
-TC_VERSION="2.5.0"
+TC_VERSION="2.5.1"
 
 # Look up an existing user by email via the admin endpoint's per-email
 # filter (avoids the >100-users pagination bug in the previous shape that
@@ -99,7 +108,7 @@ TC_VERSION="2.5.0"
 # page ≥2 — review-finding data-integrity #1).
 find_user_by_email() {
   local email="$1"
-  curl -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
+  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
     -H "$header_auth" -H "$header_api" \
     | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
 }
@@ -118,7 +127,7 @@ for slot in 1 2 3; do
 
   if [[ -z "$user_id" ]]; then
     echo "Creating $email..."
-    create_response=$(curl -sf "$SB_URL/auth/v1/admin/users" \
+    create_response=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
       -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
       -d "$(jq -nc --arg email "$email" --arg password "$password" \
         '{email: $email, password: $password, email_confirm: true}')")
@@ -130,7 +139,7 @@ for slot in 1 2 3; do
     echo "  Created: $user_id"
   else
     echo "Refreshing password for $email ($user_id)..."
-    curl -sf "$SB_URL/auth/v1/admin/users/$user_id" \
+    curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users/$user_id" \
       -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
       -d "$(jq -nc --arg password "$password" '{password: $password, email_confirm: true}')" \
       > /dev/null
@@ -142,7 +151,7 @@ for slot in 1 2 3; do
   # (review-finding data-integrity #2). PATCH is idempotent — repeated
   # runs reset the row to the canonical QA-ready state.
   echo "  Provisioning public.users row..."
-  curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
+  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
     -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "$(jq -nc \
@@ -154,11 +163,11 @@ for slot in 1 2 3; do
 
   # Ensure a dummy anthropic api_keys row exists so the dashboard's
   # has-key gate passes. Idempotent: only insert if no row matches.
-  existing_key=$(curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
+  existing_key=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
     -H "$header_auth" -H "$header_api" \
     | jq -r '.[0].id // ""')
   if [[ -z "$existing_key" ]]; then
-    curl -sf "$SB_URL/rest/v1/api_keys" \
+    curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys" \
       -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
       -H "Prefer: return=minimal" \
       -d "$(jq -nc --arg uid "$user_id" \

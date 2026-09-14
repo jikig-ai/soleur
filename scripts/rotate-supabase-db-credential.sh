@@ -37,7 +37,7 @@ CONFIG=""
 PRD_ACK=0
 LEAKED=0
 TOKEN_CONFIG=prd_terraform
-TOKEN_NAME=SUPABASE_ACCESS_TOKEN   # SUPABASE_PAT is dead (401) everywhere -- #8028
+TOKEN_NAME=SUPABASE_ACCESS_TOKEN   # SUPABASE_PAT was retired (dead, 401 everywhere) -- #8028
 
 # Ref -> human label. The ack decision is made on the DERIVED ref, never on the
 # config NAME: the name is a label the caller chooses, the ref is the thing that

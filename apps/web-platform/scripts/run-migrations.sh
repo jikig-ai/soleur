@@ -429,16 +429,30 @@ echo "Migration run complete: $applied applied, $skipped skipped."
 # supabase-js call against a freshly-added table returns PGRST205 until
 # PostgREST's natural ~10-min schema poll. The Management-API path runs
 # the NOTIFY on a backend that shares process identity with PostgREST's
-# listener, so the reload actually fires. `--best-effort` ensures a
-# missing SUPABASE_PAT or any transient upstream error never fails the
-# migration run. See learning 2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md §Prevention #5.
-if [[ "$applied" -gt 0 ]]; then
-  # The hook is --best-effort: any non-zero exit it returns is itself a bug
-  # in the script (best-effort always exits 0). Surface that case as an
-  # attributable GHA annotation rather than swallowing with `|| true`, which
-  # would erase even the inner ::warning:: from this step's log context and
-  # make downstream PGRST205 test flakes hard to trace.
-  if ! bash "$SCRIPT_DIR/postgrest-reload-schema.sh" --best-effort; then
-    echo "::warning title=PostgREST schema reload hook failed::Migration applied OK; supabase-js may return PGRST205 for up to ~10 min until natural PostgREST poll. Re-run apps/web-platform/scripts/postgrest-reload-schema.sh manually if tests fail."
-  fi
+# listener, so the reload actually fires. `--best-effort` soaks only a
+# missing SUPABASE_ACCESS_TOKEN (dev CI holds none by design) or a
+# transient upstream error; with a token present a rejected credential or
+# config defect exits 2 and is propagated below so the job goes red on
+# every run, applied or not (#8028). See learning
+# 2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md §Prevention #5.
+#
+# The hook runs on EVERY run, not only when something was applied (PR #4286
+# gated it on applied>0 under the assumption that best-effort always exits
+# 0 — that assumption is what #8028 retired): a re-run after a credential
+# fix must reload the cache even though it re-applies nothing, and every
+# prd release then liveness-checks the credential instead of leaving a dead
+# token to surface at the next migration. Its exit code reaches this
+# runner's exit (never `|| true`, which would erase even the inner
+# annotation from this step's log).
+hook_rc=0
+bash "$SCRIPT_DIR/postgrest-reload-schema.sh" --best-effort || hook_rc=$?
+if [[ "$hook_rc" -eq 2 ]]; then
+  # rc 2 is the hook's auth-OR-config class: a rejected SUPABASE_ACCESS_TOKEN,
+  # a wrong project ref (404), an unset NEXT_PUBLIC_SUPABASE_URL, or no curl.
+  # The hook's own ::error:: line above names which — this title must not.
+  echo "::error title=PostgREST schema reload refused (credential or config, rc=2)::Migrations applied this run: ${applied}. The schema-cache refresh was refused — see the postgrest-reload-schema ::error line above for the measured cause (a rejected SUPABASE_ACCESS_TOKEN, a wrong project ref, or an unset project URL). New tables may 404 in the app for ~10 min after the next deploy. Fix that cause, then re-run this job — it will not re-apply migrations, but it will retry the refresh."
+  exit 2
+elif [[ "$hook_rc" -ne 0 ]]; then
+  echo "::error title=Schema reload hook failed (rc=${hook_rc})::Migrations applied this run: ${applied}. postgrest-reload-schema.sh exited ${hook_rc} — a bug or a missing script, not a credential problem."
+  exit "$hook_rc"
 fi

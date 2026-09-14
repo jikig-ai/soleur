@@ -997,7 +997,7 @@ jobs:
     # `needs.verify-doppler-secrets.result == 'success'` conjunct at full strength
     # because the job now lives in the SAME run as the deploy it gates.
     if: github.event_name != 'push'
-    # Pre-deploy guard: asserts the hand-maintained list of required NEXT_PUBLIC_*
+    # Pre-deploy guard: asserts the hand-maintained list of required build/runtime
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
     runs-on: ubuntu-latest
@@ -1017,7 +1017,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
-      - name: Assert required NEXT_PUBLIC_* secrets present in Doppler prd
+      - name: Assert required build/runtime secrets present in Doppler prd
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |

@@ -55,6 +55,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Sub-skills that return control to an orchestrator must output a structured continuation marker (e.g., `## Work Phase Complete`), not natural-language completion phrases ("Implementation complete.") -- the orchestrator must include an explicit CONTINUATION GATE block that names the marker and forbids ending the turn; conclusive-sounding text is interpreted as a turn boundary even when followed by "proceed to next step"
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
 - Never place deferred/forward-reference instructions ("NOTE: after STEP N, do X") in multi-step LLM prompts -- the agent reads the instruction at STEP 1 but must execute it at STEP N; this temporal gap causes either premature execution or silent omission; relocate the instruction to STEP N with a conditional guard ("If STEP 1b was used, do X")
+- Never call anything that can write stdout from inside a bash function whose stdout IS its return value (`SECRET="$(read_secret)"`) — a diagnostic `curl`, `logger` fallback or `echo` on the failure path lands in the captured value; route every side channel to stderr/`>/dev/null` and say so in the function's comment. **Why:** PR #8135 — a Sentry beacon's `202` would have become the Bearer secret; a mock curl chattier than production caught it.
 
 ### Prefer
 
@@ -300,6 +301,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 ## Testing
 
 ### Always
+
 - A lint cited as the oracle for a guard is proven by a RED, never a green: on a scratch copy delete the guard and run the lint; if it still passes, the guard needs its own harness row and the lint citation is a comment. Same for any code shape a plan justifies as "what the linter needs" — measure it with the guard deleted (2026-09-11, #7898 §2 — the prescribed shape was the one that disarmed the linter)
 
 - Run `bun test` before merging changes that affect parsing, conversion, or output
@@ -318,6 +320,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - When a component gains a pre-flight fetch (HEAD, OPTIONS), sweep `global.fetch` mocks in the same edit -- single-response `mockResolvedValue` returns the GET shape for HEAD too, breaking contract; rewrite as method-aware `vi.fn((_url, init) => init?.method === "HEAD" ? ... : ...)` (ex-`cq-preflight-fetch-sweep-test-mocks`)
 - Before extracting a constant for drift-resistance, identify downstream tests that fully `vi.mock()` the source module -- such tests cannot `import { CONST } from "module"` (the import resolves to the mock factory, often `undefined`); either include the constant in the mock factory return, extract to a separate non-mocked module, or verbatim copy with sync-comment in that one test file (ex-`cq-test-mocked-module-constant-import`)
 - When a full-gate run is refused or skipped (contention rc=4, reaped, out of budget), derive the per-suite coverage list from the CONSUMERS of every changed file (`git grep -l <basename> -- '*.test.sh'` over the registered suites) and run each -- never from memory of what you edited. A suite that reds is disproportionately one that reaches your change through a shared lib you never opened. (PR #8052: a registered gate-lib consumer was 78/1 on the branch behind a "seventeen suites green" report.)
+- A PR gate that certifies a build MUST build the same artifact from the same context the release builds (for the web platform: the Dockerfile `builder` stage from `apps/web-platform`, plugin vendored) and MUST be a required leg of the merge gate — a full-checkout build cannot see a build-context difference, and an advisory check cannot stop a merge (#8136, release 34773058045).
 
 ### Never
 
@@ -325,6 +328,8 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Never gate a jsdom test assertion on layout-engine output (`clientWidth`, `scrollWidth`, `offsetHeight`, `getBoundingClientRect`) -- jsdom returns 0 for layout values, so gated assertions silently pass as no-ops; assert structure or `data-*` hooks, or move the layout check to Playwright (ex-`cq-jsdom-no-layout-gated-assertions`)
 - Tests that DELETE from shared production must gate on an allowlist of synthetic identifiers -- `beforeAll`/`afterAll` resets touching prod must throw if the targeted email/user-id/tenant is not on a known-synthetic allowlist; an unguarded reset is a blast-radius violation (ex-`cq-destructive-prod-tests-allowlist`)
 - Never scrub global stubs in `afterEach` within shared Vitest setup files -- setup-file hooks run per-test, not per-file, so `vi.unstubAllGlobals()`/`vi.restoreAllMocks()` in `afterEach` breaks files using module-scope `vi.stubGlobal(...)`; fix cross-file leaks in `afterAll` or via `isolate: true` on the project, and never force-restore `globalThis.fetch` in `beforeAll` (ex-`cq-vitest-setup-file-hook-scope`)
+- Never stub a wrapper the code under test DEFINES (`_bs_query_rows`-class reader functions) in a render/integration harness — stub the PROCESS it execs (`doppler`, `curl`, the binary) and let the real wrapper shape the bytes; a stub above the seam makes its own output the fixture, and a `0-byte` empty result where the real function writes `"\n"` kept a 550-assertion suite green while the gate misgraded every empty read (#8054, `2026-09-11-the-gate-i-built-for-a-dark-host-was-blind-to-the-byte-shape-of-nothing.md`)
+- Never write a mock for an external CLI/API from memory when the code under test PARSES its output — capture one real failure response first (wrong credential, under the unit's env) and make the mock emit that shape. **Why:** PR #8135 — a one-line mock doppler certified `head -n 1` as the cause line; the real CLI prints its cause LAST behind three constant lines, so the shipped diagnostic was a constant.
 
 ### Prefer
 

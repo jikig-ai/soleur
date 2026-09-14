@@ -129,9 +129,13 @@ echo "  instrument self-test: pass() and fail() both move"
 
 # ── Execution harness ────────────────────────────────────────────────────────
 # Executes an extracted body under the shell GitHub Actions actually uses.
-run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event ; sets OUT/RC
+# $6 is the 4th leg (web-platform-build, #8136); it defaults to success so the
+# three-shard rows keep stating their FULL triple while the build rows below
+# name the 4th value explicitly.
+run_body() {  # $1=body $2=webplat $3=bun $4=scripts $5=event [$6=build] ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
   ( WEBPLAT_RESULT="$2" BUN_RESULT="$3" SCRIPTS_RESULT="$4" EVENT_NAME="$5" \
+      BUILD_RESULT="${6:-success}" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
@@ -159,7 +163,7 @@ expect_line() {  # $1=label $2=body $3..$5=results $6=event $7=needle $8=want_rc
 # and each row's verdict is arbitrary. This runs FIRST and aborts on failure.
 _c0=$fails
 expect_line "CONTROL all-green" "$BODY" success success success push \
-  "All three shards green." 0
+  "All four legs green (three shards + web-platform-build)." 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing. The unmutated\n' >&2
   printf 'aggregator body does not emit its own success line, so every mutation\n' >&2
@@ -195,6 +199,18 @@ fi
 run_body "$BODY" success success failure push
 if grep -qF -- "matrix" "$OUT"; then pass; else
   fail "R1e the test-scripts failure message points at a single job log, but test-scripts is a matrix rollup — that log does not exist"
+fi
+
+# R1f/R1g — the 4th leg (web-platform-build, #8136): red ALONE fails the job and
+# names itself; skipped ALONE (GitHub reports a needs-dependency that never ran
+# as `skipped`) is NOT success — the fail-open the aggregator's header forbids.
+run_body "$BODY" success success success push failure
+if [ "$RC" -eq 1 ] && grep -qF -- "web-platform-build: FAILED" "$OUT"; then pass; else
+  fail "R1f a red web-platform-build with every shard green must fail the aggregator and name the leg (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+run_body "$BODY" success success success push skipped
+if [ "$RC" -eq 1 ] && grep -qF -- "web-platform-build: SKIPPED" "$OUT"; then pass; else
+  fail "R1g a skipped web-platform-build reads as success — the fail-open the header forbids (rc=$RC)"
 fi
 
 # Two legs cancelled on a pull_request run: the run was superseded.
@@ -264,7 +280,7 @@ done
 # CONTROL; repeated here across the other event name so the event gate cannot
 # be implemented as "always fail on pull_request".
 expect_line "Hb must-PASS all-green on pull_request" "$BODY" success success success pull_request \
-  "All three shards green." 0
+  "All four legs green (three shards + web-platform-build)." 0
 
 # ── MUTATION BATTERY ─────────────────────────────────────────────────────────
 # Each row mutates a COPY of the extracted body, asserts the mutation LANDED
@@ -363,7 +379,7 @@ for st in job.get("steps") or []:
 if step is None:
     print("NOSTEP"); raise SystemExit
 env = step.get("env") or {}
-want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts"}
+want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts", "BUILD_RESULT": "web-platform-build"}
 bad = []
 for var, shard in want.items():
     v = str(env.get(var, ""))
@@ -387,11 +403,11 @@ import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 n = d["jobs"]["test"].get("needs") or []
 n = [n] if isinstance(n, str) else list(n)
-print(len([x for x in n if x.startswith("test-")]))
+print(len(n))
 PYN
 )
-if [ "$_nshards" -eq 3 ]; then pass; else
-  fail "W2 the test job watches $_nshards test-* shards, but this suite fixtures exactly 3 — dropping a shard from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+if [ "$_nshards" -eq 4 ]; then pass; else
+  fail "W2 the test job watches $_nshards legs, but this suite fixtures exactly 4 (three test-* shards + web-platform-build, #8136) — dropping a leg from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────

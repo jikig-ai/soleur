@@ -68,6 +68,8 @@ For each host script invoked by an adnanh/webhook hook (grep `apps/web-platform/
 
 The durable rule: **the synchronous consumer (workflow step) must `cat` the response body on non-2xx before failing, and the script must emit a cause to EITHER stream.** See `knowledge-base/project/learnings/best-practices/2026-06-17-synchronous-webhook-consumer-must-dump-response-body.md`.
 
+- **An HTTP error BODY echoed into a run log is a credential sink until proven otherwise.** For every `::error::`/`echo` that prints a response body (even "the first N bytes") on a failure path, ask what the endpoint puts in a 4xx body and run it live with a deliberately wrong credential: ClickHouse's 403 is `Code: 516. DB::Exception: <username>: Authentication failed…`, i.e. half of a Basic-auth pair injected inside the child process where GitHub's masking cannot see it, on a public repo. Require length + classification, never bytes. **Why:** #8054/PR #8056 — verified live; the body echo shipped through TDD and a design-pass review.
+
 ### Step 3: catch-block sweep (`cq-silent-fallback-must-mirror-to-sentry` reinforcement)
 
 For each server-side **or layer-7 `plugins/`** `.ts` file added or modified, grep for new `catch` blocks (`git diff -U0` and look for added `} catch`/`.catch(` patterns). For each, verify ONE of:

@@ -162,6 +162,7 @@ advisory-vs-blocking
 aeo
 aeo-score
 after
+after_unknown
 aftereach
 against
 agent
@@ -517,6 +518,7 @@ brand-workshop
 branded-types
 branding
 bre
+breach-register
 breadcrumb
 breadcrumbs
 bridge
@@ -675,6 +677,7 @@ ci-infrastructure
 ci-issues
 ci-planning
 ci-release
+ci-required-checks
 ci-required-ruleset
 ci-required-status
 ci-ruleset
@@ -772,6 +775,7 @@ collapses
 collision
 collision-check
 collision-gate
+collision-preflight
 color-scheme
 column-grant
 column-level-security
@@ -869,6 +873,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+consumer-enumeration
 consumer-sweep
 contagious-interview
 container
@@ -996,6 +1001,7 @@ cross-artifact-claim
 cross-artifact-drift
 cross-channel-contract
 cross-consumer
+cross-consumer-grep
 cross-document-consistency
 cross-document-drift
 cross-domain-lane
@@ -1160,6 +1166,7 @@ destructive-tests
 destructive-tools
 detection
 detector-design
+determination
 determinism
 deterministic
 dev-db
@@ -1495,6 +1502,7 @@ file-tree
 file-truncation
 files modified on main branch
 filesystem
+filing-gate
 find-and-replace
 find-delete
 fingerprint
@@ -1735,6 +1743,7 @@ growth-strategist
 growth-targets
 guard
 guard-2
+guard-3
 guard-building
 guard-building-pr
 guard-contract
@@ -1742,9 +1751,11 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-residue
 guard-test
 guard-testing
 guard-vacuity
+guard-window
 guardrail
 guardrails
 guards
@@ -1858,11 +1869,13 @@ immutability
 immutable-infra
 implementation-patterns
 import-boundary
+import-meta-url
 import-only-resources
 importlib
 importoriginal
 imports
 in-band-mint
+in-cell-correction
 in-component-state
 in-filter
 in-flight-feature-refresh
@@ -1894,6 +1907,7 @@ infrastructure
 infrastructure-issues
 ingress
 inheritance
+inherited-claims
 inherited-framing
 initial
 initialization
@@ -2102,6 +2116,7 @@ log-injection
 logic-error
 logic-errors
 login
+logtail-provider
 loop
 loopback-gate
 loopback-gating
@@ -2422,6 +2437,7 @@ operator-precedence
 operator-role
 operator-steps
 operator-truthfulness
+operator-veto
 ops
 ops-directory
 ops-provisioner
@@ -2602,6 +2618,7 @@ plan-gate
 plan-gates
 plan-guard-as-prose
 plan-inventory
+plan-json
 plan-literalism
 plan-phase
 plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker
@@ -2848,6 +2865,7 @@ prop-wiring
 propagation
 prose-claims
 prose-conventions
+prose-counts
 prose-guard
 prospect-anchored features
 protecthome
@@ -3146,6 +3164,7 @@ rtl
 rule
 rule-audit
 rule-budget
+rule-c
 rule-d
 rule-exists-no-gate-enforces-it
 rule-governance
@@ -3158,6 +3177,7 @@ rule_retirement
 rules-loader
 ruleset
 rulesets
+run-migrations
 run_in_background
 runbook
 runbook-authoring
@@ -3195,6 +3215,7 @@ schedule-skill
 scheduled-audits
 scheduled-bug-fixer
 scheduled-ci
+scheduled-crons
 scheduled-tasks
 scheduled-workflow
 scheduled-workflows
@@ -3916,6 +3937,7 @@ ts2556
 tsc
 tsx
 ttl
+turbopack
 tweets
 two-phase-commit
 two-tier-guard

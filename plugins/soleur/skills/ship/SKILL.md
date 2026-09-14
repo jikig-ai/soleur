@@ -356,6 +356,27 @@ Then run the full battery:
 TEST_GROUP=all bash scripts/test-all.sh
 ```
 
+**Start it on the FINAL tree, and keep its log outside the session scratchpad.** Any commit you
+can already foresee — the `Reviewed-By-Soleur` trailer, the sync with `origin/main` — invalidates a
+running battery (dirty tree) and cancels the queued PR checks, so batch those first and start the run
+once (Phase 6.4's rule, applied to the local run). If the diff touches a class the Phase 5.5 advisor
+consult will inspect, run that consult before the battery so its fix is in the tree the run sees.
+Redirect a detached run's output to `mktemp -p "${TMPDIR:-/var/tmp}" ship-battery.XXXXXXXX.log`
+(the repo's own `TMPDIR` convention; a stable path collides across sessions): the harness's
+per-session scratchpad directory was wiped mid-run on PR #8069 and a battery already hours into its
+run lost its output with it. **Why:** #8069 — three restarts (trailer commit, main sync, advisor
+fix) and one lost log before a single authoritative run existed. The run that did complete came from
+the pre-#8070 `bun-test` pre-commit hook on a conflict-resolved sync commit, one sync BEFORE the head
+that merged — a path `9832d1d39` has since closed (`bun-test` skips merge commits); do not plan on
+it. The battery you start on the final tree is the only local run there will be.
+
+**Under contention, wait, launch and retry in ONE Monitor script — never probe in one tool call and launch
+in the next.** The window between `CAPACITY_OK` and the launch is exactly where a sibling worktree's run
+starts, and `test-all.sh` then refuses yours with rc 4 (no verdict). Loop on `--capacity`'s `measured_runs`
+until 0, launch detached with the rc to a file, and if that file reads `4` go back to waiting. **Why:** PR
+#8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
+contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
+
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
 - **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
@@ -2128,6 +2149,8 @@ while true; do
 done
 # <!-- phase-7-poll-block:end -->
 ```
+
+**Run every Monitor with its shell in the MAIN checkout (or `/var/tmp`), never `cd`'d into the feature worktree.** Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
 
