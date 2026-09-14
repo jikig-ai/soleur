@@ -90,12 +90,15 @@ build_sandbox() {
   # invisible to the whole suite.
   printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
-  ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
+  ( cd "$d" && git init -q && git config gc.auto 0 \
+      && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
     || die "sandbox git init/commit failed"
 }
 
 build_sandbox "$SANDBOX"
+gc_auto="$(git -C "$SANDBOX" config --get gc.auto || true)"
+[[ "$gc_auto" == "0" ]] || die "sandbox gc.auto is '${gc_auto:-unset}' (want 0); auto-gc can race the pristine snapshot"
 cp -a "$SANDBOX/." "$PRISTINE/" || die "pristine snapshot failed"
 
 restore() {

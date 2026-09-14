@@ -44,7 +44,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
     exit 0
   fi
 
-  if [[ "$state_line" != *BEHIND* ]]; then
+  if [[ "$state_line" != *BEHIND* && "$state_line" != *DIRTY* ]]; then
     echo "[pr-behind-sync] BEHIND unchanged: mergeStateStatus is not BEHIND — no sync needed"
     exit 0
   fi
@@ -54,6 +54,16 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   if ! git fetch origin main 2>&1 | tail -3; then
     echo "[pr-behind-sync] fetch origin main failed" >&2
     exit 5
+  fi
+
+  # GitHub DIRTY with a clean local merge-tree is the kb-index class: the
+  # server-side merge lacks the local driver. Key on merge-tree exit code
+  # only (stdout is a tree SHA this script does not use).
+  if ! git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+    echo "[pr-behind-sync] merge conflict — manual resolution required" >&2
+    git diff --name-only --diff-filter=U >&2 || true
+    git merge --abort 2>/dev/null || true
+    exit 6
   fi
 
   if ! git merge origin/main --no-edit 2>&1 | tail -8; then

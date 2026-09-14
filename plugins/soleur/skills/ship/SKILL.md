@@ -2081,17 +2081,21 @@ while true; do
     fi
   fi
 
-  # DIRTY exit (server-side merge conflict): GitHub computed a conflict that
-  # may or may not be local to this worktree. Exit and surface — looping
-  # produces no progress; the operator must resolve. Glob `*DIRTY*` (not
-  # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
-  # that future `--jq` template tweaks could introduce.
+  # DIRTY: GitHub computed a conflict. If `git merge-tree --write-tree` is
+  # clean (kb-index local-only driver), treat as BEHIND and fall through to
+  # auto-sync. Real conflicts still dirty-exit. Glob `*DIRTY*` (not
+  # `*" DIRTY"`) tolerates whitespace variants.
   if [[ "$s" == *DIRTY* ]]; then
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-    echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
-    git diff --name-only --diff-filter=U >&2 || true
-    echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
-    break
+    if git fetch origin main >/dev/null 2>&1 \
+       && git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+      s="OPEN BEHIND"
+    else
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+      echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
+      git diff --name-only --diff-filter=U >&2 || true
+      echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
+      break
+    fi
   fi
 
   # Auto-sync on BEHIND: GitHub auto-merge will not fire while the head
@@ -2241,7 +2245,7 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
-**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
+**DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree is the kb-index class — GitHub lacks the local merge driver — and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree is a real conflict: the loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The admin-merge hatch stays BEHIND-only.
 
 Two failure paths exit early instead of looping:
 

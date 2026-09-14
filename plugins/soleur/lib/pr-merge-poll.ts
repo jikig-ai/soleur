@@ -44,10 +44,14 @@ export function isDirtyPollState(pollLine: string): boolean {
 
 /**
  * When true, stop CI-only polling and resync branch with origin/main first.
- * BEHIND means auto-merge will not fire until head catches up to base.
+ * BEHIND: auto-merge will not fire until head catches up to base.
+ * DIRTY: GitHub computed a conflict; locally-clean DIRTY (kb-index) still resyncs.
  */
 export function shouldResyncBeforePoll(mergeStateStatus: string): boolean {
-  return mergeStateStatus === MERGE_STATE_BEHIND;
+  return (
+    mergeStateStatus === MERGE_STATE_BEHIND ||
+    mergeStateStatus === MERGE_STATE_DIRTY
+  );
 }
 
 /** Harness-specific BEHIND resync instructions. */

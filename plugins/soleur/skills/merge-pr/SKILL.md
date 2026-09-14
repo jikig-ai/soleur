@@ -406,9 +406,14 @@ while true; do
   fi
 
   if [[ "$s" == *DIRTY* ]]; then
-    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
-    git diff --name-only --diff-filter=U >&2 || true
-    break
+    if git fetch origin main >/dev/null 2>&1 \
+       && git merge-tree --write-tree origin/main HEAD >/dev/null 2>&1; then
+      s="OPEN BEHIND"
+    else
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+      git diff --name-only --diff-filter=U >&2 || true
+      break
+    fi
   fi
 
   if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then

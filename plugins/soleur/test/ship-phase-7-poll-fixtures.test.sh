@@ -6,7 +6,8 @@
 #   1. clean MERGED on tick 3
 #   2. required-check failure on tick 5 (exit on first failure)
 #   3. BEHIND saturation through 6 syncs then structured warning
-#   4. DIRTY exit (server-side merge conflict)
+#   4. DIRTY exit (real conflict: merge-tree rc=1)
+#   4b. DIRTY but locally clean (merge-tree rc=0) → BEHIND auto-sync, not dirty-exit
 #   5. absent required check (CI not yet registered) — does NOT exit
 #
 # Also asserts mirror-parity between ship/SKILL.md's canonical block and
@@ -230,11 +231,18 @@ run_scenario "3-behind-saturation" "$SCEN3" \
 rm -f "$SCEN3"
 
 # ---------------------------------------------------------------------------
-# Scenario 4 — DIRTY (server-side conflict) on tick 2
+# Scenario 4 — DIRTY (real conflict): merge-tree rc=1 → dirty-exit
 # ---------------------------------------------------------------------------
 SCEN4="$(mktemp)"
 cat > "$SCEN4" <<EOF
 ${PRELUDE}
+git() {
+  case "\$1" in
+    rev-parse) echo "test-branch" ;;
+    merge-tree) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 gh() {
   case "\$1 \$2" in
     "pr view")
@@ -253,6 +261,33 @@ run_scenario "4-dirty-exit" "$SCEN4" \
   "\[ship\.phase7\.dirty\] PR is DIRTY \(merge conflict\)" \
   "Merge poll timed out|ship\.phase7\.behind_exhausted|UNEXPECTED gh call"
 rm -f "$SCEN4"
+
+# Scenario 4b — DIRTY but locally clean: merge-tree rc=0 → BEHIND auto-sync
+# ---------------------------------------------------------------------------
+SCEN4B="$(mktemp)"
+cat > "$SCEN4B" <<EOF
+${PRELUDE}
+_dirty_seen=0
+gh() {
+  case "\$1 \$2" in
+    "pr view")
+      if [[ "\$_dirty_seen" -eq 0 ]]; then
+        _dirty_seen=1
+        echo "OPEN DIRTY"
+      else
+        echo "OPEN BLOCKED"
+      fi
+      ;;
+    "pr checks") : ;;
+    "api "*)     : ;;
+    *) _gh_unexpected "\$@" ;;
+  esac
+}
+EOF
+run_scenario "4b-dirty-locally-clean" "$SCEN4B" \
+  "BEHIND detected — auto-sync attempt" \
+  "\[ship\.phase7\.dirty\]|UNEXPECTED gh call"
+rm -f "$SCEN4B"
 
 # ---------------------------------------------------------------------------
 # Scenario 5 — absent required check (CI not yet registered) does NOT exit.
