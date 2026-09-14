@@ -29,6 +29,42 @@ type NewRunRepository = BindingRepository & {
   bind(input: Record<string, unknown>): Promise<unknown>;
 };
 
+const ENGINE_RUN_STATUSES = new Set([
+  "queued", "running", "waiting", "cancel_requested",
+  "completed", "failed", "cancelled",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isEngineUsage(value: unknown): boolean {
+  if (!isRecord(value) || !Array.isArray(value.native) || !isRecord(value.cost)) return false;
+  if (!value.native.every((unit) =>
+    isRecord(unit) && typeof unit.unit === "string" && Number.isFinite(unit.value),
+  )) return false;
+  if (value.cost.provenance === "unavailable") return true;
+  return (value.cost.provenance === "reported" || value.cost.provenance === "estimated")
+    && typeof value.cost.amount === "number"
+    && Number.isFinite(value.cost.amount)
+    && typeof value.cost.currency === "string";
+}
+
+function isEngineEventPayload(value: unknown): value is EngineEvent["payload"] {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  switch (value.type) {
+    case "status": return typeof value.status === "string" && ENGINE_RUN_STATUSES.has(value.status);
+    case "text": return typeof value.text === "string";
+    case "progress": return typeof value.message === "string";
+    case "approval": return typeof value.requestId === "string"
+      && typeof value.tool === "string" && typeof value.description === "string";
+    case "artifact": return typeof value.artifactId === "string" && typeof value.revision === "string";
+    case "usage": return isEngineUsage(value.usage);
+    case "error": return typeof value.code === "string" && typeof value.retryable === "boolean";
+    default: return false;
+  }
+}
+
 function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence: number): void {
   if (
     !event ||
@@ -39,6 +75,9 @@ function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence
     event.sequence < 1
   ) {
     throw new Error("engine event does not match bound run");
+  }
+  if (!isEngineEventPayload(event.payload)) {
+    throw new Error("engine event payload is invalid");
   }
   if (event.sequence <= lastSequence) {
     throw new Error("engine event sequence is stale or duplicated");

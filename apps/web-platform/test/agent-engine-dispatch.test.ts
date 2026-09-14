@@ -319,6 +319,25 @@ describe("dispatchBoundEngineRun", () => {
     expect(eventSink.appendEvent).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed event payloads before persistence", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield {
+        runId: "run-1",
+        eventId: "evt-1",
+        sequence: 1,
+        payload: { type: "status", status: "not-a-run-status" },
+      } as never;
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const eventSink = { appendEvent: vi.fn() };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, eventSink, runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("engine event payload is invalid");
+    expect(eventSink.appendEvent).not.toHaveBeenCalled();
+  });
+
   it("rejects stale transport sequences before exposing the duplicate event", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "first" } as const };
