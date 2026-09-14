@@ -108,7 +108,11 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE v_row public.agent_engine_runs;
 BEGIN
-  IF NOT public.is_workspace_member(p_workspace_id, auth.uid()) THEN
+  IF auth.role() = 'service_role' THEN
+    IF NOT public.is_workspace_member(p_workspace_id, p_created_by) THEN
+      RAISE EXCEPTION 'workspace creator membership required' USING ERRCODE = '42501';
+    END IF;
+  ELSIF NOT public.is_workspace_member(p_workspace_id, auth.uid()) THEN
     RAISE EXCEPTION 'workspace membership required' USING ERRCODE = '42501';
   END IF;
   IF auth.role() <> 'service_role' AND p_created_by IS DISTINCT FROM auth.uid() THEN
