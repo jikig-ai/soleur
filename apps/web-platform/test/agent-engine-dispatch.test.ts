@@ -323,6 +323,21 @@ describe("dispatchBoundEngineRun", () => {
     expect(events[0].payload).toEqual({ type: "text", text: "continued" });
   });
 
+  it("rejects a cross-run continuation event before persistence", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const adapter = { continue: vi.fn(async function* () {
+      yield { runId: "other-run", eventId: "evt-2", sequence: 2, payload: { type: "text", text: "cross-run" } as const };
+    }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    await expect((async () => {
+      for await (const _event of continueBoundEngineRun({
+        repository, adapter, eventSink, adapterEngineId: "claude-code", runId: "run-1", context: {} as never,
+        session: { resumeHandle: "opaque", sessionId: null }, input: { text: "next", attachmentIds: [] },
+      })) { /* no-op */ }
+    })()).rejects.toThrow("event does not match bound run");
+    expect(eventSink.appendEvent).not.toHaveBeenCalled();
+  });
+
   it("reloads the binding before resuming from a cursor", async () => {
     const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
     const adapter = { resumeFromCursor: vi.fn(async function* () {
@@ -336,6 +351,21 @@ describe("dispatchBoundEngineRun", () => {
     expect(adapter.resumeFromCursor).toHaveBeenCalledWith(expect.anything(), "cursor-2");
     expect(eventSink.appendEvent).toHaveBeenCalledWith(events[0]);
     expect(events).toHaveLength(1);
+  });
+
+  it("rejects a stale cursor replay event before exposing it", async () => {
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "claude-code" } }) };
+    const adapter = { resumeFromCursor: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-3", sequence: 3, payload: { type: "progress", message: "first" } as const };
+      yield { runId: "run-1", eventId: "evt-4", sequence: 2, payload: { type: "progress", message: "stale" } as const };
+    }) };
+    const eventSink = { appendEvent: vi.fn().mockResolvedValue(undefined) };
+    await expect((async () => {
+      for await (const _event of resumeBoundEngineRun({
+        repository, adapter, eventSink, adapterEngineId: "claude-code", runId: "run-1", context: {} as never, cursor: "cursor-2",
+      })) { /* no-op */ }
+    })()).rejects.toThrow("event sequence is stale or duplicated");
+    expect(eventSink.appendEvent).toHaveBeenCalledOnce();
   });
 
   it("reloads the binding before approval responses and erasure", async () => {

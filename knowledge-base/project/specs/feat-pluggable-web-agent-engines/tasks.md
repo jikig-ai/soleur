@@ -51,7 +51,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Settings resolver slice: workspace lookup failures are sanitized to retryable 503 responses (8 route tests green).
   - [x] Settings observability slice: sanitized resolver/read/write failures mirror through the shared fallback reporter.
   - [x] Dispatch identity slice: persisted bindings are checked against the selected adapter before provider invocation (4 dispatch tests green).
-  - [x] Neutral event authenticity slice: generic dispatch rejects cross-run, malformed, and stale transport events before ledger persistence or consumer delivery (20 dispatch tests green).
+  - [x] Neutral event authenticity slice: generic dispatch rejects cross-run, malformed, and stale transport events before ledger persistence or consumer delivery across start, continuation, and cursor replay (22 dispatch tests green).
   - [x] Event lifecycle slice: dispatch persists adapter events before exposing them to consumers and fails closed on ledger errors (6 dispatch tests green).
   - [x] Cancellation/reconciliation slice: lifecycle helpers reload persisted bindings and enforce adapter identity before cancel/reconcile calls (7 dispatch tests green).
   - [x] Continuation slice: native session continuation reloads and verifies the persisted adapter binding before streaming events (8 dispatch tests green).

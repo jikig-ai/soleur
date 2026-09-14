@@ -45,6 +45,20 @@ function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence
   }
 }
 
+async function* persistAndYieldEvents(
+  events: AsyncIterable<EngineEvent>,
+  runId: string,
+  eventSink: EventSink | undefined,
+): AsyncGenerator<EngineEvent> {
+  let lastSequence = 0;
+  for await (const event of events) {
+    validateDispatchedEvent(event, runId, lastSequence);
+    lastSequence = event.sequence;
+    if (eventSink) await eventSink.appendEvent(event);
+    yield event;
+  }
+}
+
 interface DispatchOptions {
   repository: BindingRepository;
   adapter: Pick<EngineAdapter, "start">;
@@ -281,10 +295,11 @@ export async function* continueBoundEngineRun(options: {
   input: EngineInput;
 }): AsyncGenerator<EngineEvent> {
   const context = await loadBoundContext(options);
-  for await (const event of options.adapter.continue(context, options.session, options.input)) {
-    if (options.eventSink) await options.eventSink.appendEvent(event);
-    yield event;
-  }
+  yield* persistAndYieldEvents(
+    options.adapter.continue(context, options.session, options.input),
+    options.runId,
+    options.eventSink,
+  );
 }
 
 export async function* resumeBoundEngineRun(options: {
@@ -297,10 +312,11 @@ export async function* resumeBoundEngineRun(options: {
   cursor: string | null;
 }): AsyncGenerator<EngineEvent> {
   const context = await loadBoundContext(options);
-  for await (const event of options.adapter.resumeFromCursor(context, options.cursor)) {
-    if (options.eventSink) await options.eventSink.appendEvent(event);
-    yield event;
-  }
+  yield* persistAndYieldEvents(
+    options.adapter.resumeFromCursor(context, options.cursor),
+    options.runId,
+    options.eventSink,
+  );
 }
 
 export async function respondToApprovalBoundEngineRun(options: {
