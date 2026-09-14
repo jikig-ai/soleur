@@ -46,3 +46,4 @@
 ### Components Invoked
 - Agents: general-purpose (Phase 3.3 agent A; Phase 4 agent B; Phase 5.1/5.3 agent C), clo (Phase 5.4 attestation)
 - Pre-commit `bun-test` (full battery) excluded for commit 8ffa2c22c by operator decision after 40 min queued behind a sibling worktree's run; CI runs the battery on push (ADR-183). Recorded in the commit body and to be named in the PR body.
+- Merge of origin/main (97e139de8): three conflicts resolved (guard-vacuity-floor PROMOTED_FILES union with #8028's postgrest-reload-schema entry; both compliance-posture rows kept; model.likec4.json regenerated). Pre-commit `plugin-component-test` failed twice on `changelog-data.test.ts` timing out at bun's 5 s default on a LIVE GitHub Releases call (API alone 2.9 s at load 14.8; suite untouched by this branch; passes alone and 2710/0 with --timeout 30000, `runs/plugin-component-test-manual.log`) — that one job excluded for the merge commit only.
