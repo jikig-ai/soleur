@@ -62,6 +62,11 @@ describe("engine data-egress policy", () => {
     );
   });
 
+  it("allows synthetic qualification when provider erasure evidence is unavailable", () => {
+    const decision = authorizeEngineDataEgress(selection, { ...qualifiedEvidence, deletionSupport: "unknown" });
+    expect(decision.deletionSupport).toBe("unknown");
+  });
+
   it("refuses a policy that requires approval when no approval is supplied", () => {
     expect(() => authorizeEngineDataEgress(selection, { ...qualifiedEvidence, approvalRequired: true })).toThrowError(
       expect.objectContaining({ code: "engine_egress_approval_required" }),

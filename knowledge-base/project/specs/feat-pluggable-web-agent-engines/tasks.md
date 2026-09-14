@@ -94,7 +94,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Registry dispatch slice: bound-run dispatch resolves the adapter from persisted engine identity through the reviewed factory (12 dispatch tests green).
   - [x] Adapter composition slice: injected Claude/Codex transports compose into reviewed factories, with Codex omitted until auth dependencies exist (2 composition tests green).
   - [x] Cancellation slice: Codex cancellation normalization confirms only explicit terminal acknowledgement (18 adapter tests green).
-  - [x] Egress policy slice: server-side endpoint, data-class, DPA, transfer-geography, deletion-support, and approval evidence fail closed before registry dispatch (8 policy tests and 1 dispatch integration test green).
+  - [x] Egress policy slice: server-side endpoint, data-class, DPA, transfer-geography, deletion-support, and approval evidence fail closed before registry dispatch; synthetic qualification may proceed without erasure evidence, while customer data requires verified deletion support (9 policy tests and 1 dispatch integration test green).
   - [x] Expanded evidence slice: migration-inclusive engine/settings/routine suite passes 116/116; C4 freshness passes 3/3.
   - [x] Catalog identity slice: reviewed Codex metadata reuses the adapter’s immutable engine ID (22 registry/factory tests green).
   - [x] C4 composition slice: adapter factory and provider composition boundaries are modeled and regenerated; freshness 3/3 and version pin 2/2 pass.

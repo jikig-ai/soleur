@@ -24,7 +24,7 @@ export interface EngineDataEgressDecision {
   dataClass: EngineDataClass;
   vendorDpaStatus: VendorDpaStatus;
   transferGeography: Exclude<TransferGeography, "unknown">;
-  deletionSupport: "verified";
+  deletionSupport: DeletionSupport;
   approvalRequired: boolean;
 }
 
@@ -77,9 +77,6 @@ export function authorizeEngineDataEgress(
   }
   if (evidence.approvalRequired && evidence.approvalGranted !== true) {
     throw new EngineDataEgressError("engine egress approval is required", "engine_egress_approval_required");
-  }
-  if (evidence.deletionSupport !== "verified") {
-    return deny("engine egress deletion support is not verified");
   }
   return {
     endpoint,
