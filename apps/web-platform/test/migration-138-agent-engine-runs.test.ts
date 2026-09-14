@@ -19,6 +19,9 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/UNIQUE \(run_id, event_id\)/);
     expect(code).toMatch(/UNIQUE \(run_id, sequence\)/);
     expect(code).toMatch(/agent_engine_runs_conversation_uniq/);
+    expect(code).toMatch(/CREATE OR REPLACE FUNCTION public\.append_agent_engine_event/);
+    expect(code).toMatch(/IS DISTINCT FROM p_sequence/);
+    expect(code).toMatch(/IS DISTINCT FROM p_payload/);
   });
 
   it("pins the owner RPC search path and qualifies public relations", () => {
@@ -33,6 +36,7 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/agent_engine_runs_member_select[\s\S]*is_workspace_member/);
     expect(code).toMatch(/agent_engine_events_member_select[\s\S]*is_workspace_member/);
     expect(code).toMatch(/GRANT EXECUTE ON FUNCTION public\.bind_agent_engine_run[\s\S]*TO authenticated, service_role/);
+    expect(code).toMatch(/GRANT EXECUTE ON FUNCTION public\.append_agent_engine_event[\s\S]*TO authenticated, service_role/);
     expect(code).toMatch(/p_created_by IS DISTINCT FROM auth\.uid\(\)/);
     expect(code).toMatch(/auth\.role\(\) = 'service_role'[\s\S]*is_workspace_member\(p_workspace_id, p_created_by\)/);
   });

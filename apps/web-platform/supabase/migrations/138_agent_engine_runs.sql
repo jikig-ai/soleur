@@ -52,6 +52,45 @@ CREATE TABLE IF NOT EXISTS public.agent_engine_events (
   UNIQUE (run_id, sequence)
 );
 
+-- Idempotent event append: an exact retry returns the existing row, while
+-- reusing an event key with a different sequence or payload is rejected.
+CREATE OR REPLACE FUNCTION public.append_agent_engine_event(
+  p_run_id uuid,
+  p_event_id text,
+  p_sequence integer,
+  p_payload jsonb
+) RETURNS public.agent_engine_events
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_row public.agent_engine_events;
+BEGIN
+  IF auth.role() <> 'service_role' AND NOT EXISTS (
+    SELECT 1 FROM public.agent_engine_runs r
+    WHERE r.id = p_run_id AND public.is_workspace_member(r.workspace_id, auth.uid())
+  ) THEN
+    RAISE EXCEPTION 'workspace membership required' USING ERRCODE = '42501';
+  END IF;
+  SELECT e.* INTO v_row
+    FROM public.agent_engine_events e
+   WHERE e.run_id = p_run_id AND e.event_id = p_event_id;
+  IF FOUND THEN
+    IF v_row.sequence IS DISTINCT FROM p_sequence OR v_row.payload IS DISTINCT FROM p_payload THEN
+      RAISE EXCEPTION 'event key already maps to a different event' USING ERRCODE = '23P01';
+    END IF;
+    RETURN v_row;
+  END IF;
+  INSERT INTO public.agent_engine_events(run_id, event_id, sequence, payload)
+  VALUES (p_run_id, p_event_id, p_sequence, p_payload)
+  RETURNING * INTO v_row;
+  RETURN v_row;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.append_agent_engine_event(uuid, text, integer, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.append_agent_engine_event(uuid, text, integer, jsonb) FROM anon;
+GRANT EXECUTE ON FUNCTION public.append_agent_engine_event(uuid, text, integer, jsonb) TO authenticated, service_role;
+
 ALTER TABLE public.workspace_engine_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_engine_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_engine_events ENABLE ROW LEVEL SECURITY;

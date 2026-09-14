@@ -83,11 +83,12 @@ describe("AgentEnginePersistenceRepository", () => {
     const supabase = client();
     const repo = new AgentEnginePersistenceRepository(supabase);
     await repo.appendEvent({ runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "hi" } });
-    expect(supabase.from).toHaveBeenCalledWith("agent_engine_events");
-    expect(supabase.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ event_id: "evt-1", run_id: "run-1" }),
-      { onConflict: "run_id,event_id", ignoreDuplicates: true },
-    );
+    expect(supabase.rpc).toHaveBeenCalledWith("append_agent_engine_event", {
+      p_run_id: "run-1",
+      p_event_id: "evt-1",
+      p_sequence: 1,
+      p_payload: { type: "text", text: "hi" },
+    });
   });
 
   it("surfaces bind failures instead of silently creating an unbound run", async () => {
@@ -105,14 +106,14 @@ describe("AgentEnginePersistenceRepository", () => {
 
   it("surfaces event persistence failures for retry/reconciliation", async () => {
     const supabase = client();
-    supabase.insert.mockResolvedValueOnce({ data: null, error: { message: "unique violation" } });
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: "event key conflict" } });
     const repo = new AgentEnginePersistenceRepository(supabase);
     await expect(repo.appendEvent({
       runId: "run-1",
       eventId: "evt-2",
       sequence: 2,
       payload: { type: "status", status: "running" },
-    })).rejects.toThrow("engine event append failed: unique violation");
+    })).rejects.toThrow("engine event append failed: event key conflict");
   });
 
   it("normalizes persisted snake_case rows into the neutral binding contract", async () => {

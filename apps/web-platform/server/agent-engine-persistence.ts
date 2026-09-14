@@ -104,15 +104,12 @@ export class AgentEnginePersistenceRepository {
   }
 
   async appendEvent(event: EngineEvent): Promise<unknown> {
-    const result = await this.client.from("agent_engine_events").insert(
-      {
-        run_id: event.runId,
-        event_id: event.eventId,
-        sequence: event.sequence,
-        payload: event.payload,
-      },
-      { onConflict: "run_id,event_id", ignoreDuplicates: true },
-    );
+    const result = await this.client.rpc("append_agent_engine_event", {
+      p_run_id: event.runId,
+      p_event_id: event.eventId,
+      p_sequence: event.sequence,
+      p_payload: event.payload,
+    });
     if (result.error) throw new Error(`engine event append failed: ${result.error.message}`);
     return result.data;
   }
