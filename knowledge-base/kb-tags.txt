@@ -1796,6 +1796,7 @@ health-endpoint
 health-scanner
 health-snapshot
 heartbeat
+heartbeat-subshell
 helper-boundary-transform
 helper-extraction
 helper-migration
@@ -1990,7 +1991,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
-kb-index-drift
+kb-index-driver
 kb-layout
 kb-pdf
 kb-reader
@@ -2581,6 +2582,7 @@ phase-e
 phase-ordering
 phase-surface-hint
 phased-rollout
+pid-identity
 pii
 pii-scrubbing
 pil
@@ -3761,7 +3763,6 @@ tasks-drift
 tautology
 taxonomy
 tc-acceptance
-tc-lock-timeout
 tdd
 tdd-edge-cases
 tdd-test-fixtures
