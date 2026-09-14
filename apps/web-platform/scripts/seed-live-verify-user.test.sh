@@ -231,9 +231,8 @@ fi
 
 # (c) NON-VACUITY CONTROL: the extraction must FAIL on a file that lacks the
 # export. Without this, a `sed` that matches nothing looks identical to success.
-tmp_ssot="$(mktemp)"; printf 'export const SOMETHING_ELSE = "x";\n' > "$tmp_ssot"
-neg="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$tmp_ssot")"
-rm -f "$tmp_ssot"
+neg="$(printf 'export const SOMETHING_ELSE = "x";\n' \
+  | sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p')"
 if [[ -z "$neg" ]]; then
   echo "  ok: extraction yields empty on a file without the export (control fires)"
 else
