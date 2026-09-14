@@ -17,7 +17,9 @@ Closes: #8051, #8053
   (plan §Proposed Solution item 3).
 - [x] 1.4 Bump `readonly MIN_ASSERTIONS` 24→25 (line 25).
 - [x] 1.5 Verify AC1–AC4: clean-env run green; hook-env run green; no `env -u GIT_` in the probe;
-  `_GFE_HOOK_ENV_REPLAY` ≥2 hits.
+  replay-guard present ≥2 hits. (Review changed the guard from the planned
+  `_GFE_HOOK_ENV_REPLAY` env flag to a `--hook-env-replay` argv flag — an ambient env var
+  could silently skip the arm; argv cannot leak through the environment.)
 
 ## Phase 2 — #8053: anchor the recovery grep (`.github/workflows/apply-web-platform-infra.yml`)
 

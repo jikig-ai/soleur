@@ -42,3 +42,20 @@
 
 ### Decisions
 - Floor 53→54 bump touched the count AND both message strings ("floor is 54", "floor 54") — message drift would have misled the next reader.
+
+## Review Phase
+- Status: complete. Class `code`, design-risk no. Panel: 9/9 agents returned (7 adversarial + structural-enumeration seat replacing agent-native-reviewer + test-design-reviewer + coverage consult). Shellcheck substituted for semgrep (bash-only diff) — info-level SC2317 only, pre-existing trap idiom.
+- Findings: ~20 deduped — 0 P1 merge-blockers, 2 P2, rest P3. ALL fixed inline (commits `d4f7949a6`, `10cb89128`); zero scope-out filings.
+
+### Errors
+- Review Row 6d needle draft used `^[^#]*` — too strict: the message line legitimately contains `(#7695;` before the grep. Corrected to first-non-blank-isn't-`#`.
+- Coverage consult's MIN_ASSERTIONS lead was a false positive (floor 24→25 does track the arm; deleting it → 24<25 → FATAL). Dropped after self-verification.
+- Coverage consult's Row 6e lead required two rounds: `["']*` matched the deliberate prose quote `'grep -c probe_schema=3'`; `["']` (required quote) is the right shape.
+
+### Decisions (review resolutions)
+- env-flag → `--hook-env-replay` argv guard (4 seats converged on the silent-vacuity vector; argv can't leak through env). Residual: deliberate manual invocation still vacuous — accepted, documented in comment.
+- #8053 class closed, not just the instance: cutover-inngest.sh:1377 anchored, `$EXPECTED$` right boundary, IREF= anchored tag extraction, fail-loud `git show > file && grep` recipe (coverage-consult P2).
+- Row 6 pins hardened: 6d non-comment line anchor, 6e quoted-unanchored negative, 6f cutover sibling, 6g IREF pin, 6h fail-loud pin. Floor 53→58.
+- Scrub self-check added (residue FATAL) — catches name-list reversion the replay arm cannot.
+- Pre-existing sibling-suite exposures (git-tripwire.test.sh, test-all-infra-coverage-notice.test.sh) left to the #7822 census — bounded, fail-loud, already-tracked class.
+- Post-review: fixture suite 25/0/25 clean AND hook-env; gate suite 58/0; collateral 3 suites rc=0; YAML parses; cutover `bash -n` clean.
