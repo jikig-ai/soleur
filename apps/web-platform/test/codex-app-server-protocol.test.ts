@@ -7,6 +7,11 @@ import {
   createCodexThreadStartRequest,
   createCodexTurnStartRequest,
 } from "@/server/codex-app-server-protocol";
+import {
+  decodeCodexJsonlLine,
+  decodeCodexJsonlStream,
+  encodeCodexJsonl,
+} from "@/server/codex-app-server-jsonl";
 
 describe("Codex App Server protocol requests", () => {
   it("constructs the initialize handshake without credential material", () => {
@@ -62,6 +67,38 @@ describe("Codex App Server protocol requests", () => {
     );
     expect(() => createCodexTurnStartRequest("rpc-1", "thread-1", "x".repeat(16_385))).toThrowError(
       expect.objectContaining({ code: "codex_rpc_input_invalid" }),
+    );
+  });
+
+  it("encodes one JSON-RPC message per newline-delimited frame", () => {
+    const request = createCodexInitializeRequest("rpc-6");
+    const frame = encodeCodexJsonl(request);
+    expect(frame.endsWith("\n")).toBe(true);
+    expect(decodeCodexJsonlLine(frame)).toEqual(request);
+  });
+
+  it("reassembles chunked stdio input into ordered messages", async () => {
+    const first = encodeCodexJsonl(createCodexInitializeRequest("rpc-7"));
+    const second = encodeCodexJsonl(createCodexInitializedNotification());
+    const chunks = (async function* () {
+      yield first.slice(0, 10);
+      yield first.slice(10) + second.slice(0, 4);
+      yield second.slice(4);
+    })();
+    const messages = [];
+    for await (const message of decodeCodexJsonlStream(chunks)) messages.push(message);
+    expect(messages).toEqual([createCodexInitializeRequest("rpc-7"), createCodexInitializedNotification()]);
+  });
+
+  it("rejects blank, malformed, and oversized frames", () => {
+    expect(() => decodeCodexJsonlLine("\n")).toThrowError(
+      expect.objectContaining({ code: "codex_rpc_frame_invalid" }),
+    );
+    expect(() => decodeCodexJsonlLine("{not-json}\n")).toThrowError(
+      expect.objectContaining({ code: "codex_rpc_frame_invalid" }),
+    );
+    expect(() => encodeCodexJsonl({ payload: "x".repeat(1_048_577) })).toThrowError(
+      expect.objectContaining({ code: "codex_rpc_frame_too_large" }),
     );
   });
 });
