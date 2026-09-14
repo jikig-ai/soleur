@@ -1,7 +1,7 @@
 ---
 upstream: github.com/goSprinto/compliance-skills
 pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
-last-verified: 2026-05-10
+last-verified: 2026-09-14
 registry: knowledge-base/engineering/policies/content-vendoring.md
 lifted-files:
   # Each entry pins TWO blob SHAs:
