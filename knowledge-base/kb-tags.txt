@@ -603,6 +603,7 @@ canusetool
 cap
 cap-coupling
 cap-rpc
+capability-matrix
 capability-precedent
 capacity
 capture
@@ -1182,6 +1183,7 @@ dev-prod-divergence
 dev-server
 devdependencies
 developer-experience
+devin-cloud
 dhh-rails-reviewer
 di-seam
 diagnosability
@@ -1786,6 +1788,7 @@ hardcoded-map-drift
 harness
 harness-adapter
 harness-fidelity
+harness-parity
 harness-reliability
 harvest-debt
 has_function_privilege
@@ -2703,6 +2706,7 @@ plugin-marketplace
 plugin-path
 plugin-root
 plugin-structure
+plugin-surfaces
 plugin-system
 plugin-versioning
 plugins/soleur

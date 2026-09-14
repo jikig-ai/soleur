@@ -515,6 +515,8 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    - Acceptance criteria (from brainstorm decisions)
    - If replacing closed issue: "Replaces closed #$existing_issue"
 
+   **Filing-gate exit selection:** when the feature's deliverable is itself plugin verification machinery (gates, banners, ledgers, parity work), the issue-filing gate classifies it as machinery — the `User-Impact:`/`Fix-Size:` exit is refused even when correctly formatted; file with `--label meta/machinery` directly. Reserve the `User-Impact:` exit for features whose surface a user actually receives. See `knowledge-base/project/learnings/documentation-gaps/devin-cloud-plugin-surface-matrix-SoleurPlugin-20260914.md`.
+
 3. **Update existing issue with artifact links** (if using existing issue):
 
    Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts (or "Bundled scoping") section with links to the brainstorm document, spec file, branch name, and draft PR. Then update with `gh issue edit <number> --body-file -` reading stdin. For bundles, loop over every referenced issue and append the same note to each.
