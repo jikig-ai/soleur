@@ -37,7 +37,7 @@
 ### Recovery of the two rate-limited agents
 
 - **Plan+deepen agent** — resumed via SendMessage; confirmed its in-flight Deliverable C / Guard Contract
-  edit had already landed, fixed a fixture-id placeholder, re-measured A11 (574 B, not 596 B), committed
+  edit had already landed, fixed a fixture-id placeholder, re-measured A11 as 574 B — WRONG: at /work the line is byte-identical to the plan's replacement and measures 596 B (the architecture reviewer was right); budget is 43343 → 42640 (−703), not 42618 (−725) — committed
   and pushed (`c78288928`). Session Summary received.
 - **`kieran-rails-reviewer`** — spawned by the planning agent and killed by the same limit before
   returning; its id was not reachable from this session, so its one concrete deliverable (the
