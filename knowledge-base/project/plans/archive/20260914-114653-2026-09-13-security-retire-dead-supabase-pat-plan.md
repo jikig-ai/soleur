@@ -250,7 +250,7 @@ logs:
 
 discoverability_test:
   command: "bash apps/web-platform/scripts/postgrest-reload-schema.test.sh"
-  expected_output: "Results: 20 passed, 0 failed"
+  expected_output: "Results: 24 passed, 0 failed"
 ```
 
 ## Guard Contract
