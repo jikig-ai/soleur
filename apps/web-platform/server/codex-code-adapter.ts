@@ -29,6 +29,13 @@ export function sanitizeCodexError(error: unknown): Error {
   return Object.assign(new Error("Codex provider request failed"), { code });
 }
 
+export function validateCodexEvent(event: EngineEvent, expectedRunId: string): EngineEvent {
+  if (event.runId !== expectedRunId || !event.eventId || !Number.isInteger(event.sequence) || event.sequence < 1) {
+    throw Object.assign(new Error("Codex event does not match the bound run"), { code: "codex_event_invalid" });
+  }
+  return event;
+}
+
 export function normalizeCodexUsageEvent(
   runId: string,
   eventId: string,
@@ -159,18 +166,20 @@ export function createCodexCodeAdapter(
   transport: CodexCodeAdapterTransport,
   auth: CodexAuthBoundary,
 ): EngineAdapter {
-  async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>): AsyncIterable<EngineEvent> {
-    try { yield* await load(); } catch (error) { throw sanitizeCodexError(error); }
+  async function* stream<T extends AsyncIterable<EngineEvent>>(load: () => Promise<T>, runId: string): AsyncIterable<EngineEvent> {
+    try {
+      for await (const event of await load()) yield validateCodexEvent(event, runId);
+    } catch (error) { throw sanitizeCodexError(error); }
   }
   const call = async <T>(operation: () => Promise<T>): Promise<T> => {
     try { return await operation(); } catch (error) { throw sanitizeCodexError(error); }
   };
   return {
-    start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire())),
-    continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire())),
+    start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire()), context.runId),
+    continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire()), context.runId),
     cancel: async (context, session) => call(async () => transport.cancel(context, session, await auth.acquire())),
     reconcile: async (context, session) => call(async () => transport.reconcile(context, session, await auth.acquire())),
-    resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire())),
+    resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire()), context.runId),
     respondToApproval: async (context, requestId, decision) => call(async () => transport.respondToApproval(context, requestId, decision, await auth.acquire())),
     erase: async (context, session) => call(async () => transport.erase(context, session, await auth.acquire())),
     dispose: () => transport.dispose(),

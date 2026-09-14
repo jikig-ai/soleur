@@ -6,6 +6,7 @@ import {
   normalizeCodexUsageEvent,
   runWithCodexRecovery,
   sanitizeCodexError,
+  validateCodexEvent,
   type CodexAuthProvider,
   type CodexAuthMode,
 } from "@/server/codex-code-adapter";
@@ -105,7 +106,7 @@ describe("Codex neutral adapter boundary", () => {
     };
     const adapter = createCodexCodeAdapter(transport, auth);
     const events = [];
-    for await (const event of adapter.start({} as never, { text: "hi", attachmentIds: [] })) events.push(event);
+    for await (const event of adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] })) events.push(event);
     expect(events).toHaveLength(1);
     expect(transport.start).toHaveBeenCalledOnce();
   });
@@ -184,5 +185,17 @@ describe("Codex error sanitization", () => {
 
   it("maps unknown thrown values to a generic provider error", () => {
     expect(sanitizeCodexError("token=secret")).toMatchObject({ code: "codex_provider_error", message: "Codex provider request failed" });
+  });
+});
+
+describe("Codex event boundary", () => {
+  it("accepts only events for the bound run with a positive sequence", () => {
+    const event = { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+    expect(validateCodexEvent(event, "run-1")).toEqual(event);
+  });
+
+  it("rejects cross-run and stale sequence events", () => {
+    const event = { runId: "run-2", eventId: "evt-1", sequence: 0, payload: { type: "text", text: "replay" } as const };
+    expect(() => validateCodexEvent(event, "run-1")).toThrowError(expect.objectContaining({ code: "codex_event_invalid" }));
   });
 });
