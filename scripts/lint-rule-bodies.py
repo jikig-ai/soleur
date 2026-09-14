@@ -122,7 +122,11 @@ DELETED_TOKEN = "DELETED"
 
 
 def _normalize(line: str) -> str:
-    """Collapse all whitespace runs to single spaces and strip the ends."""
+    """Collapse all whitespace runs to single spaces and strip the ends.
+
+    scripts/lint-migrated-rule-ids.sh `hash_text` must agree with this on every body it accepts
+    (it refuses non-ASCII whitespace, the one class where `tr` and `str.split()` differ).
+    """
     return " ".join(line.split())
 
 
