@@ -20,16 +20,29 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 # GIT_* variables into every hook process (measured from a real hook env: GIT_DIR,
 # GIT_INDEX_FILE, GIT_AUTHOR_*, GIT_COMMITTER_*, GIT_EDITOR, GIT_EXEC_PATH, GIT_PREFIX,
 # GIT_TERMINAL_PROMPT), and every `bash -c` child below would inherit them — tripwires fire and
-# identity probes read "from anywhere" values. Strip by prefix, before any child spawns: a
-# hand-listed name set is a claim about which variables git honours and goes stale the day git
-# adds one (2026-09-04 learning; the five-name `env -u` chain this replaces was itself that
-# shape). GIT_LOCATION_VARS is exempted only defensively — nothing sets it before this file is
-# sourced, but the lib's own list idiom keeps it anyway.
+# identity probes read "from anywhere" values. Strip by prefix, before any child spawns —
+# NOTHING above this block may spawn a process, because a command substitution inserted higher
+# inherits the unscrubbed environment (a positional invariant, not a coincidence of today's
+# layout). A hand-listed name set is a claim about which variables git honours and goes stale
+# the day git adds one (2026-09-04 learning; the five-name `env -u` chain the leak probe carried
+# until this change was itself that shape). GIT_LOCATION_VARS is exempted only defensively —
+# nothing sets it before this file is sourced, but the lib's own list idiom keeps it anyway.
 for _v in ${!GIT_@}; do
   [[ "$_v" == "GIT_LOCATION_VARS" ]] && continue
   unset "$_v"
 done
 unset _v
+
+# The scrub verifies ITSELF before anything else spawns: a reversion to the nine-name
+# GIT_LOCATION_VARS list would leave non-location GIT_* vars exported with every child arm
+# still green — the replay arm below observes a deleted scrub, not a narrowed one. Exempt
+# GIT_LOCATION_VARS to match the scrub's own rule.
+_residue="$(env | grep '^GIT_' | grep -v '^GIT_LOCATION_VARS=' || true)"
+if [[ -n "$_residue" ]]; then
+  printf '[FATAL] ambient GIT_* scrub left variables exported:\n%s\n' "$_residue" >&2
+  exit 2
+fi
+unset _residue
 
 REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 LIB="$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
@@ -77,7 +90,7 @@ PASS=1; ASSERTIONS=1
 # directories and ~416 KB per full-gate run, into a machine-global 4 GiB tmpfs shared by every
 # parallel worktree.
 _FIXTURE_ROOT="$(mktemp -d "$TMPDIR/gfe-shell.XXXXXXXX")" || {
-  printf '[FATAL] mktemp -d failed; harness cannot set up\n' >&2; exit 2; }
+  printf '[FATAL] mktemp -d failed; harness cannot set up\n' >&2; rm -f "$_VERDICT_LEDGER"; exit 2; }
 # Guarded on the shape this function itself creates, so the trap cannot be aimed elsewhere.
 # ONE owning EXIT trap: fixture cleanup AND the verdict.
 #
@@ -209,10 +222,13 @@ for bad_dir in "/tmp" "relative/path" "$TMPDIR/has:colon/repo"; do
   # is what keeps the probe honest if the suite's own scrub is ever deleted (the mutation this
   # arm exists to detect).
   probe=$(bash -c '
-    for _v in ${!GIT_@}; do unset "$_v"; done
-    source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true
-    echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"' \
-    _ "$LIB" "$bad_dir" 2>&1)
+  for _v in ${!GIT_@}; do
+    [[ "$_v" == "GIT_LOCATION_VARS" ]] && continue
+    unset "$_v"
+  done
+  source "$1"; git_fixture_env "$2" >/dev/null 2>&1 || true
+  echo "CEIL=${GIT_CEILING_DIRECTORIES:-<unset>} ID=${GIT_AUTHOR_NAME:-<unset>} SIGN=${GIT_CONFIG_KEY_0:-<unset>}"
+' _ "$LIB" "$bad_dir" 2>&1)
   r=$(bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1' _ "$LIB" "$bad_dir"; echo $?)
   if [[ "$r" != "0" ]]; then ok "refuses an unenforceable ceiling for [$bad_dir]"
   else bad "ACCEPTED an unenforceable ceiling for [$bad_dir]"; fi
@@ -224,7 +240,16 @@ done
 # A relative path that EXISTS is the case the ceiling arm structurally cannot catch: cd -P resolves
 # it to an absolute physical path, so the computed ceiling is absolute and passes every check below
 # it. Only the input guard can refuse this, so fixture it from inside the parent directory.
-relprobe=$(cd "$REL_BASE" && bash -c 'source "$1"; git_fixture_env "sub" >/dev/null 2>&1; echo "rc=$?; CEIL=${GIT_CEILING_DIRECTORIES:-<unset>}"' _ "$LIB" 2>&1)
+# The in-child scrub matters here too: this probe prints a GIT_* value out of the post-REFUSAL
+# environment for diagnosis, and the lib's sweep runs only inside git_fixture_env after
+# validation — on a refused call the ambient value would print as if it were builder state.
+relprobe=$(cd "$REL_BASE" && bash -c '
+  for _v in ${!GIT_@}; do
+    [[ "$_v" == "GIT_LOCATION_VARS" ]] && continue
+    unset "$_v"
+  done
+  source "$1"; git_fixture_env "sub" >/dev/null 2>&1; echo "rc=$?; CEIL=${GIT_CEILING_DIRECTORIES:-<unset>}"
+' _ "$LIB" 2>&1)
 if [[ "$relprobe" == *"rc=0"* ]]; then
   bad "ACCEPTED an EXISTING relative fixture dir -- resolved against the caller CWD: $relprobe"
 else
@@ -317,22 +342,30 @@ fi
 
 printf '\n=== the suite is green under a hook-shaped environment (#8051 regression) ===\n'
 # The 2026-09-04 learning's "a fixture that spawns git must be run once with GIT_DIR deliberately
-# set", self-contained so CI (which never has a real hook env) exercises it. The flag is not a
-# GIT_* name, so the inner run's own ambient scrub cannot strip it and recursion cannot restart.
-if [[ "${_GFE_HOOK_ENV_REPLAY:-0}" == "1" ]]; then
+# set", self-contained so CI (which never has a real hook env) exercises it. The recursion guard
+# is an ARGV flag, not an environment variable: an env flag can be set externally and the outer
+# run would then take the vacuous `ok` branch — the silent-disarm shape this file's own doctrine
+# exists to prevent. argv cannot leak through an environment.
+if [[ "${1:-}" == "--hook-env-replay" ]]; then
   ok "inner replay run (the outer invocation supplied the hook env)"
 else
+  # Sentinels live under _FIXTURE_ROOT (trap-cleaned), never bare /tmp: if the ambient scrub AND
+  # the lib tripwire both regressed, fixture git calls would honour GIT_DIR/GIT_INDEX_FILE and
+  # write there — and GIT_EXEC_PATH points at a guaranteed-nonexistent path so any honoured use
+  # fails loudly rather than silently working.
+  _replay_out="$_FIXTURE_ROOT/replay.out"
   _replay_rc=0
-  _GFE_HOOK_ENV_REPLAY=1 \
-    GIT_DIR="/tmp/gfe-hostile-gitdir" GIT_INDEX_FILE="/tmp/gfe-hostile-index" \
+  GIT_DIR="$_FIXTURE_ROOT/hostile-gitdir" GIT_INDEX_FILE="$_FIXTURE_ROOT/hostile-index" \
     GIT_AUTHOR_NAME="Hook Inherited" GIT_AUTHOR_EMAIL="hook@example.com" \
-    GIT_COMMITTER_NAME="Hook Inherited" GIT_EDITOR=":" GIT_PREFIX="sub/" \
-    GIT_TERMINAL_PROMPT=0 GIT_EXEC_PATH="/usr/lib/git-core" \
-    bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || _replay_rc=$?
+    GIT_COMMITTER_NAME="Hook Inherited" GIT_COMMITTER_EMAIL="hook@example.com" \
+    GIT_EDITOR=":" GIT_PREFIX="sub/" GIT_TERMINAL_PROMPT=0 \
+    GIT_EXEC_PATH="$_FIXTURE_ROOT/no-such-git-exec" \
+    bash "${BASH_SOURCE[0]}" --hook-env-replay >"$_replay_out" 2>&1 || _replay_rc=$?
   if [[ "$_replay_rc" == "0" ]]; then
     ok "suite exits 0 under an inherited hook env (GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_*)"
   else
-    bad "suite exited $_replay_rc under an inherited hook env -- the ambient prefix scrub regressed"
+    tail -20 "$_replay_out" >&2
+    bad "inner run exited $_replay_rc under an injected hook env (inner output tail above)"
   fi
 fi
 
