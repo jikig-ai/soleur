@@ -207,6 +207,22 @@ describe("parseCommand", () => {
     expect(parseCommand(block)).toBe('curl -fsS https://x/health');
   });
 
+  test("Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)", () => {
+    // 389 plans in the corpus write `command: "…"`. The runtime executed the
+    // quotes as part of the first word and returned rc=127 on every one of
+    // them; the mirror had stripped the pair all along. Symmetric pair only —
+    // a mismatched pair is not YAML and must reach the gate untouched.
+    const dq = `discoverability_test:\n  command: "bash scripts/prod-version-drift-b9-probe.sh"\n`;
+    expect(parseCommand(dq)).toBe("bash scripts/prod-version-drift-b9-probe.sh");
+    const sq = `discoverability_test:\n  command: 'printf 200'\n`;
+    expect(parseCommand(sq)).toBe("printf 200");
+    const mixed = `discoverability_test:\n  command: "printf 200'\n`;
+    expect(parseCommand(mixed)).toBe(`"printf 200'`);
+    // An interior quoted argument is untouched.
+    const inner = `discoverability_test:\n  command: curl -H "x: y" https://x/\n`;
+    expect(parseCommand(inner)).toBe('curl -H "x: y" https://x/');
+  });
+
   test("Form A — block scalar via `|`", () => {
     const block = [
       "discoverability_test:",
@@ -1789,6 +1805,24 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the verb gate").toBeLessThan(gate);
     expect(norm, "normalize before the shell-active reject").toBeLessThan(reject);
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
+  });
+
+  test("F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)", () => {
+    // parse-form-a.awk prints the `command:` line verbatim, so `command: "bash x"`
+    // reached `bash -c` with its quotes and every quoted command died rc=127 while
+    // the verb gate (which dequotes a COPY) passed. The strip must sit AFTER the
+    // trim and BEFORE the gate so every consumer sees the same string.
+    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
+    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
+    const dq = lines.findIndex((l) => /^\s*\\"\*\\"\) CMD="\$\{CMD#\\"\}"; CMD="\$\{CMD%\\"\}" ;;/.test(l));
+    const sq = lines.findIndex((l) => /^\s*\\'\*\\'\) CMD="\$\{CMD#\\'\}"; CMD="\$\{CMD%\\'\}" ;;/.test(l));
+    expect(dq, "double-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(sq, "single-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(dq, "strip before the verb gate").toBeLessThan(gate);
+    expect(sq, "strip before the verb gate").toBeLessThan(gate);
+    // Single-line scalars only: a multi-line block scalar is never dequoted.
+    const guard = lines.findIndex((l, i) => i > norm && i < dq && /^if \[\[ \$CMD != \*\$'\\n'\* \]\]; then$/.test(l));
+    expect(guard, "newline guard must precede the case").toBeGreaterThan(norm);
   });
 
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
