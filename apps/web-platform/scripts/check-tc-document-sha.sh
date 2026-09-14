@@ -274,9 +274,21 @@ if [ -n "$CANONICAL_TC_VERSION" ]; then
       # Seed script absent in this checkout (e.g., docs-only branch) — skip.
       continue
     fi
+    # A seed that DERIVES the version from the canonical file cannot drift from
+    # it, so it satisfies this guard by construction and is accepted here (#7969).
+    # This is not a loosening: a matching literal is a snapshot that must be
+    # re-verified on every bump, and the drift this guard exists to catch is
+    # exactly what happened — seed-live-verify-user.sh carried a CORRECT literal
+    # that nobody re-derived after TC_VERSION moved 2.3.0 -> 2.5.1, so the
+    # synthetic principal silently fell behind the middleware gate for weeks.
+    # Require the derivation to name the canonical FILE, so "derived" cannot be
+    # claimed by a sed over something else.
+    if grep -qE '^TC_VERSION="\$\(sed' "$seed" && grep -q 'lib/legal/tc-version.ts' "$seed"; then
+      continue
+    fi
     SEED_VERSION=$(grep -oE '^TC_VERSION="[^"]+"' "$seed" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
     if [ -z "$SEED_VERSION" ]; then
-      echo "::error::$seed missing TC_VERSION=\"…\" literal" >&2
+      echo "::error::$seed neither restates TC_VERSION=\"…\" nor derives it from lib/legal/tc-version.ts" >&2
       FAILED=$((FAILED+1)); FAILURES+=("$(basename "$seed"): TC_VERSION missing")
       continue
     fi
