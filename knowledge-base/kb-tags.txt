@@ -874,6 +874,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+consumer-enumeration
 consumer-sweep
 contagious-interview
 container
@@ -1182,6 +1183,7 @@ diagnosability
 diagnosis
 diagnostic
 diagnostic-discipline
+diagnostics
 diff-predicate
 diff-range
 diff-scoping
@@ -1797,6 +1799,7 @@ health-endpoint
 health-scanner
 health-snapshot
 heartbeat
+heartbeat-subshell
 helper-boundary-transform
 helper-extraction
 helper-migration
@@ -1991,6 +1994,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index-driver
 kb-layout
 kb-pdf
 kb-reader
@@ -2195,6 +2199,7 @@ merge-queue
 merge-ref
 merge-semantics
 merge-strategy
+merge-tail
 merge-time-timebomb
 merge-time-verification
 message
@@ -2435,6 +2440,7 @@ operator-mint
 operator-only-step
 operator-override
 operator-precedence
+operator-recovery
 operator-role
 operator-steps
 operator-truthfulness
@@ -2580,6 +2586,7 @@ phase-e
 phase-ordering
 phase-surface-hint
 phased-rollout
+pid-identity
 pii
 pii-scrubbing
 pil
@@ -3001,6 +3008,7 @@ refactoring
 reference-files
 referrer-policy
 refreshsession
+refs-pull-merge
 regex
 regex-concurrency
 regex-fidelity
@@ -3182,6 +3190,7 @@ rule_retirement
 rules-loader
 ruleset
 rulesets
+run-migrations
 run_in_background
 runbook
 runbook-authoring
@@ -3281,6 +3290,7 @@ sdk-read-tool
 sdk-router
 sdk-shape
 sdk-tooling
+seam
 seam-guard
 search
 search-path-injection
@@ -4170,6 +4180,7 @@ widening
 wire-path
 wire-protocol
 wire-schema
+wire-vs-endpoints
 withisolationscope
 without
 woff2

@@ -1028,7 +1028,7 @@ jobs:
     # `needs.verify-doppler-secrets.result == 'success'` conjunct at full strength
     # because the job now lives in the SAME run as the deploy it gates.
     if: github.event_name != 'push'
-    # Pre-deploy guard: asserts the hand-maintained list of required NEXT_PUBLIC_*
+    # Pre-deploy guard: asserts the hand-maintained list of required build/runtime
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
     runs-on: ubuntu-latest
@@ -1048,7 +1048,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
-      - name: Assert required NEXT_PUBLIC_* secrets present in Doppler prd
+      - name: Assert required build/runtime secrets present in Doppler prd
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
@@ -1727,7 +1727,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
-          # `set +e` so a non-zero harness exit (run.ts exits 1 on FAIL/CANT-RUN)
+          # `set +e` so a non-zero harness exit (run.ts exits 1 on FAIL; a
+          # CANT-RUN may exit 0 — classification keys on the RESULT line, not rc)
           # cannot abort the step before the RESULT extraction + $GITHUB_OUTPUT
           # write. "Failure cannot fail the job" (topology + continue-on-error) is
           # a DISTINCT invariant from "failure still produces a recording" (this).
@@ -1810,7 +1811,16 @@ jobs:
               *) RESULT="CANT-RUN"; LEVEL="warning" ;;
             esac
           fi
+          # #7969/#8092: the CANT-RUN reason is the whole point of the harness,
+          # and a CANT-RUN leaves the job GREEN (BLOCK=0). Without an annotation
+          # it is discoverable only by someone who chooses to open a green job's
+          # log — which is exactly how #7969 stayed invisible for five releases.
+          # Emit the FULL reason, not just the classified token.
+          if [[ "${RESULT}" == CANT-RUN* ]]; then
+            echo "::warning title=live-verify could not reach a verdict::${MSG}"
+          fi
           echo "live-verify: result=${RESULT} level=${LEVEL} block=${BLOCK}" >> "$GITHUB_STEP_SUMMARY"
+          echo "live-verify reason: \`${MSG}\`" >> "$GITHUB_STEP_SUMMARY"
           {
             echo "result=${RESULT}"
             echo "level=${LEVEL}"

@@ -427,6 +427,12 @@ commit is unknown to this repository, and it names the path anyway, so it reads 
 like a content verdict. If Phase 4 reports files MISSING with that second wording, you
 have an unfetched commit, not a bad merge — fetch and re-run before reporting anything.
 
+**Query `actions/runs?head_sha=` with the FULL 40-char SHA, and refuse a verdict when `total_count` is below the
+runs you expect.** A short SHA matches zero runs, and a poll that reports "0 pending" over an empty set reads as
+`ALL_RUNS_COMPLETE` — a set must be proven non-empty before it can be reported drained. **Why:** PR #8135 — a
+9-char `head_sha` returned `total_count:0` on the first tick and the Monitor declared all 15 post-merge runs
+complete before any had started.
+
 **Do NOT use `git show main:<path>` here.** `main` is a LOCAL ref and it lags: in a worktree or bare-repo layout nothing fast-forwards it as a side effect of the merge, so it routinely points at a commit from before this PR landed. Reading a file that this PR ADDED through a stale `main` returns `fatal: path ... does not exist`, and the phase whose entire job is answering *"did the merge land?"* then reports **MISSING** for a file that is present in the merge commit. The failure is silent and inverted — it manufactures a false alarm about the thing it is verifying, and it gets worse the busier the repo is.
 
 `git rev-parse --short main` next to `git rev-parse --short origin/main` is the cheap tell when a result looks wrong. Prefer the merge SHA unconditionally: it is immutable, it is the exact tree that merged, and it cannot drift while the phase runs. `origin/main` is an acceptable second choice only immediately after a fetch, and even then a sibling merge can move it mid-phase.
