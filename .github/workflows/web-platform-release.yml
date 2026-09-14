@@ -213,15 +213,22 @@ jobs:
     if: always() && github.event_name != 'push'
     needs: [release]
     runs-on: ubuntu-latest
-    # 60 = the `release` job's own ceiling (declared on the callee,
-    # reusable-release.yml). This job's only unbounded activity is the liveness
-    # poll on the RELEASE run for this SHA, so that run's ceiling bounds this one.
-    # It must not EXCEED the release ceiling or it would dominate the declared
-    # critical path in scripts/prod-version-drift-check.test.sh (B9) and push the
-    # pipeline budget past DRIFT_SUSTAINED_THRESHOLD_MIN. In practice the residual
-    # wait is ~0: release and CI start together and release's measured median is
-    # 7.11 min against CI's 35+, so by the time this arm fires the release is done.
-    timeout-minutes: 60
+    # 15m — measured max 14s over 9 successful workflow_run runs ending 2026-09-14 (#8149);
+    # >=60x headroom. Was 60m (= the release ceiling, sized for a max() B9 no longer uses).
+    # This term is ADDITIVE in the declared merge-to-deploy critical path that B9 in
+    # scripts/prod-version-drift-check.test.sh asserts against DRIFT_SUSTAINED_THRESHOLD_MIN
+    # (max(ci, release) + resolve-target + migrate + verify-migrations + deploy), so it is
+    # sized on its own execution: 3x the measured max rounds to under a minute, and 15 is the
+    # #8020 floor convention every ci.yml ceiling already uses. RAISING it reds B9 by name.
+    # Consequence, not sizing: the liveness poll on the RELEASE run below is dead by
+    # construction under ADR-217 D3(b) (this arm queues behind the release run on the shared
+    # concurrency group, so the release is done before this job starts). If a future edit
+    # ever un-couples the arms and makes that poll live again, this job fails closed on any
+    # release over 15 m (observed max ~24 m, well under the callee's own ceiling): release-outcome
+    # classifies it as non-delivery and emails the operator — a FALSE non-delivery alarm, and
+    # that is the intended loud warning ADR-217 D3 said was absent, in place of an hour of
+    # silent waiting.
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
@@ -441,9 +448,11 @@ jobs:
           # before reaching here). It is kept because reason 2 is a property of the
           # concurrency key, not of this job: change that key so the arms stop
           # sharing a group — which a future edit might do to parallelise them —
-          # and this loop becomes live again with no other warning.
+          # and this loop becomes live again -- and the only warning is this job's
+          # `timeout-minutes` (declared above, sized for the dead poll) tripping
+          # as a false non-delivery email.
           #
-          # Job-level `timeout-minutes: 60` bounds it regardless; GitHub starts that
+          # Job-level `timeout-minutes` bounds it regardless; GitHub starts that
           # clock when the job STARTS, so queueing behind the push arm does not
           # consume it.
           attempt=0
@@ -578,17 +587,29 @@ jobs:
       # ADR-212 Decision 3 rejected arithmetic for.
       # `DRIFT_SUSTAINED_THRESHOLD_MIN` is the declared end-to-end pipeline
       # budget and check B9 in scripts/prod-version-drift-check.test.sh already
-      # asserts it stays >= the declared critical path. CI's ALLOWED share is
-      # that budget minus the declared ceilings of the jobs downstream of CI.
+      # asserts it stays >= the declared critical path
+      # (max(ci, release) + resolve-target + migrate + verify-migrations + deploy).
+      # CI's ALLOWED share is that budget minus the declared ceilings of every job
+      # that FOLLOWS CI on the deploy arm.
       #
       # TWO DIFFERENT QUANTITIES, PREVIOUSLY CONFLATED. Keep them apart:
-      #   CI_BUDGET_MIN     — what the pipeline budget ALLOWS CI (207 - 135 = 72).
-      #                       The soft ceiling derives from this.
-      #   CI_DECLARED_PATH  — what CI DECLARES for itself (test-scripts 60 +
-      #                       test 10 = 70). B9's arithmetic uses this.
+      #   CI_BUDGET_MIN     — what the pipeline budget ALLOWS CI:
+      #                       DRIFT_SUSTAINED_THRESHOLD_MIN minus resolve-target,
+      #                       migrate, verify-migrations, deploy. The soft ceiling
+      #                       derives from this.
+      #   CI_DECLARED_PATH  — what CI DECLARES for itself: ci.yml's longest
+      #                       needs: path. B9's arithmetic uses this.
       # `CI_DECLARED_PATH <= CI_BUDGET_MIN` is the headroom statement that makes
       # the whole budget hold, and it is asserted below rather than assumed.
-      # Every term is READ from the tree, so the number moves when a ceiling does.
+      # Every term is READ from the tree and the step PRINTS the live values, so
+      # no number lives in this comment: a number here is the stale-comment
+      # liability this tree carried three copies of before #8149.
+      # The release ceiling is deliberately NOT read here. CI_BUDGET_MIN is CI's
+      # share under max(ci, release) — release competes with CI for the same
+      # head of the path, it does not follow CI — and B9 is the site that asserts
+      # the full path including release. Do not "fix" this with a callee read.
+      # GUARD 5 of plugins/soleur/test/workflow-run-deploy-invariants.test.sh pins
+      # the four subtracted terms by call form and the partition by shape.
       - name: Derive the CI budget and check for creep
         id: budget
         env:
@@ -684,25 +705,30 @@ jobs:
 
           THRESHOLD=$(read_threshold)
           REL=.github/workflows/web-platform-release.yml
+          RT=$(job_ceiling "$REL" resolve-target)
           M=$(job_ceiling "$REL" migrate)
           V=$(job_ceiling "$REL" verify-migrations)
           D=$(job_ceiling "$REL" deploy)
-          for pair in "THRESHOLD:$THRESHOLD" "migrate:$M" "verify-migrations:$V" \
-                      "deploy:$D"; do
+          for pair in "THRESHOLD:$THRESHOLD" "resolve-target:$RT" "migrate:$M" \
+                      "verify-migrations:$V" "deploy:$D"; do
             if [ -z "${pair#*:}" ]; then
               echo "::error::could not read ${pair%%:*} from the tree — the CI budget is underived, so the creep detector would be measuring against a made-up number"
               exit 1
             fi
           done
 
-          CI_BUDGET_MIN=$(( THRESHOLD - M - V - D ))
+          # THE PARTITION IS THE PROPERTY: every job that follows CI on the deploy
+          # arm is subtracted, resolve-target included (#8149 — it was missing, so
+          # a bare threshold raise would have loosened the soft ceiling). Same
+          # terms, same order as G5-18 asserts.
+          CI_BUDGET_MIN=$(( THRESHOLD - RT - M - V - D ))
           # WHAT THE TRIGGER ACTUALLY WAITS FOR. `workflow_run: types:
           # [completed]` fires when the WHOLE ci.yml run concludes, not when the
           # `test` aggregator does. The predecessor quantity — `test-scripts` +
           # `test` — was correct for `await-ci`, which polled for the `test`
           # CHECK, and it was carried across the rewrite unchanged. It is the
-          # wrong quantity here by an order of magnitude: measured on this tree,
-          # to-`test` is 70m while the whole-run declared path is 720m.
+          # wrong quantity whenever any job is undeclared: to-`test` stops at
+          # the aggregator while the whole-run path carries every 360m default.
           CI_UNDECLARED=$(undeclared_jobs .github/workflows/ci.yml)
           N_UNDECLARED=$(printf '%s' "$CI_UNDECLARED" | grep -c . || true)
           # 0.7 — the same factor ADR-212 Decision 4 chose for the ceiling this
@@ -718,9 +744,11 @@ jobs:
           # The statement that makes the budget hold is "CI's declared path fits
           # in the share the pipeline budget allows it". Asserting it requires
           # every job on the run to DECLARE a ceiling. While any job does not,
-          # GitHub's 360m default applies to it, and the declared path is 720m
-          # against a 72m share — so the invariant is FALSE, and the previous
-          # `70 <= 72` green was an artifact of measuring to-`test` instead.
+          # GitHub's 360m default applies to it and the declared path dwarfs
+          # CI_BUDGET_MIN (measured at #8020 time: two undeclared jobs on the
+          # longest path made it 360m x 2 against a share under 80m) — so the
+          # invariant is FALSE, and the earlier to-`test` green was an artifact
+          # of measuring the wrong quantity.
           #
           # As of #8020 (closed inline in this PR) every ci.yml job declares a
           # ceiling derived from measured duration, so this branch is not taken
@@ -730,17 +758,20 @@ jobs:
           # default, and a green derived from invented numbers is worse than a
           # warning that names them.
           if [ "$N_UNDECLARED" -gt 0 ]; then
-            echo "::warning::CI budget headroom is UNASSERTED: ${N_UNDECLARED} ci.yml job(s) declare no timeout-minutes, so GitHub's 360m default applies to each and the declared path through the run (720m) exceeds the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows CI. The measured soft ceiling below still applies. Undeclared: $(printf '%s' "$CI_UNDECLARED" | tr '\n' ' ')(#8020)"
+            echo "::warning::CI budget headroom is UNASSERTED: ${N_UNDECLARED} ci.yml job(s) declare no timeout-minutes, so GitHub's 360m default applies to each and the declared path through the run exceeds the ${CI_BUDGET_MIN}m share (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus resolve-target ${RT} + migrate ${M} + verify-migrations ${V} + deploy ${D}) the pipeline budget allows CI. The measured soft ceiling below still applies. Undeclared: $(printf '%s' "$CI_UNDECLARED" | tr '\n' ' ')(#8020)"
           else
             # Every job declares. Now the arithmetic means something, so assert it.
             CI_DECLARED_PATH_MIN=$(run_declared_path .github/workflows/ci.yml)
             emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
-            if [ -z "$CI_DECLARED_PATH_MIN" ]; then
-              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed — the budget would be underived"
+            # `-gt 0`, not just non-empty: the awk prints 0 when the `jobs:`
+            # header never matched and under-counts a quoted needs: list, and a
+            # 0 passes the `-gt $CI_BUDGET_MIN` compare below silently.
+            if ! [ "${CI_DECLARED_PATH_MIN:-0}" -gt 0 ] 2>/dev/null; then
+              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed (read '${CI_DECLARED_PATH_MIN:-}') — the budget would be underived"
               exit 1
             fi
             if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
-              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
+              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus resolve-target ${RT} + migrate ${M} + verify-migrations ${V} + deploy ${D}). Remedies: lower a ci.yml ceiling on the longest needs: path; or lower one of the deploy-arm ceilings named above; or raise DRIFT_SUSTAINED_THRESHOLD_MIN in scripts/prod-version-drift-check.sh and add a dated line to its header, in the same commit as the ceiling change -- check B9 in scripts/prod-version-drift-check.test.sh must stay green either way."
               exit 1
             fi
           fi
@@ -774,7 +805,7 @@ jobs:
           emit soft_elapsed_s "$ELAPSED_S"
           if [ "$ELAPSED_S" -gt "$SOFT_CEILING_S" ]; then
             emit soft_breach "true"
-            echo "::warning::CI took ${ELAPSED_S}s for this SHA, past ${SOFT_CEILING_S}s (70% of the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows it). CI is creeping toward the end-to-end budget; this is the signal that used to come from await-ci's soft ceiling."
+            echo "::warning::CI took ${ELAPSED_S}s for this SHA, past ${SOFT_CEILING_S}s (70% of the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows it: DRIFT_SUSTAINED_THRESHOLD_MIN minus resolve-target ${RT} + migrate ${M} + verify-migrations ${V} + deploy ${D}). CI is creeping toward the end-to-end budget; this is the signal that used to come from await-ci's soft ceiling."
           else
             emit soft_breach "false"
             echo "CI elapsed ${ELAPSED_S}s, within the ${SOFT_CEILING_S}s soft ceiling"
@@ -1062,18 +1093,20 @@ jobs:
     # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
     #
-    # COUPLED (#7091, #7160, #5806): this value is one term on the declared critical path that
-    # bounds the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum,
-    # and since #5806 the parallel arms are in DIFFERENT WORKFLOWS — `release` on this file's
-    # push arm, CI in ci.yml, both started by the same push, with the deploy chain firing on CI's
-    # completion:
-    #     max(release 60, CI-to-`test` 70, resolve-target 60) + migrate 30 + verify-migrations 15
-    #       + deploy 90 = 205
-    # (this comment previously read `max(release 60, await-ci 60) + ... = 195`, which was ALREADY
-    # stale before #5806 — await-ci was 72 and the threshold 207)
-    # (the release ceiling is declared on the CALLEE, reusable-release.yml, because the GitHub
-    # schema forbids timeout-minutes on a `uses:` job). scripts/prod-version-drift-check.sh sets
-    # DRIFT_SUSTAINED_THRESHOLD_MIN from that path, and B9 asserts the threshold stays >= it —
+    # COUPLED (#7091, #7160, #5806, #8149): this value is one term on the declared
+    # merge-to-deploy critical path that bounds the longest LEGITIMATE commit-to-deployed
+    # latency. That path is NOT a serial sum, and since #5806 the parallel arms are in
+    # DIFFERENT WORKFLOWS — `release` on this file's push arm, CI in ci.yml, both started by
+    # the same push, with the deploy arm firing on CI's completion and then running
+    # `resolve-target` serially (ADR-217 D3(b)). One formula, by term name:
+    #     max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy
+    # computed by B9 in scripts/prod-version-drift-check.test.sh against
+    # DRIFT_SUSTAINED_THRESHOLD_MIN, every term read from the tree — no number lives in this
+    # comment, because two earlier restatements here went stale (`max(release 60, await-ci
+    # 60) = 195`, then `= 205`). (The release ceiling is declared on the CALLEE,
+    # reusable-release.yml, because the GitHub schema forbids timeout-minutes on a `uses:`
+    # job.) scripts/prod-version-drift-check.sh sets DRIFT_SUSTAINED_THRESHOLD_MIN from that
+    # path, and B9 asserts the threshold stays >= it —
     # so RAISING any of these fails that suite until the threshold is raised too, and DELETING
     # one now fails it as well (an absent ceiling reads as the GitHub 360 default, not as zero).
     # That direction is deliberate: the threshold must never silently become smaller than the

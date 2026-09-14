@@ -110,6 +110,8 @@ catches the creep class that produced #7902 months before it becomes a fail-clos
 > statement therefore cannot be asserted at all while any job is unbounded — it is computed only
 > when every job declares a ceiling, and otherwise warns with the list. See ADR-217 Decision 4 and
 > #8020.
+>
+> **2026-09-14:** `CI_BUDGET_MIN` is now `DRIFT_SUSTAINED_THRESHOLD_MIN − resolve-target − migrate − verify-migrations − deploy` = `225 − 15 − 30 − 15 − 90 = 75` (the `= 72` above omitted the serial `resolve-target` term); see ADR-217 Decision 4 addendum (#8149).
 
 **5. Job ceilings exist to bound a HUNG job, and a silent bound must never fire before a loud
 one.**
