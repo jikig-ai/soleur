@@ -187,6 +187,89 @@ Four read-only verifier passes (ci-deploy.sh handlers + mocks; rearm/inventory/c
 
 **C13 — learnings added.** `2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md` (the `--kill-after` SIGKILL fallback is the load-bearing primitive under a webhook-inherited PGID); `2026-07-03-pass-is-not-proof-three-vacuous-green-traps-in-infra-verification.md` ("what would make this pass WITHOUT the thing under test being true?" — applied to every mock-seam row); plus the three cited in C1/C4/C10.
 
+## Review Round 1 Corrections (2026-09-14)
+
+PR #8173 review round 1 falsified premises this plan relied on, and the CTO ruled on the design
+question they raised. The binding contract for the fix round is
+[`review-fix-contract.md`](../specs/feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md).
+Where it conflicts with anything above — including the Deepen-Plan Corrections — **the contract
+wins**. This section records what changed and why; it does not restate the contract. The decision
+record is ADR-100's 2026-09-14 amendment.
+
+**C-R0 — CTO ruling: hybrid.** The systemd shape (`is-active` ∈ {inactive, failed} ∧ `is-enabled`
+= disabled) stays the only signal that REFUSES a start. A new on-host marker
+`/var/lib/inngest/quiesced-by-op`, written only by the `quiesce inngest` handler, ATTRIBUTES the
+shape to a deliberate `op=quiesce-web` and binds the capture to it (`capture_sha256`). Read sites use
+a byte-identical tri-state `quiesced | disabled_unattributed | not_quiesced` (contract §1–§3). A lost
+marker becomes a page (`DISABLED_UNATTRIBUTED`), never a restart. This reverses the plan's
+"no new state" choice (Alternative Approaches, row 2): that row rejected OFF-host markers; an
+on-host file written beside the capture by the same flock-held handler, and never consulted to
+permit a start, has none of the rejected properties. Rejected in the ruling: timestamps only
+(no provenance), marker required at every site (fail-open on a lost marker), provenance inside the
+capture file (deleted on re-arm, retired on rollback), and a loud bootstrap enable (image change,
+misses a manual disable).
+
+**C-R1 — "only the quiesce handler writes `disabled`" is false.** A failed `systemctl enable` in
+`inngest-bootstrap.sh` (`|| true`) and a manual disable also produce the shape. Risk R1's mitigation
+and the User-Brand Impact first bullet rested on it. Now: those read `DISABLED_UNATTRIBUTED` — a
+recorded watchdog failure (Sentry `error`, `[ci/inngest-disabled-unattributed]`), not a restart,
+not a suppression (contract §4, §8).
+
+**C-R2 — capture freshness.** A persisted 2.1 resume must prove the file belongs to the current
+quiesce: JSON array, sha256 == `marker.capture_sha256`, no `capture_consumed_at`. Refusals
+`stale_capture`, `already re-armed`, `capture_unattributed` replace `nothing to resume from`
+(contract §5). Guard 4's assembly widens from "shape" to "tri-state + sha".
+
+**C-R3 — capture at the quiesce boundary NARROWS the loss window; it does not close it.** A reminder
+armed between the capture and the stop is lost. The runbook's window procedure now sets
+`INNGEST_CUTOVER_QUIESCE=1` in Doppler `soleur/prd` and redeploys web-platform BEFORE
+`op=quiesce-web` (Doppler env is baked at container start), and clears it in the 2.4 redeploy before
+`op=rearm`. The route answers `503` with `X-Soleur-Unavailable: cutover-quiesce` for the window
+(User-Brand Impact window bullet and C14 superseded on this point).
+
+**C-R4 — quiesce entry rules.** D1b captured only on `active` and otherwise proceeded to stop,
+which could stop a scheduler with no trustworthy capture. Now four arms (active / already quiesced /
+unit absent / anything else → `quiesce_capture_unavailable`, nothing stopped), a marker-write
+failure reason, a post-verify tri-state check (`quiesced_shape_unrecognized`), and a scrubbed capture
+stderr tail (contract §6). Guard 5's mutation matrix gains the non-active arms.
+
+**C-R5 — rollback retires the capture and removes the marker before `enable`** (contract §6), so no
+later quiesce can resume a pre-rollback capture. The web-2 rollback fan-out is not a no-op: `enable`
+on its absent unit writes `inngest_enable_failed` to web-2's own slot, tolerated.
+
+**C-R6 — re-arm held back reminders that already fired.** Records with `fire_at` ≤ `marker.epoch`
+fired on the web scheduler and are not re-sent; the canonical line gains `held_back=H` with
+`N+F+H == K` and the P2-b parser reconciles it (contract §5, §9). Recorded residual, not closed: a
+record due between `marker.epoch` and the stop's completion (≤ 180 s) can fire on web-1 and again
+after re-arm, because the dedicated host holds no event-id dedup key from web-1.
+
+**C-R7 — two 503s.** `backend-refused` vs `cutover-quiesce` get distinct re-arm messages and remedies
+(contract §5).
+
+**C-R8 — 2.2 certification tightened.** PASSED needs EVERY answered non-200 body to carry the
+anchored QUIESCED sentinel, not one; a `DISABLED_UNATTRIBUTED` body is UNKNOWN with remedy
+`op=rollback` (contract §9). Guard 3 rows follow.
+
+**C-R9 — a quiesced unit read green forever even with no scheduler anywhere.** New `nolive`
+workflow step: alarm when the web unit is quiesced beyond `INNGEST_QUIESCE_GRACE_MIN` (60) and the
+dedicated verdict is not `healthy` (empty, `probe-unavailable`, `stopped-by-brake` count); files
+`[ci/inngest-no-live-scheduler]`, and the Sentry check-in `ok` additionally requires no alarm
+(contract §8). This amends Guard 1's "Sentry check-in `ok`" property for the quiesced state.
+
+**C-R10 — ordering and delivery.** The wiped-volume gate moves BEFORE enumeration (contract §3);
+the QUIESCED/DISABLED_UNATTRIBUTED lines are evaluated before the `gql_error` marker (contract §4);
+`op=quiesce-web` refuses before any stop when the on-host script sha256s differ from the checkout,
+and its poller keeps polling on `lock_contention` (contract §9). R2 is now enforced, not procedural.
+
+**C-R11 — documentation defects.** The false-suppression audit fired forever post-cutover (it
+looked for a quiesce in the prior 24 h); it is replaced by an ONSET audit isolated by
+`SYSLOG_IDENTIFIER` and `host_name`. "Expected once per window" appeared twice (deduplicated). The
+2026-07-12 "LB-routed" correction now cites the `deploy.` ingress's web-1 target. The shared
+concurrency group `deploy-inngest-restart` (restart, cutover, deploy-inngest-image) can let a
+watchdog restart replace a pending cutover op. The consumer-heartbeat read got an executable
+command. `## Observability` `failure_modes` now cite a layer per detection and route, and add the
+modes above.
+
 ## Alternative Approaches Considered
 
 | Alternative | Why not |
@@ -219,26 +302,50 @@ Four read-only verifier passes (ci-deploy.sh handlers + mocks; rearm/inventory/c
 liveness_signal:
   what: "scheduled-inngest-health.yml Sentry cron monitor `scheduled-inngest-health` (unchanged) + the per-cycle `web scheduler QUIESCED` ::notice:: in its run log; the dedicated-host arm (#7674) keeps grading the real scheduler"
   cadence: "*/15 min"
-  alert_target: "Sentry monitor-failure page on `error` check-in; the quiesced state is deliberately `ok` (run-log notice only)"
+  alert_target: "Sentry monitor-failure page on `error` check-in; the quiesced state is deliberately `ok` (run-log notice only) unless the review-round-1 no-live-scheduler alarm fires; DISABLED_UNATTRIBUTED is `error`"
   configured_in: ".github/workflows/scheduled-inngest-health.yml (probe step case arm + auto-close if:), apps/web-platform/infra/sentry/cron-monitors.tf"
 
 error_reporting:
   destination: "Better Stack Logs source 2457081 via Vector Source 4 (journald tags inngest-inventory, inngest-rearm-reminders, ci-deploy — all pre-allowlisted); Sentry beacon path in inngest-rearm-reminders.sh unchanged"
-  fail_loud: "cutover-inngest.sh ::error:: lines (2.1 `nothing to resume from`, 2.2 `UNKNOWN` with the source-branched remedy); ci-deploy deploy-status reasons `quiesce_capture_failed`, `inngest_quiesced_restart_refused`, `inngest_quiesced_deploy_refused`; journald (tag ci-deploy) `INNGEST_QUIESCE_CAPTURE_FAILED rc= stderr_tail=`, `INNGEST_RESTART_REFUSED`; (tag inngest-inventory) `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced`; (tag inngest-rearm-reminders) `resumed persisted capture`"
+  fail_loud: "cutover-inngest.sh ::error:: lines (2.1 `stale_capture` / `already re-armed` / `capture_unattributed` — review round 1 replaced `nothing to resume from`; 2.2 `UNKNOWN` with the verdict-specific remedy); ci-deploy deploy-status reasons `quiesce_capture_failed`, `inngest_quiesced_restart_refused`, `inngest_quiesced_deploy_refused`; journald (tag ci-deploy) `INNGEST_QUIESCE_CAPTURE_FAILED rc= stderr_tail=`, `INNGEST_RESTART_REFUSED`; (tag inngest-inventory) `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced`; (tag inngest-rearm-reminders) `resumed persisted capture`"
 
 failure_modes:
-  - mode: "watchdog reads QUIESCED but the unit is actually crashed (false suppression)"
-    detection: "impossible by construction unless is-enabled=disabled; Better Stack query on `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced` rows outside a cutover window (no op=quiesce-web run in the prior 24 h) is the audit"
-    alert_route: "operator review of the health run log notice; the dedicated-host arm pages independently if the dedicated scheduler is down"
-  - mode: "capture resumes from a stale persisted file"
-    detection: "2.1 ::notice:: prints source=persisted captured_at=…; journald `resumed persisted capture … captured_at=`; after D1b this arises only when quiesce skipped the capture because the unit was not active"
-    alert_route: "op=execute run annotation (red-by-design read by the operator before op=arm)"
-  - mode: "2.2 UNKNOWN because inngest-inventory.sh was not delivered"
-    detection: "2.2 ::error:: names the shape; apply-deploy-pipeline-fix.yml run for the merge shows files_written and the inngest-inventory.sh sha256"
-    alert_route: "op=execute run annotation"
-  - mode: "restart refused when the operator meant to restart"
-    detection: "restart-inngest-server.yml fails with reason=inngest_quiesced_restart_refused; journald INNGEST_RESTART_REFUSED"
-    alert_route: "the dispatching run; remedy names op=rollback"
+  # Review round 1 (2026-09-14): every detection and alert_route names its layer — `vector` Source 4
+  # (journald tag → Better Stack source 2457081), `workflow run log` (`::error::`/`::notice::`),
+  # `sentry check-in` (monitor `scheduled-inngest-health`), `github issue` — or says "none".
+  - mode: "watchdog reads QUIESCED from a marker that no op=quiesce-web wrote (false suppression)"
+    detection: "vector Source 4 — tag inngest-inventory `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced` and tag ci-deploy `SUCCESS: quiesce inngest` (host_name soleur-web-platform); the runbook onset audit (§Web scheduler QUIESCED) requires the first mode=quiesced row after the last non-quiesced verdict to follow a SUCCESS row"
+    alert_route: "none automatic — runbook onset audit (operator-run betterstack-query.sh). A crashed or bootstrap-disabled unit has no marker and routes to DISABLED_UNATTRIBUTED below instead"
+  - mode: "stopped+disabled unit with no valid quiesce marker (DISABLED_UNATTRIBUTED: failed bootstrap enable, manual disable, lost/voided marker)"
+    detection: "vector Source 4 — tag inngest-inventory `SOLEUR_INNGEST_LIVENESS_VERDICT mode=disabled_unattributed`; workflow run log — classifier `inngest_disabled_unattributed` in scheduled-inngest-health.yml"
+    alert_route: "sentry check-in `error`; github issue `[ci/inngest-disabled-unattributed]` (remedy op=rollback). No restart dispatch"
+  - mode: "no live scheduler: web unit quiesced longer than INNGEST_QUIESCE_GRACE_MIN (60) while the dedicated-host verdict is not healthy (incl. probe-unavailable / stopped-by-brake)"
+    detection: "workflow run log — `::error::` from the `nolive` step (alarm=true)"
+    alert_route: "sentry check-in `error`; github issue `[ci/inngest-no-live-scheduler]` (label action-required), auto-closed when alarm=false"
+  - mode: "2.1 would resume a capture that does not belong to the current quiesce (stale, consumed, or unattributed)"
+    detection: "workflow run log — op=execute `::error::` carrying `stale_capture` / `already re-armed` / `capture_unattributed`; vector Source 4 — tag inngest-rearm-reminders `FATAL: rearm-from-capture: stale_capture` / `already re-armed` on the op=rearm path"
+    alert_route: "workflow run log (op=execute / op=rearm red, SEAM withheld)"
+  - mode: "2.2 UNKNOWN (inngest-inventory.sh not delivered, a non-200 body without the QUIESCED sentinel, or a DISABLED_UNATTRIBUTED body)"
+    detection: "workflow run log — 2.2 `::error::` with the verdict-specific remedy and a 120-char body excerpt"
+    alert_route: "workflow run log (op=execute red, SEAM withheld)"
+  - mode: "quiesce_capture_failed — capture failed or timed out on an active unit; nothing stopped"
+    detection: "vector Source 4 — tag ci-deploy `INNGEST_QUIESCE_CAPTURE_FAILED rc= stderr_tail=` (scrubbed); workflow run log — op=quiesce-web poller `::error::` arm"
+    alert_route: "workflow run log (op=quiesce-web red)"
+  - mode: "quiesce_capture_unavailable — unit neither active, quiesced, nor absent; nothing stopped"
+    detection: "vector Source 4 — tag ci-deploy `INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit= enabled= state=`; workflow run log — op=quiesce-web poller `::error::` arm"
+    alert_route: "workflow run log (op=quiesce-web red)"
+  - mode: "quiesce_marker_write_failed / quiesced_shape_unrecognized"
+    detection: "workflow run log — op=quiesce-web poller `::error::` arm reading the deploy-status reason"
+    alert_route: "workflow run log (op=quiesce-web red)"
+  - mode: "quiesce-web dispatched before the config push landed (on-host script sha != checkout)"
+    detection: "workflow run log — preflight `::error::` \"config push not landed\" before any dispatch"
+    alert_route: "workflow run log (op=quiesce-web red, nothing stopped)"
+  - mode: "restart or bootstrap deploy refused on a stopped+disabled unit"
+    detection: "vector Source 4 — tag ci-deploy `INNGEST_RESTART_REFUSED` / `INNGEST_DEPLOY_REFUSED` with state=; workflow run log — restart-inngest-server.yml / deploy-inngest-image.yml red on the refused reason"
+    alert_route: "workflow run log of the dispatching run (remedy names op=rollback); for a watchdog-dispatched restart, the watchdog's own sentry check-in and github issue"
+  - mode: "re-arm aborted on a 503 (backend-refused before the 2.4 redeploy, or INNGEST_CUTOVER_QUIESCE still live)"
+    detection: "workflow run log — op=rearm `::error::` naming the X-Soleur-Unavailable class; capture retained"
+    alert_route: "workflow run log (op=rearm red)"
 
 logs:
   where: "journald on web-1 (tags inngest-inventory / inngest-rearm-reminders / ci-deploy) → Vector → Better Stack source 2457081; GitHub Actions run logs for cutover-inngest.yml and scheduled-inngest-health.yml"
