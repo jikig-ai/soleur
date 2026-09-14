@@ -181,6 +181,14 @@ The current regulated-data PR can ship; the staleness-driven follow-up is a sepa
 
 `git hash-object --no-filters` is canonical for both NOTICE entries and the integrity gate. The `--no-filters` flag is load-bearing — it skips gitattributes line-ending normalisation that would otherwise diverge from upstream blob SHAs on Windows / CRLF-configured workspaces. On Windows operators using WSL2 or Linux subsystems this is generally moot; native Windows commits should be made via Git for Windows with `core.autocrlf=input` to keep blob SHAs byte-identical across platforms.
 
+## 9a. Emit-Strip Doctrine (no-attribution licenses only)
+
+Vendored content may carry upstream promotional surfaces — credit footers, marketing links, author plugs. The corpus retains them verbatim: provenance and byte-fidelity are what make the NOTICE pins and drift detection meaningful.
+
+Emit paths are a different surface. When vendored content flows into a user-facing artifact (a generated legal document, a rendered page), the promotional surface is stripped deterministically by a dedicated script — e.g. `legal-generate/scripts/strip-vendor-credit.sh` removes the vendored attribution header and trailing credit block, anchored on the credit-paragraph marker text (never a bare `---`, which also terminates legitimate document sections). The strip fails loud (exit 2) on input lacking the expected marker — an unexpected shape means the corpus drifted or the file isn't what it claims; emit nothing.
+
+**Scope limitation: this doctrine applies only to no-attribution licenses (CC0, public-domain dedications).** A CC-BY or attribution-required bundle MUST carry its notice through to emitted artifacts — stripping is then a license violation, not hygiene. The bundle's NOTICE `license` field is the authority; if it isn't CC0-class, do not build a strip path.
+
 ## 10. Registry
 
 | Bundle | Upstream | License | Pinned | Last Verified | NOTICE | Status |

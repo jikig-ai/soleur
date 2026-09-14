@@ -2,6 +2,8 @@
 
 When the content-vendor-drift cron files a re-vendor PR (label `vendor/pin-drift`) or opens a tracking issue (label `vendor/cron-failure` / `vendor/upstream-rollback` / `vendor/upstream-archived`), use this runbook to resolve the situation.
 
+**Multi-bundle model (#8122).** The cron discovers every schema-conforming bundle — `plugins/soleur/skills/*/NOTICE` with parseable frontmatter declaring `upstream` + `pinned-commit` — and runs an independent detect/attest arm per bundle. Artifacts are slugged: re-vendor branches `ci/content-vendor-drift-<slug>-<ts>`, attestation branches `ci/vendor-attest-<slug>-`, per-bundle cron name `cron-content-vendor-drift-<slug>`. Legacy un-suffixed branches/issues classify as `gdpr-gate`'s. A failure in one bundle does NOT mask a sibling — each arm returns a typed outcome and the run-level heartbeat is the AND of all bundle outcomes. Substitute `<slug>` and its NOTICE path wherever this runbook names `gdpr-gate`.
+
 Cross-references:
 
 - Policy: `knowledge-base/engineering/policies/content-vendoring.md`
@@ -14,14 +16,14 @@ Cross-references:
   (allowlisted via the drift-guarded manifest in `server/inngest/cron-manifest.ts`).
   **`gh workflow run` cannot dispatch this job** — there is no workflow to dispatch.
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
-- gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
+- Enrolled bundles: `plugins/soleur/skills/gdpr-gate/NOTICE`, `plugins/soleur/skills/legal-generate/NOTICE` (schema-conforming set is authoritative — see `vendor-bundle-coverage.test.sh`)
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`
 
 ## 1. Synthetic-Drift Test — Cron-Failure-Path Validation
 
 Run this once after merging the PR that landed this runbook (#3517) — or after any change to the cron, classifier, or NOTICE schema — to verify NOTICE tampering produces a visible alert. The earlier form of this test mutated `pinned-commit` only, but the drift-detection logic compares per-file `upstream-blob-sha` values, so mutating `pinned-commit` alone produced "no drift detected" and silently skipped validation (issue #3540).
 
-**Scope:** this test validates the **cron-failure path** — the workflow's `if: failure()` arm that opens a `vendor/cron-failure` issue when an upstream blob lookup 404s. It does NOT validate the happy-path auto-PR creation, which requires a real upstream content change (covered separately when a real upstream drift lands or when a fork-based test is added).
+**Scope:** this test validates the **cron-failure path** — the per-bundle typed-failure arm that opens a `vendor/cron-failure` issue when an upstream blob lookup 404s. It does NOT validate the happy-path auto-PR creation, which requires a real upstream content change (covered separately when a real upstream drift lands or when a fork-based test is added).
 
 ```bash
 # 1. Create a feature branch with one upstream-blob-sha mutated to a
@@ -84,7 +86,7 @@ Upstream maintainers reverted a commit (security regression, unintended breaking
 
 1. Verify the rollback is intentional by reading upstream commit history: `gh api repos/<o>/<r>/commits?per_page=10`.
 2. Check the upstream issue tracker / changelog for a rollback announcement.
-3. If intentional: dispatch the workflow with `--ref main` to bump to current upstream HEAD. The classifier will re-run; if exit 15 stabilizes, manually edit NOTICE `pinned-commit` to the rollback target SHA and open a non-auto PR.
+3. If intentional: trigger the cron via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`) to bump to current upstream HEAD. The classifier will re-run; if exit 15 stabilizes, manually edit the affected bundle's NOTICE `pinned-commit` to the rollback target SHA and open a non-auto PR.
 
 ### 3b. Force-push accident
 
@@ -115,18 +117,18 @@ When upstream is permanently archived (read-only, will not receive patches), we 
 
 ## 6. Cron Failure (`vendor/cron-failure` issue)
 
-The `if: failure()` step in the workflow opens an issue when the cron itself fails (gh api 5xx, rate-limit, runner OOM, etc.). The issue title and body link to the failed run.
+A per-bundle arm failure opens an issue when the cron arm itself fails (gh api 5xx, rate-limit, parser error, etc.). The issue title and body name the failing bundle.
 
-1. Inspect the run: `gh run view <run-id> --log`.
+1. Inspect the run: it is an Inngest function, so `gh run view` finds nothing — observe via Inngest / Sentry (monitor slug `scheduled-content-vendor-drift`); the `vendor/cron-failure` issue body names the failing bundle slug.
 2. Common transient causes:
-   - **Rate-limit** (HTTP 403 from `gh api`): wait one hour, manually re-dispatch.
-   - **Upstream 5xx**: wait, re-dispatch. If GitHub Status indicates a degraded API, hold until resolved.
-   - **Runner OOM**: rare; bump the timeout-minutes or split into smaller batches if it recurs.
-3. If the failure persists across two consecutive re-dispatches, escalate: read the policy doc §4.1 and consider whether the workflow logic itself needs revision (issue + PR).
+   - **Rate-limit** (HTTP 403 from `gh api`): wait one hour, manually re-trigger via `/soleur:trigger-cron`.
+   - **Upstream 5xx**: wait, re-trigger. If GitHub Status indicates a degraded API, hold until resolved.
+   - **Per-bundle arm failure**: a typed failure in one bundle leaves siblings green — check the handler result's per-bundle `outcomes` to see which arm threw.
+3. If the failure persists across two consecutive re-triggers, escalate: read the policy doc §4.1 and consider whether the cron logic itself needs revision (issue + PR).
 
 ## 7. POSTURE_FAIL Operator Chain (>90d stale)
 
-When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDOUT during a regulated PR's `/soleur:gdpr-gate` invocation, the gate is signaling that the cron + auto-PR pipeline has been silently broken for >90 days and the lifted detection rules are dangerously stale. The chain:
+When a bundle's staleness surface emits `POSTURE_FAIL:` — `gdpr-gate.sh` during a regulated PR's `/soleur:gdpr-gate` invocation, or `legal-generate`'s Phase 1.5 staleness check — it is signaling that the cron + auto-PR pipeline has been silently broken for >90 days and that bundle's lifted content is dangerously stale. The chain (shown for `gdpr-gate`; substitute the affected bundle's slug and NOTICE path):
 
 1. **Do not pause the current regulated PR.** The gate is advisory and exits 0; the staleness signal is a separate cycle.
 2. Open a tracking issue:

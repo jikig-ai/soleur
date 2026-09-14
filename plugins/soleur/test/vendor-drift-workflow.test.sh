@@ -134,4 +134,43 @@ echo "  SKIP: blob-sha updates delegated to spawned NOTICE-bump scripts"
 PASS=$((PASS + 1))
 echo ""
 
+# --- Multi-bundle operation (#8122): the cron is registry-driven, not a
+# single hardcoded gdpr-gate bundle. These anchors pin the per-bundle
+# identity manifest: slugged step IDs, per-bundle NOTICE_FILE env, per-bundle
+# branch/dedup namespaces, per-arm worktree reset, and AND-aggregated health.
+echo "TS13: multi-bundle architecture anchors (>= 2 bundles)"
+assert_contains "$WF_CONTENT" "discoverBundles" "bundle discovery function"
+assert_contains "$WF_CONTENT" "BundleDescriptor" "typed bundle descriptor"
+assert_contains "$WF_CONTENT" '`detect-drift-${bundle.slug}`' "slugged detect step ID"
+assert_contains "$WF_CONTENT" '`attest-freshness-${bundle.slug}`' "slugged attest step ID"
+assert_contains "$WF_CONTENT" '`reset-worktree-${bundle.slug}`' "per-arm worktree reset"
+assert_contains "$WF_CONTENT" "classifyBranchOwner" "per-bundle dedup classification"
+assert_contains "$WF_CONTENT" "classifyIssueOwner" "per-bundle issue dedup"
+assert_contains "$WF_CONTENT" "cron-content-vendor-drift-" "per-bundle cronName"
+assert_contains "$WF_CONTENT" "outcomes.every" "AND-aggregated health"
+echo ""
+
+# --- Both real bundles exercise the shared parser under NOTICE_FILE ---
+echo "TS14: both enrolled bundles parse through the shared parser (>=2-bundle coverage)"
+for notice in \
+  "$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE" \
+  "$REPO_ROOT/plugins/soleur/skills/legal-generate/NOTICE"; do
+  slug="$(basename "$(dirname "$notice")")"
+  if [[ ! -f "$notice" ]]; then
+    echo "  FAIL: $slug NOTICE missing"
+    FAIL=$((FAIL + 1))
+    continue
+  fi
+  upstream="$(NOTICE_FILE="$notice" bash "$PARSER" field upstream 2>/dev/null || true)"
+  count="$(NOTICE_FILE="$notice" bash "$PARSER" record-count lifted-files 2>/dev/null || true)"
+  if [[ -n "$upstream" && "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
+    echo "  PASS: $slug → upstream=$upstream lifted-records=$count"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $slug NOTICE did not parse (upstream='$upstream' count='$count')"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
 print_results

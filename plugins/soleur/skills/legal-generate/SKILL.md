@@ -5,7 +5,7 @@ description: "This skill should be used when generating draft legal documents fo
 
 # Legal Document Generator
 
-Generate draft legal documents from company context. Supports 8 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
+Generate draft legal documents from company context. Supports 14 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
 
 ## Supported Document Types
 
@@ -17,6 +17,17 @@ Generate draft legal documents from company context. Supports 8 document types a
 - Data Processing Agreement
 - Data Protection Disclosure
 - Disclaimer / Limitation of Liability
+- Master Services Agreement
+- Mutual NDA
+- One-Way NDA
+- Advisor Agreement
+
+Two more types are available on explicit request only — both carry blocking confirmations, so they are never offered in the menu:
+
+- Employee Offer Letter (CA-exempt scope confirm)
+- Business Associate Agreement (HIPAA/PHI confirm)
+
+Overlapping types fill a vendored template substrate ([references/templates/](references/templates/)); uncovered types and unsupported jurisdictions are generated from scratch by the agent — routing is its decision, not the menu's.
 
 ## Phase 0: Context Gathering
 
@@ -32,11 +43,24 @@ If the user provides arguments after the skill name (e.g., `/legal-generate priv
 
 ## Phase 1: Document Selection
 
-Use the **AskUserQuestion tool** to select a document type from the 8 supported types listed above.
+Use the **AskUserQuestion tool** to select a document type. Offer the four most likely types (e.g. Privacy Policy / Terms & Conditions / Mutual NDA / Master Services Agreement) and rely on the built-in **Other** free-text option for the rest — the menu never lists the gated types.
+
+## Phase 1.5: Substrate Staleness Check
+
+Before invoking the agent, check the freshness of the vendored template corpus:
+
+```bash
+NOTICE_FILE="${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/NOTICE" \
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/gdpr-gate/scripts/notice-frontmatter.sh" days-stale
+```
+
+- **>30 days** — print an advisory banner to stdout: the template corpus has not been verified against upstream recently.
+- **>90 days** — additionally print `POSTURE_FAIL:`; the operator follows the chain in `knowledge-base/engineering/policies/content-vendoring.md` to record it in `compliance-posture.md`.
+- Advisory only — generation proceeds either way; do not block on staleness.
 
 ## Phase 2: Generation
 
-Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type:
+Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
 
 ```
 Task legal-document-generator: "Generate a [document type] for [company name].
@@ -154,6 +178,16 @@ below.
 No un-scanned draft ever crosses the transcript or lands on disk.
 
 ## Phase 3: Output
+
+Before presenting, self-audit the draft — all three greps must return zero hits:
+
+```bash
+grep -icE 'general[-.[:space:]]?legal' "$DRAFT"            # vendor marks (general.legal / General Legal / General-Legal)
+grep -icE 'attorney[- ]draft|prepared by[^.]{0,30}(attorney|law firm)|reviewed by[^.]{0,30}attorney' "$DRAFT"  # credential-claim leakage
+grep -cE '<mark|\[FIELD\]' "$DRAFT"                        # unfilled substrate slots
+```
+
+Any hit → do not present; report the residue. (The agent already runs this on the template-fill arm — this is the skill-level double-check.)
 
 <decision_gate>
 
