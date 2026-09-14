@@ -140,4 +140,11 @@ describe("agent engine settings route", () => {
     expect(response!.status).toBe(503);
     await expect(response!.json()).resolves.toEqual({ error: "settings_update_failed" });
   });
+
+  it("maps owner authorization failures to a forbidden response", async () => {
+    setDefault.mockRejectedValue(Object.assign(new Error("workspace default engine requires owner"), { code: "workspace_owner_required" }));
+    const response = await PUT(request({ engineId: "claude-code" }));
+    expect(response!.status).toBe(403);
+    await expect(response!.json()).resolves.toEqual({ error: "workspace_owner_required" });
+  });
 });

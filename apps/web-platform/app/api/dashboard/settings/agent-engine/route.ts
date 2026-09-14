@@ -78,6 +78,9 @@ export async function PUT(request: Request) {
     if (error instanceof Error && error.message === "engine_unknown") {
       return NextResponse.json({ error: "engine_unknown" }, { status: 400 });
     }
+    if (error instanceof Error && "code" in error && error.code === "workspace_owner_required") {
+      return NextResponse.json({ error: "workspace_owner_required" }, { status: 403 });
+    }
     reportSilentFallback(error, { feature: "agent-engine-settings", op: "write" });
     return NextResponse.json({ error: "settings_update_failed" }, { status: 503 });
   }

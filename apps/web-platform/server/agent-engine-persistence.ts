@@ -33,7 +33,15 @@ export class AgentEnginePersistenceRepository {
     const result = await this.client.rpc("set_workspace_default_engine", {
       ...args,
     });
-    if (result.error) throw new Error(`workspace default engine update failed: ${result.error.message}`);
+    if (result.error) {
+      const error = result.error as { message: string; code?: string };
+      if (error.code === "42501" || error.message.includes("requires owner")) {
+        throw Object.assign(new Error("workspace default engine requires owner"), {
+          code: "workspace_owner_required",
+        });
+      }
+      throw new Error(`workspace default engine update failed: ${error.message}`);
+    }
     return result.data;
   }
 

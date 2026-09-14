@@ -34,6 +34,17 @@ describe("AgentEnginePersistenceRepository", () => {
     });
   });
 
+  it("preserves the owner authorization code from the settings RPC", async () => {
+    const supabase = client();
+    supabase.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: "workspace default engine requires owner", code: "42501" },
+    });
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await expect(repo.setDefaultEngine("ws-1", "codex"))
+      .rejects.toMatchObject({ code: "workspace_owner_required" });
+  });
+
   it("reads the persisted auth mode through the tenant-scoped settings table", async () => {
     const supabase = client();
     supabase.from.mockReturnValueOnce({
