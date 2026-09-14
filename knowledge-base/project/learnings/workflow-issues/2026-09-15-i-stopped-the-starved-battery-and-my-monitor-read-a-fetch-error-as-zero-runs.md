@@ -29,8 +29,10 @@ it was written.
    The skipped step is recorded as an unticked test-plan item in the PR body.
 2. **My first post-merge Monitor reported `total=0 pending=0` twice.** Its fetch line was
    `j=$(gh run list … 2>/dev/null || echo '[]')`. A failed `gh` call and "no runs on this
-   commit" produced byte-identical output, and only the loop's `tot > 0` exit guard kept it from
-   declaring the post-merge set settled. The replacement surfaced a `FETCH-ERROR` line and
+   commit" produced byte-identical output. The failure cause was not captured (that is the defect),
+   but the likeliest one is item 3: the Monitor's working directory was the feature worktree,
+   deleted under it. The same query succeeded immediately from the repo root.
+   Only the loop's `tot > 0` exit guard kept it from declaring the post-merge set settled. The replacement surfaced a `FETCH-ERROR` line and
    capped retries.
 3. **The feature worktree vanished minutes after the merge.** A sibling session's
    `cleanup-merged` reaped it (correctly: the branch was gone), so my next
