@@ -574,6 +574,11 @@ model {
   // (not a hard dependency), so a single transient blip must not page — grace is relaxed and it
   // arms the previously-unfed git_data_prd beat.
   hetzner -> gitDataStore "CONSUMER reachability probe (#6548): web-git-data-probe.sh does a bounded SSH connect-and-close to 10.0.1.20:22 over the private net and pings the git_data_prd heartbeat on success. Fail-soft (connect-and-close, not a git ls-remote — the accepted reachability-vs-serviceability tradeoff for a v1 overlay); this is what finally FEEDS git_data_prd, previously unfed. NOTE (#6977): the probe RUNS today, but its target host has never been provisioned, so it is currently probing an address nothing answers on — the feeder is real, the endpoint is not yet" { technology "SSH connect-and-close (private-net, BatchMode ConnectTimeout)" }
+  // #6680 / ADR-220 — CI's cutover access to the store. Source is `github`, NOT `hetzner`: web-1
+  // only relays TCP for CI (a direct-tcpip channel), and a hetzner-sourced edge would draw the
+  // "store authority on web-1" design ADR-220 rejects. Same TARGET-state honesty marker as the
+  // hetzner -> gitDataStore probe above: transport is measured, the root credential is not provisioned.
+  github -> gitDataStore "Cutover SSH from git-data-cutover.yml: through the ssh. tunnel to web-1 (10.0.1.10 via the bridge NAT rule), then a web-1 direct-tcpip channel (-W 10.0.1.20:22), authenticating end-to-end so no key or agent socket lands on web-1. Transport LIVE (SSH-2.0- banner probe, no git-data credential); root credential TARGET until #8189: until then the access gate stops at git-data-auth verdict=git_data_root_key_absent before any host mutation (ADR-220)" { technology "SSH" }
   // #6438 §3 / ADR-123 — the web-host private-NIC self-report guard. Same in-surface emit as the
   // registry's SOLEUR_PRIVATE_NIC (this edge is the SECOND source of that event), but the web host
   // makes a STRUCTURALLY DIFFERENT decision: detect + emit + alarm, NO reboot (a web-1 reboot would

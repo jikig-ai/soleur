@@ -75,6 +75,10 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
    preconditions + pass-1 rsync + the **set-identity verify** with NO freeze, NO
    flip, NO re-point, NO wipe. Confirm the set-identity verify reports `OK` for
    every repo.
+   Until #8189 lands, the dry-run is designed to stop at
+   `role=git-data-auth verdict=git_data_root_key_absent` (exit 3), after
+   `role=web verdict=ok` and `role=git-data-jump verdict=ok` and before
+   `prepare_luks_target`. That result is the expected green for the transport (ADR-220).
 5. **Real cutover** — dispatch `git-data-cutover.yml` with
    `confirm=CUTOVER-GIT-DATA`, `dry_run=false`, `confirm_wipe=false`. The script:
    - `prepare_luks_target`: idempotent `luksOpen` + mount at `/mnt/git-data-luks`;
