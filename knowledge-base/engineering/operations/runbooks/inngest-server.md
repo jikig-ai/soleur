@@ -1330,8 +1330,13 @@ ADR-100, amendment 2026-09-14.
    once the marker carries `capture_consumed_at` (`already re-armed`). Remedy for both, as in 2.1:
    `op=rollback` if scheduling must reopen.
 
-   **Held back.** A record whose `fire_at` is at or before the marker's `epoch` came due while the
-   web scheduler was still running, so it already fired there. It is NOT re-sent; it is counted as
+   **Held back.** A record whose `fire_at` is at or before the cutoff came due while the web
+   scheduler was still running, so it already fired there. The cutoff is the marker's `epoch`, or the
+   unit's `InactiveEnterTimestamp` when that is later and the host has not rebooted since the marker
+   was written (same `boot_id`). After a reboot the timestamp is gone and the cutoff falls back to
+   the marker's `epoch`. So when a run ends with `F > 0` and the host reboots before the retry,
+   reminders due in the few seconds between the marker write and the stop can be re-armed and fire
+   twice. Retry before rebooting. It is NOT re-sent; it is counted as
    `held_back` and its ids are printed on stderr
    (`inngest-rearm-reminders: held back <n> reminder(s) due before the quiesce: <ids>`). The
    canonical final line is:
