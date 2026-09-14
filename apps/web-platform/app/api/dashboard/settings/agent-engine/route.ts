@@ -6,7 +6,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
 import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 import { listReviewedEngineDefinitions, reviewedEngineRegistry } from "@/server/agent-engine-reviewed-definitions";
-import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
+import { DEFAULT_AGENT_ENGINE_ID, type EngineSettingsMetadata } from "@/server/agent-engine-contract";
 import { reportSilentFallback } from "@/server/observability";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +37,7 @@ export async function GET() {
       workspaceId: resolved.workspaceId,
       defaultEngineId: await repository.getDefaultEngine(resolved.workspaceId) ?? DEFAULT_AGENT_ENGINE_ID,
       defaultAuthMode: await repository.getDefaultAuthMode(resolved.workspaceId) ?? "managed",
-      engines: await Promise.all(listReviewedEngineDefinitions().map(async ({ id, version, transport, authModes, enabledForNewRuns }) =>
+      engines: await Promise.all(listReviewedEngineDefinitions().map(async ({ id, version, transport, authModes, enabledForNewRuns }): Promise<EngineSettingsMetadata> =>
         ({ id, version, transport, authModes, enabledForNewRuns, rolloutEnabled: await isEngineRolloutEnabled(id, resolved.identity.orgId, resolved.identity) }))),
     });
   } catch (error) {

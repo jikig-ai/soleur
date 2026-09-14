@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DEFAULT_AGENT_ENGINE_ID } from "@/server/agent-engine-contract";
+import { DEFAULT_AGENT_ENGINE_ID, type EngineSettingsMetadata } from "@/server/agent-engine-contract";
 
-type Engine = { id: string; version: string; transport: string; authModes: string[]; enabledForNewRuns: boolean; rolloutEnabled?: boolean };
+type Engine = EngineSettingsMetadata;
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);
@@ -11,7 +11,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [authMode, setAuthMode] = useState<string>("managed");
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
   const isEngineSelectable = (engine: Engine): boolean =>
-    engine.enabledForNewRuns && (engine.rolloutEnabled ?? true);
+    engine.enabledForNewRuns && engine.rolloutEnabled;
   const selectedEngine = engines.find((engine) => engine.id === selected);
 
   useEffect(() => {
