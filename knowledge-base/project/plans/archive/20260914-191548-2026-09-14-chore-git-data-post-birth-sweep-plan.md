@@ -309,9 +309,9 @@ logs:
   where: GitHub Actions run logs for apply-web-platform-infra.yml; Better Stack table t520508_soleur_git_data_prd_logs for the host's boot_complete row (read-only, unchanged)
   retention: GitHub default (90 days); Better Stack per-source retention (unchanged)
 discoverability_test:
-  command: grep -cF "if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}" .github/workflows/apply-web-platform-infra.yml
+  command: grep -cE "if: .[{][{] [!]cancelled[(][)] .. [(]steps[.]apply[.]outcome == 'success' .. steps[.]apply[.]outcome == 'failure'[)] [}][}]" .github/workflows/apply-web-platform-infra.yml
   expected_output: "1"
-  # This is a TEXT pin, not a runtime probe: the route is dispatch-only and inert while hcloud_server.git_data exists, so the runtime property (P3) is first exercised on the next real dispatch. actionlint (Scenario 2) is the only mechanical check that `steps.apply` resolves.
+  # The `.`/`..` wildcards stand in for the `$`, `&&` and `||` of the literal predicate (AC6), which preflight Check 10 rejects as shell-active tokens before running a probe. This is a TEXT pin, not a runtime probe: the route is dispatch-only and inert while hcloud_server.git_data exists, so the runtime property (P3) is first exercised on the next real dispatch. actionlint (Scenario 2) is the only mechanical check that `steps.apply` resolves.
 ```
 
 ## Encryption Posture
