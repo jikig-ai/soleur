@@ -34,10 +34,17 @@ The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
 settings metadata lookup never grants execution authorization.
 
+Factory and dispatch entry points accept an explicit reviewed registry when a
+deployment or deterministic test catalog needs additional engines. The built-in
+catalog remains the default, so future providers can be added through reviewed
+definitions and additive factories without changing provider control flow.
+
 ## Consequences
 
 Adding an engine requires a reviewed definition, adapter transport, lifecycle
 tests, credential and qualification evidence, and settings/catalog wiring. A
 workspace default change affects new runs only; existing runs retain their
-binding. System-triggered routines still require a dedicated service identity
-before they can participate in the same binding path.
+binding. Registry injection keeps future engine wiring additive but does not
+bypass enablement, binding identity, event validation, or egress policy. System-
+triggered routines still require a dedicated service identity before they can
+participate in the same binding path.
