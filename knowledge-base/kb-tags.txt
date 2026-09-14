@@ -793,6 +793,7 @@ commands/brainstorm
 comment-drift
 comment-mutability
 comment-rot
+comment-stripped-grep
 comments
 commit-discipline
 commit-format
@@ -1111,6 +1112,7 @@ delegations
 delete
 delete-path
 deletion-sweep
+delimiter-collision
 delivery
 demotion
 deny-by-default
@@ -2750,6 +2752,7 @@ pr-6266
 pr-body
 pr-creation
 pr-d
+pr-fanout
 pr-g
 pr-hygiene
 pr-naming-collisions
@@ -2792,6 +2795,7 @@ premise-verification
 premises
 prescribed
 presence-guard
+presence-vs-exclusivity
 pretooluse
 pretooluse-hook
 pretooluse-hooks
@@ -2801,6 +2805,7 @@ prevention-infrastructure
 pricing-page
 pricing-source
 primitive
+printf-newline-read
 prior-art
 prior-art-discovery
 prior-decision-recovery
@@ -2830,6 +2835,7 @@ processing-register
 prod-probe
 prod-safety
 prod-state
+prod-version-drift
 prod-write-safety
 producer-consumer
 product domain without coordinator
