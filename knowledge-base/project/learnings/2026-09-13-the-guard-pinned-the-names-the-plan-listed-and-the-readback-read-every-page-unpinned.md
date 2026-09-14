@@ -143,6 +143,56 @@ redirect target are the two things that change without a diff.
     `<stop>BLOCKED: …</stop>`.** — **Prevention:** a turn that ends waiting carries the marker;
     closing text never names an action not yet taken.
 
+## Addendum — 2026-09-14 (#8110 ship tail)
+
+Errors after the compound pass, recorded here because the learning above was committed before
+the ship phase ran (`wg-every-session-error-must-produce-either`).
+
+1. **The full battery outlived its 4-hour runtime ceiling because the laptop suspended
+   overnight mid-run** — `elapsed_s=46133` against `ceiling_s=14400`; 93 suites (the infra
+   registered-suites runner among them) were DECLINED and the run exited 3. Recovery: the
+   infra runner re-run standalone, the touched suites re-run individually, CI's required
+   `test` context as the merge gate; the local unsharded re-run never got capacity (three
+   sibling worktrees held full-gate runs for the whole morning). — **Prevention:** a
+   ship-time battery on a laptop is a wall-clock bet; when capacity is refused twice, run
+   the infra runner directly (it is the only locally-blocking gate) and let CI carry the rest
+   instead of waiting for a window that other sessions keep taking.
+2. **Four defects the gates surfaced that the review panel had not**: the new harness's exact
+   `-ne` floor was invisible to `guard-vacuity-floor.test.sh` (recognises `-lt/-le/-ge`),
+   tripping its construction ratchet 15 → 16; the follow-through's `row_absent` message named
+   `GH_TOKEN`, which `lint-shell-trace-credential-refusal` counts as a referenced credential;
+   the probe's remote-exec `inline` block lacked `"set -e"` (server-tf-set-e, 22 → 23
+   blocks); `logtail_exploration`/`logtail_exploration_alert` were unknown to the
+   encryption-posture ledger (fail-closed). — **Prevention:** before ship, run the four
+   repo-wide *classifier* guards by hand on a diff that adds a resource type, a shell suite
+   or a follow-through (`guard-vacuity-floor`, `lint-shell-trace-credential-refusal`,
+   `server-tf-set-e`, `lint-encryption-posture --repo-sweep`); each is a census that rejects
+   an unclassified newcomer, so a new instance of anything is red by construction.
+3. **Three infra suites went RED under three concurrent sibling batteries and were green 3/3
+   in isolation** (`journald-config`, `soleur-host-bootstrap-observability` AC22,
+   `luks-monitor`), none touched by the diff — the `printf | grep -q` SIGPIPE-under-`pipefail`
+   and shared `/var/tmp` classes. — **Prevention:** a RED under `CAPACITY_CONTENDED` is
+   confirmed three ways before it is believed (isolated re-run, the matching CI job, a clean
+   full re-run); do not fix a suite the diff did not touch on the strength of one contended run.
+4. **The plan's `discoverability_test.command` was YAML-double-quoted and its
+   `expected_output` carried a placeholder `N`**; preflight Check 10 ran the literal string
+   `"bash …"` in the sandbox (rc 127). — **Prevention:** write the inline scalar unquoted
+   and the expected output as a real substring of the command's stdout; deepen-plan's field
+   check verifies presence, only the sandbox execution verifies shape.
+5. **The push-triggered infra apply for the merge commit was cancelled before it ran** — a
+   `workflow_dispatch` (git_data_host_create) entered the shared
+   `terraform-apply-web-platform-host` concurrency group and GitHub keeps only the newest
+   *pending* run; the dispatch then sat `waiting` on the environment approval, holding the
+   group, and a re-queued apply was cancelled again. The alert resources were therefore NOT
+   live at postmerge time; the follow-through sweeper on #8097 reports `alert_absent` until an
+   apply runs. — **Prevention:** after a merge whose deliverable IS a Terraform resource, read
+   the apply run's *conclusion*, not the release arm's; a `cancelled` apply on a merge commit
+   is a deliverable that did not ship, and the cumulative next-push apply is the recovery.
+6. **`origin/main` moved twice during the ship tail** — one rebase to reword a commit whose
+   subject read `closes #8097` (the squash body would have auto-closed the follow-through
+   tracker), and one DIRTY→sync after auto-merge was queued. — **Prevention:** grep the branch's
+   commit *subjects* for close keywords before the first push, not at ship time.
+
 ## Related
 
 - ADR-218 — native Better Stack Logs alerts are Terraform-managed via the logtail provider
