@@ -46,6 +46,9 @@ selection through registry qualification; a registry without `resolve` fails
 closed rather than treating metadata lookup as authorization. The built-in
 catalog remains the default, so future providers can be added through reviewed
 definitions and additive factories without changing provider control flow.
+The factory also requires the selection operation to match the dispatch
+operation, preventing new-run qualification from authorizing an existing-run
+adapter invocation.
 
 ## Consequences
 

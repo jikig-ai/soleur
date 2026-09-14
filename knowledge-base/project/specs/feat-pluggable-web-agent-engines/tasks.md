@@ -111,6 +111,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] DSAR metadata slice: audit/export metadata contains auth mode and expiry only; credential values are excluded (17 adapter tests green).
   - [x] Adapter factory slice: reviewed registry state gates adapter creation for unknown, disabled, or unavailable engines (2 factory tests green).
   - [x] Qualification-aware factory slice: egress-selected dispatch passes the trusted selection through reviewed registry resolution; get-only registries fail closed when qualification is requested (5 factory and 28 dispatch tests green).
+  - [x] Selection-operation safety slice: reviewed adapter creation rejects a `new-run` selection used for an `existing-run` dispatch (6 factory tests green).
   - [x] Registry dispatch slice: bound-run dispatch resolves the adapter from persisted engine identity through the reviewed factory (12 dispatch tests green).
   - [x] Registry injection dispatch slice: conversation, routine, and bound-run dispatch accept an explicit reviewed registry so future engines can cross the same binding boundary (24 dispatch tests green).
   - [x] Adapter composition slice: injected Claude/Codex transports compose into reviewed factories, with Codex omitted until auth dependencies exist (2 composition tests green).

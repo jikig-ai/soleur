@@ -17,6 +17,7 @@ export function createReviewedEngineAdapter(
   try {
     if (selection) {
       if (selection.engineId !== engineId) throw new Error("engine_selection_mismatch");
+      if (selection.operation !== operation) throw new Error("engine_selection_operation_mismatch");
       if (!registry.resolve) throw new Error("engine_qualification_unavailable");
       definition = registry.resolve(selection);
     } else {
@@ -25,6 +26,7 @@ export function createReviewedEngineAdapter(
   } catch (error) {
     if (error instanceof EngineEligibilityError) throw error;
     if (error instanceof Error && error.message === "engine_selection_mismatch") throw error;
+    if (error instanceof Error && error.message === "engine_selection_operation_mismatch") throw error;
     if (error instanceof Error && error.message === "engine_qualification_unavailable") throw error;
     throw new Error("engine_unknown");
   }

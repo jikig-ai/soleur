@@ -99,4 +99,23 @@ describe("reviewed engine adapter factory", () => {
       qualifiedSelection,
     )).toThrowError("engine_qualification_unavailable");
   });
+
+  it("rejects a selection whose operation differs from the factory operation", () => {
+    const registry = createEngineRegistry([{
+      id: "grok-build",
+      version: "grok-build-v1",
+      transport: "remote",
+      enabledForNewRuns: true,
+      enabledForExistingRuns: true,
+      authModes: ["managed"],
+      qualifications: [],
+    }]);
+    expect(() => createReviewedEngineAdapter(
+      "grok-build",
+      { "grok-build": () => ({} as never) },
+      "existing-run",
+      registry,
+      qualifiedSelection,
+    )).toThrowError("engine_selection_operation_mismatch");
+  });
 });
