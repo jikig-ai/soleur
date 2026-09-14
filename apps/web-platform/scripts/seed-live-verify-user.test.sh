@@ -117,12 +117,17 @@ fi
 #   which is no longer on this line — consent moved to the accept_terms RPC so
 #   the Art. 7(1) ledger row gets written. The anchor was coupled to a field
 #   unrelated to what it asserts, so a correct change to that field broke it
-#   (cq-assert-anchor-not-bare-token). `workspace_path` is the users PATCH's
-#   own payload key and is absent from the workspaces PATCH.
-if grep -qE 'workspace_status: "ready", repo_status: "ready", workspace_path' "$SEED"; then
+#   (cq-assert-anchor-not-bare-token). Re-anchored TWICE in one PR, which is
+#   the lesson: the first re-anchor used `workspace_path`, and a later commit
+#   removed that column (migration 112 dropped it; PostgREST answered 42703 and
+#   aborted every run). An anchor has to be a field the assertion is ABOUT, not
+#   one that merely happens to sit on the same line. `workspace_status` is the
+#   users ladder's own field and is absent from the workspaces PATCH, which
+#   carries repo_status + repo_url.
+if grep -qE 'workspace_status: "ready", repo_status: "ready"' "$SEED"; then
   echo "  ok: public.users PATCH uses repo_status: \"ready\""
 else
-  echo "  FAIL: public.users PATCH (workspace_path line) does not carry repo_status: \"ready\"" >&2
+  echo "  FAIL: public.users PATCH (workspace_status line) does not carry repo_status: \"ready\"" >&2
   fail=1
 fi
 
