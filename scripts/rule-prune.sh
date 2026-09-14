@@ -191,7 +191,7 @@ if [[ "$PROPOSE_RETIREMENT" == "1" ]]; then
   # Emit sentinels for the workflow to consume. Both lines are tr -d'd
   # defensively even though sanitized_prefix already stripped CR/LF.
   pr_title="feat(rule-prune): propose retirement of $appended rules ($hook_enforced hook/skill-enforced)"
-  pr_body="Quarterly rule-prune retirement proposal: $appended rules with fire_count=0 over >=${WEEKS} weeks. Per-rule rationale in the diff. $hook_enforced flagged hook-/skill-enforced — review them carefully. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md."
+  pr_body="Quarterly rule-prune SHORTLIST, not retirement evidence: $appended rules recorded no enforcement event (warn/deny/bypass/applied) over >=${WEEKS} weeks. An obeyed rule emits nothing, so this list nominates the best-obeyed rules first (#8030). Merge a row only with an editorial reason to retire THAT rule; otherwise drop the row or close this PR. $hook_enforced flagged hook-/skill-enforced. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md."
   printf '::rule-prune-pr-title::%s\n' "$(printf '%s' "$pr_title" | tr -d '\n\r')"
   printf '::rule-prune-pr-body::%s\n'  "$(printf '%s' "$pr_body"  | tr -d '\n\r')"
 

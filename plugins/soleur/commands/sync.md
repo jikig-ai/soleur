@@ -433,7 +433,7 @@ and nothing under `plugins/` imports Sentry.
 
 #### Rule Prune Analysis
 
-Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
+Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune. The shortlist is an investigation aid, not retirement evidence: the log records enforcement events only, so an obeyed rule never appears and zero hits nominates the best-obeyed rules first (#8030). Retirement stays an editorial call; headroom comes from migration per `cq-agents-md-tier-gate`.
 
 1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run` (forwarded to `rule-prune.sh`).
 2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, run the aggregator first. Both producers in this area are repo-root scripts outside the plugin payload, so the invocation is gated on a monorepo sentinel that fails closed — run this block verbatim rather than the bare command, so the halt executes whether or not this paragraph was read:

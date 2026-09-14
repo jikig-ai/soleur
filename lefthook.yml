@@ -89,6 +89,18 @@ pre-commit:
         - "AGENTS.rules.md"
         - "scripts/retired-rule-ids.txt"
       run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
+    migrated-rule-id-lint:
+      priority: 5
+      # #8030: placement + body hash of rules migrated out of AGENTS.rules.md. Runs after
+      # rule-id-lint, which validates the paired retired rows. Takes no positional args.
+      glob:
+        - "scripts/migrated-rule-ids.txt"
+        - "scripts/retired-rule-ids.txt"
+        - "AGENTS.rules.md"
+        - "plugins/soleur/**/*.md"
+        - "scripts/lint-migrated-rule-ids.sh"
+        - "scripts/lint-migrated-rule-ids.test.sh"
+      run: bash scripts/lint-migrated-rule-ids.sh
     agents-compound-sync:
       priority: 4
       # Enumerate EVERY file the guard reads. Two pre-existing gaps (#6461):

@@ -10,6 +10,8 @@ Analyze the conversation to detect which skill is running, reflect on what went 
 </objective>
 
 <context>
+If a fix adds a new user-facing capability, run its domain assessment (brainstorm Phase 0.5, or plan Phase 2.5 on a pipeline run) with CPO and CMO in the room (CTO when architectural) before applying it; CMO may be omitted with a one-line rationale for operator-facing-only capabilities, CPO never. The rule's canonical text is `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
 </context>
 

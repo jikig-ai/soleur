@@ -29,6 +29,17 @@ Phase 0.5 Processing Instructions: when `USER_BRAND_CRITICAL=true`, expand the r
 
 **Why:** Triggered by #2887 — the dev/prd Doppler-config collapse needed product framing (worst-user-outcome), legal framing (data-isolation compliance), and architectural framing (blast radius) at brainstorm time, but no gate forced any of those leaders into the room. AGENTS.md `hr-weigh-every-decision-against-target-user-impact` codifies this; this section is the brainstorm-side enforcement.
 
+## New-capability leader mandate
+
+> **Rule `hr-new-skills-agents-or-user-facing` — migrated out of `AGENTS.rules.md` on 2026-09-14 (PR #8175).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur inside a domain sweep, and every sweep — brainstorm Phase 0.5, plan Phase 2.5
+> Step 1 (fresh assessment), product-roadmap's leader assessment — reads this file
+> first, so it no longer costs every session's always-loaded budget. This is now its
+> canonical home.
+>
+> New skills, agents, or user-facing capabilities must include CPO + CMO in brainstorm domain assessment (CTO when architectural) [id: hr-new-skills-agents-or-user-facing] [skill-enforced: brainstorm Phase 0.5]. CMO MAY be omitted with one-line rationale for operator-facing-only capabilities (dev tooling, internal CLI, agent infra); CPO stays mandatory. **Why:** #3493.
+
 ## Lane Inference
 
 Lanes describe **Phase 0.5 domain-leader breadth** (single source of truth; downstream skills reference this section by heading).

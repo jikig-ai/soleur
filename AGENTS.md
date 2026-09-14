@@ -23,8 +23,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-autonomous-loop-skill-api-budget-disclosure]
 - [id: hr-every-new-terraform-root-must-include-an]
 - [id: hr-tf-variable-no-operator-mint-default]
-- [id: hr-new-skills-agents-or-user-facing]
-- [id: hr-before-shipping-ship-phase-5-5-runs]
 - [id: hr-when-a-workflow-concludes-with-an]
 - [id: hr-before-asserting-github-issue-status]
 - [id: hr-never-run-commands-with-unbounded-output]
