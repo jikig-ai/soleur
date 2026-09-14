@@ -1181,6 +1181,7 @@ diagnosability
 diagnosis
 diagnostic
 diagnostic-discipline
+diagnostics
 diff-predicate
 diff-range
 diff-scoping
@@ -2437,6 +2438,7 @@ operator-mint
 operator-only-step
 operator-override
 operator-precedence
+operator-recovery
 operator-role
 operator-steps
 operator-truthfulness
@@ -3282,6 +3284,7 @@ sdk-read-tool
 sdk-router
 sdk-shape
 sdk-tooling
+seam
 seam-guard
 search
 search-path-injection
@@ -4171,6 +4174,7 @@ widening
 wire-path
 wire-protocol
 wire-schema
+wire-vs-endpoints
 withisolationscope
 without
 woff2
