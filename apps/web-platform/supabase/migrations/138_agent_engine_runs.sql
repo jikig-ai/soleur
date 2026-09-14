@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS public.agent_engine_events (
   UNIQUE (run_id, sequence)
 );
 
+-- Keep all mutations behind the SECURITY DEFINER RPCs below.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.workspace_engine_settings FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.agent_engine_runs FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.agent_engine_events FROM anon, authenticated;
+
 -- Idempotent event append: an exact retry returns the existing row, while
 -- reusing an event key with a different sequence or payload is rejected.
 CREATE OR REPLACE FUNCTION public.append_agent_engine_event(
