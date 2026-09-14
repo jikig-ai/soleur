@@ -1581,8 +1581,9 @@ fi
 # ── ARMS 72–75 (#7460): the baked ingest token's bindings ──────────────────────────
 #
 # 5.5 RESIDENCY. The issue asks for an assertion that trips red if the credential's scope is
-# later narrowed. Targeted at the TERRAFORM DECLARATION rather than at a live Doppler config,
-# because the git-data host has never been born and `prd_git_data` holds nothing to read.
+# later narrowed. Targeted at the TERRAFORM DECLARATION rather than at a live Doppler config:
+# this suite is hermetic (no credentials, runs on every PR and in CI) and must not read a
+# live config — the host was born 2026-09-14, but the declaration is what a PR can change.
 _luks_tf="${DIR}/git-data-luks.tf"
 _bs_res="$(sed 's/[[:space:]]#.*$//' "$_luks_tf" 2>/dev/null \
   | awk '/^resource "doppler_secret" "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
