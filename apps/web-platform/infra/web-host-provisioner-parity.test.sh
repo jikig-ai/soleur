@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Web-host provisioner DUAL-DELIVERY parity guard (#7000).
 #
-# WHAT THIS PINS. server.tf carries 15 `terraform_data` host provisioners whose SSH
+# WHAT THIS PINS. server.tf carries 17 `terraform_data` host provisioners whose SSH
 # `connection` is pinned to `hcloud_server.web["web-1"]`. That pinning is DELIBERATE and is
 # NOT a bug to be fixed by fanning them out over var.web_hosts:
 #
@@ -9,7 +9,7 @@
 #     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the tunnel
 #     connector is web-1-only by construction. web-2's public :22 is firewalled to
 #     var.admin_ips, which the non-static GH runner egress is not in.
-#   * All 15 are `-target=`ed by BARE address across two workflows (14 in
+#   * All 17 are `-target=`ed by BARE address across two workflows (16 in
 #     apply-web-platform-infra.yml, infra_config_handler_bootstrap in
 #     apply-deploy-pipeline-fix.yml), and a bare -target hits EVERY for_each instance — so a
 #     fan-out would make every merge dial web-2:22 and hang to the SSH timeout. There is no
@@ -17,7 +17,7 @@
 #   * ADR-114 ("Load-bearing constraint for any I2 implementation") ALREADY records this:
 #     "do NOT repoint the ... terraform_data.* connection { host } blocks ... every
 #     provisioner dies — and those are -targeted by the per-PR merge apply, so main wedges."
-#     (ADR-114 says 12; the real count in this file is 15.) This guard MECHANISES a
+#     (ADR-114's 2026-07-27 amendment says 15; the count in this file is 17 as of #8097.) This guard MECHANISES a
 #     constraint the architecture already carried in prose.
 #   * The plan's Phase 5 (2026-07-24-feat-web-active-active-cluster-iac-plan.md §5.3(c))
 #     REMOVES these provisioners once web-1 is cattle. It does not extend them.
@@ -37,7 +37,7 @@
 # (or changed in) the web-1 SSH path with no matching change on the fresh-boot path. Nothing
 # fails: web-1 gets it, CI is green, web-2 silently comes up WITHOUT it on its next rebuild.
 #
-#     EVERY absolute destination the 15 SSH provisioners WRITE has a fresh-boot counterpart
+#     EVERY absolute destination the 17 SSH provisioners WRITE has a fresh-boot counterpart
 #     that writes the SAME destination on a fresh cattle host.
 #
 # WHY DESTINATION-KEYED (this is the whole design). The first version of this guard keyed on
@@ -63,7 +63,7 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 16, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
+# 17, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
@@ -142,7 +142,7 @@ bootstrap = strip_comments(read("soleur-host-bootstrap.sh"))
 # three (the previous version had three and documented one). Value is the reason, which is
 # mandatory. Adding an entry is a reviewable diff.
 #
-# This was "deliberately empty" until #7539, on the claim that every destination the 15 write
+# This was "deliberately empty" until #7539, on the claim that every destination the 17 write
 # has a real fresh-boot counterpart. That stopped being true when #7539 added a rotation
 # backup, and the sentence is corrected here rather than left to read as still-surveyed --
 # a claim that silently outlives the set it described is the exact defect #7539 fixes.
@@ -230,7 +230,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 16
+FLOOR_RESOURCES = 17
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -249,7 +249,7 @@ if not fanned and not unpinned:
     ok(f"1: all {len(ssh_resources)} SSH provisioners are web-1-pinned and none is for_each'd")
 else:
     no(f"1: for_each'd={sorted(fanned)} not-web-1-pinned={sorted(unpinned)}. CI has ONE SSH "
-       "route (web-1) and all 15 are bare -target'ed, so a fan-out makes every merge-triggered "
+       "route (web-1) and all 17 are bare -target'ed, so a fan-out makes every merge-triggered "
        "apply dial a host it cannot reach and hang to the SSH timeout. See ADR-114's "
        "load-bearing constraint. If CI genuinely gained a route to web-2, the tunnel connector, "
        "the firewall and the -target lists must change FIRST, and this check with them.")
@@ -257,7 +257,7 @@ else:
 # ── §2. Destination sweep: the load-bearing invariant ────────────────────────────────
 # ASYMMETRY (the v2 defect, and the reason this is shaped the way it is). The two halves of
 # the derivation fail in OPPOSITE directions:
-#   * EXTRACTION ("what do the 15 write?") -- a miss is SILENT: the destination never enters
+#   * EXTRACTION ("what do the 17 write?") -- a miss is SILENT: the destination never enters
 #     the set, so nothing is checked and the guard reports a clean sweep. Enumerating write
 #     verbs here is therefore fail-OPEN, which is exactly how v2 shipped: `mv`, `dd of=`,
 #     `curl -o`, `python3 - /path`, and any quoted path all walked past it. So this half is

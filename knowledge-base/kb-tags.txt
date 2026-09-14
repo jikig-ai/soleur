@@ -162,6 +162,7 @@ advisory-vs-blocking
 aeo
 aeo-score
 after
+after_unknown
 aftereach
 against
 agent
@@ -517,6 +518,7 @@ brand-workshop
 branded-types
 branding
 bre
+breach-register
 breadcrumb
 breadcrumbs
 bridge
@@ -675,6 +677,7 @@ ci-infrastructure
 ci-issues
 ci-planning
 ci-release
+ci-required-checks
 ci-required-ruleset
 ci-required-status
 ci-ruleset
@@ -772,6 +775,7 @@ collapses
 collision
 collision-check
 collision-gate
+collision-preflight
 color-scheme
 column-grant
 column-level-security
@@ -1161,6 +1165,7 @@ destructive-tests
 destructive-tools
 detection
 detector-design
+determination
 determinism
 deterministic
 dev-db
@@ -1737,6 +1742,7 @@ growth-strategist
 growth-targets
 guard
 guard-2
+guard-3
 guard-building
 guard-building-pr
 guard-contract
@@ -1744,9 +1750,11 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-residue
 guard-test
 guard-testing
 guard-vacuity
+guard-window
 guardrail
 guardrails
 guards
@@ -1860,11 +1868,13 @@ immutability
 immutable-infra
 implementation-patterns
 import-boundary
+import-meta-url
 import-only-resources
 importlib
 importoriginal
 imports
 in-band-mint
+in-cell-correction
 in-component-state
 in-filter
 in-flight-feature-refresh
@@ -1896,6 +1906,7 @@ infrastructure
 infrastructure-issues
 ingress
 inheritance
+inherited-claims
 inherited-framing
 initial
 initialization
@@ -2104,6 +2115,7 @@ log-injection
 logic-error
 logic-errors
 login
+logtail-provider
 loop
 loopback-gate
 loopback-gating
@@ -2424,6 +2436,7 @@ operator-precedence
 operator-role
 operator-steps
 operator-truthfulness
+operator-veto
 ops
 ops-directory
 ops-provisioner
@@ -2604,6 +2617,7 @@ plan-gate
 plan-gates
 plan-guard-as-prose
 plan-inventory
+plan-json
 plan-literalism
 plan-phase
 plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker
@@ -2850,6 +2864,7 @@ prop-wiring
 propagation
 prose-claims
 prose-conventions
+prose-counts
 prose-guard
 prospect-anchored features
 protecthome
@@ -3148,6 +3163,7 @@ rtl
 rule
 rule-audit
 rule-budget
+rule-c
 rule-d
 rule-exists-no-gate-enforces-it
 rule-governance
@@ -3919,6 +3935,7 @@ ts2556
 tsc
 tsx
 ttl
+turbopack
 tweets
 two-phase-commit
 two-tier-guard

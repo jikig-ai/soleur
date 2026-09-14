@@ -650,7 +650,8 @@ recurrence alarm over a Better Stack Logs source is an in-repo GH-Actions cron p
 GitHub issue → Sentry self-liveness heartbeat), **NOT** a native Better Stack alert. This alarm
 (#6291) and the `scheduled-followthrough-sweeper.yml` soak probes both recur this shape. The
 `BetterStackHQ/better-uptime` Terraform provider has **no** log-alert resource (only
-`betteruptime_monitor`/`_heartbeat`/`_policy`), and even the programmatic **Telemetry v2 SQL-alert
+`betteruptime_monitor`/`_heartbeat`/`_policy`; the sibling `logtail` provider does — see the
+2026-09-13 amendment below), and even the programmatic **Telemetry v2 SQL-alert
 API** (which *does* exist — see §Alternatives) is rejected for this signal class because: (1) the
 stateful consecutive-climb condition + newest-`boot_id` scoping are not faithfully expressible as a
 single `{{time}}`-bucketed threshold; (2) the operator surface must be a digest-visible GitHub
@@ -658,6 +659,18 @@ single `{{time}}`-bucketed threshold; (2) the operator surface must be a digest-
 split the decode source-of-truth off from the reporter's decode semantics. Choose the GH-cron poller
 for future log-content alarms unless a signal is a pure stateless per-bucket count with an
 email-acceptable surface.
+
+### Native Logs alerts via the `logtail` provider (amendment 2026-09-13, #8097 / ADR-218)
+
+The provider-gap sentence above is amended, not deleted: the `better-uptime` provider still has no
+log-alert resource, but the sibling `BetterStackHQ/logtail` provider **does** —
+`logtail_exploration_alert`, first used by [ADR-218](ADR-218-native-better-stack-logs-alerts-are-terraform-managed-via-the-logtail-provider.md)
+for `soleur-monitor-send-failed-prd` (#8097), the exception case this paragraph already named: a
+pure stateless per-bucket count with an email-acceptable surface. The poller pattern remains the
+default for the stateful, newest-scoped signal class described here; ADR-218 records the
+routing contract, the `treat_as_zero` rationale and the opt-in policy for further PRIORITY-2
+classes. Rejection (2) above is reconciled there too: for a signal whose point is independence
+from Sentry/Resend/GitHub, email is the surface.
 
 ### Reprovisioning path + alert recipient — restart-loop alarm cross-ref (amendment 2026-07-10, #6291)
 
