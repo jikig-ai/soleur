@@ -1137,7 +1137,7 @@ and failed at 2.1 (#6921), and the `*/15` watchdog read the deliberately stopped
 nothing on the host distinguished a deliberate quiesce from a fault.
 
 The binding implementation contract for this amendment is
-`knowledge-base/project/specs/feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md`
+`knowledge-base/project/specs/archive/20260914-223454-feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md`
 (the tri-state function, the marker JSON, the output lines and the per-site table). This section
 records the decision and why; it does not restate the byte-level contract.
 

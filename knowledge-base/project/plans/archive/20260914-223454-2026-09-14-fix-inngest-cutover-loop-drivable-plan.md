@@ -191,7 +191,7 @@ Four read-only verifier passes (ci-deploy.sh handlers + mocks; rearm/inventory/c
 
 PR #8173 review round 1 falsified premises this plan relied on, and the CTO ruled on the design
 question they raised. The binding contract for the fix round is
-[`review-fix-contract.md`](../specs/feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md).
+[`review-fix-contract.md`](../../specs/archive/20260914-223454-feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md).
 Where it conflicts with anything above — including the Deepen-Plan Corrections — **the contract
 wins**. This section records what changed and why; it does not restate the contract. The decision
 record is ADR-100's 2026-09-14 amendment.
@@ -493,7 +493,7 @@ discoverability_test:
 - NFR1: No new sudoers alias, secret, Doppler write, repo variable, hook, or vector.toml tag. `git diff --stat` touches no `*.tf`, no `hooks.json.tmpl`, no `vector.toml`.
 - NFR2: `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt` reports no NEW findings for the three host scripts (baseline unchanged or reduced).
 - NFR3: `actionlint .github/workflows/scheduled-inngest-health.yml` clean.
-- NFR4: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-09-14-fix-inngest-cutover-loop-drivable-plan.md` passes.
+- NFR4: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/archive/20260914-223454-2026-09-14-fix-inngest-cutover-loop-drivable-plan.md` passes.
 
 ### Quality Gates
 
