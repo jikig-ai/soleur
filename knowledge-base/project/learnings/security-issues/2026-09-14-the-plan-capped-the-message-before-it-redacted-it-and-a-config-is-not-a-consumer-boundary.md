@@ -157,6 +157,11 @@ The instrument that found the third was not a lens on the diff but a question ab
 - **Recovery:** `[[ -z "${CURL_BODY+x}" ]] && CURL_BODY='{}'`, plus T15d for the genuinely empty body.
 - **Prevention:** never default a variable to a value containing `}` via `${VAR:=…}`; use the unset-test form.
 
+**17. CI's `test-scripts (1/3)` shard went red on `scripts/lint-shell-capture-exit-live`** — a new `x=$(… | grep … | head -1 | wc -c)` capture in T15e was a NEW finding against that lint's baseline. The Phase 2 substitute set (touched + consumer-derived + vocabulary-derived suites) never included the tree-wide lints the shard runs, and the local full battery had not yet acquired the advisory lock when the branch was pushed.
+
+- **Recovery:** `{ grep … || true; }` inside the pipeline; lint `[OK] … 0 new findings`; suite 24/24; committed and pushed before the queued battery acquired the lock, so it still runs on the final tree.
+- **Prevention:** when the exit-gate shards are REFUSED, the substitute set MUST include every tree-wide lint `test-all.sh` registers under `scripts/lint-*-live` (they scan the whole tree, so a "consumer of the touched file" derivation cannot reach them) — enumerate them with `grep -n 'run_suite "scripts/lint-.*-live"' scripts/test-all.sh`.
+
 ## Related
 
 - `2026-07-11-wrapper-around-sanitizing-sibling-must-re-apply-the-sanitizer.md` — the same composition failure with the wrapper outside the sanitizer.

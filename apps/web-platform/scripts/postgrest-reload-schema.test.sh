@@ -616,7 +616,7 @@ out=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=401 \
 rc=$?
 set -e
 err_lines=$(printf '%s\n' "$out" | grep -c '^::error::postgrest-reload-schema:' || true)
-err_len=$(printf '%s\n' "$out" | grep '^::error::postgrest-reload-schema:' | head -1 | wc -c)
+err_len=$(printf '%s\n' "$out" | { grep '^::error::postgrest-reload-schema:' || true; } | head -1 | wc -c)
 if [[ "$rc" == "2" ]] && [[ "$err_lines" == "1" ]] \
    && ! printf '%s\n' "$out" | grep -qE '^::(stop-commands|error::injected)' \
    && ! printf '%s' "$out" | grep -q 'sbp_straddle' \
