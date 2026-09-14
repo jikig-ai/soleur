@@ -201,17 +201,19 @@ export function createCodexCodeAdapter(
       }
     } catch (error) { throw sanitizeCodexError(error); }
   }
-  const call = async <T>(operation: () => Promise<T>): Promise<T> => {
-    try { return await operation(); } catch (error) { throw sanitizeCodexError(error); }
+  const call = async <T>(operation: (lease: CodexCredentialLease) => Promise<T>): Promise<T> => {
+    try {
+      return await runWithCodexRecovery(auth, operation);
+    } catch (error) { throw sanitizeCodexError(error); }
   };
   return {
     start: (context, input) => stream(async () => transport.start(context, input, await auth.acquire()), context.runId),
     continue: (context, session, input) => stream(async () => transport.continue(context, session, input, await auth.acquire()), context.runId),
-    cancel: async (context, session) => call(async () => transport.cancel(context, session, await auth.acquire())),
-    reconcile: async (context, session) => call(async () => transport.reconcile(context, session, await auth.acquire())),
+    cancel: async (context, session) => call((lease) => transport.cancel(context, session, lease)),
+    reconcile: async (context, session) => call((lease) => transport.reconcile(context, session, lease)),
     resumeFromCursor: (context, cursor) => stream(async () => transport.resumeFromCursor(context, cursor, await auth.acquire()), context.runId),
-    respondToApproval: async (context, requestId, decision) => call(async () => transport.respondToApproval(context, requestId, decision, await auth.acquire())),
-    erase: async (context, session) => call(async () => transport.erase(context, session, await auth.acquire())),
+    respondToApproval: async (context, requestId, decision) => call((lease) => transport.respondToApproval(context, requestId, decision, lease)),
+    erase: async (context, session) => call((lease) => transport.erase(context, session, lease)),
     dispose: () => transport.dispose(),
   };
 }

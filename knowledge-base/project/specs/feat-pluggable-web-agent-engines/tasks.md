@@ -86,6 +86,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Settings UI auth-mode slice: owner selector loads, displays, and persists the selected engine auth mode (4 component tests green).
   - [x] Usage provenance slice: Codex token usage normalizes to neutral events with reported or unavailable cost provenance (8 adapter tests green).
   - [x] Recovery integration slice: authorization failures trigger at most one refreshed-lease retry; other failures propagate unchanged (10 adapter tests green).
+  - [x] Promise lifecycle recovery slice: Codex cancellation, reconciliation, approval, and erasure calls use the one-refresh recovery boundary before error sanitization (20 adapter tests green).
   - [x] Error sanitization slice: Codex transport errors cross the neutral boundary with stable codes and generic messages (12 adapter tests green).
   - [x] Replay boundary slice: Codex streams reject cross-run, missing-id, and non-positive-sequence events before ledger handoff (14 adapter tests green).
   - [x] Sequence monotonicity slice: Codex streams reject stale or duplicate sequence numbers within a provider stream before ledger handoff (19 adapter tests green).

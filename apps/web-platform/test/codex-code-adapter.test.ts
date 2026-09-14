@@ -142,6 +142,32 @@ describe("Codex neutral adapter boundary", () => {
       return collected;
     })()).rejects.toMatchObject({ code: "codex_event_sequence_invalid" });
   });
+
+  it("refreshes once when a promise lifecycle call reports an expired lease", async () => {
+    const auth = createCodexAuthBoundary({
+      mode: "managed",
+      acquire: vi.fn(async () => ({ accessToken: "first", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => ({ accessToken: "second", expiresAt: Date.now() + 60_000 })),
+      logout: vi.fn(async () => undefined),
+    });
+    const transport = {
+      start: vi.fn(async function* () { yield* []; }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error("expired"), { code: "codex_credential_expired" }))
+        .mockResolvedValue("confirmed" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createCodexCodeAdapter(transport, auth);
+    await expect(adapter.cancel({ runId: "run-1" } as never, { resumeHandle: "opaque", sessionId: null }))
+      .resolves.toBe("confirmed");
+    expect(transport.cancel).toHaveBeenCalledTimes(2);
+    expect(transport.cancel.mock.calls[1][2]).toEqual(expect.objectContaining({ accessToken: "second" }));
+  });
 });
 
 describe("Codex usage normalization", () => {
