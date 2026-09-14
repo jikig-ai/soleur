@@ -61,6 +61,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Dispatch boundary slice: persisted binding is required before adapter start; missing bindings fail closed (2 dispatch tests green).
   - [x] Claude adapter boundary slice: provider transport is wrapped behind the neutral lifecycle contract without SDK types crossing it (1 adapter test green).
   - [x] Claude adapter lifecycle coverage: start, continue, cancel, reconcile, cursor resume, approval, erasure, and disposal delegation are pinned.
+  - [x] Claude neutral-boundary slice: stream identity/sequence validation and generic provider-error sanitization protect every lifecycle method (3 adapter tests green).
   - [x] Claude identity slice: the adapter exports a single immutable engine ID for dispatch selection and registry alignment.
   - [x] Catalog identity slice: reviewed engine definitions consume the Claude adapter identity constant rather than duplicating it (21 registry/adapter tests green).
   - [x] Settings identity slice: API fallback defaults reuse the Claude adapter identity constant.

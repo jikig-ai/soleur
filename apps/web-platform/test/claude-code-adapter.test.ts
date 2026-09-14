@@ -31,4 +31,43 @@ describe("Claude Code neutral adapter boundary", () => {
     expect(transport.dispose).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
   });
+
+  it("rejects malformed or stale events before they cross the neutral boundary", async () => {
+    const transport = {
+      start: vi.fn(async function* () {
+        yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
+        yield { runId: "run-1", eventId: "evt-2", sequence: 1, payload: { type: "text", text: "duplicate" } as const };
+      }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockResolvedValue("requested" as const),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createClaudeCodeAdapter(transport);
+    const events = adapter.start({ runId: "run-1" } as never, { text: "hi", attachmentIds: [] });
+    await expect((async () => {
+      const collected = [];
+      for await (const event of events) collected.push(event);
+      return collected;
+    })()).rejects.toMatchObject({ code: "claude_event_sequence_invalid" });
+  });
+
+  it("sanitizes provider errors while retaining a stable failure code", async () => {
+    const transport = {
+      start: vi.fn(async function* () { yield* []; }),
+      continue: vi.fn(async function* () { yield* []; }),
+      cancel: vi.fn().mockRejectedValue(Object.assign(new Error("token=secret"), { code: "provider_timeout" })),
+      reconcile: vi.fn().mockResolvedValue("running" as const),
+      resumeFromCursor: vi.fn(async function* () { yield* []; }),
+      respondToApproval: vi.fn().mockResolvedValue(undefined),
+      erase: vi.fn().mockResolvedValue("confirmed" as const),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter = createClaudeCodeAdapter(transport);
+    await expect(adapter.cancel({ runId: "run-1" } as never, { resumeHandle: "opaque", sessionId: null }))
+      .rejects.toMatchObject({ code: "provider_timeout", message: "Claude provider request failed" });
+  });
 });
