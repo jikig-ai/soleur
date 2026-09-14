@@ -102,3 +102,9 @@
 
 - Learning: `knowledge-base/project/learnings/2026-09-14-my-proxy-allowlisted-the-messages-it-relayed-and-relayed-them-verbatim.md`; routed bullets to `clo` (cite code by name; never overwrite cited run records), `security-sentinel` (rebuild allowlisted messages), `test-design-reviewer` (group reaper + hygiene row for signal-ignoring fixtures).
 - Archival: the plan is archived. This spec directory is deliberately NOT archived: the Art. 30 register (PA-8 §(g), 7 citations), the CLO attestation (4) and ADR-213 cite `runs/*.txt` under this path, and moving it would break citations inside signed legal records.
+
+## Ship Phase
+
+- Advisor consult (ADR-083, curated payload): 4 gaps claimed. (1) unrefused `--save-trace`/`--save-video` argv and `PLAYWRIGHT_MCP_SAVE_*`/`OUTPUT_MODE` env: refuted by measurement, since 0.0.78's MCP option list and `configFromEnv` read none of them. (2) a one-row JSON-escaped tree passed `escaped_tree_in`'s newline requirement: reproduced (the sentinel survived `redact_text`); fixed, with row 56 and mutant 56; suite 284/284 (56 mutants), passthrough 164/122 (`runs/suite-advisor-onerow.txt`, `runs/suite-red-passthrough-advisor-onerow.txt`). (3) image blocks forwarded: already a recorded residual (ADR-213, screenshot of a readonly credential panel). (4) plan FR7/FR9 wording predates the review round's vocabulary and drift-arm change: the plan is archived, and the ADR-213 amendment records the change.
+- The first run of mutant 56 checked leaks on response id 1 (initialize) instead of 3 (tools/call) and reported "mutant survived"; fixed to id 3.
+- Preflight Check 10: the plan's probe ran the full suite, which cannot finish in the 15 s sandbox; amended to a fast `.mcp.json` probe with a note. The Incident-PIR gate fired on a hypothetical design note; reworded.

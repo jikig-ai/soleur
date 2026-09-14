@@ -472,7 +472,9 @@ class Proxy:
                 parsed = json.loads(cand)
             except (ValueError, RecursionError):
                 continue
-            if any("\n" in s and self.looks_like_a11y_tree(s) for s in json_strings(parsed)):
+            # No newline requirement: one row returned by `ariaSnapshot()` on a
+            # single locator is a whole tree to the redactor's predicate.
+            if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):
                 return True
         return False
 

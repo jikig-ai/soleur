@@ -474,6 +474,7 @@ r="$(odd error-message-tree)"; assert_withheld 'row 46: an error message carryin
 r="$(odd error-no-data)"; assert_true 'row 31 companion: a data-less prose error forwarded byte-identical' bash -c '[[ "$(fact "$1" 3 rawline | base64 -d)" == "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32000,\"message\":\"boom\"}}" ]]' _ "$r"
 r="$(odd run-code-escaped)"; assert_withheld 'row 49: a JSON-escaped tree (browser_run_code_unsafe shape) → withheld' "$r" 3 'JSON-escaped'
 r="$(odd evaluate-escaped-object)"; assert_withheld 'row 49: a tree inside a pretty-printed JSON object → withheld' "$r" 3 'JSON-escaped'
+r="$(odd run-code-escaped-one-row)"; assert_withheld 'row 56: a ONE-ROW escaped tree (single-locator ariaSnapshot) → withheld' "$r" 3 'JSON-escaped'
 r="$(odd quoted-key)"; assert_redacted_result 'quoted YAML key ("API Key #1") redacted through the proxy; "Notes #2" intact' "$r" 3 1
 r="$(odd value-contains-link-substring)"; assert_true 'row 36: a VALUE containing the link substring outside ### Snapshot is redacted, not replaced' bash -c 'delivered_ok "$1" 3 && text_has "$1" 3 "\"Token\" [ref=e1]: <redacted>"' _ "$r"
 r="$(odd value-contains-brace)"; assert_redacted_result 'P6 canary: a value containing { is delivered redacted (no envelope sniff)' "$r" 3 1
@@ -762,8 +763,10 @@ mutant 54-relay-verbatim relay_server_message '            write_line(self.out, 
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m54 "$MUTANT_PATH" --env FAKE_PW_CANCEL=1 --send "$INIT" --send "$SNAP" --end eof)"; red 'row 54: relayed notifications not rebuilt → the reason/_meta tree reaches the client' bash -c 'started "$1" && stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"; fi
 mutant 55-any-id-plain plain_id '        return isinstance(value, str) and not self.looks_like_a11y_tree(value) and self.redact_text(value) == value' '        return True'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m55 "$MUTANT_PATH" --env FAKE_PW_CANCEL=1 --send "$INIT" --send "$SNAP" --end eof)"; red 'row 55: requestId not vetted → a tree row rides a cancellation to the client' bash -c 'started "$1" && stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"; fi
-EXPECTED_MUTANTS=55   # rows 1-55 without row 4, with 22a/22b; exactly one mutation row each
-EXPECTED_RED_ROWS=55
+mutant 56-escaped-needs-newline escaped_tree_in '            if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):' '            if any("\n" in s and self.looks_like_a11y_tree(s) for s in json_strings(parsed)):'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m56 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/run-code-escaped-one-row.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 56: escaped check requires a newline → a one-row tree leaks' leaks "$r" 3; fi
+EXPECTED_MUTANTS=56   # rows 1-56 without row 4, with 22a/22b; exactly one mutation row each
+EXPECTED_RED_ROWS=56
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)
@@ -869,7 +872,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=281
+MIN_ASSERTIONS=284
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

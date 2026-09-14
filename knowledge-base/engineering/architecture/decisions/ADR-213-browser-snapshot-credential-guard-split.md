@@ -463,6 +463,11 @@ row and a mutant that proves the row can go red.
   ids alone, and a `requestId` or request id carrying a tree row or a redactable
   value is dropped, so no `reason` or `_meta` field carries page text past the
   proxy (raised by the CLO re-attestation; suite rows 54/55).
+- A JSON-escaped tree is withheld even when it is a single row with no newline
+  (`ariaSnapshot()` on one locator, returned through `browser_evaluate` or
+  `browser_run_code`): `escaped_tree_in` no longer requires a newline before asking
+  the tree predicate (raised by the ship-gate advisor consult; suite row 56). The
+  cost is that a value tool returning one YAML-shaped line is withheld, fail-closed.
 - A JSON-RPC error is forwarded only as `{code, message}` with prose; an error that
   also carries `result`, is not an object, carries `data`, or whose message is
   tree-shaped is withheld.
