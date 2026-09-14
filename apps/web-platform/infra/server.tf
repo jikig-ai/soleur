@@ -543,6 +543,7 @@ resource "terraform_data" "send_failed_alert_probe" {
 
   provisioner "remote-exec" {
     inline = [
+      "set -e",
       "logger -p user.crit -t disk-monitor 'SOLEUR_DISK_MONITOR_SEND_FAILED channel=resend http_code=000 rc=7 synthetic=1 probe_rev=${local.monitor_send_failed_probe_rev}'",
     ]
   }
