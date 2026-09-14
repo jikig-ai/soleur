@@ -55,8 +55,11 @@ three hours before it launched cleanly. My reasons were true:
 - a battery run beside three siblings on a starved `/var/tmp` produces REDs nobody can
   interpret.
 
-But "CI already covers it" is exactly the argument ADR-183 declined to accept for this gate.
-The honest record is that the gate was skipped, with the reason, not that it was satisfied.
+Ship Phase 4 still pins that battery: `TEST_GROUP=all`, and "the battery you start on the final
+tree is the only local run there will be". It is a pin I overrode rather than a gap I filled.
+ADR-183 is consistent with my reasoning on one point only: CI's required `test` is the merge
+gate, and the local run is the last fail-fast checkpoint. It does not grant this exit. The honest
+record is that the gate was skipped, with the reason, not that it was satisfied.
 
 Whether Phase 4 should gain a sanctioned exit is a design question for the gate's owner, not
 something to settle in a merge tail. A possible exit: an unrun battery, recorded in the PR
