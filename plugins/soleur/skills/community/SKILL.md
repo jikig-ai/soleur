@@ -3,6 +3,10 @@ name: community
 description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Community Management
 
 Manage community presence across Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News. Detects enabled platforms from environment variables (or always-on for GitHub and HN) and delegates data collection to platform-specific scripts.

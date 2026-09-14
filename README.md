@@ -25,6 +25,8 @@ Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to sk
 
 Update to the latest version with `devin plugins update soleur`, or `devin plugins update` to refresh all installed plugins. If you see a transient "content could not be fetched" warning, Devin will retry automatically; run the update command again if it persists.
 
+The plugin also loads in **Devin Cloud** sessions (`/handoff` or web app). Cloud sessions run under Soleur Cloud Mode — plugin subagents and SessionStart/SessionEnd hooks are absent, so fan-out runs sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure and secrets/production steps require an explicit session-scoped acknowledgement. See the [capability matrix](plugins/soleur/devin/INSTRUCTIONS.md#cloud-mode-devin-cloud-sessions).
+
 **Codex:**
 
 ```bash

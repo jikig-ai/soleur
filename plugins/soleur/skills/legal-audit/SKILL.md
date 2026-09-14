@@ -3,6 +3,10 @@ name: legal-audit
 description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents and displays findings inline."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Legal Compliance Auditor
 
 Scan a project's existing legal documents and audit them for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Findings are displayed inline in the conversation.

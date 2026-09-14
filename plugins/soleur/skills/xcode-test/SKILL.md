@@ -3,6 +3,10 @@ name: xcode-test
 description: "This skill should be used when building and testing iOS apps on the simulator using XcodeBuildMCP. It handles building, installing, launching, screenshot capture, and log analysis for iOS/macOS apps."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Xcode Test
 
 <command_purpose>Build, install, and test iOS apps on the simulator using XcodeBuildMCP. Captures screenshots, logs, and verifies app behavior.</command_purpose>

@@ -3,6 +3,10 @@ name: fix-issue
 description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or human review."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 # Fix Issue
 
 Attempt a single-file fix for a GitHub issue and open a PR for human review.

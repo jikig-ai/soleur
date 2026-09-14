@@ -3,6 +3,10 @@ name: drain-labeled-backlog
 description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work — `local` proceeds normally; `not-local:<reason>` applies the cloud contract in `${CLAUDE_PLUGIN_ROOT}/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), and require an explicit session-scoped acknowledgement before any secrets read or production mutation.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-labeled-backlog` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-labeled-backlog`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->

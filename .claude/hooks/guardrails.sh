@@ -131,26 +131,44 @@ fi
 # so chained commands like "git add && git commit" are caught.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
+# The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
+# plugin is the source of truth so work/ship/one-shot can invoke the identical
+# check in sessions where hooks do not fire (Soleur Cloud Mode, FR5). This
+# wrapper translates the script's refusal into the hook deny envelope.
 if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
-  # Resolve the branch from the command's working directory, not the hook's CWD.
-  # resolve_command_cwd (lib/incidents.sh) covers: "cd /worktree && ...",
-  # "git -C /worktree commit", and hook-input .cwd. Falls through to the
-  # hook's own CWD if none resolve.
-  GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
-  if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
-    BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
+  if [ -n "$REPO_ROOT" ] && [ -x "$GUARD" ]; then
+    HOOK_CWD=$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || echo "")
+    if ! bash "$GUARD" --cwd "$HOOK_CWD" "$COMMAND" >/dev/null 2>&1; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   else
-    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  fi
-  if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
-    emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
-    jq -n '{
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
-      }
-    }'
-    exit 0
+    # Plugin script unreachable — fall back to the inline check so the hook
+    # never silently loses the guard when the plugin tree moves.
+    GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
+    if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
+      BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    else
+      BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    fi
+    if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   fi
 fi
 
