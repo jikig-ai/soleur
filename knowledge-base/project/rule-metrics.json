@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-14T18:22:01Z",
+  "generated_at": "2026-09-14T19:20:44Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1082,19 +1082,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-new-skills-agents-or-user-facing",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 5,
-      "warn_count": 0,
-      "fire_count": 5,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-11T08:41:04Z",
-      "first_seen": "2026-05-26T19:58:11Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "cq-write-failing-tests-before",
       "section": "Code Quality",
       "hit_count": 0,
@@ -1160,19 +1147,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-before-shipping-ship-phase-5-5-runs",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 32,
-      "warn_count": 0,
-      "fire_count": 32,
-      "prevented_errors": 0,
-      "last_hit": "2026-09-14T17:13:34Z",
-      "first_seen": "2026-08-13T19:13:15Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-ssh-diagnosis-verify-firewall",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1188,13 +1162,13 @@
     {
       "id": "wg-defer-only-after-inline-triage",
       "section": "Workflow Gates",
-      "hit_count": 54,
+      "hit_count": 57,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 54,
-      "prevented_errors": 54,
-      "last_hit": "2026-09-14T17:09:07Z",
+      "fire_count": 57,
+      "prevented_errors": 57,
+      "last_hit": "2026-09-14T18:26:22Z",
       "first_seen": "2026-09-11T09:35:31Z",
       "rule_text_prefix": ""
     },
@@ -1279,13 +1253,13 @@
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 492,
+      "hit_count": 493,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 492,
-      "prevented_errors": 492,
-      "last_hit": "2026-09-14T18:21:28Z",
+      "fire_count": 493,
+      "prevented_errors": 493,
+      "last_hit": "2026-09-14T19:20:16Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1304,15 +1278,15 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 100,
+    "total_rules_tagged": 98,
     "rules_unused_over_8w": 81,
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 32,
-      "net-issue-flow": 427,
+      "skill-security-scan": 41,
       "monitor-supersede": 143,
-      "post-dispatch-watch-gate": 4530,
+      "net-issue-flow": 427,
+      "post-dispatch-watch-gate": 4532,
       "guardrails-block-recursive-delete": 324,
       "kb-domain-allowlist-guard": 164,
       "guardrails-require-milestone": 503,
@@ -1331,7 +1305,7 @@
       "prod-write-defer-git-push-main": 6,
       "prod-write-defer-doppler-secrets-stdout": 23,
       "prod-write-defer-terraform-apply": 97,
-      "cost-of-filing-flip-inline": 8,
+      "cost-of-filing-flip-inline": 9,
       "cost-of-filing-file": 1,
       "guardrails-worktree-write-guard": 255,
       "prod-write-defer-doppler-prd-secrets": 6,
