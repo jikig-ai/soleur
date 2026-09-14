@@ -102,6 +102,20 @@ else
   CRED_FILE_STATE=absent
 fi
 
+# Sentry destination pin (#7873 Rule D drawdown). The seven Sentry POSTs below forward
+# SENTRY_PUBLIC_KEY to "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/", and both
+# halves are env-settable. A value outside the shape Sentry issues (measured against Doppler prd,
+# 2026-09-15) is dropped, which disables the best-effort Sentry arm (every site is guarded on
+# `-n`) rather than sending the key to an arbitrary host; journald still carries each event.
+if [[ -n "${SENTRY_INGEST_DOMAIN:-}" ]] && ! [[ "$SENTRY_INGEST_DOMAIN" =~ ^o[0-9]+\.ingest\.(de\.|us\.)?sentry\.io$ ]]; then
+  logger -t "$LOG_TAG" "SENTRY_DEST_REFUSED: SENTRY_INGEST_DOMAIN is not a Sentry ingest host; Sentry events disabled for this run"
+  SENTRY_INGEST_DOMAIN=""
+fi
+if [[ -n "${SENTRY_PROJECT_ID:-}" ]] && ! [[ "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then
+  logger -t "$LOG_TAG" "SENTRY_DEST_REFUSED: SENTRY_PROJECT_ID is not numeric; Sentry events disabled for this run"
+  SENTRY_PROJECT_ID=""
+fi
+
 # Image signature verification (#5933 Item 4; #6005 private-GHCR + offline rework).
 # The running host pulls the app image by semver tag (ALLOWED_IMAGES); this
 # cosign-verifies its signature and runs the VERIFIED DIGEST (not the tag → closes
@@ -517,7 +531,7 @@ report_cron_drain_timeout() {
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "ci-deploy", op: "cron-drain-timeout"},
         extra: {cron_drain_wait_secs: ($w | tonumber)}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -597,7 +611,7 @@ sandbox_canary_sentry_event() {
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -621,7 +635,7 @@ cosign_verify_event() {
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-verify", verify_result: $r, mode: $m},
         extra: {ref: $ref, detail: $d}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -689,7 +703,7 @@ pull_failure_event() {
         level: "error", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", pull_result: $r, host_id: $h, recovery_stage: $rs},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -715,7 +729,7 @@ pull_auth_recovery_event() {
         level: "info", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull-recovery", recovery_stage: $s, host_id: $h},
         extra: {ref: $ref}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -746,7 +760,7 @@ registry_pull_event() {
         platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: $reg, image: $img},
         extra: {tag: $t}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
@@ -1522,7 +1536,7 @@ zot_gate_degraded_event() {
         level: "warning", platform: "other", logger: "ci-deploy",
         tags: {feature: "supply-chain", op: "image-pull", registry: "zot-gate-degraded", zot_gate_reason: $r, host_id: $h, login_class: $lc, login_http: $lh, login_registry: "zot"},
         extra: {login_hatch: $hx}}' 2>/dev/null)" || return 0
-    curl -s -o /dev/null --max-time 10 -X POST \
+    curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
       -H "Content-Type: application/json" \
       -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
