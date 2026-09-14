@@ -4,8 +4,16 @@
 # signs in as this user against the DEPLOYED app to catch the realtime/
 # server-commit-timing bug class mock e2e structurally cannot (#5391/#5421/#5436).
 #
-# Usage (agent-run LOCALLY, ONE-TIME — NEVER wired into CI; keeps prod
-# service-role out of GitHub Actions, security P0-1):
+# Usage: run LOCALLY, or automatically before live-verify on a triggering
+# release (web-platform-release.yml, #7969 — operator-approved).
+#
+# SUPERSEDES the original "NEVER wired into CI; keeps prod service-role out of
+# GitHub Actions" note. That claim was already inaccurate when written: the
+# sibling live-verify harness step runs under `doppler run -c prd`, which
+# injects the whole prd config — SUPABASE_SERVICE_ROLE_KEY included — into an
+# Actions process. Wiring this in does not widen what a compromised
+# DOPPLER_TOKEN_PRD reaches; it makes an already-present capability routine,
+# which is why the masking below is not optional.
 #
 #   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh
 #
@@ -19,8 +27,11 @@
 # (server/ws-handler.ts) aborts if `workspaces.repo_url` is null — so this seeds:
 #   - auth user (email_confirm:true) → handle_new_user trigger (mig 053, ADR-038)
 #     auto-provisions a solo workspace whose id == user.id + owner membership
-#   - public.users ladder: tc_accepted_version (= lib/legal/tc-version.ts),
-#     workspace_status=ready, repo_status=ready, workspace_path
+#   - public.users ladder: workspace_status + repo_status (consent is recorded
+#     separately via the public.accept_terms RPC, which also writes the ledger),
+#     NOTE: workspace_path was DROPPED from public.users by migration 112
+#     (112_drop_legacy_users_repo_columns.sql). PATCHing it returns 42703 and
+#     aborted every run — measured against prd.
 #   - workspaces row: repo_status=ready AND repo_url=<synthetic sentinel> (the
 #     seed-qa-user.sh gap; getCurrentRepoUrl reads workspaces.repo_url, not
 #     users.repo_url — server/current-repo-url.ts:58-62)
@@ -88,44 +99,105 @@ url_host="${url_host%%/*}"
 is_custom_domain=0
 if [[ "$url_host" == "api.soleur.ai" ]]; then
   is_custom_domain=1
+elif [[ "$DOPPLER_CONFIG" == "prd" && -n "${GITHUB_ACTIONS:-}" ]]; then
+  # IDENTITY, not internal consistency (#7969 review). The other gates prove the
+  # config is NAMED prd, the URL has a valid SHAPE, and the key admins whatever
+  # project that URL names — a coherent-but-wrong set (a dev URL + its own key,
+  # under any Doppler project carrying a config called `prd`) satisfies all
+  # three and would seed the wrong database. hr-dev-prd-distinct-supabase-projects
+  # is a hard rule, and automation is what promotes this from theoretical:
+  # an operator would notice a wrong ref in the pre-flight notice, a release job
+  # will not. So the refusal is scoped to UNATTENDED runs: locally the canonical
+  # path still works, which is what it was designed for and what the JWT-branch
+  # fixtures exercise.
+  echo "::error::DOPPLER_CONFIG=prd but NEXT_PUBLIC_SUPABASE_URL host is \"$url_host\","
+  echo "::error::not the prod custom domain (api.soleur.ai) — refusing to seed."
+  exit 1
 elif [[ ! "$SB_URL" =~ $CANONICAL_RE ]]; then
   echo "::error::NEXT_PUBLIC_SUPABASE_URL=\"$SB_URL\" is neither the prod custom domain"
   echo "::error::(api.soleur.ai) nor the canonical 20-char ref shape — refusing to seed."
   exit 1
 fi
 
-# Decode the service-role JWT payload and assert role + derive ref.
-if [[ "$(printf '%s' "$SRK" | tr -cd '.' | wc -c)" -ne 2 ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY is not a 3-segment JWT"
-  exit 1
+# MASK BEFORE FIRST USE (#7969 review). Actions masks `secrets.*` only, so
+# everything `doppler run` injects is unmasked in a PUBLIC log. redact-stdin.ts
+# is the primary control and these are defence in depth — a directive survives
+# that pipe unchanged, and GHA parses workflow commands from step stdout.
+# Emitted only under Actions so a local run is unaffected.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  printf '::add-mask::%s\n' "$SRK"
+  [[ -n "${LIVE_VERIFY_USER_PASSWORD:-}" ]] && printf '::add-mask::%s\n' "$LIVE_VERIFY_USER_PASSWORD"
 fi
-payload=$(printf '%s' "$SRK" | cut -d. -f2)
-pad=$(( (4 - ${#payload} % 4) % 4 ))
-if [[ $pad -gt 0 ]]; then
-  padded="$payload$(printf '=%.0s' $(seq 1 $pad))"
+
+# Assert the key grants service-role ON THIS PROJECT.
+#
+# Two key formats exist and only one can be decoded:
+#   * legacy  — a 3-segment JWT carrying `role` and `ref` claims
+#   * current — an opaque `sb_secret_…` secret key (Supabase's newer format)
+#
+# The prd key is the OPAQUE form, and this block used to require a JWT
+# unconditionally. That is why the seed had been unrunnable in prd since the
+# key rotated: it exited 1 at the segment count before writing anything, so the
+# synthetic principal silently stopped being refreshed and drifted behind the
+# T&C gate — the root cause of #7969. The literal `TC_VERSION` was a symptom;
+# this was the disease.
+#
+# The two properties the JWT decode bought are preserved, and one is
+# strengthened. A JWT's `role` is a SELF-ASSERTED claim this script never
+# verified against the server; an authenticated probe is the server's own
+# verdict, and it proves BOTH properties at once:
+#   P1 the key really grants service-role  — /auth/v1/admin/* is 401 for anon
+#   P2 the key belongs to the project the URL resolves to — the probe targets
+#      $SB_URL, so a key for another project cannot answer 200 here
+ref=""
+if [[ "$(printf '%s' "$SRK" | tr -cd '.' | wc -c)" -eq 2 ]]; then
+  # Legacy JWT: keep the decode, which additionally yields the ref for the
+  # canonical-host cross-check below.
+  payload=$(printf '%s' "$SRK" | cut -d. -f2)
+  pad=$(( (4 - ${#payload} % 4) % 4 ))
+  if [[ $pad -gt 0 ]]; then
+    padded="$payload$(printf '=%.0s' $(seq 1 $pad))"
+  else
+    padded="$payload"
+  fi
+  json=$(printf '%s' "$padded" | tr '_-' '/+' | base64 -d 2>/dev/null) || {
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY payload is not valid base64url"
+    exit 1
+  }
+  ref=$(printf '%s' "$json" | jq -r '.ref // ""')
+  role=$(printf '%s' "$json" | jq -r '.role // ""')
+  if [[ "$role" != "service_role" ]]; then
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY role=\"$role\", expected \"service_role\""
+    exit 1
+  fi
+  if [[ -z "$ref" ]]; then
+    echo "::error::SUPABASE_SERVICE_ROLE_KEY carries no ref claim — cannot bind project"
+    exit 1
+  fi
+  key_form="jwt"
 else
-  padded="$payload"
-fi
-json=$(printf '%s' "$padded" | tr '_-' '/+' | base64 -d 2>/dev/null) || {
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY payload is not valid base64url"
-  exit 1
-}
-ref=$(printf '%s' "$json" | jq -r '.ref // ""')
-role=$(printf '%s' "$json" | jq -r '.role // ""')
-
-if [[ "$role" != "service_role" ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY role=\"$role\", expected \"service_role\""
-  exit 1
-fi
-if [[ -z "$ref" ]]; then
-  echo "::error::SUPABASE_SERVICE_ROLE_KEY carries no ref claim — cannot bind project"
-  exit 1
+  # Opaque key. Refuse anything that is not recognisably a SECRET key before
+  # sending it anywhere — `sb_publishable_…` is the anon-equivalent and must
+  # never reach a seeding path.
+  case "$SRK" in
+    sb_secret_*) ;;
+    sb_publishable_*)
+      echo "::error::SUPABASE_SERVICE_ROLE_KEY is a PUBLISHABLE key (sb_publishable_…), not a secret key"
+      exit 1 ;;
+    *)
+      echo "::error::SUPABASE_SERVICE_ROLE_KEY is neither a 3-segment JWT nor an sb_secret_… key"
+      exit 1 ;;
+  esac
+  key_form="opaque"
 fi
 
-# On the canonical 20-char URL, the host first-label IS the ref — cross-check.
-# On the custom domain (api.soleur.ai) the host carries no 20-char label, so we
-# trust the JWT ref as the source of truth (mirrors validate-anon-key.ts).
-if [[ "$is_custom_domain" -eq 0 ]]; then
+# Retained from the original preflight, NOT dropped as a side effect of the
+# compat fix: on a canonical 20-char URL the host's first label IS the ref, so
+# a JWT whose ref disagrees is refused before any probe. The probe below
+# subsumes this (a foreign key cannot answer 200 against this URL), but a
+# security check should not disappear because an unrelated bug was fixed.
+# Only reachable on the JWT path; an opaque key carries no ref to compare.
+if [[ -n "$ref" && "$is_custom_domain" -eq 0 ]]; then
   url_ref="${url_host%%.*}"
   if [[ "$ref" != "$url_ref" ]]; then
     echo "::error::JWT ref=\"$ref\" does not match URL canonical ref=\"$url_ref\""
@@ -134,7 +206,19 @@ if [[ "$is_custom_domain" -eq 0 ]]; then
   fi
 fi
 
-echo "::notice::Pre-flight OK (DOPPLER_CONFIG=prd, service_role, ref=$ref, host=$url_host)"
+# Behavioural proof, run for BOTH formats: a JWT's role claim is self-asserted,
+# so the probe is what actually establishes the privilege. Read-only.
+probe_code=$(curl --disable --noproxy '*' --proto '=https' -g -sS -o /dev/null \
+  -w '%{http_code}' --max-time 20 \
+  -H "Authorization: Bearer $SRK" -H "apikey: $SRK" \
+  "$SB_URL/auth/v1/admin/users?per_page=1" || echo "000")
+if [[ "$probe_code" != "200" ]]; then
+  echo "::error::service-role probe against $url_host returned HTTP $probe_code (expected 200)."
+  echo "::error::The key does not grant admin access to THIS project — refusing to seed."
+  exit 1
+fi
+
+echo "::notice::Pre-flight OK (DOPPLER_CONFIG=prd, key=$key_form, admin-probe=200, ref=${ref:-<opaque>}, host=$url_host)"
 
 # --- Seed ----------------------------------------------------------------
 
@@ -142,9 +226,38 @@ header_auth="Authorization: Bearer $SRK"
 header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
 
-# TC_VERSION must match lib/legal/tc-version.ts (middleware redirects to
-# /accept-terms on mismatch). Keep this literal in sync with that file.
-TC_VERSION="2.5.1"
+# DERIVED from lib/legal/tc-version.ts, never restated. A hand-kept literal
+# with a "keep this in sync" comment is the drift shape this repo documents
+# repeatedly, and it drifted here: the principal sat at 2.3.0 against a gate
+# requiring 2.5.1, so `live-verify` redirected to /accept-terms and timed out
+# on a page that could never contain the composer (#7969). The literal was
+# CORRECT at the time — what broke was that nothing re-derived it after the
+# bump. Extraction failure is fatal: a silently-empty version would PATCH the
+# gate column to "" and re-break the harness in the same way.
+_seed_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TC_SRC="$_seed_dir/../lib/legal/tc-version.ts"
+[[ -f "$TC_SRC" ]] || { echo "::error::tc-version.ts not found at $TC_SRC"; exit 1; }
+TC_VERSION="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC")"
+# Anchored on the DECLARATION, not on "a 64-hex literal somewhere in the file",
+# and ambiguity is a REFUSAL rather than `head -1`. A second 64-hex constant
+# (a TC_PREVIOUS_DOCUMENT_SHA, a formatter reorder) would otherwise yield a
+# wrong-but-valid sha256 that the shape check below CANNOT reject — and
+# accept_terms writes it into tc_acceptances.document_sha, which is WORM:
+# UPDATE is refused outright and the re-run is an ON CONFLICT no-op, so the
+# false attestation would be permanent and uncorrectable.
+_sha_matches="$(sed -n '/^export const TC_DOCUMENT_SHA/,/;/p' "$TC_SRC" \
+  | sed -n 's/.*"\([0-9a-f]\{64\}\)".*/\1/p')"
+_sha_count="$(printf '%s\n' "$_sha_matches" | grep -c . || true)"
+if [[ "$_sha_count" -ne 1 ]]; then
+  echo "::error::TC_DOCUMENT_SHA extraction matched $_sha_count literals, expected exactly 1 —"
+  echo "::error::refusing rather than guessing: a wrong SHA lands in a WORM consent ledger."
+  exit 1
+fi
+TC_DOCUMENT_SHA="$_sha_matches"
+[[ "$TC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || { echo "::error::derived TC_VERSION '\''$TC_VERSION'\'' is not a semver — the extraction is broken"; exit 1; }
+[[ "$TC_DOCUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "::error::derived TC_DOCUMENT_SHA is not a sha256 — the extraction is broken"; exit 1; }
 
 EMAIL="live-verify@soleur.ai"
 # Synthetic, non-resolvable sentinel repo URL. Never cloned/fetched — the app
@@ -153,11 +266,61 @@ EMAIL="live-verify@soleur.ai"
 # zero benefit.
 SENTINEL_REPO_URL="https://github.com/soleur-synthetic/verify-harness-sentinel"
 
+# The `email=` query parameter is IGNORED by this endpoint — measured against
+# prd: `?email=<addr>&per_page=1` returns byte-identical results to `?per_page=1`
+# (the first user overall, not the match). The filtering was therefore happening
+# CLIENT-side over a ONE-ITEM page, so the lookup found the principal only when
+# it happened to sort first and otherwise reported "not found" — at which point
+# the caller below tries to CREATE it. With 17 users in prd that is a ~1-in-17
+# chance of working, and the failure mode is an attempted duplicate of a
+# production principal, stopped only by the server rejecting it.
+#
+# So: page through the whole set and match client-side, which is what the code
+# already believed it was doing. `x-total-count` bounds the walk, and a set
+# larger than the walk is a REFUSAL rather than a silent miss — "not found"
+# must never be reachable by looking at only part of the list.
 find_user_by_email() {
-  local email="$1"
-  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
-    -H "$header_auth" -H "$header_api" \
-    | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
+  local email="$1" per_page=200 page=1 total id
+  # BIND BY UID WHERE WE HAVE ONE (#7969 CLO ruling E3). The walk below pages
+  # the ENTIRE auth.users admin list; run inside a GitHub-hosted runner on every
+  # release, that puts every production account holder's email address on
+  # infrastructure the Art. 30 register does not list as a recipient for PA-1
+  # (whose §(e) presently reads "No transfer for the Supabase + Hetzner plane").
+  # LIVE_VERIFY_EXPECTED_UID is already a Doppler prd value that run.ts requires,
+  # so resolve the one record directly and enumerate nothing. The full walk stays
+  # for the LOCAL bootstrap path, where the UID does not exist yet.
+  if [[ -n "${LIVE_VERIFY_EXPECTED_UID:-}" ]]; then
+    local by_uid
+    by_uid=$(curl --disable --noproxy '*' -sf \
+      "$SB_URL/auth/v1/admin/users/$LIVE_VERIFY_EXPECTED_UID" \
+      -H "$header_auth" -H "$header_api" \
+      | jq -r --arg e "$email" 'if .email == $e then .id else "" end' 2>/dev/null) || by_uid=""
+    if [[ -n "$by_uid" ]]; then printf '%s' "$by_uid"; return 0; fi
+    # A set UID that does not resolve to this email is a MISMATCH, not a cue to
+    # go enumerate: under Actions that would reintroduce exactly what this
+    # avoids, and locally it means the pinned UID is stale.
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      echo "::error::LIVE_VERIFY_EXPECTED_UID did not resolve to $email — refusing to enumerate the user list" >&2
+      return 1
+    fi
+  fi
+  total=$(curl --disable --noproxy '*' -sfD - -o /dev/null \
+    "$SB_URL/auth/v1/admin/users?per_page=1" -H "$header_auth" -H "$header_api" \
+    | tr -d '\r' | sed -n 's/^[Xx]-[Tt]otal-[Cc]ount: *//p' | head -1)
+  [[ "$total" =~ ^[0-9]+$ ]] || {
+    echo "::error::admin users listing returned no x-total-count — cannot bound the search" >&2
+    return 1
+  }
+  local pages=$(( (total + per_page - 1) / per_page ))
+  while (( page <= pages )); do
+    id=$(curl --disable --noproxy '*' -sf \
+      "$SB_URL/auth/v1/admin/users?per_page=$per_page&page=$page" \
+      -H "$header_auth" -H "$header_api" \
+      | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""')
+    [[ -n "$id" ]] && { printf '%s' "$id"; return 0; }
+    page=$(( page + 1 ))
+  done
+  printf ''
 }
 
 user_id=$(find_user_by_email "$EMAIL")
@@ -185,16 +348,28 @@ else
   echo "  Updated."
 fi
 
-# public.users ladder — clears /accept-terms + /setup-key middleware gates.
+# public.users ladder — clears /setup-key + workspace middleware gates.
+# NOTE: tc_accepted_version is deliberately NOT set here. Consent goes through
+# public.accept_terms below, the same RPC /api/accept-terms calls, because that
+# is what also writes the public.tc_acceptances ledger row. PATCHing the column
+# directly records consent with no audit row — measured in prod on the synthetic
+# principal: tc_accepted_version set since 2026-06-17, ledger EMPTY (#7969).
 echo "  Provisioning public.users row..."
 curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc \
-    --arg tc "$TC_VERSION" \
-    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg wp "/workspaces/$user_id" \
-    '{tc_accepted_version: $tc, tc_accepted_at: $ts, workspace_status: "ready", repo_status: "ready", workspace_path: $wp}')" \
+    '{workspace_status: "ready", repo_status: "ready"}')" \
+  > /dev/null
+
+# Consent via the RPC the application uses. Idempotent in SQL: the users UPDATE
+# is a no-op when the version already matches, and the ledger INSERT is
+# ON CONFLICT (user_id, version) DO NOTHING.
+echo "  Recording T&C acceptance (v$TC_VERSION) via public.accept_terms..."
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/rpc/accept_terms" \
+  -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  -d "$(jq -nc --arg uid "$user_id" --arg v "$TC_VERSION" --arg sha "$TC_DOCUMENT_SHA" \
+    '{p_user_id: $uid, p_version: $v, p_doc_sha: $sha}')" \
   > /dev/null
 
 # Resolve the solo workspace (handle_new_user trigger sets id == user.id; the
@@ -277,8 +452,17 @@ fi
 echo ""
 echo "::notice::Synthetic prod principal provisioned (tc=$TC_VERSION, workspace=ready,"
 echo "::notice::repo_url sentinel set, dummy anthropic key, NO scope_grants)."
+# Only for a human at a terminal. Under Actions these publish the prod project
+# ref and the principal UID to a PUBLIC log, and redact.ts has no rule for a
+# 20-char ref; the custom domain is precisely what keeps that origin private.
+if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
 echo "::notice::Set these Doppler prd values for the harness allowlist code-gate:"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_UID=$user_id -p soleur -c prd"
 echo "::notice::  doppler secrets set LIVE_VERIFY_EXPECTED_REF=$ref -p soleur -c prd"
+
+# Inside the guard too. These two were left OUTSIDE it, so the UID still
+# published on every run under Actions — and redact.ts has no rule for a bare
+# UUID or a 20-char project ref, which is exactly why the guard exists.
 echo "LIVE_VERIFY_EXPECTED_UID=$user_id"
 echo "LIVE_VERIFY_EXPECTED_REF=$ref"
+fi
