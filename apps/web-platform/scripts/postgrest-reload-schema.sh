@@ -33,10 +33,11 @@ backend identity with PostgREST's LISTEN, so the NOTIFY actually reaches.
 Examples:
   # prd (token lives in the prd root, inherited by every prd_* branch):
   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
-  # dev target: no dev config carries the token by design (a pull_request
-  # job reads dev_scheduled), so read it from prd_terraform on demand:
-  SUPABASE_ACCESS_TOKEN="$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd_terraform --plain)" \
-    doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
+  # dev target (no dev config carries the token by design; read it from prd_terraform,
+  # value never expanded in the caller's shell):
+  doppler run -p soleur -c prd_terraform --only-secrets SUPABASE_ACCESS_TOKEN -- \
+    doppler run -p soleur -c dev --preserve-env=SUPABASE_ACCESS_TOKEN -- \
+    bash apps/web-platform/scripts/postgrest-reload-schema.sh
 
 Required environment:
   SUPABASE_ACCESS_TOKEN     Supabase Management-API token (sbp_…), the same
@@ -79,12 +80,13 @@ done
 # Belt-and-braces: the token should never appear in $body/$response from
 # a well-behaved Supabase API, but a misconfigured curl flag (e.g., --verbose
 # added later) could surface the Authorization header; this gate makes the
-# leak class structurally impossible at the print site. The body is also
-# capped at 512 bytes and stripped of CR/LF/FF/VT/ESC/DEL (octal escapes
-# only — `tr` has no `\e`) before it reaches a `::error::` line: a body line
-# beginning with `::` would otherwise be parsed as a runner command.
-scrub_pat() {
-  printf '%s' "${1:0:512}" | tr -d '\r\n\f\v\033\177' | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'
+# leak class structurally impossible at the print site. Control bytes are
+# stripped (a line beginning with `::` would otherwise be parsed as a runner
+# command) and the message is capped at 512 bytes AFTER redaction — capping
+# first would let a token straddling the cut survive the regex's 20-char
+# floor (review of #8028 measured a 19-char prefix leak).
+scrub_token() {
+  printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g' | tr -d '[:cntrl:]' | head -c 512
 }
 
 # The single soak rule (#8028). Under --best-effort a failure is soft ONLY
@@ -95,13 +97,13 @@ scrub_pat() {
 # loud under the migration runner as it is in strict mode.
 fail_or_skip() {
   local code="$1" msg="$2"
-  msg="$(scrub_pat "$msg")"
+  msg="$(scrub_token "$msg")"
   if [[ "$best_effort" == "1" && ( "$code" == "1" || -z "${SUPABASE_ACCESS_TOKEN:-}" ) ]]; then
-    if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-      echo "::notice::postgrest-reload-schema: $msg (best-effort: skipping — no SUPABASE_ACCESS_TOKEN in this environment)" >&2
-    else
-      echo "::warning::postgrest-reload-schema: $msg (best-effort: skipping)" >&2
-    fi
+    # Absence is informational (dev CI hits it on every PR); transience is a
+    # titled warning so it stands out in the run's annotations list.
+    local level="warning title=PostgREST schema reload skipped (transient)"
+    [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] || level="notice"
+    echo "::${level}::postgrest-reload-schema: $msg (best-effort: skipping)" >&2
     exit 0
   fi
   echo "::error::postgrest-reload-schema: $msg" >&2
@@ -161,7 +163,7 @@ payload='{"query":"NOTIFY pgrst, '\''reload schema'\'';"}'
 # redirecting the request (lint-shell-trace-credential-refusal Rule D).
 # Capture stderr separately to /dev/null so a future flag change (e.g.,
 # adding --verbose) cannot leak the Authorization header into $response
-# and from there into our `::error::` echoes. scrub_pat is the second line
+# and from there into our `::error::` echoes. scrub_token is the second line
 # of defense.
 set +e
 response="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" \
@@ -198,6 +200,11 @@ case "$http_code" in
     else
       fail_or_skip 1 "auth endpoint answered HTTP ${http_code} without an API JSON body (edge/WAF?). Retry; if persistent see https://status.supabase.com. Response: ${body}"
     fi ;;
+  408|429)
+    # Request timeout / rate limit are transient by definition (RFC 6585);
+    # the account token is shared with three other workflows that can run
+    # alongside a release, so a 429 must not block deploy.
+    fail_or_skip 1 "rate-limited or timed out (HTTP ${http_code}). Retry. Response: ${body}" ;;
   4??)
     # 404 = wrong ref (config); 422 = bad SQL (would only happen if NOTIFY
     # syntax broke — treat as durable). Other 4xx is operator-actionable.

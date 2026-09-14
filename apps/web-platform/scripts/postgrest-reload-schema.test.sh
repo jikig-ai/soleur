@@ -23,6 +23,13 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
+# Helper self-test (ADR-193): drive both verdict helpers once and require both
+# counters to move, reporting via printf + exit — never through the helpers
+# under test. A neutered or misrouted fail() would otherwise leave every
+# case below green (measured in the #8028 review: `fail() { :; }` → 20/20).
+( pass probe >/dev/null; [[ "$PASS" == 1 ]] ) || { printf '[FATAL] pass() does not count\n' >&2; exit 1; }
+( fail probe >/dev/null; [[ "$FAIL" == 1 ]] ) || { printf '[FATAL] fail() does not count\n' >&2; exit 1; }
+
 # Build a fake curl that:
 #   - drains stdin to $CURL_STDIN_FILE (the bearer header arrives there)
 #   - writes its argv (one per line) to $CURL_ARGS_FILE
@@ -35,7 +42,10 @@ make_fake_curl() {
 #!/usr/bin/env bash
 : "${CURL_ARGS_FILE:=/dev/null}"
 : "${CURL_STDIN_FILE:=/dev/null}"
-: "${CURL_BODY:={}}"
+# `${CURL_BODY:={}}` would collapse an EXPLICIT empty body to the single byte
+# `{` (the first `}` closes the expansion) and make "empty body" unexpressible;
+# default only when the variable is unset.
+[[ -z "${CURL_BODY+x}" ]] && CURL_BODY='{}'
 : "${CURL_HTTP_CODE:=200}"
 : "${CURL_EXIT:=0}"
 # Drain stdin FIRST (SIGPIPE guard): the script pipes the bearer header in
@@ -68,7 +78,7 @@ else
 fi
 
 # ------------------------------------------------------------------------
-# T2 — missing SUPABASE_ACCESS_TOKEN in --best-effort mode → exit 0 with warning.
+# T2 — missing SUPABASE_ACCESS_TOKEN in --best-effort mode → exit 0 with ::notice::.
 #       run-migrations.sh invokes the reload as a best-effort post-step;
 #       the absence of SUPABASE_ACCESS_TOKEN must not break dev apply.
 # ------------------------------------------------------------------------
@@ -79,8 +89,8 @@ out=$(env -i PATH="$PATH" HOME="$HOME" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qiE 'warn|skip'; then
-  pass "exit 0 with warn/skip message"
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q '::notice::' && ! printf '%s' "$out" | grep -q '::warning'; then
+  pass "exit 0 with a ::notice:: (absence is informational, never a warning)"
 else
   fail "rc=$rc out=$out"
 fi
@@ -123,14 +133,22 @@ set -e
 # The bearer travels on curl's STDIN (`--header @-`), never in argv, so a
 # process listing / xtrace of the curl line cannot leak it (#8028, lint
 # lint-shell-trace-credential-refusal Rule D).
+# Transport confinement is a property of the WHOLE argv, not a prefix
+# (#7997 class): pin `--disable` first and `--noproxy '*'` exactly once, and
+# deny every flag a later element could use to re-open a proxy, disable
+# certificate verification, follow a redirect, or dump the header.
 if [[ "$rc" == "0" ]] \
    && grep -q '/v1/projects/abcdefghijklmnopqrst/database/query' "$TMP/args" \
    && grep -qF "NOTIFY pgrst" "$TMP/args" \
-   && grep -qx -- '--header' "$TMP/args" \
+   && grep -qx -- 'POST' "$TMP/args" \
+   && grep -qx -- 'Content-Type: application/json' "$TMP/args" \
    && grep -qx -- '@-' "$TMP/args" \
+   && [[ "$(sed -n 1p "$TMP/args")" == "--disable" && "$(sed -n 2p "$TMP/args")" == "--noproxy" && "$(sed -n 3p "$TMP/args")" == "*" ]] \
+   && [[ "$(grep -cx -- '--noproxy' "$TMP/args")" == 1 ]] \
+   && ! grep -qxE -- '-[a-zA-Z]*[kvxKDL][a-zA-Z]*|--(insecure|proxy|proxy-header|verbose|trace|trace-ascii|dump-header|config|location|location-trusted|netrc|netrc-file)' "$TMP/args" \
    && grep -qE 'Authorization: Bearer sbp_fake' "$TMP/stdin" \
    && ! grep -q 'sbp_fake' "$TMP/args"; then
-  pass "exit 0, correct endpoint, NOTIFY body, bearer on stdin (absent from argv)"
+  pass "exit 0, endpoint, NOTIFY body, --disable first, --noproxy '*' once, no re-opening flag, bearer on stdin only"
 else
   fail "rc=$rc"
   echo "    out=$out"
@@ -194,18 +212,24 @@ rm -rf "$TMP"; trap - EXIT
 # T7 — malformed NEXT_PUBLIC_SUPABASE_URL → non-zero (cannot extract ref).
 #       Catches typos like missing host or non-supabase URLs.
 # ------------------------------------------------------------------------
-echo "T7: malformed URL → non-zero"
+echo "T7: malformed URL → exit 2 (config) in strict AND --best-effort with a token present"
 set +e
 out=$(env -i PATH="$PATH" HOME="$HOME" \
         SUPABASE_ACCESS_TOKEN="sbp_fake" \
         NEXT_PUBLIC_SUPABASE_URL="https://example.com" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
+out_soft=$(env -i PATH="$PATH" HOME="$HOME" \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" \
+        NEXT_PUBLIC_SUPABASE_URL="https://example.com" \
+        bash "$SCRIPT" --best-effort 2>&1 </dev/null)
+rc_soft=$?
 set -e
-if [[ "$rc" != "0" ]] && printf '%s' "$out" | grep -qi 'project ref\|supabase\.co'; then
-  pass "non-zero exit, message references ref/supabase.co"
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qi 'project ref\|supabase\.co' \
+   && [[ "$rc_soft" == "2" ]] && printf '%s' "$out_soft" | grep -q '::error::'; then
+  pass "exit 2 both modes, message references ref/supabase.co"
 else
-  fail "rc=$rc out=$out"
+  fail "rc=$rc out=$out rc_soft=$rc_soft out_soft=$out_soft"
 fi
 
 # ------------------------------------------------------------------------
@@ -225,8 +249,8 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qiE 'warn|skip|best-effort'; then
-  pass "exit 0 with warn under best-effort"
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q '::warning' && ! printf '%s' "$out" | grep -q '::notice::'; then
+  pass "exit 0 with a ::warning:: under best-effort (transience, not absence)"
 else
   fail "rc=$rc out=$out"
 fi
@@ -243,9 +267,9 @@ set -e
 if [[ "$rc" == "0" ]] \
    && printf '%s' "$out" | grep -q '^Usage:' \
    && printf '%s' "$out" | grep -q 'SUPABASE_ACCESS_TOKEN' \
-   && printf '%s' "$out" | grep -qF -- '-c prd_terraform --plain' \
+   && printf '%s' "$out" | grep -qF -- '--only-secrets SUPABASE_ACCESS_TOKEN' \
    && printf '%s' "$out" | grep -q 'Exit codes'; then
-  pass "exit 0; renders Usage, SUPABASE_ACCESS_TOKEN, the prd_terraform one-liner, Exit codes"
+  pass "exit 0; renders Usage, SUPABASE_ACCESS_TOKEN, the prd_terraform --only-secrets one-liner, Exit codes"
 else
   fail "rc=$rc out=$out"
 fi
@@ -265,9 +289,9 @@ else
 fi
 
 # ------------------------------------------------------------------------
-# T11 — curl network failure (curl_rc != 0) → exit 1, message scrubs PAT.
+# T11 — curl network failure (curl_rc != 0) → exit 1, message scrubs the token.
 # ------------------------------------------------------------------------
-echo "T11: curl network failure → exit 1, PAT scrubbed"
+echo "T11: curl network failure → exit 1, token scrubbed"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 make_fake_curl "$TMP"
@@ -283,7 +307,7 @@ set -e
 if [[ "$rc" == "1" ]] \
    && printf '%s' "$out" | grep -q 'curl failed' \
    && ! printf '%s' "$out" | grep -q 'sbp_must_not_leak'; then
-  pass "exit 1; PAT not echoed in error path"
+  pass "exit 1; token not echoed in error path"
 else
   fail "rc=$rc out=$out"
 fi
@@ -306,8 +330,8 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]]; then
-  pass "exit 2 on 404"
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -q 'Supabase rejected'; then
+  pass "exit 2 on 404, attributed to config (never to the credential)"
 else
   fail "rc=$rc out=$out"
 fi
@@ -481,7 +505,7 @@ set +e
 out_strict=$(PATH="$TMP:$PATH" \
         CURL_ARGS_FILE="$TMP/args" \
         CURL_HTTP_CODE=403 \
-        CURL_BODY='<html><body>Access denied</body></html>' \
+        CURL_BODY='<html><head><style>body{margin:0}</style></head><body>Error message: access denied</body></html>' \
         SUPABASE_ACCESS_TOKEN="sbp_fake" \
         NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" 2>&1 </dev/null)
@@ -489,7 +513,7 @@ rc_strict=$?
 out_soft=$(PATH="$TMP:$PATH" \
         CURL_ARGS_FILE="$TMP/args" \
         CURL_HTTP_CODE=403 \
-        CURL_BODY='<html><body>Access denied</body></html>' \
+        CURL_BODY='<html><head><style>body{margin:0}</style></head><body>Error message: access denied</body></html>' \
         SUPABASE_ACCESS_TOKEN="sbp_fake" \
         NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
@@ -498,8 +522,8 @@ set -e
 if [[ "$rc_strict" == "1" ]] \
    && printf '%s' "$out_strict" | grep -q 'without an API JSON body' \
    && [[ "$rc_soft" == "0" ]] \
-   && printf '%s' "$out_soft" | grep -qiE 'warn|skip'; then
-  pass "strict exit 1 (no JSON body); best-effort exit 0 with warn"
+   && printf '%s' "$out_soft" | grep -q '::warning'; then
+  pass "strict exit 1 (no JSON body — braces inside HTML do not count); best-effort exit 0 with ::warning::"
 else
   fail "rc_strict=$rc_strict out_strict=$out_strict rc_soft=$rc_soft out_soft=$out_soft"
 fi
@@ -523,8 +547,8 @@ out=$(PATH="$TMP:$PATH" \
         bash "$SCRIPT" --best-effort 2>&1 </dev/null)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q '::error::' && ! printf '%s' "$out" | grep -qi 'skipping'; then
-  pass "exit 2 on 404 under best-effort (config defect with a token present)"
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'client error (HTTP 404)' && ! printf '%s' "$out" | grep -q 'Supabase rejected' && ! printf '%s' "$out" | grep -qi 'skipping'; then
+  pass "exit 2 on 404 under best-effort, attributed to config (never to the credential)"
 else
   fail "rc=$rc out=$out"
 fi
@@ -548,6 +572,122 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# T15d — a 401 with an EMPTY body is transient (edge/WAF with nothing to say):
+#         strict → 1 naming the missing body; --best-effort → 0.
+# ------------------------------------------------------------------------
+echo "T15d: 401 + empty body → transient (strict 1, best-effort 0)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out_strict=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=401 CURL_BODY='' \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" 2>&1 </dev/null)
+rc_strict=$?
+out_soft=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=401 CURL_BODY='' \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" --best-effort 2>&1 </dev/null)
+rc_soft=$?
+set -e
+if [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -q 'without an API JSON body' \
+   && [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -q '::warning'; then
+  pass "strict exit 1; best-effort exit 0 with ::warning::"
+else
+  fail "rc_strict=$rc_strict out_strict=$out_strict rc_soft=$rc_soft out_soft=$out_soft"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T15e — a response body cannot smuggle a runner command or exceed the cap:
+#         control bytes stripped, message capped at 512 bytes AFTER
+#         redaction, so a token straddling the cut is still redacted.
+# ------------------------------------------------------------------------
+echo "T15e: hostile body → single capped ::error:: line, no runner-command smuggle, no straddle leak"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+STRADDLE="sbp_straddlefixture0123456789abcdefghijklmn"   # 44 chars, like a real token
+PAD="$(printf 'p%.0s' {1..400})"
+set +e
+out=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=401 \
+        CURL_BODY=$'{"message":"x"}\n::stop-commands::tok\r\n::error::injected '"${PAD}${STRADDLE}" \
+        SUPABASE_ACCESS_TOKEN="$STRADDLE" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" --best-effort 2>&1 </dev/null)
+rc=$?
+set -e
+err_lines=$(printf '%s\n' "$out" | grep -c '^::error::postgrest-reload-schema:' || true)
+err_len=$(printf '%s\n' "$out" | grep '^::error::postgrest-reload-schema:' | head -1 | wc -c)
+if [[ "$rc" == "2" ]] && [[ "$err_lines" == "1" ]] \
+   && ! printf '%s\n' "$out" | grep -qE '^::(stop-commands|error::injected)' \
+   && ! printf '%s' "$out" | grep -q 'sbp_straddle' \
+   && [[ "$err_len" -le 600 ]]; then
+  pass "one ::error:: line (<=600 bytes), smuggled directives neutralised, straddling token redacted"
+else
+  fail "rc=$rc err_lines=$err_lines err_len=$err_len out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T16c — curl missing with a token present is a config defect → exit 2 even
+#         under --best-effort (only token ABSENCE is soaked).
+# ------------------------------------------------------------------------
+echo "T16c: --best-effort + no curl on PATH with token present → exit 2"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/bin"
+for tool in bash dirname tr sed head grep dig; do
+  src="$(command -v "$tool" 2>/dev/null || true)"
+  [[ "$src" == /* ]] && ln -s "$src" "$TMP/bin/$tool"
+done
+set +e
+out=$(env -i PATH="$TMP/bin" HOME="$HOME" \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" --best-effort 2>&1 </dev/null)
+rc=$?
+set -e
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'curl not found'; then
+  pass "exit 2: missing curl is not soaked when a token is present"
+else
+  fail "rc=$rc out=$out"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
+# T17 — HTTP 429 (rate limit) is transient: --best-effort → 0 with a
+#        warning; strict → 1. A shared account token must not red a release.
+# ------------------------------------------------------------------------
+echo "T17: HTTP 429 → transient (best-effort 0, strict 1)"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+make_fake_curl "$TMP"
+set +e
+out_soft=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=429 CURL_BODY='{"message":"rate limited"}' \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" --best-effort 2>&1 </dev/null)
+rc_soft=$?
+out_strict=$(PATH="$TMP:$PATH" CURL_ARGS_FILE="$TMP/args" CURL_HTTP_CODE=429 CURL_BODY='{"message":"rate limited"}' \
+        SUPABASE_ACCESS_TOKEN="sbp_fake" NEXT_PUBLIC_SUPABASE_URL="https://abcdefghijklmnopqrst.supabase.co" \
+        bash "$SCRIPT" 2>&1 </dev/null)
+rc_strict=$?
+set -e
+if [[ "$rc_soft" == "0" ]] && printf '%s' "$out_soft" | grep -q '::warning' \
+   && [[ "$rc_strict" == "1" ]] && printf '%s' "$out_strict" | grep -q 'rate-limited'; then
+  pass "429 soaked as transient under best-effort; exit 1 strict"
+else
+  fail "rc_soft=$rc_soft out_soft=$out_soft rc_strict=$rc_strict out_strict=$out_strict"
+fi
+rm -rf "$TMP"; trap - EXIT
+
+# ------------------------------------------------------------------------
 echo
 echo "Results: $PASS passed, $FAIL failed"
+
+# VACUITY FLOOR, reported directly rather than through fail() (ADR-193): the
+# as-written case count, so a deleted or short-circuited arm reddens instead
+# of shrinking the suite silently. Bump deliberately when adding a case.
+if [[ $((PASS + FAIL)) -lt 24 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertion(s) EXECUTED; expected >= 24.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
+
 [[ "$FAIL" == "0" ]] || exit 1

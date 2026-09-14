@@ -127,8 +127,9 @@ state" — but no equivalent gate fires today.
    [Updated 2026-09-13 — #8028] The token is now `SUPABASE_ACCESS_TOKEN`
    (Doppler `prd` root; a dev target reads it from `prd_terraform` — see the
    script's `--help`); `SUPABASE_PAT` was dead in every config and has been
-   deleted. `--best-effort` soaks only a missing token/URL or a transient
-   error; a rejected credential exits 2, and `run-migrations.sh` runs the hook
+   deleted. `--best-effort` soaks only a missing token or a transient error
+   (5xx, network, 408/429, a 401/403 without an API JSON body); with a token
+   present a JSON-bodied 401/403, a 404, or an unset URL exits 2, and `run-migrations.sh` runs the hook
    on every run and fails the job on that exit — the two sentences above are
    the historical record, not the current instruction.
 

@@ -1,4 +1,4 @@
-26  # Supabase Management API call sites this guard can still SEE.
+28  # Supabase Management API call sites this guard can still SEE.
     #
     # THIS IS A COVERAGE FLOOR, NOT AN OFFENDER CEILING, AND THE DIRECTION IS INVERTED
     # RELATIVE TO THIS REPO'S OTHER .highwater FILES. lint-diagnosis-claims.highwater and
@@ -78,3 +78,8 @@
     # The three `advisors/security` sites inside this census are WAIVED, not absent. The waiver
     # lives in the script's DENY array with its date and justification; removing it is what
     # turns this population red, and that is the guard's live non-vacuity proof.
+    #
+    # 2026-09-14 (#8028 review): 26 -> 28. The two sites landed with PR #8031
+    # (scripts/rotate-supabase-db-credential.sh: GET /v1/projects and
+    # PATCH /v1/projects/$REF/database/password) without this ratchet moving;
+    # the census had read 28 against 26 on main since, and this locks it in.

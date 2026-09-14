@@ -19,7 +19,7 @@ CLI from the existing prd value — pick one and justify."
 
 **What the plan does instead.** Dev CI (`.github/workflows/tenant-integration.yml`, "Apply
 migrations to dev") keeps the script's absence-soak: `SUPABASE_ACCESS_TOKEN` is not set there,
-the reload hook exits 0 with `::warning::… is not set`, and PostgREST's ~10-minute natural
+the reload hook exits 0 with a `::notice::… is not set` (absence is informational, never a warning), and PostgREST's ~10-minute natural
 poll remains the fallback — the operating state since the PAT died. Operators running the
 script by hand against dev read the token on demand from Doppler `prd_terraform` (the
 `scripts/rotate-supabase-db-credential.sh` precedent), which `--help` documents.

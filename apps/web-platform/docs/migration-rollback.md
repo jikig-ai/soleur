@@ -84,7 +84,7 @@ or a transient failure in the post-apply Management-API NOTIFY.
 
 ```bash
 doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
-doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --help
+bash apps/web-platform/scripts/postgrest-reload-schema.sh --help   # no secrets needed
 ```
 
 The script POSTs `NOTIFY pgrst, 'reload schema'` to the Supabase Management

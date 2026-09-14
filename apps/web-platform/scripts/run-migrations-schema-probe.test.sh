@@ -34,6 +34,12 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 
+# Helper self-test (ADR-193): the PASS+FAIL floor below sees the EXECUTED
+# count, not the routing — a fail() misrouted to PASS keeps it green. Drive
+# both helpers once and require both counters to move, via printf + exit.
+( pass probe >/dev/null; [[ "$PASS" == 1 ]] ) || { printf '[FATAL] pass() does not count\n' >&2; exit 1; }
+( fail probe >/dev/null; [[ "$FAIL" == 1 ]] ) || { printf '[FATAL] fail() does not count\n' >&2; exit 1; }
+
 # Allocate all temp dirs upfront with a single trap so partial-failure
 # in any test still cleans up every dir. Cascading per-test `trap …
 # EXIT` lines (the prior shape) only register the LAST tmpdir mentioned;
@@ -47,18 +53,17 @@ trap 'rm -rf "$tmp1" "$tmp2" "$tmp3"' EXIT
 
 # Plant a stub postgrest-reload-schema.sh beside the relocated runner
 # (#8028). The runner now calls the hook on EVERY run, so a tree without
-# one would exit 127 before any assertion. The stub records that it ran
-# (../hook-ran, i.e. $tmp/hook-ran) and exits FAKE_RELOAD_HOOK_RC.
-# The heredoc MUST stay quoted: an unquoted one would expand
-# `$(dirname "$0")` at plant time into THIS test's directory (touching a
-# file inside the live repo) and freeze the rc default to 0, making the
-# hook-failure cases vacuous.
+# one would exit 127 before any assertion. The stub prints a marker line
+# carrying its argv to stdout (captured in $out by every case — no
+# filesystem side effect) and exits FAKE_RELOAD_HOOK_RC. The heredoc MUST
+# stay quoted: an unquoted one would freeze the rc default to 0 at plant
+# time and make the hook-failure cases vacuous.
 plant_reload_stub() {
   local tmp="$1"
   cat > "$tmp/scripts/postgrest-reload-schema.sh" <<'STUB'
 #!/usr/bin/env bash
 # Stub reload hook for run-migrations-schema-probe.test.sh (#8028).
-touch "$(dirname "$0")/../hook-ran"
+printf 'reload-stub: ran args=[%s]\n' "$*"
 exit "${FAKE_RELOAD_HOOK_RC:-0}"
 STUB
   chmod +x "$tmp/scripts/postgrest-reload-schema.sh"
@@ -272,7 +277,7 @@ fi
 tmpr1=$(mktemp -d); tmpr2=$(mktemp -d); tmpr3=$(mktemp -d); tmpr4=$(mktemp -d)
 trap 'rm -rf "$tmp1" "$tmp2" "$tmp2b" "$tmp3" "$tmpr1" "$tmpr2" "$tmpr3" "$tmpr4"' EXIT
 
-echo "R1: apply + hook rc 0 → runner exit 0, hook ran, no ::error"
+echo "R1: apply + hook rc 0 → runner exit 0, hook ran with --best-effort, no ::error"
 make_temp_tree "$tmpr1" "nonexistent_xyz_4338"
 set +e
 out=$(env -i PATH="$tmpr1/bin:/usr/bin:/bin" HOME="$HOME" \
@@ -283,13 +288,15 @@ out=$(env -i PATH="$tmpr1/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr1/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "0" ]] && [[ -e "$tmpr1/hook-ran" ]] && ! printf '%s' "$out" | grep -q '::error'; then
-  pass "exit 0, hook ran, no ::error"
+# The argv pin is load-bearing: dropping `--best-effort` from the runner's
+# call would red every dev CI run (no token there), and nothing else sees it.
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qF 'reload-stub: ran args=[--best-effort]' && ! printf '%s' "$out" | grep -q '::error'; then
+  pass "exit 0, hook ran with exactly --best-effort, no ::error"
 else
-  fail "expected rc=0 + hook-ran + no ::error; got rc=$rc hook-ran=$([[ -e "$tmpr1/hook-ran" ]] && echo yes || echo no) out=$out"
+  fail "expected rc=0 + 'reload-stub: ran args=[--best-effort]' + no ::error; got rc=$rc out=$out"
 fi
 
-echo "R2: apply + hook rc 2 (rejected credential) → runner exit 2 with titled error"
+echo "R2: apply + hook rc 2 (rejected credential / config) → runner exit 2 with titled error"
 make_temp_tree "$tmpr2" "nonexistent_xyz_4338"
 set +e
 out=$(env -i PATH="$tmpr2/bin:/usr/bin:/bin" HOME="$HOME" \
@@ -300,8 +307,8 @@ out=$(env -i PATH="$tmpr2/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr2/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF '::error title=Supabase rejected the migration credential::'; then
-  pass "exit 2 with the rejected-credential title"
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF '::error title=PostgREST schema reload refused (credential or config, rc=2)::'; then
+  pass "exit 2 with the refused title (credential OR config — the hook line names which)"
 else
   fail "expected rc=2 + titled error; got rc=$rc out=$out"
 fi
@@ -335,10 +342,10 @@ out=$(env -i PATH="$tmpr4/bin:/usr/bin:/bin" HOME="$HOME" \
         bash "$tmpr4/scripts/run-migrations.sh" --bootstrap=skip 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && [[ -e "$tmpr4/hook-ran" ]] && printf '%s' "$out" | grep -q '0 applied'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -qF 'reload-stub: ran' && printf '%s' "$out" | grep -qF 'Migration run complete: 0 applied, 1 skipped.'; then
   pass "hook ran at applied=0 and its rc 2 failed the run"
 else
-  fail "expected rc=2 + hook-ran + '0 applied'; got rc=$rc hook-ran=$([[ -e "$tmpr4/hook-ran" ]] && echo yes || echo no) out=$out"
+  fail "expected rc=2 + stub marker + 'Migration run complete: 0 applied, 1 skipped.'; got rc=$rc out=$out"
 fi
 
 # ------------------------------------------------------------------------
