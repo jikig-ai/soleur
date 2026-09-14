@@ -65,6 +65,9 @@
 # worktree_lease) + the Better Stack git-data heartbeat, NEVER by SSH-eyeballing a
 # host (hr-no-ssh-fallback-in-runbooks). See the runbook.
 set -euo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 log()  { echo "[git-data-cutover] $*"; }
 step() { echo; echo "[git-data-cutover] ===== $* ====="; }
@@ -152,7 +155,7 @@ _access_emit() { # <role> <host> <verdict> [rc]
     echo "::error title=git-data-cutover access::role=$1 verdict=$3${4:+ rc=$4}"
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    printf -- '- `ACCESS %s`\n' "$detail" >> "$GITHUB_STEP_SUMMARY" || true
+    printf -- '- ACCESS %s\n' "$detail" >> "$GITHUB_STEP_SUMMARY" || true
   fi
 }
 _access_stderr() { # <captured-stderr-file>

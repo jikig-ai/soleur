@@ -22,6 +22,8 @@
 # Run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 # Registered as a step in .github/workflows/infra-validation.yml.
 
+# pass() cannot fail, so the runtime rows' `cond && pass || fail` is a true if/else.
+# shellcheck disable=SC2015
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -134,9 +136,9 @@ else fail "S1: canonical dry-run did not stop at git_data_root_key_absent with e
 if [ "$(tl_ssh)" = 2 ] && grep -qE '^ssh .* 10\.0\.1\.10 true$' "$TLF" && grep -qE '^ssh .* -W 10\.0\.1\.20:22 10\.0\.1\.10$' "$TLF" && ! mutating_remote; then
   pass "S1/S12: the timeline holds exactly the web probe and the jump probe — no remote after exit 3, and the EXIT trap added none"
 else fail "S1/S12: timeline is not exactly {web probe, jump probe}" "$(ctx)"; fi
-if [ "$(grep -c 'ACCESS role=' "$T/s1.summary" 2>/dev/null || echo 0)" = 3 ]; then
+if [ "$(grep -c 'ACCESS role=' "$T/s1.summary" 2>/dev/null || true)" = 3 ]; then
   pass "S1: the three verdict lines are appended to \$GITHUB_STEP_SUMMARY"
-else fail "S1: \$GITHUB_STEP_SUMMARY does not carry the three ACCESS verdicts" "$(cat "$T/s1.summary" 2>/dev/null | tr '\n' '|')"; fi
+else fail "S1: \$GITHUB_STEP_SUMMARY does not carry the three ACCESS verdicts" "$(tr '\n' '|' < "$T/s1.summary" 2>/dev/null)"; fi
 # S15 — ok -> ::notice, non-ok -> ::error.
 if grep -qxE '::notice title=git-data-cutover access::role=web verdict=ok' "$OUT" \
    && grep -qxE '::notice title=git-data-cutover access::role=git-data-jump verdict=ok' "$OUT" \
