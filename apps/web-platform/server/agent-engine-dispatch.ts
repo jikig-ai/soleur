@@ -45,6 +45,13 @@ function validateDispatchedEvent(event: EngineEvent, runId: string, lastSequence
   }
 }
 
+function assertPersistedRunId(persisted: object, runId: string): void {
+  const persistedId = (persisted as { id?: unknown }).id;
+  if (persistedId !== undefined && persistedId !== runId) {
+    throw new Error("persisted engine binding does not match run");
+  }
+}
+
 async function* persistAndYieldEvents(
   events: AsyncIterable<EngineEvent>,
   runId: string,
@@ -82,6 +89,7 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
 }): AsyncGenerator<EngineEvent> {
   const persisted = await options.repository.getRun(options.runId);
   if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
+  assertPersistedRunId(persisted, options.runId);
   const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
     (persisted as unknown as EngineRunContext["binding"]);
   if (options.egress) {
@@ -188,6 +196,7 @@ export async function* dispatchBoundEngineRun(
   if (!persisted || typeof persisted !== "object") {
     throw new Error("persisted engine binding not found");
   }
+  assertPersistedRunId(persisted, options.runId);
 
   const context = {
     ...options.context,
@@ -240,6 +249,7 @@ async function loadBoundContext(options: {
 }): Promise<EngineRunContext> {
   const persisted = await options.repository.getRun(options.runId);
   if (!persisted || typeof persisted !== "object") throw new Error("persisted engine binding not found");
+  assertPersistedRunId(persisted, options.runId);
   const context = {
     ...options.context,
     runId: options.runId,

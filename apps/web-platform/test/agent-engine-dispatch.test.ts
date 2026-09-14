@@ -187,6 +187,22 @@ describe("dispatchBoundEngineRun", () => {
     expect(adapter.start).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a run lookup returns a different persisted row", async () => {
+    const adapter = { start: vi.fn() };
+    const repository = {
+      getRun: vi.fn().mockResolvedValue({
+        id: "different-run",
+        binding: { engineId: "claude-code" },
+      }),
+    };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRun({
+        repository, adapter, runId: "run-1", input: { text: "hi", attachmentIds: [] }, context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("persisted engine binding does not match run");
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the persisted engine does not match the selected adapter", async () => {
     const adapter = { start: vi.fn() };
     const repository = { getRun: vi.fn().mockResolvedValue({
