@@ -224,11 +224,15 @@ jobs:
             # lines and drives an AUTOMATED PROD RESTART off failure_mode/failure_detail, so
             # clearing errexit for all of it would disarm far more than the capture. Scope it
             # to the substitution and the read, then re-arm immediately.
+            # Bearer on curl's STDIN (--header @-), never argv; --disable first
+            # (no ~/.curlrc) and --noproxy '*' (no ALL_PROXY redirect) — the same
+            # transport confinement postgrest-reload-schema.sh carries (#8028).
             set +e
-            response="$(curl --silent --show-error \
+            response="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" \
+              | curl --disable --noproxy '*' --silent --show-error \
               --request POST \
               --url "https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query" \
-              --header "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+              --header @- \
               --header "Content-Type: application/json" \
               --data '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' \
               --max-time 15 \

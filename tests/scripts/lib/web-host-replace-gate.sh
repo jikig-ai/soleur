@@ -47,10 +47,10 @@
 #      hcloud_server.web["web-1"].ipv4_address, dns.tf). Omit it and app.soleur.ai resolves
 #      to a destroyed host — a total product outage.
 #
-#   3. all 15 terraform_data.* SSH provisioners in server.tf hardcode
+#   3. all 17 terraform_data.* SSH provisioners in server.tf hardcode
 #      connection.host = hcloud_server.web["web-1"].ipv4_address. `-target` is
 #      upstream-only, so NONE of them is pulled into the plan — including the seccomp and
-#      AppArmor sandbox controls. A replaced web-1 leaves all 15 un-run against a dead IP,
+#      AppArmor sandbox controls. A replaced web-1 leaves all 17 un-run against a dead IP,
 #      and no plan-shaped arm can see them.
 #
 # And the decisive reason, which is NOT a plan property and therefore not something any
@@ -173,7 +173,7 @@ web_host_replace_gate() {
 
   # Refused BEFORE the plan is even read: this is a property of the request, not of the
   # plan, and there is no plan shape that would make it safe. See the header for the
-  # measured topology (LUKS singleton attachment + apex A record + 15 web-1-pinned SSH
+  # measured topology (LUKS singleton attachment + apex A record + 17 web-1-pinned SSH
   # provisioners + the superseded-plaintext mount, which is the decisive one).
   if [[ "$host_key" == "$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" ]]; then
     echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none'; the guest-side unlock path is deferred to #6931). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs #6931 first; see #6964."

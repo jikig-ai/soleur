@@ -162,6 +162,7 @@ advisory-vs-blocking
 aeo
 aeo-score
 after
+after_unknown
 aftereach
 against
 agent
@@ -517,6 +518,7 @@ brand-workshop
 branded-types
 branding
 bre
+breach-register
 breadcrumb
 breadcrumbs
 bridge
@@ -773,6 +775,7 @@ collapses
 collision
 collision-check
 collision-gate
+collision-preflight
 color-scheme
 column-grant
 column-level-security
@@ -870,6 +873,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+consumer-enumeration
 consumer-sweep
 contagious-interview
 container
@@ -1162,6 +1166,7 @@ destructive-tests
 destructive-tools
 detection
 detector-design
+determination
 determinism
 deterministic
 dev-db
@@ -1791,6 +1796,7 @@ health-endpoint
 health-scanner
 health-snapshot
 heartbeat
+heartbeat-subshell
 helper-boundary-transform
 helper-extraction
 helper-migration
@@ -1870,6 +1876,7 @@ importlib
 importoriginal
 imports
 in-band-mint
+in-cell-correction
 in-component-state
 in-filter
 in-flight-feature-refresh
@@ -1984,6 +1991,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index-driver
 kb-layout
 kb-pdf
 kb-reader
@@ -2110,6 +2118,7 @@ log-injection
 logic-error
 logic-errors
 login
+logtail-provider
 loop
 loopback-gate
 loopback-gating
@@ -2187,6 +2196,7 @@ merge-queue
 merge-ref
 merge-semantics
 merge-strategy
+merge-tail
 merge-time-timebomb
 merge-time-verification
 message
@@ -2430,6 +2440,7 @@ operator-precedence
 operator-role
 operator-steps
 operator-truthfulness
+operator-veto
 ops
 ops-directory
 ops-provisioner
@@ -2571,6 +2582,7 @@ phase-e
 phase-ordering
 phase-surface-hint
 phased-rollout
+pid-identity
 pii
 pii-scrubbing
 pil
@@ -2610,6 +2622,7 @@ plan-gate
 plan-gates
 plan-guard-as-prose
 plan-inventory
+plan-json
 plan-literalism
 plan-phase
 plan-phase-2-8 + iac-plan-write-guard.sh + agents.core.md marker
@@ -2856,6 +2869,7 @@ prop-wiring
 propagation
 prose-claims
 prose-conventions
+prose-counts
 prose-guard
 prospect-anchored features
 protecthome
@@ -2986,6 +3000,7 @@ refactoring
 reference-files
 referrer-policy
 refreshsession
+refs-pull-merge
 regex
 regex-concurrency
 regex-fidelity
@@ -3167,6 +3182,7 @@ rule_retirement
 rules-loader
 ruleset
 rulesets
+run-migrations
 run_in_background
 runbook
 runbook-authoring

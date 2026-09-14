@@ -3,7 +3,7 @@ title: "Soleur on Devin CLI: /soleur:go runs the real workflow"
 type: feature-launch
 publish_date: 2026-09-14
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#8083"
 ---
 

@@ -63,7 +63,7 @@ web-1's public IPv4** (`dns.tf`), covered by no Access application. So the servi
 traverse the tunnel or Access at all, and nothing in this decision can reach it. A replace would take production from **stale but serving** to **destroyed and
 unbootable**, with no rollback.
 
-It would not even solve the problem. A fresh host runs 16 SSH-delivered installers, and those run
+It would not even solve the problem. A fresh host runs 17 SSH-delivered installers (16 when this was written; #8097 added one), and those run
 over the same bridge whose credential is dead. The redeploy needs the channel that the redeploy was
 supposed to repair.
 
