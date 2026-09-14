@@ -54,6 +54,11 @@
 /scripts/_agents_md_sections.py                         @deruelle
 /.claude/rule-body-hashes.txt                          @deruelle
 /.claude/rule-weakening-acks.txt                        @deruelle
+# #8030: a migrated rule's body lives at its skill-local home, outside the manifest above;
+# its integrity is the body hash in the migrated registry, checked by the lint below.
+/scripts/migrated-rule-ids.txt                          @deruelle
+/scripts/retired-rule-ids.txt                           @deruelle
+/scripts/lint-migrated-rule-ids.sh                      @deruelle
 
 # PR-B §1.6 — Service-role allowlist gate. Without these pins, an
 # attacker-modeled PR (or a careless agent loop) could add a

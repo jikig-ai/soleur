@@ -87,6 +87,8 @@ Skills use a three-level loading system to manage context efficiently:
 
 ## Skill Creation Process
 
+A new skill, agent, or user-facing capability needs CPO + CMO in its domain assessment (CTO when architectural) — see `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 To create a skill, follow the "Skill Creation Process" in order, skipping steps only if there is a clear reason why they are not applicable.
 
 ### Step 1: Understanding the Skill with Concrete Examples

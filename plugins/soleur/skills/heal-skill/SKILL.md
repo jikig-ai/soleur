@@ -10,6 +10,8 @@ Analyze the conversation to detect which skill is running, reflect on what went 
 </objective>
 
 <context>
+If a fix adds a new user-facing capability, it needs CPO + CMO in its domain assessment (CTO when architectural) — see `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` under `## New-capability leader mandate`.
+
 Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
 </context>
 
