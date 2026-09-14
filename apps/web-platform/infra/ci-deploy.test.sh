@@ -130,28 +130,52 @@ create_mock_systemctl() {
 # quiesce/enable verdict, so a blanket exit-0 mock would mask them. Per-verb fail
 # toggles let a test drive a TOLERATED stop/disable non-zero vs a GENUINE failure.
 verb="$1"
+# #6921/#8077 verb log: EVERY verb (queries included) is appended when MOCK_SYSTEMCTL_LOG is
+# set, so a row can assert ORDER (capture before disable before stop) and ABSENCE (no
+# `restart` on a refused unit). The mock rearm script appends its mode to the SAME log, which
+# is what makes the capture-vs-stop ordering observable at all. A row asserting absence must
+# first assert the log EXISTS — an absent log would satisfy "no restart" vacuously.
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "$verb" >> "$MOCK_SYSTEMCTL_LOG"; fi
+# Stateful mode is OPT-IN (MOCK_SYSTEMCTL_STATEFUL=1): `stop` / `disable` leave markers and the
+# queries read them back. Made default it would flip AC-Q5 (static /health 200 → still_serving)
+# and AC-Q6 (static active → still_serving) to `quiesced`. Markers live beside this mock (a
+# fresh mktemp -d per runner) unless MOCK_STATE_DIR pins them.
+_sdir="${MOCK_STATE_DIR:-$(dirname "$0")}"
+_stateful=0
+if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" ]]; then _stateful=1; fi
 case "$verb" in
   is-active)
     # `is-active [--quiet] <unit>`. Default: inactive (systemd exit 3). A test that
     # needs "unit still ACTIVE despite /health down" (arch P2-3) arms MOCK_SYSTEMCTL_ACTIVE=1.
+    # MOCK_SYSTEMCTL_ACTIVE_STATE prints any other non-active state (e.g. `failed`, the
+    # post-SIGKILL stop shape) with systemd's non-zero exit.
+    if [[ "$_stateful" == "1" && -e "$_sdir/stopped" ]]; then echo inactive; exit 3; fi
     if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]]; then echo active; exit 0; fi
-    echo inactive; exit 3
+    echo "${MOCK_SYSTEMCTL_ACTIVE_STATE:-inactive}"; exit 3
     ;;
   is-enabled)
     # Echo the unit's enabled-state; exit 0 iff enabled (systemd convention).
     # Default "disabled" (a clean quiesced unit). Tests override via
-    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled).
+    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled | enabled-runtime | not-found).
+    # `not-found` exits 4 — systemd >= 253 on an absent unit (prod: systemd 255).
     state="${MOCK_SYSTEMCTL_ENABLED_STATE:-disabled}"
+    if [[ "$_stateful" == "1" && -e "$_sdir/disabled" ]]; then state=disabled; fi
     echo "$state"
-    case "$state" in enabled|enabled-runtime) exit 0 ;; *) exit 1 ;; esac
+    case "$state" in enabled|enabled-runtime) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac
     ;;
   show)
     # `show -p ExecStart …` — no output (the durable-backend branch stays skipped
     # in tests, matching pre-#6178 blanket-mock behavior).
     exit 0
     ;;
-  stop)    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
-  disable) [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  stop)
+    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/stopped"; fi
+    exit 0 ;;
+  disable)
+    [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/disabled"; fi
+    exit 0 ;;
   enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
   start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
 esac
@@ -162,6 +186,33 @@ fi
 exit 0
 MOCK
   chmod +x "$1/systemctl"
+}
+
+# #6921 D1b mock rearm script (INNGEST_REARM_CMD). Appends the MODE it was invoked with to the
+# systemctl verb log — the handler passes INNGEST_REARM_MODE=capture, so a `capture` line proves
+# both that the capture ran and WHEN, relative to the unit verbs. Default: success with 2 ids.
+#   MOCK_REARM_CAPTURE_FAIL=1   exit 1 with stderr text (carries a token-shaped string so a row
+#                               can assert the journald tail is redacted, not raw)
+#   MOCK_REARM_CAPTURE_EMPTY=1  success with captured:0 (an empty capture IS a capture)
+#   MOCK_REARM_CAPTURE_SLEEP=N  block N seconds first (the bounded row). /bin/sleep directly:
+#                               the PATH sleep is create_mock_sleep's no-op.
+create_mock_rearm() {
+  cat > "$1/inngest-rearm-reminders.sh" << 'MOCK'
+#!/bin/bash
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "${INNGEST_REARM_MODE:-<unset>}" >> "$MOCK_SYSTEMCTL_LOG"; fi
+if [[ -n "${MOCK_REARM_CAPTURE_SLEEP:-}" ]]; then /bin/sleep "$MOCK_REARM_CAPTURE_SLEEP"; fi
+if [[ "${MOCK_REARM_CAPTURE_FAIL:-}" == "1" ]]; then
+  echo "ERROR: capture: enumeration failed (mock) auth=dp.st.prd.MOCKLEAKVALUE123" >&2
+  exit 1
+fi
+if [[ "${MOCK_REARM_CAPTURE_EMPTY:-}" == "1" ]]; then
+  echo '{"captured":0,"reminder_ids":[],"capture_file":"/var/lib/inngest/cutover-capture.json"}'
+  exit 0
+fi
+echo '{"captured":2,"reminder_ids":["r1","r2"],"capture_file":"/var/lib/inngest/cutover-capture.json"}'
+exit 0
+MOCK
+  chmod +x "$1/inngest-rearm-reminders.sh"
 }
 
 create_mock_df() {
@@ -677,6 +728,10 @@ case "$URL" in
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
       exit 1
     fi
+    # Stateful systemctl (opt-in): once the mock `stop` has run, the scheduler no longer serves.
+    if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" && -e "${MOCK_STATE_DIR:-$(dirname "$0")}/stopped" ]]; then
+      exit 1
+    fi
     write_body '{"status":200,"message":"OK"}'
     exit 0
     ;;
@@ -861,6 +916,12 @@ create_base_mocks() {
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
+  create_mock_rearm "$mock_dir"
+  # #6921 D1b: the quiesce handler captures an ACTIVE scheduler's reminders through
+  # INNGEST_REARM_CMD before it stops it. Exported by DEFAULT (deepen C4b) — AC-Q6 (unit active)
+  # now reaches the capture, and without this seam it would exec the real
+  # /usr/local/bin/inngest-rearm-reminders.sh and read quiesce_capture_failed.
+  export INNGEST_REARM_CMD="$mock_dir/inngest-rearm-reminders.sh"
   # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
   # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
   # #6665: installed by DEFAULT. MOCK_SLEEP_REAL=1 is the opt-out for a test that genuinely needs
@@ -1057,6 +1118,9 @@ assert_inngest_docker_trace() {
       export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
     fi
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    # #8077 D3: the default mock unit is quiesced (inactive+disabled) and the deploy arm refuses
+    # it before the pull — arm an enabled unit so this row still exercises the pull routing.
+    export MOCK_SYSTEMCTL_ENABLED_STATE=enabled
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -3047,9 +3111,12 @@ echo ""
 echo "--- Restart action ---"
 
 # AC1: restart inngest succeeds with healthy server + registered functions
+# #8077 D3: the default systemctl mock IS the quiesced shape (inactive + disabled), which the
+# restart handler now refuses — every row that expects the restart to RUN arms an enabled unit.
 assert_state_contains "restart inngest succeeds" \
   "success" "0" \
-  "restart inngest _ latest"
+  "restart inngest _ latest" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC2: restart of non-inngest component rejected
 assert_state_contains "restart web-platform rejected" \
@@ -3060,13 +3127,13 @@ assert_state_contains "restart web-platform rejected" \
 assert_state_contains "restart inngest systemctl failure" \
   "inngest_restart_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_SYSTEMCTL_FAIL=1"
+  "export MOCK_SYSTEMCTL_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC5(b): restart with inngest health check failure
 assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # #4650 AC9, reframed #5159: the cron-plan check is now ADVISORY. A server that
 # is /health-healthy but whose cron triggers are de-planned (H9b) no longer FAILS
@@ -3080,7 +3147,91 @@ assert_state_contains "restart inngest health failure" \
 assert_state_contains "restart inngest succeeds when cron plan de-planned (advisory, #5159)" \
   "success" "0" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
+  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# --- #8077 D3: restart / deploy-inngest refuse the QUIESCED unit shape ---------------------
+# run_inngest_row <cmd> [extra_env]: one ci-deploy.sh run whose observation channels live
+# OUTSIDE the runner's self-deleting MOCK_DIR. Sets ROW_DIR (caller removes it), ROW_RC, ROW_OUT,
+# ROW_REASON, ROW_EXIT, ROW_UNITV (the verb log filtered to capture + unit-state verbs,
+# comma-joined, in order). $ROW_DIR/verbs is the full log; $ROW_DIR/logger the journald capture.
+run_inngest_row() {
+  local cmd="$1" extra_env="${2:-}"
+  ROW_DIR=$(mktemp -d)
+  ROW_OUT=$(
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$ROW_DIR/state" MOCK_SYSTEMCTL_LOG="$ROW_DIR/verbs" MOCK_LOGGER_CAPTURE_FILE="$ROW_DIR/logger"
+    run_deploy_traced "$cmd" 2>&1
+  ) && ROW_RC=0 || ROW_RC=$?
+  ROW_REASON=""; ROW_EXIT=""
+  if [[ -f "$ROW_DIR/state" ]]; then read_state_reason_and_exit "$ROW_DIR/state" ROW_REASON ROW_EXIT; fi
+  ROW_UNITV=""
+  if [[ -f "$ROW_DIR/verbs" ]]; then
+    ROW_UNITV=$(grep -xE 'capture|disable|stop|start|restart|enable' "$ROW_DIR/verbs" | paste -sd, - || true)
+  fi
+}
+# row_verdict <description> <ok 0|1> <detail>
+row_verdict() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 — $3"
+    echo "        output: $(printf '%s' "$ROW_OUT" | tail -5)"
+  fi
+  rm -rf "$ROW_DIR"
+}
+
+# Guard 2 #1/#4/#5: the refused row asserts the verb log EXISTS (the handler's own is-active
+# query wrote it) before asserting it carries no `restart` — an absent log would pass vacuously.
+run_inngest_row "restart inngest _ latest"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 \
+      && -s "$ROW_DIR/verbs" ]] && grep -qx 'is-active' "$ROW_DIR/verbs" \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: unit inactive+disabled (quiesced)' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a quiesced unit (inactive+disabled) → inngest_quiesced_restart_refused, no restart verb" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC verbs=$(paste -sd, "$ROW_DIR/verbs" 2>/dev/null || echo '<no log>')"
+
+# Guard 2 #9 (deepen C1): a stop that ended in SIGKILL leaves failed+disabled — still quiesced.
+run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ACTIVE_STATE=failed"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && -s "$ROW_DIR/verbs" ]] \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs"; then ok=1; fi
+row_verdict "restart refuses a failed+disabled unit (the post-SIGKILL quiesce shape)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Guard 2 #3: inactive but ENABLED is a crashed unit — exactly what restart is for.
+run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart proceeds on an inactive-but-ENABLED unit → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #2: ACTIVE + disabled is not the quiesced shape.
+run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ACTIVE=1"
+ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart proceeds on an ACTIVE disabled unit → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #10: an absent unit (`not-found`, rc 4 on systemd >= 253) is never read as quiesced.
+run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ENABLED_STATE=not-found"
+ok=0; if [[ "$ROW_REASON" != "inngest_quiesced_restart_refused" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart on is-enabled=not-found (rc 4) is not quiesced — proceeds to its own restart verb" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #8: enabled-runtime + inactive → proceeds.
+run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled-runtime"
+ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart proceeds on is-enabled=enabled-runtime + inactive → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #6 / FR14: `deploy inngest` with the quiesced shape refuses BEFORE the pull — the
+# bootstrap it would run enables and restarts the unit. The logger marker is the positive
+# control that the run reached the inngest arm (a validation exit would also show no pull).
+run_inngest_row "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.0.0"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_deploy_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+      && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:pull' \
+      && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:create' \
+      && grep -qF 'INNGEST_DEPLOY_REFUSED' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "deploy inngest _ <tag> refuses a quiesced unit → inngest_quiesced_deploy_refused, no DOCKER_TRACE:pull" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
 
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
 # (the restart action already does — see the four restart tests above; the
@@ -3166,6 +3317,51 @@ assert_state_contains "quiesce fails closed when /health is down but the unit is
 assert_state_contains "quiesce web-platform rejected (component_not_quiescible)" \
   "component_not_quiescible" "1" \
   "quiesce web-platform _ _"
+
+# --- #6921 D1b / Guard 5: quiesce captures an ACTIVE scheduler's reminders BEFORE it stops it ---
+# Stateful mock (stop → is-active inactive + /health down) so the post-stop verify reads the
+# stop it just issued rather than a static fixture. HEALTH_FAIL is also armed (deepen C4a).
+QC_ENV="export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+
+# Guard 5 #1/#4: order capture → disable → stop. The `capture` line is written by the mock rearm
+# on INNGEST_REARM_CMD, so its presence also proves the handler used the seam.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_ACTIVE=1"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce captures BEFORE disable+stop when the unit is active (capture,disable,stop → quiesced)" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Guard 5 #2/#5c: a failed capture stops NOTHING, and its cause reaches journald — redacted.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_ACTIVE=1 MOCK_REARM_CAPTURE_FAIL=1"
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && "$ROW_UNITV" == "capture" ]] \
+      && grep -qE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=1 stderr_tail=.*enumeration failed' "$ROW_DIR/logger" 2>/dev/null \
+      && ! grep -qF 'MOCKLEAKVALUE123' "$ROW_DIR/logger"; then ok=1; fi
+row_verdict "quiesce fails closed when the capture fails (quiesce_capture_failed) and stops NOTHING" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+
+# Guard 5 #3: a unit that is not active is not captured (a stopped scheduler cannot be enumerated;
+# a re-dispatch must not fail on it). The log must exist so "no capture" is not vacuous.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV"
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && -s "$ROW_DIR/verbs" && "$ROW_UNITV" == "disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce skips the capture when the unit is not active (disable,stop → quiesced)" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 5 #5b: the capture is bounded. The mock blocks 8 s against a 1 s bound; asserted as
+# non-zero (not exactly 124 — dev boxes may carry uutils timeout) and nothing stopped.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_ACTIVE=1 MOCK_REARM_CAPTURE_SLEEP=8 QUIESCE_CAPTURE_TIMEOUT=1"
+QC_RC=$(grep -oE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=[0-9]+' "$ROW_DIR/logger" 2>/dev/null | head -1 | grep -oE '[0-9]+$' || true)
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture" \
+      && "$QC_RC" =~ ^[0-9]+$ && "$QC_RC" -ne 0 ]]; then ok=1; fi
+row_verdict "quiesce capture is bounded (QUIESCE_CAPTURE_TIMEOUT) → quiesce_capture_failed, nothing stopped" "$ok" \
+  "reason=$ROW_REASON capture_rc=${QC_RC:-<none>} unit_verbs=$ROW_UNITV"
+
+# Guard 5 #7: an empty capture (captured:0) is a capture — quiesce proceeds.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_ACTIVE=1 MOCK_REARM_CAPTURE_EMPTY=1"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce proceeds on an empty capture (captured:0)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+unset QC_ENV QC_RC
 
 # AC-E1: enable inngest = enable + start + verify-serving-and-enabled → enabled, exit 0.
 # Default mock: /health 200 (serving); is-enabled=enabled (re-enable confirmed).
@@ -3613,18 +3809,25 @@ QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" 
 QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
+# #6921 D1b: the quiesce handler now runs a bounded capture BEFORE its stop, on the same
+# deploy-status clock. Extracted by shape from the ONE `timeout --kill-after=K "${QUIESCE_CAPTURE_TIMEOUT:-N}"`
+# invocation: N is the bound, K the SIGKILL grace timeout adds after it (both are wall clock the
+# poll must cover). The `:-N` shape must occur exactly once in ci-deploy.sh (comments included).
+QDG_CAPTURE=$(grep -oE 'QUIESCE_CAPTURE_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | head -1 | grep -oE '[0-9]+$' || true)
+QDG_CAPTURE_COUNT=$(grep -cE 'QUIESCE_CAPTURE_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" || true)
+QDG_KILL_AFTER=$(grep -E 'QUIESCE_CAPTURE_TIMEOUT:-[0-9]+' "$DEPLOY_SCRIPT" | grep -oE 'timeout --kill-after=[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)
 QDG_OK=1
 QDG_WHY=""
-for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
+for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL" "capture:$QDG_CAPTURE" "kill_after:$QDG_KILL_AFTER"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
 done
-for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT" "capture:$QDG_CAPTURE_COUNT"; do
   if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
 done
 QDG_LEFT=""; QDG_RIGHT=""
 if [[ "$QDG_OK" -eq 1 ]]; then
   QDG_LEFT=$((QDG_MAX_POLLS * QDG_POLL_INTERVAL))
-  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + 60))
+  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + QDG_CAPTURE + QDG_KILL_AFTER + 60))
   if [[ "$QDG_LEFT" -lt "$QDG_RIGHT" ]]; then QDG_OK=0; QDG_WHY="quiesce-web poll window ${QDG_LEFT}s < host worst case ${QDG_RIGHT}s"; fi
 fi
 if [[ "$QDG_OK" -eq 1 ]]; then
@@ -3632,7 +3835,76 @@ if [[ "$QDG_OK" -eq 1 ]]; then
   echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP capture=$QDG_CAPTURE kill_after=$QDG_KILL_AFTER QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
+fi
+
+# #8077 Guard 2 #6c — every START writer of inngest-server on the web host is gated or named.
+# The assembly is enumerated, not remembered: git grep for the verbs that start the unit, drop
+# comment lines, sudoers grants (`Cmnd_Alias` — a permission, not a writer), tests and docs.
+# Each surviving hit must either carry the quiesced predicate in its preceding window
+# (`inngest_unit_quiesced`, or an inline `= disabled` / `== disabled` test — the two separate
+# scripts carry the predicate inline, and the workspaces dead-man `sh -c` string carries it on
+# the same line) or match an entry of the NAMED allowlist below (file + a regex the hit's
+# window must contain). The window is 30 preceding lines, not 15: inngest-wiped-volume-verify.sh
+# gates once, before its throwaway-marker arm, and its stop/wipe/start sit ~20 lines below.
+QS_WINDOW=30
+QS_ALLOW=(
+  # the deliberate re-arm (op=rollback) — the ONE start path allowed on a quiesced unit
+  'apps/web-platform/infra/ci-deploy.sh|"\$ACTION" == "enable"'
+  # reached only through the gated `deploy inngest` arm, or first boot
+  'apps/web-platform/infra/inngest-bootstrap.sh|systemctl restart inngest-server\.service'
+  # first-boot runcmd: the unit is born enabled, no quiesced shape can pre-exist
+  'apps/web-platform/infra/cloud-init.yml|^[[:space:]]*-[[:space:]]'
+  # the dedicated host — out of scope (no web scheduler to quiesce)
+  'apps/web-platform/infra/cloud-init-inngest.yml|.'
+)
+QS_REPO="$SCRIPT_DIR/../../.."
+QS_HITS_RC=0
+QS_HITS=$(git -C "$QS_REPO" grep -nE 'systemctl (restart|start) inngest-server' -- 'apps/web-platform/infra/' 2>/dev/null) || QS_HITS_RC=$?
+QS_BAD=""; QS_CHECKED=0
+if [[ "$QS_HITS_RC" -eq 0 ]]; then
+  while IFS= read -r qs_hit; do
+    qs_file="${qs_hit%%:*}"; qs_rest="${qs_hit#*:}"; qs_line="${qs_rest%%:*}"; qs_text="${qs_rest#*:}"
+    case "$qs_file" in *.test.sh|*.md) continue ;; esac
+    if [[ "$qs_text" =~ ^[[:space:]]*# ]]; then continue; fi
+    if [[ "$qs_text" == *Cmnd_Alias* ]]; then continue; fi
+    # `inngest-server-probe.service` etc. share the prefix — only the unit itself is a writer.
+    if ! [[ "$qs_text" =~ systemctl\ (restart|start)\ inngest-server(\.service)?([^-A-Za-z0-9_]|$) ]]; then continue; fi
+    QS_CHECKED=$((QS_CHECKED + 1))
+    qs_from=$(( qs_line > QS_WINDOW ? qs_line - QS_WINDOW : 1 ))
+    qs_win=$(sed -n "${qs_from},${qs_line}p" "$QS_REPO/$qs_file" | grep -vE '^[[:space:]]*#' || true)
+    if printf '%s\n' "$qs_win" | grep -qE 'inngest_unit_quiesced|unit_quiesced|[[:space:]]!?==?[[:space:]]*\\?"?disabled\b'; then continue; fi
+    qs_allowed=0
+    for qs_entry in "${QS_ALLOW[@]}"; do
+      if [[ "$qs_file" == "${qs_entry%%|*}" ]] && printf '%s\n' "$qs_win" | grep -qE -- "${qs_entry#*|}"; then qs_allowed=1; break; fi
+    done
+    if [[ "$qs_allowed" -eq 0 ]]; then QS_BAD="${QS_BAD} ${qs_file}:${qs_line}"; fi
+  done <<< "$QS_HITS"
+fi
+TOTAL=$((TOTAL + 1))
+# Non-vacuity floor: today's assembly has at least ci-deploy restart + enable + bootstrap restart.
+if [[ "$QS_HITS_RC" -eq 0 && "$QS_CHECKED" -ge 3 && -z "$QS_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: every inngest-server start writer ($QS_CHECKED checked) carries the quiesced predicate or is named in the allowlist (Guard 2 #6c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: Guard 2 #6c start-writer assembly (git grep rc=$QS_HITS_RC checked=$QS_CHECKED, need >= 3) — ungated, un-allowlisted:${QS_BAD:- <none>}"
+fi
+
+# #8077 task 3.5 — cross-file parity of the quiesced predicate. The three delivered scripts each
+# define it (no shared lib); each definition, comment-stripped, must test all three literals:
+# inactive + failed (deepen C1: a SIGKILLed stop is `failed`) and disabled (the discriminator).
+TOTAL=$((TOTAL + 1))
+QP_BAD=""
+for qp_f in ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh; do
+  qp_body=$(awk '/^[[:space:]]*(inngest_)?unit_quiesced\(\)/{f=1} f{print} f&&/^[[:space:]]*}[[:space:]]*$/{exit}' "$SCRIPT_DIR/$qp_f" | grep -vE '^[[:space:]]*#' || true)
+  if [[ -z "$qp_body" ]]; then QP_BAD="${QP_BAD} ${qp_f}:no-(inngest_)unit_quiesced()-definition"; continue; fi
+  for qp_lit in inactive failed disabled; do
+    if ! printf '%s\n' "$qp_body" | grep -qw -- "$qp_lit"; then QP_BAD="${QP_BAD} ${qp_f}:missing-${qp_lit}"; fi
+  done
+done
+if [[ -z "$QP_BAD" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: quiesced predicate parity — ci-deploy.sh, inngest-inventory.sh, inngest-rearm-reminders.sh each test inactive|failed + disabled"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: quiesced predicate parity (task 3.5):${QP_BAD}"
 fi
 
 echo ""
@@ -4197,6 +4469,7 @@ export MOCK_RUNNING_IMAGE_ID="sha256:6512ccccccccccccccccccccccccccccccccccccccc
 export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version tag present, so ONLY the web guard gates the tier out
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/c2.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/c2.state"
+export MOCK_SYSTEMCTL_ENABLED_STATE=enabled   # #8077 D3: not quiesced, so the arm reaches the pull
 run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v9.9.9" >/dev/null 2>&1 || true
 read_state_reason_and_exit "$CI_DEPLOY_STATE" C2_REASON C2_EXIT
 TOTAL=$((TOTAL + 1))
@@ -4206,7 +4479,7 @@ if [[ "$C2_REASON" == "image_pull_failed" ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) reason=$C2_REASON — expected image_pull_failed (reached the pull) + no local-cache event; a non-image_pull_failed reason means the run exited early and the assertion is vacuous"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE MOCK_SYSTEMCTL_ENABLED_STATE
 rm -rf "$T6512"
 
 # (d) zot SERVES the image → the pull succeeds; the local-cache tier is never reached even

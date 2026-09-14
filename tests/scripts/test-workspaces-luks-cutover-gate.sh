@@ -274,6 +274,117 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ── #6921/#8077: workspaces-cutover.sh never STARTS a quiesced inngest-server ────────
+#
+# op=quiesce-web leaves inngest-server.service stopped + DISABLED (the cutover's quiesce signal;
+# only op=rollback's `enable` clears it). A `systemctl start` runs a disabled unit, so every start
+# writer on the web host other than `enable` must refuse that shape. workspaces-cutover.sh has
+# TWO: resume_writers' reconcile (attended) and the dead-man `systemd-run … /bin/sh -c` string's
+# remount-success arm (UNATTENDED — the path nobody watches). Both are pinned structurally over
+# COMMENT-STRIPPED text AND executed: the dead-man string is rendered by the real arm_dead_man and
+# run under `sh` against PATH stubs, because it is a string passed to `sh -c` and a quoting slip in
+# the escaped guard would be invisible to a grep yet break the unattended restore.
+CUTOVER="${DIR}/../../apps/web-platform/infra/workspaces-cutover.sh"
+Q_TMP="$TMP/quiesce"; mkdir -p "$Q_TMP/state" "$Q_TMP/mnt" "$Q_TMP/stg" "$Q_TMP/bin"
+
+# Q1 — resume_writers: the reconcile start is preceded by the is-enabled == disabled guard, and the
+# skip is logged with the contract marker on the luks tag.
+awk '/^resume_writers\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$CUTOVER" | grep -v '^[[:space:]]*#' > "$Q_TMP/rw.sh" || true
+q_rw_n=$(wc -l < "$Q_TMP/rw.sh" | tr -d '[:space:]')
+if [ "$q_rw_n" -gt 20 ]; then pass; else fail "Q1a: resume_writers body not extracted (got $q_rw_n lines) — every Q1 row below would be vacuous"; fi
+q_start_ln=$(grep -nF 'systemctl start inngest-server.service' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+q_guard_ln=$(grep -nE '"\$\(systemctl is-enabled inngest-server\.service 2>/dev/null( \|\| true)?\)" = disabled' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+q_skip_ln=$(grep -nF 'logger -t "$LUKS_LOG_TAG" -- "SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced"' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+if [ -n "$q_start_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_start_ln" ]; then pass
+else fail "Q1b: resume_writers' inngest-server start (line ${q_start_ln:-none}) is not preceded by the is-enabled = disabled guard (line ${q_guard_ln:-none})"; fi
+if [ -n "$q_skip_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_skip_ln" ]; then pass
+else fail "Q1c: the quiesced skip is not logged as 'SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced' on \$LUKS_LOG_TAG after the guard"; fi
+
+# Q2 — resume_writers EXECUTED (sourced; guard => functions only) with a stub systemctl.
+q_resume() {  # $1 = is-enabled answer -> call log at $Q_TMP/rw-$1.log
+  : > "$Q_TMP/rw-$1.log"
+  (
+    export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+    # shellcheck source=/dev/null
+    source "$CUTOVER" >/dev/null 2>&1
+    Q_LOG="$Q_TMP/rw-$1.log"; Q_EN="$1"
+    mountpoint() { return 0; }
+    systemctl() {
+      printf 'systemctl %s\n' "$*" >> "$Q_LOG"
+      case "${1:-}" in
+        is-active) return 3 ;;
+        is-enabled) printf '%s\n' "$Q_EN"; [ "$Q_EN" = enabled ] && return 0; return 1 ;;
+      esac
+      return 0
+    }
+    logger() { printf 'logger %s\n' "$*" >> "$Q_LOG"; }
+    emit_drift() { :; }; log() { :; }
+    resume_writers
+  ) >/dev/null 2>&1
+}
+q_resume disabled
+if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/rw-disabled.log" \
+   && ! grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-disabled.log" \
+   && grep -qF 'SOLEUR_WORKSPACES_LUKS inngest_start_skipped reason=quiesced' "$Q_TMP/rw-disabled.log"; then pass
+else fail "Q2a: resume_writers on a DISABLED inactive inngest-server must query is-enabled, log the skip, and never start it"; fi
+if grep -qF 'systemctl start webhook.service' "$Q_TMP/rw-disabled.log"; then pass
+else fail "Q2b: the quiesced skip must not suppress the rest of resume_writers (webhook.service not restarted)"; fi
+q_resume enabled
+if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-enabled.log" \
+   && ! grep -qF 'inngest_start_skipped' "$Q_TMP/rw-enabled.log"; then pass
+else fail "Q2c: an inactive but ENABLED inngest-server must still be reconciled (started)"; fi
+
+# Q3 — the dead-man string (source, comment-stripped): its only inngest-server start is guarded inline.
+q_dm_src=$(grep -v '^[[:space:]]*#' "$CUTOVER" | grep -F '/bin/sh -c "' | grep -F 'SOLEUR_WORKSPACES_LUKS_DEADMAN' || true)
+q_dm_starts=$(printf '%s' "$q_dm_src" | grep -oF 'systemctl start inngest-server.service' | wc -l | tr -d '[:space:]')
+q_dm_guarded=$(printf '%s' "$q_dm_src" | grep -oF '[ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service' | wc -l | tr -d '[:space:]')
+if [ -n "$q_dm_src" ] && [ "$q_dm_starts" -ge 1 ] && [ "$q_dm_starts" -eq "$q_dm_guarded" ]; then pass
+else fail "Q3: the dead-man sh -c string starts inngest-server unguarded (starts=$q_dm_starts guarded=$q_dm_guarded) — the unattended path would re-arm a quiesced scheduler"; fi
+
+# Q4 — the dead-man string RENDERED by the real arm_dead_man, parsed and EXECUTED under sh.
+(
+  export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+  # shellcheck source=/dev/null
+  source "$CUTOVER" >/dev/null 2>&1
+  DRY_RUN=0
+  systemd-run() { local a; for a in "$@"; do printf '%s\0' "$a"; done > "$Q_TMP/dm.args"; }
+  logger() { :; }
+  arm_dead_man
+) >/dev/null 2>&1
+q_dm_cmd=""; q_next=0
+if [ -f "$Q_TMP/dm.args" ]; then
+  while IFS= read -r -d '' q_a; do
+    if [ "$q_next" = 1 ]; then q_dm_cmd="$q_a"; break; fi
+    [ "$q_a" = "-c" ] && q_next=1
+  done < "$Q_TMP/dm.args"
+fi
+case "$q_dm_cmd" in
+  *'systemctl start inngest-server.service'*) pass ;;
+  *) fail "Q4a: arm_dead_man rendered no sh -c string carrying the inngest-server start (got ${#q_dm_cmd} bytes) — Q4 rows would be vacuous" ;;
+esac
+if sh -n -c "$q_dm_cmd" 2>/dev/null; then pass; else fail "Q4b: the rendered dead-man string does not parse under sh -n (quoting broke the unattended restore)"; fi
+for q_b in logger docker umount cryptsetup mount; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/dm-exec.log"\nexit 0\n' "$q_b" "$Q_TMP" > "$Q_TMP/bin/$q_b"
+done
+cat > "$Q_TMP/bin/systemctl" <<STUB
+#!/bin/sh
+printf 'systemctl %s\n' "\$*" >> "$Q_TMP/dm-exec.log"
+if [ "\$1" = is-enabled ]; then printf '%s\n' "\$Q_EN"; [ "\$Q_EN" = enabled ] && exit 0; exit 1; fi
+exit 0
+STUB
+chmod +x "$Q_TMP/bin/"*
+: > "$Q_TMP/dm-exec.log"
+Q_EN=disabled PATH="$Q_TMP/bin:$PATH" sh -c "$q_dm_cmd" >/dev/null 2>&1 || true
+if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && ! grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && grep -qF 'systemctl start webhook.service' "$Q_TMP/dm-exec.log" \
+   && grep -qF 'result=ok reason=plaintext_remounted' "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4c: executed dead-man with a DISABLED inngest-server must skip only its start (and still restore webhook + log result=ok)"; fi
+: > "$Q_TMP/dm-exec.log"
+Q_EN=enabled PATH="$Q_TMP/bin:$PATH" sh -c "$q_dm_cmd" >/dev/null 2>&1 || true
+if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4d: executed dead-man with an ENABLED inngest-server must still start it"; fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting

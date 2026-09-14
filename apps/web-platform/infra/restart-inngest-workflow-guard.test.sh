@@ -70,13 +70,32 @@ assert "EVERY job is gated on workflow_dispatch (never fires on the registration
 assert "the job set is exactly {restart} (a new job must be added to the guard deliberately)" \
   "[[ \$(probe jobs_exact) == 'yes' ]]"
 
+# #6921/#8077 — the two inngest pollers name a quiesced refusal legibly. ci-deploy.sh's `restart`
+# handler and `deploy inngest` arm refuse a unit op=quiesce-web stopped+disabled, writing
+# inngest_quiesced_restart_refused / inngest_quiesced_deploy_refused. Without an arm the operator
+# reads a generic "Restart failed" or a misleading "likely inngest-redis-bootstrap" and retries the
+# very refusal. Anchored on the case-arm SHAPE (the `case "$REASON" in` opener immediately followed
+# by the glob arm and its exact ::error:: text) over COMMENT-STRIPPED text, so prose mentioning the
+# reason cannot satisfy it.
+DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-inngest-image.yml"
+quiesced_arm_present() {  # $1 = workflow file → "yes" iff the arm follows a `case "$REASON" in` opener
+  grep -v '^[[:space:]]*#' "$1" | awk '
+    /^[[:space:]]*case "\$REASON" in[[:space:]]*$/ { opener = NR; next }
+    opener && NR == opener + 1 && index($0, "inngest_quiesced_*_refused) echo \"::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it\" ;;") { found = 1 }
+    END { print (found ? "yes" : "no") }'
+}
+assert "#8077 restart-inngest-server.yml terminal_fail names an inngest_quiesced_*_refused reason (case arm)" \
+  "[[ \$(quiesced_arm_present '$WF') == 'yes' ]]"
+assert "#8077 deploy-inngest-image.yml failure print names an inngest_quiesced_*_refused reason (case arm)" \
+  "[[ \$(quiesced_arm_present '$DEPLOY_WF') == 'yes' ]]"
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
 
 # ANTI-VACUITY FLOOR — see the sibling note in registry-zot-inventory-workflow-guard.test.sh.
 # Measured: removing all 6 assert calls left this file reporting "0/0 passed" and exiting 0.
 # A FLOOR, never an equality. Raise in lockstep when assertions are added.
-MIN_ASSERTIONS=6
+MIN_ASSERTIONS=8
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
   echo "      Treat this as UN-RUN, not as a pass."

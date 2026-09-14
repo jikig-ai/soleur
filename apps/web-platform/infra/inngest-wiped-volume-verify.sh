@@ -14,7 +14,7 @@
 # /hooks/inngest-wiped-volume-verify POST hook, async 202 + the
 # /hooks/inngest-verify-status responder).
 #
-# SAFETY GATES (in order; either failing aborts BEFORE any destructive action):
+# SAFETY GATES (in order; any failing aborts BEFORE any destructive action):
 #   1. Emptiness gate (B1 — the REAL safety gate): run the enumeration; if ANY
 #      non-throwaway armed reminder is present, ABORT LOUD. A wipe with a real
 #      armed reminder present could destroy the operator's pending action. This
@@ -24,6 +24,8 @@
 #      non-secret --postgres-max-open-conns durable sentinel (#5560 — postgres/redis
 #      URIs are env-delivered now, never argv). A wipe of a SQLite-only backend
 #      destroys real state. This is a belt-and-suspenders assert, not the primary gate.
+#   3. Not quiesced (#6921/#8077): a unit stopped+disabled by op=quiesce-web is refused
+#      (reason quiesced_refused) — this script's `start` would re-arm the stopped scheduler.
 #
 # THROWAWAY MARKER (P2-sec-b): an UNREGISTERED `named-check` (check name
 # `__cutover-verify-noop__`). The handler accepts it (route validates only that
@@ -215,6 +217,20 @@ fi
 # ---- Gate 2: durable-backend sanity (secondary) ------------------------------
 execstart="${INNGEST_VERIFY_EXECSTART:-$(systemctl show inngest-server.service -p ExecStart 2>/dev/null || true)}"
 [[ "$execstart" == *"--postgres-max-open-conns"* ]] || abort "non_durable_backend" "inngest ExecStart has no --postgres-max-open-conns durable sentinel (SQLite-only) — a wipe would destroy real state"
+
+# ---- Gate 3: the web scheduler is not QUIESCED (#6921/#8077) ------------------
+# op=quiesce-web leaves inngest-server.service `is-active ∈ {inactive, failed}` AND `is-enabled ==
+# disabled` — the shape ONLY its `quiesce` handler writes and only op=rollback's `enable` clears
+# (`failed` = a stop that ended in SIGKILL at TimeoutStopSec). The `start` below would re-arm the
+# scheduler the cutover deliberately stopped (a start runs a disabled unit), so refuse BEFORE
+# arming the marker or touching the unit. Read-only queries, no sudo; stdout is the verdict, the
+# non-zero rc (is-active 3, is-enabled 1) is tolerated. Same two-state predicate as ci-deploy.sh
+# inngest_unit_quiesced() and inngest-inventory.sh unit_quiesced() (separate scripts, no shared lib).
+unit_active="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+unit_enabled="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+if [[ ( "$unit_active" == inactive || "$unit_active" == failed ) && "$unit_enabled" == disabled ]]; then
+  abort "quiesced_refused" "inngest-server.service is quiesced (unit=$unit_active enabled=disabled — op=quiesce-web); refusing to stop/wipe/start a deliberately stopped scheduler — only op=rollback re-arms it"
+fi
 
 # ---- Arm the throwaway marker (unregistered named-check → no comment) --------
 SECRET="$(read_secret)"

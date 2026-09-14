@@ -146,7 +146,12 @@ jobs:
                 exit 0
                 ;;
               terminal_fail)
-                echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)"
+                # #6921/#8077: ci-deploy.sh refuses to restart a unit op=quiesce-web stopped+disabled
+                # (a restart STARTS a disabled unit). Name it — retrying cannot succeed.
+                case "$REASON" in
+                  inngest_quiesced_*_refused) echo "::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it" ;;
+                  *) echo "::error::Restart failed (exit_code=$EXIT_CODE, reason=$REASON)" ;;
+                esac
                 echo "$BODY" | jq .
                 exit 1
                 ;;

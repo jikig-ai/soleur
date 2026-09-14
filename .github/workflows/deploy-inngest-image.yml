@@ -117,7 +117,12 @@ jobs:
               -3) echo "Attempt $i/$MAX_POLLS: corrupt state read, retrying" ;;
               *)
                 if [ "$COMPONENT" = "inngest" ] && [ "$START_TS" -ge "$FRESH_FLOOR" ]; then
-                  echo "::error::Inngest deploy ${TAG} FAILED (exit_code=$EXIT_CODE, reason=$REASON) — likely inngest-redis-bootstrap or verify_inngest_health"
+                  # #6921/#8077: the bootstrap arm refuses a unit op=quiesce-web stopped+disabled
+                  # (inngest-bootstrap.sh enables then restarts it) — not a bootstrap/health fault.
+                  case "$REASON" in
+                    inngest_quiesced_*_refused) echo "::error::the web inngest unit is quiesced by op=quiesce-web — deliberate; only op=rollback re-arms it" ;;
+                    *) echo "::error::Inngest deploy ${TAG} FAILED (exit_code=$EXIT_CODE, reason=$REASON) — likely inngest-redis-bootstrap or verify_inngest_health" ;;
+                  esac
                   echo "$BODY" | jq .; exit 1
                 fi
                 echo "Attempt $i/$MAX_POLLS: stale non-zero state predates this trigger — waiting"

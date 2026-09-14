@@ -2410,6 +2410,22 @@ inngest_unit_enabled() {
   esac
 }
 
+# Single-source "is the unit in the QUIESCED shape op=quiesce-web writes?" (#8077): is-active ∈
+# {inactive, failed} AND is-enabled == disabled. Only the `quiesce` handler writes it (stop +
+# disable) and only `enable` (op=rollback) clears it; the `restart` handler and the `deploy
+# inngest` arm refuse it, because a restart STARTS a disabled unit. `failed` counts: a stop that
+# ends in SIGKILL at TimeoutStopSec leaves failed+disabled, while a crashed ENABLED unit cycles
+# `activating` — `disabled` is the discriminator. STRICTER than verify_inngest_quiesced's
+# not-enabled test (static/masked/empty are benign THERE): here only the exact shape quiesce
+# writes counts, so an absent unit (`not-found`, rc 4) or a no-[Install] unit is never refused.
+# `|| true` is load-bearing: is-active exits 3 on inactive/failed, is-enabled 1 on disabled.
+inngest_unit_quiesced() {
+  local a e
+  a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  [[ ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ]]
+}
+
 # Verify inngest-server is QUIESCED (#6178, op=quiesce-web). The goal state is
 # NOT-serving AND NOT-enabled — verifying only not-serving is a proxy that defeats the
 # disable's purpose (data-integrity P1-A): a disable-failure on a unit WITH an [Install]
@@ -2652,6 +2668,14 @@ write_state "$EXIT_RUNNING" "running"
 # --- Restart action handler (#4538) ---
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
+  # #8077: a quiesced unit (op=quiesce-web's stop+disable) is deliberate — the watchdog's restart
+  # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb.
+  if inngest_unit_quiesced; then
+    logger -t "$LOG_TAG" "INNGEST_RESTART_REFUSED: unit inactive+disabled (quiesced) — only op=rollback re-arms"
+    echo "Error: inngest-server.service is quiesced (inactive+disabled); only op=rollback re-arms it" >&2
+    final_write_state 1 "inngest_quiesced_restart_refused"
+    exit 1
+  fi
   echo "Restarting inngest-server.service..."
   if ! sudo /usr/bin/systemctl restart inngest-server.service; then
     logger -t "$LOG_TAG" "FAILED: systemctl restart inngest-server.service"
@@ -2682,12 +2706,43 @@ fi
 # an hr-observability-as-plan-quality-gate regression). Mirrors the restart handler's
 # set +e/-e-around-verify pattern verbatim.
 if [[ "$ACTION" == "quiesce" ]]; then
-  echo "Quiescing inngest-server.service (stop + disable)..."
-  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
-    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
+  # #6921 D1b: capture the still-armed reminders BEFORE the scheduler stops, so the persisted
+  # capture a later op=execute resumes from is taken at the quiesce boundary. Only an ACTIVE unit
+  # is captured (a stopped scheduler cannot be enumerated — a re-dispatch after a transient peer
+  # failure, a failed/activating unit, or a host with no unit skips it and keeps the existing file).
+  # Fail-closed: stopping a scheduler whose reminders were not captured is the loss this prevents,
+  # so a failed or timed-out capture stops NOTHING. The escape hatch for an active-but-GQL-dead
+  # unit is a restart, then re-dispatch op=quiesce-web.
+  # Bounded: `timeout` (no --foreground, so it signals its own process group and the capture's
+  # curl dies with it) plus a SIGKILL grace; the drift guard in ci-deploy.test.sh adds both to the
+  # op=quiesce-web poll window. `200>&-` (#5062) so an orphaned child cannot hold the deploy flock.
+  if [[ "$(systemctl is-active inngest-server.service 2>/dev/null || true)" == active ]]; then
+    echo "Capturing armed reminders before quiesce..."
+    cap_err="$(mktemp 2>/dev/null || echo /dev/null)"
+    # Chain the stderr-file cleanup onto the state-writing EXIT trap (the ENV_FILE precedent in the
+    # web-platform arm) — replacing it would lose the "unhandled" reason capture.
+    trap 'rc=$?; if [ "${cap_err:-/dev/null}" != /dev/null ]; then rm -f "$cap_err"; fi; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
+    cap_rc=0
+    timeout --kill-after=5 "${QUIESCE_CAPTURE_TIMEOUT:-120}" env INNGEST_REARM_MODE=capture "${INNGEST_REARM_CMD:-/usr/local/bin/inngest-rearm-reminders.sh}" >/dev/null 2>"$cap_err" 200>&- || cap_rc=$?
+    if [[ "$cap_rc" -ne 0 ]]; then
+      cap_tail="$(_cred_err_tail "$(cat "$cap_err" 2>/dev/null || true)")"
+      logger -t "$LOG_TAG" "INNGEST_QUIESCE_CAPTURE_FAILED rc=$cap_rc stderr_tail=${cap_tail:-<empty>}"
+      echo "Error: reminder capture failed (rc=$cap_rc) — inngest-server.service left running" >&2
+      final_write_state 1 "quiesce_capture_failed"
+      exit 1
+    fi
+    if [[ "$cap_err" != /dev/null ]]; then rm -f "$cap_err" 2>/dev/null || true; fi
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: reminders captured before stop"
   fi
+
+  # disable BEFORE stop: the final shape is order-independent, but disabling first shrinks the
+  # deactivating+enabled window a watchdog tick can land in (R8).
+  echo "Quiescing inngest-server.service (disable + stop)..."
   if ! sudo /usr/bin/systemctl disable inngest-server.service; then
     logger -t "$LOG_TAG" "INNGEST_QUIESCE: disable returned non-zero (no [Install]/already-disabled tolerated — the enabled-state assertion in verify is the gate)"
+  fi
+  if ! sudo /usr/bin/systemctl stop inngest-server.service; then
+    logger -t "$LOG_TAG" "INNGEST_QUIESCE: stop returned non-zero (already-stopped/absent tolerated — verify is the gate)"
   fi
 
   set +e
@@ -3360,6 +3415,15 @@ case "$COMPONENT" in
     fi
     ;;
   inngest)
+    # #8077: refuse a quiesced unit BEFORE the pull. The bootstrap this arm runs enables and then
+    # restarts inngest-server.service, which would re-arm the web scheduler op=quiesce-web stopped
+    # (reachable from the hand-dispatched deploy-inngest-image.yml). Only op=rollback re-arms.
+    if inngest_unit_quiesced; then
+      logger -t "$LOG_TAG" "INNGEST_DEPLOY_REFUSED: unit inactive+disabled (quiesced) — only op=rollback re-arms"
+      echo "Error: inngest-server.service is quiesced (inactive+disabled); refusing the bootstrap deploy — only op=rollback re-arms it" >&2
+      final_write_state 1 "inngest_quiesced_deploy_refused"
+      exit 1
+    fi
     # Inngest server bootstrap (PR-F follow-up, #3960).
     #
     # No canary: inngest-server binds loopback only (127.0.0.1:8288/8289) so

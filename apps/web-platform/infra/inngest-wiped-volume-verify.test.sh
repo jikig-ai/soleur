@@ -68,10 +68,16 @@ case "\$url" in
 esac
 MOCK
   chmod +x "${MOCKBIN}/curl"
-  # mock systemctl: record verb order to a file
+  # mock systemctl: record verb order to a file. The two read-only unit-shape queries answer
+  # like systemd (stdout is the state; is-active rc 3 when not active, is-enabled rc 1 on
+  # disabled) from WVV_UNIT_ACTIVE / WVV_UNIT_ENABLED — default active+enabled (a serving unit).
   cat > "${MOCKBIN}/systemctl" <<MOCK
 #!/usr/bin/env bash
 echo "\$*" >> "${MOCKBIN}/systemctl.log"
+case "\$1" in
+  is-active)  s="\${WVV_UNIT_ACTIVE:-active}"; echo "\$s"; [[ "\$s" == active ]] || exit 3 ;;
+  is-enabled) s="\${WVV_UNIT_ENABLED:-enabled}"; echo "\$s"; [[ "\$s" == enabled ]] || exit 1 ;;
+esac
 exit 0
 MOCK
   chmod +x "${MOCKBIN}/systemctl"
@@ -214,8 +220,43 @@ test_no_functions_aborts_loud() {
   teardown
 }
 
+# --- Test 7 (#6921/#8077): the web unit is QUIESCED by op=quiesce-web → refuse ---
+# `is-active ∈ {inactive, failed}` AND `is-enabled == disabled` is the shape only op=quiesce-web
+# writes; this script's `start` would re-arm the scheduler the cutover deliberately stopped. Abort
+# with reason quiesced_refused BEFORE arming the marker and BEFORE any stop/wipe/start. (Test 1
+# counts every systemctl verb; here the read-only is-active/is-enabled queries are expected, so
+# the row asserts no stop/start — the destructive verbs — instead.)
+test_abort_when_quiesced() {
+  local active
+  for active in inactive failed; do
+    setup
+    make_enum_stub '[]'
+    local out rc=0
+    out=$(WVV_UNIT_ACTIVE="$active" WVV_UNIT_ENABLED=disabled run_verify) || rc=$?
+    assert_eq "quiesced ($active+disabled) exits non-zero" "1" "$rc"
+    assert_eq "quiesced ($active+disabled) terminal reason is quiesced_refused" "quiesced_refused" \
+      "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+    assert_contains "quiesced ($active+disabled) abort names op=rollback" "$out" "op=rollback"
+    local sclog; sclog=$(cat "${MOCKBIN}/systemctl.log" 2>/dev/null || echo "")
+    assert_contains "quiesced ($active+disabled) the unit shape was actually queried (non-vacuity)" "$sclog" "is-enabled inngest-server.service"
+    assert_eq "quiesced ($active+disabled) no stop/start in the systemctl log" "0" \
+      "$(grep -cE '^(stop|start|restart) ' "${MOCKBIN}/systemctl.log" 2>/dev/null || true)"
+    assert_eq "quiesced ($active+disabled) data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"
+    assert_eq "quiesced ($active+disabled) throwaway marker NOT armed" "0" "$(grep -c '^ARM_BODY:' "$ARM_LOG" || true)"
+    teardown
+  done
+  # Must-PASS: inactive but ENABLED (a crashed/stopped armed unit) is not quiesced → proceeds.
+  setup
+  make_enum_stub '[]'
+  local rc2=0
+  WVV_UNIT_ACTIVE=inactive WVV_UNIT_ENABLED=enabled run_verify >/dev/null 2>&1 || rc2=$?
+  assert_eq "inactive+ENABLED is not quiesced → verify proceeds (exit 0)" "0" "$rc2"
+  teardown
+}
+
 test_abort_on_real_reminder
 test_abort_on_spoofed_prefix_real_reminder
+test_abort_when_quiesced
 test_abort_on_non_durable_backend
 test_throwaway_posts_no_comment
 test_happy_wipe_order
