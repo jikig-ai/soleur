@@ -96,6 +96,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Cancellation slice: Codex cancellation normalization confirms only explicit terminal acknowledgement (18 adapter tests green).
   - [x] Expanded evidence slice: migration-inclusive engine/settings/routine suite passes 116/116; C4 freshness passes 3/3.
   - [x] Catalog identity slice: reviewed Codex metadata reuses the adapter’s immutable engine ID (22 registry/factory tests green).
+  - [x] C4 composition slice: adapter factory and provider composition boundaries are modeled and regenerated; freshness 3/3 and version pin 2/2 pass.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.
