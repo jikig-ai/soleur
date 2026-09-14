@@ -109,6 +109,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] GDPR evidence checkpoint: regulated-path scan examined 53 changed files and matched 4; no new Art. 9 finding. The pre-existing >90-day corpus posture signal remains tracked by #7710, with the inert cron binding tracked by #7255.
   - [x] Synthetic qualification record: Codex API-key and managed ChatGPT modes have deterministic evidence recorded separately from pending customer-content vendor/CLO approval (`codex-qualification-record.md`).
   - [x] Account-erasure slice: migration 138 anonymizes engine setting/run identity through a service-role-only RPC before auth deletion; lineage/events remain, tenant-isolation teardown parity is updated, and cascade coverage passes 35/35.
+  - [x] Codex rollout flag slice: identity-aware `codex-engine` runtime flag is default-off, requires a matching workspace identity, and remains independent from registry capability, authorization, and qualification checks (34 feature-flag tests green).
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.

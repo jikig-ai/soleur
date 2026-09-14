@@ -30,6 +30,7 @@ import {
   getFeatureFlags,
   isTeamWorkspaceInviteEnabled,
   isByokDelegationsEnabled,
+  isCodexEngineEnabled,
   ANON_IDENTITY,
   __resetFeatureFlagsForTests,
   type Identity,
@@ -173,6 +174,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -196,6 +198,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -219,6 +222,7 @@ describe("getFeatureFlags (combined per-identity snapshot)", () => {
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 
@@ -284,6 +288,40 @@ describe("isByokDelegationsEnabled (async, single-control)", () => {
     process.env.FLAG_BYOK_DELEGATIONS = "1";
     mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
     await expect(isByokDelegationsEnabled("org-123", ORG_USER)).resolves.toBe(true);
+  });
+});
+
+describe("isCodexEngineEnabled (async, fail-closed rollout)", () => {
+  it("returns true only when the identity-aware Flagsmith flag is ON", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    mockGetIdentityFlags.mockResolvedValue({
+      isFeatureEnabled: (name: string) => name === "codex-engine",
+    });
+
+    await expect(isCodexEngineEnabled("org-123", ORG_USER)).resolves.toBe(true);
+    expect(mockGetIdentityFlags).toHaveBeenCalledWith(
+      "org:org-123:prd",
+      { role: "prd", orgId: "org-123" },
+      true,
+    );
+  });
+
+  it("fails closed when no workspace is supplied", async () => {
+    await expect(isCodexEngineEnabled(null, ORG_USER)).resolves.toBe(false);
+    expect(mockGetIdentityFlags).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the requested workspace differs from the identity", async () => {
+    await expect(isCodexEngineEnabled("org-other", ORG_USER)).resolves.toBe(false);
+    expect(mockGetIdentityFlags).not.toHaveBeenCalled();
+  });
+
+  it("uses the default-off env mirror during a Flagsmith outage", async () => {
+    process.env.FLAGSMITH_ENVIRONMENT_KEY = "ser.test-key";
+    process.env.FLAG_CODEX_ENGINE = "0";
+    mockGetIdentityFlags.mockRejectedValue(new Error("outage"));
+
+    await expect(isCodexEngineEnabled("org-123", ORG_USER)).resolves.toBe(false);
   });
 });
 
@@ -409,6 +447,7 @@ describe("getIdentityFlags timeout → warn-level debounced mirror (Sentry-bug r
       support: false,
       "guided-tour": false,
       "support-live": false,
+      "codex-engine": false,
     });
   });
 

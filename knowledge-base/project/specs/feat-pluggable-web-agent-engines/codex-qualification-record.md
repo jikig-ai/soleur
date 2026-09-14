@@ -37,8 +37,9 @@ remote response is stored in this record.
 ## Release decision
 
 The only permitted use of the Codex adapter in this phase is internal,
-synthetic or explicitly redacted dogfooding under a separately controlled
-feature flag. Customer content remains blocked until both auth modes have:
+synthetic or explicitly redacted dogfooding under the identity-aware,
+default-off `codex-engine` runtime flag. Customer content remains blocked until
+both auth modes have:
 
 1. a reviewed vendor/DPA and transfer-geography record;
 2. verified retention and remote-erasure behavior (or an approved restriction
