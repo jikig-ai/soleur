@@ -2112,6 +2112,9 @@ if want_scripts; then
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
+  # #7966: the rotation script had never completed a run (TARGETS exported after the check that
+  # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
+  run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.

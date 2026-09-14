@@ -164,6 +164,10 @@ print(re.sub(r'(^\w+://[^:]+:)([^@]*)(@)', lambda m: m.group(1)+os.environ['NEWP
 done < "$_tmp/targets"
 
 echo "==> verifying Doppler holds the new password (by hash, never by value)"
+# Exported BEFORE the check that reads it. It used to sit after this block, so
+# the python KeyError'd and every run bailed here with exit 7 -- after the PATCH
+# and the Doppler rewrite, skipping the connectivity proof and the sweep (#7966).
+TARGETS="$_tmp/targets"; export TARGETS
 if ! doppler secrets -p "$PROJECT" -c "$CONFIG" --json \
      | NEWPW="$NEWPW" python3 -c "
 import json,sys,os,re,hashlib
@@ -183,7 +187,6 @@ sys.exit(1 if bad else 0)
   echo "ERROR: at least one secret does NOT carry the new password." >&2
   _bail_with_recovery
 fi
-TARGETS="$_tmp/targets"; export TARGETS
 
 if command -v docker >/dev/null; then
   echo "==> proving the new credential authenticates"
