@@ -190,6 +190,36 @@ describe("dispatchBoundEngineRun", () => {
     })()).rejects.toMatchObject({ code: "engine_egress_denied" });
     expect(adapter.start).not.toHaveBeenCalled();
   });
+
+  it("rejects egress auth modes that differ from the persisted binding", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "should-not-run" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({
+      id: "run-1", binding: { engineId: "codex", authMode: "api-key" },
+    }) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRunFromRegistry({
+        repository,
+        factories: { codex: () => adapter as never },
+        egress: {
+          selection: {
+            engineId: "codex",
+            authMode: "managed",
+            operation: "existing-run",
+            workflow: "interactive",
+            dataClass: "synthetic",
+            requiredCapabilities: [],
+            now: Date.now(),
+          },
+        },
+        runId: "run-1",
+        input: { text: "hi", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toThrow("egress selection does not match persisted engine binding");
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
   it("loads the persisted binding before invoking the adapter", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };

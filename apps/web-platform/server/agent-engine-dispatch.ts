@@ -133,7 +133,11 @@ export async function* dispatchBoundEngineRunFromRegistry(options: {
   const binding = (persisted as { binding?: EngineRunContext["binding"] }).binding ??
     (persisted as unknown as EngineRunContext["binding"]);
   if (options.egress) {
-    if (options.egress.selection.engineId !== binding.engineId) {
+    const persistedAuthMode = (binding as { authMode?: unknown }).authMode;
+    if (
+      options.egress.selection.engineId !== binding.engineId
+      || (persistedAuthMode !== undefined && options.egress.selection.authMode !== persistedAuthMode)
+    ) {
       throw new Error("egress selection does not match persisted engine binding");
     }
     authorizeEngineDataEgress(options.egress.selection, options.egress.evidence);
