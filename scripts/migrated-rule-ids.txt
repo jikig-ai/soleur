@@ -4,9 +4,10 @@
 #
 # <body-sha256> is the sha256 of the migrated body line(s) at the home, blockquote markers
 # stripped, whitespace runs collapsed to one space, ends trimmed. Print it with
-# `bash scripts/lint-migrated-rule-ids.sh --print-hash <id>`. A reviewed body edit at the home
-# updates this hash in the same diff -- that update is the ack scripts/lint-rule-bodies.py
-# cannot give, because it hashes bodies only in AGENTS.rules.md (#8030).
+# `bash scripts/lint-migrated-rule-ids.sh --print-hash <id>`. Updating it is NOT an ack:
+# `rule-body-lint --check` diffs this file against the merge-base and requires a NEW
+# `<id>|<new-hash>|...` ack in .claude/rule-weakening-acks.txt for any changed hash, a
+# verbatim move for any new row, and `<id>|MIGRATED-ROW-DELETED|...` for a removed row (#8030).
 #
 # These are ACTIVE rules, not retired ones. The distinction matters because the
 # corpus previously had only two states -- "a body in AGENTS.rules.md" or
@@ -19,7 +20,10 @@
 #       SOLEUR_RULE_APPLIED markers for these ids are dropped with no sentinel --
 #       silent telemetry loss, caught by that hook's producer/consumer parity test)
 #   scripts/lint-migrated-rule-ids.sh              (reads THIS file; checks each
-#       row's placement and body hash, and that every banner has a row)
+#       row's placement and body hash, uniqueness, that every banner has a row, and that
+#       the id set equals the `NOT a retirement of the RULE` rows of retired-rule-ids.txt)
+#   scripts/lint-rule-bodies.py --check            (reads THIS file at HEAD and at the
+#       merge-base; governs hash changes, new rows and removed rows)
 #
 # scripts/rule-metrics-aggregate.sh does NOT read this file (0 references, measured
 # 2026-09-14). It is kept from exiting 5 by the paired scripts/retired-rule-ids.txt
@@ -45,7 +49,8 @@
 # Per-rule checklist -- ONE commit, in a dedicated reviewed PR, never as a side edit
 # of a compound run (the pre-commit rule-id, budget and enforcement-tag lints red on
 # every intermediate state):
-#   1. scripts/retired-rule-ids.txt: "NOT a retirement" row (the aggregator's exemption).
+#   1. scripts/retired-rule-ids.txt: a row whose reason contains the literal
+#      `NOT a retirement of the RULE` (the aggregator's exemption; the guard keys on it).
 #   2. this file: a row, with the body hash from `--print-hash` (write the callout first).
 #   3. .claude/rule-weakening-acks.txt: a `<id>|DELETED|...` row.
 #   4. hr-* only: add the id to HR_RETIREMENT_ALLOWLIST in scripts/lint-rule-ids.py.

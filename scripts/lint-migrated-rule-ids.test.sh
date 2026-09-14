@@ -17,6 +17,9 @@
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
+# The guard reads this variable to pick its root and floor; an exported value from the parent
+# would silently retarget case L (and every case that relies on "no override").
+unset LINT_MIGRATED_RULE_IDS_ROOT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD="$REPO_ROOT/scripts/lint-migrated-rule-ids.sh"
@@ -58,6 +61,7 @@ new_root() {
   local r="$TMPROOT/$1"
   mkdir -p "$r/scripts" "$r/plugins/soleur/skills/fixture"
   : >"$r/scripts/migrated-rule-ids.txt"
+  : >"$r/scripts/retired-rule-ids.txt"
   printf '%s' "$r"
 }
 
@@ -71,10 +75,16 @@ callout() {
 
 body_for() { printf 'Fixture body for %s [id: %s] [skill-enforced: fixture Gate]. **Why:** fixture.' "$1" "$1"; }
 
+# retired_row <root> <id> — the paired "NOT a retirement" row every migration carries.
+retired_row() {
+  printf '%s | 2026-09-14 | #8175 | domain-scoped fixture. NOT a retirement of the RULE -- still active.\n' "$2" >>"$1/scripts/retired-rule-ids.txt"
+}
+
 # add_row <root> <id> <path> <heading> [hash-override]
 add_row() {
   local h="${5:-$(body_hash "$(body_for "$2")")}"
   printf '%s | 2026-09-14 | #8175 | %s :: %s | %s\n' "$2" "$3" "$4" "$h" >>"$1/scripts/migrated-rule-ids.txt"
+  retired_row "$1" "$2"
 }
 
 run_guard() {
@@ -126,6 +136,28 @@ if [[ "$FAIL" -ne 0 ]]; then
   printf 'FATAL: positive control failed — the fixture is broken and no other case proves anything\n' >&2
   exit 1
 fi
+
+# --- verdict-helper self-test: each helper must REJECT as well as accept ---------------------
+# pass()/fail() are self-tested above; expect_green/expect_red own their own verdicts, so a
+# helper rewritten to always pass would leave every counter balanced. Drive each in BOTH
+# directions against a known-green and a known-red root, then unwind the counters.
+vg="$(new_root vg)"; canonical_home "$vg" zz-fixture-alpha
+add_row "$vg" zz-fixture-alpha "$HOME_REL" "### Gate A"
+vr="$(new_root vr)"; canonical_home "$vr" zz-fixture-alpha
+add_row "$vr" zz-fixture-alpha "$HOME_REL" "### Gate Missing"
+p0=$PASS; f0=$FAIL; c0=$CASES
+{
+  expect_green "self-test green/green" "$vg"
+  expect_green "self-test green/red (EXPECTED FAIL)" "$vr"
+  expect_red "self-test red/red" "$vr" "heading not found"
+  expect_red "self-test red/green (EXPECTED FAIL)" "$vg" "heading not found"
+} >/dev/null
+if [[ $((PASS - p0)) -ne 2 || $((FAIL - f0)) -ne 2 || $((CASES - c0)) -ne 4 ]]; then
+  printf 'FATAL: verdict-helper self-test: expected +2 pass +2 fail +4 cases, got +%s +%s +%s\n' \
+    "$((PASS - p0))" "$((FAIL - f0))" "$((CASES - c0))" >&2
+  exit 1
+fi
+PASS=$p0; FAIL=$f0; CASES=$c0
 
 # --- 1 / 1b: placement is section-scoped ---------------------------------------------------
 r="$(new_root c1)"
@@ -216,6 +248,7 @@ expect_green "7a level-4 heading section" "$r"
 
 r="$(new_root c7b)"; canonical_home "$r" zz-fixture-alpha
 printf 'zz-fixture-alpha|2026-09-14|#8175|%s :: ### Gate A|%s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >"$r/scripts/migrated-rule-ids.txt"
+retired_row "$r" zz-fixture-alpha
 expect_green "7b pipes without surrounding spaces" "$r"
 
 r="$(new_root c8)"
@@ -289,6 +322,85 @@ r="$(new_root c15c)"; canonical_home "$r" zz-fixture-alpha
 printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A\n' "$HOME_REL" >"$r/scripts/migrated-rule-ids.txt"
 expect_red "15c row missing its hash field" "$r" "malformed row"
 
+# --- 16: an intermediate directory symlink, and --print-hash ----------------------------------
+r="$(new_root c16a)"; outside="$TMPROOT/c16a-outside"; mkdir -p "$outside/evil"
+{ printf '# Evil\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"; } >"$outside/evil/SKILL.md"
+ln -s "$outside" "$r/plugins/soleur/skills/linked"
+add_row "$r" zz-fixture-alpha "plugins/soleur/skills/linked/evil/SKILL.md" "### Gate A"
+expect_red "16a intermediate directory symlink escapes the root" "$r" "path escapes root"
+
+# expect_cmd <name> <want-rc> <needle> -- <cmd...>
+expect_cmd() {
+  local name="$1" want="$2" needle="$3"; shift 4
+  CASES=$((CASES + 1))
+  "$@" >"$OUT" 2>&1
+  RC=$?
+  local o; o="$(cat "$OUT")"
+  if [[ "$RC" -eq "$want" && "$o" == *"$needle"* ]]; then pass "$name"; else fail "$name" "rc=$RC out=$(printf '%s' "$o" | tr '\n' '|' | cut -c1-300)"; fi
+}
+r="$(new_root c16b)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+expect_cmd "16b --print-hash equals the independent oracle" 0 "$(body_hash "$(body_for zz-fixture-alpha)")" -- \
+  env LINT_MIGRATED_RULE_IDS_ROOT="$r" bash "$GUARD" --print-hash zz-fixture-alpha
+expect_cmd "16c --print-hash on an unregistered id" 1 "no row for zz-fixture-nope" -- \
+  env LINT_MIGRATED_RULE_IDS_ROOT="$r" bash "$GUARD" --print-hash zz-fixture-nope
+expect_cmd "16d --print-hash with no id" 2 "needs an id" -- \
+  env LINT_MIGRATED_RULE_IDS_ROOT="$r" bash "$GUARD" --print-hash
+
+# --- 17: uniqueness — one row, one banner, one tagged body -----------------------------------
+r="$(new_root c17a)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A | %s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >>"$r/scripts/migrated-rule-ids.txt"
+expect_red "17a duplicate registry row" "$r" "duplicate row for zz-fixture-alpha"
+
+r="$(new_root c17b)"
+{ printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"
+  printf '\n'; callout zz-fixture-alpha "Weaker copy [id: zz-fixture-alpha] [skill-enforced: fixture Gate]. Optional."
+  printf '\n### Gate B\n'; } >"$r/$HOME_REL"
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+expect_red "17b second banner for the same id inside the section" "$r" "migration banner for zz-fixture-alpha occurs 2 times"
+
+r="$(new_root c17c)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+mkdir -p "$r/plugins/soleur/skills/other"
+{ printf '# Other\n\n### Y\n\n'; callout zz-fixture-alpha "Weaker copy [id: zz-fixture-alpha] [x]. Optional."; } >"$r/plugins/soleur/skills/other/SKILL.md"
+expect_red "17c second banner for the same id in another file" "$r" "second migration banner for zz-fixture-alpha" "other/SKILL.md"
+
+r="$(new_root c17d)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+mkdir -p "$r/.claude/hooks"
+{ printf '# Orphan\n\n'; callout zz-fixture-orphan "$(body_for zz-fixture-orphan)"; } >"$r/.claude/hooks/notes.md"
+expect_red "17d banner outside plugins/soleur is scanned" "$r" "outside plugins/soleur/ (.claude/hooks/notes.md:3)" "no registry row for migrated banner zz-fixture-orphan"
+
+r="$(new_root c17e)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+mkdir -p "$r/knowledge-base/project/plans"
+{ printf '# Plan\n\n'; callout zz-fixture-quoted "$(body_for zz-fixture-quoted)"; } >"$r/knowledge-base/project/plans/p.md"
+expect_green "17e a plan quoting a banner is not a home" "$r"
+
+r="$(new_root c17f)"
+{ printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha)"
+  printf '\n### Gate B\n\n- Relaxed restatement [id: zz-fixture-alpha]: optional under deadline pressure.\n'; } >"$r/$HOME_REL"
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+expect_red "17f a second tagged copy of the body elsewhere in the home" "$r" "[id: zz-fixture-alpha] occurs 2 times"
+
+# --- 18: identity against retired-rule-ids.txt -----------------------------------------------
+r="$(new_root c18a)"; canonical_home "$r" zz-fixture-alpha
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+retired_row "$r" zz-fixture-dropped
+expect_red "18a a migration row whose registry row was dropped" "$r" "zz-fixture-dropped has a 'NOT a retirement of the RULE' row"
+
+r="$(new_root c18b)"; canonical_home "$r" zz-fixture-alpha
+printf 'zz-fixture-alpha | 2026-09-14 | #8175 | %s :: ### Gate A | %s\n' "$HOME_REL" "$(body_hash "$(body_for zz-fixture-alpha)")" >"$r/scripts/migrated-rule-ids.txt"
+printf 'zz-fixture-alpha | 2026-09-14 | #8175 | an ordinary retirement, no marker\n' >"$r/scripts/retired-rule-ids.txt"
+expect_red "18b a registry row with no migration row (a swapped-in id)" "$r" "zz-fixture-alpha has a row in scripts/migrated-rule-ids.txt but no"
+
+# --- 19: non-ASCII whitespace the two normalisers disagree on --------------------------------
+r="$(new_root c19)"
+{ printf '# Fixture\n\n### Gate A\n\n'; callout zz-fixture-alpha "$(body_for zz-fixture-alpha | sed $'s/Fixture body/Fixture\xc2\xa0body/')"; } >"$r/$HOME_REL"
+add_row "$r" zz-fixture-alpha "$HOME_REL" "### Gate A"
+expect_red "19 NBSP in a body" "$r" "non-ASCII whitespace"
+
 # --- L: live registry, no override ------------------------------------------------------------
 CASES=$((CASES + 1))
 bash "$GUARD" >"$OUT" 2>&1
@@ -303,8 +415,8 @@ fi
 
 # --- floor + conservation (reported directly, never through fail()) --------------------------
 printf '\nRESULT: %s passed, %s failed, %s cases\n' "$PASS" "$FAIL" "$CASES"
-if [[ "$CASES" -lt 32 ]]; then
-  printf 'FAIL: vacuity floor: only %s cases ran; expected >= 32\n' "$CASES" >&2
+if [[ "$CASES" -lt 45 ]]; then
+  printf 'FAIL: vacuity floor: only %s cases ran; expected >= 45\n' "$CASES" >&2
   exit 1
 fi
 if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
