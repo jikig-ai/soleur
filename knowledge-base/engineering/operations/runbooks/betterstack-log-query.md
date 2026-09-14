@@ -20,11 +20,24 @@ cron poller**, NOT a native Better Stack alert — query via `betterstack-query.
 in a `scripts/` checker → deduped `action-required` GitHub issue → Sentry self-liveness heartbeat.
 This is the reusable **"Pattern: Better Stack log-content alarms"** recorded in
 [`ADR-096` §Consequences](../../architecture/decisions/ADR-096-migrate-container-registry-ghcr-to-self-hosted-zot.md)
-(the `better-uptime` TF provider has no log-alert resource, and the Telemetry v2 SQL-alert API is
-rejected for stateful/newest-scoped signals + the operator-surface reasons documented there).
+(the `better-uptime` TF provider has no log-alert resource — the sibling `BetterStackHQ/logtail`
+provider does, and [ADR-218](../../architecture/decisions/ADR-218-native-better-stack-logs-alerts-are-terraform-managed-via-the-logtail-provider.md)
+uses it for the one signal class ADR-096 exempts: a pure stateless per-bucket count with an
+email-acceptable surface; the Telemetry v2 SQL-alert route stays rejected for stateful/newest-scoped
+signals + the operator-surface reasons documented there).
 
 Live standing alarms over this source:
 
+- **`logtail_exploration_alert.monitor_send_failed`** (#8097 / ADR-218, evaluated every 60 s over
+  a 300 s window) — the one Terraform-managed native Better Stack Logs alert, `soleur-monitor-send-failed-prd`. Pages
+  (team email; `betteruptime_policy.uptime` on the paid tier) on any PRIORITY-2 row whose message
+  starts `SOLEUR_` and contains `_SEND_FAILED` or `_REFUSED` — a web-1 monitor unit's own Resend/
+  Sentry send failed. `SOLEUR_*_SEND_SKIPPED` and `SOLEUR_*_HALT` never match by construction.
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; verified through the real apply
+  path by `terraform_data.send_failed_alert_probe` + `scripts/followthroughs/send-failed-alert-probe-8097.sh`;
+  self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
+  [`monitor-send-failed-alert.md`](./monitor-send-failed-alert.md). Readback (never
+  `--grep PRIORITY=2`): the runbook's step-1 SQL with `JSONExtractString(raw,'PRIORITY') = '2'`.
 - **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the

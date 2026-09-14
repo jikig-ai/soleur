@@ -2115,6 +2115,7 @@ log-injection
 logic-error
 logic-errors
 login
+logtail-provider
 loop
 loopback-gate
 loopback-gating
@@ -2863,6 +2864,7 @@ prop-wiring
 propagation
 prose-claims
 prose-conventions
+prose-counts
 prose-guard
 prospect-anchored features
 protecthome

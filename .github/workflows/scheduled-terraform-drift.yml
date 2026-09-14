@@ -79,7 +79,10 @@ jobs:
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
 
       - name: Terraform init
-        run: terraform init -input=false
+        # -lockfile=readonly (#8097): the drift plan must resolve providers ONLY from the
+        # committed lockfile, exactly as apply-web-platform-infra.yml does — a new third-party
+        # provider cannot be silently resolved outside it here.
+        run: terraform init -input=false -lockfile=readonly
         working-directory: ${{ matrix.directory }}
 
       - name: Terraform plan (drift detection)
@@ -1349,7 +1352,8 @@ jobs:
           fi
           # The script reads the BETTERSTACK_API_TOKEN env, sourced from the Read-scoped
           # BETTERSTACK_API_TOKEN_READONLY secret in Doppler (least privilege: reconcile only
-          # GETs /api/v2/heartbeats). It prints SOLEUR_HEARTBEAT_RECONCILE_* markers, and NEVER
+          # GETs uptime…/api/v2/heartbeats and, since #8097, telemetry…/api/v2/alerts — the same
+          # global token serves both). It prints SOLEUR_HEARTBEAT_RECONCILE_* markers, and NEVER
           # echoes the token. Capture stdout+stderr to a file.
           BETTERSTACK_API_TOKEN="$TOKEN" \
             bun plugins/soleur/scripts/reconcile-live-heartbeats.ts \
@@ -1446,6 +1450,8 @@ jobs:
               echo ""
               echo "- \`reason=fed-but-paused\` — a fed heartbeat is \`paused\` live (the #6537 shape)."
               echo "- \`reason=absent-live\` — a non-count-gated heartbeat is missing live (the #6548 \`git_data\` shape)."
+              echo "- \`live=logs_alert reason=logs-alert-paused detail=\"…\"\` — a declared Better Stack LOGS alert (logtail_exploration_alert, #8097/ADR-218) is paused live; \`detail\` carries the vendor's paused_reason (auto-pause on complexity/too many failures, or a hand pause). The drift plan is not the detector: the per-merge apply re-arms it silently (a pause is visible in the plan only between infra merges) and the untargeted plan is already perpetually non-zero (#7904) — this arm is what reports it as a named marker."
+              echo "- \`live=logs_alert reason=logs-alert-absent\` — a declared Logs alert is missing live (the main apply never created it, or it was deleted vendor-side)."
               echo ""
               echo "<details><summary>Reconcile markers</summary>"
               echo ""
@@ -1459,7 +1465,8 @@ jobs:
               echo ""
               echo "1. For \`fed-but-paused\`: verify a real ping lands, then unpause via the Better Stack UI/API (#6210 — never unpause an unfed monitor)."
               echo "2. For \`absent-live\`: disposition the heartbeat — build its feeder or delete the monitor (the #6548 build-vs-delete call)."
-              echo "3. Close this issue when every listed heartbeat reconciles; the reconcile re-opens it if a mismatch recurs."
+              echo "3. For \`logs-alert-paused\` / \`logs-alert-absent\`: read \`detail\` — a rejected template SQL is fixed by a .tf edit + merge (the apply re-arms the alert); an absent alert means the merge apply failed before creating it. Runbook: knowledge-base/engineering/operations/runbooks/monitor-send-failed-alert.md."
+              echo "4. Close this issue when every listed heartbeat / Logs alert reconciles; the reconcile re-opens it if a mismatch recurs."
               echo ""
               echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml) heartbeat-live-reconcile job._"
             } > /tmp/reconcile-body.md

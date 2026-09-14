@@ -297,6 +297,8 @@ no Logs-source resource — 97 files in its `internal/provider` tree, all monito
 on-call, status pages and integrations — and no other Better Stack provider exists in the Terraform
 registry. `inngest.tf` already records that as an IaC gap and it stands.
 
+*Premise stale as of ADR-218 (2026-09-13): `BetterStackHQ/logtail` exists (adopted for `logtail_exploration_alert`); whether to adopt `logtail_source` — whose `token` attribute the provider does not mark Sensitive — is #8124.*
+
 The **operator-mint** half was an a-priori classification, and this repo's own learning
 (`2026-06-17-vendor-dashboard-mint-presumed-playwright-automatable.md`) forbids exactly that: the
 burden of proof is on the operator-only claim, discharged only by an attempt reaching a named human
