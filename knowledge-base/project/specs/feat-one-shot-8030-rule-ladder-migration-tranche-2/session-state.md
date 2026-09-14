@@ -112,3 +112,37 @@ in scope. The eval-harness gate on `brainstorm-domain-config.md` is block-scoped
 - `soleur:one-shot` (Steps 0a, 0a.5, 0b, 0c, 1-2)
 - `soleur:plan`, `soleur:deepen-plan` (in the plan+deepen subagent)
 - `soleur:engineering:review:architecture-strategist` (plan-review seat)
+
+## Review Phase (2026-09-14)
+
+Nine seats on Sonnet (the Opus weekly limit was still in force), all report-only: code-simplicity and
+architecture (design pass), then git-history, pattern-recognition, security, data-integrity,
+agent-native, code-quality, test-design, and a structural-enumeration seat in place of performance-oracle.
+
+- **Structural-cause roll-up:** security P1-1 (edit + re-hash in one commit stays green), security P2-1
+  (verbatim-at-migration unverified) and structural §3/§5 (drop a row, swap in a fabricated id) are one
+  gap — the registry certified itself with no external anchor. Fixed by `rule-body-lint --check`
+  diffing the registry against the merge-base (`ee83a0b53`) plus identity against retired-rule-ids.txt
+  (`bd6645657`). The structural seat mapped the instances but not the shared anchor.
+- **Fixed inline:** the anchor above; uniqueness (row / banner / `[id:]` tag), repo-wide banner scan,
+  NBSP refusal, reverse-scan line numbers (`bd6645657`); test survivors — verdict-helper self-test,
+  intermediate symlink, `--print-hash`, env inheritance (`bd6645657`); merge conflict on
+  `MIN_FIRING_SUITES` resolved to 40, not 39 (`f9bb01b97`); actionable skill-creator/heal-skill pointers;
+  rule-prune.sh PR body no longer frames zero events as retirement evidence (pinned by tp5b); plan P3s.
+- **No change, with rationale:** agent-native "merge-pr/drain-prs/fix-issue lose visibility" — the body
+  only DESCRIBES ship Phase 5.5, so nothing an agent outside ship could act on was removed; "direct file
+  write creates a skill" — the rule constrains an assessment's composition, and a session running none
+  violates nothing; security P1-2 (no ruleset requires human review) — pre-existing, and code-owner
+  review on a single-owner repo would block the owner's own merges; the machine gate plus the
+  mandatory-human-review annotation is the ADR-092-consistent control; rule-metrics.json at 100 rules —
+  a cron snapshot.
+- **Residual documented:** text adjacent to a callout but outside its blockquote (guard header).
+
+### Errors
+
+- My pre-panel `git merge-tree` returned clean; #8149 merged to main during the review and produced a
+  real conflict the code-quality seat found. **Prevention:** re-run the merge-tree probe immediately
+  before applying review fixes, not only before spawning the panel.
+- Mutation M2 survived the first battery: case 17b's needle `occurs 2 times` also matched the
+  tag-count finding. **Prevention:** a RED needle must name the check (its unique message prefix), never
+  a phrase two checks share.
