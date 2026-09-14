@@ -1,6 +1,13 @@
 # Rules that MOVED out of AGENTS.rules.md into a skill-local home.
 #
-# Format: <rule-id> | <date> | <PR> | <new home>
+# Format: <rule-id> | <date> | <PR> | <path> :: <heading> | <body-sha256>
+#
+# <body-sha256> is the sha256 of the migrated body line(s) at the home, blockquote markers
+# stripped, whitespace runs collapsed to one space, ends trimmed. Print it with
+# `bash scripts/lint-migrated-rule-ids.sh --print-hash <id>`. Updating it is NOT an ack:
+# `rule-body-lint --check` diffs this file against the merge-base and requires a NEW
+# `<id>|<new-hash>|...` ack in .claude/rule-weakening-acks.txt for any changed hash, a
+# verbatim move for any new row, and `<id>|MIGRATED-ROW-DELETED|...` for a removed row (#8030).
 #
 # These are ACTIVE rules, not retired ones. The distinction matters because the
 # corpus previously had only two states -- "a body in AGENTS.rules.md" or
@@ -9,15 +16,63 @@
 # those consumers read.
 #
 # Consumers that MUST treat these as valid:
-#   .claude/hooks/rule-incident-marker-capture.sh  (else SOLEUR_RULE_APPLIED
-#       markers for these ids are dropped with no sentinel -- silent telemetry
-#       loss, caught by that hook's producer/consumer parity test)
-#   scripts/rule-metrics-aggregate.sh              (else the orphan gate exits 5
-#       BEFORE jsonl rotation, disarming the write path)
+#   .claude/hooks/rule-incident-marker-capture.sh  (reads THIS file; else
+#       SOLEUR_RULE_APPLIED markers for these ids are dropped with no sentinel --
+#       silent telemetry loss, caught by that hook's producer/consumer parity test)
+#   scripts/lint-migrated-rule-ids.sh              (reads THIS file; checks each
+#       row's placement and body hash, uniqueness, that every banner has a row, and that
+#       the id set equals the `NOT a retirement of the RULE` rows of retired-rule-ids.txt)
+#   scripts/lint-rule-bodies.py --check            (reads THIS file at HEAD and at the
+#       merge-base; governs hash changes, new rows and removed rows)
+#
+# scripts/rule-metrics-aggregate.sh does NOT read this file (0 references, measured
+# 2026-09-14). It is kept from exiting 5 by the paired scripts/retired-rule-ids.txt
+# row, which is why every migration needs BOTH rows; migrated ids appear in no
+# rule-metrics.json field.
 #
 # Keep this file, not two ad-hoc allowlists, as the single source of truth.
-wg-record-recurring-vendor-expense-before-ready | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Recurring-Vendor-Expense Gate (mandatory)
-rf-review-finding-default-fix-inline | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Review-Findings Exit Gate (mandatory)
-wg-when-fixing-a-workflow-gates-detection | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Retroactive Gate Application (conditional)
-cq-ac-must-not-depend-on-concurrent-sessions | 2026-09-10 | #8034 | plugins/soleur/skills/plan-review/SKILL.md :: ## Standing panel checks (every review, no relevance gate)
-wg-architecture-decision-is-a-plan-deliverable | 2026-09-10 | #8034 | plugins/soleur/skills/plan/SKILL.md :: ### 2.10. Architecture Decision (ADR / C4) Gate
+#
+# Candidate test (bind-vs-check). A rule may migrate only if it survives all four:
+#   (1) citation sweep -- `git grep -l --fixed-strings <id>` outside AGENTS*.md,
+#       knowledge-base/project/{learnings,plans,specs,brainstorms}, rule-metrics.json,
+#       rule-body-hashes.txt, INDEX.md, .grok/ and agents.manifest.json; a hit from code,
+#       infra, runbooks, ADRs or a PR template is a site where the rule BINDS;
+#   (2) derived-artifact check -- a marker read only from AGENTS.rules.md body lines
+#       ([mandates-filing] per ADR-155, the enforcement-tag floors, the hash manifest)
+#       is a bind site the sweep cannot see;
+#   (3) test-pin check -- `git grep -l <id> plugins/soleur/test tests scripts/*.test.sh
+#       .claude/hooks/*.test.sh`; a test asserting the corpus line exists is a bind site;
+#   (4) a tag naming where the rule is CHECKED is not evidence of where it BINDS, and a
+#       violation reachable on a turn that never enters the enforcer means it binds.
+# Survives all four -> CHECK -> migrate. Anything else stays in the corpus.
+#
+# Per-rule checklist -- ONE commit, in a dedicated reviewed PR, never as a side edit
+# of a compound run (the pre-commit rule-id, budget and enforcement-tag lints red on
+# every intermediate state):
+#   1. scripts/retired-rule-ids.txt: a row whose reason contains the literal
+#      `NOT a retirement of the RULE` (the aggregator's exemption; the guard keys on it).
+#   2. this file: a row, with the body hash from `--print-hash` (write the callout first).
+#   3. .claude/rule-weakening-acks.txt: a `<id>|DELETED|...` row.
+#   4. hr-* only: add the id to HR_RETIREMENT_ALLOWLIST in scripts/lint-rule-ids.py.
+#   5. Insert the callout under the home heading: the banner line, the domain-scope
+#      sentence, `>`, then the body line VERBATIM (list marker dropped, tags intact).
+#   6. Delete the body from AGENTS.rules.md and its pointer from AGENTS.md.
+#   7. `python3 scripts/lint-rule-bodies.py --write` (the manifest drops the line).
+#   8. Re-measure `python3 scripts/lint-agents-enforcement-tags.py AGENTS.md
+#      AGENTS.rules.md`; lower MIN_CHECKS to the exact counts, and its .test.sh mirror.
+#   9. Repoint any "see AGENTS.md `<id>`" sentence at the new home.
+#  10. Raise MIN_ROWS in scripts/lint-migrated-rule-ids.sh to the new row count.
+#
+# Placement and body integrity are checked by scripts/lint-migrated-rule-ids.sh.
+#
+# Reversal (moving a body back) requires deleting this row AND the id's
+# retired-rule-ids.txt row in one reviewed edit -- lint-rule-ids.py otherwise rejects
+# the id as a reintroduced retired rule; both files are append-only by convention, not
+# by lint.
+wg-record-recurring-vendor-expense-before-ready | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Recurring-Vendor-Expense Gate (mandatory) | 10316c91677573a6b1fcf206070f2a202985cf17f0f3fbba83cb504fa5a351c4
+rf-review-finding-default-fix-inline | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Review-Findings Exit Gate (mandatory) | a306d9f85c8363aeb44d2064be7e54ee1b336f6d3c43587cf6d8f627b682b9fe
+wg-when-fixing-a-workflow-gates-detection | 2026-09-10 | #8034 | plugins/soleur/skills/ship/SKILL.md :: ### Retroactive Gate Application (conditional) | 778039a752976ddc4f6caa21236eb64486e8fe956d07fc8e34b7e5e41be9e01c
+cq-ac-must-not-depend-on-concurrent-sessions | 2026-09-10 | #8034 | plugins/soleur/skills/plan-review/SKILL.md :: ## Standing panel checks (every review, no relevance gate) | 7900fbe2e53ffe1d19af4d5cd743cb899ce47b6f0e8bb75f4586dbbde386b74c
+wg-architecture-decision-is-a-plan-deliverable | 2026-09-10 | #8034 | plugins/soleur/skills/plan/SKILL.md :: ### 2.10. Architecture Decision (ADR / C4) Gate | 84906d4c73b79a96db95d82b8957d59ccd5a1294b4a0e2e17e1025b83c208ffa
+hr-before-shipping-ship-phase-5-5-runs | 2026-09-14 | #8175 | plugins/soleur/skills/ship/SKILL.md :: ### Pre-Ship Domain Review (conditional) | d4a0cd460bc2f89be0e035c0aca6fb07fd7bc8426e8cb5dc6f74f2871ab920b0
+hr-new-skills-agents-or-user-facing | 2026-09-14 | #8175 | plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md :: ## New-capability leader mandate | 1760c9e436408913e060b2273103a0f3a66e33fd41a208135337034cefa95ed9

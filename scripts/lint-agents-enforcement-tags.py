@@ -64,7 +64,14 @@ from pathlib import Path
 # hook_checks untouched at 10 (12 measured): no hook-enforced rule moved. Floors
 # are the EXACT measured counts, so headroom is zero and the ratchet is STRICTER
 # than before against any further drop.
-MIN_CHECKS = {"hook_checks": 10, "skill_units": 26, "anchor_checks": 27}
+#
+# skill_units 26 -> 24 and anchor_checks 27 -> 25 (2026-09-14, PR #8175): tranche 2
+# moved hr-before-shipping-ship-phase-5-5-runs and hr-new-skills-agents-or-user-facing
+# into their enforcing homes, each a single-anchor skill tag kept VERBATIM there. Same
+# "corpus legitimately shrank" case as tranche 1.
+#     before: 13 hook + 26 skill via 27 anchor checks
+#     after:  13 hook + 24 skill via 25 anchor checks
+MIN_CHECKS = {"hook_checks": 10, "skill_units": 24, "anchor_checks": 25}
 CORPUS_FILENAME = "AGENTS.rules.md"
 
 HOOK_TAG_RE = re.compile(r"\[hook-enforced: ([^\]]+)\]")
