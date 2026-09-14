@@ -45,6 +45,7 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
@@ -74,9 +75,30 @@ import { fileURLToPath } from "node:url";
 // empty, which degrades exit 2 out of existence while looking like a clean run.
 // The sandbox's CWD is not guaranteed either. Same class as guardrails.sh
 // resolving its copy via ${BASH_SOURCE[0]%/*}.
-const FILING_TAXONOMY_PATH = fileURLToPath(
-  new URL("../../../../.claude/hooks/lib/user-surface-taxonomy.txt", import.meta.url),
-);
+//
+// NOT `new URL("…", import.meta.url)`: that spelling is the bundler's static
+// asset-reference syntax (Turbopack and webpack both), and this file is now in
+// the Next.js server bundle (the deny marker imports `filingShape`), so
+// `next build` tried to RESOLVE the taxonomy as a module and the Docker build
+// -- whose context is apps/web-platform, four levels below the file -- failed
+// with "Module not found" (#8074 post-merge release 34773058045; every CI
+// build passed because a full checkout has the file). A path joined at call
+// time is opaque to the bundler; inside the bundle it resolves nowhere, which
+// is the documented exit-2-does-not-apply degradation, and the bundle never
+// evaluates a filing anyway -- only the standalone `node <this file>` hook
+// does, from the sandbox's repo checkout.
+//
+// Computed LAZILY, not at module load: this file's "never throw" doctrine
+// guards main(), and a module-init throw in a bundle that leaves
+// `import.meta.url` undefined (esbuild's CJS output does) would take down
+// the whole importing route -- every cron -- rather than one hook run. The
+// lazy form throws, if ever, inside the exit-2 try/catch below (#8136 review).
+function filingTaxonomyPath() {
+  return resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../.claude/hooks/lib/user-surface-taxonomy.txt",
+  );
+}
 
 // Does any REAL label token in the (dequoted) segment carry `label`? Six
 // spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
@@ -191,7 +213,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // rather than breaking a cron that files honestly.
   let surfaces = [];
   try {
-    const raw = readTaxonomy ? readTaxonomy(FILING_TAXONOMY_PATH) : "";
+    const raw = readTaxonomy ? readTaxonomy(filingTaxonomyPath()) : "";
     surfaces = String(raw).split("\n").map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
   } catch { surfaces = []; }

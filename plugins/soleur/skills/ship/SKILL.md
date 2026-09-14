@@ -2143,6 +2143,8 @@ done
 # <!-- phase-7-poll-block:end -->
 ```
 
+**Run every Monitor with its shell in the MAIN checkout (or `/var/tmp`), never `cd`'d into the feature worktree.** Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
+
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
 
 **Auto-sync on BEHIND.** When the polling loop observes `OPEN BEHIND`, origin/main has moved ahead of the branch's head since the queued auto-merge started waiting on CI. GitHub's auto-merge does not fire while the branch is behind base — it observes the BEHIND state and silently waits forever. The poll loop closes this by:

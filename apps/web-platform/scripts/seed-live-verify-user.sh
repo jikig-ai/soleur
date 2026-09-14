@@ -50,6 +50,15 @@
 
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${LIVE_VERIFY_USER_PASSWORD:+x}${NEXT_PUBLIC_SUPABASE_ANON_KEY:+x}${SUPABASE_SERVICE_ROLE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- Pre-flight ----------------------------------------------------------
 
 if [[ "${DOPPLER_CONFIG:-}" != "prd" ]]; then
@@ -135,7 +144,7 @@ header_json="Content-Type: application/json"
 
 # TC_VERSION must match lib/legal/tc-version.ts (middleware redirects to
 # /accept-terms on mismatch). Keep this literal in sync with that file.
-TC_VERSION="2.5.0"
+TC_VERSION="2.5.1"
 
 EMAIL="live-verify@soleur.ai"
 # Synthetic, non-resolvable sentinel repo URL. Never cloned/fetched — the app
@@ -146,7 +155,7 @@ SENTINEL_REPO_URL="https://github.com/soleur-synthetic/verify-harness-sentinel"
 
 find_user_by_email() {
   local email="$1"
-  curl -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
+  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
     -H "$header_auth" -H "$header_api" \
     | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
 }
@@ -155,7 +164,7 @@ user_id=$(find_user_by_email "$EMAIL")
 
 if [[ -z "$user_id" ]]; then
   echo "Creating $EMAIL..."
-  create_response=$(curl -sf "$SB_URL/auth/v1/admin/users" \
+  create_response=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -d "$(jq -nc --arg email "$EMAIL" --arg password "$LIVE_VERIFY_USER_PASSWORD" \
       '{email: $email, password: $password, email_confirm: true}')")
@@ -168,7 +177,7 @@ if [[ -z "$user_id" ]]; then
   echo "  Created."
 else
   echo "Refreshing password for $EMAIL..."
-  curl -sf "$SB_URL/auth/v1/admin/users/$user_id" \
+  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users/$user_id" \
     -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
     -d "$(jq -nc --arg password "$LIVE_VERIFY_USER_PASSWORD" \
       '{password: $password, email_confirm: true}')" \
@@ -178,7 +187,7 @@ fi
 
 # public.users ladder — clears /accept-terms + /setup-key middleware gates.
 echo "  Provisioning public.users row..."
-curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc \
@@ -190,7 +199,7 @@ curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
 
 # Resolve the solo workspace (handle_new_user trigger sets id == user.id; the
 # owner membership row is the authoritative lookup).
-workspace_id=$(curl -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$user_id&role=eq.owner&select=workspace_id&limit=1" \
+workspace_id=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$user_id&role=eq.owner&select=workspace_id&limit=1" \
   -H "$header_auth" -H "$header_api" \
   | jq -r '.[0].workspace_id // ""')
 if [[ -z "$workspace_id" ]]; then
@@ -203,7 +212,7 @@ fi
 # createConversation aborts "No connected repository" and the rail check can
 # never materialize a conversation (CTO ruling Q3 — the seed-qa-user.sh gap).
 echo "  Provisioning workspaces row (repo_url sentinel + repo_status=ready)..."
-curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
   -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc --arg url "$SENTINEL_REPO_URL" \
@@ -225,7 +234,7 @@ curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
 # role bypasses the SELECT-only RLS (mig 060:41-43); the table has no
 # insert/update trigger and no table-level REVOKE FROM service_role.
 echo "  Resolving organization_id for the active-workspace binding..."
-org_id=$(curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id&select=organization_id" \
+org_id=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id&select=organization_id" \
   -H "$header_auth" -H "$header_api" \
   | jq -r '.[0].organization_id // ""')
 if [[ -z "$org_id" ]]; then
@@ -236,7 +245,7 @@ fi
 # POST upsert (NOT a bare PATCH: no row exists yet, so ?user_id=eq.X matches 0
 # rows and silently no-ops, leaving the binding absent and the harness broken).
 echo "  Binding active workspace (user_session_state upsert)..."
-curl -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
+curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
   -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
   -H "Prefer: resolution=merge-duplicates,return=minimal" \
   -d "$(jq -nc \
@@ -250,11 +259,11 @@ curl -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
 # Dummy decrypt-poisoned anthropic api_keys row (has-key gate). iv/auth_tag are
 # NOT NULL (mig 004); GCM verification can never succeed on these, so any real
 # dispatch fails decryption — the row only drives the "key on file" UI state.
-existing_key=$(curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
+existing_key=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
   -H "$header_auth" -H "$header_api" \
   | jq -r '.[0].id // ""')
 if [[ -z "$existing_key" ]]; then
-  curl -sf "$SB_URL/rest/v1/api_keys" \
+  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys" \
     -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "$(jq -nc --arg uid "$user_id" \

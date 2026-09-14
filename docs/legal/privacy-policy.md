@@ -24,9 +24,11 @@ generated-date: 2026-02-20
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
+**Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
+
 ## 1. Introduction
 
-This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").
+This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI) providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").
 
 We are committed to protecting your privacy. This Policy explains what data is and is not collected, how the Plugin operates, and your rights under applicable law, including the EU General Data Protection Regulation (GDPR) and US privacy regulations.
 
@@ -42,13 +44,13 @@ For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Priva
 
 ## 3. What the Plugin Does
 
-Soleur is a locally installed Claude Code plugin. It provides specialist AI agents, skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via the Claude Code CLI and runs entirely on your local machine.
+Soleur is a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). It provides specialist AI agents, skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via a supported AI coding CLI and runs entirely on your local machine.
 
 ## 4. Data We Collect
 
 ### 4.1 Data Collected by the Plugin: None
 
-The Soleur **Plugin** (the locally installed Claude Code extension) **does not collect, transmit, or store any personal data on external servers**. Specifically:
+The Soleur **Plugin** (the locally installed plugin for supported AI coding CLIs) **does not collect, transmit, or store any personal data on external servers**. Specifically:
 
 - The Plugin runs entirely on your local machine.
 - All knowledge-base files -- including plans, brainstorms, specifications, and learnings -- are stored exclusively on your local filesystem.
@@ -313,12 +315,14 @@ Jikigai's founder conducts limited, one-to-one (1:1) cold outreach to profession
 
 ### 5.1 Anthropic Claude API
 
-The Soleur Plugin is designed to work with the Anthropic Claude API through the Claude Code CLI. When you use the Plugin:
+The Soleur Plugin is designed to work with the AI provider of the CLI you run it in (Anthropic through Claude Code; xAI through Grok Build). When you use Claude Code:
 
 - **You** connect to the Anthropic API using **your own API key**.
 - Data sent to the Anthropic API (such as prompts, code context, and file contents) is transmitted directly between your machine and Anthropic's servers.
 - Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic.
 - Anthropic's handling of your data is governed by [Anthropic's Privacy Policy](https://www.anthropic.com/privacy) and their Terms of Service.
+
+When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials. That provider is not a Jikigai processor.
 
 **This section describes the locally-installed Plugin only.** Jikigai separately operates its own automated jobs that send content to Anthropic PBC under a **Jikigai-held API key**, for which Jikigai is the controller and Anthropic is its processor. The three bullets above — in particular "Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic" — do **not** describe that processing and must not be read as covering it. See Section 4.4, which sets out what is collected, where it is sent, and what has been republished. *(Clarification added 2026-07-31, ref #7100: the scoping was previously implicit, which left this section reading as a statement about all Anthropic egress, contradicting Section 4.4.)*
 
