@@ -1918,18 +1918,19 @@ _g "G29: a MERGE commit touching the evidence, one parent side carrying a payloa
 #            the "untouched" PASS branch.
 # RAISED 149 -> 150 (#8010 sweep): +1 regression pin — the rung-2 no-evidence HOLD still
 #            names git-data-birth.md after the DO-NOT-DISPATCH wording was retired.
+_FLOOR=150
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 150 ]]; then
+if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
   # APPEND TO THE LEDGER TOO. The verdict is `exit $(( ${#FAILURES[@]} > 0 ))`, so a floor
   # that only bumps the counter exits non-zero by ACCIDENT — via the reconciliation below
   # tripping — and prints "fail() was tampered with", which is false and misdirects whoever
   # hits it. It also means the natural fix for that false message (relaxing the
   # reconciliation) silently disarms the floor: measured 102 assertions, "1 failed", exit 0.
-  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is 150")
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 150. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  FAILURES+=("ANTI-VACUITY: only ${_ran} assertions ran, floor is ${_FLOOR}")
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 150)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

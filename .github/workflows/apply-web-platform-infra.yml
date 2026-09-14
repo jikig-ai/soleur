@@ -249,7 +249,7 @@ on:
           template landed), and the authorization-map interlock (#8009). An earlier version
           of this text said a dispatch exits 1 before planning; that stopped being true when
           the evidence merged. What holds the route now is the environment approval alone
-          (the runbook banner was cleared 2026-09-13, PR #8128) -- and that approval reports prevent_self_review:false with a
+          (the runbook banner was cleared by PR #8128, merged 2026-09-14) -- and that approval reports prevent_self_review:false with a
           single reviewer, so the dispatcher can approve their own deployment. (That attribute
           is declared nowhere in this repo's Terraform, so false is the provider default, not
           a choice; every gated environment here reads the same way.) Read
@@ -295,7 +295,7 @@ on:
           # apply and a dark boot are indistinguishable. #6982 SHIPPED that emitter, so the
           # gate now RELEASES — it remains armed as a regression check, not as a hold.
           # The runbook's DO-NOT-DISPATCH banner held the route until the rung-2 evidence
-          # merged (PR #8126); it was cleared 2026-09-13 (PR #8128) and the host was born
+          # merged (PR #8126); it was cleared by PR #8128 (merged 2026-09-14) and the host was born
           # 2026-09-14. See the git_data_host_create job and
           # knowledge-base/engineering/operations/runbooks/git-data-birth.md.
           - git-data-host-create
@@ -5815,7 +5815,7 @@ jobs:
     # moment the rung-2 boot evidence merged, which is exactly the drift a comment asserting
     # a live verdict invites -- so it now states what the gates ARE rather than what they
     # currently answer. What held the route before the birth was the runbook's
-    # DO-NOT-DISPATCH banner (cleared 2026-09-13, PR #8128) and the environment approval;
+    # DO-NOT-DISPATCH banner (cleared by PR #8128, merged 2026-09-14) and the environment approval;
     # the approval is the remaining hold, and it
     # reports prevent_self_review:false with a single reviewer (declared nowhere in this
     # repo's Terraform, so that is the provider default rather than a chosen setting).
@@ -6182,8 +6182,8 @@ jobs:
       # Runs after a green OR a failed apply, never after a skipped one: a partial birth is
       # exactly when the boot evidence matters most, but a plan the gate REFUSED has no host
       # to hear from (measured on run 34822248580: a refused plan left this step polling for
-      # its full 10-minute budget and printing "the apply may be green" over a run where no
-      # apply happened). `!cancelled()` rather than `always()` so a cancelled run does not
+      # its full 10-minute budget and then telling the operator to "re-dispatch once the query
+      # path works" over a run where no apply happened). `!cancelled()` rather than `always()` so a cancelled run does not
       # spend the budget either. Enumerated (`== 'success' || == 'failure'`) rather than
       # `!= 'skipped'`: a renamed `apply` id resolves to '', and only the enumerated form
       # fails closed on that (the idiom's rationale in apply-deploy-pipeline-fix.yml).

@@ -8,7 +8,7 @@
 # THIS WORKFLOW SHIPS UNFIRED, AND THAT IS THE DESIGN RATHER THAN AN OVERSIGHT. A PR merges
 # ATOMICALLY, so evidence committed in the same PR that builds the harness would be evidence
 # from a rehearsal that never ran. The harness must exist, merge, and then RUN before its
-# output can release anything. The banner in git-data-birth.md was cleared 2026-09-13 once
+# output can release anything. The banner in git-data-birth.md was cleared by PR #8128 (merged 2026-09-14) once
 # evidence for the current template merged; a later template edit re-HOLDs the gate, not the banner.
 #
 # IT NEVER COMMITS ITS OWN EVIDENCE. The evidence file lands as a workflow ARTIFACT and, if

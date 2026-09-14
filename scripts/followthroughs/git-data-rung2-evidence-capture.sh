@@ -1021,6 +1021,7 @@ esac
   printf '#\n'
   printf '# Rehearsal host : %s\n' "$HOST_NAME"
   printf '# Captured (UTC) : %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '# TABLE: BS_TABLE=%s BS_TABLE_S3=%s\n' "$BS_TABLE" "$_bs_s3"
   printf '#\n'
   printf '# WHAT THE HASH BINDS: the cloud-init template plus every file()-bound payload in\n'
   printf '# modules/git-data-userdata/main.tf. It does NOT bind the templatefile ARGUMENTS, so\n'
@@ -1030,7 +1031,6 @@ esac
   printf '#\n'
   printf '# ARTIFACT 1 — source-liveness anchor. Excludes this host BY DESIGN: an anchor a\n'
   printf '# silent host could satisfy would collapse "dark boot" and "broken instrument".\n'
-  printf '# TABLE: BS_TABLE=%s BS_TABLE_S3=%s\n' "$BS_TABLE" "$_bs_s3"
   printf '# QUERY:%s\n' "$(printf '%s' "$ANCHOR_SQL" | tr '\n' ' ' | tr -s ' ')"
   printf '#\n'
   printf '# ARTIFACT 2 — every stage this host reported, and ARTIFACT 3 — the fatal/false-assertion\n'

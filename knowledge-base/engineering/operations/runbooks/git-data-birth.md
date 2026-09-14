@@ -1,6 +1,6 @@
 # Runbook — birthing the git-data host
 
-> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13
+> ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
 > This runbook opened with a `⛔ DO NOT DISPATCH THIS YET` banner from its first commit until
 > the PR that made this edit. It was cleared on the release condition it stated, and nothing
