@@ -108,6 +108,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] QA checkpoint: plan has no executable `## Test Scenarios` section, so browser/API scenarios were skipped per QA workflow; diff does not touch structural nav-state paths. Full web-platform and focused migration/settings/routine suites remain green.
   - [x] GDPR evidence checkpoint: regulated-path scan examined 53 changed files and matched 4; no new Art. 9 finding. The pre-existing >90-day corpus posture signal remains tracked by #7710, with the inert cron binding tracked by #7255.
   - [x] Synthetic qualification record: Codex API-key and managed ChatGPT modes have deterministic evidence recorded separately from pending customer-content vendor/CLO approval (`codex-qualification-record.md`).
+  - [x] Account-erasure slice: migration 138 anonymizes engine setting/run identity through a service-role-only RPC before auth deletion; lineage/events remain and cascade tests pass 8/8.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.

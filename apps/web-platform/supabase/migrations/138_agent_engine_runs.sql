@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS public.workspace_engine_settings (
   workspace_id uuid PRIMARY KEY REFERENCES public.workspaces(id) ON DELETE CASCADE,
   default_engine_id text NOT NULL,
   default_auth_mode text NOT NULL DEFAULT 'managed',
-  updated_by uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  updated_by uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.agent_engine_runs (
   auth_mode text NOT NULL,
   adapter_version text NOT NULL,
   status text NOT NULL CHECK (status IN ('queued','running','waiting','cancel_requested','completed','failed','cancelled')),
-  created_by uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  created_by uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL DEFAULT now(),
   terminal_at timestamptz NULL,
   CONSTRAINT agent_engine_runs_execution_chk CHECK (
@@ -136,5 +136,35 @@ $$;
 REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) FROM anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.bind_agent_engine_run(uuid, text, uuid, text, text, uuid) TO authenticated, service_role;
+
+-- Account erasure keeps operational engine lineage while severing user identity.
+CREATE OR REPLACE FUNCTION public.anonymise_agent_engine_data(p_user_id uuid)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE v_count integer := 0;
+        v_rows integer;
+BEGIN
+  IF auth.role() <> 'service_role' THEN
+    RAISE EXCEPTION 'agent engine anonymisation requires service role' USING ERRCODE = '42501';
+  END IF;
+  UPDATE public.workspace_engine_settings
+    SET updated_by = NULL
+    WHERE updated_by = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  v_count := v_rows;
+  UPDATE public.agent_engine_runs
+    SET created_by = NULL
+    WHERE created_by = p_user_id;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  v_count := v_count + v_rows;
+  RETURN v_count;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.anonymise_agent_engine_data(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.anonymise_agent_engine_data(uuid) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.anonymise_agent_engine_data(uuid) TO service_role;
 
 COMMIT;
