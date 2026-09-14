@@ -94,6 +94,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Registry dispatch slice: bound-run dispatch resolves the adapter from persisted engine identity through the reviewed factory (12 dispatch tests green).
   - [x] Adapter composition slice: injected Claude/Codex transports compose into reviewed factories, with Codex omitted until auth dependencies exist (2 composition tests green).
   - [x] Cancellation slice: Codex cancellation normalization confirms only explicit terminal acknowledgement (18 adapter tests green).
+  - [x] Egress policy slice: server-side endpoint, data-class, DPA, transfer-geography, deletion-support, and approval evidence fail closed before registry dispatch (8 policy tests and 1 dispatch integration test green).
   - [x] Expanded evidence slice: migration-inclusive engine/settings/routine suite passes 116/116; C4 freshness passes 3/3.
   - [x] Catalog identity slice: reviewed Codex metadata reuses the adapter’s immutable engine ID (22 registry/factory tests green).
   - [x] C4 composition slice: adapter factory and provider composition boundaries are modeled and regenerated; freshness 3/3 and version pin 2/2 pass.
@@ -102,6 +103,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Full web-platform gate: 1,085 files and 13,556 tests pass (54 skipped, 1 existing todo) after DSAR integration fixes.
   - [x] Review fix slice: service-role binding now verifies `p_created_by` membership when `auth.uid()` is unavailable (migration/grant tests pass 12/12).
   - [x] QA checkpoint: plan has no executable `## Test Scenarios` section, so browser/API scenarios were skipped per QA workflow; diff does not touch structural nav-state paths. Full web-platform and focused migration/settings/routine suites remain green.
+  - [x] GDPR evidence checkpoint: regulated-path scan examined 53 changed files and matched 4; no new Art. 9 finding. The pre-existing >90-day corpus posture signal remains tracked by #7710, with the inert cron binding tracked by #7255.
 - [ ] GREEN-05 (blockedBy RED-05): Codex transport, auth lifecycle, credential isolation, shared policy and normalized events.
 - [ ] RED-06: settings default, both auth modes, routines, missing credentials, availability, and owner authorization.
 - [ ] GREEN-06 (blockedBy RED-06): settings UI and server endpoints following the updated wireframe.

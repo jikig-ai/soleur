@@ -12,6 +12,34 @@ describe("dispatchBoundEngineRun", () => {
     expect(adapter.start).toHaveBeenCalledOnce();
     expect(events).toHaveLength(1);
   });
+
+  it("fails closed on incomplete egress evidence before invoking a provider", async () => {
+    const adapter = { start: vi.fn(async function* () {
+      yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "should-not-run" } as const };
+    }) };
+    const repository = { getRun: vi.fn().mockResolvedValue({ id: "run-1", binding: { engineId: "codex" } }) };
+    await expect((async () => {
+      for await (const _event of dispatchBoundEngineRunFromRegistry({
+        repository,
+        factories: { codex: () => adapter as never },
+        egress: {
+          selection: {
+            engineId: "codex",
+            authMode: "managed",
+            operation: "existing-run",
+            workflow: "interactive",
+            dataClass: "customer",
+            requiredCapabilities: [],
+            now: Date.now(),
+          },
+        },
+        runId: "run-1",
+        input: { text: "hi", attachmentIds: [] },
+        context: {} as never,
+      })) { /* no-op */ }
+    })()).rejects.toMatchObject({ code: "engine_egress_denied" });
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
   it("loads the persisted binding before invoking the adapter", async () => {
     const adapter = { start: vi.fn(async function* () {
       yield { runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "ok" } as const };
