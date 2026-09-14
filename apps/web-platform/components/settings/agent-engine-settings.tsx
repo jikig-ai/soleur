@@ -12,6 +12,9 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
   const [authMode, setAuthMode] = useState<string>("managed");
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
+  const isEngineSelectable = (engine: Engine): boolean =>
+    engine.enabledForNewRuns && (engine.id !== "codex" || codexRolloutEnabled);
+  const selectedEngine = engines.find((engine) => engine.id === selected);
 
   useEffect(() => {
     void fetch("/api/dashboard/settings/agent-engine")
@@ -51,8 +54,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
         {status === "error" && <p role="alert" className="mb-3 text-sm text-red-400">Engine settings are unavailable.</p>}
         <div className="space-y-3">
           {engines.map((engine) => {
-            const rolloutEnabled = engine.id !== "codex" || codexRolloutEnabled;
-            const selectable = engine.enabledForNewRuns && rolloutEnabled;
+            const selectable = isEngineSelectable(engine);
             return (
             <label key={engine.id} className="flex items-start gap-3 text-sm text-soleur-text-primary">
               <input
@@ -77,13 +79,13 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
             );
           })}
         </div>
-        {engines.find((engine) => engine.id === selected)?.authModes.length ? (
+        {selectedEngine?.authModes.length ? (
           <label className="mt-5 block text-sm text-soleur-text-primary">
             <span className="mb-2 block font-medium">Authentication mode</span>
             <select
               aria-label="Authentication mode"
               value={authMode}
-              disabled={!isOwner || status === "loading" || status === "saving"}
+              disabled={!isOwner || status === "loading" || status === "saving" || !isEngineSelectable(selectedEngine)}
               onChange={(event) => {
                 const nextMode = event.target.value;
                 setAuthMode(nextMode);
@@ -91,7 +93,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
               }}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2"
             >
-              {(engines.find((engine) => engine.id === selected)?.authModes ?? []).map((mode) => (
+              {selectedEngine.authModes.map((mode) => (
                 <option key={mode} value={mode}>{mode}</option>
               ))}
             </select>

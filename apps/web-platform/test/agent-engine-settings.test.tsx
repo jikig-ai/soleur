@@ -52,6 +52,22 @@ describe("AgentEngineSettings", () => {
     expect(await findByLabelText(/codex/)).toBeDisabled();
   });
 
+  it("keeps the auth selector disabled for a persisted Codex default while rollout is off", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        defaultEngineId: "codex",
+        defaultAuthMode: "managed",
+        engines: [
+          { id: "claude-code", version: "claude-code-v1", transport: "local", authModes: ["managed"], enabledForNewRuns: true },
+          { id: "codex", version: "codex-v1", transport: "remote", authModes: ["managed", "api-key"], enabledForNewRuns: true },
+        ],
+      }),
+    });
+    const { findByLabelText } = render(<AgentEngineSettings isOwner />);
+    expect(await findByLabelText(/Authentication mode/)).toBeDisabled();
+  });
+
   it("saves a changed default for an owner", async () => {
     useOptionalFeatureFlagMock.mockReturnValue(true);
     fetchMock.mockResolvedValueOnce({
