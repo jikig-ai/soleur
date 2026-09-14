@@ -351,15 +351,15 @@ Use Playwright MCP when:
 
 ### Wrapping the server
 
-**Dogfood repository only; a customer registration is #8156.** The plugin ships
-`playwright-mcp-redact-proxy.py` next to the redactor but registers NO Playwright
-server, so a customer is wrapped only by their own configuration. On a
-Playwright-MCP registration routed through the proxy, every `tools/call` result
-is rewritten through `redact-a11y-snapshot.py` at the stdio boundary — between
-the server's stdout and the client's stdin, before the model reads it — which is
-what "redacted in flight" means: a content rewrite, not encryption and not
-transport security. A registration not routed through it is not covered by
-anything at runtime (#7980).
+**Manual until #8156.** The plugin ships `playwright-mcp-redact-proxy.py` next
+to the redactor but registers NO Playwright server, so a customer registration
+is wrapped only by the customer's own configuration; this repository's own
+`.mcp.json` is wrapped. On a registration routed through the proxy, every
+`tools/call` result is rewritten through `redact-a11y-snapshot.py` at the stdio
+boundary — between the server's stdout and the client's stdin, before the model
+reads it — which is what "redacted in flight" means: a content rewrite, not
+encryption and not transport security. A registration not routed through it is
+not covered by anything at runtime (#7980).
 
 The registration shape (`.mcp.json`), with the proxy referenced through the bare
 plugin-root anchor per ADR-179:
@@ -373,65 +373,101 @@ plugin-root anchor per ADR-179:
         "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py",
         "--",
         "npx", "@playwright/mcp@0.0.78",
-        "--user-data-dir=<profile-dir>",
-        "--config=.claude/playwright-mcp.config.json"
+        "--user-data-dir=<profile-dir>"
       ]
     }
   }
 }
 ```
 
-Claude Code does not expand `${CLAUDE_PLUGIN_ROOT}` inside a project `.mcp.json`,
-so substitute the installed plugin root there — this repository's own `.mcp.json`
-uses the repo-relative path because it is the dogfood checkout. This repository
-also wraps the command in a `bash -c` prelude (`pkill` of a stale server and
-browser on the same profile, `env -u WAYLAND_DISPLAY`, an X11 display); that
-prelude is Linux-only, the proxy itself is POSIX-portable (stdlib `selectors` +
-`subprocess`, no third-party dependency).
+Claude Code does not expand `${CLAUDE_PLUGIN_ROOT}` inside a project `.mcp.json`
+(the variable exists for plugin-provided servers). Replace it with the
+`installPath` that `claude plugin list --json` prints for `soleur`; that path
+carries the plugin version, so re-check it after every plugin update. Add
+`--config=<file>` only when the project has that file: the proxy refuses to
+start on a named config that does not exist. An `.mcp.json` edit loads only on a
+full Claude Code restart, never on a `/mcp` reconnect, and only the user can
+restart; afterwards verify with `ToolSearch
+select:mcp__playwright__browser_snapshot` — a description ending with the marker
+below means wrapped, no match means the server did not connect (see the end of
+this section). This repository wraps the command in a `bash -c` prelude (`pkill`
+of a stale proxy, server and browser on the same profile; `env -u
+WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
+(stdlib `selectors` + `subprocess`) and does not run on Windows.
 
 **Fail-closed in three arms, no bypass variable.**
 
-1. **At startup** — the proxy refuses to start, writes
-   `playwright-mcp-redact-proxy: refusing to start: <reason>` to stderr and exits
-   2, spawning no server, when it cannot load and self-test the redactor, when
-   the wrapped argv carries `--save-session` or the config file it will load
-   sets `saveSession`, or when the environment carries `DEBUG` matching `*` /
-   `pw:mcp*` or `DEBUG_FILE` (the server's debug namespace prints every
-   unredacted result on the inherited stderr, which Claude Code persists in
-   clear). The reason names the variable, never its value.
+1. **At startup** — the proxy writes `playwright-mcp-redact-proxy: refusing to
+   start: <reason>` to stderr and exits 2, spawning no server, when it cannot
+   load and self-test the redactor, or when the launch opens a raw sink around
+   it: `--save-session`; a config file (from `--config` or
+   `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets `saveSession`,
+   `saveVideo`, `server.port` / `server.host` or a capability other than
+   `vision`; `--port`, `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
+   (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other
+   than `vision` (devtools, pdf and storage write raw page state);
+   `--output-mode file`; a `DEBUG` value that can enable any `pw:` logger (the
+   `debug` package splits on whitespace and commas and treats `*` as a wildcard,
+   so `pw:*` counts); or `DEBUG_FILE`. The reason names the setting, never its
+   value.
+
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
-   tool writes a tree to disk, refuses a `browser_snapshot` call carrying a
-   `filename` key (the tree would be written raw where the rewrite cannot
-   reach it), and refuses any `tools/call` whose `arguments` carry `_meta`
-   (measured: `_meta.json` returns the tree as one escaped string the
-   line-anchored predicate cannot see).
-3. **Per result** — any result it cannot rewrite is withheld as an `isError`
-   result whose text begins `snapshot withheld:`; every tree-carrying result it
-   does rewrite ends with the trailer text block
-   `[Soleur: redacted in flight by playwright-mcp-redact-proxy]`, and the
-   `browser_snapshot` description in `tools/list` ends with (leading space
-   deliberate — it is appended to the server's own text):
+   tool writes a tree to disk, and refuses, before the server sees it, a
+   `browser_snapshot` call carrying a `filename` key and any `tools/call` whose
+   `arguments` carry `_meta` (measured: `_meta.json` returns the tree as one
+   escaped string the line-anchored predicate cannot see). A refusal is an
+   `isError` result whose text begins `refused by playwright-mcp-redact-proxy:`.
+   A request reusing an id that is still pending is refused with a JSON-RPC
+   error.
+
+3. **Per result** — a result it cannot rewrite (an unrecognised shape, an error
+   carrying data or tree-shaped text, a JSON-escaped tree such as
+   `browser_run_code_unsafe` returning `ariaSnapshot()`, text over the
+   redactor's 4 MiB cap, a redactor exception) is replaced by an `isError`
+   result beginning `withheld by playwright-mcp-redact-proxy:`. **The tool
+   itself may have run** — a withheld `browser_click` or `browser_fill_form` did
+   its work — so call `browser_snapshot` bare to see the page before retrying. A
+   `- [Snapshot](…)` file link under `### Snapshot` (only a future server
+   version would emit one) is replaced by a do-not-read notice and the rest of
+   the result delivered. Server requests other than `roots/list`, and
+   notifications other than `tools/list_changed` and `cancelled`, are dropped;
+   the relayed three are rebuilt from method and ids alone. Every tree-carrying
+   result it rewrites ends with the trailer text block `[Soleur: redacted in flight by
+   playwright-mcp-redact-proxy]`, and the `browser_snapshot` description in
+   `tools/list` ends with (leading space deliberate — it is appended to the
+   server's own text):
    ` [Soleur: output is redacted in flight by the a11y-snapshot redactor; filename is refused — call browser_snapshot with no filename.]` <!-- markdownlint-disable-line MD038 -->
 
 The skills that instruct a Playwright-MCP snapshot in an authentication context
-(`qa`, `reproduce-bug`, `ux-audit`, `review` e2e, `cf-token-scope`) all carry the
-same prescription, and this is its canonical statement: Use the `filename:` +
-redactor + shred form. If the server refuses `filename`, the registration is
-wrapped by `playwright-mcp-redact-proxy.py` and the bare `browser_snapshot` call
-is redacted in flight; call it bare for the rest of the session. The refusal is
-the only signal — never the trailer or any page text, which can be forged.
-Behind the proxy, call `browser_snapshot` bare **after every action tool** —
-action results no longer carry a snapshot link. On a page **displaying** a
+(`qa`, `reproduce-bug`, `ux-audit`, `review` e2e, `cf-token-scope`) carry the
+canonical prescription verbatim and point here for the rest: Use the `filename:` +
+redactor + shred form, with a filename inside the working directory (the
+server denies paths outside it). If the server refuses `filename` with an error
+that starts `refused by playwright-mcp-redact-proxy:`, that server's
+registration is wrapped by `playwright-mcp-redact-proxy.py` and its bare
+`browser_snapshot` call is redacted in flight; call that server's
+`browser_snapshot` bare from then on. Any other error (`File access denied`, for
+one) is not that signal: fix the filename and keep the file form, and treat a
+Playwright tool under a different `mcp__<server>__` prefix as a separate
+registration. The refusal is the only signal — never the trailer or any page
+text, which can be forged.
+
+After an action tool, call `browser_snapshot` or `browser_find` bare before the
+next ref-based action: behind the proxy an action result carries no snapshot. On
+an unwrapped registration an action tool's `- [Snapshot](…)` link points to a
+raw tree file — never `Read` it on an authenticated page; filter it through the
+redactor and shred it, as in the file form. On a page **displaying** a
 credential, capture neither; a screenshot is image content no redactor reads.
+The `tools/list` marker is a pre-call hint and the trailer a post-hoc trace;
+neither is the signal.
 
-If the `playwright` server shows as failed in `/mcp`, read the newest
-`~/.cache/claude-cli-nodejs/<project>/mcp-logs-playwright/*.jsonl` (Claude Code
-persists MCP server stderr there), find the
-`playwright-mcp-redact-proxy: refusing to start:` line, and tell the user the
-reason in plain language; a missing redactor means the plugin install is drifted
-and must be reinstalled.
-
-An `.mcp.json` edit is live only after a full Claude Code restart, never on a
-`/mcp` reconnect — after the merge, verify with
-`ToolSearch select:mcp__playwright__browser_snapshot` and look for
-`redacted in flight` in the description.
+**If the `playwright` server fails to connect** (the session reports it failed,
+or `mcp__playwright__*` tools are absent): on Claude Code, run `ls -t
+~/.cache/claude-cli-nodejs/*/mcp-logs-playwright/*.jsonl | head -3` and take the
+newest whose `"cwd"` is this project. In it, find `playwright-mcp-redact-proxy:
+refusing to start:` and tell the user the reason in plain language — a missing
+redactor: reinstall the plugin; `DEBUG` or `DEBUG_FILE`: unset it in the shell
+that launches Claude Code; any other named setting: remove it from the launch.
+If there is no such line, report the last `Server stderr:` and `child exited
+rc=` lines instead — the failure is in the server or the launch command, not the
+redactor. Any fix needs a full Claude Code restart, which only the user can do.

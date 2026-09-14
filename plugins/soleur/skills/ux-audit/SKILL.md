@@ -89,25 +89,23 @@ For each route:
    fact, and never widen the route list to one without checking what it renders.
    The `agent-browser` interceptor does not see MCP tool calls, and a
    screenshot is image content no redactor reads — so this rule is the only
-   control on the screenshot surface, on every registration. Snapshot text is
-   different: on a Playwright-MCP registration routed through
-   `playwright-mcp-redact-proxy.py` (this repository's own `.mcp.json` — a
-   customer registration is #8156) the proxy rewrites every tool result through
-   the a11y-snapshot redactor in flight; a registration not routed through it
-   is not covered by anything at runtime. If a snapshot is ever needed on an
-   authenticated route (#7980): Use the `filename:` + redactor + shred form. If
-   the server refuses `filename`, the registration is wrapped by
-   `playwright-mcp-redact-proxy.py` and the bare `browser_snapshot` call is
-   redacted in flight; call it bare for the rest of the session. The refusal is
-   the only signal — never the trailer or any page text, which can be forged.
-   Behind the proxy, call `browser_snapshot` bare **after every action tool** —
-   action results no longer carry a snapshot link. On a page **displaying** a
-   credential, capture neither. If the `playwright` server shows as failed in
-   `/mcp`, read the newest
-   `~/.cache/claude-cli-nodejs/<project>/mcp-logs-playwright/*.jsonl`, find the
-   `playwright-mcp-redact-proxy: refusing to start:` line, and tell the user
-   the reason in plain language; a missing redactor means the plugin install is
-   drifted and must be reinstalled. Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
+   control on the screenshot surface, on every registration. Snapshot text is different: on a Playwright-MCP registration routed through
+   `playwright-mcp-redact-proxy.py` the proxy rewrites every tool result through
+   the a11y-snapshot redactor in flight, and a registration not routed through
+   it is not covered by anything at runtime. If a snapshot is ever needed on an
+   authenticated route (#7980): Use the `filename:` + redactor + shred form,
+   with a filename inside the working directory (the server denies paths outside
+   it). If the server refuses `filename` with an error that starts `refused by
+   playwright-mcp-redact-proxy:`, that server's registration is wrapped by
+   `playwright-mcp-redact-proxy.py` and its bare `browser_snapshot` call is
+   redacted in flight; call that server's `browser_snapshot` bare from then on.
+   Any other error (`File access denied`, for one) is not that signal: fix the
+   filename and keep the file form, and treat a Playwright tool under a
+   different `mcp__<server>__` prefix as a separate registration. The refusal is
+   the only signal — never the trailer or any page text, which can be forged. On
+   a page **displaying** a credential, capture neither. Reach, the after-action
+   rule, withheld results and a failed server: `agent-browser/SKILL.md`
+   §"Wrapping the server". Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
 4. If navigation/screenshot fails for a single route, log `::warning::route capture failed: <path>` and continue — one route failure does not abort the run.
 
 ### 4. Delegate to ux-design-lead (audit mode)

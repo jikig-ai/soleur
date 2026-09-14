@@ -66,15 +66,15 @@ FR13 AST row: the module docstring (raw, `ast.get_docstring(clean=False)`) and
 the `self_test` function body are exempt from the literal scan; `self_test` must
 be the ONLY function carrying such a literal and must carry at least one. The
 row-10 mutant (`if "password" in text` inside `rewrite_result`) is still caught
-(`suite-green-1.log`).
+(`suite-green-1.txt`).
 
 ## Suite measurements (`runs/`)
 
 | record | result |
 |---|---|
-| `suite-green-1.log` — shipped proxy | 162 passed, 0 failed, 162 cases, rc=0; 39/39 mutants landed and caught |
-| `suite-red-passthrough.log` — `PROXY_UNDER_TEST=fake-passthrough-proxy.py` (QG5) | 81 passed, 83 failed, rc=1; every redaction/refusal/withhold row RED, every must-PASS row (P1–P5, byte-identical forwards, roots/list passthrough) GREEN |
-| `phase4-gates.log` | lint suite 39/39; bare lint OK over 8323 files; old MCP-gap sentence absent from `plugins/soleur/skills`; vacuity floor 23/23 after promotion |
+| `suite-green-1.txt` — shipped proxy | 162 passed, 0 failed, 162 cases, rc=0; 39/39 mutants landed and caught |
+| `suite-red-passthrough.txt` — `PROXY_UNDER_TEST=fake-passthrough-proxy.py` (QG5) | 81 passed, 83 failed, rc=1; every redaction/refusal/withhold row RED, every must-PASS row (P1–P5, byte-identical forwards, roots/list passthrough) GREEN |
+| `phase4-gates.txt` | lint suite 39/39; bare lint OK over 8323 files; old MCP-gap sentence absent from `plugins/soleur/skills`; vacuity floor 23/23 after promotion |
 | vacuity self-measure | `ok()` neutered → `INSTRUMENT BROKEN` rc=1; `bad()` neutered → rc=1; floor 99999 → `[FATAL] vacuity floor: only 162 cases` rc=1 |
 
 ## Live verification (Phase 3.2)
@@ -94,3 +94,27 @@ then withheld by the 4 MiB result cap. The row drives 65 MiB so the line-cap arm
 itself is what fires (`discarding oversize server line`, pending answered
 `oversize`); the row-37 mutant is distinguished by the ABSENCE of that discard
 line and of `oversize` in the reason, not by isError alone (both arms withhold).
+
+## Review round (2026-09-14)
+
+Measurements the ten-seat review took against the pinned server bundle
+(`~/.npm/_npx/*/node_modules/playwright-core/lib/coreBundle.js`), each closed in
+this change with a suite row and a mutant:
+
+| Observable | Measured | Closure |
+|---|---|---|
+| YAML key quoting | `yamlEscapeKeyIfNeeded` single-quotes a key containing a space-hash, colon-space, `{`, `}`, a backtick or a control character; live through the old proxy, "API Key #1" leaked with the trailer appended | redactor unwraps quoted keys; its suite fixtures were rendered by that function |
+| `DEBUG` matching | the `debug` package splits on whitespace and commas and treats `*` as a wildcard anywhere; `DEBUG=pw:*` enables `pw:mcp:server:response` | any pattern that can enable a `pw:` logger refuses to start |
+| Config parsing | `loadConfig` falls back to `configFromIniFile`; `saveSession` is a typed INI key | a named config that is missing or not a JSON object refuses to start |
+| `checkFile` | an out-of-root `filename` returns `### Error\nFile access denied: …` with `isError`, the old refusal's shape | refusal text carries `refused by playwright-mcp-redact-proxy:` |
+| Server notifications | 0.0.78 emits none; its only server request is `roots/list` | everything else dropped (a request answered on the server side) |
+| `--caps` / `--port` / `--output-mode` | `devtools`, `pdf`, `storage` write raw page state; `--port` serves SSE around stdio; `--output-mode file` writes snapshots and logs | refused at startup, with the matching env vars and config keys |
+
+Suite records: `runs/suite-review-round.txt` (274 passed, 0 failed, 274 cases,
+53 mutants and 53 mutation rows, rc=0); `runs/suite-red-passthrough-review-round.txt`
+(the same suite against `fake-passthrough-proxy.py`: 156 passed, 120 failed, rc=1 —
+every redaction, refusal and withhold row red; the passing rows are byte-identical
+forwards, must-PASS rows, structure rows on the shipped file and Guard 2, which
+reads `.mcp.json` rather than `PROXY`); `runs/suite-helper-neuter-review-round.txt`
+(`red`, `leaks`, `started`, `delivered_ok` each neutered on a copy →
+`HELPER CONTROL BROKEN`, rc=1).

@@ -220,6 +220,37 @@ describe("#7980 — fleet overlay writes no raw accessibility tree to disk (PA-3
     // zero screenshots at a green monitor. The `logger.info({ screenshotCount })`
     // line is INFO and Vector's WARN+ filter drops it — so the upload step must
     // mirror the zero case via warnSilentFallback (layer 2 pino→Sentry).
-    expect(SUT_SOURCE).toMatch(/op:\s*"zero-screenshots"/);
+    // Anchored on the CALL inside the zero-length branch, over comment-stripped
+    // source: the op token alone also appears in the explanatory comment above
+    // the call, so deleting the call would leave a bare-token match green.
+    const code = SUT_SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).toMatch(
+      /if\s*\(\s*screenshots\.length\s*===\s*0\s*\)\s*\{\s*warnSilentFallback\(\s*new Error\([^)]*\),\s*\{\s*feature:\s*"cron-ux-audit",\s*op:\s*"zero-screenshots"/,
+    );
   });
+
+  // PA-31 §(g) (t1) remedy, made mechanical (#7980 review): every cron's per-fire
+  // Playwright overlay is UNWRAPPED (no playwright-mcp-redact-proxy.py on the
+  // cron image), so no cron may hold a tool that returns tree lines or page
+  // values into Anthropic-bound content. `browser_find` inlines tree lines even
+  // under --snapshot-mode none (ADR-213 addendum, measured row 14); evaluate,
+  // run_code_unsafe, network_request(s) and console_messages return values the
+  // agent asks for. Granting one requires routing that cron's overlay through the
+  // proxy first — and then this list, not a silent edit, is what changes.
+  it.each(Object.entries(CRON_MCP_ALLOWLISTS))(
+    "%s holds no tree- or value-returning Playwright tool on its unwrapped overlay",
+    (_cron, entry) => {
+      const forbidden = [
+        "mcp__playwright__browser_snapshot",
+        "mcp__playwright__browser_find",
+        "mcp__playwright__browser_evaluate",
+        "mcp__playwright__browser_run_code_unsafe",
+        "mcp__playwright__browser_network_request",
+        "mcp__playwright__browser_network_requests",
+        "mcp__playwright__browser_console_messages",
+      ];
+      expect(entry.tools.filter((t) => forbidden.includes(t))).toEqual([]);
+      expect(entry.tools.length).toBeGreaterThan(0);
+    },
+  );
 });

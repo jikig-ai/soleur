@@ -2,8 +2,7 @@
 """One proxy session for the suite (#7980). stdlib only.
 
     proxy-session-driver.py --out <dir> --proxy <proxy.py> --server <argv...>
-        [--env K=V]... [--send <json-line>]... [--wait N] [--end eof|sigterm|sigkill|killchild|none]
-        [--reap-pattern <regex>] [--timeout S]
+        [--env K=V]... [--send <json-line>]... [--end eof|sigterm|sigkill|killchild|none] [--timeout S]
 
 Launches `python3 <proxy.py> -- <server argv...>` in a NEW SESSION (so the
 proxy's own pid is the group we assert on for a SIGKILLed proxy), writes each
@@ -11,7 +10,7 @@ proxy's own pid is the group we assert on for a SIGKILLed proxy), writes each
 lapses, then ends the session per --end and waits. Writes into <out>:
   stdout.bin   every byte the proxy wrote          responses.json  parsed objects
   stderr.txt   proxy + server stderr               rc              proxy exit code
-  child_pgid   the pgid the proxy logged (or "")  proxy_pgid      the proxy's pgid
+  child_pgid   the pgid the proxy logged (or "")
   group_after  member count of child_pgid after --end (polled 0.2 s up to --timeout)
 Exit 0 always (the suite reads the files); usage error exits 2.
 """
@@ -28,7 +27,7 @@ import time
 
 
 def parse(argv):
-    o = {"env": {}, "send": [], "wait": 0.0, "end": "eof", "timeout": 8.0, "reap": None, "out": None, "proxy": None, "server": []}
+    o = {"env": {}, "send": [], "end": "eof", "timeout": 8.0, "out": None, "proxy": None, "server": []}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -36,10 +35,8 @@ def parse(argv):
         elif a == "--proxy": o["proxy"] = argv[i + 1]; i += 2
         elif a == "--env": k, v = argv[i + 1].split("=", 1); o["env"][k] = v; i += 2
         elif a == "--send": o["send"].append(argv[i + 1]); i += 2
-        elif a == "--wait": o["wait"] = float(argv[i + 1]); i += 2
         elif a == "--end": o["end"] = argv[i + 1]; i += 2
         elif a == "--timeout": o["timeout"] = float(argv[i + 1]); i += 2
-        elif a == "--reap-pattern": o["reap"] = argv[i + 1]; i += 2
         elif a == "--server": o["server"] = argv[i + 1:]; break
         else: sys.stderr.write(__doc__); sys.exit(2)
     if not (o["out"] and o["proxy"] and o["server"]): sys.stderr.write(__doc__); sys.exit(2)
@@ -60,7 +57,6 @@ def main():
     err = open(err_path, "wb")
     p = subprocess.Popen([sys.executable, o["proxy"], "--"] + o["server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=err, env=env, bufsize=0, start_new_session=True)
-    proxy_pgid = os.getpgid(p.pid)
     sel = selectors.DefaultSelector(); sel.register(p.stdout, selectors.EVENT_READ)
     buf = bytearray(); raw = bytearray(); objs = []
     want = set()
@@ -98,7 +94,6 @@ def main():
 
     while want - got and time.monotonic() < deadline and p.stdout in [k.fileobj for k in sel.get_map().values()]:
         if pump(True) is None: break
-    if o["wait"]: time.sleep(o["wait"])
     while sel.get_map() and pump(False): pass
     err.flush()
     child_pgid = ""
@@ -114,8 +109,6 @@ def main():
             os.killpg(int(child_pgid), signal.SIGTERM)
     elif o["end"] == "sigkill":
         os.kill(p.pid, signal.SIGKILL)
-        if o["reap"]:  # the wrapper's reaper lines, run by the suite after a SIGKILLed proxy
-            subprocess.run(["pkill", "-9", "-f", o["reap"]])
     # drain anything the proxy still says, then wait for it
     t_end = time.monotonic() + o["timeout"]
     while time.monotonic() < t_end:
@@ -136,7 +129,7 @@ def main():
         time.sleep(0.2); n = group_members(child_pgid)
     with open(os.path.join(o["out"], "stdout.bin"), "wb") as fh: fh.write(bytes(raw))
     json.dump(objs, open(os.path.join(o["out"], "responses.json"), "w"), indent=1, ensure_ascii=False)
-    for name, val in (("rc", rc), ("child_pgid", child_pgid), ("proxy_pgid", proxy_pgid), ("group_after", n)):
+    for name, val in (("rc", rc), ("child_pgid", child_pgid), ("group_after", n)):
         open(os.path.join(o["out"], name), "w").write(str(val) + "\n")
     err.close()
     return 0

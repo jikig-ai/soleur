@@ -387,19 +387,21 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # sibling schema-probe suite it mirrors was promoted the same way. Ledger returns to
 # MAX_DEFERRED rather than growing.
 # `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` added by #7980 — the
-# guard-contract suite for the stdio redacting proxy in front of @playwright/mcp (39 one-edit
+# guard-contract suite for the stdio redacting proxy in front of @playwright/mcp (53 one-edit
 # mutants, an executable .mcp.json row, P6 parity). PROMOTED, not deferred, beside its sibling
 # `redact-a11y-snapshot.test.sh` and for the reason every entry above gives: this gate's FAIL message
 # says "cover it … do NOT raise this number" and the ledger is shrink-only. It qualifies: the floor is
 # `-lt` over `$cases` (an independent per-row counter, with a `pass + fail == cases` conservation
-# identity checked first), emitted by `printf '[FATAL] vacuity floor…'` + `exit 1` and never routed
-# through the `ok()`/`bad()` it backstops (ADR-193); an instrument self-test drives both helpers once
-# and exits 1 before any real row if either counter fails to move; a helper-control block drives
-# every verdict-owning helper with an input it must REJECT. Measured at promotion on the as-committed
-# suite: control GREEN (162/162, rc=0); `ok()` neutered -> `INSTRUMENT BROKEN`, rc=1; `bad()`
-# neutered -> `INSTRUMENT BROKEN`, rc=1; floor raised to 99999 on a copy -> `[FATAL] vacuity floor:
-# only 162 cases executed`, rc=1. Bound (150) is a literal adjacent to the test, so it is
-# mutant-CONSTRUCTIBLE.
+# identity checked first and an exact mutant / mutation-row count beside it), emitted by `printf
+# '[FATAL] …'` + `exit 1` and never routed through the `ok()`/`bad()` it backstops (ADR-193); an
+# instrument self-test drives both helpers once and exits 1 before any real row if either counter
+# fails to move; a helper-control block drives the verdict-owning helpers it names (the assert_*
+# family, `red`, `leaks`, `started`, `delivered_ok`, `mutant`) with an input each must REJECT.
+# Measured at the #7980 review round: `red`, `leaks`, `started` and `delivered_ok` each neutered
+# on a copy -> `HELPER CONTROL BROKEN`, rc=1 (runs/suite-helper-neuter-review-round.txt); after
+# the relay rebuild and stub reaper control GREEN (281/281, 55 mutants, rc=0; runs/suite-relay-rebuild.txt).
+# Bound (281) is a literal adjacent to the test,
+# so it is mutant-CONSTRUCTIBLE.
 PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"

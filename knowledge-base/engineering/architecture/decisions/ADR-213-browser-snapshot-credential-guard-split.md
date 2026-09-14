@@ -78,6 +78,11 @@ snapshotting a credential page safe, and the module header enumerates the
 bypasses: a localised accessible name, a credential outside a text-input role, a
 value split across segmented inputs, and the whole Playwright-MCP runtime path.
 
+> **Superseded 2026-09-14 (#7980):** the module header no longer lists the whole
+> Playwright-MCP runtime path as a bypass — only a registration NOT routed through
+> `playwright-mcp-redact-proxy.py`. See the #7980 addendum and its review-round
+> amendment below.
+
 ### 2. A PreToolUse interceptor — the control that does not depend on memory
 
 [`browser-snapshot-credential-guard.sh`](../../../../plugins/soleur/hooks/browser-snapshot-credential-guard.sh)
@@ -154,6 +159,14 @@ on one enumerated sink, not a substitute for the carried refusal".
 | A PostToolUse hook that redacts snapshot output | P5, P7 | Structurally impossible: PostToolUse runs after the tool's write and cannot rewrite tool output (`.claude/hooks/README.md` §PostToolUse hooks). |
 | A structural `type=password` predicate | P5 | Measured unimplementable — no surface serializes `type`. |
 | Prose guidance in the browser skills alone | P7 | Fails this plan's own test: it holds only when the agent remembers, and the operator it protects cannot audit an accessibility tree. |
+
+> **Corrected 2026-09-14 (#7980 review round):** the PostToolUse row's "cannot
+> rewrite tool output" is false for the transcript sink on current Claude Code —
+> the installed 2.1.270 PostToolUse output schema carries `updatedToolOutput`
+> ("Replaces the tool output before it is sent to the model") and
+> `updatedMCPToolOutput`. It stays true that such a hook runs AFTER the tool's
+> disk write. The earliest Claude Code version carrying the field was not
+> measured. See the review-round amendment below for what this changes.
 
 ## Addendum — 2026-09-09, post-review
 
@@ -396,6 +409,13 @@ sentence alone now fails S2; `MCP_GAP_MARKER_RE` anchors on the new claim, and
 the lint's failure message quotes the canonical sentence so a copy-edit in one
 file shows the phrase to restore.
 
+> **Superseded 2026-09-14 (#7980 review round):** "if the server refuses
+> `filename` … call it bare for the rest of the session" was unsafe as written —
+> the unwrapped server refuses an out-of-root filename with its own `File access
+> denied`, and a session can hold a second, unwrapped Playwright server. The
+> signal is now the proxy-unique refusal text on that one server, and the marker
+> is the whole canonical sentence. See the review-round amendment below.
+
 ### Enumerative closure, bound to the pin
 
 The disk-sink closure covers the TREE sinks only and is an enumeration, not a
@@ -411,3 +431,73 @@ and the Phase 0 re-capture: the suite derives its fixture directory from the
 version pinned in `.mcp.json`, so a bump that forgets to re-run the capture
 driver reddens rather than testing stale captures. The next bump re-enumerates
 this list.
+
+> **Superseded 2026-09-14 (#7980 review round):** the `DEBUG` refusal above was a
+> literal match (`*`, `pw:mcp*`) where the `debug` package treats `*` as a
+> wildcard, and the enumeration missed INI configs, `saveVideo`, `--caps`,
+> `--output-mode file` and the `--port` / `--host` HTTP transport. The drift arm no
+> longer withholds. See the review-round amendment below.
+
+## Amendment — 2026-09-14 (#7980), review round
+
+A ten-seat review of the shipped proxy found that the assembly was narrower than
+the property the addendum above names. Four of its findings were live on the real
+`@playwright/mcp@0.0.78` server, and each is closed in this change with a suite
+row and a mutant that proves the row can go red.
+
+**Closed, with the measurement that found each.**
+
+| Finding | Measured | Now |
+|---|---|---|
+| A credential label containing a space-hash, a colon-space, `{`, `}` or a backtick leaked in clear, with the trailer appended | Live: `- 'textbox "API Key #1" [ref=e2]': <value>` — Playwright's `yamlEscapeKeyIfNeeded` single-quotes the whole key, and every predicate anchored on `- role` | The redactor unwraps a quoted key before matching and re-quotes on output (its suite carries the key strings the server's own function renders) |
+| `DEBUG=pw:*`, `pw:api *`, `*:response` started the proxy | Node, against the pinned bundle: `debug('pw:mcp:server:response').enabled` is true under each | Refused: split on whitespace and commas, skip exclusions, `*` as a wildcard anywhere — any pattern that can enable a `pw:` logger |
+| An INI config setting `saveSession = true` started the proxy | `loadConfig` falls back to `configFromIniFile` when JSON parsing fails | A named config the proxy cannot parse as a JSON object, or that does not exist, refuses to start |
+| "Refuses `filename`" was forgeable in both directions | `checkFile` throws `File access denied: <path> is outside allowed roots` as `### Error` + `isError`, the proxy's own shape | The refusal text begins `refused by playwright-mcp-redact-proxy:`; S2's canonical sentence keys on it, scopes "call it bare" to that one server, and the lint's marker is now the whole sentence |
+
+**Closed, not reachable on 0.0.78 but on the next version's likely path.**
+
+- Server requests other than `roots/list`, and notifications other than
+  `notifications/tools/list_changed` and `notifications/cancelled`, are dropped;
+  0.0.78 emits none, and a `sampling/createMessage` carrying a tree would otherwise
+  have reached the client raw. The three relayed kinds are rebuilt from method and
+  ids alone, and a `requestId` or request id carrying a tree row or a redactable
+  value is dropped, so no `reason` or `_meta` field carries page text past the
+  proxy (raised by the CLO re-attestation; suite rows 54/55).
+- A JSON-RPC error is forwarded only as `{code, message}` with prose; an error that
+  also carries `result`, is not an object, carries `data`, or whose message is
+  tree-shaped is withheld.
+- A JSON-escaped tree inside a result (`browser_run_code_unsafe` returning
+  `ariaSnapshot()`, a pretty-printed `browser_evaluate` object) is withheld — the
+  same shape the `_meta` refusal exists for. The addendum's residual framing of
+  these tools as "not tree-shaped" was false.
+- Startup also refuses `saveVideo`, a capability other than `vision` (`--caps`,
+  `PLAYWRIGHT_MCP_CAPS`, config `capabilities`), `--port` / `--host` /
+  `PLAYWRIGHT_MCP_PORT` / `PLAYWRIGHT_MCP_HOST` / config `server.*` (an HTTP
+  transport that serves results around the stdio relay), and `--output-mode file`.
+- A request reusing a pending id is refused, and a content-bearing result is
+  rewritten whatever request it answers.
+- Teardown signals the child's whole process group even when the direct child has
+  already exited, so a grandchild that outlives `npx` is still killed.
+- An unparsable client line is dropped, never forwarded unvetted (an integer past
+  Python's digit limit parsed in Node and not in the proxy).
+
+**Changed rather than hardened: the drift arm.** A `- [Snapshot](…)` line used to
+withhold the whole result. A page controls dialog text, and 0.0.78 inserts dialog
+messages unescaped, so a page could withhold every result and hide the `### Modal
+state` section an agent needs to recover. The arm now replaces only a link line
+inside `### Snapshot` with a do-not-read notice and delivers the rest; the file the
+server wrote persists either way.
+
+**A premise corrected, with a consequence for #8156.** The Alternatives table's
+"PostToolUse cannot rewrite tool output" is false for the transcript sink on Claude
+Code 2.1.270 (`updatedMCPToolOutput`). A plugin-shipped PostToolUse hook on
+`mcp__playwright__.*` could therefore reach a customer registration without an
+`.mcp.json` edit, for the transcript only — the disk-write half of that row still
+holds. That is a design input for #8156, not a change to this decision: the proxy
+also closes the disk sinks, which a PostToolUse hook cannot.
+
+**The filename coupling, stated where a renamer looks.** The proxy loads the
+redactor by the sibling basename `REDACTOR_BASENAME = "redact-a11y-snapshot.py"`,
+so a rename must update the proxy alongside the hook, the lint,
+`EXPECTED_GATE_REFS`, the register and `agent-browser/SKILL.md`; the proxy suite's
+`nosib` and `v-rename` rows red on a missed one.

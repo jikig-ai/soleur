@@ -6,6 +6,8 @@
 Fields (printed on stdout):
   found      1 if a RESPONSE (result/error) with that id was captured, else 0
   count      how many responses carried that id
+  jsonrpc_error  1 if the first response for that id is a JSON-RPC `error` object, else 0
+  description:<tool>  the description of <tool> in the tools/list result answering that id
   isError    true/false/none
   text       all text blocks of the result joined by "\\n"
   sentinel   occurrences of ZZQP-SENTINEL-7980 in the raw stdout line of that response
@@ -43,6 +45,17 @@ def main(argv):
         print(1 if hits else 0); return 0
     if field == "count":
         print(len(hits)); return 0
+    if field.startswith("description:"):
+        tool = field.split(":", 1)[1]
+        for _l, o in hits:
+            res = o.get("result")
+            tools = res.get("tools") if isinstance(res, dict) else None
+            for t in tools if isinstance(tools, list) else []:
+                if isinstance(t, dict) and t.get("name") == tool:
+                    sys.stdout.write(str(t.get("description", ""))); return 0
+        return 0
+    if field == "jsonrpc_error":
+        print(1 if hits and "error" in hits[0][1] else 0); return 0
     if field == "lines":
         print(len(lines)); return 0
     if field == "alljson":
