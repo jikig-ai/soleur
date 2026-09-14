@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 
-# Tests for .github/workflows/scheduled-content-vendor-drift.yml.
+# Tests for apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
+# (the Inngest function that replaced the deleted
+# .github/workflows/scheduled-content-vendor-drift.yml).
 # Run: bash plugins/soleur/test/vendor-drift-workflow.test.sh
 #
-# The drift workflow runs weekly, reads NOTICE frontmatter, fetches upstream
-# blob SHAs via `gh api`, classifies any drift, opens a re-vendor PR via the
-# bot-pr-with-synthetic-checks composite, and files an issue on cron failure.
+# The drift cron runs weekly, discovers schema-conforming NOTICE bundles,
+# fetches upstream blob SHAs via Octokit, classifies any drift, routes
+# security-relevant classes to a deduplicated issue, and reports a typed
+# per-bundle outcome to the run-level Sentry heartbeat. The auto-PR re-vendor
+# route is registered but produces no artifact today (see ADR-219).
 #
 # This integration test does NOT execute the workflow against real upstream
 # (no GH credentials in test env). Instead it asserts structural invariants
@@ -132,6 +136,45 @@ echo "TS12: last-verified referenced in function"
 assert_contains "$WF_CONTENT" "last-verified" "last-verified referenced"
 echo "  SKIP: blob-sha updates delegated to spawned NOTICE-bump scripts"
 PASS=$((PASS + 1))
+echo ""
+
+# --- Multi-bundle operation (#8122): the cron is registry-driven, not a
+# single hardcoded gdpr-gate bundle. These anchors pin the per-bundle
+# identity manifest: slugged step IDs, per-bundle NOTICE_FILE env, per-bundle
+# branch/dedup namespaces, per-arm worktree reset, and AND-aggregated health.
+echo "TS13: multi-bundle architecture anchors (>= 2 bundles)"
+assert_contains "$WF_CONTENT" "discoverBundles" "bundle discovery function"
+assert_contains "$WF_CONTENT" "BundleDescriptor" "typed bundle descriptor"
+assert_contains "$WF_CONTENT" '`detect-drift-${bundle.slug}`' "slugged detect step ID"
+assert_contains "$WF_CONTENT" '`attest-freshness-${bundle.slug}`' "slugged attest step ID"
+assert_contains "$WF_CONTENT" '`reset-worktree-${bundle.slug}`' "per-arm worktree reset"
+assert_contains "$WF_CONTENT" "classifyBranchOwner" "per-bundle dedup classification"
+assert_contains "$WF_CONTENT" "classifyIssueOwner" "per-bundle issue dedup"
+assert_contains "$WF_CONTENT" "cron-content-vendor-drift-" "per-bundle cronName"
+assert_contains "$WF_CONTENT" "outcomes.every" "AND-aggregated health"
+echo ""
+
+# --- Both real bundles exercise the shared parser under NOTICE_FILE ---
+echo "TS14: both enrolled bundles parse through the shared parser (>=2-bundle coverage)"
+for notice in \
+  "$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE" \
+  "$REPO_ROOT/plugins/soleur/skills/legal-generate/NOTICE"; do
+  slug="$(basename "$(dirname "$notice")")"
+  if [[ ! -f "$notice" ]]; then
+    echo "  FAIL: $slug NOTICE missing"
+    FAIL=$((FAIL + 1))
+    continue
+  fi
+  upstream="$(NOTICE_FILE="$notice" bash "$PARSER" field upstream 2>/dev/null || true)"
+  count="$(NOTICE_FILE="$notice" bash "$PARSER" record-count lifted-files 2>/dev/null || true)"
+  if [[ -n "$upstream" && "$count" =~ ^[0-9]+$ && "$count" -gt 0 ]]; then
+    echo "  PASS: $slug → upstream=$upstream lifted-records=$count"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $slug NOTICE did not parse (upstream='$upstream' count='$count')"
+    FAIL=$((FAIL + 1))
+  fi
+done
 echo ""
 
 print_results

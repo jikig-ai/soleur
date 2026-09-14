@@ -1,8 +1,11 @@
 // TR9 Phase-2 — Migrated from the GHA scheduled-content-vendor-drift
 // workflow (deleted in the same PR per TR9 I-13 hygiene). Weekly upstream
-// content drift detector. Parses NOTICE files in plugins/soleur/skills/*/
-// NOTICE.md, fetches upstream blobs, detects SHA drift, runs 3-way merge.
-// Opens PR for low-risk drift, issue for security/license drift.
+// content drift detector. Parses schema-conforming NOTICE files under
+// plugins/soleur/skills/<slug>/NOTICE (multi-bundle discovery, ADR-219),
+// fetches upstream blobs, detects SHA drift. Routes security-relevant drift
+// to an issue; the low-risk auto-PR route (classifier rc 13) currently opens
+// no artifact — the re-vendor write is unimplemented and the arm reports
+// unhealthy rather than silent-green (see prArtifactMissing).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — Octokit + node:fs reads called INSIDE step.run (replay memoization).
@@ -30,7 +33,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
@@ -46,7 +49,11 @@ import {
   postSentryHeartbeat,
   type HandlerArgs,
 } from "./_cron-shared";
-import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
+import {
+  SYNTHETIC_CHECK_NAMES,
+  safeCommitAndPr,
+  type SafeCommitResult,
+} from "./_cron-safe-commit";
 
 // =============================================================================
 // Constants
@@ -69,12 +76,42 @@ export const MAX_RUN_DURATION_MS = 15 * 60 * 1000;
 export const WRITE_SUPPRESSION_DAYS = 21;
 const TOKEN_MIN_LIFETIME_MS = 20 * 60 * 1000;
 
-export const NOTICE_FILE_REL = "plugins/soleur/skills/gdpr-gate/NOTICE";
+/**
+ * Bundle discovery root. Every `plugins/soleur/skills/<slug>/NOTICE` whose
+ * frontmatter parses AND declares non-empty `upstream` + `pinned-commit` is
+ * a vendored bundle (schema-keyed enrollment, ADR-219). Prose attribution
+ * NOTICEs without the schema — `incident/NOTICE` exists on the tree today —
+ * match the bare glob but are skip-with-warn, never enrolled.
+ */
+export const SKILLS_DIR_REL = "plugins/soleur/skills";
+export const NOTICE_FILENAME = "NOTICE";
+
+// Shared scripts, not bundle constants — the parser and classifier are the
+// gdpr-gate skill's, reused for every bundle via the NOTICE_FILE env override
+// (ADR-095 shared-engine).
 export const PARSER_REL =
   "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh";
 export const CLASSIFIER_REL =
   "plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh";
-export const SKILL_PREFIX = "plugins/soleur/skills/gdpr-gate";
+
+/**
+ * Re-vendor branch prefix. `safeCommitAndPr`'s `deriveBranchName` produces
+ * `ci/<cronName minus cron->-<ts>`; the per-bundle cronName
+ * `cron-content-vendor-drift-<slug>` therefore lands each bundle's re-vendor
+ * PR on `ci/content-vendor-drift-<slug>-<ts>`. The dedup query keys on this
+ * prefix and classifies ownership per slug — see classifyBranchOwner.
+ */
+export const DRIFT_BRANCH_PREFIX = "ci/content-vendor-drift";
+
+/**
+ * The bundle that owns UNSUFFIXED legacy artifacts. Pre-multi-bundle branches
+ * (`ci/content-vendor-drift-<ts>`, `ci/vendor-attest-<ts>`) and issues whose
+ * titles carry no `[<slug>]` token predate slugging and are all gdpr-gate's —
+ * they were created when gdpr-gate was the only bundle. Classifying them as
+ * gdpr-gate's keeps the dedup suppressing duplicate PRs/issues for that
+ * bundle without letting them mask a sibling.
+ */
+export const LEGACY_BUNDLE_SLUG = "gdpr-gate";
 
 /**
  * Branch prefix for the freshness-attestation PR.
@@ -130,7 +167,6 @@ const CATEGORY_LABELS: Record<string, string[]> = {
 /** Exit codes that route to issue (security-relevant). */
 export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
 
-/**
 /** Repository-level state of the upstream, observed once per run. */
 export type UpstreamRepoState = "ok" | "archived" | "renamed" | "unreachable";
 
@@ -325,11 +361,57 @@ export function heartbeatOk(
 // Types
 // =============================================================================
 
+/**
+ * One enrolled vendored bundle. Discovered from `plugins/soleur/skills/<slug>/NOTICE`
+ * inside a step.run against the clone (ADR-033 I1 — never module-level).
+ *
+ * `upstream` is the NOTICE's raw `upstream:` field (e.g.
+ * `github.com/General-Legal/legal-templates`); `upstreamName` is the
+ * `owner/repo` form used in commit/PR text.
+ */
+export interface BundleDescriptor {
+  slug: string;
+  noticeFileRel: string;
+  skillPrefix: string;
+  upstream: string;
+  upstreamName: string;
+  pinnedCommit: string;
+}
+
+/** The detect step's per-bundle result: verdict, route, and the totals the
+ * attestation predicate reads. Every return site spreads `ComparisonTotals`
+ * so no exit can silently omit a conjunct (#7710 review). */
+interface DetectResult extends ComparisonTotals {
+  drift: "none" | "detected" | "skipped-open-pr";
+  route: "pr" | "issue" | "none";
+  labels: string[];
+  classifyRc: number;
+  /** The upstream default branch the comparison fetched against
+   * (`repoMeta.default_branch`, "main" when the probe could not answer). */
+  upstreamRef: string;
+}
+
+/**
+ * Per-bundle arm outcome. `healthy` is this bundle's own heartbeatOk verdict
+ * (or false when the arm failed before totals existed); the run-level
+ * heartbeat is the AND over all bundles — a red bundle is never masked by a
+ * green sibling.
+ */
+interface BundleOutcome {
+  slug: string;
+  status: "failed" | "no-drift" | "detected" | "skipped-open-pr";
+  route: "pr" | "issue" | "none" | null;
+  healthy: boolean;
+  attestationOutcome: string;
+  attestationPrNumber: string | null;
+  observedAgeDays: number | null;
+  error?: string;
+}
+
 interface HandlerResult {
   ok: boolean;
   status: string;
-  route?: "pr" | "issue" | "none";
-  labels?: string[];
+  bundles?: BundleOutcome[];
 }
 
 // =============================================================================
@@ -396,10 +478,8 @@ async function setupEphemeralWorkspace(
       `git clone failed (exit ${result.exitCode}, signal ${result.signal}) for ${REPO_OWNER}/${REPO_NAME}`,
     );
   }
-  if (!existsSync(join(repoRoot, NOTICE_FILE_REL))) {
-    throw new Error(
-      `Sentinel: ${NOTICE_FILE_REL} absent after clone`,
-    );
+  if (!existsSync(join(repoRoot, SKILLS_DIR_REL))) {
+    throw new Error(`Sentinel: ${SKILLS_DIR_REL} absent after clone`);
   }
   return { ephemeralRoot, repoRoot };
 }
@@ -502,6 +582,145 @@ function parseClassifierLabels(
 }
 
 // =============================================================================
+// Bundle discovery + per-bundle identity
+// =============================================================================
+
+/**
+ * The schema predicate shared by cron discovery, Guard 2, and the
+ * vendor-pin-verify workflow: a NOTICE enrolls its skill as a vendored bundle
+ * iff it declares non-empty `upstream` AND `pinned-commit` through the parser.
+ * `incident/NOTICE` — prose attribution, no schema — must NOT enroll.
+ *
+ * Exported and pure so the predicate is assertable without a filesystem
+ * (#7710-class guard: enrollment is a schema property, not a glob property).
+ */
+export function isSchemaConformingNotice(
+  upstream: string,
+  pinnedCommit: string,
+): boolean {
+  return upstream.trim() !== "" && pinnedCommit.trim() !== "";
+}
+
+/**
+ * Which bundle owns an open `ci/` branch. Slugged refs
+ * (`<prefix>-<slug>-<ts>`) belong to that slug; refs with no slug segment are
+ * LEGACY_BUNDLE_SLUG's (pre-multi-bundle artifacts — see its docblock).
+ * Returns null for refs outside the prefix entirely.
+ *
+ * Exported and pure because the masking property — "an open bundle-A PR must
+ * not suppress a bundle-B dedup" — is assertable only over ref strings, not
+ * by grepping the query.
+ */
+export function classifyBranchOwner(
+  ref: string,
+  prefix: string,
+  slugs: readonly string[],
+): string | null {
+  if (!ref.startsWith(`${prefix}-`)) return null;
+  const rest = ref.slice(prefix.length + 1);
+  // Longest-match-first: when one slug is a hyphenated prefix of another
+  // (`legal` vs `legal-generate`), iterating the sorted slug list would hand
+  // `ci/content-vendor-drift-legal-generate-<ts>` to `legal` — suppressing the
+  // longer slug's dedup and misattributing its artifacts.
+  for (const slug of [...slugs].sort((a, b) => b.length - a.length)) {
+    if (rest.startsWith(`${slug}-`)) return slug;
+  }
+  return LEGACY_BUNDLE_SLUG;
+}
+
+/**
+ * Which bundle owns an open drift issue. New titles carry `[<slug>]`
+ * (`[vendor-drift][<slug>] security-relevant drift …`); titles with no slug
+ * token are LEGACY_BUNDLE_SLUG's.
+ */
+export function classifyIssueOwner(
+  title: string,
+  slugs: readonly string[],
+): string {
+  for (const slug of slugs) {
+    if (title.includes(`[${slug}]`)) return slug;
+  }
+  return LEGACY_BUNDLE_SLUG;
+}
+
+/**
+ * Enumerate `plugins/soleur/skills/<slug>/NOTICE` in the clone and keep the
+ * schema-conforming ones. Called INSIDE a step.run — filesystem work is
+ * Inngest-memoized (ADR-033 I1) and a module-level glob would freeze the
+ * bundle set at import time.
+ */
+async function discoverBundles(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv,
+  logger: HandlerArgs["logger"],
+): Promise<BundleDescriptor[]> {
+  const parserPath = join(repoRoot, PARSER_REL);
+  if (!existsSync(parserPath)) {
+    throw new Error(`Parser script not found: ${PARSER_REL}`);
+  }
+  const skillsDir = join(repoRoot, SKILLS_DIR_REL);
+  const entries = await readdir(skillsDir, { withFileTypes: true });
+  const bundles: BundleDescriptor[] = [];
+  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue;
+    const noticeFileRel = `${SKILLS_DIR_REL}/${entry.name}/${NOTICE_FILENAME}`;
+    const noticeAbs = join(repoRoot, noticeFileRel);
+    if (!existsSync(noticeAbs)) continue;
+
+    const bundleEnv: NodeJS.ProcessEnv = { ...env, NOTICE_FILE: noticeAbs };
+    const upstream = (
+      await spawnScriptCapture(parserPath, ["field", "upstream"], {
+        cwd: repoRoot,
+        env: bundleEnv,
+      })
+    ).stdout.trim();
+    const pinnedCommit = (
+      await spawnScriptCapture(parserPath, ["field", "pinned-commit"], {
+        cwd: repoRoot,
+        env: bundleEnv,
+      })
+    ).stdout.trim();
+
+    if (!isSchemaConformingNotice(upstream, pinnedCommit)) {
+      // Skip-with-warn, not enroll-and-fail: a prose NOTICE (incident/NOTICE
+      // is on the tree today) is attribution, not a vendoring registry, and
+      // treating it as one would red the cron on every run.
+      logger.warn(
+        { fn: "cron-content-vendor-drift", noticeFileRel },
+        "NOTICE lacks vendoring schema (upstream/pinned-commit) — skipped",
+      );
+      continue;
+    }
+
+    bundles.push({
+      slug: entry.name,
+      noticeFileRel,
+      skillPrefix: `${SKILLS_DIR_REL}/${entry.name}`,
+      upstream,
+      upstreamName: upstream.replace(/^github\.com\//, ""),
+      pinnedCommit,
+    });
+  }
+  return bundles;
+}
+
+/** Open PR head refs under a prefix — one `pulls` list call, classified
+ * per-slug by classifyBranchOwner. The search API's `head:` filter cannot
+ * express "prefix X but not slug Y", so ownership is resolved client-side. */
+async function listOpenPrHeads(octokit: Octokit): Promise<string[]> {
+  const { data: prs } = await octokit.request(
+    "GET /repos/{owner}/{repo}/pulls",
+    {
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      state: "open",
+      per_page: 100,
+    },
+  );
+  return prs.map((pr) => pr.head.ref);
+}
+
+// =============================================================================
 // Handler
 // =============================================================================
 
@@ -545,597 +764,825 @@ export async function cronContentVendorDriftHandler({
       await ensureLabels(octokit);
     });
 
-    // Detect drift by parsing NOTICE and fetching upstream blobs
-    const detectResult = await step.run("detect-drift", async () => {
-      const parserPath = join(repoRoot, PARSER_REL);
-      const classifierPath = join(repoRoot, CLASSIFIER_REL);
-
-      if (!existsSync(parserPath)) {
-        throw new Error(`Parser script not found: ${PARSER_REL}`);
-      }
-      if (!existsSync(classifierPath)) {
-        throw new Error(`Classifier script not found: ${CLASSIFIER_REL}`);
-      }
-
+    // Bundle discovery runs INSIDE a step against the clone (ADR-033 I1):
+    // the enrolled set is whatever `plugins/soleur/skills/*/NOTICE` says at
+    // run time, never a module-level constant.
+    const bundles = await step.run("discover-bundles", async () => {
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
-      NODE_ENV: process.env.NODE_ENV,
+        NODE_ENV: process.env.NODE_ENV,
         HOME: process.env.HOME,
         GH_TOKEN: installationToken,
       };
+      return discoverBundles(repoRoot, env, logger);
+    });
+    const slugs = bundles.map((b) => b.slug);
 
-      // Get upstream repo info
-      const upstreamResult = await spawnScriptCapture(
-        parserPath,
-        ["field", "upstream"],
-        { cwd: repoRoot, env },
+    // An empty registry is not a clean registry. Zero conforming NOTICEs is
+    // a measurement failure — the glob shrank, the parser broke, or the clone
+    // is wrong — and must never post a green heartbeat.
+    if (bundles.length === 0) {
+      reportSilentFallback(
+        new Error("No schema-conforming vendored bundles discovered"),
+        {
+          feature: "cron-content-vendor-drift",
+          op: "discovery-empty",
+          message: `${SKILLS_DIR_REL}/*/NOTICE matched no bundle with upstream + pinned-commit`,
+        },
       );
-      const upstream = upstreamResult.stdout.trim();
-
-      const pinnedResult = await spawnScriptCapture(
-        parserPath,
-        ["field", "pinned-commit"],
-        { cwd: repoRoot, env },
+      await step.run("sentry-heartbeat", () =>
+        postSentryHeartbeat({
+          ok: false,
+          sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+          cronName: "cron-content-vendor-drift",
+          logger,
+        }),
       );
-      const pinnedSha = pinnedResult.stdout.trim();
+      return { ok: false, status: "no-bundles", bundles: [] };
+    }
 
-      if (!upstream || !pinnedSha) {
-        throw new Error(
-          `Failed to parse NOTICE: upstream=${upstream}, pinned-commit=${pinnedSha}`,
-        );
-      }
-
-      const ownerRepo = upstream.replace(/^github\.com\//, "");
-      logger.info(
-        { fn: "cron-content-vendor-drift", upstream, pinnedSha },
-        "Parsed NOTICE",
-      );
-
-      // Probe upstream repo for archived/renamed status.
-      //
-      // `driftFlags` drives the CLASSIFIER (its vocabulary is that script's
-      // contract and is left untouched); `upstreamRepoState` is the same
-      // observation in a form the attestation predicate can read. They are
-      // deliberately separate: the catch reports `--archived` to the
-      // classifier because that is the conservative ROUTING, but "I could not
-      // reach the repo" is not evidence the repo IS archived, and the
-      // attestation must distinguish them (#7710 review, P1-A).
-      let driftFlags = "";
-      let upstreamRepoState: UpstreamRepoState = "ok";
+    // Per-bundle arms run SEQUENTIALLY in a stable order (discovery sorts by
+    // slug). A throwing arm is a typed per-bundle failure — caught here so a
+    // sibling still runs — never an abort that leaves the sibling unmeasured.
+    const outcomes: BundleOutcome[] = [];
+    for (const bundle of bundles) {
       try {
-        const { data: repoMeta } = await octokit.request(
-          "GET /repos/{owner}/{repo}",
-          {
-            owner: ownerRepo.split("/")[0],
-            repo: ownerRepo.split("/")[1],
-          },
+        outcomes.push(
+          await runBundleArm({
+            step,
+            logger,
+            bundle,
+            slugs,
+            octokit,
+            repoRoot,
+            installationToken,
+            runStartedAt,
+          }),
         );
-        if (repoMeta.archived) {
-          driftFlags = "--archived";
-          upstreamRepoState = "archived";
-        } else if (
-          repoMeta.full_name &&
-          repoMeta.full_name !== ownerRepo
-        ) {
-          driftFlags = "--renamed";
-          upstreamRepoState = "renamed";
+      } catch (armErr) {
+        const e = armErr as Error;
+        if (installationToken) {
+          e.message = redactToken(e.message, installationToken);
         }
-      } catch {
+        reportSilentFallback(e, {
+          feature: "cron-content-vendor-drift",
+          op: "bundle-arm",
+          message: `bundle=${bundle.slug} ${e.message}`,
+          extra: { fn: "cron-content-vendor-drift", bundle: bundle.slug },
+        });
+        outcomes.push({
+          slug: bundle.slug,
+          status: "failed",
+          route: null,
+          healthy: false,
+          attestationOutcome: "arm-threw",
+          attestationPrNumber: null,
+          observedAgeDays: null,
+          error: e.message,
+        });
+      }
+    }
+
+    // The run-level heartbeat is the AND over bundles. A red bundle is never
+    // masked by a green sibling; the per-bundle breakdown travels in the
+    // result so the accountability record names the failing bundle.
+    const isHealthy = outcomes.every((o) => o.healthy);
+
+    await step.run("sentry-heartbeat", () =>
+      postSentryHeartbeat({
+        ok: isHealthy,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-content-vendor-drift",
+        logger,
+      }),
+    );
+
+    return {
+      ok: isHealthy,
+      status: outcomes.every((o) => o.status === "no-drift")
+        ? "no-drift"
+        : "drift-or-failure",
+      bundles: outcomes,
+    };
+  } catch (err) {
+    const e = err as Error;
+    if (installationToken) {
+      e.message = redactToken(e.message, installationToken);
+    }
+    reportSilentFallback(e, {
+      feature: "cron-content-vendor-drift",
+      op: "handler-top-level",
+      message: e.message,
+    });
+    // The attestation summary is the ADR-203 accountability record, and the
+    // step that emits it is never reached on a throw — so without this the
+    // runs with NO record are exactly the runs that failed. Emitted outside a
+    // step deliberately: the handler is already unwinding.
+    logger.warn(
+      {
+        fn: "cron-content-vendor-drift",
+        op: "attestation-summary",
+        attestationOutcome: "handler-threw",
+        isHealthy: false,
+      },
+      "Vendor-drift attestation summary (run aborted before the summary step)",
+    );
+    try {
+      await postSentryHeartbeat({
+        ok: false,
+        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
+        cronName: "cron-content-vendor-drift",
+        logger,
+      });
+    } catch {
+      // best-effort
+    }
+    return { ok: false, status: "error" };
+  } finally {
+    await teardownEphemeralWorkspace(ephemeralRoot);
+  }
+}
+
+// =============================================================================
+// Per-bundle arm
+// =============================================================================
+
+/**
+ * One bundle's full pass: worktree reset → detect → route (PR/issue) → age
+ * read → attestation → summary. Every step.run ID carries the slug because
+ * Inngest memoizes BY STEP ID — an unsuffixed ID would replay bundle A's
+ * memoized result for bundle B.
+ *
+ * The arm is sequential within itself but isolated across bundles: a throw
+ * anywhere here is caught by the caller as THIS bundle's typed failure and
+ * does not abort siblings.
+ */
+async function runBundleArm(deps: {
+  step: HandlerArgs["step"];
+  logger: HandlerArgs["logger"];
+  bundle: BundleDescriptor;
+  slugs: readonly string[];
+  octokit: Octokit;
+  repoRoot: string;
+  installationToken: string;
+  runStartedAt: string;
+}): Promise<BundleOutcome> {
+  const {
+    step,
+    logger,
+    bundle,
+    slugs,
+    octokit,
+    repoRoot,
+    installationToken,
+    runStartedAt,
+  } = deps;
+  // Per-bundle cronName feeds safeCommitAndPr's deriveBranchName, landing
+  // this bundle's re-vendor PRs on `ci/content-vendor-drift-<slug>-<ts>` —
+  // the namespace the dedup classifier reads.
+  const cronName = `cron-content-vendor-drift-${bundle.slug}`;
+  const noticeAbs = join(repoRoot, bundle.noticeFileRel);
+
+  // Per-arm worktree reset to origin/main. safeCommitAndPr's `checkout -B`
+  // branches from HEAD (_cron-safe-commit.ts:622), so without this bundle B's
+  // attestation PR could carry bundle A's unmerged re-vendor commit.
+  await step.run(`reset-worktree-${bundle.slug}`, async () => {
+    const reset = await spawnGit(
+      ["checkout", "-f", "-B", "main", "origin/main"],
+      { cwd: repoRoot },
+    );
+    if (reset.exitCode !== 0) {
+      throw new Error(
+        `worktree reset to origin/main failed (exit ${reset.exitCode}) for ${bundle.slug}`,
+      );
+    }
+    return { reset: true };
+  });
+
+  // Detect drift by parsing NOTICE and fetching upstream blobs.
+  // NOTICE_FILE is the per-bundle ABSOLUTE path — without it the shared
+  // parser falls back to gdpr-gate's NOTICE and bundle B attests onto
+  // bundle A's registry.
+  const detectResult = await step.run(`detect-drift-${bundle.slug}`, async () => {
+    const parserPath = join(repoRoot, PARSER_REL);
+    const classifierPath = join(repoRoot, CLASSIFIER_REL);
+
+    if (!existsSync(parserPath)) {
+      throw new Error(`Parser script not found: ${PARSER_REL}`);
+    }
+    if (!existsSync(classifierPath)) {
+      throw new Error(`Classifier script not found: ${CLASSIFIER_REL}`);
+    }
+
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      NODE_ENV: process.env.NODE_ENV,
+      HOME: process.env.HOME,
+      GH_TOKEN: installationToken,
+      NOTICE_FILE: noticeAbs,
+    };
+
+    const upstream = bundle.upstream;
+    const pinnedSha = bundle.pinnedCommit;
+    const ownerRepo = bundle.upstreamName;
+    logger.info(
+      {
+        fn: "cron-content-vendor-drift",
+        bundle: bundle.slug,
+        upstream,
+        pinnedSha,
+      },
+      "Parsed NOTICE",
+    );
+
+    // Probe upstream repo for archived/renamed status.
+    //
+    // `driftFlags` drives the CLASSIFIER (its vocabulary is that script's
+    // contract and is left untouched); `upstreamRepoState` is the same
+    // observation in a form the attestation predicate can read. They are
+    // deliberately separate: the catch reports `--archived` to the
+    // classifier because that is the conservative ROUTING, but "I could not
+    // reach the repo" is not evidence the repo IS archived, and the
+    // attestation must distinguish them (#7710 review, P1-A).
+    let driftFlags = "";
+    let upstreamRepoState: UpstreamRepoState = "ok";
+    // The upstream default branch, derived from the repo probe rather than
+    // assumed — a bundle whose upstream renamed `main` must not fetch a
+    // stale or nonexistent ref and read the failure as drift.
+    let upstreamRef = "main";
+    try {
+      const { data: repoMeta } = await octokit.request(
+        "GET /repos/{owner}/{repo}",
+        {
+          owner: ownerRepo.split("/")[0],
+          repo: ownerRepo.split("/")[1],
+        },
+      );
+      if (repoMeta.default_branch) {
+        upstreamRef = repoMeta.default_branch;
+      }
+      if (repoMeta.archived) {
         driftFlags = "--archived";
-        upstreamRepoState = "unreachable";
-      }
-
-      // Get upstream files list
-      const upstreamFilesResult = await spawnScriptCapture(
-        parserPath,
-        ["upstream-files"],
-        { cwd: repoRoot, env },
-      );
-      const upstreamFiles = upstreamFilesResult.stdout
-        .trim()
-        .split("\n")
-        .filter(Boolean);
-
-      let driftDetected = false;
-      const aggDiffParts: string[] = [];
-
-      // THREE states, not two (#7710). The previous form collapsed a missing
-      // sha and an equal sha into ONE `continue`, which scores a response that
-      // ARRIVED BUT COULD NOT BE PARSED — a degraded 200, a body with no
-      // `sha` field — identically to "this file is unchanged".
-      //
-      // (That superseded expression is deliberately not quoted verbatim here:
-      // the regression guard in the test suite greps this file for it, and a
-      // body-grep cannot tell code from a comment.)
-      // That is a false-clean: the run cannot distinguish "I compared it and
-      // it matched" from "I could not compare it", and both fed a `drift:
-      // none` return that reads as evidence of currency.
-      //
-      // A fetch that did not answer is ERROR, never SAME.
-      let filesExamined = 0;
-      const examinedPaths = new Set<string>();
-      let filesSame = 0;
-      let filesDrifted = 0;
-      let filesError = 0;
-
-      for (const line of upstreamFiles) {
-        const [upstreamPath, oldSha] = line.split(":");
-        if (!upstreamPath || !oldSha) {
-          // A malformed registry line is not a file we compared. Counting it
-          // as examined-and-same would let a corrupt NOTICE manufacture a
-          // clean total.
-          filesError += 1;
-          continue;
-        }
-
-        // DISTINCT paths, not records. A duplicated `upstream-path` (the
-        // ordinary copy-paste slip in a re-vendor PR) would otherwise let
-        // eight records compare seven files twice-over and satisfy
-        // `filesExamined === registryCount` with one rule file never fetched
-        // — the same 5-of-8 shape the completeness conjunct exists to catch,
-        // one level down. The Set lives on the object the predicate reads, so
-        // it cannot drift away from the conjunct that consumes it.
-        if (examinedPaths.has(upstreamPath)) {
-          filesError += 1;
-          logger.warn(
-            {
-              fn: "cron-content-vendor-drift",
-              path: upstreamPath,
-            },
-            "Duplicate upstream-path in the NOTICE registry — scored ERROR; the registry does not describe the corpus it claims to",
-          );
-          continue;
-        }
-        examinedPaths.add(upstreamPath);
-        filesExamined += 1;
-
-        try {
-          const { data: contents } = await octokit.request(
-            "GET /repos/{owner}/{repo}/contents/{path}",
-            {
-              owner: ownerRepo.split("/")[0],
-              repo: ownerRepo.split("/")[1],
-              path: upstreamPath,
-              ref: "main",
-            },
-          );
-          const currentSha = (contents as { sha?: string }).sha;
-          const verdict = classifyFileComparison(oldSha, currentSha);
-
-          if (verdict === "error") {
-            filesError += 1;
-            logger.warn(
-              {
-                fn: "cron-content-vendor-drift",
-                path: upstreamPath,
-                oldSha,
-              },
-              "Upstream contents response carried no sha — scored ERROR, not SAME",
-            );
-            continue;
-          }
-
-          if (verdict === "same") {
-            filesSame += 1;
-            continue;
-          }
-
-          filesDrifted += 1;
-          driftDetected = true;
-
-          // Populate the classifier's stdin. This array was declared and
-          // joined into `stdin` but NEVER written to (#7710), so the
-          // classifier received an empty diff on every run, returned 0, and
-          // the handler took the `classifyRc === 0` early return — which is
-          // the SECOND `drift: "none"` site, reached AFTER drift was
-          // detected. Categorising drift is the classifier's whole job and it
-          // was being asked to categorise nothing.
-          //
-          // IT MUST BE A UNIFIED DIFF. `vendor-drift-classify.sh` says so in
-          // its header, and every category check is anchored accordingly:
-          // license on `^(\+\+\+|---) [ab]/…LICENSE`, security on `^\+`. A
-          // first revision of this fix pushed `path\told\tnew`, which begins
-          // with a path and therefore matches NEITHER — so exits 10 (security)
-          // and 11 (license) became unreachable and every drift fell through
-          // to check 5's bare non-empty test, i.e. exit 13 → the auto-PR route
-          // with `mergeMode: "direct"`. That route is restricted to exit 13
-          // precisely to keep attacker-controlled upstream bytes from landing
-          // via the weekly bot, so the shape of the string is load-bearing
-          // security, not formatting.
-          //
-          // Every line of the drifted upstream file is emitted as ADDED. That
-          // is deliberate and conservative: a minimal diff can only shrink the
-          // text the security regex sees, and the failure direction we cannot
-          // afford is under-triggering. Over-triggering costs a human reading
-          // an issue instead of a bot opening a PR.
-          const upstreamBody = decodeContentsBody(contents);
-          if (upstreamBody === null) {
-            // We know it drifted but cannot show the classifier what changed.
-            // Emitting only headers would let check 5 route it to the
-            // auto-PR path on the strength of a filename. Force the guarded
-            // route with an explicit marker the security regex matches.
-            aggDiffParts.push(
-              `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n+[CRITICAL] drifted content unreadable — classify conservatively`,
-            );
-          } else {
-            const body = upstreamBody
-              .split("\n")
-              .slice(0, MAX_DIFF_LINES_PER_FILE)
-              .map((l) => `+${l}`)
-              .join("\n");
-            aggDiffParts.push(
-              `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n${body}`,
-            );
-          }
-
-          logger.info(
-            {
-              fn: "cron-content-vendor-drift",
-              path: upstreamPath,
-              oldSha,
-              currentSha,
-            },
-            "Drift detected",
-          );
-        } catch (fetchErr) {
-          // A per-FILE fetch failure is not evidence about the REPOSITORY.
-          // This arm used to raise the repo-level rename flag, telling the
-          // classifier the whole upstream had moved — and routing to
-          // `vendor/upstream-archived` + `needs-human-review` — on a single
-          // 404 or 5xx. That is "I could not measure" read as evidence, which
-          // is the defect this PR exists to close (#7710 review). The
-          // superseded assignment is described rather than quoted: the
-          // regression guard greps this region for it, and a body-grep cannot
-          // tell code from a comment.
-          //
-          // The error is counted, which is enough: `filesError > 0` both
-          // refuses the attestation and marks the run as unable to measure,
-          // so it reaches the heartbeat without inventing a repo-level claim.
-          driftDetected = true;
-          filesError += 1;
-          logger.warn(
-            {
-              fn: "cron-content-vendor-drift",
-              path: upstreamPath,
-              err: (fetchErr as Error).message,
-            },
-            "Upstream contents fetch failed for one file — scored ERROR",
-          );
-        }
-      }
-
-      // The count of records DECLARED in the NOTICE — NOT `upstreamFiles.length`.
-      //
-      // `upstream-files` is a FILTERED view: `_emit_files` flushes a record
-      // only when both its path key and its sha key are non-empty, so a record
-      // that loses `upstream-blob-sha` vanishes from it. Deriving the
-      // denominator from that view made the completeness conjunct a tautology
-      // — the denominator shrank with the numerator, `filesExamined ===
-      // registryCount` held, and the cron attested over a corpus it had only
-      // partially compared. That is the 5-of-8 failure #7710 exists to
-      // prevent, so its guard must not be measured through the same lens that
-      // loses the records (#7710 review).
-      const declaredResult = await spawnScriptCapture(
-        parserPath,
-        ["record-count", "lifted-files"],
-        { cwd: repoRoot, env },
-      );
-      const declaredRaw = declaredResult.stdout.trim();
-
-      // A SECOND, differently-derived view of the registry's size.
-      //
-      // `record-count` shares its record-opener predicate with `_emit_files`,
-      // so deleting an OPENER line shrinks both together: measured, declared 7
-      // and emitted 7 with one record silently absorbed into its predecessor,
-      // and the completeness conjunct held. Counting a key the opener
-      // predicate does not consume breaks that coupling — on the same fixture
-      // it reads 8 against an emitted 7.
-      const statusResult = await spawnScriptCapture(
-        parserPath,
-        ["key-count", "lifted-files", "status"],
-        { cwd: repoRoot, env },
-      );
-      const statusRaw = statusResult.stdout.trim();
-      // Fail closed: a non-numeric answer means the registry could not be
-      // read, and 0 makes `registryCount > 0` refuse.
-      // Fail closed: a non-numeric answer means the registry could not be
-      // read, and 0 makes `registryCount > 0` refuse.
-      const declaredOpeners = /^\d+$/.test(declaredRaw) ? Number(declaredRaw) : 0;
-      const declaredStatus = /^\d+$/.test(statusRaw) ? Number(statusRaw) : 0;
-
-      // The LARGER of the two declared views. Any record loss inflates the
-      // denominator relative to what was examined, so the completeness
-      // conjunct refuses; a missing `status:` key alone does not (it costs no
-      // comparability, and all records were still compared).
-      const registryCount = Math.max(declaredOpeners, declaredStatus);
-      if (
-        declaredOpeners !== declaredStatus ||
-        registryCount !== upstreamFiles.length
+        upstreamRepoState = "archived";
+      } else if (
+        repoMeta.full_name &&
+        repoMeta.full_name !== ownerRepo
       ) {
+        driftFlags = "--renamed";
+        upstreamRepoState = "renamed";
+      }
+    } catch {
+      driftFlags = "--archived";
+      upstreamRepoState = "unreachable";
+    }
+
+    // Get upstream files list
+    const upstreamFilesResult = await spawnScriptCapture(
+      parserPath,
+      ["upstream-files"],
+      { cwd: repoRoot, env },
+    );
+    const upstreamFiles = upstreamFilesResult.stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+
+    let driftDetected = false;
+    const aggDiffParts: string[] = [];
+
+    // THREE states, not two (#7710). The previous form collapsed a missing
+    // sha and an equal sha into ONE `continue`, which scores a response that
+    // ARRIVED BUT COULD NOT BE PARSED — a degraded 200, a body with no
+    // `sha` field — identically to "this file is unchanged".
+    //
+    // (That superseded expression is deliberately not quoted verbatim here:
+    // the regression guard in the test suite greps this file for it, and a
+    // body-grep cannot tell code from a comment.)
+    // That is a false-clean: the run cannot distinguish "I compared it and
+    // it matched" from "I could not compare it", and both fed a `drift:
+    // none` return that reads as evidence of currency.
+    //
+    // A fetch that did not answer is ERROR, never SAME.
+    let filesExamined = 0;
+    const examinedPaths = new Set<string>();
+    let filesSame = 0;
+    let filesDrifted = 0;
+    let filesError = 0;
+
+    for (const line of upstreamFiles) {
+      const [upstreamPath, oldSha] = line.split(":");
+      if (!upstreamPath || !oldSha) {
+        // A malformed registry line is not a file we compared. Counting it
+        // as examined-and-same would let a corrupt NOTICE manufacture a
+        // clean total.
+        filesError += 1;
+        continue;
+      }
+
+      // DISTINCT paths, not records. A duplicated `upstream-path` (the
+      // ordinary copy-paste slip in a re-vendor PR) would otherwise let
+      // eight records compare seven files twice-over and satisfy
+      // `filesExamined === registryCount` with one rule file never fetched
+      // — the same 5-of-8 shape the completeness conjunct exists to catch,
+      // one level down. The Set lives on the object the predicate reads, so
+      // it cannot drift away from the conjunct that consumes it.
+      if (examinedPaths.has(upstreamPath)) {
+        filesError += 1;
         logger.warn(
           {
             fn: "cron-content-vendor-drift",
-            declaredOpeners,
-            declaredStatus,
-            emitted: upstreamFiles.length,
+            bundle: bundle.slug,
+            path: upstreamPath,
           },
-          "NOTICE registry views disagree — a record is malformed or being dropped; the attestation will refuse",
+          "Duplicate upstream-path in the NOTICE registry — scored ERROR; the registry does not describe the corpus it claims to",
         );
+        continue;
       }
+      examinedPaths.add(upstreamPath);
+      filesExamined += 1;
 
-      // Built once and spread at every exit. Hand-copying six fields across
-      // six returns is how a seventh return site silently omits one, and an
-      // omitted field on THIS object is a conjunct the write predicate then
-      // cannot evaluate (#7710 review).
-      const totals: ComparisonTotals = {
-        registryCount,
-        filesExamined,
-        filesSame,
-        filesDrifted,
-        filesError,
-        upstreamRepoState,
-      };
-
-      if (!driftDetected && !driftFlags) {
-        return {
-          drift: "none" as const,
-          route: "none" as const,
-          labels: [] as string[],
-          classifyRc: 0,
-          ...totals,
-        };
-      }
-
-      // Run classifier
-      const classifierArgs = driftFlags ? [driftFlags] : [];
-      const classifyResult = await spawnScriptCapture(
-        classifierPath,
-        classifierArgs,
-        {
-          cwd: repoRoot,
-          env,
-          stdin: aggDiffParts.join("\n"),
-        },
-      );
-
-      const classifyRc = classifyResult.exitCode ?? 0;
-      const labels = parseClassifierLabels(
-        classifyResult.stdout,
-        classifyRc,
-      );
-
-      logger.info(
-        {
-          fn: "cron-content-vendor-drift",
-          classifyRc,
-          labels,
-        },
-        "Classifier result",
-      );
-
-      if (classifyRc === 0) {
-        // NOT an attestation-worthy exit. This return is reached AFTER drift
-        // was detected, whenever the classifier declines to categorise it.
-        // Keying the freshness write on `drift === "none"` would therefore
-        // advance a compliance attestation over a corpus this very run found
-        // drift in — which is the exact falsification #7710 exists to
-        // prevent. The write predicate keys on the TOTALS instead.
-        return {
-          drift: "none" as const,
-          route: "none" as const,
-          labels: [] as string[],
-          classifyRc: 0,
-          ...totals,
-        };
-      }
-
-      // Trust-model routing: security/license/rollback/renamed/archived
-      // drift opens an ISSUE (no auto-PR). Auto-PR is reserved for
-      // low-risk batched drift (exit 13).
-      if (ISSUE_EXIT_CODES.has(classifyRc)) {
-        return {
-          drift: "detected" as const,
-          route: "issue" as const,
-          labels,
-          classifyRc,
-          ...totals,
-        };
-      }
-
-      if (classifyRc === 13) {
-        // Check for open drift PRs (idempotency). The prefix MUST track the
-        // safeCommitAndPr-derived branch (`ci/content-vendor-drift-<ts>`,
-        // #5111) — this guard is what suppresses duplicate drift PRs when a
-        // direct merge failed and last week's PR is still open. (No old
-        // `ci/vendor-drift-` transition match needed: the pre-#5111 PR route
-        // never produced content, so no old-prefix PR can be open.)
-        const { data: openPRs } = await octokit.request(
-          "GET /search/issues",
+      try {
+        const { data: contents } = await octokit.request(
+          "GET /repos/{owner}/{repo}/contents/{path}",
           {
-            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:ci/content-vendor-drift-`,
-            per_page: 5,
+            owner: ownerRepo.split("/")[0],
+            repo: ownerRepo.split("/")[1],
+            path: upstreamPath,
+            ref: upstreamRef,
           },
         );
-        if (openPRs.total_count > 0) {
-          logger.info(
-            { fn: "cron-content-vendor-drift" },
-            "Skipping: open drift PR(s) already exist",
+        const currentSha = (contents as { sha?: string }).sha;
+        const verdict = classifyFileComparison(oldSha, currentSha);
+
+        if (verdict === "error") {
+          filesError += 1;
+          logger.warn(
+            {
+              fn: "cron-content-vendor-drift",
+              bundle: bundle.slug,
+              path: upstreamPath,
+              oldSha,
+            },
+            "Upstream contents response carried no sha — scored ERROR, not SAME",
           );
-          return {
-            drift: "skipped-open-pr" as const,
-            route: "none" as const,
-            labels,
-            classifyRc,
-          ...totals,
-          };
+          continue;
         }
 
-        return {
-          drift: "detected" as const,
-          route: "pr" as const,
-          labels,
-          classifyRc,
-          ...totals,
-        };
-      }
+        if (verdict === "same") {
+          filesSame += 1;
+          continue;
+        }
 
-      // Unknown exit code — route to issue for human triage
+        filesDrifted += 1;
+        driftDetected = true;
+
+        // Populate the classifier's stdin. This array was declared and
+        // joined into `stdin` but NEVER written to (#7710), so the
+        // classifier received an empty diff on every run, returned 0, and
+        // the handler took the `classifyRc === 0` early return — which is
+        // the SECOND `drift: "none"` site, reached AFTER drift was
+        // detected. Categorising drift is the classifier's whole job and it
+        // was being asked to categorise nothing.
+        //
+        // IT MUST BE A UNIFIED DIFF. `vendor-drift-classify.sh` says so in
+        // its header, and every category check is anchored accordingly:
+        // license on `^(\+\+\+|---) [ab]/…LICENSE`, security on `^\+`. A
+        // first revision of this fix pushed `path\told\tnew`, which begins
+        // with a path and therefore matches NEITHER — so exits 10 (security)
+        // and 11 (license) became unreachable and every drift fell through
+        // to check 5's bare non-empty test, i.e. exit 13 → the auto-PR route
+        // with `mergeMode: "direct"`. That route is restricted to exit 13
+        // precisely to keep attacker-controlled upstream bytes from landing
+        // via the weekly bot, so the shape of the string is load-bearing
+        // security, not formatting.
+        //
+        // Every line of the drifted upstream file is emitted as ADDED. That
+        // is deliberate and conservative: a minimal diff can only shrink the
+        // text the security regex sees, and the failure direction we cannot
+        // afford is under-triggering. Over-triggering costs a human reading
+        // an issue instead of a bot opening a PR.
+        const upstreamBody = decodeContentsBody(contents);
+        if (upstreamBody === null) {
+          // We know it drifted but cannot show the classifier what changed.
+          // Emitting only headers would let check 5 route it to the
+          // auto-PR path on the strength of a filename. Force the guarded
+          // route with an explicit marker the security regex matches.
+          aggDiffParts.push(
+            `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n+[CRITICAL] drifted content unreadable — classify conservatively`,
+          );
+        } else {
+          const body = upstreamBody
+            .split("\n")
+            .slice(0, MAX_DIFF_LINES_PER_FILE)
+            .map((l) => `+${l}`)
+            .join("\n");
+          aggDiffParts.push(
+            `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n${body}`,
+          );
+        }
+
+        logger.info(
+          {
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            path: upstreamPath,
+            oldSha,
+            currentSha,
+          },
+          "Drift detected",
+        );
+      } catch (fetchErr) {
+        // A per-FILE fetch failure is not evidence about the REPOSITORY.
+        // This arm used to raise the repo-level rename flag, telling the
+        // classifier the whole upstream had moved — and routing to
+        // `vendor/upstream-archived` + `needs-human-review` — on a single
+        // 404 or 5xx. That is "I could not measure" read as evidence, which
+        // is the defect this PR exists to close (#7710 review). The
+        // superseded assignment is described rather than quoted: the
+        // regression guard greps this region for it, and a body-grep cannot
+        // tell code from a comment.
+        //
+        // The error is counted, which is enough: `filesError > 0` both
+        // refuses the attestation and marks the run as unable to measure,
+        // so it reaches the heartbeat without inventing a repo-level claim.
+        driftDetected = true;
+        filesError += 1;
+        logger.warn(
+          {
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            path: upstreamPath,
+            err: (fetchErr as Error).message,
+          },
+          "Upstream contents fetch failed for one file — scored ERROR",
+        );
+      }
+    }
+
+    // The count of records DECLARED in the NOTICE — NOT `upstreamFiles.length`.
+    //
+    // `upstream-files` is a FILTERED view: `_emit_files` flushes a record
+    // only when both its path key and its sha key are non-empty, so a record
+    // that loses `upstream-blob-sha` vanishes from it. Deriving the
+    // denominator from that view made the completeness conjunct a tautology
+    // — the denominator shrank with the numerator, `filesExamined ===
+    // registryCount` held, and the cron attested over a corpus it had only
+    // partially compared. That is the 5-of-8 failure #7710 exists to
+    // prevent, so its guard must not be measured through the same lens that
+    // loses the records (#7710 review).
+    const declaredResult = await spawnScriptCapture(
+      parserPath,
+      ["record-count", "lifted-files"],
+      { cwd: repoRoot, env },
+    );
+    const declaredRaw = declaredResult.stdout.trim();
+
+    // A SECOND, differently-derived view of the registry's size.
+    //
+    // `record-count` shares its record-opener predicate with `_emit_files`,
+    // so deleting an OPENER line shrinks both together: measured, declared 7
+    // and emitted 7 with one record silently absorbed into its predecessor,
+    // and the completeness conjunct held. Counting a key the opener
+    // predicate does not consume breaks that coupling — on the same fixture
+    // it reads 8 against an emitted 7.
+    const statusResult = await spawnScriptCapture(
+      parserPath,
+      ["key-count", "lifted-files", "status"],
+      { cwd: repoRoot, env },
+    );
+    const statusRaw = statusResult.stdout.trim();
+    // Fail closed: a non-numeric answer means the registry could not be
+    // read, and 0 makes `registryCount > 0` refuse.
+    const declaredOpeners = /^\d+$/.test(declaredRaw) ? Number(declaredRaw) : 0;
+    const declaredStatus = /^\d+$/.test(statusRaw) ? Number(statusRaw) : 0;
+
+    // The LARGER of the two declared views. Any record loss inflates the
+    // denominator relative to what was examined, so the completeness
+    // conjunct refuses; a missing `status:` key alone does not (it costs no
+    // comparability, and all records were still compared).
+    const registryCount = Math.max(declaredOpeners, declaredStatus);
+    if (
+      declaredOpeners !== declaredStatus ||
+      registryCount !== upstreamFiles.length
+    ) {
+      logger.warn(
+        {
+          fn: "cron-content-vendor-drift",
+          bundle: bundle.slug,
+          declaredOpeners,
+          declaredStatus,
+          emitted: upstreamFiles.length,
+        },
+        "NOTICE registry views disagree — a record is malformed or being dropped; the attestation will refuse",
+      );
+    }
+
+    // Built once and spread at every exit. Hand-copying six fields across
+    // six returns is how a seventh return site silently omits one, and an
+    // omitted field on THIS object is a conjunct the write predicate then
+    // cannot evaluate (#7710 review).
+    const totals: ComparisonTotals = {
+      registryCount,
+      filesExamined,
+      filesSame,
+      filesDrifted,
+      filesError,
+      upstreamRepoState,
+    };
+
+    if (!driftDetected && !driftFlags) {
+      return {
+        drift: "none" as const,
+        route: "none" as const,
+        labels: [] as string[],
+        classifyRc: 0,
+        upstreamRef,
+        ...totals,
+      };
+    }
+
+    // Run classifier
+    const classifierArgs = driftFlags ? [driftFlags] : [];
+    const classifyResult = await spawnScriptCapture(
+      classifierPath,
+      classifierArgs,
+      {
+        cwd: repoRoot,
+        env,
+        stdin: aggDiffParts.join("\n"),
+      },
+    );
+
+    const classifyRc = classifyResult.exitCode ?? 0;
+    const labels = parseClassifierLabels(
+      classifyResult.stdout,
+      classifyRc,
+    );
+
+    logger.info(
+      {
+        fn: "cron-content-vendor-drift",
+        bundle: bundle.slug,
+        classifyRc,
+        labels,
+      },
+      "Classifier result",
+    );
+
+    if (classifyRc === 0) {
+      // NOT an attestation-worthy exit. This return is reached AFTER drift
+      // was detected, whenever the classifier declines to categorise it.
+      // Keying the freshness write on `drift === "none"` would therefore
+      // advance a compliance attestation over a corpus this very run found
+      // drift in — which is the exact falsification #7710 exists to
+      // prevent. The write predicate keys on the TOTALS instead.
+      return {
+        drift: "none" as const,
+        route: "none" as const,
+        labels: [] as string[],
+        classifyRc: 0,
+        upstreamRef,
+        ...totals,
+      };
+    }
+
+    // Trust-model routing: security/license/rollback/renamed/archived
+    // drift opens an ISSUE (no auto-PR). Auto-PR is reserved for
+    // low-risk batched drift (exit 13).
+    if (ISSUE_EXIT_CODES.has(classifyRc)) {
       return {
         drift: "detected" as const,
         route: "issue" as const,
         labels,
         classifyRc,
-          ...totals,
+        upstreamRef,
+        ...totals,
       };
-    });
+    }
 
-    // Route: open PR for low-risk drift. Persistence via safeCommitAndPr
-    // (#5111) — gains the deletion guard (a large upstream restructure
-    // deleting >10 files under references/ aborts loudly BY DESIGN; see the
-    // runbook's DEFAULT_MAX_DELETIONS raise path), dirty-index precondition,
-    // dropped-path warn, and replay idempotency. mergeMode "direct" +
-    // synthetic checks preserves the production-proven merge mechanics.
-    // Branch becomes ci/content-vendor-drift-<ts> (helper derivation,
-    // renamed from ci/vendor-drift-<date> — NOT cosmetic: the detect step's
-    // open-PR dedup query keys on this prefix and was updated in lockstep).
-    if (detectResult.route === "pr") {
-      await step.run("safe-commit-pr", async () =>
-        safeCommitAndPr({
-          spawnCwd: repoRoot,
-          installationToken,
-          cronName: "cron-content-vendor-drift",
-          commitMessage:
-            "chore(vendor-drift): re-vendor gosprinto/compliance-skills",
-          allowedPaths: [`${SKILL_PREFIX}/NOTICE`, `${SKILL_PREFIX}/references/`],
-          runStartedAt,
-          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-          // The sentence claiming the NOTICE freshness field was advanced at
-          // PR-creation time was removed here (#7710). NOTHING HAD EVER DONE
-          // THAT. The GHA workflow deleted in #4483 did carry a `sed` for it,
-          // but 177 lines past an `exit 0` taken on every no-drift run — so it
-          // was reachable only on the drift arm, the corpus never drifted, and
-          // no `ci/vendor-drift-*` PR has ever existed. This body asserted a
-          // bump on every drift PR it opened while the field sat unchanged. The retired sentence is described rather than
-          // quoted: the regression guard greps this file for it. `last-verified` is now advanced by the
-          // attest-freshness step below, and ONLY on a verified-clean run —
-          // which is deliberately not this path, since this path exists
-          // because drift WAS found.
-          prBody:
-            "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified is NOT advanced here — this PR exists because drift was detected; the field advances only on a verified-clean comparison. Classifier exit and labels set in commit metadata.",
-          prLabels: detectResult.labels,
-          syntheticChecks: {
-            names: SYNTHETIC_CHECK_NAMES,
-            summary: "Re-vendor on upstream drift detection — see runbook",
-          },
-          mergeMode: "direct",
-          octokit,
-          logger,
-        }),
+    if (classifyRc === 13) {
+      // Idempotency, scoped PER BUNDLE: an open bundle-A re-vendor PR must
+      // not suppress bundle-B's. The pulls list is classified by
+      // classifyBranchOwner — slugged refs belong to their slug, legacy
+      // unsuffixed refs to LEGACY_BUNDLE_SLUG (#5111 kept the prefix-based
+      // dedup; multi-bundle adds the ownership classification).
+      const openHeads = await listOpenPrHeads(octokit);
+      const openDriftPrs = openHeads.filter(
+        (ref) =>
+          classifyBranchOwner(ref, DRIFT_BRANCH_PREFIX, slugs) ===
+          bundle.slug,
       );
-    }
-
-    // Route: open issue for security-relevant drift
-    if (detectResult.route === "issue") {
-      await step.run("open-drift-issue", async () => {
-        const todayISO = new Date().toISOString().slice(0, 10);
-        const title = `[vendor-drift] security-relevant drift on ${todayISO} (classifier rc=${detectResult.classifyRc})`;
-
-        // Idempotency: check for existing open issue
-        const { data: existing } = await octokit.request(
-          "GET /search/issues",
+      if (openDriftPrs.length > 0) {
+        logger.info(
           {
-            q: `is:issue is:open repo:${REPO_OWNER}/${REPO_NAME} label:vendor/pin-drift "vendor-drift] security-relevant drift" in:title`,
-            per_page: 5,
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            openDriftPrs,
           },
+          "Skipping: open drift PR(s) already exist for this bundle",
         );
-        if (existing.total_count > 0) {
-          logger.info(
-            { fn: "cron-content-vendor-drift" },
-            "Existing open security-drift issue found; skipping",
-          );
-          return;
-        }
+        return {
+          drift: "skipped-open-pr" as const,
+          route: "none" as const,
+          labels,
+          classifyRc,
+          upstreamRef,
+          ...totals,
+        };
+      }
 
-        const body = [
-          "Automated drift detection routed to issue-only (no auto-PR).",
-          "",
-          `**Classifier exit code:** \`${detectResult.classifyRc}\``,
-          `**Labels:** \`${detectResult.labels.join(", ")}\``,
-          "",
-          "## Why issue, not PR?",
-          "",
-          "Security-/license-/rollback-/archived-/renamed-class drift requires human re-vendor (per review #3521 user-impact-reviewer).",
-          "The auto-PR path is restricted to exit 13 (batched non-security drift) to prevent attacker-controlled upstream bytes from landing via the weekly bot.",
-          "",
-          "## Resolution path",
-          "",
-          "Follow `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
-          "",
-          "Ref #3517",
-        ].join("\n");
-
-        await octokit.request("POST /repos/{owner}/{repo}/issues", {
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          title,
-          body,
-          labels: detectResult.labels,
-        });
-      });
+      return {
+        drift: "detected" as const,
+        route: "pr" as const,
+        labels,
+        classifyRc,
+        upstreamRef,
+        ...totals,
+      };
     }
 
-    // -- Freshness attestation (#7710) ------------------------------------
-    //
-    // `last-verified` in NOTICE is what the gdpr-gate hook reads to decide
-    // whether its detection corpus is current. Nothing had EVER advanced it:
-    // `git log -S` over that field returns exactly one commit, the one that
-    // introduced it, and that commit typed the value by hand — a date one day
-    // older than the commit itself. The workflow deleted in #4483 carried a
-    // `sed` for the field but behind an `exit 0` on the no-drift path, so it
-    // never fired on the arm that mattered. The field therefore aged from
-    // 2026-05-10 to 117 days stale while this cron compared the corpus every
-    // week and found it clean the whole time. This step is a NEW writer, not a
-    // restored one.
-    //
-    // THE PREDICATE IS THE TOTALS, NEVER `detectResult.drift`. Two of the
-    // returns above yield `drift: "none"` and only one of them means "I
-    // compared everything and it matched" — the other is reached after drift
-    // was detected and the classifier declined to categorise it. Keying on
-    // the return value would advance a compliance attestation over a corpus
-    // the same run had just found drift in.
-    //
-    // Every conjunct is load-bearing:
-    //   registryCount > 0        — `0 of 0` is not evidence of currency, and
-    //                              a writer treating it as such is vacuous.
-    //   filesExamined === count  — a PARTIAL comparison is not evidence.
-    //   filesDrifted === 0       — the obvious one.
-    //   filesError === 0         — a file we could not fetch is not a file we
-    //                              verified; without this, an outage reads as
-    //                              a clean bill of health.
-    const attestationEligible = mayAttestFreshness(detectResult);
-    const measurementFailed = couldNotMeasure(detectResult);
+    // Unknown exit code — route to issue for human triage
+    return {
+      drift: "detected" as const,
+      route: "issue" as const,
+      labels,
+      classifyRc,
+      upstreamRef,
+      ...totals,
+    };
+  });
 
-    let wroteAttestation = false;
-    let artifactCurrent = false;
-    let observedAgeDays: number | null = null;
-    let attestationOutcome = "not-eligible";
-    // A PR number, not a commit SHA. `safeCommitAndPr`'s committed arm
-    // reports `prNumber`; calling it `commitSha` on the only forensic surface
-    // this run has would be the same conflation #7710 is about.
-    let attestationPrNumber: string | null = null;
+  // Route: open PR for low-risk drift. Persistence via safeCommitAndPr
+  // (#5111) — gains the deletion guard (a large upstream restructure
+  // deleting >10 files under references/ aborts loudly BY DESIGN; see the
+  // runbook's DEFAULT_MAX_DELETIONS raise path), dirty-index precondition,
+  // dropped-path warn, and replay idempotency. mergeMode "direct" +
+  // synthetic checks preserves the production-proven merge mechanics.
+  // Branch becomes ci/content-vendor-drift-<slug>-<ts> via the per-bundle
+  // cronName (helper derivation, #5111) — the detect step's open-PR dedup
+  // classifies this namespace by slug and was updated in lockstep.
+  // `pr` route honesty: the result is CAPTURED, not discarded. Nothing in the
+  // detect step writes vendored content into the worktree (the re-vendor write
+  // is unimplemented — tracked follow-up), so today this step always lands
+  // `no-changes`. A pr-route arm with no committed artifact is NOT healthy —
+  // the heartbeat must not read `route !== "none"` as "artifact produced".
+  let prStepResult: SafeCommitResult | null = null;
+  if (detectResult.route === "pr") {
+    prStepResult = await step.run(`safe-commit-pr-${bundle.slug}`, async () =>
+      safeCommitAndPr({
+        spawnCwd: repoRoot,
+        installationToken,
+        cronName,
+        commitMessage: `chore(vendor-drift): re-vendor ${bundle.upstreamName}`,
+        allowedPaths: [
+          `${bundle.skillPrefix}/NOTICE`,
+          `${bundle.skillPrefix}/references/`,
+        ],
+        runStartedAt,
+        scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+        // The sentence claiming the NOTICE freshness field was advanced at
+        // PR-creation time was removed here (#7710). NOTHING HAD EVER DONE
+        // THAT. The GHA workflow deleted in #4483 did carry a `sed` for it,
+        // but 177 lines past an `exit 0` taken on every no-drift run — so it
+        // was reachable only on the drift arm, the corpus never drifted, and
+        // no `ci/vendor-drift-*` PR has ever existed. This body asserted a
+        // bump on every drift PR it opened while the field sat unchanged. The retired sentence is described rather than
+        // quoted: the regression guard greps this file for it. `last-verified` is now advanced by the
+        // attest-freshness step below, and ONLY on a verified-clean run —
+        // which is deliberately not this path, since this path exists
+        // because drift WAS found.
+        prBody:
+          `Automated re-vendor on upstream drift for bundle \`${bundle.slug}\`. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified is NOT advanced here — this PR exists because drift was detected; the field advances only on a verified-clean comparison. Classifier exit and labels set in commit metadata.`,
+        prLabels: detectResult.labels,
+        syntheticChecks: {
+          names: SYNTHETIC_CHECK_NAMES,
+          summary: "Re-vendor on upstream drift detection — see runbook",
+        },
+        mergeMode: "direct",
+        octokit,
+        logger,
+      }),
+    );
+  }
 
-    // READ THE ARTIFACT'S AGE UNCONDITIONALLY.
-    //
-    // This used to happen only inside the `if (attestationEligible)` block,
-    // so on every drift run `observedAgeDays` stayed null and was never read.
-    // That is what let a drift run report healthy indefinitely: the drift is
-    // filed once, the issue-open step dedups on it thereafter, and the field
-    // ages past 30 and then 90 days behind a green monitor. The age is a
-    // local read of the already-cloned NOTICE — it costs nothing and it is
-    // the number the whole control is about, so it is measured on every path.
-    observedAgeDays = await step.run("read-attestation-age", async () => {
+  // Route: open issue for security-relevant drift
+  if (detectResult.route === "issue") {
+    await step.run(`open-drift-issue-${bundle.slug}`, async () => {
+      const todayISO = new Date().toISOString().slice(0, 10);
+      const title = `[vendor-drift][${bundle.slug}] security-relevant drift on ${todayISO} (classifier rc=${detectResult.classifyRc})`;
+
+      // Idempotency, scoped PER BUNDLE: titles carry `[<slug>]`, and legacy
+      // titles with no slug token classify as LEGACY_BUNDLE_SLUG's — an open
+      // bundle-A issue must not suppress bundle-B's filing.
+      // Dedup on the TITLE PHRASE alone — the label conjunct would miss the
+      // four non-security drift classes (license/archived/renamed/rollback
+      // carry vendor/license-changed, vendor/upstream-archived and
+      // vendor/upstream-rollback, NOT vendor/pin-drift), so an unresolved
+      // issue in any of those classes was invisible to this query and the
+      // run re-filed a duplicate every week. Bundle ownership is still
+      // partitioned client-side by classifyIssueOwner on the [<slug>] token.
+      const { data: existing } = await octokit.request(
+        "GET /search/issues",
+        {
+          q: `is:issue is:open repo:${REPO_OWNER}/${REPO_NAME} "security-relevant drift" in:title`,
+          per_page: 20,
+        },
+      );
+      const existingForBundle = existing.items.filter(
+        (item) => classifyIssueOwner(item.title, slugs) === bundle.slug,
+      );
+      if (existingForBundle.length > 0) {
+        logger.info(
+          { fn: "cron-content-vendor-drift", bundle: bundle.slug },
+          "Existing open security-drift issue found; skipping",
+        );
+        return;
+      }
+
+      const body = [
+        "Automated drift detection routed to issue-only (no auto-PR).",
+        "",
+        `**Bundle:** \`${bundle.slug}\` (\`${bundle.noticeFileRel}\`)`,
+        `**Upstream:** \`${bundle.upstream}\` pinned at \`${bundle.pinnedCommit}\``,
+        `**Classifier exit code:** \`${detectResult.classifyRc}\``,
+        `**Labels:** \`${detectResult.labels.join(", ")}\``,
+        "",
+        "## Why issue, not PR?",
+        "",
+        "Security-/license-/rollback-/archived-/renamed-class drift requires human re-vendor (per review #3521 user-impact-reviewer).",
+        "The auto-PR path is restricted to exit 13 (batched non-security drift) to prevent attacker-controlled upstream bytes from landing via the weekly bot.",
+        "",
+        "## Resolution path",
+        "",
+        "Follow `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
+        "",
+        "Ref #3517",
+      ].join("\n");
+
+      await octokit.request("POST /repos/{owner}/{repo}/issues", {
+        owner: REPO_OWNER,
+        repo: REPO_NAME,
+        title,
+        body,
+        labels: detectResult.labels,
+      });
+    });
+  }
+
+  // -- Freshness attestation (#7710), per bundle --------------------------
+  //
+  // `last-verified` in each NOTICE is what that bundle's gate hook reads to
+  // decide whether its corpus is current. Nothing had EVER advanced it:
+  // `git log -S` over that field returns exactly one commit, the one that
+  // introduced it, and that commit typed the value by hand — a date one day
+  // older than the commit itself. The workflow deleted in #4483 carried a
+  // `sed` for the field but behind an `exit 0` on the no-drift path, so it
+  // never fired on the arm that mattered. The field therefore aged from
+  // 2026-05-10 to 117 days stale while this cron compared the corpus every
+  // week and found it clean the whole time. This step is a NEW writer, not a
+  // restored one.
+  //
+  // THE PREDICATE IS THE TOTALS, NEVER `detectResult.drift`. Two of the
+  // returns above yield `drift: "none"` and only one of them means "I
+  // compared everything and it matched" — the other is reached after drift
+  // was detected and the classifier declined to categorise it. Keying on
+  // the return value would advance a compliance attestation over a corpus
+  // the same run had just found drift in.
+  //
+  // Every conjunct is load-bearing:
+  //   registryCount > 0        — `0 of 0` is not evidence of currency, and
+  //                              a writer treating it as such is vacuous.
+  //   filesExamined === count  — a PARTIAL comparison is not evidence.
+  //   filesDrifted === 0       — the obvious one.
+  //   filesError === 0         — a file we could not fetch is not a file we
+  //                              verified; without this, an outage reads as
+  //                              a clean bill of health.
+  const attestationEligible = mayAttestFreshness(detectResult);
+  const measurementFailed = couldNotMeasure(detectResult);
+
+  let wroteAttestation = false;
+  let artifactCurrent = false;
+  let observedAgeDays: number | null = null;
+  let attestationOutcome = "not-eligible";
+  // A PR number, not a commit SHA. `safeCommitAndPr`'s committed arm
+  // reports `prNumber`; calling it `commitSha` on the only forensic surface
+  // this run has would be the same conflation #7710 is about.
+  let attestationPrNumber: string | null = null;
+
+  // READ THE ARTIFACT'S AGE UNCONDITIONALLY.
+  //
+  // This used to happen only inside the `if (attestationEligible)` block,
+  // so on every drift run `observedAgeDays` stayed null and was never read.
+  // That is what let a drift run report healthy indefinitely: the drift is
+  // filed once, the issue-open step dedups on it thereafter, and the field
+  // ages past 30 and then 90 days behind a green monitor. The age is a
+  // local read of the already-cloned NOTICE — it costs nothing and it is
+  // the number the whole control is about, so it is measured on every path.
+  observedAgeDays = await step.run(
+    `read-attestation-age-${bundle.slug}`,
+    async () => {
       try {
-        const notice = await readFile(join(repoRoot, NOTICE_FILE_REL), "utf8");
+        const notice = await readFile(noticeAbs, "utf8");
         const m = notice.match(/^last-verified:[ \t]*(\S+)[ \t]*$/m);
         if (!m) return null;
         const age = Math.floor(
@@ -1147,12 +1594,14 @@ export async function cronContentVendorDriftHandler({
       } catch {
         return null;
       }
-    });
+    },
+  );
 
-    if (attestationEligible) {
-      const attestation = await step.run("attest-freshness", async () => {
-        const noticePath = join(repoRoot, NOTICE_FILE_REL);
-        const before = await readFile(noticePath, "utf8");
+  if (attestationEligible) {
+    const attestation = await step.run(
+      `attest-freshness-${bundle.slug}`,
+      async () => {
+        const before = await readFile(noticeAbs, "utf8");
         // `runStartedAt`, not a fresh clock read: this value is the
         // idempotency key for the "already advanced today" short-circuit
         // below, and `_cron-safe-commit` already derives the branch name and
@@ -1210,7 +1659,7 @@ export async function cronContentVendorDriftHandler({
           };
         }
         await writeFile(
-          noticePath,
+          noticeAbs,
           before.replace(
             /^last-verified:[ \t]*\S+[ \t]*$/m,
             `last-verified: ${today}`,
@@ -1226,20 +1675,19 @@ export async function cronContentVendorDriftHandler({
         // what the drift route already does, and inherits the allow-list, the
         // deletion guard and the replay idempotency a hand-rolled path would
         // discard.
-        // Idempotency: do not stack attestation PRs. The 21-day suppression
-        // reads `last-verified` from the freshly-cloned default branch, so an
-        // unmerged PR is invisible to it — without this guard a stuck PR means
-        // a NEW one every cadence, each self-merging, each editing the same
-        // line and so mutually conflicting, on a CODEOWNERS-protected
-        // compliance file (#7710 review).
-        const { data: openAttestPRs } = await octokit.request(
-          "GET /search/issues",
-          {
-            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:${ATTEST_BRANCH_PREFIX}-`,
-            per_page: 5,
-          },
+        // Idempotency, scoped PER BUNDLE: do not stack attestation PRs. The
+        // 21-day suppression reads `last-verified` from the freshly-cloned
+        // default branch, so an unmerged PR is invisible to it — without this
+        // guard a stuck PR means a NEW one every cadence, each self-merging,
+        // each editing the same line and so mutually conflicting, on a
+        // CODEOWNERS-protected compliance file (#7710 review).
+        const openHeads = await listOpenPrHeads(octokit);
+        const openAttestPRs = openHeads.filter(
+          (ref) =>
+            classifyBranchOwner(ref, ATTEST_BRANCH_PREFIX, slugs) ===
+            bundle.slug,
         );
-        if (openAttestPRs.total_count > 0) {
+        if (openAttestPRs.length > 0) {
           return {
             outcome: "attest-pr-already-open" as const,
             wrote: false,
@@ -1255,28 +1703,28 @@ export async function cronContentVendorDriftHandler({
         const res = await safeCommitAndPr({
           spawnCwd: repoRoot,
           installationToken,
-          cronName: "cron-content-vendor-drift",
+          cronName,
           // The squash commit that lands on `main` carries COMMIT_MESSAGES,
           // not the PR body (verified against the repo's
           // `squash_merge_commit_message` setting), so the evidence has to be
           // IN the commit message or it does not survive the merge — and
           // ADR-203's Art. 5(2) argument rests on the commit being the record.
           commitMessage: [
-            `chore(vendor-drift): attest gosprinto/compliance-skills unchanged (${today})`,
+            `chore(vendor-drift): attest ${bundle.upstreamName} unchanged (${today})`,
             "",
-            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at ${pinnedForBody}, against upstream main:`,
+            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at ${pinnedForBody}, against upstream ${detectResult.upstreamRef}:`,
             `${detectResult.filesSame} SAME, ${detectResult.filesDrifted} drifted, ${detectResult.filesError} errors, repo-state ${detectResult.upstreamRepoState}.`,
             "",
             "Advances last-verified only; no vendored content is changed.",
           ].join("\n"),
-          branchName: `${ATTEST_BRANCH_PREFIX}-${runStartedAt.replace(/[:.]/g, "-")}`,
-          allowedPaths: [`${SKILL_PREFIX}/NOTICE`],
+          branchName: `${ATTEST_BRANCH_PREFIX}-${bundle.slug}-${runStartedAt.replace(/[:.]/g, "-")}`,
+          allowedPaths: [`${bundle.skillPrefix}/NOTICE`],
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,
           prBody: [
-            "Automated freshness attestation.",
+            `Automated freshness attestation for bundle \`${bundle.slug}\`.`,
             "",
-            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at \`${pinnedForBody}\`, against upstream \`main\`: ${detectResult.filesSame} SAME, ${detectResult.filesDrifted} drifted, ${detectResult.filesError} errors.`,
+            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at \`${pinnedForBody}\`, against upstream \`${detectResult.upstreamRef}\`: ${detectResult.filesSame} SAME, ${detectResult.filesDrifted} drifted, ${detectResult.filesError} errors.`,
             "",
             "This PR advances `last-verified` only. It does not change any vendored content.",
           ].join("\n"),
@@ -1314,41 +1762,61 @@ export async function cronContentVendorDriftHandler({
               ? String(res.prNumber)
               : null,
         };
-      });
+      },
+    );
 
-      wroteAttestation = attestation.wrote;
-      artifactCurrent = attestation.current;
-      observedAgeDays = attestation.ageDays;
-      attestationOutcome = attestation.outcome;
-      attestationPrNumber = attestation.pr;
-    }
+    wroteAttestation = attestation.wrote;
+    artifactCurrent = attestation.current;
+    observedAgeDays = attestation.ageDays;
+    attestationOutcome = attestation.outcome;
+    attestationPrNumber = attestation.pr;
+  }
 
-    // ONE line carrying every field together. Four hypotheses share the
-    // symptom "the attestation did not advance" — clean-and-written,
-    // clean-and-the-merge-was-refused, drifted-and-correctly-withheld, and
-    // never-compared — and a single boolean cannot separate them.
-    //
-    // A structured log rather than an Inngest event because this run has no
-    // consumer for an event. (An earlier revision of this comment cited
-    // "ADR-033 I6 forbids event payloads from this function"; ADR-033 I6
-    // requires `actor: "platform"` ON emitted events and forbids nothing —
-    // #7710 review. The pre-existing gloss in this file's header carries the
-    // same error and is corrected there too.)
-    // Inside a step: Inngest re-executes the handler BODY at every step
-    // boundary, so a bare logger.info here re-fires on each replay and this
-    // line is the accountability artifact ADR-203 relies on — duplicating it
-    // corrupts the evidence it exists to be. Same for the Sentry mirror
-    // below (#7710 review).
-    await step.run("attestation-summary", async () => {
-      // WARN, not info. Measured: `logger.info` reaches no observability
-      // layer — the Sentry breadcrumb mirror keeps >= warn
-      // (SENTRY_BREADCRUMB_MIN_LEVEL) and the Vector pipeline drops pino
-      // level < 40 — so an `info` line carrying the ADR-203 accountability
-      // fields would exist only in a stream nothing ingests. This IS the
-      // compliance record; it has to be queryable.
-      logger.warn(
+  // ONE line carrying every field together. Four hypotheses share the
+  // symptom "the attestation did not advance" — clean-and-written,
+  // clean-and-the-merge-was-refused, drifted-and-correctly-withheld, and
+  // never-compared — and a single boolean cannot separate them.
+  //
+  // A structured log rather than an Inngest event because this run has no
+  // consumer for an event. (An earlier revision of this comment cited
+  // "ADR-033 I6 forbids event payloads from this function"; ADR-033 I6
+  // requires `actor: "platform"` ON emitted events and forbids nothing —
+  // #7710 review. The pre-existing gloss in this file's header carries the
+  // same error and is corrected there too.)
+  // Inside a step: Inngest re-executes the handler BODY at every step
+  // boundary, so a bare logger.info here re-fires on each replay and this
+  // line is the accountability artifact ADR-203 relies on — duplicating it
+  // corrupts the evidence it exists to be. Same for the Sentry mirror
+  // below (#7710 review).
+  // A `pr` route that produced no committed artifact reads as "none" for
+  // health purposes — the dedup-and-skip path aside, `route !== "none"` is the
+  // heartbeat's "the run produced an artifact" signal, and a discarded
+  // `no-changes` result must not satisfy it. This is also what makes the
+  // unimplemented re-vendor write VISIBLE the day an upstream drifts into the
+  // auto-PR class: red check-in + Sentry event instead of a silent green.
+  const prArtifactMissing =
+    detectResult.route === "pr" && prStepResult?.status !== "committed";
+  if (prArtifactMissing) {
+    attestationOutcome = `pr-route-no-artifact(${prStepResult?.status ?? "no-step"})`;
+  }
+  const bundleHealthy =
+    heartbeatOk(
+      measurementFailed,
+      attestationEligible,
+      observedAgeDays,
+      detectResult.route,
+    ) && !prArtifactMissing;
+  await step.run(`attestation-summary-${bundle.slug}`, async () => {
+    // WARN, not info. Measured: `logger.info` reaches no observability
+    // layer — the Sentry breadcrumb mirror keeps >= warn
+    // (SENTRY_BREADCRUMB_MIN_LEVEL) and the Vector pipeline drops pino
+    // level < 40 — so an `info` line carrying the ADR-203 accountability
+    // fields would exist only in a stream nothing ingests. This IS the
+    // compliance record; it has to be queryable.
+    logger.warn(
       {
         fn: "cron-content-vendor-drift",
+        bundle: bundle.slug,
         op: "attestation-summary",
         filesExamined: detectResult.filesExamined,
         filesSame: detectResult.filesSame,
@@ -1362,108 +1830,46 @@ export async function cronContentVendorDriftHandler({
         artifactCurrent,
         observedAgeDays,
         measurementFailed,
-        isHealthy: heartbeatOk(
-          measurementFailed,
-          attestationEligible,
-          observedAgeDays,
-          detectResult.route,
-        ),
+        isHealthy: bundleHealthy,
       },
       "Vendor-drift attestation summary",
+    );
+
+    if (!bundleHealthy) {
+      reportSilentFallback(
+        new Error(
+          `Vendor-drift run is not healthy for bundle ${bundle.slug} (outcome=${attestationOutcome}, age=${observedAgeDays ?? "unreadable"})`,
+        ),
+        {
+          feature: "cron-content-vendor-drift",
+          op: measurementFailed
+            ? "comparison-could-not-measure"
+            : "attestation-stale",
+          // `pr` is load-bearing: on the ordinary `pr-open-not-merged` path
+          // this is the ONLY Sentry event, and without it the operator
+          // cannot tell "a PR is open and auto-merging" from "nothing was
+          // created". `bundle` names which registry the event is about.
+          message: `bundle=${bundle.slug} examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome} pr=${attestationPrNumber ?? "none"} age=${observedAgeDays ?? "unreadable"}`,
+        },
       );
-
-      if (
-        !heartbeatOk(
-          measurementFailed,
-          attestationEligible,
-          observedAgeDays,
-          detectResult.route,
-        )
-      ) {
-        reportSilentFallback(
-          new Error(
-            `Vendor-drift run is not healthy (outcome=${attestationOutcome}, age=${observedAgeDays ?? "unreadable"})`,
-          ),
-          {
-            feature: "cron-content-vendor-drift",
-            op: measurementFailed
-              ? "comparison-could-not-measure"
-              : "attestation-stale",
-            // `pr` is load-bearing: on the ordinary `pr-open-not-merged` path
-            // this is the ONLY Sentry event, and without it the operator
-            // cannot tell "a PR is open and auto-merging" from "nothing was
-            // created".
-            message: `examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome} pr=${attestationPrNumber ?? "none"} age=${observedAgeDays ?? "unreadable"}`,
-          },
-        );
-      }
-      return { logged: true };
-    });
-
-    // The heartbeat must reflect the ARTIFACT, not the run. Previously this
-    // posted ok:true unconditionally, so the cron could compare clean, fail
-    // to commit, and still report healthy — the failure path inside
-    // safeCommitAndPr terminates in reportSilentFallback under a green
-    // check-in, which is how a broken writer stays invisible for 117 days.
-    const isHealthy = heartbeatOk(
-      measurementFailed,
-      attestationEligible,
-      observedAgeDays,
-      detectResult.route,
-    );
-
-    await step.run("sentry-heartbeat", () =>
-      postSentryHeartbeat({
-        ok: isHealthy,
-        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
-        cronName: "cron-content-vendor-drift",
-        logger,
-      }),
-    );
-
-    return {
-      ok: isHealthy,
-      status: detectResult.drift === "none" ? "no-drift" : detectResult.drift,
-      route: detectResult.route,
-      labels: detectResult.labels,
-    };
-  } catch (err) {
-    const e = err as Error;
-    if (installationToken) {
-      e.message = redactToken(e.message, installationToken);
     }
-    reportSilentFallback(e, {
-      feature: "cron-content-vendor-drift",
-      op: "handler-top-level",
-      message: e.message,
-    });
-    // The attestation summary is the ADR-203 accountability record, and the
-    // step that emits it is never reached on a throw — so without this the
-    // runs with NO record are exactly the runs that failed. Emitted outside a
-    // step deliberately: the handler is already unwinding.
-    logger.warn(
-      {
-        fn: "cron-content-vendor-drift",
-        op: "attestation-summary",
-        attestationOutcome: "handler-threw",
-        isHealthy: false,
-      },
-      "Vendor-drift attestation summary (run aborted before the summary step)",
-    );
-    try {
-      await postSentryHeartbeat({
-        ok: false,
-        sentryMonitorSlug: SENTRY_MONITOR_SLUG,
-        cronName: "cron-content-vendor-drift",
-        logger,
-      });
-    } catch {
-      // best-effort
-    }
-    return { ok: false, status: "error" };
-  } finally {
-    await teardownEphemeralWorkspace(ephemeralRoot);
-  }
+    return { logged: true };
+  });
+
+  // The heartbeat must reflect the ARTIFACT, not the run. Previously this
+  // posted ok:true unconditionally, so the cron could compare clean, fail
+  // to commit, and still report healthy — the failure path inside
+  // safeCommitAndPr terminates in reportSilentFallback under a green
+  // check-in, which is how a broken writer stays invisible for 117 days.
+  return {
+    slug: bundle.slug,
+    status: detectResult.drift === "none" ? "no-drift" : detectResult.drift,
+    route: detectResult.route,
+    healthy: bundleHealthy,
+    attestationOutcome,
+    attestationPrNumber,
+    observedAgeDays,
+  };
 }
 
 // =============================================================================

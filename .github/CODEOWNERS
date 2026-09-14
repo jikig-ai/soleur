@@ -36,6 +36,7 @@
 # the fix is an Inngest-aware liveness source, and whatever path carries it gets the
 # row then.
 /plugins/soleur/skills/gdpr-gate/NOTICE                 @deruelle
+/plugins/soleur/skills/legal-generate/NOTICE            @deruelle
 /.github/workflows/gdpr-gate-self-test.yml              @deruelle
 /plugins/soleur/test/fixtures/gdpr-gate-stale/          @deruelle
 
