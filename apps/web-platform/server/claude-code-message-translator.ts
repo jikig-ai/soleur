@@ -21,7 +21,7 @@ function safeSourceId(value: unknown): string | null {
   if (!candidate || candidate.length > 128) return null;
   if ([...candidate].some((character) => {
     const code = character.charCodeAt(0);
-    return code < 32 || code === 127;
+    return code < 32 || code === 127 || code === 0x2028 || code === 0x2029;
   })) return null;
   return candidate;
 }
@@ -155,6 +155,7 @@ export async function* translateClaudeSdkStream(
   messages: AsyncIterable<unknown>,
   runId: string,
 ): AsyncIterable<EngineEvent> {
+  if (!safeSourceId(runId)) throw new Error("claude_run_id_invalid");
   let sequence = 0;
   for await (const message of messages) {
     for (const translated of translateClaudeSdkMessage(message)) {

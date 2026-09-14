@@ -130,6 +130,11 @@ describe("Claude SDK message translator", () => {
       uuid: "msg-\n-injection",
       message: { content: [{ type: "text", text: "hidden" }] },
     })).toEqual([]);
+    expect(translateClaudeSdkMessage({
+      type: "assistant",
+      uuid: "msg-\u2028-injection",
+      message: { content: [{ type: "text", text: "hidden" }] },
+    })).toEqual([]);
   });
 
   it("wraps translated messages with run identity and contiguous sequences", async () => {
@@ -144,5 +149,15 @@ describe("Claude SDK message translator", () => {
       { runId: "run-1", eventId: "claude:msg-9:usage", sequence: 2, payload: { type: "usage", usage: { native: [], cost: { provenance: "unavailable" } } } },
       { runId: "run-1", eventId: "claude:msg-9:status", sequence: 3, payload: { type: "status", status: "completed" } },
     ]);
+  });
+
+  it("rejects an invalid run identity before consuming provider messages", async () => {
+    const messages = (async function* () {
+      yield* [];
+      throw new Error("provider stream should not be consumed");
+    })();
+    await expect((async () => {
+      for await (const _event of translateClaudeSdkStream(messages, "bad\nrun")) { /* no-op */ }
+    })()).rejects.toThrowError("claude_run_id_invalid");
   });
 });

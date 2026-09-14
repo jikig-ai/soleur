@@ -73,6 +73,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Claude SDK transport bridge slice: an SDK-shaped lifecycle source can be wrapped behind the neutral Claude transport while preserving source-owned permissions, session, approval, and cancellation behavior (10 adapter/translator tests green).
   - [x] Claude assistant-error slice: authentication, billing, rate-limit, overload, and model failures become bounded neutral error events with explicit retryability (11 adapter/translator tests green).
   - [x] Claude source-identity hardening slice: SDK source IDs are bounded and control-character-free before becoming persisted event IDs (132 focused regression tests green).
+  - [x] Claude run-identity hardening slice: stream wrappers reject malformed run IDs, including control and Unicode separator characters, before consuming provider output (133 focused regression tests green).
   - [x] Claude identity slice: the adapter exports a single immutable engine ID for dispatch selection and registry alignment.
   - [x] Catalog identity slice: reviewed engine definitions consume the Claude adapter identity constant rather than duplicating it (21 registry/adapter tests green).
   - [x] Settings identity slice: API fallback defaults reuse the Claude adapter identity constant.
