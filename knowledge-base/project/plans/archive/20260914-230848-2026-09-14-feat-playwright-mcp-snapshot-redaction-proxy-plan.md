@@ -415,9 +415,15 @@ logs:
   retention: Claude Code's own (one file per session; not rotated by this plan)
 
 discoverability_test:
-  command: bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh
-  expected_output: last line `<N> passed, 0 failed, <M> cases` with M >= MIN_ASSERTIONS (the redactor suite's shape; the vacuity floor prints a separate `[FATAL]` line when it fires)
+  command: grep -c playwright-mcp-redact-proxy .mcp.json
+  expected_output: "1"
 ```
+
+> **Amended at ship (#8150):** the command above originally ran the full proxy suite, which takes
+> several minutes and cannot finish inside preflight Check 10's 15-second sandbox. The fast probe
+> checks that the repo's own registration launches the proxy; the suite
+> (`bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh`, last line
+> `<N> passed, 0 failed, <M> cases`) remains the full verification and runs in CI.
 
 ## Guard Contract
 
