@@ -274,17 +274,23 @@ describe("cron-inngest-cron-watchdog — resolveInngestHost", () => {
     expect(resolveInngestHost("")).toBe("http://10.0.1.40:8288");
   });
 
-  // Parity guard: the fallback host must equal the INNGEST_BASE_URL that
-  // ci-deploy.sh injects into the web-platform container. If that env value
-  // changes (port bump, host form), the dormant fallback would silently point
-  // at the wrong loopback during a partial-env restart.
-  it("INNGEST_HOST_FALLBACK matches the INNGEST_BASE_URL ci-deploy.sh sets", () => {
-    const ciDeploy = readFileSync(
-      resolve(__dirname, "../../../infra/ci-deploy.sh"),
-      "utf8",
-    );
-    const m = ciDeploy.match(/INNGEST_BASE_URL=(http:\/\/[^\s\\]+)/);
-    expect(m).not.toBeNull();
-    expect(resolveInngestHost(undefined)).toBe(m![1]);
+  // Parity guard: the fallback host must equal EVERY INNGEST_BASE_URL the
+  // web-platform container is started with — ci-deploy.sh's canary and prod
+  // `docker run` sites AND cloud-init.yml's first-boot run. Every site is read
+  // (not the first match) and the site count is pinned, so a repoint or revert
+  // that misses one site — or deletes one — goes red and names the file.
+  it("INNGEST_HOST_FALLBACK matches every INNGEST_BASE_URL in ci-deploy.sh and cloud-init.yml", () => {
+    const SITE_RE = /^\s*-e INNGEST_BASE_URL=([^\s\\]+)/gm;
+    const fallback = resolveInngestHost(undefined);
+    for (const [file, count] of [
+      ["ci-deploy.sh", 2],
+      ["cloud-init.yml", 1],
+    ] as const) {
+      const src = readFileSync(resolve(__dirname, "../../../infra", file), "utf8");
+      const values = [...src.matchAll(SITE_RE)].map((m) => m[1]);
+      expect(values, `${file} INNGEST_BASE_URL sites`).toEqual(
+        Array(count).fill(fallback),
+      );
+    }
   });
 });

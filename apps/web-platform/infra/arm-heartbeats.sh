@@ -508,6 +508,8 @@ arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'       
 # function registry out of 10.0.1.40:8288. That host has not bound :8288 since 2026-07-30, and
 # THIS CHANGE DOES NOT FIX THAT — the fix needs `apply_target=inngest-host-replace` plus a
 # cutover window (#7462), so the probe is correctly SUPPRESSING and no beat can land.
+# Superseded 2026-09-15 (#6178, #8191): op=arm flipped the host FSM to done and 10.0.1.40:8288
+# serves a 70-function registry, so the probe can now read a non-empty registry and ping.
 #
 # 230 → 30. Measured on run 32360734255: the five healthy arms complete in ~0.6 s of wall clock
 # while this one arm burns ~235 s, which was 98.8% of the ARM step and 78.5% of the whole apply
