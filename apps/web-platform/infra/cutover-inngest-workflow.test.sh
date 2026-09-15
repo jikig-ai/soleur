@@ -1699,11 +1699,16 @@ assert "#6178 at least 3 bucketing sites exist (2 arms + missed-tick OBSERVED)" 
 #   fn-a 10:00 / 10:02 -> SAME 1200s bucket  => exactly one dupe group, count 2
 #   fn-b 10:00         -> different fn, same bucket => must NOT group with fn-a
 #   fn-c 10:00 / 10:40 -> different buckets  => must NOT group
+# #6178 THIRD DEFECT — the Postgres-backed dedicated host returns startedAt WITH FRACTIONAL SECONDS
+# ("2026-09-14T11:09:34.101119Z"), which `fromdateiso8601` rejects (jq exit 5), so op=verify could
+# never produce a verdict on the new backend (measured, run 34961424195). Both fixtures therefore
+# mix whole-second and fractional-second stamps: the whole-second-only fixtures this block had
+# before were the SQLite shape, and could not see it.
 NULL_FIXTURE='{"runs":[
   {"functionID":"fn-q","startedAt":null},
   {"functionID":"fn-q","startedAt":null},
   {"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},
-  {"functionID":"fn-a","startedAt":"2026-07-08T10:02:00Z"},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:02:00.101119Z"},
   {"functionID":"fn-b","startedAt":"2026-07-08T10:00:00Z"},
   {"functionID":"fn-c","startedAt":"2026-07-08T10:00:00Z"},
   {"functionID":"fn-c","startedAt":"2026-07-08T10:40:00Z"}]}'
@@ -1712,7 +1717,7 @@ NULL_FIXTURE='{"runs":[
 CLEAN_FIXTURE='{"runs":[
   {"functionID":"fn-q","startedAt":null},
   {"functionID":"fn-a","startedAt":"2026-07-08T10:00:00Z"},
-  {"functionID":"fn-a","startedAt":"2026-07-08T10:40:00Z"},
+  {"functionID":"fn-a","startedAt":"2026-07-08T10:40:00.5Z"},
   {"functionID":"fn-b","startedAt":"2026-07-08T10:00:00Z"}]}'
 for prog in "$BUCKET_PROGS_DIR"/prog-*.jq; do
   pname=$(basename "$prog")
