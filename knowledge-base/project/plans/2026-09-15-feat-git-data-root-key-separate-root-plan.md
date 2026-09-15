@@ -1390,3 +1390,9 @@ rationale). Items below correct plan statements above without rewriting them.
   review restored both to their dated origin/main wording and added Superseded markers instead. The restored
   status sentence matches `git grep -n 'until #8189'`. AC12 is satisfied when every hit in ADR-220 is dated text
   that carries a Superseded marker.
+- **Renamed in review.** `tests/scripts/lib/git-data-root-key-arm.sh` is now
+  `tests/scripts/lib/git-data-root-key-arm-gate.sh` (it grades a plan, so `plan-gate-preamble` requires the
+  `*gate*` name); every earlier mention of the old path in this plan means the renamed file. The Guard 3 census
+  moved from `git-data-cutover-access.test.sh` to `tests/scripts/test-git-data-root-token-census.sh`, which runs on
+  every PR. QA: the Test Scenarios are prose without `Browser:`/`API verify:` steps; every detection control and
+  verdict word named above was confirmed present with at least one emitter (2026-09-15).
