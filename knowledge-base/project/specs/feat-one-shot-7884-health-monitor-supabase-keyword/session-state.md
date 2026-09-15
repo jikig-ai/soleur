@@ -38,3 +38,13 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, l
 - 4.1 SKIPPED (deviation): `Output utilization high` (Logs alert 2536305877) is paused ("Manually paused") and already modeled in the logs_alert arm fixtures (`heartbeat-live-reconcile.test.ts`, `send-failed-alert-probe-8097.test.sh`); an issue for an inert, already-known object adds backlog with no consequence (net-issue-flow gate). Recorded here and in the PR body instead.
 - 4.3 N/A (keyword branch).
 - 4.4 CONVERTED to in-pipeline work: the filing gate (wg-defer-only-after-inline-triage) refused the issue — measured Fix-Size 32 lines / 3 files (import block 5, variable 23, tftest 4) is inside the inline threshold. POSTMERGE TODO: after AC17 read-back passes, open a follow-up PR removing the gated import {} block, variable adopt_app_health_monitor and its tftest override; ADR-222 + uptime-alerts.tf comment record this.
+
+### Review-phase probe 2 — status→keyword conversion (2026-09-15, operator-authorized)
+- POST status monitor 201; created id=4934199 (request_timeout 30, confirmation_period 0, notifications off); reading0 up 17:52:12Z
+- PATCH exact merge attribute set {monitor_type keyword, required_keyword `"supabase":"connected"`, confirmation_period 180, recovery_period 180, request_timeout 10, pronounceable_name} → 200; readback matched all fields, paused false
+- reading1 after conversion: up 17:52:27Z; cleanup DELETE 204, GET 404
+- Closes user-impact-reviewer F1 (the merge's in-place conversion is vendor-accepted).
+
+### Review decisions (lead)
+- Import-removal tracking: #7884 stays OPEN until the removal PR merges; AC19 becomes a comment; the removal PR carries `Closes #7884`.
+- Structural roll-ups: (A) escalation routing key too coarse + whole-history search (security, architecture, observability, user-impact, structural); (B) alarm-critical fields unpinned in declaration and live compare (structural B3-B5, user-impact F3, test-design F5); (C) removal tracking (architecture, user-impact, code-quality, patterns).
