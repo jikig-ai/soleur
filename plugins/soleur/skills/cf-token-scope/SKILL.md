@@ -76,8 +76,10 @@ token.
    The widen transits a **full-power dashboard session** (the cookie is an
    account-wide bearer). Do **not** dump `browser_network_requests` /
    `browser_console_messages` to files, scope screenshots to the edit control,
-   route any accessibility snapshot through the redactor
-   (`"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`), and
+   take any accessibility snapshot in the file form and filter the file through
+   the redactor (`"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`)
+   — an MCP tool result cannot be piped through a script; the playbook states
+   when a bare call is safe — and
    always call `browser_evaluate` **with** a `filename` — without one the value
    is returned into the transcript. This corrects an inverted instruction that
    stood here previously; see the playbook's leak constraints.

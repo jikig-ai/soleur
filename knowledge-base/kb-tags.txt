@@ -84,6 +84,7 @@
 650
 653
 7898
+7980
 @ts-expect-error
 a11y
 ab-testing
@@ -2065,6 +2066,7 @@ ledger
 lefthook
 legal
 legal-agents
+legal-attestation
 legal-audit-trail
 legal-compliance
 legal-compliance-auditor
@@ -2997,6 +2999,7 @@ red-green-refactor
 red-herring
 red-verification
 redaction
+redaction-proxy
 redirect
 redirect-handling
 redirect-loop
@@ -3033,6 +3036,7 @@ regression-test
 rehearsal
 rehype-highlight
 relative-path
+relay
 release
 release-announce
 release-announcements
@@ -3826,6 +3830,7 @@ test-gates
 test-harness
 test-harness-verification
 test-helpers
+test-hygiene
 test-infrastructure
 test-isolation
 test-masking

@@ -1,0 +1,51 @@
+╭──────────────────────────────────────╮
+│ 🥊 lefthook v2.1.6  hook: pre-commit │
+╰──────────────────────────────────────╯
+│  rust-format (skip) no matching staged files
+│  rust-lint-fix (skip) no matching staged files
+│  rust-lint-check (skip) no matching staged files
+│  lint-fixture-content (skip) no files for inspection
+┃  markdown-lint ❯ 
+
+markdown-lint: 4 file(s) clean.
+
+┃  lint-infra-no-human-steps ❯ 
+
+OK: no human-run infra steps in 8 scanned file(s)
+
+│  rule-id-lint (skip) no matching staged files
+┃  gitleaks-staged ❯ 
+
+[90m5:56PM[0m [32mINF[0m [1m1 commits scanned.[0m
+[90m5:56PM[0m [32mINF[0m [1mscanned ~108345 bytes (108.35 KB) in 361ms[0m
+[90m5:56PM[0m [32mINF[0m [1mno leaks found[0m
+
+│  agents-compound-sync (skip) no matching staged files
+│  rule-budget-lint (skip) no matching staged files
+│  conversations-update-callsites (skip) no matching staged files
+│  web-platform-typecheck (skip) no matching staged files
+│  scheduled-show-full-output-lint (skip) no files for inspection
+│  agents-enforcement-tag-lint (skip) no matching staged files
+│  client-pii-grep (skip) no files for inspection
+│  vendor-pin-integrity (skip) no files for inspection
+│  bun-test (skip) no matching staged files
+│  gdpr-gate-advisory (skip) no files for inspection
+│  plugin-component-test (skip) no matching staged files
+│  skill-security-scan-advisory (skip) no files for inspection
+│  terraform-fmt (skip) no files for inspection
+│  kb-structure-guard (skip) no matching staged files
+│  c4-model-regenerate (skip) no matching staged files
+┃  generate-kb-index ❯ 
+
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/INDEX.md (6540 files indexed)
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-tags.txt (4261 tags) and /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-categories.txt (79 categories)
+
+│  distribution-content-liquid-guard (skip) no files for inspection
+                                      
+  ────────────────────────────────────
+summary: (done in 8.60 seconds)       
+✔️ markdown-lint (2.44 seconds)
+✔️ lint-infra-no-human-steps (0.14 seconds)
+✔️ gitleaks-staged (0.82 seconds)
+✔️ generate-kb-index (5.10 seconds)
+RC=0
