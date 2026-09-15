@@ -559,8 +559,15 @@ drive r2 2202
 kill "$GD"; wait "$GD" 2>/dev/null
 drive r3 2201
 ( while :; do printf 'HTTP/1.0 400 Bad Request\r\n\r\n' | nc -N -l 127.0.0.2 22 >/dev/null 2>&1; done ) >/dev/null 2>&1 &
-for _ in 1 2 3 4 5 6 7 8 9 10; do nc -z 127.0.0.2 22 2>/dev/null && break; sleep 0.5; done
-row r4_listening "$(nc -z 127.0.0.2 22 2>/dev/null && echo 1 || echo 0)"
+# The listener serves one connection per loop turn, so a second confirming probe would race its
+# restart: record the first success, then let it re-arm before the real probe.
+listening=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if nc -z 127.0.0.2 22 2>/dev/null; then listening=1; break; fi
+  sleep 0.5
+done
+row r4_listening "$listening"
+sleep 1
 drive r4 2201
 kill "$WEB_OK" "$WEB_NOFWD" 2>/dev/null
 echo DRIVER_DONE
