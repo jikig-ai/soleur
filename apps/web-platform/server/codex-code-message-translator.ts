@@ -224,6 +224,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
     }];
   }
 
+  if (type === "functionCallOutput") {
+    return [{
+      sourceId: `function-output:${itemId}`,
+      payload: { type: "progress", message: "Function output recorded" },
+    }];
+  }
+
   if (type === "mcpToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `mcp:${itemId}:status`,

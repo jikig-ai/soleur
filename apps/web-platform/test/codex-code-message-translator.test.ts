@@ -295,6 +295,22 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "imageView", id: "bad\nimage", path: "/private.png" })).toEqual([]);
   });
 
+  it("replays function-call output activity without tool identity or output", () => {
+    expect(translateCodexPersistedItem({
+      type: "functionCallOutput",
+      id: "output-1",
+      name: "private_tool",
+      namespace: "private_namespace",
+      output: "private result",
+    })).toEqual([
+      {
+        sourceId: "function-output:output-1",
+        payload: { type: "progress", message: "Function output recorded" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "functionCallOutput", id: "bad\noutput", output: "must fail" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
