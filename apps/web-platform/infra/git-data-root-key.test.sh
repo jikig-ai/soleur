@@ -995,7 +995,7 @@ run_fingerprint() {  # <state-fixture> <hetzner-fixture> [state-rc] [curl-rc] ->
   F_SUMMARY="$(cat "$WORK/step-summary.md")"
 }
 # Nothing but the fingerprint prints: no private-key sentinel, and the token only on its add-mask line.
-fp_clean() { [[ "$F_OUT" != *"$SENT"* && "$F_SUMMARY" != *"$SENT"* ]] && ! grep -v '^::add-mask::' <<<"$F_OUT" | grep -qF "$TOKEN_SENT"; }
+fp_clean() { [[ "$F_OUT" != *"$SENT"* && "$F_SUMMARY" != *"$SENT"* ]] && [[ "$(grep -v '^::add-mask::' <<<"$F_OUT" | grep -cF -- "$TOKEN_SENT" || true)" == 0 ]]; }
 
 HZ_ONE="$(hetzner_fixture one 1 soleur-git-data-root)"
 run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE"

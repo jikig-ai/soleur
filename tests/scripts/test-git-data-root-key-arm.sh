@@ -315,7 +315,7 @@ refusal_surface "R7 an unreadable plan (the preamble's refusal) => annotation + 
 # this positive control R5's exact-match could pass on a detail that never named anything.
 run_arm "$ARM" "$TMP/wrong-name.json" "$FP"
 if grep -q '^git_data_root_key_arm: detail: .*soleur-git-data-root-2' <<<"$OUT" \
-   && ! grep -E '^::' <<<"$OUT" | grep -q 'soleur-git-data-root-2'; then
+   && [[ "$(grep -E '^::' <<<"$OUT" | grep -c 'soleur-git-data-root-2' || true)" == 0 ]]; then
   pass "R8 positive control: the key name is in the detail line and absent from the annotation"
 else
   fail "R8 positive control: key name placement" "out=$OUT"
