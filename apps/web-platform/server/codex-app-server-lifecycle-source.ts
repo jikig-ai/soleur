@@ -73,11 +73,16 @@ function safeReplayItemType(value: unknown): string {
   return value;
 }
 
+function replayInvalid(observability: EngineObservability | undefined, failureClass: string, message: string): never {
+  observability?.emit("engine_replay_failed", { engineId: "codex", failureClass });
+  throw Object.assign(new Error(message), { code: "codex_replay_invalid" });
+}
+
 function replayItems(items: unknown[], observability?: EngineObservability): ReturnType<typeof createCodexReplayEvent>[] {
   const replay = [] as ReturnType<typeof createCodexReplayEvent>[];
   for (const item of items) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw Object.assign(new Error("Codex replay item is invalid"), { code: "codex_replay_invalid" });
+      replayInvalid(observability, "item_invalid", "Codex replay item is invalid");
     }
     const itemRecord = item as Record<string, unknown>;
     const translated = translateCodexPersistedItem(item);
@@ -94,7 +99,7 @@ function replayItems(items: unknown[], observability?: EngineObservability): Ret
     const functionOutputActivity = type === "functionCallOutput";
     const userMessageActivity = type === "userMessage";
     if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || webSearchActivity || imageViewActivity || functionOutputActivity || userMessageActivity || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
-      throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
+      replayInvalid(observability, "item_malformed", "Codex replay item is malformed");
     }
     if (translated.length === 0) {
       observability?.emit("engine_replay_item_dropped", {
@@ -111,21 +116,21 @@ function replayItems(items: unknown[], observability?: EngineObservability): Ret
 function replayHistory(result: Record<string, unknown>, observability?: EngineObservability): ReturnType<typeof createCodexReplayEvent>[] {
   const data = result.data;
   if (!Array.isArray(data) || data.length > 100) {
-    throw Object.assign(new Error("Codex replay history result is invalid"), { code: "codex_replay_invalid" });
+    replayInvalid(observability, "page_invalid", "Codex replay history result is invalid");
   }
   const replay = [] as ReturnType<typeof createCodexReplayEvent>[];
   for (const turn of data) {
     if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
-      throw Object.assign(new Error("Codex replay turn is invalid"), { code: "codex_replay_invalid" });
+      replayInvalid(observability, "turn_invalid", "Codex replay turn is invalid");
     }
     const turnRecord = turn as Record<string, unknown>;
     if (turnRecord.items !== undefined && !Array.isArray(turnRecord.items)) {
-      throw Object.assign(new Error("Codex replay items are invalid"), { code: "codex_replay_invalid" });
+      replayInvalid(observability, "items_invalid", "Codex replay items are invalid");
     }
     replay.push(...replayItems(turnRecord.items ?? [], observability));
     const turnEvents = translateCodexPersistedTurn(turn);
     if (turnRecord.id !== undefined && turnRecord.status !== undefined && turnEvents.length === 0) {
-      throw Object.assign(new Error("Codex replay turn is malformed"), { code: "codex_replay_invalid" });
+      replayInvalid(observability, "turn_malformed", "Codex replay turn is malformed");
     }
     for (const event of turnEvents) replay.push(createCodexReplayEvent(event));
   }

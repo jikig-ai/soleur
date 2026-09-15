@@ -315,6 +315,35 @@ describe("Codex App Server lifecycle source", () => {
     });
   });
 
+  it("emits safe telemetry before failing on malformed replay pages", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({ data: "malformed", nextCursor: null });
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), close: vi.fn(), receive: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const sink = vi.fn();
+    const source = createCodexAppServerLifecycleSource({
+      open: vi.fn(async () => connection),
+      nextRequestId: () => "rpc",
+      observability: createEngineObservability(sink),
+    });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    const transport = createCodexAppServerTransport(source);
+    await expect((async () => {
+      for await (const _event of transport.resumeFromCursor(context, "cursor-1", lease)) { /* no-op */ }
+    })()).rejects.toMatchObject({ code: "codex_replay_invalid" });
+    expect(sink).toHaveBeenCalledWith("engine_replay_failed", {
+      engineId: "codex",
+      failureClass: "page_invalid",
+    });
+  });
+
   it("fails closed on malformed interrupt and reconciliation responses", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn()

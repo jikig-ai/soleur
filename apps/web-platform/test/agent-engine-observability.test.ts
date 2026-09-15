@@ -42,4 +42,17 @@ describe("engine observability", () => {
     expect(sink.mock.calls[0][1]).not.toHaveProperty("content");
     expect(sink.mock.calls[0][1]).not.toHaveProperty("output");
   });
+
+  it("accepts replay-failure telemetry with a stable failure class", () => {
+    const sink = vi.fn();
+    const observability = createEngineObservability(sink);
+    observability.emit("engine_replay_failed", {
+      engineId: "codex",
+      failureClass: "page_invalid",
+    });
+    expect(sink).toHaveBeenCalledWith("engine_replay_failed", {
+      engineId: "codex",
+      failureClass: "page_invalid",
+    });
+  });
 });
