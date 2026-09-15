@@ -121,11 +121,23 @@ for slug in "${CONFORMING[@]}"; do
     FAIL=$((FAIL + 1))
   fi
 
-  if grep -qF "$prefix/" "$VERIFY"; then
-    echo "  PASS: $slug covered by vendor-pin-verify.yml paths"
+  # Two SEPARATE anchors, not a single prefix grep: the gate's literal
+  # alternation lists each bundle's NOTICE file AND its references/ tree
+  # independently, so an enrollment that anchors only the NOTICE (or only
+  # references/) is under-anchored and must go RED here — a lone `$prefix/`
+  # match cannot tell those apart.
+  if grep -qF "$prefix/NOTICE" "$VERIFY"; then
+    echo "  PASS: $slug NOTICE anchored in vendor-pin-verify.yml detect-changes"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: $prefix/ absent from vendor-pin-verify.yml paths"
+    echo "  FAIL: $prefix/NOTICE absent from vendor-pin-verify.yml anchors"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -qF "$prefix/references/" "$VERIFY"; then
+    echo "  PASS: $slug references/ anchored in vendor-pin-verify.yml detect-changes"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $prefix/references/ absent from vendor-pin-verify.yml anchors"
     FAIL=$((FAIL + 1))
   fi
 done

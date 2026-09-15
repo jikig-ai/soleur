@@ -2362,7 +2362,7 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
-  # (#5585 pattern instance #2). Registered HERE for the same reason: nothing
+  # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
   # is silent AND green while the allow-list it pins decides whether the #8181
   # NOTICE binding actually gates merges.

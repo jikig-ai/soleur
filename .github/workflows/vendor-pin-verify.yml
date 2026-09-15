@@ -49,7 +49,12 @@ jobs:
     outputs:
       vendor: ${{ steps.filter.outputs.vendor }}
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      # Checkout only pays for itself on the pull_request arm — the
+      # merge_group and push/dispatch short-circuits below write
+      # $GITHUB_OUTPUT and exit before the diff, so a full-history clone on
+      # those events is pure waste.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           fetch-depth: 0
       - id: filter
@@ -88,12 +93,31 @@ jobs:
           # anchored because a broken parser makes every NOTICE parse empty →
           # all skipped → the anti-vacuity floor below is what catches that —
           # but only if a parser edit triggers the gate at all. The workflow
-          # file AND the verdict script + its test are anchored (gate logic
-          # lives in all three), mirroring tenant-integration.yml's self-
-          # trigger. vendor-bundle-coverage.test.sh TS4 greps these literal
+          # file AND the verdict script + its test are anchored, mirroring
+          # tenant-integration.yml's self-trigger — and so is
+          # vendor-bundle-coverage.test.sh, the TS4 enrollment tripwire
+          # itself, so neutering the census that forces a new bundle into
+          # this list also fires the gate. TS4 greps these literal
           # `plugins/soleur/skills/<slug>/` prefixes, so a NEW bundle must be
           # added here when enrolled.
-          if printf '%s\n' "$CHANGED" | grep -qE '^(plugins/soleur/skills/gdpr-gate/NOTICE$|plugins/soleur/skills/gdpr-gate/references/|plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity\.sh$|plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter\.sh$|plugins/soleur/skills/legal-generate/NOTICE$|plugins/soleur/skills/legal-generate/references/|\.github/workflows/vendor-pin-verify\.yml$|scripts/vendor-pin-gate-verdict\.sh$|tests/scripts/test-vendor-pin-gate-verdict\.sh$)'; then
+          # SCOPE BOUNDARY (deliberately unanchored): scripts/test-all.sh and
+          # lefthook.yml gate this surface through OTHER required checks (test,
+          # lefthook hooks) — anchoring them here would run the upstream-
+          # network verification on their unrelated churn. The registration
+          # surfaces (.tf / canonical JSON / required-checks.txt) are pinned by
+          # T-rsc-7/9 + the parity test inside `test`, not by this gate.
+          # The match is a HERESTRING, not `printf | grep` — under pipefail,
+          # grep -q's early exit SIGPIPEs the printf and the pipeline's
+          # non-zero lands in `else`, emitting vendor=false on a diff that DID
+          # touch the vendored surface (#8203 review). And grep's own error
+          # (rc>1) must fail the job closed rather than read as no-match.
+          # (`set -uo pipefail` above, no -e — grep's non-zero does not abort.)
+          grep -qE '^(plugins/soleur/skills/gdpr-gate/NOTICE$|plugins/soleur/skills/gdpr-gate/references/|plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity\.sh$|plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter\.sh$|plugins/soleur/skills/legal-generate/NOTICE$|plugins/soleur/skills/legal-generate/references/|plugins/soleur/test/vendor-bundle-coverage\.test\.sh$|\.github/workflows/vendor-pin-verify\.yml$|scripts/vendor-pin-gate-verdict\.sh$|tests/scripts/test-vendor-pin-gate-verdict\.sh$)' <<<"$CHANGED"
+          grep_rc=$?
+          if (( grep_rc > 1 )); then
+            echo "::error::anchor grep failed (rc=$grep_rc); failing detect-changes closed." >&2
+            exit 1
+          elif (( grep_rc == 0 )); then
             printf 'vendor=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'vendor=false\n' >> "$GITHUB_OUTPUT"
@@ -107,8 +131,8 @@ jobs:
     # Per-ref concurrency group at JOB level — deliberately NOT workflow level.
     # The always-run aggregator must stay OUTSIDE the group so every PR still
     # reports the required context; a workflow-level group would let a third
-    # arrival evict a pending aggregator and leave the required check without
-    # a result. See tenant-integration.yml's concurrency block for the full
+    # arrival evict a pending RUN (which contains the aggregator job) and leave
+    # the required check without a result. See tenant-integration.yml's concurrency block for the full
     # eviction arithmetic (#7055 / #7986 / #8048). cancel-in-progress: false
     # so a superseded run is not cancelled mid-flight into a `cancelled`
     # result that fails the gate closed on the head SHA.
@@ -180,4 +204,5 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
           VERIFY_RESULT: ${{ needs.verify-upstream-blobs.result }}
-        run: bash scripts/vendor-pin-gate-verdict.sh "$DETECT_RESULT" "$VERIFY_RESULT"
+          VENDOR_FLAG: ${{ needs.detect-changes.outputs.vendor }}
+        run: bash scripts/vendor-pin-gate-verdict.sh "$DETECT_RESULT" "$VERIFY_RESULT" "$VENDOR_FLAG"

@@ -722,26 +722,29 @@ finds its tracking issue by the `merge-queue-revisit` **label** (#5840 today),
 not by number — the 2026-06-30 text's "pings issue #5840" describes the current
 resolution of that label, not a hardcoded id.
 
-**Producer / `merge_group` inventory as of 2026-09-14.** No trigger work is
-outstanding. Every producer of the 22 `@15368` contexts in ruleset 14145388 —
+**Producer / `merge_group` inventory as of 2026-09-15.** No trigger work is
+outstanding. Every producer of the 23 `@15368` contexts in ruleset 14145388 —
 `ci.yml`, `pr-quality-guards.yml`, `secret-scan.yml`, `dependency-review.yml`,
 `legal-doc-cross-document-gate.yml`, `tenant-integration.yml`,
-`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml` — carries
-`merge_group:` (PR-1, #5784). The CLA ruleset's two producers (`cla.yml`,
+`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml`,
+`vendor-pin-verify.yml` — carries `merge_group:` (PR-1, #5784; the ninth
+producer added by #8203, whose always-run aggregator is the required
+context). The CLA ruleset's two producers (`cla.yml`,
 `cla-evidence.yml`) do not, by design — the removed
 `merge-queue-cla-synthetics.yml` covered them and is on the restore list above.
 `CodeQL@57789` cannot. `infra/github/ruleset-ci-required.tf` still carries the
 `merge_queue` block deliberately absent under its "Merge queue REVERTED"
 comment; nothing in #8149 touches the ruleset.
 
-## Amendment — 2026-09-15 (#8203): 23 → 24, second always-run aggregator
+## Amendment — 2026-09-15 (#8203): 23 → 24, third always-run aggregator
 
 `required_status_checks` widened 23 → 24 by adding `vendor-pin-required`.
 The current-state grep
 (`grep -c '^      required_check {' infra/github/ruleset-ci-required.tf`)
 now returns `24`; T-rsc-7's literal and the canonical JSON moved in lockstep.
 
-**Second instance of the #5585 always-run aggregator pattern.**
+**Third instance of the #5585 always-run aggregator pattern** (after
+`sentry-destroy-required`, #6589).
 `.github/workflows/vendor-pin-verify.yml` enforced the #8181
 path+commit+blob NOTICE binding via a `paths:`-filtered `verify-upstream-blobs`
 job whose context was never registered — so it could go red and the PR still

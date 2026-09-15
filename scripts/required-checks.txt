@@ -236,7 +236,8 @@ credential-path-guard
 marketplace-manifest-guard
 
 # #8203 — vendor-pin-verify.yml `vendor-pin-required` job. Always-run
-# aggregator (second instance of the #5585 pattern) that wraps the
+# aggregator (third instance of the #5585 pattern — sentry-destroy-required
+# was the second, #6589) that wraps the
 # path-gated `verify-upstream-blobs` job — the CI enforcement of the #8181
 # NOTICE path+commit+blob binding. Born blocking: before this entry the
 # binding's context was never required, so a red could merge.

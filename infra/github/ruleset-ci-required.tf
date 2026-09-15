@@ -33,7 +33,7 @@
 # it in the action's Phase-4 ceiling before extending ALLOWED_PATHS. See the
 # CODEOWNERS-gated note in scripts/required-checks.txt + ADR-092.
 #
-# #6882 adds `credential-path-guard` (20th, ADR-139) — the always-run ci.yml
+# #6882 adds `credential-path-guard` (21st, ADR-139) — the always-run ci.yml
 # full-scan job that blocks a tracked doc from reintroducing a resolvable
 # credential-file path. First apply (this PR's merge via apply-github-infra.yml)
 # makes it LIVE-required. Content-scoped, but its bot-PR synthetic is EARNED (the
@@ -229,7 +229,7 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # #6882 (ADR-139) adds `credential-path-guard` (20th) — the ci.yml
+      # #6882 (ADR-139) adds `credential-path-guard` (21st) — the ci.yml
       # always-run FULL-SCAN job that fails any tracked doc reintroducing a
       # home-relative resolvable path to a real credential file (the vector that
       # read a live Doppler token into model context via preflight/SKILL.md).
@@ -275,18 +275,21 @@ resource "github_repository_ruleset" "ci_required" {
       }
 
       # #8203 adds `vendor-pin-required` (24th) — vendor-pin-verify.yml's
-      # always-run aggregator and the SECOND instance of the #5585
-      # always-run-aggregator pattern (ADR-032). The upstream-blob
+      # always-run aggregator and the THIRD instance of the #5585
+      # always-run-aggregator pattern (ADR-032; sentry-destroy-required was
+      # the second, #6589). The upstream-blob
       # verification (verify-upstream-blobs, the #8181 path+commit+blob
       # binding) is path-gated behind detect-changes; this context is what
       # makes a red binding result unmergeable rather than merely visible —
       # before this, the verify job's context was never registered, so a red
       # could merge (#8203's title bug).
       #
-      # Bot-PR disposition: NOT fabricated via the composite action —
-      # CHECK_NAMES derives from scripts/required-checks.txt and the action's
-      # ALLOWED_PATHS does not intersect plugins/soleur/skills/**, so no
-      # bot PR can reach the vendored surface anyway. The Inngest re-vendor
+      # Bot-PR disposition: the composite action DOES post a synthetic green —
+      # CHECK_NAMES derives from scripts/required-checks.txt — fabricated but
+      # sound-by-UNREACHABILITY like rule-body-lint / sentry-destroy-required,
+      # because the action's ALLOWED_PATHS does not intersect
+      # plugins/soleur/skills/** (no bot PR can reach the vendored surface).
+      # The Inngest re-vendor
       # path (content-vendor-drift) pushes with an App token that triggers
       # real CI (#8166), so its vendor-pin-required is EARNED — and
       # SYNTHETIC_CHECK_NAMES in _cron-safe-commit.ts must never gain this

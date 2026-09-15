@@ -615,7 +615,7 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 21 entries with CodeQL pinned to 57789.
+# T-rsc-7: real canonical RSC has 24 entries with CodeQL pinned to 57789.
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
 # 17->18 by #6103 (rule-body-lint, ADR-091); bumped 18->19 by #6325
@@ -641,7 +641,7 @@ t_rsc_order_insensitive() {
 # credential-path-guard: SCAN_DIRS is one file and ALLOWED_PATHS does not
 # contain it — re-derived per ADR-139, not inherited);
 # bumped 23->24 by #8203 (vendor-pin-required — vendor-pin-verify.yml's
-# always-run aggregator, the second #5585-pattern instance, wrapping the
+# always-run aggregator, the third #5585-pattern instance, wrapping the
 # path-gated verify-upstream-blobs job so the #8181 NOTICE binding's red
 # actually blocks merge. Bot-PR disposition: composite-action synthetic is
 # sound-by-UNREACHABILITY (ALLOWED_PATHS ∩ plugins/soleur/skills/** = ∅) and

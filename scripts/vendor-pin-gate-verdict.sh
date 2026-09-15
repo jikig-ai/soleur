@@ -2,9 +2,10 @@
 # vendor-pin-gate-verdict.sh — fail-closed verdict for the
 # `vendor-pin-required` aggregator gate job (#8203).
 #
-# Usage: vendor-pin-gate-verdict.sh <detect_changes_result> <verify_upstream_blobs_result>
-#   where each arg is a GitHub Actions `needs.<job>.result`
-#   (success | failure | cancelled | skipped | "").
+# Usage: vendor-pin-gate-verdict.sh <detect_changes_result> <verify_upstream_blobs_result> <vendor_flag>
+#   where the first two args are GitHub Actions `needs.<job>.result`
+#   (success | failure | cancelled | skipped | "") and the third is
+#   needs.detect-changes.outputs.vendor ('true' | 'false' | "").
 #
 # Exit 0 (gate SUCCESS) iff BOTH:
 #   - detect-changes succeeded (the path detection that decides whether to run
@@ -17,6 +18,14 @@
 # unenumerated state — detect-changes failure/cancelled/skipped/empty
 # (the DROP-1 fail-open class), verify failure/cancelled/empty, or a future
 # GitHub-added result string — fails closed.
+#
+# FLAG BINDING. The `skipped` arm is additionally bound to the detector's
+# declared flag: verify=skipped is only admissible with vendor='false'.
+# verify=skipped with vendor='true' or vendor='' means the worker skipped
+# while detection said the vendored surface WAS touched (or said nothing at
+# all — a detector step that exits between checkout and $GITHUB_OUTPUT
+# produces detect=success + empty output + worker skipped = green on an
+# unchecked vendored diff without this binding). Fails closed.
 #
 # WHY AN ALLOW-LIST AND NOT `!= 'failure'`. A deny-list greens on `cancelled`
 # and on the empty string. The empty string is what a `needs` job reports when
@@ -34,6 +43,7 @@ set -uo pipefail
 
 detect="${1:-}"
 verify="${2:-}"
+vendor_flag="${3:-}"
 
 if [[ "$detect" == "success" && ( "$verify" == "success" || "$verify" == "skipped" ) ]]; then
   echo "vendor-pin gate: PASS (detect-changes=$detect, verify-upstream-blobs=$verify)"
@@ -46,7 +56,11 @@ if [[ "$detect" == "success" && ( "$verify" == "success" || "$verify" == "skippe
   # anchors must cover the verified surface, not the whole repo, or every PR
   # pays for an upstream-network verification it cannot fail.)
   if [[ "$verify" == "skipped" ]]; then
-    skipped_msg="vendor-pin-required PASSED on the SKIPPED arm: the NOTICE upstream-blob verification did NOT execute against this tree (detect-changes emitted vendor=false — no vendored-surface path in the diff). The green asserts nothing about upstream blob SHAs on this PR."
+    if [[ "$vendor_flag" != "false" ]]; then
+      echo "::error::vendor-pin gate FAILED closed: the upstream-blob verification was SKIPPED but detect-changes declared vendor='${vendor_flag:-<empty>}' (expected 'false'). A skipped worker without a positive 'no vendored surface' declaration asserts nothing about this tree — the gate cannot pass." >&2
+      exit 1
+    fi
+    skipped_msg="vendor-pin-required PASSED on the SKIPPED arm: the NOTICE upstream-blob verification did NOT execute against this tree (detect-changes emitted vendor=false — no vendored-surface path in the diff, or a merge_group candidate whose authoritative PR-arm run already passed). The green asserts nothing about upstream blob SHAs on this PR."
     echo "::notice::$skipped_msg"
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       printf '%s\n' "- :warning: $skipped_msg" >>"$GITHUB_STEP_SUMMARY"
@@ -76,5 +90,5 @@ if [[ "$detect" == "success" && "$verify" == "cancelled" ]]; then
   exit 1
 fi
 
-echo "::error::vendor-pin gate FAILED closed (detect-changes=${detect:-<empty>}, verify-upstream-blobs=${verify:-<empty>}). The required check passes only when detect-changes succeeds AND the upstream-blob verification is success or skipped." >&2
+echo "::error::vendor-pin gate FAILED closed (detect-changes=${detect:-<empty>}, verify-upstream-blobs=${verify:-<empty>}, vendor='${vendor_flag:-<empty>}'). The required check passes only when detect-changes succeeds AND the upstream-blob verification is success or skipped. Re-run the failed job, or inspect the vendor-pin-verify run for this ref to find which job went red." >&2
 exit 1
