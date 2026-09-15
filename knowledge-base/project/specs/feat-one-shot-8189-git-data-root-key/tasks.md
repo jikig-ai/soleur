@@ -10,15 +10,15 @@ revision: v4 (deepened 2026-09-15)
 
 ## Phase 0 — Probes, baselines, follow-ups
 
-- [ ] 0.1 Re-measure baselines: parity 197/0, replace gate 23/0, birth gate 114/0, access suite 69/0/0, rung-2 gate RELEASED `5c50797be839…`.
-- [ ] 0.2 Doppler read-only probe: project limit and identity availability.
+- [x] 0.1 Re-measure baselines: parity 197/0, replace gate 23/0, birth gate 114/0, access suite 69/0/0, rung-2 gate RELEASED `5c50797be839…`.
+- [x] 0.2 Doppler read-only probe: project limit and identity availability.
 - [ ] 0.3 Record the measured Doppler CLI semantics (absent + `--no-exit-on-missing-secret` → rc 0, empty; bad config → rc 1) in the flag-precheck header.
-- [ ] 0.4 Fingerprint form: normalize the arm and the apply's print step to one `SHA256:` form (`ssh-keygen -l -E sha256` on the public key).
+- [x] 0.4 Fingerprint form: normalize the arm and the apply's print step to one `SHA256:` form (`ssh-keygen -l -E sha256` on the public key).
 - [ ] 0.5 Scratch `terraform validate` of the planned root (`-backend=false`); generate the lock with `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`.
-- [ ] 0.6 Consumer sweep of `git-data-cutover.sh` and the functions to delete; list every edit.
-- [ ] 0.7 Resolve 40-char SHA pins for `actions/checkout`, `hashicorp/setup-terraform`, `DopplerHQ/cli-action`; pin the Doppler CLI version.
-- [ ] 0.8 Identify the `web-git-data-probe` heartbeat monitor and its read-only state API call.
-- [ ] 0.9 File F1, F2, F4 (dedupe first; milestone Post-MVP / Later) with the bodies the plan specifies; comment on #8093 (hook prose, root-login detection, `removeGitDataRepo` connect timeout).
+- [x] 0.6 Consumer sweep of `git-data-cutover.sh` and the functions to delete; list every edit.
+- [x] 0.7 Resolve 40-char SHA pins for `actions/checkout`, `hashicorp/setup-terraform`, `DopplerHQ/cli-action`; pin the Doppler CLI version.
+- [x] 0.8 Identify the `web-git-data-probe` heartbeat monitor and its read-only state API call.
+- [x] 0.9 File F1, F2, F4 (dedupe first; milestone Post-MVP / Later) with the bodies the plan specifies; comment on #8093 (hook prose, root-login detection, `removeGitDataRepo` connect timeout).
 
 ## Phase 1 — RED (harness conventions: `mutate()` helper, `MUTANT_FLOOR`, `True`-key YAML lookup, `is False`, census lower bounds, per-name Doppler shim, `diff` timelines, stub-based RED ledger)
 
@@ -75,3 +75,13 @@ revision: v4 (deepened 2026-09-15)
 - [ ] 8.2 PR committing `apps/web-platform/infra/git-data-root-key.fingerprint` (AC17).
 - [ ] 8.3 Authorized `git_data_host_replace` from `main`; `web-git-data-probe` heartbeat green via its API (AC18).
 - [ ] 8.4 Authorized, approved dry-run dispatch from `main`; flip D1b with the caveat; close #6680 and #8189 with the run URL (AC19).
+
+## Phase 0 results (measured 2026-09-15, /work)
+
+- 0.1 parity 197/0; replace gate 23/0; birth gate 114/0; access suite 69/0/0; rung-2 gate `RELEASED … 5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`.
+- 0.2 Doppler workplace currently lists 4 projects (`doppler projects --json | length`); identities not probed further (plan tier already recorded in DC-3).
+- 0.4 Hetzner `GET /v1/ssh_keys` returns `fingerprint` in MD5 colon-hex form, so the arm and the apply's print step derive `SHA256:` with `ssh-keygen -l -E sha256` from `public_key`.
+- 0.6 Extra consumer the plan did not list: `apps/web-platform/infra/git-data-luks.test.sh` asserts the cutover body (GAP-1/GAP-2/A8/A10, `verify_set_identity`); its rows are retired with the body.
+- 0.7 Pins: `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`, `hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0`, `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4`.
+- 0.8 `web-git-data-probe.sh` pings `GIT_DATA_HEARTBEAT_URL` on success (Better Stack heartbeat).
+- 0.9 Filed F1 #8209, F4 #8210, F2 #8211 (milestone Post-MVP / Later); #8093 comment posted.

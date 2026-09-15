@@ -1,193 +1,186 @@
 # git-data LUKS cutover runbook — #5274 Phase 3 / Sub-PR 3.D / ADR-068
 
-Operator runbook for migrating the live per-workspace bare repos onto a fresh
-LUKS-at-rest volume and flipping the `GIT_DATA_STORE_ENABLED` GA flag across both
-web hosts. This is the additive **rsync-then-flag-flip** cutover (ADR-068 §1), not
-an authority flip — `origin`→GitHub is retained throughout as the rehydration
-backstop.
+Runbook for the git-data LUKS cutover route. **Today the route is a reviewer-gated, read-only proof.**
+`git-data-cutover.yml` authenticates to root on the git-data host through the ADR-220 web-1 jump, reads
+three facts about the store, and exits. It moves no data, repoints no mount, flips no flag and wipes no
+volume. The real cutover (copy, repoint, flag flip, rollback, old-volume decommission) was removed from
+`git-data-cutover.sh` because it called host mechanisms that do not exist; its rebuild is **#8211**.
+Rationale and residuals: ADR-220 › "Amendment log" › "2026-09-15 (#8189)".
 
-**No SSH in this runbook.** All verification is read from the observability layer
-(Sentry + Better Stack) per `hr-no-ssh-fallback-in-runbooks`. The cutover
-*mechanism* uses SSH transport (over the CF Tunnel bridge, off the app host), but
-you never SSH a host to *check* whether it worked — you read Sentry/Better Stack.
+**No SSH in this runbook.** Every read below is a workflow annotation, a Better Stack API read or a
+Sentry query. The dispatch itself uses SSH transport off the app host; you never SSH a host to check
+whether it worked (`hr-no-ssh-fallback-in-runbooks`).
 
-## Preconditions
+## Preconditions for the real cutover (all open — do not book a window)
 
-- **#8189 merged, and a `dry_run=true` dispatch reads `role=git-data-auth verdict=ok`** (ADR-220).
-  Until then, do not start the Sequence and do not book the step-3 maintenance window: no credential
-  can reach root on the git-data host, so every forward run stops at the access gate.
-- Sub-PRs 3.A–3.C merged; both web hosts (`web-1`, `web-2`) deployed with the
-  Phase-3 container (AC5). Confirm from the **deploy pipeline run**, not by SSH.
-- ADR-068 status is `adopting`. `GIT_DATA_STORE_ENABLED` is currently **OFF**
-  (unset / not `"true"`) in Doppler `prd`.
-- `SENTRY_AUTH_TOKEN` and the git-data cutover secrets (`DOPPLER_TOKEN`,
-  `DOPPLER_TOKEN_WRITE`) are configured as GitHub secrets.
-- **Doppler `prd_git_data` config exists** (Project → soleur → New config under `prd`,
-  name = `prd_git_data`) — the LUKS boot key + its read-only service token live there
-  so the git-data host carries a one-secret token, not the full-prd token (security
-  MEDIUM / CTO ruling). `terraform apply` writes `GIT_DATA_LUKS_KEY` + mints the token
-  <!-- lint-infra-ignore start -->
-  **SUPERSEDED 2026-07-27 by #6977 — do NOT hand-create this config.** It is now
-  `doppler_config.git_data_prd`, provisioned by the gated `git-data-host-create`
-  dispatch. The parenthetical that stood here ("the Doppler provider does not create
-  configs") is false: `doppler_config` is first-class in the pinned provider. Creating
-  it by hand makes the birth apply FAIL with `400 {"messages":["Name is already in
-  use"]}` — measured — and recovery is `terraform import doppler_config.git_data_prd
-  soleur.prd_git_data`, not a re-dispatch. Before the birth this config must be
-  ABSENT; by cutover time it already exists.
-  <!-- lint-infra-ignore end -->
-- **Proxy activation (when the owner relay goes live):** whenever `SOLEUR_PROXY_BIND`
-  is set on a host (the private-net proxy listener), `SOLEUR_PROXY_PEER_ALLOWLIST` MUST
-  also be set to the comma-separated **web-host** private IPs (e.g. `10.0.1.10,10.0.1.11`
-  — EXCLUDING the git-data host `10.0.1.20`). The listener is **fail-closed**: with
-  `SOLEUR_PROXY_BIND` set but no allowlist it refuses to start (a token-less session
-  port must never accept from a non-peer private-net host — security HIGH / CTO ruling).
+The real cutover does not exist yet. It is blocked on all of:
 
-## Sequence
+- **#8211** — rebuild the real modes on real mechanisms (freeze model, same-version redeploy, rollback
+  split, `web-1-swap` membership, the endpoint guard for the copy).
+- **#8209** — evict the repo-secret-reachable credentials from `prd_terraform` (its own ADR).
+- **#7226** — pin git-data's SSH host key. Until then every store-probe answer is unauthenticated.
+- A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
+  cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
+- The legal-activation dependencies on the roadmap row for #5274 (Article 30 PA-36, #8101, #8094).
 
-1. **Merge** the 3.D PR to `main`.
-2. **CI deploys** the container to BOTH hosts (AC5) — verify the deploy workflow
-   run is green.
-3. **Maintenance-window `terraform apply`** (`apply-web-platform-infra.yml`):
-   provisions + **attaches** the fresh **LUKS** git-data block volume. The
-   `placement_group` attach on the running host forces a power-off → **this reboots
-   `web-1`**, hence the maintenance window. Confirm `0 to destroy` on the plan.
-   NOTE: terraform only *attaches* the volume — cloud-init runs **only on first
-   boot**, so on the already-running git-data host it does **not** `luksFormat`/
-   `luksOpen`/mount the new volume. The cutover script's `prepare_luks_target` step
-   does that idempotent unlock+mount at `/mnt/git-data-luks` (key fetched host-side
-   via `doppler run`, piped on stdin — never argv). Do **not** expect
-   `/mnt/git-data-luks` to exist before the cutover runs.
-   <!-- lint-infra-ignore start -->
-   This maintenance-window apply is a **FULL operator apply** (not the per-PR CI
-   `-target` path), so it ALSO lands the resources the dark-launch merge-apply
-   deliberately excludes because they depend on prerequisites CI cannot create:
-   <!-- lint-infra-ignore end -->
-   - **`doppler_service_token.git_data`** — the scoped read-only token minted into the
-     `prd_git_data` config (created as a Precondition above). It is in
-     `OPERATOR_APPLIED_TOKEN_EXCLUSIONS` (terraform-target-parity.test.ts), NOT the CI
-     `-target` set — CI cannot mint it (the config does not exist until you create it).
-   - **Multi-host DNS rewire** — to serve both hosts, convert `cloudflare_record.app`
-     (dns.tf) to `for_each = var.web_hosts` (one proxied A record per host → CF
-     round-robin) in this same apply, once `web-2` exists. It is NOT in dns.tf on
-     `main` (a per-PR `for_each` conversion is a destroy+recreate of the LIVE app
-     record with no `moved` path, and references a not-yet-existing `web-2`). Apply the
-     `for_each` edit here so the record transition and `web-2`'s creation land together.
-4. **Dry-run the cutover** — dispatch `git-data-cutover.yml` with
-   `confirm=CUTOVER-GIT-DATA`, `dry_run=true`. This runs `prepare_luks_target` +
-   preconditions + pass-1 rsync + the **set-identity verify** with NO freeze, NO
-   flip, NO re-point, NO wipe. Confirm the set-identity verify reports `OK` for
-   every repo.
-   Until #8189 lands, the run **fails** (red, exit 3) before `prepare_luks_target`. The expected
-   annotations are `role=web verdict=ok` and `role=git-data-jump verdict=ok`, then
-   `role=git-data-auth verdict=git_data_root_key_absent` (ADR-220). Read them without SSH:
-   `gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations --jq '.[].message'`, with the job
-   id from `gh run view <run-id> --json jobs --jq '.jobs[0].databaseId'`.
-5. **Real cutover** — dispatch `git-data-cutover.yml` with
-   `confirm=CUTOVER-GIT-DATA`, `dry_run=false`, `confirm_wipe=false`. The script:
-   - `prepare_luks_target`: idempotent `luksOpen` + mount at `/mnt/git-data-luks`;
-   - pass-1 bulk rsync (writers live);
-   - **write-freeze**: drain **both** web hosts (the authoritative freeze — the
-     writers are the web hosts' per-turn `replicateToGitData`) + drop the freeze
-     sentinel (`git-data-pre-receive.sh` now denies receive-pack while it exists,
-     so a straggler push is rejected loud, not lost);
-   - pass-2 **delta rsync under the drain** (a genuinely quiesced source) →
-     **set-identity verify** (`git for-each-ref` diff empty **AND** `git rev-list
-     --all | sort | sha256sum` equal, per repo) — the ONLY verify that gates the
-     flip, and it runs post-drain so it never races a live writer;
-   - **`repoint_luks_mount`**: umount the LUKS staging + old plaintext mounts, mount
-     `/dev/mapper/git-data` **at `/mnt/git-data`** and rewrite `/etc/fstab`, so every
-     hardcoded wrapper/symlink/`hooksPath` becomes LUKS-backed with zero path
-     changes (the GA flag alone does NOT change host mount topology);
-   - **coordinated flip**: write `GIT_DATA_STORE_ENABLED=true` once → reload both
-     (drained) containers → release the freeze / un-drain;
-   - **canary**: assert a fresh write under `/mnt/git-data` is backed by
-     `/dev/mapper/git-data` — this gates the DL-2 wipe.
-   On any mid-flip failure the script auto-rolls-back (flag off) and always releases
-   the freeze (un-drains). A stale-mount abort leaves the wipe gated.
-6. **Verify set-identity + health from observability** (below).
-7. **Enroll the soak follow-through** (below) — this gates GA close.
-8. **Old-volume decommission (DL-2)** — only AFTER the soak confirms health AND the
-   canary passed, re-dispatch with `confirm_wipe=true`. The old plaintext volume is
-   already unmounted by the re-point; secure-wipe + detach/destroy the old
-   `hcloud_volume` via terraform so the decommissioned disk carries no plaintext.
-   Do **not** wipe the **FRESH** volume — it is now live. After a *rollback*, do not
-   wipe **either** volume until git-data-only post-flip writes are reconciled (see
-   Rollback).
+A dispatch that asks for a real mode refuses with `verdict=real_cutover_unreconciled` (exit 5) before
+any remote call.
 
-## Verification (observability layer — NO SSH)
+## What the read-only dispatch does
 
-Read the verdict from:
+`git-data-cutover.yml` (`workflow_dispatch`, input `confirm=CUTOVER-GIT-DATA`, from `main`). One job,
+`cutover`, behind the `web-platform-infra-apply` environment approval. The whole run holds the
+`git-data-state` concurrency group, so it never overlaps a git-data replace, birth or rehearsal.
 
-- **Sentry** (these classes are the `feature` tag — NOT `op`, which is the sub-op):
-  - `feature:control_plane_route level:error` failures — expect **0** after the flip.
-    Zero events on a changed routing path can ALSO mean the wrong layer shipped
-    (learning 2026-06-30) — confirm you see healthy `feature:control_plane_route`
-    placement events first, then zero *failures*.
-  - `feature:worktree_lease level:error` reject events — expect **0** (no fence
-    false-rejects).
-  - `feature:git-data-authz cross_tenant:true` — expect **0** (no cross-tenant
-    denials). NB: this is emitted at `level:warning` (not error) and `member:false`
-    lives in non-searchable `extra` — query the `cross_tenant:true` tag, not `member`.
-- **Better Stack**: the `soleur-git-data-prd` heartbeat (GIT_DATA_HEARTBEAT_URL)
-  is GREEN — the git-data host is reachable over the private net post-cutover.
+1. Confirm token.
+2. **Flag precheck** (`git-data-flag-precheck.sh`, the only step holding the `prd` read token). A read
+   error refuses `verdict=flag_read_failed`; `GIT_DATA_STORE_ENABLED=true` refuses
+   `verdict=flag_already_true`. Both exit 5.
+3. **Secrets present.** An empty `DOPPLER_TOKEN_GIT_DATA_ROOT` refuses `verdict=git_data_root_token_absent`.
+4. CF tunnel bridge to web-1.
+5. **Key fetch** from the isolated Doppler project `soleur-git-data-root`. A failure refuses
+   `verdict=git_data_root_key_fetch_failed reason=<rc_nonzero|empty|not_openssh_key>`.
+6. `ssh_config` writer (literal jump target, `IdentitiesOnly`, no forwarding).
+7. **Script.** The access gate (`role=web`, `role=git-data-jump`, `role=git-data-auth`; exit 3 on any
+   non-ok), then three fail-closed store probes (exit 5): `old_store_unmounted`, `already_cut_over`,
+   `store_not_empty`, or `probe_failed` when a probe answer does not validate.
+8. Teardown, always.
 
-If any is unhealthy, run **Rollback**.
+Exit 0 means: root authenticated end to end, the plaintext store is mounted from a device that is not
+the LUKS mapper, and it holds zero repositories. While #7226 is open a compromised web-1 could forge
+that answer (ADR-220 D4).
 
-## Rollback
+Read the annotations without a dashboard:
+`gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations --jq '.[].message'`, with the job id from
+`gh run view <run-id> --json jobs --jq '.jobs[0].databaseId'`.
 
-Dispatch `git-data-cutover.yml` with `confirm=CUTOVER-GIT-DATA`, `rollback=true`
-(or, if the run is still in progress, the script's EXIT trap auto-rolls-back a
-mid-flip failure). Rollback sets `GIT_DATA_STORE_ENABLED=false` in Doppler `prd`,
-reloads both containers, and releases any held freeze (un-drains both hosts).
-A rollback run exits 4 (red), with one `recovery::step=<name>` warning annotation per step, when any
-step could not run. Today the sentinel removal and the web reload cannot run: nothing holds a
-git-data credential, and the systemd units they call do not exist (#8189).
+## Post-merge order (#8189)
 
-**Backstop — do NOT assume GitHub `origin` holds everything (it does not).**
-`replicateToGitData` force-pushes **all** refs to git-data, whereas the app's
-`syncPush` only auto-commits `knowledge-base/**` and reroutes protected pushes to a
-PR branch — so **`origin` is a strict SUBSET of git-data**. On rollback the flag is
-OFF, so `replicateToGitData` no-ops and the app reverts to its local-clone +
-origin baseline. The real backstops for any **git-data-only** post-flip writes are
-(a) each web host's **local worktree clone** and (b) the **FRESH LUKS volume**,
-which physically retains every post-flip write.
+Each prod step needs explicit authorization for that step. A menu acknowledgement does not count
+(`hr-menu-option-ack-not-prod-write-auth`).
 
-**WARNING:** after a rollback, do **not** run the DL-2 wipe of the FRESH LUKS
-volume until those git-data-only post-flip writes are reconciled — `origin` does
-not hold them, so wiping FRESH would permanently lose them.
+1. **Root-key apply.** Dispatch `apply-git-data-root-key.yml` from `main` with its typed confirm token,
+   then approve the environment. It refuses any plan that is not create, read or no-op, and prints the
+   key's `SHA256:` fingerprint. Any non-success emails ops through `notify-root-key-apply`.
+2. **Fingerprint PR.** A PR commits the printed value to
+   `apps/web-platform/infra/git-data-root-key.fingerprint` and merges.
+3. **Replace.** Dispatch `apply-web-platform-infra.yml` from `main` with
+   `apply_target=git-data-host-replace`. The replace gate's `git_data_root_key_arm` must pass. This is
+   the only way the key reaches the host.
+4. **Private-NIC readiness read** (below). It must read `up`.
+5. **Dry run.** Dispatch `git-data-cutover.yml` from `main` and approve. It must read
+   `role=git-data-auth verdict=ok`, clear all three store probes, and exit 0.
 
-## Soak follow-through (gates GA close)
+### Private-NIC readiness read (step 4)
 
-After cutover, file a `follow-through` tracker issue that gates GA close:
-**≥7 days, zero fence false-rejects, zero cross-tenant denials, zero
-control_plane_route failures → ADR-068 `accepted` / #5274 Phase-3 milestone
-closes.**
+`web-git-data-probe.sh` runs on web-1 every 60 s. On a successful bounded TCP connect to `10.0.1.20:22`
+over the private network, it pings the `soleur-git-data-prd` heartbeat (`betteruptime_heartbeat.git_data_prd`
+in `git-data.tf`, period 60 s, grace 180 s). A green read proves the fresh host's private NIC is up and
+its sshd port answers. It does **not** prove that git transport serves or that the root key was
+delivered; the dry run proves that.
 
-1. Pin `START=` in `scripts/followthroughs/phase3-ga-soak-5274.sh` to the UTC
-   timestamp **just after** the flip (replace the `<POST_CUTOVER_UTC>`
-   placeholder), commit it.
-2. File the tracker issue with the `follow-through` label and this directive in
-   the body (set `earliest=` to cutover-UTC + 7 days):
+Read it no earlier than 4 minutes (period plus grace) after the replace run completed
+(`gh run view <run-id> --json conclusion,updatedAt`), so a beat from before the replace cannot account
+for `up`:
 
-   ```html
-   <!-- soleur:followthrough
-     script=scripts/followthroughs/phase3-ga-soak-5274.sh
-     earliest=<CUTOVER_UTC_PLUS_7D>
-     secrets=SENTRY_AUTH_TOKEN
-   -->
-   ```
+```bash
+curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain -p soleur -c prd_terraform)" \
+  'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' \
+  | jq '.data[] | select(.attributes.name == "soleur-git-data-prd") | {id, status: .attributes.status, paused: .attributes.paused}'
+```
 
-   `SENTRY_AUTH_TOKEN` is already wired in
-   `.github/workflows/scheduled-followthrough-sweeper.yml`. The sweeper closes the
-   issue the day the soak passes (exit 0); until then it comments and leaves it
-   open. When it closes, flip ADR-068 `adopting`→`accepted` and close the Phase-3
-   milestone.
+- `up` — proceed to the dry run.
+- `down` — the fresh host's private NIC or sshd is not up. A fresh Hetzner host can boot with its
+  private NIC down (learning `2026-07-07-immutable-redeploy.md`). Re-dispatch the replace; both volumes
+  are retained.
+- `paused` — the heartbeat is not armed, so this read proves nothing. Arming is
+  `arm-heartbeats.sh --arm` inside `apply-web-platform-infra.yml`, and it skips an address absent from
+  state. Rely on the dry run's `role=git-data-jump` verdict for L3 instead.
+
+## Verdict map
+
+| Where you are | What the run reads |
+|---|---|
+| Before the root-key apply | `verdict=git_data_root_token_absent` |
+| Before the fingerprint PR merged, or the Hetzner key object deleted or swapped | the replace or birth gate refuses `verdict=git_data_root_key_not_in_create reason=<fingerprint_file_missing\|data_source_absent\|key_count\|name\|fingerprint\|server_keys>` |
+| Token revoked, or the Doppler secret missing or malformed | `verdict=git_data_root_key_fetch_failed reason=<rc_nonzero\|empty\|not_openssh_key>` |
+| **L3** — the host is down, or its private NIC or sshd is not up | `role=git-data-jump verdict=failed reason=timeout\|no_route\|connect_refused` |
+| web-1's sshd stopped permitting `direct-tcpip` | `role=git-data-jump verdict=failed reason=forward_refused` |
+| **L7** — the key has not been delivered yet (replace not run) | `role=git-data-auth verdict=failed reason=auth_refused` |
+| **L7** — after a key rotation, until the next replace | `role=git-data-auth verdict=failed reason=auth_refused` |
+| Flag read failed, or the flag is already on | `verdict=flag_read_failed` / `verdict=flag_already_true` (exit 5) |
+| Store not mounted, already on the mapper, not empty, or an unvalidated probe answer | `verdict=old_store_unmounted` / `already_cut_over` / `store_not_empty` / `probe_failed` (exit 5) |
+| A stale invocation asking for a real mode | `verdict=real_cutover_unreconciled` (exit 5) |
+
+L3 and L7 are different faults: L3 is reachability (NIC, sshd, host), L7 is authorization (the key).
+Read the private-NIC heartbeat before treating an L7 verdict as a key problem.
+
+## Sharp edges
+
+- **A pending approval holds `git-data-state`.** A cutover or root-key apply run waiting for its
+  environment approval holds the group. A replace dispatched meanwhile waits while holding
+  `terraform-apply-web-platform-host`, which stalls web-platform applies. Approve, reject or cancel the
+  pending run before you dispatch a replace.
+- **A newer queued run cancels an older pending one (#8167).** GitHub keeps one pending run per
+  concurrency group. A run that ends `cancelled` without executing a step was displaced, not refused.
+  Re-dispatch it once the group's current holder has finished.
+- **A re-run asks for approval again.** The environment sits on the job that reads the key.
+
+## What users see during the replace
+
+- **Web requests: nothing.** With `GIT_DATA_STORE_ENABLED` off, provision, replicate and fetch return
+  before touching git-data (`apps/web-platform/server/git-data-replication.ts`).
+- **Settings → Delete Account completes**, but each deletion during the window can wait up to the
+  30 s timeout in `removeGitDataRepo` and logs an Art. 17 erasure-failure Sentry event
+  (`feature:account-delete`, `op:git-data-bare-repo-erasure`). No repository exists yet, so nothing is
+  left behind. These events are expected for the window, and only for the window: one outside a replace
+  window is a real finding.
+- The `soleur-git-data-prd` heartbeat reads `down` for the window.
+
+## Breach-triage trigger
+
+Open an incident (`/soleur:incident`) and route it to the CLO for an Art. 33 assessment when any of
+these is seen:
+
+- a run log or artifact showing root-key material;
+- a reference to `DOPPLER_TOKEN_GIT_DATA_ROOT` outside the `cutover` job;
+- an unexplained change to the Hetzner key labelled `soleur-role=git-data-root`, or a create gate
+  refusing `reason=fingerprint` or `reason=key_count`;
+- a `git-data-root-key` state object or `soleur-git-data-root` Doppler access that no dispatch explains.
+
+Before any repository exists, a leaked root key already reaches the host's own Doppler token
+(`prd_git_data`, #6167). Once repositories exist, a leak is likely an Art. 33 event (ADR-220 D4).
+
+## Multi-host DNS rewire
+
+Not part of the read-only proof. `cloudflare_record.app` (`dns.tf`) stays single-host until the
+ADR-068 Phase-3 GA flip, which also brings the out-of-band second web host into rotation (ADR-143 D2).
+That rewire is sequenced by #8211 together with the real cutover; the design constraint stays recorded
+in the `dns.tf` header.
+
+## After the real cutover (owned by #8211)
+
+These stay recorded for the rebuild; none applies to the read-only proof.
+
+- **Verification (observability only).** Sentry `feature:control_plane_route level:error` = 0 (after
+  confirming healthy placement events exist), `feature:worktree_lease level:error` = 0,
+  `feature:git-data-authz cross_tenant:true` = 0 (a `level:warning` tag). The `soleur-git-data-prd`
+  heartbeat reads `up` through the API read above.
+- **Backstop: `origin` is a strict subset of git-data.** `replicateToGitData` force-pushes all refs,
+  while `syncPush` commits only `knowledge-base/**` and reroutes protected pushes. After any rollback, do
+  not decommission the LUKS volume until git-data-only writes are reconciled.
+- **Soak follow-through (gates GA close).** ≥7 days with zero fence false-rejects, zero cross-tenant
+  denials and zero `control_plane_route` failures, via
+  `scripts/followthroughs/phase3-ga-soak-5274.sh` and a `follow-through` tracker
+  (`followthrough-convention.md`), whose directive carries `secrets=SENTRY_AUTH_TOKEN`. When it closes,
+  ADR-068 moves `adopting` → `accepted`.
 
 ## References
 
-- Cutover body: `apps/web-platform/infra/git-data-cutover.sh`
-- Dispatch workflow: `.github/workflows/git-data-cutover.yml`
+- Dispatch workflows: `.github/workflows/git-data-cutover.yml`, `.github/workflows/apply-git-data-root-key.yml`
+- Script: `apps/web-platform/infra/git-data-cutover.sh`; flag precheck: `apps/web-platform/infra/git-data-flag-precheck.sh`
+- Root-key Terraform root: `apps/web-platform/infra/git-data-root-key/`
+- Create-gate arm: `tests/scripts/lib/git-data-root-key-arm.sh`
+- ADR-220 (access and credential), ADR-068 (cutover design), ADR-149 (birth route)
 - Soak script: `scripts/followthroughs/phase3-ga-soak-5274.sh`
 - Convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`
-- ADR-068: `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md`

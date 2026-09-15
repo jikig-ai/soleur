@@ -16,8 +16,9 @@ tags: [git-data, ssh, cloudflare-tunnel, credentials, luks, cutover, security]
 
 `proposed` in frontmatter, because the frontmatter holds one value and the decisions below do not
 share one. Each decision's own status is in **D5**. Implements the decision half of #6680; the
-credential is provisioned by **#8189**. #6680 stays open until #8189's dry-run reads
-`role=git-data-auth verdict=ok`.
+credential is provisioned by **#8189**. #6680 stays open until the post-merge dry run of #8189's
+delivered key reads `role=git-data-auth verdict=ok`. What #8189 changed in D1b–D6 is recorded in the
+**Amendment log** at the end; dated text above it that the log replaces carries a Superseded marker.
 
 ## Context
 
@@ -64,6 +65,10 @@ The same static read found older defects. They stay hidden until a key exists:
 The third is fixed in the PR that lands this ADR. The others are blocking checklist items in #8189,
 which holds the detail (reconciling the freeze and reloads with ADR-119 among them).
 
+> **Superseded 2026-09-15 (#8189):** the flag token, the concurrency serialization and the dry-run
+> self-overwrite are fixed; the inert freeze and reloads were deleted with the whole cutover body, whose
+> rebuild is #8211. See the Amendment log, "Blocker dispositions".
+
 ## Considered Options
 
 | Option | What it buys | Why it was not chosen |
@@ -102,6 +107,9 @@ The runner authenticates **end-to-end** to git-data through the D1a channel, usi
 `ProxyCommand ssh -F <cfg> -W %h:%p 10.0.1.10` with `IdentitiesOnly yes` and `BatchMode yes` on both
 host blocks (#8189). No key and no agent socket ever lands on web-1, so a compromised web-1 cannot
 replay the root login.
+
+> **Superseded 2026-09-15 (#8189), as to `%h:%p` only:** the ProxyCommand names a literal
+> `-W 10.0.1.20:22` target, never `%h`. See the Amendment log, "D1b".
 
 ### D2 — Credential: a dedicated Terraform-minted root key for git-data
 
@@ -148,6 +156,10 @@ replay the root login.
   ungated job that holds no git-data secret, and only the freeze-sentinel removal (which needs the
   credential) runs gated. This split is the decision #8189 implements.
 
+> **Superseded 2026-09-15 (#8189):** the config `prd_git_data_root`, the dedicated R2 bucket, the
+> OIDC-first delivery, the mint-time expiry and the rollback split are each replaced or deferred. See the
+> Amendment log, "D2".
+
 ### D3 — Lifetime
 
 - **Consumer side:** the read credential exists only for a cutover window (a rehearsal, the
@@ -155,6 +167,9 @@ replay the root login.
 - **Host side:** the key is revoked at the next replace.
 - **Rotation:** rotation cutovers therefore **need no host replace**.
 - **While a token exists:** #8009's authorization accounting and PA-36 record the root authority.
+
+> **Superseded 2026-09-15 (#8189):** there is no window, the token does not expire, and the host-side
+> key is not revoked at the next replace. See the Amendment log, "D3".
 
 ### D4 — Residuals, with their bounds
 
@@ -189,6 +204,9 @@ replay the root login.
 `architecture list` shows the frontmatter's single status, which is the least-advanced one
 (`proposed`).
 
+> **Superseded 2026-09-15 (#8189), as to the D1b and D2–D3 rows:** their flip conditions are restated
+> in the Amendment log, "D5".
+
 ### D6 — Sequencing
 
 **This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
@@ -197,8 +215,8 @@ reference**: a secret wired into an ungated job would arm itself the moment #818
 
 **Exit codes.** `3` = the access gate stopped the run (one `ACCESS` verdict per role: `web`,
 `git-data-jump`, `git-data-auth`). `4` = a ROLLBACK-only run could not complete a recovery step
-(`::warning title=git-data-cutover recovery::step=<name> rc=<n>`). Until #8189 lands, the expected
-dry-run result is a **red** run whose annotation reads
+(`::warning title=git-data-cutover recovery::step=<name> rc=<n>`). Before #8189's key delivery, the
+expected dry-run result is a **red** run whose annotation reads
 `role=git-data-auth verdict=git_data_root_key_absent`, stopped before `prepare_luks_target`.
 
 **#8189** delivers the rest:
@@ -214,6 +232,9 @@ dry-run result is a **red** run whose annotation reads
 
 Landing the key resources in this PR would put their addresses outside every exact-scope gate
 allow-set.
+
+> **Superseded 2026-09-15 (#8189):** exit code `4` and the ROLLBACK mode are gone; `5` is a refusal.
+> The "#8189 delivers the rest" list is dispositioned in the Amendment log, "D6".
 
 ## Consequences
 
@@ -233,6 +254,9 @@ allow-set.
 - There is now a second unverified host key for #7226.
 - Once #8189 lands, a dry-run is **no longer non-mutating**: it runs `luksOpen`, mounts, and runs
   `rsync --delete` into FRESH.
+
+  > **Superseded 2026-09-15 (#8189):** the dry run stays read-only. See the Amendment log,
+  > "Consequences".
 - PR-branch `plan` runs can already read the web-platform root state. This is a pre-existing
   exposure: this ADR bounds it with the custody goal but does not remove it (D2 known gaps).
 
@@ -240,6 +264,9 @@ allow-set.
 
 None. #8189 adds one Doppler config, a service token or OIDC identity, and one Hetzner SSH key
 object, all on existing plans.
+
+> **Superseded 2026-09-15 (#8189), as to the object list:** one Doppler project with one environment,
+> one service token and one Hetzner SSH key object, all on existing plans. Still no cost.
 
 ## NFR Impacts
 
@@ -258,3 +285,174 @@ object, all on existing plans.
 - **AP-002 (No SSH state mutation):** No new deviation. The cutover already mutates hosts over SSH
   under ADR-068. This ADR only decides how that SSH session reaches git-data, and no runbook gains an
   SSH step.
+
+> **Superseded 2026-09-15 (#8189), as to AP-008 and AP-003:** the key is in the Doppler project
+> `soleur-git-data-root`, not `prd_git_data_root`, and the root has its own state key in the shared R2
+> bucket, not its own bucket. See the Amendment log, "Principle Alignment".
+
+## Amendment log
+
+### 2026-09-15 (#8189): a separate root, a reviewer-gated read token, and a read-only dry run
+
+Implementation measured several D2 and D3 requirements as unmet or undeliverable. The decisions below
+replace them. The plan
+(`knowledge-base/project/plans/2026-09-15-feat-git-data-root-key-separate-root-plan.md`, "Measured facts
+that change the issue's design") holds the evidence. The issues named here are #8209 (evict the
+repo-secret-reachable credentials from `prd_terraform`), #8211 (rebuild the cutover's real modes) and
+#8210 (`/dev/mapper/git-data` is not reopened at boot).
+
+#### Blocker dispositions (Context)
+
+1. **`read_flag` failed open.** `git-data-flag-precheck.sh` now reads `GIT_DATA_STORE_ENABLED` from `prd`
+   in its own workflow step, before the bridge and the key fetch exist. It is the only step holding
+   `DOPPLER_TOKEN_PRD`. A read error refuses `flag_read_failed`, and `true` refuses `flag_already_true`.
+   `DOPPLER_TOKEN_WRITE` is no longer referenced.
+2. **Inert freeze and reloads.** Deleted, together with the rest of the cutover body (copy, repoint,
+   canary, wipe, flip, rollback, the web-host SSH helper). A real mode refuses
+   `real_cutover_unreconciled` before any remote call. The rebuild is #8211.
+3. **Dry-run self-overwrite.** The script no longer contains a copy, mount or LUKS call. After the access
+   gate, three fail-closed probes refuse `old_store_unmounted`, `already_cut_over` and `store_not_empty`.
+4. **No serialization.** The run holds workflow-level `git-data-state`. `web-1-swap` membership moves to
+   #8211, with the first job that mutates web-1. A read-only job waiting on that group could cancel a
+   pending release deploy (#8167) and would protect nothing.
+
+#### D1b
+
+The authenticated hop is written by a workflow step into a fixed-path `ssh_config`. It has exact
+`Host 10.0.1.10` and `Host 10.0.1.20` blocks, each with its own `IdentityFile`, and
+`ProxyCommand ssh -F <cfg> -W 10.0.1.20:22 10.0.1.10` with a literal target. Both blocks set
+`IdentitiesOnly`, `BatchMode` and no forwarding. The decision is otherwise unchanged.
+
+#### D2 — the credential as delivered
+
+- **The custody goal is nominal today.** Any branch workflow can name the `DOPPLER_TOKEN` repo secret,
+  which reads `prd_terraform`. That config holds `DOPPLER_TOKEN_TF`, `CF_API_TOKEN_R2`, `HCLOUD_TOKEN` and
+  `GITHUB_APP_PRIVATE_KEY`. The separate root is still worth having: the key never enters the web-platform
+  root, which many plan and apply jobs read and print from in a public repository's logs. It does not
+  protect against a repo-secret holder. That is #8209, which needs its own ADR.
+- **The root.** `apps/web-platform/infra/git-data-root-key/`, applied only by the dispatch-only
+  `apply-git-data-root-key.yml`. That job runs behind the `web-platform-infra-apply` environment and
+  holds job-level `git-data-state`. It refuses any plan change other than create, read or no-op (so
+  `forget` is refused too), prints the key's `SHA256:` fingerprint, and emails ops on any non-success.
+  - Resources: an ED25519 `tls_private_key`; `hcloud_ssh_key` `soleur-git-data-root`, labelled
+    `soleur-role=git-data-root`; the Doppler project `soleur-git-data-root`, whose environment and config
+    `prd` holds `GIT_DATA_ROOT_SSH_PRIVATE_KEY`; and a read service token published as the repo secret
+    `DOPPLER_TOKEN_GIT_DATA_ROOT`.
+  - `prevent_destroy` covers the key, the Hetzner key object, the project, the environment and the secret.
+- **A Doppler project, not `prd_git_data_root`.** A branch config under `prd` resolves `prd`'s secrets
+  (learning `security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`).
+- **D2.1 reversed: a shared bucket with its own state key.** State lives at
+  `web-platform/git-data-root-key/terraform.tfstate` in `soleur-terraform-state`. No credential can mint a
+  bucket-scoped R2 token (ADR-130), and `CF_API_TOKEN_R2` is account-wide, so a dedicated bucket would be
+  readable by the same holders.
+- **D2.2 holds by placement.** The nested root collapses to its parent in `detect-changes`, so the PR
+  `plan` job never initializes it (`infra-validation-detect.test.sh`, TS2b). **D2.3 holds:** the
+  web-platform root has no `terraform_remote_state`.
+- **Public-key hand-off.**
+  - `git-data.tf` reads a label-selected plural `data "hcloud_ssh_keys" "git_data_root"` and concatenates
+    it into `hcloud_server.git_data`'s `ssh_keys`. `ignore_changes = [ssh_keys]` stays.
+  - There is no resource precondition, because it would fail every web-platform plan. Instead, both
+    host-creating gates call `git_data_root_key_arm`. It refuses a create unless:
+    - the committed `apps/web-platform/infra/git-data-root-key.fingerprint` matches the single resolved
+      key;
+    - every created server carries exactly the default key and that key.
+  - The refusal reads `verdict=git_data_root_key_not_in_create reason=<word>`.
+  - The committed fingerprint is the one value an `HCLOUD_TOKEN` holder cannot move. It stops a swapped
+    Hetzner key object from becoming root on every future replace.
+- **Token delivery: the fallback is taken.** Doppler service-account identities need the Team or
+  Enterprise plan, and the workplace is on the Developer plan. The fallback's three guards, as delivered:
+  1. A reference census allows `DOPPLER_TOKEN_GIT_DATA_ROOT` under `.github/` only in the `cutover` job of
+     `git-data-cutover.yml`. It stops accidental use on `main` bytes. It does not stop a branch workflow
+     from naming a repo secret.
+  2. The `main`-only policy comes from reusing `web-platform-infra-apply` (reviewer, custom branch policy
+     `main`) instead of creating a `git-data-cutover` environment.
+  3. **Expiry is not expressible.** `doppler_service_token` has no expiry attribute. The token persists
+     until a reviewed PR `-replace`s or removes it.
+- **What the environment is and is not.** It is a single-human acknowledgement, not two-party review: it
+  records `can_admins_bypass: true` and `prevent_self_review: false`. It is a human gate, not a secret
+  boundary. The Terraform App cannot write environment secrets, so the token is a repo secret, and
+  `secrets: inherit` in `web-platform-release.yml` and `version-bump-and-release.yml` passes every repo
+  secret to `reusable-release.yml`. The real boundary is repository write access.
+- **Scope.** The gated job serves the read-only dry run only. The rollback split moves to #8211.
+- **The Doppler hop is kept** (AP-008) over a repo secret holding the key itself.
+
+#### D3 — lifetime as delivered
+
+- **No window.** The read token does not expire (D2). The private key stays in state and in Doppler.
+- **Host side.** The key is not revoked at the next replace. `prevent_destroy` and the create gate make
+  every replace carry the same key. Host authorization ends only at a replace that follows a rotation.
+- **Rotation.** A reviewed PR lifts `prevent_destroy`, then a dispatch runs and a new fingerprint PR
+  merges; the next replace delivers the new key. Until that replace, dry runs fail `auth_refused`.
+- **Accounting.** #8009's authorization accounting records the root key as a fourth, distinct authority
+  (ADR-149, "Addendum — #8189 (2026-09-15)"), and the Article 30 git-data entry carries it as a TOM.
+
+#### D4 — new residuals
+
+- **Repo-secret reach (#8209).** A repo-secret holder reaches the R2 state object and the Doppler project
+  that hold the key. #8209 decides the eviction in its own ADR.
+- **`HCLOUD_TOKEN` already reaches root on the host** through rescue, rebuild or a volume re-attach. The
+  separate root does not protect against that holder.
+- **A leaked root key exposes `prd` before any repository exists.** Root on the host reads the host's own
+  `prd_git_data` token. That token is a `prd` branch config, likely resolving all of `prd` (#6167).
+- **Store-probe evidence is unauthenticated until #7226.** A compromised web-1 could answer "mounted, not
+  cut over, empty". `store_not_empty` stays as a refusal at least until #7226 pins git-data's host key.
+- **Root logins on git-data are not detected.** Tracked on #8093.
+- **Breach triage.** Once repositories exist, a root-key leak is likely an Art. 33 event. The runbook
+  (`git-data-luks-cutover-5274.md`, "Breach-triage trigger") names what opens an incident.
+- **No drift leg for the new root.** A scheduled leg would need state that holds the private key. A
+  deleted or swapped Hetzner key object surfaces at the create gate. A deleted secret or a revoked token
+  surfaces as `git_data_root_key_fetch_failed` on the next dispatch.
+- **A rotation breaks dry runs until the next replace** (`auth_refused`).
+
+#### D5 — statuses (2026-09-15)
+
+| Decision | Status | Flips to `accepted` when |
+|---|---|---|
+| D1a transport | `accepted` (2026-09-15) | Unchanged. |
+| D1b authenticated hop | `proposed` | A dispatch from `main`, after the root-key apply, the fingerprint PR and the replace, reads `role=git-data-auth verdict=ok` with all three store probes clear. The flip is recorded with the caveat that the store evidence is unauthenticated until #7226. |
+| D2–D3 credential and lifetime | `proposed` | #7226, #8209 and #8211 land. |
+| D4 residuals | Standing constraints | Each is discharged by the issue named with it. |
+
+#### D6 — sequencing and hand-off
+
+- **#8189 ships** the new root and its apply, the data source and the create-gate arm, the flag precheck,
+  the read-only script with its probes, and the workflow's shape and serialization. Exit codes: `3` means
+  the access gate stopped the run, and `5` means a refusal.
+- **Post-merge order.** Each step needs explicit authorization:
+  1. the root-key apply;
+  2. the fingerprint PR;
+  3. `git-data-host-replace`;
+  4. the private-NIC heartbeat read;
+  5. the dry run.
+
+  The runbook holds the verdict map.
+- **Hand-off to #8211:** the cutover body; the rollback split (an ungated flag-off and reload, and a gated
+  credential step); `web-1-swap` membership on the job that drains web-1; and a `prd` flag-write
+  credential.
+- **#8211's preconditions:**
+  - #7226;
+  - #8209;
+  - a fresh replace plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real cutover, so nothing
+    planted during the read-only period survives into it.
+
+  #8210 must close before a post-cutover reboot is safe.
+
+#### Consequences
+
+- **The dry run stays read-only.** It authenticates to root and runs three read probes. It cannot copy,
+  mount, flip or wipe.
+- Delivering the key requires a replace, and so does ending a rotated key's authorization.
+- **The create gates now depend on the root-key apply and the fingerprint file.** A recovery replace
+  refuses until both exist. Until it runs, account deletions log Art. 17 erasure-failure events; no
+  repository exists, so nothing is left behind.
+- **A pending approval on a cutover or root-key run holds `git-data-state`.** Answer or cancel it before
+  dispatching a replace.
+- **Rotation cutovers still need no replace for access**, because the key persists. The first real
+  cutover needs one (D6).
+
+#### Principle Alignment
+
+- **AP-001:** unchanged. The key is minted by Terraform and delivered by a replace, with no human mint.
+- **AP-008:** the key is in the Doppler project `soleur-git-data-root`, and the repo secret carries only a
+  read token.
+- **AP-003:** the root has its own state key in the R2 backend's shared bucket.

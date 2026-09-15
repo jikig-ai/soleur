@@ -275,6 +275,9 @@ needed.
 > `docker run` from `cloud-init.yml`. If you find a document telling you to restart a unit
 > to pick up these keys, that document is wrong — `git-data-cutover.sh` currently contains
 > exactly that mistake at two sites (tracked under #5274/#6982).
+>
+> **Superseded 2026-09-15 (#8189):** both sites were deleted with the rest of the cutover body. The
+> dispatch is now a read-only proof, and the real cutover is being rebuilt under #8211.
 
 ## If it fails
 
