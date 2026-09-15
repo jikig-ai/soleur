@@ -18,6 +18,26 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-15
+**Sections enhanced:** Overview, Research Insights, Hypotheses, Technical Approach, Implementation Phases, Observability, Architecture Decision, Guard Contract, Acceptance Criteria, Risks
+**Agents used (deepen pass):** framework-docs-researcher (Terraform v1.10.5 import source), security-sentinel, test-design-reviewer, observability-coverage-reviewer, a verify-the-negative + post-edit self-audit sweep. Earlier plan-time panel: repo-research-analyst ×2, learnings-researcher, framework-docs-researcher, functional-discovery, CTO ×2, terraform-architect, spec-flow-analyzer ×2, architecture-strategist, DHH, Kieran, code-simplicity, CPO, scoped advisor consult.
+
+### Key Improvements
+
+1. **H-F resolved from Terraform source.** v1.10.5 `expandResourceImports` skips an import only when the address is in the (refreshed) state, so after a vendor-side deletion the gated import is re-attempted against a missing object and the plan most likely aborts. The import block therefore gets a tracked removal once adoption is verified, and the gate variable is the interim off-switch.
+2. **Marker grammar hardened against vendor text.** All vendor-sourced fields (`url`, `name`, `detail`) now come last and quoted, ids must be numeric, invisible/bidi characters are stripped, fields are capped at 200 chars, and the workflow extracts routing tokens only from the machine prefix. Per-arm host+path pin, page cap and seen-URL set added.
+3. **Escalation and issue routing are tested.** A small workflow-body suite (python `yaml.safe_load` + `gh` stub, precedent `plugins/soleur/test/token-drift-workflow-causes.test.sh`) covers the fail-closed lookup, the whole-token escalation key and the `infra-drift` label. Subject precedence and keyless-marker escalation are decided.
+4. **Guard 1 can no longer be satisfied by a silent downgrade.** The expected branch is a constant set from the Phase 0.2 result, not read from the declaration.
+5. **Probe script is specified to the repo's credential rules** (write token, `--disable --noproxy '*'`, header on stdin, xtrace refusal, unique run-id name, sweep re-checks each object before deleting).
+6. **Observability layer citations added**, plus the apply-failure mode (`notify-apply-failure` job) and the rc-1 masking fix (the issue step also runs when rc 1 carries MISMATCH markers).
+
+### New Considerations Discovered
+
+- PR #8215 merged during planning; the post-mortem is on `origin/main` and its #7884 action-item row is updated by this PR.
+- A persistent 429 on the monitors arm silently suspends disarm detection (rc 0, check-in ok); recorded as a residual.
+
 ## Overview
 
 Better Stack monitor `4226366` (`https://app.soleur.ai/health`) was created by hand on
@@ -69,7 +89,7 @@ rather than applied.
 ### Premise Validation (Phase 0.6)
 
 - #7884: OPEN, labels `priority/p1-high`, `infra-drift`, milestone `Post-MVP / Later`; not closed by any PR.
-- #6606: OPEN (Sentry analogue). #8215: OPEN, branch `chore-pir-prd-supabase-unhealthy-20260915`, adds `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md`, which is NOT on `origin/main`. This plan cites that path as inline code, never as a link, and creates no file there.
+- #6606: OPEN (Sentry analogue). #8215: was OPEN at plan start and **MERGED during the deepen pass** (commit `8749d4f06` on `origin/main`); it adds `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md`, whose Action Items table carries a `#7884 … open` row and whose 5-Whys say "Another occurrence now pages once #7884 lands". This branch predates the merge, so /work starts by merging `origin/main`; this plan creates no post-mortem file and only updates that row's status (Phase 3.8).
 - The post-mortem timeline (read from the PR branch) verifies the load-bearing premise: during the outage `/health` returned `status: ok` with **`supabase: error`** (15:33Z, 4 reads); recovery read `supabase: connected` (15:45:16Z). A keyword monitor on `"supabase":"connected"` would have failed from the first check after 14:16Z. One flap at 15:44:44Z (`supabase: error` once) is the blip class `confirmation_period` absorbs.
 - `apps/web-platform/server/index.ts` `/health` branch: `res.writeHead(200, …); res.end(JSON.stringify(health))` — always 200, compact JSON. `server/health.ts` `buildHealthResponse`: `status: "ok"` hardcoded; `supabase: supabaseOk ? "connected" : "error"`; `checkSupabase` = GET `${serverUrl()}/rest/v1/users?select=id&limit=1` with the service-role key and `AbortSignal.timeout(2000)`; catch → false.
 - Live body: `{"status":"ok","version":"0.274.4","build_sha":"2ff3e159…","supabase":"connected","sentry":"configured","uptime":3245,"memory":237}`; `cf-cache-status: DYNAMIC`.
@@ -104,9 +124,9 @@ rather than applied.
 - A `betteruptime_policy` for this alarm → free tier; same email path as siblings.
 - A C4 count-parity clause → no Better Stack counts are embedded in `model.c4`.
 - Regex expansion of `${…}` → exact resolution from literal variable defaults; anything else fails closed.
-- `duplicate-live` and `monitor-absent-live` classes → folded into `unmanaged-live` (with `detail=duplicate-url`) and the existing `absent-live`.
+- `duplicate-live` and `monitor-absent-live` classes → folded into `unmanaged-live` (with `dup=url`) and the existing `absent-live`.
 - `git ls-files` census of declarations outside the infra dir → zero exist; no property needs it.
-- `has_unmanaged`/`has_mismatch`/`uptime_clean` outputs, a separate unmanaged issue step, a close-on-clean step and a YAML-extraction workflow test harness → the existing issue step routes all rows; its gating stays `rc == '2'`.
+- `has_unmanaged`/`uptime_clean` outputs, a separate unmanaged issue step and a close-on-clean step → the existing issue step routes all rows. (Deepen pass kept one output, `has_mismatch`, so an arm ERROR cannot hide mismatch rows, and reinstated a narrow issue-step test over the extracted `run:` body — the escalation key is the defect class behind #8140 and a precedent harness exists.)
 - Import-id and gate-default mutation rows in Guard 1 → the adoption is one-time; Phase 0.3 and `terraform test` cover it.
 - Consecutive-UNREACHABLE escalation → existing contract (no page on vendor 5xx) stays.
 - A comment on #6606 → no property.
@@ -168,7 +188,18 @@ The feature text matched the network-outage trigger ("unreachable", "timeout"). 
 | H-C | The workspace accepts a `keyword` monitor | #7798 measured `expected_status_code` only; 13 live objects against a "10" pricing reading | UNKNOWN — Phase 0.2. A quota refusal does NOT answer H-C |
 | H-D | The keyword monitor also fails when the app is down / 5xx / timing out | A Cloudflare 52x page, a timeout or a TLS failure yields no body containing the phrase | Holds by construction for this endpoint |
 | H-E | A single 2 s check timeout would page without a confirmation window | `checkSupabase` timeout; 15:44:44Z single-read flap | Mitigated by `confirmation_period = 180` |
-| H-F | After a vendor-side deletion of 4226366, the gated import block aborts the plan (vs. a quiet `+ create`) | Import blocks are skipped for addresses in prior state; refresh drops a 404'd object | UNKNOWN — recorded in ADR-222 with both reported outcomes and the off-switch remedy |
+| H-F | After a vendor-side deletion of 4226366, the gated import block aborts the plan (vs. a quiet `+ create`) | Terraform v1.10.5 `internal/terraform/node_resource_plan.go` `expandResourceImports` removes an import only `if state.ResourceInstance(el.Key) != nil` ("skipping import address … already in state"); refresh drops a 404'd object (`monitorRead` → `SetId("")`), so the import is re-attempted and the passthrough importer's read of a missing id yields an import error | LIKELY abort (source-derived, not measured). Mitigations: reconcile reports `absent-live` first; gate variable is the off-switch; the import block and variable are removed by a tracked follow-up once AC17 passes |
+
+### Network-Outage Deep-Dive (deepen-plan 4.5)
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | Opt-out with artifact | The probe path terminates at Cloudflare anycast (three CF addresses from `dig`); the existing monitor on the URL reads `status up` via the API. No host firewall or SSH provisioner is on any resource this plan applies (`betteruptime_monitor` has no `connection`/`provisioner`). |
+| L3 DNS/routing | Verified | `dig +short app.soleur.ai` → 104.26.11.163, 104.26.10.163, 172.67.73.132; three `curl` reads 200 in 0.30-0.38 s. |
+| L7 TLS/proxy | Verified | `curl -sIv` → TLS 1.3, cert verified, `server: cloudflare`, `cf-cache-status: DYNAMIC`. |
+| L7 application | Verified | `health.ts`/`index.ts` code read; post-mortem timeline shows `supabase: error` with status 200 during the outage. |
+
+No gaps before implementation.
 
 ## Technical Approach
 
@@ -217,7 +248,7 @@ variable "adopt_app_health_monitor" {
 }
 ```
 
-`tests/web-hosts-eu-pin.tftest.hcl` sets `adopt_app_health_monitor = false` beside `adopt_seo_config_entrypoint = false`. The variable comment says why the gate exists (mock_provider does not mock imports) and what `false` means: before adoption it plans a CREATE of a second monitor on the same URL (reported by the reconcile as `unmanaged-live detail=duplicate-url`); after adoption the import is already skipped and `false` changes nothing.
+`tests/web-hosts-eu-pin.tftest.hcl` sets `adopt_app_health_monitor = false` beside `adopt_seo_config_entrypoint = false`. The variable comment says why the gate exists (mock_provider does not mock imports) and what `false` means: before adoption it plans a CREATE of a second monitor on the same URL (reported by the reconcile as `unmanaged-live dup=url`); after adoption the import is already skipped and `false` changes nothing.
 
 Value choices, each stated in the block comment:
 
@@ -230,7 +261,7 @@ Value choices, each stated in the block comment:
 
 ### Apply path
 
-Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/**`) → targeted plan including `-target=betteruptime_monitor.app_health` → `1 to import, 0 to add, 1 to change, 0 to destroy` → apply. The destroy guard scores no `betteruptime_*` action. A refused PATCH would fail the whole `apply` step on that run and on every later infra merge (the `~ update` re-plans each time), skipping the job's later implicit-`success()` steps (token sync, SSH bridge, bridge apply) — which is why Phase 0.2 is a merge gate.
+Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/**`) → targeted plan including `-target=betteruptime_monitor.app_health` → `1 to import, 0 to add, 1 to change, 0 to destroy` → apply. The destroy guard scores no `betteruptime_*` action. A refused PATCH would fail the whole `apply` step on that run and on every later infra merge (the `~ update` re-plans each time), skipping the job's later implicit-`success()` steps (token sync, SSH bridge, bridge apply) — which is why Phase 0.2 is a merge gate. Such a failure is not silent: the workflow's `notify-apply-failure` job (`needs: [preflight, apply]`, `always()`) emails ops through `notify-ops-email` on every non-green push run, naming the failing step.
 
 ### Live inventory reconcile (lib + script + workflow)
 
@@ -245,49 +276,57 @@ Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/
 - New `reconcileMonitors(declared, live)`:
   - `absent-live` (existing reason, monitor kind) — a declared instance with no live monitor on its URL.
   - `monitor-config-drift` — exactly one live monitor on a declared URL whose `monitorType`, `requiredKeyword` or `paused` differs; `null` and `""` keywords compare equal; one row per field.
-  - `unmanaged-live` — a live monitor whose URL matches no declared instance, or every live monitor on a URL that has ≥2 (`detail=duplicate-url`; none picked as managed).
-- New `findUnmanagedHeartbeats(declared, live)`: `unmanaged-live` per live heartbeat whose name is no declared instance's name, or every one of ≥2 sharing a name (`detail=duplicate-name`).
+  - `unmanaged-live` — a live monitor whose URL matches no declared instance, or every live monitor on a URL that has ≥2 (`dup=url`; none picked as managed).
+- New `findUnmanagedHeartbeats(declared, live)`: `unmanaged-live` per live heartbeat whose name is no declared instance's name, or every one of ≥2 sharing a name (`dup=name`).
 - `ViolationReason` gains `"unmanaged-live" | "monitor-config-drift"`.
 
 `plugins/soleur/scripts/reconcile-live-heartbeats.ts`:
 
-- `fetchPaged`'s `mapAttrs` receives the row `id`. On the monitors arm a row without a string `url` is `error` (never skipped).
-- `MONITORS_URL = https://uptime.betterstack.com/api/v2/monitors` under the existing exact-host pin; no query string (pagination follows `pagination.next`). The monitors arm always runs; heartbeats unmanaged detection runs inside the heartbeats arm.
+- `fetchPaged`'s `mapAttrs` receives the row `id`. On the monitors and heartbeats arms a row whose `id` is not `^[0-9]+$`, or (monitors) whose `url` is not a string, is `error` (rc 1, never skipped).
+- `MONITORS_URL = https://uptime.betterstack.com/api/v2/monitors`; no query string (pagination follows `pagination.next`). The monitors arm always runs; heartbeats unmanaged detection runs inside the heartbeats arm.
+- **Pagination pin per arm.** `isAllowedUrlFor` additionally requires `parsed.port === ""` and a pathname equal to that arm's `/api/v2/monitors` or `/api/v2/heartbeats`, so a `pagination.next` cannot switch endpoints. `fetchPaged` keeps a seen-URL set and a 50-page cap; a repeated URL or the cap → `error` (rc 1).
 - `UnresolvableDeclaration` → `SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=unresolvable-declaration resource=<type.name>` (rc 1).
 - All arms print their markers before codes combine (ERROR 1 > MISMATCH 2 > OK 0); header comment updated.
-- Marker vocabulary — one `surface=` spelling per arm (`heartbeats`, `logs_alert`, `monitors`), machine fields before vendor text, vendor text quoted with `"` stripped and `oneLine`-sanitized:
-  - existing heartbeat rows, unchanged prefix, one field appended: `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=<n> live=absent|paused reason=absent-live|fed-but-paused resource=<type.name>`
-  - existing logs_alert rows, prefix unchanged, `resource=<type.name>` appended after `detail="…"`
-  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=heartbeats reason=unmanaged-live id=<id> name="<n>" [detail=duplicate-name]`
-  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=unmanaged-live id=<id> url=<url> name="<n>" [detail=duplicate-url]`
-  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=absent-live resource=<type.name> url=<url>`
-  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=monitor-config-drift id=<id> resource=<type.name> detail="field=<f> declared=<v> live=<v>"`
+- **Vendor-text sanitization.** `oneLine`'s class gains `​-‏‪-‮⁦-⁩﻿` (escapes only, `cq-regex-unicode-separators-escape-only`); each vendor field is capped at 200 chars; inside quoted fields `"` is percent-encoded as `%22` (not stripped, so `required_keyword` drift stays legible).
+- **Marker grammar.** One `surface=` spelling per arm (`heartbeats`, `logs_alert`, `monitors`). Machine fields first; every vendor-sourced field (`url`, `name`, `detail`) last and double-quoted. Routing tokens (`reason=`, `resource=[a-z_]+\.[a-z0-9_]+`, `id=[0-9]+`, `surface=`) are read only from the text before the first `"`:
+  - existing heartbeat rows, unchanged prefix, one machine field appended before nothing vendor-sourced (the name there is our `.tf` literal): `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=<n> live=absent|paused reason=absent-live|fed-but-paused resource=<type.name>`
+  - existing logs_alert rows: prefix unchanged; `resource=<type.name>` inserted immediately before `detail="…"` so the vendor text stays last
+  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=heartbeats reason=unmanaged-live id=<id> [dup=name] name="<n>"`
+  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=unmanaged-live id=<id> [dup=url] url="<url>" name="<n>"`
+  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=absent-live resource=<type.name> url="<url>"`
+  - `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=monitor-config-drift id=<id> resource=<type.name> field=<f> detail="declared=<v> live=<v>"`
   - `SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors declared=<n> live=<n> matched=<id,id,…>`
-  - `SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=monitors detail=<d>` / `SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=<kind> detail=<d>`
+  - `SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=monitors detail="<d>"` / `SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=<kind> detail="<d>"`
   - `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>` — only when both uptime reads succeeded.
+  - Invariant (tested): every MISMATCH line carries exactly one `resource=` or `id=` routing token before its first `"`.
 
 `.github/workflows/scheduled-terraform-drift.yml`, `heartbeat-live-reconcile` job (existing steps, no new steps):
 
-- "Create or update reconcile issue": the existing-issue lookup runs under `set -euo pipefail` so a failing `gh issue list` fails the step instead of creating a duplicate; escalation extracts `(resource|id)=<token>` pairs with a trailing token boundary (`[[:space:]]|$`) and compares them whole against the issue history; the decode list gains `unmanaged-live` and `monitor-config-drift`; when any `reason=unmanaged-live` marker is present the step also runs `gh issue edit <n> --add-label infra-drift` (and creates the issue with both labels). Body next steps name the remedy for an unmanaged object: have an agent adopt it (`/soleur:one-shot` on the issue — declare it with an `import {}` block + resource + `-target=` line, the #7884 pattern) or delete it if abandoned.
-- "Ensure heartbeat-reconcile-mismatch label exists": also ensures `infra-drift` exists.
-- "Prepare reconcile email content": one plain sentence per class above the raw markers; subject `[ALARM DISARMED] Better Stack monitor config drift` when a `monitor-config-drift` marker is present, `[INFRA-DRIFT] Better Stack object live but unmanaged by Terraform` when an `unmanaged-live` marker is present, the existing subjects otherwise.
+- The reconcile step writes one more output, `has_mismatch` (`true` when any line matches `^SOLEUR_HEARTBEAT_RECONCILE_MISMATCH `). The label and issue steps gate on `rc == '2' || (rc == '1' && has_mismatch == 'true')`, so an arm ERROR in the same run no longer hides real mismatch rows from the issue.
+- "Create or update reconcile issue": the existing-issue lookup runs under `set -euo pipefail`, so a failing `gh issue list` fails the step instead of creating a duplicate. Escalation keys are the `resource=…`/`id=…` tokens taken from each MISMATCH line's pre-quote prefix and compared as whole tokens (`grep -qE "(^|[[:space:]])${key}([[:space:]]|\$)"`) against the issue history; a MISMATCH line with no key escalates (fail safe). The decode list gains `unmanaged-live` and `monitor-config-drift`. When any `reason=unmanaged-live` routing token is present the step runs `gh issue edit <n> --add-label infra-drift` (new issues are created with both labels). The fenced markers are introduced as "untrusted vendor data". Body next steps for an unmanaged object: have an agent adopt it (`/soleur:one-shot` on the issue — declare it with an `import {}` block + resource + `-target=` line, the #7884 pattern) or delete it if abandoned; either path first re-reads the object by id through the API and checks its URL/name, and no delete runs on an issue-supplied id alone (`hr-bulk-delete-per-item-live-infra-role-check`).
+- "Ensure heartbeat-reconcile-mismatch label exists": same gate as the issue step; also ensures `infra-drift` exists.
+- "Prepare reconcile email content": one plain sentence per class above the raw markers. Subject precedence: rc 1 → the existing `[ERROR]` subject (with "issue filer failed" when `steps.reconcile_issue.outcome == 'failure'`); else a `monitor-config-drift` token → `[ALARM DISARMED] Better Stack monitor config drift`; else an `unmanaged-live` token → `[INFRA-DRIFT] Better Stack object live but unmanaged by Terraform`; else the existing mismatch subject. The `$GITHUB_OUTPUT` heredoc delimiter becomes random (`EOF_$(openssl rand -hex 8)`).
 - Email step and Sentry check-in conditions gain `steps.reconcile_issue.outcome == 'failure'` (email sent; Sentry status `error`), so a failed filer is never silent.
 - First run after merge escalates every existing row once (prior history carries no `resource=` tokens); stated in the ADR-117 amendment.
+- Test: `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh`, following `plugins/soleur/test/token-drift-workflow-causes.test.sh` (python `yaml.safe_load` extracts the step's `run:` body and `if:` strings; a `gh` stub on `PATH` logs its argv; `RUNNER_TEMP`/`GITHUB_OUTPUT` are temp files). Discovered by `scripts/test-all.sh` via the existing `plugins/soleur/test/*.test.sh` glob. Rows in Guard 3.
 
 ### Keyword contract test
 
-`apps/web-platform/test/server/health-keyword-monitor-contract.test.ts` (vitest `unit` project, `test/**/*.test.ts`). A pure `checkHealthKeywordContract({ tfTexts, indexText, connectedBody, failedBodies, branch })` returning violations, exercised on the real files and on mutated strings (Guard 1). `tfTexts` is every `apps/web-platform/infra/*.tf`. It reads the keyword from the declaration, builds bodies via `buildHealthResponse()` with `fetch` mocked 200 / 503 / throw, and inspects only the brace-extracted `/health` branch of `index.ts`. `branch` is derived from the declaration itself: `keyword` (full contract) or `status` (census + no `required_keyword` + status 200 only).
+`apps/web-platform/test/server/health-keyword-monitor-contract.test.ts` (vitest `unit` project, `test/**/*.test.ts`). A pure `checkHealthKeywordContract({ tfTexts, indexText, connectedBody, failedBodies, expectedBranch })` returning violations as `{ rule: string }[]`, exercised on the real files and on injected strings (Guard 1). A `loadInfraTf(dir)` helper returns every `*.tf` in the directory. The checker reads the keyword from the declaration, the real-file run builds bodies via `buildHealthResponse()` with `fetch` mocked 200 / 503 / throw, and it inspects only the brace-extracted `/health` branch of `index.ts` (exactly one `pathname === "/health"` anchor; every `writeHead(` call in the branch counted). `EXPECTED_BRANCH` is a constant in the test file set from the Phase 0.2 decision (`"keyword"` or `"status"`) — never derived from the declaration, so a later PR cannot downgrade the alarm by editing the declaration alone. Each matrix row asserts the exact `rule` list it produces.
 
 ## Implementation Phases
 
 ### Phase 0 — Preconditions (measure before building)
 
+0.0 Merge `origin/main` into the branch: PR #8215 (the post-mortem this plan updates) landed after the branch point.
+
 0.1 Re-read live monitor 4226366 and the monitor/heartbeat lists with `BETTERSTACK_API_TOKEN_READONLY` (Doppler `soleur/prd_terraform`). Stop the monitor half if 4226366 is gone or no longer `status`.
 
 0.2 **Keyword probe — merge gate for the keyword half.** Precedent: #7798 Phase 0 (cited in `uptime-alerts.tf`: "Free-tier acceptance of the type was MEASURED at #7798 Phase 0 (HTTP 201)"). The probe is a reversible production-vendor write: one notification-free monitor, created and deleted inside one script run, touching no existing object. /work runs it under that precedent; if this session's permission policy refuses the write, that refusal is recorded and the `status` branch applies.
-  - Read-only precheck: list existing monitors; delete any whose `pronounceable_name` starts with `soleur-probe-7884-` (orphans of an interrupted run).
-  - POST one monitor `soleur-probe-7884` on `https://app.soleur.ai/health`: `monitor_type keyword`, `required_keyword "\"supabase\":\"connected\""`, `check_frequency 180`, `request_timeout 10`, `confirmation_period 0`, `email/call/sms/push false`, `critical_alert false`, no `policy_id`, `team_name "Your team"`. Print the id immediately.
-  - `trap` deletes it on EXIT/INT/TERM and confirms GET → 404.
+  - Credential handling: the write token is `BETTERSTACK_API_TOKEN` (Doppler `soleur/prd_terraform`), read once with `doppler secrets get … --plain` into a variable and never echoed. The script opens with the xtrace refusal used by `scripts/betterstack-ingest-probe.sh` and never enables `set -x`. Every call is `curl --disable --noproxy '*' --proto '=https' --max-redirs 0 -sS -H @- <literal https://uptime.betterstack.com/api/v2/monitors…>` with the `Authorization` header fed on stdin (token out of argv). The script is ad hoc (scratchpad), so these rules are stated here rather than left to the commit-time credential lint.
+  - Precheck sweep: list monitors (all pages); for each whose `pronounceable_name` starts with `soleur-probe-7884-`, re-check `url == https://app.soleur.ai/health`, `monitor_type == keyword`, and `email/call/sms/push` all false before deleting; anything else with that prefix stops the script.
+  - POST one monitor `soleur-probe-7884-<run-id>` (run-id = UTC timestamp) on `https://app.soleur.ai/health`: `monitor_type keyword`, `required_keyword "\"supabase\":\"connected\""`, `check_frequency 180`, `request_timeout 10`, `confirmation_period 0`, `email/call/sms/push false`, `critical_alert false`, no `policy_id`, `team_name "Your team"`. Print the id immediately.
+  - `trap` on EXIT/INT/TERM re-checks the id is numeric, deletes it and confirms GET → 404; a failed confirmation exits non-zero. Read-only precheck of workspace integrations (outgoing webhooks, Slack) if the API lists them; if any would relay incidents, skip the `down` arm and treat the probe as not run.
   - Poll (GET, ≤ 10 min) until `last_checked_at` is set; record `status` (expect `up`).
   - PATCH `required_keyword "\"supabase\":\"soleur-probe-never\""`; poll until `last_checked_at` advances past the PATCH time; record `status` (expect `down`).
   - Recorded in the PR body: POST status, both readings, id, 404 confirmation.
@@ -307,26 +346,28 @@ Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/
 
 ### Phase 2 — Reconcile (RED first)
 
-2.1 Extend `plugins/soleur/test/heartbeat-live-reconcile.test.ts` with the Guard 2 matrix, update the "no logtail_exploration_alert declared" case's exact `seen` list to include `https://uptime.betterstack.com/api/v2/monitors`, and add `real infra dir resolves` — runs declaration discovery on the real `apps/web-platform/infra` and asserts no `UnresolvableDeclaration` (so a refactor fails the PR, not the 06:00 run). Run RED.
+2.1 Extend `plugins/soleur/test/heartbeat-live-reconcile.test.ts` with the Guard 2 matrix (rows 1-19, the marker-key property, H1-H6), update the "no logtail_exploration_alert declared" case's exact `seen` list to include `https://uptime.betterstack.com/api/v2/monitors`, and add `real infra dir resolves` — runs declaration discovery on the real `apps/web-platform/infra` and asserts no `UnresolvableDeclaration` (so a refactor fails the PR, not the 06:00 run). Run RED.
 2.2 Implement the lib, then the script.
-2.3 Workflow edits in the existing steps (lookup under `pipefail`, escalation key, decode list, `infra-drift` label, email subject/sentences, failure conditions). `actionlint .github/workflows/scheduled-terraform-drift.yml`; extract each changed `run:` body with `python3 -c 'import yaml…'` and `bash -n` it.
+2.3 RED first: `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh` with Guard 3 (W1-W7, H1-H2). Then workflow edits in the existing steps (`has_mismatch` output and gates, lookup under `pipefail`, whole-token escalation key, decode list, `infra-drift` label, untrusted-data framing, subject precedence, random heredoc delimiter, failure conditions). `actionlint .github/workflows/scheduled-terraform-drift.yml`; extract each changed `run:` body with `python3 -c 'import yaml…'` and `bash -n` it.
 2.4 Local read-only run with the Phase 1 declarations in the working tree: `BETTERSTACK_API_TOKEN="$(doppler secrets get BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform --plain)" bun plugins/soleur/scripts/reconcile-live-heartbeats.ts`. Expected: no `${each.key}`; `soleur-git-data-prd absent-live resource=betteruptime_heartbeat.git_data_prd` remains (#6548); `OK surface=monitors … matched=` lists `4226366` (the positive control that the arm reads the #7884 object on either branch); `INVENTORY` present; zero `unmanaged-live`; on the `keyword` branch also `monitor-config-drift id=4226366` rows (live is still `status`). Paste in the PR body.
 
 ### Phase 3 — Records
 
-3.1 ADR-222 (provisional) via `/soleur:architecture`: "Better Stack is the database-readiness pager, reading the `/health` body; every live Better Stack uptime object is Terraform-declared or reported." Two decision sections. Alternatives: 503 on DB failure; separate `/ready` endpoint; Sentry uptime assertion; tfstate id matching; asserting a cap. Consequences: keyword literal coupled to serialization (pinned by the contract test); gated import block and H-F; email-only paging, so detection includes inbox latency; residual gaps — a Better Stack outage leaves database readiness without a second alarm; a single web host losing Supabase while its sibling is healthy alternates checks and may not trip the confirmation window (Supabase is shared, so rare); checks oscillating near the 2 s timeout can open and close incidents repeatedly; vendor 5xx on the reconcile never pages. On the `status` branch the ADR status is `adopting` and its title's paging clause is marked pending.
-3.2 ADR-117: `### Amendment (2026-09-15, #7884)` — exact resolution of `for_each`/`count` declarations from literal variable defaults (a Doppler `TF_VAR_*` override of those variables is a stated limit), the `resource=` field appended to rows, and the one-time re-escalation after merge.
+3.1 ADR-222 (provisional) via `/soleur:architecture`: "Better Stack is the database-readiness pager, reading the `/health` body; every live Better Stack uptime object is Terraform-declared or reported." Two decision sections. Alternatives: 503 on DB failure; separate `/ready` endpoint; Sentry uptime assertion; tfstate id matching; asserting a cap. Consequences: keyword literal coupled to serialization (pinned by the contract test); gated import block, H-F (likely abort, source-derived) and its tracked removal; email-only paging, so detection includes inbox latency; residual gaps — a Better Stack outage leaves database readiness without a second alarm; a single web host losing Supabase while its sibling is healthy alternates checks and may not trip the confirmation window (Supabase is shared, so rare); checks oscillating near the 2 s timeout can open and close incidents repeatedly; vendor 5xx or a persistent 429 on the reconcile never pages and silently suspends unmanaged and disarm detection (visible only as a missing `INVENTORY` line). On the `status` branch the ADR status is `adopting` and its title's paging clause is marked pending.
+3.2 ADR-117: `### Amendment (2026-09-15, #7884)` — exact resolution of `for_each`/`count` declarations from literal variable defaults (a Doppler `--name-transformer tf-var` override — `WEB_HOSTS`, `BETTERSTACK_PAID_TIER`, `ADOPT_APP_HEALTH_MONITOR` — would bypass it; none exists, stated as a limit), the `resource=` field appended to rows, and the one-time re-escalation after merge.
 3.3 ADR-204: `## Residual gap` #7884 paragraph → its resolution (links ADR-222); `## Consequences` "4 monitors of 10 on the free tier" → measured 4 + 9 and the marker.
 3.4 ADR-149: one sentence after reason (c) pointing at `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY` as the measurement that supersedes "a vendor-page reading".
-3.5 Runbook `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` (frontmatter like `www-redirect-alarm.md`): TL;DR `curl -s --max-time 10 https://app.soleur.ai/health | jq -r .supabase`; "which alarm is this?" table (`soleur app database readiness` / `soleur app dashboard` / `soleur dot ai apex`); what is asserted; diagnosis with no SSH — dev-project control probe, Supabase Management API health, `scripts/supabase-logs-query.sh` (`supabase-log-query.md`), and the service-role-key cause (`supabase-db-credential-rotation.md`); remediation — a project restart is a production write that needs explicit operator authorization per `hr-menu-option-ack-not-prod-write-auth`; the H-F remedy (set `adopt_app_health_monitor` default `false` in a PR) step by step; the post-mortem path from PR #8215 as inline code.
+3.5 Runbook `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` (frontmatter like `www-redirect-alarm.md`): TL;DR `curl -s --max-time 10 https://app.soleur.ai/health | jq -r .supabase`; "which alarm is this?" table (`soleur app database readiness` / `soleur app dashboard` / `soleur dot ai apex`); what is asserted; diagnosis with no SSH — dev-project control probe, Supabase Management API health, `scripts/supabase-logs-query.sh` (`supabase-log-query.md`), and the service-role-key cause (`supabase-db-credential-rotation.md`); remediation — a project restart is a production write that needs explicit operator authorization per `hr-menu-option-ack-not-prod-write-auth`; the H-F remedy (set `adopt_app_health_monitor` default `false` in a PR) step by step; a link to the post-mortem (on `origin/main` since #8215).
 3.6 C4: `model.c4` `betterstack -> hetzner` gains the database-readiness keyword probe; `github -> betterstack` reconcile sentence gains `GET /api/v2/monitors`, `unmanaged-live`, `monitor-config-drift` and the INVENTORY marker; `betterstack -> founder` gains the database alarm in what pages. Run `bash scripts/regenerate-c4-model.sh`; then `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh`.
 3.7 Prose sweep: `git grep -n 'heartbeat-live-reconcile\|reconcile-live-heartbeats'` — update statements that describe the job as heartbeats-only in `ADR-141`, `apps/web-platform/infra/sentry/cron-monitors.tf` and `function-registry-count.test.ts` where they would now be false; leave historical plan/spec files.
+3.8 Post-mortem (on `origin/main` since #8215): in `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md` Action Items, set the #7884 row's status to reflect this PR — `resolved by #8216 (keyword alarm)` on the keyword branch, `in progress: imported as status; keyword follow-up #<n>` on the `status` branch.
 
 ### Phase 4 — Issue housekeeping (automated)
 
 4.1 `gh issue create` "Better Stack Logs alert `Output utilization high` (id 2536305877) is live but undeclared", `--milestone "Post-MVP / Later"`, labels `infra-drift`, `domain/engineering`.
 4.2 Comment on #8140 that it duplicates #6645 (the fail-open lookup fixed here) and close it `not planned`; comment on #6645 that the `${each.key}` rows were false and are fixed by this PR.
 4.3 On the `status` branch only: the follow-up issue from the decision rule.
+4.4 `gh issue create` "Remove the app_health adoption import block and adopt_app_health_monitor once adoption is verified" (H-F: the block most likely aborts every plan in the root after a vendor-side deletion; removal also closes the Doppler tf-var override path), `priority/p2-medium`, milestone `Post-MVP / Later`, body citing AC17 as the precondition and naming the tftest override and Guard-free removal (a PR deleting both lines + the tftest override).
 
 ## Files to Edit
 
@@ -347,6 +388,7 @@ Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/
 ## Files to Create
 
 - `apps/web-platform/test/server/health-keyword-monitor-contract.test.ts`
+- `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh`
 - `knowledge-base/engineering/architecture/decisions/ADR-222-better-stack-database-readiness-pager-and-live-inventory.md` (ordinal provisional)
 - `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md`
 
@@ -364,6 +406,7 @@ Pipeline-written files that may also appear in the diff: `knowledge-base/INDEX.m
 | New `/ready` endpoint for a status monitor | New app surface + deploy for a property the body already carries. |
 | `terraform import` CLI in a dispatch job | Imperative, state-only, invisible to review. |
 | Ungated `import {}` | Breaks the credential-free `terraform test` leg; no off-switch. |
+| Keep the gated `import {}` permanently | Terraform v1.10.5 re-attempts a skipped import once refresh drops a deleted object, so the block would most likely abort every plan in the root; it is removed by a tracked follow-up after AC17 (it must exist for the adoption apply itself). |
 | Delete 4226366 and create a fresh keyword monitor | Loses 5.5 months of check history. |
 | Match live objects by tfstate ids | Needs state access and a second credential surface. |
 | Match monitors by name; regex-expand templated names | Renames read as unmanaged; loose patterns absorb look-alikes. |
@@ -399,27 +442,43 @@ failure_modes:
   - mode: "prd Supabase unreachable, REST check over 2 s, or service-role key invalid (body supabase:error)"
     detection: "keyword monitor fails; incident after confirmation_period"
     alert_route: "Better Stack email (owner + ops@)"
+    layer: "external synthetic check (Better Stack uptime monitor); no in-repo layer — deliberate carve-out, as ADR-204"
   - mode: "app.soleur.ai down / Cloudflare 52x / TLS failure / /health slower than 10 s"
     detection: "keyword absent; also betteruptime_monitor.app and the Sentry uptime monitors"
     alert_route: "Better Stack email; Sentry issue alert email"
+    layer: "external synthetic check (Better Stack uptime monitor); no in-repo layer — deliberate carve-out, as ADR-204"
   - mode: "/health serialization change makes the keyword unmatchable"
     detection: "health-keyword-monitor-contract.test.ts fails before merge"
     alert_route: "PR check failure"
+    layer: "workflow run log (PR check)"
   - mode: "vendor-side edit disarms the alarm (type, keyword, paused)"
     detection: "reconcile reason=monitor-config-drift"
     alert_route: "reconcile issue + [ALARM DISARMED] ops email; next infra merge apply re-converges"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
   - mode: "hand-created or duplicated Better Stack monitor or heartbeat"
     detection: "reconcile reason=unmanaged-live with id"
     alert_route: "reconcile issue labeled infra-drift + [INFRA-DRIFT] ops email"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
   - mode: "monitor 4226366 deleted vendor-side"
     detection: "reconcile surface=monitors reason=absent-live, then unmanaged-live or a restored id after the next apply (H-F)"
     alert_route: "reconcile issue + ops email"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
   - mode: "reconcile cannot read Better Stack (401/403/malformed), a declaration is unresolvable, or the script crashes"
     detection: "rc=1 in the reconcile step; unresolvable declarations also fail the PR via the real-infra-dir test"
     alert_route: "[ERROR] ops email + Sentry cron check-in status error"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
   - mode: "Better Stack API 5xx/429 after retries"
     detection: "SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE and no INVENTORY line (no page, existing contract; residual in ADR-222)"
     alert_route: "workflow warning annotation"
+    layer: "workflow run log (::warning::); residual — a persistent 5xx/429 suspends unmanaged and disarm detection with no page (ADR-222)"
+  - mode: "adoption import or keyword PATCH refused, or the import aborts the targeted apply (H-F)"
+    detection: "workflow run log ::error:: in the apply step of apply-web-platform-infra.yml"
+    alert_route: "notify-apply-failure job -> notify-ops-email to ops on every non-green push run"
+    layer: "workflow run log + notify-ops-email"
+  - mode: "Phase 0.2 probe monitor left behind (trap delete failed)"
+    detection: "next probe run pre-sweep; reconcile surface=monitors reason=unmanaged-live with the probe id"
+    alert_route: "reconcile issue labeled infra-drift + [INFRA-DRIFT] ops email"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
 
 logs:
   where: "GitHub Actions logs for scheduled-terraform-drift.yml (reconcile-output.txt echoed) and apply-web-platform-infra.yml; Better Stack check history for monitor 4226366"
@@ -504,76 +563,108 @@ Everything ships in this PR. On the Phase 0.2 `status` branch, ADR-222 is author
 
 ### Guard 1 — health keyword monitor contract
 
-**Property.** Exactly one Terraform-declared Better Stack monitor watches `https://app.soleur.ai/health`; on the keyword branch its required keyword occurs in the served `/health` body exactly when the Supabase check succeeds; on either branch `/health` answers HTTP 200 in every database state.
+**Property.** Exactly one Terraform-declared Better Stack monitor watches `https://app.soleur.ai/health`, its type is the committed `EXPECTED_BRANCH`; on the keyword branch its required keyword occurs in the served `/health` body exactly when the Supabase check succeeds; on either branch `/health` answers HTTP 200 in every database state.
 
-**Assembly.** (1) EVERY comment-stripped `apps/web-platform/infra/*.tf` file: every `resource "betteruptime_monitor"` block whose `url` is the health URL (census); (2) `apps/web-platform/server/health.ts` `buildHealthResponse` on the connected arm and both failed arms (non-2xx, thrown fetch); (3) `apps/web-platform/server/index.ts`, the brace-extracted `/health` branch only, for status code and serializer. Chokepoints: the declaration's keyword literal (read, never copied) and the one serialization site.
+**Assembly.** (1) EVERY comment-stripped `*.tf` returned by `loadInfraTf("apps/web-platform/infra")`: every `resource "betteruptime_monitor"` block whose `url` is the health URL (census); (2) `apps/web-platform/server/health.ts` `buildHealthResponse` on the connected arm and both failed arms (non-2xx, thrown fetch); (3) `apps/web-platform/server/index.ts`, the single brace-extracted `/health` branch, every `writeHead(` call and the serializer call in it; (4) the `EXPECTED_BRANCH` constant. Chokepoints: the declaration's keyword literal (read, never copied), the one serialization site, and the constant.
 
-**Mutation matrix:**
+**Mutation matrix** (each row asserts the exact `rule` list):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | `required_keyword = "\"supabase\": \"connected\""` (space after colon) | RED — absent from the connected body |
-| 2 | `health.ts`: `supabase: supabaseOk ? "ok" : "error"` | RED — absent from the connected body |
-| 3 | `health.ts`: `supabase: "connected"` unconditionally | RED — present in a failed body |
-| 4 | `index.ts` `/health` branch: `JSON.stringify(health, null, 2)` | RED |
-| 5 | `index.ts` `/health` branch: `writeHead(supabaseOk ? 200 : 503` | RED (both branches) |
-| 6 | Keyword branch: `monitor_type = "status"` while `required_keyword` stays | RED |
-| 7 | A second `betteruptime_monitor` on the same URL in a DIFFERENT infra `.tf` after the compliant first | RED — census finds two |
-| 8 | Checker dispatch: infra texts with zero health-URL blocks | RED — "0 monitors checked" is a violation |
+| 1 | `required_keyword = "\"supabase\": \"connected\""` (space after colon) | RED `keyword-absent-connected` |
+| 2 | Injected connected body with `"supabase":"ok"` | RED `keyword-absent-connected` |
+| 3 | Injected failed body containing `"supabase":"connected"` | RED `keyword-present-failed` |
+| 4 | `/health` branch: `JSON.stringify(health, null, 2)` | RED `serializer-not-compact` |
+| 5 | `/health` branch gains a second `res.writeHead(503` inside an `if` | RED `status-not-always-200` |
+| 6 | `EXPECTED_BRANCH = "keyword"` and the declaration says `monitor_type = "status"` with no `required_keyword` | RED `branch-downgraded` |
+| 7 | `monitor_type = "keyword"` with no `required_keyword` | RED `keyword-missing` |
+| 8 | `required_keyword = local.kw` | RED `keyword-unresolvable` |
+| 9 | A second health-URL `betteruptime_monitor` in a DIFFERENT `.tf` (temp dir with two files through `loadInfraTf`) | RED `census-not-one` |
+| 10 | Infra texts with zero health-URL blocks | RED `census-not-one` |
+| 11 | `index.ts` with zero or two `pathname === "/health"` anchors | RED `health-branch-not-one` |
 
-Harness rows: (H1) stub `buildHealthResponse` so all arms return the same object → RED; (H2) must-PASS: attributes reordered and a comment line containing `monitor_type = "status"` → GREEN; (H3) must-PASS: an unrelated monitor block with a different URL → GREEN; (H4) must-PASS: a `status`-branch declaration with no `required_keyword` → GREEN on the status contract.
+Harness rows: (H1) stub `buildHealthResponse` so every arm returns the same object → the real-file run goes RED; (H2) one real-file proof: a temp copy of `health.ts` with `supabaseOk ? "ok" : "error"`, loaded through the same builder path, goes RED, then the real file is GREEN; (H3) must-PASS: attributes reordered plus a comment line containing `monitor_type = "status"` → GREEN; (H4) must-PASS: an unrelated monitor block with a different URL → GREEN; (H5) must-PASS: `EXPECTED_BRANCH = "status"` with a status declaration → GREEN.
 
-**Anchor.** Keyword literal and serialization live in different files; one diff can change both consistently and stay green, which is correct because the monitor then still tracks the database. The outside anchor for the vendor's actual matching is the Phase 0.2 probe and the post-merge read-back (AC17).
+**Anchor.** Keyword literal and serialization live in different files; one diff can change both consistently and stay green, which is correct because the monitor then still tracks the database. A downgrade must also edit `EXPECTED_BRANCH`, which a reviewer sees in the test diff. The outside anchor for the vendor's matching is the Phase 0.2 probe and the post-merge read-back (AC17).
 
 ### Guard 2 — Better Stack live inventory reconcile
 
-**Property.** Every live Better Stack uptime monitor and heartbeat is accounted for by exactly one resolved Terraform declaration in the web-platform root (monitors by literal URL, heartbeats by resolved name), every declared instance is live, every declared monitor's live type, keyword and paused state equal its declaration, and every outcome is printed as a marker with ids and measured counts — never silently skipped.
+**Property.** Every live Better Stack uptime monitor and heartbeat is accounted for by exactly one resolved Terraform declaration in the web-platform root (monitors by literal URL, heartbeats by resolved name), every declared instance is live, every declared monitor's live type, keyword and paused state equal its declaration, and every outcome is printed as a marker whose routing tokens vendor text cannot forge — never silently skipped.
 
-**Assembly.** Live: every page of `GET /api/v2/monitors` and `GET /api/v2/heartbeats` through the single `fetchPaged` chokepoint. Declared: every comment-stripped `betteruptime_monitor` / `betteruptime_heartbeat` block in `RECONCILE_INFRA_DIR/*.tf` through `resourceBlocks`, with `for_each`/`count` through the single `resolveInfraVariables` resolver. Emission: `runReconcile`'s full marker list and combined code.
+**Assembly.** Live: every page of `GET /api/v2/monitors` and `GET /api/v2/heartbeats` through the single `fetchPaged` chokepoint (per-arm host+port+path pin, seen-URL set, page cap). Declared: every comment-stripped `betteruptime_monitor` / `betteruptime_heartbeat` block in `RECONCILE_INFRA_DIR/*.tf` through `resourceBlocks`, with `for_each`/`count` through the single `resolveInfraVariables` resolver. Emission: `runReconcile`'s full marker list, the `oneLine` sanitizer, and the combined code. Reconcile is dependency-injected (`runReconcile(infraDir, opts, manifest, { reconcileMonitors })`) so harness rows can replace it.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Live monitors gain `{id: 9, url: "https://example.soleur.ai/"}` | RED — `surface=monitors reason=unmanaged-live id=9`, rc 2 |
-| 2 | A second live monitor on `https://app.soleur.ai/health` after the compliant first | RED — `unmanaged-live detail=duplicate-url` for both ids |
-| 3 | The unmanaged monitor only on page 2 (`pagination.next` set on page 1) | RED — still reported |
+| 1 | Live monitors gain `{id: "9", url: "https://example.soleur.ai/"}` | RED — `surface=monitors reason=unmanaged-live id=9`, rc 2 |
+| 2 | A second live monitor on `https://app.soleur.ai/health` after the compliant first | RED — `unmanaged-live dup=url` for both ids |
+| 3 | The unmanaged monitor only on page 2 | RED — still reported |
 | 4 | Monitors endpoint `data: []` while declarations exist | RED — `surface=monitors reason=absent-live` per declared instance |
 | 5 | Live heartbeat `soleur-web-zot-consumer-web-1-old` | RED — `unmanaged-live` |
-| 6 | Live heartbeat `soleur-web-zot-consumer-web-3` (key not in the default) | RED — `unmanaged-live` |
+| 6 | Live heartbeat `soleur-web-zot-consumer-web-3` | RED — `unmanaged-live` |
 | 7 | Declared keyword monitor live with `monitor_type: status` / different `required_keyword` / `paused: true` | RED — one `monitor-config-drift` row per field |
 | 8 | Declaration present only inside a `#` comment | RED — live object `unmanaged-live` |
-| 9 | Heartbeat `name = "soleur-${local.x}"`, `for_each = local.hosts`, or `count = 2` | RED — rc 1 `unresolvable-declaration` |
-| 10 | Two declared monitors on the same URL | RED — rc 1 `unresolvable-declaration` |
-| 11 | Monitors read 401 while heartbeats read OK | RED — rc 1; no `INVENTORY` line |
-| 12 | Monitors row without a string `url` | RED — rc 1 (row not skipped) |
-| 13 | Reorder: monitors arm finds `unmanaged-live` while the heartbeats arm ERRORs | RED unless the unmanaged marker is still printed |
-| 14 | `github_webhook_failures`-shaped block with `count = var.betterstack_paid_tier ? 1 : 0` and a live monitor on its URL, default `false` | RED — `unmanaged-live` (a zero-instance declaration claims nothing) |
+| 9 | Heartbeat `name = "soleur-${local.x}"` | RED — rc 1 `unresolvable-declaration` |
+| 10 | Heartbeat `for_each = local.hosts` | RED — rc 1 `unresolvable-declaration` |
+| 11 | Heartbeat `count = 2` | RED — rc 1 `unresolvable-declaration` |
+| 12 | Two declared monitors on the same URL | RED — rc 1 `unresolvable-declaration` |
+| 13 | Monitors read 401 while heartbeats read OK | RED — rc 1; no `INVENTORY` line |
+| 14 | Monitors endpoint 5xx after retries | `UNREACHABLE surface=monitors`, no `OK surface=monitors`, no `INVENTORY` |
+| 15 | Monitors row whose `id` is `"9x"`, or without a string `url` | RED — rc 1 |
+| 16 | Monitors arm finds `unmanaged-live` while the heartbeats arm ERRORs | rc 1 AND both the heartbeats ERROR marker and the monitors `unmanaged-live` marker printed |
+| 17 | `count = var.betterstack_paid_tier ? 1 : 0` block (default `false`) and a live monitor on its URL | RED — `unmanaged-live` |
+| 18 | Vendor name `x id=1 reason=monitor-config-drift` on an unmanaged monitor (and a name with U+202E) | the line's pre-quote routing tokens are exactly `surface=monitors reason=unmanaged-live id=<real>`; no bidi char survives |
+| 19 | `pagination.next` pointing at `/api/v2/heartbeats` on the monitors arm, or repeating its own URL | RED — rc 1 |
 
-Harness rows: (H1) replace `reconcileMonitors` with `() => []` → rows 1, 2, 4, 7, 14 must go RED; (H2) must-PASS: live `soleur-web-zot-consumer-web-1`, `-web-2`, `soleur-web-nic-guard-web-1`, `-web-2` with templated declarations over a `web_hosts`-shaped default (nested object values + `validation {}` blocks) → GREEN; (H3) must-PASS: shuffled live arrays with unknown extra attributes → GREEN; (H4) must-PASS: live monitor renamed (same URL, type, keyword) → GREEN; (H5) must-PASS: status monitors whose live `required_keyword` is `""` against an undeclared keyword → GREEN; (H6) must-PASS: the real `apps/web-platform/infra` resolves with no `UnresolvableDeclaration`.
+Plus a property assertion over every fixture's output: each MISMATCH line has exactly one `resource=` or `id=` token before its first `"`.
+
+Harness rows: (H1) inject `reconcileMonitors: () => []` → rows 1, 2, 4, 7, 17 must go RED; (H2) must-PASS: live `soleur-web-zot-consumer-web-1`, `-web-2`, `soleur-web-nic-guard-web-1`, `-web-2` with templated declarations over a `web_hosts`-shaped default (nested object values + `validation {}` blocks) → GREEN; (H3) must-PASS: shuffled live arrays with unknown extra attributes → GREEN; (H4) must-PASS: live monitor renamed (same URL, type, keyword) → GREEN; (H5) must-PASS: status monitors whose live `required_keyword` is `""` or `null` against an undeclared keyword → GREEN; (H6) must-PASS and non-vacuous: the real `apps/web-platform/infra` resolves with no `UnresolvableDeclaration`, its declared monitors include `https://app.soleur.ai/health`, every templated heartbeat resolves to ≥1 instance, and no resolved name contains `${`.
 
 **Anchor.** The declared set comes from the same commit as the code, so a PR could declare a hand-made object's URL to silence the arm. Declaring it without an `import {}` makes the next apply create a second object on that URL, which row 2 reports — the outside anchor is live vendor state.
+
+### Guard 3 — reconcile issue-step routing
+
+**Property.** Every MISMATCH row reaches the reconcile issue even when another arm errors, each new routing key re-emails exactly once, unmanaged rows add the `infra-drift` label, and the issue step can neither create a duplicate nor fail silently.
+
+**Assembly.** The `run:` bodies and `if:` strings of the reconcile step (`has_mismatch` write), the label step, "Create or update reconcile issue", "Prepare reconcile email content", the email step and the Sentry check-in in the `heartbeat-live-reconcile` job — extracted by `yaml.safe_load` in `plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh`, run against a `gh` stub that logs argv, with temp `RUNNER_TEMP`/`GITHUB_OUTPUT`.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| W1 | `gh issue list` stub exits 1 | step exits non-zero; no `gh issue create` logged |
+| W2 | History has `resource=betteruptime_heartbeat.git_data_prd`; current row has `resource=betteruptime_heartbeat.git_data` | `escalate=true` |
+| W3 | Same key present at end of line / end of text in history | `escalate=false` |
+| W4 | Current `id=9`, history `id=94` | `escalate=true` |
+| W5 | A second new key after a first known key in the same run | `escalate=true` |
+| W6 | A `reason=unmanaged-live` row, existing issue | `gh issue edit <n> --add-label infra-drift` logged; with no existing issue, create carries both labels |
+| W7 | Parsed `if:` strings: label/issue steps lack `rc == '1' && … has_mismatch`, or email/Sentry steps lack `steps.reconcile_issue.outcome == 'failure'` | RED |
+
+Also asserted: a MISMATCH row with no key escalates; subject precedence rc1 > `monitor-config-drift` > `unmanaged-live` > default. Harness rows: (H1) a `gh` stub that logs nothing → W1, W6 must go RED; (H2) must-PASS: a vendor name containing spaces, `id=1` and backticks inside quotes → routing uses only the real pre-quote tokens.
+
+**Anchor.** Routing lives in the workflow file the test extracts from; a PR editing both could weaken both. The live anchor is AC18's post-merge script run and the existing issue history (#6645).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/health-keyword-monitor-contract.test.ts test/server/health-supabase.test.ts test/server/health.test.ts test/seo-config-rules.test.ts` passes; the contract test asserts its own Guard 1 row count in-file.
+- [ ] AC1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/health-keyword-monitor-contract.test.ts test/server/health-supabase.test.ts test/server/health.test.ts test/seo-config-rules.test.ts` passes; the contract test asserts its own Guard 1 row count in-file and `EXPECTED_BRANCH` equals the Phase 0.2 decision.
 - [ ] AC2 `.github/workflows/apply-web-platform-infra.yml` per-merge `apply` job carries `-target=betteruptime_monitor.app_health`; `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes.
 - [ ] AC3 For `apps/web-platform/infra`: `terraform fmt -check -recursive`, `terraform validate` and `terraform test` pass (the `infra-validation.yml` jobs are green on the PR).
 - [ ] AC4 Phase 0.2 result recorded in the PR body (POST status, `up` then `down` readings, id, 404 confirmation — or the recorded refusal), and the declared `monitor_type` in `uptime-alerts.tf` matches the decision rule's branch.
 - [ ] AC5 Phase 0.3 output recorded in the PR body: `Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.`, no `-/+`, attribute diff limited to the branch's named attributes.
-- [ ] AC6 `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts` passes with every Guard 2 row, H1-H6 and the updated `seen` expectation.
-- [ ] AC7 `actionlint .github/workflows/scheduled-terraform-drift.yml` is clean and every changed `run:` body passes `bash -n` after extraction.
+- [ ] AC6 `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts` passes with every Guard 2 row (1-19), H1-H6 and the updated `seen` expectation.
+- [ ] AC7 `actionlint .github/workflows/scheduled-terraform-drift.yml` is clean, every changed `run:` body passes `bash -n` after extraction, and `bash plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh` passes with every Guard 3 row.
 - [ ] AC8 Phase 2.4 local read-only run output in the PR body: no line containing `${each.key}`; `OK surface=monitors` with `4226366` in `matched=`; an `INVENTORY` line whose counts equal the lengths of the two live lists read through all pages in the same minute; zero `unmanaged-live`.
 - [ ] AC9 `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` and `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` pass.
 - [ ] AC10 The `uptime-alerts.tf` header no longer asserts that heartbeats "are NOT pooled" or that the www monitor "is the 4th of 10"; it names `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY` and records #7884's resolution (read the comment block, not a bare-token grep).
 - [ ] AC11 ADR-204 `## Residual gap` no longer describes 4226366 as unmanaged and links ADR-222; its `## Consequences` no longer says "4 monitors of 10"; ADR-117 carries `### Amendment (2026-09-15, #7884)`; ADR-149 carries the INVENTORY pointer.
 - [ ] AC12 ADR-222 exists with the Phase 3.1 content (status `adopting` on the `status` branch); its ordinal is free across all `origin/*` refs immediately before merge; `bun test plugins/soleur/test/adr-frontmatter-ordinal-guard.test.ts` passes.
-- [ ] AC13 `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` exists; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes; it contains no `ssh ` command, covers the service-role-key cause and the H-F remedy, and cites the post-mortem path as inline code.
+- [ ] AC13 `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` exists; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes; it contains no `ssh ` command, covers the service-role-key cause and the H-F remedy, and links the post-mortem.
 - [ ] AC14 `model.c4` edges updated per Phase 3.6; `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
 - [ ] AC15 PR body uses `Ref #7884`, not `Closes`; on the `status` branch the PR title and body state that database outages remain undetected until the follow-up.
-- [ ] AC16 Phase 4 actions done: Logs-alert issue exists with a milestone; #8140 closed as a duplicate of #6645 with a comment; on the `status` branch, the keyword follow-up issue exists with milestone `Phase 4: Validate + Scale` and `priority/p1-high`.
+- [ ] AC16 Phase 4 actions done: Logs-alert issue exists with a milestone; #8140 closed as a duplicate of #6645 with a comment; the import-block removal issue (Phase 4.4) exists; on the `status` branch, the keyword follow-up issue exists with milestone `Phase 4: Validate + Scale` and `priority/p1-high`; the post-mortem #7884 row status is updated (Phase 3.8).
 
 ### Post-merge (automated, `/ship` postmerge)
 
@@ -595,12 +686,18 @@ Harness rows: (H1) replace `reconcileMonitors` with `() => []` → rows 1, 2, 4,
 **Status:** reviewed — approve with conditions
 **Assessment:** Conditions applied: C1 the probe is attempted, not silently skipped (Phase 0.2); C2 the `status`-branch follow-up goes on `Phase 4: Validate + Scale`, `priority/p1-high`; C3 a `status`-branch PR and ADR say database outages remain undetected, and #7884 stays open; C4 User-Brand Impact names the `status`-branch exposure. C5 (email is not a page): recorded in ADR-222 Consequences; push stays off, matching every sibling. Shipping import-as-status alone is acceptable only under C1-C3.
 
+### Deepen pass (2026-09-15)
+
+**Status:** reviewed
+**Assessment:** security-sentinel — vendor text could forge routing tokens (`url` unquoted; token regex quote-blind) and invisible/bidi characters survived `oneLine`; probe sweep name mismatch and unchecked deletes; no transport confinement prescribed; pagination could switch endpoints or loop. All folded (marker grammar, sanitizer, per-arm pin, page cap, probe credential rules, untrusted-data framing, re-read-before-act remedy, random heredoc delimiter, `%22` encoding). test-design-reviewer (7.4/10) — Guard 1 branch derived from the declaration allowed a silent downgrade (now `EXPECTED_BRANCH`); rows 2-3 were not drivable (now injected bodies + one real-file proof); per-row rule ids; extractor rows; non-vacuous H6; split rows; escalation-key workflow suite reinstated narrowly (W1-W7) with subject precedence and keyless escalation decided. observability-coverage-reviewer — layer citations added; apply-failure and probe-orphan modes added with `notify-apply-failure`; rc-1 masking fixed with `has_mismatch`; 429 residual recorded. framework-docs-researcher — Terraform v1.10.5 import skip is state-keyed, so H-F is likely-abort; import-block removal tracked (Phase 4.4). Verify-the-negative/self-audit — all negative claims confirmed; no surviving references to cut mechanisms; row/AC counts consistent. PR #8215 merged mid-pass; Phase 3.8 added.
+
 No Product/UX gate: no UI surface in Files to Create/Edit.
 
 ## Test Scenarios
 
-- Contract test: Guard 1 rows 1-8, H1-H4.
-- Reconcile unit tests: Guard 2 rows 1-14, H1-H6; existing cases still pass (fed-but-paused, absent-live, logs_alert arm, host pinning, redirect refusal, retry/unreachable) with the one updated `seen` list.
+- Contract test: Guard 1 rows 1-11, H1-H5.
+- Issue-step suite: Guard 3 rows W1-W7.
+- Reconcile unit tests: Guard 2 rows 1-19, H1-H6; existing cases still pass (fed-but-paused, absent-live, logs_alert arm, host pinning, redirect refusal, retry/unreachable) with the one updated `seen` list.
 - Workflow: `actionlint`; extracted `run:` bodies `bash -n`.
 - Terraform: `validate`, `test` with the gate off; Phase 0.3 targeted plan with the gate on.
 - Live, read-only: AC8 before merge; AC17/AC18 after.
@@ -609,7 +706,8 @@ No Product/UX gate: no UI surface in Files to Create/Edit.
 
 - **Workspace refuses the keyword type or matches differently.** Phase 0.2 gate; `status` branch with P1 follow-up otherwise.
 - **Refused PATCH wedges later infra merges.** Prevented by the same gate; the remedy is reverting `monitor_type` in a PR.
-- **Import block after vendor-side deletion (H-F).** Reported by the reconcile; the gate variable is the off-switch; runbook has the steps.
+- **Import block after vendor-side deletion (H-F, likely abort per Terraform source).** Reported by the reconcile; any aborted apply emails via `notify-apply-failure`; the gate variable is the off-switch (runbook steps); the block and variable are removed by the Phase 4.4 follow-up once AC17 passes.
+- **Vendor text forging routing tokens or hiding in invisible characters.** Quoted-last vendor fields, pre-quote token extraction, numeric ids, bidi strip, 200-char cap; Guard 2 row 18 and Guard 3 H2.
 - **Deploy windows.** Container restarts give Cloudflare 52x for seconds; `confirmation_period = 180` exceeds them.
 - **False `unmanaged-live`.** Exact resolution, URL matching, H2/H4/H5 must-pass rows, and AC8 on live data before merge.
 - **Parser breaks on a harmless refactor.** Guard 2 H6 fails the PR before the scheduled run sees it.
@@ -624,4 +722,4 @@ No Product/UX gate: no UI surface in Files to Create/Edit.
 - The existing reconcile row prefixes are a wire contract quoted by ADR-218 and `monitor-send-failed-alert.md`; new fields are appended, never inserted.
 - `mock_provider` does not mock `import` blocks; any import block in this root needs a gate variable set `false` in the tftest.
 - Import targets are validated before `-target` pruning (`seo-config-rules.tf` comment): a bad import id aborts the whole targeted apply on the adoption run. Phase 0.3 is the pre-merge check.
-- The post-mortem file is added by PR #8215; cite it as inline code until that PR merges.
+- The post-mortem was added by PR #8215, merged during planning; this branch must merge `origin/main` before editing or linking it (Phase 0.0).
