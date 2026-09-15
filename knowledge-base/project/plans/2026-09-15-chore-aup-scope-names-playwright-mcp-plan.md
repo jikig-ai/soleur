@@ -17,6 +17,23 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this branch.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-15
+**Sections enhanced:** 4 (Implementation, Acceptance Criteria, Risks & Sharp Edges, Research Insights)
+**Agents used:** clo (planning ruling), learnings-researcher, functional-discovery, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer (plan-review), legal-compliance-auditor (deepen cross-document audit). The skill's "run every agent" fan-out was deliberately scoped to these for a one-bullet notice-document edit (operator: keep it small); every mechanical deepen gate below ran in full.
+
+### Key Improvements
+
+1. Plan-review cut six non-load-bearing ACs and the Test Scenarios section, fixed an AC that could never fail (PR-token grep), moved every diff check to `origin/main...HEAD`, scoped the addendum check so the pre-existing A4 "DISCHARGED, unchanged" cannot satisfy it, and added `probe-legal-corpus-truth.sh` plus the three lint unit arms to the gate set.
+2. Last Updated annotation reworded "adds" → "now names" (auditor: "adds" reads as a new capability; the change is a Tier 2 clarification).
+3. Single-sourced the `TC_VERSION` reasoning (Domain Review in the plan; tier line in the PR body only).
+
+### New Considerations Discovered
+
+- `apps/web-platform/server/agent-runner.ts` reads the plugin manifest's `mcpServers`, so if #8156 makes the plugin register Playwright, the hosted runner would inherit it — the neutral "a … server driven by Soleur agents or skills" wording stays true either way.
+- Auditor suggestions considered and declined (see Risks & Sharp Edges).
+
 ## Overview
 
 The Acceptable Use Policy's Section 2 scope list names browser automation through the
@@ -63,7 +80,7 @@ None.
    `- Browser automation via the agent-browser subsystem or a Playwright MCP server driven by Soleur agents or skills;`
 2. Canonical frontmatter: `last-updated: 2026-09-13` → `last-updated: <WORK_DATE>`.
 3. Both body `**Last Updated:**` lines: replace only the prefix `**Last Updated:** September 13, 2026 *(` with
-   `**Last Updated:** <Long WORK_DATE> *(Section 2 scope adds browser automation through a Playwright MCP server.)* Previous: September 13, 2026 *(`
+   `**Last Updated:** <Long WORK_DATE> *(Section 2 scope now names browser automation through a Playwright MCP server.)* Previous: September 13, 2026 *(`
    — the ~3 kB history tail is not retyped. The parenthetical says WHAT changed only: no rationale, no PR/issue tokens (public doc).
 4. Mirror hero: `| Last Updated September 13, 2026</p>` → `| Last Updated <Long WORK_DATE></p>`.
 5. Last: `sha256sum docs/legal/acceptable-use-policy.md` → paste into `LEGAL_DOC_SHAS["acceptable-use-policy"]`. Any later canonical tweak means repinning.
@@ -170,7 +187,7 @@ discoverability_test:
 All `git diff` checks run after committing, against the merge base (`origin/main...HEAD`), so a moving `main` cannot flip them.
 
 - [ ] AC1 — New bullet present exactly once per surface, old bullet gone: `grep -cxF -- '- Browser automation via the agent-browser subsystem or a Playwright MCP server driven by Soleur agents or skills;' docs/legal/acceptable-use-policy.md plugins/soleur/docs/pages/legal/acceptable-use-policy.md` → `:1` each; `grep -cxF -- '- Browser automation via the agent-browser subsystem;' <same two files>` → `:0` each.
-- [ ] AC2 — Canonical dated: `grep -c '^last-updated: <WORK_DATE>$' docs/legal/acceptable-use-policy.md` → 1; `grep -cF '**Last Updated:** <Long WORK_DATE> *(Section 2 scope adds browser automation through a Playwright MCP server.)* Previous: September 13, 2026 *(Harness-neutral' docs/legal/acceptable-use-policy.md` → 1. (Mirror body/hero parity is AC5's vitest.)
+- [ ] AC2 — Canonical dated: `grep -c '^last-updated: <WORK_DATE>$' docs/legal/acceptable-use-policy.md` → 1; `grep -cF '**Last Updated:** <Long WORK_DATE> *(Section 2 scope now names browser automation through a Playwright MCP server.)* Previous: September 13, 2026 *(Harness-neutral' docs/legal/acceptable-use-policy.md` → 1. (Mirror body/hero parity is AC5's vitest.)
 - [ ] AC3 — The new public annotation carries no PR/issue token: `sed -n 's/^\*\*Last Updated:\*\* \(.*\) Previous: September 13, 2026.*/\1/p' docs/legal/acceptable-use-policy.md plugins/soleur/docs/pages/legal/acceptable-use-policy.md | grep -c '#[0-9]'` → 0 (capture stops before older history, which legitimately contains `PR #4949`).
 - [ ] AC4 — SHA pin: `git diff -U0 origin/main...HEAD -- apps/web-platform/lib/legal/legal-doc-shas.ts | grep -cE '^[+-] '` → 2 (only the AUP value line).
 - [ ] AC5 — Gates green, own invocations: `bash apps/web-platform/scripts/check-tc-document-sha.sh`; `bash scripts/lint-legal-mirror-drift-baseline.sh`; `bash scripts/lint-legal-scope-block-placement.sh`; `bash scripts/lint-legal-registers.sh`; `bash scripts/probe-legal-corpus-truth.sh`; `bash scripts/lint-legal-scope-block-placement.test.sh`; `bash scripts/lint-legal-mirror-drift-baseline.test.sh`; `bash scripts/lint-legal-registers.test.sh` — each exits 0; `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts` → 2 files passed, 0 failed. (Plan-time baseline 2026-09-15: all eight scripts exit 0; vitest 43/43.)
@@ -201,7 +218,16 @@ No Product/UX gate: no UI surface in Files to Edit (Eleventy legal markdown pros
 - The `**Last Updated:**` line is one ~3 kB line; replacing only its short prefix avoids retyping history. Body-equivalence catches a canonical/mirror mismatch but not an identical corruption on both — review the diff hunk.
 - `WORK_DATE` may differ from the plan date; every AC uses the placeholder.
 - #8156 may land first; the ruled wording is deliberately neutral to it.
+- Declined auditor wording suggestions (deepen pass): (a) "a Playwright MCP server **that you configure**" — false once #8156 ships a default registration, which the CLO ruling expressly guards against; Privacy Policy §5.4 "initiated by you, configured by you" stays consistent because the user initiates the Soleur session that drives the server. (b) "a browser-automation MCP server (such as Playwright MCP)" — broader than the issue asks; the §2 list is already non-exhaustive ("including but not limited to"), and naming the concrete surface is the stated fix. Both are wording taste against a binding CLO ruling; recorded here, not persisted as a challenge.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6.
+
+### Deepen-plan verification record (2026-09-15)
+
+- Phase 4.6: `## User-Brand Impact` present; threshold `none` with a `threshold: none, reason:` scope-out (required: `apps/web-platform/lib/legal/` matches `SENSITIVE_PATH_RE`). PASS.
+- Phase 4.7: all five Observability fields present with children; no `ssh`; `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh` on the `discoverability_test.command` → exit 0. PASS.
+- Phase 4.8: PAT-shape sweep → no match. 4.5/4.55/4.9/4.10/4.11: not triggered (no network symptom, downtime op, UI surface, store/connection, or guard).
+- Verify-the-negative: plugin manifest registers no Playwright server (`plugins/soleur/.claude-plugin/plugin.json` `mcpServers` = context7, cloudflare, vercel, stripe); no Playwright reference under `apps/web-platform/server/` outside `server/inngest/` (Jikigai-internal cron fleet); `LEGAL_DOC_SHAS` has no consumer besides `check-tc-document-sha.sh`; no public page outside `docs/legal/acceptable-use-policy.md` names agent-browser; the Eleventy mirror has no `last-updated` frontmatter key (only the hero `<p>` and body line carry dates).
+- Citations verified live: #7947 CLOSED, #7980 CLOSED, #8156 OPEN, #8119 MERGED (moved the posture AUP row 2026-08-11 → 2026-09-13 — precedent holds), #7955 MERGED, #8207 OPEN draft, #7981 OPEN. No AGENTS rule IDs cited in the plan body. Cited learning paths exist.
 
 ## Gates Skipped (with reason)
 
