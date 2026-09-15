@@ -332,12 +332,18 @@ function heredocSpan(text: string, open: number): { bodyStart: number; bodyEnd: 
   const m = /^<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\n/.exec(text.slice(open, open + 256));
   if (!m) return null;
   const tag = m[1];
-  const closer = new RegExp(`\\n[ \\t]*${tag}[ \\t]*(?=\\n|$)`, "g");
-  closer.lastIndex = open + m[0].length - 1;
-  const c = closer.exec(text);
-  if (!c) return null;
   const bodyStart = open + m[0].length;
-  return { bodyStart, bodyEnd: Math.max(bodyStart, c.index), end: c.index + c[0].length };
+  // A line scan, not `new RegExp(tag)`: the tag comes from the scanned text, and building a pattern
+  // from it is a data-to-regex flow even though the capture above admits identifier characters only.
+  for (let nl = bodyStart - 1; nl !== -1; ) {
+    const next = text.indexOf("\n", nl + 1);
+    const lineEnd = next === -1 ? text.length : next;
+    if (text.slice(nl + 1, lineEnd).replace(/^[ \t]+|[ \t]+$/g, "") === tag) {
+      return { bodyStart, bodyEnd: Math.max(bodyStart, nl), end: lineEnd };
+    }
+    nl = next;
+  }
+  return null;
 }
 
 /**
