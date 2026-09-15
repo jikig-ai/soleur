@@ -299,6 +299,25 @@ ensure_network() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# ensure_snippets_dir — pre-create the Studio SQL-snippets bind-mount source
+# as the invoking user, so the container runtime never has to.
+#
+# On Linux, a bind-mount source directory that does not yet exist is created
+# by the DAEMON (root), independent of which user the container process runs
+# as. The Supabase CLI bind-mounts `supabase/snippets` into Studio on every
+# `start`, so a worktree that has never run the stack gets a root:root
+# directory the very first time it does — and an unprivileged `rm -rf` on the
+# worktree afterward cannot unlink entries inside it (#7114). A bind-mount
+# source that already exists keeps its existing ownership, so creating it as
+# the current user before the daemon ever sees a missing path is the
+# producer-side fix — this closes the class rather than remediating it after
+# the fact.
+# ---------------------------------------------------------------------------
+ensure_snippets_dir() {
+  mkdir -p "${SCRIPT_DIR}/../supabase/snippets"
+}
+
 main() {
   case "${1:-}" in
     ""|--help|-h|help)
@@ -314,7 +333,8 @@ main() {
         echo "supabase-local: the 'supabase' CLI is not on PATH." >&2
         exit 127
       }
-      # Only ensure the network for verbs that can CREATE containers.
+      # Only ensure the network (and the snippets bind-mount source) for verbs
+      # that can CREATE containers.
       #
       # LOAD-BEARING: `docker network rm` fails while containers are attached,
       # so running ensure_network on `stop` aborted with "refusing to start"
@@ -325,7 +345,7 @@ main() {
       # any state.
       case "${1:-}" in
         stop|status) ;;
-        *) ensure_network ;;
+        *) ensure_network; ensure_snippets_dir ;;
       esac
       # --network-id MUST precede "$@" so subcommands using `--` passthrough
       # (e.g. `db lint -- --strict`) still parse correctly.
