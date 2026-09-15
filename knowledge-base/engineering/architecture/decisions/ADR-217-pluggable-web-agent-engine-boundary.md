@@ -105,6 +105,9 @@ cross-thread prompts and identities remain excluded until their isolation model
 is qualified.
 Persisted review-mode items emit only review-started/review-completed progress;
 review targets and findings remain excluded from replay payloads.
+Persisted context-compaction items emit a fixed `Context compacted` progress
+message keyed by their bounded item identity; compaction summaries, reasoning,
+and source context remain excluded from replay payloads.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or

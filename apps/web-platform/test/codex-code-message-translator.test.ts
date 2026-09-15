@@ -250,6 +250,21 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("replays context compaction as bounded metadata without reasoning content", () => {
+    expect(translateCodexPersistedItem({
+      type: "contextCompaction",
+      id: "compact-1",
+      summary: "private reasoning summary",
+      input: "private context",
+    })).toEqual([
+      {
+        sourceId: "compaction:compact-1",
+        payload: { type: "progress", message: "Context compacted" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "contextCompaction", id: "bad\ncompaction" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",

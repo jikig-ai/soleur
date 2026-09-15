@@ -203,6 +203,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
     }];
   }
 
+  if (type === "contextCompaction") {
+    return [{
+      sourceId: `compaction:${itemId}`,
+      payload: { type: "progress", message: "Context compacted" },
+    }];
+  }
+
   if (type === "mcpToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `mcp:${itemId}:status`,
