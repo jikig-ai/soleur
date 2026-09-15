@@ -65,9 +65,15 @@
 # all ABORT. This gate authorizes creating the store that holds user source code; "I could
 # not check" must never read as "it is fine".
 #
+# ROOT-KEY ARM (#8189, ADR-220, Guard 4), the last check before PASS: git_data_root_key_arm
+# (git-data-root-key-arm.sh) requires the born host to carry exactly {default key, root key},
+# the root key resolved in prior_state and hashing to the committed anchor named by
+# GIT_DATA_ROOT_KEY_FINGERPRINT_FILE. Unset or empty reads as a missing anchor and refuses.
+# The allow-set literal below is unchanged.
+#
 # Usage:  source tests/scripts/lib/plan-gate-preamble.sh
 #         source tests/scripts/lib/git-data-host-birth-gate.sh
-#         git_data_host_birth_gate <plan-json>          # 0=PASS, 1=ABORT
+#         GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=<path> git_data_host_birth_gate <plan-json>   # 0=PASS, 1=ABORT
 
 # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
 if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
@@ -75,6 +81,11 @@ if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   # shellcheck source=/dev/null
   source "${_GDHBG_DIR}/plan-gate-preamble.sh"
 fi
+
+# Sourced UNCONDITIONALLY, as in git-data-host-replace-gate.sh: a declare -F guard would let
+# a same-named stub stand in for the arm; a failed source makes the call return 127 and refuse.
+# shellcheck source=tests/scripts/lib/git-data-root-key-arm.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm.sh"
 
 # The birth fan-out, defined ONCE.
 #
@@ -560,6 +571,8 @@ git_data_host_birth_gate() {
     echo "git_data_host_birth_gate: ABORT — hcloud_firewall_attachment.git_data does not end this plan bound to exactly one server. It is the ONLY thing binding the zero-rule deny-all hcloud_firewall.git_data to the host, so without it the store boots NAKED on its public IPv4/IPv6 with every connected user's source code on it. This arm asserts the OUTCOME (server_ids ends at length 1) rather than a verb, because the attachment's terraform ID is the FIREWALL's id: when a host is destroyed outside terraform the attachment survives refresh with server_ids emptied, so a legitimate re-birth plans an UPDATE here, not a create. Whether or not server_ids is known at plan time (it is unknown on every first birth), the plan's configuration must show the attachment referencing exactly hcloud_server.git_data — a fan-out, a literal list, a reference to some other pre-existing host, or a plan with no configuration block all fail this check, as does an omitted attachment."
     return 1
   fi
+
+  git_data_root_key_arm "$plan_json" "${GIT_DATA_ROOT_KEY_FINGERPRINT_FILE:-}" || return 1
 
   echo "git_data_host_birth_gate: PASS — scoped birth of ${want_addr} permitted (exactly 1 host create, its 3 entailed members created + its firewall attachment bound to exactly 1 server, all 15 presence members create-or-no-op, 0 destroys, 0 volume destroys, 0 firewall rules, 0 passphrase mutations, 0 reboots, 0 out-of-scope changes)."
   return 0

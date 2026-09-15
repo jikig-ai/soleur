@@ -86,6 +86,10 @@ on:
       # untouched, and modules/git-data-userdata/ is deliberately NOT excluded, because the
       # production host really does render from it.
       - "!apps/web-platform/infra/rung2-rehearsal/**"
+      # (#8189, ADR-220) Same reason: git-data-root-key/ is its own root with its own state key,
+      # applied only by apply-git-data-root-key.yml. The committed anchor
+      # git-data-root-key.fingerprint sits OUTSIDE that directory and still fires this workflow.
+      - "!apps/web-platform/infra/git-data-root-key/**"
       - ".github/workflows/apply-web-platform-infra.yml"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
@@ -4235,6 +4239,8 @@ jobs:
           # Sourced gate — the SAME bytes tests/scripts/test-git-data-host-replace-gate.sh exercises.
           # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
+          # (#8189) The gate's root-key arm compares the resolved root key to this committed anchor.
+          export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_replace_gate tfplan.json; then
             echo "::error::git-data-host-replace destroy-guard ABORTED: the plan is not the exact scoped git-data-host recreate. Refusing to apply. Specifically verify: BOTH data volumes (hcloud_volume.git_data + hcloud_volume.git_data_luks) are preserved (no delete/forget/replace), the LUKS passphrase (random_password.git_data_luks + doppler_secret.git_data_luks_key) is untouched, the private NIC (hcloud_server_network.git_data) is re-created, BOTH store attachments are re-created, and the deny-all FIREWALL (hcloud_firewall_attachment.git_data) is re-attached. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
@@ -6115,6 +6121,8 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/plan-gate-preamble.sh"
           # shellcheck source=tests/scripts/lib/git-data-host-birth-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-birth-gate.sh"
+          # (#8189) The gate's root-key arm compares the resolved root key to this committed anchor.
+          export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"
           if ! git_data_host_birth_gate tfplan.json; then
             echo "::error::git-data-host-create birth gate ABORTED: the plan is not the exact scoped birth of hcloud_server.git_data. The gate's message above names WHICH arm refused. Nothing has been created. NO [ack-destroy] bypass on this path — this gate does NOT borrow git-data-host-replace-gate.sh, whose contract is the opposite of this one."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2

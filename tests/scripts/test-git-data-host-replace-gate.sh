@@ -36,6 +36,33 @@ fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# ── #8189 root-key arm fixtures ───────────────────────────────────────────────────
+# The gate now ends in git_data_root_key_arm (tests/scripts/lib/git-data-root-key-arm.sh),
+# so every PASS fixture carries what that arm reads: data.hcloud_ssh_keys.git_data_root
+# resolved in prior_state, hcloud_ssh_key.default in prior_state, both ids on the recreated
+# server, and a committed-anchor fingerprint file. The key is SYNTHESIZED here with ssh-keygen
+# into $TMP and deleted on exit (cq-test-fixtures-synthesized-only) — never committed.
+command -v ssh-keygen >/dev/null 2>&1 || { echo "FATAL: ssh-keygen is required for the root-key arm fixtures" >&2; exit 2; }
+ssh-keygen -q -t ed25519 -N '' -C 'synthesized-root-key-under-test' -f "$TMP/root-key" || { echo "FATAL: ssh-keygen (root)" >&2; exit 2; }
+ssh-keygen -q -t ed25519 -N '' -C 'synthesized-impostor-key' -f "$TMP/other-key" || { echo "FATAL: ssh-keygen (other)" >&2; exit 2; }
+ROOT_KEY_PUB="$(<"$TMP/root-key.pub")"
+OTHER_KEY_PUB="$(<"$TMP/other-key.pub")"
+ssh-keygen -l -E sha256 -f "$TMP/root-key.pub" | awk '{print $2}' > "$TMP/git-data-root-key.fingerprint"
+export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$TMP/git-data-root-key.fingerprint"
+# The harness's mutation helpers source a COPY of the gate from $TMP, and the gate sources the
+# arm from its own directory — so the arm must sit beside that copy.
+cp "${DIR}/lib/git-data-root-key-arm.sh" "$TMP/git-data-root-key-arm.sh"
+
+# root_key_prior_state [public_key] — prior_state with the data source resolved to one key
+# (id NUMBER 4242) and hcloud_ssh_key.default (id "1111").
+root_key_prior_state() {
+  jq -nc --arg pub "${1:-$ROOT_KEY_PUB}" '{values:{root_module:{resources:[
+    {address:"data.hcloud_ssh_keys.git_data_root",mode:"data",type:"hcloud_ssh_keys",name:"git_data_root",
+     values:{with_selector:"soleur-role=git-data-root",ssh_keys:[{id:4242,name:"soleur-git-data-root",fingerprint:"00:11:22:33",labels:{"soleur-role":"git-data-root"},public_key:$pub}]}},
+    {address:"hcloud_ssh_key.default",mode:"managed",type:"hcloud_ssh_key",name:"default",values:{id:"1111"}}]}}}'
+}
+PRIOR_STATE="$(root_key_prior_state)"
+
 # A resource_change object with the given address + actions array.
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 
@@ -43,13 +70,14 @@ rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 # (delete+create); firewall_attachment UPDATE-in-place (server_ids re-point). The two data
 # volumes + the LUKS passphrase are UNTARGETED → they do not appear in resource_changes at all
 # (preserved by omission). Test 8 exercises the explicit-no-op variant.
-SERVER_REPLACE="$(rc_obj 'hcloud_server.git_data' '"delete","create"')"
+# The recreated server carries BOTH key ids as strings (#8189): default "1111" and root 4242.
+SERVER_REPLACE='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["1111","4242"]},"after_unknown":{"ssh_keys":[false,false]}}}'
 NET_REPLACE="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
 VA_LUKS_REPLACE="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
 FW_UPDATE="$(rc_obj 'hcloud_firewall_attachment.git_data' '"update"')"
 
-write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
+write_plan() { printf '{"prior_state":%s,"resource_changes":[%s]}' "${2:-$PRIOR_STATE}" "$1" > "$TMP/plan.json"; }
 
 # The canonical PASS fixture (referenced by later single-mutation tests).
 PASS_SET="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
@@ -304,6 +332,46 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ── #8189: the root-key arm (Guard 4) is wired into THIS gate ─────────────────────
+# The arm's own suite (test-git-data-root-key-arm.sh) holds the full matrix; these rows prove
+# the replace gate reaches it on an otherwise-perfect scoped recreate.
+check_rk() {  # <name> <want_rc> <needle> — runs the gate on $TMP/plan.json
+  gate_check "$1" git_data_host_replace_gate "$2" "$3" "$TMP/plan.json"
+}
+
+write_plan "${PASS_SET}"
+check_rk "RK1 the scoped recreate carrying both key ids => PASS through the root-key arm" 0 "git_data_root_key_arm: PASS"
+
+write_plan "${PASS_SET}" "$(root_key_prior_state "$OTHER_KEY_PUB")"
+check_rk "RK2 [Guard 4 fingerprint] right name and label, different key => refused" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint"
+
+write_plan "${PASS_SET}" "$(root_key_prior_state | jq -c '.values.root_module.resources |= map(select(.address != "data.hcloud_ssh_keys.git_data_root"))')"
+check_rk "RK3 [Guard 4 presence] data source absent from prior_state => refused" 1 "verdict=git_data_root_key_not_in_create reason=data_source_absent"
+
+SERVER_DEFAULT_ONLY='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["1111"]},"after_unknown":{"ssh_keys":[false]}}}'
+write_plan "${SERVER_DEFAULT_ONLY},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+check_rk "RK4 [Guard 4 membership] recreated server carries only the default key => refused" 1 "verdict=git_data_root_key_not_in_create reason=server_keys"
+
+SERVER_REORDERED='{"address":"hcloud_server.git_data","change":{"actions":["delete","create"],"after":{"ssh_keys":["4242","1111"]},"after_unknown":{"ssh_keys":[false,false]}}}'
+write_plan "${SERVER_REORDERED},${NET_REPLACE},${VA_REPLACE},${VA_LUKS_REPLACE},${FW_UPDATE}"
+check_rk "RK5 reordered ssh_keys (numeric id in the data source, strings on the server) => PASS" 0 "git_data_root_key_arm: PASS"
+
+write_plan "${PASS_SET}"
+_rk_saved="$GIT_DATA_ROOT_KEY_FINGERPRINT_FILE"
+export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$TMP/absent.fingerprint"
+check_rk "RK6 missing fingerprint file => refused with reason=fingerprint_file_missing" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint_file_missing"
+unset GIT_DATA_ROOT_KEY_FINGERPRINT_FILE
+check_rk "RK7 fingerprint env unset => refused with reason=fingerprint_file_missing (fail closed)" 1 "verdict=git_data_root_key_not_in_create reason=fingerprint_file_missing"
+export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$_rk_saved"
+
+# SOLE-GUARD: delete the arm call from a COPY of the gate and the fingerprint-mismatch plan
+# PASSES — every counter in the gate is satisfied, so the arm is the only thing refusing it.
+write_plan "${PASS_SET}" "$(root_key_prior_state "$OTHER_KEY_PUB")"
+cp "$TMP/plan.json" "$TMP/rk-mismatch.json"
+gate_mutate_and_check "RK8 root-key arm call (the replace gate's only check on the key set)" \
+  '/^    git_data_root_key_arm "\$plan_json" /d' \
+  git_data_host_replace_gate "$TMP/rk-mismatch.json"
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -321,11 +389,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 20 ]]; then
+if [[ "$_ran" -lt 31 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 20. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 31. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 20)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 31)\n' "$_ran"
 fi
 
 echo ""

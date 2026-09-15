@@ -68,8 +68,14 @@
 # named "must be preserved" backstops (operator-legible + GDPR-relevant: the LUKS volume is the
 # Art.17 at-rest store + rollback backstop).
 #
+# ROOT-KEY ARM (#8189, ADR-220, Guard 4). A plan that passes every counter above is still
+# refused unless git_data_root_key_arm (git-data-root-key-arm.sh) proves the recreated host
+# carries exactly {default key, root key}, the root key resolved in prior_state and hashing
+# to the committed anchor named by GIT_DATA_ROOT_KEY_FINGERPRINT_FILE. Unset or empty reads
+# as a missing anchor and refuses. The allow-set above is unchanged.
+#
 # Usage:  source tests/scripts/lib/git-data-host-replace-gate.sh
-#         git_data_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
+#         GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=<path> git_data_host_replace_gate <plan-json-file>   # 0=PASS, 1=ABORT
 
 # THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
 # infrastructure must never let "I could not check" read as "it is fine". These three
@@ -84,6 +90,13 @@ if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   # shellcheck source=/dev/null
   source "${_GDHRG_DIR}/plan-gate-preamble.sh"
 fi
+
+# Sourced UNCONDITIONALLY (no declare -F guard): the file only defines functions, and a
+# guard would let a same-named stub defined earlier in the shell stand in for the arm. A
+# failed source leaves the function undefined, and the call below then returns 127 and
+# refuses.
+# shellcheck source=tests/scripts/lib/git-data-root-key-arm.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm.sh"
 
 git_data_host_replace_gate() {
   local plan_json="$1"
@@ -200,6 +213,7 @@ git_data_host_replace_gate() {
 
   echo "out_of_scope=${oos} git_data_volume_destroyed=${gvd} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} plaintext_attachment_recreated=${patt} luks_attachment_recreated=${latt} firewall_ok=${fw}"
   if [[ "$oos" -eq 0 && "$gvd" -eq 0 && "$lvd" -eq 0 && "$lpt" -eq 0 && "$replaced" -eq 1 && "$nic" -ge 1 && "$patt" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 ]]; then
+    git_data_root_key_arm "$plan_json" "${GIT_DATA_ROOT_KEY_FINGERPRINT_FILE:-}" || return 1
     echo "git_data_host_replace_gate: PASS — scoped git-data-host recreate permitted (server + 4 dependents; BOTH data volumes + LUKS passphrase preserved by omission; NIC + both store attachments + deny-all firewall re-attached)"
     return 0
   fi
