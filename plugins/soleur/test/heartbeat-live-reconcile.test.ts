@@ -7,6 +7,7 @@
 // that closes that gap — synthetic fixtures only (cq-test-fixtures-synthesized-only), no network.
 
 import { describe, expect, it } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,17 +15,30 @@ import { join } from "node:path";
 import type { ManifestEntry } from "../lib/heartbeat-manifest";
 import {
   type DiscoveredHeartbeat,
+  type DiscoveredMonitor,
+  type InfraVariables,
   type LiveHeartbeat,
+  type LiveMonitor,
+  findUnmanagedHeartbeats,
   parseHeartbeatBlocks,
+  parseInfraVariables,
   parseLogsAlertBlocks,
+  parseMonitorBlocks,
   reconcileHeartbeats,
   reconcileLogsAlerts,
+  reconcileMonitors,
+  resolveInfraVariables,
   stripComments,
+  UnresolvableDeclaration,
 } from "../lib/heartbeat-live-reconcile";
 import {
   discoverHeartbeatsFromInfra,
+  discoverMonitorsFromInfra,
   fetchLiveHeartbeats,
+  MAX_PAGES,
+  type RunDeps,
   runReconcile,
+  VENDOR_FIELD_CAP,
 } from "../scripts/reconcile-live-heartbeats";
 
 // --- Synthetic manifest rows (reconcileHeartbeats reads .name + .feeder.kind + .arming_pending) ---
@@ -60,7 +74,8 @@ const disc = (
   countGated: opts.countGated ?? false,
 });
 
-const live = (name: string, paused: boolean): LiveHeartbeat => ({ name, paused });
+let liveIdSeq = 1000;
+const live = (name: string, paused: boolean, id: string = String(liveIdSeq++)): LiveHeartbeat => ({ id, name, paused });
 
 describe("reconcileHeartbeats — condition (a) live-paused-but-fed (#6537 shape)", () => {
   it("flags a fed heartbeat that is paused in live Better Stack", () => {
@@ -161,14 +176,32 @@ describe("reconcileHeartbeats — condition (b) present-in-HCL-absent-live (git_
   });
 });
 
-describe("reconcileHeartbeats — item-1 carve-out (count-gated webhook rows never flagged absent)", () => {
-  it("does NOT flag a count-gated heartbeat that is absent live", () => {
-    const violations = reconcileHeartbeats(
-      [unfed("github_webhook_sig_failures")],
-      [disc("github_webhook_sig_failures", "soleur-github-webhook-sig-failures-prd", { countGated: true })],
-      [], // intentionally absent under the free tier (count = 0)
-    );
-    expect(violations).toEqual([]);
+describe("reconcileHeartbeats — item-1 carve-out, EVALUATED (#7884): count resolved to 0 is not expected live", () => {
+  const TF = `resource "betteruptime_heartbeat" "github_webhook_sig_failures" {
+  count  = var.betterstack_paid_tier ? 1 : 0
+  name   = "soleur-github-webhook-sig-failures-prd"
+  paused = true
+}`;
+  const tier = (value: boolean): InfraVariables => new Map([["betterstack_paid_tier", { kind: "bool", value }]]);
+
+  it("does NOT flag a count-gated heartbeat absent live when its count resolves to 0 (free tier)", () => {
+    const discovered = parseHeartbeatBlocks(TF, tier(false));
+    expect(discovered).toEqual([]); // no instance at all
+    expect(reconcileHeartbeats([unfed("github_webhook_sig_failures")], discovered, [])).toEqual([]);
+  });
+
+  it("DOES flag it absent-live when its count resolves to 1 (paid tier) — the carve-out is no longer assumed", () => {
+    const discovered = parseHeartbeatBlocks(TF, tier(true));
+    expect(discovered).toHaveLength(1);
+    expect(reconcileHeartbeats([unfed("github_webhook_sig_failures")], discovered, [])).toEqual([
+      {
+        kind: "heartbeat",
+        resourceName: "github_webhook_sig_failures",
+        liveName: "soleur-github-webhook-sig-failures-prd",
+        live: "absent",
+        reason: "absent-live",
+      },
+    ]);
   });
 });
 
@@ -186,7 +219,7 @@ describe("reconcileHeartbeats — OK path + mixed realistic set", () => {
       disc("registry_prd", "soleur-registry-prd"),
       disc("registry_disk_prd", "soleur-registry-disk-prd"),
       disc("git_data_prd", "soleur-git-data-prd"),
-      disc("github_webhook_sig_failures", "soleur-github-webhook-sig-failures-prd", { countGated: true }),
+      // github_webhook_sig_failures: count resolved to 0 → no discovered instance at all
     ];
     const livePayload: LiveHeartbeat[] = [
       live("soleur-inngest-server-prd", false),
@@ -233,7 +266,7 @@ resource "betteruptime_heartbeat" "no_paused_attr" {
 `;
 
   it("extracts resourceName, liveName, sourcePaused, and countGated per block", () => {
-    const blocks = parseHeartbeatBlocks(TF);
+    const blocks = parseHeartbeatBlocks(TF, new Map([["betterstack_paid_tier", { kind: "bool", value: true }]]));
     const byName = Object.fromEntries(blocks.map((b) => [b.resourceName, b]));
 
     expect(byName.registry_prd).toMatchObject({
@@ -283,8 +316,9 @@ describe("discoverHeartbeatsFromInfra — reads every .tf, pre-filters, aggregat
       );
       writeFileSync(
         join(dir, "b.tf"),
-        `resource "betteruptime_heartbeat" "two" {\n  count = 1\n  name = "soleur-two"\n}`,
+        `resource "betteruptime_heartbeat" "two" {\n  count = var.paid ? 1 : 0\n  name = "soleur-two"\n}`,
       );
+      writeFileSync(join(dir, "variables.tf"), `variable "paid" {\n  type    = bool\n  default = true\n}`);
       writeFileSync(join(dir, "c.tf"), `resource "hcloud_server" "x" {}`); // no heartbeat → skipped
       writeFileSync(join(dir, "notes.md"), `resource "betteruptime_heartbeat" "nope" {}`); // not .tf
       const discovered = discoverHeartbeatsFromInfra(dir).sort((a, b) =>
@@ -302,12 +336,20 @@ describe("discoverHeartbeatsFromInfra — reads every .tf, pre-filters, aggregat
 
 describe("runReconcile — tri-state exit contract the drift workflow branches on", () => {
   const noSleep = async () => {};
+  // Routes by endpoint: the heartbeats list gets `live`, the (#7884, always-read) monitors list is
+  // empty — this infra declares no monitor, so the monitors arm is OK.
   const okFetch =
     (live: LiveHeartbeat[]) =>
-    async () =>
-      new Response(JSON.stringify({ data: live.map((h) => ({ attributes: h })), pagination: { next: null } }), {
-        status: 200,
-      });
+    async (url: string) =>
+      new Response(
+        JSON.stringify({
+          data: url.startsWith("https://uptime.betterstack.com/api/v2/heartbeats")
+            ? live.map(({ id, ...attributes }) => ({ id, attributes }))
+            : [],
+          pagination: { next: null },
+        }),
+        { status: 200 },
+      );
 
   const withInfra = async (
     tf: string,
@@ -351,8 +393,8 @@ describe("runReconcile — tri-state exit contract the drift workflow branches o
         manifest,
       );
       expect(result.code).toBe(2);
-      expect(result.markers.join("\n")).toContain(
-        "SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-reg live=paused reason=fed-but-paused",
+      expect(result.markers).toContain(
+        "SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-reg live=paused reason=fed-but-paused resource=betteruptime_heartbeat.reg",
       );
     });
   });
@@ -393,11 +435,11 @@ describe("fetchLiveHeartbeats — flake tolerance + auth (network injected)", ()
   it("returns ok with parsed heartbeats on 200, following pagination.next until null", async () => {
     const pages: Record<string, unknown> = {
       "https://uptime.betterstack.com/api/v2/heartbeats": {
-        data: [{ attributes: { name: "soleur-a", paused: false } }],
+        data: [{ id: "11", attributes: { name: "soleur-a", paused: false } }],
         pagination: { next: "https://uptime.betterstack.com/api/v2/heartbeats?page=2" },
       },
       "https://uptime.betterstack.com/api/v2/heartbeats?page=2": {
-        data: [{ attributes: { name: "soleur-b", paused: true } }],
+        data: [{ id: 12, attributes: { name: "soleur-b", paused: true } }],
         pagination: { next: null },
       },
     };
@@ -408,8 +450,8 @@ describe("fetchLiveHeartbeats — flake tolerance + auth (network injected)", ()
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.live).toEqual([
-        { name: "soleur-a", paused: false },
-        { name: "soleur-b", paused: true },
+        { id: "11", name: "soleur-a", paused: false },
+        { id: "12", name: "soleur-b", paused: true },
       ]);
     }
   });
@@ -479,7 +521,7 @@ describe("fetchLiveHeartbeats — flake tolerance + auth (network injected)", ()
       if (url === "https://uptime.betterstack.com/api/v2/heartbeats") {
         return new Response(
           JSON.stringify({
-            data: [{ attributes: { name: "soleur-a", paused: false } }],
+            data: [{ id: "11", attributes: { name: "soleur-a", paused: false } }],
             pagination: { next: "https://evil.example.com/api/v2/heartbeats" },
           }),
           { status: 200 },
@@ -556,6 +598,7 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     );
     expect(v).toEqual([
       {
+        kind: "logs_alert",
         resourceName: "monitor_send_failed",
         liveName: "soleur-monitor-send-failed-prd",
         live: "logs_alert",
@@ -593,12 +636,15 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
 
   const page = (rows: unknown[]) =>
     new Response(JSON.stringify({ data: rows, pagination: { next: null } }), { status: 200 });
+  const hbPage = (h: LiveHeartbeat) => page([{ id: h.id, attributes: { name: h.name, paused: h.paused } }]);
+  const MONITORS = "https://uptime.betterstack.com/api/v2/monitors";
   // Dispatches on URL so the heartbeat and alert reads are distinguishable — and so a read of
   // any OTHER host is refused loudly rather than answered.
   const routed =
     (alerts: unknown[], onOther?: (u: string) => void) =>
     async (url: string) => {
-      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return hbPage(live("soleur-reg", false));
+      if (url === MONITORS) return page([]); // #7884: the monitors arm always reads; none declared here
       if (url === "https://telemetry.betterstack.com/api/v2/alerts") return page(alerts);
       onOther?.(url);
       return new Response("unexpected host", { status: 500 });
@@ -627,8 +673,10 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
       );
       expect(result.code).toBe(2);
       const out = result.markers.join("\n");
-      expect(out).toContain(
-        'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-monitor-send-failed-prd live=logs_alert reason=logs-alert-paused detail="too many failures"',
+      // The ADR-218 / runbook prefix stays byte-identical; `resource=` sits immediately before the
+      // quoted vendor text so the vendor text stays last.
+      expect(result.markers).toContain(
+        'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-monitor-send-failed-prd live=logs_alert reason=logs-alert-paused resource=logtail_exploration_alert.monitor_send_failed detail="too many failures"',
       );
     });
   });
@@ -669,7 +717,7 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
       const result = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: noSleep }, manifest);
       expect(result.code).toBe(0);
       expect(seen.filter((u) => u.includes("/api/v2/alerts"))).toEqual([]);
-      expect(seen).toEqual(["https://uptime.betterstack.com/api/v2/heartbeats"]);
+      expect(seen).toEqual(["https://uptime.betterstack.com/api/v2/heartbeats", "https://uptime.betterstack.com/api/v2/monitors"]);
     });
   });
 
@@ -691,7 +739,8 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
 
   it("heartbeat MISMATCH + alerts auth failure → ERROR wins: code 1 with both markers present", async () => {
     const fetchImpl = async (url: string) => {
-      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", true) }]);
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return hbPage(live("soleur-reg", true));
+      if (url === MONITORS) return page([]);
       return new Response("forbidden", { status: 403 });
     };
     await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
@@ -716,14 +765,15 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
       );
       expect(result.code).toBe(2);
       const line = result.markers.find((m) => m.includes("live=logs_alert"))!;
-      expect(line).toMatch(/detail="too many failures "$/);
+      // `"` is percent-encoded (not stripped), so the quote cannot close the field early.
+      expect(line).toMatch(/detail="too many %22failures "$/);
       expect(line).not.toMatch(/[\u2028\x7f`]/);
     });
   });
 
   it("a heartbeat MISMATCH and an alert MISMATCH combine to one rc=2 run carrying both markers", async () => {
     const pausedHb = async (url: string) => {
-      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", true) }]);
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return hbPage(live("soleur-reg", true));
       return page([]);
     };
     await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
@@ -739,7 +789,8 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
     let tokenLeakedOffHost = false;
     const fetchImpl = async (url: string, init?: RequestInit) => {
       const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
-      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return hbPage(live("soleur-reg", false));
+      if (url === MONITORS) return page([]);
       if (url === "https://telemetry.betterstack.com/api/v2/alerts") {
         return new Response(
           // A host sharing the vendor SUFFIX: `endsWith("betterstack.com")` accepts it; only equality refuses.
@@ -760,7 +811,8 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
 
   it("alerts endpoint unreachable (5xx) → UNREACHABLE marker for the arm, never a MISMATCH (no page on a vendor blip)", async () => {
     const fetchImpl = async (url: string) => {
-      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return page([{ attributes: live("soleur-reg", false) }]);
+      if (url === "https://uptime.betterstack.com/api/v2/heartbeats") return hbPage(live("soleur-reg", false));
+      if (url === MONITORS) return page([]);
       return new Response("upstream", { status: 503 });
     };
     await withInfra({ "hb.tf": HB_TF, "alerts.tf": ALERT_TF }, async (dir) => {
@@ -771,5 +823,631 @@ describe("runReconcile — logs_alert arm through the injected fetchImpl (#8097)
       expect(out).toContain("surface=logs_alert");
       expect(out).not.toContain("MISMATCH");
     });
+  });
+});
+
+// ─── #7884 Guard 2: Better Stack live inventory reconcile ─────────────────────────────────────
+// Property: every live Better Stack uptime monitor and heartbeat is accounted for by exactly one
+// resolved Terraform declaration (monitors by literal URL, heartbeats by resolved name), every
+// declared instance is live, every declared monitor's live type/keyword/paused equals its
+// declaration, and every outcome is a marker whose routing tokens vendor text cannot forge.
+// Synthetic fixtures only (cq-test-fixtures-synthesized-only); network injected.
+
+const UPTIME = "https://uptime.betterstack.com";
+const MON_URL = `${UPTIME}/api/v2/monitors`;
+const HB_URL = `${UPTIME}/api/v2/heartbeats`;
+const HEALTH = "https://app.soleur.ai/health";
+const APP = "https://app.soleur.ai/";
+const WEBHOOK = "https://soleur.ai/api/webhooks/github";
+const KW = '"supabase":"connected"';
+
+// A `web_hosts`-shaped variable: quoted keys, nested object values, a multi-line `type`, and
+// trailing `validation {}` blocks whose strings carry braces (`{1,3}`) — the resolver must read only
+// the top-level keys of the default.
+const G2_VARIABLES_TF = `
+variable "web_hosts" {
+  description = "Web-host cluster {keys immutable}"
+  type = map(object({
+    location    = string
+    private_ip  = string
+    server_type = optional(string, "cx33")
+  }))
+  # default = { "web-9" = {} }  <- a commented-out default must not be read
+  default = {
+    "web-1" = { location = "hel1", private_ip = "10.0.1.10" }
+    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }
+  }
+  validation {
+    condition     = alltrue([for h in values(var.web_hosts) : can(regex("^10\\\\.0\\\\.1\\\\.[0-9]{1,3}$", h.private_ip))])
+    error_message = "web_hosts private_ip must be in 10.0.1.0/24 {default = nope}."
+  }
+}
+
+variable "betterstack_paid_tier" {
+  type    = bool
+  default = false
+}
+`;
+
+const G2_MONITORS_TF = `
+resource "betteruptime_monitor" "app_health" {
+  monitor_type       = "keyword"
+  url                = "https://app.soleur.ai/health"
+  pronounceable_name = "soleur app database readiness"
+  required_keyword   = "\\"supabase\\":\\"connected\\""
+  paused             = false
+}
+
+resource "betteruptime_monitor" "app" {
+  paused       = false
+  url          = "https://app.soleur.ai/"
+  monitor_type = "status"
+}
+
+resource "betteruptime_monitor" "github_webhook_failures" {
+  count        = var.betterstack_paid_tier ? 1 : 0
+  url          = "https://soleur.ai/api/webhooks/github"
+  monitor_type = "expected_status_code"
+}
+`;
+
+const G2_HEARTBEATS_TF = `
+resource "betteruptime_heartbeat" "reg" {
+  name   = "soleur-reg"
+  paused = true
+  lifecycle {
+    ignore_changes = [paused]
+  }
+}
+
+resource "betteruptime_heartbeat" "web_zot_consumer" {
+  for_each = var.web_hosts
+  name     = "soleur-web-zot-consumer-\${each.key}"
+  paused   = true
+}
+
+resource "betteruptime_heartbeat" "web_nic_guard" {
+  for_each  = var.web_hosts
+  name      = "soleur-web-nic-guard-\${each.key}"
+  team_name = "Your team"
+}
+`;
+
+const G2_MANIFEST: ManifestRow[] = [fedTimer("reg"), unfed("web_zot_consumer"), unfed("web_nic_guard")];
+
+const monRow = (
+  id: string | number,
+  url: unknown,
+  o: { type?: string; kw?: string | null; paused?: boolean; name?: string; extra?: Record<string, unknown> } = {},
+) => ({
+  id,
+  type: "monitor",
+  attributes: {
+    url,
+    monitor_type: o.type ?? "status",
+    required_keyword: o.kw === undefined ? null : o.kw,
+    paused: o.paused ?? false,
+    pronounceable_name: o.name ?? `monitor ${id}`,
+    ...o.extra,
+  },
+});
+const hbRow = (id: string | number, name: string, paused = false, extra: Record<string, unknown> = {}) => ({
+  id,
+  type: "heartbeat",
+  attributes: { name, paused, ...extra },
+});
+const COMPLIANT_MONITORS = () => [monRow("101", HEALTH, { type: "keyword", kw: KW }), monRow("102", APP)];
+const COMPLIANT_HEARTBEATS = () => [
+  hbRow("201", "soleur-reg"),
+  hbRow("202", "soleur-web-zot-consumer-web-1"),
+  hbRow("203", "soleur-web-zot-consumer-web-2"),
+  hbRow("204", "soleur-web-nic-guard-web-1"),
+  hbRow("205", "soleur-web-nic-guard-web-2"),
+];
+
+const listPage = (rows: unknown[], next: string | null = null) =>
+  new Response(JSON.stringify({ data: rows, pagination: { next } }), { status: 200 });
+
+type Route = (url: string) => Response;
+interface G2Input {
+  files?: Record<string, string | null>;
+  monitors?: unknown[] | Route;
+  heartbeats?: unknown[] | Route;
+  deps?: RunDeps;
+  seen?: string[];
+}
+interface G2Result {
+  code: number;
+  markers: string[];
+  out: string;
+}
+
+/** Every G2 run's markers — the marker-key property assertion runs over all of them. */
+const G2_OUTPUTS: string[][] = [];
+
+async function g2(input: G2Input = {}): Promise<G2Result> {
+  const dir = mkdtempSync(join(tmpdir(), "hb-g2-"));
+  const files: Record<string, string | null> = {
+    "variables.tf": G2_VARIABLES_TF,
+    "monitors.tf": G2_MONITORS_TF,
+    "heartbeats.tf": G2_HEARTBEATS_TF,
+    ...input.files,
+  };
+  const route = (spec: unknown[] | Route | undefined, fallback: () => unknown[], url: string) =>
+    typeof spec === "function" ? spec(url) : listPage(spec ?? fallback());
+  const fetchImpl = async (url: string) => {
+    input.seen?.push(url);
+    if (url === MON_URL || url.startsWith(`${MON_URL}?`)) return route(input.monitors, COMPLIANT_MONITORS, url);
+    if (url === HB_URL || url.startsWith(`${HB_URL}?`)) return route(input.heartbeats, COMPLIANT_HEARTBEATS, url);
+    return new Response("unrouted", { status: 404 });
+  };
+  try {
+    for (const [name, text] of Object.entries(files)) if (text !== null) writeFileSync(join(dir, name), text);
+    const r = await runReconcile(dir, { token: "t", fetchImpl, sleepImpl: async () => {}, maxAttempts: 1 }, G2_MANIFEST, input.deps);
+    G2_OUTPUTS.push(r.markers);
+    return { ...r, out: r.markers.join("\n") };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Routing tokens of a marker line: only the text before its first `"` is ever routed on. */
+const preQuoteTokens = (line: string) =>
+  line
+    .split('"')[0]
+    .trim()
+    .split(/\s+/)
+    .filter((t) => /^(surface|reason|resource|id)=/.test(t));
+const mismatchLines = (r: G2Result) => r.markers.filter((m) => m.startsWith("SOLEUR_HEARTBEAT_RECONCILE_MISMATCH "));
+const BIDI_OR_INVISIBLE = new RegExp(
+  `[${[[0x200b, 0x200f], [0x202a, 0x202e], [0x2066, 0x2069], [0xfeff, 0xfeff]]
+    .map(([a, b]) => `${String.fromCharCode(a)}-${String.fromCharCode(b)}`)
+    .join("")}]`,
+);
+
+// Rows the H1 harness re-runs with a no-op `reconcileMonitors` — each MUST go RED there.
+const H1_ROWS: { row: string; input: () => G2Input; assert: (r: G2Result) => void }[] = [
+  {
+    row: "1 unmanaged live monitor",
+    input: () => ({ monitors: [...COMPLIANT_MONITORS(), monRow("9", "https://example.soleur.ai/")] }),
+    assert: (r) => {
+      expect(r.code).toBe(2);
+      expect(r.markers).toContain(
+        'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=unmanaged-live id=9 url="https://example.soleur.ai/" name="monitor 9"',
+      );
+      // The arm summary still prints (positive control), and never lists the unmanaged id.
+      expect(r.markers).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors declared=2 live=3 matched=101,102");
+    },
+  },
+  {
+    row: "2 second live monitor on the declared health URL",
+    input: () => ({ monitors: [...COMPLIANT_MONITORS(), monRow("103", HEALTH, { type: "keyword", kw: KW })] }),
+    assert: (r) => {
+      expect(r.code).toBe(2);
+      expect(r.out).toContain(`surface=monitors reason=unmanaged-live id=101 dup=url url="${HEALTH}"`);
+      expect(r.out).toContain(`surface=monitors reason=unmanaged-live id=103 dup=url url="${HEALTH}"`);
+      // Neither is picked as managed, so neither yields a drift row or a matched id.
+      expect(r.out).not.toContain("monitor-config-drift");
+      expect(r.markers).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors declared=2 live=3 matched=102");
+    },
+  },
+  {
+    row: "4 monitors endpoint empty while declarations exist",
+    input: () => ({ monitors: [] }),
+    assert: (r) => {
+      expect(r.code).toBe(2);
+      expect(r.markers).toContain(
+        `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=absent-live resource=betteruptime_monitor.app_health url="${HEALTH}"`,
+      );
+      expect(r.markers).toContain(
+        `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=absent-live resource=betteruptime_monitor.app url="${APP}"`,
+      );
+      // count resolved to 0 → not expected live
+      expect(r.out).not.toContain("github_webhook_failures");
+    },
+  },
+  {
+    row: "7 declared keyword monitor live as status",
+    input: () => ({ monitors: [monRow("101", HEALTH, { type: "status", kw: KW }), monRow("102", APP)] }),
+    assert: (r) => {
+      expect(r.code).toBe(2);
+      expect(mismatchLines(r)).toEqual([
+        'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=monitor-config-drift id=101 resource=betteruptime_monitor.app_health field=monitor_type detail="declared=keyword live=status"',
+      ]);
+    },
+  },
+  {
+    row: "17 live monitor on a count-gated (default false) declaration's URL",
+    input: () => ({ monitors: [...COMPLIANT_MONITORS(), monRow("104", WEBHOOK, { type: "expected_status_code" })] }),
+    assert: (r) => {
+      expect(r.code).toBe(2);
+      expect(r.out).toContain(`surface=monitors reason=unmanaged-live id=104 url="${WEBHOOK}"`);
+    },
+  },
+];
+
+describe("Guard 2 (#7884) — resolveInfraVariables / declaration resolution", () => {
+  it("reads only top-level keys of a literal map default (nested objects + validation blocks skipped) and bool defaults", () => {
+    const vars = parseInfraVariables(G2_VARIABLES_TF);
+    expect(vars.get("web_hosts")).toEqual({ kind: "map", keys: ["web-1", "web-2"] });
+    expect(vars.get("betterstack_paid_tier")).toEqual({ kind: "bool", value: false });
+  });
+
+  it("a non-literal default is `other`, and a variable without a default is absent", () => {
+    const vars = parseInfraVariables(
+      `variable "a" {\n  default = local.x\n}\nvariable "b" {\n  type = string\n}\nvariable "c" {\n  default = { web-1 = 1, "web 2" = 2 }\n}`,
+    );
+    expect(vars.get("a")).toEqual({ kind: "other" });
+    expect(vars.has("b")).toBe(false);
+    expect(vars.get("c")).toEqual({ kind: "map", keys: ["web-1", "web 2"] });
+  });
+
+  it("for_each = var.<map> yields one instance per key with ${each.key} substituted; count = var.<bool> ? 1 : 0 yields 1 or 0", () => {
+    const vars = parseInfraVariables(G2_VARIABLES_TF);
+    expect(parseHeartbeatBlocks(G2_HEARTBEATS_TF, vars).map((h) => `${h.resourceName}:${h.liveName}`)).toEqual([
+      "reg:soleur-reg",
+      "web_zot_consumer:soleur-web-zot-consumer-web-1",
+      "web_zot_consumer:soleur-web-zot-consumer-web-2",
+      "web_nic_guard:soleur-web-nic-guard-web-1",
+      "web_nic_guard:soleur-web-nic-guard-web-2",
+    ]);
+    const monitors: DiscoveredMonitor[] = parseMonitorBlocks(G2_MONITORS_TF, vars);
+    expect(monitors).toEqual([
+      { resourceName: "app_health", url: HEALTH, monitorType: "keyword", requiredKeyword: KW, paused: false },
+      { resourceName: "app", url: APP, monitorType: "status", requiredKeyword: "", paused: false },
+    ]);
+  });
+
+  it("an UnresolvableDeclaration names the resource as <type>.<name>", () => {
+    const vars = parseInfraVariables(G2_VARIABLES_TF);
+    let caught: unknown;
+    try {
+      parseHeartbeatBlocks(`resource "betteruptime_heartbeat" "bad" {\n  for_each = var.betterstack_paid_tier\n  name = "x-\${each.key}"\n}`, vars);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UnresolvableDeclaration);
+    expect((caught as UnresolvableDeclaration).resource).toBe("betteruptime_heartbeat.bad");
+  });
+});
+
+describe("Guard 2 (#7884) — mutation matrix rows 1-19", () => {
+  it("baseline: the compliant fixture is GREEN with OK markers on both uptime arms and an INVENTORY line", async () => {
+    const r = await g2();
+    expect(r.code).toBe(0);
+    expect(r.markers).toEqual([
+      "SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats checked=5 live=5",
+      "SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors declared=2 live=2 matched=101,102",
+      "SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=2 heartbeats=5 total=7",
+    ]);
+  });
+
+  for (const h of H1_ROWS) {
+    it(`row ${h.row} → RED`, async () => {
+      h.assert(await g2(h.input()));
+    });
+  }
+
+  it("row 3: an unmanaged monitor only on page 2 is still reported", async () => {
+    const seen: string[] = [];
+    const r = await g2({
+      seen,
+      monitors: (url) =>
+        url === MON_URL ? listPage(COMPLIANT_MONITORS(), `${MON_URL}?page=2`) : listPage([monRow("9", "https://example.soleur.ai/")]),
+    });
+    expect(seen).toContain(`${MON_URL}?page=2`);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('surface=monitors reason=unmanaged-live id=9 url="https://example.soleur.ai/"');
+    expect(r.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=3 heartbeats=5 total=8");
+  });
+
+  it("row 5: live heartbeat soleur-web-zot-consumer-web-1-old → unmanaged-live", async () => {
+    const r = await g2({ heartbeats: [...COMPLIANT_HEARTBEATS(), hbRow("301", "soleur-web-zot-consumer-web-1-old")] });
+    expect(r.code).toBe(2);
+    expect(mismatchLines(r)).toEqual([
+      'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=heartbeats reason=unmanaged-live id=301 name="soleur-web-zot-consumer-web-1-old"',
+    ]);
+  });
+
+  it("row 6: live heartbeat soleur-web-zot-consumer-web-3 (a key the default does not have) → unmanaged-live", async () => {
+    const r = await g2({ heartbeats: [...COMPLIANT_HEARTBEATS(), hbRow("302", "soleur-web-zot-consumer-web-3")] });
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('surface=heartbeats reason=unmanaged-live id=302 name="soleur-web-zot-consumer-web-3"');
+  });
+
+  it("row 6b: two live heartbeats sharing a declared name → both unmanaged-live dup=name", async () => {
+    const r = await g2({ heartbeats: [...COMPLIANT_HEARTBEATS(), hbRow("303", "soleur-reg")] });
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('surface=heartbeats reason=unmanaged-live id=201 dup=name name="soleur-reg"');
+    expect(r.out).toContain('surface=heartbeats reason=unmanaged-live id=303 dup=name name="soleur-reg"');
+  });
+
+  it("row 7: one monitor-config-drift row per drifted field (required_keyword, paused, and all three at once)", async () => {
+    const kw = await g2({ monitors: [monRow("101", HEALTH, { type: "keyword", kw: '"supabase":"ok"' }), monRow("102", APP)] });
+    expect(mismatchLines(kw)).toEqual([
+      'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=monitor-config-drift id=101 resource=betteruptime_monitor.app_health field=required_keyword detail="declared=%22supabase%22:%22connected%22 live=%22supabase%22:%22ok%22"',
+    ]);
+    const paused = await g2({ monitors: [monRow("101", HEALTH, { type: "keyword", kw: KW, paused: true }), monRow("102", APP)] });
+    expect(mismatchLines(paused)).toEqual([
+      'SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=monitor-config-drift id=101 resource=betteruptime_monitor.app_health field=paused detail="declared=false live=true"',
+    ]);
+    const all = await g2({ monitors: [monRow("101", HEALTH, { type: "status", kw: null, paused: true }), monRow("102", APP)] });
+    expect(all.code).toBe(2);
+    expect(mismatchLines(all).map((l) => /field=([a-z_]+)/.exec(l)?.[1])).toEqual(["monitor_type", "required_keyword", "paused"]);
+    // AC8 shape: drift rows AND the drifted id in the arm summary's matched= list.
+    expect(all.markers).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors declared=2 live=2 matched=101,102");
+  });
+
+  it("row 8: a declaration present only inside a `#` comment does not account for its live object", async () => {
+    const commented = G2_MONITORS_TF.replace(
+      /resource "betteruptime_monitor" "app" \{[\s\S]*?\n\}/,
+      (block) => block.split("\n").map((l) => `# ${l}`).join("\n"),
+    );
+    expect(commented).not.toBe(G2_MONITORS_TF);
+    const r = await g2({ files: { "monitors.tf": commented } });
+    expect(r.code).toBe(2);
+    expect(r.out).toContain(`surface=monitors reason=unmanaged-live id=102 url="${APP}"`);
+  });
+
+  const UNRESOLVABLE = (resource: string) =>
+    `SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=unresolvable-declaration resource=${resource}`;
+
+  it('row 9: heartbeat name = "soleur-${local.x}" → rc 1 unresolvable-declaration', async () => {
+    const r = await g2({ files: { "bad.tf": `resource "betteruptime_heartbeat" "bad" {\n  name = "soleur-\${local.x}"\n}` } });
+    expect(r.code).toBe(1);
+    expect(r.markers).toContain(UNRESOLVABLE("betteruptime_heartbeat.bad"));
+    // Fail closed: no heartbeats verdict is computed from a partial declared set.
+    expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats");
+    expect(r.out).not.toContain("surface=heartbeats reason=unmanaged-live");
+  });
+
+  it("row 10: heartbeat for_each = local.hosts → rc 1 unresolvable-declaration", async () => {
+    const r = await g2({
+      files: { "bad.tf": `resource "betteruptime_heartbeat" "bad" {\n  for_each = local.hosts\n  name = "soleur-\${each.key}"\n}` },
+    });
+    expect(r.code).toBe(1);
+    expect(r.markers).toContain(UNRESOLVABLE("betteruptime_heartbeat.bad"));
+  });
+
+  it("row 11: heartbeat count = 2 → rc 1 unresolvable-declaration", async () => {
+    const r = await g2({ files: { "bad.tf": `resource "betteruptime_heartbeat" "bad" {\n  count = 2\n  name = "soleur-bad"\n}` } });
+    expect(r.code).toBe(1);
+    expect(r.markers).toContain(UNRESOLVABLE("betteruptime_heartbeat.bad"));
+  });
+
+  it("row 12: two declared monitors on the same URL (different files) → rc 1 unresolvable-declaration", async () => {
+    const r = await g2({
+      files: { "zz-dup.tf": `resource "betteruptime_monitor" "app_again" {\n  monitor_type = "status"\n  url = "https://app.soleur.ai/"\n}` },
+    });
+    expect(r.code).toBe(1);
+    expect(r.markers).toContain(UNRESOLVABLE("betteruptime_monitor.app_again"));
+    expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors");
+  });
+
+  it("row 13: monitors read 401 while heartbeats read OK → rc 1, no INVENTORY line", async () => {
+    const r = await g2({ monitors: () => new Response("unauthorized", { status: 401 }) });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=auth");
+    expect(r.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats");
+    expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_INVENTORY");
+  });
+
+  it("row 14: monitors endpoint 5xx after retries → UNREACHABLE surface=monitors, no OK surface=monitors, no INVENTORY", async () => {
+    const r = await g2({ monitors: () => new Response("upstream", { status: 503 }) });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE surface=monitors detail="HTTP 503"');
+    expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=monitors");
+    expect(r.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_INVENTORY");
+  });
+
+  it('row 15: a monitors row whose id is "9x", or without a string url, is an ERROR (rc 1) — never skipped', async () => {
+    const badId = await g2({ monitors: [...COMPLIANT_MONITORS(), monRow("9x", "https://example.soleur.ai/")] });
+    expect(badId.code).toBe(1);
+    expect(badId.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=error");
+    expect(badId.out).not.toContain("SOLEUR_HEARTBEAT_RECONCILE_INVENTORY");
+    const noUrl = await g2({ monitors: [...COMPLIANT_MONITORS(), monRow("9", 42)] });
+    expect(noUrl.code).toBe(1);
+    expect(noUrl.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=error");
+    const hbBadId = await g2({ heartbeats: [...COMPLIANT_HEARTBEATS(), hbRow("-1", "soleur-x")] });
+    expect(hbBadId.code).toBe(1);
+    expect(hbBadId.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR reason=error");
+  });
+
+  it("row 16: monitors unmanaged-live while the heartbeats arm ERRORs → rc 1 AND both markers printed", async () => {
+    const r = await g2({
+      heartbeats: () => new Response("forbidden", { status: 403 }),
+      monitors: [...COMPLIANT_MONITORS(), monRow("9", "https://example.soleur.ai/")],
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('SOLEUR_HEARTBEAT_RECONCILE_ERROR reason=auth detail="HTTP 403"');
+    expect(r.out).toContain('SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=monitors reason=unmanaged-live id=9 url="https://example.soleur.ai/"');
+  });
+
+  it("row 18: vendor text cannot forge routing tokens; bidi/invisible characters never survive; fields are capped", async () => {
+    const RLO = String.fromCharCode(0x202e);
+    const ZWSP = String.fromCharCode(0x200b);
+    const r = await g2({
+      monitors: [
+        ...COMPLIANT_MONITORS(),
+        monRow("9", `https://example.soleur.ai/ id=1 resource=betteruptime_monitor.app"`, {
+          name: `x id=1 reason=monitor-config-drift ${RLO}evil${ZWSP}" dup=url`,
+        }),
+        monRow("10", "https://example.soleur.ai/long", { name: "n".repeat(500) }),
+      ],
+      heartbeats: [...COMPLIANT_HEARTBEATS(), hbRow("304", `hb id=2 resource=betteruptime_heartbeat.reg ${RLO}"`)],
+    });
+    expect(r.code).toBe(2);
+    const line = r.markers.find((m) => m.includes("id=9"))!;
+    expect(preQuoteTokens(line)).toEqual(["surface=monitors", "reason=unmanaged-live", "id=9"]);
+    expect(line).toContain(`name="x id=1 reason=monitor-config-drift evil%22 dup=url"`);
+    const hbLine = r.markers.find((m) => m.includes("id=304"))!;
+    expect(preQuoteTokens(hbLine)).toEqual(["surface=heartbeats", "reason=unmanaged-live", "id=304"]);
+    for (const m of r.markers) expect(m).not.toMatch(BIDI_OR_INVISIBLE);
+    // Exactly the grammar's own quotes: `%22` encoding keeps every vendor field to one quoted span.
+    expect(line.split('"').length - 1).toBe(4);
+    const long = r.markers.find((m) => m.includes("id=10"))!;
+    expect(/name="(n*)"/.exec(long)?.[1].length).toBe(VENDOR_FIELD_CAP);
+  });
+
+  it("row 19: pagination.next pointing at /api/v2/heartbeats on the monitors arm, or repeating its own URL → rc 1", async () => {
+    const tokenSentTo: string[] = [];
+    const switched = await g2({
+      seen: tokenSentTo,
+      monitors: () => listPage(COMPLIANT_MONITORS(), `${HB_URL}?page=2`),
+    });
+    expect(switched.code).toBe(1);
+    expect(switched.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=error");
+    expect(tokenSentTo.filter((u) => u.startsWith(HB_URL))).toEqual([HB_URL]); // only the heartbeats arm's own read
+
+    const loop = await g2({ monitors: () => listPage(COMPLIANT_MONITORS(), MON_URL) });
+    expect(loop.code).toBe(1);
+    expect(loop.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=monitors reason=error");
+
+    const port = await g2({ monitors: (u) => (u === MON_URL ? listPage([], `${UPTIME}:8443/api/v2/monitors?page=2`) : listPage([])) });
+    expect(port.code).toBe(1);
+
+    let pages = 0;
+    const endless = await g2({
+      monitors: (u) => {
+        pages++;
+        const n = Number(new URL(u).searchParams.get("page") ?? "1");
+        return listPage([], `${MON_URL}?page=${n + 1}`);
+      },
+    });
+    expect(endless.code).toBe(1);
+    expect(pages).toBe(MAX_PAGES);
+    expect(endless.out).toContain(`pagination exceeded ${MAX_PAGES} pages`);
+  });
+
+  it("the vendor's real pagination.next shape (`?page=N&per_page=M`) is followed", async () => {
+    const r = await g2({
+      monitors: (u) =>
+        u === MON_URL
+          ? listPage([COMPLIANT_MONITORS()[0]], `${MON_URL}?page=2&per_page=1`)
+          : listPage([COMPLIANT_MONITORS()[1]]),
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("matched=101,102");
+  });
+});
+
+describe("Guard 2 (#7884) — harness rows H1-H6", () => {
+  it("H1: a no-op reconcileMonitors (DI seam) turns rows 1, 2, 4, 7, 17 RED", async () => {
+    const noop: RunDeps = { reconcileMonitors: () => [] };
+    for (const h of H1_ROWS) {
+      const r = await g2({ ...h.input(), deps: noop });
+      expect(() => h.assert(r)).toThrow();
+    }
+  });
+
+  it("H2 must-PASS: live web-1/web-2 instances against templated declarations over a web_hosts-shaped default", async () => {
+    const r = await g2();
+    expect(r.code).toBe(0);
+    expect(mismatchLines(r)).toEqual([]);
+    expect(r.out).not.toContain("${");
+    expect(r.out).toContain("SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats checked=5 live=5");
+  });
+
+  it("H3 must-PASS: shuffled live arrays carrying unknown extra attributes", async () => {
+    const r = await g2({
+      monitors: [monRow("102", APP, { extra: { regions: ["eu"], foo: { bar: 1 } } }), monRow("101", HEALTH, { type: "keyword", kw: KW, extra: { status: "up" } })],
+      heartbeats: [...COMPLIANT_HEARTBEATS()].reverse().map((h) => ({ ...h, attributes: { ...h.attributes, period: 60, url: "redacted" } })),
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("matched=101,102");
+  });
+
+  it("H4 must-PASS: a live monitor renamed (same URL, type, keyword)", async () => {
+    const r = await g2({ monitors: [monRow("101", HEALTH, { type: "keyword", kw: KW, name: "renamed by hand" }), monRow("102", APP)] });
+    expect(r.code).toBe(0);
+  });
+
+  it('H5 must-PASS: status monitors whose live required_keyword is "" or null against an undeclared keyword', async () => {
+    for (const kw of ["", null]) {
+      const r = await g2({ monitors: [monRow("101", HEALTH, { type: "keyword", kw: KW }), monRow("102", APP, { kw })] });
+      expect(r.code).toBe(0);
+    }
+  });
+
+  it("H6 must-PASS and non-vacuous: the real apps/web-platform/infra resolves with no UnresolvableDeclaration", () => {
+    const REAL = join(import.meta.dir, "..", "..", "..", "apps", "web-platform", "infra");
+    const vars = resolveInfraVariables(REAL);
+    const heartbeats = discoverHeartbeatsFromInfra(REAL, vars);
+    const monitors = discoverMonitorsFromInfra(REAL, vars);
+    expect(monitors.map((m) => m.url)).toContain(HEALTH);
+    for (const h of heartbeats) expect(h.liveName).not.toContain("${");
+    // Every templated (for_each) heartbeat declaration in the real root resolves to ≥1 instance.
+    const templated = new Set<string>();
+    for (const f of readdirSync(REAL).filter((n) => n.endsWith(".tf"))) {
+      const text = stripComments(readFileSync(join(REAL, f), "utf8"));
+      for (const m of text.matchAll(/resource\s+"betteruptime_heartbeat"\s+"([a-z0-9_]+)"\s*\{[^}]*?\bfor_each\s*=/g)) templated.add(m[1]);
+    }
+    expect(templated.size).toBeGreaterThan(0);
+    for (const name of templated) {
+      expect(heartbeats.filter((h) => h.resourceName === name).length).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
+
+describe("Guard 2 (#7884) — pure reconcile units", () => {
+  const dm = (resourceName: string, url: string, o: Partial<DiscoveredMonitor> = {}): DiscoveredMonitor => ({
+    resourceName,
+    url,
+    monitorType: "status",
+    requiredKeyword: "",
+    paused: false,
+    ...o,
+  });
+  const lm = (id: string, url: string, o: Partial<LiveMonitor> = {}): LiveMonitor => ({
+    id,
+    url,
+    name: "",
+    monitorType: "status",
+    requiredKeyword: null,
+    paused: false,
+    ...o,
+  });
+
+  it("reconcileMonitors: absent-live, drift and unmanaged carry the discriminated kind", () => {
+    expect(reconcileMonitors([dm("a", "https://a/")], [])).toEqual([
+      { kind: "monitor", reason: "absent-live", resourceName: "a", url: "https://a/" },
+    ]);
+    expect(reconcileMonitors([], [lm("7", "https://b/", { name: "b" })])).toEqual([
+      { kind: "unmanaged", surface: "monitors", reason: "unmanaged-live", id: "7", url: "https://b/", name: "b", dup: false },
+    ]);
+  });
+
+  it("findUnmanagedHeartbeats: undeclared name and dup=name", () => {
+    const declared = [disc("x", "soleur-x")];
+    expect(findUnmanagedHeartbeats(declared, [live("soleur-x", false, "1"), live("soleur-y", false, "2")])).toEqual([
+      { kind: "unmanaged", surface: "heartbeats", reason: "unmanaged-live", id: "2", name: "soleur-y", dup: false },
+    ]);
+    expect(findUnmanagedHeartbeats(declared, [live("soleur-x", false, "1"), live("soleur-x", true, "3")]).map((u) => u.id)).toEqual(["1", "3"]);
+  });
+
+  it("reconcileHeartbeats iterates concrete for_each names (no ${each.key} false absent-live)", () => {
+    const vars = parseInfraVariables(G2_VARIABLES_TF);
+    const discovered = parseHeartbeatBlocks(G2_HEARTBEATS_TF, vars);
+    const liveHbs = COMPLIANT_HEARTBEATS().map((h) => live(h.attributes.name, false, String(h.id)));
+    expect(reconcileHeartbeats(G2_MANIFEST, discovered, liveHbs)).toEqual([]);
+    const missingWeb2 = liveHbs.filter((h) => h.name !== "soleur-web-nic-guard-web-2");
+    expect(reconcileHeartbeats(G2_MANIFEST, discovered, missingWeb2)).toEqual([
+      { kind: "heartbeat", resourceName: "web_nic_guard", liveName: "soleur-web-nic-guard-web-2", live: "absent", reason: "absent-live" },
+    ]);
+  });
+});
+
+describe("Guard 2 (#7884) — marker-key property over every fixture's output", () => {
+  it("each MISMATCH line has exactly one resource= and/or one id= routing token before its first quote (never zero, never two of a kind)", () => {
+    const all = G2_OUTPUTS.flat().filter((m) => m.startsWith("SOLEUR_HEARTBEAT_RECONCILE_MISMATCH "));
+    expect(all.length).toBeGreaterThan(20); // non-vacuous: the matrix above produced many rows
+    for (const line of all) {
+      const tokens = preQuoteTokens(line);
+      const resources = tokens.filter((t) => t.startsWith("resource="));
+      const ids = tokens.filter((t) => t.startsWith("id="));
+      expect(resources.length <= 1 && ids.length <= 1 && resources.length + ids.length >= 1).toBe(true);
+      for (const t of resources) expect(t).toMatch(/^resource=[a-z_]+\.[a-z0-9_]+$/);
+      for (const t of ids) expect(t).toMatch(/^id=[0-9]+$/);
+    }
   });
 });
