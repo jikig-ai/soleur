@@ -99,6 +99,7 @@ ac-grep-scope
 acceptance-criteria
 access
 access-denied
+access-gate
 accessibility
 account-consolidation
 account-delete
