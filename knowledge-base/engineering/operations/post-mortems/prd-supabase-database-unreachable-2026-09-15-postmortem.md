@@ -175,4 +175,4 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 
 | Issue | Action | Status |
 |---|---|---|
-| #7884 | Bring the `app.soleur.ai/health` Better Stack monitor under Terraform and make database unavailability page: a required keyword `"supabase":"connected"` or a sibling readiness monitor. Scope widened and raised to p1 on 2026-09-15 for this incident. | open |
+| #7884 | Bring the `app.soleur.ai/health` Better Stack monitor under Terraform and make database unavailability page: a required keyword `"supabase":"connected"` or a sibling readiness monitor. Scope widened and raised to p1 on 2026-09-15 for this incident. | resolved by #8216 (keyword alarm) |

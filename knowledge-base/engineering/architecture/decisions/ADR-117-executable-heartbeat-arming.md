@@ -325,6 +325,39 @@ asserted — `describe("the ARM gate's deadlines fit its job")` in
 `apps/web-platform/infra/arm-heartbeats.test.sh` drives the wall-clock bound and the rollback
 behaviourally against a fake clock.
 
+### Amendment (2026-09-15, #7884)
+
+The live-reconcile the 2026-07-17 amendment added now also lists monitors and reports objects no
+declaration accounts for ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)
+owns that decision). Three changes touch this ADR's reconcile, and one limit comes with them.
+
+**1. Declarations resolve exactly, not by pattern.** A templated heartbeat such as
+`name = "soleur-web-zot-consumer-${each.key}"` was compared as the literal string, never matched
+live, and produced two false `absent-live` rows on every run since July (#6645). The reconcile now
+resolves `for_each = var.<X>` from the variable's literal map default (one instance per top-level
+key, `${each.key}` substituted) and `count = var.<X> ? 1 : 0` from its literal bool default. The
+count-gated carve-out above is therefore evaluated, not assumed. Any other shape (another
+interpolation, `for_each` over a non-variable, a variable with no literal default, another `count`
+form) fails the run with `reason=unresolvable-declaration` (rc 1) instead of guessing.
+
+**Limit, stated because it is real.** The resolver reads defaults from the `.tf` source. A Doppler
+value surfaced through `doppler run --name-transformer tf-var` (`WEB_HOSTS`,
+`BETTERSTACK_PAID_TIER`, `ADOPT_APP_HEALTH_MONITOR`) would change what Terraform applies without
+changing what the reconcile expects. None of the three exists in `soleur/prd_terraform` (164
+secret names read on 2026-09-15, zero matches), so today the two agree; adding one would break
+that silently.
+
+**2. Every mismatch row carries a routing token.** Existing heartbeat rows gain a trailing
+`resource=<type.name>`; `logs_alert` rows gain `resource=<type.name>` immediately before
+`detail="…"`, so vendor text stays last. The prefixes ADR-218 and `monitor-send-failed-alert.md`
+quote are unchanged. The issue step escalates on these tokens, compared as whole tokens, instead of
+on a `name=` substring match.
+
+**3. The first run after merge re-escalates every existing row once.** Issue history (#6645)
+carries no `resource=` tokens, so each current row reads as new exactly one time, then settles.
+
+ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`

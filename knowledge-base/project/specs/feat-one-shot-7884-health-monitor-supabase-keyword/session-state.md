@@ -32,3 +32,9 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, l
 - cleanup: DELETE=204, GET-after=404
 - Pre-probe integration check: outgoing-webhooks [], slack-integrations [], email-integrations [] (no relay)
 - Decision: branch=keyword (EXPECTED_BRANCH="keyword")
+
+### Phase 4 housekeeping
+- 4.2 DONE: #8140 commented + closed not-planned (duplicate of #6645); #6645 commented (false `${each.key}` rows fixed by #8216).
+- 4.1 SKIPPED (deviation): `Output utilization high` (Logs alert 2536305877) is paused ("Manually paused") and already modeled in the logs_alert arm fixtures (`heartbeat-live-reconcile.test.ts`, `send-failed-alert-probe-8097.test.sh`); an issue for an inert, already-known object adds backlog with no consequence (net-issue-flow gate). Recorded here and in the PR body instead.
+- 4.3 N/A (keyword branch).
+- 4.4 PENDING: filing blocked by the filing-justification gate until Fix-Size can be measured from the landed Phase 1 diff; body at /var/tmp/p7884-i44.md.
