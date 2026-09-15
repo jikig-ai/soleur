@@ -13,7 +13,7 @@
 ### Decisions
 
 - AUP §2 bullet wording is the CLO ruling: "Browser automation via the agent-browser subsystem or a Playwright MCP server driven by Soleur agents or skills". It holds before and after #8156, makes no Web Platform or redaction claim.
-- `TC_VERSION` is NOT engaged, for a structural reason (the issue's "no clause changes" was imprecise): the gate pins only the T&C file, the AUP has no version constant, and the T&C incorporate the AUP by name with AUP §8 governing its own changes. Tier 2 by analogy, recorded once in the PR body.
+- `TC_VERSION` is NOT engaged; the reasoning lives once in the plan's `## Domain Review` → `### Legal`.
 - Last Updated moves in canonical body, mirror body, mirror header, canonical frontmatter, and the compliance-posture row + frontmatter; the SHA pin is refreshed last; doc, mirror and pin land in one commit.
 - The #7980 CLO attestation's "#7981 lands" trigger is closed with an append-only dated note; no new attestation file.
 - Plan review trimmed six redundant or unfalsifiable checks and added `probe-legal-corpus-truth.sh` and the three lint unit tests to the gate list.
