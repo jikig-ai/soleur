@@ -1,5 +1,5 @@
 ---
-title: "ADR-219: Soleur Cloud Mode — sentinel-based surface detection and the honest-degradation contract"
+title: "ADR-221: Soleur Cloud Mode — sentinel-based surface detection and the honest-degradation contract"
 status: Proposed
 date: 2026-09-14
 supersedes: []
@@ -7,7 +7,7 @@ amends: []
 tags: [devin, cloud, plugin, detection, degradation, hooks, subagents]
 ---
 
-# ADR-219: Soleur Cloud Mode — sentinel-based surface detection and the honest-degradation contract
+# ADR-221: Soleur Cloud Mode — sentinel-based surface detection and the honest-degradation contract
 
 ## Status
 
