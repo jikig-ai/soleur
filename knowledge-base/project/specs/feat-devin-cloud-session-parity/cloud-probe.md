@@ -159,10 +159,12 @@ input to FR4 and FR5.
    live defect **locally**: per
    `/cli/extensibility/hooks/lifecycle-hooks#using-the-matcher` the matcher is a
    regex over `tool_name`, and Devin's shell tool is `exec`, which `"Bash"`
-   never matches. `plugins/soleur/hooks/hooks.json` still registers
+   never matches. `plugins/soleur/hooks/hooks.json` registered
    `matcher: "Bash"` for `browser-snapshot-credential-guard.sh` — a silent
-   no-op on every Devin surface, local included. Fix to `^exec$`, or
-   `^(exec|Bash)$` to keep Claude Code working.
+   no-op on every Devin surface, local included. **Fixed in this branch** to
+   `^(Bash|exec)$` (both surfaces), pinned by a regex-evaluating test in
+   `plugins/soleur/test/devin-plugin.test.ts`; a presence grep would not have
+   caught it, since `"Bash"` is present and still wrong.
    Corroboration that the scripts themselves are sound: invoking
    `.claude/hooks/guardrails.sh` directly with a synthesised `exec` payload for
    a direct commit to `main` returns `permissionDecision: "deny"` with the
@@ -239,8 +241,8 @@ input to FR4 and FR5.
   `plugins/soleur/hooks/hooks.json` is absent there, which puts FR5's
   extraction scope at its maximum: any guardrail that must hold in cloud has to
   live in skill text, not in a hook.
-- The `"Bash"` matcher no-op (item 4) is a real *local* defect surfaced by this
-  probe, independent of the cloud work.
+- The `"Bash"` matcher no-op (item 4) was a real *local* defect surfaced by
+  this probe, independent of the cloud work; fixed here.
 - `requiredPlugins` placement (item 5) should move to the managed manifest
   before FR6 is frozen.
 - The banner needs the stateless per-invocation form (item 10), and FR4 should
