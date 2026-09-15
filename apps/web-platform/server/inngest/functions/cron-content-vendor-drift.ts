@@ -3,9 +3,9 @@
 // content drift detector. Parses schema-conforming NOTICE files under
 // plugins/soleur/skills/<slug>/NOTICE (multi-bundle discovery, ADR-219),
 // fetches upstream blobs, detects SHA drift. Routes security-relevant drift
-// to an issue; the low-risk auto-PR route (classifier rc 13) currently opens
-// no artifact — the re-vendor write is unimplemented and the arm reports
-// unhealthy rather than silent-green (see prArtifactMissing).
+// to an issue; the low-risk auto-PR route (classifier rc 13) re-vendors via
+// an in-step `git merge-file --diff3` write + NOTICE pin advance, committed
+// through safeCommitAndPr (#8180).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — Octokit + node:fs reads called INSIDE step.run (replay memoization).
@@ -169,6 +169,33 @@ export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
 
 /** Repository-level state of the upstream, observed once per run. */
 export type UpstreamRepoState = "ok" | "archived" | "renamed" | "unreachable";
+
+/**
+ * One drifted lifted file, carried from detection to the re-vendor write.
+ *
+ * `liftedPath` is the NOTICE-relative path (`references/...`); `upstreamPath`
+ * the upstream repo path; `oldSha` the NOTICE-pinned upstream blob and
+ * `newSha` the blob currently at `upstreamPath` on the upstream default
+ * branch. Only records the detect loop scored `drift` land here — an
+ * error-record file is excluded so the write never touches unmeasured bytes.
+ */
+export interface DriftedFile {
+  liftedPath: string;
+  upstreamPath: string;
+  oldSha: string;
+  newSha: string;
+}
+
+/**
+ * Upstream repository metadata, captured when the detect-step probe answered.
+ * Absent (null) when the probe failed — `unreachable` must never render as
+ * affirmative repository facts in the issue body (#8183).
+ */
+export interface RepoMetaSummary {
+  fullName: string;
+  archived: boolean;
+  defaultBranch: string;
+}
 
 /**
  * Totals produced by one comparison pass over the NOTICE registry.
@@ -389,6 +416,15 @@ interface DetectResult extends ComparisonTotals {
   /** The upstream default branch the comparison fetched against
    * (`repoMeta.default_branch`, "main" when the probe could not answer). */
   upstreamRef: string;
+  /** The upstream head commit at detect time — the pin the re-vendor write
+   * advances `pinned-commit` to (#8180). Null when it could not be fetched. */
+  newPinnedCommit: string | null;
+  /** Per-file (liftedPath, upstreamPath, oldSha, newSha) pairs for the
+   * re-vendor write (#8180). Empty on non-drift exits. */
+  driftedFiles: DriftedFile[];
+  /** Upstream repo metadata for the issue body (#8183). Null on a failed
+   * probe — unreachable renders `?`, never affirmative facts. */
+  repoMetaSummary: RepoMetaSummary | null;
 }
 
 /**
@@ -427,6 +463,170 @@ function spawnGit(
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
   });
+}
+
+/** Spawn git and capture stdout (rejects on non-zero exit or spawn error). */
+async function spawnGitStdout(
+  args: string[],
+  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...opts,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (d: Buffer) => {
+      stdout += d.toString();
+    });
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    child.on("exit", (exitCode) => {
+      if (exitCode === 0) {
+        resolve(stdout.trim());
+      } else {
+        reject(
+          new Error(
+            `git ${args.join(" ")} exited ${exitCode}: ${stderr.slice(0, 500)}`,
+          ),
+        );
+      }
+    });
+    child.on("error", (err) => reject(err));
+  });
+}
+
+/**
+ * Walk all pages of a paginated octokit list call (`per_page: 100`) up to a
+ * defensive cap of 20 pages — the `fetchAllPages` pattern established in
+ * `get-workstream-issue-options.ts` (the octokit client here is bare
+ * `@octokit/core`; no `paginate` plugin is installed).
+ *
+ * Any dedup path that ENUMERATES items to decide "does a matching open item
+ * exist" must page to completion: a bounded first page makes an existing open
+ * item beyond it invisible and the cron files a duplicate — a failure that
+ * grows exactly when the repo is busiest (#8182). The enumeration call sites
+ * are `listOpenPrHeads` (open-PR dedup for both the drift and attestation
+ * arms) and the per-bundle issue scan in `open-drift-issue-<slug>`.
+ */
+export async function fetchAllPages<T>(
+  fetchPage: (page: number) => Promise<{ data: T[] }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const { data } = await fetchPage(page);
+    out.push(...data);
+    if (data.length < 100) break;
+  }
+  return out;
+}
+
+/**
+ * Rewrite ONE lifted-files record in a NOTICE frontmatter body, porting the
+ * deleted workflow's Python heredoc verbatim in spirit
+ * (`git show 804114883:.github/workflows/scheduled-content-vendor-drift.yml`).
+ *
+ * The block anchor is `- path: <rel>` followed by its 4-space-indented
+ * sub-keys; the greedy `(?:    [^\n]+\n)+` span is load-bearing — a
+ * non-greedy span would capture only the first sub-key line and the sha
+ * substitutions below would silently no-op on a block lacking their targets.
+ * FAILS CLOSED: anything but exactly 1 block match, 1 local-blob-sha
+ * substitution and 1 upstream-blob-sha substitution throws — a NOTICE that
+ * cannot be rewritten atomically must not be written at all.
+ */
+export function rewriteNoticeRecord(
+  src: string,
+  relPath: string,
+  newLocalSha: string,
+  newUpstreamSha: string,
+): string {
+  const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const blockRe = new RegExp(`- path: ${escaped}\\n(?:    [^\\n]+\\n)+`, "g");
+  const nBlocks = (src.match(blockRe) ?? []).length;
+  if (nBlocks !== 1) {
+    throw new Error(
+      `NOTICE rewrite failed for ${relPath}: ${nBlocks} matching record blocks (expected exactly 1)`,
+    );
+  }
+  let nLocal = 0;
+  let nUpstream = 0;
+  const next = src.replace(new RegExp(blockRe.source, "m"), (block) => {
+    const withLocal = block.replace(
+      /(local-blob-sha:\s*)[0-9a-f]+/g,
+      (_m, prefix: string) => {
+        nLocal += 1;
+        return prefix + newLocalSha;
+      },
+    );
+    return withLocal.replace(
+      /(upstream-blob-sha:\s*)[0-9a-f]+/g,
+      (_m, prefix: string) => {
+        nUpstream += 1;
+        return prefix + newUpstreamSha;
+      },
+    );
+  });
+  if (nLocal !== 1 || nUpstream !== 1) {
+    throw new Error(
+      `NOTICE rewrite failed for ${relPath}: local-subs=${nLocal} upstream-subs=${nUpstream} (expected exactly 1 each)`,
+    );
+  }
+  return next;
+}
+
+/**
+ * Advance ONE top-level NOTICE scalar field, line-anchored. Exactly one
+ * replacement or throw — the same fail-closed contract as the record rewrite
+ * above: a NOTICE whose `pinned-commit`/`last-verified` cannot be advanced
+ * unambiguously must abort the write rather than attest a value it did not
+ * set.
+ */
+export function bumpNoticeField(
+  src: string,
+  field: string,
+  value: string,
+): string {
+  const all = new RegExp(`^${field}:[ \\t]*\\S+[ \\t]*$`, "gm");
+  const n = (src.match(all) ?? []).length;
+  if (n !== 1) {
+    throw new Error(
+      `NOTICE ${field} bump failed: ${n} matching lines (expected exactly 1)`,
+    );
+  }
+  return src.replace(
+    new RegExp(`^${field}:[ \\t]*\\S+[ \\t]*$`, "m"),
+    `${field}: ${value}`,
+  );
+}
+
+/**
+ * Fetch one upstream blob by its immutable SHA. A 404 or an undecodable body
+ * here is a genuine anomaly — the SHA came from the contents endpoint minutes
+ * ago — so this THROWS rather than skipping (the deleted workflow's
+ * `base64 -d` had the same hard-fail shape).
+ */
+async function fetchUpstreamBlob(
+  octokit: Octokit,
+  ownerRepo: string,
+  sha: string,
+): Promise<Buffer> {
+  const { data } = await octokit.request(
+    "GET /repos/{owner}/{repo}/git/blobs/{file_sha}",
+    {
+      owner: ownerRepo.split("/")[0],
+      repo: ownerRepo.split("/")[1],
+      file_sha: sha,
+    },
+  );
+  const d = data as { content?: string; encoding?: string };
+  if (typeof d.content !== "string" || d.encoding !== "base64") {
+    throw new Error(
+      `Upstream blob ${sha} returned no decodable base64 content`,
+    );
+  }
+  return Buffer.from(d.content, "base64");
 }
 
 /** Spawn a bash script and capture stdout + stderr + exit code. */
@@ -536,6 +736,14 @@ async function ensureLabels(octokit: Octokit): Promise<void> {
       description:
         "Vendor-drift workflow failed (gh api 5xx, rate-limit, etc.)",
       color: "B60205",
+    },
+    {
+      // Advisory label the conflicted re-vendor arm applies (#8180): a PR
+      // carrying --diff3 markers is create-only and waits on a human.
+      name: "needs-human-review",
+      description:
+        "Automated change needs human review before merge",
+      color: "D93F0B",
     },
   ];
   for (const label of labels) {
@@ -704,18 +912,21 @@ async function discoverBundles(
   return bundles;
 }
 
-/** Open PR head refs under a prefix — one `pulls` list call, classified
- * per-slug by classifyBranchOwner. The search API's `head:` filter cannot
- * express "prefix X but not slug Y", so ownership is resolved client-side. */
+/** Open PR head refs — ALL pages of the `pulls` list, classified per-slug
+ * by classifyBranchOwner. The search API's `head:` filter cannot express
+ * "prefix X but not slug Y", so ownership is resolved client-side — which
+ * makes this an ENUMERATION dedup: it must page to completion via
+ * fetchAllPages, or a matching open PR beyond page 1 is invisible and the
+ * run files a duplicate (#8182). */
 async function listOpenPrHeads(octokit: Octokit): Promise<string[]> {
-  const { data: prs } = await octokit.request(
-    "GET /repos/{owner}/{repo}/pulls",
-    {
+  const prs = await fetchAllPages((page) =>
+    octokit.request("GET /repos/{owner}/{repo}/pulls", {
       owner: REPO_OWNER,
       repo: REPO_NAME,
       state: "open",
       per_page: 100,
-    },
+      page,
+    }),
   );
   return prs.map((pr) => pr.head.ref);
 }
@@ -1006,6 +1217,10 @@ async function runBundleArm(deps: {
     // attestation must distinguish them (#7710 review, P1-A).
     let driftFlags = "";
     let upstreamRepoState: UpstreamRepoState = "ok";
+    // Captured for the issue-body enrichment (#8183) and the pin advance
+    // (#8180). `repoMetaSummary` stays null when the probe throws —
+    // `unreachable` must never render as affirmative repository facts.
+    let repoMetaSummary: RepoMetaSummary | null = null;
     // The upstream default branch, derived from the repo probe rather than
     // assumed — a bundle whose upstream renamed `main` must not fetch a
     // stale or nonexistent ref and read the failure as drift.
@@ -1018,9 +1233,12 @@ async function runBundleArm(deps: {
           repo: ownerRepo.split("/")[1],
         },
       );
-      if (repoMeta.default_branch) {
-        upstreamRef = repoMeta.default_branch;
-      }
+      repoMetaSummary = {
+        fullName: repoMeta.full_name,
+        archived: repoMeta.archived === true,
+        defaultBranch: repoMeta.default_branch || "main",
+      };
+      upstreamRef = repoMetaSummary.defaultBranch;
       if (repoMeta.archived) {
         driftFlags = "--archived";
         upstreamRepoState = "archived";
@@ -1034,6 +1252,38 @@ async function runBundleArm(deps: {
     } catch {
       driftFlags = "--archived";
       upstreamRepoState = "unreachable";
+      repoMetaSummary = null;
+    }
+
+    // The commit the new pin will name on the re-vendor arm (#8180).
+    // Detection, this pin, and the blobs merged all describe the same
+    // upstream head (`upstreamRef`). A failed fetch leaves null rather than
+    // degrading the probe's repo-level verdict — the write step throws on
+    // a missing pin, so the failure is loud, not silently absent.
+    let newPinnedCommit: string | null = null;
+    if (upstreamRepoState === "ok" || upstreamRepoState === "renamed") {
+      try {
+        const { data: headCommit } = await octokit.request(
+          "GET /repos/{owner}/{repo}/commits/{ref}",
+          {
+            owner: ownerRepo.split("/")[0],
+            repo: ownerRepo.split("/")[1],
+            ref: upstreamRef,
+          },
+        );
+        if (typeof headCommit.sha === "string" && headCommit.sha) {
+          newPinnedCommit = headCommit.sha;
+        }
+      } catch (pinErr) {
+        logger.warn(
+          {
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            err: (pinErr as Error).message,
+          },
+          "Upstream head-commit fetch failed — a PR-route run will fail loudly on the missing pin",
+        );
+      }
     }
 
     // Get upstream files list
@@ -1047,8 +1297,31 @@ async function runBundleArm(deps: {
       .split("\n")
       .filter(Boolean);
 
+    // The positional twin of `upstream-files`: `lifted-files` emits
+    // `<local-rel>:<local-sha>` in the same record order, and the re-vendor
+    // write pairs them by index to know WHICH local path a drifted
+    // upstream path maps to (#8180). If the two views differ in length the
+    // zip would merge the wrong upstream bytes into the wrong file —
+    // throw; that NOTICE is malformed and the mismatch is a measurement
+    // failure, not a per-file error.
+    const liftedFilesResult = await spawnScriptCapture(
+      parserPath,
+      ["lifted-files"],
+      { cwd: repoRoot, env },
+    );
+    const liftedFiles = liftedFilesResult.stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    if (liftedFiles.length !== upstreamFiles.length) {
+      throw new Error(
+        `NOTICE registry views disagree on cardinality: lifted-files=${liftedFiles.length} upstream-files=${upstreamFiles.length} — cannot zip-pair records for the re-vendor write`,
+      );
+    }
+
     let driftDetected = false;
     const aggDiffParts: string[] = [];
+    const driftedFiles: DriftedFile[] = [];
 
     // THREE states, not two (#7710). The previous form collapsed a missing
     // sha and an equal sha into ONE `continue`, which scores a response that
@@ -1069,7 +1342,8 @@ async function runBundleArm(deps: {
     let filesDrifted = 0;
     let filesError = 0;
 
-    for (const line of upstreamFiles) {
+    for (let i = 0; i < upstreamFiles.length; i++) {
+      const line = upstreamFiles[i];
       const [upstreamPath, oldSha] = line.split(":");
       if (!upstreamPath || !oldSha) {
         // A malformed registry line is not a file we compared. Counting it
@@ -1108,6 +1382,9 @@ async function runBundleArm(deps: {
             owner: ownerRepo.split("/")[0],
             repo: ownerRepo.split("/")[1],
             path: upstreamPath,
+            // The probed default branch, not a hardcoded "main": the same
+            // ref detection compares, the pin names, and the write merges —
+            // three reads of one upstream head (#8180).
             ref: upstreamRef,
           },
         );
@@ -1135,6 +1412,20 @@ async function runBundleArm(deps: {
 
         filesDrifted += 1;
         driftDetected = true;
+
+        // Record the pair the re-vendor write will merge (#8180). The
+        // lifted path comes from the positionally-paired `lifted-files`
+        // view (cardinality asserted above); `newSha` is the blob now at
+        // `upstreamPath` on `upstreamRef`, fetched seconds ago.
+        const liftedPath = liftedFiles[i].split(":")[0];
+        driftedFiles.push({
+          liftedPath,
+          upstreamPath,
+          oldSha,
+          // verdict === "drift" is unreachable with an empty currentSha —
+          // classifyFileComparison scores that ERROR above.
+          newSha: currentSha as string,
+        });
 
         // Populate the classifier's stdin. This array was declared and
         // joined into `stdin` but NEVER written to (#7710), so the
@@ -1290,6 +1581,15 @@ async function runBundleArm(deps: {
       upstreamRepoState,
     };
 
+    // Carried on every arm for a uniform memoized shape (ADR-033 I5):
+    // `driftedFiles`/`newPinnedCommit` feed the re-vendor write and
+    // `repoMetaSummary` feeds the issue-body metadata section.
+    const detection = {
+      driftedFiles,
+      newPinnedCommit,
+      repoMetaSummary,
+    };
+
     if (!driftDetected && !driftFlags) {
       return {
         drift: "none" as const,
@@ -1297,6 +1597,7 @@ async function runBundleArm(deps: {
         labels: [] as string[],
         classifyRc: 0,
         upstreamRef,
+        ...detection,
         ...totals,
       };
     }
@@ -1342,6 +1643,7 @@ async function runBundleArm(deps: {
         labels: [] as string[],
         classifyRc: 0,
         upstreamRef,
+        ...detection,
         ...totals,
       };
     }
@@ -1356,6 +1658,7 @@ async function runBundleArm(deps: {
         labels,
         classifyRc,
         upstreamRef,
+        ...detection,
         ...totals,
       };
     }
@@ -1387,6 +1690,7 @@ async function runBundleArm(deps: {
           labels,
           classifyRc,
           upstreamRef,
+          ...detection,
           ...totals,
         };
       }
@@ -1397,6 +1701,7 @@ async function runBundleArm(deps: {
         labels,
         classifyRc,
         upstreamRef,
+        ...detection,
         ...totals,
       };
     }
@@ -1408,6 +1713,7 @@ async function runBundleArm(deps: {
       labels,
       classifyRc,
       upstreamRef,
+      ...detection,
       ...totals,
     };
   });
@@ -1421,15 +1727,156 @@ async function runBundleArm(deps: {
   // Branch becomes ci/content-vendor-drift-<slug>-<ts> via the per-bundle
   // cronName (helper derivation, #5111) — the detect step's open-PR dedup
   // classifies this namespace by slug and was updated in lockstep.
-  // `pr` route honesty: the result is CAPTURED, not discarded. Nothing in the
-  // detect step writes vendored content into the worktree (the re-vendor write
-  // is unimplemented — tracked follow-up), so today this step always lands
-  // `no-changes`. A pr-route arm with no committed artifact is NOT healthy —
-  // the heartbeat must not read `route !== "none"` as "artifact produced".
+  // `pr` route honesty: the result is CAPTURED, not discarded. A pr-route
+  // arm with no committed artifact is NOT healthy — the heartbeat must not
+  // read `route !== "none"` as "artifact produced" (prArtifactMissing below).
   let prStepResult: SafeCommitResult | null = null;
   if (detectResult.route === "pr") {
-    prStepResult = await step.run(`safe-commit-pr-${bundle.slug}`, async () =>
-      safeCommitAndPr({
+    prStepResult = await step.run(`safe-commit-pr-${bundle.slug}`, async () => {
+      // THE RE-VENDOR WRITE LIVES IN THIS STEP, before safeCommitAndPr —
+      // not in a prior step. A filesystem write that is the only carrier of
+      // new content must execute in the same memoized step as the commit
+      // consuming it: split out, an Inngest replay returns the memoized
+      // detect result while the worktree is clean and the commit is a
+      // silent `no-changes` no-op — the exact dead-route failure #8180
+      // exists to remove (learning
+      // 2026-06-14-inngest-regenerate-cron-consolidate-write-and-commit-in-one-step).
+      //
+      // The merge/NOTICE-rewrite/conflict-gate shape is ported from the
+      // deleted workflow (`git show
+      // 804114883:.github/workflows/scheduled-content-vendor-drift.yml`,
+      // ~:270-360): blob fetches keyed by immutable SHA, `git merge-file
+      // --diff3` into the lifted path, `git hash-object --no-filters` for
+      // the new local pin, block-anchored NOTICE rewrite with an
+      // assert-exactly-1 contract, then the conflict-marker gate. All paths
+      // and identity strings are per-bundle — `bundle.skillPrefix`,
+      // `bundle.noticeFileRel`, `bundle.upstreamName` — never the old
+      // single-bundle constants.
+      if (detectResult.driftedFiles.length === 0) {
+        throw new Error(
+          `route=pr with zero drifted files for bundle ${bundle.slug} — the classifier routed drift this run did not measure`,
+        );
+      }
+      if (!detectResult.newPinnedCommit) {
+        throw new Error(
+          `route=pr without a resolved upstream head commit for bundle ${bundle.slug} — cannot write a pin that was not measured`,
+        );
+      }
+
+      // Merge inputs live OUTSIDE the clone — inside `repoRoot` they would
+      // read as untracked paths to safeCommitAndPr's allow-list guard.
+      const mergeDir = await mkdtemp(join(repoRoot, "..", "merge-inputs-"));
+      let noticeSrc = await readFile(noticeAbs, "utf8");
+      const mergeStatus: {
+        path: string;
+        outcome: "merged" | "conflicted";
+      }[] = [];
+
+      for (const f of detectResult.driftedFiles) {
+        const liftedAbs = join(repoRoot, bundle.skillPrefix, f.liftedPath);
+        if (!existsSync(liftedAbs)) {
+          throw new Error(
+            `Drifted lifted file absent from worktree: ${bundle.skillPrefix}/${f.liftedPath}`,
+          );
+        }
+        const idx = mergeStatus.length;
+        const oldTmp = join(mergeDir, `old-${idx}`);
+        const newTmp = join(mergeDir, `new-${idx}`);
+        // Both keyed by immutable blob SHA — a resumed step re-derives
+        // identical bytes.
+        await writeFile(
+          oldTmp,
+          await fetchUpstreamBlob(octokit, bundle.upstreamName, f.oldSha),
+        );
+        await writeFile(
+          newTmp,
+          await fetchUpstreamBlob(octokit, bundle.upstreamName, f.newSha),
+        );
+
+        // git merge-file: 0 = clean merge (lifted path rewritten in place);
+        // 1..127 = conflict count and the file now carries --diff3 markers;
+        // >=128 or a spawn error is a hard failure — throw, never skip.
+        const merge = await spawnGit(
+          [
+            "merge-file",
+            "--diff3",
+            "-L",
+            f.liftedPath,
+            "-L",
+            "upstream-pinned",
+            "-L",
+            "upstream-new",
+            liftedAbs,
+            oldTmp,
+            newTmp,
+          ],
+          { cwd: repoRoot },
+        );
+        if (
+          merge.exitCode === null ||
+          merge.exitCode < 0 ||
+          merge.exitCode >= 128 ||
+          merge.signal
+        ) {
+          throw new Error(
+            `git merge-file failed for ${f.liftedPath} (exit ${merge.exitCode}, signal ${merge.signal})`,
+          );
+        }
+        const conflicted = merge.exitCode > 0;
+        mergeStatus.push({
+          path: f.liftedPath,
+          outcome: conflicted ? "conflicted" : "merged",
+        });
+
+        const newLocalSha = await spawnGitStdout(
+          ["hash-object", "--no-filters", liftedAbs],
+          { cwd: repoRoot },
+        );
+        if (!/^[0-9a-f]{40}$/.test(newLocalSha)) {
+          throw new Error(
+            `git hash-object returned a non-SHA for ${f.liftedPath}: ${newLocalSha}`,
+          );
+        }
+        noticeSrc = rewriteNoticeRecord(
+          noticeSrc,
+          f.liftedPath,
+          newLocalSha,
+          f.newSha,
+        );
+        await rm(oldTmp, { force: true });
+        await rm(newTmp, { force: true });
+      }
+
+      // The records now attest the newly-pinned content — this write IS the
+      // verified-clean endpoint for the new pin, so pinned-commit and
+      // last-verified advance inside the PR's own NOTICE diff. Line-anchored,
+      // exactly-one each (bumpNoticeField throws otherwise). The separate
+      // attest-freshness step's clean-run writer is untouched.
+      const today = runStartedAt.slice(0, 10);
+      noticeSrc = bumpNoticeField(
+        noticeSrc,
+        "pinned-commit",
+        detectResult.newPinnedCommit,
+      );
+      noticeSrc = bumpNoticeField(noticeSrc, "last-verified", today);
+      await writeFile(noticeAbs, noticeSrc, "utf8");
+
+      // Conflict-marker gate (runbook §2): a merged file still carrying
+      // `<<<<<<<` markers must NOT auto-merge upstream bytes into
+      // compliance content — the PR is created create-only and labeled for
+      // human resolution.
+      let needsHumanReview = false;
+      for (const f of detectResult.driftedFiles) {
+        const merged = await readFile(
+          join(repoRoot, bundle.skillPrefix, f.liftedPath),
+          "utf8",
+        );
+        if (/^<<<<<<</m.test(merged)) {
+          needsHumanReview = true;
+        }
+      }
+
+      const res = await safeCommitAndPr({
         spawnCwd: repoRoot,
         installationToken,
         cronName,
@@ -1440,29 +1887,61 @@ async function runBundleArm(deps: {
         ],
         runStartedAt,
         scheduledIssueLabel: SENTRY_MONITOR_SLUG,
-        // The sentence claiming the NOTICE freshness field was advanced at
-        // PR-creation time was removed here (#7710). NOTHING HAD EVER DONE
-        // THAT. The GHA workflow deleted in #4483 did carry a `sed` for it,
-        // but 177 lines past an `exit 0` taken on every no-drift run — so it
-        // was reachable only on the drift arm, the corpus never drifted, and
-        // no `ci/vendor-drift-*` PR has ever existed. This body asserted a
-        // bump on every drift PR it opened while the field sat unchanged. The retired sentence is described rather than
-        // quoted: the regression guard greps this file for it. `last-verified` is now advanced by the
-        // attest-freshness step below, and ONLY on a verified-clean run —
-        // which is deliberately not this path, since this path exists
-        // because drift WAS found.
-        prBody:
-          `Automated re-vendor on upstream drift for bundle \`${bundle.slug}\`. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified is NOT advanced here — this PR exists because drift was detected; the field advances only on a verified-clean comparison. Classifier exit and labels set in commit metadata.`,
-        prLabels: detectResult.labels,
+        // An earlier revision of this body asserted a last-verified bump
+        // nothing performed (#7710 — the sentence is described, not quoted,
+        // because the regression guard greps for it). The claim is true NOW:
+        // the write loop above advances both fields in this PR's NOTICE
+        // diff, so the body reports what it did rather than what it did not.
+        prBody: [
+          `Automated re-vendor on upstream drift for bundle \`${bundle.slug}\`. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md.`,
+          "",
+          "## Per-file merge status",
+          "",
+          ...mergeStatus.map((m) => `- \`${m.path}\` — ${m.outcome}`),
+          "",
+          `NOTICE \`pinned-commit\` advanced to \`${detectResult.newPinnedCommit}\` and \`last-verified\` to \`${today}\` — the merged records attest the newly pinned content.`,
+          ...(needsHumanReview
+            ? [
+                "",
+                "⚠️ Merge conflicts present — files above marked `conflicted` carry `--diff3` markers. This PR is create-only; resolve per runbook §2.",
+              ]
+            : []),
+        ].join("\n"),
+        prLabels: detectResult.labels.concat(
+          needsHumanReview ? ["needs-human-review"] : [],
+        ),
         syntheticChecks: {
           names: SYNTHETIC_CHECK_NAMES,
           summary: "Re-vendor on upstream drift detection — see runbook",
         },
-        mergeMode: "direct",
+        // "none" is the create-only human-review arm: a conflicted
+        // re-vendor must not auto-merge conflict markers into compliance
+        // content (also removes the CODEOWNERS-bypass residual ADR-203
+        // carries on the direct-merge arm).
+        mergeMode: needsHumanReview ? "none" : "direct",
         octokit,
         logger,
-      }),
-    );
+      });
+
+      // The return must never be discarded — a clean worktree means a
+      // silent no-PR run reading green. On this arm `no-changes` means the
+      // write loop regressed; report it so the miss is observable (the
+      // prArtifactMissing conjunct below additionally keeps the bundle
+      // heartbeat red).
+      if (res.status === "no-changes") {
+        reportSilentFallback(
+          new Error(
+            "Re-vendor write produced no worktree changes — safeCommitAndPr returned no-changes on the PR route",
+          ),
+          {
+            feature: "cron-content-vendor-drift",
+            op: "safe-commit-no-changes",
+            message: `bundle=${bundle.slug} drifted=${detectResult.driftedFiles.length} conflicted=${needsHumanReview} — expected a dirty tree, got none`,
+          },
+        );
+      }
+      return res;
+    });
   }
 
   // Route: open issue for security-relevant drift
@@ -1481,14 +1960,20 @@ async function runBundleArm(deps: {
       // issue in any of those classes was invisible to this query and the
       // run re-filed a duplicate every week. Bundle ownership is still
       // partitioned client-side by classifyIssueOwner on the [<slug>] token.
-      const { data: existing } = await octokit.request(
-        "GET /search/issues",
-        {
+      //
+      // Dedup completeness (#8182): this is an ENUMERATION — the match is
+      // found by scanning `items`, so the scan must page to completion via
+      // fetchAllPages. A bounded first page makes an existing open issue
+      // beyond it invisible and the run re-files a duplicate every week.
+      const existingItems = await fetchAllPages(async (page) => {
+        const { data } = await octokit.request("GET /search/issues", {
           q: `is:issue is:open repo:${REPO_OWNER}/${REPO_NAME} "security-relevant drift" in:title`,
-          per_page: 20,
-        },
-      );
-      const existingForBundle = existing.items.filter(
+          per_page: 100,
+          page,
+        });
+        return { data: data.items };
+      });
+      const existingForBundle = existingItems.filter(
         (item) => classifyIssueOwner(item.title, slugs) === bundle.slug,
       );
       if (existingForBundle.length > 0) {
@@ -1499,6 +1984,12 @@ async function runBundleArm(deps: {
         return;
       }
 
+      // The detect step already fetched this — render it rather than
+      // making the operator re-fetch it during triage (#8183). A failed
+      // probe leaves `repoMetaSummary` null and renders `?`: "I could not
+      // reach the repo" is uncertainty, never an affirmative "repo is
+      // healthy" fact.
+      const meta = detectResult.repoMetaSummary;
       const body = [
         "Automated drift detection routed to issue-only (no auto-PR).",
         "",
@@ -1506,6 +1997,19 @@ async function runBundleArm(deps: {
         `**Upstream:** \`${bundle.upstream}\` pinned at \`${bundle.pinnedCommit}\``,
         `**Classifier exit code:** \`${detectResult.classifyRc}\``,
         `**Labels:** \`${detectResult.labels.join(", ")}\``,
+        "",
+        "## Upstream repository metadata",
+        "",
+        `- **full_name:** \`${meta ? meta.fullName : "?"}\``,
+        `- **archived:** \`${meta ? meta.archived : "?"}\``,
+        `- **default_branch:** \`${meta ? meta.defaultBranch : "?"}\``,
+        `- **upstream_repo_state:** \`${detectResult.upstreamRepoState}\``,
+        ...(meta
+          ? []
+          : [
+              "",
+              "_(repository probe failed — fields are unknown, not healthy)_",
+            ]),
         "",
         "## Why issue, not PR?",
         "",
