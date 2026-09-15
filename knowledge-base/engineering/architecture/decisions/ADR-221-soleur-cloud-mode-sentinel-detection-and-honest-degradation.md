@@ -11,24 +11,31 @@ tags: [devin, cloud, plugin, detection, degradation, hooks, subagents]
 
 ## Status
 
-Proposed — 2026-09-14. Provisional ordinal; re-derived against `origin/*` at merge
-time. Implements #8159. Merge-readiness is frozen on the Phase 0 empirical cloud
-probe (#8172) or an explicit recorded deferral — this ADR records the *design*
-as implemented for Phases 1–3; matrix rows, FR4 mechanism, and FR5 scope may be
-revised by measured probe data.
+Proposed — 2026-09-14; probe-measured 2026-09-15. Provisional ordinal;
+re-derived against `origin/*` at merge time. Implements #8159. The Phase 0
+probe ran on two arms (DRS sandbox `devin-b9cf2c02cc8f49debdbc49ed72cdf2b5`;
+user-facing web-app session, absorbed from PR #8196) — matrix rows, FR4
+mechanism, and FR5 scope are now measured, not provisional. Residual
+verification (user-facing re-check, clean-account `requiredPlugins`, `/handoff`
+`.devin/` sync, post-merge SC1/SC3/SC4) tracks on #8172.
 
 ## Context
 
 Soleur runs on the Devin harness in two substrates with different enforcement
 surfaces. Locally (CLI/Desktop) the full plugin surface exists: skills, plugin
 `AGENTS.md` rules, MCP, plugin subagents (`agents/**/*.md` via `run_subagent`),
-and plugin hooks. In a Devin Cloud session (Cognition-managed VM) the
-documented surface is narrower: skills and plugin `AGENTS.md` rules load, MCP
-loads (auth via the web-app connection), plugin subagents are local-only, and
-plugin `SessionStart`/`SessionEnd` hooks never fire. Plugin `command` hooks are
-documented cloud-capable for other events, but per-matcher binding
-(`hooks.json` registers `matcher: "Bash"` while Devin's shell tool is `exec`)
-is unverified; repo-level `.devin/config.json` hooks are undocumented.
+and plugin hooks. In a Devin Cloud session (Cognition-managed VM) the measured
+surface is narrower — and narrower than the documentation suggested: skills and
+plugin `AGENTS.md` rules load, MCP loads (auth via the web-app connection),
+plugin subagents are local-only (`run_subagent` exists in the web-app tool
+catalog but plugin `agents/**` do not load), and **no hook class fires on any
+registration surface** — plugin `hooks.json`, repo `.devin/config.json`, and
+`.claude/settings.json` were all probed inert, including a `matcher: ""`
+catch-all. `ask_user_question` is absent; `message_user` blocks and stalls,
+never auto-approves. The probe also caught a real defect: `hooks.json`
+registered `matcher: "Bash"`, which never binds Devin's `exec` tool — the
+credential guard was a silent no-op on every Devin surface including local
+(fixed; the wider `.claude/settings.json` `"Bash"` matcher class is #8205).
 
 The failure class this addresses is **silent degradation**: an operator runs
 `/soleur:one-shot` or `/soleur:review` in a cloud session, the agent fan-out
@@ -53,15 +60,24 @@ safeguard.
    `{"host","ts","hook_source"}` unconditionally under Devin env (no
    `plugins/soleur/` scope guard — user repos consuming via `requiredPlugins`
    are the primary audience, and a scope guard inverts detection into
-   permanent false-cloud). The write is ordered after the `additionalContext`
-   JSON emit and failure-isolated with `|| true`, so a write failure can never
-   kill context injection. `plugins/soleur/scripts/cloud-detect.sh` is the
-   ONE classifier: `local` only when the sentinel exists, `host` matches
-   `hostname` (same invocation on write and compare sides), and
-   `hook_source` is `plugin`; every other outcome emits
-   `not-local:<reason>` (`no-devin-env | sentinel-absent | malformed |
-   foreign-host | non-plugin-source`) and consumers fail closed. No `jq`
-   dependency; a `not-local` result is never a usage error (exit 0).
+   permanent false-cloud). The write is atomic (tmp+`mv`), ordered BEFORE the
+   `additionalContext` JSON emit so a `jq`-less host still leaves the sentinel,
+   and failure-isolated with `|| true`. `plugins/soleur/scripts/cloud-detect.sh`
+   is the ONE classifier, and it is **sentinel-first**: a valid sentinel alone
+   means `local` because local Devin exec shells export *zero* `DEVIN*`
+   variables (measured on this machine — the env gate the first draft led
+   with made `local` unreachable). `local` requires the sentinel to exist,
+   `host` to match `hostname`, and `hook_source` = `plugin`; every other
+   outcome emits `not-local:<reason>` (`no-devin-env | sentinel-absent |
+   malformed | foreign-host | non-plugin-source | conflicting-evidence`) and
+   consumers fail closed. `no-devin-env` means *not a Devin session* — it
+   proceeds normally and suppresses the banner; the cloud-only marker set
+   (`DEVIN_DIR`, `DEVIN_DISABLE_HISTEXPAND`) distinguishes a Devin box from a
+   Claude Code shell. `conflicting-evidence` closes the upstream-convergence
+   hole: a valid plugin-sourced sentinel *plus* a cloud-only env marker means
+   plugin hooks have started firing in cloud before subagents exist — fail
+   closed, not open. No `jq` dependency; a `not-local` result is never a
+   usage error (exit 0).
 2. **Dual-registration ordering is pinned.** This repo registers
    `devin-session-start.sh` twice (plugin `hooks.json` and repo
    `.devin/config.json`), so the hook can fire twice locally with undefined
@@ -73,9 +89,12 @@ safeguard.
    `not-local` classification at pipeline start. (b) Sequential fallback:
    skills that fan out execute each role definition sequentially inline and
    mark deliverables/PR trailers `Reviewed-Coverage: sequential-fallback`
-   (`emit-review-trailer.sh --mode`); `/ship` blocks that coverage value on
-   `single-user incident` plans unless the operator explicitly acknowledges —
-   interactive sessions get a structured ask, headless sessions abort.
+   (`emit-review-trailer.sh --mode` — the explicit mode survives count-based
+   derivation, since N/N sequential roles are NOT `full` independent-agent
+   coverage); `/ship` blocks that coverage value on `single-user incident`
+   plans unless the operator explicitly acknowledges — interactive sessions
+   get a structured ask (`message_user` in cloud; `ask_user_question` is
+   absent there), headless sessions abort.
    (c) A session-scoped acknowledgement gate before secrets reads or
    production mutation — conversation context only, never a persisted ack
    file (a stale file replays into a new session); if the session is
@@ -83,33 +102,37 @@ safeguard.
 4. **The contract lives on guaranteed-load surfaces only.** The canonical
    text is `devin/INSTRUCTIONS.md` §Cloud Mode + a `[id:]`-tagged rules
    section in `plugins/soleur/AGENTS.md` — the two surfaces documented to
-   load in cloud. Each of the 59 grep-derived union-set SKILL.md files
-   (spawn-sites ∪ secrets/prod ∪ pipeline skills) carries one composite
-   `<!-- soleur-cloud-mode:start/end -->` pointer block — a single marker per
-   skill, grep-verifiable, no per-skill detection logic.
+   load in cloud. Each of the 64 union-set SKILL.md files (spawn-sites ∪
+   secrets/prod ∪ pipeline skills) carries one composite
+   `<!-- soleur-cloud-mode:start/end -->` pointer block, plus the 3
+   `devin/skills/*` shims and `commands/go.md` — a single byte-identical
+   marker per skill, drift-pinned in `devin-cloud-mode.test.ts`.
 5. **One structural guardrail is restored skill-side; the rest are disclosed
    absent.** `plugins/soleur/scripts/precommit-guard.sh` (self-contained, no
    vendored `.claude/hooks/lib` — those paths resolve relative to the repo and
    land in the plugin install cache when vendored, ADR-178) refuses
-   commit-on-main/master including chained commands, invoked directly by
-   work/ship/one-shot; `.claude/hooks/guardrails.sh` delegates its
-   commit-on-main block to it (plugin = canonical source, repo reaches in,
-   with the inline check retained as an unreachable-plugin fallback). The
-   DONE-marker stop-gate is deliberately NOT extracted — it reads hook-stdin
-   transcript data a standalone script cannot see. All other repo guardrails
-   (prod-write-defer-gate, worktree-write-guard, secret-scan, freeze-lock, …)
-   are enumerated as *not restored* in the capability matrix.
+   commit-on-main/master across chained/piped/env-prefixed/`-C`/`--git-dir`
+   command shapes, invoked directly by work/ship/one-shot skill text and the
+   marker block; `.claude/hooks/guardrails.sh` delegates its commit-on-main
+   block to it (plugin = canonical source, repo reaches in, with the inline
+   check retained as an unreachable-plugin fallback) and the `.openhands`
+   port carries the same detection width + segment-scoped resolution inline.
+   The DONE-marker stop-gate is deliberately NOT extracted — it reads
+   hook-stdin transcript data a standalone script cannot see. All other repo
+   guardrails (prod-write-defer-gate, worktree-write-guard, secret-scan,
+   freeze-lock, …) are enumerated as *not restored* in the capability matrix.
 6. **`requiredPlugins` is added to `.devin/config.json`** so cloud sessions on
    this repo install the plugin from the cloned repository; unknown-key
-   tolerance verified locally (`devin doctor` parses clean). Cloud install
-   behavior is a Phase 0 probe item.
-7. **The empirical probe is an operator-gated Phase 0, not a verification
-   tail.** Probe results freeze the FR4 ack mechanism (does
-   `ask_user_question` auto-approve, stall, or return distinguishable
-   unanswered in unattended sessions), the FR5 extraction scope (which
-   repo-level guardrails already fire in cloud), capability-matrix rows, and
-   Art. 30 wording. A GDPR pre-probe credential determination precedes the
-   session; any Jikigai limb escalates to CLO first (D10 pre-emptive).
+   tolerance verified locally (`devin doctor` parses clean) and the repo-level
+   key is documented in plugins overview §Inheritance level 3. Its marginal
+   effect is unmeasured — the org managed manifest already installs Soleur, so
+   a clean-account arm stays on #8172.
+7. **The empirical probe ran (two arms) — results are folded into the
+   decisions above.** FR4 froze on the hard-defer `message_user` mechanism
+   (it blocks and stalls; never auto-approves). FR5 is maximal scope: zero
+   hook dispatch on any registration surface. A GDPR pre-probe credential
+   determination preceded both sessions (all limbs personal — D10 not
+   engaged); the residual user-facing verification set tracks on #8172.
 
 ## Consequences
 
@@ -124,11 +147,13 @@ safeguard.
   contract; they are never claimed capability-equivalent. `sequential-fallback`
   coverage on a `single-user incident` plan blocks `/ship` absent explicit
   acknowledgement.
-- **Probe debt:** FR4 mechanism, FR5 scope beyond commit-on-main, matrix rows,
-  and Art. 30 wording are measured-data decisions parked on #8172. If the probe
-  shows plugin `command` hooks fully working in cloud, FR5's remaining
-  extraction narrows; if repo hooks fire in cloud, `hook_source` already keeps
-  detection correct either way — the design is stable under both outcomes.
+- **Residual probe debt:** the two-arm probe measured the surfaces this design
+  depends on; what remains on #8172 is confirmatory (user-facing re-check of
+  the sandbox findings, a clean-account `requiredPlugins` arm, `/handoff`
+  `.devin/` sync, post-merge SC1/SC3/SC4 verification). If upstream later ships
+  plugin hooks in cloud before subagents (#8160's own sequence), the
+  `conflicting-evidence` arm keeps detection fail-closed instead of reading
+  the new sentinel writes as `local`.
 - **Legal surface:** the cloud substrate is a third configuration (third-party
   machine + user credential + user purpose) the two-category taxonomy did not
   name; the disclosure floor (DPD corrections, fifth classification row) is
@@ -151,7 +176,9 @@ safeguard.
 
 - #8159 (feature), #8155 (PR), #8160 (upstream request: plugin subagents +
   plugin hooks in cloud), #8161 (Jikigai-credentialed cloud sessions),
-  #8162 (full-parity posture), #8172 (operator-gated probe).
+  #8162 (full-parity posture), #8172 (operator-gated probe — two arms landed),
+  #8205 (the wider `.claude/settings.json` `"Bash"` matcher class — per-hook
+  review, not a sweep).
 - Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-plan.md`;
   spec: `knowledge-base/project/specs/feat-devin-cloud-session-parity/spec.md`;
   probe record: `knowledge-base/project/specs/feat-devin-cloud-session-parity/cloud-probe.md`.

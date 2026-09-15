@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ -n "${DEVIN:-}" || -n "${DEVIN_HOME:-}" || -n "${DEVIN_PROJECT_DIR:-}" || -n "${DEVIN_PLUGIN_ROOT:-}" ]] || exit 0
+# DEVIN_DIR is in the gate deliberately: it is the measured cloud-only marker
+# (cloud-probe.md), so if a repo-level SessionStart registration ever fires on a
+# cloud VM this hook must still write — the `hook_source=repo` sentinel is what
+# makes the classifier's non-plugin-source arm discriminate.
+[[ -n "${DEVIN:-}" || -n "${DEVIN_HOME:-}" || -n "${DEVIN_PROJECT_DIR:-}" || -n "${DEVIN_PLUGIN_ROOT:-}" || -n "${DEVIN_DIR:-}" ]] || exit 0
 SOLEUR_PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-jq -n --arg root "$SOLEUR_PLUGIN_ROOT" \
-  --rawfile instructions "$SOLEUR_PLUGIN_ROOT/devin/INSTRUCTIONS.md" \
-  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext:
-    ("Soleur plugin root: " + $root + "\n" + $instructions)}}'
 
 # --- Local-session sentinel (Soleur Cloud Mode, FR1) ---
 # Content-bearing proof-of-local for scripts/cloud-detect.sh: SessionStart is the
@@ -22,6 +22,11 @@ jq -n --arg root "$SOLEUR_PLUGIN_ROOT" \
 #   1. SOLEUR_HOOK_SOURCE env override (a registration may inject it explicitly)
 #   2. CLAUDE_PLUGIN_ROOT set and resolving to this script's plugin root → plugin
 #   3. otherwise → repo (the fail-safe direction for detection)
+#
+# The sentinel write runs BEFORE the jq emit: a jq-less minimal host must not
+# lose proof-of-local because the context emit died first (the write block is
+# already `|| true`-isolated; a jq failure below still exits non-zero but the
+# sentinel survives).
 #
 # Canonical copy of test-helpers.sh's assert_fixture_dir — P1a requires every
 # tracked copy be byte-equal, and the P1b scanner recognises ONLY this name.
@@ -55,9 +60,20 @@ assert_fixture_dir() {
      grep -q '"hook_source"[[:space:]]*:[[:space:]]*"plugin"' "$_sentinel" 2>/dev/null; then
     :
   else
+    # ts is forensic-only (written for debugging; the classifier does not
+    # enforce freshness — a stale same-host sentinel is a documented limit).
+    # SOLEUR_HOOK_SOURCE is self-reported under the trusted-agent threat model —
+    # an env-forged `plugin` on a cloud VM still fails closed at the
+    # classifier's conflicting-evidence arm (DEVIN_DIR is set there).
     assert_fixture_dir "$_sentinel" && \
     printf '{"host":"%s","ts":"%s","hook_source":"%s"}\n' \
       "$(hostname)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_sentinel_source" \
-      > "$_sentinel"
+      > "$_sentinel.tmp" && \
+    mv "$_sentinel.tmp" "$_sentinel"
   fi
 } || true
+
+jq -n --arg root "$SOLEUR_PLUGIN_ROOT" \
+  --rawfile instructions "$SOLEUR_PLUGIN_ROOT/devin/INSTRUCTIONS.md" \
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext:
+    ("Soleur plugin root: " + $root + "\n" + $instructions)}}'

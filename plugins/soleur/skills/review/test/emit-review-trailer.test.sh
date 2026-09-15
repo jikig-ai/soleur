@@ -167,6 +167,32 @@ for bad in "--agents-ran abc --agents-expected 5" \
     "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
 done
 
+# ── ARM 9: sequential-fallback SURVIVES the count derivation ────────────────────
+#
+# sequential-fallback is not a count axis — it attests the plugin subagent
+# surface was absent (Devin Cloud) and the roles ran sequentially inline. A
+# cloud review that ran all N roles sequentially passes N/N; letting the
+# derivation "upgrade" that to `full` would emit a trailer claiming
+# independent-agent coverage that never ran, and the /ship gate (which keys on
+# the sequential-fallback PREFIX) would never fire. The explicit mode must win.
+d="$(new_repo seqfallback)"
+out="$(cd "$d" && bash "$SUT" --agents-ran 9 --agents-expected 9 \
+        --mode sequential-fallback 2>&1)"; rc=$?
+cov="$(coverage_of "$d")"
+assert "explicit sequential-fallback + N/N counts is NOT upgraded to full" \
+  '[[ "$rc" -eq 0 && "$cov" == sequential-fallback* && "$cov" == *"9/9 agents"* ]]' \
+  "rc=$rc got: '$cov'"
+assert "ship-gate prefix still matches (starts-with sequential-fallback)" \
+  '[[ "$cov" == sequential-fallback* ]]' "got: '$cov'"
+
+d="$(new_repo seqfallback_partial)"
+out="$(cd "$d" && bash "$SUT" --agents-ran 5 --agents-expected 9 \
+        --mode sequential-fallback 2>&1)"; rc=$?
+cov="$(coverage_of "$d")"
+assert "explicit sequential-fallback + partial counts is NOT rewritten to degraded" \
+  '[[ "$rc" -eq 0 && "$cov" == sequential-fallback* && "$cov" == *"5/9 agents"* ]]' \
+  "rc=$rc got: '$cov'"
+
 # ── ARM 8: still refuses to run on main ──────────────────────────────────────────
 # Guards against the coverage plumbing having disturbed the pre-existing branch guard.
 d="$(new_repo onmain)"; git -C "$d" checkout -q main
@@ -205,7 +231,7 @@ fi
 # A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
 # arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
 # assertions, update this number".
-TRAILER_MIN_ASSERTIONS=12
+TRAILER_MIN_ASSERTIONS=15
 if (( CASES < TRAILER_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2

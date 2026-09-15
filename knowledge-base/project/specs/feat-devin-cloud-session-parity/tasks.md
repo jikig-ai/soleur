@@ -23,17 +23,17 @@ Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-p
 
 - [x] `devin/INSTRUCTIONS.md` §Cloud Mode: canonical contract (banner disclosure + fallback degrade path + ack posture + absent-guardrail disclosure) — loaded via the go shim on routed sessions.
 - [x] `plugins/soleur/AGENTS.md`: cloud-mode rules section (`[id:]` convention).
-- [x] `plugins/soleur/scripts/cloud-banner.sh`: per-invocation emit, delegates to `cloud-detect.sh`.
-- [x] Grep-derive union set: spawn-sites ∪ secrets/prod ∪ directly-invocable pipeline skills — 59 skills derived (compound, code-to-prd, frontend-design, product-roadmap, spec-templates, work, preflight, one-shot, brainstorm, plan, schedule, community, pencil-setup, rclone all present).
-- [x] One composite `<!-- soleur-cloud-mode:start/end -->` pointer block per union-set SKILL.md (59/59 applied).
+- [x] `cloud-detect.sh --banner`: per-invocation emit, stateless — the standalone `cloud-banner.sh` wrapper was merged into this flag (the plan sanctioned either shape) and deleted; zero callers ever referenced it.
+- [x] Grep-derive union set: spawn-sites ∪ secrets/prod ∪ directly-invocable pipeline skills — 59 skills derived (compound, code-to-prd, frontend-design, product-roadmap, spec-templates, work, preflight, one-shot, brainstorm, plan, schedule, community, pencil-setup, rclone all present); review round added the 5 FR4-union secrets/prod skills the first pass missed (admin-ip-refresh, cf-token-scope, flag-delete, provision-cloudflare, user-set-role) → 64.
+- [x] One composite `<!-- soleur-cloud-mode:start/end -->` pointer block per union-set SKILL.md (64/64 applied) + the 3 `devin/skills/*` shims + `commands/go.md`; byte-identical drift pin in `devin-cloud-mode.test.ts` (67 marked files).
 - [x] `emit-review-trailer.sh`: `sequential-fallback` enum widen at all four enum sites; flag in deliverables + PR trailers; xtrace refusal guard added (baseline entry removed).
 - [x] `ship` gate: `sequential-fallback` coverage on `single-user incident` plans = blocking (Phase 1.5 Step 2; interactive AskUserQuestion / headless abort; superseding `full` trailer lifts the block).
 
 ## Phase 3 — Skill-internal guardrails (FR5)
 
-- [x] `plugins/soleur/scripts/precommit-guard.sh`: self-contained commit-on-main check, exec'd by work/ship/one-shot; no vendored lib, no DONE-marker arm; `git -C`/`cd`-chain/cwd target resolution.
-- [x] `.claude/hooks/guardrails.sh`: commit-on-main block delegates to `precommit-guard.sh` (inline check retained as unreachable-plugin fallback).
-- [x] Verified in a repo lacking `.claude/` (bare tmp repo, all six arms). Enumerate unrestored guards for the matrix — deferred to Phase 4 (probe-informed).
+- [x] `plugins/soleur/scripts/precommit-guard.sh`: self-contained commit-on-main check, invoked by work/ship/one-shot skill text + the marker block; no vendored lib, no DONE-marker arm; segment-scoped resolution (chain/pipe split, env-assignment prefixes, launchers, `-C`/`-c`/`--git-dir`/`GIT_DIR` attached to the commit's own segment, `cd` tracking, `--cwd` fallback).
+- [x] `.claude/hooks/guardrails.sh`: commit-on-main block delegates to `precommit-guard.sh` (inline check retained as unreachable-plugin fallback); trigger regex widened to COMMIT_RE width (chain ops incl. `|`, env prefixes, launchers, git options). `.openhands` copy: same regex width + segment-scoped resolution ported inline.
+- [x] `plugins/soleur/scripts/precommit-guard.test.sh`: 30-assertion suite — refusal matrix (chains/pipes/env prefixes/launchers/-C/--git-dir/GIT_DIR/--cwd), declared-scope allows, plus end-to-end arms through BOTH hook copies (regex parity + delegation + deny envelope).
 
 ## Phase 4 — Capability matrix + upstream requests (FR7, FR10)
 

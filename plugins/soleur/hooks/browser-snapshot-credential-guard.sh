@@ -87,7 +87,10 @@ if [[ $jq_rc -ne 0 ]]; then
   exit 0
 fi
 
-[[ "$TOOL" == "Bash" ]] || exit 0
+# Both names: hooks.json binds `^(Bash|exec)$` — Claude Code's tool is `Bash`,
+# Devin's is `exec`, and either envelope may arrive. Dropping `exec` here would
+# silently no-op the guard on exactly the surface the matcher was widened for.
+[[ "$TOOL" == "Bash" || "$TOOL" == "exec" ]] || exit 0
 
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [[ -z "$CMD" ]] && exit 0

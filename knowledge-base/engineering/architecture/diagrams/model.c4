@@ -21,7 +21,7 @@ model {
   // content-bearing sentinel and degrades honestly rather than claiming parity.
   devin = system "Devin (CLI + Cloud)" {
     #external
-    description "Devin CLI/Desktop locally and Devin Cloud sessions on Cognition-managed VMs. Loads the Soleur plugin in both: skills, AGENTS.md rules, and MCP carry; plugin subagents are local-only and plugin SessionStart/SessionEnd hooks never fire in cloud, so cloud sessions run under the Soleur Cloud Mode contract — sentinel-based classification (local | not-local:<reason>), capability banner, sequential-fallback review with Reviewed-Coverage disclosure, and a session-scoped acknowledgement gate before secrets or production mutation (#8159, ADR pending)."
+    description "Devin CLI/Desktop locally and Devin Cloud sessions on Cognition-managed VMs. Loads the Soleur plugin in both: skills, AGENTS.md rules, and MCP carry; plugin subagents are local-only and plugin SessionStart/SessionEnd hooks never fire in cloud, so cloud sessions run under the Soleur Cloud Mode contract — sentinel-based classification (local | not-local:<reason>), capability banner, sequential-fallback review with Reviewed-Coverage disclosure, and a session-scoped acknowledgement gate before secrets or production mutation (#8159, ADR-221)."
   }
 
   founder -> devin "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"

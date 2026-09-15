@@ -184,7 +184,14 @@ fi
 # DERIVE the mode rather than trusting the caller's label where the counts
 # already answer it. A caller that passes `--mode full` alongside `--agents-ran 2
 # --agents-expected 10` is either confused or overclaiming; the counts win.
-if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+#
+# Exception: `sequential-fallback` is NOT a count axis — it attests that the
+# plugin subagent surface was unavailable and the roles ran inline. A cloud
+# review that ran all N roles sequentially passes N/N, which counts alone would
+# "upgrade" to `full` — silently defeating the /ship gate that keys on the
+# sequential-fallback prefix. An explicit `--mode sequential-fallback` survives
+# derivation; the counts still annotate the coverage string.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$MODE" != "sequential-fallback" ]]; then
   if [[ "$AGENTS_RAN" -eq 0 ]]; then
     MODE="inline-fallback"
   elif [[ "$AGENTS_RAN" -lt "$AGENTS_EXPECTED" ]]; then

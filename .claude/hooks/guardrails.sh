@@ -127,15 +127,19 @@ if [[ -n "$_bypass_rid" ]]; then
 fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
-# Match git commit at start of string OR after chain operators (&&, ||, ;)
-# so chained commands like "git add && git commit" are caught.
+# Match git commit at start of string OR after chain operators (&&, ||, ;, |)
+# so chained commands like "git add && git commit" are caught. Tolerates
+# env-assignment prefixes (LEFTHOOK=0 git commit), a launcher (sudo/env/…),
+# and git options between `git` and `commit` (-C dir, -c k=v, --git-dir=d) —
+# the same width precommit-guard.sh detects; a narrower gate here would make
+# those arms unreachable on the hook path.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
 # The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
 # plugin is the source of truth so work/ship/one-shot can invoke the identical
 # check in sessions where hooks do not fire (Soleur Cloud Mode, FR5). This
 # wrapper translates the script's refusal into the hook deny envelope.
-if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
+if grep -qE '(^|[|;&])[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
   GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
   if [ -n "$REPO_ROOT" ] && [ -x "$GUARD" ]; then

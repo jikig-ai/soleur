@@ -61,7 +61,9 @@ if [[ ! -x "$HOOK" ]]; then
 fi
 
 envelope() { jq -nc --arg c "$1" '{tool_name:"Bash", tool_input:{command:$c}}'; }
+envelope_exec() { jq -nc --arg c "$1" '{tool_name:"exec", tool_input:{command:$c}}'; }
 decision() { envelope "$1" | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null; }
+decision_exec() { envelope_exec "$1" | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null; }
 
 assert_deny() {
   local label="$1" cmd="$2" d
@@ -187,6 +189,34 @@ if [[ -z "$ks" ]]; then
   ok 'kill-switch: SOLEUR_DISABLE_SNAPSHOT_GUARD=1 disables the deny'
 else
   bad 'kill-switch did not disable the guard'
+fi
+
+# ---- Devin `exec` envelope rows ----
+# The matcher was widened to `^(Bash|exec)$` because Devin dispatches shell
+# calls as `exec` envelopes — but a widened matcher is dead if the script then
+# rejects the non-Bash tool_name one line inside. These feed REAL exec
+# envelopes through the hook, not just the regex.
+cases=$((cases + 1))
+if [[ "$(decision_exec 'agent-browser snapshot -i')" == "deny" ]]; then
+  ok 'exec envelope: unrouted `agent-browser snapshot` is denied'
+else
+  bad 'exec envelope: unrouted `agent-browser snapshot` silently allowed (internal tool_name check rejects exec)'
+fi
+
+cases=$((cases + 1))
+exec_allow="$(envelope_exec "agent-browser snapshot -i | $RED" | bash "$HOOK" 2>/dev/null)"
+if [[ -z "$exec_allow" ]]; then
+  ok 'exec envelope: routed snapshot produces no decision (allowed)'
+else
+  bad "exec envelope: routed snapshot emitted an unexpected decision: ${exec_allow:0:60}"
+fi
+
+cases=$((cases + 1))
+exec_other="$(jq -nc '{tool_name:"exec", tool_input:{command:"ls -la"}}' | bash "$HOOK" 2>/dev/null)"
+if [[ -z "$exec_other" ]]; then
+  ok 'exec envelope: non-snapshot command produces no decision'
+else
+  bad "exec envelope: ordinary command emitted an unexpected decision: ${exec_other:0:60}"
 fi
 
 # ---- Reason content: the deny must name BOTH escape routes ----
@@ -345,7 +375,7 @@ printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
 if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
-MIN_ASSERTIONS=35
+MIN_ASSERTIONS=38
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2; exit 1
 fi

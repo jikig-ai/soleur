@@ -36,30 +36,57 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Fast path: not a git commit invocation. Match at start OR after a chain
-# operator (&&, ||, ;) — "git add && git commit" must be caught, and a commit
-# that mentions "git commit" in its message body still IS a commit, so the raw
-# command (not a body-stripped view) is the right scan target.
-if ! grep -qE '(^|&&|\|\||;)[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+commit' <<<"$COMMAND"; then
-  exit 0
-fi
+# Detection is per pipeline segment: a `git commit` can hide anywhere in a
+# chain — `git add && git commit`, `cd repo; git commit`, `printf msg |
+# git commit -F -`, `LEFTHOOK=0 git commit`. Split COMMAND on the chain
+# operators (&&, ||, ;, |, newline), then judge each segment.
+#
+# Known lexical limits (documented, not silently missed): subshell/eval forms
+# like `bash -c 'git commit'`, `$(git commit)`, `( git commit )`, quoted
+# `-C`/`cd` paths containing spaces, `git -c <cfg> commit` side effects beyond
+# detection, and commits created without `git commit` (merge/pull/cherry-pick/
+# rebase/continue) are out of this guard's declared scope — commit-on-main ONLY.
+COMMIT_RE='^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)'
 
-# Resolve which repo the commit targets. Order:
-#   1. `git -C <dir>` inside the command
-#   2. a `cd <dir>` segment earlier in the chain
-#   3. --cwd (the caller's session directory)
-#   4. this script's own cwd
-TARGET=""
-git_c="$(grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]&|;]+' <<<"$COMMAND" | head -n 1 | sed -E 's/^git[[:space:]]+-C[[:space:]]+//' || true)"
-cd_dir="$(grep -oE '(^|&&|\|\||;)[[:space:]]*cd[[:space:]]+[^[:space:]&|;]+' <<<"$COMMAND" | head -n 1 | sed -E 's/.*cd[[:space:]]+//' || true)"
-for cand in "$git_c" "$cd_dir" "$CWD" "$PWD"; do
-  [[ -n "$cand" && -d "$cand" ]] && TARGET="$cand" && break
-done
-[[ -n "$TARGET" ]] || exit 0 # nowhere to resolve — nothing to refuse on
+last_cd=""
+while IFS= read -r seg; do
+  # Track the dir the chain has cd'd into — it applies to later segments.
+  cd_hit="$(grep -oE '(^|[[:space:]])cd[[:space:]]+[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/.*cd[[:space:]]+//' || true)"
+  [[ -n "$cd_hit" ]] && last_cd="$cd_hit"
 
-BRANCH="$(git -C "$TARGET" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
-  printf 'BLOCKED: Committing directly to %s is not allowed. Create a feature branch first.\n' "$BRANCH" >&2
-  exit 1
-fi
+  grep -qE "$COMMIT_RE" <<<"$seg" || continue
+
+  # Resolve the repo THIS segment commits into. Priority: the -C / --git-dir
+  # attached to the commit's own git invocation, then a GIT_DIR env-assignment
+  # prefix (LEFTHOOK=0-style prefixes are the reason env-assignments are scanned
+  # at all — dropping GIT_DIR would resolve the wrong repo); then the chain's
+  # most recent cd; then --cwd; then ambient $PWD.
+  target="" git_dir=""
+  if grep -qoE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$seg"; then
+    git_dir="$(grep -oE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/^--git-dir[=[:space:]]+//')"
+  elif grep -qoE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$seg"; then
+    git_dir="$(grep -oE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/.*GIT_DIR=//')"
+  else
+    git_c="$(grep -oE -- '-C[[:space:]]+[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/^-C[[:space:]]+//' || true)"
+    [[ -n "$git_c" ]] && target="$git_c"
+  fi
+  if [[ -z "$target" && -z "$git_dir" ]]; then
+    for cand in "$last_cd" "$CWD" "$PWD"; do
+      [[ -n "$cand" && -d "$cand" ]] && target="$cand" && break
+    done
+  fi
+
+  if [[ -n "$git_dir" ]]; then
+    BRANCH="$(git --git-dir="$git_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  elif [[ -n "$target" && -d "$target" ]]; then
+    BRANCH="$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  else
+    continue # nowhere to resolve — nothing to refuse on
+  fi
+  if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+    printf 'BLOCKED: Committing directly to %s is not allowed. Create a feature branch first.\n' "$BRANCH" >&2
+    exit 1
+  fi
+done < <(printf '%s\n' "$COMMAND" | sed -E 's/&&|\|\||[;|]/\n/g')
+
 exit 0
