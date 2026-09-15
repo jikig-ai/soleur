@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { translateCodexAppServerEvent, translateCodexAppServerStream } from "@/server/codex-code-message-translator";
+import {
+  translateCodexAppServerEvent,
+  translateCodexAppServerStream,
+  translateCodexPersistedItem,
+  translateCodexPersistedTurn,
+} from "@/server/codex-code-message-translator";
 
 describe("Codex App Server event translator", () => {
   it("translates agent message deltas into neutral text events", () => {
@@ -66,5 +71,54 @@ describe("Codex App Server event translator", () => {
     await expect((async () => {
       for await (const _event of translateCodexAppServerStream(messages, "run-2")) { /* no-op */ }
     })()).rejects.toThrowError("codex_message_invalid");
+  });
+
+  it("translates persisted agent messages without leaking provider item fields", () => {
+    expect(translateCodexPersistedItem({
+      type: "agentMessage",
+      id: "item-4",
+      text: "Persisted answer",
+      phase: "final_answer",
+      secret: "must-not-cross",
+    })).toEqual([
+      { sourceId: "item:item-4:message", payload: { type: "text", text: "Persisted answer" } },
+    ]);
+  });
+
+  it("translates only approval-waiting persisted commands", () => {
+    expect(translateCodexPersistedItem({
+      type: "commandExecution",
+      id: "item-5",
+      command: "git status",
+      status: "awaitingApproval",
+      cwd: "/workspace",
+    })).toEqual([
+      {
+        sourceId: "approval:item-5",
+        payload: { type: "approval", requestId: "item-5", tool: "command", description: "git status" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "commandExecution", id: "item-6", command: "git status", status: "completed" })).toEqual([]);
+  });
+
+  it("translates persisted turn status and usage with bounded identities", () => {
+    expect(translateCodexPersistedTurn({
+      id: "turn-3",
+      status: "completed",
+      usage: { inputTokens: 3, outputTokens: 2, totalCostUsd: 0.01 },
+    })).toEqual([
+      {
+        sourceId: "turn:turn-3:usage",
+        payload: {
+          type: "usage",
+          usage: {
+            native: [{ unit: "input_tokens", value: 3 }, { unit: "output_tokens", value: 2 }],
+            cost: { provenance: "reported", amount: 0.01, currency: "USD" },
+          },
+        },
+      },
+      { sourceId: "turn:turn-3:status", payload: { type: "status", status: "completed" } },
+    ]);
+    expect(translateCodexPersistedTurn({ id: "turn\n3", status: "completed" })).toEqual([]);
   });
 });

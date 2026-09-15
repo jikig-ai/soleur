@@ -84,6 +84,10 @@ The session also exposes the experimental `thread/items/list` seam with an
 optional validated turn filter, allowing a later replay translator to fetch
 persisted items without resuming a thread or accepting provider envelopes at
 the neutral boundary.
+The replay translator now admits only persisted `agentMessage` text,
+approval-waiting `commandExecution` items, and recognized turn status/usage
+records. It drops unsupported item kinds and malformed identities, preserving
+the same bounded payload rules as live notifications.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

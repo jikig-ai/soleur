@@ -24,6 +24,12 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function statusType(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  const record = asRecord(value);
+  return typeof record?.type === "string" ? record.type : null;
+}
+
 function boundedDescription(value: unknown): string {
   const description = nonEmptyString(value);
   if (!description) return "Codex requested command approval";
@@ -65,6 +71,7 @@ function turnStatus(value: unknown): Extract<EngineEventPayload, { type: "status
   switch (value) {
     case "started":
     case "in_progress":
+    case "inProgress":
       return "running";
     case "completed":
       return "completed";
@@ -124,6 +131,54 @@ export function translateCodexAppServerEvent(event: unknown): CodexTranslatedEve
   }
 
   return [];
+}
+
+const APPROVAL_STATUSES = new Set(["awaitingApproval", "approvalRequired", "needsApproval", "waiting"]);
+
+/** Translate the persisted item subset that can be represented safely in the neutral contract. */
+export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent[] {
+  const record = asRecord(item);
+  const type = nonEmptyString(record?.type);
+  const itemId = safeProviderId(record?.id);
+  if (!type || !itemId) return [];
+
+  if (type === "agentMessage") {
+    const text = nonEmptyString(record?.text);
+    return text
+      ? [{ sourceId: `item:${itemId}:message`, payload: { type: "text", text } }]
+      : [];
+  }
+
+  if (type === "commandExecution" && APPROVAL_STATUSES.has(statusType(record?.status) ?? "")) {
+    const command = nonEmptyString(record?.command);
+    return command
+      ? [{
+        sourceId: `approval:${itemId}`,
+        payload: {
+          type: "approval",
+          requestId: itemId,
+          tool: "command",
+          description: boundedDescription(command),
+        },
+      }]
+      : [];
+  }
+
+  return [];
+}
+
+/** Translate a persisted turn summary without exposing its native envelope. */
+export function translateCodexPersistedTurn(turn: unknown): CodexTranslatedEvent[] {
+  const record = asRecord(turn);
+  if (!record) return [];
+  const turnId = safeProviderId(record?.id);
+  const status = turnStatus(statusType(record?.status));
+  if (!turnId || !status) return [];
+  const events: CodexTranslatedEvent[] = [];
+  const usage = usagePayload(record);
+  if (usage) events.push({ sourceId: `turn:${turnId}:usage`, payload: usage });
+  events.push({ sourceId: `turn:${turnId}:status`, payload: { type: "status", status } });
+  return events;
 }
 
 function hasSafeIdentity(method: string, params: RecordLike | null): boolean {
