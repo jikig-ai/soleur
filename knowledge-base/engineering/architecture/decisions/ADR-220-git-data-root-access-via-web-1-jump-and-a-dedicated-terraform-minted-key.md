@@ -6,6 +6,7 @@ issue: 6680
 supersedes: []
 amends:
   - ADR-068
+  - ADR-149
 tags: [git-data, ssh, cloudflare-tunnel, credentials, luks, cutover, security]
 ---
 
@@ -22,8 +23,8 @@ credential is provisioned by **#8189**. #6680 stays open until #8189's dry-run r
 
 `git-data-cutover.yml` is the only automated route that moves the shared git store onto LUKS and
 flips `GIT_DATA_STORE_ENABLED`. ADR-068's D10 addendum also keeps it as the **rotation** route.
-It has **never run** (`gh run list --workflow git-data-cutover.yml` returns zero runs), so its
-defects show up one at a time. A static read found three walls on the access path:
+It **had never run** before this PR's branch dry-run (run 34906907089), so its defects show up
+one at a time. A static read found three walls on the access path:
 
 1. **The bridge had no `server-ip`.** The workflow called `./.github/actions/cf-tunnel-ssh-bridge`
    without `server-ip`, so the bridge ran `terraform output -raw server_ip` in a job that never
@@ -45,21 +46,29 @@ defects show up one at a time. A static read found three walls on the access pat
 Wall 3 means that choosing a transport is necessary but not enough. This ADR decides both the
 transport and the credential.
 
-The same static read found three older defects. They stay hidden until a key exists:
+The same static read found older defects. They stay hidden until a key exists:
 
 - `read_flag`/`set_flag` use a `prd_terraform`-scoped token.
 - The workflow is in neither the `web-1-swap` nor the `git-data-state` concurrency group.
 - A default (`dry_run=true`) ROLLBACK dispatch never released a held freeze, because
   `release_freeze` returned at its `DRY_RUN` guard.
+- **The freeze and both reloads are inert.** `acquire_freeze`/`release_freeze` run
+  `systemctl start|stop soleur-drain.service`, and `flip_flag_and_reload`/`rollback` run
+  `systemctl restart soleur-web.service`. Neither unit exists: ADR-119 records the drain unit as
+  "defined nowhere", and the app is the `soleur-web-platform` docker container, whose env is fixed
+  at `docker run`.
+- **A later dry-run can overwrite the live store.** After a first real cutover, the mapper is
+  mounted at `/mnt/git-data`. A `dry_run=true` dispatch would mount the same mapper at `FRESH_ROOT`
+  and `rsync --delete` the populated store onto itself, because `read_flag` fails open.
 
-The first two are blocking checklist items in #8189. The third is fixed in the PR that lands this
-ADR.
+The third is fixed in the PR that lands this ADR. The others are blocking checklist items in #8189,
+which holds the detail (reconciling the freeze and reloads with ADR-119 among them).
 
 ## Considered Options
 
 | Option | What it buys | Why it was not chosen |
 |---|---|---|
-| (a) A second ingress `ssh-git-data.` → `ssh://10.0.1.20:22`, with a second Access app and a second bridge redirect | An sshd for the store that the edge can address directly | web-1 is the only connector (#6425), so this path also goes through web-1 and gains no host independence. It also gives the store host a public SSH hostname and brings in #6441's per-hostname multiplexing. It satisfies ADR-114 I2, but the blast radius is too large. |
+| (a) A second ingress `ssh-git-data.` → `ssh://10.0.1.20:22`, with a second Access app and a second bridge redirect | An sshd for the store that the edge can address directly | Today web-1 is the only connector (#6425), so this path also goes through web-1 and gains no host independence. It also gives the store host a public SSH hostname and brings in #6441's per-hostname multiplexing. It satisfies ADR-114 I2, but the blast radius is too large. |
 | `ssh -J` with the jump host on the command line | A shorter invocation | The jump hop ignores a command-line `-i` (`man ssh`), so web-1 would be dialed without the CI key |
 | Jump via `127.0.0.1:2222` | Skips the NAT rule | One host would have two SSH identities for #7226 to pin. The NAT rule already matches for `server-ip` callers. |
 | A git-data key on web-1, or agent forwarding | No proxy needed on the runner | Anyone with root on web-1 could reach root on the store |
@@ -74,20 +83,25 @@ ADR.
 
 ## Decision
 
-### D1 — Transport: a jump through web-1's existing `ssh.` ingress
+### D1a — Transport: a jump through web-1's existing `ssh.` ingress
 
 The runner reaches web-1 over the existing tunnel and NAT rule (`server-ip` = 10.0.1.10). All uses
 share this one route. The runner then opens a `direct-tcpip` channel through web-1's sshd to
-`10.0.1.20:22` and authenticates **end-to-end** to git-data. No key and no agent socket ever lands on
-web-1, so a compromised web-1 cannot replay the root login.
+`10.0.1.20:22`.
 
-- **Proving the transport in this PR:** `$WEB_HOST_SSH -W 10.0.1.20:22 10.0.1.10 </dev/null`. The
-  check passes only if the first line of output begins `SSH-2.0-`. This needs no git-data
-  credential, and the verdict does not depend on the exit code.
-- **Later authenticated hop (#8189):** an `ssh_config` `ProxyCommand ssh -F <cfg> -W %h:%p 10.0.1.10`
-  with `IdentitiesOnly yes` and `BatchMode yes` on both host blocks.
-- **If web-1's sshd refuses forwarding:** the fallback (a ProxyCommand that runs a TCP relay on
-  web-1) needs its own amendment to this ADR.
+- **Proof in this PR:** `$WEB_HOST_SSH -W 10.0.1.20:22 10.0.1.10 </dev/null` passes only if the
+  first output line begins `SSH-2.0-`, whatever the exit code. It needs no git-data credential. It
+  proves that web-1 permits `direct-tcpip` and that something answered with an `SSH-2.0-` line:
+  liveness, not authenticity (#7226).
+- **If web-1's sshd refuses forwarding** (`reason=forward_refused`): the fallback (a ProxyCommand
+  that runs a TCP relay on web-1) needs its own amendment to this ADR.
+
+### D1b — Authenticated hop: `ssh_config` ProxyCommand, end-to-end
+
+The runner authenticates **end-to-end** to git-data through the D1a channel, using an `ssh_config`
+`ProxyCommand ssh -F <cfg> -W %h:%p 10.0.1.10` with `IdentitiesOnly yes` and `BatchMode yes` on both
+host blocks (#8189). No key and no agent socket ever lands on web-1, so a compromised web-1 cannot
+replay the root login.
 
 ### D2 — Credential: a dedicated Terraform-minted root key for git-data
 
@@ -97,12 +111,27 @@ web-1, so a compromised web-1 cannot replay the root login.
   `ignore_changes = [ssh_keys]` stays. The private half lives in Doppler config `prd_git_data_root`
   (AP-008). It is never stored in `prd_git_data`, which is the host's own boot config and must not
   hold a credential that logs in **to** that host. It is never stored in `prd_terraform` either.
-- **Custody rule.** Nothing that can read the web-platform root state may be able to read the
-  private half. That state can be read from PR-branch `terraform plan` runs (`infra-validation.yml`'s
-  `plan` job), and it already holds the web-1 root key and the CF Access token. So the keypair is
-  minted in a **separate Terraform root** with its own isolated state location and credentials
-  (`hr-every-new-terraform-root-must-include-an`). The web-platform root gets only the public half,
-  through `data "hcloud_ssh_key"`.
+- **Custody goal.** No silent, replayable root credential for the store may be readable from
+  PR-reachable surfaces. The web-platform root state is one: PR-branch `terraform plan` runs
+  (`infra-validation.yml`'s `plan` job) read it, and it already holds the web-1 root key and the CF
+  Access token. So the keypair is minted in a **separate Terraform root**
+  (`hr-every-new-terraform-root-must-include-an`). #8189 must deliver that root with:
+  1. a dedicated R2 bucket and its own token. Both roots use `soleur-terraform-state` today, and R2
+     tokens are scoped per bucket, so a separate key prefix isolates nothing;
+  2. exclusion from `infra-validation.yml`'s `detect-changes`/`plan` job (or planning only in an
+     environment-gated job), with a test that pins the exclusion;
+  3. no `terraform_remote_state` read of it from the web-platform root.
+- **Known gaps: existing root-equivalent paths this rule does not close.**
+  - `hcloud_token` in `prd_terraform` allows rescue, rebuild and volume moves.
+  - `doppler_service_token.git_data` sits in web-platform state and reads `prd_git_data`, which holds
+    `GIT_DATA_LUKS_KEY`.
+  - Root on web-1 reads the `GIT_PROVISION`/`GIT_TRANSPORT`/`GIT_REMOVE` ssh keys, which carry full
+    data access.
+- **Public-key hand-off.** A singular `data "hcloud_ssh_key"` fails every web-platform plan while the
+  key is absent: before the new root's first apply, and mid-rotation, because key names are unique.
+  #8189 uses a plural `data "hcloud_ssh_keys"` with a label selector (an absent key is an empty list,
+  not an error) plus a precondition only on the git-data replace path, or a gate-enforced apply
+  order.
 - **Token delivery, OIDC first.**
   - **Preferred:** a Doppler OIDC identity bound to the `git-data-cutover` environment's `sub`, so no
     secret is stored.
@@ -113,8 +142,11 @@ web-1, so a compromised web-1 cannot replay the root login.
 
     These guards are needed because an `environment:` gate only binds the jobs that declare it,
     while any workflow file on any branch can name a repo secret.
-- **Scope.** The reviewer-gated environment covers **every** dispatch mode. Otherwise a dry-run
-  could never authenticate, and the dry-run is the proof.
+- **Scope.** The reviewer-gated environment covers every mode that needs the git-data credential:
+  dry-run and real cutover. Otherwise a dry-run could never authenticate, and the dry-run is the
+  proof. Rollback is urgent, so it is split: the flag-off write and the web reload run in an
+  ungated job that holds no git-data secret, and only the freeze-sentinel removal (which needs the
+  credential) runs gated. This split is the decision #8189 implements.
 
 ### D3 — Lifetime
 
@@ -134,31 +166,40 @@ web-1, so a compromised web-1 cannot replay the root login.
   `SSH-2.0-` line. Once a key exists, it could also run a fake sshd that accepts any login. So
   pinning git-data's host key is a precondition for D2's `accepted` status, not only for rotating
   a populated store.
-- **One path to the store.** Reaching git-data now depends on web-1's sshd and on the single
-  connector (ADR-114 I1). Any #6441 rework must keep the jump working.
+- **The path to the store.** Since #6594 the `ssh.` ingress is origin-relative, so reaching git-data
+  depends on a connector with a private NIC plus web-1's sshd (ADR-114 I1), not on exactly one
+  connector. Any #6441 rework must keep the jump working.
+- **web-1 forwarding is unguarded.** `AllowTcpForwarding` on web-1 is a stock default that nothing
+  pins. Hardening web-1's sshd could silently break the jump; it would surface at the next dispatch
+  as `role=git-data-jump verdict=failed reason=forward_refused`.
+- **Probe penalties on git-data.** OpenSSH ≥ 9.8 `PerSourcePenalties noauth` could penalize
+  10.0.1.10 after each unauthenticated banner probe. That is the same source as production
+  `GIT_TRANSPORT`/`GIT_PROVISION`. When git-data's OpenSSH is upgraded, set
+  `PerSourcePenaltyExemptList 10.0.1.10`.
 
 ### D5 — Statuses
 
 | Decision | Status | Flips to `accepted` when |
 |---|---|---|
-| D1 transport | `accepted` (2026-09-15) | Measured: branch dry-run [34906907089](https://github.com/jikig-ai/soleur/actions/runs/34906907089) logged `role=web verdict=ok`, `role=git-data-jump verdict=ok`, `role=git-data-auth verdict=git_data_root_key_absent` and exited 3 before `prepare_luks_target`. web-1's sshd permits the `direct-tcpip` channel and git-data's sshd answered through it. |
-| D2–D3 credential and lifetime | `proposed` | #7226 pins git-data's host key **and** #8189's dry-run reads `role=git-data-auth verdict=ok`. With a `main`-only deployment policy, that dry-run can only run after #8189 merges. |
+| D1a transport | `accepted` (2026-09-15) | Measured: branch dry-run [34906907089](https://github.com/jikig-ai/soleur/actions/runs/34906907089) logged `role=web verdict=ok`, `role=git-data-jump verdict=ok`, `role=git-data-auth verdict=git_data_root_key_absent` and exited 3 before `prepare_luks_target`. web-1's sshd permits the `direct-tcpip` channel and an `SSH-2.0-` line came back through it. |
+| D1b authenticated hop | `proposed` | #8189's dry-run reads `role=git-data-auth verdict=ok`. |
+| D2–D3 credential and lifetime | `proposed` | #7226 pins git-data's host key, #8189's dry-run reads `role=git-data-auth verdict=ok`, **and** the freeze and reloads are reconciled with ADR-119 (Context). That dry-run exercises neither the freeze nor the flip, so it cannot stand in for the reconciliation. With a `main`-only deployment policy, it can only run after #8189 merges. |
 | D4 residuals | Standing constraints | They are not accepted. Each one is discharged by the issue named with it. |
+
+`architecture list` shows the frontmatter's single status, which is the least-advanced one
+(`proposed`).
 
 ### D6 — Sequencing
 
-**This PR** ships this ADR and the ADR-068 amendment note. It also ships:
+**This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
+(`2026-09-14-fix-git-data-cutover-ci-access-path-plan.md`). It has **no key input and no secret
+reference**: a secret wired into an ungated job would arm itself the moment #8189 creates it.
 
-- the bridge `server-ip` input and the deletion of the bogus `GIT_DATA_SSH` export;
-- the `if: always()` bridge teardown;
-- a fail-closed `access_gate` as the first statement on the cutover script's forward path;
-- the ROLLBACK freeze-release fix;
-- tests, the C4 edge, and a runbook line.
-
-The access gate reports one `ACCESS` verdict per role (`web`, `git-data-jump`, `git-data-auth`). Until
-#8189 lands it stops at `role=git-data-auth verdict=git_data_root_key_absent` (exit 3), before
-`prepare_luks_target`. This PR has **no key input and no secret reference**: a secret wired into an
-ungated job would arm itself the moment #8189 creates it.
+**Exit codes.** `3` = the access gate stopped the run (one `ACCESS` verdict per role: `web`,
+`git-data-jump`, `git-data-auth`). `4` = a ROLLBACK-only run could not complete a recovery step
+(`::warning title=git-data-cutover recovery::step=<name> rc=<n>`). Until #8189 lands, the expected
+dry-run result is a **red** run whose annotation reads
+`role=git-data-auth verdict=git_data_root_key_absent`, stopped before `prepare_luks_target`.
 
 **#8189** delivers the rest:
 
@@ -167,8 +208,9 @@ ungated job would arm itself the moment #8189 creates it.
 - #8009 C1 re-approval (CPO + CTO) and the PA-36 update;
 - the `ssh_config` auth wiring;
 - the git-data replace;
-- its blocking checklist: the `prd_terraform`-scoped flag token and the missing concurrency
-  serialization.
+- its blocking checklist: the `prd_terraform`-scoped flag token, the missing concurrency
+  serialization, the ADR-119 reconciliation of the freeze and reloads, and the post-cutover
+  dry-run self-overwrite (Context).
 
 Landing the key resources in this PR would put their addresses outside every exact-scope gate
 allow-set.
@@ -186,12 +228,13 @@ allow-set.
 **Harder or newly true:**
 
 - Delivering the key requires a git-data replace (#8189).
-- Reaching the store depends on web-1's sshd allowing `direct-tcpip` and on the single connector.
+- Reaching the store depends on web-1's sshd allowing `direct-tcpip` and on a connector with a
+  private NIC.
 - There is now a second unverified host key for #7226.
 - Once #8189 lands, a dry-run is **no longer non-mutating**: it runs `luksOpen`, mounts, and runs
   `rsync --delete` into FRESH.
 - PR-branch `plan` runs can already read the web-platform root state. This is a pre-existing
-  exposure: this ADR bounds it with the custody rule but does not remove it.
+  exposure: this ADR bounds it with the custody goal but does not remove it (D2 known gaps).
 
 ## Cost Impacts
 

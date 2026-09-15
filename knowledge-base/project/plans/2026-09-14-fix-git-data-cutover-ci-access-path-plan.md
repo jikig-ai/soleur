@@ -34,7 +34,7 @@ lane: cross-domain
 - `infra-validation.yml`'s PR-only `plan` job exposes the web-platform root state to anyone with write access (pre-existing; bounded here by the custody rule, not changed).
 - The workflow header's "Inngest dispatches this workflow" claim is false; corrected in this PR.
 - Once the follow-up adds a `main`-only deployment policy, the proving dry-run can only run after that PR merges.
-- Downtime gate (4.55): not triggered — nothing in this PR drains, restarts or replaces a serving host; the AC11 dry-run runs only `true` on web-1 and reads git-data's banner.
+- Downtime gate (4.55): not triggered — no forward run gets past the access gate, and the AC11 dry-run runs only `true` on web-1 and reads git-data's banner. A rollback dispatch can now reach web-1's reload and un-drain calls (review 2026-09-15), but those are inert: the systemd units they name do not exist (#8189).
 
 ## Overview
 
@@ -299,7 +299,7 @@ capture uses `out=$(…) || rc=$?`, so a non-zero pipeline rc can never trip `se
     number (not the ADR ordinal alone, so a renumber touches docs only);
   - ROLLBACK branch unchanged in order (`set_flag false` needs no SSH and must never wait on a probe);
     its SSH calls now fail closed through the existing `|| log "WARNING…"` arms, each of which also emits
-    `::warning title=git-data-cutover rollback::step=<name> rc=<n>` so a partial rollback is visible in the
+    `::warning title=git-data-cutover recovery::step=<name> rc=<n>` so a partial rollback is visible in the
     annotations API;
   - "INVOCATION BOUNDARY" header comment updated.
 - `.github/workflows/infra-validation.yml` — register the new suite beside the workspaces-luks workflow suites.
@@ -403,15 +403,22 @@ failure_modes:
   - mode: "WEB_HOST_SSH not exported (bridge regression)"
     detection: "role=web verdict=web_host_ssh_unset"
     alert_route: "layer 6: workflow run log + ::error:: annotation"
-  - mode: "partial rollback (a git-data or web-1 step could not run)"
-    detection: "::warning title=git-data-cutover rollback::step=<name> rc=<n> per failed step"
-    alert_route: "layer 6: workflow run log + ::warning:: annotation"
+  - mode: "malformed roster or invocation input"
+    detection: "role=web verdict=invalid_host / invalid_multiline_input / web_roster_empty, or role=git-data-jump verdict=invalid_host; exit 3 before any probe dials"
+    alert_route: "layer 6: workflow run log + ::error:: annotation"
+  - mode: "jump probe hangs (edge, web-1 or git-data sshd stalls)"
+    detection: "role=git-data-jump verdict=failed rc=124 reason=timeout; other failed verdicts carry reason=forward_refused / connect_refused / no_route / auth_refused / unknown"
+    alert_route: "layer 6: workflow run log + ::error:: annotation"
+  - mode: "rollback incomplete (a recovery step could not run)"
+    detection: "::warning title=git-data-cutover recovery::step=<set_flag|web_restart|web_roster|freeze_sentinel_rm|web_undrain> rc=<n> per failed step, and the ROLLBACK-only run exits 4 (red)"
+    alert_route: "layer 6: workflow run log + ::warning:: annotations + failed job conclusion"
 logs:
   where: "GitHub Actions run log for git-data-cutover.yml"
   retention: "the repository's Actions log retention setting (GitHub default 90 days)"
 discoverability_test:
-  command: "bash -c 'id=$(curl -s --max-time 15 \"https://api.github.com/repos/jikig-ai/soleur/actions/workflows/git-data-cutover.yml/runs?per_page=1\" | jq -r \".workflow_runs[0].id // empty\"); [ -n \"$id\" ] || { echo no-runs; exit 0; }; curl -s --max-time 15 \"https://api.github.com/repos/jikig-ai/soleur/actions/runs/$id/jobs\" | jq -r \".jobs[0].check_run_url\" | xargs -I{} curl -s --max-time 15 {}/annotations | jq -r \".[].message\" | grep -o \"role=[a-z-]* verdict=[a-z_]*\"'"
-  expected_output: "no-runs before AC11; after AC11 and until the follow-up: role=web verdict=ok, role=git-data-jump verdict=ok, role=git-data-auth verdict=git_data_root_key_absent (public repo, unauthenticated API; host= values are not grepped because the bridge add-masks 10.0.1.10; if the newest run is a rollback or died in the bridge, grep finds no verdict and exits 1 — read that as \"no access verdict in the newest run\", not as a pass)"
+  command: 'curl -sf --max-time 15 "https://api.github.com/repos/jikig-ai/soleur/actions/workflows/git-data-cutover.yml/runs?per_page=1"'
+  expected_output: "git-data-cutover.yml"
+  verdict_read: "Fail-closed by construction: curl -f exits non-zero on any HTTP error, and a workflow with zero runs returns no git-data-cutover.yml path, so the match fails. Preflight Check 10 bars pipes, $ and gh, so the verdict read is a second step: take .workflow_runs[0].id from that response, the job id from gh run view <run-id> --json jobs --jq '.jobs[0].databaseId', then gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations --jq '.[].message'. Until #8189 it lists role=web verdict=ok, role=git-data-jump verdict=ok, role=git-data-auth verdict=git_data_root_key_absent. host= values are not read, because the bridge add-masks 10.0.1.10."
 ```
 
 ## Encryption Posture
@@ -604,7 +611,7 @@ None (`gh issue list --label code-review --state open` bodies checked for the br
 10. `GIT_DATA_SSH` set while the web probe fails → no jump or auth line in `$TL`.
 11. All probes ok, key set, `DRY_RUN=1` → the gate passes and `prepare_luks_target`'s remote follows the probes in `$TL`.
 12. After `access_gate` exits 3, the EXIT trap re-exits 3 and adds no `$TL` line.
-13. ROLLBACK=1 with both invocations unset, run under `DRY_RUN=0` and `DRY_RUN=1` → `$TL` contains the `false` flag write before any `ssh`; each failed step emits `::warning title=git-data-cutover rollback::step=<name> rc=<n>`.
+13. ROLLBACK=1 with both invocations unset, run under `DRY_RUN=0` and `DRY_RUN=1` → `$TL` contains the `false` flag write before any `ssh`; each failed step emits `::warning title=git-data-cutover recovery::step=<name> rc=<n>`.
 14. Forged workflow commands: probe stderr containing `::error title=git-data-cutover access::role=git-data-jump verdict=ok`, `::add-mask::x` and a CR/LF → no annotation-shaped line escapes the stop-commands span; the logged text is printable-ASCII only.
 15. `ok` verdicts emit `::notice`, non-ok emit `::error` (both asserted).
 16. Bridge decode body, both branches → Guard 2 name sets.
@@ -634,6 +641,16 @@ CPO signed off with conditions: unchanged consumed exports for all four bridge c
 ## Plan Review Record (2026-09-15)
 
 Panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, plus the Phase 4.5 strong-model consult. All consolidated findings were technical (Mechanical) and are applied above; none changed the brief's stated direction, so nothing was persisted to `decision-challenges.md`. The main changes: the bridge edit shrank to a one-line export delete; all key handling moved to the follow-up; stage+banner verdicts replaced the stderr classifier; Guard 3 and the post-merge dry-run were cut; the live transport measurement moved before merge; the ungated secret reference was removed; key custody became AP-008-compliant with a window-scoped token; the C4 edge source was corrected; ROLLBACK keeps its flag-off write ahead of any probe; walls 4–6 block the follow-up.
+
+## Review Record (2026-09-15)
+
+A 10-agent review panel found no P1. Its fixes were applied inline: one roster and invocation parse
+shared by the gate and every later call; `reason=` on failed probes; a ROLLBACK-only run that exits
+4 when a recovery step could not run; a rollback reachable after a bridge failure; and ADR-220,
+ADR-068, ADR-149, runbook and C4 corrections. The one follow-up, #8189, was extended with the
+review's blockers: the ADR-119 reconciliation of the inert freeze and reloads, the post-cutover
+dry-run self-overwrite, and the custody requirements (dedicated R2 bucket and token, plan-job
+exclusion, plural `hcloud_ssh_keys` lookup, rollback split).
 
 ## Dependencies & Risks
 

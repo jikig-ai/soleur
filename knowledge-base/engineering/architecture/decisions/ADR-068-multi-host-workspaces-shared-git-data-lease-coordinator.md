@@ -1283,6 +1283,11 @@ rotation cutover D10 keeps on the same route, are decided in
 a jump through web-1's existing `ssh.` ingress, and a dedicated Terraform-minted root key provisioned
 by #8189. Rotation cutovers inherit ADR-220's rule that the read credential is scoped to the window,
 and they need **no host replace per rotation**. Only the first key delivery rides a git-data replace.
+Rotations against a populated store stay gated on #7226 (host-key pinning), per ADR-220 D4.
+
+**Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
+amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand
+only, and no dispatcher exists.
 
 ### Why D7 is mandatory
 
