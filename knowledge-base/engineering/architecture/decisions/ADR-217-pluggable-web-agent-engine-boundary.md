@@ -61,6 +61,8 @@ approval decisions use the RPC response path.
 Inbound notifications hand off through a bounded ordered buffer; overflow
 closes the source with an explicit backpressure error instead of growing the
 server heap without limit.
+The RPC client exposes channel-close callbacks so the bridge terminates
+consumers when the provider process exits, preserving the source error.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

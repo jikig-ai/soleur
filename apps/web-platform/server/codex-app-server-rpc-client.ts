@@ -8,6 +8,7 @@ export interface CodexRpcChannel {
 export interface CodexRpcClientOptions {
   onNotification?: (message: Record<string, unknown>) => void;
   onServerRequest?: (message: Record<string, unknown>) => void;
+  onClose?: (reason: Error) => void;
   maxPending?: number;
 }
 
@@ -139,6 +140,7 @@ export function createCodexRpcClient(
       : clientError("Codex RPC channel is closed", "codex_rpc_closed");
     for (const entry of pending.values()) entry.reject(error);
     pending.clear();
+    options.onClose?.(error);
   };
 
   return {
