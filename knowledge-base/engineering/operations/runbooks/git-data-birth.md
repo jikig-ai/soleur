@@ -235,7 +235,12 @@ approval: the interlock, the birth gate, and the stock preflight.
    ```
 
 8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
-   which arm refused.
+   which arm refused. Its last arm (#8189, shared with the replace gate) refuses unless the
+   created server carries exactly the default key and the git-data root key, and the root
+   key's `SHA256:` fingerprint equals `apps/web-platform/infra/git-data-root-key.fingerprint`:
+   `verdict=git_data_root_key_not_in_create reason=<word>`. Remedy: dispatch
+   `apply-git-data-root-key.yml`, commit its printed fingerprint, re-dispatch
+   (`git-data-luks-cutover-5274.md` › verdict map).
 9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
