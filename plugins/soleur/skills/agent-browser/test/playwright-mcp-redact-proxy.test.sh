@@ -27,7 +27,20 @@ trap 'printf "[ABORT] line %s: %s (rc=%s)\n" "$LINENO" "$BASH_COMMAND" "$?" >&2'
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export PLAYWRIGHT_MCP_PROXY_GRACE_S=1
 
+# Refuses an empty, relative, root or synthetic-fs fixture dir (byte-identical copy; the
+# fixture-dir-operand-assert suite pins every tracked copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+assert_fixture_dir "$REPO_ROOT"
 SKILL="$REPO_ROOT/plugins/soleur/skills/agent-browser"
 PROXY_SHIPPED="$SKILL/scripts/playwright-mcp-redact-proxy.py"
 PROXY="${PROXY_UNDER_TEST:-$PROXY_SHIPPED}"
@@ -46,6 +59,7 @@ CAPTURES="$FIX/playwright-mcp-$PIN"
 SENTINEL='ZZQP-SENTINEL-7980'
 BENIGN='ZZQP-BENIGN-7980'
 WORK="$(mktemp -d -t proxy-suite.XXXXXXXX)"
+assert_fixture_dir "$WORK"
 MUT="$WORK/mutants"; mkdir -p "$MUT"; cp "$REDACTOR" "$MUT/"   # every mutant loads the REAL predicate beside it
 # Every child group a session logged. A FAKE_PW_HOLD stub ignores SIGTERM, so a row whose proxy
 # does no teardown (the passthrough, a teardown mutant) leaves it alive; reap_all SIGKILLs each
@@ -486,7 +500,12 @@ assert_withheld 'row 21: list-shaped server line — first pending id answered b
 assert_withheld 'row 21: list-shaped server line — second pending id answered' "$r" 4 'list line'
 assert_true 'row 21: the list line itself was not forwarded' bash -c 'stderr_has "$1" "dropped list line from server" && ! grep -qa "^\[" "$1/stdout.bin"' _ "$r"
 # tools/list without a tools key: fed from a scratch capture dir
-NOTOOLS="$WORK/notools"; mkdir -p "$NOTOOLS"; cp "$CAPTURES/initialize.json" "$CAPTURES/snapshot.json" "$NOTOOLS/"; cp "$ODD/tools-list-no-tools.json" "$NOTOOLS/tools-list.json"
+NOTOOLS="$WORK/notools"
+assert_fixture_dir "$NOTOOLS"
+mkdir -p "$NOTOOLS"
+assert_fixture_dir "$CAPTURES"
+cp "$CAPTURES/initialize.json" "$CAPTURES/snapshot.json" "$NOTOOLS/"
+cp "$ODD/tools-list-no-tools.json" "$NOTOOLS/tools-list.json"
 r="$(session notools "$PROXY" --env FAKE_PW_FIXTURE_DIR="$NOTOOLS" --send "$INIT" --send "$LIST" --send "$SNAP" --end eof)"
 assert_byte_identical 'FR10/row 25: tools/list without a tools key forwarded unchanged (fail-safe)' "$r" 2 "$ODD/tools-list-no-tools.json"
 assert_stderr_marker 'FR10/row 25: annotate failure noted on stderr' "$r" 'annotate failed' 1
@@ -784,7 +803,7 @@ cwd = os.readlink(f"/proc/{ppid}/cwd")
 script = os.path.realpath(os.path.join(cwd, cmd[1])) if len(cmd) > 1 else ""
 print(json.dumps({"argv": sys.argv[2:], "parent_comm": open(f"/proc/{ppid}/comm").read().strip(), "parent_script": script}))
 PY
-printf '#!/usr/bin/env bash\npython3 "%s" "$PPID" "$@" >> "$SHIM_OUT"\n' "$G2/npx-record.py" > "$G2/bin/npx"
+printf '#!/usr/bin/env bash\npython3 "%s" "$PPID" "$@" %s "$SHIM_OUT"\n' "$G2/npx-record.py" '>>' > "$G2/bin/npx"
 chmod +x "$G2/bin/npx"
 # run_mcp_args <args1-string> <tag>; the wrapper's pkill/rm lines resolve $prof under the scratch HOME
 run_mcp_args() {
