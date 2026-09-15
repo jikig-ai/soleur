@@ -78,10 +78,21 @@ export function createCodexThreadResumeRequest(id: string, threadId: string): Co
   return request(id, "thread/resume", { threadId: assertThreadId(threadId) });
 }
 
+export function createCodexThreadReadRequest(id: string, threadId: string, includeTurns = false): CodexRpcRequest {
+  return request(id, "thread/read", { threadId: assertThreadId(threadId), includeTurns });
+}
+
 export function createCodexTurnStartRequest(id: string, threadId: string, input: string): CodexRpcRequest {
   return request(id, "turn/start", {
     threadId: assertThreadId(threadId),
     input: [{ type: "text", text: assertInput(input) }],
+  });
+}
+
+export function createCodexTurnInterruptRequest(id: string, threadId: string, turnId: string): CodexRpcRequest {
+  return request(id, "turn/interrupt", {
+    threadId: assertThreadId(threadId),
+    turnId: assertThreadId(turnId),
   });
 }
 

@@ -40,7 +40,31 @@ describe("Codex App Server lifecycle source", () => {
     expect(notify).toHaveBeenCalledOnce();
   });
 
-  it("routes approval responses and rejects unsupported lifecycle operations", async () => {
+  it("interrupts an active turn and conservatively reconciles its status", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ thread: { id: "thread-1", status: { type: "active" }, turns: [{ status: "inProgress" }] } });
+    const notify = vi.fn();
+    const respond = vi.fn(async () => undefined);
+    const connection = {
+      client: { request, notify, respond, receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    await expect(source.cancel(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("requested");
+    await expect(source.reconcile(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("running");
+    expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual([
+      "initialize", "thread/start", "turn/start", "turn/interrupt", "thread/read",
+    ]);
+  });
+
+  it("routes approval responses and keeps cursor replay and erase explicit", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn();
     const notify = vi.fn();
@@ -53,7 +77,26 @@ describe("Codex App Server lifecycle source", () => {
     const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
     await expect(source.respondToApproval(context, "approval-1", "deny", lease)).resolves.toBeUndefined();
     expect(respond).toHaveBeenCalledWith("approval-1", { decision: "decline" });
-    await expect(source.cancel(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_operation_unsupported" });
+    await expect(source.resumeFromCursor(context, null, lease)).rejects.toMatchObject({ code: "codex_operation_unsupported" });
     await expect(source.erase(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("unsupported");
+  });
+
+  it("fails closed on malformed interrupt and reconciliation responses", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({ accepted: true })
+      .mockResolvedValueOnce({ thread: { id: "other-thread", turns: [] } });
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    await expect(source.cancel(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_cancel_ack_invalid" });
+    await expect(source.reconcile(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_reconcile_invalid" });
   });
 });

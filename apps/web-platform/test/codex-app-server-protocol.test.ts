@@ -4,7 +4,9 @@ import {
   createCodexInitializeRequest,
   createCodexInitializedNotification,
   createCodexThreadResumeRequest,
+  createCodexThreadReadRequest,
   createCodexThreadStartRequest,
+  createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
 } from "@/server/codex-app-server-protocol";
 import {
@@ -59,6 +61,24 @@ describe("Codex App Server protocol requests", () => {
       id: "rpc-5",
       result: { decision: "decline" },
     });
+  });
+
+  it("builds bounded interrupt and thread-read requests", () => {
+    expect(createCodexTurnInterruptRequest("rpc-6", "thread-1", "turn-1")).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-6",
+      method: "turn/interrupt",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    });
+    expect(createCodexThreadReadRequest("rpc-7", "thread-1", true)).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-7",
+      method: "thread/read",
+      params: { threadId: "thread-1", includeTurns: true },
+    });
+    expect(() => createCodexTurnInterruptRequest("rpc-8", "thread-1", "turn\n1")).toThrowError(
+      expect.objectContaining({ code: "codex_thread_invalid" }),
+    );
   });
 
   it("rejects malformed request identities and unbounded input", () => {

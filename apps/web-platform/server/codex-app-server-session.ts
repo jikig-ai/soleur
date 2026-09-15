@@ -2,8 +2,10 @@ import type { NativeSessionReference } from "./agent-engine-contract";
 import { normalizeCodexThreadReference } from "./codex-code-adapter";
 import {
   createCodexApprovalResponseRequest,
+  createCodexThreadReadRequest,
   createCodexThreadResumeRequest,
   createCodexThreadStartRequest,
+  createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
 } from "./codex-app-server-protocol";
 import { createCodexAppServerHandshake } from "./codex-app-server-handshake";
@@ -26,8 +28,11 @@ export interface CodexAppServerTurn {
 }
 
 export interface CodexAppServerSession {
+  initialize(): Promise<Record<string, unknown>>;
   start(input: string): Promise<CodexAppServerTurn>;
   resume(threadId: string, input: string): Promise<CodexAppServerTurn>;
+  readThread(threadId: string): Promise<Record<string, unknown>>;
+  interrupt(threadId: string, turnId: string): Promise<Record<string, unknown>>;
   respondToApproval(requestId: string, decision: "allow" | "deny"): Promise<void>;
 }
 
@@ -106,6 +111,7 @@ export function createCodexAppServerSession(
   };
 
   return {
+    initialize: ensureInitialized,
     start: async (input) => {
       await ensureInitialized();
       return startTurn(await ensureThread(), input);
@@ -117,6 +123,14 @@ export function createCodexAppServerSession(
       thread = resumed;
       threadStart = Promise.resolve(resumed);
       return startTurn(resumed, input);
+    },
+    readThread: async (threadId) => {
+      await ensureInitialized();
+      return client.request(createCodexThreadReadRequest(options.nextRequestId(), threadId, true));
+    },
+    interrupt: async (threadId, turnId) => {
+      await ensureInitialized();
+      return client.request(createCodexTurnInterruptRequest(options.nextRequestId(), threadId, turnId));
     },
     respondToApproval: async (requestId, decision) => {
       const response = createCodexApprovalResponseRequest(requestId, decision);

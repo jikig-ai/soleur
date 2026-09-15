@@ -70,6 +70,9 @@ The lifecycle source composes that connection with the neutral start and
 continuation operations, reuses the negotiated session, and returns an
 explicit unsupported error for protocol operations that are not yet qualified
 instead of silently simulating parity.
+Cancellation uses `turn/interrupt` and requires an exact empty acknowledgement;
+reconciliation uses `thread/read` and maps only recognized turn/thread states,
+falling back to `queued` when the provider state is incomplete.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
