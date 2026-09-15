@@ -53,6 +53,10 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
   is_workspace_owner: (c) => `select is_workspace_owner('${c.wsA}', auth.uid())`,
+  // Event append is authenticated-callable, but the run id is still tenant-
+  // scoped: tenant B must not append to tenant A's conversation-shaped UUID.
+  append_agent_engine_event: (c) =>
+    `select append_agent_engine_event('${c.convA}','attack-event',1,'{}'::jsonb)`,
   is_email_triage_workspace_owner: (c) => `select is_email_triage_workspace_owner('${c.wsA}', auth.uid())`,
   list_workspace_member_actions: (c) => `select count(*) from list_workspace_member_actions('${c.wsA}',10,null,null)`,
   invite_workspace_member: (c) =>
