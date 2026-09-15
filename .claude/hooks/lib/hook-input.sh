@@ -42,6 +42,10 @@
 HOOK_CMD=""
 # shellcheck disable=SC2034
 HOOK_TOOL_NAME=""
+# Claude-canonical kind of HOOK_TOOL_NAME (Devin's lowercase wire names map to
+# the kind hook bodies gate on; unmapped names pass through — #8205).
+# shellcheck disable=SC2034
+HOOK_TOOL_KIND=""
 # shellcheck disable=SC2034
 HOOK_CWD=""
 # shellcheck disable=SC2034
@@ -109,6 +113,11 @@ HOOK_INPUT_RESPONDER="guardrails"
 # the `${IFS-}` note below already records, and the reason a bare `$IFS` is
 # banned fifteen lines from here.
 _HOOK_INPUT_RS=$'\x1e'
+
+# The kind map is sourced fail-hard for the same reason this file is: a
+# fail-soft source under `set -euo pipefail` leaves hook_tool_kind undefined
+# and kills the hook at the call, printing nothing.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/hook-tool-kind.sh"
 
 _HOOK_INPUT_JQ='
 # d maps ONLY null (absent) to "". It must not use the // operator: in jq that
@@ -181,7 +190,7 @@ end
 hook_parse_input() {
   local input="${1-}"
   HOOK_INPUT_REASON=""
-  HOOK_CMD=""; HOOK_TOOL_NAME=""; HOOK_CWD=""; HOOK_SESSION_ID=""; HOOK_FILE_PATH=""
+  HOOK_CMD=""; HOOK_TOOL_NAME=""; HOOK_TOOL_KIND=""; HOOK_CWD=""; HOOK_SESSION_ID=""; HOOK_FILE_PATH=""
 
   if ! command -v jq >/dev/null 2>&1; then
     HOOK_INPUT_REASON="jq_missing"
@@ -379,6 +388,7 @@ hook_parse_input() {
 
   HOOK_CMD="${_hi_s[1]}"
   HOOK_TOOL_NAME="${_hi_s[2]}"
+  HOOK_TOOL_KIND="$(hook_tool_kind "$HOOK_TOOL_NAME")"
   HOOK_CWD="${_hi_s[3]}"
   HOOK_SESSION_ID="${_hi_s[4]}"
   HOOK_FILE_PATH="${_hi_s[5]}"
