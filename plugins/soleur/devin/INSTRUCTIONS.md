@@ -92,13 +92,28 @@ a `devin cloud drs` sandbox and a user-facing web-app session
 
 **Detection:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` prints
 `local` or `not-local:<reason>` (`sentinel-absent`, `foreign-host`,
-`non-plugin-source`, `malformed`, `no-devin-env`). The classifier is
-sentinel-based: the SessionStart hook writes `.devin/soleur-local-session`
-(`{host, ts, hook_source}`) on local sessions, and SessionStart never fires in
-cloud. A session is `local` only when the sentinel exists, its `host` matches
-the current hostname, and `hook_source` is `plugin`. Every other outcome fails
-closed to `not-local` — a repo-level SessionStart firing in cloud produces a
-`non-plugin-source` sentinel, not a false local.
+`non-plugin-source`, `malformed`, `conflicting-evidence`, `no-devin-env`). If
+`CLAUDE_PLUGIN_ROOT` is unset — measured: cloud exec shells export only
+`DEVIN_DIR` + `DEVIN_DISABLE_HISTEXPAND`, no `CLAUDE*`/`SOLEUR*` vars — resolve
+the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1` (the
+managed plugin cache; the lock file is `/opt/.devin/plugins/lock.json`).
+
+The classifier is sentinel-based: the SessionStart hook writes
+`.devin/soleur-local-session` (`{host, ts, hook_source}`) on local sessions,
+and SessionStart never fires in cloud. A session is `local` only when the
+sentinel exists, its `host` matches the current hostname, `hook_source` is
+`plugin`, AND no cloud-only env marker is present. `DEVIN_DIR`/
+`DEVIN_DISABLE_HISTEXPAND` are measured cloud-only: a valid plugin sentinel on
+a box carrying them classifies `not-local:conflicting-evidence` — the
+upstream-convergence arm, so a future partial dispatch of plugin hooks in
+cloud (#8160) fails closed instead of reading as local. Every other outcome
+fails closed to `not-local` — a repo-level SessionStart firing in cloud
+produces a `non-plugin-source` sentinel, not a false local.
+
+`not-local:no-devin-env` is the one reason that is NOT cloud: it means no
+sentinel and no Devin env markers — i.e. probably not a Devin session at all
+(a Claude Code session, for example). Treat it like `local`: proceed normally,
+no banner, no cloud contract.
 
 **In a `not-local` session, all four rules apply:**
 
@@ -115,15 +130,21 @@ closed to `not-local` — a repo-level SessionStart firing in cloud produces a
 3. **Acknowledgement gate.** Before any secrets read, production mutation,
    Doppler action, Terraform production action, mutating GitHub API call, or
    other credential-bearing operation, require an explicit session-scoped
-   acknowledgement. The ack lives in conversation context only — no persisted
-   ack file (a stale file replays into a new session). If the session is
-   unattended and no answer is obtainable, defer or abort the secrets/prod
-   step with a documented alternative; never continue silently.
+   acknowledgement via `message_user` — the only ask primitive that exists in
+   cloud (`ask_user_question` is absent). The ack lives in conversation
+   context only — no persisted ack file (a stale file replays into a new
+   session). `message_user` blocks: if it returns an answer, proceed; if the
+   session is unattended (`--headless` or no operator channel), the call
+   stalls indefinitely — that IS the defer. Do not substitute an
+   in-transcript "proceeding unless you object"; defer the secrets/prod step
+   and document the alternative.
 4. **Absent guardrails.** SessionStart rule injection and any hook that does
-   not fire are gone. `precommit-guard.sh` is invoked directly by
-   work/ship/one-shot so commit-on-main still refuses without hook execution;
-   every other repo guardrail is **not restored** in cloud — treat the
-   session as running without hook backstops.
+   not fire are gone. The sole restored check is commit-on-main: every marked
+   skill's cloud-mode block instructs running
+   `scripts/precommit-guard.sh "<command>"` before any `git commit`, and
+   work/ship/one-shot carry the same instruction on their commit paths. Every
+   other repo guardrail is **not restored** in cloud — treat the session as
+   running without hook backstops.
 
 **Guardrails NOT restored in cloud** (repo `.claude/hooks/`; cloud execution
 undocumented, absent entirely in user repos): prod-write-defer-gate,

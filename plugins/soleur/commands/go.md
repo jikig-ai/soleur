@@ -62,6 +62,18 @@ If the output shows `SOLEUR_GIT_REPO_READY=false` (or, on the fallback, **neithe
 
 This gate is deterministic and fires on the first action, so a not-ready workspace produces a clear message instead of a long flail. (The runtime's `worktree_enter_failed` detector only catches a narrow repeated-`cd … && pwd` loop — #5313 — not the general "no repo, agent tries many different commands" case the Concierge no-repo session hit.)
 
+## Step 0.5: Cloud Mode detection
+
+Before the mutating preamble below (worktree cleanup, `.mcp.json` restore), classify the session — a routed skill's marker block cannot protect work that runs before it loads:
+
+```bash
+DETECT="${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"
+[ -f "$DETECT" ] || DETECT="$(find /opt/.devin/plugins -name cloud-detect.sh 2>/dev/null | head -1)"
+[ -n "$DETECT" ] && bash "$DETECT" --banner
+```
+
+`local` or `not-local:no-devin-env` → proceed. Any other `not-local:<reason>` → apply the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode (sequential fan-out with `Reviewed-Coverage: sequential-fallback` disclosure, `message_user` ack before secrets/prod, `precommit-guard.sh` before any `git commit`).
+
 ## Step 0: Session-Start Preamble
 
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
