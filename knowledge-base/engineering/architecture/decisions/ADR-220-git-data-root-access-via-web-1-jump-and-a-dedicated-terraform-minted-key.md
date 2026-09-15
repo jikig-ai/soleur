@@ -342,8 +342,9 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
 - **The root.** `apps/web-platform/infra/git-data-root-key/`, applied only by the dispatch-only
   `apply-git-data-root-key.yml`. That job runs behind the `web-platform-infra-apply` environment and
   holds job-level `git-data-state`. It is **additive-only, with no exception and no rotation input**:
-  it refuses any plan other than a create of exactly the root's seven addresses or a no-op, and it
-  refuses an import or a moved address (so `forget` and `delete` are refused too). Once
+  it refuses any plan other than a create of exactly the root's seven addresses or a no-op (so
+  `forget`, `delete`, `update` and a replace are refused too), and it refuses an import or a moved
+  address. Once
   `apps/web-platform/infra/git-data-root-key.fingerprint` exists in the checkout, it refuses a create
   of `tls_private_key.git_data_root` (`git_data_root_key_remint_refused`): a create then means state
   loss or a deleted key, never a first mint. It prints the key's `SHA256:` fingerprint **read from
@@ -392,7 +393,8 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
   2. The `main`-only policy comes from reusing `web-platform-infra-apply` (reviewer, custom branch policy
      `main`) instead of creating a `git-data-cutover` environment.
   3. **Expiry is not expressible.** `doppler_service_token` has no expiry attribute. The token persists
-     until a reviewed PR `-replace`s or removes it.
+     until a reviewed PR that adds a typed rotation arm for exactly its addresses replaces it, or a PR
+     removes it.
 - **What the environment is and is not.** It is a single-human acknowledgement, not two-party review: it
   records `can_admins_bypass: true` and `prevent_self_review: false`. It is a human gate, not a secret
   boundary. The Terraform App cannot write environment secrets, so the token is a repo secret, and
