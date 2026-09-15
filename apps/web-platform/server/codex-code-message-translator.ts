@@ -189,6 +189,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
       : [];
   }
 
+  if (type === "fileChange") {
+    const changes = record?.changes;
+    return Array.isArray(changes) && changes.length <= 1000
+      ? [{ sourceId: `file-change:${itemId}`, payload: { type: "progress", message: `File changes recorded (${changes.length})` } }]
+      : [];
+  }
+
   if (type === "commandExecution" && APPROVAL_STATUSES.has(statusType(record?.status) ?? "")) {
     const command = nonEmptyString(record?.command);
     return command

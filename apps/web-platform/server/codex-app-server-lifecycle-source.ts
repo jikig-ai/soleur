@@ -72,7 +72,7 @@ function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent
     const translated = translateCodexPersistedItem(item);
     const type = typeof itemRecord.type === "string" ? itemRecord.type : null;
     const approvalWaiting = type === "commandExecution" && REPLAY_APPROVAL_STATUSES.has(statusType(itemRecord.status) ?? "");
-    if ((type === "agentMessage" || type === "plan" || approvalWaiting) && translated.length === 0) {
+    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || approvalWaiting) && translated.length === 0) {
       throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
     }
     for (const event of translated) replay.push(createCodexReplayEvent(event));

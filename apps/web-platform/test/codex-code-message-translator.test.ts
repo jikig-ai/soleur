@@ -117,6 +117,21 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "plan", id: "plan-2" })).toEqual([]);
   });
 
+  it("reduces persisted file changes to metadata progress without exposing paths or diffs", () => {
+    expect(translateCodexPersistedItem({
+      type: "fileChange",
+      id: "change-1",
+      status: "completed",
+      changes: [{ path: "/workspace/secret.ts", kind: "update", diff: "private" }],
+    })).toEqual([
+      {
+        sourceId: "file-change:change-1",
+        payload: { type: "progress", message: "File changes recorded (1)" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "fileChange", id: "change-2", changes: "malformed" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
