@@ -87,9 +87,26 @@ claim that an independent review occurred when it did not.
 ## Hooks and completion
 
 Review and trust the plugin hooks through `/hooks` before relying on them.
-Installation does not grant hook trust. Devin supports the bundled Bash
-credential guard and Stop hooks, but hook execution does not prove that every
-Claude-only workflow primitive has an equivalent.
+Installation does not grant hook trust. Measured hook semantics under Devin
+(envelope capture: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+
+- **Wire names are lowercase**: `exec`, `write`, `edit`, `ask_user_question`,
+  `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)
+  are dead — loaded but never dispatched.
+- **Plugin `Stop` hooks fire** (empty matcher).
+- **The bundled credential guard is conditional**: its plugin `Bash` matcher
+  is dead under Devin until the `^(Bash|exec)$` widening ships (#8155); its
+  in-body tool gate is kind-normalized so it acts on `exec` once dispatched.
+- **SessionStart source matchers are dead** — `startup`, `resume`, `clear`,
+  `compact` never fire; only the empty matcher `""` does.
+- **Project hooks need Devin-side registration**: this repository binds its
+  hook set in `.devin/config.json` with anchored matchers; the authoritative
+  per-hook dispositions live in `.claude/hooks/devin-dispositions.tsv`.
+- **`.claude` permissions are not imported** — `.devin/config.json`
+  `permissions` uses `Exec(prefix)`/`Read(glob)`/`Write(glob)`/`Fetch(pattern)`;
+  this repository ports its allow/deny rules there.
+- **Hook response contracts**: both `{"decision":"block"}` and Claude-shape
+  `permissionDecision:"deny"` reject the call; `updatedInput` rewrites it.
 
 Keep long-running workflows bounded by their iteration and cost gates.
 Soleur's subscription and model usage are separate charges; substitute

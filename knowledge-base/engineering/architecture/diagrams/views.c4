@@ -15,6 +15,10 @@ views {
       // soleurMarketplace have a rendered target — without it the marketplace
       // renders as a disconnected box (ADR-182, #7471).
       platform.plugin, soleurMarketplace,
+      // #8205: devin is an L1 harness external like codex/grokBuild; both edge
+      // endpoints (founder, platform.plugin) are already in this view so the
+      // edges render rather than leaving a disconnected box.
+      devin,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser,
       // #7980: the browser the agent drives is an L1 external system like every other
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so

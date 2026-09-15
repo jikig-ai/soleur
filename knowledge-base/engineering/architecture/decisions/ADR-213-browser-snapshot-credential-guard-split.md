@@ -506,3 +506,31 @@ redactor by the sibling basename `REDACTOR_BASENAME = "redact-a11y-snapshot.py"`
 so a rename must update the proxy alongside the hook, the lint,
 `EXPECTED_GATE_REFS`, the register and `agent-browser/SKILL.md`; the proxy suite's
 `nosib` and `v-rename` rows red on a missed one.
+
+## Addendum — 2026-09-15 (#8205): harness scope of the Bash matcher
+
+The `PreToolUse` interceptor this ADR ships is registered in
+`plugins/soleur/hooks/hooks.json` (and in repo `.claude/settings.json` for
+dogfooding) on the matcher `Bash`. Measured in a controlled Devin child
+session
+(`knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`),
+that matcher is **dead under Devin CLI**: Devin loads the registry but
+dispatches the lowercase wire name `exec`, which `Bash` never matches. For
+the window during which `plugins/soleur/devin/INSTRUCTIONS.md` asserted the
+guard was supported on Devin, the control was absent there — an unstated
+gap, which is the failure mode rather than the gap itself.
+
+Two independent fixes are required for the guard to act under Devin, and
+neither alone is sufficient:
+
+1. **Dispatch** — the plugin matcher must cover `exec` (the `^(Bash|exec)$`
+   widening on #8155).
+2. **Body gate** — the hook's own `tool_name == "Bash"` check must not
+   self-exclude `exec`; #8214 normalizes it to `HOOK_TOOL_KIND`
+   (`exec` → `Bash` via `lib/hook-tool-kind.sh`), so the body semantics are
+   unchanged on Claude and correct on Devin.
+
+Until a post-merge runtime trace confirms both halves, Devin coverage is
+claimed for the mechanism only (`covered-by-plugin` in
+`.claude/hooks/devin-dispositions.tsv`), and `devin/INSTRUCTIONS.md` states
+the measured state rather than support. Claude `Bash` coverage is unchanged.

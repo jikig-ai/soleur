@@ -4,6 +4,10 @@
 # Why: Doppler CLI prints the ENTIRE remaining config on write operations — all secrets exposed.
 set -euo pipefail
 
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # shellcheck source=lib/hook-input.sh
 # FAIL-HARD (no `|| true`): a fail-soft source leaves hook_parse_input undefined
 # and the hook dies at the call, letting the tool proceed (#7164 defect 2).
@@ -41,7 +45,7 @@ CMD="$HOOK_CMD"
 # Read-only commands (get, download) are safe — they show only requested keys.
 if grep -qE 'doppler\s+secrets\s+(delete|set|upload)' <<<"$CMD"; then
   if ! grep -qE '>\s*/dev/null|>\s*&-|1>\s*/dev/null' <<<"$CMD"; then
-    SUBCMD=$(printf '%s' "$CMD" | grep -oE 'doppler\s+secrets\s+(delete|set|upload)' | awk '{print $3}')
+    SUBCMD=$(printf '%s' "$CMD" | grep -oE 'doppler\s+secrets\s+(delete|set|upload)' | awk '{print $3}' || true)
     jq -n --arg subcmd "$SUBCMD" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",        permissionDecision: "deny",
