@@ -139,12 +139,22 @@ describe("Codex App Server lifecycle source", () => {
       events,
       dispose: vi.fn(async () => undefined),
     };
-    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    const sink = vi.fn();
+    const source = createCodexAppServerLifecycleSource({
+      open: vi.fn(async () => connection),
+      nextRequestId: () => "rpc",
+      observability: createEngineObservability(sink),
+    });
     await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
     const transport = createCodexAppServerTransport(source);
     await expect((async () => {
       for await (const _event of transport.resumeFromCursor(context, "cursor-1", lease)) { /* no-op */ }
     })()).rejects.toMatchObject({ code: "codex_replay_invalid" });
+    expect(sink).toHaveBeenCalledWith("engine_replay_failed", {
+      engineId: "codex",
+      failureClass: "item_malformed",
+    });
+    expect(sink.mock.calls[0][1]).not.toHaveProperty("itemId");
   });
 
   it("fails closed when persisted replay contains malformed context compaction", async () => {
