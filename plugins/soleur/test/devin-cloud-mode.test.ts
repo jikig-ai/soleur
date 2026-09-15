@@ -14,7 +14,7 @@ const SCRIPT = join(import.meta.dir, "../scripts/cloud-detect.sh");
 const HOOK = join(import.meta.dir, "../hooks/devin-session-start.sh");
 const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 const SENTINEL_REL = join(".devin", "soleur-local-session");
-const DEVIN_ENV_VARS = ["DEVIN", "DEVIN_HOME", "DEVIN_PROJECT_DIR", "DEVIN_PLUGIN_ROOT"];
+const DEVIN_ENV_VARS = ["DEVIN", "DEVIN_HOME", "DEVIN_PROJECT_DIR", "DEVIN_PLUGIN_ROOT", "DEVIN_DIR"];
 
 function createTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "devin-cloud-mode-"));

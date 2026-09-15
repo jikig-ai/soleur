@@ -75,14 +75,19 @@ Soleur runs in two Devin environments with different enforcement surfaces:
 
 | Surface | Local CLI/Desktop | Devin Cloud session |
 | --- | --- | --- |
-| Skills (`/soleur:*`) | yes | yes |
-| Plugin `AGENTS.md` rules | yes | yes |
-| MCP servers | yes | yes (auth via the web-app connection) |
-| Plugin subagents (`agents/**/*.md`) | yes | **no — local-only** |
+| Skills (`/soleur:*`) | yes | yes — measured 2026-09-15 (sandbox): ~95 skills loaded from the plugin cache |
+| Plugin `AGENTS.md` rules | yes | yes — measured: injected as always-on `<rules>` blocks |
+| MCP servers | yes | yes (auth via the web-app connection) — measured: listed in-session |
+| Plugin subagents (`agents/**/*.md`) | yes | **no — measured absent**: `run_subagent` is not in the cloud tool catalog |
+| `ask_user_question` | yes | **no — tool absent**; `message_user` (`user_question`) is blocking with no auto-approve |
 | Plugin hooks: `SessionStart` / `SessionEnd` | yes | **no — never fire in cloud** |
-| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | documented yes — verify per-matcher |
-| Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | undocumented — verify empirically |
-| `.devin/config.json` `requiredPlugins` | yes | honored from each cloned repository |
+| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (sandbox)**: no hook dispatched; corrects the "documented yes" claim |
+| Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | **no — measured absent (sandbox)**: blueprint states "lifecycle hooks do NOT dispatch in cloud sessions" |
+| `.devin/config.json` `requiredPlugins` | yes | honored from each cloned repository — marginal effect unmeasured (account already had the plugin installed) |
+
+*Sandbox caveat:* rows marked "measured" come from a `devin cloud drs` sandbox
+session on 2026-09-15 (`cloud-probe.md`); a user-facing `/handoff`/web-app
+session re-verification is tracked at #8172.
 
 **Detection:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` prints
 `local` or `not-local:<reason>` (`sentinel-absent`, `foreign-host`,
@@ -131,14 +136,19 @@ it reads hook-stdin transcript data a standalone script cannot see.
 
 **Upstream requests** (capability gaps only Cognition can close):
 
-- **#8160** — plugin subagents (`agents/**/*.md`) and plugin
-  `SessionStart`/`SessionEnd` hooks in cloud sessions; per-matcher binding for
-  plugin `command` hooks (`Bash` vs `exec`).
-- **Repo-level `.devin/config.json` hooks + `requiredPlugins`** — behavior in
-  cloud sessions is undocumented; tracked as probe items (#8172) until measured.
-- **Unattended `ask_user_question` semantics** — documented answer needed for
-  whether an ask auto-approves, stalls, or times out distinguishably (freezes
-  the ack-gate mechanism).
+- **#8160** — plugin subagents (`agents/**/*.md`) and plugin hooks in cloud
+  sessions. Probe-measured 2026-09-15 (sandbox): `run_subagent` absent from
+  the tool catalog; NO hooks dispatch — repo `.devin/config.json`,
+  `.claude/settings.json`, and plugin `hooks.json` all inert (blueprint:
+  "lifecycle hooks do NOT dispatch in cloud sessions"). The request should
+  now cover ALL hook surfaces, not just SessionStart/SessionEnd.
+- **Repo-level `requiredPlugins` marginal effect** — plugin already loads
+  via account-level install; behavior on a fresh account is unmeasured
+  (#8172).
+- **`ask_user_question` in cloud** — tool absent; `message_user` is
+  blocking-only. If an interactive question primitive is added to cloud,
+  its unattended semantics need documenting (auto-approve would fail the
+  ack gate open).
 
 ## Domain agents
 

@@ -6,7 +6,9 @@
 #   not-local:<reason>   -- everything else; consumers MUST fail closed on it
 #
 # Reasons, in priority order (first match wins):
-#   no-devin-env       -- no DEVIN / DEVIN_HOME / DEVIN_PROJECT_DIR / DEVIN_PLUGIN_ROOT set
+#   no-devin-env       -- no DEVIN / DEVIN_HOME / DEVIN_PROJECT_DIR / DEVIN_PLUGIN_ROOT /
+#                         DEVIN_DIR set (measured: cloud VMs expose only DEVIN_DIR +
+#                         DEVIN_DISABLE_HISTEXPAND in exec shells — probe 2026-09-15)
 #   sentinel-absent    -- no .devin/soleur-local-session under the git root (or no git repo/git)
 #   malformed          -- sentinel exists but is not a JSON object or lacks host/hook_source
 #   foreign-host       -- sentinel host != `hostname` (handoff copy / committed sentinel)
@@ -57,7 +59,7 @@ sentinel_field() {
 
 classify() {
   # 1. Devin session env must be present at all.
-  if [[ -z "${DEVIN:-}" && -z "${DEVIN_HOME:-}" && -z "${DEVIN_PROJECT_DIR:-}" && -z "${DEVIN_PLUGIN_ROOT:-}" ]]; then
+  if [[ -z "${DEVIN:-}" && -z "${DEVIN_HOME:-}" && -z "${DEVIN_PROJECT_DIR:-}" && -z "${DEVIN_PLUGIN_ROOT:-}" && -z "${DEVIN_DIR:-}" ]]; then
     echo "not-local:no-devin-env"
     return
   fi
@@ -118,7 +120,7 @@ emit_banner() {
   local reason="$1" detail
   case "$reason" in
     no-devin-env)
-      detail="no Devin session environment (DEVIN, DEVIN_HOME, DEVIN_PROJECT_DIR, DEVIN_PLUGIN_ROOT all unset)"
+      detail="no Devin session environment (DEVIN, DEVIN_HOME, DEVIN_PROJECT_DIR, DEVIN_PLUGIN_ROOT, DEVIN_DIR all unset)"
       ;;
     sentinel-absent)
       detail="no local-session sentinel at .devin/soleur-local-session (plugin SessionStart never ran here)"
