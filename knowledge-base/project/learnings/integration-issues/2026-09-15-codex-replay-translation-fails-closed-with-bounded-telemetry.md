@@ -1,6 +1,6 @@
 ---
 date: 2026-09-15
-category: integration_issue
+category: integration-issues
 module: web-platform-codex-replay
 severity: high
 tags: [codex, replay, observability, privacy, fail-closed]
