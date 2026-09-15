@@ -5,6 +5,10 @@ export interface CodexTranslatedEvent {
   payload: EngineEventPayload;
 }
 
+export interface CodexReplayEvent extends CodexTranslatedEvent {
+  kind: "codex-replay";
+}
+
 type RecordLike = Record<string, unknown>;
 
 function asRecord(value: unknown): RecordLike | null {
@@ -82,6 +86,35 @@ function turnStatus(value: unknown): Extract<EngineEventPayload, { type: "status
     case "canceled":
     case "interrupted":
       return "cancelled";
+    default:
+      return null;
+  }
+}
+
+export function createCodexReplayEvent(event: CodexTranslatedEvent): CodexReplayEvent {
+  return { kind: "codex-replay", sourceId: event.sourceId, payload: event.payload };
+}
+
+function safeReplaySourceId(value: unknown): string | null {
+  if (typeof value !== "string" || value.length < 1 || value.length > 128) return null;
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 0x1f || codePoint === 0x7f || codePoint === 0x2028 || codePoint === 0x2029;
+  }) ? null : value;
+}
+
+function replayPayload(value: unknown): EngineEventPayload | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  switch (record.type) {
+    case "text":
+    case "progress":
+    case "approval":
+    case "artifact":
+    case "usage":
+    case "error":
+    case "status":
+      return value as EngineEventPayload;
     default:
       return null;
   }
@@ -201,6 +234,14 @@ export async function* translateCodexAppServerStream(
   let sequence = 0;
   for await (const event of events) {
     const record = asRecord(event);
+    if (record?.kind === "codex-replay") {
+      const sourceId = safeReplaySourceId(record.sourceId);
+      const payload = replayPayload(record.payload);
+      if (!sourceId || !payload) throw new Error("codex_replay_invalid");
+      sequence += 1;
+      yield { runId, eventId: `codex:${sourceId}`, sequence, payload };
+      continue;
+    }
     const method = nonEmptyString(record?.method);
     if (method && RECOGNIZED_METHODS.has(method) && !hasSafeIdentity(method, asRecord(record?.params))) {
       throw new Error("codex_message_invalid");

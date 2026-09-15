@@ -88,6 +88,10 @@ The replay translator now admits only persisted `agentMessage` text,
 approval-waiting `commandExecution` items, and recognized turn status/usage
 records. It drops unsupported item kinds and malformed identities, preserving
 the same bounded payload rules as live notifications.
+Cursor replay now fetches full turn pages through the negotiated session and
+wraps those translated events in a private replay envelope consumed by the
+existing neutral transport. A missing runtime thread, malformed page, or
+malformed recognized item fails closed before dispatch receives an event.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

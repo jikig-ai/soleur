@@ -119,6 +119,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Remote erasure slice: the lifecycle source calls server-built `thread/delete`, confirms only an exact empty acknowledgement, and clears an erased active thread from runtime state (3 protocol/session/lifecycle tests green).
   - [x] Thread item request slice: the negotiated session builds bounded experimental `thread/items/list` requests with optional validated turn filtering and cursors; response translation remains deferred until the neutral replay mapping is qualified (2 protocol/session tests green).
   - [x] Persisted item translation slice: replay translation admits bounded agent text, approval-waiting commands, and recognized turn status/usage while dropping unsupported or malformed provider shapes (3 translator tests green).
+  - [x] Cursor replay wiring slice: the lifecycle source fetches full bounded turn pages, emits translated replay events through the neutral transport, and fails closed on missing threads or malformed recognized history (3 translator/lifecycle tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).

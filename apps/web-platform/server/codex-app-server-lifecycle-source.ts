@@ -7,6 +7,7 @@ import type {
 import type { CodexCredentialLease, CodexAppServerEventSource } from "./codex-code-adapter";
 import { createCodexAppServerSession, type CodexAppServerSession } from "./codex-app-server-session";
 import type { CodexAppServerStdioConnection } from "./codex-app-server-stdio";
+import { createCodexReplayEvent, translateCodexPersistedItem, translateCodexPersistedTurn } from "./codex-code-message-translator";
 
 export interface CodexAppServerLifecycleSourceOptions {
   open(lease: CodexCredentialLease): Promise<CodexAppServerStdioConnection>;
@@ -19,12 +20,6 @@ interface RuntimeConnection {
   session: CodexAppServerSession;
   thread: NativeSessionReference | null;
   turnId: string | null;
-}
-
-function unsupported(): Error {
-  return Object.assign(new Error("Codex App Server operation is not supported by this source"), {
-    code: "codex_operation_unsupported",
-  });
 }
 
 function assertLease(lease: CodexCredentialLease): void {
@@ -63,6 +58,50 @@ function reconcileStatus(result: Record<string, unknown>, expectedThreadId: stri
   if (statusType(thread.status) === "systemError") return "failed";
   if (statusType(thread.status) === "active") return "running";
   return "queued";
+}
+
+const REPLAY_APPROVAL_STATUSES = new Set(["awaitingApproval", "approvalRequired", "needsApproval", "waiting"]);
+
+function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent>[] {
+  const replay = [] as ReturnType<typeof createCodexReplayEvent>[];
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw Object.assign(new Error("Codex replay item is invalid"), { code: "codex_replay_invalid" });
+    }
+    const itemRecord = item as Record<string, unknown>;
+    const translated = translateCodexPersistedItem(item);
+    const type = typeof itemRecord.type === "string" ? itemRecord.type : null;
+    const approvalWaiting = type === "commandExecution" && REPLAY_APPROVAL_STATUSES.has(statusType(itemRecord.status) ?? "");
+    if ((type === "agentMessage" || approvalWaiting) && translated.length === 0) {
+      throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
+    }
+    for (const event of translated) replay.push(createCodexReplayEvent(event));
+  }
+  return replay;
+}
+
+function replayHistory(result: Record<string, unknown>): ReturnType<typeof createCodexReplayEvent>[] {
+  const data = result.data;
+  if (!Array.isArray(data) || data.length > 100) {
+    throw Object.assign(new Error("Codex replay history result is invalid"), { code: "codex_replay_invalid" });
+  }
+  const replay = [] as ReturnType<typeof createCodexReplayEvent>[];
+  for (const turn of data) {
+    if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+      throw Object.assign(new Error("Codex replay turn is invalid"), { code: "codex_replay_invalid" });
+    }
+    const turnRecord = turn as Record<string, unknown>;
+    if (turnRecord.items !== undefined && !Array.isArray(turnRecord.items)) {
+      throw Object.assign(new Error("Codex replay items are invalid"), { code: "codex_replay_invalid" });
+    }
+    replay.push(...replayItems(turnRecord.items ?? []));
+    const turnEvents = translateCodexPersistedTurn(turn);
+    if (turnRecord.id !== undefined && turnRecord.status !== undefined && turnEvents.length === 0) {
+      throw Object.assign(new Error("Codex replay turn is malformed"), { code: "codex_replay_invalid" });
+    }
+    for (const event of turnEvents) replay.push(createCodexReplayEvent(event));
+  }
+  return replay;
 }
 
 /** Compose the negotiated stdio connection with neutral start/continue calls. */
@@ -124,8 +163,19 @@ export function createCodexAppServerLifecycleSource(
       const result = await active.session.readThread(session.resumeHandle);
       return reconcileStatus(result, session.resumeHandle);
     },
-    resumeFromCursor: async (_context: EngineRunContext, _cursor: string | null, _lease: CodexCredentialLease) => {
-      throw unsupported();
+    resumeFromCursor: async (_context: EngineRunContext, cursor: string | null, lease: CodexCredentialLease) => {
+      const active = await ensureRuntime(lease);
+      if (!active.thread) {
+        throw Object.assign(new Error("Codex replay thread is unavailable"), { code: "codex_thread_missing" });
+      }
+      const result = await active.session.listTurns(active.thread.resumeHandle, {
+        cursor,
+        sortDirection: "asc",
+        itemsView: "full",
+      });
+      return (async function* () {
+        for (const event of replayHistory(result)) yield event;
+      })();
     },
     respondToApproval: async (_context: EngineRunContext, requestId: string, decision: "allow" | "deny", lease: CodexCredentialLease) => {
       const active = await ensureRuntime(lease);

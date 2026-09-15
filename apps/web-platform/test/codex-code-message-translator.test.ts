@@ -4,6 +4,7 @@ import {
   translateCodexAppServerStream,
   translateCodexPersistedItem,
   translateCodexPersistedTurn,
+  createCodexReplayEvent,
 } from "@/server/codex-code-message-translator";
 
 describe("Codex App Server event translator", () => {
@@ -120,5 +121,19 @@ describe("Codex App Server event translator", () => {
       { sourceId: "turn:turn-3:status", payload: { type: "status", status: "completed" } },
     ]);
     expect(translateCodexPersistedTurn({ id: "turn\n3", status: "completed" })).toEqual([]);
+  });
+
+  it("wraps already-translated replay events with the same neutral stream contract", async () => {
+    const messages = (async function* () {
+      yield createCodexReplayEvent({
+        sourceId: "item:item-7:message",
+        payload: { type: "text", text: "replayed" },
+      });
+    })();
+    const events = [];
+    for await (const event of translateCodexAppServerStream(messages, "run-3")) events.push(event);
+    expect(events).toEqual([
+      { runId: "run-3", eventId: "codex:item:item-7:message", sequence: 1, payload: { type: "text", text: "replayed" } },
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerEventBridge } from "@/server/codex-app-server-event-bridge";
+import { createCodexAppServerTransport } from "@/server/codex-code-adapter";
 import { createCodexAppServerLifecycleSource } from "@/server/codex-app-server-lifecycle-source";
 
 const context = { runId: "run-1" } as never;
@@ -64,7 +65,7 @@ describe("Codex App Server lifecycle source", () => {
     ]);
   });
 
-  it("routes approval responses, keeps cursor replay explicit, and confirms remote erasure", async () => {
+  it("routes approval responses, requires a replay thread, and confirms remote erasure", async () => {
     const events = createCodexAppServerEventBridge();
     const request = vi.fn()
       .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
@@ -79,9 +80,70 @@ describe("Codex App Server lifecycle source", () => {
     const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
     await expect(source.respondToApproval(context, "approval-1", "deny", lease)).resolves.toBeUndefined();
     expect(respond).toHaveBeenCalledWith("approval-1", { decision: "decline" });
-    await expect(source.resumeFromCursor(context, null, lease)).rejects.toMatchObject({ code: "codex_operation_unsupported" });
+    await expect(source.resumeFromCursor(context, null, lease)).rejects.toMatchObject({ code: "codex_thread_missing" });
     await expect(source.erase(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("confirmed");
     expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual(["initialize", "thread/delete"]);
+  });
+
+  it("replays bounded persisted turns through the neutral transport", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({
+        data: [{
+          id: "turn-1",
+          status: "completed",
+          usage: { inputTokens: 2, outputTokens: 1 },
+          items: [{ type: "agentMessage", id: "item-1", text: "replayed answer" }],
+        }],
+        nextCursor: null,
+      });
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    const transport = createCodexAppServerTransport(source);
+    const replayed = [];
+    for await (const event of transport.resumeFromCursor(context, "cursor-1", lease)) replayed.push(event);
+    expect(replayed).toEqual([
+      { runId: "run-1", eventId: "codex:item:item-1:message", sequence: 1, payload: { type: "text", text: "replayed answer" } },
+      { runId: "run-1", eventId: "codex:turn:turn-1:usage", sequence: 2, payload: { type: "usage", usage: { native: [{ unit: "input_tokens", value: 2 }, { unit: "output_tokens", value: 1 }], cost: { provenance: "unavailable" } } } },
+      { runId: "run-1", eventId: "codex:turn:turn-1:status", sequence: 3, payload: { type: "status", status: "completed" } },
+    ]);
+    expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual([
+      "initialize", "thread/start", "turn/start", "thread/turns/list",
+    ]);
+  });
+
+  it("fails closed when persisted replay contains a malformed recognized item", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({
+        data: [{
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "bad\nitem", text: "must fail" }],
+        }],
+      });
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const source = createCodexAppServerLifecycleSource({ open: vi.fn(async () => connection), nextRequestId: () => "rpc" });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    const transport = createCodexAppServerTransport(source);
+    await expect((async () => {
+      for await (const _event of transport.resumeFromCursor(context, "cursor-1", lease)) { /* no-op */ }
+    })()).rejects.toMatchObject({ code: "codex_replay_invalid" });
   });
 
   it("fails closed on malformed interrupt and reconciliation responses", async () => {
