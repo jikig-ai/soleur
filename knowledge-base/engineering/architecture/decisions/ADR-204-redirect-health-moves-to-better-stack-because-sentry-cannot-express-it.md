@@ -4,6 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [observability, uptime-monitoring, sentry, better-stack, terraform, redirects, single-vendor]
 related_adrs: [ADR-194, ADR-175]
+amended_by: [ADR-222]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 ---
@@ -179,17 +180,18 @@ answer it, but doing so needs a URL that flaps on demand, which we do not have.
 Confidence is moderate, not high. **Re-evaluation trigger:** any observed www
 redirect fault that the alarm did not report.
 
-Separately, the quota measurement surfaced a fourth Better Stack monitor
-(`app.soleur.ai/health`, id 4226366) that was declared in no root — found only
+Separately, the Better Stack workspace holds an **unmanaged** fourth monitor
+(`app.soleur.ai/health`, id 4226366) that is not declared in any root — found only
 because the free-tier quota was measured live rather than counted from `.tf`
 blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
 
-> **Resolved 2026-09-15 (#7884, PR #8216):** this paragraph originally described
-> 4226366 as unmanaged, in the present tense. It is now declared as
-> `betteruptime_monitor.app_health` in `uptime-alerts.tf`, adopted through a gated
-> `import {}` block, and converted from a `status` to a `keyword` monitor that pages
-> when `/health` stops reporting `"supabase":"connected"`. The twice-daily reconcile
-> now reports any live monitor or heartbeat that no declaration accounts for. See
+> **Resolved 2026-09-15 (#7884, PR #8216):** the paragraph above is kept as
+> written on 2026-09-07. Monitor 4226366 is now declared as
+> `betteruptime_monitor.app_health` in `uptime-alerts.tf`. The first per-merge apply
+> after PR #8216 adopts it through a gated `import {}` block and converts it from a
+> `status` to a `keyword` monitor that pages when `/health` stops reporting
+> `"supabase":"connected"`. The twice-daily reconcile now reports any live monitor
+> or heartbeat that no declaration accounts for. See
 > [ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md).
 
 ## Consequences
@@ -209,12 +211,11 @@ blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
   rebuild window.
 - `deploy-docs.yml` no longer holds a Sentry credential of any kind — `jq` and
   every `SENTRY_*` secret were used only by the removed steps.
-- Better Stack usage grows by one monitor. No recurring cost: the monitor is ungated
-  and policy-less, riding the existing email path.
+- Better Stack usage goes to 4 monitors of 10 on the free tier. No recurring cost:
+  the monitor is ungated and policy-less, riding the existing email path.
 
-  > **Superseded 2026-09-15 (#7884):** this bullet originally read "goes to 4
-  > monitors of 10 on the free tier", an asserted cap. Measured live on 2026-09-15
-  > the workspace held 4 monitors + 9 heartbeats = 13 objects, which contradicts a
-  > single shared pool of ten. No cap is asserted any more: the reconcile prints
+  > **Superseded 2026-09-15 (#7884):** "4 monitors of 10" above is an asserted
+  > cap. Measured live on 2026-09-15 the workspace held 4 monitors + 9 heartbeats
+  > = 13 objects, which contradicts a single shared pool of ten. No cap is asserted any more: the reconcile prints
   > `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`
   > every run ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)).

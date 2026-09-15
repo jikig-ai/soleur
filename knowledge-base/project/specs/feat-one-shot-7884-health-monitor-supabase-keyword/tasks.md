@@ -48,4 +48,5 @@ Plan: `knowledge-base/project/plans/2026-09-15-fix-health-monitor-supabase-keywo
 ## Phase 5: Ship-time checks
 
 - [ ] 5.1 PR body: `Ref #7884`; Phase 0.2/0.3/2.4 outputs; decision challenges rendered
-- [ ] 5.2 Post-merge: AC17 apply + read-back (≥360 s, `last_checked_at`), AC18 reconcile run, AC19 close or comment on #7884
+- [ ] 5.2 Post-merge: AC17 apply + read-back (≥360 s, `last_checked_at`), AC18 reconcile run, AC19 comment on #7884 (do not close)
+- [ ] 5.3 Post-AC17: open the import-block removal PR (delete the `app_health` `import {}` block, `adopt_app_health_monitor` and the tftest override) with `Closes #7884` in the body; #7884 closes when it merges

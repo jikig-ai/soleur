@@ -20,11 +20,10 @@ related_runbooks:
 apply that imports and converges `betteruptime_monitor.app_health`; that apply and the read-back
 after it are post-merge facts, checked by the plan's AC17/AC18 and not asserted here.
 
-- **Issue:** [#7884](https://github.com/jikig-ai/soleur/issues/7884) (stays open until the
-  post-merge read-back).
+- **Issue:** [#7884](https://github.com/jikig-ai/soleur/issues/7884). It stays open after PR #8216
+  and closes with the import-block removal PR, which carries `Closes #7884` and follows the AC17
+  read-back.
 - **Incident:** [prd Supabase database unreachable, 2026-09-15](../../operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md).
-- **Ordinal note:** ADR-221 was the highest ordinal across all `origin/*` refs on 2026-09-15
-  (it exists only on a pushed branch). Re-derive at ship.
 
 ## Context
 
@@ -52,11 +51,13 @@ Two further facts shaped the second decision:
   resources in state; the twice-daily `heartbeat-live-reconcile` job compared declared heartbeats
   against live ones and never listed monitors or looked for undeclared objects.
 
-### Vendor probe (2026-09-15, before any code)
+### Vendor probes (2026-09-15, before merge)
 
 The keyword half rests on Better Stack matching a quoted compact-JSON substring in the raw body.
 Its documentation says only "a specified keyword or phrase in the page response", so it was
-measured with a throwaway monitor on the real URL (`confirmation_period` 0, no alert channels):
+measured with throwaway monitors on the real URL (`confirmation_period` 0, no alert channels).
+
+**Probe 1: does the keyword match, and can it fail?**
 
 | Step | Result |
 |---|---|
@@ -68,6 +69,18 @@ measured with a throwaway monitor on the real URL (`confirmation_period` 0, no a
 The `down` reading is what makes the `up` reading mean anything: a monitor that cannot fail also
 reads `up`. The workspace also accepted the `keyword` type, so the plan's `status` fallback branch
 did not apply.
+
+**Probe 2: does the vendor accept the in-place conversion the adoption apply sends?**
+
+| Step | Result |
+|---|---|
+| `POST` a `status` monitor (the shape of `4226366`) | created, id `4934199`, 2026-09-15T17:52Z |
+| One `PATCH` with the exact attribute set the apply converges: `monitor_type` status→keyword, `required_keyword`, `confirmation_period` 180, `recovery_period` 180, `request_timeout` 10, `pronounceable_name` | **200** |
+| Read back | every attribute matched; reading after conversion **`up`** |
+| `DELETE`, then `GET` | **204**, then **404** |
+
+The provider updates `monitor_type` in place, and the vendor accepts that update with the rest of
+the merge's attribute set, so the adoption apply is not expected to be refused.
 
 ## Considered Options
 
@@ -117,8 +130,16 @@ heartbeats, against the declarations in `apps/web-platform/infra`:
   every object sharing a URL or name with another (`dup=url` / `dup=name`). The issue gains the
   `infra-drift` label and the email says so.
 - `reason=monitor-config-drift` reports a declared monitor whose live `monitor_type`,
-  `required_keyword` or `paused` differs, so a vendor-side edit cannot quietly disarm the alarm in
-  decision 1 between infra merges.
+  `required_keyword` or `paused` differs, and, where the declaration sets them, `email`, `call`,
+  `sms`, `push`, `confirmation_period`, `check_frequency`, `request_timeout`, `recovery_period`,
+  `verify_ssl` or `follow_redirects`, plus any live maintenance window. A vendor-side edit
+  therefore cannot quietly disarm the alarm in decision 1 between infra merges. It emails on every
+  run while it persists.
+- A declaration file that fails to parse prints
+  `SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=parse-error`; an override file or
+  a `.tf.json` file reports `reason=unresolvable-declaration`. Both fail the run.
+- Every `MISMATCH` row carries one `route=<reason>~<subject>` token, and escalation keys on it
+  (ADR-117 amendment of 2026-09-15 owns the routing rule).
 - Every run in which both uptime reads succeed prints
   `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`. This measured
   count replaces any asserted cap, in `uptime-alerts.tf` and in ADR-149 reason (c).
@@ -138,22 +159,37 @@ arm checks declared alerts only and does not report undeclared ones.
   failing check, plus the 180 s confirmation window. Paging is email only, so the time until a
   human acts includes reading the inbox; nothing escalates on the current configuration. The
   confirmation window absorbs single-check flaps such as the 15:44:44Z one in the post-mortem.
-- **The gated import block is temporary, and most likely harmful if kept.** Terraform v1.10.5
-  skips an import only while the address is in state. If `4226366` were deleted on the vendor
-  side, refresh would drop it from state, the import would be attempted again, and the
-  passthrough importer's read of a missing id would most likely abort every plan in the root.
-  This is derived from Terraform and provider source (hypothesis H-F in the plan), not measured.
-  Before any merge, the reconcile reports the deletion as `absent-live`; the off-switch is setting
+- **The gated import block is temporary, and harmful if kept (hypothesis H-F).** Terraform
+  v1.10.5 skips an import while the address is in state. If `4226366` were deleted on the vendor
+  side, the provider's read of the 404 clears the id (`SetId("")`), refresh drops the object from
+  state, and the import is attempted again against a missing object ("Cannot import non-existent
+  remote object"). Which plans that aborts was measured on Terraform 1.10.5 during review: an
+  import whose `to` address is outside a plan's `-target` set is skipped silently, even with an
+  unreadable id, while an untargeted plan or one that targets the address aborts. So after a
+  deletion:
+  - the per-merge `apply` job of `apply-web-platform-infra.yml`, which targets
+    `betteruptime_monitor.app_health`, aborts on every infra merge and emails through its
+    `notify-apply-failure` job;
+  - the scheduled `drift-check` plan, which is untargeted, exits 1 on every run, sending
+    `[ERROR] Terraform plan failed for web-platform` twice a day and a Sentry
+    `scheduled-terraform-drift` error check-in;
+  - targeted dispatch jobs whose `-target` set excludes the address, such as
+    `apply-deploy-pipeline-fix.yml`, skip the import and keep working (that workflow sends no
+    failure email of its own).
+
+  The abort follows from Terraform core and provider source plus the targeting measurement; it was
+  not reproduced against Better Stack. The reconcile reports the deletion as `absent-live` on its
+  next run (06:00 or 18:00 UTC), so within 12 hours, not necessarily before the next merge: an
+  infra merge inside that gap fails first and emails. The interim off-switch is setting
   `adopt_app_health_monitor` to `false` in a PR (runbook
-  [app-database-readiness-alarm.md](../../operations/runbooks/app-database-readiness-alarm.md));
-  and the #7884 pipeline removes the block and the variable in a follow-up PR once the post-merge
-  read-back passes (a 32-line, 3-file change, so it is done rather than filed).
-  Removing the variable also closes a Doppler `TF_VAR_*` override path around the reconcile's
-  resolver (ADR-117 amendment of 2026-09-15).
+  [app-database-readiness-alarm.md](../../operations/runbooks/app-database-readiness-alarm.md)).
+  The block and the variable are removed by a follow-up PR after the AC17 read-back; #7884 stays
+  open until that PR merges. Removing the variable also closes a Doppler `TF_VAR_*` override path
+  around the reconcile's resolver (ADR-117 amendment of 2026-09-15).
 - **Unmanaged objects surface within one drift cycle (12 h at most), with no SSH**, through the
   existing mismatch issue, the `infra-drift` label and email.
 - **The first run after merge re-emails every existing mismatch row once**, because issue history
-  carries no `resource=` routing tokens yet (ADR-117 amendment).
+  carries no `route=` tokens yet (ADR-117 amendment).
 
 ### Residual gaps, recorded rather than implied closed
 
@@ -170,6 +206,21 @@ arm checks declared alerts only and does not report undeclared ones.
   `SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE` and a workflow warning (the existing contract), and it
   silently suspends unmanaged and disarm detection for as long as it lasts. The only trace is the
   missing `INVENTORY` line.
+- **The readiness check is one REST read, so some Supabase outages stay green.**
+  `checkSupabase` is a single service-role `GET /rest/v1/users?select=id&limit=1`. Supabase Auth
+  down while PostgREST serves, and a database that has gone read-only (reads succeed, writes
+  fail), both keep `"supabase":"connected"` and do not page, although users cannot sign in or
+  save.
+- **A hand-made replacement of an untargeted heartbeat is read as managed.** Heartbeats join on
+  name, and the reconcile has no tfstate access. The four heartbeats in the parity test's
+  `OPERATOR_APPLIED_EXCLUSIONS` (`git_data_prd`, `workspaces_luks`, `registry_prd`,
+  `registry_disk_prd`) have no per-merge `-target`. A vendor-side replacement of one of them that
+  reuses the declared name matches its declaration and is not reported.
+- **Only uptime monitors and heartbeats are inventoried.** Status pages, on-call calendars,
+  escalation policies, webhooks and undeclared Logs alerts (such as the paused
+  `Output utilization high`) are not read.
+- **Modules are not expanded.** Declarations are read from the root's own `.tf` files; a monitor
+  or heartbeat declared inside a module call would not be seen.
 
 ## Cost Impacts
 
@@ -190,4 +241,5 @@ monitor was created and deleted. No new vendor, plan or line item.
 - AP-002 (No SSH state mutation): Aligned. Detection, diagnosis and the H-F remedy need no SSH.
 - AP-005 (Email for ops): Aligned. Both the alarm and the reconcile page by email.
 - AP-021 (Diagnostic honesty): Aligned. The object cap is measured by a marker and never
-  asserted; H-F is labelled source-derived, not measured.
+  asserted; H-F's reach is measured on Terraform and its trigger is labelled source-derived, not
+  reproduced against Better Stack.

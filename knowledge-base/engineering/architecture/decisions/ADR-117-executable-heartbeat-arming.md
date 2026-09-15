@@ -3,6 +3,7 @@ title: A heartbeat's arming claim must be executable — a monitor is fed, or ho
 status: accepted
 date: 2026-07-16
 amends: ADR-103
+amended_by: [ADR-222]
 supersedes: none
 issue: 6537
 ---
@@ -347,14 +348,20 @@ changing what the reconcile expects. None of the three exists in `soleur/prd_ter
 secret names read on 2026-09-15, zero matches), so today the two agree; adding one would break
 that silently.
 
-**2. Every mismatch row carries a routing token.** Existing heartbeat rows gain a trailing
+**2. Every mismatch row carries routing tokens.** Existing heartbeat rows gain a trailing
 `resource=<type.name>`; `logs_alert` rows gain `resource=<type.name>` immediately before
-`detail="…"`, so vendor text stays last. The prefixes ADR-218 and `monitor-send-failed-alert.md`
-quote are unchanged. The issue step escalates on these tokens, compared as whole tokens, instead of
-on a `name=` substring match.
+`detail="…"`, so vendor text stays last. Every `MISMATCH` row also carries exactly one
+`route=<reason>~<subject>` token (for example `route=monitor-config-drift~id.4226366.paused`). The
+`logs_alert` prefix ADR-218 and `monitor-send-failed-alert.md` quote is unchanged only through
+`reason=`; the fields after it changed. The issue step escalates on the `route=` key, compared as a
+whole token, instead of on a `name=` substring match.
 
-**3. The first run after merge re-escalates every existing row once.** Issue history (#6645)
-carries no `resource=` tokens, so each current row reads as new exactly one time, then settles.
+**3. Escalation follows the latest reconcile comment.** A `route=` key emails again whenever it is
+absent from the latest bot-authored reconcile comment, and history is read only from the marker
+lines of bot-authored comments, so a human comment cannot suppress an alert.
+`reason=monitor-config-drift` emails on every run while it persists. Two consequences: the first
+run after merge re-emails every existing row once, because issue history (#6645) carries no
+`route=` tokens; and a row that clears for one run and then returns emails again.
 
 ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
 

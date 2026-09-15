@@ -133,7 +133,8 @@ Better Stack auto-pauses an alert whose query it rejects (`paused_reason` "compl
 - `plugins/soleur/scripts/reconcile-live-heartbeats.ts` (twice daily from
   `scheduled-terraform-drift.yml`) carries a `logs_alert` arm: a paused or absent declared alert
   prints `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=soleur-monitor-send-failed-prd live=logs_alert
-  reason=logs-alert-paused|logs-alert-absent detail="…"` and lands in the existing deduped
+  reason=logs-alert-paused|logs-alert-absent`, followed by the routing tokens `resource=` and
+  `route=` and, last, `detail="…"`, and lands in the existing deduped
   `heartbeat-reconcile-mismatch` issue. The untargeted drift plan is **not** the detector: the
   per-merge apply re-arms `paused = false` silently, so a vendor pause only shows in the plan
   between infra merges.

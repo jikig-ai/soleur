@@ -26,7 +26,7 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
 ### Key Improvements
 
-1. **H-F resolved from Terraform source.** v1.10.5 `expandResourceImports` skips an import only when the address is in the (refreshed) state, so after a vendor-side deletion the gated import is re-attempted against a missing object and the plan most likely aborts. The import block therefore gets a tracked removal once adoption is verified, and the gate variable is the interim off-switch.
+1. **H-F resolved from Terraform source.** v1.10.5 `expandResourceImports` skips an import only when the address is in the (refreshed) state, so after a vendor-side deletion the gated import is re-attempted against a missing object. Review measured the reach on Terraform 1.10.5: plans that target the address or are untargeted abort, plans whose `-target` excludes it skip the import. The import block therefore gets a tracked removal once adoption is verified, and the gate variable is the interim off-switch.
 2. **Marker grammar hardened against vendor text.** All vendor-sourced fields (`url`, `name`, `detail`) now come last and quoted, ids must be numeric, invisible/bidi characters are stripped, fields are capped at 200 chars, and the workflow extracts routing tokens only from the machine prefix. Per-arm host+path pin, page cap and seen-URL set added.
 3. **Escalation and issue routing are tested.** A small workflow-body suite (python `yaml.safe_load` + `gh` stub, precedent `plugins/soleur/test/token-drift-workflow-causes.test.sh`) covers the fail-closed lookup, the whole-token escalation key and the `infra-drift` label. Subject precedence and keyless-marker escalation are decided.
 4. **Guard 1 can no longer be satisfied by a silent downgrade.** The expected branch is a constant set from the Phase 0.2 result, not read from the declaration.
@@ -188,7 +188,7 @@ The feature text matched the network-outage trigger ("unreachable", "timeout"). 
 | H-C | The workspace accepts a `keyword` monitor | #7798 measured `expected_status_code` only; 13 live objects against a "10" pricing reading | UNKNOWN — Phase 0.2. A quota refusal does NOT answer H-C |
 | H-D | The keyword monitor also fails when the app is down / 5xx / timing out | A Cloudflare 52x page, a timeout or a TLS failure yields no body containing the phrase | Holds by construction for this endpoint |
 | H-E | A single 2 s check timeout would page without a confirmation window | `checkSupabase` timeout; 15:44:44Z single-read flap | Mitigated by `confirmation_period = 180` |
-| H-F | After a vendor-side deletion of 4226366, the gated import block aborts the plan (vs. a quiet `+ create`) | Terraform v1.10.5 `internal/terraform/node_resource_plan.go` `expandResourceImports` removes an import only `if state.ResourceInstance(el.Key) != nil` ("skipping import address … already in state"); refresh drops a 404'd object (`monitorRead` → `SetId("")`), so the import is re-attempted and the passthrough importer's read of a missing id yields an import error | LIKELY abort (source-derived, not measured). Mitigations: reconcile reports `absent-live` first; gate variable is the off-switch; the import block and variable are removed by a tracked follow-up once AC17 passes |
+| H-F | After a vendor-side deletion of 4226366, the gated import block aborts the plan (vs. a quiet `+ create`) | Terraform v1.10.5 `internal/terraform/node_resource_plan.go` `expandResourceImports` removes an import only `if state.ResourceInstance(el.Key) != nil` ("skipping import address … already in state"); refresh drops a 404'd object (`monitorRead` → `SetId("")`), so the import is re-attempted and the passthrough importer's read of a missing id yields an import error | ABORTS, for plans that target the address or are untargeted: the per-merge apply (emails via `notify-apply-failure`) and the scheduled drift plan (`[ERROR] Terraform plan failed` email twice daily + Sentry `scheduled-terraform-drift` error). Plans whose `-target` excludes the address (e.g. `apply-deploy-pipeline-fix.yml`) skip the import (targeting measured on Terraform 1.10.5 during review; the 404 trigger is source-derived, not reproduced against Better Stack). Mitigations: reconcile reports `absent-live` within 12 h (06:00/18:00 UTC), not necessarily before a merge; gate variable is the off-switch; the import block and variable are removed by the Phase 4.4 PR after AC17, which closes #7884 |
 
 ### Network-Outage Deep-Dive (deepen-plan 4.5)
 
@@ -360,14 +360,14 @@ Merge → `apply-web-platform-infra.yml` (push, `paths: apps/web-platform/infra/
 3.5 Runbook `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` (frontmatter like `www-redirect-alarm.md`): TL;DR `curl -s --max-time 10 https://app.soleur.ai/health | jq -r .supabase`; "which alarm is this?" table (`soleur app database readiness` / `soleur app dashboard` / `soleur dot ai apex`); what is asserted; diagnosis with no SSH — dev-project control probe, Supabase Management API health, `scripts/supabase-logs-query.sh` (`supabase-log-query.md`), and the service-role-key cause (`supabase-db-credential-rotation.md`); remediation — a project restart is a production write that needs explicit operator authorization per `hr-menu-option-ack-not-prod-write-auth`; the H-F remedy (set `adopt_app_health_monitor` default `false` in a PR) step by step; a link to the post-mortem (on `origin/main` since #8215).
 3.6 C4: `model.c4` `betterstack -> hetzner` gains the database-readiness keyword probe; `github -> betterstack` reconcile sentence gains `GET /api/v2/monitors`, `unmanaged-live`, `monitor-config-drift` and the INVENTORY marker; `betterstack -> founder` gains the database alarm in what pages. Run `bash scripts/regenerate-c4-model.sh`; then `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh`.
 3.7 Prose sweep: `git grep -n 'heartbeat-live-reconcile\|reconcile-live-heartbeats'` — update statements that describe the job as heartbeats-only in `ADR-141`, `apps/web-platform/infra/sentry/cron-monitors.tf` and `function-registry-count.test.ts` where they would now be false; leave historical plan/spec files.
-3.8 Post-mortem (on `origin/main` since #8215): in `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md` Action Items, set the #7884 row's status to reflect this PR — `resolved by #8216 (keyword alarm)` on the keyword branch, `in progress: imported as status; keyword follow-up #<n>` on the `status` branch.
+3.8 Post-mortem (on `origin/main` since #8215): in `knowledge-base/engineering/operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md` Action Items, set the #7884 row's status to reflect this PR — `fixed in #8216; live after the post-merge read-back (AC17); #7884 closes with the import-removal PR` on the keyword branch, `in progress: imported as status; keyword follow-up #<n>` on the `status` branch.
 
 ### Phase 4 — Issue housekeeping (automated)
 
 4.1 `gh issue create` "Better Stack Logs alert `Output utilization high` (id 2536305877) is live but undeclared", `--milestone "Post-MVP / Later"`, labels `infra-drift`, `domain/engineering`.
 4.2 Comment on #8140 that it duplicates #6645 (the fail-open lookup fixed here) and close it `not planned`; comment on #6645 that the `${each.key}` rows were false and are fixed by this PR.
 4.3 On the `status` branch only: the follow-up issue from the decision rule.
-4.4 `gh issue create` "Remove the app_health adoption import block and adopt_app_health_monitor once adoption is verified" (H-F: the block most likely aborts every plan in the root after a vendor-side deletion; removal also closes the Doppler tf-var override path), `priority/p2-medium`, milestone `Post-MVP / Later`, body citing AC17 as the precondition and naming the tftest override and Guard-free removal (a PR deleting both lines + the tftest override).
+4.4 No separate issue (decision 2026-09-15). After AC17 passes, a follow-up PR removes the `app_health` adoption `import {}` block, `adopt_app_health_monitor` and the tftest override, and carries `Closes #7884`. #7884 stays open until that PR merges; it is the tracking record. Reason for removal (H-F): after a vendor-side deletion the block aborts the per-merge apply and the untargeted drift plan; removal also closes the Doppler tf-var override path.
 
 ## Files to Edit
 
@@ -406,7 +406,7 @@ Pipeline-written files that may also appear in the diff: `knowledge-base/INDEX.m
 | New `/ready` endpoint for a status monitor | New app surface + deploy for a property the body already carries. |
 | `terraform import` CLI in a dispatch job | Imperative, state-only, invisible to review. |
 | Ungated `import {}` | Breaks the credential-free `terraform test` leg; no off-switch. |
-| Keep the gated `import {}` permanently | Terraform v1.10.5 re-attempts a skipped import once refresh drops a deleted object, so the block would most likely abort every plan in the root; it is removed by a tracked follow-up after AC17 (it must exist for the adoption apply itself). |
+| Keep the gated `import {}` permanently | Terraform v1.10.5 re-attempts a skipped import once refresh drops a deleted object, so the block would abort the per-merge apply and the untargeted drift plan (H-F); it is removed by the Phase 4.4 PR after AC17 (it must exist for the adoption apply itself). |
 | Delete 4226366 and create a fresh keyword monitor | Loses 5.5 months of check history. |
 | Match live objects by tfstate ids | Needs state access and a second credential surface. |
 | Match monitors by name; regex-expand templated names | Renames read as unmanaged; loose patterns absorb look-alikes. |
@@ -417,6 +417,7 @@ Pipeline-written files that may also appear in the diff: `knowledge-base/INDEX.m
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the next prd database outage leaves app.soleur.ai sign-in and every data-backed page failing with no alarm (the 2026-09-15 shape, ~89 min).
+- **Scope when this lands working:** the alarm detects outages in which the one-row service-role REST read fails (database unreachable, PostgREST failing, a rejected key, a read over 2 s). It does not detect a Supabase Auth outage while REST serves (sign-in fails, `/health` stays `connected`) or a write-path outage such as a read-only database (saves fail, reads succeed). Both are residuals in ADR-222.
 - **If this lands on the `status` branch, the user experiences:** the same — the 2026-09-15 outage shape stays undetected until the keyword follow-up PR merges; the PR and ADR say so.
 - **If this lands broken the other way, the user experiences:** nothing directly, but a permanently firing `soleur app database readiness` alarm trains the inbox to ignore Better Stack, which hides the next real outage.
 - **If this lands broken in the apply, the user experiences:** infra merges whose later apply steps (tunnel, bridge apply) stop running until the config is fixed — the Phase 0.2 gate exists to prevent this.
@@ -429,7 +430,7 @@ CPO sign-off: approve with conditions (Domain Review). `user-impact-reviewer` ru
 
 ```yaml
 liveness_signal:
-  what: "Better Stack keyword monitor betteruptime_monitor.app_health ('soleur app database readiness') on https://app.soleur.ai/health; reconcile liveness via the existing Sentry cron monitor scheduled-heartbeat-reconcile"
+  what: "Better Stack keyword monitor betteruptime_monitor.app_health ('soleur app database readiness') on https://app.soleur.ai/health; reconcile liveness only (not mismatch findings, which check in ok) via the existing Sentry cron monitor scheduled-heartbeat-reconcile"
   cadence: "180 s checks with 180 s confirmation; reconcile twice daily (06:00/18:00 UTC, Inngest-dispatched)"
   alert_target: "Better Stack email to the account owner and betteruptime_team_member.ops (ops@jikigai.com); reconcile: heartbeat-reconcile-mismatch issue (plus infra-drift label for unmanaged objects) + Resend email to ops; Sentry cron issue on a missed or error check-in"
   configured_in: "apps/web-platform/infra/uptime-alerts.tf; .github/workflows/scheduled-terraform-drift.yml (heartbeat-live-reconcile job)"
@@ -454,15 +455,15 @@ failure_modes:
   - mode: "vendor-side edit disarms the alarm (type, keyword, paused)"
     detection: "reconcile reason=monitor-config-drift"
     alert_route: "reconcile issue + [ALARM DISARMED] ops email; next infra merge apply re-converges"
-    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::); Sentry cron monitor scheduled-heartbeat-reconcile is liveness only here (rc 2 checks in ok)"
   - mode: "hand-created or duplicated Better Stack monitor or heartbeat"
     detection: "reconcile reason=unmanaged-live with id"
     alert_route: "reconcile issue labeled infra-drift + [INFRA-DRIFT] ops email"
-    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::); Sentry cron monitor scheduled-heartbeat-reconcile is liveness only here (rc 2 checks in ok)"
   - mode: "monitor 4226366 deleted vendor-side"
     detection: "reconcile surface=monitors reason=absent-live, then unmanaged-live or a restored id after the next apply (H-F)"
     alert_route: "reconcile issue + ops email"
-    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::); Sentry cron monitor scheduled-heartbeat-reconcile is liveness only here (rc 2 checks in ok)"
   - mode: "reconcile cannot read Better Stack (401/403/malformed), a declaration is unresolvable, or the script crashes"
     detection: "rc=1 in the reconcile step; unresolvable declarations also fail the PR via the real-infra-dir test"
     alert_route: "[ERROR] ops email + Sentry cron check-in status error"
@@ -478,7 +479,7 @@ failure_modes:
   - mode: "Phase 0.2 probe monitor left behind (trap delete failed)"
     detection: "next probe run pre-sweep; reconcile surface=monitors reason=unmanaged-live with the probe id"
     alert_route: "reconcile issue labeled infra-drift + [INFRA-DRIFT] ops email"
-    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::) + Sentry cron monitor scheduled-heartbeat-reconcile"
+    layer: "workflow run log (SOLEUR_HEARTBEAT_RECONCILE_* markers, ::error::/::warning::); Sentry cron monitor scheduled-heartbeat-reconcile is liveness only here (rc 2 checks in ok)"
 
 logs:
   where: "GitHub Actions logs for scheduled-terraform-drift.yml (reconcile-output.txt echoed) and apply-web-platform-infra.yml; Better Stack check history for monitor 4226366"
@@ -652,25 +653,25 @@ Also asserted: a MISMATCH row with no key escalates; subject precedence rc1 > `m
 - [ ] AC1 `cd apps/web-platform && ./node_modules/.bin/vitest run test/server/health-keyword-monitor-contract.test.ts test/server/health-supabase.test.ts test/server/health.test.ts test/seo-config-rules.test.ts` passes; the contract test asserts its own Guard 1 row count in-file and `EXPECTED_BRANCH` equals the Phase 0.2 decision.
 - [ ] AC2 `.github/workflows/apply-web-platform-infra.yml` per-merge `apply` job carries `-target=betteruptime_monitor.app_health`; `bun test plugins/soleur/test/terraform-target-parity.test.ts` passes.
 - [ ] AC3 For `apps/web-platform/infra`: `terraform fmt -check -recursive`, `terraform validate` and `terraform test` pass (the `infra-validation.yml` jobs are green on the PR).
-- [ ] AC4 Phase 0.2 result recorded in the PR body (POST status, `up` then `down` readings, id, 404 confirmation — or the recorded refusal), and the declared `monitor_type` in `uptime-alerts.tf` matches the decision rule's branch.
+- [ ] AC4 Phase 0.2 result recorded in the PR body (probe 1: POST status, `up` then `down` readings, id `4934114`, 404 confirmation — or the recorded refusal; probe 2: a `status` monitor, id `4934199`, PATCHed with the exact merge attribute set → 200, read-back matched, `up` after conversion, 204/404 on delete), and the declared `monitor_type` in `uptime-alerts.tf` matches the decision rule's branch.
 - [ ] AC5 Phase 0.3 output recorded in the PR body: `Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.`, no `-/+`, attribute diff limited to the branch's named attributes.
 - [ ] AC6 `bun test plugins/soleur/test/heartbeat-live-reconcile.test.ts` passes with every Guard 2 row (1-19), H1-H6 and the updated `seen` expectation.
 - [ ] AC7 `actionlint .github/workflows/scheduled-terraform-drift.yml` is clean, every changed `run:` body passes `bash -n` after extraction, and `bash plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh` passes with every Guard 3 row.
 - [ ] AC8 Phase 2.4 local read-only run output in the PR body: no line containing `${each.key}`; `OK surface=monitors` with `4226366` in `matched=`; an `INVENTORY` line whose counts equal the lengths of the two live lists read through all pages in the same minute; zero `unmanaged-live`.
 - [ ] AC9 `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` and `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` pass.
 - [ ] AC10 The `uptime-alerts.tf` header no longer asserts that heartbeats "are NOT pooled" or that the www monitor "is the 4th of 10"; it names `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY` and records #7884's resolution (read the comment block, not a bare-token grep).
-- [ ] AC11 ADR-204 `## Residual gap` no longer describes 4226366 as unmanaged and links ADR-222; its `## Consequences` no longer says "4 monitors of 10"; ADR-117 carries `### Amendment (2026-09-15, #7884)`; ADR-149 carries the INVENTORY pointer.
+- [ ] AC11 ADR-204 `## Residual gap` and `## Consequences` keep their original sentences verbatim, each followed by a dated append-only callout (Resolved: 4226366 declared, linking ADR-222; Superseded: the "4 monitors of 10" cap replaced by the INVENTORY marker); ADR-117 carries `### Amendment (2026-09-15, #7884)`; ADR-149 carries the INVENTORY pointer.
 - [ ] AC12 ADR-222 exists with the Phase 3.1 content (status `adopting` on the `status` branch); its ordinal is free across all `origin/*` refs immediately before merge; `bun test plugins/soleur/test/adr-frontmatter-ordinal-guard.test.ts` passes.
 - [ ] AC13 `knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md` exists; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes; it contains no `ssh ` command, covers the service-role-key cause and the H-F remedy, and links the post-mortem.
 - [ ] AC14 `model.c4` edges updated per Phase 3.6; `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
 - [ ] AC15 PR body uses `Ref #7884`, not `Closes`; on the `status` branch the PR title and body state that database outages remain undetected until the follow-up.
-- [ ] AC16 Phase 4 actions done: Logs-alert issue exists with a milestone; #8140 closed as a duplicate of #6645 with a comment; the import-block removal issue (Phase 4.4) exists; on the `status` branch, the keyword follow-up issue exists with milestone `Phase 4: Validate + Scale` and `priority/p1-high`; the post-mortem #7884 row status is updated (Phase 3.8).
+- [ ] AC16 Phase 4 actions done: Logs-alert issue exists with a milestone; #8140 closed as a duplicate of #6645 with a comment; no import-block removal issue is filed, because #7884 tracks it (Phase 4.4); on the `status` branch, the keyword follow-up issue exists with milestone `Phase 4: Validate + Scale` and `priority/p1-high`; the post-mortem #7884 row status is updated (Phase 3.8).
 
 ### Post-merge (automated, `/ship` postmerge)
 
 - [ ] AC17 The `apply-web-platform-infra.yml` run whose head commit contains the merge commit concludes `success`; its apply log contains `betteruptime_monitor.app_health` import and `Modifications complete`. Then `GET /api/v2/monitors/4226366` (READONLY token), polled for at least 360 s after the apply's completion, returns the declared `monitor_type`, `required_keyword` (keyword branch), `pronounceable_name "soleur app database readiness"` and `confirmation_period 180`, with `last_checked_at` later than completion + 180 s and `status: "up"`.
 - [ ] AC18 After AC17: `BETTERSTACK_API_TOKEN="$(doppler secrets get BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform --plain)" bun plugins/soleur/scripts/reconcile-live-heartbeats.ts` prints `OK surface=monitors` with `4226366` in `matched=`, an `INVENTORY` line, and no `unmanaged-live`, `monitor-config-drift` or `${each.key}`.
-- [ ] AC19 Keyword branch: `gh issue close 7884` with a comment linking the apply run and the AC17 read-back. `status` branch: comment only; #7884 closes with the follow-up PR.
+- [ ] AC19 Keyword branch: comment on #7884 linking the apply run and the AC17 read-back; do not close it. #7884 closes when the import-block removal PR (Phase 4.4, `Closes #7884`) merges. `status` branch: comment only; #7884 closes with the follow-up PR.
 
 ## Domain Review
 
@@ -706,20 +707,20 @@ No Product/UX gate: no UI surface in Files to Create/Edit.
 
 - **Workspace refuses the keyword type or matches differently.** Phase 0.2 gate; `status` branch with P1 follow-up otherwise.
 - **Refused PATCH wedges later infra merges.** Prevented by the same gate; the remedy is reverting `monitor_type` in a PR.
-- **Import block after vendor-side deletion (H-F, likely abort per Terraform source).** Reported by the reconcile; any aborted apply emails via `notify-apply-failure`; the gate variable is the off-switch (runbook steps); the block and variable are removed by the Phase 4.4 follow-up once AC17 passes.
+- **Import block after vendor-side deletion (H-F: aborts the per-merge apply and the untargeted drift plan).** Reported by the reconcile within 12 h; any aborted apply emails via `notify-apply-failure`; the drift plan emails `[ERROR] Terraform plan failed`; the gate variable is the off-switch (runbook steps); the block and variable are removed by the Phase 4.4 follow-up once AC17 passes.
 - **Vendor text forging routing tokens or hiding in invisible characters.** Quoted-last vendor fields, pre-quote token extraction, numeric ids, bidi strip, 200-char cap; Guard 2 row 18 and Guard 3 H2.
 - **Deploy windows.** Container restarts give Cloudflare 52x for seconds; `confirmation_period = 180` exceeds them.
 - **False `unmanaged-live`.** Exact resolution, URL matching, H2/H4/H5 must-pass rows, and AC8 on live data before merge.
 - **Parser breaks on a harmless refactor.** Guard 2 H6 fails the PR before the scheduled run sees it.
 - **Duplicate or silent issue filing.** Fail-closed lookup plus failure-triggered email and Sentry error; #8140 closed.
-- **One-time email burst after merge.** Every existing row re-escalates once because history lacks `resource=`; stated in ADR-117.
+- **One-time email burst after merge.** Every existing row re-escalates once because history lacks `route=`; stated in ADR-117.
 - **Probe leaves an orphan monitor.** Sweep-first, trap, id printed; the new arm would report a survivor as `unmanaged-live`.
 
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.
 - The keyword literal is compact JSON with escaped quotes in HCL; `JSON.stringify` output has no spaces. A change to `/health` serialization is a change to the paging contract (Guard 1).
-- The existing reconcile row prefixes are a wire contract quoted by ADR-218 and `monitor-send-failed-alert.md`; new fields are appended, never inserted.
+- The existing reconcile row prefixes are a wire contract quoted by ADR-218 and `monitor-send-failed-alert.md`. The `logs_alert` prefix is unchanged only through `reason=`: `resource=` is inserted before `detail=` and `route=` is added, and both documents quote the new shape.
 - `mock_provider` does not mock `import` blocks; any import block in this root needs a gate variable set `false` in the tftest.
-- Import targets are validated before `-target` pruning (`seo-config-rules.tf` comment): a bad import id aborts the whole targeted apply on the adoption run. Phase 0.3 is the pre-merge check.
+- An import whose `to` address is in a plan's `-target` set, or any import in an untargeted plan, aborts that plan on a bad id; a plan whose `-target` set excludes the address skips the import (measured on Terraform 1.10.5 during review; the old `seo-config-rules.tf` "validated before pruning" comment was wrong and is corrected). The per-merge apply targets `app_health`, so a bad id aborts the adoption run. Phase 0.3 is the pre-merge check.
 - The post-mortem was added by PR #8215, merged during planning; this branch must merge `origin/main` before editing or linking it (Phase 0.0).
