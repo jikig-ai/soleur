@@ -361,7 +361,9 @@ absent from the latest bot-authored reconcile comment, and history is read only 
 lines of bot-authored comments, so a human comment cannot suppress an alert.
 `reason=monitor-config-drift` emails on every run while it persists. Two consequences: the first
 run after merge re-emails every existing row once, because issue history (#6645) carries no
-`route=` tokens; and a row that clears for one run and then returns emails again.
+`route=` tokens; and a row that clears and then returns emails again, because a fully clean run
+(rc 0, no arm unreachable) posts a `SOLEUR_HEARTBEAT_RECONCILE_CLEAR` comment that becomes the latest
+reconcile post.
 
 ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
 

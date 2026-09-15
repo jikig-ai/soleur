@@ -12,7 +12,7 @@ Plan: `knowledge-base/project/plans/2026-09-15-fix-health-monitor-supabase-keywo
 
 ## Phase 1: Monitor import + keyword
 
-- [x] 1.1 RED: `apps/web-platform/test/server/health-keyword-monitor-contract.test.ts` — Guard 1 rows 1-11, H1-H5, `EXPECTED_BRANCH` constant from 0.2, per-row rule ids, `loadInfraTf`
+- [x] 1.1 RED: `apps/web-platform/test/server/health-keyword-monitor-contract.test.ts` — Guard 1 rows 1-11, H1-H5, `EXPECTED_BRANCH` constant from 0.2, per-row rule ids, `loadInfraTf` (reworked at review: rows 1-21 + H1-H2, see test file)
 - [x] 1.2 `variables.tf` `adopt_app_health_monitor`; tftest override `false`; gated `import {}` + `betteruptime_monitor.app_health` in `uptime-alerts.tf`
 - [x] 1.3 `-target=betteruptime_monitor.app_health` in the per-merge apply job
 - [x] 1.4 Rewrite `uptime-alerts.tf` quota header and #7884 bullet; repoint the apex "10 monitors" sentence

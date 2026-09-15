@@ -564,6 +564,11 @@ Everything ships in this PR. On the Phase 0.2 `status` branch, ADR-222 is author
 
 ### Guard 1 — health keyword monitor contract
 
+> **Superseded at review 2026-09-15 (#8216):** the row table below is the plan-time matrix. The shipped
+> contract test was reworked after review (lib parser reuse, alarm-field and adoption-gate rules,
+> behavioural `/health` checks via `writeHealthResponse`); its in-file assertion pins the current row set
+> (rows 1-21 plus H1-H2). Read `apps/web-platform/test/server/health-keyword-monitor-contract.test.ts`.
+
 **Property.** Exactly one Terraform-declared Better Stack monitor watches `https://app.soleur.ai/health`, its type is the committed `EXPECTED_BRANCH`; on the keyword branch its required keyword occurs in the served `/health` body exactly when the Supabase check succeeds; on either branch `/health` answers HTTP 200 in every database state.
 
 **Assembly.** (1) EVERY comment-stripped `*.tf` returned by `loadInfraTf("apps/web-platform/infra")`: every `resource "betteruptime_monitor"` block whose `url` is the health URL (census); (2) `apps/web-platform/server/health.ts` `buildHealthResponse` on the connected arm and both failed arms (non-2xx, thrown fetch); (3) `apps/web-platform/server/index.ts`, the single brace-extracted `/health` branch, every `writeHead(` call and the serializer call in it; (4) the `EXPECTED_BRANCH` constant. Chokepoints: the declaration's keyword literal (read, never copied), the one serialization site, and the constant.

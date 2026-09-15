@@ -35,6 +35,8 @@ the `/health` branch with `res.writeHead(200, …)` and `JSON.stringify(health)`
 `buildHealthResponse()` in `server/health.ts` sets `supabase: supabaseOk ? "connected" : "error"`,
 where `checkSupabase` is a service-role REST read with `AbortSignal.timeout(2000)`. During the
 outage `/health` returned `status: ok` with `supabase: error` (post-mortem timeline, 15:33Z).
+Since #8216 the response is written by `writeHealthResponse()` in `server/health.ts` (still HTTP 200
+in every state, now also `Cache-Control: no-store`), and `index.ts` only delegates to it.
 
 The only uptime monitor on that URL was Better Stack monitor `4226366`. It was created by hand on
 2026-03-28, declared in no Terraform root, and typed `status`, so it read the HTTP 200 and stayed
@@ -102,7 +104,7 @@ the merge's attribute set, so the adoption apply is not expected to be refused.
 `4226366` and converges it in the same per-merge apply:
 
 - `monitor_type = "keyword"`, `required_keyword = "\"supabase\":\"connected\""`, the exact compact
-  JSON `index.ts` serializes.
+  JSON `writeHealthResponse()` in `server/health.ts` serializes.
 - `check_frequency = 180`, `confirmation_period = 180` (was 0), `recovery_period = 180`,
   `request_timeout = 10` (was 30, the sibling convention; `/health` is bounded by the 2 s REST
   timeout).

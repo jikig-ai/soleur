@@ -47,7 +47,8 @@ the database may be fine.
 `https://app.soleur.ai/health` and requires the exact substring `"supabase":"connected"` in the
 body. Better Stack matches keywords case-insensitively.
 
-`/health` answers HTTP 200 in every database state (`server/index.ts`). Only the body changes:
+`/health` answers HTTP 200 in every database state (`writeHealthResponse()` in `server/health.ts`,
+called from `server/index.ts`, with `Cache-Control: no-store`). Only the body changes:
 `buildHealthResponse()` in `server/health.ts` sets `supabase` to `connected` when a service-role
 GET of `/rest/v1/users?select=id&limit=1` returns 2xx within 2 s, and to `error` otherwise. A
 status-code monitor cannot see that, which is why the 2026-09-15 outage paged nobody for ~89
