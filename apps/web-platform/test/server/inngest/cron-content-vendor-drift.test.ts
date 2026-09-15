@@ -713,7 +713,10 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
   it("fails an unreadable drifted body CLOSED, onto the guarded route", () => {
     // Emitting only headers would let check 5 route on a filename alone.
     expect(src).toMatch(/decodeContentsBody\(contents\)/);
-    expect(src).toMatch(/\[CRITICAL\] drifted content unreadable/);
+    // The critical marker covers BOTH the undecodable body AND the >cap
+    // body — either way the classifier sees a guarded-route signal.
+    expect(src).toMatch(/\[CRITICAL\] drifted content \$\{upstreamBody === null/);
+    expect(src).toMatch(/MAX_DIFF_LINES_PER_FILE/);
   });
 
   it("counts DISTINCT upstream paths, so a duplicate cannot fake completeness", () => {
@@ -932,8 +935,11 @@ describe("per-bundle identity — source-shape anchors", () => {
     );
   });
 
-  it("fetches upstream blobs on the repo's default branch, not a literal", () => {
-    expect(SUT_SOURCE).toMatch(/ref: upstreamRef/);
+  it("fetches upstream blobs at the resolved head commit, not a literal", () => {
+    // The contents read binds to the resolved pin when available — the
+    // mutable branch name is only the no-pin fallback (TOCTOU: a mid-loop
+    // upstream push must not mix C1's pin with C2's blob, #8185 review).
+    expect(SUT_SOURCE).toMatch(/ref: newPinnedCommit \?\? upstreamRef/);
     expect(SUT_SOURCE).toMatch(/upstreamRef = repoMetaSummary\.defaultBranch/);
   });
 
@@ -985,12 +991,24 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
     "",
   ].join("\n");
 
+  const A_EXPECTED = {
+    upstreamPath: "rules/alpha.md",
+    oldUpstreamSha: A_OLD_UP,
+    oldLocalSha: A_OLD_LOCAL,
+  };
+  const B_EXPECTED = {
+    upstreamPath: "rules/beta.md",
+    oldUpstreamSha: B_OLD_UP,
+    oldLocalSha: B_OLD_LOCAL,
+  };
+
   it("rewrites exactly the targeted record — both sha fields, nothing else", () => {
     const out = rewriteNoticeRecord(
       NOTICE,
       "references/alpha.md",
       A_NEW_LOCAL,
       A_NEW_UP,
+      A_EXPECTED,
     );
     expect(out).toContain(`local-blob-sha: ${A_NEW_LOCAL}`);
     expect(out).toContain(`upstream-blob-sha: ${A_NEW_UP}`);
@@ -1009,6 +1027,7 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
       "references/beta.md",
       A_NEW_LOCAL,
       A_NEW_UP,
+      B_EXPECTED,
     );
     expect(out).toContain(`upstream-blob-sha: ${A_NEW_UP}`);
     expect(out).toContain(`upstream-blob-sha: ${A_OLD_UP}`); // alpha untouched
@@ -1016,7 +1035,13 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
 
   it("throws when the record block is absent — never a silent no-op", () => {
     expect(() =>
-      rewriteNoticeRecord(NOTICE, "references/missing.md", A_NEW_LOCAL, A_NEW_UP),
+      rewriteNoticeRecord(
+        NOTICE,
+        "references/missing.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
     ).toThrow(/0 matching record blocks/);
   });
 
@@ -1026,7 +1051,13 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
       "- path: references/alpha.md.bak",
     );
     expect(() =>
-      rewriteNoticeRecord(extended, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP),
+      rewriteNoticeRecord(
+        extended,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
     ).toThrow(/matching record blocks/);
   });
 
@@ -1040,7 +1071,13 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
         "    status: active-verbatim\nsoleur-authored:",
     );
     expect(() =>
-      rewriteNoticeRecord(dup, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP),
+      rewriteNoticeRecord(
+        dup,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
     ).toThrow(/2 matching record blocks/);
   });
 
@@ -1050,8 +1087,49 @@ describe("rewriteNoticeRecord — Guard 2 row 4 (#8180)", () => {
       "",
     );
     expect(() =>
-      rewriteNoticeRecord(stripped, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP),
+      rewriteNoticeRecord(
+        stripped,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        A_EXPECTED,
+      ),
     ).toThrow(/upstream-subs=0/);
+  });
+
+  it("throws when the block names a DIFFERENT upstream path — the crossed-pair guard", () => {
+    // A positionally-paired record that is not the one that drifted: the
+    // block exists and has both sha keys, but its upstream-path names
+    // record B's path while the caller passes record A's (#8185 review —
+    // equal-length filtered views can misalign the zip).
+    expect(() =>
+      rewriteNoticeRecord(
+        NOTICE,
+        "references/alpha.md",
+        A_NEW_LOCAL,
+        A_NEW_UP,
+        B_EXPECTED,
+      ),
+    ).toThrow(/does not name upstream-path/);
+  });
+
+  it("throws when the block's old shas differ from the drifted record's", () => {
+    // Same block, wrong expected old value → zero literal substitutions →
+    // fail closed instead of rewriting a neighboring record's sha.
+    expect(() =>
+      rewriteNoticeRecord(NOTICE, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP, {
+        upstreamPath: "rules/alpha.md",
+        oldUpstreamSha: B_OLD_UP,
+        oldLocalSha: A_OLD_LOCAL,
+      }),
+    ).toThrow(/upstream-subs=0/);
+    expect(() =>
+      rewriteNoticeRecord(NOTICE, "references/alpha.md", A_NEW_LOCAL, A_NEW_UP, {
+        upstreamPath: "rules/alpha.md",
+        oldUpstreamSha: A_OLD_UP,
+        oldLocalSha: B_OLD_LOCAL,
+      }),
+    ).toThrow(/local-subs=0/);
   });
 });
 
@@ -1127,15 +1205,18 @@ describe("fetchAllPages — dedup enumeration completeness (#8182)", () => {
     expect(out.length).toBe(101);
   });
 
-  it("stops at the defensive 20-page cap", async () => {
+  it("stops at the defensive 20-page cap — LOUDLY", async () => {
+    // A full final page at the cap means the enumeration is incomplete;
+    // dedup must not decide on a partial view, so the walk throws.
     let calls = 0;
     const fetchPage = async () => {
       calls++;
       return { data: Array.from({ length: 100 }, () => 1) };
     };
-    const out = await fetchAllPages(fetchPage);
+    await expect(fetchAllPages(fetchPage)).rejects.toThrow(
+      /20-page cap with a full final page/,
+    );
     expect(calls).toBe(20);
-    expect(out.length).toBe(2000);
   });
 
   it("a single full page is not mistaken for complete when a next page may exist", async () => {
@@ -1213,8 +1294,9 @@ describe("handler source-shape — the #8180-#8183 fixes", () => {
   it("the issue body carries the upstream repository metadata section (#8183)", () => {
     expect(src).toContain("## Upstream repository metadata");
     expect(src).toContain("repoMetaSummary");
-    // unreachable renders `?`, never affirmative facts.
-    expect(src).toMatch(/meta \? meta\.fullName : "\?"/);
+    // unreachable renders `?`, never affirmative facts — and upstream-
+    // controlled strings are scrubbed before code-span interpolation.
+    expect(src).toMatch(/meta \? mdSafe\(meta\.fullName\) : "\?"/);
     expect(src).toContain("upstream_repo_state");
   });
 });

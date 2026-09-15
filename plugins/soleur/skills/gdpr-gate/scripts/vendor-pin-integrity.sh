@@ -100,11 +100,24 @@ if (( VERIFY_UPSTREAM )); then
     upstream_path="${line%%:*}"
     upstream_sha="${line##*:}"
     checked=$((checked + 1))
+    # The path is interpolated into the request URL's path segment —
+    # unvalidated, a NOTICE-supplied `?`/`&`/`#`/space/`%` would split the
+    # segment early and smuggle a second `ref` (or truncate the binding to
+    # whatever precedes it), attesting a path the check never read (#8185
+    # review). Repo paths are constrained to a portable charset; anything
+    # else fails closed rather than constructing a malformed request.
+    if [[ ! "$upstream_path" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+      echo "vendor-pin-integrity: upstream path '$upstream_path' contains characters unsafe for URL interpolation — refusing to bind" >&2
+      fails=$((fails + 1))
+      continue
+    fi
     # The contents endpoint binds all three fields in one answer: the PATH
     # at the pinned COMMIT must resolve to the pinned BLOB. A 404 (path
     # absent at that commit) yields empty actual_sha -> fail; a directory
-    # path yields a JSON array whose .sha is null -> fail.
-    actual_sha=$(gh api "repos/$OWNER_REPO/contents/$upstream_path?ref=$PINNED_COMMIT" --jq '.sha' 2>/dev/null || true)
+    # path yields a JSON array whose .sha is null -> fail. `ref` travels as
+    # a -f field so gh percent-encodes it — the pinned commit can never be
+    # re-sliced by a metacharacter in the path argument.
+    actual_sha=$(gh api "repos/$OWNER_REPO/contents/$upstream_path" -f "ref=$PINNED_COMMIT" --jq '.sha' 2>/dev/null || true)
     if [[ "$actual_sha" != "$upstream_sha" ]]; then
       echo "vendor-pin-integrity: $upstream_path at pinned-commit $PINNED_COMMIT resolves to blob '${actual_sha:-<unresolved>}' but NOTICE pins $upstream_sha — path/commit/blob binding failed" >&2
       fails=$((fails + 1))

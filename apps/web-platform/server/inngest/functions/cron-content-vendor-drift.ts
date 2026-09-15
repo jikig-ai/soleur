@@ -32,9 +32,9 @@
 // script as the routing brain.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
@@ -184,6 +184,10 @@ export interface DriftedFile {
   upstreamPath: string;
   oldSha: string;
   newSha: string;
+  /** The NOTICE `local-blob-sha` for this record — carried so the rewrite
+   * can bind the substitution to the record that actually drifted rather
+   * than any hex value in a positionally-paired block (#8185 review). */
+  oldLocalSha: string;
 }
 
 /**
@@ -425,6 +429,14 @@ interface DetectResult extends ComparisonTotals {
   /** Upstream repo metadata for the issue body (#8183). Null on a failed
    * probe — unreachable renders `?`, never affirmative facts. */
   repoMetaSummary: RepoMetaSummary | null;
+  /** The resolved upstream head sits behind/diverged from the pinned
+   * commit — a rollback or rewritten history. Forces the issue route
+   * regardless of the content classification (#8185 review). */
+  rollbackSuspected: boolean;
+  /** Open drift-PR head refs that suppressed this run (populated only on
+   * the skipped-open-pr arm) — carried so the health message can name the
+   * suppressing PR instead of `pr=none` (#8185 review). */
+  openPrRefs: string[];
 }
 
 /**
@@ -454,14 +466,41 @@ interface HandlerResult {
 // Helpers
 // =============================================================================
 
+/** Host git-config isolation, matching runGit's scrub in
+ * `_cron-safe-commit.ts` — merge-file/hash-object are effectively
+ * config-insensitive, but the two spawners must not disagree inside one
+ * pipeline (#8185 review). */
+const GIT_ISOLATED_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+
 function spawnGit(
   args: string[],
   opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
-): Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}> {
   return new Promise((resolve) => {
-    const child = spawn("git", args, { stdio: "ignore", ...opts });
-    child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-    child.on("error", () => resolve({ exitCode: -1, signal: null }));
+    const child = spawn("git", args, {
+      ...opts,
+      env: { ...GIT_ISOLATED_ENV, ...opts?.env },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    child.on("exit", (exitCode, signal) =>
+      resolve({ exitCode, signal, stderr }),
+    );
+    child.on("error", (err) =>
+      resolve({ exitCode: -1, signal: null, stderr: err.message }),
+    );
   });
 }
 
@@ -474,6 +513,7 @@ async function spawnGitStdout(
     const child = spawn("git", args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...opts,
+      env: { ...GIT_ISOLATED_ENV, ...opts?.env },
     });
     let stdout = "";
     let stderr = "";
@@ -513,12 +553,26 @@ async function spawnGitStdout(
  */
 export async function fetchAllPages<T>(
   fetchPage: (page: number) => Promise<{ data: T[] }>,
+  opts?: { perPage?: number; maxPages?: number },
 ): Promise<T[]> {
+  const perPage = opts?.perPage ?? 100;
+  const maxPages = opts?.maxPages ?? 20;
   const out: T[] = [];
-  for (let page = 1; page <= 20; page++) {
+  let lastSize = 0;
+  for (let page = 1; page <= maxPages; page++) {
     const { data } = await fetchPage(page);
     out.push(...data);
-    if (data.length < 100) break;
+    lastSize = data.length;
+    if (data.length < perPage) break;
+  }
+  // The cap is a bound on runaway walks, not a silent truncation point: a
+  // full final page means the enumeration is INCOMPLETE and a dedup decided
+  // on it can miss an existing open item — the exact defect #8182 exists to
+  // close. Fail loud rather than dedup on a partial view.
+  if (lastSize === perPage) {
+    throw new Error(
+      `fetchAllPages hit the ${maxPages}-page cap with a full final page — enumeration is incomplete; dedup must not decide on a partial view`,
+    );
   }
   return out;
 }
@@ -541,8 +595,10 @@ export function rewriteNoticeRecord(
   relPath: string,
   newLocalSha: string,
   newUpstreamSha: string,
+  expected: { upstreamPath: string; oldUpstreamSha: string; oldLocalSha: string },
 ): string {
-  const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = esc(relPath);
   const blockRe = new RegExp(`- path: ${escaped}\\n(?:    [^\\n]+\\n)+`, "g");
   const nBlocks = (src.match(blockRe) ?? []).length;
   if (nBlocks !== 1) {
@@ -553,15 +609,34 @@ export function rewriteNoticeRecord(
   let nLocal = 0;
   let nUpstream = 0;
   const next = src.replace(new RegExp(blockRe.source, "m"), (block) => {
+    // Bind the substitution to the RECORD that drifted, not to position:
+    // `lifted-files`/`upstream-files` are filtered over different key pairs,
+    // so equal-length views can still pair record i's local path with
+    // record j's upstream sha (#8185 review — positional zip is only a
+    // cardinality check). Requiring the block to name the expected
+    // upstream-path and carry the expected OLD shas turns a crossed pair
+    // into a loud throw instead of a wrong-file merge.
+    const pathRe = new RegExp(
+      `^    upstream-path:[ \\t]*${esc(expected.upstreamPath)}[ \\t]*$`,
+      "m",
+    );
+    if (!pathRe.test(block)) {
+      throw new Error(
+        `NOTICE rewrite failed for ${relPath}: record block does not name upstream-path ${expected.upstreamPath} — registry views misaligned`,
+      );
+    }
     const withLocal = block.replace(
-      /(local-blob-sha:\s*)[0-9a-f]+/g,
+      new RegExp(`(local-blob-sha:[ \\t]*)${esc(expected.oldLocalSha)}`, "g"),
       (_m, prefix: string) => {
         nLocal += 1;
         return prefix + newLocalSha;
       },
     );
     return withLocal.replace(
-      /(upstream-blob-sha:\s*)[0-9a-f]+/g,
+      new RegExp(
+        `(upstream-blob-sha:[ \\t]*)${esc(expected.oldUpstreamSha)}`,
+        "g",
+      ),
       (_m, prefix: string) => {
         nUpstream += 1;
         return prefix + newUpstreamSha;
@@ -585,7 +660,7 @@ export function rewriteNoticeRecord(
  */
 export function bumpNoticeField(
   src: string,
-  field: string,
+  field: "pinned-commit" | "last-verified",
   value: string,
 ): string {
   const all = new RegExp(`^${field}:[ \\t]*\\S+[ \\t]*$`, "gm");
@@ -928,7 +1003,14 @@ async function listOpenPrHeads(octokit: Octokit): Promise<string[]> {
       page,
     }),
   );
-  return prs.map((pr) => pr.head.ref);
+  // Same-repo heads only: a FORK PR's branch can carry any name, so an
+  // external actor could open `ci/content-vendor-drift-<slug>-x` from a fork
+  // and suppress this bundle's re-vendor PRs indefinitely (#8185 review).
+  return prs
+    .filter(
+      (pr) => pr.head.repo?.full_name === `${REPO_OWNER}/${REPO_NAME}`,
+    )
+    .map((pr) => pr.head.ref);
 }
 
 // =============================================================================
@@ -1174,7 +1256,11 @@ async function runBundleArm(deps: {
   // NOTICE_FILE is the per-bundle ABSOLUTE path — without it the shared
   // parser falls back to gdpr-gate's NOTICE and bundle B attests onto
   // bundle A's registry.
-  const detectResult = await step.run(`detect-drift-${bundle.slug}`, async () => {
+  // Typed so every return site is compile-checked against DetectResult —
+  // the interface was previously inferred-only dead surface (#8185 review).
+  const detectResult: DetectResult = await step.run(
+    `detect-drift-${bundle.slug}`,
+    async () => {
     const parserPath = join(repoRoot, PARSER_REL);
     const classifierPath = join(repoRoot, CLASSIFIER_REL);
 
@@ -1234,7 +1320,13 @@ async function runBundleArm(deps: {
         },
       );
       repoMetaSummary = {
-        fullName: repoMeta.full_name,
+        // A degraded 200 can carry no full_name — fall back to the
+        // NOTICE-declared owner/repo rather than rendering `undefined`
+        // inside a code span in the issue body.
+        fullName:
+          typeof repoMeta.full_name === "string" && repoMeta.full_name
+            ? repoMeta.full_name
+            : ownerRepo,
         archived: repoMeta.archived === true,
         defaultBranch: repoMeta.default_branch || "main",
       };
@@ -1382,10 +1474,15 @@ async function runBundleArm(deps: {
             owner: ownerRepo.split("/")[0],
             repo: ownerRepo.split("/")[1],
             path: upstreamPath,
-            // The probed default branch, not a hardcoded "main": the same
-            // ref detection compares, the pin names, and the write merges —
-            // three reads of one upstream head (#8180).
-            ref: upstreamRef,
+            // Read at the RESOLVED head commit when we have it, not the
+            // mutable branch name: a push landing between the pin fetch
+            // above and this read would otherwise write a NOTICE asserting
+            // `upstream-blob-sha` at commit C2 while `pinned-commit` names
+            // C1 — an internally inconsistent binding the #8181 check then
+            // correctly fails on main after auto-merge (#8185 review). The
+            // branch name remains the fallback for detection when the pin
+            // fetch failed (the pr route throws on the null pin anyway).
+            ref: newPinnedCommit ?? upstreamRef,
           },
         );
         const currentSha = (contents as { sha?: string }).sha;
@@ -1414,10 +1511,20 @@ async function runBundleArm(deps: {
         driftDetected = true;
 
         // Record the pair the re-vendor write will merge (#8180). The
-        // lifted path comes from the positionally-paired `lifted-files`
-        // view (cardinality asserted above); `newSha` is the blob now at
-        // `upstreamPath` on `upstreamRef`, fetched seconds ago.
-        const liftedPath = liftedFiles[i].split(":")[0];
+        // lifted path AND the local sha come from the positionally-paired
+        // `lifted-files` view (cardinality asserted above); `newSha` is the
+        // blob now at `upstreamPath` on `upstreamRef`, fetched seconds ago.
+        // `oldLocalSha` lets the NOTICE rewrite bind the substitution to
+        // this record's block — positional pairing alone cannot tell a
+        // crossed view pair from an aligned one (#8185 review).
+        const [liftedPath, oldLocalSha] = liftedFiles[i].split(":");
+        if (!liftedPath || !/^[0-9a-f]{40}$/.test(oldLocalSha ?? "")) {
+          // A lifted-files line without a usable sha is a malformed record,
+          // not a file to merge — count it and let the write step's
+          // completeness gate refuse the pr route.
+          filesError += 1;
+          continue;
+        }
         driftedFiles.push({
           liftedPath,
           upstreamPath,
@@ -1425,6 +1532,7 @@ async function runBundleArm(deps: {
           // verdict === "drift" is unreachable with an empty currentSha —
           // classifyFileComparison scores that ERROR above.
           newSha: currentSha as string,
+          oldLocalSha,
         });
 
         // Populate the classifier's stdin. This array was declared and
@@ -1453,18 +1561,23 @@ async function runBundleArm(deps: {
         // afford is under-triggering. Over-triggering costs a human reading
         // an issue instead of a bot opening a PR.
         const upstreamBody = decodeContentsBody(contents);
-        if (upstreamBody === null) {
-          // We know it drifted but cannot show the classifier what changed.
-          // Emitting only headers would let check 5 route it to the
-          // auto-PR path on the strength of a filename. Force the guarded
-          // route with an explicit marker the security regex matches.
+        const bodyLines = upstreamBody?.split("\n");
+        if (
+          upstreamBody === null ||
+          (bodyLines?.length ?? 0) > MAX_DIFF_LINES_PER_FILE
+        ) {
+          // We know it drifted but cannot show the classifier what changed
+          // (undecodable body), or cannot show it ALL (the truncation cap):
+          // a diff past line MAX_DIFF_LINES_PER_FILE would feed the security
+          // regex a PREFIX while the merge commits the whole blob — content
+          // past the cap would auto-merge unscreened (#8185 review). Force
+          // the guarded route with an explicit marker the security regex
+          // matches.
           aggDiffParts.push(
-            `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n+[CRITICAL] drifted content unreadable — classify conservatively`,
+            `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n+[CRITICAL] drifted content ${upstreamBody === null ? "unreadable" : `exceeds the ${MAX_DIFF_LINES_PER_FILE}-line classifier window`} — classify conservatively`,
           );
         } else {
-          const body = upstreamBody
-            .split("\n")
-            .slice(0, MAX_DIFF_LINES_PER_FILE)
+          const body = (bodyLines ?? [])
             .map((l) => `+${l}`)
             .join("\n");
           aggDiffParts.push(
@@ -1581,13 +1694,66 @@ async function runBundleArm(deps: {
       upstreamRepoState,
     };
 
+    // Rollback / rewritten-history detection (#8183, #8185 review). The
+    // classifier's exit-15 arm needs `git merge-base` against objects this
+    // clone does not hold, so ordering is decided via the compare API
+    // instead: the resolved upstream head BEHIND or DIVERGED from the
+    // pinned commit is a rollback/force-push — a supply-chain signal that
+    // must reach a human regardless of what the content diff classifies as.
+    let rollbackSuspected = false;
+    if (
+      driftDetected &&
+      newPinnedCommit &&
+      /^[0-9a-f]{40}$/.test(pinnedSha) &&
+      newPinnedCommit !== pinnedSha
+    ) {
+      try {
+        const { data: cmp } = await octokit.request(
+          "GET /repos/{owner}/{repo}/compare/{basehead}",
+          {
+            owner: ownerRepo.split("/")[0],
+            repo: ownerRepo.split("/")[1],
+            basehead: `${pinnedSha}...${newPinnedCommit}`,
+          },
+        );
+        if (cmp.status === "behind" || cmp.status === "diverged") {
+          rollbackSuspected = true;
+          logger.warn(
+            {
+              fn: "cron-content-vendor-drift",
+              bundle: bundle.slug,
+              pinnedCommit: pinnedSha,
+              newPinnedCommit,
+              compareStatus: cmp.status,
+            },
+            "Upstream head is behind/diverged from the pinned commit — rollback or rewritten history; routing to human review",
+          );
+        }
+      } catch (cmpErr) {
+        // An inconclusive compare is not evidence of ordering — leave the
+        // flag false and let content classification route; the failure is
+        // logged, not asserted.
+        logger.warn(
+          {
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            err: (cmpErr as Error).message,
+          },
+          "Upstream compare probe failed — rollback detection inconclusive",
+        );
+      }
+    }
+
     // Carried on every arm for a uniform memoized shape (ADR-033 I5):
-    // `driftedFiles`/`newPinnedCommit` feed the re-vendor write and
-    // `repoMetaSummary` feeds the issue-body metadata section.
+    // `driftedFiles`/`newPinnedCommit` feed the re-vendor write,
+    // `repoMetaSummary` feeds the issue-body metadata section, and
+    // `openPrRefs` lets the skip arm report WHICH PRs suppressed this run.
     const detection = {
       driftedFiles,
       newPinnedCommit,
       repoMetaSummary,
+      rollbackSuspected,
+      openPrRefs: [] as string[],
     };
 
     if (!driftDetected && !driftFlags) {
@@ -1619,6 +1785,15 @@ async function runBundleArm(deps: {
       classifyResult.stdout,
       classifyRc,
     );
+    // A suspected rollback/rewrite must reach a human no matter what the
+    // content diff classified as — the classifier's own exit-15 arm is
+    // unreachable here (it needs upstream git objects this clone lacks), so
+    // the compare-API verdict above takes over its routing and labels.
+    if (rollbackSuspected) {
+      for (const l of CATEGORY_LABELS.rollback) {
+        if (!labels.includes(l)) labels.push(l);
+      }
+    }
 
     logger.info(
       {
@@ -1650,8 +1825,10 @@ async function runBundleArm(deps: {
 
     // Trust-model routing: security/license/rollback/renamed/archived
     // drift opens an ISSUE (no auto-PR). Auto-PR is reserved for
-    // low-risk batched drift (exit 13).
-    if (ISSUE_EXIT_CODES.has(classifyRc)) {
+    // low-risk batched drift (exit 13). A suspected upstream rollback joins
+    // the issue route unconditionally — its content can be classifier-clean
+    // while still being a supply-chain event.
+    if (ISSUE_EXIT_CODES.has(classifyRc) || rollbackSuspected) {
       return {
         drift: "detected" as const,
         route: "issue" as const,
@@ -1676,7 +1853,11 @@ async function runBundleArm(deps: {
           bundle.slug,
       );
       if (openDriftPrs.length > 0) {
-        logger.info(
+        // WARN, not info: <40 pino lines reach no observability layer (the
+        // comment at the attestation summary carries the measurement), and
+        // "why did the cron not file this week" is a question an operator
+        // should be able to answer from shipped telemetry.
+        logger.warn(
           {
             fn: "cron-content-vendor-drift",
             bundle: bundle.slug,
@@ -1691,6 +1872,7 @@ async function runBundleArm(deps: {
           classifyRc,
           upstreamRef,
           ...detection,
+          openPrRefs: openDriftPrs,
           ...totals,
         };
       }
@@ -1762,6 +1944,82 @@ async function runBundleArm(deps: {
           `route=pr without a resolved upstream head commit for bundle ${bundle.slug} — cannot write a pin that was not measured`,
         );
       }
+      if (!/^[0-9a-f]{40}$/.test(detectResult.newPinnedCommit)) {
+        throw new Error(
+          `route=pr with a non-SHA pin for bundle ${bundle.slug}: ${detectResult.newPinnedCommit}`,
+        );
+      }
+      // A partially-measured registry must not advance `pinned-commit`:
+      // `bumpNoticeField` moves the pin for the WHOLE registry while only
+      // `driftedFiles` records get rewritten — an errored/unmeasured record
+      // would keep its old blob-sha beside the new commit, an internally
+      // inconsistent binding the #8181 verify gate then fails on the merged
+      // PR itself (#8185 review). Fail loud; the issue route is where
+      // unmeasurable drift belongs.
+      if (
+        detectResult.filesError > 0 ||
+        detectResult.filesExamined !== detectResult.registryCount
+      ) {
+        throw new Error(
+          `route=pr on a partially-measured registry for bundle ${bundle.slug} (examined=${detectResult.filesExamined}/${detectResult.registryCount} errors=${detectResult.filesError}) — refusing to advance pinned-commit over unmeasured records`,
+        );
+      }
+
+      // `liftedPath` is NOTICE-supplied data used as a write target —
+      // confine it to `references/` (the only prefix safeCommitAndPr's
+      // allowlist commits content under) before ANY disk touch, including
+      // the restore below. A record declaring `../x` or `docs/x` would
+      // otherwise be merged on disk and then DROPPED by the allowlist —
+      // while its NOTICE record was already rewritten, leaving a merged PR
+      // attesting bytes it never carried (#8185 review). Validated for the
+      // whole set up front so a bad LATER record cannot leave earlier
+      // merges half-applied before the throw.
+      const referencesRoot = join(
+        repoRoot,
+        bundle.skillPrefix,
+        "references",
+      );
+      for (const f of detectResult.driftedFiles) {
+        const liftedAbs = join(repoRoot, bundle.skillPrefix, f.liftedPath);
+        if (
+          f.liftedPath.includes("..") ||
+          f.liftedPath.startsWith("/") ||
+          !resolve(liftedAbs).startsWith(referencesRoot + sep)
+        ) {
+          throw new Error(
+            `Refusing to merge into a lifted path outside references/: ${bundle.skillPrefix}/${f.liftedPath}`,
+          );
+        }
+      }
+
+      // Replay idempotency: a mid-loop throw retries this WHOLE step with
+      // detect memoized and the worktree holding the first attempt's
+      // merges. `git merge-file` is not idempotent — a second pass over
+      // already-merged content produces nested markers or a clean-but-wrong
+      // merge (#8185 review). Restore every touched path to origin/main —
+      // NOT HEAD, which by then is the ci/ branch tip carrying the first
+      // attempt's merges — so the retry merges the same inputs as the
+      // initial attempt.
+      {
+        const restore = await spawnGit(
+          [
+            "restore",
+            "--source=origin/main",
+            "--worktree",
+            "--",
+            bundle.noticeFileRel,
+            ...detectResult.driftedFiles.map(
+              (f) => `${bundle.skillPrefix}/${f.liftedPath}`,
+            ),
+          ],
+          { cwd: repoRoot },
+        );
+        if (restore.exitCode !== 0) {
+          throw new Error(
+            `git restore of re-vendor targets failed for bundle ${bundle.slug} (exit ${restore.exitCode}): ${restore.stderr.slice(0, 500)}`,
+          );
+        }
+      }
 
       // Merge inputs live OUTSIDE the clone — inside `repoRoot` they would
       // read as untracked paths to safeCommitAndPr's allow-list guard.
@@ -1773,10 +2031,16 @@ async function runBundleArm(deps: {
       }[] = [];
 
       for (const f of detectResult.driftedFiles) {
+        // A symlink at the merge target is as out-of-bounds as a `..` path:
+        // merge-file follows it and writes outside the repo.
         const liftedAbs = join(repoRoot, bundle.skillPrefix, f.liftedPath);
-        if (!existsSync(liftedAbs)) {
+        if (
+          !existsSync(liftedAbs) ||
+          !lstatSync(liftedAbs).isFile() ||
+          lstatSync(liftedAbs).isSymbolicLink()
+        ) {
           throw new Error(
-            `Drifted lifted file absent from worktree: ${bundle.skillPrefix}/${f.liftedPath}`,
+            `Drifted lifted file absent from worktree (or not a regular file): ${bundle.skillPrefix}/${f.liftedPath}`,
           );
         }
         const idx = mergeStatus.length;
@@ -1819,7 +2083,7 @@ async function runBundleArm(deps: {
           merge.signal
         ) {
           throw new Error(
-            `git merge-file failed for ${f.liftedPath} (exit ${merge.exitCode}, signal ${merge.signal})`,
+            `git merge-file failed for ${f.liftedPath} (exit ${merge.exitCode}, signal ${merge.signal}): ${merge.stderr.slice(0, 500)}`,
           );
         }
         const conflicted = merge.exitCode > 0;
@@ -1842,6 +2106,11 @@ async function runBundleArm(deps: {
           f.liftedPath,
           newLocalSha,
           f.newSha,
+          {
+            upstreamPath: f.upstreamPath,
+            oldUpstreamSha: f.oldSha,
+            oldLocalSha: f.oldLocalSha,
+          },
         );
         await rm(oldTmp, { force: true });
         await rm(newTmp, { force: true });
@@ -1864,8 +2133,12 @@ async function runBundleArm(deps: {
       // Conflict-marker gate (runbook §2): a merged file still carrying
       // `<<<<<<<` markers must NOT auto-merge upstream bytes into
       // compliance content — the PR is created create-only and labeled for
-      // human resolution.
-      let needsHumanReview = false;
+      // human resolution. The merge-file exit verdict is a belt over the
+      // marker scan: a >0 exit with no visible markers still means the
+      // merge was not clean (#8185 review).
+      let needsHumanReview = mergeStatus.some(
+        (m) => m.outcome === "conflicted",
+      );
       for (const f of detectResult.driftedFiles) {
         const merged = await readFile(
           join(repoRoot, bundle.skillPrefix, f.liftedPath),
@@ -1937,8 +2210,37 @@ async function runBundleArm(deps: {
             feature: "cron-content-vendor-drift",
             op: "safe-commit-no-changes",
             message: `bundle=${bundle.slug} drifted=${detectResult.driftedFiles.length} conflicted=${needsHumanReview} — expected a dirty tree, got none`,
+            extra: {
+              fn: "cron-content-vendor-drift",
+              bundle: bundle.slug,
+              driftedFiles: detectResult.driftedFiles.length,
+              conflicted: needsHumanReview,
+            },
           },
         );
+      }
+      // The committed set must CONTAIN every file this step claims to have
+      // re-vendored — `paths` is undefined only on the replay-resume arm,
+      // where the commit was already produced under this same check.
+      // Without this, an allowlist-dropped file leaves the NOTICE attesting
+      // content that never landed (#8185 review).
+      if (res.status === "committed" && res.paths) {
+        const committed = new Set(res.paths);
+        const missing = detectResult.driftedFiles
+          .map((f) => `${bundle.skillPrefix}/${f.liftedPath}`)
+          .filter((p) => !committed.has(p));
+        if (missing.length > 0) {
+          reportSilentFallback(
+            new Error(
+              `Re-vendor PR for bundle ${bundle.slug} committed without ${missing.length} drifted path(s): ${missing.join(", ")} — the NOTICE attests content the PR does not carry`,
+            ),
+            {
+              feature: "cron-content-vendor-drift",
+              op: "revendor-paths-missing",
+              extra: { fn: "cron-content-vendor-drift", bundle: bundle.slug, missing },
+            },
+          );
+        }
       }
       return res;
     });
@@ -1971,14 +2273,25 @@ async function runBundleArm(deps: {
           per_page: 100,
           page,
         });
+        // A server-side-truncated search page is not a complete enumeration
+        // — deciding dedup on it re-files a duplicate (#8185 review).
+        if (data.incomplete_results === true) {
+          throw new Error(
+            "Issue-search enumeration returned incomplete_results — dedup cannot decide on a partial page",
+          );
+        }
         return { data: data.items };
       });
       const existingForBundle = existingItems.filter(
         (item) => classifyIssueOwner(item.title, slugs) === bundle.slug,
       );
       if (existingForBundle.length > 0) {
-        logger.info(
-          { fn: "cron-content-vendor-drift", bundle: bundle.slug },
+        logger.warn(
+          {
+            fn: "cron-content-vendor-drift",
+            bundle: bundle.slug,
+            titles: existingForBundle.map((i) => i.title),
+          },
           "Existing open security-drift issue found; skipping",
         );
         return;
@@ -1990,6 +2303,10 @@ async function runBundleArm(deps: {
       // reach the repo" is uncertainty, never an affirmative "repo is
       // healthy" fact.
       const meta = detectResult.repoMetaSummary;
+      // Upstream-controlled strings (full_name, default_branch — a refname
+      // can legally contain backticks) are scrubbed before interpolating
+      // into markdown code spans (mirrors safeMd in _cron-safe-commit).
+      const mdSafe = (s: string) => s.replace(/[`\r\n|]/g, "ʼ");
       const body = [
         "Automated drift detection routed to issue-only (no auto-PR).",
         "",
@@ -1997,12 +2314,18 @@ async function runBundleArm(deps: {
         `**Upstream:** \`${bundle.upstream}\` pinned at \`${bundle.pinnedCommit}\``,
         `**Classifier exit code:** \`${detectResult.classifyRc}\``,
         `**Labels:** \`${detectResult.labels.join(", ")}\``,
+        ...(detectResult.rollbackSuspected
+          ? [
+              "",
+              "**⚠️ Upstream head is behind/diverged from the pinned commit — possible rollback or rewritten history. Treat as a supply-chain event.**",
+            ]
+          : []),
         "",
         "## Upstream repository metadata",
         "",
-        `- **full_name:** \`${meta ? meta.fullName : "?"}\``,
+        `- **full_name:** \`${meta ? mdSafe(meta.fullName) : "?"}\``,
         `- **archived:** \`${meta ? meta.archived : "?"}\``,
-        `- **default_branch:** \`${meta ? meta.defaultBranch : "?"}\``,
+        `- **default_branch:** \`${meta ? mdSafe(meta.defaultBranch) : "?"}\``,
         `- **upstream_repo_state:** \`${detectResult.upstreamRepoState}\``,
         ...(meta
           ? []
@@ -2086,7 +2409,16 @@ async function runBundleArm(deps: {
     `read-attestation-age-${bundle.slug}`,
     async () => {
       try {
-        const notice = await readFile(noticeAbs, "utf8");
+        // Read the field on the DEFAULT BRANCH, not the worktree: on the
+        // pr-route arm the write step has already bumped `last-verified` in
+        // `noticeAbs` (and committed onto a ci/ branch), so a worktree read
+        // would report age 0 while main's artifact keeps aging — a parked
+        // conflicted PR would check in healthy at exactly the moment it
+        // needs watching (#8185 review).
+        const notice = await spawnGitStdout(
+          ["show", `origin/main:${bundle.noticeFileRel}`],
+          { cwd: repoRoot },
+        );
         const m = notice.match(/^last-verified:[ \t]*(\S+)[ \t]*$/m);
         if (!m) return null;
         const age = Math.floor(
@@ -2105,7 +2437,14 @@ async function runBundleArm(deps: {
     const attestation = await step.run(
       `attest-freshness-${bundle.slug}`,
       async () => {
-        const before = await readFile(noticeAbs, "utf8");
+        // Read from origin/main, not the worktree: a step retry after a
+        // partial attempt would otherwise see its own bumped `last-verified`
+        // and short-circuit `still-fresh`, silently dropping the attestation
+        // (#8185 review).
+        const before = await spawnGitStdout(
+          ["show", `origin/main:${bundle.noticeFileRel}`],
+          { cwd: repoRoot },
+        );
         // `runStartedAt`, not a fresh clock read: this value is the
         // idempotency key for the "already advanced today" short-circuit
         // below, and `_cron-safe-commit` already derives the branch name and
@@ -2162,29 +2501,15 @@ async function runBundleArm(deps: {
             pr: null as string | null,
           };
         }
-        await writeFile(
-          noticeAbs,
-          before.replace(
-            /^last-verified:[ \t]*\S+[ \t]*$/m,
-            `last-verified: ${today}`,
-          ),
-          "utf8",
-        );
-
-        // Routed through safeCommitAndPr rather than a raw push: the helper
-        // has no direct-to-branch mode (every path opens a PR against main),
-        // and a raw push is independently blocked by the branch rulesets
-        // whose relevant bypass actors are all `bypass_mode: "pull_request"`.
-        // `mergeMode: "direct"` opens the PR and squash-merges it, which is
-        // what the drift route already does, and inherits the allow-list, the
-        // deletion guard and the replay idempotency a hand-rolled path would
-        // discard.
         // Idempotency, scoped PER BUNDLE: do not stack attestation PRs. The
         // 21-day suppression reads `last-verified` from the freshly-cloned
         // default branch, so an unmerged PR is invisible to it — without this
         // guard a stuck PR means a NEW one every cadence, each self-merging,
         // each editing the same line and so mutually conflicting, on a
         // CODEOWNERS-protected compliance file (#7710 review).
+        // The dedup runs BEFORE the write: on this arm a step retry would
+        // otherwise re-read an already-bumped `last-verified` (ageDays 0 →
+        // `still-fresh`) and silently drop the attestation (#8185 review).
         const openHeads = await listOpenPrHeads(octokit);
         const openAttestPRs = openHeads.filter(
           (ref) =>
@@ -2203,6 +2528,15 @@ async function runBundleArm(deps: {
             pr: null as string | null,
           };
         }
+
+        // `bumpNoticeField`, not an inline replace: the exactly-one contract
+        // throws on a duplicated `last-verified` line where `replace` would
+        // bump the first and leave the second stale (#8185 review).
+        await writeFile(
+          noticeAbs,
+          bumpNoticeField(before, "last-verified", today),
+          "utf8",
+        );
 
         const res = await safeCommitAndPr({
           spawnCwd: repoRoot,
@@ -2295,8 +2629,8 @@ async function runBundleArm(deps: {
   // A `pr` route that produced no committed artifact reads as "none" for
   // health purposes — the dedup-and-skip path aside, `route !== "none"` is the
   // heartbeat's "the run produced an artifact" signal, and a discarded
-  // `no-changes` result must not satisfy it. This is also what makes the
-  // unimplemented re-vendor write VISIBLE the day an upstream drifts into the
+  // `no-changes` result must not satisfy it. This is also what makes a
+  // regressed re-vendor write VISIBLE the day an upstream drifts into the
   // auto-PR class: red check-in + Sentry event instead of a silent green.
   const prArtifactMissing =
     detectResult.route === "pr" && prStepResult?.status !== "committed";
@@ -2353,7 +2687,7 @@ async function runBundleArm(deps: {
           // this is the ONLY Sentry event, and without it the operator
           // cannot tell "a PR is open and auto-merging" from "nothing was
           // created". `bundle` names which registry the event is about.
-          message: `bundle=${bundle.slug} examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome} pr=${attestationPrNumber ?? "none"} age=${observedAgeDays ?? "unreadable"}`,
+          message: `bundle=${bundle.slug} examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome} pr=${attestationPrNumber ?? "none"} openPrs=${detectResult.openPrRefs.join(",") || "none"} age=${observedAgeDays ?? "unreadable"}`,
         },
       );
     }

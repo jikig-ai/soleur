@@ -654,17 +654,33 @@ mkdir -p "$GHSTUB_DIR"
 cat > "$GHSTUB_DIR/gh" <<'STUB_EOF'
 #!/usr/bin/env bash
 # gh test double for --verify-upstream. See suite header for the two-surface
-# contract. $GH_STUB_TABLE holds "<path>|<ref>|<sha>" lines.
+# contract. $GH_STUB_TABLE holds "<path>|<ref>|<sha>" lines. The ref may
+# arrive inline (`contents/<p>?ref=<r>`) or as a `-f ref=<r>` field arg —
+# both are accepted so the stub discriminates the binding, not the syntax.
 set -u
 if [[ "${1:-}" != "api" ]]; then
   echo "gh stub: unhandled subcommand '$*'" >&2
   exit 1
 fi
-url="${2:-}"
+shift
+url=""; ref=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -f|--field)
+      [[ "${2:-}" == ref=* ]] && ref="${2#ref=}"
+      shift 2 ;;
+    --jq|--method|-X|-H|--header)
+      shift 2 ;;
+    -*)
+      shift ;;
+    *)
+      url="$1"; shift ;;
+  esac
+done
 case "$url" in
-  repos/*/contents/*\?ref=*)
+  repos/*/contents/*)
     path="${url#*contents/}"; path="${path%%\?*}"
-    ref="${url##*ref=}"
+    [[ "$url" == *"?ref="* ]] && ref="${url##*ref=}"
     while IFS='|' read -r p r s; do
       if [[ "$p" == "$path" && "$r" == "$ref" ]]; then
         printf '%s\n' "$s"
@@ -698,12 +714,16 @@ SHA_MOVED="9999999999999999999999999999999999999999"
 
 # What upstream actually serves: at PIN_A alpha->SHA_ALPHA, beta->SHA_BETA,
 # other->SHA_OTHER; at PIN_B alpha->SHA_MOVED (file changed), beta unchanged.
+# The `not-a-sha` row is load-bearing for TS16e: it lets the stub ANSWER a
+# query for the malformed ref, so a missing pinned-commit validation would
+# read green instead of merely 404ing — the mutation arm is real.
 cat > "$TMP_TS16/table" <<EOF
 rules/alpha.md|$PIN_A|$SHA_ALPHA
 rules/beta.md|$PIN_A|$SHA_BETA
 rules/other.md|$PIN_A|$SHA_OTHER
 rules/alpha.md|$PIN_B|$SHA_MOVED
 rules/beta.md|$PIN_B|$SHA_BETA
+rules/alpha.md|not-a-sha|$SHA_ALPHA
 EOF
 
 make_verify_notice() {
@@ -811,7 +831,9 @@ assert_contains "$OUT" "rules/gone.md" "stderr names the unresolvable path"
 
 # TS16e — fail-closed on a malformed pinned-commit: not 40-hex means the ref
 # under verification is corrupt, and a default-branch read would silently
-# attest the wrong commit.
+# attest the wrong commit. The `not-a-sha` table row above makes this arm a
+# real mutation discriminator: WITHOUT the charset check the stub resolves
+# the malformed ref to SHA_ALPHA and this test would go green.
 make_verify_notice "$TMP_TS16/NOTICE-badpin" "not-a-sha" \
 "  - path: references/alpha.md
     upstream-path: rules/alpha.md
@@ -834,6 +856,26 @@ RC=$?
 set -e
 assert_eq "1" "$RC" "bad SECOND record still fails (loop checks every record)"
 
+# TS16g — fail-closed on an upstream path carrying URL metacharacters: a
+# `?` in the path segment would split the request early and smuggle a
+# second `ref` parameter, so the script must refuse rather than construct
+# the request (#8185 review). `rules/evil.md` itself is unregistered, so
+# without the charset guard the stub 404s and still fails — the DISCRIMINA-
+# TOR is the stderr token: only the validation path prints "unsafe".
+make_verify_notice "$TMP_TS16/NOTICE-evilpath" "$PIN_A" \
+"  - path: references/evil.md
+    upstream-path: rules/evil.md?ref=deadbeef
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-evilpath")
+RC=$?
+set -e
+assert_eq "1" "$RC" "upstream path with URL metacharacters fails closed"
+assert_contains "$OUT" "unsafe" "stderr names the charset refusal, not a binding miss"
+
 rm -rf "$TMP_TS16"
 echo ""
 
@@ -842,7 +884,7 @@ echo ""
 # replacing assert_eq with a stub that always passes reported
 # "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
 # #7710. A FLOOR, not equality: adding an assertion must not red the suite.
-# Derived from a green run (37 assertions on 2026-09-04).
+# Derived from a green run (39 assertions: 37 on 2026-09-04 + TS16g's two).
 #
 # Kept in the `print_results <floor>` form deliberately. A second, directly-
 # reported floor was written here to satisfy `scripts/guard-vacuity-floor.test.sh`
@@ -852,4 +894,4 @@ echo ""
 # EXITS 0 under neutered machinery) is fixed where it lives, at the
 # provenance-oracle dispatch check above, which now exits 1 directly instead of
 # tallying through FAIL.
-print_results 37
+print_results 39

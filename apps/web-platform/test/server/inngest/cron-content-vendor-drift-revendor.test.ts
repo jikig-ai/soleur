@@ -54,7 +54,12 @@ const state = vi.hoisted(() => ({
   // Paginated enumeration fixtures, keyed by 1-based page number. The dedup
   // sites page via fetchAllPages — a page <100 items ends the walk.
   searchIssuePages: {} as Record<number, { title: string }[]>,
-  pullPages: {} as Record<number, { head: { ref: string } }[]>,
+  pullPages: {} as Record<
+    number,
+    { head: { ref: string; repo?: { full_name: string } | null } }[]
+  >,
+  // The upstream compare endpoint used for rollback/rewrite detection.
+  compareStatus: "ahead" as "ahead" | "behind" | "diverged" | "identical",
   // Recorded API traffic.
   issues: [] as Record<string, unknown>[],
   pulls: [] as Record<string, unknown>[],
@@ -342,6 +347,8 @@ function installOctokitRoutes() {
           const items = state.searchIssuePages[page] ?? [];
           return { data: { total_count: items.length, items } };
         }
+        case "GET /repos/{owner}/{repo}/compare/{basehead}":
+          return { data: { status: state.compareStatus } };
         case "GET /repos/{owner}/{repo}/pulls": {
           const page = (params?.page as number) ?? 1;
           return { data: state.pullPages[page] ?? [] };
@@ -422,6 +429,7 @@ beforeEach(() => {
   state.blobs = {};
   state.searchIssuePages = {};
   state.pullPages = {};
+  state.compareStatus = "ahead";
   state.issues = [];
   state.pulls = [];
   state.labelPosts = [];
@@ -444,9 +452,9 @@ afterEach(() => {
 describe("cron-content-vendor-drift — re-vendor write (#8180)", () => {
   it("two drifted files, clean merges → real PR carrying merged bytes + bumped NOTICE", async () => {
     const files = [ALPHA, BETA_CLEAN];
-    fixtureDir = buildFixtureRepo(files, {
-      lastVerified: new Date().toISOString().slice(0, 10),
-    });
+    // Stale `last-verified` (the fixture default 2026-01-01) — the bump
+    // assertion below must be able to FAIL if the write did not advance it.
+    fixtureDir = buildFixtureRepo(files);
     state.cloneUrl = `file://${fixtureDir}`;
     files.forEach(registerUpstream);
 
@@ -489,12 +497,19 @@ describe("cron-content-vendor-drift — re-vendor write (#8180)", () => {
     // NOTICE on the branch: every drifted record rewritten + pin/date bumped.
     const notice = git(fixtureDir, `show ${branch}:${SKILL_DIR}/NOTICE`);
     expect(notice).toContain(`pinned-commit: ${NEW_PINNED_COMMIT}`);
-    expect(notice).toMatch(/last-verified: \d{4}-\d{2}-\d{2}/);
+    // Discriminating: the fixture's stale date must be GONE and today's
+    // (runStartedAt's) date present — a missing bump fails both halves.
+    const today = new Date().toISOString().slice(0, 10);
+    expect(notice).toContain(`last-verified: ${today}`);
     expect(notice).not.toContain(`last-verified: 2026-01-01`);
     for (const f of files) {
       expect(notice).toContain(`upstream-blob-sha: ${blobSha(f.newContent)}`);
       expect(notice).not.toContain(`upstream-blob-sha: ${blobSha(f.oldContent)}`);
     }
+    // AC-1 names local-blob-sha too: it must pin the MERGED bytes, which are
+    // provable independently via the same sha1 blob digest git uses.
+    expect(notice).toContain(`local-blob-sha: ${blobSha(mergedAlpha + "\n")}`);
+    expect(notice).toContain(`local-blob-sha: ${blobSha(mergedBeta + "\n")}`);
 
     // no-changes is genuinely unreachable here.
     expect(fallbackOps()).not.toContain("safe-commit-no-changes");
@@ -526,7 +541,11 @@ describe("cron-content-vendor-drift — re-vendor write (#8180)", () => {
       fixtureDir,
       `show ${branch}:${SKILL_DIR}/references/beta.md`,
     );
+    // The pushed file carries the FULL diff3 marker set — `|||||||` proves
+    // --diff3 produced a base section, not just generic conflict markers.
     expect(mergedBeta).toContain("<<<<<<<");
+    expect(mergedBeta).toContain("|||||||");
+    expect(mergedBeta).toContain("=======");
     expect(mergedBeta).toContain(">>>>>>>");
     expect(mergedBeta).toContain("beta LOCAL edit");
     expect(mergedBeta).toContain("beta UPSTREAM edit");
@@ -541,9 +560,15 @@ describe("cron-content-vendor-drift — re-vendor write (#8180)", () => {
     state.cloneUrl = `file://${fixtureDir}`;
     files.forEach(registerUpstream);
 
-    await invoke(makeStep());
+    const res = await invoke(makeStep());
     expect(state.pulls.length).toBe(0);
     expect(fallbackOps()).toContain("safe-commit-no-changes");
+    // The heartbeat must go RED — a silent no-changes was the exact #8180
+    // failure shape and must never read as a healthy run.
+    expect(res.bundles?.[0]?.healthy).toBe(false);
+    expect(postHeartbeatSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false }),
+    );
   });
 
   it("replay shape: memoized detect + fresh clean worktree still produces the write", async () => {
@@ -574,6 +599,167 @@ describe("cron-content-vendor-drift — re-vendor write (#8180)", () => {
   });
 });
 
+describe("cron-content-vendor-drift — fail-closed hardening (#8185 review)", () => {
+  it("a per-file fetch error refuses the pin advance — no partial attestation", async () => {
+    // ALPHA drifts (registered); BETA's contents call 404s (never
+    // registered). filesError=1 with route=pr must NOT advance
+    // `pinned-commit` over a registry the run could not fully measure.
+    const files = [ALPHA, BETA_CLEAN];
+    fixtureDir = buildFixtureRepo(files);
+    state.cloneUrl = `file://${fixtureDir}`;
+    registerUpstream(ALPHA);
+    // BETA_CLEAN deliberately unregistered → contents 404 → filesError.
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.status).toBe("failed");
+    expect(String(b?.error)).toContain("partially-measured registry");
+    expect(state.pulls.length).toBe(0);
+  });
+
+  it("route=pr without a resolved upstream head commit fails loud", async () => {
+    const files = [ALPHA];
+    fixtureDir = buildFixtureRepo(files);
+    state.cloneUrl = `file://${fixtureDir}`;
+    files.forEach(registerUpstream);
+    // The commits endpoint answers with no usable sha → newPinnedCommit
+    // stays null; drift is still measured against upstreamRef.
+    state.newPinnedCommit = "";
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.status).toBe("failed");
+    expect(String(b?.error)).toContain(
+      "without a resolved upstream head commit",
+    );
+    expect(state.pulls.length).toBe(0);
+  });
+
+  it("a NOTICE lifted-path outside references/ is refused before any write", async () => {
+    const escapee: FixtureFile = {
+      lifted: "../evil.md",
+      upstream: "rules/evil.md",
+      oldContent: "evil old\n",
+      localContent: "evil old\n",
+      newContent: "evil new\n",
+    };
+    fixtureDir = buildFixtureRepo([escapee]);
+    state.cloneUrl = `file://${fixtureDir}`;
+    registerUpstream(escapee);
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.status).toBe("failed");
+    expect(String(b?.error)).toContain("outside references/");
+    expect(state.pulls.length).toBe(0);
+    // The escapee file was restored/untouched — never merged.
+    expect(
+      git(fixtureDir, "show HEAD:plugins/soleur/skills/evil.md"),
+    ).toBe("evil old");
+  });
+
+  it("crossed registry views (equal lengths, different records) fail closed", async () => {
+    // `lifted-files` filters on path+local-blob-sha, `upstream-files` on
+    // upstream-path+upstream-blob-sha. Record A carries only the local
+    // pair, record B only the upstream pair — both views emit ONE line, so
+    // the cardinality check passes while the pairing is crossed. The
+    // declared-record counts (2 vs emitted 1) must refuse the run.
+    const dir = mkdtempSync(join(tmpdir(), "vdrift-fixture-"));
+    fixtureDir = dir;
+    git(dir, "init -b main");
+    for (const s of [
+      "notice-frontmatter.sh",
+      "vendor-drift-classify.sh",
+    ]) {
+      const dest = join(dir, SKILL_DIR, "scripts", s);
+      mkdirSync(dirname(dest), { recursive: true });
+      cpSync(join(SCRIPTS_DIR, s), dest);
+    }
+    const alphaBytes = "alpha local only\n";
+    const betaBytes = "beta local\n";
+    mkdirSync(join(dir, SKILL_DIR, "references"), { recursive: true });
+    writeFileSync(
+      join(dir, SKILL_DIR, "references", "alpha.md"),
+      alphaBytes,
+    );
+    writeFileSync(join(dir, SKILL_DIR, "references", "beta.md"), betaBytes);
+    const notice = [
+      "---",
+      "upstream: github.com/acme/widgets",
+      `pinned-commit: ${PINNED_COMMIT}`,
+      "last-verified: 2026-01-01",
+      "lifted-files:",
+      "  - path: references/alpha.md",
+      `    local-blob-sha: ${blobSha(alphaBytes)}`,
+      "    status: active-verbatim",
+      "  - path: references/beta.md",
+      "    upstream-path: rules/beta.md",
+      `    upstream-blob-sha: ${blobSha("beta pinned\n")}`,
+      "    status: active-verbatim",
+      "---",
+      "",
+      "# NOTICE",
+      "",
+    ].join("\n");
+    writeFileSync(join(dir, SKILL_DIR, "NOTICE"), notice);
+    git(dir, "add -A");
+    git(dir, "commit -m fixture");
+    state.cloneUrl = `file://${dir}`;
+    // Record B's upstream drifts — without the completeness guard the write
+    // would merge B's upstream bytes into A's local path.
+    state.contents["rules/beta.md"] = {
+      sha: blobSha("beta drifted\n"),
+      content: Buffer.from("beta drifted\n", "utf8").toString("base64"),
+    };
+    state.blobs[blobSha("beta pinned\n")] = "beta pinned\n";
+    state.blobs[blobSha("beta drifted\n")] = "beta drifted\n";
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.status).toBe("failed");
+    expect(String(b?.error)).toContain("partially-measured registry");
+    expect(state.pulls.length).toBe(0);
+  });
+
+  it("upstream head BEHIND the pinned commit routes to issue with rollback labels", async () => {
+    const files = [ALPHA];
+    fixtureDir = buildFixtureRepo(files);
+    state.cloneUrl = `file://${fixtureDir}`;
+    files.forEach(registerUpstream);
+    state.compareStatus = "behind";
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.route).toBe("issue");
+    expect(state.pulls.length).toBe(0);
+    expect(state.issues.length).toBe(1);
+    expect(state.issues[0].labels).toEqual(
+      expect.arrayContaining([
+        "vendor/upstream-rollback",
+        "needs-human-review",
+      ]),
+    );
+    expect(String(state.issues[0].body)).toContain(
+      "behind/diverged from the pinned commit",
+    );
+    expect(String(state.issues[0].body)).toContain("supply-chain event");
+  });
+
+  it("a mid-write blob fetch failure aborts the PR route", async () => {
+    const files = [ALPHA];
+    fixtureDir = buildFixtureRepo(files);
+    state.cloneUrl = `file://${fixtureDir}`;
+    registerUpstream(ALPHA);
+    // The old (merge-base) blob 404s — the merge cannot be built.
+    delete state.blobs[blobSha(ALPHA.oldContent)];
+
+    const res = await invoke(makeStep());
+    const b = res.bundles?.[0];
+    expect(b?.status).toBe("failed");
+    expect(state.pulls.length).toBe(0);
+  });
+});
+
 describe("cron-content-vendor-drift — dedup completeness (#8182)", () => {
   it("an open drift PR on page 2 of the pulls enumeration suppresses the route", async () => {
     const files = [ALPHA];
@@ -584,12 +770,16 @@ describe("cron-content-vendor-drift — dedup completeness (#8182)", () => {
     // Page 1 is full (100 refs) so a page-1-only reader never sees the match.
     state.pullPages = {
       1: Array.from({ length: 100 }, (_, i) => ({
-        head: { ref: `ci/unrelated-${i}` },
+        head: {
+          ref: `ci/unrelated-${i}`,
+          repo: { full_name: "jikig-ai/soleur" },
+        },
       })),
       2: [
         {
           head: {
             ref: "ci/content-vendor-drift-gdpr-gate-2026-09-08T11-17-00",
+            repo: { full_name: "jikig-ai/soleur" },
           },
         },
       ],
@@ -665,6 +855,7 @@ describe("cron-content-vendor-drift — dedup completeness (#8182)", () => {
         {
           head: {
             ref: "ci/content-vendor-drift-legal-generate-2026-09-08T11-17-00",
+            repo: { full_name: "jikig-ai/soleur" },
           },
         },
       ],
@@ -678,6 +869,76 @@ describe("cron-content-vendor-drift — dedup completeness (#8182)", () => {
         String(p.head).startsWith("ci/content-vendor-drift-gdpr-gate-"),
       ),
     ).toBe(true);
+  });
+
+  it("a FORK PR carrying a same-named head ref does not suppress the route", async () => {
+    // An external actor can name a fork branch anything — without the
+    // same-repo filter in listOpenPrHeads, a fork PR on
+    // `ci/content-vendor-drift-<slug>-…` would suppress this bundle's
+    // re-vendor PRs indefinitely.
+    const files = [ALPHA];
+    fixtureDir = buildFixtureRepo(files);
+    state.cloneUrl = `file://${fixtureDir}`;
+    files.forEach(registerUpstream);
+    state.pullPages = {
+      1: [
+        {
+          head: {
+            ref: "ci/content-vendor-drift-gdpr-gate-2026-09-08T11-17-00",
+            repo: { full_name: "mallory/soleur-fork" },
+          },
+        },
+      ],
+    };
+
+    const res = await invoke(makeStep());
+    expect(res.bundles?.[0]?.route).toBe("pr");
+    expect(state.pulls.length).toBe(1);
+  });
+
+  it("a sibling bundle's open ISSUE does not suppress this bundle's filing", async () => {
+    // The issue-scan dedup is partitioned by classifyIssueOwner on the
+    // [<slug>] title token — a legal-generate issue must not mask an
+    // unfiled gdpr-gate drift.
+    const siblingFile: FixtureFile = {
+      lifted: "references/gamma.md",
+      upstream: "rules/gamma.md",
+      oldContent: "gamma unchanged\n",
+      localContent: "gamma unchanged\n",
+      newContent: "gamma unchanged\n",
+    };
+    const files = [ALPHA];
+    fixtureDir = buildFixtureRepo(files, {
+      sibling: { slug: "legal-generate", files: [siblingFile] },
+    });
+    state.cloneUrl = `file://${fixtureDir}`;
+    // Archived upstream routes gdpr-gate to issue; both bundles serve
+    // unchanged per-file SHAs (repo-level signal does the routing).
+    state.repoMeta = {
+      full_name: "acme/widgets",
+      archived: true,
+      default_branch: "main",
+    };
+    for (const f of [ALPHA, siblingFile]) {
+      state.contents[f.upstream] = {
+        sha: blobSha(f.oldContent),
+        content: Buffer.from(f.oldContent, "utf8").toString("base64"),
+      };
+    }
+    state.searchIssuePages = {
+      1: [
+        {
+          title:
+            "[vendor-drift][legal-generate] security-relevant drift on 2026-09-08 (classifier rc=12)",
+        },
+      ],
+    };
+
+    const res = await invoke(makeStep());
+    const gdpr = res.bundles?.find((b) => b.slug === "gdpr-gate");
+    expect(gdpr?.route).toBe("issue");
+    expect(state.issues.length).toBe(1);
+    expect(String(state.issues[0].title)).toContain("[gdpr-gate]");
   });
 });
 

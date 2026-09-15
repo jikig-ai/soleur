@@ -204,19 +204,43 @@ fi
 # The conflict arm must not auto-merge: mergeMode "none" + the advisory label.
 assert_contains "$PR_STEP" '"none"' 'conflict arm uses mergeMode "none"'
 assert_contains "$PR_STEP" "needs-human-review" "conflict arm labels needs-human-review"
+# #8185-review hardening anchors inside the write step: restored-from-
+# origin/main replay (NOT HEAD — the ci/ branch tip carries first-attempt
+# merges), references/ containment on NOTICE-supplied paths, the
+# partial-measurement refusal, the expected-identity NOTICE binding, and
+# the committed-paths verification.
+assert_contains "$PR_STEP" '"--source=origin/main"' "replay restore reads origin/main, not the ci branch tip"
+assert_contains "$PR_STEP" "outside references/" "liftedPath confined to references/"
+assert_contains "$PR_STEP" "partially-measured registry" "pin advance refuses on incomplete measurement"
+assert_contains "$PR_STEP" "oldLocalSha" "rewriteNoticeRecord binds expected record identity"
+assert_contains "$PR_STEP" "revendor-paths-missing" "committed paths asserted against drifted set"
+echo ""
+
+# --- #8183 + #8185 review: rollback detection via the compare API ---
+# The classifier's exit-15 arm needs upstream git objects the shallow clone
+# lacks, so ordering is probed via compare; a behind/diverged head must
+# force the issue route regardless of the content classification.
+echo "TS17: rollback detection via compare API + forced issue route (#8183)"
+assert_contains "$WF_CONTENT" 'GET /repos/{owner}/{repo}/compare/{basehead}' "compare API probed for ordering"
+assert_contains "$WF_CONTENT" 'cmp.status === "behind"' '"behind" treated as rollback'
+assert_contains "$WF_CONTENT" 'cmp.status === "diverged"' '"diverged" treated as rewritten history'
+assert_contains "$WF_CONTENT" "rollbackSuspected" "rollback flag carried through detection"
+assert_contains "$WF_CONTENT" "vendor/upstream-rollback" "rollback label applied"
 echo ""
 
 # --- #8181: --verify-upstream binds path+commit+blob via Contents API ---
 # The integrity script's verify loop must call
-# contents/<upstream-path>?ref=<pinned-commit> — NOT git/blobs/<sha>, which
-# proved object existence anywhere in the store rather than the blob at the
-# declared path at the declared commit.
+# contents/<upstream-path> with ref=<pinned-commit> — NOT git/blobs/<sha>,
+# which proved object existence anywhere in the store rather than the blob
+# at the declared path at the declared commit. The path is charset-validated
+# before URL interpolation (#8185 review).
 echo "TS16: --verify-upstream uses the contents endpoint, not blob existence (#8181)"
 INTEGRITY_SRC="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh"
 VERIFY_BLOCK=$(awk '/\(\( VERIFY_UPSTREAM \)\); then/,/^fi$/' "$INTEGRITY_SRC")
 assert_contains "$VERIFY_BLOCK" 'contents/' "verify loop calls the contents endpoint"
 assert_contains "$VERIFY_BLOCK" 'ref=' "verify loop pins the ref (pinned-commit)"
 assert_contains "$VERIFY_BLOCK" 'pinned-commit' "verify loop reads pinned-commit from NOTICE"
+assert_contains "$VERIFY_BLOCK" 'A-Za-z0-9._/-' "upstream_path charset-validated before URL interpolation"
 if printf '%s' "$VERIFY_BLOCK" | grep -q 'git/blobs'; then
   echo "  FAIL: verify loop still asserts via git/blobs object existence"
   FAIL=$((FAIL + 1))
