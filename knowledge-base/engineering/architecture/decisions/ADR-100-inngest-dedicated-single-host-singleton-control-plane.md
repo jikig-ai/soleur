@@ -17,7 +17,9 @@ brand_survival_threshold: single-user incident
 > **It has not started.** The cutover did not hold: the dedicated host has served nothing since
 > 2026-07-30 and `INNGEST_CUTOVER_FLIP` rests at `rollback`. See the
 > [2026-08-12 addendum](#addendum--2026-08-12-7228--the-cutover-did-not-hold-and-the-soak-never-started)
-> before treating any statement below as describing a running system. Amends **ADR-030** (Inngest
+> before treating any statement below as describing a running system.
+> **Superseded 2026-09-15:** the cutover was re-run and completed — see the
+> [2026-09-15 addendum](#addendum--2026-09-15-6178-8191--the-cutover-completed). Amends **ADR-030** (Inngest
 > as durable trigger layer); does not supersede it.
 
 ## Context
@@ -1347,3 +1349,19 @@ unchanged.
 | Read `/hooks/deploy-status` `reason=quiesced` in the watchdog | A single slot overwritten by the next deploy or restart — a merge to main during the window would erase the signal and reopen the fuse. |
 | Gate the healthy auto-close on a separate `web_scheduler=quiesced` output | Gating the whole step stops pool issues from ever auto-closing post-cutover; gating only the liveness closes adds a second output beside the single-source `failure_mode` contract, which is fail-open for a future consumer. A deliberate stop+disable resolves a "web scheduler down" issue, so the unchanged auto-close is correct. The `web_quiesced_since` output that does ship has exactly one reader (`nolive`). |
 | Also treat `deactivating`+`disabled` as quiesced | Two predicates (lenient watchdog, strict gate) for a stop window that disable-before-stop already shrinks, whose worst case is one false `inngest_down` tick per window that the refusal and the next tick's auto-close absorb. |
+
+## Addendum — 2026-09-15 (#6178, #8191) — the cutover completed
+
+The 2026-08-12 addendum's "the cutover did not hold" is superseded, not edited. Measured this day,
+in order: `op=quiesce-web` (run 34947786718) stopped and disabled web-1's scheduler with a quiesce
+marker; the second `op=execute` (run 34947956908) resumed the persisted capture and passed the 2.2
+QUIESCE HARD GATE; `op=arm` (run 34948112813) passed G1–G3.7 and confirmed the host FSM `done`
+(`INNGEST_CUTOVER_FLIP=done`); `op=registry-probe` (run 34948634783) read 70 registered functions
+from `10.0.1.40:8288`. The 2.4 app-repoint (#8191) moves `INNGEST_BASE_URL` to
+`http://10.0.1.40:8288` in all four places. It also supersedes the 2026-09-07 interim repoint to
+the co-located scheduler (#7897), which the 2026-08-12 addendum had recorded as declined.
+
+The app<->host channel is plain HTTP on the Hetzner private network: transport confidentiality on
+this link is accepted, not provided (encryption-posture ledger row, exception tracked on #6897).
+The Phase-4 soak — the `adopting -> accepted` condition — starts after `op=rearm` and `op=verify`
+pass, and this ADR stays `adopting` until it completes.

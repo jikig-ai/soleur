@@ -461,6 +461,22 @@
           "expires_on": "2026-10-22"
         }
       }
+    },
+    {
+      "connection": "web-platform app (web hosts) <-> dedicated inngest host (10.0.1.40:8288, and its sdk_url call-back to 10.0.1.10:3000/api/inngest)",
+      "enforced_at": "apps/web-platform/infra/ci-deploy.sh / cloud-init.yml (-e INNGEST_BASE_URL=http://10.0.1.40:8288); apps/web-platform/infra/inngest-host.tf (sdk_url); apps/web-platform/infra/cron-egress-nftables.sh (10.0.1.40:8288 accept)",
+      "in_transit": {
+        "tls": "none (plain HTTP on the Hetzner private network by design, ADR-100)",
+        "cert_verification": "off",
+        "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read INNGEST_EVENT_KEY (in the /e/<key> send path), the hashed signing key (Bearer signkey-prod-<sha256>), event payloads and step outputs; replaying a sniffed key additionally requires sending from a web host's private IP (the inngest host's nftables allows :8288 only from 10.0.1.10/10.0.1.11). The raw signing key never crosses the wire (Inngest->app requests carry only an HMAC).",
+        "disclosed_as": "not-publicly-claimed",
+        "exception": {
+          "justification": "the same private-network-only plaintext exception recorded for the zot registry link: the app<->scheduler channel stays inside the Hetzner private network, both ends are nftables-restricted to the web hosts' private IPs, and the peers on 10.0.1.0/24 are our own hosts (git-data .20, registry .30). Transport confidentiality on this link is accepted, not provided; recorded when the #6178 2.4 app-repoint (#8191) moved the channel off the host loopback.",
+          "tracking_issue": "#6897",
+          "reevaluate_when": "the channel gains TLS, a non-Jikigai peer joins 10.0.1.0/24, or the inngest host is reachable beyond the private network",
+          "expires_on": "2026-10-22"
+        }
+      }
     }
   ]
 }
