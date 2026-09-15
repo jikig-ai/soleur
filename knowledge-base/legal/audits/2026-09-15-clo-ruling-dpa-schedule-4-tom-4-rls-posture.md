@@ -5,7 +5,7 @@ date: 2026-09-15
 issue: none — referred directly by the operator, not via a GitHub issue
 attestation-authority: clo
 status: APPROVED (CLO-agent-ruled, Soleur-as-tenant-zero v1)
-disposition: DISCHARGED — defect confirmed and corrected before first execution. No Art. 33 duty, no Art. 34 duty, NO breach-register row. No counterparty notification owed, because the instrument has never been executed. One advisory Art. 30 register incompleteness recorded as an open item; it does not block.
+disposition: DISCHARGED — defect confirmed and corrected before first execution. No Art. 33 duty, no Art. 34 duty, NO breach-register row. No counterparty notification owed, because the instrument has never been executed. One Art. 30(1)(c) gap found and closed in the same change (PA-1 §(c), `denied_jti.reason`); the limb-(g) incompleteness alleged in an earlier draft was withdrawn as mischaracterised — see §7c. One open item recorded for separate work: whether the DSAR-export machinery needs its own Processing Activity.
 signed_off_at: 2026-09-15
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 art_33_triggered: false
@@ -26,6 +26,7 @@ re_evaluation_triggers:
   - "First execution with any counterparty. This ruling's entire materiality analysis rests on nobody having relied on the defective text. Once signed, any further inaccuracy in Schedule 4 is an Annex II defect in a live instrument and the analysis at §3 does not carry over."
   - "Any decision to add a storage-bucket TOM to Schedule 4, or to widen the scope sentence past the migration corpus. Either re-opens the accepted limit at §7 and requires `storage.objects` policies to be measured on the same footing as the corpus tables."
   - "Any out-of-band policy change applied to production without a migration. This would break the correspondence between the corpus and the live database that §8 relies on."
+  - "Any widening of `denied_jti.reason` beyond an operator-authored revocation note — a length bound, a structured shape, or a second writer. PA-1 §(c) describes it as free text authored through `revoke_jti`; a different write path is a different category."
   - "First arms-length (non-Jikigai) Customer, EEA-out processing, or a regulated-industry counterparty — the standing triggers for EXTERNAL counsel re-review of this internal sign-off."
 related:
   - knowledge-base/legal/data-processing-agreement-template.md
@@ -406,17 +407,53 @@ question that this ruling does not decide**. It is registered as a
 re-evaluation trigger in the frontmatter, and it must be answered before the
 template is promoted to `docs/legal/`.
 
-### 7c. Advisory open item — Art. 30 register incompleteness
+### 7c. Art. 30 register — ruled correct-as-is on limb (g); one limb-(c) gap closed in this PR
 
-The register records the zero-policy TOM for three of the seven Tier A tables.
-`dsar_export_audit_pii`, `denied_jti`, `mint_rate_window` and
-`runtime_mint_intent` have **no** §(g) entry recording it. That is an
-**incompleteness, not a falsity** — nothing in the register is wrong — and it
-does **not** block this correction, which is why it is recorded as advisory. It
-warrants its own issue. The dependency runs one way and is worth noting: the
-corrected DPA text now designates the register as the authoritative per-activity
-record, so register completeness matters more after this correction than it did
-before.
+**This section replaces an earlier draft that mischaracterised the register. The
+correction is recorded rather than made silently, because a legal record that
+misstates another legal record is the defect class this ruling exists to correct.**
+
+The earlier draft asserted that `dsar_export_audit_pii`, `denied_jti`,
+`mint_rate_window` and `runtime_mint_intent` lacked a §(g) entry recording their
+zero-policy posture. **That framing was wrong and is withdrawn.** It imported a
+table-enumeration standard that Art. 30 does not impose. Art. 30(1) records
+processing *activities*; limb (c) requires *categories of personal data* and limb
+(g) requires, *"where possible, a general description"* of the Art. 32 measures.
+Neither requires a table inventory.
+
+**On limb (g), all four tables are correct as they stand, and nothing is added:**
+
+- `mint_rate_window` and `runtime_mint_intent` — the activity is recorded at
+  **PA-1 §(g)(5)** (per-user JWT mint via `getFreshTenantClient(userId)`). The
+  identifiers they hold are already within PA-1 §(c). No new category, no new
+  measure.
+- `denied_jti` — the measure is recorded by name at **PA-13 §(g)(4)**: *"the
+  `is_jti_denied` deny-list (PR-D #3883) gates the mint."*
+- `dsar_export_audit_pii` — its only §(g) mention is inside PA-2's limb, whose
+  RLS sentence is scoped to `public.messages`, `public.conversations`,
+  `public.team_names` and `public.user_concurrency_slots`. It asserts nothing
+  about `dsar_export_audit_pii`. **No falsity.**
+
+**One genuine gap exists, on limb (c) rather than (g), and is closed in this PR.**
+`denied_jti.reason` is free text authored by the operator through the
+service-role-only `revoke_jti(jti, founder_id, reason)` RPC (migration
+`068_jti_deny_rls_predicate_and_revoke_rpc`), attributed to an identified account
+holder, and **readable back by that data subject** through `my_revocation_status()`.
+It is a category of personal data described nowhere in the register. PA-14 §(c)
+already records `scope_grants.revoked_reason` on exactly that footing, so the
+omission is an inconsistency with the register's own settled practice as well as a
+limb-(c) gap. One clause is appended to PA-1 §(c). No §(g) item is added anywhere:
+PA-13 §(g)(4) already carries the measure, and duplicating a measure across
+activities is the drift mechanism this register records at PA-14 §(e) (corrected
+2026-09-03, #7695).
+
+**Deliberately NOT resolved here, and not folded into this PR.** No Processing
+Activity appears to record the **DSAR-export machinery itself** as an activity —
+`dsar_export_audit_pii` collects `requester_ip` and `user_agent` at download time,
+and the register's per-activity `(h) DSAR` limbs record *reachability*, which is a
+different thing. **This is not asserted as a finding:** the check was a targeted
+grep, not a read of all 36 activities, and settling it requires a dedicated pass
+over the whole register. It is registered as an open item for separate work.
 
 ---
 
