@@ -63,9 +63,9 @@ while IFS= read -r seg; do
   # most recent cd; then --cwd; then ambient $PWD.
   target="" git_dir=""
   if grep -qoE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$seg"; then
-    git_dir="$(grep -oE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/^--git-dir[=[:space:]]+//')"
+    git_dir="$(grep -oE -- '--git-dir[=[:space:]][^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/^--git-dir[=[:space:]]+//' || true)"
   elif grep -qoE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$seg"; then
-    git_dir="$(grep -oE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/.*GIT_DIR=//')"
+    git_dir="$(grep -oE -- '(^|[[:space:]])GIT_DIR=[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/.*GIT_DIR=//' || true)"
   else
     git_c="$(grep -oE -- '-C[[:space:]]+[^[:space:]]+' <<<"$seg" | tail -n 1 | sed -E 's/^-C[[:space:]]+//' || true)"
     [[ -n "$git_c" ]] && target="$git_c"

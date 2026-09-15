@@ -195,7 +195,9 @@ assert "explicit sequential-fallback + partial counts is NOT rewritten to degrad
 
 # ── ARM 8: still refuses to run on main ──────────────────────────────────────────
 # Guards against the coverage plumbing having disturbed the pre-existing branch guard.
-d="$(new_repo onmain)"; git -C "$d" checkout -q main
+d="$(new_repo onmain)"
+: "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+git -C "$d" checkout -q main
 out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
 assert "still skips on main (pre-existing guard intact)" \
   '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
