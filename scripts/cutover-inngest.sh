@@ -820,7 +820,20 @@ case "$OP" in
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
       echo "::error::doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
     fi
+    # #6178 — PAGE-OVERLAP DEDUPE. The probe cursor-paginates runs(orderBy: STARTED_AT ASC) and a
+    # run can come back on two pages (cause unconfirmed). Measured 2026-09-15: every reported
+    # "double-fire" group equalled RUN_COUNT - total_count and was absent from trace_runs (one run
+    # per tick). Dedupe by the run id (trace_runs.run_id PRIMARY KEY): a repeated page row shares
+    # its id and two distinct runs never do. FALLBACK when the host's probe predates the id
+    # projection: (functionID, startedAt) — startedAt is MILLISECOND precision, so two schedulers
+    # firing in the same millisecond would collapse; that verdict is qualified, never silent.
+    PRE_DEDUPE_N=$(echo "$BODY" | jq '.runs | length')
+    DEDUPE_KEY=$(echo "$BODY" | jq -r 'if (.runs | length) > 0 and all(.runs[]; (.id | type) == "string") then "run-id" else "functionID+startedAt(ms)" end')
+    BODY=$(echo "$BODY" | jq -c '.runs |= (if length > 0 and all(.[]; (.id | type) == "string") then unique_by(.id) else ([ .[] | select(.startedAt == null) ] + ([ .[] | select(.startedAt != null) ] | unique_by([.functionID, .startedAt]))) end)')
     RUN_COUNT=$(echo "$BODY" | jq '.runs | length')
+    if (( PRE_DEDUPE_N > RUN_COUNT )); then
+      echo "::notice::doublefire-probe: dropped $(( PRE_DEDUPE_N - RUN_COUNT )) page-overlap duplicate(s) (dedupe key: $DEDUPE_KEY)"
+    fi
     # #6178 — NULL-SAFE BUCKETING. The probe projects {functionID, startedAt} from EVERY
     # returned node, and a run that is queued, running, or cancelled-before-start carries
     # startedAt:null. `fromdateiso8601` THROWS on null ("strptime/1 requires string
@@ -844,6 +857,9 @@ case "$OP" in
     # a clean dark-host result over a scan whose scale was never measured is a weaker
     # statement than one over a measured scan.
     TOTAL_COUNT=$(echo "$BODY" | jq -r '.total_count // "absent"')
+    if [[ "$TOTAL_COUNT" =~ ^[0-9]+$ ]] && (( RUN_COUNT < TOTAL_COUNT )); then
+      echo "::warning::doublefire-probe: INCOMPLETE SCAN — deduped=$RUN_COUNT < total_count=$TOTAL_COUNT (pre_dedupe=$PRE_DEDUPE_N, dedupe key: $DEDUPE_KEY); runs were collapsed or missed, so a clean result here is not evidence."
+    fi
     if [[ "$TOTAL_COUNT" == "unknown" || "$TOTAL_COUNT" == "absent" ]]; then
       echo "::warning::doublefire-probe: the server did not report a usable totalCount (total_count=$TOTAL_COUNT) — the page-1 feasibility gate did not run and the scan's scale is unmeasured."
     fi
@@ -2255,7 +2271,20 @@ case "$OP" in
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
       echo "::error::2.6 doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
     fi
+    # #6178 — PAGE-OVERLAP DEDUPE. The probe cursor-paginates runs(orderBy: STARTED_AT ASC) and a
+    # run can come back on two pages (cause unconfirmed). Measured 2026-09-15: every reported
+    # "double-fire" group equalled RUN_COUNT - total_count and was absent from trace_runs (one run
+    # per tick). Dedupe by the run id (trace_runs.run_id PRIMARY KEY): a repeated page row shares
+    # its id and two distinct runs never do. FALLBACK when the host's probe predates the id
+    # projection: (functionID, startedAt) — startedAt is MILLISECOND precision, so two schedulers
+    # firing in the same millisecond would collapse; that verdict is qualified, never silent.
+    PRE_DEDUPE_N=$(echo "$BODY" | jq '.runs | length')
+    DEDUPE_KEY=$(echo "$BODY" | jq -r 'if (.runs | length) > 0 and all(.runs[]; (.id | type) == "string") then "run-id" else "functionID+startedAt(ms)" end')
+    BODY=$(echo "$BODY" | jq -c '.runs |= (if length > 0 and all(.[]; (.id | type) == "string") then unique_by(.id) else ([ .[] | select(.startedAt == null) ] + ([ .[] | select(.startedAt != null) ] | unique_by([.functionID, .startedAt]))) end)')
     RUN_COUNT=$(echo "$BODY" | jq '.runs | length')
+    if (( PRE_DEDUPE_N > RUN_COUNT )); then
+      echo "::notice::2.6 doublefire-probe: dropped $(( PRE_DEDUPE_N - RUN_COUNT )) page-overlap duplicate(s) (dedupe key: $DEDUPE_KEY)"
+    fi
     # #6178 — NULL-SAFE BUCKETING (see the full rationale on the op=doublefire-probe arm).
     # fromdateiso8601 throws on a null startedAt and jq's exit 5 propagates through
     # `set -euo pipefail`; a run with no startedAt has not fired and cannot be a
@@ -2283,6 +2312,14 @@ case "$OP" in
       echo "::error::2.6 VACUOUS SCAN — refusing to report a verdict. total_count=$TOTAL_COUNT run_count=$RUN_COUNT anchor_source=$DF_ANCHOR_SOURCE from=$DF_FROM. 'No duplicates' over a scan that examined nothing is not an exactly-once proof, and must not close #6178 or release the rollback snapshot. Check the function_ids scope and the anchor, then re-dispatch."
       exit 1
     fi
+    # #6178 — COMPLETENESS FLOOR. After the dedupe, the distinct runs must be at least the server's
+    # total_count (>=, not ==: the window is open-topped and the scheduler keeps inserting). Fewer
+    # means runs were wrongly collapsed or MISSED by pagination, and a clean verdict over an
+    # incomplete scan is the false-CLEAN this gate must never print.
+    if [[ "$TOTAL_COUNT" =~ ^[0-9]+$ ]] && (( RUN_COUNT < TOTAL_COUNT )); then
+      echo "::error::2.6 INCOMPLETE SCAN — refusing to report a verdict. pre_dedupe=$PRE_DEDUPE_N deduped=$RUN_COUNT total_count=$TOTAL_COUNT (dedupe key: $DEDUPE_KEY). Fewer distinct runs than the server reports means runs were collapsed or missed; re-dispatch op=verify."
+      exit 1
+    fi
     echo "::notice::2.6 doublefire-probe: $RUN_COUNT run(s) in window (server total_count=$TOTAL_COUNT); bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
     # Any (functionID, floor(startedAt/period)) group with >1 run is a double-fire.
     DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
@@ -2301,6 +2338,9 @@ case "$OP" in
     # window, or an unverified operator-typed anchor is a WEAKER claim than one over an
     # fsm-anchored full-population scan, and AC-V4 keys on this distinction.
     VERDICT_QUALIFIERS=""
+    if [[ "$DEDUPE_KEY" != "run-id" ]]; then
+      VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}page-overlap dedupe fell back to (functionID, startedAt) at millisecond precision, so a same-millisecond double-fire is indistinguishable from a repeated page row (the host probe predates the run-id projection); "
+    fi
     if [[ -n "$DF_FNIDS" ]]; then
       VERDICT_QUALIFIERS="${VERDICT_QUALIFIERS}population scoped to function_ids=[$DF_FNIDS] (the destructive crons may be excluded); "
     fi

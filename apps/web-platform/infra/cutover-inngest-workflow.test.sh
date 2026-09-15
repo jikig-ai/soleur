@@ -1758,6 +1758,53 @@ EOF
   fi
 done
 
+# --- #6178 page-overlap dedupe (both probe arms) — EXECUTED, not grepped. ---
+# The probe's cursor pagination returned the same run on two pages, and op=verify scored each repeat
+# as a double-fire (measured 2026-09-15: groups == RUN_COUNT - total_count, all absent from
+# trace_runs). Dedupe is by run id: a repeat shares its id, two distinct runs never do — INCLUDING two
+# schedulers firing in the same MILLISECOND (startedAt is ms precision), which the id key must keep.
+# Without ids (a host probe predating the projection) it falls back to (functionID, startedAt).
+DEDUPE_PROGS=$(perl -ne "print \"\$1\n\" if /jq -c '(\.runs \|= [^']+unique_by[^']+)'/" "$WF")
+DEDUPE_N=$(printf '%s\n' "$DEDUPE_PROGS" | grep -c 'unique_by' || true)
+assert "#6178 page-overlap dedupe is applied in BOTH probe arms (op=doublefire-probe + op=verify 2.6)" "[[ '$DEDUPE_N' -eq 2 ]]"
+ID_FIXTURE='{"runs":[
+  {"id":"R1","functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"id":"R1","functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"id":"R2","functionID":"fn-s","startedAt":"2026-09-15T08:00:00.012Z"},
+  {"id":"R3","functionID":"fn-s","startedAt":"2026-09-15T08:00:00.012Z"},
+  {"id":"R4","functionID":"fn-d","startedAt":"2026-07-30T15:00:00.065Z"},
+  {"id":"R5","functionID":"fn-d","startedAt":"2026-07-30T15:00:00.343Z"},
+  {"id":"R6","functionID":"fn-q","startedAt":null},
+  {"id":"R7","functionID":"fn-q","startedAt":null}]}'
+NOID_FIXTURE='{"runs":[
+  {"functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-30T15:00:00.065Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-30T15:00:00.343Z"},
+  {"functionID":"fn-q","startedAt":null},
+  {"functionID":"fn-q","startedAt":null}]}'
+_fncount() { jq --arg f "$2" '[.runs[]? | select(.functionID==$f)] | length' <<<"$1" 2>/dev/null || echo X; }
+di=0
+while IFS= read -r dprog; do
+  [[ -n "$dprog" ]] || continue
+  di=$((di + 1))
+  iout=$(jq -c "$dprog" <<<"$ID_FIXTURE" 2>/dev/null || echo '{"runs":"CRASH"}')
+  nout=$(jq -c "$dprog" <<<"$NOID_FIXTURE" 2>/dev/null || echo '{"runs":"CRASH"}')
+  assert "#6178 dedupe site $di [id] drops the page-repeated run (same id -> fn-p once)" "[[ '$(_fncount "$iout" fn-p)' == 1 ]]"
+  assert "#6178 dedupe site $di [id] KEEPS a same-MILLISECOND double-fire (distinct ids -> fn-s stays 2)" "[[ '$(_fncount "$iout" fn-s)' == 2 ]]"
+  assert "#6178 dedupe site $di [id] KEEPS a ms-apart double-fire (fn-d stays 2)" "[[ '$(_fncount "$iout" fn-d)' == 2 ]]"
+  assert "#6178 dedupe site $di [id] keeps distinct null-startedAt runs (fn-q stays 2)" "[[ '$(_fncount "$iout" fn-q)' == 2 ]]"
+  assert "#6178 dedupe site $di [no-id fallback] drops the repeat (fn-p once)" "[[ '$(_fncount "$nout" fn-p)' == 1 ]]"
+  assert "#6178 dedupe site $di [no-id fallback] KEEPS a ms-apart double-fire (fn-d stays 2)" "[[ '$(_fncount "$nout" fn-d)' == 2 ]]"
+  assert "#6178 dedupe site $di [no-id fallback] leaves null-startedAt runs (fn-q stays 2)" "[[ '$(_fncount "$nout" fn-q)' == 2 ]]"
+done <<<"$DEDUPE_PROGS"
+assert "#6178 the dedupe loop executed both sites" "[[ '$di' -eq 2 ]]"
+VERIFY_ARM_BODY=$(grep -vE '^[[:space:]]*#' "$WF") || true
+assert "#6178 op=verify FAILS an incomplete scan (deduped RUN_COUNT < total_count) instead of printing a verdict" \
+  "grep -A2 -F '(( RUN_COUNT < TOTAL_COUNT ))' <<<\"\$VERIFY_ARM_BODY\" | grep -qF '2.6 INCOMPLETE SCAN' && grep -A3 -F '2.6 INCOMPLETE SCAN' <<<\"\$VERIFY_ARM_BODY\" | grep -qE '^[[:space:]]*exit 1'"
+assert "#6178 op=verify QUALIFIES a verdict whose dedupe fell back off the run id" \
+  "grep -qF '[[ \"\$DEDUPE_KEY\" != \"run-id\" ]]' <<<\"\$VERIFY_ARM_BODY\""
+
 # --- NON-VACUITY HARD GATE (AC-V3), enforced in code rather than by operator diligence. ---
 assert "#6178 op=verify READS the server's total_count (it was emitted and never consumed)" \
   "grep -qE 'TOTAL_COUNT=.*jq -r .\\.total_count' '$VERIFY_ARM_FILE'"
@@ -2725,7 +2772,9 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
-_EXACT_FLOOR=630
+# 630 -> 648 (+18) at the page-overlap dedupe fix: both-arms presence, 7 executed rows per site x2
+#   (id key incl. same-millisecond keep + no-id fallback), loop-ran, incomplete-scan gate, fallback qualifier.
+_EXACT_FLOOR=648
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
