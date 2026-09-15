@@ -65,6 +65,16 @@ until F2. Git history and F2's body keep the design and every review finding.
   environment-assert script. Its `can_admins_bypass: true` / `prevent_self_review: false` are stated in
   ADR-220 and in the Article 30 TOM limits.
 
+## DC-8 — Root-key apply is dispatch-only, and a fingerprint PR precedes the replace (Taste, deepen)
+
+- **Change:** the new root is applied by an authorized `workflow_dispatch` (not on push), and a small PR
+  commits the created key's `SHA256:` fingerprint before `git_data_host_replace` may deliver it.
+- **Why:** a push-queued approval would hold `git-data-state` and could cancel a queued replace (#8167); the
+  merge alone has no blast radius. The committed fingerprint is the only anchor a `HCLOUD_TOKEN` holder
+  (reachable from any branch workflow) cannot move, so a swapped Hetzner key object cannot become root on
+  every future replace (security-sentinel P1-1).
+- **Cost:** one extra post-merge PR before the key can be delivered.
+
 ## DC-7 — Keep the Doppler hop (reviewer suggestion not taken)
 
 - **Suggestion (code-simplicity):** publish the private key directly as a repo secret; a repo secret
