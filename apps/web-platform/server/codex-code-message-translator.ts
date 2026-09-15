@@ -206,6 +206,16 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
     }];
   }
 
+  if (type === "dynamicToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
+    return [{
+      sourceId: `dynamic:${itemId}:status`,
+      payload: {
+        type: "progress",
+        message: statusType(record?.status) === "completed" ? "Dynamic tool completed" : "Dynamic tool failed",
+      },
+    }];
+  }
+
   if (type === "commandExecution" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `command:${itemId}:status`,

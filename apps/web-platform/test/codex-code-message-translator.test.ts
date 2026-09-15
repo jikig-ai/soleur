@@ -183,6 +183,28 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("replays dynamic tool outcomes as status metadata without tool payloads", () => {
+    expect(translateCodexPersistedItem({
+      type: "dynamicToolCall",
+      id: "dynamic-1",
+      tool: "private_tool",
+      status: "completed",
+      arguments: { token: "private" },
+      contentItems: [{ text: "private result" }],
+    })).toEqual([
+      {
+        sourceId: "dynamic:dynamic-1:status",
+        payload: { type: "progress", message: "Dynamic tool completed" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "dynamicToolCall", id: "dynamic-2", status: "failed" })).toEqual([
+      {
+        sourceId: "dynamic:dynamic-2:status",
+        payload: { type: "progress", message: "Dynamic tool failed" },
+      },
+    ]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",

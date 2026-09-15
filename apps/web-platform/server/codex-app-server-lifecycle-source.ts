@@ -74,7 +74,8 @@ function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent
     const approvalWaiting = type === "commandExecution" && REPLAY_APPROVAL_STATUSES.has(statusType(itemRecord.status) ?? "");
     const commandOutcome = type === "commandExecution" && (statusType(itemRecord.status) === "completed" || statusType(itemRecord.status) === "failed");
     const mcpOutcome = type === "mcpToolCall" && (statusType(itemRecord.status) === "completed" || statusType(itemRecord.status) === "failed");
-    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || approvalWaiting || commandOutcome || mcpOutcome) && translated.length === 0) {
+    const dynamicOutcome = type === "dynamicToolCall" && (statusType(itemRecord.status) === "completed" || statusType(itemRecord.status) === "failed");
+    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome) && translated.length === 0) {
       throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
     }
     for (const event of translated) replay.push(createCodexReplayEvent(event));

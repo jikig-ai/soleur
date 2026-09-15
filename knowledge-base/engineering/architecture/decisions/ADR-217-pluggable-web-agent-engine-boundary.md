@@ -98,6 +98,8 @@ commands and aggregated output remain excluded from replay payloads.
 Persisted MCP tool calls follow the same status-only rule; connector identity,
 arguments, results, and provider errors remain excluded until redaction is
 qualified per connector.
+Persisted dynamic tool calls likewise emit only completed/failed status
+progress, excluding tool payloads and result content.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or
