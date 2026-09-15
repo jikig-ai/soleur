@@ -192,7 +192,7 @@ replay the root login.
 ### D6 — Sequencing
 
 **This PR** ships D1a's wiring and a fail-closed access gate; the change list is in the plan
-(`2026-09-14-fix-git-data-cutover-ci-access-path-plan.md`). It has **no key input and no secret
+(`plans/archive/20260915-105155-2026-09-14-fix-git-data-cutover-ci-access-path-plan.md`). It has **no key input and no secret
 reference**: a secret wired into an ungated job would arm itself the moment #8189 creates it.
 
 **Exit codes.** `3` = the access gate stopped the run (one `ACCESS` verdict per role: `web`,
