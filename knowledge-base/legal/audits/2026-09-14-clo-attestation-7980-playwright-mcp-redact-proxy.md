@@ -834,3 +834,9 @@ Claude Code always connects over a pipe, so it has no register consequence.
 > `runs/suite-neuter-reap.txt`). They now read 281 passed / 0 failed (55 mutants)
 > and 162 passed / 121 failed. The proxy and redactor did not change between the
 > run this addendum read and the re-run.
+
+## Addendum — #7981 re-evaluation trigger, 2026-09-15
+
+The frontmatter trigger "#7981 lands or is closed without landing" fired: PR #8207 widened the
+published AUP §2 bullet to name "a Playwright MCP server driven by Soleur agents or skills", and
+the bullet states nothing about any snapshot control. **Disposition: DISCHARGED, unchanged.**
