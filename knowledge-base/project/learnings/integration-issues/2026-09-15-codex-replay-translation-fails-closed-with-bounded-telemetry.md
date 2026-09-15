@@ -68,6 +68,7 @@ path alone cannot show that replay drift is visible.
 18. The first local constraint-gate invocation yielded before returning its session identifier, making its result unrecoverable from that tool call. **Prevention:** always print and retain the session ID when `yield_time_ms` can be reached, then resume with `write_stdin`.
 19. The legal mirror-ratchet gate caught canonical-only additions to the three published legal mirrors. **Prevention:** every legal disclosure amendment must update canonical and Eleventy mirror surfaces together, then rerun the ratchet before pushing.
 20. A combined PR-status probe (`git status`, remote SHA, PR JSON, and all checks) exceeded the tool context and was truncated before its result could be reviewed. **Prevention:** run bounded status, remote, PR, and check probes separately with explicit output caps.
+21. A qualification-record read used the live spec path after the plan had been archived, so the file lookup failed. **Prevention:** resolve archived plan artifacts with `rg --files` before reading a path copied from an earlier resume prompt.
 
 ## Related
 
