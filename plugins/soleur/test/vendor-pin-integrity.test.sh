@@ -84,6 +84,19 @@ set -e
 assert_eq "0" "$RC" "exit 0 when all lifted files match NOTICE blob SHAs"
 echo ""
 
+# --- TS1b: same run under a hook's inherited git environment ---
+# A pre-commit hook exports GIT_DIR (and GIT_INDEX_FILE in a worktree). With
+# GIT_DIR set, `git -C <dir> rev-parse --show-toplevel` answers <dir> itself, so
+# an unstripped root resolution reported every file "missing from working tree".
+echo "TS1b: hook-inherited GIT_DIR/GIT_INDEX_FILE → still exit 0 (#8150)"
+HOOK_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir)"
+set +e
+( cd "$REPO_ROOT" && GIT_DIR="$HOOK_GIT_DIR" GIT_INDEX_FILE="$HOOK_GIT_DIR/index" bash "$INTEGRITY" "${LIFTED_PATHS[@]}" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 with GIT_DIR inherited from a hook"
+echo ""
+
 # --- TS2: SHA-mismatch fixture (mocked NOTICE) → exit 1 ---
 # Build a fixture NOTICE with deliberately-wrong blob-sha for fields.md, then
 # point the integrity script at it via NOTICE_FILE override. Expect exit 1

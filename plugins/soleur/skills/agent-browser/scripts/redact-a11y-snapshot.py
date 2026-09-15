@@ -32,6 +32,13 @@ MEASURED BEHAVIOUR THIS FILTER IS BUILT AGAINST
     the line with SGR escapes, both outside the bullet every regex anchors on.
   * A multi-line value (a textarea holding a PEM block) emits its 2nd..Nth
     lines raw at column 0, so suppression cannot key on indent alone.
+  * Playwright's YAML serialiser wraps the WHOLE key in single quotes when the
+    accessible name contains ` #`, `: `, `{`, `}`, a backtick or a control
+    character (`- 'textbox "API Key #1" [ref=e2]': value`, `''` escaping an
+    apostrophe). Every regex below anchors on `- role`, so the quoted key is
+    unwrapped before matching and re-quoted on output -- measured against the
+    real @playwright/mcp@0.0.78 server during the #7980 review, where a field
+    labelled "API Key #1" leaked in clear.
 
 STATED BYPASSES (P5's explicit non-coverage -- do not read this filter as
 closing them):
@@ -41,8 +48,9 @@ closing them):
   * a credential rendered outside a text-input role (a status region, a
     validation message, a `<pre>` block);
   * a value split across segmented single-character inputs;
-  * every node on the Playwright-MCP runtime path, which this filter can only
-    reach if a human pipes a saved snapshot through it.
+  * every node on a Playwright-MCP registration NOT routed through
+    `playwright-mcp-redact-proxy.py` (the sibling transport proxy, #7980), which
+    this filter can only reach if a human pipes a saved snapshot through it.
 
 FAIL-CLOSED CONTRACT (ADR-095 shape): on refusal, exit 2 with stdout EMPTY and
 a reason on stderr that never quotes the offending input.
@@ -55,6 +63,16 @@ import re
 import sys
 
 REDACTED = "<redacted>"
+
+# CONSUMER CONTRACT (#7980). `playwright-mcp-redact-proxy.py` loads this file by
+# its sibling BASENAME (`REDACTOR_BASENAME` there -- renaming this file is a proxy
+# edit too) with `importlib.util.spec_from_file_location` and binds exactly these
+# four names at startup -- ALL FOUR, so a refactor that renames one fails loud
+# at the proxy's exit 2 instead of as a per-result withhold that reads like an
+# outage. The contract is declared and tested HERE, where it is provided
+# (redact-a11y-snapshot.test.sh carries the import row); the proxy defines no
+# predicate of its own -- this module is the one predicate for both surfaces.
+__all__ = ["redact_text", "looks_like_a11y_tree", "MAX_INPUT_BYTES", "REDACTED"]
 
 # 4 MiB. A real snapshot is kilobytes; anything at this size is not a snapshot,
 # and refusing is cheaper than trying to redact it correctly.
@@ -165,6 +183,37 @@ QUOTED_CHILD_RE = re.compile(
 
 INDENT_RE = re.compile(r"^(\s*)")
 
+# A YAML single-quoted KEY, e.g. `- 'textbox "Token: prod" [ref=e3]': value`.
+QUOTED_KEY_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<bullet>[-+])\s+'(?P<key>(?:[^']|'')*)'(?P<tail>(?::.*)?)$"
+)
+
+
+def _unquote_key(line: str) -> tuple[str, str | None]:
+    """Return (line to MATCH against, the raw quoted key or None).
+
+    The matched form carries the unescaped key so NODE_RE / QUOTED_CHILD_RE and
+    the name predicate see the name Playwright rendered; the raw key is kept so
+    a redacted line is re-emitted with the quoting it arrived with.
+    """
+    quoted = QUOTED_KEY_RE.match(line)
+    if not quoted:
+        return line, None
+    key = quoted.group("key")
+    unescaped = key.replace("''", "'")
+    return f"{quoted.group('indent')}{quoted.group('bullet')} {unescaped}{quoted.group('tail')}", key
+
+
+def _render_redacted_node(node: "re.Match[str]", quoted_key: str | None) -> str:
+    """Render a credential node with its VALUE replaced, keeping name and quoting."""
+    if quoted_key is not None:
+        return f"{node.group('indent')}{node.group('bullet')} '{quoted_key}'{node.group('sep')}{REDACTED}"
+    return (
+        f"{node.group('indent')}{node.group('bullet')} {node.group('role')}"
+        f"{_fmt_name(node.group('name'))}{node.group('attrs') or ''}"
+        f"{node.group('sep')}{REDACTED}"
+    )
+
 # Any tree bullet, used to tell a NODE line from a value CONTINUATION line.
 BULLET_RE = re.compile(r"^\s*[-+]\s")
 
@@ -242,7 +291,8 @@ def redact_text(text: str) -> str:
                 # line above already rendered `<redacted>` in its place.
                 continue
 
-        node = NODE_RE.match(line)
+        match_line, quoted_key = _unquote_key(line)
+        node = NODE_RE.match(match_line)
         # An UNNAMED text-input node carrying a value is redacted on the
         # fail-safe side. We cannot decide it by name -- there is no name -- and
         # an unlabeled readonly box is the commonest shape of a
@@ -259,11 +309,7 @@ def redact_text(text: str) -> str:
         if node and node.group("role") in TEXT_INPUT_ROLES and (
             unnamed_input or _is_credential_name(node.group("name"))
         ):
-            emit(
-                f"{node.group('indent')}{node.group('bullet')} {node.group('role')}"
-                f"{_fmt_name(node.group('name'))}{node.group('attrs') or ''}"
-                f"{node.group('sep')}{REDACTED}"
-            )
+            emit(_render_redacted_node(node, quoted_key))
             suppress_indent = indent
             continue
 
@@ -274,17 +320,13 @@ def redact_text(text: str) -> str:
             # had its NAME redacted and its VALUE preserved. That is the exact
             # inversion of the point: it destroyed the signal and kept the
             # secret.
-            inner = NODE_RE.match(line)
+            inner = NODE_RE.match(match_line)
             if inner:
                 # A node with its own `: value` tail -- redact the VALUE, keep
                 # the name, exactly as for the parent.
-                emit(
-                    f"{inner.group('indent')}{inner.group('bullet')} {inner.group('role')}"
-                    f"{_fmt_name(inner.group('name'))}{inner.group('attrs') or ''}"
-                    f"{inner.group('sep')}{REDACTED}"
-                )
+                emit(_render_redacted_node(inner, quoted_key))
                 continue
-            child = QUOTED_CHILD_RE.match(line)
+            child = QUOTED_CHILD_RE.match(match_line)
             if child and child.group("role") in VALUE_CARRYING_CHILD_ROLES:
                 # The measured `-d N` / no-flag duplicate: the value repeated as
                 # a StaticText child. Redact it.
@@ -304,7 +346,7 @@ def redact_text(text: str) -> str:
     return "\n".join(out)
 
 
-def _looks_like_a11y_tree(value: str) -> bool:
+def looks_like_a11y_tree(value: str) -> bool:
     """True when a JSON string value carries an accessibility tree.
 
     Keying on the field NAME was the defect: `snapshot --json` puts the tree
@@ -319,6 +361,7 @@ def _looks_like_a11y_tree(value: str) -> bool:
         mark = DIFF_MARKER_RE.match(line)
         if mark:
             line = line[mark.end():]
+        line, _quoted = _unquote_key(line)
         if NODE_RE.match(line) or QUOTED_CHILD_RE.match(line):
             return True
     return False
@@ -329,7 +372,7 @@ def _redact_json_in_place(node: object) -> object:
     if isinstance(node, dict):
         return {
             k: (redact_text(v)
-                if isinstance(v, str) and (k == "snapshot" or _looks_like_a11y_tree(v))
+                if isinstance(v, str) and (k == "snapshot" or looks_like_a11y_tree(v))
                 else _redact_json_in_place(v))
             for k, v in node.items()
         }

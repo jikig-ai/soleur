@@ -47,7 +47,16 @@ done
 set -- "${ARGS[@]}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+# Resolve the root with every inherited GIT_* variable stripped (by prefix, not a
+# name list). A pre-commit hook in a worktree inherits GIT_DIR, and with GIT_DIR
+# set and no GIT_WORK_TREE, `--show-toplevel` answers the -C directory itself, so
+# REPO_ROOT became this scripts dir and every staged file read as "missing from
+# working tree" (#8150, measured on a merge that staged legal-generate templates).
+_git_env_unset=()
+while IFS='=' read -r _name _; do
+  [[ "$_name" == GIT_* ]] && _git_env_unset+=(-u "$_name")
+done < <(env)
+REPO_ROOT="$(env "${_git_env_unset[@]}" git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PARSER="$SCRIPT_DIR/notice-frontmatter.sh"
 # SKILL_PREFIX + NOTICE_FILE env overrides parameterize the script for a
 # second vendored bundle (ADR-095 shared-engine precedent: the scripts stay

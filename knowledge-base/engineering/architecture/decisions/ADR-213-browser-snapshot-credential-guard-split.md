@@ -78,6 +78,11 @@ snapshotting a credential page safe, and the module header enumerates the
 bypasses: a localised accessible name, a credential outside a text-input role, a
 value split across segmented inputs, and the whole Playwright-MCP runtime path.
 
+> **Superseded 2026-09-14 (#7980):** the module header no longer lists the whole
+> Playwright-MCP runtime path as a bypass — only a registration NOT routed through
+> `playwright-mcp-redact-proxy.py`. See the #7980 addendum and its review-round
+> amendment below.
+
 ### 2. A PreToolUse interceptor — the control that does not depend on memory
 
 [`browser-snapshot-credential-guard.sh`](../../../../plugins/soleur/hooks/browser-snapshot-credential-guard.sh)
@@ -119,6 +124,8 @@ is stated plainly because an unstated gap is the failure mode, not the gap itsel
 On the MCP path the walker gates what the corpus *instructs* and never what an
 agent *does*; the `.mcp.json` stdio proxy that would close it is deferred.
 
+[Superseded 2026-09-14 — see the #7980 addendum below; the proxy is now the fourth control on the wrapped registration.]
+
 `@playwright/mcp`'s own `--secrets` option does not close it either: it masks
 values named in advance, its README calls that "a convenience and not a security
 feature", and it cannot reach a password the agent never supplied — which is
@@ -152,6 +159,14 @@ on one enumerated sink, not a substitute for the carried refusal".
 | A PostToolUse hook that redacts snapshot output | P5, P7 | Structurally impossible: PostToolUse runs after the tool's write and cannot rewrite tool output (`.claude/hooks/README.md` §PostToolUse hooks). |
 | A structural `type=password` predicate | P5 | Measured unimplementable — no surface serializes `type`. |
 | Prose guidance in the browser skills alone | P7 | Fails this plan's own test: it holds only when the agent remembers, and the operator it protects cannot audit an accessibility tree. |
+
+> **Corrected 2026-09-14 (#7980 review round):** the PostToolUse row's "cannot
+> rewrite tool output" is false for the transcript sink on current Claude Code —
+> the installed 2.1.270 PostToolUse output schema carries `updatedToolOutput`
+> ("Replaces the tool output before it is sent to the model") and
+> `updatedMCPToolOutput`. It stays true that such a hook runs AFTER the tool's
+> disk write. The earliest Claude Code version carrying the field was not
+> measured. See the review-round amendment below for what this changes.
 
 ## Addendum — 2026-09-09, post-review
 
@@ -250,3 +265,244 @@ rather than counted as catches).
 fixtures must come from the surface, not from the author. Prefer capturing real
 output once and fixturing that over composing what the output "obviously" looks
 like — the composed shape is always the one that passes.
+
+## Addendum — 2026-09-14 (#7980): the Playwright-MCP residual is closed by a transport proxy
+
+The §Consequences paragraph above records P7 as NOT achieved on the
+Playwright-MCP runtime path and names the `.mcp.json` stdio proxy as the deferred
+closer. That proxy has shipped:
+[`playwright-mcp-redact-proxy.py`](../../../../plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py),
+a single-file, stdlib-only Python 3 JSON-RPC relay placed between Claude Code's
+stdio client and `npx @playwright/mcp@0.0.78`. It is the **fourth control** on
+the registration this repository controls, and it reuses the first: it loads
+`redact-a11y-snapshot.py` by path and calls the same `redact_text` the redactor's
+CLI calls, so there is still one predicate. Status stays `accepted` and no new
+ordinal is claimed, because the decision is the same decision — same predicate,
+same three prior controls — with one more reach.
+
+Every measured fact below was captured by the lead on 2026-09-14 against the real
+`@playwright/mcp@0.0.78` over raw stdio via the committed driver
+`plugins/soleur/skills/agent-browser/test/fixtures/capture-playwright-mcp-fixtures.py`;
+the captured messages are the fixtures under
+`plugins/soleur/skills/agent-browser/test/fixtures/playwright-mcp-0.0.78/`, and
+the plan-time captures are in
+[the plan-time probe record](../../../project/specs/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/plan-time-probe-record.md).
+Row numbers below are that record's. This is the round-3 lesson applied: the
+fixtures came from the surface, not from the author.
+
+### The three design questions, resolved
+
+**Q1 — wrap the whole server or only the snapshot tool?** Resolved: the whole
+server, by SHAPE. The predicate runs over the text of every `tools/call` result
+with no tool-name allowlist; `redact_text` is inert on prose (row 5), so the cost
+is one regex pass per response.
+
+| Alternative | Why rejected |
+|---|---|
+| Tool-name allowlist (`browser_snapshot` only) | A name is a standing bet on a name and a version; the redactor already paid for that bet once (`data.snapshot` vs `data.diff`, round-3 row 2). The bet was also already wrong at deepen: `browser_find` (row 14) inlines matched tree lines under `### Result`, bypassing `--snapshot-mode` — a second inline path. Shape-based covers both at no extra cost. |
+| Rewrite or delete the `page-*.yml` the server writes | Dissolved by `--snapshot-mode none` (rows 6/11): action tools write no tree file. A contained `os.remove` in the drift arm was drafted and **cut at plan review** (DHH, code-simplicity and spec-flow all fired): a relay does not delete; the path is server-emitted text; the file cannot be un-leaked once written; and the cwd-relative resolution was wrong for the dogfood `.mcp.json`, which passes no `--output-dir`. The drift arm withholds the result and names only the enclosing directory. |
+| Strip `filename:` and forward as a bare call | The refusal IS the structural signal the prose now relies on (see the S2 note below): a refused `filename` means "wrapped". Stripping would make a wrapped and an unwrapped registration indistinguishable to the agent. Kept, against DHH. |
+| Honour `filename:` by redacting inline and writing the file ourselves | Adds path validation and file writing to a guard for a use no skill has today; the refusal is five lines and teaches. |
+| Annotate `initialize.instructions` as a second pre-call signal | **Cut at plan review**: the `tools/list` description marker is the one pre-call signal and the `filename` refusal is the structural one; a second site is a second vocabulary to keep in sync for no property gain. |
+
+**Q2 — fail open or fail closed?** Resolved: fail closed, in three arms, loud in
+each, with no kill switch.
+
+| Arm | Behaviour | Alternative rejected |
+|---|---|---|
+| (i) startup | If the redactor cannot be loaded, or its self-test does not redact a sentinel row, or the wrapped argv / config / environment carries a raw sink (`--save-session`, `saveSession`, `DEBUG` matching `*` or `pw:mcp*`, `DEBUG_FILE`), the proxy prints `playwright-mcp-redact-proxy: refusing to start: <reason>` to stderr and exits 2 before spawning the server. Claude Code persists that stderr in `mcp-logs-playwright/*.jsonl` (row 9) and `/mcp` shows the server down. The reason names the option or variable, never its value. | Silently stripping the offending option — a kill-switch class: the server would run with a sink the operator cannot see. |
+| (ii) per result | Any exception, a text block over `MAX_INPUT_BYTES`, a link-shaped (`- [Snapshot](`) result, an unrecognised result shape, or a JSON-RPC `error` carrying `data` replaces the result with an `isError: true` text result built by one function (`error_result`) that names the tool, states why, and never quotes input. `error.data` is two-way — **cut from three-way at plan review**: no `data` forwards raw, any `data` withholds. A response for an unknown id is DROPPED, not forwarded raw (forwarding it was a fail-open the review caught). A list-shaped server line answers every pending id it contains with `error_result` — the standalone list arm was **folded into classification at plan review**. | Forward on doubt — the exact fail-open the issue forbids. |
+| (iii) transport | A dead child ends the proxy with the child's exit code (a signal-killed child clamps to 128+n); a closed stdin closes the child's stdin, SIGTERMs the process group, and SIGKILLs after a 5 s grace. | Two pump threads with locks — **cut at plan review**: a single `selectors` loop needs no stdout lock, no map lock and no daemon-thread exit dance. |
+| no kill switch | One's own `.mcp.json` is the off switch. | An env-var bypass like the hook's — a silent fail-open on a control whose whole point is not depending on memory. |
+
+**Q3 — in-process or subprocess?** Resolved: in-process. The proxy loads
+`redact-a11y-snapshot.py` with `importlib.util.spec_from_file_location` and binds
+four names at startup — `redact_text`, `looks_like_a11y_tree`, `MAX_INPUT_BYTES`,
+`REDACTED` — which the redactor now declares as its consumer contract
+(`__all__`). Binding all four at startup makes a provider refactor that renames
+one fail loud at exit 2, rather than as a per-result `AttributeError` that arm
+(ii) would "catch" as a withhold of every result — fail-closed but
+indistinguishable from an outage.
+
+| Alternative | Why rejected |
+|---|---|
+| Shell out to the redactor CLI per result | Measured, row 4: the CLI's `main()` JSON-envelope arm refuses a `browser_evaluate` object result at exit 2 (`refusing to emit: input looks like JSON but does not parse`). That arm is `agent-browser --json` plumbing, not the predicate. Whole-server + CLI would over-refuse every legitimate object result; snapshot-only + CLI needs the allowlist Q1 rejects. |
+| Rename the CLI to an importable name, or extract a `_lib.py` | The filename is the anchor in the hook (`REDACTOR_ANCHOR`), the lint (`REDACTOR_ANCHOR_RE`), `EXPECTED_GATE_REFS`, this ADR, the register and eight SKILL.md prescriptions — a sweep with no property gain and a 61-row suite to re-anchor. The contract is declared on the provider instead. |
+| A second predicate inside the proxy | Refused structurally: an AST walk over the proxy finds no `re.*` call, no `def redact_text`, exactly one `spec_from_file_location`, and no string literal the redactor's own `_is_credential_name` accepts; parity is byte-equal against the CLI on every tree-carrying fixture. |
+
+### The measured rows that decided them
+
+| Row | Measured on `@playwright/mcp@0.0.78` | What it decided |
+|---|---|---|
+| 4 | The redactor CLI refuses a `browser_evaluate` object result at exit 2. | Q3: in-process `redact_text`, not subprocess-of-CLI. |
+| 6 / 11 | With a `--config` file pinning `snapshot.mode: full` AND `--snapshot-mode none` appended, `browser_navigate` carries no `### Snapshot` section, zero `page-*.yml` are written, and a bare `browser_snapshot` is still inline. The CLI flag wins over the config file. | Q1: the action-tool disk sink is closed by appending the flag, not by deleting files; the explicit-snapshot path stays inline and is redacted. |
+| 12 | Every stdout message is one `\n`-terminated JSON object; no `Content-Length` header anywhere. | The pump splits raw bytes on `\n` only — measured on the pinned server, not assumed from the spec. |
+| 13 | `arguments._meta.json: true` returns the tree as ONE JSON-escaped string (2 newlines in the whole text, sentinel present); `_meta.raw` returns the bare tree. | The line-anchored predicate cannot see an escaped tree, so any `tools/call` whose `params.arguments` carries `_meta` is refused (the protocol-level `params._meta` is not). |
+| 14 | `browser_find` inlines matched tree lines carrying the sentinel under `### Result`, independent of `--snapshot-mode`. | Q1: two inline paths, not one — the reason the predicate runs by shape on every result. |
+| 16 | `browser_close` result keys on the wire are `['content']` only (`isClose` is deleted before sending); the server's `roots/list` request id is `0`, an independent counter. | The result-shape whitelist keeps `isClose` harmlessly; a server-to-client request can collide with a pending client id, so classification requires `result` or `error` present and never touches the pending map for a request. |
+| fleet, 0.0.75 | From a scratch cwd with no `--output-dir`, `browser_navigate` writes `.playwright-mcp/page-*.yml` under cwd carrying the sentinel (2 occurrences) and links it; `--snapshot-mode none` is accepted and stops the write. | Reach (d): the Inngest fleet overlay gets the flag directly. |
+
+### Reach, per surface
+
+- **(a) This repository's `.mcp.json`** — **declared** there and asserted by an
+  executable suite row (the row runs the wrapper under a scratch `HOME` with an
+  `npx` shim and reads the recorded argv; it proves the declaration, not a loaded
+  session — `.mcp.json` loads on restart only).
+- **(b) A customer's own registration** — the plugin SHIPS the proxy but registers
+  NO Playwright server (`plugin.json` is unchanged), so a customer is wrapped only
+  by their own configuration; tracked at #8156. The skills prescribe the
+  `filename:` form first and treat a refusal of `filename` as the structural
+  signal that the registration is wrapped.
+- **(c) The hosted agent-runner** registers no Playwright server.
+- **(d) The Inngest fleet's per-fire overlay** (`cron-ux-audit.ts`,
+  `@playwright/mcp@0.0.75`) is NOT wrapped — it gets `--snapshot-mode none`
+  appended directly, measured on the 0.0.75 copy (register PA-31 §(g)).
+
+Reach statements stay in the "on a registration routed through the proxy" form;
+none is a Jikigai safety undertaking (#7981 stays `Ref` only).
+
+### What remains open, restated rather than implied
+
+- `browser_take_screenshot` returns an `image` block; the measurement above that
+  a screenshot renders a readonly credential panel in clear is unchanged.
+- `browser_network_request` returns request headers (`Cookie`, `Authorization`)
+  and, with `part: request-body`, the submitted form body; `browser_evaluate` and
+  `browser_run_code_unsafe` return whatever they are asked for, including a
+  `filename` write of raw values to disk behind the proxy. All three accept
+  `filename`, none is tree-shaped, and `--secrets` remains the only control there.
+- Non-tree disk sinks the server writes without agent action: `console-*.log`
+  under the output dir at or above `console.level` regardless of snapshot mode,
+  the screenshot PNG (always written), and downloads as `download-*.bin`. The
+  opt-in `devtools` capability adds `browser_start_tracing` (trace snapshots carry
+  input values) and `pdf` renders the panel in clear — row 15 asserts the default
+  `tools/list` (24 tools) carries neither `browser_start_tracing` nor
+  `browser_pdf_save`.
+- Prose the predicate is inert on passes in clear: `- Page URL:` (emitted on every
+  navigate even under `--snapshot-mode none`; a magic link or OAuth redirect
+  carries `?token=`, `code=` or `#access_token=`), `- Page Title:`,
+  `### Modal state` dialog messages, and `/url:` children of links.
+- The predicate's own stated bypasses — a localised accessible name, a credential
+  outside a text-input role, a value split across segmented inputs — carry over
+  unchanged. Same predicate, same ceiling.
+- When the drift arm withholds a `- [Snapshot](` link, the raw file the server
+  already wrote persists on disk. The proxy does not delete it; the reason names
+  the enclosing directory only. Under the pinned 0.0.78 with the flag and the
+  refusals in place no code path produces that link — the arm exists for the next
+  bump.
+- The `tools/list` marker and the per-result trailer
+  `[Soleur: redacted in flight by playwright-mcp-redact-proxy]` are a pre-call
+  hint and a post-hoc trace respectively; page content can forge the trailer, so
+  neither is a verification.
+
+### The corpus lint's S2 rule changes class
+
+Control 3's S2 disclosure was a statically true sentence ("no runtime guard on
+the Playwright-MCP path"). Its truth now depends on the registration, which the
+walker cannot see and only the runtime can settle. The prescription therefore
+changes class, from a static disclosure to a **structural** one: use the
+`filename:` + redactor + shred form first (safe on an unwrapped registration,
+refused on a wrapped one); if the server refuses `filename`, the registration is
+wrapped by `playwright-mcp-redact-proxy.py` and the bare `browser_snapshot` call
+is redacted in flight — call it bare for the rest of the session. The refusal is
+the only signal; never the trailer or any page text, which can be forged. The old
+sentence alone now fails S2; `MCP_GAP_MARKER_RE` anchors on the new claim, and
+the lint's failure message quotes the canonical sentence so a copy-edit in one
+file shows the phrase to restore.
+
+> **Superseded 2026-09-14 (#7980 review round):** "if the server refuses
+> `filename` … call it bare for the rest of the session" was unsafe as written —
+> the unwrapped server refuses an out-of-root filename with its own `File access
+> denied`, and a session can hold a second, unwrapped Playwright server. The
+> signal is now the proxy-unique refusal text on that one server, and the marker
+> is the whole canonical sentence. See the review-round amendment below.
+
+### Enumerative closure, bound to the pin
+
+The disk-sink closure covers the TREE sinks only and is an enumeration, not a
+property: `--snapshot-mode none` (action tools), the `filename` refusal (explicit
+snapshot to a named file), the `_meta` refusal (the `json` / `raw` / `cwd`
+argument hooks), and the `--save-session` / `saveSession` / `DEBUG` /
+`DEBUG_FILE` refusals (the `session.md` response log and the
+`pw:mcp:server:response` debug stream, both of which carry every unredacted
+result). Every item is a dated observation of `@playwright/mcp@0.0.78`
+(`playwright-core` 1.62.0-alpha), not an undertaking about that tool. The
+complement is the drift arm (any `- [Snapshot](` link that reappears is withheld)
+and the Phase 0 re-capture: the suite derives its fixture directory from the
+version pinned in `.mcp.json`, so a bump that forgets to re-run the capture
+driver reddens rather than testing stale captures. The next bump re-enumerates
+this list.
+
+> **Superseded 2026-09-14 (#7980 review round):** the `DEBUG` refusal above was a
+> literal match (`*`, `pw:mcp*`) where the `debug` package treats `*` as a
+> wildcard, and the enumeration missed INI configs, `saveVideo`, `--caps`,
+> `--output-mode file` and the `--port` / `--host` HTTP transport. The drift arm no
+> longer withholds. See the review-round amendment below.
+
+## Amendment — 2026-09-14 (#7980), review round
+
+A ten-seat review of the shipped proxy found that the assembly was narrower than
+the property the addendum above names. Four of its findings were live on the real
+`@playwright/mcp@0.0.78` server, and each is closed in this change with a suite
+row and a mutant that proves the row can go red.
+
+**Closed, with the measurement that found each.**
+
+| Finding | Measured | Now |
+|---|---|---|
+| A credential label containing a space-hash, a colon-space, `{`, `}` or a backtick leaked in clear, with the trailer appended | Live: `- 'textbox "API Key #1" [ref=e2]': <value>` — Playwright's `yamlEscapeKeyIfNeeded` single-quotes the whole key, and every predicate anchored on `- role` | The redactor unwraps a quoted key before matching and re-quotes on output (its suite carries the key strings the server's own function renders) |
+| `DEBUG=pw:*`, `pw:api *`, `*:response` started the proxy | Node, against the pinned bundle: `debug('pw:mcp:server:response').enabled` is true under each | Refused: split on whitespace and commas, skip exclusions, `*` as a wildcard anywhere — any pattern that can enable a `pw:` logger |
+| An INI config setting `saveSession = true` started the proxy | `loadConfig` falls back to `configFromIniFile` when JSON parsing fails | A named config the proxy cannot parse as a JSON object, or that does not exist, refuses to start |
+| "Refuses `filename`" was forgeable in both directions | `checkFile` throws `File access denied: <path> is outside allowed roots` as `### Error` + `isError`, the proxy's own shape | The refusal text begins `refused by playwright-mcp-redact-proxy:`; S2's canonical sentence keys on it, scopes "call it bare" to that one server, and the lint's marker is now the whole sentence |
+
+**Closed, not reachable on 0.0.78 but on the next version's likely path.**
+
+- Server requests other than `roots/list`, and notifications other than
+  `notifications/tools/list_changed` and `notifications/cancelled`, are dropped;
+  0.0.78 emits none, and a `sampling/createMessage` carrying a tree would otherwise
+  have reached the client raw. The three relayed kinds are rebuilt from method and
+  ids alone, and a `requestId` or request id carrying a tree row or a redactable
+  value is dropped, so no `reason` or `_meta` field carries page text past the
+  proxy (raised by the CLO re-attestation; suite rows 54/55).
+- A JSON-escaped tree is withheld even when it is a single row with no newline
+  (`ariaSnapshot()` on one locator, returned through `browser_evaluate` or
+  `browser_run_code`): `escaped_tree_in` no longer requires a newline before asking
+  the tree predicate (raised by the ship-gate advisor consult; suite row 56). The
+  cost is that a value tool returning one YAML-shaped line is withheld, fail-closed.
+- A JSON-RPC error is forwarded only as `{code, message}` with prose; an error that
+  also carries `result`, is not an object, carries `data`, or whose message is
+  tree-shaped is withheld.
+- A JSON-escaped tree inside a result (`browser_run_code_unsafe` returning
+  `ariaSnapshot()`, a pretty-printed `browser_evaluate` object) is withheld — the
+  same shape the `_meta` refusal exists for. The addendum's residual framing of
+  these tools as "not tree-shaped" was false.
+- Startup also refuses `saveVideo`, a capability other than `vision` (`--caps`,
+  `PLAYWRIGHT_MCP_CAPS`, config `capabilities`), `--port` / `--host` /
+  `PLAYWRIGHT_MCP_PORT` / `PLAYWRIGHT_MCP_HOST` / config `server.*` (an HTTP
+  transport that serves results around the stdio relay), and `--output-mode file`.
+- A request reusing a pending id is refused, and a content-bearing result is
+  rewritten whatever request it answers.
+- Teardown signals the child's whole process group even when the direct child has
+  already exited, so a grandchild that outlives `npx` is still killed.
+- An unparsable client line is dropped, never forwarded unvetted (an integer past
+  Python's digit limit parsed in Node and not in the proxy).
+
+**Changed rather than hardened: the drift arm.** A `- [Snapshot](…)` line used to
+withhold the whole result. A page controls dialog text, and 0.0.78 inserts dialog
+messages unescaped, so a page could withhold every result and hide the `### Modal
+state` section an agent needs to recover. The arm now replaces only a link line
+inside `### Snapshot` with a do-not-read notice and delivers the rest; the file the
+server wrote persists either way.
+
+**A premise corrected, with a consequence for #8156.** The Alternatives table's
+"PostToolUse cannot rewrite tool output" is false for the transcript sink on Claude
+Code 2.1.270 (`updatedMCPToolOutput`). A plugin-shipped PostToolUse hook on
+`mcp__playwright__.*` could therefore reach a customer registration without an
+`.mcp.json` edit, for the transcript only — the disk-write half of that row still
+holds. That is a design input for #8156, not a change to this decision: the proxy
+also closes the disk sinks, which a PostToolUse hook cannot.
+
+**The filename coupling, stated where a renamer looks.** The proxy loads the
+redactor by the sibling basename `REDACTOR_BASENAME = "redact-a11y-snapshot.py"`,
+so a rename must update the proxy alongside the hook, the lint,
+`EXPECTED_GATE_REFS`, the register and `agent-browser/SKILL.md`; the proxy suite's
+`nosib` and `v-rename` rows red on a missed one.
