@@ -3212,6 +3212,7 @@
 - [blanket renumber rewrote other work and a count certified it](project/learnings/workflow-issues/2026-08-03-blanket-renumber-rewrote-other-work-and-a-count-certified-it.md)
 - [meta harness is not a third harness union member](project/learnings/workflow-issues/2026-09-11-meta-harness-is-not-a-third-harness-union-member.md)
 - [the runner i watched was its own heartbeat subshell and ci tested a tree i had never built](project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md)
+- [I stopped a starved ship battery at 61 minutes, and my post-merge monitor read a fetch error as zero runs](project/learnings/workflow-issues/2026-09-15-i-stopped-the-starved-battery-and-my-monitor-read-a-fetch-error-as-zero-runs.md)
 - [Contradictory One-Shot Handoff Instructions Stop Pipeline](project/learnings/workflow-issues/contradictory-oneshot-handoff-stops-pipeline-20260412.md)
 - [CPO Agent Scope Boundaries for Roadmapping](project/learnings/workflow-issues/cpo-scope-boundaries-dogfood-20260324.md)
 - [CPO Domain Leader Operates on Stale Milestone Data](project/learnings/workflow-issues/cpo-stale-milestone-data-api-first-20260410.md)
