@@ -99,7 +99,9 @@ describe("Codex App Server event translator", () => {
         payload: { type: "approval", requestId: "item-5", tool: "command", description: "git status" },
       },
     ]);
-    expect(translateCodexPersistedItem({ type: "commandExecution", id: "item-6", command: "git status", status: "completed" })).toEqual([]);
+    expect(translateCodexPersistedItem({ type: "commandExecution", id: "item-6", command: "git status", status: "completed" })).toEqual([
+      { sourceId: "command:item-6:status", payload: { type: "progress", message: "Command completed" } },
+    ]);
   });
 
   it("translates persisted plan text into bounded progress", () => {
@@ -130,6 +132,32 @@ describe("Codex App Server event translator", () => {
       },
     ]);
     expect(translateCodexPersistedItem({ type: "fileChange", id: "change-2", changes: "malformed" })).toEqual([]);
+  });
+
+  it("replays command outcomes as status metadata without stdout or stderr", () => {
+    expect(translateCodexPersistedItem({
+      type: "commandExecution",
+      id: "command-1",
+      status: "completed",
+      command: "cat secret.txt",
+      aggregatedOutput: "private output",
+    })).toEqual([
+      {
+        sourceId: "command:command-1:status",
+        payload: { type: "progress", message: "Command completed" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({
+      type: "commandExecution",
+      id: "command-2",
+      status: "failed",
+      exitCode: 1,
+    })).toEqual([
+      {
+        sourceId: "command:command-2:status",
+        payload: { type: "progress", message: "Command failed" },
+      },
+    ]);
   });
 
   it("translates persisted turn status and usage with bounded identities", () => {

@@ -93,6 +93,8 @@ their provider metadata and raw plan structure remain outside the contract.
 Persisted `fileChange` items are reduced to a count-only progress event; paths,
 diffs, and provider change metadata remain replay metadata until a dedicated
 artifact store and egress policy are qualified.
+Persisted command executions emit only completed/failed status progress;
+commands and aggregated output remain excluded from replay payloads.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or

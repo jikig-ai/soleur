@@ -196,6 +196,16 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
       : [];
   }
 
+  if (type === "commandExecution" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
+    return [{
+      sourceId: `command:${itemId}:status`,
+      payload: {
+        type: "progress",
+        message: statusType(record?.status) === "completed" ? "Command completed" : "Command failed",
+      },
+    }];
+  }
+
   if (type === "commandExecution" && APPROVAL_STATUSES.has(statusType(record?.status) ?? "")) {
     const command = nonEmptyString(record?.command);
     return command
