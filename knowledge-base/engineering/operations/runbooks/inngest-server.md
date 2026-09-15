@@ -1267,8 +1267,9 @@ ADR-100, amendment 2026-09-14.
    The next per-merge apply keeps a fresh `inngest-cutover` env secret available for a future
    cutover; the required-reviewer gate means it cannot be used without an approved dispatch.
 
-4. **App-repoint (2.4).** Merge the `ci-deploy.sh` `INNGEST_BASE_URL` → `http://10.0.1.40:8288`
-   change (both the canary and prod sites) and redeploy the web app so the functions re-sync
+4. **App-repoint (2.4).** Merge the `INNGEST_BASE_URL` → `http://10.0.1.40:8288` change — all four
+   places: `ci-deploy.sh` canary + prod sites, `cloud-init.yml`, and the watchdog's
+   `INNGEST_HOST_FALLBACK` (parity-pinned; #8191) — and redeploy the web app so the functions re-sync
    (register) onto the dedicated host. `op=rearm`/`op=verify` precondition-check that this
    landed (registry-non-empty).
 
@@ -1568,8 +1569,14 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
 
    There is **no separate operator Doppler write** — the dedicated-host stop is now folded into
    this single dispatch.
-2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
-   (back to the loopback `host.docker.internal:8288`) and redeploy.
+2. **Repoint the app back to the co-located scheduler** — `git revert` the 2.4 app-repoint PR
+   (#8191) and redeploy. The repoint spans FOUR places, so never hand-edit one: `ci-deploy.sh`
+   (canary + prod `docker run`), `cloud-init.yml` (a freshly born web host's first run) and the
+   watchdog's `INNGEST_HOST_FALLBACK` (+ its parity test, which reds on a partial revert). The
+   target is the Docker host-gateway `http://host.docker.internal:8288`, not a loopback address.
+   **Pre-stage the revert PR green BEFORE dispatching step 1**: `op=rollback` stops the dedicated
+   host and re-enables web-1 in one dispatch, and until the revert deploys every app
+   `inngest.send()` is refused (`X-Soleur-Unavailable: backend-refused`).
 
 <!-- lint-infra-ignore start -->
 
