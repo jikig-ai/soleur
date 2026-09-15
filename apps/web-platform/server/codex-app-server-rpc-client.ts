@@ -1,5 +1,5 @@
 import { decodeCodexJsonlLine, encodeCodexJsonl } from "./codex-app-server-jsonl";
-import type { CodexRpcRequest } from "./codex-app-server-protocol";
+import type { CodexRpcNotification, CodexRpcRequest } from "./codex-app-server-protocol";
 
 export interface CodexRpcChannel {
   write(frame: string): Promise<void> | void;
@@ -14,6 +14,7 @@ export interface CodexRpcClientOptions {
 export interface CodexRpcClient {
   request(request: CodexRpcRequest): Promise<Record<string, unknown>>;
   respond(id: string, result: Record<string, unknown>): Promise<void>;
+  notify(notification: CodexRpcNotification): Promise<void>;
   receiveLine(line: string): void;
   receive(message: unknown): void;
   close(reason?: unknown): void;
@@ -93,6 +94,19 @@ export function createCodexRpcClient(
     }
   };
 
+  const notify = async (notification: CodexRpcNotification): Promise<void> => {
+    if (closed) throw clientError("Codex RPC channel is closed", "codex_rpc_closed");
+    if (!notification || typeof notification !== "object" || Array.isArray(notification) || typeof notification.method !== "string") {
+      throw clientError("Codex RPC notification is invalid", "codex_rpc_message_invalid");
+    }
+    const frame = encodeCodexJsonl(notification);
+    try {
+      await channel.write(frame);
+    } catch {
+      throw clientError("Codex RPC channel write failed", "codex_rpc_channel_error");
+    }
+  };
+
   const receive = (message: unknown): void => {
     const record = asRecord(message);
     if (!record) throw clientError("Codex RPC message is invalid", "codex_rpc_message_invalid");
@@ -130,6 +144,7 @@ export function createCodexRpcClient(
   return {
     request,
     respond,
+    notify,
     receiveLine: (line) => receive(decodeCodexJsonlLine(line)),
     receive,
     close,

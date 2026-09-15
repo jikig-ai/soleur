@@ -51,6 +51,8 @@ and approval requests separately, and rejects pending work on close or provider
 errors without exposing native error details.
 It also sends provider-request responses through a separate bounded path, so
 approval decisions never masquerade as new client requests.
+Handshake notifications use the same framed channel through a distinct
+notification method and never consume request IDs.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

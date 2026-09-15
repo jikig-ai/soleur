@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCodexInitializeRequest } from "@/server/codex-app-server-protocol";
+import { createCodexInitializeRequest, createCodexInitializedNotification } from "@/server/codex-app-server-protocol";
 import { createCodexRpcClient } from "@/server/codex-app-server-rpc-client";
 
 describe("Codex App Server RPC client", () => {
@@ -33,6 +33,14 @@ describe("Codex App Server RPC client", () => {
     expect(channel.write).toHaveBeenCalledWith(
       '{"jsonrpc":"2.0","id":"approval-1","result":{"decision":"accept"}}\n',
     );
+    expect(client.pendingCount()).toBe(0);
+  });
+
+  it("sends initialized notifications through the channel without a pending ID", async () => {
+    const channel = { write: vi.fn(async () => undefined) };
+    const client = createCodexRpcClient(channel);
+    await expect(client.notify(createCodexInitializedNotification())).resolves.toBeUndefined();
+    expect(channel.write).toHaveBeenCalledWith('{"jsonrpc":"2.0","method":"initialized","params":{}}\n');
     expect(client.pendingCount()).toBe(0);
   });
 
