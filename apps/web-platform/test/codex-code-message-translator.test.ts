@@ -280,6 +280,21 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "webSearch", id: "bad\nsearch" })).toEqual([]);
   });
 
+  it("replays image-view activity without filesystem paths or image content", () => {
+    expect(translateCodexPersistedItem({
+      type: "imageView",
+      id: "image-1",
+      path: "/workspace/private/customer.png",
+      content: "private pixels",
+    })).toEqual([
+      {
+        sourceId: "image-view:image-1",
+        payload: { type: "progress", message: "Image view recorded" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "imageView", id: "bad\nimage", path: "/private.png" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",

@@ -217,6 +217,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
     }];
   }
 
+  if (type === "imageView") {
+    return [{
+      sourceId: `image-view:${itemId}`,
+      payload: { type: "progress", message: "Image view recorded" },
+    }];
+  }
+
   if (type === "mcpToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `mcp:${itemId}:status`,

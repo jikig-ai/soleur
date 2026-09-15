@@ -79,7 +79,8 @@ function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent
     const reviewLifecycle = type === "enteredReviewMode" || type === "exitedReviewMode";
     const compactionLifecycle = type === "contextCompaction";
     const webSearchActivity = type === "webSearch";
-    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || webSearchActivity || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
+    const imageViewActivity = type === "imageView";
+    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || webSearchActivity || imageViewActivity || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
       throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
     }
     for (const event of translated) replay.push(createCodexReplayEvent(event));

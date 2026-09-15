@@ -111,6 +111,9 @@ and source context remain excluded from replay payloads.
 Persisted `webSearch` items emit a fixed `Web search recorded` progress message
 keyed by their bounded item identity; queries, URLs, and action details remain
 excluded from replay payloads.
+Persisted `imageView` items emit a fixed `Image view recorded` progress message
+keyed by their bounded item identity; filesystem paths and image content remain
+excluded from replay payloads.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or
