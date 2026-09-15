@@ -6,8 +6,8 @@
 #   * cryptsetup `isLuks` idempotency guard present (2nd cloud-init run is a no-op);
 #   * the LUKS passphrase is delivered via stdin (`--key-file -`) and NEVER appears
 #     as a bare argv token on any luksFormat/luksOpen line (leak via `ps`/argv);
-#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data-luks (the cutover
-#     FRESH_ROOT git-data-cutover.sh asserts);
+#   * the mapper /dev/mapper/git-data is mounted at /mnt/git-data-luks (the staging mount
+#     a future cutover repoints from — #8211);
 #   * fail-loud on an empty key — never an unencrypted fallback;
 #   * the key arrives from the Doppler-injected env (doppler run), and the passphrase
 #     literal is NOT baked into user_data (only random_password → doppler_secret).
@@ -115,7 +115,7 @@ p_printf_pipe() {
   if grep -Eq "printf[[:space:]]+'%s'[[:space:]]+\"\\\$GIT_DATA_LUKS_KEY\"[[:space:]]*\|[[:space:]]*cryptsetup" "$1"; then echo 1; else echo 0; fi
 }
 
-# Mapper mounted at the cutover FRESH_ROOT.
+# Mapper mounted at the LUKS staging mount (/mnt/git-data-luks).
 p_mapper_mount() {
   if grep -Eq 'mount[[:space:]]+/dev/mapper/git-data[[:space:]]+/mnt/git-data-luks' "$1"; then echo 1; else echo 0; fi
 }
@@ -137,55 +137,41 @@ p_tf_random() {
     && grep -Eq 'name[[:space:]]*=[[:space:]]*"GIT_DATA_LUKS_KEY"' "$1"; then echo 1; else echo 0; fi
 }
 
-# --- Cutover-script predicates (GAP-1/2/3 + DI-HIGH review) -----------------
+# --- Cutover-script predicates: the body is RETIRED (#8189; rebuilt in #8211) ---------
+# A8-A12 used to assert that git-data-cutover.sh carried the LUKS cutover body (repoint, canary,
+# prepare, trap rollback, post-drain ordering). #8189 deleted that body — its freeze and reload
+# called systemd units that do not exist, and a re-run after a repoint could rsync a store onto
+# itself — and made the script a read-only proof. These rows now assert the ABSENCE of each
+# retired piece, so a partial re-introduction outside the #8211 rebuild (which owns re-adding
+# them, with their guards) is a visible edit. The read-only proof's own guards live in
+# git-data-cutover-access.test.sh.
 
-# GAP-1: repoint_luks_mount exists AND re-points the mapper to the hardcoded path
-# (/dev/mapper/git-data mounted at /mnt/git-data) AND rewrites /etc/fstab.
-p_repoint() {
-  if grep -Eq '^repoint_luks_mount\(\)' "$1" \
-    && grep -Eq 'mount "\$LUKS_MAPPER" "\$OLD_ROOT"' "$1" \
-    && grep -Eq '/etc/fstab' "$1"; then echo 1; else echo 0; fi
+# Comment lines are dropped first: the script's header may describe what was deleted.
+_cutover_code() { sed -E 's/^[[:space:]]*#.*$//' "$1"; }
+
+# A8 retired: no repoint of the mapper onto the live path, no fstab rewrite.
+p_no_repoint() {
+  if _cutover_code "$1" | grep -Eq '^repoint_luks_[a-z_]+\(\)|mount "\$LUKS_MAPPER"|/etc/fstab'; then echo 0; else echo 1; fi
 }
 
-# GAP-1: a canary asserts /mnt/git-data's source device is the LUKS mapper, AND the
-# DL-2 wipe is gated on it (CANARY_OK).
-p_canary_gate() {
-  if grep -Eq '^canary_luks_device\(\)' "$1" \
-    && grep -Eq 'findmnt -no SOURCE "\$OLD_ROOT"' "$1" \
-    && grep -Eq 'CANARY_OK' "$1" \
-    && grep -Eq '\[ "\$CANARY_OK" != "1" \]' "$1"; then echo 1; else echo 0; fi
+# A9 retired: no canary, no DL-2 wipe step, no CANARY_OK gate.
+p_no_canary_wipe() {
+  if _cutover_code "$1" | grep -Eq '^canary_luks_[a-z_]+\(\)|^old_volume_[a-z_]+\(\)|CANARY_OK'; then echo 0; else echo 1; fi
 }
 
-# GAP-2: prepare_luks_target idempotently luksOpens+mounts, key via stdin --key-file -
-# (never argv), fail-loud on empty key.
-p_prepare_luks() {
-  local f="$1"
-  if grep -Eq '^prepare_luks_target\(\)' "$f" \
-    && grep -Eq 'cryptsetup luksOpen --key-file - "\$luks_dev"' "$f" \
-    && grep -Eq 'GIT_DATA_LUKS_KEY.*empty' "$f" \
-    && ! grep -Eq 'cryptsetup luks(Open|Format)[^|]*\$GIT_DATA_LUKS_KEY' "$f"; then echo 1; else echo 0; fi
+# A10 retired: no LUKS unlock and no passphrase anywhere in the script.
+p_no_prepare_luks() {
+  if _cutover_code "$1" | grep -Eq '^prepare_luks_target\(\)|cryptsetup|GIT_DATA_LUKS_KEY'; then echo 0; else echo 1; fi
 }
 
-# GAP-3: an EXIT trap auto-recovers (rollback on flip + release freeze), and a
-# ROLLBACK-only mode exists.
-p_trap_rollback() {
-  if grep -Eq 'trap cleanup EXIT' "$1" \
-    && grep -Eq 'FLIP_DONE" = "1" \].*rollback' "$1" \
-    && grep -Eq '\[ "\$ROLLBACK" = "1" \]' "$1"; then echo 1; else echo 0; fi
+# A11 retired: no rollback function, no ROLLBACK-only mode, no flag write.
+p_no_rollback_mode() {
+  if _cutover_code "$1" | grep -Eq '^rollback\(\)|\[ "\$ROLLBACK" = "1" \]|doppler[[:space:]]+secrets[[:space:]]+set|set_flag'; then echo 0; else echo 1; fi
 }
 
-# DI-HIGH: the delta-rsync + set-identity verify that gate the flip run AFTER the
-# drain (acquire_freeze before delta_rsync before verify before flip in main()).
-# Matches the indented call-sites (which carry trailing comments), not the col-0
-# function definitions (`name() {`).
-p_postdrain_gate() {
-  local f="$1" a d v ff
-  a="$(grep -nE '^[[:space:]]+acquire_freeze([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
-  d="$(grep -nE '^[[:space:]]+delta_rsync([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
-  v="$(grep -nE '^[[:space:]]+verify_set_identity([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
-  ff="$(grep -nE '^[[:space:]]+flip_flag_and_reload([[:space:]]|$)' "$f" | head -1 | cut -d: -f1)"
-  if [ -n "$a" ] && [ -n "$d" ] && [ -n "$v" ] && [ -n "$ff" ] \
-    && [ "$a" -lt "$d" ] && [ "$d" -lt "$v" ] && [ "$v" -lt "$ff" ]; then echo 1; else echo 0; fi
+# A12 retired: no freeze, rsync, set-identity verify or flip — called or defined.
+p_no_freeze_flip() {
+  if _cutover_code "$1" | grep -Eq '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)'; then echo 0; else echo 1; fi
 }
 
 # DI-HIGH: the pre-receive hook honours the cutover freeze sentinel (fail-closed).
@@ -675,29 +661,22 @@ assert_mutation "A6 doppler-run" p_doppler_run "$CLOUD_INIT" 's/doppler run/dopp
 assert_holds   "A7 tf-random-secret" p_tf_random "$LUKS_TF"
 assert_mutation "A7 tf-random-secret" p_tf_random "$LUKS_TF" 's/random_password/static_password/g'
 
-# A8 (GAP-1): repoint_luks_mount re-points the mapper to the hardcoded path.
-assert_holds    "A8 repoint-mount" p_repoint "$CUTOVER"
-assert_mutation "A8 repoint-mount" p_repoint "$CUTOVER" 's#mount "\$LUKS_MAPPER" "\$OLD_ROOT"#mount "\$LUKS_MAPPER" "\$FRESH_ROOT"#'
+# A8-A12: the cutover body is retired (#8189; rebuilt in #8211). Each row holds on the script and
+# flips when the retired piece is re-introduced into a copy.
+assert_holds    "A8 repoint-mount retired" p_no_repoint "$CUTOVER"
+assert_mutation "A8 repoint-mount retired" p_no_repoint "$CUTOVER" 's#^main\(\) \{$#repoint_luks_mount() { mount "$LUKS_MAPPER" "$OLD_ROOT"; }\n&#'
 
-# A9 (GAP-1): canary asserts the LUKS device AND gates the wipe on CANARY_OK.
-assert_holds    "A9 canary-gate" p_canary_gate "$CUTOVER"
-assert_mutation "A9 canary-gate" p_canary_gate "$CUTOVER" 's/CANARY_OK/CANARY_NOPE/g'
+assert_holds    "A9 canary-wipe retired" p_no_canary_wipe "$CUTOVER"
+assert_mutation "A9 canary-wipe retired" p_no_canary_wipe "$CUTOVER" 's#^main\(\) \{$#CANARY_OK=0\n&#'
 
-# A10 (GAP-2): prepare_luks_target unlocks via stdin --key-file -, key never argv.
-assert_holds    "A10 prepare-luks" p_prepare_luks "$CUTOVER"
-assert_mutation "A10 prepare-luks" p_prepare_luks "$CUTOVER" \
-  's#cryptsetup luksOpen --key-file - "\$luks_dev" git-data#cryptsetup luksOpen "\$GIT_DATA_LUKS_KEY" "\$luks_dev" git-data#'
+assert_holds    "A10 prepare-luks retired" p_no_prepare_luks "$CUTOVER"
+assert_mutation "A10 prepare-luks retired" p_no_prepare_luks "$CUTOVER" 's#^main\(\) \{$#prepare_luks_target() { cryptsetup luksOpen --key-file - /dev/sdc git-data; }\n&#'
 
-# A11 (GAP-3): EXIT-trap auto-rollback + ROLLBACK-only mode.
-assert_holds    "A11 trap-rollback" p_trap_rollback "$CUTOVER"
-assert_mutation "A11 trap-rollback" p_trap_rollback "$CUTOVER" 's/trap cleanup EXIT/trap - EXIT/'
+assert_holds    "A11 rollback-mode retired" p_no_rollback_mode "$CUTOVER"
+assert_mutation "A11 rollback-mode retired" p_no_rollback_mode "$CUTOVER" 's#^main\(\) \{$#&\n  [ "$ROLLBACK" = "1" ] \&\& exit 0#'
 
-# A12 (DI-HIGH): the flip-gating rsync+verify run AFTER the drain (main() order).
-assert_holds    "A12 postdrain-gate" p_postdrain_gate "$CUTOVER"
-# Mutation: neutralize the drain call-site so the ordered gate can no longer be
-# proven (models the pre-fix "verify races live writers" arrangement) → flips to 0.
-assert_mutation "A12 postdrain-gate" p_postdrain_gate "$CUTOVER" \
-  's/^([[:space:]]+)acquire_freeze([[:space:]])/\1XdrainX\2/'
+assert_holds    "A12 freeze-flip retired" p_no_freeze_flip "$CUTOVER"
+assert_mutation "A12 freeze-flip retired" p_no_freeze_flip "$CUTOVER" 's#^  access_gate$#&\n  acquire_freeze#'
 
 # A13 (DI-HIGH): the pre-receive hook denies receive-pack while the freeze sentinel exists.
 assert_holds    "A13 prereceive-freeze" p_prereceive_freeze "$PRERECEIVE"
@@ -961,10 +940,11 @@ p_no_shell_tracing() {
 GIT_DATA_USERDATA_MODULE="$DIR/modules/git-data-userdata"
 boot_path_files() {
   printf '%s\n' "$CLOUD_INIT"
-  # git-data-cutover.sh is NOT file()-bound into user_data (it ships via the deploy pipeline),
-  # so the derivation below cannot see it — yet it references GIT_DATA_LUKS_KEY six times and
-  # runs on the same host against the same shared log. The property A28 asserts is about the
-  # PASSPHRASE, not about user_data membership, so the quantifier has to include it explicitly.
+  # git-data-cutover.sh is NOT file()-bound into user_data, so the derivation below cannot see
+  # it. Since #8189 it references GIT_DATA_LUKS_KEY zero times (its LUKS body was deleted; A10
+  # asserts that), but it stays in the quantifier on purpose: the #8211 rebuild re-introduces a
+  # passphrase path, and A28 must cover that script from the day it does, not the day someone
+  # remembers. The property is about the PASSPHRASE, not about user_data membership.
   [ -f "$CUTOVER" ] && printf '%s\n' "$CUTOVER"
   sed -nE 's/^[[:space:]]*[a-z_]+[[:space:]]*=[[:space:]]*(replace\()?file\("\$\{path\.module\}\/([^"]+)".*/\2/p' \
     "$GIT_DATA_USERDATA_MODULE/main.tf" | sort -u | while read -r f; do

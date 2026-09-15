@@ -95,6 +95,68 @@ rc_scalar_change() {
     "$(printf '%s' "$1" | jq -R .)" "$(printf '%s' "$2" | jq -R .)"
 }
 
+# ── #8189 root-key fixtures (git-data-root-key-arm-gate.sh) ───────────────────────────
+#
+# ONE COPY for the three suites that grade that arm: test-git-data-host-replace-gate.sh,
+# test-git-data-host-birth-gate.sh and test-git-data-root-key-arm.sh. The block was copied into
+# each, and the copies are what the arm reads, so a drift between them is a drift in what "a PASS
+# plan" means per suite.
+#
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical, so do not reformat it). root_key_fixtures runs it
+# on $TMP before writing under it. A consuming suite that defines its own copy redefines the same bytes.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+# root_key_fixtures [<arm-file-to-copy-beside-TMP>]
+#   Synthesizes two ed25519 keys into $TMP (cq-test-fixtures-synthesized-only; deleted with $TMP,
+#   never committed) and sets, in the caller's shell:
+#     ROOT_KEY_PUB / OTHER_KEY_PUB     the root key and an impostor, one line each
+#     ROOT_KEY_FP / OTHER_KEY_FP       their SHA256 fingerprints
+#     GIT_DATA_ROOT_KEY_FINGERPRINT_FILE (exported)  $TMP/git-data-root-key.fingerprint, holding ROOT_KEY_FP
+#   With an arm file, copies it beside $TMP: the harness's mutation helpers source a COPY of the
+#   gate from $TMP, and the gate sources the arm from its own directory.
+#   A FATAL here exits the suite (rc 2): a suite with no fixtures has nothing to grade.
+#   Call it at top level, never in $(...), or the variables die with the subshell.
+root_key_fixtures() {
+  local arm="${1:-}"
+  assert_fixture_dir "$TMP"
+  command -v ssh-keygen >/dev/null 2>&1 || { echo "FATAL: ssh-keygen is required for the root-key arm fixtures" >&2; exit 2; }
+  ssh-keygen -q -t ed25519 -N '' -C 'synthesized-root-key-under-test' -f "$TMP/root-key" || { echo "FATAL: ssh-keygen (root)" >&2; exit 2; }
+  ssh-keygen -q -t ed25519 -N '' -C 'synthesized-impostor-key' -f "$TMP/other-key" || { echo "FATAL: ssh-keygen (other)" >&2; exit 2; }
+  ROOT_KEY_PUB="$(<"$TMP/root-key.pub")"
+  # shellcheck disable=SC2034  # an output of this helper, read by the consuming suites
+  OTHER_KEY_PUB="$(<"$TMP/other-key.pub")"
+  ROOT_KEY_FP="$(ssh-keygen -l -E sha256 -f "$TMP/root-key.pub" | awk '{print $2}')"
+  OTHER_KEY_FP="$(ssh-keygen -l -E sha256 -f "$TMP/other-key.pub" | awk '{print $2}')"
+  [[ "$ROOT_KEY_FP" =~ ^SHA256:[A-Za-z0-9+/]{43}$ && "$OTHER_KEY_FP" =~ ^SHA256:[A-Za-z0-9+/]{43}$ && "$OTHER_KEY_FP" != "$ROOT_KEY_FP" ]] \
+    || { echo "FATAL: synthesized fingerprints are not usable ($ROOT_KEY_FP / $OTHER_KEY_FP)" >&2; exit 2; }
+  printf '%s\n' "$ROOT_KEY_FP" > "$TMP/git-data-root-key.fingerprint"
+  export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$TMP/git-data-root-key.fingerprint"
+  if [[ -n "$arm" ]]; then
+    cp "$arm" "$TMP/$(basename "$arm")" || { echo "FATAL: could not copy the arm $arm beside \$TMP" >&2; exit 2; }
+  fi
+}
+
+# root_key_prior_state [<public_key>] — a prior_state object with data.hcloud_ssh_keys.git_data_root
+# resolved to one key (id NUMBER 4242, named soleur-git-data-root, carrying <public_key>, default
+# ROOT_KEY_PUB) and hcloud_ssh_key.default (id STRING "1111"). The number-vs-string split is the
+# real provider shape and is what the arm's set comparison has to survive.
+root_key_prior_state() {
+  jq -nc --arg pub "${1:-$ROOT_KEY_PUB}" '{values:{root_module:{resources:[
+    {address:"data.hcloud_ssh_keys.git_data_root",mode:"data",type:"hcloud_ssh_keys",name:"git_data_root",
+     values:{with_selector:"soleur-role=git-data-root",ssh_keys:[{id:4242,name:"soleur-git-data-root",fingerprint:"00:11:22:33",labels:{"soleur-role":"git-data-root"},public_key:$pub}]}},
+    {address:"hcloud_ssh_key.default",mode:"managed",type:"hcloud_ssh_key",name:"default",values:{id:"1111"}}]}}}'
+}
+
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────
 
 # gate_assert_ran <observed-total> <floor>

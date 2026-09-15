@@ -1,69 +1,54 @@
-# git-data LUKS cutover — epic #5274 Phase 3, Sub-PR 3.D / ADR-068.
+# git-data cutover — a reviewer-gated, READ-ONLY proof (epic #5274 / ADR-068 / ADR-220).
 #
-# workflow_dispatch-only. Runs apps/web-platform/infra/git-data-cutover.sh
-# OFF the app host with cloud-admin/Doppler creds held here in GitHub secrets
-# (learning 2026-06-02: never hold cloud-admin creds inline on a prod host; the
-# cutover script itself carries no creds — this workflow injects them).
+# workflow_dispatch-only. What a run proves, in order, changing nothing on any host:
+#   1. the GIT_DATA_STORE_ENABLED flag read SUCCEEDS and the flag is not `true`
+#      (git-data-flag-precheck.sh, fail-closed, in its own step);
+#   2. the git-data root read token is published;
+#   3. root on git-data accepts the Terraform-minted root key through the web-1 jump
+#      (git-data-cutover.sh › access_gate);
+#   4. the store is mounted on a plaintext device, not already the LUKS mapper, and holds no
+#      repository (git-data-cutover.sh store probes).
+# The real cutover, rollback and wipe were deleted from the script: their freeze and reload
+# called systemd units that do not exist. They are rebuilt on real mechanisms in #8211.
 #
-# Reach model (ADR-220, #6680): the GH runner egress IP is not in var.admin_ips, so it
-# cannot dial either host's :22 directly. The CF Tunnel carries ONE SSH ingress, to
-# web-1; the bridge (.github/actions/cf-tunnel-ssh-bridge, terraform-free `server-ip`
-# form) scopes its NAT redirect to web-1's private address and exports WEB_HOST_SSH.
-# The git-data host (10.0.1.20) has no ingress of its own: it is reached THROUGH web-1
-# as an `ssh -W` direct-tcpip channel, authenticating end-to-end to git-data, so no key
-# and no agent socket lands on web-1. No CI credential is authorized for root on
-# git-data yet — #8189 provisions one behind a reviewer-gated environment — so this
-# workflow references no git-data secret, and git-data-cutover.sh's access_gate stops
-# every forward run at `role=git-data-auth verdict=git_data_root_key_absent` (exit 3)
-# BEFORE any host-mutating step. A dry run therefore proves the transport only.
+# Reach model (ADR-220, #6680). The GH runner egress IP is not in var.admin_ips, so it cannot
+# dial either host's :22 directly. The CF Tunnel carries ONE SSH ingress, to web-1; the bridge
+# (.github/actions/cf-tunnel-ssh-bridge, terraform-free `server-ip` form) scopes its NAT
+# redirect to web-1's private address and exports WEB_HOST_SSH and CI_SSH_KEYFILE. git-data
+# (10.0.1.20) has no ingress of its own: an ssh_config written by this job reaches it THROUGH
+# web-1 as an `ssh -W` direct-tcpip channel, authenticating end to end with the root key, so no
+# key and no agent socket lands on web-1.
 #
-# Auth pattern mirrors apply-web-platform-infra.yml:
-#   - secrets.DOPPLER_TOKEN        — prd_terraform READ (backend creds, flag read)
-#   - secrets.DOPPLER_TOKEN_WRITE  — prd_terraform READ/WRITE (the ONE flag flip)
-#   - SHA-pinned actions; untrusted inputs routed through env, never interpolated
-#     into run: blocks.
+# Credentials, each bound in exactly one step's env:
+#   - secrets.DOPPLER_TOKEN_PRD            `prd` read — the flag precheck step ONLY
+#   - secrets.DOPPLER_TOKEN                prd_terraform read — the bridge (CF Access + CI key)
+#   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT  soleur-git-data-root/prd read — the key fetch ONLY
+# The secrets check tests the two job tokens for presence with a boolean expression, so neither
+# value enters that step. No write-scoped token is referenced: this workflow writes nothing.
 #
-# This workflow does NOT run terraform: the fresh LUKS volume is provisioned by a
-# maintenance-window apply-web-platform-infra.yml run BEFORE this is dispatched
-# (see knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md).
+# The human gate is the `web-platform-infra-apply` environment on the one job that reads the
+# key (reviewer-gated, `main` branch policy); a re-run asks for approval again. That
+# environment is a human acknowledgement, not a secret boundary (ADR-220 D2).
 #
-# Dispatch: by hand only. An earlier revision of this header said an Inngest function
-# dispatches it when scheduled; no such function exists (nothing under
-# apps/web-platform/server dispatches this workflow). A scheduled dispatcher would need
-# its own Sentry-mirrored alarm, as workspaces-luks-verify.yml has. The typed `confirm`
-# token below is required on every dispatch.
+# Serialization: workflow-level `git-data-state`, the literal git_data_host_replace and
+# git_data_host_create hold in apply-web-platform-infra.yml, so a proof never runs between a
+# replace's plan and its apply. A run waiting on approval holds the group: answer or cancel it
+# before dispatching a replace. It does not join `web-1-swap`: it mutates nothing on web-1.
+#
+# Dispatch: by hand only. The typed `confirm` token below is required on every dispatch.
 
-name: git-data LUKS cutover (#5274 Phase 3 / ADR-068)
+name: git-data cutover read-only proof (#5274 / ADR-220)
 
 on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: "Type CUTOVER-GIT-DATA to authorize the flip (typo-guard)."
+        description: "Type CUTOVER-GIT-DATA to run the read-only proof (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
-      dry_run:
-        description: "If true: preconditions + rsync + set-identity verify only; NO freeze, NO flip, NO wipe."
-        required: false
-        type: boolean
-        default: true
-      confirm_wipe:
-        description: "If true AND canary-confirmed: decommission the old plaintext volume (DL-2). Leave false until post-soak."
-        required: false
-        type: boolean
-        default: false
-      rollback:
-        description: "Recovery: flip the flag OFF + reload both hosts + release any freeze. Use if a cutover left prod unhealthy."
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
-  # Serialize against the web-platform terraform applies: the cutover re-points the
-  # git-data mount that a concurrent apply could also touch. Shared literal string
-  # with apply-web-platform-infra.yml is NOT required (different resource), but a
-  # dedicated non-cancellable group prevents two cutover dispatches overlapping.
-  group: git-data-cutover
+  group: git-data-state
   cancel-in-progress: false
 
 permissions:
@@ -83,6 +68,7 @@ jobs:
   cutover:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    environment: web-platform-infra-apply
     steps:
       - name: Validate confirm token
         id: confirm
@@ -104,26 +90,38 @@ jobs:
         id: doppler
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
+      # Before the bridge and before the key exists on this runner, so the `prd` read token
+      # never shares a process with host bytes or key bytes. Exit 5 on a read failure or a
+      # `true` flag stops the job here.
+      - name: Flag precheck (fail-closed read of GIT_DATA_STORE_ENABLED)
+        id: flag_precheck
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: bash apps/web-platform/infra/git-data-flag-precheck.sh
+
       - name: Verify required secrets present
         id: secrets_check
+        # Boolean expressions: only "true"/"false" enters this step, never a token value.
         env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+          DOPPLER_TOKEN_PRESENT: ${{ secrets.DOPPLER_TOKEN != '' }}
+          GIT_DATA_ROOT_TOKEN_PRESENT: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT != '' }}
         run: |
           set -euo pipefail
-          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN not configured."; exit 1; }
-          [[ -n "$DOPPLER_TOKEN_WRITE_CHECK" ]] || { echo "::error::DOPPLER_TOKEN_WRITE not configured (needed for the flag flip)."; exit 1; }
+          if [[ "$DOPPLER_TOKEN_PRESENT" != "true" ]]; then
+            echo "::error title=git-data-cutover secrets::verdict=doppler_token_absent"
+            exit 1
+          fi
+          if [[ "$GIT_DATA_ROOT_TOKEN_PRESENT" != "true" ]]; then
+            echo "[git-data-cutover] SECRETS verdict=git_data_root_token_absent"
+            echo "::error title=git-data-cutover secrets::verdict=git_data_root_token_absent"
+            echo "[git-data-cutover] remedy: dispatch apply-git-data-root-key.yml (it publishes the root read token), then re-dispatch."
+            exit 1
+          fi
+          echo "required secrets present."
 
-      # Establish the private-net SSH access path off the app host. The bridge
-      # exports WEB_HOST_SSH; the cutover script holds no key material itself and
-      # reaches git-data through web-1 (see the Reach model header).
+      # Establish the private-net SSH access path off the app host. The bridge exports
+      # WEB_HOST_SSH and CI_SSH_KEYFILE (see the Reach model header).
       - name: CF Tunnel SSH bridge
-        # Needed on EVERY invocation (dry-run, real cutover, rollback): main() runs
-        # access_gate + prepare_luks_target + preconditions + bulk_rsync — all of which SSH
-        # to the git-data/web hosts — BEFORE the first DRY_RUN gate (acquire_freeze), so a
-        # dry-run rehearsal is host-touching and needs the bridge. A dry_run guard here
-        # (mis-copied from an assumption that dry-run is host-free) would leave the bridge
-        # un-set on the rehearsal path → SSH timeout (sibling of workspaces-luks run 29644526137).
         uses: ./.github/actions/cf-tunnel-ssh-bridge
         with:
           doppler-token: ${{ secrets.DOPPLER_TOKEN }}
@@ -134,36 +132,108 @@ jobs:
           # bridge's `terraform output -raw server_ip` died with exit 127 (#6680 wall 1).
           server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
-      - name: Run git-data cutover
-        # A ROLLBACK must still reach the flag-off write (Doppler only, no SSH) when the
-        # bridge failed — but never when the confirm token, the Doppler CLI or the secrets
-        # check failed. Every other mode runs only on success.
-        if: ${{ !cancelled() && (success() || (inputs.rollback && steps.confirm.outcome == 'success' && steps.doppler.outcome == 'success' && steps.secrets_check.outcome == 'success')) }}
+      # The key goes straight from Doppler into a 0600 file at a fixed path. The path is never
+      # exported to $GITHUB_ENV, and every key line is add-masked before this step prints
+      # anything else. A key that ssh-keygen cannot derive a public key from stops the job.
+      - name: Fetch git-data root key
+        id: key_fetch
         env:
-          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
-          # Read-scoped token for the flag READ (preconditions); write-scoped for
-          # the single flag FLIP. Cloud-admin creds stay in these secrets, never
-          # on the app host.
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_TOKEN_WRITE: ${{ secrets.DOPPLER_TOKEN_WRITE }}
-          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-          CONFIRM_WIPE: ${{ inputs.confirm_wipe && '1' || '0' }}
-          ROLLBACK: ${{ inputs.rollback && '1' || '0' }}
-        # The read path (preconditions) uses DOPPLER_TOKEN; the flip uses
-        # DOPPLER_TOKEN_WRITE. The script's set_flag/read_flag call `doppler` with
-        # an explicit -p/-c; we bind the write token for the process so the flip
-        # succeeds and keep the read token available. Because the script performs
-        # exactly one write (the flag), running it under the write-scoped token is
-        # acceptable and simplest; the read token remains for parity with the
-        # apply workflow's two-token model.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}
         run: |
           set -euo pipefail
-          chmod +x "${INFRA_DIR}/git-data-cutover.sh"
-          # Bind the write-capable token for the process (single-write script).
-          DOPPLER_TOKEN="${DOPPLER_TOKEN_WRITE}" \
-            bash "${INFRA_DIR}/git-data-cutover.sh"
+          case "$-" in
+            *x*) echo "::error title=git-data-cutover key::refusing to run under xtrace"; exit 78 ;;
+          esac
+          umask 077
+          keyfile="$RUNNER_TEMP/gd-root-key"
+          rc=0
+          doppler secrets get GIT_DATA_ROOT_SSH_PRIVATE_KEY --plain -p soleur-git-data-root -c prd > "$keyfile" 2>/dev/null || rc=$?
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ -n "$line" ]]; then printf '::add-mask::%s\n' "$line"; fi
+          done < "$keyfile"
+          if [[ -s "$keyfile" && -n "$(tail -c 1 "$keyfile")" ]]; then
+            printf '\n' >> "$keyfile"
+          fi
+          reason=""
+          if [[ "$rc" -ne 0 ]]; then
+            reason=rc_nonzero
+          elif [[ ! -s "$keyfile" ]]; then
+            reason=empty
+          else
+            pub="$(ssh-keygen -y -f "$keyfile" </dev/null 2>/dev/null)" || pub=""
+            [[ "$pub" == ssh-* ]] || reason=not_openssh_key
+          fi
+          if [[ -n "$reason" ]]; then
+            echo "[git-data-cutover] KEY verdict=git_data_root_key_fetch_failed reason=${reason}"
+            echo "::error title=git-data-cutover key::verdict=git_data_root_key_fetch_failed reason=${reason}"
+            exit 1
+          fi
+          echo "git-data root key fetched."
 
-      # The bridge's caller-side teardown contract (see its action.yml header).
+      # Exact per-host blocks, no `Host *`: web-1 authenticates with the bridge's CI key, git-data
+      # with the root key through a LITERAL ProxyCommand target (no %h). git-data-cutover.sh
+      # reads it as GIT_DATA_SSH="ssh -F <this file>".
+      # Nested connect budgets: the web-1 hop (also the ProxyCommand's own connect) gets 10 s, so
+      # a slow jump fails inside git-data's 20 s ConnectTimeout instead of consuming all of it.
+      - name: Write git-data ssh_config
+        id: ssh_config
+        run: |
+          set -euo pipefail
+          cfg="$RUNNER_TEMP/gd-ssh-config"
+          key="$RUNNER_TEMP/gd-root-key"
+          if [[ -z "${CI_SSH_KEYFILE:-}" || ! -s "$CI_SSH_KEYFILE" || ! -s "$key" ]]; then
+            echo "::error title=git-data-cutover ssh_config::verdict=ssh_config_key_absent"
+            exit 1
+          fi
+          for p in "$cfg" "$key" "$CI_SSH_KEYFILE"; do
+            if ! [[ "$p" =~ ^/[A-Za-z0-9/_.-]+$ ]]; then
+              echo "::error title=git-data-cutover ssh_config::verdict=ssh_config_path_unsafe"
+              exit 1
+            fi
+          done
+          umask 077
+          cat > "$cfg" <<EOF
+          Host 10.0.1.10
+            User root
+            IdentityFile ${CI_SSH_KEYFILE}
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 10
+            LogLevel ERROR
+            ForwardAgent no
+            ClearAllForwardings yes
+            PermitLocalCommand no
+            ControlPath none
+            UpdateHostKeys no
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile /dev/null
+
+          Host 10.0.1.20
+            User root
+            IdentityFile ${key}
+            ProxyCommand ssh -F ${cfg} -W 10.0.1.20:22 10.0.1.10
+            IdentitiesOnly yes
+            BatchMode yes
+            ConnectTimeout 20
+            LogLevel ERROR
+            ForwardAgent no
+            ClearAllForwardings yes
+            PermitLocalCommand no
+            ControlPath none
+            UpdateHostKeys no
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile /dev/null
+          EOF
+          echo "ssh_config written."
+
+      - name: Run git-data cutover read-only proof
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+        run: bash apps/web-platform/infra/git-data-cutover.sh
+
+      # The bridge's caller-side teardown contract (see its action.yml header), plus the root
+      # key and the ssh_config (hygiene; the ephemeral VM is the control).
       - name: Tear down cloudflared SSH bridge
         if: always()
         shell: bash
@@ -179,25 +249,27 @@ jobs:
           if [[ -n "${CI_SSH_KEYFILE:-}" && -f "$CI_SSH_KEYFILE" ]]; then
             shred -u "$CI_SSH_KEYFILE" 2>/dev/null || true
           fi
+          if [[ -f "$RUNNER_TEMP/gd-root-key" ]]; then
+            shred -u "$RUNNER_TEMP/gd-root-key" 2>/dev/null || true
+          fi
+          if [[ -f "$RUNNER_TEMP/gd-ssh-config" ]]; then
+            shred -u "$RUNNER_TEMP/gd-ssh-config" 2>/dev/null || true
+          fi
           if [[ -f /tmp/cloudflared.log ]]; then tail -n 200 /tmp/cloudflared.log || true; fi
 
-      - name: Cutover summary
+      - name: Read-only proof summary
         if: always()
         env:
           ACTOR: ${{ github.actor }}
-          DRY: ${{ inputs.dry_run }}
-          WIPE: ${{ inputs.confirm_wipe }}
           JOB_STATUS: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "## git-data LUKS cutover"
+            echo "## git-data cutover read-only proof"
             echo ""
             echo "**Actor:** ${ACTOR}"
-            echo "**Dry run:** ${DRY}"
-            echo "**Confirm wipe:** ${WIPE}"
             echo "**Status:** ${JOB_STATUS}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "GA verdict is soak-gated — enroll scripts/followthroughs/phase3-ga-soak-5274.sh."
+            echo "Nothing on any host was changed. The real cutover is rebuilt in #8211."
           } >> "$GITHUB_STEP_SUMMARY"

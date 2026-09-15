@@ -2338,6 +2338,9 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
+  run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
+  run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
