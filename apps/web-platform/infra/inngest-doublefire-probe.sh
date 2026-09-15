@@ -18,12 +18,12 @@
 #   status, functionIDs: [UUID!], appIDs, query }; FunctionRunV2 node carries
 # { id, functionID, status, queuedAt, startedAt, endedAt, ... }.
 #
-# Output (stdout): a single pure-JSON object — run metadata ONLY (functionID +
+# Output (stdout): a single pure-JSON object — run metadata ONLY (run id, functionID,
 # startedAt), never reminder bodies / actors / connection strings (P2-sec-a). The
 # webhook returns CombinedOutput and the workflow jq-parses the body as an OBJECT,
 # so on SUCCESS this writes NOTHING non-JSON to EITHER stream (summary + the
 # SOLEUR_INNGEST_PREFLIGHT_* markers → journald via `logger` only):
-#   { "runs": [ { "functionID": <uuid>, "startedAt": <iso> }, ... ] }
+#   { "runs": [ { "id": <ulid>, "functionID": <uuid>, "startedAt": <iso> }, ... ] }
 #
 # Fail-LOUD (non-zero exit + stderr) on a non-array `.data.runs.edges` — a fetch
 # failure / GraphQL error / unexpected shape must NOT read as a false-clean
@@ -423,8 +423,10 @@ run_probe() {
         fi
       fi
     fi
-    # Append this page's projected runs (functionID + startedAt ONLY — no bodies).
-    echo "$resp" | jq -c '[ .data.runs.edges[].node | {functionID, startedAt} ]' >> "$spool"
+    # Append this page's projected runs (run id + functionID + startedAt ONLY — no bodies). The run
+    # id (a ULID, trace_runs.run_id PRIMARY KEY) lets op=verify drop a run returned on two pages
+    # without collapsing two distinct runs that share a millisecond startedAt (#6178).
+    echo "$resp" | jq -c '[ .data.runs.edges[].node | {id, functionID, startedAt} ]' >> "$spool"
     has_next=$(echo "$resp" | jq -r '.data.runs.pageInfo.hasNextPage // false')
     end_cursor=$(echo "$resp" | jq -r '.data.runs.pageInfo.endCursor // ""')
     if [[ "$has_next" == "true" ]]; then
