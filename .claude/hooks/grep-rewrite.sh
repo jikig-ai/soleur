@@ -194,7 +194,7 @@ fi
 # The settings matcher is `Bash`, but a matcher is an upstream invariant this
 # hook cannot verify (ADR-156). An absent tool_name is tolerated so the suite's
 # minimal fixtures stay legible.
-[[ -z "$HOOK_TOOL_NAME" || "$HOOK_TOOL_NAME" == "Bash" ]] || exit 0
+[[ -z "$HOOK_TOOL_NAME" || "$HOOK_TOOL_KIND" == "Bash" ]] || exit 0
 
 CMD="$HOOK_CMD"
 [[ -z "$CMD" ]] && exit 0

@@ -72,6 +72,8 @@ payload="$(cat)"
 # empty → allow. Mirrors new-scheduled-cron-prefer-inngest.sh (#4600).
 tool_name="$(echo "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 
+# DEVIN-SKIP reason=no-analog: Devin has no CronCreate tool; Claude-canonical
+# gate intentionally left on the raw name. Ledger: devin-dispositions.tsv.
 case "$tool_name" in
   CronCreate) ;;
   *) allow ;;

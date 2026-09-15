@@ -77,6 +77,11 @@ REDACTOR_CMD='python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact
 # non-zero (wrong build, missing shared library, exec-format error) passes a
 # presence check and then fails exactly like an absent one. The first revision
 # of this branch used `command -v` and the suite caught it.
+# Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
+# degrades to passthrough, preserving this hook's fail-open invariant.
+. "$(dirname "${BASH_SOURCE[0]}")/lib/hook-tool-kind.sh" 2>/dev/null || true
+if ! type hook_tool_kind >/dev/null 2>&1; then hook_tool_kind() { printf '%s\n' "${1-}"; }; fi
+
 jq_rc=0
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)" || jq_rc=$?
 if [[ $jq_rc -ne 0 ]]; then
@@ -87,7 +92,7 @@ if [[ $jq_rc -ne 0 ]]; then
   exit 0
 fi
 
-[[ "$TOOL" == "Bash" ]] || exit 0
+[[ "$(hook_tool_kind "$TOOL")" == "Bash" ]] || exit 0
 
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [[ -z "$CMD" ]] && exit 0

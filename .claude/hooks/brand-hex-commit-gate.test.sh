@@ -412,7 +412,20 @@ t_four_digit_bracket_blocked
 t_message_flaglike_text_no_false_deny
 t_real_dash_a_scans_unstaged
 t_palette_poison_via_unstaged_worktree
+# Devin wire name `exec` reaches the gated scan (kind map, #8205).
+t_devin_exec_triggers() {
+  local repo; repo=$(_seed_repo)
+  _stage "$repo" "apps/web-platform/components/dashboard/banner.tsx" \
+'export const B = () => <div className="bg-[#2563eb]">x</div>;'
+  local out; out=$(_run "$repo" "exec" "git commit -m 'add'")
+  [[ "$(_decision "$out")" == "deny" ]] \
+    && _report "T24 Devin exec tool_name reaches scan -> deny" ok \
+    || _report "T24 Devin exec tool_name reaches scan -> deny" fail "$(_decision "$out")"
+  rm -rf "$repo"
+}
+
 t_single_line_token_css_palette
+t_devin_exec_triggers
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

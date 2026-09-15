@@ -333,11 +333,18 @@ assert_deny 'F2c unrouted `agent-browser diff snapshot`' \
 assert_deny 'F2d unrouted `agent-browser diff snapshot --json`' \
   'agent-browser diff snapshot --json'
 
+# Devin wire name `exec` reaches the gate via the kind map (#8205). Under
+# Devin this hook is dispatched by the plugin manifest's exec matcher.
+cases=$((cases + 1))
+_d="$(jq -nc '{tool_name:"exec", tool_input:{command:"agent-browser snapshot"}}' | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)"
+[[ "$_d" == "deny" ]] && ok 'Devin exec: unrouted `agent-browser snapshot` denied' \
+  || bad "Devin exec unrouted snapshot — expected deny, got '$_d'"
+
 printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
 if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
-MIN_ASSERTIONS=35
+MIN_ASSERTIONS=36
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2; exit 1
 fi

@@ -80,10 +80,10 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-tool_name="$HOOK_TOOL_NAME"
+tool_kind="$HOOK_TOOL_KIND"
 
-# Only fire on Bash.
-[ "$tool_name" = "Bash" ] || allow
+# Only fire on Bash (or its Devin kind twin, exec — #8205).
+[ "$tool_kind" = "Bash" ] || allow
 
 command="$HOOK_CMD"
 [ -n "$command" ] || allow

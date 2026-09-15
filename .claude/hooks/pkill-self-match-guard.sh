@@ -47,7 +47,13 @@ set -uo pipefail
 INPUT="$(cat 2>/dev/null || true)"
 [[ -z "$INPUT" ]] && exit 0
 
+# Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
+# degrades to passthrough, preserving this hook's fail-open invariant.
+. "$(dirname "${BASH_SOURCE[0]}")/lib/hook-tool-kind.sh" 2>/dev/null || true
+if ! type hook_tool_kind >/dev/null 2>&1; then hook_tool_kind() { printf '%s\n' "${1-}"; }; fi
+
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+TOOL="$(hook_tool_kind "$TOOL")"
 [[ "$TOOL" == "Bash" ]] || exit 0
 
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"

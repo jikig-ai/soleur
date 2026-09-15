@@ -31,7 +31,7 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-TOOL="$HOOK_TOOL_NAME"
+TOOL="$HOOK_TOOL_KIND"
 [[ "$TOOL" == "Bash" ]] || exit 0
 
 CMD="$HOOK_CMD"

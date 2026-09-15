@@ -68,6 +68,11 @@ ABS_NEW_PATH="$PWD/.github/workflows/scheduled-fake-cron-for-tests.yml"
 assert_decision "Write new scheduled workflow (absolute path) denies" "deny" \
   "$(mk_write_payload "$ABS_NEW_PATH" "name: Scheduled fake\non:\n  schedule:\n    - cron: '0 0 * * *'")"
 
+# Devin wire name `write` reaches the gate (kind map, #8205).
+assert_decision "Devin write of new scheduled workflow denies" "deny" \
+  "$(jq -nc --arg p "$NEW_PATH" --arg c "name: Scheduled fake\non:\n  schedule:\n    - cron: '0 0 * * *'" \
+     '{tool_name: "write", tool_input: {file_path: $p, content: $c}}')"
+
 # --- (b) Edit of existing scheduled YAML allows ---------------------------
 # Find a scheduled-*.yml that exists on origin/main; skip the assertion if
 # the worktree's origin doesn't have any (unusual in CI, but defensive).

@@ -217,6 +217,27 @@ t_reason_cites_learning() {
   rm -rf "$tmp"
 }
 
+# T10: Devin wire name `exec` reaches the gated scan (kind map, #8205).
+t_devin_exec_triggers_scan() {
+  local tmp; tmp=$(mktemp -d)
+  (
+    cd "$tmp"
+    git init -q -b main
+    git config user.email t@t; git config user.name t
+    cp "$GITLEAKS_TOML" .gitleaks.toml
+    pem=$(_mk_pem "t10_devinexecsyntheticpayload")
+    jq -n --arg p "$pem" '{key: $p}' > leak5.json
+    git add leak5.json .gitleaks.toml
+  )
+  local out; out=$(_run "$tmp" "exec" "git commit -m 'add'")
+  if [[ "$(_decision "$out")" == "deny" ]]; then
+    _report "T10 Devin exec tool_name reaches scan → deny" ok
+  else
+    _report "T10 Devin exec tool_name reaches scan → deny" fail "$(_decision "$out")"
+  fi
+  rm -rf "$tmp"
+}
+
 t_non_bash_tool
 t_bash_non_commit
 t_substring_not_match
@@ -226,6 +247,7 @@ t_amend_triggers_scan
 t_chained_commit
 t_commit_tree_not_matched
 t_reason_cites_learning
+t_devin_exec_triggers_scan
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

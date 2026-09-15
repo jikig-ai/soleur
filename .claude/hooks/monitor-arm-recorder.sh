@@ -39,6 +39,8 @@ INPUT="$(cat 2>/dev/null || true)"
 [ -n "$INPUT" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+# DEVIN-SKIP reason=no-analog: Devin has no Monitor tool; Claude-canonical
+# gate intentionally left on the raw name. Ledger: devin-dispositions.tsv.
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null) || exit 0
 SESSION=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null) || exit 0
 NOW=$(date +%s 2>/dev/null) || exit 0
