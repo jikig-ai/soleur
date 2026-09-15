@@ -10,8 +10,11 @@
 #   2. three store probes, each fail-closed, each through gd_capture:
 #        refuse_if_unmounted        `findmnt -no SOURCE $OLD_ROOT` must name a /dev/ device
 #        refuse_if_cut_over         ...and that device must not be $LUKS_MAPPER
-#        refuse_if_store_not_empty  $OLD_REPOS must hold zero `*.git` entries (absent = 0)
-#      A refusal exits 5 with a fixed verdict word.
+#        refuse_if_store_not_empty  $OLD_REPOS must be a directory on that SAME source
+#                                   (`findmnt -T`) holding zero `*.git` entries
+#      A refusal exits 5 with a fixed verdict word. A read that could not be completed
+#      (transport, timeout, oversized or multi-line answer) is `probe_failed rc=<n>`, never
+#      a store-state verdict.
 # Exit 0 means: access ok, store mounted on a plaintext device, not cut over, empty.
 #
 # WHAT IT NO LONGER DOES. The rsync / freeze / repoint / flag-flip / rollback / wipe body was
@@ -38,7 +41,8 @@
 # every remote read (30 s, 4096 bytes), accepts a value only when it matches an anchored
 # pattern in full, and never prints the value. This evidence is still not authentication.
 #
-# Exit codes: 0 clear; 3 access gate; 5 refusal (real mode, store probe); 78 xtrace refusal.
+# Exit codes: 0 clear; 1 internal error (die: the access gate's mktemp failed); 3 access gate;
+# 5 refusal (real mode, store probe); 78 xtrace refusal.
 set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
@@ -54,7 +58,7 @@ OLD_ROOT="${OLD_ROOT:-/mnt/git-data}"                 # the plaintext store ever
 LUKS_MAPPER="${LUKS_MAPPER:-/dev/mapper/git-data}"    # the LUKS device-mapper node a cutover mounts
 REPO_SUBDIR="${REPO_SUBDIR:-repositories}"
 OLD_REPOS="${OLD_ROOT}/${REPO_SUBDIR}"
-WEB_HOSTS="${WEB_HOSTS:-10.0.1.10}"   # web-2 (10.0.1.11) retired #6538; single-host roster
+WEB_HOSTS="${WEB_HOSTS:-10.0.1.10}"   # web-1 only: the read-only proof needs one jump host, not every web host
 
 # --- Roster + invocations: parsed ONCE, used by the gate AND every later call ---
 # One parse (`read -ra`: first line only, no glob expansion) so the addresses and argv the
@@ -161,7 +165,7 @@ gd_capture() {
 }
 
 # ============================================================================
-# access_gate — every host reachable and authorized BEFORE any mutation (ADR-220)
+# access_gate — every host reachable and authorized BEFORE any store probe (ADR-220)
 # ============================================================================
 # Three probes, strictly ordered; each runs only after the previous one read ok:
 #   web            every roster member runs `true` over WEB_HOST_SSH.
@@ -173,7 +177,7 @@ gd_capture() {
 #                  with stdin held open the probe waits out its timeout.
 #   git-data-auth  root login over GIT_DATA_SSH; unset -> git_data_root_key_absent (#8189).
 # Non-ok exits 3 from THIS body. Keep the call a plain statement: inside $(...) or a
-# pipeline its `exit 3` would only leave a subshell and the mutating steps would run.
+# pipeline its `exit 3` would only leave a subshell and the store probes would run anyway.
 # Probe bytes are chosen by the edge or web-1 while host keys are unverified (#7226), and the
 # runner parses workflow commands on stdout AND stderr. So every probe writes to a file, the
 # -W line is only compared, and a failed probe's stderr is printed capped, printable-ASCII,
@@ -225,7 +229,7 @@ _access_tmp_drop() {
   ACCESS_TMP=""
 }
 access_gate() {
-  step "access gate (ADR-220): web -> git-data-jump -> git-data-auth, before any host mutation"
+  step "access gate (ADR-220): web -> git-data-jump -> git-data-auth, before any store probe"
   local h rc first
   local -a inv gdinv
   if [ -n "$ROSTER_ERR_ROLE" ]; then _access_emit "$ROSTER_ERR_ROLE" "<invalid>" "$ROSTER_ERR_VERDICT"; exit 3; fi
@@ -254,7 +258,7 @@ access_gate() {
   read -ra gdinv <<< "${GIT_DATA_SSH:-}"
   if [ "${#gdinv[@]}" -eq 0 ]; then
     _access_emit git-data-auth "$GIT_DATA_HOST" git_data_root_key_absent
-    log "no credential is authorized for root on the git-data host yet — ADR-220; #8189 provisions it."
+    log "remedy: no root credential reached this step — dispatch apply-git-data-root-key.yml (it mints the key and publishes its read token), then re-dispatch (ADR-220)."
     exit 3
   fi
   rc=0
@@ -285,13 +289,26 @@ _store_refuse() { # <probe> <verdict> [rc] — emit, stop
   exit 5
 }
 
+# The capture pattern admits any one-line findmnt SOURCE shape (device, tmpfs, bind `[..]`,
+# host:/export, or empty), so gd_capture's 96 means only "the answer could not be read as one
+# line" and is reported with the transport failures. The device test is a separate local match.
+#   rc 0 + a /dev/ source   ok
+#   rc 0 + any other answer old_store_unmounted             (a non-device source, or none)
+#   rc 1                    old_store_unmounted rc=1        (findmnt's own "no such mount")
+#   any other rc            probe_failed rc=<n>             (124 timeout, 255 ssh, 141 SIGPIPE,
+#                                                            96 unreadable answer, 95/97 local)
 STORE_SOURCE=""
 refuse_if_unmounted() {
   step "store probe: $OLD_ROOT is mounted on a device"
   local rc=0 q
   printf -v q '%q' "$OLD_ROOT"
-  gd_capture '^/dev/[A-Za-z0-9/_.-]+$' "findmnt -no SOURCE $q" || rc=$?
-  [ "$rc" -eq 0 ] || _store_refuse store-mounted old_store_unmounted "$rc"
+  gd_capture '^[][A-Za-z0-9/_.:@+=-]*$' "findmnt -no SOURCE $q" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) _store_refuse store-mounted old_store_unmounted "$rc" ;;
+    *) _store_refuse store-mounted probe_failed "$rc" ;;
+  esac
+  [[ "$GD_CAPTURED" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-mounted old_store_unmounted
   STORE_SOURCE="$GD_CAPTURED"
   _store_emit store-mounted ok
 }
@@ -303,14 +320,24 @@ refuse_if_cut_over() {
   _store_emit store-not-cut-over ok
 }
 
-# One remote command whose only output is the count. A missing $OLD_REPOS on a mounted root
-# counts as 0; a $OLD_REPOS that exists but is not a directory, or a failing find, is a probe
-# error. `find -H` follows a symlinked $OLD_REPOS itself, never the entries under it.
+# One remote command whose only output is the count, run in ONE ssh session so the source it
+# checks is the source it counts on. Every abnormal shape is a probe error (remote exit code),
+# never a count of 0:
+#   3  $OLD_REPOS is a dangling symlink, or exists but is not a directory
+#   7  $OLD_REPOS is missing: git-data-bootstrap.sh creates it on every boot, so a mounted
+#      root without it is not an empty store
+#   5  `findmnt -T` could not resolve the source $OLD_REPOS lives on
+#   6  that source differs from the one refuse_if_unmounted accepted (another volume
+#      underneath, or a remount between the two ssh sessions)
+#   4  find failed
+# `find -H` follows a symlinked $OLD_REPOS itself, never the entries under it.
 refuse_if_store_not_empty() {
   step "store probe: $OLD_REPOS holds no repositories"
-  local rc=0 q
+  local rc=0 q qs
+  [[ "$STORE_SOURCE" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || _store_refuse store-empty probe_failed
   printf -v q '%q' "$OLD_REPOS"
-  gd_capture '^[0-9]+$' "d=$q; if [ -d \"\$d\" ]; then n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo \"\${#n}\"; elif [ -e \"\$d\" ]; then exit 3; else echo 0; fi" || rc=$?
+  printf -v qs '%q' "$STORE_SOURCE"
+  gd_capture '^[0-9]+$' "d=$q; src=$qs; if [ -L \"\$d\" ] && [ ! -e \"\$d\" ]; then exit 3; fi; if [ ! -e \"\$d\" ]; then exit 7; fi; [ -d \"\$d\" ] || exit 3; s=\$(findmnt -no SOURCE -T \"\$d\") || exit 5; [ \"\$s\" = \"\$src\" ] || exit 6; n=\$(find -H \"\$d\" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo \"\${#n}\"" || rc=$?
   [ "$rc" -eq 0 ] || _store_refuse store-empty probe_failed "$rc"
   [[ "$GD_CAPTURED" =~ ^0+$ ]] || _store_refuse store-empty store_not_empty
   _store_emit store-empty ok

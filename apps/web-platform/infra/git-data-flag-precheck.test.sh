@@ -68,7 +68,11 @@ mkdir -p "$BIN" "$T/mut" || { printf 'FAIL SETUP: mkdir %s\n' "$BIN" >&2; exit 1
 printf '\n=== git-data flag precheck (Guard 1, #8189) ===\n\n'
 
 # Per-name Doppler shim. A store is $DOPPLER_STORE/<project>/<config>/<NAME>; a missing config
-# directory is "nonexistent or unauthorized config" (exit 1 even with the flag).
+# directory is "nonexistent or unauthorized config" (exit 1 even with the flag). Every config also
+# answers the reserved secrets DOPPLER_PROJECT / DOPPLER_CONFIG with its own project / config name
+# (docs.doppler.com/docs/secrets › reserved secrets). SHIM_BOUND_PROJECT / SHIM_BOUND_CONFIG model a
+# service token bound to ANOTHER config: the -p/-c the caller passes are not what gets read.
+# SHIM_ERR forces one error class, with a canary in its text so a printed stderr is visible.
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
@@ -85,10 +89,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "${DOPPLER_TOKEN:-}" ] || { echo "Doppler Error: you must provide a token" >&2; exit 1; }
-[ "${SHIM_SCOPE_ERROR:-0}" = 1 ] && { echo "Doppler Error: This token does not have access to requested config '$cfg'" >&2; exit 1; }
+[ "${SHIM_SCOPE_ERROR:-0}" = 1 ] && { echo "Doppler Error: This token does not have access to requested config '$cfg' STDERR-CANARY-3b" >&2; exit 1; }
+case "${SHIM_ERR:-}" in
+  auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
+  network) echo "Doppler Error: Get \"https://api.doppler.com/v3/configs/config/secret\": dial tcp: lookup api.doppler.com: no such host STDERR-CANARY-3b" >&2; exit 1 ;;
+  other)   echo "Doppler Error: something unforeseen STDERR-CANARY-3b" >&2; exit 2 ;;
+esac
 [ "$plain" = 1 ] || { echo "doppler-shim: --plain required" >&2; exit 64; }
+proj="${SHIM_BOUND_PROJECT:-$proj}"; cfg="${SHIM_BOUND_CONFIG:-$cfg}"
 d="$DOPPLER_STORE/$proj/$cfg"
-if [ -z "$proj" ] || [ -z "$cfg" ] || [ ! -d "$d" ]; then echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; fi
+if [ -z "$proj" ] || [ -z "$cfg" ] || [ ! -d "$d" ]; then echo "Doppler Error: Could not find requested config '$cfg' STDERR-CANARY-3b" >&2; exit 1; fi
+case "$name" in
+  DOPPLER_PROJECT) printf '%s' "$proj"; exit 0 ;;
+  DOPPLER_CONFIG)  printf '%s' "$cfg"; exit 0 ;;
+esac
 if [ -f "$d/$name" ]; then cat "$d/$name"; exit 0; fi
 # SHIM_IGNORE_FLAG models an argument-blind shim (or a CLI that ignores the flag).
 if [ "$noexit" = 1 ] && [ "${SHIM_IGNORE_FLAG:-0}" != 1 ]; then exit 0; fi
@@ -97,19 +111,30 @@ SHIM
 chmod +x "$BIN/doppler" || { printf 'FAIL SETUP: chmod shim\n' >&2; exit 1; }
 
 # run_case <name> <value|ABSENT> [VAR=value ...] — the flag's stored value (printf, no newline
-# unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG.
+# unless given), then the script (CASE_SCRIPT, default the real one). Sets OUT, RC, DLOG, CTMP
+# (the case's own TMPDIR, so a leaked tempfile is visible). A store also carries soleur/prd_terraform
+# (flag absent there) and other-project/prd, the two configs a mis-bound token would read.
 run_case() {
   local name="$1" value="$2"; shift 2
   local store="$T/store-$name"
   assert_fixture_dir "$store"
-  rm -rf "$store"; mkdir -p "$store/soleur/prd" "$store/soleur/prd_terraform" || { printf 'FAIL SETUP: store\n' >&2; exit 1; }
+  rm -rf "$store"; mkdir -p "$store/soleur/prd" "$store/soleur/prd_terraform" "$store/other-project/prd" || { printf 'FAIL SETUP: store\n' >&2; exit 1; }
   [ "$value" = ABSENT ] || printf '%s' "$value" > "$store/soleur/prd/GIT_DATA_STORE_ENABLED"
+  CTMP="$T/tmp-$name"
+  assert_fixture_dir "$CTMP"
+  rm -rf "$CTMP"; mkdir -p "$CTMP" || { printf 'FAIL SETUP: case tmp\n' >&2; exit 1; }
   OUT="$T/$name.out"; DLOG="$T/$name.dlog"; : > "$DLOG"
-  timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
+  timeout -k 3 30 env -i PATH="$BIN:/usr/bin:/bin" HOME="$T" TMPDIR="$CTMP" DOPPLER_STORE="$store" DOPPLER_LOG="$DLOG" \
     DOPPLER_TOKEN=fixture-prd-read "$@" bash "${CASE_SCRIPT:-$PRECHECK}" > "$OUT" 2>&1
   RC=$?
 }
-ARGV='doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd'
+ARGV='doppler secrets get GIT_DATA_STORE_ENABLED --plain --no-exit-on-missing-secret -p soleur -c prd
+doppler secrets get DOPPLER_PROJECT --plain -p soleur -c prd
+doppler secrets get DOPPLER_CONFIG --plain -p soleur -c prd'
+refusal() { # <verdict-detail> — the exact two-line output of a refusal
+  printf '[git-data-flag-precheck] verdict=%s\n::error title=git-data-flag-precheck::verdict=%s' "$1" "$1"
+}
+detail() { printf 'rc=%s out=[%s]' "$RC" "$(tr '\n' '|' < "$OUT" | sed 's/::/: :/g')"; }
 
 # ── cases (functions, so a mutant re-runs exactly the case its row names) ──────────────
 case_absent() {
@@ -118,13 +143,25 @@ case_absent() {
 }
 case_scope_error() {
   run_case scope false SHIM_SCOPE_ERROR=1
-  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "[git-data-flag-precheck] verdict=flag_read_failed rc=1
-::error title=git-data-flag-precheck::verdict=flag_read_failed rc=1" ]
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal 'flag_read_failed reason=forbidden rc=1')" ]
+}
+case_token_absent() {
+  run_case notoken false DOPPLER_TOKEN=
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal flag_token_absent)" ] && [ ! -s "$DLOG" ]
+}
+case_reason() { # <label> <expected-word> <expected-rc> [VAR=value ...] — the word, never the stderr
+  local label="$1" word="$2" rc="$3"; shift 3
+  run_case "reason-$label" false "$@"
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal "flag_read_failed reason=$word rc=$rc")" ] && ! grep -q 'CANARY' "$OUT"
+}
+case_scope_mismatch() { # <label> [VAR=value ...]
+  local label="$1"; shift
+  run_case "mismatch-$label" ABSENT "$@"
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal 'flag_read_failed reason=scope_mismatch')" ]
 }
 case_true() {
   run_case "true$1" "$2"
-  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "[git-data-flag-precheck] verdict=flag_already_true
-::error title=git-data-flag-precheck::verdict=flag_already_true" ]
+  [ "$RC" = 5 ] && [ "$(cat "$OUT")" = "$(refusal flag_already_true)" ]
 }
 case_off() { # <label> <value>
   run_case "off$1" "$2"
@@ -132,27 +169,42 @@ case_off() { # <label> <value>
 }
 
 if case_absent; then pass "P1: an absent flag (exit 0, empty stdout WITH the flag) prints exactly flag=unset, exit 0"
-else fail "P1: an absent flag was not flag=unset" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
-if [ "$(cat "$DLOG")" = "$ARGV" ]; then pass "P1: doppler is called exactly once, as: $ARGV"
+else fail "P1: an absent flag was not flag=unset" "$(detail)"; fi
+if [ "$(cat "$DLOG")" = "$ARGV" ]; then pass "P1: doppler is called exactly three times — the flag read, then DOPPLER_PROJECT and DOPPLER_CONFIG with the same -p soleur -c prd"
 else fail "P1: the doppler argv differs" "$(tr '\n' '|' < "$DLOG")"; fi
+if [ -z "$(ls -A "$CTMP")" ]; then pass "P1: the stderr capture file is removed on exit (TMPDIR left empty)"
+else fail "P1: a tempfile survived the run" "$(ls -A "$CTMP" | tr '\n' ' ')"; fi
 if ! case_absent SHIM_IGNORE_FLAG=1 && [ "$RC" = 5 ] && grep -qF 'verdict=flag_read_failed' "$OUT"; then
   pass "H1: against a shim that exits non-zero on absent (ignores the flag) the absent case goes RED as flag_read_failed — the shim is flag-sensitive"
-else fail "H1: the absent case did not react to a flag-blind shim" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
-if case_scope_error; then pass "P4/S2: a scope error (non-zero rc) -> verdict=flag_read_failed rc=1, exit 5 — never read as unset"
-else fail "P4/S2: a scope error was not flag_read_failed" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
-run_case notoken false DOPPLER_TOKEN=
-if [ "$RC" = 5 ] && grep -qxF '[git-data-flag-precheck] verdict=flag_read_failed rc=1' "$OUT"; then pass "P4b: an empty DOPPLER_TOKEN_PRD (no token) -> flag_read_failed, exit 5"
-else fail "P4b: a missing token was not flag_read_failed" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "H1: the absent case did not react to a flag-blind shim" "$(detail)"; fi
+if case_scope_error; then pass "P4/S2: a token without access to the config -> verdict=flag_read_failed reason=forbidden rc=1, exit 5 — never read as unset"
+else fail "P4/S2: a scope error was not flag_read_failed reason=forbidden" "$(detail)"; fi
+if [ -z "$(ls -A "$CTMP")" ]; then pass "P4/S2: the stderr capture file is removed on a refusal too"
+else fail "P4/S2: a tempfile survived a refusal" "$(ls -A "$CTMP" | tr '\n' ' ')"; fi
+if case_token_absent; then pass "P4b: an empty DOPPLER_TOKEN -> verdict=flag_token_absent, exit 5, doppler never called"
+else fail "P4b: an empty token was not flag_token_absent before any doppler call" "$(detail) dlog=[$(tr '\n' '|' < "$DLOG")]"; fi
+if case_reason auth auth_invalid 1 SHIM_ERR=auth; then pass "C2a: 'Invalid Auth token' -> reason=auth_invalid, the stderr text never printed"
+else fail "C2a: an invalid token was not reason=auth_invalid (or its stderr was printed)" "$(detail)"; fi
+if case_reason config config_not_found 1 SHIM_BOUND_CONFIG=prd_missing; then pass "C2b: a config the token cannot find -> reason=config_not_found"
+else fail "C2b: a missing config was not reason=config_not_found" "$(detail)"; fi
+if case_reason network network 1 SHIM_ERR=network; then pass "C2c: a DNS/dial failure -> reason=network"
+else fail "C2c: a network failure was not reason=network" "$(detail)"; fi
+if case_reason other unknown 2 SHIM_ERR=other; then pass "C2d: unrecognized stderr -> reason=unknown, keeping doppler's rc (2)"
+else fail "C2d: unrecognized stderr was not reason=unknown rc=2" "$(detail)"; fi
+if case_scope_mismatch config SHIM_BOUND_CONFIG=prd_terraform; then pass "C2e: a token bound to soleur/prd_terraform (flag absent there) -> reason=scope_mismatch, never flag=unset"
+else fail "C2e: a token bound to another config read the flag as unset" "$(detail)"; fi
+if case_scope_mismatch project SHIM_BOUND_PROJECT=other-project; then pass "C2f: a token bound to another project's prd -> reason=scope_mismatch"
+else fail "C2f: a token bound to another project was accepted" "$(detail)"; fi
 if case_true plain true; then pass "P3/S3: exactly true -> verdict=flag_already_true, exit 5"
-else fail "P3/S3: true was not refused" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "P3/S3: true was not refused" "$(detail)"; fi
 if case_true nl $'true\n'; then pass "P3b: true with a trailing newline (as --plain may print) is still refused"
-else fail "P3b: true + newline was not refused" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "P3b: true + newline was not refused" "$(detail)"; fi
 if case_off false false; then pass "P2: false -> exactly flag=off, exit 0"
-else fail "P2: false was not flag=off" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "P2: false was not flag=off" "$(detail)"; fi
 if case_off upper TRUE; then pass "P5: TRUE is not true (the app compares === \"true\") -> flag=off"
-else fail "P5: TRUE was not flag=off" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "P5: TRUE was not flag=off" "$(detail)"; fi
 if case_off space 'true '; then pass "P5b: 'true ' (trailing space) is not true -> flag=off"
-else fail "P5b: 'true ' was not flag=off" "rc=$RC out=[$(tr '\n' '|' < "$OUT")]"; fi
+else fail "P5b: 'true ' was not flag=off" "$(detail)"; fi
 if case_off canary 'off-CANARY-5d1e' && ! grep -q 'CANARY' "$OUT"; then pass "P6: the flag value itself is never printed"
 else fail "P6: the flag value was printed" "out=[$(tr '\n' '|' < "$OUT")]"; fi
 run_case xtrace false
@@ -240,10 +292,16 @@ mutant_red() {
   if "$@"; then fail "M-$name: the named case stayed GREEN against the mutant"
   else pass "M-$name: the named case goes RED against the mutant"; fi
 }
+# mutant_red self-test (ADR-193), both directions, in a subshell so the counters roll back: a case
+# that stays GREEN must count one failure, a case that goes RED one pass. Reported with printf + exit.
+_mr="$( (mutant_red st-green true >/dev/null; printf '%s,%s ' "$passes" "$fails"; mutant_red st-red false >/dev/null; printf '%s,%s' "$passes" "$fails") )"
+if [ "$_mr" != "$passes,$((fails + 1)) $((passes + 1)),$((fails + 1))" ]; then
+  printf 'FAIL INSTRUMENT: mutant_red self-test read "%s" (from %s,%s) — a GREEN case must fail, a RED case must pass\n' "$_mr" "$passes" "$fails" >&2; exit 1
+fi
 
-# Row 1 — restore `|| echo ""` semantics: a non-zero rc reads as unset.
+# Row 1 — restore `|| echo ""` semantics: a non-zero rc reads as an empty value.
 # shellcheck disable=SC2016  # sed programs are data
-if mutate read-error-as-unset "$PRECHECK" 2 's#\|\| rc=\$\?$#|| flag=""#'; then
+if mutate read-error-as-unset "$PRECHECK" 2 's#2>"\$ERRF"\)" \|\| rc=\$\?$#2>"$ERRF")" || VAL=""#'; then
   CASE_SCRIPT="$MUTANT" mutant_red read-error-as-unset case_scope_error
 fi
 # Row 2 — REORDER: move the flag precheck step after the bridge step.
@@ -276,14 +334,33 @@ fi
 if mutate true-case-insensitive "$PRECHECK" 2 's#^if \[ "\$flag" = true \]; then$#if [ "${flag,,}" = true ]; then#'; then
   CASE_SCRIPT="$MUTANT" mutant_red true-case-insensitive case_off upper TRUE
 fi
+# Row 5 — drop the reserved-secret scope check.
+# shellcheck disable=SC2016
+if mutate no-scope-check "$PRECHECK" 2 's#^if \[ "\$project" != soleur \] \|\| \[ "\$config" != prd \]; then$#if false; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red no-scope-check case_scope_mismatch mconfig SHIM_BOUND_CONFIG=prd_terraform
+fi
+# Row 6 — drop the empty-token guard (the read then fails with reason=unknown instead).
+# shellcheck disable=SC2016
+if mutate no-token-guard "$PRECHECK" 2 's#^if \[ -z "\$\{DOPPLER_TOKEN:-\}" \]; then$#if false; then#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red no-token-guard case_token_absent
+fi
+# Row 7 — collapse the auth reason word into unknown.
+if mutate auth-reason-collapsed "$PRECHECK" 2 's#then echo auth_invalid$#then echo unknown#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red auth-reason-collapsed case_reason mauth auth_invalid 1 SHIM_ERR=auth
+fi
+# Row 8 — print doppler's captured stderr on a failed read.
+# shellcheck disable=SC2016
+if mutate stderr-printed "$PRECHECK" 2 's#^    refuse "flag_read_failed reason=\$\(reason_of "\$ERRF"\) rc=\$\{rc\}"$#    cat "$ERRF"; &#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red stderr-printed case_reason mprint auth_invalid 1 SHIM_ERR=auth
+fi
 
 # ── FLOOR + LEDGER ────────────────────────────────────────────────────────────────────
-MUTANT_FLOOR=4   # Guard 1 matrix rows
+MUTANT_FLOOR=8   # Guard 1 matrix rows
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2; exit 1
 fi
-# Assertion FLOOR: script cases 12 + workflow rows 6 + mutants 4 x 2 = 26 (exact).
-FLOOR=26
+# Assertion FLOOR: script cases 20 + workflow rows 6 + mutants 8 x 2 = 42 (exact).
+FLOOR=42
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s\n' "$_ran" "$FLOOR" >&2; exit 1

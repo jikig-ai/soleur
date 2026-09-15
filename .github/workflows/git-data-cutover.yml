@@ -173,6 +173,8 @@ jobs:
       # Exact per-host blocks, no `Host *`: web-1 authenticates with the bridge's CI key, git-data
       # with the root key through a LITERAL ProxyCommand target (no %h). git-data-cutover.sh
       # reads it as GIT_DATA_SSH="ssh -F <this file>".
+      # Nested connect budgets: the web-1 hop (also the ProxyCommand's own connect) gets 10 s, so
+      # a slow jump fails inside git-data's 20 s ConnectTimeout instead of consuming all of it.
       - name: Write git-data ssh_config
         id: ssh_config
         run: |
@@ -196,7 +198,7 @@ jobs:
             IdentityFile ${CI_SSH_KEYFILE}
             IdentitiesOnly yes
             BatchMode yes
-            ConnectTimeout 20
+            ConnectTimeout 10
             LogLevel ERROR
             ForwardAgent no
             ClearAllForwardings yes

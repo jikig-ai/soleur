@@ -577,7 +577,21 @@ jobs:
     # for survives the addition (799 + 22 = 821; 1200/821 = 1.46x). NOT re-bumped: an addition
     # this size does not move the derivation, and the block's own rule is that a ceiling meant to
     # catch a bypassed sleep mock is not raised casually.
-    timeout-minutes: 20
+    #
+    # RE-DERIVED 2026-09-15 (#8189), as the block above instructs, because that PR adds steps to
+    # this job (the git-data flag precheck suite, the git-data root-key drift-guards + its terraform
+    # validate) and grows the cutover access suite. The ~799 s basis above is stale: measured from
+    # the API over the last 10 successful `Infra Validation` runs on main, deploy-script-tests
+    # job seconds:
+    #   899 902 925 937 969 981 998 1012 1023 1030
+    # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
+    #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
+    #   + the #8189 additions (measured locally, budgeted high)     : +90 s
+    #   new basis                                                    : ~1120 s
+    #   1120 x 1.4 = 1568 s = 26.1 min -> 27
+    # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
+    # from a cancel that lands on whatever step the clock runs out in.
+    timeout-minutes: 27
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -1517,10 +1531,13 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
-      # (#6680, ADR-220) git-data-cutover's access gate precedes every host mutation, probe
-      # bytes never reach the workflow-command parser, the bridge's server-ip export set is
-      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring. Runtime arm drives the
-      # real script against real OpenSSH in the pinned image; under CI=true a missing docker FAILS.
+      # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
+      # probe, the store probes fail closed (a failed read is probe_failed, never a store state),
+      # probe bytes never reach the workflow-command parser, the bridge's server-ip export set is
+      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring and step gating. Runtime arm
+      # drives the real script against real OpenSSH in the pinned image; under CI=true a missing
+      # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
+      # (tests/scripts/test-git-data-root-token-census.sh), not here.
       - name: Run git-data cutover access-path tests (ADR-220)
         run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 

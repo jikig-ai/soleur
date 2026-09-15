@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # git-data-cutover read-only proof (#6680 / #8189 / ADR-220). Access gate, store probes, captured
-# values, real-mode refusal, workflow wiring, the root-token census, and a runtime arm.
+# values, real-mode refusal, workflow wiring and step gating, and a runtime arm.
 #
 # Access gate — git-data-cutover.sh's access_gate runs web (every roster member) -> git-data-jump
 #   (an `ssh -W` banner through web-1, no git-data credential) -> git-data-auth; a non-ok verdict
@@ -9,9 +9,11 @@
 #   unsanitized. Observed through ONE timeline file ($TL): PATH shims for `ssh`, `doppler` and
 #   `timeout` append to it, so every remote call is ordered in one stream.
 # Guard 2 (plan) — no run exits 0 on an unmounted, cut-over or non-empty store; each probe fails
-#   closed; the script carries no rsync/cryptsetup/mount/umount/mkfs/touch/rm -rf/systemctl/doppler.
-# Guard 3 — DOPPLER_TOKEN_GIT_DATA_ROOT is named under .github/ only by git-data-cutover.yml job
-#   `cutover` (environment web-platform-infra-apply); `secrets: inherit` sites are the known set.
+#   closed, and a read that could not complete is probe_failed, never a store-state verdict; the
+#   count runs only on the source the mount probe accepted; the script carries no
+#   rsync/cryptsetup/mount/umount/mkfs/touch/rm -rf/systemctl/doppler.
+# Guard 3 — the root token's reference census lives in tests/scripts/test-git-data-root-token-census.sh
+#   (registered in scripts/test-all.sh, so it runs on every PR rather than only on infra paths).
 # Guard 5 — gd_capture bounds (30 s, 4096 bytes), anchors and never prints a captured value; no
 #   raw capture of an ssh invocation outside it.
 # Guard 6 (cutover half) — workflow-level git-data-state, cancel-in-progress False, the literal
@@ -20,8 +22,9 @@
 #   non-default value exits 5 with an EMPTY timeline.
 # Bridge — the "Decode CI SSH private key" step exports exactly {CI_SSH_KEYFILE, WEB_HOST_SSH} on
 #   the server-ip branch and exactly {TF_VAR_ci_ssh_private_key} on the terraform branch.
-# Workflow (D-6 / AC9) — parsed as YAML (`on:` read through the True-key lookup); the key-fetch,
-#   ssh_config and secrets-check step bodies are EXECUTED, not grepped.
+# Workflow (D-6 / AC9) — parsed as YAML (`on:` read through the True-key lookup); step GATING is
+#   pinned (no continue-on-error before the script step; only teardown and summary carry if:); the
+#   key-fetch, ssh_config, secrets-check and teardown step bodies are EXECUTED, not grepped.
 # Runtime arm — the real script against real OpenSSH in the pinned ubuntu:24.04 image, including
 #   the workflow's own ssh_config writer end to end through a web-1 jump. Under CI=true a missing
 #   docker is a FAILURE.
@@ -32,7 +35,7 @@
 # reported with printf + exit, never through pass()/fail().
 #
 # The script under test carries no test seam (ADR-214): it is driven through PATH shims only.
-# GDC_* variables are seams of the SUITE (GDC_SCRIPT, GDC_WORKFLOW, GDC_GITHUB_DIR, GDC_ACTION).
+# GDC_* variables are seams of the SUITE (GDC_SCRIPT, GDC_WORKFLOW, GDC_ACTION).
 #
 # Run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 # Registered as a step in .github/workflows/infra-validation.yml.
@@ -47,7 +50,6 @@ ROOT="$(cd "$DIR/../../.." && pwd)"
 SCRIPT="${GDC_SCRIPT:-$DIR/git-data-cutover.sh}"
 ACTION="${GDC_ACTION:-$ROOT/.github/actions/cf-tunnel-ssh-bridge/action.yml}"
 WF="${GDC_WORKFLOW:-$ROOT/.github/workflows/git-data-cutover.yml}"
-GHDIR="${GDC_GITHUB_DIR:-$ROOT/.github}"
 IV="$ROOT/.github/workflows/infra-validation.yml"
 APPLY_WF="$ROOT/.github/workflows/apply-web-platform-infra.yml"
 # The pinned base image is owned by git-data-runcmd-rehearsal.test.sh (rule-audit.yml watches
@@ -149,6 +151,7 @@ case "$c" in
       empty)  : ;;
       rc1)    exit 1 ;;
       tmpfs)  printf 'tmpfs\n' ;;
+      rc255)  echo "ssh: connect to host 10.0.1.20 port 22: Connection timed out" >&2; exit 255 ;;
       line2)  printf '/dev/sdb\nCANARY-SECOND-LINE-7f3a\n' ;;
       noeol)  printf '/dev/sdb' ;;
       big)    printf '/dev/'; head -c 5000 /dev/zero | tr '\0' a ;;
@@ -167,6 +170,16 @@ case "$c" in
 esac
 exit "${SHIM_REMOTE_RC:-1}"
 SHIM
+# findmnt: reached ONLY by the count command when SHIM_COUNT=exec runs the remote bytes locally.
+# `-T <path>` answers the source that path lives on: SHIM_FINDMNT_T (default the mount probe's
+# /dev/sdb), or `fail` for a findmnt that cannot resolve it.
+cat > "$BIN/findmnt" <<'SHIM'
+#!/usr/bin/env bash
+case "${SHIM_FINDMNT_T:-/dev/sdb}" in
+  fail) echo "findmnt: can't find target" >&2; exit 1 ;;
+  *) printf '%s\n' "${SHIM_FINDMNT_T:-/dev/sdb}" ;;
+esac
+SHIM
 # doppler: the script must never call it. Logged and refused.
 cat > "$BIN/doppler" <<'SHIM'
 #!/usr/bin/env bash
@@ -183,7 +196,7 @@ shift
 if [ -n "\${SHIM_TIMEOUT_S:-}" ]; then exec "$REAL_TIMEOUT" "\$SHIM_TIMEOUT_S" "\$@"; fi
 exec "\$@"
 SHIM
-chmod +x "$BIN/ssh" "$BIN/doppler" "$BIN/timeout" || { printf 'FAIL SETUP: chmod shims\n' >&2; exit 1; }
+chmod +x "$BIN/ssh" "$BIN/findmnt" "$BIN/doppler" "$BIN/timeout" || { printf 'FAIL SETUP: chmod shims\n' >&2; exit 1; }
 
 WEB_INV='ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root'
 GD_INV='ssh -F /fixture/gd-ssh-config'
@@ -242,6 +255,12 @@ mutant_red() {
   if "$@"; then fail "M-$name: the named case stayed GREEN against the mutant" "$(ctx)"
   else pass "M-$name: the named case goes RED against the mutant"; fi
 }
+# mutant_red self-test (ADR-193), both directions, in a subshell so the counters roll back: a case
+# that stays GREEN must count one failure, a case that goes RED one pass. Reported with printf + exit.
+_mr="$( (RC=- OUT=/dev/null TLF=/dev/null; mutant_red st-green true >/dev/null; printf '%s,%s ' "$passes" "$fails"; mutant_red st-red false >/dev/null; printf '%s,%s' "$passes" "$fails") )"
+if [ "$_mr" != "$passes,$((fails + 1)) $((passes + 1)),$((fails + 1))" ]; then
+  printf 'FAIL INSTRUMENT: mutant_red self-test read "%s" (from %s,%s) — a GREEN case must fail, a RED case must pass\n' "$_mr" "$passes" "$fails" >&2; exit 1
+fi
 
 # ── ACCESS GATE (unit rows) ───────────────────────────────────────────────────────────
 
@@ -259,7 +278,7 @@ for mode in unset defaults; do
   else fail "S1/S12 ($mode): timeline is not exactly {web probe, jump probe}" "$(ctx)"; fi
 done
 if grep -qx 'timeout 30' "$T/s1unset.tl" && grep -qx 'timeout 25' "$T/s1unset.tl" && ! grep -qv -e '^ssh' -e '^timeout' "$T/s1unset.tl" \
-   && [ "$(grep -c '^ssh-stdin ' "$T/s1unset.tl")" = 2 ] && ! grep '^ssh-stdin ' "$T/s1unset.tl" | grep -vqx 'ssh-stdin /dev/null'; then
+   && [ "$(grep -c '^ssh-stdin ' "$T/s1unset.tl")" = 2 ] && [ "$(grep -cx 'ssh-stdin /dev/null' "$T/s1unset.tl")" = 2 ]; then
   pass "X1: the web probe is bounded by timeout 30, the jump by timeout 25, and every probe's stdin is /dev/null"
 else fail "X1: probe bounds or stdin changed" "$(tr '\n' '|' < "$T/s1unset.tl")"; fi
 if [ "$(cat "$T/s1unset.summary" 2>/dev/null)" = "- ACCESS role=web host=10.0.1.10 verdict=ok
@@ -449,7 +468,7 @@ ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile
 ssh -i FIXTURE_WEB_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root -o BatchMode=yes -o ConnectTimeout=20 -W 10.0.1.20:22 10.0.1.10
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 true
 ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 findmnt -no SOURCE /mnt/git-data
-ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; if [ -d "$d" ]; then n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"; elif [ -e "$d" ]; then exit 3; else echo 0; fi
+ssh -F /fixture/gd-ssh-config -o BatchMode=yes -o ConnectTimeout=20 10.0.1.20 d=/mnt/git-data/repositories; src=/dev/sdb; if [ -L "$d" ] && [ ! -e "$d" ]; then exit 3; fi; if [ ! -e "$d" ]; then exit 7; fi; [ -d "$d" ] || exit 3; s=$(findmnt -no SOURCE -T "$d") || exit 5; [ "$s" = "$src" ] || exit 6; n=$(find -H "$d" -mindepth 1 -maxdepth 1 -name '*.git' -printf .) || exit 4; echo "${#n}"
 EXP
 run_case ac2 "${KEYED[@]}" GITHUB_STEP_SUMMARY="$T/ac2.summary"
 if [ "$RC" = 0 ] && has_store store-mounted ok && has_store store-not-cut-over ok && has_store store-empty ok \
@@ -477,7 +496,12 @@ else fail "AC2: annotation set differs, or the captured value was printed" "$(gr
 # Each case is a function so a mutant can re-run exactly the case its matrix row names.
 case_unmounted_empty() { # findmnt rc 0 with an empty source
   run_case g2empty "${KEYED[@]}" SHIM_FINDMNT=empty
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=96' "$OUT" && no_count_probe
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted' "$OUT" && no_count_probe
+}
+case_mount_transport() { # the findmnt read dies in ssh itself (rc 255): a probe error, not a store state
+  run_case g2rc255 "${KEYED[@]}" SHIM_FINDMNT=rc255
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=255' "$OUT" && no_count_probe \
+    && grep -qxF '::error title=git-data-cutover store::probe=store-mounted verdict=probe_failed rc=255' "$OUT"
 }
 case_mapper() {
   run_case g2mapper "${KEYED[@]}" SHIM_FINDMNT=mapper
@@ -500,16 +524,18 @@ case_verb_census() { # <script>
   [ "$n" -ge 50 ] && [ -z "$hits" ]
 }
 
-if case_unmounted_empty; then pass "S4b/G2: findmnt exits 0 with an EMPTY source -> old_store_unmounted rc=96, exit 5, count never dialed"
+if case_unmounted_empty; then pass "S4b/G2: findmnt exits 0 with an EMPTY source -> old_store_unmounted (no rc: the read itself succeeded), exit 5, count never dialed"
 else fail "S4b/G2: an empty findmnt source was accepted" "$(ctx)"; fi
 run_case g2rc1 "${KEYED[@]}" SHIM_FINDMNT=rc1
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=1' "$OUT" && no_count_probe; then
   pass "S4/G2: findmnt non-zero -> old_store_unmounted rc=1, exit 5"
 else fail "S4/G2: a failing findmnt was not refused" "$(ctx)"; fi
 run_case g2tmpfs "${KEYED[@]}" SHIM_FINDMNT=tmpfs
-if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=96' "$OUT" && no_count_probe; then
-  pass "S4c/G2: a non-device source (tmpfs) is old_store_unmounted rc=96"
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted' "$OUT" && no_count_probe; then
+  pass "S4c/G2: a non-device source (tmpfs) is old_store_unmounted (no rc)"
 else fail "S4c/G2: a non-device source was accepted" "$(ctx)"; fi
+if case_mount_transport; then pass "S4d/G2: findmnt read failing in ssh (rc 255) -> probe_failed rc=255, never old_store_unmounted"
+else fail "S4d/G2: a transport failure was reported as a store state" "$(ctx)"; fi
 if case_mapper; then pass "S5/G2: findmnt names the LUKS mapper -> already_cut_over, exit 5, count never dialed"
 else fail "S5/G2: a mapper-backed store was not refused" "$(ctx)"; fi
 run_case g2one "${KEYED[@]}" SHIM_COUNT=one
@@ -535,10 +561,32 @@ _store() { # <name> — a fresh fixture store root under $T
 }
 # `_store`'s own guard runs inside `$( )`, where `exit` kills only the subshell and the caller
 # binds "" — so each binding is re-guarded HERE, in the shell that performs the writes.
-_sr="$(_store missing)"; assert_fixture_dir "$_sr"
-run_case g2missing "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
-if [ "$RC" = 0 ] && has_store store-empty ok; then pass "S7/H2: a mounted root with NO repositories dir counts 0 -> exit 0"
-else fail "S7/H2: a missing repositories dir was not counted as 0" "$(ctx)"; fi
+case_missing_repos() { # a mounted root with no repositories dir: bootstrap always creates it
+  local sr
+  sr="$(_store missing)"; assert_fixture_dir "$sr"
+  run_case g2missing "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$sr"
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=7' "$OUT"
+}
+case_other_source() { # the repositories dir lives on a different source than the one accepted
+  local sr
+  sr="$(_store othersrc)"; assert_fixture_dir "$sr"; mkdir -p "$sr/repositories"
+  run_case g2othersrc "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$sr" SHIM_FINDMNT_T=/dev/sdc
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=6' "$OUT"
+}
+if case_missing_repos; then pass "S7/H2: a mounted root with NO repositories dir -> probe_failed rc=7 (git-data-bootstrap.sh creates it; absent is abnormal, never a count of 0)"
+else fail "S7/H2: a missing repositories dir was not probe_failed rc=7" "$(ctx)"; fi
+if case_other_source; then pass "S7e: repositories on a different source (findmnt -T /dev/sdc != /dev/sdb) -> probe_failed rc=6"
+else fail "S7e: a count on a different source was accepted" "$(ctx)"; fi
+_sr="$(_store tfail)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories"
+run_case g2tfail "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr" SHIM_FINDMNT_T=fail
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=5' "$OUT"; then
+  pass "S7f: findmnt -T unable to resolve the repositories source -> probe_failed rc=5"
+else fail "S7f: an unresolvable source was not probe_failed rc=5" "$(ctx)"; fi
+_sr="$(_store dangling)"; assert_fixture_dir "$_sr"; ln -s "$T/store-dangling-nowhere" "$_sr/repositories"
+run_case g2dangling "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=3' "$OUT"; then
+  pass "S7g: a dangling repositories symlink -> probe_failed rc=3, never a count of 0"
+else fail "S7g: a dangling symlink was not probe_failed rc=3" "$(ctx)"; fi
 _sr="$(_store other)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/notes" && : > "$_sr/repositories/x.gitx" && : > "$_sr/repositories/README"
 run_case g2other "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 0 ] && has_store store-empty ok; then pass "S7b: entries that are not *.git do not count -> exit 0"
@@ -579,12 +627,12 @@ else fail "D-3: the script called doppler" "$(grep -l '^doppler ' "$T"/*.tl | he
 # ── GUARD 5 — captured values ─────────────────────────────────────────────────────────
 case_line2() { # injected second line: refused AND the canary never printed
   run_case g5line2 "${KEYED[@]}" SHIM_FINDMNT=line2
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=96' "$OUT" \
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" \
     && ! grep -q 'CANARY-SECOND-LINE' "$OUT" && no_count_probe
 }
 case_hang() {
   CASE_TIMEOUT=15 run_case g5hang "${KEYED[@]}" SHIM_FINDMNT=hang SHIM_TIMEOUT_S=2
-  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=124' "$OUT"
+  [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=124' "$OUT"
 }
 case_capture_census() { # <script>
   local code outside calls
@@ -598,12 +646,12 @@ case_capture_census() { # <script>
   CAPTURE_DETAIL="calls=$calls outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
   [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 2 ]
 }
-if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is refused (rc=96) and neither line is printed"
+if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
-if case_hang; then pass "S8b/G5: a hung host is cut by gd_capture's timeout -> old_store_unmounted rc=124, exit 5"
+if case_hang; then pass "S8b/G5: a hung host is cut by gd_capture's timeout -> probe_failed rc=124, exit 5"
 else fail "S8b/G5: a hung host was not bounded" "$(ctx)"; fi
 run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
-if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=old_store_unmounted rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
+if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
 if case_capture_census "$SCRIPT"; then pass "G5 census: exactly two gd_capture call sites; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
@@ -765,6 +813,17 @@ check("WF10: script step runs the script with no if: (only when every earlier st
       str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh" and "if" not in r, (r.get("run"), r.get("if")))
 td = step("teardown")
 check("WF7: teardown is if: always() and after the script step", td.get("if") == "always()")
+# Step GATING (C7): the content rows above cannot see a step that stops gating. Before the script
+# step nothing may continue past its own failure, and only teardown and the summary run on a failed job.
+SUMMARY = "Read-only proof summary"
+run_i = pos["run"][0] if len(pos["run"]) == 1 else len(steps)
+coe = [s.get("id") or s.get("name") or s.get("uses") for s in steps[:run_i + 1] if "continue-on-error" in s]
+ifs = sorted((s.get("name") or s.get("id") or str(s.get("uses"))) for s in steps if "if" in s)
+summ = [s for s in steps if s.get("name") == SUMMARY]
+check("WF-gating: no step up to and including the script step carries continue-on-error; only teardown (exactly always()) and the summary carry if:",
+      len(steps) >= 10 and not coe and ifs == sorted(["Tear down cloudflared SSH bridge", SUMMARY])
+      and td.get("if") == "always()" and len(summ) == 1 and summ[0].get("if") == "always()",
+      (coe, ifs))
 body = td.get("run") or ""
 code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("#"))
 check("WF8: teardown deletes the NAT rule, kills cloudflared, shreds the CI keyfile, the root key and the ssh_config, each guarded",
@@ -795,7 +854,7 @@ check("AC9 pins: every remote uses: is @<40 hex> # v… (%d remote), and the onl
       len(remote) >= 2 and all(re.search(r"uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v", u) for u in remote) and local == [BRIDGE],
       (remote, local))
 # Step bodies for the executed rows.
-for k in ("key_fetch", "ssh_config", "secrets_check"):
+for k in ("key_fetch", "ssh_config", "secrets_check", "teardown"):
     s = step(k)
     if isinstance(s.get("run"), str):
         open("%s/%s.sh" % (steps_dir, k), "w").write(s["run"])
@@ -817,7 +876,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -ge 30 ] || fail "WF: only $_wf_n workflow verdicts were produced (expected 30) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -ge 31 ] || fail "WF: only $_wf_n workflow verdicts were produced (expected 31) — the YAML leg crashed" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -903,8 +962,9 @@ PY
   for spec in "none:rc_nonzero" "empty:empty" "garbage:not_openssh_key"; do
     _m="${spec%%:*}"; _r="${spec##*:}"
     _kf_run "$_m" "$_m"
+    _unmasked="$(grep -v '^::add-mask::' "$KR/stdout" || true)"
     if [ "$KF_RC" != 0 ] && grep -qxF "::error title=git-data-cutover key::verdict=git_data_root_key_fetch_failed reason=${_r}" "$KR/stdout" \
-       && ! grep -v '^::add-mask::' "$KR/stdout" | grep -q 'NOT-A-KEY-CANARY'; then
+       && ! grep -q 'NOT-A-KEY-CANARY' <<< "$_unmasked"; then
       pass "KF ($_m): fails with verdict=git_data_root_key_fetch_failed reason=$_r, printing the reason word only"
     else fail "KF ($_m): expected reason=$_r" "rc=$KF_RC $(tr '\n' '|' < "$KR/stdout" | sed 's/::/: :/g' | cut -c1-300)"; fi
   done
@@ -961,17 +1021,22 @@ for h, opts in blocks.items():
 pc20 = [o for o in blocks.get("Host 10.0.1.20", []) if o.lower().startswith("proxycommand ")]
 if pc20 != ["ProxyCommand ssh -F %s -W 10.0.1.20:22 10.0.1.10" % cfg]: problems.append("proxycommand %r" % pc20)
 if any(o.lower().startswith("proxy") for o in blocks.get("Host 10.0.1.10", [])): problems.append("web block has a proxy")
+want_ct = {"Host 10.0.1.10": ["ConnectTimeout 10"], "Host 10.0.1.20": ["ConnectTimeout 20"]}
+for h, want in want_ct.items():
+    got = [o for o in blocks.get(h, []) if o.lower().startswith("connecttimeout")]
+    if got != want: problems.append("%s connecttimeout %r" % (h, got))
 print("OK" if not problems else "; ".join(problems))
 PY
 )"
-  if [ "$_sc_struct" = OK ]; then pass "SC2: exactly Host 10.0.1.10 then Host 10.0.1.20 (no Host */Match), one IdentityFile each, literal ProxyCommand, every hardening option in both"
+  if [ "$_sc_struct" = OK ]; then pass "SC2: exactly Host 10.0.1.10 then Host 10.0.1.20 (no Host */Match), one IdentityFile each, literal ProxyCommand, ConnectTimeout 10 on the web-1 hop and 20 on git-data, every hardening option in both"
   else fail "SC2: ssh_config structure differs" "$_sc_struct"; fi
   _g20="$(ssh -G -F "$SC_CFG" 10.0.1.20 2>/dev/null)"; _g10="$(ssh -G -F "$SC_CFG" 10.0.1.10 2>/dev/null)"
   if grep -qxF "proxycommand ssh -F $SC_CFG -W 10.0.1.20:22 10.0.1.10" <<< "$_g20" \
      && [ "$(grep '^identityfile ' <<< "$_g20")" = "identityfile $SR/rt/gd-root-key" ] && grep -qx 'user root' <<< "$_g20" \
      && [ "$(grep '^identityfile ' <<< "$_g10")" = "identityfile $T/sc-good/ci-key" ] && ! grep -q '^proxycommand ' <<< "$_g10" \
-     && grep -qx 'identitiesonly yes' <<< "$_g20" && grep -qx 'forwardagent no' <<< "$_g10"; then
-    pass "SC3: real OpenSSH (ssh -G) resolves git-data to the root key via the web-1 ProxyCommand, and web-1 to the CI key with no proxy"
+     && grep -qx 'identitiesonly yes' <<< "$_g20" && grep -qx 'forwardagent no' <<< "$_g10" \
+     && grep -qx 'connecttimeout 10' <<< "$_g10" && grep -qx 'connecttimeout 20' <<< "$_g20"; then
+    pass "SC3: real OpenSSH (ssh -G) resolves git-data to the root key via the web-1 ProxyCommand (connect 20 s), and web-1 to the CI key with no proxy (connect 10 s)"
   else fail "SC3: ssh -G resolution differs" "$(printf '%s' "$_g20" | grep -E '^(proxycommand|identityfile|user) ' | tr '\n' '|')"; fi
   _sc_run nokey ""
   if [ "$SC_RC" != 0 ] && [ ! -e "$SC_CFG" ] && grep -qF 'verdict=ssh_config_key_absent' "$SR/stdout"; then pass "SC4: CI_SSH_KEYFILE unset -> ssh_config_key_absent, nothing written"
@@ -1002,97 +1067,51 @@ else
   else fail "SEC: an absent DOPPLER_TOKEN passed"; fi
 fi
 
-# ── GUARD 3 — the root token's reference census ──────────────────────────────────────
-cat > "$T/g3.py" <<'PY'
-import sys, os, yaml, json, re
-gh = sys.argv[1]
-NAME = "DOPPLER_TOKEN_GIT_DATA_ROOT"
-KNOWN_INHERIT = {("version-bump-and-release.yml", "release"), ("web-platform-release.yml", "release")}
-out = []
-def check(name, cond, detail=""):
-    out.append("%s\t%s\t%s" % ("ok" if cond else "FAIL", name, str(detail)[:240].replace("\t", " ").replace("\n", " ")))
-files = []
-for sub in ("workflows", "actions"):
-    for dp, dn, fn in os.walk(os.path.join(gh, sub)):
-        for f in fn: files.append(os.path.join(dp, f))
-files.sort()
-check("G3a: census scanned >= 1 file under .github/workflows and .github/actions (%d files scanned)" % len(files),
-      len(files) >= 1 and any(p.endswith("/workflows/git-data-cutover.yml") for p in files), "%d files scanned" % len(files))
-naming, parse_err, inherit, dynamic, reusable_names = [], [], set(), [], False
-cut = None
-for p in files:
-    rel = os.path.relpath(p, gh)
-    text = open(p, encoding="utf-8", errors="replace").read()
-    if p.endswith((".yml", ".yaml")):
-        try: doc = yaml.safe_load(text)
-        except Exception as e: parse_err.append(rel); continue
-        dumped = json.dumps(doc, default=str)
-        if isinstance(doc, dict):
-            for j, b in (doc.get("jobs") or {}).items():
-                if isinstance(b, dict) and b.get("secrets") == "inherit": inherit.add((os.path.basename(p), j))
-        if rel == os.path.join("workflows", "git-data-cutover.yml"): cut = doc
-    else:
-        dumped = text  # no comment semantics outside YAML: any mention counts
-    if NAME in dumped: naming.append(rel)
-    if "toJSON(secrets)" in dumped or re.search(r"secrets\s*\[", dumped): dynamic.append(rel)
-    if os.path.basename(p) == "reusable-release.yml" and NAME in dumped: reusable_names = True
-check("G3b: the token is named (outside comments) only by workflows/git-data-cutover.yml", naming == [os.path.join("workflows", "git-data-cutover.yml")] and not parse_err, (naming, parse_err))
-jobs = (cut or {}).get("jobs") or {}
-top = [k for k, v in (cut or {}).items() if k != "jobs" and NAME in json.dumps(v, default=str)]
-jn = [j for j, b in jobs.items() if NAME in json.dumps(b, default=str)]
-check("G3c: within it only job `cutover` names the token, and no workflow-level key does", jn == ["cutover"] and not top, (jn, top))
-env = (jobs.get("cutover") or {}).get("environment")
-if isinstance(env, dict): env = env.get("name")
-check("G3d: job `cutover` declares environment web-platform-infra-apply", env == "web-platform-infra-apply", env)
-steps = (jobs.get("cutover") or {}).get("steps") or []
-sites = []
-for s in steps:
-    if NAME not in json.dumps(s, default=str): continue
-    e = s.get("env") or {}
-    keys = [k for k, v in e.items() if NAME in str(v)]
-    rest = {k: v for k, v in s.items() if k != "env"}
-    sites.append((s.get("id"), keys, [e[k] for k in keys], NAME in json.dumps(rest, default=str)))
-check("G3e: the token's steps are exactly the secrets check (presence boolean) and the key fetch (value bind)",
-      sites == [("secrets_check", ["GIT_DATA_ROOT_TOKEN_PRESENT"], ["${{ secrets.%s != '' }}" % NAME], False),
-                ("key_fetch", ["DOPPLER_TOKEN"], ["${{ secrets.%s }}" % NAME], False)], sites)
-check("G3f: `secrets: inherit` sites are exactly the known release callers", inherit == KNOWN_INHERIT, sorted(inherit))
-check("G3g: no toJSON(secrets) / secrets[...] dynamic secret access anywhere", not dynamic, dynamic)
-check("G3h: reusable-release.yml never names the token", not reusable_names)
-print("\n".join(out))
-PY
-python3 "$T/g3.py" "$GHDIR" > "$T/g3.tsv" 2> "$T/g3.err"
-_g3_n=0
-while IFS=$'\t' read -r v name detail; do
-  [ -n "$v" ] || continue
-  _g3_n=$((_g3_n + 1))
-  if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
-done < "$T/g3.tsv"
-[ "$_g3_n" -ge 8 ] || fail "G3: only $_g3_n census verdicts were produced (expected 8) — the census crashed" "$(head -c 300 "$T/g3.err")"
-
-# Harness rows: a fixture tree.
-_ghcopy() { # <name> — a copy of the census input tree under $T; prints its path
-  local d="$T/gh-$1"
-  assert_fixture_dir "$d"; assert_fixture_dir "$GHDIR"
-  rm -rf "$d"; mkdir -p "$d" && cp -r "$GHDIR/workflows" "$GHDIR/actions" "$d/" || { printf 'FAIL SETUP: gh copy\n' >&2; exit 1; }
-  printf '%s' "$d"
+# Teardown — EXECUTED with PATH stubs for sudo/iptables/shred (kill is the builtin, aimed at a
+# real sleeping fixture process). The key file and the ssh_config must be gone afterwards.
+mkdir -p "$T/tdbin" || { printf 'FAIL SETUP: mkdir tdbin\n' >&2; exit 1; }
+cat > "$T/tdbin/sudo" <<'SHIM'
+#!/usr/bin/env bash
+exec "$@"
+SHIM
+cat > "$T/tdbin/iptables" <<'SHIM'
+#!/usr/bin/env bash
+printf 'iptables %s\n' "$*" >> "$TD_LOG"
+SHIM
+cat > "$T/tdbin/shred" <<'SHIM'
+#!/usr/bin/env bash
+printf 'shred %s\n' "$*" >> "$TD_LOG"
+[ "${1:-}" = -u ] && [ -n "${2:-}" ] && rm -f -- "$2"
+SHIM
+chmod +x "$T/tdbin/sudo" "$T/tdbin/iptables" "$T/tdbin/shred"
+case_teardown() { # <teardown-body-file>
+  local body="$1" pid
+  TDR="$T/td-run"
+  assert_fixture_dir "$TDR"
+  rm -rf "$TDR"; mkdir -p "$TDR/rt" || { printf 'FAIL SETUP: mkdir td\n' >&2; exit 1; }
+  [ -s "$body" ] || { TD_DETAIL="no teardown body extracted"; return 1; }
+  printf 'k\n' > "$TDR/rt/gd-root-key"; printf 'c\n' > "$TDR/rt/gd-ssh-config"; printf 'ci\n' > "$TDR/ci-key"; : > "$TDR/log"
+  sleep 60 & pid=$!
+  env -i PATH="$T/tdbin:/usr/bin:/bin" HOME="$TDR" RUNNER_TEMP="$TDR/rt" TD_LOG="$TDR/log" SERVER_IP=10.0.1.10 \
+    CLOUDFLARED_PID="$pid" CI_SSH_KEYFILE="$TDR/ci-key" bash --noprofile --norc -e "$body" > "$TDR/stdout" 2>&1
+  TD_RC=$?
+  local alive=1; kill -0 "$pid" 2>/dev/null || alive=0
+  [ "$alive" = 1 ] && kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  TD_DETAIL="rc=$TD_RC alive=$alive files=[$(ls -A "$TDR/rt" | tr '\n' ' ')] log=[$(tr '\n' '|' < "$TDR/log")]"
+  [ "$TD_RC" = 0 ] && [ ! -e "$TDR/rt/gd-root-key" ] && [ ! -e "$TDR/rt/gd-ssh-config" ] && [ ! -e "$TDR/ci-key" ] && [ "$alive" = 0 ] \
+    && grep -qxF 'iptables -t nat -D OUTPUT -d 10.0.1.10 -p tcp --dport 22 -j REDIRECT --to-ports 2222' "$TDR/log"
 }
-# Same as `_store` above: `_ghcopy`'s guard exits only its subshell, so re-guard every binding.
-_gc="$(_ghcopy comment)"; assert_fixture_dir "$_gc"
-printf '# mentions DOPPLER_TOKEN_GIT_DATA_ROOT in a comment only\nname: zz-comment\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo ok\n' > "$_gc/workflows/zz-comment.yml"
-python3 "$T/g3.py" "$_gc" > "$T/g3c.tsv" 2>&1
-if grep -qP '^ok\tG3b:' "$T/g3c.tsv"; then pass "H3a: a comment-only mention in another workflow does not count"
-else fail "H3a: a comment-only mention was counted" "$(grep G3b "$T/g3c.tsv")"; fi
-assert_fixture_dir "$T/gh-empty"; mkdir -p "$T/gh-empty/workflows" "$T/gh-empty/actions"
-python3 "$T/g3.py" "$T/gh-empty" > "$T/g3e.tsv" 2>&1
-if grep -qP '^FAIL\tG3a:' "$T/g3e.tsv" && grep -q '0 files scanned' "$T/g3e.tsv"; then pass "H3b: an empty scan set is a FAILURE reported as '0 files scanned'"
-else fail "H3b: an empty scan set passed" "$(head -2 "$T/g3e.tsv")"; fi
+if case_teardown "$T/steps/teardown.sh"; then
+  pass "TD: the teardown body, executed, removes the root key, the ssh_config and the CI keyfile, kills cloudflared and deletes the NAT rule"
+else fail "TD: the executed teardown left key material or the bridge behind" "$TD_DETAIL"; fi
 
 # ── MUTANTS ───────────────────────────────────────────────────────────────────────────
 echo; echo "--- mutation matrix (each row must turn its named case RED)"
 # shellcheck disable=SC2016  # sed programs are data
 {
 # G2 row 1 — accept an empty findmnt source.
-if mutate g2-empty-source "$SCRIPT" 2 "s#gd_capture '\\^/dev/\\[A-Za-z0-9/_.-\\]\\+\\\$'#gd_capture '^(/dev/[A-Za-z0-9/_.-]+)?\$'#"; then
+if mutate g2-empty-source "$SCRIPT" 2 's#^  \[\[ "\$GD_CAPTURED" =~ \^/dev/\[A-Za-z0-9/_.-\]\+\$ \]\] \|\| _store_refuse store-mounted old_store_unmounted$#  [[ "$GD_CAPTURED" =~ ^(/dev/[A-Za-z0-9/_.-]+)?$ ]] || _store_refuse store-mounted old_store_unmounted#'; then
   CASE_SCRIPT="$MUTANT" mutant_red g2-empty-source case_unmounted_empty
 fi
 # G2 row 2 — delete refuse_if_cut_over from main (keep the other two).
@@ -1141,36 +1160,41 @@ if mutate g6-group-rename "$WF" 2 's#^  group: git-data-state$#  group: git-data
   python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-g6.tsv" 2>&1
   mutant_red g6-group-rename wf_row "$T/mut/wf-g6.tsv" "G6: workflow-level concurrency group"
 fi
-# G3 row 1 — a second job in git-data-cutover.yml referencing the token.
-_gm="$(_ghcopy m-secondjob)"; assert_fixture_dir "$_gm"
-if mutate g3-second-job "$_gm/workflows/git-data-cutover.yml" 6 '$a\  second:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}'; then
-  cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
-  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-1.tsv" 2>&1
-  mutant_red g3-second-job wf_row "$T/mut/g3-1.tsv" "G3c:"
+# C1 row — report a transport failure of the mount read as a store state.
+if mutate c1-transport-as-unmounted "$SCRIPT" 2 's#^    \*\) _store_refuse store-mounted probe_failed "\$rc" ;;$#    *) _store_refuse store-mounted old_store_unmounted "$rc" ;;#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red c1-transport-as-unmounted case_mount_transport
 fi
-# G3 row 4 — remove environment: from cutover.
-_gm="$(_ghcopy m-noenv)"; assert_fixture_dir "$_gm"
-if mutate g3-no-environment "$_gm/workflows/git-data-cutover.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
-  cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
-  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-4.tsv" 2>&1
-  mutant_red g3-no-environment wf_row "$T/mut/g3-4.tsv" "G3d:"
+# C3 row 1 — drop the mount-identity check from the count command.
+if mutate c3-no-source-identity "$SCRIPT" 2 's#\[ \\"\\\$s\\" = \\"\\\$src\\" \] \|\| exit 6; ##'; then
+  CASE_SCRIPT="$MUTANT" mutant_red c3-no-source-identity case_other_source
 fi
-# G3 row 2 — a second workflow file referencing the token, sorted after the compliant first.
-_gm="$(_ghcopy m-secondwf)"; assert_fixture_dir "$_gm"
-printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: web-platform-infra-apply\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}\n' > "$_gm/workflows/zz-second.yml"
-if [ -s "$_gm/workflows/zz-second.yml" ]; then
-  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g3-second-workflow: fixture workflow zz-second.yml written after git-data-cutover.yml"
-  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-2.tsv" 2>&1
-  mutant_red g3-second-workflow wf_row "$T/mut/g3-2.tsv" "G3b:"
-else fail "M-g3-second-workflow: fixture not written"; fi
-# G3 row 3 — `secrets: inherit` on a new caller.
-_gm="$(_ghcopy m-inherit)"; assert_fixture_dir "$_gm"
-printf 'name: zz\non: workflow_dispatch\njobs:\n  call:\n    uses: ./.github/workflows/reusable-release.yml\n    secrets: inherit\n' > "$_gm/workflows/zz-caller.yml"
-if [ -s "$_gm/workflows/zz-caller.yml" ]; then
-  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g3-inherit: fixture caller zz-caller.yml with secrets: inherit written"
-  python3 "$T/g3.py" "$_gm" > "$T/mut/g3-3.tsv" 2>&1
-  mutant_red g3-inherit wf_row "$T/mut/g3-3.tsv" "G3f:"
-else fail "M-g3-inherit: fixture not written"; fi
+# C3 row 2 — count a missing repositories dir as 0.
+if mutate c3-missing-as-zero "$SCRIPT" 2 's#then exit 7; fi#then echo 0; exit 0; fi#'; then
+  CASE_SCRIPT="$MUTANT" mutant_red c3-missing-as-zero case_missing_repos
+fi
+# C7 row 1 — continue-on-error on the key fetch.
+if mutate c7-key-fetch-coe "$WF" 1 's#^        id: key_fetch$#&\n        continue-on-error: true#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-c7a.tsv" 2>&1
+  mutant_red c7-key-fetch-coe wf_row "$T/mut/wf-c7a.tsv" "WF-gating:"
+fi
+# C7 row 2 — the confirm token check never runs.
+if mutate c7-confirm-if-false "$WF" 1 's#^        id: confirm$#&\n        if: false#'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-c7b.tsv" 2>&1
+  mutant_red c7-confirm-if-false wf_row "$T/mut/wf-c7b.tsv" "WF-gating:"
+fi
+# C7 row 3 — teardown only on success.
+if mutate c7-teardown-success "$WF" 2 '/^      - name: Tear down cloudflared SSH bridge$/{n;s#^        if: always\(\)$#        if: success()#}'; then
+  python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-c7c.tsv" 2>&1
+  mutant_red c7-teardown-success wf_row "$T/mut/wf-c7c.tsv" "WF-gating:"
+fi
+# C7 row 4 — teardown stops shredding the ssh_config (content rows are grep-free here: executed).
+if mutate c7-teardown-keeps-config "$WF" 2 's#^            shred -u "\$RUNNER_TEMP/gd-ssh-config" 2>/dev/null \|\| true$#            true#'; then
+  rm -f "$T/mut/teardown.sh"
+  python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-c7d.tsv" 2>&1
+  # The mutant's teardown body must have been extracted, or the case goes RED for the wrong reason.
+  if [ -s "$T/mut/teardown.sh" ]; then mutant_red c7-teardown-keeps-config case_teardown "$T/mut/teardown.sh"
+  else fail "M-c7-teardown-keeps-config: no teardown body was extracted from the mutant" "$(head -c 300 "$T/mut/wf-c7d.tsv")"; fi
+fi
 }
 
 # ── RUNTIME ARM — real OpenSSH (pinned ubuntu:24.04) ─────────────────────────────────
@@ -1277,7 +1301,7 @@ drive2() { # label
   row "$1_web_accepted" "$(( $(accepted 10.0.1.10) - wb ))"; row "$1_gd_accepted" "$(( $(accepted 10.0.1.20) - gb ))"
   cp /out/remote.log "/out/$1.remote"
 }
-printf '/dev/sdb\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data
+printf '/dev/sdb\n' > /fixture/findmnt.out; echo 0 > /fixture/findmnt.rc; rm -rf /mnt/git-data; mkdir -p /mnt/git-data/repositories
 drive2 r5
 mkdir -p /mnt/git-data/repositories/ws-1.git
 drive2 r6
@@ -1319,8 +1343,10 @@ DRV
       && pass "R5-fixture: 10.0.1.10/10.0.1.20 bound in the container and the workflow's ssh_config writer ran (rc 0)" || fail "R5-fixture: address binding or the ssh_config writer failed" "ip=$(_rv ip_ok) sshcfg=$(_rv sshcfg_rc) $(tr '\n' '|' < "$T/rt/out/sshcfg.out" 2>/dev/null | sed 's/::/: :/g')"
     { [ "$(_rv r5_rc)" = 0 ] && _acc r5 web ok && _acc r5 git-data-jump ok && _acc r5 git-data-auth ok && _sto r5 store-mounted ok && _sto r5 store-not-cut-over ok && _sto r5 store-empty ok; } \
       && pass "R5a/AC2 runtime: real OpenSSH through the generated ssh_config — access ok x3, store probes ok x3, exit 0" || fail "R5a: the end-to-end read-only proof did not exit 0" "rc=$(_rv r5_rc) $(_rctx r5)"
-    [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -no SOURCE /mnt/git-data" ] \
-      && pass "R5b: on git-data the only command observed is findmnt -no SOURCE /mnt/git-data (a missing repositories dir needs no find)" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
+    [ "$(cat "$T/rt/out/r5.remote" 2>/dev/null)" = "findmnt -no SOURCE /mnt/git-data
+findmnt -no SOURCE -T /mnt/git-data/repositories
+find -H /mnt/git-data/repositories -mindepth 1 -maxdepth 1 -name *.git -printf ." ] \
+      && pass "R5b: on git-data the commands observed are exactly the mount read, the findmnt -T source re-check and the count" || fail "R5b: unexpected remote commands" "$(tr '\n' '|' < "$T/rt/out/r5.remote" 2>/dev/null)"
     { [ "$(_rv r5_web_accepted)" = 5 ] && [ "$(_rv r5_gd_accepted)" = 3 ]; } \
       && pass "R5c: web-1 accepted 5 CI-key logins (web, jump, and the ProxyCommand hop of auth/findmnt/count); git-data accepted 3 root-key logins" || fail "R5c: login counts differ" "web=$(_rv r5_web_accepted) gd=$(_rv r5_gd_accepted)"
     { [ "$(_rv r6_rc)" = 5 ] && _sto r6 store-empty store_not_empty; } \
@@ -1340,19 +1366,21 @@ DRV
 fi
 
 # ── FLOOR + LEDGER (ADR-193: reported with printf + exit, never through pass()/fail()) ─────
-# MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 3 x4, Guard 5 x4,
-# Guard 6 (cutover half) x1, Guard 7 x3 = 16.
-MUTANT_FLOOR=16
+# MUTANT_FLOOR = the matrix rows this suite owns: Guard 2 x4, Guard 5 x4, Guard 6 (cutover half) x1,
+# Guard 7 x3, C1 (transport vs store state) x1, C3 (count on the accepted source) x2, C7 (step
+# gating + executed teardown) x4 = 19. Guard 3's four rows moved with the census to
+# tests/scripts/test-git-data-root-token-census.sh.
+MUTANT_FLOOR=19
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-# Assertion FLOOR, restated after the #8189 rewrite (the old 69 counted the deleted ROLLBACK and
-# prepare_luks_target rows). Measured, by section: script unit rows 62 (access gate, AC2, Guard 2,
-# Guard 5, Guard 7); bridge export set 6; workflow YAML 30; executed workflow steps 17 (key fetch 8,
-# ssh_config 6, secrets check 3); Guard 3 census 8 + harness 2; mutants 16 x 2 = 32; runtime 17.
-# Total 174 — exact, not a margin: removing an assertion on purpose costs one edit here.
-FLOOR=174
+# Assertion FLOOR, restated after the #8189 review (the census moved out; C1/C3/C7 rows added).
+# Measured, by section: script unit rows 66 (access gate, AC2, Guard 2 incl. S4d/S7e/S7f/S7g,
+# Guard 5, Guard 7); bridge export set 6; workflow YAML 31 (incl. WF-gating); executed workflow
+# steps 18 (key fetch 8, ssh_config 6, secrets check 3, teardown 1); mutants 19 x 2 = 38; runtime 17.
+# Total 176 — exact, not a margin: removing an assertion on purpose costs one edit here.
+FLOOR=176
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
