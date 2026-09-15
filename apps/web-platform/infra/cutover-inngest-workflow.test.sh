@@ -1711,7 +1711,10 @@ NULL_FIXTURE='{"runs":[
   {"functionID":"fn-a","startedAt":"2026-07-08T10:02:00.101119Z"},
   {"functionID":"fn-b","startedAt":"2026-07-08T10:00:00Z"},
   {"functionID":"fn-c","startedAt":"2026-07-08T10:00:00Z"},
-  {"functionID":"fn-c","startedAt":"2026-07-08T10:40:00Z"}]}'
+  {"functionID":"fn-c","startedAt":"2026-07-08T10:40:00.25Z"}]}'
+# fn-c 10:40:00.25Z is the ONLY run in its (fn,bucket) pair and carries a non-6-digit fraction: a
+# program that silently DROPS fractional runs (`try fromdateiso8601 catch empty`) or strips only 6
+# digits loses that pair, so the missed-tick OBSERVED count below falls to 3 instead of passing.
 # A fixture with NO duplicate at all — proves the dupe detector can say "clean", so an
 # always-reports-a-dupe mutation cannot pass by satisfying only the positive case.
 CLEAN_FIXTURE='{"runs":[
@@ -1743,8 +1746,11 @@ EOF
     dupe_ct=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq -r '.[0].count')
     assert "#6178 $pname attributes the double-fire to fn-a (not fn-b sharing the bucket)" "[[ '$dupe_fn' == 'fn-a' ]]"
     assert "#6178 $pname reports count=2 for the duplicated tick" "[[ '$dupe_ct' -eq 2 ]]"
-    clean_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$CLEAN_FIXTURE" 2>/dev/null | jq 'length')
-    assert "#6178 $pname reports ZERO groups on a genuinely clean fixture (detector can say clean)" "[[ '$clean_n' -eq 0 ]]"
+    crc=0
+    clean_out=$(jq -c --argjson period 1200 -f "$prog" <<<"$CLEAN_FIXTURE" 2>/dev/null) || crc=$?
+    clean_n=$(jq 'length' <<<"${clean_out:-null}" 2>/dev/null || true)
+    assert "#6178 $pname parses the clean fixture (a crash must not read as 'clean')" "[[ '$crc' -eq 0 ]]"
+    assert "#6178 $pname reports ZERO groups on a genuinely clean fixture (detector can say clean)" "[[ '$clean_n' =~ ^[0-9]+\$ && '$clean_n' -eq 0 ]]"
   else
     # The missed-tick OBSERVED program: a deduplicated (fn, bucket) set, nulls excluded.
     obs_n=$(jq -c --argjson period 1200 -f "$prog" <<<"$NULL_FIXTURE" 2>/dev/null | jq 'length')
@@ -2717,7 +2723,9 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   op=capture source, the held_back P2-b rows, the rendered quiesce-web preflight (+ mutation) and
 #   poller arms, and the web-1-only / single web-2 statement pins.
 _DISPATCHED=$((PASS + FAIL))
-_EXACT_FLOOR=628
+# 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
+# dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
+_EXACT_FLOOR=630
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
