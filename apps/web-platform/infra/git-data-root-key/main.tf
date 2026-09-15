@@ -1,6 +1,6 @@
 # (#8189, ADR-220) THE GIT-DATA ROOT-KEY ROOT — a SEPARATE Terraform root that mints the git-data
 # root SSH key, publishes its public half to Hetzner (label soleur-role=git-data-root, read by the
-# web-platform root's data source at create time), stores the private half in the isolated Doppler
+# web-platform root's data source at create time), stores the private half in the separate Doppler
 # project soleur-git-data-root, and publishes one read token for the reviewer-gated cutover job.
 #
 # Why a separate root, what it does NOT isolate (R2 state readable by prd_terraform credentials,

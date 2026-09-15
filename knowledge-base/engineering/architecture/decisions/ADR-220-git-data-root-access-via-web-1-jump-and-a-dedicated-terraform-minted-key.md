@@ -415,7 +415,8 @@ The authenticated hop is written by a workflow step into a fixed-path `ssh_confi
   delivers the new key. Until that replace, dry runs fail `auth_refused`. An earlier draft of this
   amendment carried a `rotate_read_token` dispatch input; it was removed because it admitted
   delete-only and no-op "rotations" and could not express a key rotation.
-- **Accounting.** #8009's authorization accounting records the root key as a fourth, distinct authority
+- **Accounting.** #8009's authorization accounting records the root key as a distinct root authority,
+  beside `hcloud_ssh_key.default`, which every create also delivers as a root login key
   (ADR-149, "Addendum — #8189 (2026-09-15)"), and the Article 30 git-data entry carries it as a TOM.
 
 #### D4 — new residuals

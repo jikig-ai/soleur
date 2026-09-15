@@ -41,7 +41,7 @@ any remote call.
    `GIT_DATA_STORE_ENABLED=true` refuses `verdict=flag_already_true`. All exit 5.
 3. **Secrets present.** An empty `DOPPLER_TOKEN_GIT_DATA_ROOT` refuses `verdict=git_data_root_token_absent`.
 4. CF tunnel bridge to web-1.
-5. **Key fetch** from the isolated Doppler project `soleur-git-data-root`. A failure refuses
+5. **Key fetch** from the separate Doppler project `soleur-git-data-root`. A failure refuses
    `verdict=git_data_root_key_fetch_failed reason=<rc_nonzero|empty|not_openssh_key>`.
 6. `ssh_config` writer (literal jump target, `IdentitiesOnly`, no forwarding).
 7. **Script.** The access gate (`role=web`, `role=git-data-jump`, `role=git-data-auth`; exit 3 on any

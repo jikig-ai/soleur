@@ -348,21 +348,21 @@ fi
 cases=$((cases + 1))
 if [[ "$(fact "$ROOT_FACTS" ATTR_DPROJ)" == '"soleur-git-data-root"' \
       && "$(fact "$ROOT_FACTS" ATTR_DENV)" == '"prd"|doppler_project.git_data_root.name' ]]; then
-  pass "ROOT.doppler-project: isolated project soleur-git-data-root with a prd environment"
+  pass "ROOT.doppler-project: separate project soleur-git-data-root with a prd environment"
 else
   fail "ROOT.doppler-project: project/environment drifted" "proj=$(fact "$ROOT_FACTS" ATTR_DPROJ) env=$(fact "$ROOT_FACTS" ATTR_DENV)"
 fi
 
 cases=$((cases + 1))
 if [[ "$(fact "$ROOT_FACTS" ATTR_DSEC)" == '"GIT_DATA_ROOT_SSH_PRIVATE_KEY"|tls_private_key.git_data_root.private_key_openssh|"masked"|doppler_project.git_data_root.name|doppler_environment.git_data_root_prd.slug' ]]; then
-  pass "ROOT.doppler-secret: GIT_DATA_ROOT_SSH_PRIVATE_KEY = private_key_openssh, masked, in the isolated prd config"
+  pass "ROOT.doppler-secret: GIT_DATA_ROOT_SSH_PRIVATE_KEY = private_key_openssh, masked, in its own prd config"
 else
   fail "ROOT.doppler-secret: secret shape drifted" "$(fact "$ROOT_FACTS" ATTR_DSEC)"
 fi
 
 cases=$((cases + 1))
 if [[ "$(fact "$ROOT_FACTS" ATTR_DTOK)" == '"read"|doppler_project.git_data_root.name|doppler_environment.git_data_root_prd.slug' ]]; then
-  pass "ROOT.read-token: access read on the isolated prd config"
+  pass "ROOT.read-token: access read on its own prd config"
 else
   fail "ROOT.read-token: service token shape drifted" "$(fact "$ROOT_FACTS" ATTR_DTOK)"
 fi

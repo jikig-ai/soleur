@@ -223,11 +223,15 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
-### Addendum — #8189 (2026-09-15): a fourth, root authority beside item 10's three keys
+### Addendum — #8189 (2026-09-15): a root authority beside item 10's three keys
 
 Item 10 and the #8009 disposition account for **three** SSH authorities on git-data, each a distinct
-key with a fixed forced command. #8189 adds a **fourth, distinct** authority, and this record carries it
-so the accounting stays complete. As of this addendum the authority is declared, not delivered: the
+key with a fixed forced command. #8189 adds a **distinct root** authority, and this record carries it
+so the accounting stays complete. It is not the only root authority: `hcloud_ssh_key.default` (the
+operator's public key) has been delivered as a root login key, with no forced command, by every create
+of `hcloud_server.git_data`, including the host born 2026-09-14, and the create gate requires exactly
+that key and the root key. Item 10's three-key count never covered it; a count of "four" would read
+as complete, so none is given. As of this addendum the authority is declared, not delivered: the
 root-key apply, the fingerprint PR and the replace all run after #8189 merges, each with its own
 authorization, so the entries below are written in the future tense.
 
