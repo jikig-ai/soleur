@@ -141,7 +141,7 @@ ACCESS_TMP=""       # probe capture dir of the access gate; removed on every exi
 cleanup() {
   local rc=$?
   trap - EXIT
-  [ -z "$ACCESS_TMP" ] || rm -rf "$ACCESS_TMP" || true
+  _access_tmp_drop || true
   if [ "$rc" -eq 0 ]; then exit 0; fi
   if [ "$FLIP_DONE" != "1" ] && [ "$FREEZE_HELD" != "1" ]; then
     log "exit $rc — no flip and no freeze held, nothing to recover"
@@ -222,6 +222,14 @@ _access_stderr() { # <captured-stderr-file>
   done
   echo "::${tok}::"
 }
+# Removes ONLY the gate's three named captures, then the directory itself: the EXIT trap reads
+# a global it did not bind, so nothing here may recurse into whatever that global holds.
+_access_tmp_drop() {
+  [ -n "$ACCESS_TMP" ] || return 0
+  rm -f "$ACCESS_TMP/web.err" "$ACCESS_TMP/jump.err" "$ACCESS_TMP/auth.err"
+  rmdir "$ACCESS_TMP" || return 1
+  ACCESS_TMP=""
+}
 access_gate() {
   step "access gate (ADR-220): web -> git-data-jump -> git-data-auth, before any host mutation"
   local h rc first
@@ -260,7 +268,7 @@ access_gate() {
     </dev/null >/dev/null 2>"$ACCESS_TMP/auth.err" || rc=$?
   [ "$rc" -eq 0 ] || _access_fail git-data-auth "$GIT_DATA_HOST" "$rc" "$ACCESS_TMP/auth.err"
   _access_emit git-data-auth "$GIT_DATA_HOST" ok
-  rm -rf "$ACCESS_TMP"; ACCESS_TMP=""
+  _access_tmp_drop
 }
 
 # ============================================================================

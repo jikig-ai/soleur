@@ -61,6 +61,20 @@ done
 python3 -c 'import yaml' 2>/dev/null || { printf 'FAIL SETUP: python3 yaml module unavailable\n' >&2; exit 1; }
 [ -n "$UBUNTU_BASE" ] || { printf 'FAIL SETUP: no UBUNTU_BASE pin readable from %s\n' "$REHEARSAL" >&2; exit 1; }
 
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical). Executed as a statement before writes under a
+# caller-supplied root so the P1b relative-operand ratchet can see the operand is absolute.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 T="$(mktemp -d "${TMPDIR}/gdc-access.XXXXXX")" || { printf 'FAIL SETUP: mktemp\n' >&2; exit 1; }
 # A literal `exit 0` anywhere above the verdict would skip the floor; the trap turns that into
 # a failure (an EXIT trap may override the exit status).
@@ -431,6 +445,7 @@ SHIM
   }
   _g2_run() { # <label> <server-ip-input> <tmp-root>
     local label="$1" sip="$2" troot="$3"
+    assert_fixture_dir "$troot"
     mkdir -p "$troot" || { printf 'FAIL SETUP: mkdir %s\n' "$troot" >&2; exit 1; }
     rm -f "$troot/k" "$troot/k.pub"
     ssh-keygen -q -t ed25519 -N '' -C "g2-$label" -f "$troot/k" || { printf 'FAIL SETUP: ssh-keygen\n' >&2; exit 1; }
