@@ -58,6 +58,9 @@ The handshake helper enforces initialize completion before sending
 The session coordinator owns that negotiated channel's thread start/resume and
 turn-start ordering, returning only neutral thread and turn identities while
 approval decisions use the RPC response path.
+Inbound notifications hand off through a bounded ordered buffer; overflow
+closes the source with an explicit backpressure error instead of growing the
+server heap without limit.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
