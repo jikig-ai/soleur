@@ -51,5 +51,5 @@ Plan: `knowledge-base/project/plans/2026-09-14-fix-git-data-cutover-ci-access-pa
 ## Phase 6: Invariance and ship prep
 
 - [x] 6.1 AC9: no hash-bound, evidence or `.tf` diff; rung-2 gate still RELEASED 5c50797be839…
-- [ ] 6.2 `git merge-tree --write-tree origin/main HEAD` clean before review and before `gh pr ready`
+- [x] 6.2 `git merge-tree --write-tree origin/main HEAD` clean before review and before `gh pr ready`
 - [ ] 6.3 PR body: `Ref #6680`, no infra applied on merge, follow-up issue named

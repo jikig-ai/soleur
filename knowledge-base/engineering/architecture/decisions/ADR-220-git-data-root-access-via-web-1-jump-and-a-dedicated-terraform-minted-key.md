@@ -181,7 +181,7 @@ replay the root login.
 
 | Decision | Status | Flips to `accepted` when |
 |---|---|---|
-| D1a transport | `accepted` (2026-09-15) | Measured: branch dry-run [34906907089](https://github.com/jikig-ai/soleur/actions/runs/34906907089) logged `role=web verdict=ok`, `role=git-data-jump verdict=ok`, `role=git-data-auth verdict=git_data_root_key_absent` and exited 3 before `prepare_luks_target`. web-1's sshd permits the `direct-tcpip` channel and an `SSH-2.0-` line came back through it. |
+| D1a transport | `accepted` (2026-09-15) | Measured: branch dry-run [34906907089](https://github.com/jikig-ai/soleur/actions/runs/34906907089), re-measured on the post-review code in [34948776755](https://github.com/jikig-ai/soleur/actions/runs/34948776755) (same three verdicts, exit 3), logged `role=web verdict=ok`, `role=git-data-jump verdict=ok`, `role=git-data-auth verdict=git_data_root_key_absent` and exited 3 before `prepare_luks_target`. web-1's sshd permits the `direct-tcpip` channel and an `SSH-2.0-` line came back through it. |
 | D1b authenticated hop | `proposed` | #8189's dry-run reads `role=git-data-auth verdict=ok`. |
 | D2–D3 credential and lifetime | `proposed` | #7226 pins git-data's host key, #8189's dry-run reads `role=git-data-auth verdict=ok`, **and** the freeze and reloads are reconciled with ADR-119 (Context). That dry-run exercises neither the freeze nor the flip, so it cannot stand in for the reconciliation. With a `main`-only deployment policy, it can only run after #8189 merges. |
 | D4 residuals | Standing constraints | They are not accepted. Each one is discharged by the issue named with it. |
