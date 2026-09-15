@@ -96,10 +96,25 @@ base_plan() {
     }'
 }
 
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical, so do not reformat it). Executed as a statement
+# before a write under a caller-supplied path so the P1b relative-operand ratchet can see the
+# operand is absolute.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # mk <file> [jq-filter] — the base plan with one jq edit applied.
 mk() {
   local f="$1" filter="${2:-.}"
-  case "$f" in /*) : ;; *) echo "FATAL: fixture path $f is relative" >&2; exit 2 ;; esac
+  assert_fixture_dir "$f"
   base_plan | jq -c "$filter" > "$f" || { echo "FATAL: fixture filter failed for $f" >&2; exit 2; }
 }
 

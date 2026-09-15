@@ -87,6 +87,21 @@ if [[ "$passes" -ne $((_st_p + 1)) || "$fails" -ne $((_st_f + 1)) ]]; then
 fi
 passes=$_st_p; fails=$_st_f
 
+# Canonical copy of plugins/soleur/test/test-helpers.sh's guard (the fixture-dir-operand-assert
+# suite pins every tracked copy byte-identical, so do not reformat it). Executed as a statement
+# before a copy out of an override-supplied tree ($RK_DIR / $PARENT_DIR come from the environment
+# in child runs) so the P1b relative-operand ratchet can see the operand is absolute.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d -t gdrootkey.XXXXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
 trap 'rm -rf "$WORK"' EXIT
 
@@ -813,8 +828,10 @@ mutate() {  # <name> <src-file> <want del/add> <sed-expr> [dir-kind: root|parent
     dst="$WORK/mut-$name"
     mkdir -p "$dst"
     if [[ "$kind" == "root" ]]; then
+      assert_fixture_dir "$RK_DIR"
       cp "$RK_DIR"/*.tf "$RK_DIR"/.terraform.lock.hcl "$dst"/ || { printf '[FATAL] root copy failed\n' >&2; exit 2; }
     else
+      assert_fixture_dir "$PARENT_DIR"
       cp "$PARENT_DIR"/*.tf "$PARENT_DIR"/.terraform.lock.hcl "$dst"/ || { printf '[FATAL] parent copy failed\n' >&2; exit 2; }
     fi
     target="$dst/$(basename "$src")"; MUTANT="$dst"
@@ -849,6 +866,7 @@ if [[ "$CHILD" != "1" ]]; then
   # CONTROL: pristine copies through every override must stay fully green, or a red baseline is
   # indistinguishable from a caught mutation.
   mkdir -p "$WORK/ctl-root" "$WORK/ctl-parent"
+  assert_fixture_dir "$RK_DIR"; assert_fixture_dir "$PARENT_DIR"
   cp "$RK_DIR"/*.tf "$RK_DIR"/.terraform.lock.hcl "$WORK/ctl-root/"
   cp "$PARENT_DIR"/*.tf "$PARENT_DIR"/.terraform.lock.hcl "$WORK/ctl-parent/"
   cp "$WF" "$WORK/ctl-wf.yml"; cp "$APPLY_WF" "$WORK/ctl-apply.yml"

@@ -533,23 +533,25 @@ _store() { # <name> — a fresh fixture store root under $T
   rm -rf "$T/store-$1"; mkdir -p "$T/store-$1" || { printf 'FAIL SETUP: mkdir store\n' >&2; exit 1; }
   printf '%s' "$T/store-$1"
 }
-_sr="$(_store missing)"
+# `_store`'s own guard runs inside `$( )`, where `exit` kills only the subshell and the caller
+# binds "" — so each binding is re-guarded HERE, in the shell that performs the writes.
+_sr="$(_store missing)"; assert_fixture_dir "$_sr"
 run_case g2missing "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 0 ] && has_store store-empty ok; then pass "S7/H2: a mounted root with NO repositories dir counts 0 -> exit 0"
 else fail "S7/H2: a missing repositories dir was not counted as 0" "$(ctx)"; fi
-_sr="$(_store other)"; mkdir -p "$_sr/repositories/notes" && : > "$_sr/repositories/x.gitx" && : > "$_sr/repositories/README"
+_sr="$(_store other)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/notes" && : > "$_sr/repositories/x.gitx" && : > "$_sr/repositories/README"
 run_case g2other "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 0 ] && has_store store-empty ok; then pass "S7b: entries that are not *.git do not count -> exit 0"
 else fail "S7b: non-repository entries were counted" "$(ctx)"; fi
-_sr="$(_store realrepo)"; mkdir -p "$_sr/repositories/ws-1.git"
+_sr="$(_store realrepo)"; assert_fixture_dir "$_sr"; mkdir -p "$_sr/repositories/ws-1.git"
 run_case g2realrepo "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 5 ] && has_store store-empty store_not_empty; then pass "S6b: one real *.git entry under the store -> store_not_empty"
 else fail "S6b: a real repository entry was not counted" "$(ctx)"; fi
-_sr="$(_store symlink)"; mkdir -p "$T/store-symlink-target/ws-2.git" && ln -s "$T/store-symlink-target" "$_sr/repositories"
+_sr="$(_store symlink)"; assert_fixture_dir "$_sr"; mkdir -p "$T/store-symlink-target/ws-2.git" && ln -s "$T/store-symlink-target" "$_sr/repositories"
 run_case g2symlink "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 5 ] && has_store store-empty store_not_empty; then pass "S7c: a symlinked repositories dir is followed (find -H) -> store_not_empty"
 else fail "S7c: a symlinked repositories dir hid a repository" "$(ctx)"; fi
-_sr="$(_store notdir)"; : > "$_sr/repositories"
+_sr="$(_store notdir)"; assert_fixture_dir "$_sr"; : > "$_sr/repositories"
 run_case g2notdir "${KEYED[@]}" SHIM_COUNT=exec OLD_ROOT="$_sr"
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-empty verdict=probe_failed rc=3' "$OUT"; then
   pass "S7d: a repositories path that is not a directory -> probe_failed rc=3"
@@ -1070,11 +1072,12 @@ done < "$T/g3.tsv"
 # Harness rows: a fixture tree.
 _ghcopy() { # <name> — a copy of the census input tree under $T; prints its path
   local d="$T/gh-$1"
-  assert_fixture_dir "$d"
+  assert_fixture_dir "$d"; assert_fixture_dir "$GHDIR"
   rm -rf "$d"; mkdir -p "$d" && cp -r "$GHDIR/workflows" "$GHDIR/actions" "$d/" || { printf 'FAIL SETUP: gh copy\n' >&2; exit 1; }
   printf '%s' "$d"
 }
-_gc="$(_ghcopy comment)"
+# Same as `_store` above: `_ghcopy`'s guard exits only its subshell, so re-guard every binding.
+_gc="$(_ghcopy comment)"; assert_fixture_dir "$_gc"
 printf '# mentions DOPPLER_TOKEN_GIT_DATA_ROOT in a comment only\nname: zz-comment\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo ok\n' > "$_gc/workflows/zz-comment.yml"
 python3 "$T/g3.py" "$_gc" > "$T/g3c.tsv" 2>&1
 if grep -qP '^ok\tG3b:' "$T/g3c.tsv"; then pass "H3a: a comment-only mention in another workflow does not count"
@@ -1139,21 +1142,21 @@ if mutate g6-group-rename "$WF" 2 's#^  group: git-data-state$#  group: git-data
   mutant_red g6-group-rename wf_row "$T/mut/wf-g6.tsv" "G6: workflow-level concurrency group"
 fi
 # G3 row 1 — a second job in git-data-cutover.yml referencing the token.
-_gm="$(_ghcopy m-secondjob)"
+_gm="$(_ghcopy m-secondjob)"; assert_fixture_dir "$_gm"
 if mutate g3-second-job "$_gm/workflows/git-data-cutover.yml" 6 '$a\  second:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}'; then
   cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
   python3 "$T/g3.py" "$_gm" > "$T/mut/g3-1.tsv" 2>&1
   mutant_red g3-second-job wf_row "$T/mut/g3-1.tsv" "G3c:"
 fi
 # G3 row 4 — remove environment: from cutover.
-_gm="$(_ghcopy m-noenv)"
+_gm="$(_ghcopy m-noenv)"; assert_fixture_dir "$_gm"
 if mutate g3-no-environment "$_gm/workflows/git-data-cutover.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
   cp "$MUTANT" "$_gm/workflows/git-data-cutover.yml"
   python3 "$T/g3.py" "$_gm" > "$T/mut/g3-4.tsv" 2>&1
   mutant_red g3-no-environment wf_row "$T/mut/g3-4.tsv" "G3d:"
 fi
 # G3 row 2 — a second workflow file referencing the token, sorted after the compliant first.
-_gm="$(_ghcopy m-secondwf)"
+_gm="$(_ghcopy m-secondwf)"; assert_fixture_dir "$_gm"
 printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: web-platform-infra-apply\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}\n' > "$_gm/workflows/zz-second.yml"
 if [ -s "$_gm/workflows/zz-second.yml" ]; then
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g3-second-workflow: fixture workflow zz-second.yml written after git-data-cutover.yml"
@@ -1161,7 +1164,7 @@ if [ -s "$_gm/workflows/zz-second.yml" ]; then
   mutant_red g3-second-workflow wf_row "$T/mut/g3-2.tsv" "G3b:"
 else fail "M-g3-second-workflow: fixture not written"; fi
 # G3 row 3 — `secrets: inherit` on a new caller.
-_gm="$(_ghcopy m-inherit)"
+_gm="$(_ghcopy m-inherit)"; assert_fixture_dir "$_gm"
 printf 'name: zz\non: workflow_dispatch\njobs:\n  call:\n    uses: ./.github/workflows/reusable-release.yml\n    secrets: inherit\n' > "$_gm/workflows/zz-caller.yml"
 if [ -s "$_gm/workflows/zz-caller.yml" ]; then
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g3-inherit: fixture caller zz-caller.yml with secrets: inherit written"

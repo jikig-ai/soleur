@@ -59,7 +59,7 @@ _git_data_root_key_refuse() {
 
 git_data_root_key_arm() {
   local plan_json="${1:-}" fp_file="${2:-}"
-  local want facts reason detail root_id default_id public_key tmpd got lines
+  local want facts reason detail root_id default_id public_key tmp_parent tmpd got lines
 
   # ── The anchor ────────────────────────────────────────────────────────────────
   if [[ -z "$fp_file" || ! -f "$fp_file" || ! -r "$fp_file" ]]; then
@@ -180,7 +180,16 @@ git_data_root_key_arm() {
   public_key=$(jq -r '.public_key' <<<"$facts")
 
   # ── The fingerprint, derived (Hetzner's own field is MD5) ─────────────────────
-  tmpd="$(mktemp -d "${TMPDIR:-/var/tmp}/gd-root-key-arm.XXXXXX")" || {
+  # The scratch parent is bound on its own line, and REFUSED unless absolute, before anything is
+  # created: a relative TMPDIR would root the key write and the rm -rf below at the runner's CWD
+  # (the checked-out repo). Fail closed with the arm's own refusal shape, never a best effort.
+  tmp_parent="${TMPDIR:-/var/tmp}"
+  case "$tmp_parent" in
+    /|//|/.|*/../*|*/..) _git_data_root_key_refuse fingerprint "TMPDIR '${tmp_parent}' is the filesystem root or carries '..'; refusing to create the hashing temp dir under it"; return 1 ;;
+    /*) : ;;
+    *) _git_data_root_key_refuse fingerprint "TMPDIR '${tmp_parent}' is not an absolute path; refusing to create the hashing temp dir relative to the current directory"; return 1 ;;
+  esac
+  tmpd="$(mktemp -d "${tmp_parent}/gd-root-key-arm.XXXXXX")" || {
     _git_data_root_key_refuse fingerprint "could not create a temp dir to hash the resolved public_key"
     return 1
   }
