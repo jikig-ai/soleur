@@ -11,17 +11,21 @@
 //
 // #7884 widened it: every live Better Stack uptime MONITOR and HEARTBEAT must be accounted for by
 // exactly one resolved declaration (monitors by literal `url`, heartbeats by resolved `name`), and a
-// declared monitor's live `monitor_type` / `required_keyword` / `paused` must equal its declaration.
-// `for_each` / `count` are resolved EXACTLY from literal variable defaults (`resolveInfraVariables`);
-// any shape that cannot be resolved exactly throws `UnresolvableDeclaration` (fail closed — a guess
-// would either invent false `unmanaged-live` rows or silently absorb a hand-made object).
+// declared monitor's live type / keyword / paused / alarm leaves must equal its declaration.
+// `for_each` / `count` are resolved EXACTLY from literal variable defaults in the `.tf` SOURCE
+// (`resolveInfraVariables`) — source defaults only: a `TF_VAR_*` / `-var` / tfvars override the
+// apply uses is NOT seen here (ADR-117 amendment), so a root whose apply overrides a default can
+// resolve a different instance set than live. Any shape that cannot be resolved exactly — including
+// `*_override.tf` / `*.tf.json` files, which merge into declarations this scanner does not model —
+// throws `UnresolvableDeclaration` (fail closed — a guess would either invent false
+// `unmanaged-live` rows or silently absorb a hand-made object).
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ManifestEntry } from "./heartbeat-manifest";
 
-/** A declaration the reconcile cannot resolve exactly. `resource` is `<type>.<name>`. */
+/** A declaration the reconcile cannot resolve exactly. `resource` is `<type>.<name>` (or a file name). */
 export class UnresolvableDeclaration extends Error {
   readonly resource: string;
   readonly why: string;
@@ -33,12 +37,26 @@ export class UnresolvableDeclaration extends Error {
   }
 }
 
+/** A `.tf` file that could not be parsed at all (unbalanced block, unterminated comment, read error). */
+export class DeclarationParseError extends Error {
+  readonly file: string;
+  readonly detail: string;
+  constructor(file: string, detail: string) {
+    super(`${file}: ${detail}`);
+    this.name = "DeclarationParseError";
+    this.file = file;
+    this.detail = detail;
+  }
+}
+
 /** One concrete `betteruptime_heartbeat` instance resolved from the infra `.tf` source. */
 export interface DiscoveredHeartbeat {
   /** The `.tf` resource label — `betteruptime_heartbeat.<resourceName>`; the MANIFEST join key. */
   resourceName: string;
   /** The resolved `name = "..."` attribute (`${each.key}` substituted) — how live Better Stack keys it. */
   liveName: string;
+  /** The `for_each` key, or `"0"` for a `count` instance; undefined for a plain block. */
+  instanceKey?: string;
   /**
    * The source-declared `paused` value (defaults to false when the attribute is absent). Carried
    * for reporting/diagnostics only — `reconcileHeartbeats` keys its decision on live state +
@@ -54,16 +72,39 @@ export interface DiscoveredHeartbeat {
   countGated: boolean;
 }
 
-/** One concrete `betteruptime_monitor` instance resolved from the infra `.tf` source (#7884). */
+/**
+ * One concrete `betteruptime_monitor` instance resolved from the infra `.tf` source (#7884).
+ *
+ * Shape contract (also consumed by the Guard 1 contract test): every optional leaf is `undefined`
+ * when the ATTRIBUTE IS ABSENT from the block and the literal value otherwise — so `""` and absent
+ * `required_keyword` are distinguishable. A present-but-non-literal value (e.g. `var.x`) never
+ * reaches this shape: `parseMonitorBlocks` throws `UnresolvableDeclaration` instead.
+ */
 export interface DiscoveredMonitor {
   resourceName: string;
+  /** `betteruptime_monitor.<resourceName>`. */
+  resource: string;
+  /** `"0"` for a `count` instance; undefined for a plain block (`for_each` is unsupported). */
+  instanceKey?: string;
   /** Literal `url` — the monitors-arm join key (a rename never reads as unmanaged). */
   url: string;
   monitorType: string;
-  /** `""` when the attribute is absent. */
-  requiredKeyword: string;
-  /** `false` when the attribute is absent. */
-  paused: boolean;
+  requiredKeyword?: string;
+  paused?: boolean;
+  email?: boolean;
+  call?: boolean;
+  sms?: boolean;
+  push?: boolean;
+  verifySsl?: boolean;
+  followRedirects?: boolean;
+  confirmationPeriod?: number;
+  checkFrequency?: number;
+  requestTimeout?: number;
+  recoveryPeriod?: number;
+  /** Whether the block carries a `count` meta-argument. */
+  hasCount: boolean;
+  /** Whether the block carries a `for_each` meta-argument (always false today: it throws). */
+  hasForEach: boolean;
 }
 
 /** One heartbeat as reported by `GET /api/v2/heartbeats` (`data[].id` + `data[].attributes`). */
@@ -71,10 +112,11 @@ export interface LiveHeartbeat {
   /** Vendor id, numeric string (validated at fetch). */
   id: string;
   name: string;
+  /** Validated boolean at fetch (a non-boolean row is refused, never read as false). */
   paused: boolean;
 }
 
-/** One monitor as reported by `GET /api/v2/monitors` (#7884). */
+/** One monitor as reported by `GET /api/v2/monitors` (#7884). Booleans are validated at fetch. */
 export interface LiveMonitor {
   /** Vendor id, numeric string (validated at fetch). */
   id: string;
@@ -85,6 +127,21 @@ export interface LiveMonitor {
   /** `null` when the vendor returns null/absent; compared equal to `""`. */
   requiredKeyword: string | null;
   paused: boolean;
+  email: boolean;
+  call: boolean;
+  sms: boolean;
+  push: boolean;
+  verifySsl: boolean;
+  followRedirects: boolean;
+  /** Numeric leaves: `null` when the vendor returns null (compared as the literal `null`). */
+  confirmationPeriod: number | null;
+  checkFrequency: number | null;
+  requestTimeout: number | null;
+  recoveryPeriod: number | null;
+  maintenanceFrom: string | null;
+  maintenanceTo: string | null;
+  /** `null` when absent. */
+  maintenanceDays: string[] | null;
 }
 
 /**
@@ -93,23 +150,37 @@ export interface LiveMonitor {
  * / `logs-alert-absent` are the #8097 `logs_alert` arm (ADR-218 §5). `unmanaged-live` and
  * `monitor-config-drift` are the #7884 classes.
  * Every consumer that switches on this union is listed in the scheduled-terraform-drift.yml
- * issue-body decode list (cq-union-widening-grep-three-patterns).
+ * issue-body decode list (cq-union-widening-grep-three-patterns); the workflow test derives its
+ * list from this constant.
  */
-export type ViolationReason =
-  | "fed-but-paused"
-  | "absent-live"
-  | "logs-alert-paused"
-  | "logs-alert-absent"
-  | "unmanaged-live"
-  | "monitor-config-drift";
+export const VIOLATION_REASONS = [
+  "fed-but-paused",
+  "absent-live",
+  "logs-alert-paused",
+  "logs-alert-absent",
+  "unmanaged-live",
+  "monitor-config-drift",
+] as const;
+export type ViolationReason = (typeof VIOLATION_REASONS)[number];
+
+/**
+ * The per-row routing token every MISMATCH line carries exactly once, before its first `"`:
+ * `route=<reason>~<subject>`, where subject is `resource.<type>.<name>[.<instance-key>]`,
+ * `id.<id>` (unmanaged-live) or `id.<id>.<field>` (monitor-config-drift). Distinct violations in one
+ * run have distinct tokens (a `for_each` instance key is part of the subject), so an issue filer can
+ * key escalation on it. A regex SOURCE string so a non-TS consumer can reuse it verbatim.
+ */
+export const ROUTE_TOKEN_RE = "^route=[a-z-]+~[A-Za-z0-9_.-]+$";
 
 /** Heartbeat classes (a)/(b). `live` is the heartbeat live STATE. */
 export interface HeartbeatViolation {
   kind: "heartbeat";
   resourceName: string;
   liveName: string;
+  /** The `for_each` key / `"0"` for count; part of the route subject. */
+  instanceKey?: string;
   live: "paused" | "absent";
-  reason: "fed-but-paused" | "absent-live";
+  reason: Extract<ViolationReason, "fed-but-paused" | "absent-live">;
 }
 
 /**
@@ -121,19 +192,33 @@ export interface LogsAlertViolation {
   resourceName: string;
   liveName: string;
   live: "logs_alert";
-  reason: "logs-alert-paused" | "logs-alert-absent";
+  reason: Extract<ViolationReason, "logs-alert-paused" | "logs-alert-absent">;
   /** Vendor `paused_reason`, rendered inside a quoted `detail="…"`; absent for `logs-alert-absent`. */
   detail?: string;
 }
 
-export type MonitorField = "monitor_type" | "required_keyword" | "paused";
+export type MonitorField =
+  | "monitor_type"
+  | "required_keyword"
+  | "paused"
+  | "email"
+  | "call"
+  | "sms"
+  | "push"
+  | "confirmation_period"
+  | "check_frequency"
+  | "request_timeout"
+  | "recovery_period"
+  | "verify_ssl"
+  | "follow_redirects"
+  | "maintenance";
 
 /** #7884 monitors arm: a declared instance absent live, or a live field drifted from its declaration. */
 export type MonitorViolation =
-  | { kind: "monitor"; reason: "absent-live"; resourceName: string; url: string }
+  | { kind: "monitor"; reason: Extract<ViolationReason, "absent-live">; resourceName: string; instanceKey?: string; url: string }
   | {
       kind: "monitor";
-      reason: "monitor-config-drift";
+      reason: Extract<ViolationReason, "monitor-config-drift">;
       resourceName: string;
       id: string;
       field: MonitorField;
@@ -143,10 +228,55 @@ export type MonitorViolation =
 
 /** #7884: a live object no resolved declaration accounts for (or one of ≥2 sharing a join key). */
 export type UnmanagedViolation =
-  | { kind: "unmanaged"; surface: "monitors"; reason: "unmanaged-live"; id: string; url: string; name: string; dup: boolean }
-  | { kind: "unmanaged"; surface: "heartbeats"; reason: "unmanaged-live"; id: string; name: string; dup: boolean };
+  | { kind: "unmanaged"; surface: "monitors"; reason: Extract<ViolationReason, "unmanaged-live">; id: string; url: string; name: string; dup: boolean }
+  | { kind: "unmanaged"; surface: "heartbeats"; reason: Extract<ViolationReason, "unmanaged-live">; id: string; name: string; dup: boolean };
 
 export type Violation = HeartbeatViolation | LogsAlertViolation | MonitorViolation | UnmanagedViolation;
+
+export function assertNever(x: never): never {
+  throw new Error(`unhandled variant: ${JSON.stringify(x)}`);
+}
+
+/**
+ * One route-subject segment that may carry arbitrary text (an instance key, a vendor id): kept
+ * verbatim when it is already in the token charset, else hex-encoded behind an `x--` prefix. A
+ * verbatim key that itself starts `x--` is encoded too, so the mapping is injective (distinct keys
+ * never share a token).
+ */
+function routeSegment(raw: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(raw) && !raw.startsWith("x--")) return raw;
+  return `x--${Buffer.from(raw, "utf8").toString("hex")}`;
+}
+
+function resourceSubject(type: string, name: string, instanceKey?: string): string {
+  const base = `resource.${type}.${routeSegment(name)}`;
+  return instanceKey === undefined ? base : `${base}.${routeSegment(instanceKey)}`;
+}
+
+/** The `route=<reason>~<subject>` token for one violation (see `ROUTE_TOKEN_RE`). */
+export function routeToken(v: Violation): string {
+  let subject: string;
+  switch (v.kind) {
+    case "heartbeat":
+      subject = resourceSubject("betteruptime_heartbeat", v.resourceName, v.instanceKey);
+      break;
+    case "logs_alert":
+      subject = resourceSubject("logtail_exploration_alert", v.resourceName);
+      break;
+    case "monitor":
+      subject =
+        v.reason === "absent-live"
+          ? resourceSubject("betteruptime_monitor", v.resourceName, v.instanceKey)
+          : `id.${routeSegment(v.id)}.${v.field}`;
+      break;
+    case "unmanaged":
+      subject = `id.${routeSegment(v.id)}`;
+      break;
+    default:
+      return assertNever(v);
+  }
+  return `route=${v.reason}~${subject}`;
+}
 
 /** A `logtail_exploration_alert` block parsed from the infra `.tf` source (#8097). */
 export interface DiscoveredLogsAlert {
@@ -161,31 +291,6 @@ export interface LiveLogsAlert {
   paused: boolean;
   /** Vendor free text; `""` when absent/null (coalesced once, at parse). */
   pausedReason: string;
-}
-
-/**
- * Strip HCL line comments (`#` and `//`) so a `count =` / `paused =` token that appears only inside
- * an explanatory comment cannot be mistaken for real config. Mirrors the comment-stripped view the
- * parity test parses. A `#`/`//` inside a double-quoted string is preserved.
- */
-export function stripComments(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => {
-      let inString = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"' && line[i - 1] !== "\\") {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (ch === "#") return line.slice(0, i);
-        if (ch === "/" && line[i + 1] === "/") return line.slice(0, i);
-      }
-      return line;
-    })
-    .join("\n");
 }
 
 // ─── HCL scanning (string-, interpolation- and heredoc-aware) ───────────────────────────────────
@@ -219,13 +324,85 @@ function skipString(text: string, open: number): number {
 
 /** Index just past a heredoc opened at `open` (`<<` or `<<-`), or -1 when it is not a heredoc. */
 function skipHeredoc(text: string, open: number): number {
+  return heredocSpan(text, open)?.end ?? -1;
+}
+
+/** `bodyStart` is just past the opener line, `bodyEnd` the newline before the closer, `end` past the closer. */
+function heredocSpan(text: string, open: number): { bodyStart: number; bodyEnd: number; end: number } | null {
   const m = /^<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\n/.exec(text.slice(open, open + 256));
-  if (!m) return -1;
+  if (!m) return null;
   const tag = m[1];
   const closer = new RegExp(`\\n[ \\t]*${tag}[ \\t]*(?=\\n|$)`, "g");
   closer.lastIndex = open + m[0].length - 1;
   const c = closer.exec(text);
-  return c ? c.index + c[0].length : -1;
+  if (!c) return null;
+  const bodyStart = open + m[0].length;
+  return { bodyStart, bodyEnd: Math.max(bodyStart, c.index), end: c.index + c[0].length };
+}
+
+/**
+ * One string-, interpolation- and heredoc-aware pass over HCL text that removes comments: `#` and
+ * `//` to end of line, and `/* … *\/` blocks (replaced by spaces, newlines kept, so line structure
+ * and brace positions survive). A comment opener inside a quoted string or a heredoc is content,
+ * not a comment. An unterminated block comment throws (Terraform rejects it too; stripping to EOF
+ * would silently drop every declaration after it). With `maskHeredocBodies`, each heredoc body is
+ * blanked as well, so text inside one (e.g. a `resource "…" "…" {` line in a `<<EOT` script) can
+ * never be read as a declaration.
+ */
+function scanHcl(text: string, maskHeredocBodies: boolean): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"') {
+      const end = skipString(text, i);
+      const nl = text.indexOf("\n", i);
+      const stop = end !== -1 ? end : nl === -1 ? text.length : nl;
+      out += text.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === "<" && text[i + 1] === "<") {
+      const span = heredocSpan(text, i);
+      if (span) {
+        out += text.slice(i, span.bodyStart);
+        const body = text.slice(span.bodyStart, span.bodyEnd);
+        out += maskHeredocBodies ? body.replace(/[^\n]/g, " ") : body;
+        out += text.slice(span.bodyEnd, span.end);
+        i = span.end;
+        continue;
+      }
+    }
+    if (ch === "#" || (ch === "/" && text[i + 1] === "/")) {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) throw new Error("Unterminated block comment");
+      out += text.slice(i, close + 2).replace(/[^\n]/g, " ");
+      i = close + 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * Strip HCL comments (`#`, `//`, `/* *\/`) so a `count =` / `paused =` token — or a whole resource
+ * block — that appears only inside a comment cannot be mistaken for real config. A comment opener
+ * inside a double-quoted string or a heredoc is preserved.
+ */
+export function stripComments(text: string): string {
+  return scanHcl(text, false);
+}
+
+/** The view every declaration parser reads: comments removed AND heredoc bodies blanked. */
+function codeView(text: string): string {
+  return scanHcl(text, true);
 }
 
 const OPENERS: Record<string, string> = { "{": "}", "[": "]", "(": ")" };
@@ -350,9 +527,14 @@ function labeledBlocks(stripped: string, headerRe: RegExp, what: (m: RegExpExecA
   return out;
 }
 
-function resourceBlocks(stripped: string, type: string): { resourceName: string; body: string }[] {
-  const header = new RegExp(`\\bresource\\s+"${type}"\\s+"([A-Za-z0-9_]+)"\\s*\\{`, "g");
-  return labeledBlocks(stripped, header, (m) => `${type}.${m[1]}`).map(({ m, body }) => ({ resourceName: m[1], body }));
+/** A block label: quoted (`"web-1_x"`) or bare (`web_1`); captures group 1 (quoted) or 2 (bare). */
+const LABEL = '(?:"([A-Za-z_][A-Za-z0-9_-]*)"|([A-Za-z_][A-Za-z0-9_-]*))';
+/** A block keyword only at the start of input or after whitespace / a brace (never mid-identifier). */
+const HEADER_START = "(?<![^\\s{}])";
+
+function resourceBlocks(code: string, type: string): { resourceName: string; body: string }[] {
+  const header = new RegExp(`${HEADER_START}resource\\s+(?:"${type}"|${type}(?![A-Za-z0-9_-]))\\s+${LABEL}\\s*\\{`, "g");
+  return labeledBlocks(code, header, (m) => `${type}.${m[1] ?? m[2]}`).map(({ m, body }) => ({ resourceName: m[1] ?? m[2], body }));
 }
 
 // ─── Literal values ─────────────────────────────────────────────────────────────────────────────
@@ -441,12 +623,12 @@ function literalMapKeys(raw: string): string[] | null {
   return keys;
 }
 
-/** Parse every `variable "<X>" { default = … }` in one comment-stripped `.tf` text. */
+/** Parse every `variable "<X>" { default = … }` in one `.tf` text (comments and heredoc bodies ignored). */
 export function parseInfraVariables(tfText: string): Map<string, InfraVariableDefault> {
-  const stripped = stripComments(tfText);
+  const code = codeView(tfText);
   const out = new Map<string, InfraVariableDefault>();
-  const header = /\bvariable\s+"([A-Za-z0-9_-]+)"\s*\{/g;
-  for (const { m, body } of labeledBlocks(stripped, header, (x) => `variable.${x[1]}`)) {
+  const header = new RegExp(`${HEADER_START}variable\\s+${LABEL}\\s*\\{`, "g");
+  for (const { m, body } of labeledBlocks(code, header, (x) => `variable.${x[1] ?? x[2]}`)) {
     const raw = topLevelAttributes(body).get("default");
     if (raw === undefined) continue;
     let value: InfraVariableDefault = { kind: "other" };
@@ -455,33 +637,79 @@ export function parseInfraVariables(tfText: string): Map<string, InfraVariableDe
       const keys = literalMapKeys(raw);
       if (keys !== null) value = { kind: "map", keys };
     }
-    out.set(m[1], value);
-  }
-  return out;
-}
-
-/** Every literal variable default declared across the `*.tf` files of an infra directory. */
-export function resolveInfraVariables(infraDir: string): Map<string, InfraVariableDefault> {
-  const out = new Map<string, InfraVariableDefault>();
-  for (const file of readdirSync(infraDir).sort()) {
-    if (!file.endsWith(".tf")) continue;
-    const text = readFileSync(join(infraDir, file), "utf8");
-    if (!text.includes("variable")) continue;
-    for (const [k, v] of parseInfraVariables(text)) out.set(k, v);
+    out.set(m[1] ?? m[2], value);
   }
   return out;
 }
 
 /**
- * Resolve a block's `for_each` / `count` into its instance keys: `[undefined]` for a plain block,
- * one key per map entry for `for_each = var.<X>` (literal map default), `[undefined]` or `[]` for
+ * The `*.tf` files of an infra directory, sorted. Throws `UnresolvableDeclaration` (resource = the
+ * file name) when the directory holds an override (`override.tf`, `*_override.tf`) or JSON
+ * configuration (`*.tf.json`) file: Terraform merges those into declarations this scanner does not
+ * model, so any verdict computed without them could be wrong in either direction.
+ */
+export function listTfFiles(infraDir: string): string[] {
+  const names = readdirSync(infraDir).sort();
+  for (const f of names) {
+    if (f === "override.tf" || f.endsWith("_override.tf") || f.endsWith(".tf.json")) {
+      throw new UnresolvableDeclaration(f, "override and JSON configuration files are unsupported");
+    }
+  }
+  return names.filter((f) => f.endsWith(".tf"));
+}
+
+/** Variables resolved per file; a file that fails to parse contributes nothing and is reported. */
+export interface InfraVariableResolution {
+  vars: Map<string, InfraVariableDefault>;
+  errors: DeclarationParseError[];
+}
+
+/**
+ * Every literal variable default declared across the `*.tf` files of an infra directory, parsed
+ * file by file: an unparseable file is collected in `errors` (all-or-nothing for that file) so an
+ * unrelated broken block cannot blind every arm. A declaration that needed a variable from the
+ * broken file still fails closed (`UnresolvableDeclaration`: no literal default). Throws only when
+ * the directory itself cannot be listed or holds an override file (`listTfFiles`).
+ */
+export function resolveInfraVariablesPerFile(infraDir: string): InfraVariableResolution {
+  const vars = new Map<string, InfraVariableDefault>();
+  const errors: DeclarationParseError[] = [];
+  for (const file of listTfFiles(infraDir)) {
+    try {
+      const text = readFileSync(join(infraDir, file), "utf8");
+      if (!text.includes("variable")) continue;
+      for (const [k, v] of parseInfraVariables(text)) vars.set(k, v);
+    } catch (err) {
+      errors.push(new DeclarationParseError(file, String((err as Error)?.message ?? err)));
+    }
+  }
+  return { vars, errors };
+}
+
+/** Strict form of `resolveInfraVariablesPerFile`: throws the first `DeclarationParseError`. */
+export function resolveInfraVariables(infraDir: string): Map<string, InfraVariableDefault> {
+  const { vars, errors } = resolveInfraVariablesPerFile(infraDir);
+  if (errors.length > 0) throw errors[0];
+  return vars;
+}
+
+interface Instance {
+  /** Substituted for `${each.key}` (for_each only). */
+  eachKey?: string;
+  /** The Terraform instance key: the for_each key, or `"0"` for a count instance. */
+  instanceKey?: string;
+}
+
+/**
+ * Resolve a block's `for_each` / `count` into its instances: one plain instance for a plain block,
+ * one per map entry for `for_each = var.<X>` (literal map default), one (`"0"`) or none for
  * `count = var.<X> ? 1 : 0` (literal bool default). Anything else throws.
  */
 function resolveInstances(
   resource: string,
   attrs: Map<string, string>,
   vars: InfraVariables,
-): { keys: (string | undefined)[]; countGated: boolean } {
+): { instances: Instance[]; countGated: boolean } {
   const forEach = attrs.get("for_each");
   const count = attrs.get("count");
   if (forEach !== undefined && count !== undefined) {
@@ -494,7 +722,7 @@ function resolveInstances(
     if (!v || v.kind !== "map") {
       throw new UnresolvableDeclaration(resource, `for_each variable ${m[1]} has no literal map default`);
     }
-    return { keys: [...v.keys], countGated: false };
+    return { instances: v.keys.map((k) => ({ eachKey: k, instanceKey: k })), countGated: false };
   }
   if (count !== undefined) {
     const m = new RegExp(`^var\\.(${IDENT})\\s*\\?\\s*1\\s*:\\s*0$`).exec(count);
@@ -503,9 +731,9 @@ function resolveInstances(
     if (!v || v.kind !== "bool") {
       throw new UnresolvableDeclaration(resource, `count variable ${m[1]} has no literal bool default`);
     }
-    return { keys: v.value ? [undefined] : [], countGated: true };
+    return { instances: v.value ? [{ instanceKey: "0" }] : [], countGated: true };
   }
-  return { keys: [undefined], countGated: false };
+  return { instances: [{}], countGated: false };
 }
 
 // ─── Declarations ───────────────────────────────────────────────────────────────────────────────
@@ -516,40 +744,59 @@ function resolveInstances(
  * `UnresolvableDeclaration` on a name/meta-argument shape it cannot resolve exactly.
  */
 export function parseHeartbeatBlocks(tfText: string, vars: InfraVariables = new Map()): DiscoveredHeartbeat[] {
-  const stripped = stripComments(tfText);
+  const code = codeView(tfText);
   const out: DiscoveredHeartbeat[] = [];
-  for (const { resourceName, body } of resourceBlocks(stripped, "betteruptime_heartbeat")) {
+  for (const { resourceName, body } of resourceBlocks(code, "betteruptime_heartbeat")) {
     const resource = `betteruptime_heartbeat.${resourceName}`;
     const attrs = topLevelAttributes(body);
-    const { keys, countGated } = resolveInstances(resource, attrs, vars);
+    const { instances, countGated } = resolveInstances(resource, attrs, vars);
     const rawName = attrs.get("name");
     if (rawName === undefined) throw new UnresolvableDeclaration(resource, "no name attribute");
     // Absent `paused` defaults to active (false) — the conservative reading; an omission cannot
     // silently exempt a live heartbeat. Mirrors heartbeat-reprovision-parity.test.ts.
     const sourcePaused = attrs.get("paused") === "true";
-    for (const key of keys) {
-      const liveName = decodeString(rawName, key);
+    for (const { eachKey, instanceKey } of instances) {
+      const liveName = decodeString(rawName, eachKey);
       if (liveName === null || liveName === "") {
         throw new UnresolvableDeclaration(resource, `name is not a literal (or \${each.key} template): ${rawName}`);
       }
-      out.push({ resourceName, liveName, sourcePaused, countGated });
+      out.push({ resourceName, liveName, instanceKey, sourcePaused, countGated });
     }
   }
   return out;
 }
 
+function optionalBool(resource: string, attrs: Map<string, string>, key: string): boolean | undefined {
+  const raw = attrs.get(key);
+  if (raw === undefined) return undefined;
+  if (raw !== "true" && raw !== "false") throw new UnresolvableDeclaration(resource, `${key} is not a literal bool`);
+  return raw === "true";
+}
+
+function optionalInt(resource: string, attrs: Map<string, string>, key: string): number | undefined {
+  const raw = attrs.get(key);
+  if (raw === undefined) return undefined;
+  if (!/^(0|[1-9][0-9]{0,8})$/.test(raw)) throw new UnresolvableDeclaration(resource, `${key} is not a literal integer`);
+  return Number(raw);
+}
+
 /**
- * Every concrete `betteruptime_monitor` instance in one `.tf` text (#7884). `url` and
- * `monitor_type` must be literal strings; `required_keyword` a literal string or absent; `paused`
- * a literal bool or absent. Duplicate URLs across files are checked by `assertUniqueMonitorUrls`.
+ * Every concrete `betteruptime_monitor` instance in one `.tf` text (#7884). See `DiscoveredMonitor`
+ * for the returned shape. `url` and `monitor_type` must be literal strings; `required_keyword` a
+ * literal string or absent; the boolean alarm leaves (`paused`, `email`, `call`, `sms`, `push`,
+ * `verify_ssl`, `follow_redirects`) literal bools or absent; the numeric leaves
+ * (`confirmation_period`, `check_frequency`, `request_timeout`, `recovery_period`) literal integers
+ * or absent; `count` exactly `var.<bool> ? 1 : 0`; `for_each` is unsupported. Anything else throws
+ * `UnresolvableDeclaration`. Duplicate URLs across files are checked by `assertUniqueMonitorUrls`.
  */
 export function parseMonitorBlocks(tfText: string, vars: InfraVariables = new Map()): DiscoveredMonitor[] {
-  const stripped = stripComments(tfText);
+  const code = codeView(tfText);
   const out: DiscoveredMonitor[] = [];
-  for (const { resourceName, body } of resourceBlocks(stripped, "betteruptime_monitor")) {
+  for (const { resourceName, body } of resourceBlocks(code, "betteruptime_monitor")) {
     const resource = `betteruptime_monitor.${resourceName}`;
     const attrs = topLevelAttributes(body);
-    const { keys } = resolveInstances(resource, attrs, vars);
+    if (attrs.has("for_each")) throw new UnresolvableDeclaration(resource, "for_each on betteruptime_monitor is unsupported");
+    const { instances } = resolveInstances(resource, attrs, vars);
     const rawUrl = attrs.get("url");
     const url = rawUrl === undefined ? null : decodeString(rawUrl);
     if (url === null || url === "") throw new UnresolvableDeclaration(resource, "url is not a literal string");
@@ -557,14 +804,33 @@ export function parseMonitorBlocks(tfText: string, vars: InfraVariables = new Ma
     const monitorType = rawType === undefined ? null : decodeString(rawType);
     if (monitorType === null) throw new UnresolvableDeclaration(resource, "monitor_type is not a literal string");
     const rawKw = attrs.get("required_keyword");
-    const requiredKeyword = rawKw === undefined ? "" : decodeString(rawKw);
+    const requiredKeyword = rawKw === undefined ? undefined : decodeString(rawKw);
     if (requiredKeyword === null) throw new UnresolvableDeclaration(resource, "required_keyword is not a literal string");
-    const rawPaused = attrs.get("paused");
-    if (rawPaused !== undefined && rawPaused !== "true" && rawPaused !== "false") {
-      throw new UnresolvableDeclaration(resource, "paused is not a literal bool");
-    }
-    for (const _ of keys) {
-      out.push({ resourceName, url, monitorType, requiredKeyword, paused: rawPaused === "true" });
+    const leaves = {
+      paused: optionalBool(resource, attrs, "paused"),
+      email: optionalBool(resource, attrs, "email"),
+      call: optionalBool(resource, attrs, "call"),
+      sms: optionalBool(resource, attrs, "sms"),
+      push: optionalBool(resource, attrs, "push"),
+      verifySsl: optionalBool(resource, attrs, "verify_ssl"),
+      followRedirects: optionalBool(resource, attrs, "follow_redirects"),
+      confirmationPeriod: optionalInt(resource, attrs, "confirmation_period"),
+      checkFrequency: optionalInt(resource, attrs, "check_frequency"),
+      requestTimeout: optionalInt(resource, attrs, "request_timeout"),
+      recoveryPeriod: optionalInt(resource, attrs, "recovery_period"),
+    };
+    for (const { instanceKey } of instances) {
+      out.push({
+        resourceName,
+        resource,
+        instanceKey,
+        url,
+        monitorType,
+        requiredKeyword,
+        ...leaves,
+        hasCount: attrs.has("count"),
+        hasForEach: attrs.has("for_each"),
+      });
     }
   }
   return out;
@@ -583,8 +849,8 @@ export function assertUniqueMonitorUrls(declared: readonly DiscoveredMonitor[]):
 
 /** Extract every `logtail_exploration_alert` block's live name (#8097 `logs_alert` arm). */
 export function parseLogsAlertBlocks(tfText: string): DiscoveredLogsAlert[] {
-  const stripped = stripComments(tfText);
-  return resourceBlocks(stripped, "logtail_exploration_alert").map(({ resourceName, body }) => {
+  const code = codeView(tfText);
+  return resourceBlocks(code, "logtail_exploration_alert").map(({ resourceName, body }) => {
     const nameMatch = /\bname\s*=\s*"([^"]+)"/.exec(body);
     return { resourceName, liveName: nameMatch ? nameMatch[1] : "" };
   });
@@ -670,13 +936,14 @@ export function reconcileHeartbeats(
     const instances = discByResource.get(row.name) ?? [];
     const fed = row.feeder.kind === "cron" || row.feeder.kind === "timer";
     for (const disc of instances) {
+      const base = { kind: "heartbeat" as const, resourceName: disc.resourceName, liveName: disc.liveName, instanceKey: disc.instanceKey };
       const present = livePausedByName.has(disc.liveName);
       if (!present) {
-        violations.push({ kind: "heartbeat", resourceName: disc.resourceName, liveName: disc.liveName, live: "absent", reason: "absent-live" });
+        violations.push({ ...base, live: "absent", reason: "absent-live" });
         continue;
       }
       if (fed && !row.arming_pending && livePausedByName.get(disc.liveName) === true) {
-        violations.push({ kind: "heartbeat", resourceName: disc.resourceName, liveName: disc.liveName, live: "paused", reason: "fed-but-paused" });
+        violations.push({ ...base, live: "paused", reason: "fed-but-paused" });
       }
     }
   }
@@ -715,12 +982,43 @@ function liveMonitorsByUrl(live: readonly LiveMonitor[]): Map<string, LiveMonito
   return byUrl;
 }
 
+const ALL_WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+/** A live maintenance window rendered for a drift row, or `null` when the monitor has none. */
+function liveMaintenanceWindow(l: LiveMonitor): string | null {
+  const days = l.maintenanceDays;
+  const limitedDays = days !== null && !ALL_WEEK.every((d) => days.includes(d));
+  if (l.maintenanceFrom === null && l.maintenanceTo === null && !limitedDays) return null;
+  return `from=${l.maintenanceFrom ?? "null"} to=${l.maintenanceTo ?? "null"} days=${(days ?? []).join(",")}`;
+}
+
+/** Declared alarm leaves compared only when the declaration sets them: [field, declared, live]. */
+function declaredLeaves(d: DiscoveredMonitor, l: LiveMonitor): [MonitorField, boolean | number | undefined, boolean | number | null][] {
+  return [
+    ["email", d.email, l.email],
+    ["call", d.call, l.call],
+    ["sms", d.sms, l.sms],
+    ["push", d.push, l.push],
+    ["confirmation_period", d.confirmationPeriod, l.confirmationPeriod],
+    ["check_frequency", d.checkFrequency, l.checkFrequency],
+    ["request_timeout", d.requestTimeout, l.requestTimeout],
+    ["recovery_period", d.recoveryPeriod, l.recoveryPeriod],
+    ["verify_ssl", d.verifySsl, l.verifySsl],
+    ["follow_redirects", d.followRedirects, l.followRedirects],
+  ];
+}
+
 /**
  * Reconcile declared monitor instances against the live monitors (#7884).
  *
  * - **absent-live** — a declared instance with no live monitor on its URL.
- * - **monitor-config-drift** — exactly one live monitor on a declared URL whose `monitor_type`,
- *   `required_keyword` (`null` == `""`) or `paused` differs; one row per field.
+ * - **monitor-config-drift** — for EVERY live monitor on a declared URL (including each of ≥2
+ *   duplicates), one row per differing field: `monitor_type`, `required_keyword` (`null` == `""`,
+ *   absent == `""`) and `paused` (absent == false) always; the alarm leaves (`email`, `call`, `sms`,
+ *   `push`, `confirmation_period`, `check_frequency`, `request_timeout`, `recovery_period`,
+ *   `verify_ssl`, `follow_redirects`) when the declaration sets them; and `maintenance` whenever the
+ *   live monitor has a maintenance window (from/to set, or fewer than all seven days) — a window
+ *   silences the alarm, so it is always reported.
  * - **unmanaged-live** — a live monitor whose URL matches no declared instance, or every live
  *   monitor on a URL that ≥2 live monitors share (`dup`; none is picked as managed).
  */
@@ -735,19 +1033,24 @@ export function reconcileMonitors(
   for (const d of declared) {
     const onUrl = liveByUrl.get(d.url) ?? [];
     if (onUrl.length === 0) {
-      violations.push({ kind: "monitor", reason: "absent-live", resourceName: d.resourceName, url: d.url });
+      violations.push({ kind: "monitor", reason: "absent-live", resourceName: d.resourceName, instanceKey: d.instanceKey, url: d.url });
       continue;
     }
-    if (onUrl.length !== 1) continue; // every one of them is reported below as dup=url
-    const l = onUrl[0];
-    const drift = (field: MonitorField, declaredValue: string, liveValue: string) => {
-      if (declaredValue !== liveValue) {
-        violations.push({ kind: "monitor", reason: "monitor-config-drift", resourceName: d.resourceName, id: l.id, field, declared: declaredValue, live: liveValue });
+    for (const l of onUrl) {
+      const drift = (field: MonitorField, declaredValue: string, liveValue: string) => {
+        if (declaredValue !== liveValue) {
+          violations.push({ kind: "monitor", reason: "monitor-config-drift", resourceName: d.resourceName, id: l.id, field, declared: declaredValue, live: liveValue });
+        }
+      };
+      drift("monitor_type", d.monitorType, l.monitorType);
+      drift("required_keyword", d.requiredKeyword ?? "", l.requiredKeyword ?? "");
+      drift("paused", String(d.paused ?? false), String(l.paused));
+      for (const [field, declaredValue, liveValue] of declaredLeaves(d, l)) {
+        if (declaredValue !== undefined) drift(field, String(declaredValue), String(liveValue));
       }
-    };
-    drift("monitor_type", d.monitorType, l.monitorType);
-    drift("required_keyword", d.requiredKeyword, l.requiredKeyword ?? "");
-    drift("paused", String(d.paused), String(l.paused));
+      const window = liveMaintenanceWindow(l);
+      if (window !== null) drift("maintenance", "none", window);
+    }
   }
   for (const l of live) {
     const dup = (liveByUrl.get(l.url)?.length ?? 0) >= 2;
