@@ -26,6 +26,22 @@ describe("Codex App Server RPC client", () => {
     await expect(resultPromise).resolves.toEqual({});
   });
 
+  it("responds to a server initiated request without adding a pending call", async () => {
+    const channel = { write: vi.fn(async () => undefined) };
+    const client = createCodexRpcClient(channel);
+    await expect(client.respond("approval-1", { decision: "accept" })).resolves.toBeUndefined();
+    expect(channel.write).toHaveBeenCalledWith(
+      '{"jsonrpc":"2.0","id":"approval-1","result":{"decision":"accept"}}\n',
+    );
+    expect(client.pendingCount()).toBe(0);
+  });
+
+  it("rejects unsafe response identities and channel write failures", async () => {
+    const client = createCodexRpcClient({ write: vi.fn(async () => { throw new Error("closed"); }) });
+    await expect(client.respond("approval\n1", { decision: "decline" })).rejects.toMatchObject({ code: "codex_rpc_request_invalid" });
+    await expect(client.respond("approval-2", { decision: "decline" })).rejects.toMatchObject({ code: "codex_rpc_channel_error" });
+  });
+
   it("sanitizes correlated RPC errors", async () => {
     const client = createCodexRpcClient({ write: vi.fn(async () => undefined) });
     const resultPromise = client.request(createCodexInitializeRequest("rpc-3"));

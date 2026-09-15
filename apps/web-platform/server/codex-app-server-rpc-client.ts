@@ -13,6 +13,7 @@ export interface CodexRpcClientOptions {
 
 export interface CodexRpcClient {
   request(request: CodexRpcRequest): Promise<Record<string, unknown>>;
+  respond(id: string, result: Record<string, unknown>): Promise<void>;
   receiveLine(line: string): void;
   receive(message: unknown): void;
   close(reason?: unknown): void;
@@ -43,6 +44,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function assertResponseId(value: unknown): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 128 || [...value].some((character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 0x1f || codePoint === 0x7f || codePoint === 0x2028 || codePoint === 0x2029;
+  })) {
+    throw clientError("Codex RPC response identity is invalid", "codex_rpc_request_invalid");
+  }
+  return value;
+}
+
 export function createCodexRpcClient(
   channel: CodexRpcChannel,
   options: CodexRpcClientOptions = {},
@@ -67,6 +78,19 @@ export function createCodexRpcClient(
       entry?.reject(clientError("Codex RPC channel write failed", "codex_rpc_channel_error"));
     }
     return response;
+  };
+
+  const respond = async (id: string, result: Record<string, unknown>): Promise<void> => {
+    if (closed) throw clientError("Codex RPC channel is closed", "codex_rpc_closed");
+    if (!result || typeof result !== "object" || Array.isArray(result)) {
+      throw clientError("Codex RPC response is invalid", "codex_rpc_message_invalid");
+    }
+    const frame = encodeCodexJsonl({ jsonrpc: "2.0", id: assertResponseId(id), result });
+    try {
+      await channel.write(frame);
+    } catch {
+      throw clientError("Codex RPC channel write failed", "codex_rpc_channel_error");
+    }
   };
 
   const receive = (message: unknown): void => {
@@ -105,6 +129,7 @@ export function createCodexRpcClient(
 
   return {
     request,
+    respond,
     receiveLine: (line) => receive(decodeCodexJsonlLine(line)),
     receive,
     close,
