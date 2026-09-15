@@ -265,6 +265,21 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "contextCompaction", id: "bad\ncompaction" })).toEqual([]);
   });
 
+  it("replays web-search activity without queries or action details", () => {
+    expect(translateCodexPersistedItem({
+      type: "webSearch",
+      id: "search-1",
+      query: "private customer lookup",
+      action: { type: "openPage", url: "https://private.example.test" },
+    })).toEqual([
+      {
+        sourceId: "web-search:search-1",
+        payload: { type: "progress", message: "Web search recorded" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "webSearch", id: "bad\nsearch" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",

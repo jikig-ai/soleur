@@ -78,7 +78,8 @@ function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent
     const collabOutcome = type === "collabToolCall" && (statusType(itemRecord.status) === "completed" || statusType(itemRecord.status) === "failed");
     const reviewLifecycle = type === "enteredReviewMode" || type === "exitedReviewMode";
     const compactionLifecycle = type === "contextCompaction";
-    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
+    const webSearchActivity = type === "webSearch";
+    if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || webSearchActivity || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
       throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
     }
     for (const event of translated) replay.push(createCodexReplayEvent(event));

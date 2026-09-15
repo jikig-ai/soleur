@@ -108,6 +108,9 @@ review targets and findings remain excluded from replay payloads.
 Persisted context-compaction items emit a fixed `Context compacted` progress
 message keyed by their bounded item identity; compaction summaries, reasoning,
 and source context remain excluded from replay payloads.
+Persisted `webSearch` items emit a fixed `Web search recorded` progress message
+keyed by their bounded item identity; queries, URLs, and action details remain
+excluded from replay payloads.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or
