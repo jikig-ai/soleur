@@ -1,0 +1,282 @@
+# (#8189, ADR-220) Apply the git-data root-key root (apps/web-platform/infra/git-data-root-key/).
+#
+# WHAT IT DOES. Plans the separate root, refuses anything that is not additive (a create of exactly
+# the seven D-1 addresses, or a no-op; never an import, a moved address, or a re-mint of an already
+# anchored key), applies the saved plan, and prints the root key's SHA256 fingerprint read from
+# Terraform STATE, after requiring it to equal the fingerprint of the Hetzner key object's public
+# key. That fingerprint is public; a reviewed PR commits it to
+# apps/web-platform/infra/git-data-root-key.fingerprint, which both host-creating gates compare.
+#
+# WHY IT IS SHAPED THIS WAY (single-source rationale: ADR-220 D2/D3):
+#   - workflow_dispatch ONLY. A merge alone has no blast radius, and a push-queued approval would
+#     hold `git-data-state` and could cancel a queued replace (#8167).
+#   - environment `web-platform-infra-apply` (reviewer + main-only branch policy) on the one job.
+#   - job-level `git-data-state`, the literal git_data_host_replace uses, so this apply can never
+#     run between a replace's `plan -out` and its `apply`. The R2 backend has no state lock.
+#   - ADDITIVE-ONLY, NO EXCEPTIONS. There is no rotation input: any rotation (read token or key) is a
+#     reviewed PR that adds a typed arm for exactly its addresses (ADR-220 D3).
+#   - The plan JSON and the state JSON hold the private key. Each is piped straight into jq, never
+#     printed, never uploaded; the allowlist reads only address/actions/importing/previous_address,
+#     the fingerprint step reads only the tls key's public_key_fingerprint_sha256; the plan file is
+#     shredded.
+#   - notify-root-key-apply emails ops on any non-success except a run-level cancel.
+#
+# Guarded by apps/web-platform/infra/git-data-root-key.test.sh (Guards 6 root half and 8), which
+# EXECUTES the `validate`, `allowlist` and `fingerprint` step bodies below against synthesized
+# fixtures, and pins that no step from the allowlist through the apply carries `if:` or
+# `continue-on-error` (the refusal must gate the apply, not just annotate it).
+name: Apply git-data root key (ADR-220)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type APPLY-GIT-DATA-ROOT-KEY to confirm. Typo-guard only; the environment reviewer is the authorization."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  ROOT_KEY_DIR: apps/web-platform/infra/git-data-root-key
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    environment: web-platform-infra-apply
+    timeout-minutes: 20
+    concurrency:
+      group: git-data-state
+      cancel-in-progress: false
+    steps:
+      # FIRST, before any secret is read. The input arrives through env: and is compared as a literal.
+      - name: Validate dispatch inputs
+        id: validate
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "APPLY-GIT-DATA-ROOT-KEY" ]]; then
+            echo "::error::verdict=confirm_mismatch confirm must be exactly APPLY-GIT-DATA-ROOT-KEY. Typo-guard only; the environment reviewer is the authorization."
+            exit 1
+          fi
+          echo "dispatch validated (additive apply)"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Extract R2 backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init (root-key root, readonly lock)
+        working-directory: ${{ env.ROOT_KEY_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan
+        working-directory: ${{ env.ROOT_KEY_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -input=false -no-color -out "$RUNNER_TEMP/tfplan"
+
+      # THE ALLOWLIST REFUSAL. `terraform show -json` goes straight into jq and never to stdout: the
+      # plan JSON carries the private key and the plan-input variables. The program reads only
+      # `.resource_changes[]` `.address`, `.change.actions`, `.change.importing` and
+      # `.previous_address`, and prints only addresses and action words.
+      #
+      # `create_addrs` is the D-1 address set; git-data-root-key.test.sh derives that set from the
+      # root's *.tf and requires this literal to equal it. The re-mint refusal: once the fingerprint
+      # is committed, a create of the tls key means state was lost or the key was deleted, and
+      # applying would anchor nothing while breaking both host-creating gates.
+      #
+      # NO `if:` and NO `continue-on-error` on this step or the apply (pinned by the suite).
+      - name: Refuse any non-additive plan (allowlist)
+        id: allowlist
+        working-directory: ${{ env.ROOT_KEY_DIR }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${GITHUB_WORKSPACE:-}" ]]; then
+            echo "::error::verdict=git_data_root_key_anchor_unreadable GITHUB_WORKSPACE is unset; cannot tell whether the fingerprint is already committed."
+            exit 1
+          fi
+          anchored=false
+          if [[ -e "$GITHUB_WORKSPACE/apps/web-platform/infra/git-data-root-key.fingerprint" ]]; then anchored=true; fi
+          program="$(cat <<'JQ'
+          def create_addrs: [
+            "doppler_environment.git_data_root_prd",
+            "doppler_project.git_data_root",
+            "doppler_secret.git_data_root_ssh_private_key",
+            "doppler_service_token.git_data_root_read",
+            "github_actions_secret.doppler_token_git_data_root",
+            "hcloud_ssh_key.git_data_root",
+            "tls_private_key.git_data_root"
+          ];
+          def expected_create: .[0] as $a | .[1] == ["create"] and any(create_addrs[]; . == $a);
+          def additive: .[2] == null and .[3] == null and (.[1] == ["no-op"] or expected_create);
+          if length != 1 or (.[0] | type) != "object"
+             or (.[0].resource_changes | type) != "array"
+             or (.[0].resource_changes | length) == 0
+          then "verdict=git_data_root_key_plan_unreadable"
+          else
+            [.[0].resource_changes[] | [.address, .change.actions, .change.importing, .previous_address]] as $c
+            | if any($c[]; (.[0] | type) != "string" or (.[1] | type) != "array"
+                     or any(.[1][]; type != "string"))
+              then "verdict=git_data_root_key_plan_unreadable"
+              elif $anchored and any($c[]; .[0] == "tls_private_key.git_data_root" and any(.[1][]; . == "create"))
+              then "verdict=git_data_root_key_remint_refused",
+                   "refused tls_private_key.git_data_root create"
+              else
+                [$c[] | select(additive | not)] as $bad
+                | if ($bad | length) == 0
+                  then "verdict=ok",
+                       ($c[] | select(.[1] != ["no-op"]) | "change \(.[0]) \(.[1] | join(","))")
+                  else "verdict=git_data_root_key_non_additive",
+                       ($bad[] | "refused \(.[0]) \(.[1] | join(","))\(if .[2] != null then " importing" else "" end)\(if .[3] != null then " moved" else "" end)")
+                  end
+              end
+          end
+          JQ
+          )"
+          rc=0
+          report="$(terraform show -json "$RUNNER_TEMP/tfplan" | jq -r -s --argjson anchored "$anchored" "$program")" || rc=$?
+          verdict="${report%%$'\n'*}"
+          if [[ "$rc" -ne 0 || -z "$verdict" ]]; then
+            echo "::error::verdict=git_data_root_key_plan_unreadable the saved plan could not be read as JSON (rc=${rc}). Refusing to read an unreadable plan as a clean one."
+            exit 1
+          fi
+          case "$verdict" in
+            verdict=ok)
+              printf '%s\n' "$report"
+              ;;
+            verdict=git_data_root_key_plan_unreadable)
+              echo "::error::${verdict} the plan JSON has no non-empty resource_changes array."
+              exit 1
+              ;;
+            verdict=git_data_root_key_remint_refused)
+              echo "::error::${verdict} apps/web-platform/infra/git-data-root-key.fingerprint is committed, so a create of tls_private_key.git_data_root would re-mint an anchored key (state lost or key deleted). Do not re-anchor; follow the ADR-220 runbook's breach-triage trigger."
+              printf '%s\n' "${report#*$'\n'}"
+              exit 1
+              ;;
+            verdict=git_data_root_key_non_additive)
+              echo "::error::${verdict} this root is additive-only: a create of exactly the seven D-1 addresses or a no-op, never an import or a moved address. Any rotation is a reviewed PR that adds a typed arm (ADR-220 D3)."
+              printf '%s\n' "${report#*$'\n'}"
+              exit 1
+              ;;
+            *)
+              echo "::error::verdict=git_data_root_key_plan_unreadable unexpected allowlist output."
+              exit 1
+              ;;
+          esac
+
+      - name: Terraform apply (saved plan)
+        working-directory: ${{ env.ROOT_KEY_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -input=false "$RUNNER_TEMP/tfplan"
+
+      # THE PRINTED FINGERPRINT COMES FROM TERRAFORM STATE, not from the Hetzner listing (any
+      # HCLOUD_TOKEN holder can write a key object with the right name and label). `terraform show
+      # -json` with NO plan file reads the state just written; jq reads only the tls key's
+      # `public_key_fingerprint_sha256` (tls 4.3.0: golang.org/x/crypto/ssh FingerprintSHA256, the
+      # same `SHA256:<base64>` form ssh-keygen prints). MEASURED: the Hetzner API `fingerprint`
+      # field is MD5 colon-hex, so the listing's value is derived from its `public_key` with
+      # ssh-keygen, and the two must be equal. Only the `SHA256:<base64>` token prints.
+      - name: Print the git-data root key fingerprint (SHA256, public)
+        id: fingerprint
+        working-directory: ${{ env.ROOT_KEY_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          unreadable() {
+            echo "::error::verdict=git_data_root_key_fingerprint_unreadable reason=$1"
+            exit 1
+          }
+          state_fp="$(terraform show -json | jq -r '.values.root_module.resources[] | select(.address == "tls_private_key.git_data_root") | .values.public_key_fingerprint_sha256')" \
+            || unreadable state_read_failed
+          [[ "$state_fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || unreadable state_fingerprint_malformed
+          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)" || unreadable hcloud_token_read_failed
+          [[ -n "$TOKEN" ]] || unreadable hcloud_token_empty
+          printf '::add-mask::%s\n' "$TOKEN"
+          body="$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -sS -f --max-time 30 -H @- \
+                    'https://api.hetzner.cloud/v1/ssh_keys?label_selector=soleur-role%3Dgit-data-root')" \
+            || unreadable hetzner_list_failed
+          n="$(jq '.ssh_keys | length' <<<"$body")" || unreadable hetzner_list_malformed
+          [[ "$n" == "1" ]] || unreadable hetzner_key_count
+          name="$(jq -r '.ssh_keys[0].name // ""' <<<"$body")" || unreadable hetzner_list_malformed
+          [[ "$name" == "soleur-git-data-root" ]] || unreadable hetzner_key_name
+          pub="$(jq -r '.ssh_keys[0].public_key // ""' <<<"$body")" || unreadable hetzner_list_malformed
+          hetzner_fp="$(ssh-keygen -l -E sha256 -f - <<<"$pub" | awk '{print $2}')" || unreadable ssh_keygen_failed
+          [[ "$hetzner_fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || unreadable hetzner_fingerprint_malformed
+          if [[ "$state_fp" != "$hetzner_fp" ]]; then
+            echo "::error::verdict=git_data_root_key_fingerprint_mismatch the Hetzner key object's public key is not the key in Terraform state. Commit neither value; follow the ADR-220 runbook's breach-triage trigger."
+            exit 1
+          fi
+          echo "git_data_root_key_fingerprint=${state_fp}"
+          {
+            echo "### git-data root key applied"
+            echo ""
+            echo "Commit this line to \`apps/web-platform/infra/git-data-root-key.fingerprint\` in a reviewed PR:"
+            echo ""
+            echo "\`${state_fp}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Hygiene; the ephemeral VM is the control.
+      - name: Shred the saved plan
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/tfplan" ]]; then
+            shred -u "$RUNNER_TEMP/tfplan" || rm -f "$RUNNER_TEMP/tfplan"
+          fi
+
+  notify-root-key-apply:
+    needs: [apply]
+    if: always() && needs.apply.result != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Email ops on a non-green root-key apply
+        if: always()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "Apply git-data root key: run did NOT complete"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          # Workflow-context scalars only; never a step log or plan bytes.
+          body: |
+            <p>The <strong>Apply git-data root key</strong> run for <code>${{ github.sha }}</code>
+            ended with apply result <code>${{ needs.apply.result }}</code> (failed, refused by the
+            additive-only allowlist, cancelled, or the environment approval was rejected).</p>
+            <p>Nothing is down: this root holds only the git-data root key and its read credential.
+            Read the run's <code>verdict=</code> annotation before re-dispatching.</p>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>

@@ -1041,6 +1041,7 @@ curated-register
 curl
 curl-based cloudflare api calls in agent
 current_user
+custody
 custom
 custom-domain
 custom-icon
@@ -1481,6 +1482,7 @@ false-verdict
 falsifiable-test
 falsification
 falsification-gate
+fan-out
 fan-out-pattern
 faqpage
 fd-exhaustion
@@ -3099,6 +3101,7 @@ resource-management
 responsive
 responsive-design
 rest-api
+restart
 restatement
 restructure
 resume

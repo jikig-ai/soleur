@@ -4,7 +4,7 @@
 # Tunnel SSH bridge, with cloud-admin/Doppler creds held here in GitHub secrets (never on the host;
 # learning 2026-06-02). The fresh encrypted volume is +created + attached FIRST by a separate
 # `apply_target=workspaces-luks-cutover` run of apply-web-platform-infra.yml (gate-guarded); this
-# workflow does the freeze / rsync / repoint / canary. Mirrors git-data-cutover.yml.
+# workflow does the freeze / rsync / repoint / canary. Mirrors the pre-#8189 git-data cutover shape (that workflow is now a read-only proof; #8211).
 #
 # SIGN-OFF (C19 / AC20b): the freeze operates on SOLE-COPY user data with a terminal failure mode
 # the fix itself creates (passphrase/header loss ⇒ unreadable forever). The `environment:

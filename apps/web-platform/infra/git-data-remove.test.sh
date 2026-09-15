@@ -178,10 +178,12 @@ if grep -q 'not on the store' "$ERR" && [ -e "${root}/ws-offstore.git/HEAD" ]; t
 rm -rf "$root"
 
 # --- T12 (#8043 review): the CUTOVER FREEZE sentinel refuses the erasure, nothing erased.
-#     The sentinel lives at the MOUNT root in production (git-data-cutover.sh
-#     FREEZE_SENTINEL), which a suite cannot own; the path seam is the same
-#     GIT_DATA_CUTOVER_FREEZE the pre-receive fence carries, and the DEFAULT is pinned on
-#     the line so the seam cannot drift from the cutover's sentinel path. ---
+#     The sentinel lives at the MOUNT root in production, which a suite cannot own; the path
+#     seam is the same GIT_DATA_CUTOVER_FREEZE the pre-receive fence carries, and the DEFAULT
+#     is pinned on the line so the seam cannot drift. The sentinel WRITER
+#     (git-data-cutover.sh FREEZE_SENTINEL) was deleted with the cutover body in #8189; the
+#     <mount root>/.cutover-freeze path contract is honoured by its four readers and the
+#     writer is rebuilt in #8211. ---
 root=$(fresh_root); make_repo "$root" "ws-frozen"
 : > "${root}/.frozen"
 rc=$(env -i PATH="$PATH" GIT_DATA_REPO_ROOT="$root" GIT_DATA_MOUNT_ROOT="$(stat -c %m "$root")" \
