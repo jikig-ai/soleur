@@ -55,6 +55,9 @@ path alone cannot show that replay drift is visible.
 5. A shell probe using `rm -f` was rejected by the command guard. **Prevention:** use Python or a safe temporary-file lifecycle instead of destructive shell cleanup patterns.
 6. A preflight shell probe accidentally used command substitution despite the no-substitution ship/preflight contract. **Prevention:** pass values through per-worktree files and `read`, then run a separate bounded parser step.
 7. A follow-up tool call assumed a shell variable persisted across calls and opened the wrong absolute path. **Prevention:** re-derive or pass the literal per-worktree path in every independent command invocation.
+8. A merge-resync probe used a non-existent worktree path and failed before inspection. **Prevention:** copy the absolute worktree path from the session context and verify it with `test -d` before running dependent commands.
+9. A broad generated-JSON diff emitted more than a megabyte and was truncated by the tool boundary. **Prevention:** inspect generated artifacts with bounded metadata (`wc`, `jq`, `head`) and prefer the source-of-truth regeneration script over raw diff output.
+10. Worktree cleanup encountered an unregistered root-owned directory and could not remove it. **Prevention:** inspect ownership after cleanup, report the exact environment limitation, and do not claim orphan cleanup completed when permissions prevent it.
 
 ## Related
 
