@@ -486,7 +486,7 @@ logs:
   retention: "GitHub Actions logs 90 days; Better Stack check history per vendor plan"
 
 discoverability_test:
-  command: "curl -s --max-time 10 https://app.soleur.ai/health | grep -o '\"supabase\":\"connected\"'"
+  command: "curl -fsS --max-time 10 https://app.soleur.ai/health"
   expected_output: "\"supabase\":\"connected\""
 ```
 
