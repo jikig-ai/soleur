@@ -820,7 +820,18 @@ case "$OP" in
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
       echo "::error::doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
     fi
+    # #6178 — PAGE-OVERLAP DEDUPE. The probe paginates `runs(orderBy: startedAt desc)` by cursor while
+    # the live scheduler keeps inserting runs, so a run can be returned on two pages. Measured
+    # 2026-09-15: every "double-fire" group equalled RUN_COUNT - total_count and was absent from
+    # trace_runs (one run per tick). The SAME run repeats its microsecond startedAt exactly; two
+    # schedulers firing one tick start milliseconds apart (2026-07-30 pairs: 2-278 ms), so this drop
+    # cannot hide a real double-fire. The dropped count is reported, never silent.
+    PRE_DEDUPE_N=$(echo "$BODY" | jq '.runs | length')
+    BODY=$(echo "$BODY" | jq -c '.runs |= ([ .[] | select(.startedAt == null) ] + ([ .[] | select(.startedAt != null) ] | unique_by([.functionID, .startedAt])))')
     RUN_COUNT=$(echo "$BODY" | jq '.runs | length')
+    if (( PRE_DEDUPE_N > RUN_COUNT )); then
+      echo "::notice::doublefire-probe: dropped $(( PRE_DEDUPE_N - RUN_COUNT )) page-overlap duplicate(s) (same functionID + identical startedAt = the same run returned on two pages)"
+    fi
     # #6178 — NULL-SAFE BUCKETING. The probe projects {functionID, startedAt} from EVERY
     # returned node, and a run that is queued, running, or cancelled-before-start carries
     # startedAt:null. `fromdateiso8601` THROWS on null ("strptime/1 requires string
@@ -2255,7 +2266,18 @@ case "$OP" in
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
       echo "::error::2.6 doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
     fi
+    # #6178 — PAGE-OVERLAP DEDUPE. The probe paginates `runs(orderBy: startedAt desc)` by cursor while
+    # the live scheduler keeps inserting runs, so a run can be returned on two pages. Measured
+    # 2026-09-15: every "double-fire" group equalled RUN_COUNT - total_count and was absent from
+    # trace_runs (one run per tick). The SAME run repeats its microsecond startedAt exactly; two
+    # schedulers firing one tick start milliseconds apart (2026-07-30 pairs: 2-278 ms), so this drop
+    # cannot hide a real double-fire. The dropped count is reported, never silent.
+    PRE_DEDUPE_N=$(echo "$BODY" | jq '.runs | length')
+    BODY=$(echo "$BODY" | jq -c '.runs |= ([ .[] | select(.startedAt == null) ] + ([ .[] | select(.startedAt != null) ] | unique_by([.functionID, .startedAt])))')
     RUN_COUNT=$(echo "$BODY" | jq '.runs | length')
+    if (( PRE_DEDUPE_N > RUN_COUNT )); then
+      echo "::notice::2.6 doublefire-probe: dropped $(( PRE_DEDUPE_N - RUN_COUNT )) page-overlap duplicate(s) (same functionID + identical startedAt = the same run returned on two pages)"
+    fi
     # #6178 — NULL-SAFE BUCKETING (see the full rationale on the op=doublefire-probe arm).
     # fromdateiso8601 throws on a null startedAt and jq's exit 5 propagates through
     # `set -euo pipefail`; a run with no startedAt has not fired and cannot be a

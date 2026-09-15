@@ -1758,6 +1758,32 @@ EOF
   fi
 done
 
+# --- #6178 page-overlap dedupe (both probe arms) — EXECUTED, not grepped. ---
+# The probe's cursor pagination returned the same run on two pages while the scheduler kept
+# inserting runs, and op=verify scored each repeat as a double-fire (measured 2026-09-15: 5 groups
+# == RUN_COUNT - total_count, all absent from trace_runs). The filter must drop a repeat (identical
+# functionID + startedAt) and must NOT drop a real double-fire (same tick, milliseconds apart).
+DEDUPE_PROGS=$(perl -ne "print \"\$1\n\" if /jq -c '(\.runs \|= [^']+unique_by[^']+)'/" "$WF")
+DEDUPE_N=$(printf '%s\n' "$DEDUPE_PROGS" | grep -c 'unique_by' || true)
+assert "#6178 page-overlap dedupe is applied in BOTH probe arms (op=doublefire-probe + op=verify 2.6)" "[[ '$DEDUPE_N' -eq 2 ]]"
+DEDUPE_FIXTURE='{"runs":[
+  {"functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"functionID":"fn-p","startedAt":"2026-09-15T07:47:00.208Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-30T15:00:00.065Z"},
+  {"functionID":"fn-d","startedAt":"2026-07-30T15:00:00.343Z"},
+  {"functionID":"fn-q","startedAt":null},
+  {"functionID":"fn-q","startedAt":null}]}'
+di=0
+while IFS= read -r dprog; do
+  [[ -n "$dprog" ]] || continue
+  di=$((di + 1))
+  dout=$(jq -c "$dprog" <<<"$DEDUPE_FIXTURE" 2>/dev/null || echo '{"runs":"CRASH"}')
+  assert "#6178 dedupe site $di drops the page-repeated run (fn-p appears once)" "[[ \"\$(jq '[.runs[]? | select(.functionID==\"fn-p\")] | length' <<<'$dout')\" -eq 1 ]]"
+  assert "#6178 dedupe site $di KEEPS a real double-fire (fn-d, ms apart, stays 2)" "[[ \"\$(jq '[.runs[]? | select(.functionID==\"fn-d\")] | length' <<<'$dout')\" -eq 2 ]]"
+  assert "#6178 dedupe site $di leaves null-startedAt runs for the NO_START count (fn-q stays 2)" "[[ \"\$(jq '[.runs[]? | select(.functionID==\"fn-q\")] | length' <<<'$dout')\" -eq 2 ]]"
+done <<<"$DEDUPE_PROGS"
+assert "#6178 the dedupe loop executed both sites" "[[ '$di' -eq 2 ]]"
+
 # --- NON-VACUITY HARD GATE (AC-V3), enforced in code rather than by operator diligence. ---
 assert "#6178 op=verify READS the server's total_count (it was emitted and never consumed)" \
   "grep -qE 'TOTAL_COUNT=.*jq -r .\\.total_count' '$VERIFY_ARM_FILE'"
@@ -2725,7 +2751,8 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
-_EXACT_FLOOR=630
+# 630 -> 638 (+8) at the page-overlap dedupe fix: both-arms presence, 3 executed rows per site x2, loop-ran.
+_EXACT_FLOOR=638
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
