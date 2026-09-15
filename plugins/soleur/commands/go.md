@@ -67,9 +67,18 @@ This gate is deterministic and fires on the first action, so a not-ready workspa
 Before the mutating preamble below (worktree cleanup, `.mcp.json` restore), classify the session — a routed skill's marker block cannot protect work that runs before it loads:
 
 ```bash
-DETECT="${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"
-[ -f "$DETECT" ] || DETECT="$(find /opt/.devin/plugins -name cloud-detect.sh 2>/dev/null | head -1)"
-[ -n "$DETECT" ] && bash "$DETECT" --banner
+ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+# Cloud exec shells export neither *_PLUGIN_ROOT var; fall back to the
+# installed-plugin cache before declaring the script unreachable.
+if [ ! -f "${ROOT}/scripts/cloud-detect.sh" ]; then
+  FOUND="$(find /opt/.devin/plugins -name cloud-detect.sh 2>/dev/null | head -1)"
+  [ -n "$FOUND" ] && ROOT="${FOUND%/scripts/cloud-detect.sh}"
+fi
+if [ -f "${ROOT}/scripts/cloud-detect.sh" ]; then
+  bash "${ROOT}/scripts/cloud-detect.sh" --banner
+else
+  echo "SOLEUR_CLOUD_DETECT_SKIPPED reason=script-unreachable"
+fi
 ```
 
 `local` or `not-local:no-devin-env` → proceed. Any other `not-local:<reason>` → apply the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode (sequential fan-out with `Reviewed-Coverage: sequential-fallback` disclosure, `message_user` ack before secrets/prod, `precommit-guard.sh` before any `git commit`).
