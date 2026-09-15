@@ -109,11 +109,15 @@ jobs:
           # The match is a HERESTRING, not `printf | grep` — under pipefail,
           # grep -q's early exit SIGPIPEs the printf and the pipeline's
           # non-zero lands in `else`, emitting vendor=false on a diff that DID
-          # touch the vendored surface (#8203 review). And grep's own error
-          # (rc>1) must fail the job closed rather than read as no-match.
-          # (`set -uo pipefail` above, no -e — grep's non-zero does not abort.)
-          grep -qE '^(plugins/soleur/skills/gdpr-gate/NOTICE$|plugins/soleur/skills/gdpr-gate/references/|plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity\.sh$|plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter\.sh$|plugins/soleur/skills/legal-generate/NOTICE$|plugins/soleur/skills/legal-generate/references/|plugins/soleur/test/vendor-bundle-coverage\.test\.sh$|\.github/workflows/vendor-pin-verify\.yml$|scripts/vendor-pin-gate-verdict\.sh$|tests/scripts/test-vendor-pin-gate-verdict\.sh$)' <<<"$CHANGED"
-          grep_rc=$?
+          # touch the vendored surface (#8203 review). The runner's `-e` is
+          # inherited, so the capture is protected with `|| grep_rc=$?`
+          # (ADR-170 / lint-workflow-errexit-capture): without it, a no-match
+          # (rc=1) would die the step instead of emitting vendor=false, and
+          # the rc>1 arm below would be unreachable. grep's own error (rc>1)
+          # still fails the job closed rather than reading as no-match.
+          grep_rc=0
+          grep -qE '^(plugins/soleur/skills/gdpr-gate/NOTICE$|plugins/soleur/skills/gdpr-gate/references/|plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity\.sh$|plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter\.sh$|plugins/soleur/skills/legal-generate/NOTICE$|plugins/soleur/skills/legal-generate/references/|plugins/soleur/test/vendor-bundle-coverage\.test\.sh$|\.github/workflows/vendor-pin-verify\.yml$|scripts/vendor-pin-gate-verdict\.sh$|tests/scripts/test-vendor-pin-gate-verdict\.sh$)' <<<"$CHANGED" \
+            || grep_rc=$?
           if (( grep_rc > 1 )); then
             echo "::error::anchor grep failed (rc=$grep_rc); failing detect-changes closed." >&2
             exit 1
