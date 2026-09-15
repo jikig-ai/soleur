@@ -1339,3 +1339,26 @@ The panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO
 - **Store-probe evidence is unauthenticated until #7226.** D1b's `accepted` flip is recorded with that caveat.
 - **`detect-changes` treats the nested root as the parent.** Moving it to a top-level path would put it into
   the PR `plan` matrix; the detect test pins the nested behavior.
+
+## Work-phase reconciliation (2026-09-15)
+
+Measured during `/work`; each item corrects a plan statement above without rewriting it.
+
+- **Insight 16 / Downtime & Cutover stage 2.** `web-git-data-probe.sh` does not run `git ls-remote`: it opens a
+  TCP connection to `10.0.1.20:22` (`nc -z`) and pings `GIT_DATA_HEARTBEAT_URL` on success. A green heartbeat
+  proves the private NIC and the sshd port, not the key. The runbook states this; the key is proven only by the
+  AC19 dry run.
+- **"web-2 retired (#6538)".** False: `var.web_hosts` still carries `web-2` (ADR-143, re-added 2026-07-24);
+  #6538 retired a different host. The runbook keeps the DNS-rewire section `dns.tf` links to.
+- **AC3, amended.** Its literal grep also matches (a) the two mutation rows that re-introduce a deleted function
+  to prove the absence guards fire (`git-data-cutover-access.test.sh` G2, `git-data-luks.test.sh` A8) and
+  (b) `workspaces-cutover.sh` / `workspaces-luks-staging.test.sh`, the separate `/workspaces` cutover, which
+  pre-date this PR. AC3 is satisfied when every remaining hit is one of those.
+- **Phase 0.6 consumer missed by the plan.** `git-data-luks.test.sh` asserted the deleted body (A8–A12); those
+  rows now assert its absence and cite #8211.
+- **Follow-up numbers.** F1 = #8209, F4 = #8210, F2 = #8211.
+- **Fingerprint form (Phase 0.4).** Hetzner's `fingerprint` is MD5 colon-hex; both the arm and the apply's print
+  step derive `SHA256:` from `public_key` with `ssh-keygen -l -E sha256`.
+- **Fingerprint path.** Passed to both gates by `GIT_DATA_ROOT_KEY_FINGERPRINT_FILE`, not an argument, because
+  the parity suite pins the gate call shapes.
+- **Doppler CLI version.** `DopplerHQ/cli-action@5351693…` takes no version input; only the action is pinned.
