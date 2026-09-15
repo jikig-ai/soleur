@@ -130,28 +130,66 @@ create_mock_systemctl() {
 # quiesce/enable verdict, so a blanket exit-0 mock would mask them. Per-verb fail
 # toggles let a test drive a TOLERATED stop/disable non-zero vs a GENUINE failure.
 verb="$1"
+# #6921/#8077 verb log: EVERY verb (queries included) is appended when MOCK_SYSTEMCTL_LOG is
+# set, so a row can assert ORDER (capture before disable before stop) and ABSENCE (no
+# `restart` on a refused unit). The mock rearm script appends its mode to the SAME log, which
+# is what makes the capture-vs-stop ordering observable at all. A row asserting absence must
+# first assert the log EXISTS — an absent log would satisfy "no restart" vacuously.
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "$verb" >> "$MOCK_SYSTEMCTL_LOG"; fi
+# #8077 review: MOCK_SYSTEMCTL_WATCH (space-separated paths) — on enable/start, log whether each
+# path exists AT THE MOMENT of the verb (`watch:<basename>=present|absent`), so a row can prove the
+# enable handler retired the capture and removed the marker BEFORE it re-armed the unit.
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" && -n "${MOCK_SYSTEMCTL_WATCH:-}" && ( "$verb" == enable || "$verb" == start ) ]]; then
+  for _w in $MOCK_SYSTEMCTL_WATCH; do
+    if [[ -e "$_w" ]]; then _ws=present; else _ws=absent; fi
+    printf 'watch:%s=%s\n' "$(basename "$_w")" "$_ws" >> "$MOCK_SYSTEMCTL_LOG"
+  done
+fi
+# Stateful mode is OPT-IN (MOCK_SYSTEMCTL_STATEFUL=1): `stop` / `disable` leave markers and the
+# queries read them back. Made default it would flip AC-Q5 (static /health 200 → still_serving)
+# and AC-Q6 (static active → still_serving) to `quiesced`. Markers live beside this mock (a
+# fresh mktemp -d per runner). The `disabled` marker matters only on a unit that STARTS enabled
+# (MOCK_SYSTEMCTL_ENABLED_STATE=enabled): the stateful quiesce rows arm exactly that.
+_sdir="$(dirname "$0")"
+_stateful=0
+if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" ]]; then _stateful=1; fi
 case "$verb" in
   is-active)
     # `is-active [--quiet] <unit>`. Default: inactive (systemd exit 3). A test that
     # needs "unit still ACTIVE despite /health down" (arch P2-3) arms MOCK_SYSTEMCTL_ACTIVE=1.
+    # MOCK_SYSTEMCTL_ACTIVE_STATE prints any other non-active state (e.g. `failed`, the
+    # post-SIGKILL stop shape) with systemd's non-zero exit.
+    if [[ "$_stateful" == "1" && -e "$_sdir/stopped" ]]; then echo inactive; exit 3; fi
     if [[ "${MOCK_SYSTEMCTL_ACTIVE:-}" == "1" ]]; then echo active; exit 0; fi
-    echo inactive; exit 3
+    echo "${MOCK_SYSTEMCTL_ACTIVE_STATE:-inactive}"; exit 3
     ;;
   is-enabled)
     # Echo the unit's enabled-state; exit 0 iff enabled (systemd convention).
     # Default "disabled" (a clean quiesced unit). Tests override via
-    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled).
+    # MOCK_SYSTEMCTL_ENABLED_STATE (e.g. static | enabled | enabled-runtime | not-found).
+    # `not-found` exits 4 — systemd >= 253 on an absent unit (prod: systemd 255).
     state="${MOCK_SYSTEMCTL_ENABLED_STATE:-disabled}"
+    if [[ "$_stateful" == "1" && -e "$_sdir/disabled" ]]; then state=disabled; fi
     echo "$state"
-    case "$state" in enabled|enabled-runtime) exit 0 ;; *) exit 1 ;; esac
+    case "$state" in enabled|enabled-runtime) exit 0 ;; not-found) exit 4 ;; *) exit 1 ;; esac
     ;;
   show)
     # `show -p ExecStart …` — no output (the durable-backend branch stays skipped
     # in tests, matching pre-#6178 blanket-mock behavior).
+    # `show -p ActiveEnterTimestamp --value …` prints MOCK_SYSTEMCTL_ACTIVE_ENTER (default empty —
+    # systemd's value for a unit that has not entered active since boot): inngest_quiesce_state's
+    # void rule reads it.
+    if [[ " $* " == *" ActiveEnterTimestamp "* ]]; then printf '%s\n' "${MOCK_SYSTEMCTL_ACTIVE_ENTER:-}"; fi
     exit 0
     ;;
-  stop)    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
-  disable) [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
+  stop)
+    [[ "${MOCK_SYSTEMCTL_STOP_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/stopped"; fi
+    exit 0 ;;
+  disable)
+    [[ "${MOCK_SYSTEMCTL_DISABLE_FAIL:-}" == "1" ]] && exit 1
+    if [[ "$_stateful" == "1" ]]; then : > "$_sdir/disabled"; fi
+    exit 0 ;;
   enable)  [[ "${MOCK_SYSTEMCTL_ENABLE_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
   start)   [[ "${MOCK_SYSTEMCTL_START_FAIL:-}" == "1" ]] && exit 1; exit 0 ;;
 esac
@@ -162,6 +200,42 @@ fi
 exit 0
 MOCK
   chmod +x "$1/systemctl"
+}
+
+# #6921 D1b mock rearm script (INNGEST_REARM_CMD). Appends the MODE it was invoked with to the
+# systemctl verb log — the handler passes INNGEST_REARM_MODE=capture, so a `capture` line proves
+# both that the capture ran and WHEN, relative to the unit verbs. Default: success with 2 ids.
+#   MOCK_REARM_CAPTURE_FAIL=1   exit 1 with stderr text (carries a token-shaped string so a row
+#                               can assert the journald tail is redacted, not raw);
+#                               MOCK_REARM_CAPTURE_FAIL_TEXT overrides that text (the DSN-scrub row)
+#   MOCK_REARM_CAPTURE_NOFILE=1 succeed WITHOUT persisting the capture file
+#   MOCK_REARM_CAPTURE_EMPTY=1  success with captured:0 (an empty capture IS a capture)
+#   MOCK_REARM_CAPTURE_SLEEP=N  block N seconds first (the bounded row). /bin/sleep directly:
+#                               the PATH sleep is create_mock_sleep's no-op.
+create_mock_rearm() {
+  cat > "$1/inngest-rearm-reminders.sh" << 'MOCK'
+#!/bin/bash
+if [[ -n "${MOCK_SYSTEMCTL_LOG:-}" ]]; then printf '%s\n' "${INNGEST_REARM_MODE:-<unset>}" >> "$MOCK_SYSTEMCTL_LOG"; fi
+if [[ -n "${MOCK_REARM_CAPTURE_SLEEP:-}" ]]; then /bin/sleep "$MOCK_REARM_CAPTURE_SLEEP"; fi
+if [[ "${MOCK_REARM_CAPTURE_FAIL:-}" == "1" ]]; then
+  echo "${MOCK_REARM_CAPTURE_FAIL_TEXT:-ERROR: capture: enumeration failed (mock) auth=dp.st.prd.MOCKLEAKVALUE123}" >&2
+  exit 1
+fi
+# The real script persists the capture to INNGEST_CUTOVER_CAPTURE_FILE; the handler hashes that
+# file into the quiesce marker, so the mock writes it too. MOCK_REARM_CAPTURE_NOFILE=1 skips it.
+_cf="${INNGEST_CUTOVER_CAPTURE_FILE:-}"
+if [[ "${MOCK_REARM_CAPTURE_EMPTY:-}" == "1" ]]; then
+  if [[ -n "$_cf" && "${MOCK_REARM_CAPTURE_NOFILE:-}" != "1" ]]; then printf '[]' > "$_cf"; fi
+  echo "{\"captured\":0,\"reminder_ids\":[],\"capture_file\":\"$_cf\"}"
+  exit 0
+fi
+if [[ -n "$_cf" && "${MOCK_REARM_CAPTURE_NOFILE:-}" != "1" ]]; then
+  printf '[{"reminder_id":"r1","fire_at":4102444800000},{"reminder_id":"r2","fire_at":4102444800000}]' > "$_cf"
+fi
+echo "{\"captured\":2,\"reminder_ids\":[\"r1\",\"r2\"],\"capture_file\":\"$_cf\"}"
+exit 0
+MOCK
+  chmod +x "$1/inngest-rearm-reminders.sh"
 }
 
 create_mock_df() {
@@ -538,11 +612,34 @@ case "$mode" in
     ;;
   bwrap-fail)
     if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+    # #8016: answer the probe's own `docker inspect -f '{{.State.Status}}'`. Without this
+    # the mock fell through to a bare `exit 0` with no output, so cstate=unknown satisfied
+    # EVERY scenario and the field was decorative -- deleting its capture left the suite green.
+    if [[ "${1:-}" == "inspect" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"State.Status"* ]]; then
+          printf '%s\n' "${MOCK_BWRAP_CSTATE-unknown}"
+          exit 0
+        fi
+      done
+    fi
     if [[ "${1:-}" == "exec" ]]; then
       for arg in "$@"; do
         if [[ "$arg" == *"bwrap"* ]]; then
-          echo "bwrap: No permissions to create new namespace" >&2
-          exit 1
+          # #8016: parameterised so one mode drives every probe shape the contract
+          # permits. `${VAR-default}` uses NO colon on purpose: an explicitly EMPTY
+          # MOCK_BWRAP_FAIL_STDERR must mean "the probe said nothing", which the
+          # `${VAR:-default}` form would silently overwrite with the default text.
+          # That silent shape is the one both production occurrences actually had.
+          if [[ -n "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+            # /bin/sleep directly: create_mock_sleep installs a no-op `sleep` on PATH,
+            # which would swallow the duration this scenario exists to measure.
+            /bin/sleep "$MOCK_BWRAP_FAIL_SLEEP"
+          fi
+          printf '%s' "${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}" >&2
+          # rc is parameterised too: rc=0 with stderr is the pass-with-chatter shape,
+          # which is 97.6% of runs and the early signal before the next rollback.
+          exit "${MOCK_BWRAP_FAIL_RC-1}"
         fi
       done
     fi
@@ -652,6 +749,10 @@ case "$URL" in
       exit 1
     fi
     if [[ "${MOCK_CURL_INNGEST_HEALTH_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    # Stateful systemctl (opt-in): once the mock `stop` has run, the scheduler no longer serves.
+    if [[ "${MOCK_SYSTEMCTL_STATEFUL:-}" == "1" && -e "$(dirname "$0")/stopped" ]]; then
       exit 1
     fi
     write_body '{"status":200,"message":"OK"}'
@@ -838,6 +939,22 @@ create_base_mocks() {
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
   create_mock_layer3 "$mock_dir"
+  create_mock_rearm "$mock_dir"
+  # #6921 D1b: the quiesce handler captures an ACTIVE scheduler's reminders through
+  # INNGEST_REARM_CMD before it stops it. Exported by DEFAULT (deepen C4b) — AC-Q6 (unit active)
+  # now reaches the capture, and without this seam it would exec the real
+  # /usr/local/bin/inngest-rearm-reminders.sh and read quiesce_capture_failed.
+  export INNGEST_REARM_CMD="$mock_dir/inngest-rearm-reminders.sh"
+  # #8077 review: the quiesce marker, the persisted capture and the boot id are host paths
+  # (/var/lib/inngest, /proc). Every runner pins them inside its own mock dir unless the caller
+  # already did (run_inngest_row pins them OUTSIDE it, so a row can read them after the run) — a
+  # test must never read or write the runner host's /var/lib/inngest.
+  if [[ -z "${INNGEST_QUIESCE_MARKER:-}" ]]; then export INNGEST_QUIESCE_MARKER="$mock_dir/quiesced-by-op"; fi
+  if [[ -z "${INNGEST_CUTOVER_CAPTURE_FILE:-}" ]]; then export INNGEST_CUTOVER_CAPTURE_FILE="$mock_dir/cutover-capture.json"; fi
+  if [[ -z "${INNGEST_BOOT_ID_FILE:-}" ]]; then
+    printf '%s\n' "00000000-0000-4000-8000-000000000000" > "$1/boot_id"
+    export INNGEST_BOOT_ID_FILE="$mock_dir/boot_id"
+  fi
   # `if` (not `[[ … ]] && …`): create_base_mocks runs under `set -euo pipefail`, where a bare
   # `[[ false ]] && cmd` statement exits non-zero and aborts the whole suite.
   # #6665: installed by DEFAULT. MOCK_SLEEP_REAL=1 is the opt-out for a test that genuinely needs
@@ -1034,6 +1151,9 @@ assert_inngest_docker_trace() {
       export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
     fi
     export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    # #8077 D3: the default mock unit is quiesced (inactive+disabled) and the deploy arm refuses
+    # it before the pull — arm an enabled unit so this row still exercises the pull routing.
+    export MOCK_SYSTEMCTL_ENABLED_STATE=enabled
     create_base_mocks "$MOCK_DIR"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
@@ -2380,6 +2500,303 @@ assert_canary_sandbox_failed_state() {
 
 assert_canary_sandbox_failed_state
 
+# -- #8016: the blocking bwrap probe must self-report --------------------------------
+# The 2026-09-09 v0.264.6 rollback emitted exactly one journald line:
+#   DEPLOY_ROLLBACK: bwrap sandbox non-functional in <registry>/<image>:v0.264.6
+# and nothing else. `2>&1` inside the `if !` merged the probe's stderr into the
+# script's stdout, which journald never sees, so the deploy rolled back leaving zero
+# evidence of cause. These scenarios pin the fields that make the next occurrence
+# self-diagnosing.
+#
+# Anchor discipline (cq-assert-anchor-not-bare-token): every assertion SELECTS the one
+# line containing the rollback marker and then tests fields ON THAT LINE. A bare
+# `grep -q err_chars` over the whole capture would pass on any line anywhere. A second
+# DEPLOY_ROLLBACK emitter (canary-health) lives in the same file, which is why the
+# selector is the full 'bwrap sandbox non-functional' phrase and never DEPLOY_ROLLBACK
+# alone -- and why the match count is asserted to be exactly 1 rather than head -1'd
+# (head -1 stops at the first match and makes the count assertion vacuous).
+assert_blocking_probe_line() {
+  local desc="$1" stderr_val="$2" rc_val="$3" sleep_val="$4"
+  shift 4
+  # remaining args: extended-regex field assertions applied to the SELECTED line
+  TOTAL=$((TOTAL + 1))
+
+  local d state_file logger_file output
+  d=$(mktemp -d)
+  state_file="$d/ci-deploy.state"
+  logger_file="$d/logger.txt"
+  : > "$logger_file"
+
+  output=$(
+    # These exports live INSIDE this subshell on purpose. Hoisting
+    # MOCK_LOGGER_CAPTURE_FILE to file scope contaminates the four later scenarios
+    # that arm their own capture file.
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$stderr_val"
+    export MOCK_BWRAP_FAIL_RC="$rc_val"
+    [[ -n "$sleep_val" ]] && export MOCK_BWRAP_FAIL_SLEEP="$sleep_val"
+    [[ -n "${MOCK_BWRAP_CSTATE:-}" ]] && export MOCK_BWRAP_CSTATE
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local marker='DEPLOY_ROLLBACK: bwrap sandbox non-functional'
+  local hits line
+  hits=$(grep -cF "$marker" "$logger_file" || true)
+
+  if [[ "$hits" != "1" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (expected exactly 1 rollback line, got $hits)"
+    echo "        journald capture:"; sed 's/^/          /' "$logger_file"
+    # A zero-count here usually means the deploy aborted BEFORE the probe; without the
+    # deploy's own output there is no evidence of why (review finding, #8026).
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
+    rm -rf "$d"
+    return
+  fi
+
+  # `|| true`: the count assertion above guarantees exactly one match, so grep cannot
+  # exit non-zero here -- but under `set -e` a capture of a grep that CAN return 1 is
+  # the lint-shell-capture-exit S1 class, and the linter cannot see the count guard.
+  line=$(grep -F "$marker" "$logger_file" || true)
+
+  local pat failed=0
+  for pat in "$@"; do
+    if ! printf '%s' "$line" | grep -qE -- "$pat"; then
+      failed=1
+      echo "  (missing field pattern: $pat)"
+    fi
+  done
+
+  if [[ "$failed" == "0" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "        line: $line"
+    echo "        deploy output (tail):"; printf '%s\n' "$output" | tail -n 25 | sed 's/^/          /'
+  fi
+
+  rm -rf "$d"
+}
+
+# INSTRUMENT CONTROL -- run FIRST, because every scenario below is scored through this
+# helper. assert_blocking_probe_line decides its own pass/fail, which means it is disarmable
+# INDEPENDENTLY of pass()/fail() and of any assertion-count floor: flipping its `failed=1` to
+# `failed=0` silently voids every field anchor in four scenarios while TOTAL/PASS/FAIL still
+# reconcile exactly. Measured -- that mutant survived the whole suite. This drives the helper
+# with a pattern that CANNOT match and requires it to report failure.
+assert_probe_helper_positive_control() {
+  local _p0=$PASS _f0=$FAIL _t0=$TOTAL
+  # Output suppressed: the inner call is SUPPOSED to fail, and an unsuppressed `FAIL:` line
+  # here would be indistinguishable from a real failure to any log scanner.
+  assert_blocking_probe_line \
+    "(instrument control -- expected failure, unwound below)" \
+    "bwrap: No permissions to create new namespace" 1 "" \
+    'THIS_PATTERN_CANNOT_MATCH_ANY_ROLLBACK_LINE' >/dev/null 2>&1
+  local _fired=$(( FAIL - _f0 ))
+  # Unwind the control's own bookkeeping, then score the control itself.
+  PASS=$_p0; FAIL=$_f0; TOTAL=$_t0
+  TOTAL=$((TOTAL + 1))
+  if [[ "$_fired" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 instrument control: assert_blocking_probe_line can still FAIL"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 instrument control: the helper did NOT fail on an unmatchable pattern"
+    echo "        every #8016 field assertion below is therefore vacuous"
+  fi
+}
+assert_probe_helper_positive_control
+
+# Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
+MOCK_BWRAP_CSTATE=running assert_blocking_probe_line \
+  "#8016 spoken: rc + message ride the rollback line" \
+  "bwrap: No permissions to create new namespace" 1 "" \
+  'rc=1' 'ms=[0-9]{1,3} ' 'cstate=running ' 'err_chars=[0-9]+' \
+  'bwrap_err="[^"]*No permissions to create new namespace[^"]*"$'
+
+# Scenario 2 -- SILENT: the ACTUAL production shape. Zero bytes, signalled rc.
+# This is the scenario that makes the <empty> sentinel load-bearing: without it,
+# "bwrap failed silently" and "we discarded the message" render identically, and
+# that distinction IS the diagnosis.
+# cstate is asserted HERE specifically: rc=137 with zero bytes is the exact production
+# shape, and cstate is the only field that separates "the container died" from "bwrap
+# itself failed". Asserting it anywhere else would leave that discrimination unpinned.
+MOCK_BWRAP_CSTATE=exited assert_blocking_probe_line \
+  "#8016 silent: rc=137 with zero output renders the <empty> sentinel" \
+  "" 137 "" \
+  'rc=137' 'ms=[0-9]{1,3} ' 'cstate=exited ' 'err_chars=0' 'bwrap_err="<empty>"$'
+
+# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr. 97.6% of runs.
+# The deploy must NOT roll back, so there must be NO rollback line at all.
+assert_probe_pass_chatter_reemits() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="bwrap: warning namespace fallback engaged"
+    export MOCK_BWRAP_FAIL_RC=0
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local rb; rb=$(grep -cF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+  # The probe passed, so the deploy must not have rolled back for a sandbox reason,
+  # and the chatter must still have been re-emitted rather than swallowed.
+  # SANDBOX_PROBE_OK is the pass-path liveness marker: without it, "no bwrap line in
+  # journald" is ambiguous across five states, and a probe that silently stopped running is
+  # indistinguishable from a healthy fleet. Deleting it left the suite green.
+  local ok; ok=$(grep -cF 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  # The OK line must carry the chatter itself as a quote-bounded, LAST bwrap_err field --
+  # `err_chars>0` alone says only THAT bwrap spoke, and the stdout copy lands untagged in
+  # the webhook leg where no literal can find it (review finding, #8026).
+  local ok_line; ok_line=$(grep -F 'SANDBOX_PROBE_OK' "$logger_file" || true)
+  local ok_err=0
+  printf '%s' "$ok_line" | grep -qE 'err_chars=[0-9]+ bwrap_err="[^"]*namespace fallback engaged"$' && ok_err=1
+  if [[ "$rb" == "0" ]] && [[ "$ok" == "1" ]] && [[ "$ok_err" == "1" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output re-emitted AND carried on the OK line"
+    echo "        rollback_lines=$rb probe_ok_markers=$ok ok_line_carries_bwrap_err=$ok_err exit=$actual_exit"
+    echo "        ok_line: $ok_line"
+    echo "        output: $output"
+  fi
+  rm -rf "$d"
+}
+assert_probe_pass_chatter_reemits
+
+# Scenario 4 -- PURITY: the security gate. The canary runs with --env-file, so the
+# production secret set lives in its Config.Env and is re-injected into EVERY
+# docker exec. Capturing the probe's stream therefore opens a path from container
+# env -> journald -> Vector -> Better Stack. Nothing secret-shaped, and no control
+# byte that could forge a second journald record, may survive to any sink.
+#
+# The token fixtures are built by CONCATENATION so no contiguous secret-shaped
+# literal exists in this source file -- GitHub Push Protection scans the diff and
+# blocks the push on a synthesized value with a real token shape, even though it is
+# entirely fake (cq-test-fixtures-synthesized-only).
+assert_probe_output_purity() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+
+  local dp_tok sk_tok jwt_tok wh_tok dirty
+  dp_tok="dp.""st.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  sk_tok="sk_""live_AAAAAAAAAAAAAAAAAAAAAAAA"
+  jwt_tok="eyJ""hbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+  wh_tok="whsec_""AAAAAAAAAAAAAAAAAAAAAAAA"
+  # CR (forges a second journald record), a double quote (breaks the quoted field),
+  # a non-ASCII byte, and a leak canary that must never appear in any sink.
+  # $'...' is required for the non-ASCII leg: bash does NOT expand \x escapes inside
+  # "..." , so the previous form put the 12 literal ASCII chars `caf\xc3\xa9` in the
+  # fixture and that leg tested nothing.
+  dirty="SENTINEL_LEAK_CANARY $(printf 'a\rb') \"quoted\" "$'caf\xc3\xa9'" $dp_tok $sk_tok $jwt_tok $wh_tok"
+
+  local output
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$dirty"
+    export MOCK_BWRAP_FAIL_RC=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local line problems=""
+  line=$(grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+
+  # Every raw token must be absent from BOTH sinks. This loop used to test only
+  # $line while its comment claimed both -- and $output IS a sink: ci-deploy runs
+  # under adnanh/webhook -v, so this script's stdout is captured and re-logged to
+  # journald under SYSLOG_IDENTIFIER=webhook, which vector.toml allowlists. That
+  # gap is exactly what let an unsanitized re-emit ship; the assertion that would
+  # have caught it was the one asserting half of what it said.
+  local t
+  for t in "$dp_tok" "$sk_tok" "$jwt_tok" "$wh_tok"; do
+    if printf '%s' "$line"   | grep -qF -- "$t"; then problems="$problems raw-token-in-journald"; fi
+    if printf '%s' "$output" | grep -qF -- "$t"; then problems="$problems raw-token-in-stdout"; fi
+  done
+  # RETENTION, not absence. The canary is ordinary diagnostic text, and preserving
+  # ordinary text is the sanitizer's JOB -- asserting its absence would demand
+  # over-redaction. Every fixture here asserts a secret is REMOVED; without this
+  # arm nothing catches _cred_err_tail becoming too aggressive and destroying the
+  # diagnostic the whole change exists to produce. Direction axis, not content.
+  if ! printf '%s' "$line" | grep -qF -- 'SENTINEL_LEAK_CANARY'; then
+    problems="$problems diagnostic-text-destroyed-in-journald"
+  fi
+  # A CR must not survive into the journald line -- it would forge a second record.
+  if printf '%s' "$line" | grep -q $'\r'; then problems="$problems CR-survived"; fi
+  # The non-ASCII leg must ASSERT something (review finding, #8026): the two bytes of `é`
+  # are blanked by `tr -c '[:print:]'` under LC_ALL=C, so no byte outside printable ASCII
+  # may reach the journald line, and the `caf` prefix must survive as ordinary text.
+  if LC_ALL=C grep -q '[^ -~]' <<<"$line"; then problems="$problems non-ascii-byte-in-journald"; fi
+  if ! printf '%s' "$line" | grep -qF 'caf '; then problems="$problems non-ascii-leg-shredded-neighbour"; fi
+  # The field must remain parseable: bwrap_err is last, value carries no bare quote.
+  if ! printf '%s' "$line" | grep -qE 'bwrap_err="[^"]*"$'; then problems="$problems err-field-unparseable"; fi
+
+  if [[ -z "$problems" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+    echo "        problems:$problems"
+    echo "        line: $line"
+  fi
+  rm -rf "$d"
+}
+assert_probe_output_purity
+
+# Scenario 5 -- TRUNCATION provenance. err_chars reports the PRE-sanitization length,
+# so a 200-char field beside err_chars=4000 is visibly truncated. If err_chars were
+# computed from the sanitized value it would report 200 beside a 200-char value and
+# truncation would become permanently undetectable -- one field's provenance carries
+# the whole property.
+# The tail anchor is load-bearing twice over. `err_chars=4000` alone is computed from
+# ${#BWRAP_ERR} and so is satisfied whether truncation happened or not (raising the clamp to
+# 100000 passes) AND whether the helper keeps the head or the tail (the fixture is 4000
+# identical X, so head and tail are indistinguishable by construction). Pinning a distinct
+# TAILMARKER present + the head absent kills both mutants. The field is EXACTLY 200 chars
+# (nothing in this fixture is redactable, so sanitized length == clamp): a `{1,200}` bound let
+# a pre-clamp of 100 survive the battery, silently shrinking the diagnostic (#8026 review).
+assert_blocking_probe_line \
+  "#8016 truncation: err_chars is pre-sanitization AND the TAIL is what survives" \
+  "HEADMARKER$(printf 'X%.0s' $(seq 1 4000))TAILMARKER" 1 "" \
+  'err_chars=402[0-9]' 'bwrap_err="[^"]{200}"$' 'bwrap_err="[^"]*TAILMARKER"$'
+
+# Scenario 6 -- SLOW: without this, ms has one value across the whole set and a
+# hardcoded ms=0 would satisfy every other scenario. Bounded, never exact.
+# 2.0s, not 1.1s: the fast scenarios now bound ms at <=3 digits (<1000), so the gap between
+# fast-max and slow-min is 2x rather than touching, and no single hardcoded constant can
+# satisfy both arms. A BOUND, never a pin -- pinning a wall-clock quantity would flake.
+assert_blocking_probe_line \
+  "#8016 slow probe: ms reflects real elapsed time (>=1000)" \
+  "" 137 "2.0" \
+  'ms=[1-9][0-9]{3,}'
+
+# H4 -- the knobs must not leak into later scenarios. A hoisted export would
+# contaminate the four later scenarios that arm their own MOCK_LOGGER_CAPTURE_FILE.
+assert_probe_knobs_unset() {
+  TOTAL=$((TOTAL + 1))
+  if [[ -z "${MOCK_LOGGER_CAPTURE_FILE:-}" && -z "${MOCK_BWRAP_FAIL_STDERR:-}" \
+     && -z "${MOCK_BWRAP_FAIL_RC:-}" && -z "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 probe scenario knobs did not leak to file scope"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 probe scenario knobs did not leak to file scope"
+  fi
+}
+assert_probe_knobs_unset
+
 # Production container start failure (after canary passes) -> reason=production_start_failed
 assert_state_contains "production start failure writes reason=production_start_failed" \
   "production_start_failed" "1" \
@@ -2727,9 +3144,12 @@ echo ""
 echo "--- Restart action ---"
 
 # AC1: restart inngest succeeds with healthy server + registered functions
+# #8077 D3: the default systemctl mock IS the quiesced shape (inactive + disabled), which the
+# restart handler now refuses — every row that expects the restart to RUN arms an enabled unit.
 assert_state_contains "restart inngest succeeds" \
   "success" "0" \
-  "restart inngest _ latest"
+  "restart inngest _ latest" \
+  "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC2: restart of non-inngest component rejected
 assert_state_contains "restart web-platform rejected" \
@@ -2740,13 +3160,13 @@ assert_state_contains "restart web-platform rejected" \
 assert_state_contains "restart inngest systemctl failure" \
   "inngest_restart_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_SYSTEMCTL_FAIL=1"
+  "export MOCK_SYSTEMCTL_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC5(b): restart with inngest health check failure
 assert_state_contains "restart inngest health failure" \
   "inngest_health_failed" "1" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # #4650 AC9, reframed #5159: the cron-plan check is now ADVISORY. A server that
 # is /health-healthy but whose cron triggers are de-planned (H9b) no longer FAILS
@@ -2760,7 +3180,200 @@ assert_state_contains "restart inngest health failure" \
 assert_state_contains "restart inngest succeeds when cron plan de-planned (advisory, #5159)" \
   "success" "0" \
   "restart inngest _ latest" \
-  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1"
+  "export MOCK_CURL_INNGEST_FUNCTIONS_NOCRON=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# --- #8077 D3: restart / deploy-inngest refuse the QUIESCED unit shape ---------------------
+# run_inngest_row <cmd> [extra_env]: one ci-deploy.sh run whose observation channels live
+# OUTSIDE the runner's self-deleting MOCK_DIR. Sets ROW_DIR (row_verdict removes it), ROW_RC,
+# ROW_OUT, ROW_REASON, ROW_EXIT, ROW_UNITV (the verb log filtered to capture + unit-state verbs,
+# comma-joined, in order). $ROW_DIR/verbs is the full log; $ROW_DIR/logger the journald capture.
+# The quiesce marker, persisted capture and boot id are pinned in $ROW_DIR (marker, capture.json,
+# boot_id) BEFORE extra_env runs, so a row can pre-seed them and read them back after the run.
+# Pass extra_env in SINGLE quotes when it names $ROW_DIR — it is eval'd inside the run subshell.
+run_inngest_row() {
+  local cmd="$1" extra_env="${2:-}"
+  ROW_DIR=$(mktemp -d)
+  printf '%s\n' "11111111-2222-4333-8444-555555555555" > "$ROW_DIR/boot_id"
+  ROW_OUT=$(
+    export INNGEST_QUIESCE_MARKER="$ROW_DIR/marker" INNGEST_CUTOVER_CAPTURE_FILE="$ROW_DIR/capture.json" INNGEST_BOOT_ID_FILE="$ROW_DIR/boot_id"
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$ROW_DIR/state" MOCK_SYSTEMCTL_LOG="$ROW_DIR/verbs" MOCK_LOGGER_CAPTURE_FILE="$ROW_DIR/logger"
+    run_deploy_traced "$cmd" 2>&1
+  ) && ROW_RC=0 || ROW_RC=$?
+  ROW_REASON=""; ROW_EXIT=""
+  if [[ -f "$ROW_DIR/state" ]]; then read_state_reason_and_exit "$ROW_DIR/state" ROW_REASON ROW_EXIT; fi
+  ROW_UNITV=""
+  if [[ -f "$ROW_DIR/verbs" ]]; then
+    ROW_UNITV=$(grep -xE 'capture|disable|stop|start|restart|enable' "$ROW_DIR/verbs" | paste -sd, - || true)
+  fi
+}
+# row_verdict <description> <ok 0|1> <detail>
+row_verdict() {
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "1" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 — $3"
+    echo "        output: $(printf '%s' "$ROW_OUT" | tail -5)"
+  fi
+  rm -rf "$ROW_DIR"
+}
+# qs_write_marker <path> <epoch> [v]: a contract-§1 quiesce marker (the handler is the only prod
+# writer; rows seed one to model "op=quiesce-web already ran").
+qs_write_marker() {
+  printf '{"v":%s,"epoch":%s,"boot_id":"11111111-2222-4333-8444-555555555555","host_id":"h","run_id":"r","capture_sha256":"%s","capture_count":0}\n' \
+    "${3:-1}" "$2" "0000000000000000000000000000000000000000000000000000000000000000" > "$1"
+}
+
+# --- Harness self-test (#8077 review, mutation N_rowv2): the verdict helpers must still REJECT.
+# A row_verdict forced to pass turns every row below into a tautology — the panel's mutation that
+# also deleted the restart refusal's `exit 1` stayed fully green. Drive each helper that decides its
+# own verdict ONCE with a must-fail input, snapshot/restore the counters, and record the outcome
+# with a DIRECT counter write (never through the helper under test).
+RV_SNAP_P=$PASS; RV_SNAP_F=$FAIL; RV_SNAP_T=$TOTAL
+ROW_DIR=$(mktemp -d); ROW_OUT="selftest"
+row_verdict "selftest: must-fail input" 0 "selftest" >/dev/null
+RV_REJ_F=$((FAIL - RV_SNAP_F)); RV_REJ_P=$((PASS - RV_SNAP_P)); RV_REJ_DIR_GONE=0; [[ -d "$ROW_DIR" ]] || RV_REJ_DIR_GONE=1
+ROW_DIR=$(mktemp -d)
+row_verdict "selftest: must-pass input" 1 "selftest" >/dev/null
+RV_ACC_P=$((PASS - RV_SNAP_P - RV_REJ_P)); RV_ACC_F=$((FAIL - RV_SNAP_F - RV_REJ_F))
+assert_state_contains "selftest: impossible reason" "selftest_reason_that_never_exists" "1" "restart web-platform _ latest" >/dev/null
+RV_ASC_F=$((FAIL - RV_SNAP_F - RV_REJ_F - RV_ACC_F))
+assert_exit_contains "selftest: impossible text" 1 "selftest text that never appears" "restart web-platform _ latest" >/dev/null
+RV_AEC_F=$((FAIL - RV_SNAP_F - RV_REJ_F - RV_ACC_F - RV_ASC_F))
+PASS=$RV_SNAP_P; FAIL=$RV_SNAP_F; TOTAL=$RV_SNAP_T
+TOTAL=$((TOTAL + 1))
+if [[ "$RV_REJ_F" -eq 1 && "$RV_REJ_P" -eq 0 && "$RV_REJ_DIR_GONE" -eq 1 && "$RV_ACC_P" -eq 1 && "$RV_ACC_F" -eq 0 \
+      && "$RV_ASC_F" -eq 1 && "$RV_AEC_F" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: harness self-test — row_verdict / assert_state_contains / assert_exit_contains each REJECT a must-fail input (and row_verdict accepts a must-pass one)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: harness self-test — a verdict helper cannot reject (row_verdict fail=$RV_REJ_F pass=$RV_REJ_P dir_gone=$RV_REJ_DIR_GONE; accept pass=$RV_ACC_P fail=$RV_ACC_F; assert_state_contains fail=$RV_ASC_F; assert_exit_contains fail=$RV_AEC_F)"
+fi
+unset RV_SNAP_P RV_SNAP_F RV_SNAP_T RV_REJ_F RV_REJ_P RV_REJ_DIR_GONE RV_ACC_P RV_ACC_F RV_ASC_F RV_AEC_F
+
+# A marker written "now" (valid, 10 digits) — the quiesced state needs a marker newer than the
+# unit's ActiveEnterTimestamp (the mock prints none by default, which is not void).
+QS_NOW=$(date +%s)
+
+# Guard 2 #1/#4/#5: the refused rows assert the verb log EXISTS (the handler's own is-active
+# query wrote it) before asserting it carries no `restart` — an absent log would pass vacuously.
+# Default mock unit: inactive + disabled. With a valid marker → quiesced; without → unattributed.
+run_inngest_row "restart inngest _ latest" 'qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 \
+      && -s "$ROW_DIR/verbs" ]] && grep -qx 'is-active' "$ROW_DIR/verbs" \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=quiesced unit=inactive enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a quiesced unit (inactive+disabled+marker) → inngest_quiesced_restart_refused, no restart verb" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC verbs=$(paste -sd, "$ROW_DIR/verbs" 2>/dev/null || echo '<no log>')"
+
+run_inngest_row "restart inngest _ latest"
+ok=0
+if [[ "$ROW_REASON" == "inngest_disabled_unattributed_restart_refused" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 \
+      && -s "$ROW_DIR/verbs" ]] && grep -qx 'is-active' "$ROW_DIR/verbs" \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=disabled_unattributed unit=inactive enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a disabled unit with NO marker → inngest_disabled_unattributed_restart_refused (distinct reason), no restart verb" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC verbs=$(paste -sd, "$ROW_DIR/verbs" 2>/dev/null || echo '<no log>')"
+
+# Guard 2 #9 (deepen C1): a stop that ended in SIGKILL leaves failed+disabled — still quiesced, and
+# the log names the OBSERVED unit state (failed), not a hardcoded "inactive".
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE_STATE=failed; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_quiesced_restart_refused" && "$ROW_EXIT" == "1" && -s "$ROW_DIR/verbs" ]] \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs" \
+      && grep -qF 'INNGEST_RESTART_REFUSED: state=quiesced unit=failed enabled=disabled' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "restart refuses a failed+disabled unit (the post-SIGKILL quiesce shape) and logs unit=failed" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Void rule: the unit entered active AFTER the marker epoch → the marker does not attribute it.
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE_ENTER="$(date -d @'"$((QS_NOW + 60))"')"; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0
+if [[ "$ROW_REASON" == "inngest_disabled_unattributed_restart_refused" && "$ROW_EXIT" == "1" && -s "$ROW_DIR/verbs" ]] \
+      && ! grep -qx 'restart' "$ROW_DIR/verbs"; then ok=1; fi
+row_verdict "restart: a marker older than the unit's ActiveEnterTimestamp is void → inngest_disabled_unattributed_restart_refused" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Guard 2 #3/#8/#10 + static/masked: every non-quiesced shape proceeds to its own restart verb.
+for qs_en in enabled enabled-runtime static masked not-found; do
+  run_inngest_row "restart inngest _ latest" "export MOCK_SYSTEMCTL_ENABLED_STATE=$qs_en"
+  ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+  row_verdict "restart proceeds on is-enabled=$qs_en + inactive (not the quiesced shape) → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+done
+unset qs_en
+
+# Guard 2 #2: ACTIVE + disabled is not the quiesced shape (even with a marker).
+run_inngest_row "restart inngest _ latest" 'export MOCK_SYSTEMCTL_ACTIVE=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "success" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "restart" ]]; then ok=1; fi
+row_verdict "restart proceeds on an ACTIVE disabled unit → success" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 2 #6 / FR14: `deploy inngest` refuses BOTH non-running disabled states BEFORE the pull — the
+# bootstrap it would run enables and restarts the unit. The logger marker is the positive control
+# that the run reached the inngest arm (a validation exit would also show no pull).
+for qs_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled_unattributed|:"; do
+  qs_want="${qs_case%%|*}"
+  run_inngest_row "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v1.0.0" "${qs_case#*|}"
+  if [[ "$qs_want" == quiesced ]]; then qs_reason=inngest_quiesced_deploy_refused; else qs_reason=inngest_disabled_unattributed_deploy_refused; fi
+  ok=0
+  if [[ "$ROW_REASON" == "$qs_reason" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 ]] \
+        && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:pull' \
+        && ! printf '%s' "$ROW_OUT" | grep -qF 'DOCKER_TRACE:create' \
+        && grep -qF "INNGEST_DEPLOY_REFUSED: state=$qs_want unit=inactive enabled=disabled" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+  row_verdict "deploy inngest _ <tag> refuses a $qs_want unit → $qs_reason, no DOCKER_TRACE:pull" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC"
+done
+unset qs_case qs_want qs_reason
+
+# inngest_quiesce_state, driven DIRECTLY (the contract §2 tri-state): extracted from ci-deploy.sh by
+# its definition line and run against the systemctl mock. Covers the marker-validity and void rules
+# the handler rows reach only indirectly.
+QSF_BODY=$(awk '/^inngest_quiesce_state\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT")
+# qsf <expected> <description> <env...>: run the function once in a subshell with the given env.
+qsf() {
+  local want="$1" desc="$2"; shift 2
+  local qd got
+  qd=$(mktemp -d)
+  create_mock_systemctl "$qd"
+  got=$(
+    export PATH="$qd:$TEST_PATH_BASE" INNGEST_QUIESCE_MARKER="$qd/marker"
+    unset MOCK_SYSTEMCTL_FAIL
+    unset MOCK_SYSTEMCTL_ACTIVE MOCK_SYSTEMCTL_ACTIVE_STATE MOCK_SYSTEMCTL_ENABLED_STATE MOCK_SYSTEMCTL_ACTIVE_ENTER MOCK_SYSTEMCTL_STATEFUL MOCK_SYSTEMCTL_LOG
+    local kv
+    for kv in "$@"; do
+      case "$kv" in
+        MARKER=*) printf '%s' "${kv#MARKER=}" > "$qd/marker" ;;
+        MARKER_PATH=*) export INNGEST_QUIESCE_MARKER="${kv#MARKER_PATH=}" ;;
+        *) export "${kv?}" ;;
+      esac
+    done
+    eval "$QSF_BODY"
+    inngest_quiesce_state
+  ) || got="<rc=$?>"
+  rm -rf "$qd"
+  TOTAL=$((TOTAL + 1))
+  if [[ -n "$QSF_BODY" && "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: inngest_quiesce_state: $desc → $want"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: inngest_quiesce_state: $desc → expected $want, got '${got}' (body extracted: ${#QSF_BODY} bytes)"
+  fi
+}
+QSF_M="{\"v\":1,\"epoch\":$QS_NOW}"
+qsf disabled_unattributed "inactive+disabled, no marker"
+qsf quiesced "inactive+disabled + valid marker" "MARKER=$QSF_M"
+qsf quiesced "failed+disabled + valid marker" MOCK_SYSTEMCTL_ACTIVE_STATE=failed "MARKER=$QSF_M"
+qsf not_quiesced "active+disabled + valid marker" MOCK_SYSTEMCTL_ACTIVE=1 "MARKER=$QSF_M"
+qsf not_quiesced "inactive+enabled + valid marker" MOCK_SYSTEMCTL_ENABLED_STATE=enabled "MARKER=$QSF_M"
+qsf not_quiesced "inactive+static" MOCK_SYSTEMCTL_ENABLED_STATE=static
+qsf not_quiesced "inactive+not-found" MOCK_SYSTEMCTL_ENABLED_STATE=not-found
+qsf not_quiesced "activating+disabled" MOCK_SYSTEMCTL_ACTIVE_STATE=activating "MARKER=$QSF_M"
+qsf disabled_unattributed "marker v=2" "MARKER={\"v\":2,\"epoch\":$QS_NOW}"
+qsf disabled_unattributed "marker epoch is a string" "MARKER={\"v\":1,\"epoch\":\"$QS_NOW\"}"
+qsf disabled_unattributed "marker epoch 8 digits" "MARKER={\"v\":1,\"epoch\":12345678}"
+qsf disabled_unattributed "marker not JSON" "MARKER=not json"
+qsf disabled_unattributed "ActiveEnterTimestamp AFTER marker epoch (void)" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=$(date -d "@$((QS_NOW + 60))")"
+qsf quiesced "ActiveEnterTimestamp BEFORE marker epoch" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=$(date -d "@$((QS_NOW - 60))")"
+qsf quiesced "ActiveEnterTimestamp n/a (after a reboot — not void)" "MARKER=$QSF_M" "MOCK_SYSTEMCTL_ACTIVE_ENTER=n/a"
+unset QSF_M
 
 # #4652 AC3: the `deploy inngest` SUCCESS path must gate on verify_inngest_health
 # (the restart action already does — see the four restart tests above; the
@@ -2798,54 +3411,161 @@ assert_state_contains "deploy inngest restart latest rejected as image_mismatch"
 
 # --- Quiesce / enable action tests (#6178 — no-SSH web-host scheduler quiesce) ---
 echo ""
-echo "--- Quiesce / enable action (#6178) ---"
+echo "--- Quiesce / enable action (#6178, #8077 review contract §6) ---"
 
-# AC-Q1: quiesce inngest succeeds → not-serving (health fails) AND not-enabled (default
-# is-enabled=disabled) → reason quiesced, exit 0. The verify is the gate.
-assert_state_contains "quiesce inngest succeeds (not-serving + not-enabled)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1"
+# AC-Q1 (re-dispatch): the unit is already in the quiesced shape (inactive + disabled + a valid
+# marker) → no capture, marker untouched, verify → quiesced, exit 0. The verify is the gate.
+run_inngest_row "quiesce inngest _ _" 'export MOCK_CURL_INNGEST_HEALTH_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce inngest re-dispatch on a quiesced unit succeeds (not-serving + not-enabled + marker)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
 
 # AC-Q2: already-stopped idempotency — the sudo stop exits non-zero (absent/already-down)
 # but is TOLERATED; the verify (health down, unit disabled) still declares quiesced.
-assert_state_contains "quiesce tolerates an already-stopped/absent unit (stop non-zero)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1"
+run_inngest_row "quiesce inngest _ _" 'export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_STOP_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" ]] && grep -qF 'INNGEST_QUIESCE: stop returned non-zero' "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "quiesce tolerates an already-stopped unit on re-dispatch (stop non-zero)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
 
-# AC-Q3: BENIGN disable tolerance — disable exits non-zero on a unit with NO [Install]
-# section (is-enabled → static). Tolerated → quiesced, exit 0.
-assert_state_contains "quiesce tolerates a benign disable non-zero (is-enabled=static)" \
-  "quiesced" "0" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=static"
-
-# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND
-# is-enabled still reports `enabled` (a unit WITH an [Install] section) → the serving-only
-# verify would MISS this; the enabled-state assertion catches it → inngest_still_enabled, exit 1.
-assert_state_contains "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" \
-  "inngest_still_enabled" "1" \
-  "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_DISABLE_FAIL=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
-
-# AC-Q5: still-serving fail-closed — the default mock serves /health 200 → the goal
-# state (not-serving) is unmet → inngest_still_serving, exit 1.
+# AC-Q5: still-serving fail-closed — an active enabled unit whose /health keeps answering after the
+# stop (non-stateful mock) → inngest_still_serving, exit 1.
 assert_state_contains "quiesce fails closed when inngest still serves (inngest_still_serving)" \
   "inngest_still_serving" "1" \
-  "quiesce inngest _ _"
+  "quiesce inngest _ _" \
+  "export MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC-Q6: unit still ACTIVE despite /health down (arch P2-3) — a scheduler executing
 # queued jobs can outlive /health; the is-active assertion catches it → inngest_still_serving.
 assert_state_contains "quiesce fails closed when /health is down but the unit is still active" \
   "inngest_still_serving" "1" \
   "quiesce inngest _ _" \
-  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1"
+  "export MOCK_CURL_INNGEST_HEALTH_FAIL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
 
 # AC-Q7: non-inngest component rejected (mirror component_not_restartable).
 assert_state_contains "quiesce web-platform rejected (component_not_quiescible)" \
   "component_not_quiescible" "1" \
   "quiesce web-platform _ _"
+
+# --- #6921 D1b / Guard 5 + contract §6: quiesce captures an ACTIVE scheduler BEFORE it stops it ---
+# Stateful mock: the unit starts active + ENABLED and serving; `disable` flips is-enabled to
+# disabled, `stop` flips is-active to inactive and takes /health down — so the post-stop verify and
+# the final shape check read the verbs this run issued, not a static fixture.
+QC_ENV="export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+
+# Guard 5 #1/#4: order capture → disable → stop, then the marker binds the capture it was taken with.
+QC_T0=$(date +%s)
+run_inngest_row "quiesce inngest _ _" "$QC_ENV"
+QC_T1=$(date +%s)
+QC_SHA=$(sha256sum "$ROW_DIR/capture.json" 2>/dev/null | awk '{print $1}' || true)
+QC_M_OK=0
+if jq -e --arg sha "$QC_SHA" --argjson t0 "$QC_T0" --argjson t1 "$QC_T1" \
+      '(keys_unsorted == ["v","epoch","boot_id","host_id","run_id","capture_sha256","capture_count"])
+       and .v == 1 and (.epoch | type) == "number" and .epoch >= $t0 and .epoch <= $t1
+       and .boot_id == "11111111-2222-4333-8444-555555555555"
+       and (.host_id | type) == "string" and (.run_id | type) == "string" and (.run_id | length) > 0
+       and ($sha | test("^[0-9a-f]{64}$")) and .capture_sha256 == $sha and .capture_count == 2' \
+      "$ROW_DIR/marker" >/dev/null 2>&1; then QC_M_OK=1; fi
+ok=0; if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" && "$QC_M_OK" == 1 ]]; then ok=1; fi
+row_verdict "quiesce (active) captures BEFORE disable+stop and writes the marker {v,epoch,boot_id,host_id,run_id,capture_sha256==sha256(capture),capture_count}" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV marker_ok=$QC_M_OK marker=$(cat "$ROW_DIR/marker" 2>/dev/null || echo '<none>') sha=$QC_SHA"
+
+# Guard 5 #2/#5c: a failed capture stops NOTHING, writes no marker, and its cause reaches journald —
+# redacted.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_FAIL=1"
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && "$ROW_UNITV" == "capture" && ! -e "$ROW_DIR/marker" ]] \
+      && grep -qE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=1 stderr_tail=.*enumeration failed' "$ROW_DIR/logger" 2>/dev/null \
+      && ! grep -qF 'MOCKLEAKVALUE123' "$ROW_DIR/logger"; then ok=1; fi
+row_verdict "quiesce fails closed when the capture fails (quiesce_capture_failed) and stops NOTHING" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT rc=$ROW_RC unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+
+# Capture stderr carrying a connection string is logged SCRUBBED (URI, user:pass@, password=).
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_FAIL=1 MOCK_REARM_CAPTURE_FAIL_TEXT='ERROR: capture: db down postgresql://u:Secret@h/db password=Hunter2x'"
+QC_LINE=$(grep -F 'INNGEST_QUIESCE_CAPTURE_FAILED' "$ROW_DIR/logger" 2>/dev/null | head -1 || true)
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && -n "$QC_LINE" && "$QC_LINE" == *"db down"* && "$QC_LINE" == *"redacted"* \
+      && "$QC_LINE" != *Secret* && "$QC_LINE" != *postgresql://* && "$QC_LINE" != *Hunter2x* ]] \
+      && ! grep -qF 'Secret' "$ROW_DIR/logger"; then ok=1; fi
+row_verdict "quiesce capture stderr with postgresql://u:Secret@h/db is scrubbed before journald" "$ok" \
+  "reason=$ROW_REASON line=$QC_LINE"
+
+# Guard 5 #5b: the capture is bounded. The mock blocks 8 s against a 1 s bound; asserted as
+# non-zero (not exactly 124 — dev boxes may carry uutils timeout) and nothing stopped.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_SLEEP=8 QUIESCE_CAPTURE_TIMEOUT=1"
+QC_RC=$(grep -oE 'INNGEST_QUIESCE_CAPTURE_FAILED rc=[0-9]+' "$ROW_DIR/logger" 2>/dev/null | head -1 | grep -oE '[0-9]+$' || true)
+ok=0
+if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture" \
+      && "$QC_RC" =~ ^[0-9]+$ && "$QC_RC" -ne 0 ]]; then ok=1; fi
+row_verdict "quiesce capture is bounded (QUIESCE_CAPTURE_TIMEOUT) → quiesce_capture_failed, nothing stopped" "$ok" \
+  "reason=$ROW_REASON capture_rc=${QC_RC:-<none>} unit_verbs=$ROW_UNITV"
+
+# A capture that exits 0 but persists no capture file cannot be hashed into a marker → failed capture.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_NOFILE=1"
+ok=0; if [[ "$ROW_REASON" == "quiesce_capture_failed" && "$ROW_UNITV" == "capture" && ! -e "$ROW_DIR/marker" ]]; then ok=1; fi
+row_verdict "quiesce refuses a capture that persisted no file (quiesce_capture_failed, nothing stopped)" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Guard 5 #7: an empty capture (captured:0) is a capture — quiesce proceeds, marker count 0.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_REARM_CAPTURE_EMPTY=1"
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && "$ROW_UNITV" == "capture,disable,stop" ]] \
+      && jq -e '.capture_count == 0' "$ROW_DIR/marker" >/dev/null 2>&1; then ok=1; fi
+row_verdict "quiesce proceeds on an empty capture (captured:0, marker capture_count=0)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# Marker write failure → quiesce_marker_write_failed, NOTHING stopped. The marker's parent is a
+# regular file, so mktemp in it fails even as root.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV"'; : > "$ROW_DIR/notadir"; export INNGEST_QUIESCE_MARKER="$ROW_DIR/notadir/marker"'
+ok=0
+if [[ "$ROW_REASON" == "quiesce_marker_write_failed" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && "$ROW_UNITV" == "capture" ]] \
+      && [[ -z "$(find "$ROW_DIR" -maxdepth 1 -name 'notadir.*' -print -quit)" ]]; then ok=1; fi
+row_verdict "quiesce: marker write failure → quiesce_marker_write_failed, no disable/stop" "$ok" \
+  "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV"
+
+# Re-dispatch on a quiesced unit: no capture, and the marker is left BYTE-IDENTICAL (epoch must not move).
+run_inngest_row "quiesce inngest _ _" 'export MOCK_SYSTEMCTL_STATEFUL=1; qs_write_marker "$ROW_DIR/marker" 1700000000; cp "$ROW_DIR/marker" "$ROW_DIR/marker.before"'
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && -s "$ROW_DIR/verbs" && "$ROW_UNITV" == "disable,stop" ]] \
+      && cmp -s "$ROW_DIR/marker" "$ROW_DIR/marker.before" && jq -e '.epoch == 1700000000' "$ROW_DIR/marker" >/dev/null 2>&1; then ok=1; fi
+row_verdict "quiesce re-dispatch on a quiesced unit: no capture, marker untouched (epoch unchanged) → quiesced" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV marker=$(cat "$ROW_DIR/marker" 2>/dev/null || echo '<none>')"
+
+# Absent unit (web-2: is-enabled not-found, inactive): no capture, no marker → verify/fan-out → quiesced.
+run_inngest_row "quiesce inngest _ _" "export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ENABLED_STATE=not-found"
+ok=0
+if [[ "$ROW_REASON" == "quiesced" && "$ROW_EXIT" == "0" && -s "$ROW_DIR/verbs" && "$ROW_UNITV" != *capture* && ! -e "$ROW_DIR/marker" ]]; then ok=1; fi
+row_verdict "quiesce on an absent unit (not-found + inactive) succeeds with no capture and no marker" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV marker_present=$([[ -e "$ROW_DIR/marker" ]] && echo yes || echo no)"
+
+# Capture gate DIRECTION (contract §6): every non-capturable shape refuses BEFORE any disable/stop.
+for qc_case in "failed|enabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=failed MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "activating|disabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=activating" \
+               "deactivating|enabled|export MOCK_SYSTEMCTL_ACTIVE_STATE=deactivating MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "inactive|enabled|export MOCK_SYSTEMCTL_ENABLED_STATE=enabled" \
+               "inactive|static|export MOCK_SYSTEMCTL_ENABLED_STATE=static" \
+               "inactive|disabled|:"; do
+  qc_a="${qc_case%%|*}"; qc_rest="${qc_case#*|}"; qc_e="${qc_rest%%|*}"; qc_env="${qc_rest#*|}"
+  run_inngest_row "quiesce inngest _ _" "$qc_env"
+  qc_st=not_quiesced; if [[ "$qc_a|$qc_e" == "inactive|disabled" ]]; then qc_st=disabled_unattributed; fi
+  ok=0
+  if [[ "$ROW_REASON" == "quiesce_capture_unavailable" && "$ROW_EXIT" == "1" && "$ROW_RC" -ne 0 && -s "$ROW_DIR/verbs" && -z "$ROW_UNITV" && ! -e "$ROW_DIR/marker" ]] \
+        && grep -qF "INNGEST_QUIESCE_CAPTURE_UNAVAILABLE unit=$qc_a enabled=$qc_e state=$qc_st" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+  row_verdict "quiesce on $qc_a+$qc_e ($qc_st) → quiesce_capture_unavailable, no capture/disable/stop" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT unit_verbs=$ROW_UNITV logger=$(grep -F INNGEST_QUIESCE_CAPTURE_UNAVAILABLE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+done
+unset qc_case qc_a qc_rest qc_e qc_env qc_st
+
+# AC-Q4: GENUINE disable failure fail-closed (data-integrity P1-A) — disable fails AND is-enabled
+# still reports `enabled` → the enabled-state assertion catches it → inngest_still_enabled, exit 1.
+run_inngest_row "quiesce inngest _ _" "$QC_ENV MOCK_SYSTEMCTL_DISABLE_FAIL=1"
+ok=0; if [[ "$ROW_REASON" == "inngest_still_enabled" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce fails closed when the unit stays enabled (inngest_still_enabled)" "$ok" "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+
+# AC-Q3 → contract §6 final shape: an active no-[Install] unit (is-enabled=static, disable non-zero)
+# passes verify_inngest_quiesced (static cannot auto-start) but is NOT the shape any reader
+# recognises → quiesced_shape_unrecognized, not `quiesced`.
+run_inngest_row "quiesce inngest _ _" "export MOCK_SYSTEMCTL_STATEFUL=1 MOCK_SYSTEMCTL_ACTIVE=1 MOCK_SYSTEMCTL_ENABLED_STATE=static MOCK_SYSTEMCTL_DISABLE_FAIL=1"
+ok=0; if [[ "$ROW_REASON" == "quiesced_shape_unrecognized" && "$ROW_EXIT" == "1" && "$ROW_UNITV" == "capture,disable,stop" ]]; then ok=1; fi
+row_verdict "quiesce of a static (no-[Install]) unit verifies not-serving but ends quiesced_shape_unrecognized" "$ok" \
+  "reason=$ROW_REASON unit_verbs=$ROW_UNITV"
+unset QC_ENV QC_RC QC_T0 QC_T1 QC_SHA QC_M_OK QC_LINE
 
 # AC-E1: enable inngest = enable + start + verify-serving-and-enabled → enabled, exit 0.
 # Default mock: /health 200 (serving); is-enabled=enabled (re-enable confirmed).
@@ -2889,12 +3609,62 @@ assert_state_contains "enable web-platform rejected (component_not_enableable)" 
   "component_not_enableable" "1" \
   "enable web-platform _ _"
 
+# Contract §6 enable: the capture is RETIRED (mv to .retired-<epoch>) and the marker REMOVED before
+# enable/start. The mock's watch lines record both paths' existence AT the enable verb.
+run_inngest_row "enable inngest _ _" 'export MOCK_SYSTEMCTL_ENABLED_STATE=enabled MOCK_SYSTEMCTL_WATCH="$ROW_DIR/marker $ROW_DIR/capture.json"; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"'; printf "[]" > "$ROW_DIR/capture.json"'
+QE_SEQ=$(grep -E '^(enable|start|watch:.*)$' "$ROW_DIR/verbs" 2>/dev/null | paste -sd, - || true)
+QE_RETIRED=$(find "$ROW_DIR" -maxdepth 1 -name 'capture.json.retired-*' -print 2>/dev/null | head -1)
+ok=0
+if [[ "$ROW_REASON" == "enabled" && "$ROW_EXIT" == "0" \
+      && "$QE_SEQ" == "enable,watch:marker=absent,watch:capture.json=absent,start,watch:marker=absent,watch:capture.json=absent" \
+      && -n "$QE_RETIRED" && "$QE_RETIRED" =~ \.retired-[0-9]{9,11}$ && ! -e "$ROW_DIR/marker" && ! -e "$ROW_DIR/capture.json" ]] \
+      && grep -qF "INNGEST_ENABLE: retired capture=$QE_RETIRED marker_removed=true" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "enable retires the capture and removes the marker BEFORE enable/start (logged)" "$ok" \
+  "reason=$ROW_REASON seq=$QE_SEQ retired=${QE_RETIRED:-<none>} logger=$(grep -F INNGEST_ENABLE "$ROW_DIR/logger" 2>/dev/null | head -1)"
+
+# Nothing to retire → capture=none marker_removed=false.
+run_inngest_row "enable inngest _ _" "export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"
+ok=0
+if [[ "$ROW_REASON" == "enabled" ]] && grep -qF "INNGEST_ENABLE: retired capture=none marker_removed=false" "$ROW_DIR/logger" 2>/dev/null; then ok=1; fi
+row_verdict "enable with no capture/marker logs capture=none marker_removed=false" "$ok" "reason=$ROW_REASON"
+
+# A FAILED enable after the retire leaves inactive + disabled with no marker — which the tri-state
+# must read as disabled_unattributed (the retire is not undone; op=rollback is re-dispatched).
+QE_MARKER_AFTER=present
+run_inngest_row "enable inngest _ _" 'export MOCK_SYSTEMCTL_ENABLE_FAIL=1; qs_write_marker "$ROW_DIR/marker" '"$QS_NOW"'; printf "[]" > "$ROW_DIR/capture.json"'
+if [[ ! -e "$ROW_DIR/marker" ]]; then QE_MARKER_AFTER=absent; fi
+QE_REASON="$ROW_REASON"
+# The tri-state read against THIS row's marker path, before row_verdict removes $ROW_DIR.
+qsf disabled_unattributed "after a failed enable (inactive+disabled, the row's marker path retired)" "MARKER_PATH=$ROW_DIR/marker"
+ok=0; if [[ "$ROW_REASON" == "inngest_enable_failed" && "$ROW_UNITV" == "enable" && "$QE_MARKER_AFTER" == absent ]]; then ok=1; fi
+row_verdict "enable failure after the retire: inngest_enable_failed with the marker already removed" "$ok" "reason=$QE_REASON unit_verbs=$ROW_UNITV marker=$QE_MARKER_AFTER"
+unset QE_SEQ QE_RETIRED QE_MARKER_AFTER QE_REASON
+
+# Contract §6 web-platform deploy health hint: a down inngest on a quiesced/disabled unit must NOT
+# suggest restart-inngest-server.yml (the restart handler refuses exactly that shape).
+for wh_case in "quiesced|qs_write_marker \"\$ROW_DIR/marker\" $QS_NOW" "disabled_unattributed|:" "not_quiesced|export MOCK_SYSTEMCTL_ENABLED_STATE=enabled"; do
+  wh_st="${wh_case%%|*}"
+  run_inngest_row "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" "export MOCK_CURL_INNGEST_HEALTH_FAIL=1; ${wh_case#*|}"
+  ok=0
+  if [[ "$wh_st" == not_quiesced ]]; then
+    if [[ "$ROW_EXIT" == "0" ]] && grep -qF 'INNGEST_WARN: inngest-server not reachable after deploy' "$ROW_DIR/logger" 2>/dev/null \
+          && ! grep -qF 'INNGEST_HEALTH_CHECK: quiesced' "$ROW_DIR/logger"; then ok=1; fi
+  else
+    if [[ "$ROW_EXIT" == "0" ]] && grep -qF "INNGEST_HEALTH_CHECK: quiesced ($wh_st) — no restart hint" "$ROW_DIR/logger" 2>/dev/null \
+          && ! grep -qF 'restart-inngest-server.yml' "$ROW_DIR/logger"; then ok=1; fi
+  fi
+  row_verdict "web-platform deploy with inngest down on a $wh_st unit → $([[ "$wh_st" == not_quiesced ]] && echo 'restart hint' || echo 'no restart hint')" "$ok" \
+    "reason=$ROW_REASON exit=$ROW_EXIT logger=$(grep -E 'INNGEST_(WARN|HEALTH_CHECK)' "$ROW_DIR/logger" 2>/dev/null | head -2 | paste -sd'|' -)"
+done
+unset wh_case wh_st
+
 # AC-Q8: PESSIMISTIC not-serving (all probes must fail) — a return-on-first-failure impl
 # would falsely read quiesced. Bespoke: use a REAL multi-count seq (the shared mock returns
 # only "1") so the verify loop runs >1 probe; health FAILS on probe 1 then SERVES on probe 2.
 # The correct all-probes-must-fail impl continues past the probe-1 failure, sees the probe-2
 # serve, and declares still-serving. A naive early-return-on-first-failure would wrongly
-# declare quiesced after probe 1.
+# declare quiesced after probe 1 (the unit is the re-dispatch shape: inactive + disabled + marker,
+# so nothing else in the handler would stop it short of `quiesced`).
 run_quiesce_pessimism() {
   (
     export SSH_ORIGINAL_COMMAND="quiesce inngest _ _"
@@ -2904,6 +3674,8 @@ run_quiesce_pessimism() {
     export CRON_DEPLOY_LEASE_FILE="$MOCK_DIR/deploy-lease"
     export CRON_DRAIN_STATE_FILE="$MOCK_DIR/cron-drain.json"
     export CI_DEPLOY_STATE="$1"
+    export INNGEST_QUIESCE_MARKER="$MOCK_DIR/quiesced-by-op"
+    qs_write_marker "$INNGEST_QUIESCE_MARKER" "$QS_NOW"
     create_base_mocks "$MOCK_DIR"
     rm -f "$MOCK_DIR/seq"   # use the REAL multi-count seq, not the single-"1" mock
     # Small probe budget so the real multi-iteration loop stays fast.
@@ -3293,18 +4065,39 @@ QDG_INTERVAL_COUNT=$(grep -cE 'QUIESCE_PROBE_INTERVAL:-[0-9]+' "$DEPLOY_SCRIPT" 
 QDG_MAX_POLLS_COUNT=$(grep -cE 'QMAX_POLLS=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_POLL_INTERVAL_COUNT=$(grep -cE 'QPOLL_INTERVAL=[0-9]+' "$CUTOVER_WORKFLOW" || true)
 QDG_STOP_COUNT=$(printf '%s\n' "$DG_INNGEST_UNIT" | grep -cE '^TimeoutStopSec=[0-9]+' || true)
+# #6921 D1b: the quiesce handler now runs a bounded capture BEFORE its stop, on the same
+# deploy-status clock. Extracted by shape from the ONE `timeout --kill-after=K "${QUIESCE_CAPTURE_TIMEOUT:-N}"`
+# invocation: N is the bound, K the SIGKILL grace timeout adds after it (both are wall clock the
+# poll must cover). The `:-N` shape must occur exactly once in ci-deploy.sh (comments included).
+# #8077 review: ANCHORED on the whole `timeout --kill-after=K "${QUIESCE_CAPTURE_TIMEOUT:-N}" ` shape
+# (closing brace, quote and a space after N; a space after K). An unanchored `[0-9]+` read `120s`
+# as 120 and `--kill-after=1m` as 1 — a unit suffix changes the wall clock by 60x while the guard
+# stayed green. With the anchors a suffix breaks the shape, extraction is empty, and the guard fails.
+QDG_CAP_SHAPE='timeout --kill-after=[0-9]+ "\$\{QUIESCE_CAPTURE_TIMEOUT:-[0-9]+\}" '
+QDG_CAPTURE=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | head -1 | grep -oE ':-[0-9]+\}' | grep -oE '[0-9]+' || true)
+QDG_CAPTURE_COUNT=$(grep -cE 'QUIESCE_CAPTURE_TIMEOUT:-' "$DEPLOY_SCRIPT" || true)
+QDG_KILL_AFTER=$(grep -oE "$QDG_CAP_SHAPE" "$DEPLOY_SCRIPT" | head -1 | grep -oE '^timeout --kill-after=[0-9]+ ' | grep -oE '[0-9]+' || true)
+# The peer fan-out runs on the SAME deploy-status clock after the verify: one
+# `curl … --max-time T` per peer inside fan_out_to_peers. T is extracted by shape from that
+# function's body (exactly one `--max-time <int> ` there). PEERS is hardcoded to 1: the peer list is
+# SOLEUR_DEPLOY_PEERS, rendered at apply time from the web host set (web-2 is the only peer today),
+# not a literal in this repo. Raise QDG_PEERS in lockstep when a third web host joins.
+QDG_PEERS=1
+QDG_FANOUT_BODY=$(awk '/^fan_out_to_peers\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$DEPLOY_SCRIPT")
+QDG_FANOUT=$(printf '%s\n' "$QDG_FANOUT_BODY" | grep -oE 'curl [^#]*--max-time [0-9]+ ' | grep -oE -- '--max-time [0-9]+ $' | grep -oE '[0-9]+' || true)
+QDG_FANOUT_COUNT=$(printf '%s\n' "$QDG_FANOUT_BODY" | grep -cE -- '--max-time' || true)
 QDG_OK=1
 QDG_WHY=""
-for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL"; do
+for pair in "attempts:$QDG_ATTEMPTS" "interval:$QDG_INTERVAL" "stop:$QDG_STOP" "qmax:$QDG_MAX_POLLS" "qint:$QDG_POLL_INTERVAL" "capture:$QDG_CAPTURE" "kill_after:$QDG_KILL_AFTER" "fanout:$QDG_FANOUT"; do
   if ! [[ "${pair#*:}" =~ ^[0-9]+$ ]]; then QDG_OK=0; QDG_WHY="non-integer extraction: ${pair%%:*}"; fi
 done
-for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT"; do
+for pair in "attempts:$QDG_ATTEMPTS_COUNT" "interval:$QDG_INTERVAL_COUNT" "stop:$QDG_STOP_COUNT" "qmax:$QDG_MAX_POLLS_COUNT" "qint:$QDG_POLL_INTERVAL_COUNT" "capture:$QDG_CAPTURE_COUNT" "fanout:$QDG_FANOUT_COUNT"; do
   if [[ "$QDG_OK" -eq 1 && "${pair#*:}" -ne 1 ]]; then QDG_OK=0; QDG_WHY="expected exactly one match for ${pair%%:*} (got ${pair#*:})"; fi
 done
 QDG_LEFT=""; QDG_RIGHT=""
 if [[ "$QDG_OK" -eq 1 ]]; then
   QDG_LEFT=$((QDG_MAX_POLLS * QDG_POLL_INTERVAL))
-  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + 60))
+  QDG_RIGHT=$((QDG_ATTEMPTS * (QDG_INTERVAL + 5) + QDG_STOP + QDG_CAPTURE + QDG_KILL_AFTER + QDG_PEERS * QDG_FANOUT + 60))
   if [[ "$QDG_LEFT" -lt "$QDG_RIGHT" ]]; then QDG_OK=0; QDG_WHY="quiesce-web poll window ${QDG_LEFT}s < host worst case ${QDG_RIGHT}s"; fi
 fi
 if [[ "$QDG_OK" -eq 1 ]]; then
@@ -3312,8 +4105,151 @@ if [[ "$QDG_OK" -eq 1 ]]; then
   echo "  PASS: op=quiesce-web poll window (${QDG_LEFT}s) covers host quiesce worst case (${QDG_RIGHT}s) — #6178 drift guard"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
+  echo "  FAIL: quiesce-web poll drift guard (#6178): $QDG_WHY (attempts=$QDG_ATTEMPTS interval=$QDG_INTERVAL stop=$QDG_STOP capture=$QDG_CAPTURE kill_after=$QDG_KILL_AFTER fanout=${QDG_PEERS}x$QDG_FANOUT QMAX_POLLS=$QDG_MAX_POLLS QPOLL_INTERVAL=$QDG_POLL_INTERVAL; files: ci-deploy.sh, inngest-bootstrap.sh, scripts/cutover-inngest.sh)"
 fi
+
+# #8077 Guard 2 #6c (review rewrite) — PINNED PER-FILE INVENTORY of every line that can START
+# inngest-server. The previous row accepted a hit when the quiesced predicate appeared anywhere in
+# the 30 lines above it — a heuristic an unrelated `disabled` literal satisfied. This row enumerates
+# instead and pins the per-file count, so ANY new start writer (or a moved one) reds here, naming
+# its file, and the author must add the quiesce-state gate plus a behavioural row for it.
+#   Inventory A: `systemctl [flags] start|restart|enable|try-restart|reload-or-restart [flags]
+#                inngest-server[.service]` (a logged message quoting the verb counts too — the pin
+#                is a change detector, not a writer classifier).
+#   Inventory B: variable-unit forms `systemctl[_cmd] [flags] start|restart [flags] "$…` — a unit
+#                list that could come to include inngest-server.
+# Scope: apps/web-platform/infra, scripts, .github. Excluded: *.test.sh, *.md, comment lines,
+# sudoers grants (Cmnd_Alias lines, *sudoers* files) — permissions, not writers.
+# How each pinned writer is gated (and where its behavioural row lives):
+#   ci-deploy.sh             restart → inngest_quiesce_state refusal (rows above); enable/start →
+#                            the op=rollback re-arm, the ONE start allowed on a quiesced unit (rows above)
+#   inngest-bootstrap.sh     reached only through ci-deploy's gated `deploy inngest` arm (rows above)
+#   inngest-wiped-volume-verify.sh  shape gate, quiesced_refused (named row below + its own suite)
+#   workspaces-cutover.sh    reconcile + dead-man shape gates (named row below + its own suite)
+#   inngest-cutover-flip.sh / inngest-redis-bootstrap.sh  variable units on the DEDICATED host / redis
+QI_RE_A='systemctl([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart|enable|try-restart|reload-or-restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+inngest-server(\.service)?([^-A-Za-z0-9_.]|\.service|$)'
+QI_RE_B='systemctl(_cmd)?([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+(start|restart)([[:space:]]+-{1,2}[A-Za-z][A-Za-z-]*)*[[:space:]]+"\$'
+# shellcheck disable=SC2034  # read through qi_inventory's nameref
+declare -A QI_PIN_A=(
+  [apps/web-platform/infra/ci-deploy.sh]=6
+  [apps/web-platform/infra/inngest-bootstrap.sh]=2
+  [apps/web-platform/infra/inngest-wiped-volume-verify.sh]=1
+  [apps/web-platform/infra/workspaces-cutover.sh]=2
+)
+# shellcheck disable=SC2034  # read through qi_inventory's nameref
+declare -A QI_PIN_B=(
+  [apps/web-platform/infra/inngest-cutover-flip.sh]=1
+  [apps/web-platform/infra/inngest-redis-bootstrap.sh]=1
+  [apps/web-platform/infra/workspaces-cutover.sh]=2
+)
+QS_REPO="$SCRIPT_DIR/../../.."
+# qi_inventory <regex> <pin-array-name> <label>: sets QI_BAD (appends) and QI_SEEN (hit count).
+qi_inventory() {
+  local re="$1" label="$3" hits rc=0 qf
+  local -n pins="$2"
+  hits=$(git -C "$QS_REPO" grep -nE "$re" -- apps/web-platform/infra scripts .github 2>/dev/null) || rc=$?
+  if [[ "$rc" -gt 1 ]]; then QI_BAD="${QI_BAD} [$label] git-grep-rc=$rc"; return 0; fi
+  declare -A got=()
+  while IFS= read -r h; do
+    [[ -n "$h" ]] || continue
+    qf="${h%%:*}"
+    case "$qf" in *.test.sh|*.md|*sudoers*) continue ;; esac
+    local text="${h#*:}"; text="${text#*:}"
+    if [[ "$text" =~ ^[[:space:]]*# ]] || [[ "$text" == *Cmnd_Alias* ]]; then continue; fi
+    got[$qf]=$(( ${got[$qf]:-0} + 1 ))
+    QI_SEEN=$((QI_SEEN + 1))
+  done <<< "$hits"
+  for qf in "${!got[@]}"; do
+    if [[ -z "${pins[$qf]+x}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: ${got[$qf]} NEW start writer line(s) of inngest-server — add the inngest_quiesce_state gate (a start on a quiesced/disabled unit re-arms the web scheduler mid-cutover) plus a behavioural row proving it refuses, then pin the file here"
+    elif [[ "${got[$qf]}" -ne "${pins[$qf]}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: ${got[$qf]} start writer line(s), pinned ${pins[$qf]} — a writer was added/moved/removed: gate any new one on the quiesce state, add a behavioural row, then update the pin"
+    fi
+  done
+  for qf in "${!pins[@]}"; do
+    if [[ -z "${got[$qf]+x}" ]]; then
+      QI_BAD="${QI_BAD}"$'\n'"        [$label] $qf: 0 start writer lines, pinned ${pins[$qf]} — the inventory lost a writer (renamed file? changed verb shape?); re-derive the pin"
+    fi
+  done
+}
+QI_BAD=""; QI_SEEN=0
+qi_inventory "$QI_RE_A" QI_PIN_A "unit=inngest-server"
+qi_inventory "$QI_RE_B" QI_PIN_B "variable-unit"
+TOTAL=$((TOTAL + 1))
+if [[ -z "$QI_BAD" && "$QI_SEEN" -eq 15 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest-server start-writer inventory matches the per-file pins ($QI_SEEN lines across 6 files) (Guard 2 #6c)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-server start-writer inventory drifted (seen=$QI_SEEN, pinned total 15):${QI_BAD:- <per-file counts match but the total does not>}"
+fi
+# Positive control: the inventory regex still MATCHES the flag-bearing forms it claims to cover
+# (a regex that silently matched nothing would pin an empty inventory as green).
+QI_CTRL_OK=1
+for qi_line in 'sudo /usr/bin/systemctl restart inngest-server.service' 'systemctl --no-block start inngest-server' \
+               'systemctl enable --now inngest-server.service' 'systemctl try-restart inngest-server' 'systemctl reload-or-restart inngest-server.service; x'; do
+  if ! grep -qE "$QI_RE_A" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+for qi_line in 'systemctl start inngest-server-probe.service' 'systemctl stop inngest-server.service' 'systemctl is-enabled inngest-server.service'; do
+  if grep -qE "$QI_RE_A" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+for qi_line in 'systemctl_cmd start "$SERVER_UNIT"' 'systemctl --no-block restart "${u}.timer"'; do
+  if ! grep -qE "$QI_RE_B" <<< "$qi_line"; then QI_CTRL_OK=0; fi
+done
+TOTAL=$((TOTAL + 1))
+if [[ "$QI_CTRL_OK" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: start-writer inventory regexes match the flag-bearing forms and reject stop/is-enabled/-probe units (positive control)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: start-writer inventory regex control — a covered form no longer matches or an excluded one does"
+fi
+unset qi_line QI_CTRL_OK QI_SEEN
+
+# #8077 review task 3.5 — BYTE-IDENTICAL parity of inngest_quiesce_state() (contract §2). The
+# definitions are DERIVED, not listed: every non-test apps/web-platform/infra/*.sh defining it.
+# Fewer than 3 is a failure (ci-deploy.sh, inngest-inventory.sh, inngest-rearm-reminders.sh must all
+# carry it), and every body — from `inngest_quiesce_state() {` to the closing `^}` — must hash equal.
+QP_BAD=""; QP_N=0; QP_REF=""; QP_FILES=""
+while IFS= read -r qp_path; do
+  case "$qp_path" in *.test.sh) continue ;; esac
+  qp_count=$(grep -cE '^inngest_quiesce_state\(\) \{$' "$qp_path" || true)
+  if [[ "$qp_count" -ne 1 ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):definitions=$qp_count"; continue; fi
+  qp_body=$(awk '/^inngest_quiesce_state\(\) \{$/{f=1} f{print} f&&/^}$/{exit}' "$qp_path")
+  qp_sha=$(printf '%s\n' "$qp_body" | sha256sum | awk '{print $1}')
+  QP_N=$((QP_N + 1)); QP_FILES="${QP_FILES} $(basename "$qp_path")"
+  if [[ -z "$qp_body" || "$(printf '%s\n' "$qp_body" | tail -1)" != "}" ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):unterminated-body"; continue; fi
+  if [[ -z "$QP_REF" ]]; then QP_REF="$qp_sha"; elif [[ "$qp_sha" != "$QP_REF" ]]; then QP_BAD="${QP_BAD} $(basename "$qp_path"):body-differs(sha=${qp_sha:0:12} ref=${QP_REF:0:12})"; fi
+done < <(grep -lE '^inngest_quiesce_state\(\) \{$' "$SCRIPT_DIR"/*.sh 2>/dev/null || true)
+TOTAL=$((TOTAL + 1))
+if [[ "$QP_N" -ge 3 && -z "$QP_BAD" ]] && [[ " $QP_FILES " == *" ci-deploy.sh "* && " $QP_FILES " == *" inngest-inventory.sh "* && " $QP_FILES " == *" inngest-rearm-reminders.sh "* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest_quiesce_state() is byte-identical across $QP_N definitions:$QP_FILES (contract §2)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest_quiesce_state() parity (contract §2): found $QP_N definition(s) [${QP_FILES# }], need >= 3 incl. ci-deploy.sh, inngest-inventory.sh, inngest-rearm-reminders.sh, all byte-identical:${QP_BAD:- <missing file>}"
+fi
+unset qp_path qp_count qp_body qp_sha QP_N QP_REF QP_FILES QP_BAD
+
+# Contract §3 named rows: the two scripts that keep the SHAPE-ONLY guard (no marker) still carry it,
+# and it still precedes their start. (Owned elsewhere; their own suites prove the behaviour — this
+# pins that the start writer the inventory above counts is still behind the guard.)
+QW_F="$SCRIPT_DIR/inngest-wiped-volume-verify.sh"
+QW_GATE=$(grep -nE '\( "\$unit_active" == inactive \|\| "\$unit_active" == failed \) && "\$unit_enabled" == disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_ABORT=$(grep -nE 'abort "quiesced_refused"' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_START=$(grep -nE '^[^#]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+TOTAL=$((TOTAL + 1))
+if [[ -n "$QW_GATE" && -n "$QW_ABORT" && -n "$QW_START" && "$QW_GATE" -lt "$QW_ABORT" && "$QW_ABORT" -lt "$QW_START" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: inngest-wiped-volume-verify.sh keeps its shape-only quiesced_refused gate ahead of its start (contract §3)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: inngest-wiped-volume-verify.sh shape-only gate (contract §3): gate_line=${QW_GATE:-<none>} abort_line=${QW_ABORT:-<none>} start_line=${QW_START:-<none>} — need gate < abort < start"
+fi
+QW_F="$SCRIPT_DIR/workspaces-cutover.sh"
+# reconcile: an is-enabled == disabled test ahead of the plain start; dead-man: `= disabled ] || systemctl start` in the sh -c string.
+QW_REC_GATE=$(grep -nE '^[^#]*"\$\(systemctl is-enabled inngest-server\.service[^)]*\)" = disabled' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_REC_START=$(grep -nE '^[[:space:]]*systemctl start inngest-server\.service' "$QW_F" 2>/dev/null | head -1 | cut -d: -f1)
+QW_DEADMAN=$(grep -cE 'is-enabled inngest-server\.service 2>/dev/null\)\\?" = disabled \] \|\| systemctl start inngest-server\.service' "$QW_F" 2>/dev/null || true)
+TOTAL=$((TOTAL + 1))
+if [[ -n "$QW_REC_GATE" && -n "$QW_REC_START" && "$QW_REC_GATE" -lt "$QW_REC_START" && "$QW_DEADMAN" -eq 1 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: workspaces-cutover.sh keeps its shape-only disabled guards on the reconcile start and the dead-man start (contract §3)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: workspaces-cutover.sh shape-only guards (contract §3): reconcile gate_line=${QW_REC_GATE:-<none>} start_line=${QW_REC_START:-<none>} dead-man guarded starts=$QW_DEADMAN (need gate < start and exactly 1)"
+fi
+unset QW_F QW_GATE QW_ABORT QW_START QW_REC_GATE QW_REC_START QW_DEADMAN
 
 echo ""
 echo "--- Container memory caps (#5417 AC3) ---"
@@ -3877,6 +4813,7 @@ export MOCK_RUNNING_IMAGE_ID="sha256:6512ccccccccccccccccccccccccccccccccccccccc
 export MOCK_RUNNING_IMAGE_TAG="v9.9.9"   # same-version tag present, so ONLY the web guard gates the tier out
 export MOCK_SENTRY_CAPTURE_FILE="$T6512/c2.txt"; : > "$MOCK_SENTRY_CAPTURE_FILE"
 export CI_DEPLOY_STATE="$T6512/c2.state"
+export MOCK_SYSTEMCTL_ENABLED_STATE=enabled   # #8077 D3: not quiesced, so the arm reaches the pull
 run_deploy "deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap v9.9.9" >/dev/null 2>&1 || true
 read_state_reason_and_exit "$CI_DEPLOY_STATE" C2_REASON C2_EXIT
 TOTAL=$((TOTAL + 1))
@@ -3886,7 +4823,7 @@ if [[ "$C2_REASON" == "image_pull_failed" ]] \
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: #6512(c2) reason=$C2_REASON — expected image_pull_failed (reached the pull) + no local-cache event; a non-image_pull_failed reason means the run exited early and the assertion is vacuous"
 fi
-unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE
+unset MOCK_GHCR_PULL_DENY_ALWAYS MOCK_RUNNING_IMAGE_ID MOCK_RUNNING_IMAGE_TAG MOCK_SENTRY_CAPTURE_FILE CI_DEPLOY_STATE MOCK_SYSTEMCTL_ENABLED_STATE
 rm -rf "$T6512"
 
 # (d) zot SERVES the image → the pull succeeds; the local-cache tier is never reached even
@@ -5464,6 +6401,19 @@ else
 fi
 rm -rf "$F16_D"
 
+# _cet: the extracted sanitizer under test, shared by F14 below and the #8016 cases.
+_cet() {
+  # BOTH functions: _cred_err_tail calls _cred_redact_env_values, so extracting only the
+  # former leaves the value arm undefined and every value-based case silently measures the
+  # shape rules alone. (Measured: that is exactly what happened on the first run here.)
+  # shellcheck disable=SC1090
+  source /dev/stdin <<CETEOF
+$(sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT")
+$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
+CETEOF
+  _cred_err_tail "$1"
+}
+
 # --- #7095 R3 (F14): redaction MUST precede truncation, and it must be OBSERVABLE ---------
 # The existing canary sits ~50 bytes from the end, i.e. wholly inside the 200-byte tail window,
 # so truncate-first still hands the redactor a complete match and BOTH orderings pass. The
@@ -5475,13 +6425,10 @@ rm -rf "$F16_D"
 TOTAL=$((TOTAL + 1))
 F14_TOKEN="dp.st.prd.$(printf 'S%.0s' $(seq 1 60))TAILMARKER"
 F14_INPUT="$(printf 'A%.0s' $(seq 1 100))${F14_TOKEN}$(printf 'B%.0s' $(seq 1 160))"
-F14_OUT=$(
-  # shellcheck disable=SC1090
-  source /dev/stdin <<F14EOF
-$(sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT")
-F14EOF
-  _cred_err_tail "$F14_INPUT"
-)
+# Extracted via _cet (defined just above), which sources BOTH helpers. The older
+# `_cred_err_tail`-only extraction printed `_cred_redact_env_values: command not found` on
+# every run once the value arm landed, and exercised the helper minus that arm.
+F14_OUT=$(_cet "$F14_INPUT")
 if [[ -n "$F14_OUT" ]] && ! grep -qF 'TAILMARKER' <<<"$F14_OUT"; then
   PASS=$((PASS + 1)); echo "  PASS: a boundary-straddling token is fully redacted — redaction provably precedes truncation"
 else
@@ -5489,6 +6436,184 @@ else
   echo "  FAIL: a token straddling the 200-byte boundary LEAKED its tail (TAILMARKER survived) — truncation ran before redaction, so a credential split by the window reaches journald"
   echo "        got: $F14_OUT"
 fi
+
+# --- #8016: _cred_err_tail's added rules, driven ONE AT A TIME -----------------------
+# The probe purity scenario exercises all four added rules at once, so removing any single
+# rule would still be caught by *some* assertion but by none specifically. These drive each
+# rule alone, so a rule's removal reds its own case. Fixtures are synthesized and built by
+# CONCATENATION -- a contiguous secret-shaped literal in this file trips GitHub Push
+# Protection even though the value is fake.
+
+_assert_cet_redacts() {
+  local desc="$1" tok="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "prefix $tok suffix")"
+  if [[ -n "$out" ]] && ! grep -qF -- "$tok" <<<"$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail redacts $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail redacts $desc"; echo "        got: $out"
+  fi
+}
+
+# The alternation at the shape rule is SIX members, not one rule. Only two had cases, so
+# narrowing it to `(ghp|whsec)` leaked Supabase / Doppler-personal / Slack / GitHub-OAuth
+# tokens with the suite green. One case per member.
+_CET_A1="sbp_";    _assert_cet_redacts "a Supabase service key"      "${_CET_A1}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A2="dop_v1_"; _assert_cet_redacts "a Doppler personal token"    "${_CET_A2}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A3="xoxb_";   _assert_cet_redacts "a Slack bot token"           "${_CET_A3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A4="gho_";    _assert_cet_redacts "a GitHub OAuth token"        "${_CET_A4}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_A5="sk_";     _assert_cet_redacts "a Stripe TEST key"           "${_CET_A5}test_AAAAAAAAAAAAAAAAAAAA"
+_CET_A6="pk_";     _assert_cet_redacts "a Stripe publishable key"    "${_CET_A6}live_AAAAAAAAAAAAAAAAAAAA"
+unset _CET_A1 _CET_A2 _CET_A3 _CET_A4 _CET_A5 _CET_A6
+
+# OVER-REDACTION, with the shapes over-redaction actually eats. SENTINEL_LEAK_CANARY has no
+# `.`, `:`, `/` or `ey`, so it is the shape LEAST exposed and cannot carry this alone. A
+# missing-shared-object error is one of the likeliest real causes of a failing bwrap exec --
+# an unanchored JWT rule ate `libkeyring.so.1` and destroyed exactly that diagnostic.
+_assert_cet_preserves() {
+  local desc="$1" text="$2"
+  TOTAL=$((TOTAL + 1))
+  local out; out="$(_cet "$text")"
+  if [[ "$out" == *"$text"* ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail preserves $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 _cred_err_tail preserves $desc"
+    echo "        in : $text"; echo "        out: $out"
+  fi
+}
+_assert_cet_preserves "a shared-object path"  'bwrap: cannot open /usr/lib/x86_64-linux-gnu/libkeyring.so.1'
+_assert_cet_preserves "a dotted filename"     'error: /etc/keystore.p12.bak is unreadable'
+_assert_cet_preserves "an image digest"       'ref sha256:abcdef0123456789abcdef0123456789'
+_assert_cet_preserves "a host:port"           'dial tcp 10.0.1.30:5000 refused'
+_assert_cet_preserves "an underscore ident"   'ask_live_migrations failed'
+
+# THE VALUE-BASED ARM -- the most security-critical line added, and it had zero coverage.
+# Deleting its call left the suite green. Drives the real ENV_FILE format, both sides of the
+# 12-byte floor, and the <redacted:KEY> rendering.
+# Asserts the NEGATIVE too: when redaction is expected, the secret value itself must be
+# ABSENT from the output. A marker-present check alone is satisfied by a partial leak
+# (`<redacted:DB_HOST>` beside a password in clear -- the ordering defect below), so the
+# marker is necessary and the absence is what carries the security claim.
+# $envline may be multi-line (literal newlines) to drive ordering and file-shape cases;
+# a trailing newline is written unless $envline already ends without one and
+# $6 == nonl (the unterminated-last-line case).
+_assert_cet_env_value() {
+  local desc="$1" envline="$2" probe="$3" expect_redacted="$4" secret="${5:-}" nl="${6:-}"
+  TOTAL=$((TOTAL + 1))
+  local d out; d=$(mktemp -d)
+  if [[ "$nl" == nonl ]]; then printf '%s' "$envline" > "$d/envfile"; else printf '%s\n' "$envline" > "$d/envfile"; fi
+  out="$(ENV_FILE="$d/envfile" _cet "$probe")"
+  rm -rf "$d"
+  local redacted=no; [[ "$out" == *"<redacted:"* ]] && redacted=yes
+  local leaked=no; [[ -n "$secret" && "$out" == *"$secret"* ]] && leaked=yes
+  if [[ "$redacted" == "$expect_redacted" && "$leaked" == no ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: #8016 value-arm $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: #8016 value-arm $desc (expected redacted=$expect_redacted, got redacted=$redacted leaked=$leaked)"
+    echo "        out: $out"
+  fi
+}
+# BYOK is the case the shape rules structurally cannot reach: 64 bare hex, no prefix.
+_assert_cet_env_value "redacts a bare-hex secret no shape rule can match" \
+  'BYOK_ENCRYPTION_KEY=9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' \
+  'invalid environment variable: 9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c' yes \
+  '9f2c1a4e7b03d85f61ae92c47d0b3fa85c19e6d47b2fa0138ce74d9a5b60f21c'
+_assert_cet_env_value "redacts a hyphenated vendor key (sk-ant-, misses rule 2)" \
+  'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+  'exec failed: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA rejected' yes 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+# The floor is the boundary: 12 characters redacts, 11 does not. Both sides pinned at EXACTLY
+# 12 and 11 -- the earlier "below" case used `production` (10), so a floor of 11 passed both.
+_assert_cet_env_value "redacts a value AT the 12-char floor" \
+  'SOME_TOKEN=abcdefghijkl' 'saw abcdefghijkl here' yes 'abcdefghijkl'
+_assert_cet_env_value "PRESERVES an 11-char value just below the floor (no diagnostic shredding)" \
+  'SOME_LABEL=abcdefghijk' 'saw abcdefghijk here' no
+_assert_cet_env_value "PRESERVES a short value like NODE_ENV=production" \
+  'NODE_ENV=production' 'NODE_ENV was production during the run' no
+# ORDERING (review finding, #8026): a SHORT public value that is a substring of a LONGER
+# secret, listed FIRST in the env file. Substituting in file order rewrites the composite so
+# it no longer matches and the password ships in clear beside a `<redacted:DB_HOST>` marker
+# certifying that redaction ran. Longest-first consumes the composite before its parts.
+_assert_cet_env_value "consumes a composite secret before a shorter public substring of it" \
+  $'DB_HOST=db.example.com\nDATABASE_URL=postgres://u:S3CR3TPASSW0RD@db.example.com/x' \
+  'connect failed: postgres://u:S3CR3TPASSW0RD@db.example.com/x' yes 'S3CR3TPASSW0RD'
+# FILE SHAPE: the last line of the env file has no trailing newline. `read` returns non-zero
+# on it while still filling the variables; without the `|| [[ -n "$_k" ]]` guard that last
+# secret is silently skipped and nothing reds.
+_assert_cet_env_value "redacts the LAST entry of an env file with no trailing newline" \
+  $'FIRST_KEY=aaaaaaaaaaaaaaaa\nLAST_KEY=zzzzzzzzzzzzzzzzzzzz' \
+  'saw zzzzzzzzzzzzzzzzzzzz at the end' yes 'zzzzzzzzzzzzzzzzzzzz' nonl
+# STRADDLE (value-arm analogue of F14): the env VALUE begins >200 chars from the end and its
+# tail lands inside the 200-char window. The value arm must see the WHOLE value -- any clamp
+# under (200 + value length) before the arm, or truncate-first, cuts the needle so it no longer
+# matches and the secret's tail ships. Pinned: STRADDLETAIL must be absent from the output.
+# Geometry: 150 A + 100-char value + 170 B = 420 chars; the window starts at 220, so the value
+# (150..250) straddles it, and a pre-clamp of 230 (window start 190) cuts it too. After
+# substitution the string is 343 chars and the 23-char marker sits wholly inside the window
+# (a longer B pad bisects the marker itself, which is legal -- the runbook says so -- but would
+# defeat the marker-present half of this assertion). Value length is what makes both hold.
+_STRADDLE_VAL="$(printf 'S%.0s' $(seq 1 88))STRADDLETAIL"
+_assert_cet_env_value "redacts an env value straddling the 200-char tail boundary" \
+  "STRADDLE_KEY=${_STRADDLE_VAL}" \
+  "$(printf 'A%.0s' $(seq 1 150))${_STRADDLE_VAL}$(printf 'B%.0s' $(seq 1 170))" yes 'STRADDLETAIL'
+# KEY QUOTING: a `&` in a key name must render literally under bash 5.2+ patsub_replacement,
+# not expand to the matched value inside the marker.
+_assert_cet_env_value "renders a key containing & literally in the marker" \
+  'K&AMP=abcdefghijklmn' 'saw abcdefghijklmn' yes 'abcdefghijklmn'
+
+_CET_P1="sk_"; _assert_cet_redacts "a Stripe-shaped live key"   "${_CET_P1}live_AAAAAAAAAAAAAAAAAAAA"
+_CET_P2="ey";  _assert_cet_redacts "a three-segment JWT"        "${_CET_P2}JhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+_CET_P3="whsec_"; _assert_cet_redacts "a webhook signing secret" "${_CET_P3}AAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P4="ghp_";   _assert_cet_redacts "a GitHub PAT"             "${_CET_P4}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+_CET_P5="dp.";    _assert_cet_redacts "a Doppler service token"  "${_CET_P5}st.AAAAAAAAAAAAAAAAAAAAAAAA"
+
+# FAIL CLOSED. A sanitizer that dies mid-pipeline must NOT emit a partially sanitized value.
+# Without pipefail the `||`-suspended errexit lets the helper return 0 carrying whatever the
+# surviving stages produced -- i.e. it leaks exactly when its own machinery is broken.
+#
+# The stub shadows `tr`, NOT `sed`, and that choice is the whole test. `sed` is the LAST stage
+# of the pipeline, so a failing `sed` sets the pipeline status with or without pipefail and the
+# case passes either way -- measured: it survived a `set -o pipefail` deletion, i.e. it was
+# vacuous. `tr` is stage 2, never last, so its death is observable ONLY through pipefail. That
+# is also the shape of the real failure being guarded: a MID-pipeline tool death that leaves
+# later stages returning 0 over partially sanitized bytes.
+TOTAL=$((TOTAL + 1))
+_CET_FCDIR=$(mktemp -d)
+cat > "$_CET_FCDIR/tr" <<'FCTR'
+#!/bin/bash
+exit 3
+FCTR
+chmod +x "$_CET_FCDIR/tr"
+_CET_FC_TOKEN="dp.""st.SHOULDNEVERAPPEAR"
+# Extract the function body with the REAL PATH first, then scope the shadow to the call.
+# The shadow must reach the function's own pipeline and nothing else -- an earlier revision
+# shadowed `sed`, which is what _cet's own extraction uses, so the function was never defined
+# and the case failed for a reason that had nothing to do with the property.
+_CET_FCSRC="$_CET_FCDIR/fn.sh"
+{ sed -n '/^_cred_redact_env_values()/,/^}/p' "$DEPLOY_SCRIPT"
+  sed -n '/^_cred_err_tail()/,/^}/p' "$DEPLOY_SCRIPT"; } > "$_CET_FCSRC"
+_CET_FC_OUT=$(
+  # shellcheck disable=SC1090
+  source "$_CET_FCSRC"
+  # STATE the ambient option rather than inheriting it. This block sits downstream of a
+  # `set +e +o pipefail` ~2000 lines up; if a future edit re-enables pipefail before here,
+  # the mutant and the original become indistinguishable and this case silently returns to
+  # vacuity with no signal. Note the helper's own `set -o pipefail` is redundant on the
+  # deploy path (ci-deploy.sh line 2 sets it) -- what this pins is that the helper is
+  # self-sufficient when sourced into a shell that does NOT have it.
+  set +o pipefail
+  PATH="$_CET_FCDIR:$PATH"
+  hash -r   # bash caches command paths; without this, tr may still resolve to the real binary
+  _cred_err_tail "leak canary $_CET_FC_TOKEN"
+)
+if [[ "$_CET_FC_OUT" == "<sanitize_failed>" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #8016 _cred_err_tail fails CLOSED on a mid-pipeline tool death"
+  echo "        expected <sanitize_failed>, got: $_CET_FC_OUT"
+fi
+rm -rf "$_CET_FCDIR"
+unset _CET_P1 _CET_P2 _CET_P3 _CET_P4 _CET_P5 _CET_FCDIR _CET_FC_TOKEN _CET_FC_OUT _CET_FCSRC
 
 # T-7095-2c (#7095 R3, F11) — THE OTHER SIDE OF THE empty= TRANSFORM: non-zero rc WITH stdout.
 # Until this case existed, every fixture that reached the marker reported empty=1 (`empty` gives
@@ -5914,6 +7039,17 @@ rm -rf "$ZGD_TMP"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# Assertion-count floor (#8077 review): a suite that silently narrows (a block skipped, a loop that
+# iterates zero times, a helper that returns before counting) still ends "N/N passed". Pinned to the
+# exact count at the time of writing; raise it when rows are added. Deliberately a bare printf +
+# exit 1 — NOT a counted assertion through a helper that could itself be the thing that broke.
+CI_DEPLOY_ASSERT_FLOOR=305
+if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
+  printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
+    "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
+  exit 1
+fi
 
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1

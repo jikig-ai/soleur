@@ -76,6 +76,22 @@ If you are handling an inbound event, jump straight to the relevant section:
 
 **If you have no retained counsel.** FOSSA / Snyk / GitHub Dependency Review give you the classification (which is usually unambiguous); marketplace lane is for the substantive "is this OK for our business model" judgment when the classification surfaces something interesting.
 
+## template-libraries
+
+**Trigger.** You need a starting-point legal document (MSA, NDA, privacy policy, offer letter) and want a professionally drafted template to adapt rather than a from-scratch generation.
+
+**Statutory deadline.** None — but every template still requires attorney review before signing or publishing (see the Disclaimer).
+
+Soleur vendors a CC0 snapshot of one listed library (General-Legal) into `legal-generate` — see its NOTICE for pins and provenance.
+
+| Tool | License | How to get it | Best for | Canonical URL |
+|---|---|---|---|---|
+| Common Paper | CC BY 4.0 (standard agreements) | Free download of standard agreements; platform for e-sign flow | Widely-adopted startup standard agreements (CSA, MSA, DPA, NDA, offer letters) with published "how it works" annotations; attribution required by the license | <https://commonpaper.com/standards/> |
+| Bonterms | CC BY 4.0 | Free download of modular standard terms | Modular, lawyer-maintained standard terms (MSA, DPA, SLA, AI terms) designed to be incorporated by reference into short cover pages | <https://bonterms.com> |
+| General-Legal `legal-templates` | CC0 (public-domain dedication) | GitHub repo, markdown templates with `<mark>` fill fields | Agent-friendly template fill — no attribution required; US-drafted; includes an embedded vendor credit (Soleur strips it on emit) | <https://github.com/General-Legal/legal-templates> |
+
+**If you have no retained counsel.** Templates get you 80% of the way; the remaining 20% (your jurisdiction, your counterparty, your facts) is exactly what counsel is for. Use a founder-accessible marketplace (see `vendor-msa-review`) for the review pass.
+
 ## breach-notice-triage
 
 **Trigger.** You discover (or are told) that personal data was exposed, accessed by an unauthorized party, lost, or destroyed. This includes inadvertent exposure (a logging bug that wrote PII to a public bucket), credential compromise, vendor-side breach affecting your data, or a confirmed bad-actor event.

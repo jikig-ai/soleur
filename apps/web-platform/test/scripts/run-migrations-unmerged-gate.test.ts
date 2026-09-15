@@ -102,6 +102,12 @@ function runScript(env: Record<string, string | undefined>): {
     env: {
       ...process.env,
       ...env,
+      // The post-apply PostgREST reload hook runs on EVERY runner exit path
+      // since #8028, including the applied=0 runs this suite drives against
+      // the REAL runner. An operator's exported SUPABASE_ACCESS_TOKEN would
+      // otherwise make a unit test POST a live NOTIFY to prd; an empty value
+      // takes the hook's absence-soak (::notice::, exit 0) with no network.
+      SUPABASE_ACCESS_TOKEN: "",
       // Point the SUT's *.sql glob at the temp staging dir (#4957) so the
       // synthetic fixture never lands in the real migrations tree. The gate's
       // `git ls-tree origin/main -- apps/web-platform/supabase/migrations/<name>`

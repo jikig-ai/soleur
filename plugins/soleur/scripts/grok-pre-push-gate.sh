@@ -165,6 +165,10 @@ fi
 run_step "test-all (CI test aggregator)" env SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
+# Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's
+# `builder` stage from the apps/web-platform context (which is what catches a reference above
+# the app root — release 34773058045); a bare `next build` on a full checkout cannot see that
+# class. The context check itself lives in test/docker-context-import-containment.test.ts.
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   step "web-platform-build"
   if [[ -f apps/web-platform/package-lock.json ]]; then

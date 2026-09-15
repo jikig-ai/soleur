@@ -44,7 +44,7 @@ rm -rf "$SEED"
 
 LOCAL="$TMP/local.git"
 git init --bare -b main "$LOCAL" >/dev/null
-( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 # Advance upstream so origin/main is ahead of local main
 SEED2="$TMP/seed2"

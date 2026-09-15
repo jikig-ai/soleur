@@ -6,7 +6,6 @@
 03bf4eca0d95ce52aa4858e502bc617b33c77b06d1729200df3b30de8a1816d2  hr-always-read-a-file-before-editing-it
 b143af2cc16aaee9d41f7021767431186736297be1878a4d8d0ca17e7324f3e8  hr-autonomous-loop-skill-api-budget-disclosure
 11c42d0c1d42699a28bfd10162a81eb24e7661121556e92b3ff00e3a96f2eb12  hr-before-asserting-github-issue-status
-27235260447146e8eba515c8208abd0f83a04b430b50c8544e6f9d81e54a5b76  hr-before-shipping-ship-phase-5-5-runs
 95c858983479e2ecbe39c5c86f87bbfd6a7414b35889b63e5fe0956de50caaa3  hr-bulk-delete-per-item-live-infra-role-check
 e43cb51eda7fc3abf1bd044403148da4263f24be7bf821268174c404b866b3a5  hr-dev-prd-distinct-supabase-projects
 35c3a36ccf61c9125290a6f6e30a9413e554aa8ed3cdb81430997107ea8934b5  hr-dispatch-async-must-arm-watch
@@ -26,7 +25,6 @@ f8a323e9c2570956a875ac91fa6a915df7dfad6b28513eee83dd5be0592f0c93  hr-monitor-not
 4988b61e6990ca30749b8501d7ed682cfadc6aaf9806f27e3da7f0580cb89462  hr-never-paste-secrets-via-bang-prefix
 dfc7f8d48a8b89e6eb375d13b4a47ea05bd9522ff63612c1dfa8acaa849b5738  hr-never-run-commands-with-unbounded-output
 db3bee820a8ad98c276b6fcf2187d57e63aa97577723a624385457c647b28f74  hr-never-write-to-claude-code-memory-claude
-370dbe88231171523ff3e56e02910b7f596fd7d542fe8a4f2f75fcd4a184a355  hr-new-skills-agents-or-user-facing
 316221dad125031ac573e46e12c0fcfbaf6dfbc3236dca3dc6e60452bbd320ab  hr-no-dashboard-eyeball-pull-data-yourself
 4b65039402fb981832701db9839fbcf520d8ee7aa4c574d35d1ca69fdb272fe9  hr-no-ssh-fallback-in-runbooks
 d9887c48b115bb8e8559d1859c2df9061a7eaae59232eb433ca3ba2919202f42  hr-observability-as-plan-quality-gate
@@ -53,20 +51,18 @@ d49f75e348d514dd0ac018cc1593be8750e1ec4d2fc3deb5ca8d42158ba8b0a8  hr-when-triagi
 5fec24ab593f1ed130c5e663784bf126f66756a1142b6caa3c346a0af5dca83b  wg-after-a-pr-merges-to-main-verify-all
 996dc0695215e6fb6de2582dd7a786bd8eede2ae95ecde91e86e8fd2cf0e59be  wg-after-marking-a-pr-ready-run-gh-pr-merge
 e84867ed5753880b062a1304ef441815423cc3189ffe08572e3bc99af377f529  wg-after-merging-a-pr-that-adds-or-modifies
-c110204548405e57c1cc7089a049768f1ab2706bd6c0b7ff44e09c1676845680  wg-architecture-decision-is-a-plan-deliverable
 71e09900759121816b84c5e2ba85c9f98421103b0188d4a5a7e4b9fbc0da6199  wg-at-session-start-after-cleanup-merged
 eed77e1cfbd5678fb364995abec0c83bd0f6abaa5382d3ea9cc825e1a601a302  wg-at-session-start-run-bash-plugins-soleur
 c171187443a446c1020bc06932c93b6b36a44344ec038ed211b6c87d8caacdcc  wg-block-pr-ready-on-undeferred-operator-steps
 bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-author-before-merge
 0c66ba0b8543f78224a5e8c3725bd7be5916846c6df4e05942b899e76c66d987  wg-dark-launch-deploy-gates
-bd1b19b00bbbcf9d553041722d3da0b29ed782b1167764d170c15486c76c4255  wg-defer-only-after-inline-triage
+68c64543014fb769a3512988e5c17a11ee309dc509b3e60a997ffc95dde06fb7  wg-defer-only-after-inline-triage
 e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work-emit-resume-prompt
 695ee8e150a170130d85bfcd007faa8a1cb65944148cbd649f3aa31936178e79  wg-every-feature-listed-in-a-roadmap-phase
 5371eb922a7d2402648dbf68dbe902abf582e97d36e3f9e8f04942ed69443cea  wg-every-session-error-must-produce-either
 2b511a98582e3841e92287f336522bcde6fb74b454f486c03d6e3edbcde8fe75  wg-never-bump-version-files-in-feature
 080278af90659f4df6abfbebee5c4d98313847557d72eacd5eeb1097234f3ff3  wg-plan-prescribed-skills-must-run-inline
 eff970196e3c179da0a1869e06bc537b74291551d82c5ec1679521bf55e2848e  wg-pm-class-followthrough-for-operator-dogfood
-21ab9039ee82bf0c43b917f3480d26fb03bb83154003395e2cea3708cebee828  wg-record-recurring-vendor-expense-before-ready
 a7d752df4f6a2f494ffec8dfc4efc74afe4d43d9034d0fba0e972517b18f2d7b  wg-ship-push-before-merge
 8b95ccde7d534ca9b2a25e7c65f9780fbd20facaf00a813a40bdc7933d33ea79  wg-ui-feature-requires-pen-wireframe
 ea8a5568d2b51e204dcb090c14e897b3d78a6d7b3664b9a643756df163230203  wg-use-closes-n-in-pr-body-not-title-to
@@ -76,6 +72,5 @@ c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-work
 f7664416f6cf7eb36ce7d2e5977f904069e1811c29928a9853f81df425634980  wg-when-an-audit-identifies-pre-existing
 b95ce4dcdabe6b01a67775263a97bff856aacd380ef7de07c8f9c552461291ae  wg-when-closing-a-phase-milestone-update
 0bd0bc73f6535aeb97e9d0f07812bad5631231473b62d6c704c39b1acd3d969b  wg-when-deferring-a-capability-create-a
-70897e40a0f3f0ebc33ad0310d528590c9f4fb602f0b2fcf51748a81417c6629  wg-when-fixing-a-workflow-gates-detection
 d0511fb43e953e962dc14188c9ad2d6d6d1d76cb78e0b1d7bde23d5220a58e92  wg-when-tests-fail-and-are-confirmed-pre
 5e963b1aecdd81004578ed7e100f2267a1e3b8f48cfda6a15477c731280a8846  wg-zero-agents-until-user-confirms

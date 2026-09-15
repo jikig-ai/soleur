@@ -35,6 +35,8 @@
 #   1. Raw SQL (first positional arg is a SELECT …): runs it verbatim. Use the
 #      $BS_TABLE env (exported by this script) for the remote() arg, e.g.
 #      "SELECT dt, raw FROM remote($BS_TABLE) WHERE … LIMIT 50 FORMAT JSONEachRow"
+#      --table / --table-s3 are honoured here too (either side of the SQL); they are
+#      pre-scanned ahead of mode dispatch (#8043 Guard 5) — never silently dropped.
 #   2. Convenience flags (no SQL arg): --since <Nh|Nm|ISO>, --until <ISO>,
 #      --grep <substr> (repeatable, OR-combined), --limit <N>, --raw-only
 #      (exclude host metrics + journald noise), --no-archive (hot window only —
@@ -259,12 +261,80 @@ sql_quote() {
 
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
-export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
 
-# Env-seeded values, validated before mode 1 — which runs its query and exits without ever
-# reaching the flag loop.
+# (#8043 FR13 / Guard 5) PRE-SCAN `--table` / `--table-s3` AHEAD OF MODE DISPATCH. Until this
+# pass existed the flags were parsed only by the mode-2 loop, and mode 1 ran its query and
+# `exit`ed before that loop — so `betterstack-query.sh "SELECT …" --table X` silently read the
+# DEFAULT source with exit 0. Against a git-data host that is a plausible EMPTY result, i.e.
+# the false verdict "the boot was dark" (asks for X, gets Y, exit 0 — the headline bug class,
+# at the dispatch layer). The property is that a --table* flag is either honoured or refused
+# loudly in EVERY mode; honouring is the fix, so both modes read the same two variables.
+#
+# The pre-scan lifts ONLY the two table flags and passes everything else through in order.
+# Mode 2's value-taking flags are stepped over as PAIRS so a value that happens to spell
+# `--table` (e.g. `--grep --table`) is not lifted out from under its own flag. The peeled-off
+# flags are always followed by a value: a bare trailing `--table` is a usage error (64), the
+# same code as an unknown flag, not the `set -u` crash it used to be.
+_bs_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --table|--table-s3)
+      if [[ $# -lt 2 ]]; then
+        printf 'betterstack-query.sh: %s needs a value\n' "$1" >&2
+        exit 64
+      fi
+      if [[ "$1" == "--table" ]]; then BS_TABLE="$2"
+      else BS_TABLE_S3="$2"; S3_EXPLICIT=1
+      fi
+      shift 2 ;;
+    --since|--until|--grep|--limit)
+      if [[ $# -lt 2 ]]; then
+        printf 'betterstack-query.sh: %s needs a value\n' "$1" >&2
+        exit 64
+      fi
+      _bs_args+=("$1" "$2"); shift 2 ;;
+    *) _bs_args+=("$1"); shift ;;
+  esac
+done
+set -- ${_bs_args[@]+"${_bs_args[@]}"}
+unset _bs_args
+export BS_TABLE
+
+# Derive the archive name ONCE, after the pre-scan, so `--table` and `--table-s3` are
+# order-independent in both modes: an explicit --table-s3 (or BS_TABLE_S3 env) always wins,
+# whichever side it was passed on. Only the `_logs` suffix has a known `_s3` counterpart. The
+# runbook documents `_metrics` and `_spans` tables too; guessing `<name>_metrics_s3` for those
+# would invent a table the caller never named — silently querying the wrong source if it
+# happens to exist. Leave it EMPTY instead, and let each mode refuse below at the point it
+# would actually need one (mode 2 without --no-archive; mode 1 only if the SQL spells the
+# `$BS_TABLE_S3` token).
+if (( ! S3_EXPLICIT )); then
+  if [[ "$BS_TABLE" == *_logs ]]; then
+    BS_TABLE_S3="${BS_TABLE%_logs}_s3"
+  else
+    BS_TABLE_S3=""
+  fi
+fi
+export BS_TABLE_S3
+
+# Validated here, ONCE, because after the pre-scan nothing changes either variable again — the
+# flag values and the env values reach run_sql through the same two names in both modes.
 require_table_identifier BS_TABLE "$BS_TABLE"
-require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
+# The one legitimate empty value: a non-_logs table with no explicit archive has none to name.
+[[ -n "$BS_TABLE_S3" ]] && require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
+
+refuse_underived_archive() {
+  cat >&2 <<EOF
+betterstack-query.sh: cannot derive an archive table from BS_TABLE='${BS_TABLE}'.
+
+Only <name>_logs has a known <name>_s3 counterpart. For any other table, name the archive
+explicitly or opt out of it:
+
+  --table-s3 <archive_table>   (or BS_TABLE_S3=<archive_table>)
+  --no-archive                 (hot window only — returns ~40 minutes; see the header)
+EOF
+  exit 64
+}
 
 run_sql() {
   # $1 = SQL. Credentials via Basic auth; never echoed.
@@ -279,7 +349,12 @@ run_sql() {
 # Callers may write the literal token `$BS_TABLE` in their SQL; we substitute it
 # here so the table identifier survives `doppler run -- ... "$BS_TABLE"` quoting
 # (the env var would otherwise stay unexpanded inside the single-quoted arg).
+# `--table` / `--table-s3` have already been lifted out of "$@" by the pre-scan above, so the
+# SQL may sit on either side of them; what remains in $1 is the query itself.
 if [[ $# -ge 1 && "$1" =~ ^[[:space:]]*(SELECT|WITH|SHOW)[[:space:]] ]]; then
+  # A raw query that spells `$BS_TABLE_S3` on a non-_logs table with no explicit archive would
+  # otherwise substitute an EMPTY string into s3Cluster(primary, ) — refuse, same as mode 2.
+  [[ -z "$BS_TABLE_S3" && "$1" == *'$BS_TABLE_S3'* ]] && refuse_underived_archive
   # $BS_TABLE_S3 MUST be substituted before $BS_TABLE: the latter is a prefix of the
   # former, so the reverse order would rewrite `$BS_TABLE_S3` into `<hot_table>_S3` —
   # a table that does not exist — and the caller would see a confusing UNKNOWN_TABLE
@@ -300,46 +375,17 @@ while [[ $# -gt 0 ]]; do
     --limit) LIMIT="$2"; shift 2 ;;
     --raw-only) RAW_ONLY=1; shift ;;
     --no-archive) NO_ARCHIVE=1; shift ;;
-    --table) BS_TABLE="$2"; export BS_TABLE; shift 2 ;;
-    --table-s3) BS_TABLE_S3="$2"; S3_EXPLICIT=1; export BS_TABLE_S3; shift 2 ;;
+    # --table / --table-s3 never reach this loop: the pre-scan above lifted them out of "$@"
+    # so that mode 1 sees them too. Adding a table-shaped flag here would re-open Guard 5.
     *) echo "unknown flag: $1" >&2; exit 64 ;;
   esac
 done
 
-# Re-derive the archive name AFTER flag parsing so `--table` and `--table-s3` are
-# order-independent: an explicit --table-s3 (or BS_TABLE_S3 env) always wins, whichever
-# side it was passed on.
-if (( ! S3_EXPLICIT )); then
-  # Only the `_logs` suffix has a known `_s3` counterpart. The runbook documents `_metrics`
-  # and `_spans` tables too; guessing `<name>_metrics_s3` for those would invent a table the
-  # caller never named — silently querying the wrong source if it happens to exist. Demand
-  # an explicit archive name instead of guessing.
-  if [[ "$BS_TABLE" != *_logs ]]; then
-    if (( NO_ARCHIVE )); then
-      BS_TABLE_S3=""   # unused on this path; nothing to derive.
-    else
-      cat >&2 <<EOF
-betterstack-query.sh: cannot derive an archive table from BS_TABLE='${BS_TABLE}'.
-
-Only <name>_logs has a known <name>_s3 counterpart. For any other table, name the archive
-explicitly or opt out of it:
-
-  --table-s3 <archive_table>   (or BS_TABLE_S3=<archive_table>)
-  --no-archive                 (hot window only — returns ~40 minutes; see the header)
-EOF
-      exit 64
-    fi
-  else
-    BS_TABLE_S3="${BS_TABLE%_logs}_s3"
-  fi
+# A non-_logs table with no explicit archive has nothing to UNION; the caller must either
+# name one or opt out with --no-archive (the empty value is unused on that path).
+if [[ -z "$BS_TABLE_S3" ]] && (( ! NO_ARCHIVE )); then
+  refuse_underived_archive
 fi
-export BS_TABLE_S3
-
-# Re-validate: --table / --table-s3 are parsed BELOW the host check, and the archive name is
-# re-derived above, so the env-time validation does not cover either.
-require_table_identifier BS_TABLE "$BS_TABLE"
-# The one legitimate empty value: --no-archive on a non-_logs table has no archive to name.
-[[ -n "$BS_TABLE_S3" ]] && require_table_identifier BS_TABLE_S3 "$BS_TABLE_S3"
 
 # --limit interpolates raw into `LIMIT ${LIMIT}`. 64 (usage error), not 2: this is a
 # caller-typo shape, not a redirected destination.

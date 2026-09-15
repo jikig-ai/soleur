@@ -171,7 +171,10 @@ fixes for every per-step plan:
 > through the transport key). **Resolution: a dedicated, separately-keyed SSH
 > forced-command provisioning path.** A SECOND ED25519 key on the git-data host —
 > distinct from the git-shell transport key, same `git` OS user (repo root is
-> `git:git 0750`; per-key `command=` overrides the login shell) — carries a FIXED
+> `git:git 0750`; per-key `command=` is RUN BY the login shell as `<shell> -c "<command>"`, so
+> the login shell must be a real shell — git-shell refuses it with `fatal: unrecognized
+> command`, rc=128, measured in the pinned image and corrected by #8043 to `/bin/sh`; the
+> confinement is the forced-command map, never the shell) — carries a FIXED
 > forced command `command="/usr/local/bin/git-data-provision.sh"`. The wrapper
 > reads `workspace_id` from `SSH_ORIGINAL_COMMAND` as an OPAQUE argument (validated,
 > NEVER `eval`'d), enforces `^[A-Za-z0-9._-]+$` and rejects `.`/`..`/slash
@@ -1273,6 +1276,18 @@ wrong-arch binary. That is why this was a real code change and not a var flip.
 | **D8** | Keep the arch enums **mapped**, never compared: hcloud reports `x86`/`arm`, the local is `amd64`/`arm64`. |
 | **D9** | **This ADR authorizes no birth.** The repin changes declared state only. |
 | **D10** | **Born-on-LUKS rejected** — keep the additive cutover topology (plaintext source volume + fresh LUKS target, flipped by `git-data-cutover.sh`). Revisiting it would rewrite a cutover path that is already built and tested for a host that does not exist yet. |
+
+**Addendum — 2026-09-15 (#6680).** The access path and root credential for this cutover, and for every
+rotation cutover D10 keeps on the same route, are decided in
+[ADR-220](./ADR-220-git-data-root-access-via-web-1-jump-and-a-dedicated-terraform-minted-key.md):
+a jump through web-1's existing `ssh.` ingress, and a dedicated Terraform-minted root key provisioned
+by #8189. Rotation cutovers inherit ADR-220's rule that the read credential is scoped to the window,
+and they need **no host replace per rotation**. Only the first key delivery rides a git-data replace.
+Rotations against a populated store stay gated on #7226 (host-key pinning), per ADR-220 D4.
+
+**Correction — 2026-09-15 (#6680).** The "Inngest-dispatches-GHA" claim in the 2026-07-02 Phase 3 GA
+amendment, item (b), is false for the git-data cutover: `git-data-cutover.yml` is dispatched by hand
+only, and no dispatcher exists.
 
 ### Why D7 is mandatory
 

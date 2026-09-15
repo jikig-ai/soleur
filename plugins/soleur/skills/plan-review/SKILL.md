@@ -36,6 +36,13 @@ The eng panel above reviews for engineering quality (simplicity, convention, cor
 
 ## Standing panel checks (every review, no relevance gate)
 
+> **Rule `cq-ac-must-not-depend-on-concurrent-sessions` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> An acceptance criterion whose truth depends on unrelated concurrent processes — a sibling worktree, another session, ambient machine state — is not a property of the code and MUST be re-expressed as a deterministic test [id: cq-ac-must-not-depend-on-concurrent-sessions] [skill-enforced: plan-review Standing panel checks]. Litmus: could a process the plan never mentions flip it with no line of the diff changing? Then it measures the machine. **Why:** 2026-08-11 — "fires no contention banner" cost a second ~45-min re-run that verified an environment, not code.
+
 Run these against the plan regardless of change class. They are cheap, textual, and each has
 exactly one right answer, so all findings here classify **Mechanical** and auto-apply.
 

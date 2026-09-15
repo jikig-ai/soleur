@@ -11,9 +11,19 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **68 agents**, **3 commands**, and **95 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **68 agents**, **3 commands**, and **98 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
+
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and run `bash scripts/setup-devin.sh` to install from the local checkout.
+
+Update to the latest version with `devin plugins update soleur`, or `devin plugins update` to refresh all installed plugins. If you see a transient "content could not be fetched" warning, Devin will retry automatically; run the update command again if it persists.
 
 **Codex:**
 
@@ -170,6 +180,15 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:go` | Unified entry point -- routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
 
 ### Workflow Skills
 

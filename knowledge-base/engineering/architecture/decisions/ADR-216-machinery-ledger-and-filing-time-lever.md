@@ -89,8 +89,12 @@ This ordering is binding and comes from the operator: *expiry drains the stock;
 only the filing-time gate touches the rate.* At ~2:1, a 90-day sweep buys a
 one-time drop and the curve then resumes its old slope.
 
-### Three exits, one gate, and deliberately no fourth
+### Four exits, one gate, and deliberately no fourth *narratable* exit
 
+0. `--label <run-report-label>` where the label equals the `run-report-label`
+   directive the substrate wrote into this spawn's `cron-allow.txt` — present
+   only for the run-report crons, unreadable and unwritable by the agent
+   (2026-09-11 addendum below)
 1. `--label meta/machinery`
 2. `User-Impact:` naming a surface from a shared closed taxonomy, **and**
    `Fix-Size: <N> lines / <M> files` measured — refused when inside the inline
@@ -99,9 +103,107 @@ one-time drop and the curve then resumes its old slope.
 
 An earlier draft added a purpose-named bypass marker. **It is cut.** Exit 1 is
 free and always available; name the filing that must bypass the gate, cannot be
-labelled machinery, and cannot name a user impact — there isn't one. A fourth
-exit on a gate that already has a universal one reproduces exactly the
-reflexive-override pathology this repo has measured 98 times.
+labelled machinery, and cannot name a user impact — there isn't one. (> **Superseded
+2026-09-11 (#8076):** there is one — the run-report a cron MUST file to verify
+its own run, which is neither machinery nor a user impact; #8059 relabelled it
+`meta/machinery` to comply. The addendum below is that filing's exit, and it
+stays non-narratable.) A fourth
+narratable exit on a gate that already has a universal one reproduces exactly the
+reflexive-override pathology this repo has measured 98 times. Exit 0 is not
+that exit: an agent cannot take it by writing anything, because the token it
+must match is issued by the substrate per spawn and the agent never sees it.
+The addendum below records why it exists and why it is not the cut marker.
+
+### Addendum 2026-09-11 — the run-report population
+
+**The population.** Every cron whose run completion is verified by its own
+scheduled issue. Mechanically: the nine `resolveOutputAwareOk` callers —
+architecture-diagram-sync, campaign-calendar, community-monitor,
+competitive-analysis, content-generator, growth-audit, growth-execution,
+roadmap-review, seo-aeo-audit — whose handlers call
+`verifyScheduledIssueCreated` (eight of them persist through the
+`safeCommitAndPr` handshake, which refuses to commit the run's artifacts until
+the issue is seen; roadmap-review commits through its own hook-guarded path
+and verifies the same way). Plus legal-audit, by operator
+decision (D1, plan review 2026-09-11): its issues are per-gap findings rather
+than reports, so it sits in the directive map and never in the sweep. The list
+lives in one leaf, `RUN_REPORT_CRONS` in `_cron-run-reports.ts`; the
+measurement script mirrors the label set and a parity test keeps the two in
+lockstep. The population key is "calls `resolveOutputAwareOk`", NOT the
+heartbeat's `TASK_INVENTORY` — the brainstorm keyed on that and was wrong by
+four.
+
+**First live contact: #8059.** Eleven hours after the gate merged,
+cron-community-monitor was denied on its prescribed filing and complied via
+exit 1 — a community digest relabelled `meta/machinery`. The gate did what it
+says; the population was mis-specified. For these crons the issue *is* the
+proof of output: a run that cannot file it is a heartbeat failure and a lost
+artifact, not a saved filing.
+
+**Why this is class-2 reasoning inside class 3.** The filing-surface table
+exempts workflow-YAML filings (class 2) because they are "mandated by
+construction" — a machine emits them on a schedule, no discretion is
+exercised, and the gate never reached them anyway. The run-report crons are
+mandated by construction in exactly that sense, but they file from inside the
+Inngest substrate (class 3), which the gate DOES reach. The three exits were
+designed for discretionary, LLM-authored findings; a filing whose absence fails
+the run is not one. So the exemption is the class-2 exemption, applied to the
+subset of class 3 that shares class 2's property, and to nothing else.
+
+**The fourth exit.** A directive line `run-report-label <label>` written by the
+substrate (`_cron-claude-eval-substrate.ts`) into the per-spawn
+`cron-allow.txt` — the ADR-058 grammar, the third directive shape — and
+honoured by the hook iff a REAL `--label` token (any of the six spellings,
+comma-anchored, dequoted) equals it. **Label only.** A `[Scheduled]`-prefixed
+title-half was considered and cut: campaign-calendar's REQUIRED filings are
+`[Content] Overdue: …`, so a title shape would have re-denied the one cron
+whose issue titles are not the report shape. The agent can neither read nor
+write `cron-allow.txt`, and the line is absent for every cron outside the map,
+so the exit is not narratable: nothing an interactive filer or an off-map cron
+can type reaches it. That is what makes it not the cut marker.
+
+**The file-and-vanish path is closed for non-report titles, and counted otherwise.** A finding that borrowed
+the label to pass the gate would still be a `scheduled-*` issue authored by
+`app/soleur-ai`. The sweeper closes only `[Scheduled]`-titled,
+`app/soleur-ai`-authored issues after `closeAfterDays`, so a label-borrowing
+finding with a non-report title is never swept and stays visible; and every
+filing under these labels is counted by measurement line 1c as a second
+irreducible floor — inside the gate's reach, not reducible by it — so a
+residue shows in the weekly numbers rather than vanishing.
+
+**`keep-open` carries one meaning on three surfaces.** It is the sweeper's
+kill-switch (`KILLSWITCH_LABELS`); the machinery drain excludes it from both
+pool counts and applies it to the standing measurement issue it creates; and
+measurement line 1d (`meta/machinery` minus `keep-open`) subtracts EVERY
+`keep-open` machinery filing in the window, not only the standing issue — a
+machinery finding an operator protects from the sweeper also leaves the
+exit-1 count. That is the intended reading: a filing a person chose to keep
+is no longer machinery exhaust the lever is measured against.
+
+**Rejected alternatives, each with its mechanical reason.**
+
+- *Once-per-run marker* (allow the first filing, deny the rest): `PreToolUse`
+  fires on allow, not on success. A denied-then-retried or failed first
+  `gh issue create` would consume the run's one allowance and the real filing
+  would be denied.
+- *Handler-side filing* (the TypeScript handler files the issue, the agent
+  never does): the issue is the proof-of-output. Moving it out of the agent's
+  run makes the verify step attest to the handler's own action, which is the
+  self-reported-success shape this repo keeps removing.
+- *`cronName` in argv or env*: ADR-058 keys per-cron policy on directive lines
+  in the file precisely so the hook never trusts a name the spawn could carry.
+- *A new closer*: the sweeper already carries the human-triage, kill-switch,
+  `action-required` and FAILED-report guards; a second closer would be a second
+  pin on every one of them.
+- *A hook-written deny log* (`.jsonl` under `.claude/`): `permission_denials[]`
+  in the result event already carries every deny — measured 2026-09-11 — so
+  the substrate reads it there and emits `SOLEUR_CRON_FILING_DENY`; a second
+  log would be a second copy of the same fact on a surface no runner can read.
+
+**Where the operative text lives.** The hook header
+(`cron-bash-allowlist-hook.mjs`, the EXIT 0 block) is canonical. This addendum,
+ADR-058's consequence bullet, and the `wg-defer-only-after-inline-triage` body
+are pointers to it, not restatements.
 
 ### Reconciliation with ADR-155
 
@@ -153,7 +255,7 @@ the mechanism supports.
 |---|---|---|
 | 1 | Interactive / `/work` / `/review` Bash `gh issue create` | `guardrails:require-filing-justification` |
 | 2 | `.github/workflows/*.yml` | **Not covered, deliberately.** Machine-authored infra alerts (drift, health, advisor scans) never traverse a `PreToolUse` hook and are mandated by construction. |
-| 3 | Inngest cron agent substrate | `cron-bash-allowlist-hook.mjs` — the same three exits |
+| 3 | Inngest cron agent substrate | `cron-bash-allowlist-hook.mjs` — the same three exits, plus the substrate-issued `run-report-label` directive (exit 0) for the run-report crons only (2026-09-11 addendum) |
 | 4 | `gh api …/issues -X POST` | `guardrails:require-filing-justification` (trigger widened) |
 | 5 | Octokit / MCP `create_issue` | **Not covered.** `github-tools.ts` and `mutate-workstream-issue.ts` call Octokit directly, and the hook's matcher is `Bash`. |
 
@@ -208,6 +310,74 @@ required field — is the form this design already rejected as enforcing nothing
 and because its failure mode is silence rather than a false pass. Recorded as
 the one place the design contradicts its own stated principle. The weekly rate measurement is the backstop: if the rate does not
 fall, the gate is being gamed, and that is visible within four weeks.
+
+### Addendum 2026-09-14 — the second instance: the per-PR workflow generator
+
+The issue backlog was the first generator this ADR named. #8149 records a
+second with the same shape, beside it:
+
+| Generator | Finite resource | Symptom (measured) |
+|---|---|---|
+| Adversarial review agents filing issues | operator attention / closing capacity | 1,455 open, +571 net over 8 weeks (Context above) |
+| 23 workflows declaring a `pull_request` trigger | the GitHub Free-plan runner pool (20 concurrent hosted jobs); runner availability binds 76% of `main` CI runs | 186 jobs queued / 6 running on 2026-09-10; ~56 declared jobs per PR push |
+
+The merge queue was re-evaluated as the fix and re-rejected — ADR-032's
+2026-09-14 amendment carries that ruling and the new capacity factor. What
+ships instead follows this ADR's ordering: reduce the stock once, then move the
+lever to the moment the generator acts.
+
+**The one-time reductions.**
+
+- *Fold.* `readme-counts`, `lint-conversations-update-callsites` and
+  `rule-metrics-shape` — each checkout + one script, 0.2 m measured, no
+  `needs:`, not a required context — become three steps of the existing
+  `lint-bot-statuses` advisory-lint bucket: −3 declared jobs per push, PR and
+  `main` alike; `ci.yml` 25 → 22 jobs. `encryption-posture` is deliberately
+  kept standalone on its #6901 / #6907 soak.
+- *PR-only `cancel-in-progress`.* `pr-quality-guards.yml`, `secret-scan.yml`,
+  `dependency-review.yml`, `legal-doc-cross-document-gate.yml` and
+  `skill-security-scan-pr-trailer.yml` had no concurrency block, so a
+  superseded push left their runs orphaned on the pool; they now carry
+  `ci.yml`'s exact block (per-ref on `pull_request`, per-SHA otherwise, cancel
+  only on `pull_request`) — up to 19 orphaned jobs reclaimed per superseded
+  push. Four workflows are excluded, each for a stated reason:
+  `tenant-integration.yml` holds the dev-Supabase mutex and a mid-run cancel
+  can leave fixture residue; `infra-validation.yml` and
+  `apply-sentry-infra.yml` run terraform against a remote backend and a cancel
+  mid-plan can leave a state lock; `constraint-gates.yml` is parity-locked to
+  the constraint-scaffold template. One accepted cost, recorded only here and
+  in the ledger row: `secret-scan.yml`'s weekly `schedule` arm keys on `main`
+  HEAD's SHA and so shares the push-arm group, so a same-SHA re-run of the push
+  run can drop a pending weekly scan (the workflow has no heartbeat; the next
+  push or the next week re-covers it).
+
+**The filing-time lever.** `scripts/pr-fanout-ledger.txt` lists every workflow
+that fires on a PR push with its declared job count, path filter, cancel
+behaviour and a consequence; `plugins/soleur/test/pr-fanout-ledger.test.sh`
+enumerates the tree and reds the `test` check when a firing workflow has no
+row, a row's workflow no longer fires, a declared job count exceeds its row,
+a `paths` / `cancel` flag disagrees with the file, or a block copied with
+`ci.yml`'s cancel ternary does not carry `ci.yml`'s group. "Fires on a PR
+push" includes the transitive case — a `workflow_run` chained off a firing
+workflow with no branch filter (`fix-constraints-stage-b.yml`) — and a
+`uses:` job counts its local callee's jobs, since it dispatches them. The
+ledger's column definitions are the single source; the test implements them. The discipline is the issue
+gate's: a shape check — the consequence must be non-empty and at least four
+words — not a semantic one. It cannot tell a true consequence from a written
+one; what it removes is the free filing, so no workflow can add a per-PR trigger
+without naming what it costs.
+
+**Deliberately not done, and ledgered with the reason.**
+
+- Path-filtering `constraint-gates.yml`. Its body is parity-locked to the
+  constraint-scaffold template (`parity.test.sh` check 4), and always-run is
+  the template's stated design — promotable to a required check without a
+  pending-forever `paths:` deadlock.
+- Deleting the disabled `claude-code-review.yml`. It has been
+  `disabled_manually` on GitHub's side since 2026-02-12 — a state invisible in
+  the tree — but `knowledge-base/legal/article-30-register.md` PA-33 carries a
+  dated member snapshot that counts it, with no parity test to catch the
+  stale. The ledger row makes the off-tree disablement visible instead.
 
 ## Consequences
 

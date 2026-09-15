@@ -188,12 +188,16 @@ def lint(paths: list[Path]) -> int:
     reject = False
 
     # The "demote a wg-* rule to a conditional sidecar" rung is gone with the
-    # sidecars (ADR-151) — there is nowhere to demote to. Per #6794 the retirement
-    # rung is not currently actionable either (the rules_unused_over_8w metric is
-    # a per-worktree fragmentation under-count), so trimming prose is the honest
-    # first move.
+    # sidecars (ADR-151) — there is nowhere to demote to. Retirement cannot be
+    # driven by telemetry either: rules_unused_over_8w counts ENFORCEMENT events,
+    # and an obeyed rule emits none, so the metric nominates the best-obeyed rules
+    # first (#8030). The levers that work are trimming prose and migrating a
+    # domain-scoped rule into the skill that already enforces it.
     remediation = (
-        "Trim rule prose, or retire a rule via scripts/retired-rule-ids.txt."
+        "Trim rule prose, or migrate a domain-scoped rule to its enforcing skill "
+        "(cq-agents-md-tier-gate, scripts/migrated-rule-ids.txt). Retirement is an "
+        "editorial call: rules_unused_over_8w counts enforcement events only and is "
+        "not retirement evidence (#8030)."
     )
 
     if b_always > B_ALWAYS_REJECT:

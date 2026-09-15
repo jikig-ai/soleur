@@ -207,6 +207,22 @@ describe("parseCommand", () => {
     expect(parseCommand(block)).toBe('curl -fsS https://x/health');
   });
 
+  test("Form A — a YAML-quoted inline scalar is the string INSIDE the quotes (#8149)", () => {
+    // 389 plans in the corpus write `command: "…"`. The runtime executed the
+    // quotes as part of the first word and returned rc=127 on every one of
+    // them; the mirror had stripped the pair all along. Symmetric pair only —
+    // a mismatched pair is not YAML and must reach the gate untouched.
+    const dq = `discoverability_test:\n  command: "bash scripts/prod-version-drift-b9-probe.sh"\n`;
+    expect(parseCommand(dq)).toBe("bash scripts/prod-version-drift-b9-probe.sh");
+    const sq = `discoverability_test:\n  command: 'printf 200'\n`;
+    expect(parseCommand(sq)).toBe("printf 200");
+    const mixed = `discoverability_test:\n  command: "printf 200'\n`;
+    expect(parseCommand(mixed)).toBe(`"printf 200'`);
+    // An interior quoted argument is untouched.
+    const inner = `discoverability_test:\n  command: curl -H "x: y" https://x/\n`;
+    expect(parseCommand(inner)).toBe('curl -H "x: y" https://x/');
+  });
+
   test("Form A — block scalar via `|`", () => {
     const block = [
       "discoverability_test:",
@@ -1791,6 +1807,24 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(norm, "normalize before the sandboxed exec").toBeLessThan(exec);
   });
 
+  test("F1d the runtime dequotes a YAML-quoted inline scalar inside the normalize window (#8149)", () => {
+    // parse-form-a.awk prints the `command:` line verbatim, so `command: "bash x"`
+    // reached `bash -c` with its quotes and every quoted command died rc=127 while
+    // the verb gate (which dequotes a COPY) passed. The strip must sit AFTER the
+    // trim and BEFORE the gate so every consumer sees the same string.
+    const norm = lines.findIndex((l) => /^CMD="\$\(printf '%s' "\$CMD" \| sed/.test(l));
+    const gate = lines.findIndex((l) => /^PROBE_GATE=/.test(l));
+    const dq = lines.findIndex((l) => /^\s*\\"\*\\"\) CMD="\$\{CMD#\\"\}"; CMD="\$\{CMD%\\"\}" ;;/.test(l));
+    const sq = lines.findIndex((l) => /^\s*\\'\*\\'\) CMD="\$\{CMD#\\'\}"; CMD="\$\{CMD%\\'\}" ;;/.test(l));
+    expect(dq, "double-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(sq, "single-quote strip arm must exist").toBeGreaterThan(norm);
+    expect(dq, "strip before the verb gate").toBeLessThan(gate);
+    expect(sq, "strip before the verb gate").toBeLessThan(gate);
+    // Single-line scalars only: a multi-line block scalar is never dequoted.
+    const guard = lines.findIndex((l, i) => i > norm && i < dq && /^if \[\[ \$CMD != \*\$'\\n'\* \]\]; then$/.test(l));
+    expect(guard, "newline guard must precede the case").toBeGreaterThan(norm);
+  });
+
   test("F2 AC2 — the sandbox carries the load-bearing binds", () => {
     const w = sandboxWindow();
     expect(w).toMatch(/--ro-bind "\$REPO_ROOT" "\$REPO_ROOT"/);
@@ -2294,7 +2328,24 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // the stage (`inngest-server-probe`) and re-measured. This is the #7873 shape the comment
   // above describes: a `credentials_required` that is TRUE and still lets a wrong command
   // through, because the waiver removes the only thing that would have executed it.
-  const BASELINE_DECLARED_PROBES = 11;
+  //
+  // 11 -> 12 (#8026, 2026-09-11): the archived plan
+  // `plans/archive/20260910-160213-2026-09-10-fix-bwrap-probe-self-report-plan.md`.
+  //   1. PLACEMENT - two-space child of `discoverability_test:`, read from the block.
+  //   2. TRUTH - the probe is `doppler run -p soleur -c prd_terraform -- bash
+  //      scripts/betterstack-query.sh --since 12h --grep '<the two ci-deploy markers>'`, needing
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. EXECUTED during that PR: it is the read that
+  //      returned the single 2026-09-09T22:31:56Z rollback row (message with no bwrap text) that
+  //      the whole change exists to enrich. A warehouse query, not a host login.
+  //   3. NO SUBSTITUTE - the property is "the DEPLOY_ROLLBACK / SANDBOX_PROBE_OK line reaches
+  //      Better Stack from the deploy host"; the sink has no anonymous read, and a grep over the
+  //      source file would verify the diff, not the delivery.
+  // The plan's ORIGINAL command named `scripts/followthroughs/bwrap-probe-selfreport-check.sh
+  // --dry-run`, a script that PR deliberately did not build - so Check 10 would have FAILed on a
+  // missing file rather than on the property. It was replaced (old command kept in a dated
+  // superseded note beneath the block), which is why the declaration is new although the plan
+  // predates it.
+  const BASELINE_DECLARED_PROBES = 12;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

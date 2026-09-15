@@ -80,7 +80,7 @@ attach_origin() {
   git init -q --bare -b main "$origin"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin HEAD:main
-  git -C "$work" fetch -q origin
+  git -C "$work" fetch --no-tags -q origin
 }
 
 # Seed review evidence AS A COMMIT ON THE CURRENT BRANCH.

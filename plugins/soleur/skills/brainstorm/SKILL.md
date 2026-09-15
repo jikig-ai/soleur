@@ -3,6 +3,10 @@ name: brainstorm
 description: "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/brainstorm` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:brainstorm`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- brainstorm-anti-bypass-protocol:start -->
 ## Anti-bypass protocol (load-bearing — especially Grok Build)
 
@@ -10,7 +14,7 @@ You are the **exploration orchestrator**. Whether entered via `/go` (default rou
 
 - **FORBIDDEN:** Product code (Write/Edit/Shell on implementation files). Brainstorm answers **WHAT**, not **HOW**.
 - **FORBIDDEN:** Ending after spec/brainstorm doc without a lifecycle handoff — artifacts alone are not deliverables.
-- **REQUIRED (Grok Build):** Invoke successors via slash commands — `/plan` (default) or `/one-shot` (when requirements are already clear). Do not read their SKILL.md and improvise.
+- **REQUIRED (Grok Build):** Invoke successors via slash commands — `/plan` (default) or `/one-shot` (when requirements are already clear). Read each successor's SKILL.md in this process and run it to completion — do not improvise a subset.
 - **Harness adapter:** `plugins/soleur/lib/harness.ts` — Grok uses `/plan`, `/one-shot`; Claude uses Skill tool (`soleur:plan`, `soleur:one-shot`).
 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
@@ -217,6 +221,8 @@ If the feature description references named external systems, prior issues, prio
 **"Resource X is exhausted, so guard operation Y" — trace whether Y actually CONSUMES X at the moment it runs, before scoping the guard.** A replace/swap/rotate-shaped operation **frees its own unit before taking one** and is therefore net-zero on the resource it appears to exhaust — the guard belongs on the *additive* path, if anywhere (and there it is usually redundant, since an additive create fails cleanly with zero blast radius). Also check WHICH vendor error code the cited incident actually threw: an *exhaustion* code (account-wide quota, fixed by a vendor form) and an *availability* code (per-DC stock, fixed by not pinning a DC) are different counters with different fixes, and a guard on the wrong one returns green while the failure happens. "No headroom" is intuitively alarming and reliably mis-aimed. **Why:** #6453 — a `free_slots == 0` preflight would have failed **every** recreate for no reason (terraform `-replace` destroys first, freeing its slot, then creates), and the cited incident #6393 threw `resource_unavailable` (hel1 DC stock), not `resource_limit_exceeded` (the cap); the wrong model survived the issue author, the CPO, and the platform-strategist. See `knowledge-base/project/learnings/2026-07-15-replace-shaped-ops-are-net-zero-on-the-resource-they-exhaust.md`.
 
 **An issue claiming an artifact "has no consumer" is a claim about a CONTRACT, and a contract has two sides.** Before scoping a new consumer, run two cheap probes: (1) `grep -rn "<artifact-path>" --include="*.ts" --include="*.yml" .` for existing readers; (2) read the producer's append instruction and the consumer's selection predicate side by side. An artifact with two live readers can still never drain if the producer writes below the section the consumer reads, or if the consumer selects on ABSENCE of a field most rows lack. **Why:** #6827 — `seo-refresh-queue.md` had two consumers; flagged rows landed below `## Refresh Schedule` while the consumer read only §1.x/§2.2/§2.1, and its "no `generated_date`" predicate made §1.1 Homepage permanently eligible. See `knowledge-base/project/learnings/2026-07-22-no-consumer-claim-is-a-producer-consumer-contract-mismatch.md`.
+
+**A gate's first live contact producing a mislabel is a question about the filer's exits, not the exit's price.** Before scoping "is exit N too cheap", enumerate the mandated-by-construction filers *inside each covered class* (a persistence handshake, a liveness contract, a prompt that says REQUIRED) and check each has an honest exit — a filer with none takes the free one at any price, so pricing changes the artefact, not the behaviour. **Why:** #8076 — ADR-216's "there isn't one" was refutable in one grep against `TASK_INVENTORY`. See `knowledge-base/project/learnings/2026-09-11-a-filer-with-no-honest-exit-takes-the-free-one-at-any-price.md`.
 
 #### 1.1 Research (Context Gathering)
 

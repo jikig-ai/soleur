@@ -10,12 +10,16 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
-      platform, platform.webapp, platform.engine, platform.infra.supabase,
+      platform, platform.webapp, platform.engine, platform.grokBuild, platform.infra.supabase,
       // platform.plugin is included explicitly so the delivery edges from
       // soleurMarketplace have a rendered target — without it the marketplace
       // renders as a disconnected box (ADR-182, #7471).
       platform.plugin, soleurMarketplace,
-      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser
+      anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser,
+      // #7980: the browser the agent drives is an L1 external system like every other
+      // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
+      // it renders connected rather than as a disconnected box (#7332).
+      playwrightMcp
 
     style element.tag == #external {
       color muted
@@ -29,7 +33,7 @@ views {
 
     include
       founder, emailSender, betaContact, contributor, publicReader,
-      platform.webapp, platform.engine, platform.plugin, platform.infra,
+      platform.webapp, platform.engine, platform.grokBuild, platform.plugin, platform.infra,
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
       platform.plugin.skills, platform.plugin.agents, platform.plugin.kb,
@@ -38,7 +42,15 @@ views {
       platform.infra.coordinator, platform.infra.scheduler,
       platform.infra.gitDataStore, platform.infra.sessionStore, platform.infra.workspacesVolume,
       anthropic, github, cloudflare, doppler, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, systemdUser,
-      connectedRepoPlugin, connectedRepoKb
+      connectedRepoPlugin, connectedRepoKb,
+      // #7980: playwrightMcp is an L1 external and belongs here like every other one. BUT
+      // `platform.plugin` is a COMPOUND node in this view (skills/agents/kb are included),
+      // and LikeC4 does not lift an edge from a non-included descendant onto a compound
+      // ancestor — measured on this render: with only playwrightMcp listed, its inEdges
+      // were [] (the same mechanism that leaves connectedRepoKb boxed above). So the
+      // guard component is included as well, at the same nesting depth as skills/agents/kb,
+      // and the three edges (claude/hooks -> snapshotGuard -> playwrightMcp) render (#7332).
+      platform.plugin.snapshotGuard, playwrightMcp
 
     style element.tag == #external {
       color muted
@@ -59,6 +71,9 @@ views {
       platform.plugin.cto, platform.plugin.cmo, platform.plugin.cpo,
       platform.plugin.archstrat, platform.plugin.evalharness,
       platform.plugin.constraintscaffold,
+      // #7980: both endpoints of the three guard edges (claude/hooks -> snapshotGuard ->
+      // playwrightMcp) must be listed or the edges do not render (#7332).
+      platform.plugin.snapshotGuard, playwrightMcp,
       platform.engine.claude, platform.engine.hooks, platform.plugin.kb,
       platform.engine.claude.registry, platform.engine.claude.binding, platform.engine.claude.adapter,
       platform.engine.claude.factory, platform.engine.claude.composition,

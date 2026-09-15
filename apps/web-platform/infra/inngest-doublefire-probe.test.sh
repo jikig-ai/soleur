@@ -63,8 +63,9 @@ test_valid_runs_single_page() {
   assert_eq "runs is an array of 2" "2" "$(echo "$out" | jq -r '.runs | length')"
   assert_eq "run 0 functionID projected" "fn-a" "$(echo "$out" | jq -r '.runs[0].functionID')"
   assert_eq "run 0 startedAt projected" "2026-07-08T10:00:00Z" "$(echo "$out" | jq -r '.runs[0].startedAt')"
-  # No reminder body / status leakage — only functionID + startedAt keys.
-  assert_eq "run object has exactly functionID+startedAt keys" "functionID,startedAt" \
+  assert_eq "run 0 run id projected (op=verify dedupes page overlap by it, #6178)" "run-1" "$(echo "$out" | jq -r '.runs[0].id')"
+  # No reminder body / status leakage — only id + functionID + startedAt keys.
+  assert_eq "run object has exactly id+functionID+startedAt keys" "id,functionID,startedAt" \
     "$(echo "$out" | jq -r '.runs[0] | keys_unsorted | join(",")')"
   rm -rf "$dir"
 }

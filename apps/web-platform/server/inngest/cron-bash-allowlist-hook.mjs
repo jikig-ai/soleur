@@ -45,6 +45,7 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
@@ -59,8 +60,11 @@ import { fileURLToPath } from "node:url";
 // measured 626:39 engineering-to-product skew. Covering only the interactive
 // path would have left the primary deliverable missing its primary population.
 //
-// The three exits mirror guardrails.sh exactly, so an agent that learns the
-// contract on one surface does not have to relearn it on the other.
+// Exits 1-3 mirror guardrails.sh exactly, so an agent that learns the
+// contract on one surface does not have to relearn it on the other. Exit 0
+// (the substrate-issued run-report directive, ADR-216 addendum) exists on THIS
+// surface only: it is keyed on a file the agent cannot read, which no
+// interactive filer has.
 //
 // This runs AFTER the allowlist match, so it only ever narrows: a cron whose
 // allowlist does not carry `gh issue create` is already denied above and never
@@ -71,11 +75,81 @@ import { fileURLToPath } from "node:url";
 // empty, which degrades exit 2 out of existence while looking like a clean run.
 // The sandbox's CWD is not guaranteed either. Same class as guardrails.sh
 // resolving its copy via ${BASH_SOURCE[0]%/*}.
-const FILING_TAXONOMY_PATH = fileURLToPath(
-  new URL("../../../../.claude/hooks/lib/user-surface-taxonomy.txt", import.meta.url),
-);
+//
+// NOT `new URL("…", import.meta.url)`: that spelling is the bundler's static
+// asset-reference syntax (Turbopack and webpack both), and this file is now in
+// the Next.js server bundle (the deny marker imports `filingShape`), so
+// `next build` tried to RESOLVE the taxonomy as a module and the Docker build
+// -- whose context is apps/web-platform, four levels below the file -- failed
+// with "Module not found" (#8074 post-merge release 34773058045; every CI
+// build passed because a full checkout has the file). A path joined at call
+// time is opaque to the bundler; inside the bundle it resolves nowhere, which
+// is the documented exit-2-does-not-apply degradation, and the bundle never
+// evaluates a filing anyway -- only the standalone `node <this file>` hook
+// does, from the sandbox's repo checkout.
+//
+// Computed LAZILY, not at module load: this file's "never throw" doctrine
+// guards main(), and a module-init throw in a bundle that leaves
+// `import.meta.url` undefined (esbuild's CJS output does) would take down
+// the whole importing route -- every cron -- rather than one hook run. The
+// lazy form throws, if ever, inside the exit-2 try/catch below (#8136 review).
+function filingTaxonomyPath() {
+  return resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../.claude/hooks/lib/user-surface-taxonomy.txt",
+  );
+}
 
-export function filingJustificationReason(tokens, readTaxonomy) {
+// Does any REAL label token in the (dequoted) segment carry `label`? Six
+// spellings — `--label v`, `-l v`, `--label=v`, `-l=v`, `-f labels[]=v`, and a
+// bare `labels[]=v` field — comma-split and comma-anchored so `foo/<label>` and
+// `<label>x` do not match. Shared by exit 1 (meta/machinery) and exit 0 (the
+// run-report directive) so the two exits cannot drift on syntax.
+export function labelTokenEquals(tokens, label) {
+  const has = (v) => typeof v === "string" && `,${v},`.includes(`,${label},`);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if ((t === "--label" || t === "-l") && has(tokens[i + 1])) return true;
+    if (t.startsWith("--label=") && has(t.slice("--label=".length))) return true;
+    if (t.startsWith("-l=") && has(t.slice("-l=".length))) return true;
+    if (/^(-f|--field|--raw-field)$/.test(t) &&
+        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
+        has(tokens[i + 1].slice("labels[]=".length))) return true;
+    if (t.startsWith("labels[]=") && has(t.slice("labels[]=".length))) return true;
+  }
+  return false;
+}
+
+// Which of the two filing shapes a (dequoted) segment is, or null. ONE
+// predicate, shared with the deny-marker (`cron-filing-deny-marker.ts`
+// imports it) so "what the gate denies" and "what the marker counts" cannot
+// drift. The api form: an issues endpoint token — trailing slash and query
+// string included, since gh routes `…/issues?x=1` and `…/issues/` to the same
+// create and a `$`-anchored match let both through (#8074 review) — plus a
+// POST signal in ANY position: `-X POST`, `--method POST`, `-XPOST`,
+// `--method=POST`, `--input <file>` (gh defaults to POST), or a `title=`
+// field (gh defaults to POST whenever a field is given).
+export function filingShape(tokens) {
+  if (tokens[0] !== "gh") return null;
+  if (tokens[1] === "issue" && tokens[2] === "create") return "create";
+  if (tokens[1] !== "api") return null;
+  const endpoint = tokens.some((t) =>
+    /(^|\/)repos\/[^/?]+\/[^/?]+\/issues\/?(\?[^/]*)?$/.test(t),
+  );
+  if (!endpoint) return null;
+  const post = tokens.some(
+    (t, i) =>
+      ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
+      t === "-XPOST" ||
+      t === "--method=POST" ||
+      t === "--input" ||
+      (/^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "")) ||
+      /^(--field=|--raw-field=|-f=)?title=/.test(t),
+  );
+  return post ? "api" : null;
+}
+
+export function filingJustificationReason(tokens, readTaxonomy, runReportLabel = null) {
   // TWO CREATE SHAPES, because this chokepoint's whole reason for existing is
   // the cron population -- and one of the cron allowlists grants the prefix
   // `gh api repos/jikig-ai/soleur/` outright.
@@ -86,41 +160,28 @@ export function filingJustificationReason(tokens, readTaxonomy) {
   // why -- this repo has a DOCUMENTED instance of an agent filing via `gh api`
   // after the `gh issue create` form was denied -- so leaving it open here
   // reopened a known route-around at the second of the two chokepoints.
-  const isCreate =
-    tokens[0] === "gh" && tokens[1] === "issue" && tokens[2] === "create";
-  const isApiIssue =
-    tokens[0] === "gh" &&
-    tokens[1] === "api" &&
-    tokens.some((t) => /(^|\/)repos\/[^/]+\/[^/]+\/issues$/.test(t)) &&
-    tokens.some(
-      (t, i) =>
-        ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
-        /^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "") ||
-        /^title=/.test(t),
-    );
-  if (!isCreate && !isApiIssue) return null;
+  const shape = filingShape(tokens);
+  if (shape === null) return null;
+  const isCreate = shape === "create";
+  const isApiIssue = shape === "api";
+
+  // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
+  // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
+  // whose run completion is verified by that issue's existence; the agent can
+  // neither read nor write the file, so the exit is not narratable. Label only
+  // — no title shape (campaign-calendar's REQUIRED filings are
+  // `[Content] Overdue: …`). The file-and-vanish path a label-borrowing finding
+  // could take is closed by the sweeper, which closes only `[Scheduled]`-titled
+  // `app/soleur-ai` issues, and the residue is counted by measurement line 1c.
+  if (runReportLabel && labelTokenEquals(tokens, runReportLabel)) return null;
 
   // EXIT 1 — the machinery ledger. Read a REAL flag token, never prose: the
   // tokens are already dequoted, so a --body that merely NAMES the flag stays
-  // inside one token and cannot be mistaken for it.
-  //
-  // Two syntaxes and comma-joined values, for the same reasons guardrails.sh
-  // records: `--label` is a cobra StringSlice so `--label a,b` is ordinary gh
-  // syntax, and the api form has no --label flag at all -- it spells the same
-  // thing `-f 'labels[]=meta/machinery'`. Anchoring each element between commas
-  // keeps `foo/meta/machinery` and `meta/machineryX` non-matching.
-  const hasMachineryLabel = (v) =>
-    typeof v === "string" && `,${v},`.includes(",meta/machinery,");
-  for (let i = 0; i < tokens.length; i++) {
-    const t = tokens[i];
-    if ((t === "--label" || t === "-l") && hasMachineryLabel(tokens[i + 1])) return null;
-    if (t.startsWith("--label=") && hasMachineryLabel(t.slice("--label=".length))) return null;
-    if (t.startsWith("-l=") && hasMachineryLabel(t.slice("-l=".length))) return null;
-    if (/^(-f|--field|--raw-field)$/.test(t) &&
-        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
-        hasMachineryLabel(tokens[i + 1].slice("labels[]=".length))) return null;
-    if (t.startsWith("labels[]=") && hasMachineryLabel(t.slice("labels[]=".length))) return null;
-  }
+  // inside one token and cannot be mistaken for it. Same six spellings and
+  // comma anchoring as exit 0 (`labelTokenEquals`), for the reasons
+  // guardrails.sh records: `--label` is a cobra StringSlice so `--label a,b` is
+  // ordinary gh syntax, and the api form spells it `-f 'labels[]=…'`.
+  if (labelTokenEquals(tokens, "meta/machinery")) return null;
 
   // The body corpus: the dequoted --body value, or the --body-file contents.
   let body = "";
@@ -152,7 +213,7 @@ export function filingJustificationReason(tokens, readTaxonomy) {
   // rather than breaking a cron that files honestly.
   let surfaces = [];
   try {
-    const raw = readTaxonomy ? readTaxonomy(FILING_TAXONOMY_PATH) : "";
+    const raw = readTaxonomy ? readTaxonomy(filingTaxonomyPath()) : "";
     surfaces = String(raw).split("\n").map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
   } catch { surfaces = []; }
@@ -176,9 +237,12 @@ export function filingJustificationReason(tokens, readTaxonomy) {
     }
   }
 
+  const rrHint = runReportLabel
+    ? `, or this cron's own run-report label ${runReportLabel} on a real ${isApiIssue ? "-f 'labels[]='" : "--label"} token`
+    : "";
   return isApiIssue
-    ? "filing names no user-visible consequence: add -f 'labels[]=meta/machinery', or -f 'body=...' carrying User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>"
-    : "filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>";
+    ? `filing names no user-visible consequence: add -f 'labels[]=meta/machinery', or -f 'body=...' carrying User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>${rrHint}`
+    : `filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>${rrHint}`;
 }
 
 export function allowDecision() {
@@ -283,6 +347,13 @@ function dangerousMetacharReason(command) {
   if (/`/.test(substScan)) return "backtick substitution";
   if (/\$\(/.test(substScan)) return "$(...) substitution";
   if (/\$\{/.test(substScan)) return "${...} expansion";
+  // A BARE `$NAME` expands too (double quotes do not stop it) and the spawn env
+  // carries the installation token and the API key (`buildSpawnEnv`), so
+  // `gh issue create --title "$GH_TOKEN"` would post the secret to the public
+  // repo with no file read at all. Deny any `$` that starts an expansion
+  // (`$name`, `$1`, `$?`, `$$`, `$@`, `$*`, `$#`, `$!`, `$-`); a literal `$`
+  // inside single quotes was stripped above and stays allowed.
+  if (/\$[A-Za-z_0-9?$@*#!-]/.test(substScan)) return "$VAR expansion";
   if (/<\(|>\(/.test(substScan)) return "process substitution";
   // control metachars: literal inside any quote → strip single AND double
   const ctrlScan = stripQuoted(command, { stripDouble: true });
@@ -485,6 +556,12 @@ export function parseAllowlist(lines) {
   const bash = [];
   const mcpAllow = new Set();
   let navigateOrigin = null;
+  // #8076 / ADR-216 addendum — the third directive shape. Written by the
+  // substrate ONLY for the crons whose run completion is verified by their own
+  // scheduled issue (`resolveOutputAwareOk` callers + legal-audit). Last match
+  // wins, like navigate-origin. Absent for every other cron, so the run-report
+  // exit below is unreachable there.
+  let runReportLabel = null;
   for (const line of lines) {
     const mcpMatch = /^mcp-allow\s+(\S+)$/.exec(line);
     if (mcpMatch) {
@@ -496,9 +573,14 @@ export function parseAllowlist(lines) {
       navigateOrigin = originMatch[1];
       continue;
     }
+    const rrMatch = /^run-report-label\s+(\S+)$/.exec(line);
+    if (rrMatch) {
+      runReportLabel = rrMatch[1];
+      continue;
+    }
     bash.push(line);
   }
-  return { bash, mcpAllow, navigateOrigin };
+  return { bash, mcpAllow, navigateOrigin, runReportLabel };
 }
 
 // PREFIX-SHAPED token secrets that must never ride a same-origin URL to the
@@ -574,7 +656,7 @@ export function decide(input, allowPrefixes) {
 
   // Split the file into bash prefixes + the per-cron mcp policy (#5199). A file
   // with no directive lines yields an empty mcpAllow set → mcp__* stays denied.
-  const { bash: bashPrefixes, mcpAllow, navigateOrigin } =
+  const { bash: bashPrefixes, mcpAllow, navigateOrigin, runReportLabel } =
     parseAllowlist(allowPrefixes);
 
   switch (tool) {
@@ -599,8 +681,12 @@ export function decide(input, allowPrefixes) {
         if (!segmentMatchesAllowlist(tokens.join(" "), bashPrefixes))
           return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
         // Narrows only: an allowlisted `gh issue create` must still justify.
-        const filingReason = filingJustificationReason(tokens, (f) =>
-          readFileSync(f, "utf8"),
+        // The run-report directive (exit 0) is threaded from the parsed file,
+        // never from the command or the environment.
+        const filingReason = filingJustificationReason(
+          tokens,
+          (f) => readFileSync(f, "utf8"),
+          runReportLabel,
         );
         if (filingReason) return denyDecision(filingReason);
       }

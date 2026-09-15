@@ -69,6 +69,7 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -611,6 +612,72 @@ describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
     expect(summary!).toMatch(/if\s+\[\s*"\$\{SSH_SKIP\}"\s*=\s*"true"\s*\]/);
     expect(summary!).toContain("SSH_STAGE=");
     expect(summary!).toContain("**SSH stage:**");
+  });
+});
+
+describe("git_data_host_create: the boot-signal poll is gated on the apply outcome (#8010)", () => {
+  // The poll used to be `if: always()`: on run 34822248580 a plan the birth gate REFUSED
+  // (apply skipped) still spent the full 10-minute budget and told the operator to re-dispatch.
+  // These arms pin the predicate and drive the Dispatch summary's verdict `case` under real
+  // bash across the outcome cross-product, so the fail-closed branches are exercised rather
+  // than string-matched.
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const job = extractJobBlock(wf, "git_data_host_create");
+  const apply = extractStep(job, /Terraform apply \(git-data birth\)/);
+  const poll = extractStep(job, /Poll for the git-data boot-completion signal/);
+  const summary = extractStep(job, /Dispatch summary/);
+
+  test("the apply and poll steps carry the ids the predicate and the summary read", () => {
+    expect(apply).not.toBeNull();
+    expect(poll).not.toBeNull();
+    expect(apply!).toMatch(/^\s*id:\s*apply\s*$/m);
+    expect(poll!).toMatch(/^\s*id:\s*poll\s*$/m);
+  });
+
+  test("the poll's if: line is the enumerated, cancellation-aware predicate — never always()", () => {
+    const ifLine = poll!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).toMatch(
+      /steps\.apply\.outcome == 'success' \|\| steps\.apply\.outcome == 'failure'/,
+    );
+    expect(ifLine!).not.toContain("always()");
+    expect(ifLine!).not.toContain("!= 'skipped'");
+  });
+
+  test("the summary verdict case fails closed on every unverified pair (executed under bash)", () => {
+    expect(summary).not.toBeNull();
+    const m = /if \[\[ -z "\$APPLY_OUTCOME"[\s\S]*?esac/.exec(summary!);
+    expect(m).not.toBeNull();
+    // Dedent the YAML block scalar so bash sees the script as the runner would.
+    const block = m![0].split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+    // [apply, poll, rc, annotation stdout must contain ("" = must print nothing)]. The
+    // annotation column is what tells the cancelled arm from the `*` default, which share rc 0.
+    const table: Array<[string, string, number, string]> = [
+      ["success", "success", 0, ""],
+      ["success", "failure", 0, ""],
+      ["success", "skipped", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["success", "cancelled", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["skipped", "skipped", 0, "::notice::boot-signal poll SKIPPED"],
+      ["failure", "failure", 0, ""],
+      ["failure", "skipped", 0, ""],
+      ["cancelled", "skipped", 0, "::warning::apply was cancelled mid-flight"],
+      ["neutral", "skipped", 0, "::warning::unrecognised outcome pair"],
+      ["", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["success", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["", "skipped", 1, "::error::apply/poll outcome is EMPTY"],
+    ];
+    for (const [a, p, rc, note] of table) {
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", block], {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", APPLY_OUTCOME: a, POLL_OUTCOME: p },
+        encoding: "utf8",
+      });
+      expect(`${a}/${p} -> rc=${r.status}`).toBe(`${a}/${p} -> rc=${rc}`);
+      if (note === "") expect(`${a}/${p} -> [${r.stdout}]`).toBe(`${a}/${p} -> []`);
+      else expect(`${a}/${p} -> ${r.stdout}`).toContain(note);
+    }
   });
 });
 

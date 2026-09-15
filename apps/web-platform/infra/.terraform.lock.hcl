@@ -23,6 +23,28 @@ provider "registry.terraform.io/betterstackhq/better-uptime" {
   ]
 }
 
+provider "registry.terraform.io/betterstackhq/logtail" {
+  version     = "11.2.0"
+  constraints = "~> 11.2"
+  hashes = [
+    "h1:MvIif4k8YrO0XIuaX5cQDb3z35Pvc7i5gwOv3D9N6lM=",
+    "h1:zsvlJwqrz20KiazrfYPSwdQbwsbzB1rHXgulJ05oMn0=",
+    "zh:00546e61b8f871e4223d45142466b163ad197a5e9495e09cdcc8cc3d014780c9",
+    "zh:09404b5e0a23353f2ac35daf53be5e729da799a1cfe3df6afa822a67b8324f43",
+    "zh:0d4434dd617dd61b2a6b7efbd5a12ef55537a671dd3751e33aa756b138b25c2a",
+    "zh:13cfbb77e6d0325e7b916729cf17fe2a3ea91f5cd9b4ca2a0dbc0d50af9a21b3",
+    "zh:a479e3361e47a8281f9939df9de223e946134d35cb90714b961ae54afd4a839a",
+    "zh:b1bdde84e4b8ca0ec23ae2653e2a6c265d31b3ae483349999f93baab40d43563",
+    "zh:bbb8332dba06da78a477b642f4005a4f284f4f6a21612ac97fc535ea0515f738",
+    "zh:bcdd765033e2791e2db6bbdf4eb5cc01b34acd5fda1520da9d6d47fc91c2ec07",
+    "zh:d4a45d112b8c32e7390eff6fa0939658fe19dc5ca692319921b49295092cd2c6",
+    "zh:e20e2b456849dad35e92cf624b51e6012f1bed5621f036eef03c7ec07bb776b8",
+    "zh:e52266b2fa769b8de6f61595fe9e2bc660ca6683be9407023d6f72972afda9c8",
+    "zh:ec72f672ff1c50c45cd2797fbc98a67ca66ea505eb561584f20142c5dd35aa36",
+    "zh:f881bab22c243cdd5de97084756e99399b644fa753fd107c91b0e6949bb4f9fc",
+  ]
+}
+
 provider "registry.terraform.io/cloudflare/cloudflare" {
   version     = "4.52.7"
   constraints = "~> 4.0"

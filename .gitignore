@@ -27,6 +27,8 @@ __pycache__/
 *.pyc
 .codex/*
 !.codex/config.toml
+.devin/*
+!.devin/config.json
 .worktrees
 .claude/settings.local.json
 .mcp.local.json

@@ -288,14 +288,21 @@ assert_exit "Test 12b: UNMAPPED homoglyph is a version-controlled known gap (exi
 
 # ---------------------------------------------------------------------------
 # AC6 — no literal invisibles committed anywhere in the two touched skills.
+# Exclusion: skills/legal-generate/references/templates/ is upstream-vendored
+# corpus whose bytes are pinned to upstream blobs in the skill NOTICE — the
+# blob pin is a strictly stronger integrity control than this grep (any local
+# edit, invisibles included, fails vendor-pin-integrity), and verbatim byte
+# fidelity is what keeps drift detection meaningful.
 # ---------------------------------------------------------------------------
 if grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null | grep -q .; then
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/' | grep -q .; then
   echo "FAIL: AC6: literal invisibles committed (must be chr()/escapes only)"
   grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/'
   FAIL=$((FAIL + 1))
 else
   echo "PASS: AC6: no literal invisibles committed in incident/legal-generate skills"

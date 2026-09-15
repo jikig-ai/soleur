@@ -4,7 +4,7 @@
 - **Date:** 2026-07-27
 - **Issue:** #6977
 - **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27); #7025 (DC-6 — the
-  rung-2 rehearsal route, shipped unfired, 2026-07-29)
+  rung-2 rehearsal route, shipped unfired, 2026-07-29); #8128 (item 8 discharged — 2026-09-13)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -223,6 +223,63 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Addendum — #6680 (2026-09-15): F9's "operator root key" does not exist
+
+The #8043 disposition's F9 row says the root paths for the real fence hook are "a host replace
+(cloud-init) or the operator root key the cutover already uses". The second half is false: the
+cutover never held a root key on git-data (ADR-220, Context). A host replace is the only root
+delivery path for the real fence hook. The same stale claim ("the operator root path the cutover
+uses") sits in the comments of the hash-bound `git-data-pre-receive.sh` and
+`git-data-pre-receive-placeholder.sh`. They are left untouched here,
+because editing them moves the rung-2 hash, and the fix is tracked in #8189.
+
+### Disposition — #8128 (2026-09-13): item 8 discharged — the banner is cleared
+
+| Item | Status |
+|---|---|
+| 8 — clear the banner | **DONE** by PR #8128, on the sequence #8043 prescribed and nothing shorter: a fresh rehearsal dispatched from `main` `15fd63aff` (run [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), `dry_run=false`, environment-approved, verdict PASS — `stage:boot_complete` with `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes nft_metadata_drop=yes`, no `level:fatal`, teardown verified against the Hetzner API); its evidence committed ALONE in PR #8126 (Guard 4 provenance PASS, template sha256 `5c50797be8392fe551a940ae04555c52a3f4409cf249ed11bb1280fec783d5b1`, equal to `main`); then this banner PR. `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` (run-pinned liveness window on a quiet project; the gate ignores that key — #8010). The runbook now opens with a release record in the banner's place. |
+
+**Checklist effect.** Every item is now DONE, DISCHARGED, or recorded NOT SATISFIABLE AS
+WRITTEN (item 7). #7025's second checkbox reads "tick ADR-149 checklist item 7" — written
+before the #6982 disposition recorded item 7 as not satisfiable; the item that checkbox
+describes (the banner clear) is item 8, and this row is its tick. Nothing in this change
+dispatches a birth: the only control left on
+`apply_target=git-data-host-create` is the `web-platform-infra-apply` environment approval,
+measured `prevent_self_review: false`, one reviewer, `can_admins_bypass: true` — one human, not
+two parties — plus the three static interlocks, which self-invalidate the moment a bound input
+moves.
+
+### Disposition — #8043 (2026-09-11): six hash-bound hardening items, and what they cost the evidence
+
+Six defects on the git-data host were fixed as ONE change because each edits a file inside the
+13-file `RUNG2_TEMPLATE_SHA256` binding: F6 (a comment framing the three SSH pubkeys as
+identity-shaped), F7 (the `git` account owned its own authorization map), F8 (an Art. 17 erasure
+could report success over an unmounted store), F9 (`core.hooksPath` pointed at a git-writable
+directory), F10 (five wrapper comments claiming `AcceptEnv` is empty), F11 (the stage's only ssh
+unit action named `sshd`, which ubuntu-24.04 does not have). Moving them together costs one
+fresh rehearsal instead of six. Four decisions belong here rather than in the plan:
+
+| Decision | Record |
+|---|---|
+| **The ssh unit is `ssh`, and only git-data is edited** | ubuntu-24.04 ships ssh socket-activated: `ssh.socket` is `Accept=no` (one long-lived `sshd -D`, so no per-connection re-read makes a drop-in effective), and `Alias=sshd.service` is instantiated only when `ssh.service` is enabled — under socket activation, never. `systemctl restart sshd` therefore failed rc=5 on every boot, fail-open. The rename is safe on a console-less host because `ssh.socket` carries no `Conflicts=ssh.service` (the listener stays bound; a failed start does not close port 22); it adds a bounded wait (`Type=notify` + `ExecStartPre`, ≤ `DefaultTimeoutStartSec` 90 s) above the LUKS stage, to be read from the fresh rehearsal's boot wall-clock delta. **Fleet decision — git-data only:** `hcloud_server.web` has `ignore_changes = [user_data]` (an edit is inert); `inngest` and `registry` are ForceNew on LIVE hosts (a destructive replace); `grok_dogfood` renders no ssh action. The siblings load the drop-in at the daemon's first start regardless, so they are *noisy, not unhardened* — except inngest's next `runcmd` item, `inngest-boot-phone-home.sh sshd-restarted`, a positive attestation for an action that fails every boot. Filed at load-bearing severities (#8043 FR17). |
+| **A voided attestation is DELETED, never rewritten** | `git-data-rung2-boot-evidence.env` was deleted by this change rather than edited to the moved digest. Editing would make a void attestation look freshly re-rehearsed — the exact failure the gate exists to prevent and one it structurally cannot catch: `git_data_rung2_rehearsal_gate`'s only provenance check is a regex that `RUNG2_EVIDENCE_URL` *looks like* an Actions run URL; it never fetches the run (#8010). Deletion is fail-closed in both directions: the gate HOLDs on an absent file, and the CI freshness step (advisory — `deploy-script-tests` is not a required check) returns to its dormant-by-design arm instead of reddening on the moved hash. "Rehearse first" was not available either: the rehearsal environment deploys from `main` only, so the evidence could not be refreshed before the change landed. A provenance gate now enforces the shape (birth-time arm inside the rehearsal gate; advisory PR-range arm in CI); the multi-commit residual — a bound-file edit in one commit and the hash in another, landed by any non-squash method — is #8010's. |
+| **The hash binds SOURCE, not the render** | `git_data_rung2_user_data_sha256()` hashes the template and the nine payloads as committed, while `local.git_data_rationale_strip` (ADR-152) strips comment lines at render time. So a comment-only edit (F6, F10) that never reaches the host voids a paid attestation exactly as a code edit does — which is why this batch had to be six items wide, and why a future rung-2 evidence design should consider binding the RENDER. Recorded as a finding, not changed here. |
+| **The `git` login shell is a real shell, not git-shell** | Found at review (measured in the pinned image): sshd runs a `command=` as `<login shell> -c "<command>"`, and git-shell accepts only its four built-ins, so with `shell: /usr/bin/git-shell` every forced command — transport, provision, and the Art. 17 erasure — exited 128 `fatal: unrecognized command`. Nobody had ever connected to the host, so nothing had measured it; the ownership suite's runtime arm created its user with `/bin/sh` and could not see it either. Now `shell: /bin/sh`, the bootstrap reads the shell back and refuses a restricted one, the suite creates its user with the template's shell and runs a REAL forced command through sshd (R9), and ADR-068's "per-key `command=` overrides the login shell" is corrected. The confinement is the three-line forced-command map the authorization gate pins; a restricted shell only decided whether the forced command could run at all. Pre-existing, hash-bound, folded into this batch for the same reason the batch exists. |
+| **F9 retires the pipeline-iterable hook delivery** | With `$HOOKS_DIR` at `root:git 0750` and `pre-receive` installed `root:root`, no git-uid channel can deliver the real CAS fence that `git-data-pre-receive-placeholder.sh` says "ships via the web-platform deploy pipeline" (no workflow references it; it was never built). The only root paths are a host replace (cloud-init) or the operator root key the cutover already uses. Recorded so a future author does not loosen F9 to make a git-uid delivery work. |
+| **The authorization-map gate's ownership arm was measured wrong and flipped** | The arm required `owner: git:git` on the rationale that any other owner is "unreadable by sshd or writable by a second principal". Measured in the pinned image: a `root:root 0644` map in a `root:git 0750` `.ssh` authenticates; `root:root 0600` does NOT (sshd opens the file under the target user's uid — "Permission denied", every push refused). The arm now requires `root:root` / `'0644'` (checklist item 10's control, tightened; the three-distinct-keys assertion is unchanged). |
+
+| **Review pass (#8052): four host-trust seams closed while the hash was already moving** | The ten-seat review measured, in the pinned image: (1) root's weekly gc set `safe.directory=$REPO_ROOT/*` system-wide, and the trailing-`/*` form needs git ≥ 2.46 — 24.04 ships 2.43.0, where it matches nothing, so every run failed every repo (rc 128 "dubious ownership") and reported success; `git-data-gc.sh` now passes `-c safe.directory="$repo"` per command and `gc_report` is on the warning rule. (2) The gc lock sat in `/var/lock` (`/run/lock`, 1777): a git-uid pre-created file makes root's open fail under `fs.protected_regular`; moved to `RuntimeDirectory=git-data-gc`. (3) A repo-local `core.hooksPath` (git-writable) outranks the system value the bootstrap sets, so code-exec-as-`git` could unfence one workspace without touching the root-owned hook; the transport wrapper now execs `git -c core.hooksPath=$HOOKS_DIR <verb>`, the one scope repo config cannot override. (4) The transport wrapper — the forced command that WRITES user source — had none of the store-mounted/root-on-store guard provision and remove carry; it does now, with `.cutover-freeze` honoured by all three, `rm -rf --one-file-system` on the erasure, and the per-workspace lock never unlinked (unlink-while-held let a sibling hold a fresh inode). Each is hash-bound; landing them here costs nothing the batch was not already paying. |
+
+**Checklist effect.** Items 1–7, 9 and 10 are unchanged in status. The rung-2 evidence that
+satisfied item 8's precondition (landed by #8002 from run 33888071954, dated 2026-09-04 —
+the ADR's last word on item 8 before this disposition was #7025's "unproducible") is void by
+construction (the template moved) and has been deleted; item 8 (#7025) is therefore
+**re-armed**, and since this change its precondition also carries the evidence's commit
+PROVENANCE (Guard 4: the evidence's last commit must touch no bound file, read from a
+non-shallow checkout) — the sequel is a fresh rehearsal dispatched
+from `main`, its evidence PR, then the banner PR, then the birth. Nothing in this change
+dispatches a rehearsal or a birth.
+
 ### Disposition — #8009 (2026-09-10)
 
 | Item | Status |
@@ -236,7 +293,7 @@ repository. An earlier draft said "impossible"; that overstated it.
 | 1 — emitter + `sentry_dsn` threaded | **DONE.** One `/usr/local/bin/git-data-emit` (ADR-147's #6982 addendum records why it is a file and not an inline function). |
 | 2 — credential reachable in the token's single-config scope | **DONE, and it found a live boot-breaker.** The probe measured that `doppler run --config prd` under a `prd_git_data`-scoped token **exits 1** with `GIT_DATA_LUKS_KEY` absent — so `doppler run` was exiting BEFORE exec'ing the LUKS heredoc, its `set -euo pipefail` ran zero times, and the host would have booted dark with sshd up. Both invocations corrected to `--config prd_git_data`. This is exactly the "dark by construction" trap this item exists to catch, and it was sitting inside the file the interlock inspects. |
 | 3 — new addresses registered | **DONE, and the item understated the work: there are SIX sites, not three.** The gate carries `def allow:` (a PERMISSION set) *and* a separate hardcoded PRESENCE loop (a COMPLETENESS set) that nothing extracted, so a three-of-four edit was fully green — an address PERMITTED to change but not REQUIRED to appear, which is Residual 2's harm hiding behind a PASS. Set is 18 → 20. |
-| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()`). A producer with no reader is not a signal. |
+| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()` at the time; since PR #8171 gated on the apply step's outcome — it runs after a green or failed apply, never after a skipped one). A producer with no reader is not a signal. |
 | 5 — `GIT_DATA_SSH_HOST` | **SHIPPED, BOTH CONSTRAINTS MET.** `doppler_secret.git_data_ssh_host` ships and its `OPERATOR_APPLIED_EXCLUSIONS` entry lands in the same change (second constraint). The first constraint — single-source from `hcloud_server_network.git_data.ip` — is now met **as written**: the value reads that computed attribute. #6982's first draft shipped `local.git_data_private_ip` and recorded the divergence as DC-5 on the grounds that the computed attribute is unappliable pre-birth; **review refuted that** and the divergence was reversed before merge. See the DC-5 reversal note below. |
 | 6 — firewall entailment | **ALREADY DISCHARGED on `main`**, verified rather than assumed: the gate splits the attachment out of the entailed loop and asserts the OUTCOME (`server_ids` ends at length 1). No code change. |
 | 7 — replace the interlock mechanism (DC-2) | **NOT SATISFIABLE AS WRITTEN — recorded here per this item's own instruction.** #6982 ships the emitter as a FILE inside `user_data` (`/usr/local/bin/git-data-emit`), not as a Terraform resource: git-data has no bake path, so there is no resource to assert. ADR-147's #6982 addendum records that divergence. Per item 7's closing clause the `${sentry_dsn}`-pinned sentinel therefore **stays exactly as shipped**, and this recording is the precondition item 7 places on clearing item 8. |

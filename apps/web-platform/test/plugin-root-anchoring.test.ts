@@ -17,13 +17,17 @@ import { resolve } from "node:path";
  *      on the review path the git root IS the reviewed party's tree.
  *
  * Canonical form: bare `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`, QUOTED.
+ * Dual-harness alias (go.md session-start only): `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`
+ * then `"${ROOT}/<payload-relative-path>"`. The assignment must precede the
+ * invocation in the same fence, and must not put a CWD default on CLAUDE_PLUGIN_ROOT.
  * Rejected: `${CLAUDE_PLUGIN_ROOT:-…}` and `${CLAUDE_PLUGIN_ROOT:?…}`. Neither is
  * the literal token, so neither is substituted; the `:-` form then expands to a
  * customer-controlled relative path (the reported bug). Measured 2026-08-12
  * (#7450): the loader substitutes the bare token at DELIVERY time — `go.md` ships
  * `${CLAUDE_PLUGIN_ROOT}` and arrives carrying the absolute installed root while
  * the shell environment has no such variable — which is why the exact-literal
- * requirement is a fact rather than an inference.
+ * requirement is a fact rather than an inference. `${ROOT}` is assigned in-fence
+ * from that substituted token (Claude) or from GROK_PLUGIN_ROOT (Grok).
  *
  * WHY THE SKILLS AXIS NEEDS ITS OWN EXTRACTOR. The command surface invokes
  * producers directly (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"`), so a
@@ -78,6 +82,10 @@ const SENTINEL_LITERAL =
 const PREFLIGHT_ANCHOR = '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"';
 
 const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
+/** Dual-harness alias after ROOT_ASSIGN_LITERAL in the same fence (go.md). */
+const ROOT_ANCHOR_PREFIX = "${ROOT}/";
+const ROOT_ASSIGN_LITERAL = 'ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"';
+const ROOT_PREFLIGHT_ANCHOR = '"${ROOT}/.claude-plugin/plugin.json"';
 
 /**
  * Used by P7 only. P6 (presence-guard parity) deliberately spans the WHOLE command
@@ -258,15 +266,40 @@ function parse(
   return { invocations, fences, fencesBalanced, hasBashFence };
 }
 
+/** Payload-relative path after a recognized plugin-root prefix, or null. */
+function pluginRel(operand: string): string | null {
+  const bare = unquote(operand);
+  if (bare.startsWith(ANCHOR_PREFIX)) return bare.slice(ANCHOR_PREFIX.length);
+  if (bare.startsWith(ROOT_ANCHOR_PREFIX)) return bare.slice(ROOT_ANCHOR_PREFIX.length);
+  return null;
+}
+
 /** True when the operand escapes the payload via `..` after normalization. */
 function escapesPayload(operand: string): boolean {
-  const rel = unquote(operand).slice(ANCHOR_PREFIX.length);
+  const rel = pluginRel(operand);
+  if (rel === null) return true;
   const abs = resolve(PAYLOAD_ROOT, rel);
   return !abs.startsWith(PAYLOAD_ROOT + "/");
 }
 
 function isAnchored(operand: string): boolean {
-  return unquote(operand).startsWith(ANCHOR_PREFIX);
+  return pluginRel(operand) !== null;
+}
+
+/**
+ * `${ROOT}/…` is only an anchor when the same fence first assigns ROOT from
+ * GROK_PLUGIN_ROOT then CLAUDE_PLUGIN_ROOT, with no CWD default. A bare
+ * `${ROOT}` with no assignment is the #7442 CWD-relative hazard again.
+ */
+function isSafelyAnchored(inv: Invocation, fences: Fence[]): boolean {
+  const bare = unquote(inv.operand);
+  if (bare.startsWith(ANCHOR_PREFIX)) return true;
+  if (!bare.startsWith(ROOT_ANCHOR_PREFIX)) return false;
+  if (inv.fenceIdx === -1) return false;
+  const fence = fences[inv.fenceIdx];
+  const rel = inv.lineIdx - (fence.startIdx + 1);
+  const assignIdx = fence.body.findIndex((l) => l.includes(ROOT_ASSIGN_LITERAL));
+  return assignIdx !== -1 && assignIdx < rel;
 }
 
 /**
@@ -343,7 +376,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const violations: string[] = [];
     for (const p of parsed) {
       for (const inv of p.invocations) {
-        if (isAnchored(inv.operand)) continue;
+        if (isSafelyAnchored(inv, p.fences)) continue;
         if (monorepoGatedArea(inv, p.fences)) continue;
         violations.push(`${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
       }
@@ -365,9 +398,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // An unquoted expansion word-splits on an install path containing a space
     // (measured: `/mnt/c/Users/First Last/…`), and the split prefix is what gets
     // executed. The preflight cannot see this — it passes, then the run breaks.
-    const unquoted = allInvocations
-      .filter((inv) => isAnchored(inv.operand) && !/^["']/.test(inv.operand))
-      .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
+    const unquoted = parsed.flatMap((p) =>
+      p.invocations
+        .filter((inv) => isSafelyAnchored(inv, p.fences) && !/^["']/.test(inv.operand))
+        .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`),
+    );
     check(unquoted).toEqual([]);
   });
 
@@ -375,7 +410,8 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const bad: string[] = [];
     for (const inv of allInvocations) {
       if (!isAnchored(inv.operand)) continue;
-      const rel = unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+      const rel = pluginRel(inv.operand);
+      if (rel === null) continue;
       // Containment first: `resolve()` normalizes `..` straight through the
       // payload boundary, so a `${CLAUDE_PLUGIN_ROOT}/../../x` operand would
       // otherwise land on a real repo-root file and be certified resident.
@@ -407,15 +443,20 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // whole preflight block is deletable with the suite green.
     const missing: string[] = [];
     for (const p of parsed) {
-      const anchored = p.invocations.filter((inv) => isAnchored(inv.operand));
+      const anchored = p.invocations.filter((inv) => isSafelyAnchored(inv, p.fences));
       if (anchored.length === 0) continue;
       const src = readFileSync(p.file, "utf8");
-      if (!src.includes(PREFLIGHT_ANCHOR)) {
+      const hasClaudePreflight = src.includes(PREFLIGHT_ANCHOR);
+      const hasRootPreflight = src.includes(ROOT_ASSIGN_LITERAL) && src.includes(ROOT_PREFLIGHT_ANCHOR);
+      if (!hasClaudePreflight && !hasRootPreflight) {
         missing.push(p.file.replace(REPO_ROOT + "/", ""));
         continue;
       }
       // Ordering: the preflight must precede the first anchored invocation.
-      const preflightIdx = src.split("\n").findIndex((l) => l.includes(PREFLIGHT_ANCHOR));
+      const lines = src.split("\n");
+      const preflightIdx = lines.findIndex(
+        (l) => l.includes(PREFLIGHT_ANCHOR) || l.includes(ROOT_PREFLIGHT_ANCHOR),
+      );
       const firstAnchored = Math.min(...anchored.map((inv) => inv.lineIdx));
       if (!(preflightIdx < firstAnchored)) {
         missing.push(`${p.file.replace(REPO_ROOT + "/", "")} (preflight below first producer)`);
@@ -441,7 +482,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         // Fence bodies only: Phase 0 prose quotes ADR-179's worked examples as
         // inline spans. Those are documentation, not invocations, and demanding
         // guards on them makes the shortest fix "delete the ADR prose".
-        if (inv.fenceIdx === -1 || !isAnchored(inv.operand)) continue;
+        if (inv.fenceIdx === -1 || !isSafelyAnchored(inv, p.fences)) continue;
         checked += 1;
         const fence = p.fences[inv.fenceIdx];
         // The guard must PRECEDE the invocation it guards, not merely share a fence
@@ -488,7 +529,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const producers = (p?.invocations ?? []).filter(
       (inv) => inv.fenceIdx !== -1 && isAnchored(inv.operand),
     );
-    const relOf = (inv: Invocation) => unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+    const relOf = (inv: Invocation) => pluginRel(inv.operand) ?? unquote(inv.operand);
     const rels = new Set(producers.map(relOf));
 
     // Non-vacuity BEFORE comparing: `∅` equals `∅`.
@@ -608,9 +649,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     if (!p) violations.push("go.md is absent from the parsed command surface");
 
     for (const { producer, marker } of REQUIRED) {
-      const inv = (p?.invocations ?? []).find(
-        (i) => i.fenceIdx !== -1 && unquote(i.operand) === `${ANCHOR_PREFIX}${producer}`,
-      );
+      const inv = (p?.invocations ?? []).find((i) => {
+        if (i.fenceIdx === -1) return false;
+        const bare = unquote(i.operand);
+        return bare === `${ANCHOR_PREFIX}${producer}` || bare === `${ROOT_ANCHOR_PREFIX}${producer}`;
+      });
       if (!inv) {
         violations.push(
           `GO.MD INVOCATION MISSING: ${producer} — this assertion pins its guard; if the ` +
@@ -668,8 +711,16 @@ const GATE_SCRIPT_EXTRAS: ReadonlySet<string> = new Set(["token-efficiency-repor
  * but it IS outside the guard's population, so nothing asserts it stays that way".
  * Being in the population means the day one of them acquires a SKILL.md reference, the
  * anchoring rule applies to it without anyone remembering to widen this file.
+ *
+ * WIDENED again by #7980: `playwright-mcp-redact-proxy.py` is the stdio relay that
+ * rewrites Playwright-MCP tool results through `redact-a11y-snapshot.py` in flight.
+ * Its basename does not match `redact-*`, and choosing a non-matching name to stay
+ * out of this population was an evasion the architecture review caught — the proxy
+ * IS a gate script (it decides what reaches the transcript), so it is admitted by
+ * name and `agent-browser/SKILL.md`'s `.mcp.json` shape must reference it through
+ * the bare anchor like every other gate.
  */
-const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
+const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py)$/;
 
 /**
  * The gate references this corpus is expected to contain, as an IDENTITY SET.
@@ -683,10 +734,11 @@ const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
  *
  * Sorted `<repo-relative SKILL.md> -> <basename>` with duplicates retained, so a
  * second reference from the same file is also a diff. Derived with:
- *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|token-efficiency-report\.sh)' \
+ *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py|token-efficiency-report\.sh)' \
  *     -- 'plugins/soleur/skills/ * /SKILL.md'    (spaced: a literal glob would close this comment)
  */
 const EXPECTED_GATE_REFS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md -> playwright-mcp-redact-proxy.py",
   "plugins/soleur/skills/agent-browser/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/cf-token-scope/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/compound/SKILL.md -> token-efficiency-report.sh",

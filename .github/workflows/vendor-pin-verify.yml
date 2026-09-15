@@ -15,6 +15,8 @@ on:
       - "plugins/soleur/skills/gdpr-gate/references/**"
       - "plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh"
       - "plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+      - "plugins/soleur/skills/legal-generate/NOTICE"
+      - "plugins/soleur/skills/legal-generate/references/**"
       - ".github/workflows/vendor-pin-verify.yml"
 
 permissions:
@@ -32,4 +34,37 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh --verify-upstream
+          set -euo pipefail
+          fails=0
+          conforming=0
+          # Schema-keyed enrollment: a vendoring bundle is a skill NOTICE
+          # whose frontmatter parses AND declares `upstream` +
+          # `pinned-commit`. Prose attribution NOTICEs without frontmatter
+          # (e.g. incident/NOTICE) are skipped — the same predicate the
+          # drift cron and vendor-bundle-coverage guard use (#8122).
+          for notice in plugins/soleur/skills/*/NOTICE; do
+            upstream=$(NOTICE_FILE="$notice" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field upstream 2>/dev/null || true)
+            pinned=$(NOTICE_FILE="$notice" bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field pinned-commit 2>/dev/null || true)
+            if [[ -z "$upstream" || -z "$pinned" ]]; then
+              echo "::notice file=$notice::no vendoring frontmatter (upstream/pinned-commit) — skipping; not a vendored bundle"
+              continue
+            fi
+            conforming=$((conforming + 1))
+            echo "Verifying $notice (upstream $upstream @ $pinned)"
+            if ! NOTICE_FILE="$notice" SKILL_PREFIX="$(dirname "$notice")" \
+                 bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh --verify-upstream; then
+              fails=$((fails + 1))
+            fi
+          done
+          # Anti-vacuity floor: a broken notice-frontmatter.sh (this file's
+          # own `paths:` trigger covers it) makes EVERY NOTICE parse empty →
+          # all skipped → fails=0 → green gate that verified nothing. Zero
+          # conforming bundles is a gate failure, not a clean pass.
+          if (( conforming == 0 )); then
+            echo "::error::no schema-conforming NOTICE found — parser broken or the vendored bundles are gone; this gate verified nothing"
+            exit 1
+          fi
+          if (( fails > 0 )); then
+            echo "::error::$fails NOTICE bundle(s) failed upstream blob verification"
+            exit 1
+          fi

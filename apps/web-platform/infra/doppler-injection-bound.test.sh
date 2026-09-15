@@ -253,7 +253,7 @@ ACK_REASONS = {
         'detail (git-data-gc.sh:138,142) — a passphrase could ship unredacted to Sentry and '
         'Better Stack. Bounding this unit is a security-reviewed change, not a hygiene edit. Tracked in #7775.',
     'container-restart-monitor.service':
-        'sources an env-named file (a `. "$ENV_FILE"` at container-restart-monitor.sh:61) whose '
+        'sources an env-named file (the `. "$ENV_FILE"` source in container-restart-monitor.sh) whose '
         'contents are not in-repo, so the tracked script does not bound the read-set; its Sentry '
         'alarm path also degrades silently on a missing name (:69 returns without emitting). Tracked in #7775.',
     'cron-egress-firewall.service':

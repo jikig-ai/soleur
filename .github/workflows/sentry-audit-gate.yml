@@ -107,7 +107,23 @@ jobs:
         # secondary discovery path for personal tokens (legacy).
         run: |
           set -euo pipefail
-          http=$(curl -s -o /dev/null -w '%{http_code}' \
+          # This step runs BEFORE the audit script, in the same job with the same
+          # secrets, so it needs the same confinement (#7997). --disable must be
+          # FIRST (it aborts ~/.curlrc parsing); --noproxy stops ALL_PROXY
+          # redirecting a credentialed request with the destination intact.
+          # Neither reaches the resolver or the trust anchor -- that is the unset.
+          unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+                HOSTALIASES LOCALDOMAIN RES_OPTIONS
+          # DESTINATION PIN. This step runs in its OWN shell, before the audit
+          # script, so neither script-level pin reaches it -- transport
+          # confinement above does not constrain WHERE the bearer goes. The
+          # prerequisite block already declares this invariant in prose ("must be
+          # the org-subdomain ... not eu.sentry.io"); this enforces it.
+          if [[ "$SENTRY_API_HOST" != "${SENTRY_ORG}.sentry.io" ]]; then
+            echo "::error::Refusing to send a credentialed request: SENTRY_API_HOST is '${SENTRY_API_HOST}', not the org-subdomain '${SENTRY_ORG}.sentry.io'. This endpoint is org-scoped, and the regional hosts rewrite slugs ending in '-eu' (ADR-031). Reconcile the secret before merging."
+            exit 2
+          fi
+          http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 15 -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/")
           if [[ "$http" != "200" ]]; then

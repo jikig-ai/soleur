@@ -138,12 +138,37 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ["gdpr-policy", /Cloudflare R2 \(CLA evidence archive\):/],
       ["gdpr-policy", /FreeTSA \(RFC 3161 Time Stamp Authority\):/],
       ["gdpr-policy", /Article 17\(3\)\(e\)/],
+      // Grok Build Phase 6 — harness-neutral Plugin copy (not Claude-exclusive).
+      ["terms-and-conditions", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["privacy-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["data-protection-disclosure", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["gdpr-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["acceptable-use-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["cookie-policy", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["disclaimer", /supported AI coding CLIs \(including Claude Code, Grok Build, Codex, and Devin CLI\)/],
+      ["privacy-policy", /When you use another supported CLI, plugin-local inference is sent to that CLI's provider under your own credentials/],
     ];
     for (const [doc, pattern] of checks) {
       const source = loadSource(doc);
       const mirror = loadMirror(doc);
       expect(source, `source ${doc} missing ${pattern}`).toMatch(pattern);
       expect(mirror, `mirror ${doc} missing ${pattern}`).toMatch(pattern);
+    }
+  });
+
+  test("cookie-policy still says the plugin does not use cookies", () => {
+    expect(loadSource("cookie-policy")).toMatch(/does not use cookies/);
+    expect(loadMirror("cookie-policy")).toMatch(/does not use cookies/);
+  });
+
+  test("legal corpus does not invent grok --trust or add xAI as a sub-processor", () => {
+    for (const doc of DOCS) {
+      const source = loadSource(doc);
+      const mirror = loadMirror(doc);
+      expect(source).not.toMatch(/grok --trust/);
+      expect(mirror).not.toMatch(/grok --trust/);
+      expect(source).not.toMatch(/xAI[^\n]{0,80}is a (Jikigai )?(sub-)?processor/i);
+      expect(mirror).not.toMatch(/xAI[^\n]{0,80}is a (Jikigai )?(sub-)?processor/i);
     }
   });
 

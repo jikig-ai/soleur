@@ -24,6 +24,18 @@ SUT="${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
 TMP="$(mktemp -d -t gdr2cap.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
+# (#8043 Guard 4) THE FIXTURE GIT ENVIRONMENT, sourced BEFORE the fixture tree is created. The
+# rung-2 gate's provenance arm reads `git log` on the evidence file, so the producer/consumer row
+# below must hand it evidence that is TRACKED in a repository whose last touch of it is an
+# evidence-only commit — the shape the release path prescribes (commit the evidence ALONE). A
+# plain temp dir HOLDs on "not inside a git work tree", which is the gate being right and the
+# fixture being wrong. Same chokepoint as the birth-gate suite (#7849: refuses an inherited
+# GIT_DIR so a fixture `git init` cannot land commits on the developer's live branch).
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${ROOT}/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { printf 'FATAL: could not source the fixture git environment\n' >&2; exit 2; }
+git_fixture_env "$TMP" || { printf 'FATAL: git_fixture_env refused the fixture root %s\n' "$TMP" >&2; exit 2; }
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
@@ -72,6 +84,10 @@ _payloads=(git-data-bootstrap.sh git-data-provision.sh git-data-transport-wrappe
   printf '  })\n}\n'
 } > "$FIX/modules/git-data-userdata/main.tf"
 for _p in "${_payloads[@]}"; do printf '#!/usr/bin/env bash\ntrue\n' > "$FIX/$_p"; done
+# The bound tree is committed ONCE, before any evidence exists, so the evidence's own commit
+# (below) touches none of the 13 roster files — the only shape ARM 1 releases.
+git -C "$FIX" init -q && git -C "$FIX" add -A && git -C "$FIX" commit -q -m "bound tree" \
+  || { printf 'FATAL: could not commit the fixture bound tree in %s\n' "$FIX" >&2; exit 2; }
 
 # ── The stub ──────────────────────────────────────────────────────────────────────
 #
@@ -185,7 +201,17 @@ if [[ -f "$OUT" ]]; then pass "PASS writes the evidence file"; else
 if [[ -f "$OUT" ]]; then
   # shellcheck source=/dev/null
   source "${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-  if gate_out="$(git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT" 2>&1)"; then
+  # The evidence is committed ALONE into the fixture repository (the release path's own shape,
+  # see git-data-rung2-rehearsal.md "commit evidence first"), and the gate is asked about the
+  # TRACKED copy. The bytes are the SUT's, unmodified: `cmp` pins that below so a fixture that
+  # quietly rewrote the evidence could not make the row pass.
+  OUT_TRACKED="$FIX/git-data-rung2-boot-evidence.env"
+  cp "$OUT" "$OUT_TRACKED"
+  git -C "$FIX" add -- git-data-rung2-boot-evidence.env && git -C "$FIX" commit -q -m "evidence alone" \
+    || fail "the evidence could be committed alone into the fixture repository" "1" "git commit failed"
+  if cmp -s "$OUT" "$OUT_TRACKED"; then pass "the tracked evidence is byte-identical to what the SUT wrote"; else
+    fail "the tracked evidence is byte-identical to what the SUT wrote" "1" "cmp differs"; fi
+  if gate_out="$(git_data_rung2_rehearsal_gate "$FIX/cloud-init-git-data.yml" "$OUT_TRACKED" 2>&1)"; then
     pass "the written evidence RELEASES the rung-2 gate (producer/consumer are bound)"
   else
     fail "the written evidence does not satisfy the gate it exists to release" "1" "$gate_out"
@@ -205,6 +231,64 @@ if grep -q 'QUERY' "$OUT" 2>/dev/null; then
 else
   fail "evidence records the queries that produced it" "n/a" "$(cat "$OUT" 2>/dev/null)"
 fi
+
+# (#8010 item 1) …and WITH THE TABLE PAIR THE QUERY RAN AGAINST, BY VALUE. Pasting a recorded
+# query into betterstack-query.sh with no BS_TABLE exported returns rc=0 and zero rows from
+# the inngest DEFAULT table — which reads as "dark boot" on a perfectly good birth. The pin
+# asserts the value, not presence: a presence pin would pass a wrong derivation
+# (`${BS_TABLE}_s3` -> `…prd_logs_s3`, a collection that does not exist). This arm runs the
+# SUT under `env -u BS_TABLE -u BS_TABLE_S3` so an inherited shell export cannot flake it.
+# shellcheck source=/dev/null
+source "${ROOT}/scripts/lib/betterstack-sources.sh"
+OUT_TABLE="$TMP/evidence-pass-table.env"
+env -u BS_TABLE -u BS_TABLE_S3 \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_TABLE" >/dev/null 2>&1 || true
+if grep -q "^# TABLE: BS_TABLE=${BS_GIT_DATA_TABLE} BS_TABLE_S3=${BS_GIT_DATA_TABLE_S3}$" "$OUT_TABLE" 2>/dev/null; then
+  pass "evidence records the table pair it queried by value"
+else
+  fail "evidence records the table pair it queried by value" "n/a" "$(grep -n 'TABLE' "$OUT_TABLE" 2>/dev/null || echo '<no TABLE line>')"
+fi
+# The default arm's expected value is the lib CONSTANT, so a SUT printing the constant instead
+# of the live table would pass it (measured: mutant M3). Two override arms make the pin follow
+# the INPUT: BS_TABLE pinned alone records the placeholder (this file cannot see what
+# betterstack-query.sh derived); BS_TABLE + BS_TABLE_S3 pinned records the pair verbatim.
+# And the default arm is only meaningful if the constant has the git-data shape.
+if [[ "$BS_GIT_DATA_TABLE" =~ ^t[0-9]+_.*_logs$ ]]; then
+  pass "sources lib names a git-data-shaped table (default arm non-vacuous)"
+else
+  fail "sources lib names a git-data-shaped table (default arm non-vacuous)" "n/a" "$BS_GIT_DATA_TABLE"
+fi
+for _case in "t520508_override_prd_logs::<derived by betterstack-query.sh>" \
+             "t520508_x_metrics:t520508_x_archive:t520508_x_archive"; do
+  IFS=: read -r _t _s3in _s3want <<<"$_case"
+  OUT_OVR="$TMP/evidence-pass-table-$_t.env"
+  env -u BS_TABLE -u BS_TABLE_S3 ${_s3in:+BS_TABLE_S3="$_s3in"} BS_TABLE="$_t" \
+    BETTERSTACK_QUERY_SH="$STUB" \
+    BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+    bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+      --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_OVR" >/dev/null 2>&1 || true
+  if grep -q "^# TABLE: BS_TABLE=${_t} BS_TABLE_S3=${_s3want}$" "$OUT_OVR" 2>/dev/null; then
+    pass "evidence follows an overridden table pair (${_t})"
+  else
+    fail "evidence follows an overridden table pair (${_t})" "n/a" "$(grep -n 'TABLE' "$OUT_OVR" 2>/dev/null || echo '<no TABLE line>')"
+  fi
+done
+# A non-identifier table name is refused as an INPUT error (64), never TRANSIENT (2, which the
+# rehearsal workflow retries), and nothing is written. The stub ignores the table, so only the
+# SUT's own guard can refuse it.
+OUT_BAD="$TMP/evidence-pass-table-bad.env"
+out="$(env -u BS_TABLE -u BS_TABLE_S3 BS_TABLE='t520508_bad;x_logs' \
+  BETTERSTACK_QUERY_SH="$STUB" \
+  BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+  bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+    --cloud-init "$FIX/cloud-init-git-data.yml" --out "$OUT_BAD" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 ]]; then pass "a non-identifier table name => exit 64 (input error, not TRANSIENT)"; else
+  fail "a non-identifier table name => exit 64 (input error, not TRANSIENT)" "$rc" "$out"; fi
+if [[ ! -f "$OUT_BAD" ]]; then pass "a refused table name writes NO evidence file"; else
+  fail "a refused table name writes NO evidence file" "$rc" "an evidence file was written"; fi
 
 # ── ARM 2: the FAIL path — a fatal from this host ─────────────────────────────────
 #
@@ -1293,7 +1377,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=75  # 73 + the instrument self-test + the #7898 §6 egress-reachability row
+_FLOOR=86  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).

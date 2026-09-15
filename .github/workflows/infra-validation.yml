@@ -31,6 +31,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       # The gate itself. What this actually buys, stated precisely: `detect-changes` maps only
       # the two content globs to directories, so a workflow-ONLY push yields DIRS=[] and both
       # `validate` and `registry-userdata-budget` skip. What still runs is `deploy-script-tests`
@@ -42,6 +45,9 @@ on:
     paths:
       - "apps/*/infra/**"
       - "infra/**"
+      # (#8097) Suites under apps/web-platform/test/infra/ are dispatched by deploy-script-tests
+      # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
+      - "apps/web-platform/test/infra/**"
       - ".github/workflows/infra-validation.yml"
       # (#6454) The render-then-validate gate and its fixture suite. Without these,
       # editing the validator would not run the validator's own tests — the job that
@@ -761,13 +767,13 @@ jobs:
 
       # LOAD-BEARING registration (explicit list, no glob — an unregistered suite is silent ZERO
       # coverage). BREADTH half of the dual-delivery invariant, complementing fresh-boot-parity
-      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 15 web-1-pinned SSH
+      # above (which pins the 5 Phase-2.2 resources deeply). Sweeps ALL 17 web-1-pinned SSH
       # provisioners in server.tf and every artifact each delivers, asserting each has a fresh-boot
       # counterpart (bake + cloud-init) so a fresh cattle host cannot silently come up without it.
       # Before #7000, 10 of the 15 had no suite pinning that correspondence and 5 were named by no
       # suite at all. Also pins the web-1 host-scoping itself: a for_each fan-out fails here,
       # because CI has one SSH route (web-1) and a bare -target hits every instance.
-      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 15 SSH provisioners)
+      - name: Run web-host provisioner dual-delivery parity guard (#7000 all 17 SSH provisioners)
         run: bash apps/web-platform/infra/web-host-provisioner-parity.test.sh
 
       # The guard above is GREEN the day it lands, as every drift guard is; green says nothing
@@ -776,6 +782,20 @@ jobs:
       # guard cannot score a clean run. Same shape as the LUKS G4 mutation battery below.
       - name: Run web-host provisioner parity MUTATION battery (#7000 the guard can actually fail)
         run: bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
+
+      # (#8097 / ADR-218) The Better Stack Logs alert that pages on SOLEUR_*_SEND_FAILED /
+      # _REFUSED rows. Pins the predicate's three anchors + needle SET, discovers every
+      # emit_refusal() definer and holds it to `logger -p user.crit` (or a named non-crit
+      # allowlist entry), asserts every SKIPPED/_HALT literal matches no needle, pins the
+      # exploration's source id to vector.toml's sink and the probe line in server.tf.
+      - name: Run Better Stack SEND_FAILED alert drift guard (#8097)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh
+
+      # Its battery: every invariant-breaking row attributed by FAIL string (the count is pinned
+      # inside the battery as EXPECTED_ROWS), the floor's H1a-RED / H1b-GREEN pair, and the
+      # legitimate-edit controls. An unrun battery is a claim.
+      - name: Run Better Stack SEND_FAILED alert MUTATION battery (#8097 the guard can actually fail)
+        run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
@@ -1366,6 +1386,12 @@ jobs:
       - name: Run resource-monitor.sh tests
         run: bash apps/web-platform/infra/resource-monitor.test.sh
 
+      # #7898 §2: the laptop-run Resend bootstrap's key-shape / path-allowlist /
+      # transport-confinement guards (env -i, fake key, --config fd asserted
+      # in-process).
+      - name: Run resend-inbound-bootstrap.sh tests
+        run: bash apps/web-platform/infra/resend-inbound-bootstrap.test.sh
+
       - name: Run cat-deploy-state.sh tests
         run: bash apps/web-platform/infra/cat-deploy-state.test.sh
 
@@ -1396,6 +1422,10 @@ jobs:
 
       - name: Run inngest-wiped-volume-verify.sh tests
         run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
+
+      # #7095 re-read in the two webhook scripts above (found live 2026-09-13 at op=execute 2.1).
+      - name: Run webhook-doppler-token-reread tests
+        run: bash apps/web-platform/infra/webhook-doppler-token-reread.test.sh
 
       - name: Run cat-inngest-verify-state.sh tests
         run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
@@ -1473,8 +1503,22 @@ jobs:
       - name: Run git-data bare-repo erasure (Art. 17) tests
         run: bash apps/web-platform/infra/git-data-remove.test.sh
 
+      # (#8043 F7/F9, Guard 3) The git account cannot rewrite its own authorization map or the
+      # hook it is fenced by. Static arm over the bootstrap's last-writer literals; runtime arm
+      # applies them in the pinned image and proves sshd accepts the map (with a negative
+      # control). Under CI=true the runtime arm is a FAILURE if docker is unavailable.
+      - name: Run git-data ownership tests (authorization map + hook dir, Guard 3)
+        run: bash apps/web-platform/infra/git-data-ownership.test.sh
+
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
+
+      # (#6680, ADR-220) git-data-cutover's access gate precedes every host mutation, probe
+      # bytes never reach the workflow-command parser, the bridge's server-ip export set is
+      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring. Runtime arm drives the
+      # real script against real OpenSSH in the pinned image; under CI=true a missing docker FAILS.
+      - name: Run git-data cutover access-path tests (ADR-220)
+        run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 
       # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
       # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
@@ -1540,6 +1584,7 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform validate
+
 
       # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
       #
@@ -1643,6 +1688,66 @@ jobs:
       # already registered in it).
       - name: Run measured-beat ARM gate behavioural tests (#7587 — deadlines, rollback, state file)
         run: bash apps/web-platform/infra/arm-heartbeats.test.sh
+
+      # (#8043 NFR2 / Guard 4, ARM 2) THE EVIDENCE-PROVENANCE GUARD, PR-RANGE ARM.
+      #
+      # git-data-rung2-boot-evidence.env must never be ADDED or MODIFIED in the same change as
+      # any of the 13 hash-bound files it attests; it may only be DELETED there, or created by
+      # a rehearsal PR that touches none of them. The freshness step above cannot see this: a
+      # payload edit plus a hand-edited RUNG2_TEMPLATE_SHA256 is hash-valid evidence citing a
+      # rehearsal that never booted the shipped bytes. This step intersects the PR's added-or-
+      # modified set with the roster the hash binds (ONE derivation —
+      # git_data_rung2_bound_files — so the two cannot drift), and reds on a hit.
+      #
+      # ADVISORY, IN THE WORDS THIS FILE ALREADY USES: `deploy-script-tests` is NOT in
+      # scripts/required-checks.txt, so a RED row in THIS job does not block a merge. The
+      # BLOCKING arm of the same guard (ARM 1) runs inside git_data_rung2_rehearsal_gate at
+      # the birth job, the rehearsal route and the freshness step above — this step is the
+      # early warning that fires on the PR, before a birth burns an environment approval.
+      #
+      # LAST STEP OF THE JOB, deliberately (#8052 review). A step that `exit 1`s hides every
+      # step after it, and this one HOLDs on an unresolvable range as well as on a real
+      # co-edit — placed before the freshness, unit-set, byte-cap, LUKS and doppler guards it
+      # blanked nine signals per HOLD while calling itself advisory. `continue-on-error` is not
+      # the fix (this file at its Registry job explains why: conclusion=success over
+      # outcome=failure), so it runs last: a HOLD still reds the job, and nothing is hidden.
+      # Its residual is stated in the gate's header: a bound-file edit in one commit and the
+      # hash in another, landed by any non-squash method (rebase-merge or merge-commit), is visible ONLY here (#8010's scope).
+      #
+      # THE RANGE MIRRORS `detect-changes` EXACTLY — `origin/${BASE_REF}...HEAD` on
+      # pull_request, `$BEFORE_SHA HEAD` on push — and the gate HOLDs on an unresolvable base
+      # (the all-zeros branch-create sentinel, a force-pushed-away base): "running too much
+      # costs CI minutes; running nothing costs the guarantee". This job's checkout is already
+      # fetch-depth: 0 (see its checkout step), which the `...` merge-base form needs.
+      # workflow_dispatch has no range and no PR; the guard reports that and passes.
+      - name: Rung-2 evidence provenance (ADVISORY — never modified alongside a hash-bound file)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          # Empty on pull_request; on push it is the pre-push tip (all-zeros on branch create).
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source tests/scripts/lib/git-data-birth-readiness-gate.sh
+          CI_YML=apps/web-platform/infra/cloud-init-git-data.yml
+          EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "workflow_dispatch has no commit range; the provenance guard has nothing to intersect (its blocking arm runs at the birth)."
+            exit 0
+          fi
+          # THE CAPTURE IS `rc=0; cmd || rc=$?`: under -e an unguarded call aborts the step
+          # at the call and the annotation below never prints.
+          rc=0
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            git_data_rung2_evidence_provenance_gate "$CI_YML" "$EV" range "$BEFORE_SHA" HEAD || rc=$?
+          else
+            git_data_rung2_evidence_provenance_gate "$CI_YML" "$EV" range "origin/${BASE_REF}...HEAD" || rc=$?
+          fi
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::rung-2 evidence provenance HOLD (advisory in this job; blocking at the birth). This change adds or modifies ${EV} in the same range as a file the evidence's hash binds — or the range could not be resolved. A voided attestation must be DELETED, not refreshed by hand; a real rehearsal lands its evidence in its own change. See the gate's message above."
+            exit 1
+          fi
 
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #

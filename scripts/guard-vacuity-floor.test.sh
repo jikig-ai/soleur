@@ -336,7 +336,74 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # even reached, so a wrapper that never runs is caught ahead of the count; (c) its bound is a
 # literal adjacent to the test, so it is mutant-CONSTRUCTIBLE. Measured at promotion: 28/28 with
 # 14 assertions driven RED before the fix, and a fixture non-vacuity control of its own.
-PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh)$'
+# `apps/web-platform/scripts/sentry-monitors-audit.test.sh` added by #7997 — the suite gained its
+# FIRST anti-vacuity floor there (review round two), which is what put it in this population at
+# all. The file had previously carried a deliberate no-floor note citing this gate and #7585; that
+# note is superseded, because the measured reason for adding the floor was concrete: neutering
+# `pass()`/`fail()` to `:` made the suite print "Results: 0 passed, 0 failed" and exit 0 — green
+# having asserted nothing. PROMOTED, not deferred, following the sibling entry
+# `run-migrations-schema-probe.test.sh` in this same directory: the FILE is the narrower of the two
+# prescribed moves, the ledger is shrink-only, and `apps/web-platform/scripts/` stays deferred.
+# Measured at promotion on the as-merged suite: control GREEN (51/51); `pass()` neutered to a no-op
+# -> rc=1 with `FATAL: verdict helpers cannot conclude — pass 0->0 (want +1)`; and the ADR-193 case,
+# `fail()` neutered WITH a real defect present -> still rc=1 (`fail 0->0`), because the harness
+# self-test and the floor are both emitted by `printf` + `exit 1` and neither is routed through the
+# helpers they backstop. Both fire BEFORE the count is even reached. Its bound (47) is a literal
+# adjacent to the test, so it is mutant-CONSTRUCTIBLE.
+# The five `apps/web-platform/infra/` harnesses below were given (or, for `resend-inbound-bootstrap`,
+# born with) their FIRST anti-vacuity floor by #7898 §2 (PR #8073): `disk-monitor`, `resource-monitor`,
+# `container-restart-monitor`, `cron-egress-firewall`, `resend-inbound-bootstrap`. PROMOTED, not
+# deferred, on the same grounds as every sibling entry: the ledger is shrink-only and this gate's
+# own FAIL message says "cover it … do NOT raise this number". Each qualifies: the floor is `-lt`
+# over an INDEPENDENT row total (`$TOTAL`, or `$((PASS + FAIL))` for the firewall suite), emitted
+# by `printf '[FATAL] anti-vacuity floor: only %d …'` + `exit 1` and never routed through the
+# `pass()`/`fail()` it backstops (ADR-193); the bounds (15 / 15 / 29 / 236 / 6) are literals adjacent
+# to the test, so every mutant is CONSTRUCTIBLE. Measured at review: deleting the sole reader row of
+# `curl_violations` in the crm harness had gone 24/24 green before the floors landed, which is the
+# defect the floors close; the PR's 30-mutant battery (landing/restore `cmp`-verified) is the
+# evidence they fire.
+# `apps/web-platform/infra/git-data-ownership.test.sh` added by #8043 (Guard 3) — the git
+# account cannot rewrite its own SSH authorization map or the hook that fences it. PROMOTED,
+# not deferred, on the grounds every sibling entry gives (this gate's own FAIL message: "cover
+# it, or promote its directory … do NOT raise this number"; the ledger is shrink-only). It
+# qualifies: its floor is `-lt` over `passes + fails + SKIPPED` and is emitted by `printf` +
+# a direct `FAILURES+=` append the verdict reads (ADR-193), never through `fail()`. Measured
+# before promotion on the static arm: control GREEN (rc=0); `pass()` neutered -> floor FIRES
+# (re-measured at the #8052 review on the 39-floor suite: `only 10 assertions ran/declared,
+# floor is 39`, exit 1 — the 10 are the declared docker-skipped runtime rows); `fail()`
+# neutered WITH model rows deleted -> floor FIRES. Bound is a literal adjacent to the test.
+# `apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh` gained its FIRST floor in the
+# #7946 review (the AC13 retarget added behavioural rows; a suite of 113 rows with none had passed
+# "0 failed" over an extraction that could match nothing). PROMOTED, not deferred, for the reason
+# every sibling entry gives: the FAIL message says "do NOT raise this number", the ledger is
+# shrink-only, and the FILE is the narrower of the two prescribed moves. It qualifies: the floor is
+# `-lt` over `pass + fail` (a neutered ok()/no() drives it to 0 and it FIRES), emitted by `printf` +
+# `exit 1` and never through the helpers it backstops, with a literal bound adjacent to the test.
+# Measured at promotion: control GREEN (113/113); floor raised to 99999 on a copy -> rc=1 with the
+# `[FATAL] only 113 assertions ran; floor is 99999` sentinel.
+# postgrest-reload-schema.test.sh (#8028 review): promoted rather than deferred. Its floor is
+# a direct printf + exit over the as-written case count (24), sits beside a pass()/fail()
+# self-test that reports the same way, and lives in a deferred directory only because the
+# sibling schema-probe suite it mirrors was promoted the same way. Ledger returns to
+# MAX_DEFERRED rather than growing.
+# `plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` added by #7980 — the
+# guard-contract suite for the stdio redacting proxy in front of @playwright/mcp (53 one-edit
+# mutants, an executable .mcp.json row, P6 parity). PROMOTED, not deferred, beside its sibling
+# `redact-a11y-snapshot.test.sh` and for the reason every entry above gives: this gate's FAIL message
+# says "cover it … do NOT raise this number" and the ledger is shrink-only. It qualifies: the floor is
+# `-lt` over `$cases` (an independent per-row counter, with a `pass + fail == cases` conservation
+# identity checked first and an exact mutant / mutation-row count beside it), emitted by `printf
+# '[FATAL] …'` + `exit 1` and never routed through the `ok()`/`bad()` it backstops (ADR-193); an
+# instrument self-test drives both helpers once and exits 1 before any real row if either counter
+# fails to move; a helper-control block drives the verdict-owning helpers it names (the assert_*
+# family, `red`, `leaks`, `started`, `delivered_ok`, `mutant`) with an input each must REJECT.
+# Measured at the #7980 review round: `red`, `leaks`, `started` and `delivered_ok` each neutered
+# on a copy -> `HELPER CONTROL BROKEN`, rc=1 (runs/suite-helper-neuter-review-round.txt); after
+# the relay rebuild and stub reaper control GREEN (281/281, 55 mutants, rc=0; runs/suite-relay-rebuild.txt);
+# after the one-row escaped-tree fix GREEN (284/284, 56 mutants; runs/suite-advisor-onerow.txt).
+# Bound (284) is a literal adjacent to the test,
+# so it is mutant-CONSTRUCTIBLE.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/scripts/postgrest-reload-schema\.test\.sh|apps/web-platform/scripts/sentry-monitors-audit\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh|plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy\.test\.sh|\.claude/hooks/ship-soak-followthrough-gate\.test\.sh|apps/web-platform/infra/disk-monitor\.test\.sh|apps/web-platform/infra/resource-monitor\.test\.sh|apps/web-platform/infra/container-restart-monitor\.test\.sh|apps/web-platform/infra/cron-egress-firewall\.test\.sh|apps/web-platform/infra/resend-inbound-bootstrap\.test\.sh|apps/web-platform/infra/git-data-ownership\.test\.sh|apps/web-platform/infra/soleur-host-bootstrap-observability\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
@@ -651,7 +718,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=38  # +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
+MIN_FIRING_SUITES=40  # +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"

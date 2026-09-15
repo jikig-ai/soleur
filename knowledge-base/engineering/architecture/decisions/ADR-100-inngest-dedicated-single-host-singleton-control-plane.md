@@ -17,7 +17,9 @@ brand_survival_threshold: single-user incident
 > **It has not started.** The cutover did not hold: the dedicated host has served nothing since
 > 2026-07-30 and `INNGEST_CUTOVER_FLIP` rests at `rollback`. See the
 > [2026-08-12 addendum](#addendum--2026-08-12-7228--the-cutover-did-not-hold-and-the-soak-never-started)
-> before treating any statement below as describing a running system. Amends **ADR-030** (Inngest
+> before treating any statement below as describing a running system.
+> **Superseded 2026-09-15:** the cutover was re-run and completed — see the
+> [2026-09-15 addendum](#addendum--2026-09-15-6178-8191--the-cutover-completed). Amends **ADR-030** (Inngest
 > as durable trigger layer); does not supersede it.
 
 ## Context
@@ -990,3 +992,376 @@ audited under #6167): a branch config under `prd` resolves the whole root, which
 **130** names (measured). It is the right reason to bound `git-data-gc` **before** the host is ever
 born — cheaper then than after — but it is a pre-birth hardening item, not a live exposure, and it
 must not be described as one. The **live** members of this set are the three web-host units.
+
+## Addendum — 2026-09-11 (#8054) — "host dark" is a positive reading, and `op=execute` 2.0 accepts it
+
+The 2026-08-25 addendum decided that *"host dark" is not "query finds nothing"*. This is its
+continuation: what a positive reading of darkness IS, and that the cutover's own pre-flight now
+accepts one. Eight records, each measured on 2026-09-10/11 against host 165451537
+(`boot_id=402c0d5b…`, `probe_schema=8`) unless stated otherwise.
+
+### 1. The P1-5 guard and 2.0 were written against different worlds — the guard is right
+
+`op=execute` step 2.0 required the webhook's GQL forward to the dedicated host to answer HTTP 200
+with `registry_empty=true`. `inngest-server-flip-guard.sh` (P1-5) refuses a prod-URI start while
+`INNGEST_CUTOVER_FLIP ∉ {armed, flipping, flushed, done}`; every pre-arm value is outside that set,
+and the flag leaves it only via `op=arm`, which runs AFTER execute. So on the first execute of a
+cutover the host is dark BY DESIGN and 2.0 exited 1 (run 34529824513: `HTTP 500 …
+errors=["__FETCH_FAILED__"]`; the host's own line: `BLOCK: prod Postgres URI with cutover
+flag='aborted' not in {armed,flipping,flushed,done}`). 2.0's remediation step (2) — "stop the dark
+inngest-server so nothing re-syncs functions" — presumed a running-but-unarmed host, the world
+before P1-5. The guard is the correct component; 2.0 was never updated to match it. Same class as
+#8017: a predicate written against a world the surrounding guards later changed, failing closed and
+so going unnoticed until someone ran it.
+
+### 2. 2.0's property, restated
+
+*The dedicated host is not carrying a function registry that could double-fire.* Two readings
+satisfy it: the host **answered and reported an empty registry** (the pre-existing arm, unchanged
+and still reachable — the wiring suite renders it), or the host is **positively dark** — it cannot
+start, so it cannot register anything. Silence satisfies neither: a host that emits nothing has an
+UNKNOWN state, and 2.0 refuses it (`silent`) exactly as Guard 2 of the recut does.
+
+### 3. The probe row's own `cutover_flag` is the P1-5 cause, without a join
+
+`SOLEUR_INNGEST_SERVER_PROBE` at `probe_schema=8` carries, on ONE row, `http_code=000`,
+`server_active` (measured `activating` — the refuse loop never settles to `inactive`),
+`registry_fns=__UNREADABLE__` and `cutover_flag`. The flag is graded as a **positive allowlist**
+`{aborted, rolled-back}`; the arm set `{armed, flipping, flushed, done}` names its own remedy
+(`flag_armed`); anything else — `unknown`, `rollback`, empty, absent — is `flag_unreadable`. The
+G20 lesson applies: the empty string was once an accepting value in this lib. The allowlist is
+defined ONCE (`_erg_flag_class`) and the wiring suite asserts it set-equal to the flip guard's own
+`case` arm, because the partition already drifted once (#6553 added `flushed`).
+
+### 4. The flip FSM's heartbeat is the freshness bridge — freshness, not corroboration
+
+The probe row is hourly, so alone it proves darkness as of up to 90 minutes ago.
+`inngest-cutover-flip.timer` fires every 30 s and the FSM emits one JSON line per tick on EVERY
+flag, terminal ones included (P0-1/P0-2), carrying the journald `_BOOT_ID` envelope (measured: 500
+rows/24 h at the limit, ~1–2/min, all `_BOOT_ID=402c0d5b…`, `.message` an OBJECT
+`{flag, reason, guard, exit_code, start_ts}` in the warehouse). **Who parses it matters for the
+remedy:** the FSM logs a JSON *string* (`logger -t inngest-cutover-flip "$json"`), Vector ships it
+as a string (`vector.toml` ends every transform in `encode_json`), and it is **Better Stack's
+ingest-side parse** that yields the object the gate selects on. If that parse stopped, every
+heartbeat would be present and unreadable — a warehouse read-path change, which the gate reports
+as `fsm_unreadable` ("do not replace the host for it"), never as `fsm_silent`. Joined on
+`_BOOT_ID == strip_hyphens(boot_id)`,
+the NEWEST same-boot heartbeat within 15 minutes upgrades the probe's stale darkness to a fresh
+one. Its value is FRESHNESS: the probe's flag and the heartbeat's flag may legitimately differ
+(`aborted` on the hourly row, `rolled-back` a minute ago) and the gate does not require them to
+agree — it grades each against the allowlist. Only the newest same-boot heartbeat is graded, never
+"any arm-set flag in the window": the real post-abort trace holds an `armed` row minutes before
+the `aborted` one, and a gate that over-rejected it would refuse the exact state `op=execute` meets
+after a failed arm.
+
+### 4b. The dark arm is admitted only by the host's OWN refusal signature
+
+A non-200 from the webhook is not, by itself, evidence about the host: a CF Access 403, a WAF 5xx,
+`webhook.service` down, or a GQL error from a *reachable* server all arrive as non-200. The one
+non-200 that IS evidence is the web-host probe's own `inngest-registry-probe: FATAL … errors=
+["__FETCH_FAILED__"]` (HTTP 500 through the hook's error passthrough), emitted when its fetch of
+`10.0.1.40:8288/v0/gql` **failed** — refused, connect-timed-out, or reset; the probe discards
+curl's rc, so this is "the endpoint did not answer the web host just now", not specifically
+"refused" — the only *synchronous* reading this step ever gets, and the one thing the hourly probe
+row (≤90 min old) and the heartbeat (a flag, not a port) cannot supply. So 2.0 enters the dark arm
+only on that signature and refuses every other non-200 as `webhook_path` (remedy:
+`op=registry-probe`), **without reading Better Stack at all** — a stale dark row and a fresh
+heartbeat must not be consulted when the live path said nothing about the host. 2.1 capture uses
+the same webhook path, so this costs nothing in reachability. (Found at review, 2026-09-11; the
+"connection-refused" overstatement in the first cut of this section was corrected the same day.)
+
+### 4c. The probe row must postdate the newest FSM transition (E14)
+
+The hourly probe row can be up to 90 minutes old, and the FSM can change the host's state inside
+that window: an `op=arm` starts the server, `verify_or_abort` fails, the flag is driven to
+`aborted` — the FSM's own text names the case "a prod scheduler is STILL RUNNING on this host
+under a terminal flag" when `stop_server` also fails. A probe row from before that arm says
+`http_code=000`; a heartbeat from after it says `aborted`; both are true and the host may be
+bound. So the execute gate also requires the graded probe row to POSTDATE the newest same-boot
+heartbeat whose `reason` is not `noop-*` (a transition row — `verify-*`, `rolled-back`,
+`flip-complete`, `unexpected-exit`…), refusing `stale_row` otherwise. The cost is a wait of one
+probe period after any FSM transition; the next probe row then reads `http_code=200` if the server
+is in fact bound and E9 refuses `host_serving`. (Found at review, 2026-09-11.)
+
+### 5. The `BLOCK:`-stream design was measured unsatisfiable and is REJECTED
+
+The first design corroborated darkness from `inngest-server-flip-guard`'s `BLOCK:` line. Measured:
+that line is emitted only when systemd attempts a start, so after any `stop_server` (the 5.4-day
+post-stop state the plan found) the stream is silent while the host is perfectly dark — the
+corroboration was unsatisfiable in exactly the state it was meant to certify. Recorded so it is not
+proposed again. The heartbeat (§4) has no such gap: it is emitted on every tick regardless of the
+unit's state.
+
+### 6. Two streams, two reads — never one `--grep`
+
+An OR-combined read (`--grep 'SOLEUR_INNGEST_SERVER_PROBE|inngest-cutover-flip'`) was measured
+returning 500 rows and **zero** probe rows: the refuse-loop and `doppler run` wrapper noise fill a
+500-row window in ~13 minutes and starve the hourly probe row out of the limit. `_bs_query_rows`
+takes exactly one term; 2.0 calls it twice; the wiring suite asserts one term per call and distinct
+terms. Host isolation happens after decoding, never in `--grep`.
+
+### 7. The deliberate G8/E10 divergence
+
+Guard 2 (`inngest_host_dark_gate`) requires `server_active == "inactive"`. The execute gate
+(`inngest_execute_registry_gate`) requires `server_active != "active"`. Under the P1-5 refuse loop
+the unit sits in `activating` indefinitely, so **G8 refuses today's live host as `host_serving`** —
+the same defect class as this addendum — and is tracked as **#8078** rather than changed under a
+destroy-authorizing gate here. E1–E7 and G1–G7 are one shared helper (`_ihdg_graded_row`); the
+suite's mutation harness runs every shared-helper mutation row through `mutate_both` (asserted:
+any single-consumer `mutate ERG-*` row must be function-scoped) so a tightening that reddens only
+one consumer is visible. **One tightening this extraction applied to the recut gate too,
+recorded here rather than left to be rediscovered:** E7 requires the probe row's `boot_id` to be
+the `/proc/sys/kernel/random/boot_id` UUID shape (it is the E13 join key after hyphen-stripping),
+so a `boot_id=unknown` row — the emitter's read-failed fallback — now refuses BOTH gates as
+`unreadable`, where Guard 2 previously required only presence. Safe direction; the recut battery
+stayed green.
+
+### 8. The reachable-arm asymmetry is deferred
+
+A dedicated host that ANSWERS pre-arm is out of sequence (P1-5 should keep it dark), yet its empty
+registry still satisfies 2.0. The arm now prints a `::warning::` naming this and proceeds; whether
+it should instead refuse is **#8072**.
+
+**Where the code is.** Gate: `tests/scripts/lib/inngest-host-dark-gate.sh` (second entry point,
+E-table in the file). Consumer: `scripts/cutover-inngest.sh`, `execute)` 2.0. Suites:
+`tests/scripts/test-inngest-host-dark-gate.sh` (predicates + mutation harness, both entry points)
+and `apps/web-platform/infra/cutover-inngest-workflow.test.sh` (wiring, rendered arms,
+`mutate_file` rows). No emitter, guard, FSM or workflow-secret change — no image bump, no host
+replace.
+
+## Amendment (2026-09-14, Ref #6921/#8077) — the quiesced unit shape refuses a start; an on-host marker attributes it
+
+Extends the [2026-07-12 no-SSH quiesce/re-enable amendment](#amendment-2026-07-12-ref-6178--no-ssh-web-host-scheduler-quiescere-enable).
+Two defects made the documented loop `op=execute` → `op=quiesce-web` → `op=execute` → `op=arm`
+undrivable from CI: the second `op=execute` re-enumerated a scheduler the quiesce had just stopped
+and failed at 2.1 (#6921), and the `*/15` watchdog read the deliberately stopped unit as
+`inngest_down` and dispatched a restart that started it again (#8077). Both came from the same gap:
+nothing on the host distinguished a deliberate quiesce from a fault.
+
+The binding implementation contract for this amendment is
+`knowledge-base/project/specs/archive/20260914-223454-feat-one-shot-6921-cutover-loop-drivable/review-fix-contract.md`
+(the tri-state function, the marker JSON, the output lines and the per-site table). This section
+records the decision and why; it does not restate the byte-level contract.
+
+**Decision — two on-host signals, each answering one question (CTO ruling, review round 1).**
+
+1. **The unit shape answers "must this unit not be started?"** The shape holds when
+   `systemctl is-active inngest-server.service` prints `inactive` or `failed` AND
+   `systemctl is-enabled inngest-server.service` prints `disabled`. Both `is-active` states count
+   because a stop that ends in SIGKILL at `TimeoutStopSec` leaves the unit `failed`. `disabled` is
+   the discriminator: a crashed unit that is still enabled cycles through `activating` under
+   `Restart=on-failure` and never settles `disabled`.
+2. **The marker answers "was this a deliberate `op=quiesce-web`, when, and against which capture?"**
+   `/var/lib/inngest/quiesced-by-op` (root disk of the web host, beside
+   `/var/lib/inngest/cutover-capture.json`) holds `v`, `epoch`, `boot_id`, `host_id`, `run_id`,
+   `capture_sha256`, `capture_count`, and later `capture_consumed_at`. Its only writer is the
+   `ci-deploy.sh` `quiesce inngest` handler (atomic `mktemp` + `mv -f`, inside the same flock-held
+   handler that writes the capture). `inngest-rearm-reminders.sh` rewrites it once, adding
+   `capture_consumed_at`, after a fully successful re-arm.
+
+The two combine into one tri-state, byte-identical in `ci-deploy.sh`, `inngest-inventory.sh` and
+`inngest-rearm-reminders.sh` (a parity test pins it):
+
+| State | Shape | Marker | Meaning |
+|---|---|---|---|
+| `not_quiesced` | does not hold | — | the unit may run |
+| `quiesced` | holds | valid (`v == 1`, numeric `epoch`) and not voided | a deliberate quiesce |
+| `disabled_unattributed` | holds | absent, unparseable, or voided | stopped and disabled by something other than `op=quiesce-web` |
+
+**Void rule.** If the unit's `ActiveEnterTimestamp` is later than `marker.epoch`, the unit started
+after the quiesce, so the marker no longer describes it: the state is `disabled_unattributed`. An
+empty `ActiveEnterTimestamp` does not void the marker.
+
+**Reboot.** A disabled unit does not start at boot, and the marker is on the root disk, so the
+state survives a reboot. After a reboot `ActiveEnterTimestamp` is empty, which by the rule above is
+not a void; the inventory reports `rebooted_since_quiesce=true` (current `boot_id` != `marker.boot_id`)
+so an operator can see it.
+
+**Which site reads which signal.**
+
+| Site | Signal | Outcome |
+|---|---|---|
+| `ci-deploy.sh` `restart` handler | shape (state != `not_quiesced`) | `inngest_quiesced_restart_refused` or `inngest_disabled_unattributed_restart_refused`; no restart verb runs |
+| `ci-deploy.sh` `deploy inngest <tag>` arm (its `inngest-bootstrap.sh` enables and restarts the unit) | shape | `inngest_quiesced_deploy_refused` or `inngest_disabled_unattributed_deploy_refused`, at the top of the arm, before the image pull |
+| `inngest-wiped-volume-verify.sh` | shape | abort `quiesced_refused`, BEFORE the enumeration gate (so before the scheduler is read, the throwaway reminder is armed, or anything is stopped, wiped or started) |
+| `workspaces-cutover.sh` luks resume reconcile and its dead-man `sh -c` remount arm | shape | start skipped whenever `is-enabled` = `disabled` (the reconcile logs `SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced`; the dead-man string logs the same marker via a separate `= disabled ] && logger` test, so a logger failure can never become a start) |
+| `inngest-inventory.sh` non-array branch | tri-state | `QUIESCED` or `DISABLED_UNATTRIBUTED` body line |
+| `inngest-rearm-reminders.sh` capture / rearm-from-capture | tri-state + `capture_sha256` | persisted resume, or a named refusal |
+
+**Why start-refusal stays shape-only.** Every site that could START the unit refuses on the shape
+alone, marker or no marker. If a refusal needed the marker, a lost marker (a wiped
+`/var/lib/inngest`, a failed write, a manual `rm`) would turn a refusal into a start, and the
+watchdog would bring back a second scheduler on prod Postgres. With shape-only refusal a lost
+marker becomes a page (`DISABLED_UNATTRIBUTED`), never a restart. The marker only changes what the
+READ sites report and whether a capture may be resumed.
+
+**Writers of the shape — corrected.** The earlier text of this amendment said only the quiesce
+handler writes `disabled`. That was false. The shape also arises from a failed `systemctl enable`
+in `inngest-bootstrap.sh` (tolerated with `|| true`) and from a manual `systemctl disable`. Neither
+writes a marker, so both now read `disabled_unattributed`, not `quiesced`. The deliberate writers
+are:
+
+- `quiesce inngest` (`op=quiesce-web`) writes shape + marker: capture, marker, disable, stop.
+- `enable inngest` (`op=rollback`) clears both. BEFORE it enables or starts, it retires the capture
+  to `cutover-capture.json.retired-<epoch>` and removes the marker, and logs
+  `INNGEST_ENABLE: retired capture=<path|none> marker_removed=<true|false>`. A stale capture can
+  therefore never be resumed by a later quiesce, and a marker never outlives the quiesce it
+  describes.
+
+`restart` stays pure: it still never re-enables, and now never starts a unit in the shape. This
+closes the residue the 2026-07-12 amendment recorded as arch P2-4 (a pure `restart` on a web host
+STARTS the disabled unit).
+
+**`quiesce inngest` entry rules.** By state and `is-active`:
+
+- `active` → bounded capture (`timeout --kill-after=5`, 120 s) → `capture_sha256` and
+  `capture_count` → marker written atomically (failure → `quiesce_marker_write_failed`, nothing
+  stopped) → disable → stop → verify → peer fan-out.
+- `quiesced` (a re-dispatch) → no capture, marker untouched (its `epoch` must not move) →
+  idempotent disable/stop → verify → fan-out.
+- unit absent (`is-enabled` prints `not-found` or nothing, `is-active` `inactive`; web-2) → no
+  capture, no marker → verify → fan-out.
+- anything else (`failed`, `activating`, `deactivating`, inactive but enabled,
+  `disabled_unattributed`) → `quiesce_capture_unavailable`, nothing disabled or stopped. There is
+  no capture that could be trusted, so the handler refuses rather than stopping an uncaptured
+  scheduler.
+
+A failed or timed-out capture stops nothing and reports `quiesce_capture_failed`; its journald
+`INNGEST_QUIESCE_CAPTURE_FAILED` stderr tail is passed through `_cred_err_tail` and then a URI/DSN
+scrub. After `verify_inngest_quiesced` passes, the handler also requires the tri-state to read
+`quiesced` on a host that has the unit, else `quiesced_shape_unrecognized`. Capture mode needs no
+Bearer secret (it reads loopback GQL and writes a file), so a Doppler outage cannot block a quiesce.
+An active unit whose GQL is dead can never be captured; it is still enabled, so not quiesced, so a
+`restart-inngest-server.yml` dispatch followed by a new `op=quiesce-web` is the escape. No override
+flag ships. `op=quiesce-web` also refuses, before any stop, when the on-host sha256 of
+`ci-deploy.sh`, `inngest-inventory.sh`, `inngest-rearm-reminders.sh` and
+`inngest-enumerate-reminders.sh` (from `/hooks/infra-config-status`) differs from the checkout, so a
+quiesce never runs an on-host handler older than the scripts that read its marker (a pre-marker
+handler would leave the shape with no marker, which reads `DISABLED_UNATTRIBUTED`).
+
+**Capture at the quiesce boundary NARROWS the loss window; it does not close it — corrected.** The
+earlier text implied capture-before-stop closed the window. It does not. A reminder armed through
+`POST /api/internal/schedule-reminder` after the capture and before the stop lands in the web
+scheduler, is not in the capture, and is lost when the unit stops. What closes that window is
+refusing new reminders for the whole window: `INNGEST_CUTOVER_QUIESCE=1` in Doppler `soleur/prd`
+plus a web-platform redeploy BEFORE `op=quiesce-web` (the route then answers `503` with
+`X-Soleur-Unavailable: cutover-quiesce`), cleared by the 2.4 redeploy before `op=rearm`. The
+runbook's window procedure carries it.
+
+**Capture freshness is proven by sha, not by age.** A persisted capture is resumed only when the
+capture file is a JSON array, its sha256 equals `marker.capture_sha256`, and the marker carries no
+`capture_consumed_at`. Otherwise 2.1 refuses with a named reason: `already re-armed`
+(consumed), `stale_capture` (missing, invalid or sha mismatch), or `capture_unattributed`
+(`disabled_unattributed`). Each names `op=rollback` (then a fresh `op=quiesce-web`) as the remedy.
+`rearm-from-capture` applies the same sha check when a marker exists, and HOLDS BACK every record
+whose `fire_at` is at or before `marker.epoch`: the web scheduler was still running when it came
+due, so it already fired there. The canonical line becomes
+`re-armed=N failed=F held_back=H total=K` with `N+F+H == K`.
+
+Residual, not closed here: a record whose `fire_at` falls after `marker.epoch` but before the stop
+completes (the stop is bounded by `TimeoutStopSec=180`) can fire on the web scheduler and is then
+re-sent. The re-send goes to the dedicated host's backend, which holds no event-id dedup keys from
+the web host, so that record can fire twice.
+
+**Consumers.**
+
+- **Watchdog.** On `/health` != 200, `inngest-inventory.sh` answers (both liveness and full modes,
+  before the `gql_error` timeout marker and the `ERROR:` logger line):
+  - `quiesced` → `inngest-inventory: QUIESCED host_id=… unit=… enabled=disabled quiesced_since=<epoch>
+    capture=<present|consumed|absent> rebooted_since_quiesce=<bool>`, journald
+    `SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced`. The classifier maps it to `inngest_quiesced`
+    (not restart-family); the workflow prints a notice and records no failure.
+  - `disabled_unattributed` → `inngest-inventory: DISABLED_UNATTRIBUTED host_id=… unit=… enabled=disabled`,
+    journald `mode=disabled_unattributed`. The classifier maps it to `inngest_disabled_unattributed`:
+    a recorded failure (Sentry `error` check-in, `[ci/inngest-disabled-unattributed]` issue, remedy
+    `op=rollback`) that is NOT in the restart-dispatch condition.
+  - `/health` = 200 still wins (DEGRADED in liveness mode, FATAL in full mode). Consumers parse only
+    the fixed-vocabulary region before ` — `, anchored at line start.
+
+  `inngest_quiesced` is deliberately not a failure mode: that would skip the pool probe for as long
+  as the unit stays quiesced, which post-cutover is permanent.
+- **No-live-scheduler alarm.** A quiesced web scheduler is only safe while another scheduler runs. A
+  workflow step (`nolive`, `if: always()`) raises `alarm=true` when the web arm reported
+  `quiesced_since`, the dedicated-host verdict is anything but `healthy` (empty, `probe-unavailable`
+  and `stopped-by-brake` all count), and either `quiesced_since` is `unknown` or more than
+  `INNGEST_QUIESCE_GRACE_MIN` (60) minutes old. On `true` it prints `::error::` and files or comments
+  `[ci/inngest-no-live-scheduler]` (label `action-required`); it closes that issue when `false`. The
+  Sentry check-in is `ok` only when the alarm is not `true`. Without it, a window left open (2.4
+  never merged, or the dedicated host never came up) would read green for ever.
+- **2.2 certifies the attributed state.** `op=execute` 2.2 passes only when no probe answered 200,
+  at least one non-200 body carries the anchored QUIESCED sentinel, AND every answered non-200
+  (non-000) body carries it. A `DISABLED_UNATTRIBUTED` body is UNKNOWN with remedy `op=rollback`.
+  Before #6921 any stable non-200 passed, including a crash-looping enabled unit that could come
+  back mid-flip.
+- **2.1 resumes from the capture** under the freshness rule above (`source=persisted`,
+  `captured_at` = ISO of `marker.epoch`, `quiesced_since`, `rebooted_since_quiesce`). Off the shape it
+  enumerates live, and a failed live enumeration still fails; it never falls back to a file.
+
+**Why the plan-time "no new state" choice was reversed.** The plan chose the systemd shape alone
+because it needed no new state. Review falsified the premise that made that sufficient (the shape
+has writers other than the quiesce), and exposed two needs the shape cannot carry: attribution (a
+failed bootstrap enable must page, not read as a deliberate quiesce) and capture freshness (2.1 must
+know the file belongs to THIS quiesce). The rejection the plan relied on was of OFF-host markers (a
+repo variable or Doppler value written by an op with no reviewer gate, expiring on its own clock,
+and needing a separate clear-on-rollback path). An on-host file written by the same flock-held
+handler that writes the capture, cleared by the same `enable` handler that clears the shape, and
+never consulted to permit a start, has none of those properties.
+
+**Standing notes.**
+
+1. `inngest-bootstrap.sh` still tolerates a failed `systemctl enable inngest-server.service`
+   (`|| true`); making it loud is a baked-image change outside this amendment. That shape now reads
+   `DISABLED_UNATTRIBUTED` and pages, so it is no longer a silent suppression. The runbook keeps an
+   onset audit (the first `mode=quiesced` row must follow a `SUCCESS: quiesce inngest`) for a marker
+   written by hand.
+2. A web-1 REPLACED under `web_colocate_inngest=false` has no `inngest-server.service`. `is-enabled`
+   is then not `disabled`, so the shape does not hold, the probe reads `FATAL`, and the watchdog
+   churns `inngest_down` restarts into its age gate. This is pre-existing and not changed here;
+   retiring or repointing the web-liveness arm is pinned to #7674/#6178.
+3. The cattle web-2 (`10.0.1.11`, #6969, ADR-143) was born with `web_colocate_inngest=false` and has
+   no unit. The quiesce fan-out to it is a tolerated no-op (absent-unit path: no capture, no marker).
+   The `op=rollback` fan-out is NOT a no-op: its `systemctl enable` on an absent unit fails and writes
+   `inngest_enable_failed` to web-2's own deploy-status slot. The originating host measures only the
+   peer's 202 acceptance, so the rollback still reports `enabled`; the web-2 slot is expected noise.
+   There is no web-2 freeze/recreate step.
+4. `restart-inngest-server.yml`, `cutover-inngest.yml` and `deploy-inngest-image.yml` share the
+   concurrency group `deploy-inngest-restart` with `cancel-in-progress: false`. GitHub keeps one
+   pending run per group, so a watchdog-dispatched restart that queues behind a running op can
+   replace (cancel) a cutover op that was already pending.
+
+**Correction to the 2026-07-12 amendment (appended, not edited in place).** Its rejected-alternative
+paragraph describes a `restart-inngest-server.yml` restart as "LB-routed to a web host". It is not
+load-balanced. The `deploy.` tunnel ingress rule targets web-1's private IP (`tunnel.tf`,
+`service = "http://${var.web_hosts["web-1"].private_ip}:9000"`) and the `restart` handler does not
+fan out to peers, so a restart only ever reaches web-1. The conclusion of that paragraph is
+unchanged.
+
+**Alternatives considered.**
+
+| Alternative | Why rejected |
+|---|---|
+| Read `INNGEST_CUTOVER_FLIP` in the watchdog and suppress while armed/flipping/flushed | `op=arm` writes the flag AFTER the quiesce→execute window, so during the window it still holds its pre-arm value and cannot tell a deliberate quiesce from a fault. |
+| OFF-host marker: `op=quiesce-web` writes a repo variable or Doppler value honoured for a bounded window | New mutable state written by an op with no reviewer gate, a second fuse (it can expire while the window is still open), a clear-on-rollback path to keep in sync, and no atomicity with the on-host capture it would have to describe. The chosen marker is on-host, written beside the capture by the same handler, and never permits a start. |
+| A — timestamps only (date the quiesce from systemd timestamps / deploy-status, no marker) | Gives an age but no provenance: a failed bootstrap enable and a manual disable carry the same timestamps as a quiesce, and nothing ties the capture file to the quiesce that wrote it. |
+| B — require the marker at every site, including the start refusals | A lost or unwritable marker would turn a refusal into a start and let the watchdog restart a second scheduler. Refusal must fail closed on the shape; the marker only attributes. |
+| Provenance envelope inside the capture file | The capture is deleted on a full re-arm and retired on rollback, while the unit stays quiesced for good after the cutover; the provenance would vanish with it. It would also change the capture format the rearm path consumes. |
+| Make `inngest-bootstrap.sh`'s enable failure loud instead of adding attribution | A baked-image change (pin bump / host replace), and it does not cover a manual `systemctl disable`. `DISABLED_UNATTRIBUTED` detects both without an image change. |
+| Read `/hooks/deploy-status` `reason=quiesced` in the watchdog | A single slot overwritten by the next deploy or restart — a merge to main during the window would erase the signal and reopen the fuse. |
+| Gate the healthy auto-close on a separate `web_scheduler=quiesced` output | Gating the whole step stops pool issues from ever auto-closing post-cutover; gating only the liveness closes adds a second output beside the single-source `failure_mode` contract, which is fail-open for a future consumer. A deliberate stop+disable resolves a "web scheduler down" issue, so the unchanged auto-close is correct. The `web_quiesced_since` output that does ship has exactly one reader (`nolive`). |
+| Also treat `deactivating`+`disabled` as quiesced | Two predicates (lenient watchdog, strict gate) for a stop window that disable-before-stop already shrinks, whose worst case is one false `inngest_down` tick per window that the refusal and the next tick's auto-close absorb. |
+
+## Addendum — 2026-09-15 (#6178, #8191) — the cutover completed
+
+The 2026-08-12 addendum's "the cutover did not hold" is superseded, not edited. Measured this day,
+in order: `op=quiesce-web` (run 34947786718) stopped and disabled web-1's scheduler with a quiesce
+marker; the second `op=execute` (run 34947956908) resumed the persisted capture and passed the 2.2
+QUIESCE HARD GATE; `op=arm` (run 34948112813) passed G1–G3.7 and confirmed the host FSM `done`
+(`INNGEST_CUTOVER_FLIP=done`); `op=registry-probe` (run 34948634783) read 70 registered functions
+from `10.0.1.40:8288`. The 2.4 app-repoint (#8191) moves `INNGEST_BASE_URL` to
+`http://10.0.1.40:8288` in all four places. It also supersedes the 2026-09-07 interim repoint to
+the co-located scheduler (#7897), which the 2026-08-12 addendum had recorded as declined.
+
+The app<->host channel is plain HTTP on the Hetzner private network: transport confidentiality on
+this link is accepted, not provided (encryption-posture ledger row, exception tracked on #6897).
+The Phase-4 soak — the `adopting -> accepted` condition — starts after `op=rearm` and `op=verify`
+pass, and this ADR stays `adopting` until it completes.

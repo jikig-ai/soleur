@@ -19,13 +19,17 @@
 #
 # Modes:
 #   default            local pin check (per-file hash vs NOTICE local-blob-sha)
-#   --verify-upstream  call `gh api repos/$UPSTREAM/git/blobs/<sha>` for every
-#                      NOTICE upstream-blob-sha and assert HTTP 200. Closes
-#                      the NOTICE co-edit bypass (review #3521) — local
-#                      hash + NOTICE-SHA match alone is tautological if the
-#                      PR edits both. CI-time verification ensures each
-#                      pinned upstream blob is a real, fetchable upstream
-#                      object.
+#   --verify-upstream  for every NOTICE lifted-files record, call
+#                      `gh api repos/$UPSTREAM/contents/<upstream-path>?ref=<pinned-commit>`
+#                      and assert the returned .sha equals the record's
+#                      upstream-blob-sha. Binds path + pinned commit + blob in
+#                      one call (#8181): the pre-#8181 `git/blobs/<sha>` check
+#                      proved only that the object exists SOMEWHERE in the
+#                      upstream store, so a NOTICE pinning a real blob under
+#                      the wrong path passed while attesting content upstream
+#                      never published there. Closes the NOTICE co-edit bypass
+#                      (review #3521) — local hash + NOTICE-SHA match alone is
+#                      tautological if the PR edits both.
 #
 # Invoked from lefthook.yml (local mode) and
 # `.github/workflows/vendor-pin-verify.yml` (--verify-upstream mode).
@@ -47,9 +51,23 @@ done
 set -- "${ARGS[@]}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+# Resolve the root with every inherited GIT_* variable stripped (by prefix, not a
+# name list). A pre-commit hook in a worktree inherits GIT_DIR, and with GIT_DIR
+# set and no GIT_WORK_TREE, `--show-toplevel` answers the -C directory itself, so
+# REPO_ROOT became this scripts dir and every staged file read as "missing from
+# working tree" (#8150, measured on a merge that staged legal-generate templates).
+_git_env_unset=()
+while IFS='=' read -r _name _; do
+  [[ "$_name" == GIT_* ]] && _git_env_unset+=(-u "$_name")
+done < <(env)
+REPO_ROOT="$(env "${_git_env_unset[@]}" git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PARSER="$SCRIPT_DIR/notice-frontmatter.sh"
-SKILL_PREFIX="plugins/soleur/skills/gdpr-gate"
+# SKILL_PREFIX + NOTICE_FILE env overrides parameterize the script for a
+# second vendored bundle (ADR-095 shared-engine precedent: the scripts stay
+# gdpr-gate-owned; each bundle's lefthook stanza and CI step export both).
+# The --verify-upstream arm reads only NOTICE_FILE + the NOTICE-internal
+# upstream coordinate, so it needs no SKILL_PREFIX.
+SKILL_PREFIX="${SKILL_PREFIX:-plugins/soleur/skills/gdpr-gate}"
 
 if (( VERIFY_UPSTREAM )); then
   UPSTREAM=$(bash "$PARSER" field upstream 2>/dev/null || true)
@@ -67,21 +85,58 @@ if (( VERIFY_UPSTREAM )); then
     echo "vendor-pin-integrity: --verify-upstream requires gh CLI" >&2
     exit 1
   fi
+  # pinned-commit is the ref under verification. Empty or non-40-hex must
+  # fail closed — a malformed ref silently degrading to a default-branch
+  # read would attest a binding never checked (#8181).
+  PINNED_COMMIT=$(bash "$PARSER" field pinned-commit 2>/dev/null || true)
+  if [[ ! "$PINNED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "vendor-pin-integrity: NOTICE pinned-commit '$PINNED_COMMIT' is missing or not a 40-hex SHA — cannot bind path/commit/blob" >&2
+    exit 1
+  fi
   fails=0
+  checked=0
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     upstream_path="${line%%:*}"
     upstream_sha="${line##*:}"
-    if ! gh api "repos/$OWNER_REPO/git/blobs/$upstream_sha" --silent 2>/dev/null; then
-      echo "vendor-pin-integrity: upstream blob $upstream_sha (path $upstream_path) not fetchable from $OWNER_REPO — NOTICE may have been tampered with" >&2
+    checked=$((checked + 1))
+    # The path is interpolated into the request URL's path segment —
+    # unvalidated, a NOTICE-supplied `?`/`&`/`#`/space/`%` would split the
+    # segment early and smuggle a second `ref` (or truncate the binding to
+    # whatever precedes it), attesting a path the check never read (#8185
+    # review). Repo paths are constrained to a portable charset; anything
+    # else fails closed rather than constructing a malformed request.
+    if [[ ! "$upstream_path" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+      echo "vendor-pin-integrity: upstream path '$upstream_path' contains characters unsafe for URL interpolation — refusing to bind" >&2
+      fails=$((fails + 1))
+      continue
+    fi
+    # The contents endpoint binds all three fields in one answer: the PATH
+    # at the pinned COMMIT must resolve to the pinned BLOB. A 404 (path
+    # absent at that commit) yields empty actual_sha -> fail; a directory
+    # path yields a JSON array whose .sha is null -> fail. `ref` travels as
+    # a -f field so gh percent-encodes it — the pinned commit can never be
+    # re-sliced by a metacharacter in the path argument. -X GET is
+    # REQUIRED: gh api defaults to POST whenever a -f field is present, and
+    # POST on the contents endpoint 404s (measured on PR #8185 CI).
+    actual_sha=$(gh api -X GET "repos/$OWNER_REPO/contents/$upstream_path" -f "ref=$PINNED_COMMIT" --jq '.sha' 2>/dev/null || true)
+    if [[ "$actual_sha" != "$upstream_sha" ]]; then
+      echo "vendor-pin-integrity: $upstream_path at pinned-commit $PINNED_COMMIT resolves to blob '${actual_sha:-<unresolved>}' but NOTICE pins $upstream_sha — path/commit/blob binding failed" >&2
       fails=$((fails + 1))
     fi
   done < <(bash "$PARSER" upstream-files)
-  if (( fails > 0 )); then
-    echo "vendor-pin-integrity: $fails upstream blob(s) failed verification" >&2
+  # "0 checked, 0 failed" must NOT read as success — an empty lifted-files
+  # registry (or a parser that yields nothing) would otherwise print the
+  # verified message and exit 0 having verified no blob at all.
+  if (( checked == 0 )); then
+    echo "vendor-pin-integrity: NOTICE declares no lifted-files records — nothing was verified; refusing to pass vacuously" >&2
     exit 1
   fi
-  echo "vendor-pin-integrity: all NOTICE upstream-blob-sha values verified against $OWNER_REPO"
+  if (( fails > 0 )); then
+    echo "vendor-pin-integrity: $fails upstream binding(s) failed verification" >&2
+    exit 1
+  fi
+  echo "vendor-pin-integrity: all $checked NOTICE upstream-blob-sha bindings verified against $OWNER_REPO at pinned-commit ${PINNED_COMMIT:0:12}"
   exit 0
 fi
 
@@ -89,7 +144,10 @@ fi
 #
 # TWO registries feed this map, with the same record shape and opposite
 # provenance (#7710):
-#   lifted-files    — upstream-derived, pinned against goSprinto MIT content.
+#   lifted-files    — upstream-derived, pinned against the NOTICE's declared
+#                     upstream (goSprinto MIT for gdpr-gate; General-Legal CC0
+#                     for legal-generate via the SKILL_PREFIX/NOTICE_FILE
+#                     overrides).
 #   soleur-authored — written from scratch for this plugin, no upstream.
 # Both are tamper-checked identically; only the ORIGIN map below differs, and
 # it exists so a mismatch names the list the file actually belongs to. Before

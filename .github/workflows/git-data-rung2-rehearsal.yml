@@ -8,7 +8,8 @@
 # THIS WORKFLOW SHIPS UNFIRED, AND THAT IS THE DESIGN RATHER THAN AN OVERSIGHT. A PR merges
 # ATOMICALLY, so evidence committed in the same PR that builds the harness would be evidence
 # from a rehearsal that never ran. The harness must exist, merge, and then RUN before its
-# output can release anything. The DO-NOT-DISPATCH banner in git-data-birth.md stays up.
+# output can release anything. The banner in git-data-birth.md was cleared by PR #8128 (merged 2026-09-14) once
+# evidence for the current template merged; a later template edit re-HOLDs the gate, not the banner.
 #
 # IT NEVER COMMITS ITS OWN EVIDENCE. The evidence file lands as a workflow ARTIFACT and, if
 # the operator wants it, as a PR they review. A route that writes its own gate-releasing
@@ -431,9 +432,11 @@ jobs:
               echo '```bash'
               echo "gh run download ${GITHUB_RUN_ID} -n git-data-rung2-boot-evidence"
               echo "mv git-data-rung2-boot-evidence.env apps/web-platform/infra/"
+              echo "# (#8043 Guard 4) COMMIT FIRST, ALONE: the gate's provenance arm reads the evidence's own commit and HOLDs on an untracked file or on a commit that also touches a hash-bound file (commit the evidence in a commit that touches none of them)."
+              echo "git checkout -b evidence-git-data-rung2 && git add apps/web-platform/infra/git-data-rung2-boot-evidence.env && git commit -m 'feat(git-data): commit the rung-2 boot evidence from run ${GITHUB_RUN_ID}'"
               echo "source tests/scripts/lib/git-data-birth-readiness-gate.sh"
               echo "git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml apps/web-platform/infra/git-data-rung2-boot-evidence.env"
-              echo "git checkout -b evidence-git-data-rung2 && git add apps/web-platform/infra/git-data-rung2-boot-evidence.env && gh pr create"
+              echo "gh pr create"
               echo '```'
               echo ""
               echo "Open the PR promptly: the evidence carries a sha256 of \`cloud-init-git-data.yml\`, so any merge touching that template or its nine payloads invalidates it and costs a full re-rehearsal."
@@ -443,7 +446,7 @@ jobs:
             echo "### Rung-2 rehearsal: FAIL" >> "$GITHUB_STEP_SUMMARY"
             echo "The rehearsal host reported a fatal or a false assertion. This is the failure class the route exists to find: it would have looked green from the apply. No evidence written." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact from this run and read which assertion went false. Fix the template, then re-dispatch. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact from this run and read which assertion went false. Fix the template, then re-dispatch. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$rc" -eq 3 ]]; then
             echo "### Rung-2 rehearsal: WRAPPER FAILURE (doppler auth/config)" >> "$GITHUB_STEP_SUMMARY"
             echo "\`doppler run\` exited 1 twice without the capture script ever producing a verdict, so the poll stopped early rather than burning ~16 minutes on a paid host. **This says nothing about the rehearsal host** — it never got to speak." >> "$GITHUB_STEP_SUMMARY"
@@ -468,22 +471,22 @@ jobs:
             echo "### Rung-2 rehearsal: TRANSIENT — the warehouse is dark for EVERY producer" >> "$GITHUB_STEP_SUMMARY"
             echo "The capture's control read answered and returned no rows from **any** source, so Better Stack is storing nothing account-wide. **This says nothing about \`${REHEARSAL_HOST}\`** — a perfect boot and a dead boot are indistinguishable while the warehouse stores nothing." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** this is the account-wide condition tracked in #7811 — do NOT re-dispatch, because another paid cpx22 cannot produce evidence while storage is down. Re-run this rehearsal once #7811 reports storage restored. A 2xx from the ingest endpoint does not contradict this: an acknowledgement is not storage. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** this is the account-wide condition tracked in #7811 — do NOT re-dispatch, because another paid cpx22 cannot produce evidence while storage is down. Re-run this rehearsal once #7811 reports storage restored. A 2xx from the ingest endpoint does not contradict this: an acknowledgement is not storage. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif grep -q 'NEVER STORED A ROW' /tmp/rung2/capture.log 2>/dev/null; then
             echo "### Rung-2 rehearsal: TRANSIENT — this source has never stored a row" >> "$GITHUB_STEP_SUMMARY"
             echo "The control source is answering and carrying rows, so the warehouse is up; this source's table still does not exist. Better Stack creates the table lazily on the first **stored** row, so either nothing has ever been stored to it, or the table name is wrong. **This is not yet a statement about \`${REHEARSAL_HOST}\`** — a misaddressed source and a host that never shipped look identical from here." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** compare the table named in the capture output above against \`BS_GIT_DATA_TABLE\` in \`scripts/lib/betterstack-sources.sh\` — every artifact is emitted with the query that retrieved it, so both values are already in this run and neither needs looking up elsewhere. If they disagree, fix the constant; no number of paid hosts will produce evidence against the wrong table. If they agree, the source genuinely holds nothing and a re-dispatch is warranted. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** compare the table named in the capture output above against \`BS_GIT_DATA_TABLE\` in \`scripts/lib/betterstack-sources.sh\` — every artifact is emitted with the query that retrieved it, so both values are already in this run and neither needs looking up elsewhere. If they disagree, fix the constant; no number of paid hosts will produce evidence against the wrong table. If they agree, the source genuinely holds nothing and a re-dispatch is warranted. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif grep -q 'CONTROL READ ALSO FAILED' /tmp/rung2/capture.log 2>/dev/null; then
             echo "### Rung-2 rehearsal: TRANSIENT — the instrument itself is unusable" >> "$GITHUB_STEP_SUMMARY"
             echo "The control leg did not answer — either it ran and failed, or the query script was not executable so it could not run at all. Either way this run cannot tell a missing table from a dark warehouse from a broken query path. **Nothing is known, least of all anything about \`${REHEARSAL_HOST}\`.**" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** the suspect is the query path, not the host, so another paid cpx22 cannot help — do NOT re-dispatch. The capture recorded the target read's exit code and the control classifier's token in the step output above; read those, then re-run this workflow once. If it repeats with the same classifier token, the ClickHouse read credential in Doppler \`prd_terraform\` is the suspect, not the rehearsal. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** the suspect is the query path, not the host, so another paid cpx22 cannot help — do NOT re-dispatch. The capture recorded the target read's exit code and the control classifier's token in the step output above; read those, then re-run this workflow once. If it repeats with the same classifier token, the ClickHouse read credential in Doppler \`prd_terraform\` is the suspect, not the rehearsal. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
             echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. The capture step already consulted Sentry (see capture.log) (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. The capture step already consulted Sentry (see capture.log) (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **A FAIL here releases nothing: the committed evidence keeps binding the last template that PASSED.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
 

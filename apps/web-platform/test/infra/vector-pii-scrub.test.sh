@@ -641,6 +641,28 @@ fi
 assert_grep "host_scripts_journald is an input of pii_scrub_drop_userdata (redaction-boundary guard)" \
   '^inputs = \[.*"host_scripts_journald".*\]'
 
+# #7898 §2: Source 2 (system_journald) is the off-box sink for every host-script
+# refusal / failed-send crit row (`logger -p user.crit -t <unit>` lands as
+# PRIORITY=2 and this source admits PRIORITY 0-2 from ANY unit, so no per-unit
+# allowlist entry is needed). One row pins the three facts that sink depends
+# on — the PRIORITY set, the two-unit exclusion list (a widened exclusion
+# would silently drop a monitor), and membership in the scrub chain — scoped to
+# the [sources.system_journald] block so a same-named key elsewhere cannot
+# satisfy it.
+SRC2_BLOCK="$(awk '/^\[sources\.system_journald\]/{f=1; next} f && /^\[/{exit} f' "$VECTOR_TOML")"
+CASES=$((CASES + 1))
+if [[ -z "$SRC2_BLOCK" ]]; then
+  fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
+elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
+elif ! grep -qE '^exclude_units = \["inngest-server\.service", "vector\.service"\]$' <<<"$SRC2_BLOCK"; then
+  fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
+elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
+  fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
+else
+  pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (two exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
+fi
+
 echo
 # --- Accounting conservation (ADR-193 #3) ---------------------------------------------------
 # The arm that catches a DISCARDED verdict. The floor below only catches "no assertions RAN";
@@ -685,7 +707,7 @@ fi
 # fixture is deliberately NOT counted in the floor (it only runs when the pepper carries a
 # multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
 # read a floor failure on an otherwise-green run as "you added rows, update this number".
-PII_SCRUB_MIN_CASES=35
+PII_SCRUB_MIN_CASES=36
 if (( CASES < PII_SCRUB_MIN_CASES )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$PII_SCRUB_MIN_CASES" >&2

@@ -86,8 +86,9 @@ locals {
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision = replace(file("${path.module}/../../git-data-provision.sh"), local.git_data_rationale_strip, "")
-    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
-    # git-shell forced command; delivered to /usr/local/bin like the others.
+    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaced the raw
+    # git-shell forced command, and since #8043 is the key's whole confinement (login
+    # shell /bin/sh); delivered to /usr/local/bin like the others.
     git_data_transport_wrapper = replace(file("${path.module}/../../git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.

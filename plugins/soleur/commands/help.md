@@ -10,22 +10,22 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 ## Step 1: Read Plugin Manifest
 
-Use the **Read tool** to read `plugins/soleur/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
+Use the **Read tool** to read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
 
 **The manifest carries no `version` key** — that is deliberate, not an omission (a constant version string makes `claude plugin update` compare equal and no-op while reporting success, #7471). Do not report a version read from it. If a version is wanted, it comes from the latest GitHub Release tag (`gh release list --limit 1 --json tagName --jq '.[0].tagName'`); if that is unavailable, print no version rather than guessing one.
 
-If that path does not exist, try reading from `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json`.
+If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from `plugins/soleur/.claude-plugin/plugin.json` (monorepo checkout) or `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json` (legacy installed path).
 
 ## Step 2: Count Components
 
 Use the **Glob tool** to count components. Make all four calls in parallel in a single message:
 
-1. **Count agents:** Use pattern `**/*.md` with path `plugins/soleur/agents` -- count the returned file paths
-2. **Count commands:** Use pattern `*.md` with path `plugins/soleur/commands` -- count the returned file paths
-3. **Count skills:** Use pattern `**/SKILL.md` with path `plugins/soleur/skills` -- count the returned file paths (one SKILL.md per skill)
+1. **Count agents:** Use pattern `**/*.md` with path `${CLAUDE_PLUGIN_ROOT}/agents` -- count the returned file paths
+2. **Count commands:** Use pattern `*.md` with path `${CLAUDE_PLUGIN_ROOT}/commands` -- count the returned file paths
+3. **Count skills:** Use pattern `**/SKILL.md` with path `${CLAUDE_PLUGIN_ROOT}/skills` -- count the returned file paths (one SKILL.md per skill)
 4. **Count agent domains:** From the agent file paths in result 1, extract the unique top-level directory names (the first path segment after `agents/`) and count them
 
-If the plugin paths do not exist, fall back to the installed plugin paths under `~/.claude/plugins/`.
+If `CLAUDE_PLUGIN_ROOT` is not set or those paths do not exist, fall back to `plugins/soleur/...` (monorepo checkout) or `~/.claude/plugins/*/soleur/...` (legacy installed path).
 
 ## Step 2.5: Harness-aware command names
 
@@ -33,6 +33,7 @@ Detect the active harness before printing commands:
 
 - **Claude Code:** commands use the `/soleur:` prefix (`/soleur:go`, `/soleur:sync`, `/soleur:help`). Workflow skills are invoked via the **Skill tool** (`soleur:<skill>`).
 - **Grok Build:** commands are unqualified (`/go`, `/sync`, `/help`). Workflow skills are invoked via **slash commands** (`/brainstorm`, `/one-shot`, …) — not `/soleur:go`.
+- **Devin CLI:** commands use the `/soleur:` prefix (`/soleur:go`, `/soleur:sync`, `/soleur:help`). Workflow skills are invoked via the same **slash commands** (`/soleur:<skill>`).
 - Implementation reference: `plugins/soleur/lib/harness.ts` (`routingInstructions`, `formatSkillInvocation`).
 - **Codex:** entry points are `$soleur:go`, `$soleur:sync`, and `$soleur:help`.
   Read [Codex compatibility instructions](../codex/INSTRUCTIONS.md) and resolve
@@ -56,6 +57,40 @@ COMMANDS:
   /soleur:help                This help listing
 
 WORKFLOW SKILLS (invoked via /soleur:go or directly via Skill tool):
+  brainstorm                  Explore requirements and approaches
+  plan                        Create an implementation plan
+  work                        Execute the plan systematically
+  review                      Run multi-agent code review
+  compound                    Capture learnings from solved problems
+  one-shot                    Full autonomous engineering workflow
+
+AGENTS: [N] agents across [M] categories
+  review    ([count])  Code review, security, performance, patterns
+  research  ([count])  Codebase analysis, best practices, docs
+  design    ([count])  Domain-driven design
+  workflow  ([count])  PR comments, spec analysis
+
+SKILLS: [N] skills
+  [List all skills found with brief descriptions]
+
+MCP SERVERS:
+  context7                    Framework documentation lookup
+
+Quick start: /soleur:go <what you want to do>
+Full docs:   See plugins/soleur/README.md
+```
+
+### Devin CLI
+
+```text
+Soleur - The Company-as-a-Service Platform
+
+COMMANDS:
+  /soleur:go <what you want>  The recommended way to use Soleur
+  /soleur:sync                Populate knowledge-base from existing codebase
+  /soleur:help                This help listing
+
+WORKFLOW SKILLS (invoked via /soleur:go or directly as /soleur:<skill>):
   brainstorm                  Explore requirements and approaches
   plan                        Create an implementation plan
   work                        Execute the plan systematically

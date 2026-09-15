@@ -3,6 +3,10 @@ name: compound
 description: "This skill should be used when documenting a recently solved problem to compound your team's knowledge."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/compound` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:compound`). Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
 <!-- lifecycle-handoff-protocol:end -->
@@ -19,10 +23,14 @@ Captures problem solutions while context is fresh, creating structured documenta
 
 ## Usage
 
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/compound`); slash names the skill.
+
 ```bash
-skill: soleur:compound               # Document the most recent fix
-skill: soleur:compound [brief context]  # Provide additional context hint
-skill: soleur:compound --headless    # Headless mode: auto-approve all prompts
+skill: soleur:compound               # Claude — document the most recent fix
+skill: soleur:compound [brief context]
+skill: soleur:compound --headless
+/compound                            # Grok slash (then Read this SKILL.md)
+/compound --headless
 ```
 
 ## Headless Mode Detection
@@ -272,11 +280,11 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Append warnings:
    - If the linter reported **`[WARN]`** — the payload is approaching the ceiling, and this is the tier where remediation still has room to work, so act on it now rather than waiting for the reject:
      - Apply the placement gate (see Route Learning to Definition) and the discoverability litmus (`wg-every-session-error-must-produce-either`) **before adding any new rule**. Already-enforced and domain-scoped insights MUST route to a skill/agent, NOT `AGENTS.rules.md`.
-     - Retire an existing rule via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse).
-     - *(The demote-to-a-conditional-sidecar rung was REMOVED by ADR-151 — there is no class to demote into. The ladder now offers trim-prose and retire-a-rule only, and per #6794 the retirement rung needs usage evidence the telemetry cannot currently supply.)*
+     - **Migrate** — the primary lever. A domain-scoped rule whose obligation only CHECKS inside the skill that enforces it (bind-vs-check: could the violation occur on a turn that never enters that enforcer? then it BINDS and stays) moves its body into that skill. Run `git grep -l <id>` first — a hit from code, infra, runbooks or ADRs is a bind site — then do the full removal plus a registry row per `cq-agents-md-tier-gate` (the PR #8034 shape; the checklist is in the header of [migrated-rule-ids.txt](../../../../scripts/migrated-rule-ids.txt)), in a dedicated reviewed PR. Precedents: #8034, #8175.
      - When trimming `**Why:**` lines to fit, preserve per-issue mechanism labels (the text after each `#N`); strip redundant prose only. Correct: `**Why:** #2618 per-command-ack; #2880 non-interactive exec.` Over-trimmed: `**Why:** #2618; #2880.` (loses the per-issue mechanism distinction downstream readers use to map a rule to its triggering incident class).
+     - **Retire on editorial judgment only**, via [retired-rule-ids.txt](../../../../scripts/retired-rule-ids.txt) (rule IDs are immutable — retire, never renumber or reuse). `rules_unused_over_8w` is not retirement evidence — it counts enforcement events only, so an obeyed rule emits nothing (81/100 on 2026-09-14, #8030). *(ADR-151 removed the demote-to-a-conditional-sidecar rung: there is no sidecar to demote into.)*
    - If the linter **exited non-zero** — the commit is already blocked, and the fix depends on *why*:
-     - a `[REJECT] B_ALWAYS>…` verdict means the always-loaded payload is over budget → shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first.
+     - a `[REJECT] B_ALWAYS>…` verdict means the always-loaded payload is over budget → shrink is mandatory before anything else lands; apply the same remediation ladder above, and do not attempt to add a rule first. Only **Trim** lands in the blocked commit; Migrate and Retire are separate reviewed PRs.
      - an `ERROR: rule body exceeds …` (which can appear alongside an `[OK]` always-loaded verdict) means one rule body is over the per-rule cap → trim that **single named rule** by moving its context to a learning file; the payload-shrink ladder does not address it.
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
@@ -284,7 +292,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
    B_TOTAL is informational only — the per-turn cost is `AGENTS.md`, the per-session-first-turn cost is the always-loaded payload the linter reports. Since ADR-151 there are no conditional sidecars, so `B_TOTAL == B_ALWAYS` and every rule is a first-turn cost on every session.
 
-   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the pruning hint. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
+   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it **for real** — compound is the authoritative local producer of `knowledge-base/project/rule-metrics.json` (ADR-091): it runs on the operator's machine where `.claude/.rule-incidents.jsonl` actually exists, so it, not a fresh-checkout CI cron, generates the metric. Stage the aggregate **only if it changed** (`git diff --quiet -- <OUT> || git add <OUT>`) so it lands in this session's compound commit; then parse `summary.rules_unused_over_8w` for the informational hint below. Only the redaction-safe aggregate (rule_id + counts + a 50-char public prefix) is committed — never the raw `command_snippet` log. On zero rule-carrying lines the aggregator no-ops (issue #6042), leaving the committed file untouched. Do not fail the phase if the aggregator is missing or errors, but do NOT silently swallow a crash — a stderr line tells the reader why the write/hint is absent:
 
    ```bash
    if [[ -x ./scripts/rule-metrics-aggregate.sh ]]; then
@@ -300,7 +308,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
        fi
        unused=$(jq -r '.summary.rules_unused_over_8w // "unknown"' "$OUT" 2>/dev/null || echo unknown)
        if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
-         echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
+         echo "[INFO] $unused rules recorded no ENFORCEMENT event (warn/deny/bypass/applied) in 8 weeks. NOT a retirement shortlist — not retirement evidence: an obeyed rule emits nothing, so this count nominates the best-obeyed rules first. Headroom comes from editorial trims or from migrating domain-scoped rules to their enforcing skill (cq-agents-md-tier-gate; checklist in the header of scripts/migrated-rule-ids.txt)."
        fi
      else
        # The aggregator's orphan gate exits AFTER writing (CI forensic context),
@@ -408,7 +416,7 @@ After constitution promotion, compound routes the captured learning to the skill
 
 **AGENTS.md placement gate (mandatory).** Before proposing any edit that targets AGENTS.md, classify each insight. These placement classes are distinct from `rule-audit.sh`'s enforcement tiers (hooks/AGENTS.md/constitution/agents/skills) — they govern *where a new rule lives*, not the enforcement layer count.
 
-- **Already-enforced:** A hook or skill step already prevents the violation. Action: ensure the target skill/hook carries the Why; do NOT add to AGENTS.md. If an equivalent AGENTS.md rule already exists, collapse it to a one-line pointer (`[<id>] [skill-enforced: <skill> <step>]. Full rule: <path>`) and append the full body to the skill.
+- **Already-enforced:** A hook or skill step already prevents the violation. Action: ensure the target skill/hook carries the Why; do NOT add to AGENTS.md. If an equivalent AGENTS.md rule already exists and its obligation only CHECKS inside that enforcer (bind-vs-check: could the violation occur on a turn that never enters the enforcer? then it BINDS and stays), migrate it: move the body VERBATIM under the enforcing heading with the banner line **Rule `<id>` — migrated out of `AGENTS.rules.md` on <date> (PR #N)** (as a blockquote), register the id in [migrated-rule-ids.txt](../../../../scripts/migrated-rule-ids.txt), add the `retired-rule-ids.txt` exemption row and the `DELETED` ack, and delete the corpus line and its `AGENTS.md` pointer (the PR #8034 shape; [lint-migrated-rule-ids.sh](../../../../scripts/lint-migrated-rule-ids.sh) checks the placement). Never as a side edit of a compound run: record it as a migration candidate and walk the checklist in the header of [migrated-rule-ids.txt](../../../../scripts/migrated-rule-ids.txt) in a dedicated reviewed PR.
 - **Domain-scoped:** The violation only happens inside a specific skill, tool, or file pattern (tests, Terraform, CF, Playwright, Pencil, CI workflows, Next.js route files, content/docs). Action: edit the owning skill/agent/reference file. AGENTS.md is OUT OF SCOPE regardless of impact.
 - **Cross-cutting session invariant:** The violation can happen on any turn without a specific trigger (e.g., blast-radius safety, silent-failure traps that span every code path, environment constraints loaded by every session). Only these qualify for AGENTS.md.
 
