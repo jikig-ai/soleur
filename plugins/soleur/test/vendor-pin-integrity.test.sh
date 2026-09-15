@@ -657,19 +657,27 @@ cat > "$GHSTUB_DIR/gh" <<'STUB_EOF'
 # contract. $GH_STUB_TABLE holds "<path>|<ref>|<sha>" lines. The ref may
 # arrive inline (`contents/<p>?ref=<r>`) or as a `-f ref=<r>` field arg —
 # both are accepted so the stub discriminates the binding, not the syntax.
+#
+# METHOD SEMANTICS mirror real gh: a `-f` field with no explicit `-X GET`
+# makes gh POST, and POST on the contents endpoint 404s (measured on #8185
+# CI — the pre-fix run failed every binding). The stub reproduces that so
+# dropping `-X GET` turns the whole TS16 suite red.
 set -u
 if [[ "${1:-}" != "api" ]]; then
   echo "gh stub: unhandled subcommand '$*'" >&2
   exit 1
 fi
 shift
-url=""; ref=""
+url=""; ref=""; method=""; saw_field=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -f|--field)
+      saw_field=1
       [[ "${2:-}" == ref=* ]] && ref="${2#ref=}"
       shift 2 ;;
-    --jq|--method|-X|-H|--header)
+    -X|--method)
+      method="$2"; shift 2 ;;
+    --jq|-H|--header)
       shift 2 ;;
     -*)
       shift ;;
@@ -677,6 +685,10 @@ while [[ $# -gt 0 ]]; do
       url="$1"; shift ;;
   esac
 done
+# gh defaults to POST when -f fields are present; contents only serves GET.
+if [[ "$saw_field" == 1 && "$method" != "GET" && "$url" == repos/*/contents/* ]]; then
+  exit 1
+fi
 case "$url" in
   repos/*/contents/*)
     path="${url#*contents/}"; path="${path%%\?*}"

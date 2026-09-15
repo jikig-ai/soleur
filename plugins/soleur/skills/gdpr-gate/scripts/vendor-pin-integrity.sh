@@ -116,8 +116,10 @@ if (( VERIFY_UPSTREAM )); then
     # absent at that commit) yields empty actual_sha -> fail; a directory
     # path yields a JSON array whose .sha is null -> fail. `ref` travels as
     # a -f field so gh percent-encodes it — the pinned commit can never be
-    # re-sliced by a metacharacter in the path argument.
-    actual_sha=$(gh api "repos/$OWNER_REPO/contents/$upstream_path" -f "ref=$PINNED_COMMIT" --jq '.sha' 2>/dev/null || true)
+    # re-sliced by a metacharacter in the path argument. -X GET is
+    # REQUIRED: gh api defaults to POST whenever a -f field is present, and
+    # POST on the contents endpoint 404s (measured on PR #8185 CI).
+    actual_sha=$(gh api -X GET "repos/$OWNER_REPO/contents/$upstream_path" -f "ref=$PINNED_COMMIT" --jq '.sha' 2>/dev/null || true)
     if [[ "$actual_sha" != "$upstream_sha" ]]; then
       echo "vendor-pin-integrity: $upstream_path at pinned-commit $PINNED_COMMIT resolves to blob '${actual_sha:-<unresolved>}' but NOTICE pins $upstream_sha — path/commit/blob binding failed" >&2
       fails=$((fails + 1))
