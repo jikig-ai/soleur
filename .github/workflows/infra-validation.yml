@@ -1513,6 +1513,13 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      # (#6680, ADR-220) git-data-cutover's access gate precedes every host mutation, probe
+      # bytes never reach the workflow-command parser, the bridge's server-ip export set is
+      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring. Runtime arm drives the
+      # real script against real OpenSSH in the pinned image; under CI=true a missing docker FAILS.
+      - name: Run git-data cutover access-path tests (ADR-220)
+        run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
+
       # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
       # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
       # from a REAL terraform render rather than a hand-copied fixture, so it needs the
