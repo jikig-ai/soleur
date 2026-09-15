@@ -1,0 +1,30 @@
+WARNING: Bun 1.3.11 installed, expected 1.3.14 (from .bun-version)
+Run: bun upgrade
+=== test-all.sh contention preamble (#6789) ===
+[contention] tmp /tmp: 25% used, 3091MB avail, 12016 entries
+[contention] runtime /run/user/1001: 5% used, 2991MB avail, 25617 entries
+[contention] machine: 16 cores, load 11.97, MemAvailable 8620MB
+[contention] siblings: 2 other worktree(s) running test-all.sh
+[contention]   -> pid 1196851 in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-drift-threshold-ci-term-and-merge-queue (running 447s)
+[contention]   -> pid 1492703 in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy (running 131s)
+[contention]   -> pid 1502738 in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy (running 125s)
+[contention] suite siblings: 1 other worktree(s) running an individual test suite
+[contention]   -> pid 1786310 in /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-drift-threshold-ci-term-and-merge-queue (running 15s)
+[contention] BANNER SIBLING_RUN_DETECTED: test-all.sh is running in 2 other worktree(s) (listed above). Confirm a failure three ways — isolated re-run, the matching CI gate, and a clean full re-run once the sibling exits — before accepting it as real.
+[contention] BANNER SIBLING_SUITE_DETECTED: an individual test suite is running in 1 other worktree(s) (listed above). This runner competes with it for the same tmpfs capacity. Confirm a failure three ways — isolated re-run, the matching CI gate, and a clean full re-run once the sibling exits — before accepting it as real.
+ORPHAN_SCAN valid=1 mode=report scanned=689 anchors=0 set_members=0 would_signal=0 signalled=0 failed=0 refused=0 refused_cap=0 late_refused=0 refused_unauthorized=0 skipped_same_pgroup=0 skipped_foreign_ns=0 skipped_foreign_uid=400 skipped_other_session=0 prefiltered_no_fd255=243 unreadable=0 unreadable_denied=0 unreadable_gone=0 evidence=ok
+[contention] BANNER CAPACITY_CONTENDED reason=sibling_runs,sibling_suites measured_runs=2 measured_suites=1 sibling_threshold=1 tmp_avail_mb=3091 tmp_floor_mb=1024 memavail_mb=8620
+ERROR: refusing a full-gate run — 2 sibling full-gate run(s) already in flight (TEST_GROUP=scripts).
+
+The offending worktree(s) are listed in the contention preamble above, under
+'[contention] siblings:'. Concurrent full-gate runs inflate each other's timings, and on a
+contended host push suites past their own timeouts — turning a green suite red for a reason
+unrelated to your diff, so the next reader investigates a phantom.
+
+Run the suite covering your files instead:
+    bash <path/to/the/suite.test.sh>
+
+Or wait for the sibling to finish. If you are the lead and this IS the sanctioned gate run,
+override explicitly:
+    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
+RC=4
