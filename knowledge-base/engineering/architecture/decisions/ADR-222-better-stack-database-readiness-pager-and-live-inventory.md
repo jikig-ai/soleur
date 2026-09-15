@@ -146,7 +146,8 @@ arm checks declared alerts only and does not report undeclared ones.
   Before any merge, the reconcile reports the deletion as `absent-live`; the off-switch is setting
   `adopt_app_health_monitor` to `false` in a PR (runbook
   [app-database-readiness-alarm.md](../../operations/runbooks/app-database-readiness-alarm.md));
-  and a tracked follow-up removes the block and the variable once the post-merge read-back passes.
+  and the #7884 pipeline removes the block and the variable in a follow-up PR once the post-merge
+  read-back passes (a 32-line, 3-file change, so it is done rather than filed).
   Removing the variable also closes a Doppler `TF_VAR_*` override path around the reconcile's
   resolver (ADR-117 amendment of 2026-09-15).
 - **Unmanaged objects surface within one drift cycle (12 h at most), with no SSH**, through the

@@ -183,8 +183,9 @@ resource "betteruptime_monitor" "app" {
 # Adopted, not created: 4226366 was made by hand on 2026-03-28 and keeps its id
 # and check history. The import is gated on var.adopt_app_health_monitor
 # (variables.tf says what `false` means). Once adoption is verified the import
-# block and variable are removed by a tracked follow-up, because after a
-# vendor-side deletion Terraform re-attempts the import and aborts the plan.
+# block and variable are removed in a follow-up PR once the post-merge read-back
+# passes, because after a vendor-side deletion Terraform re-attempts the import
+# and most likely aborts the plan (ADR-222, derived from source, not measured).
 #
 # Contract pin: test/server/health-keyword-monitor-contract.test.ts reads the
 # keyword below, builds the real /health bodies and fails if the keyword stops
