@@ -1,5 +1,7 @@
 # Domain Config Table
 
+**Harness note:** the `gh issue view` verification inside each Task Prompt is orchestrator-side work when the spawned subagent profile has no shell (e.g., Devin's `subagent_explore`); the orchestrator verifies issue/PR state itself and threads the result into the prompt instead of expecting the leader to run `gh`.
+
 Read the user's message or feature description and assess relevance against each domain in the table below. For each relevant domain, spawn the domain leader as a Task agent using the Task Prompt column, substituting `{desc}` with context. The Routing Prompt and Options columns are retained for workshop reference only -- they are not used during standard routing.
 
 | Domain | Assessment Question | Leader | Routing Prompt | Options | Task Prompt |
