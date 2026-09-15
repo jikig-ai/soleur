@@ -237,12 +237,20 @@ else
   bad "shipped registration does not resolve to an executable (tried '${RESOLVED:-<none>}')"
 fi
 
+# The matcher is a regex against the host's shell tool name, and the two hosts
+# disagree on it: Claude Code calls it `Bash`, Devin calls it `exec`. An
+# equality check on either literal passes while the other host dispatches
+# nothing, so evaluate the regex against both names.
 cases=$((cases + 1))
-if jq -e '.hooks.PreToolUse[]? | select(.matcher == "Bash") | .hooks[]?.command | select(test("browser-snapshot-credential-guard"))' \
+if jq -e '[.hooks.PreToolUse[]?
+            | select(any(.hooks[]?.command // ""; test("browser-snapshot-credential-guard")))
+            | (.matcher // "") as $m
+            | select(("exec" | test($m)) and ("Bash" | test($m)))]
+          | length > 0' \
      "$PLUGIN_MANIFEST" >/dev/null 2>&1; then
-  ok 'shipped registration selects the Bash matcher'
+  ok 'shipped matcher binds both shell tool names (Bash, exec)'
 else
-  bad 'shipped registration must use matcher "Bash"'
+  bad 'shipped matcher must match BOTH "Bash" (Claude Code) and "exec" (Devin)'
 fi
 
 # Exact-filename anchor here too. The shipped-manifest row was hardened in
