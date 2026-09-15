@@ -79,8 +79,6 @@ INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
 CHILD="${GD_ROOT_KEY_CHILD:-0}"
 
 MUTANT_FLOOR=31
-ASSERT_FLOOR_BASE=87
-ASSERT_FLOOR_MUTANTS=48
 
 passes=0
 fails=0
@@ -1246,8 +1244,9 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   printf '\n=== git-data-root-key: %d passed, %d failed, %d skipped ===\n\n' "$passes" "$fails" "$skips"
   exit 1
 fi
-_floor=$ASSERT_FLOOR_BASE
-[[ "$CHILD" != "1" ]] && _floor=$((ASSERT_FLOOR_BASE + ASSERT_FLOOR_MUTANTS))
+ASSERT_FLOOR_BASE=87
+ASSERT_FLOOR_MUTANTS=48
+_floor=$((ASSERT_FLOOR_BASE + ASSERT_FLOOR_MUTANTS * (${CHILD:-0} != 1)))
 if [[ "$cases" -lt "$_floor" ]]; then
   printf '\n[FATAL] assertion floor: only %d assertion(s) ran, floor is %d. Arms were deleted, skipped, or the suite exited early.\n' \
     "$cases" "$_floor" >&2
