@@ -305,7 +305,7 @@ object, all on existing plans.
 
 Implementation measured several D2 and D3 requirements as unmet or undeliverable. The decisions below
 replace them. The plan
-(`knowledge-base/project/plans/2026-09-15-feat-git-data-root-key-separate-root-plan.md`, "Measured facts
+(`knowledge-base/project/plans/archive/20260915-181714-2026-09-15-feat-git-data-root-key-separate-root-plan.md`, "Measured facts
 that change the issue's design") holds the evidence. The issues named here are #8209 (evict the
 repo-secret-reachable credentials from `prd_terraform`), #8211 (rebuild the cutover's real modes) and
 #8210 (`/dev/mapper/git-data` is not reopened at boot).
