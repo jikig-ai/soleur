@@ -112,6 +112,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Session lifecycle slice: a server-owned coordinator initializes once, starts or resumes a bound thread, starts validated turns, and maps approval decisions without exposing protocol envelopes (3 session tests green).
   - [x] Event-buffer slice: inbound App Server notifications are ordered through a bounded async buffer, drain before close, and fail closed on source errors or queue overflow (3 buffer tests green).
   - [x] RPC event bridge slice: notification callbacks feed the bounded buffer and RPC channel closure propagates the provider error to stream consumers (2 bridge tests green).
+  - [x] Stdio process slice: an injectable process wrapper decodes bounded JSONL stdout, routes responses and notifications through the RPC bridge, and disposes the provider process without exposing credentials (2 stdio tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).

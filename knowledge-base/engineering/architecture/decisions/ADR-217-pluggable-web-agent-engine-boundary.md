@@ -63,6 +63,9 @@ closes the source with an explicit backpressure error instead of growing the
 server heap without limit.
 The RPC client exposes channel-close callbacks so the bridge terminates
 consumers when the provider process exits, preserving the source error.
+The stdio process wrapper owns JSONL decoding, process exit/disposal, and the
+credential-bearing launch callback; tests inject the process so no live binary
+or network is needed for protocol verification.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
