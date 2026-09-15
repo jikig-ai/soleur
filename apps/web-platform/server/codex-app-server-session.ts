@@ -5,6 +5,7 @@ import {
   createCodexThreadReadRequest,
   createCodexThreadResumeRequest,
   createCodexThreadStartRequest,
+  createCodexThreadDeleteRequest,
   createCodexThreadTurnsListRequest,
   createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
@@ -35,6 +36,7 @@ export interface CodexAppServerSession {
   resume(threadId: string, input: string): Promise<CodexAppServerTurn>;
   readThread(threadId: string): Promise<Record<string, unknown>>;
   listTurns(threadId: string, options?: CodexThreadTurnsListOptions): Promise<Record<string, unknown>>;
+  deleteThread(threadId: string): Promise<Record<string, unknown>>;
   interrupt(threadId: string, turnId: string): Promise<Record<string, unknown>>;
   respondToApproval(requestId: string, decision: "allow" | "deny"): Promise<void>;
 }
@@ -134,6 +136,10 @@ export function createCodexAppServerSession(
     listTurns: async (threadId, listOptions) => {
       await ensureInitialized();
       return client.request(createCodexThreadTurnsListRequest(options.nextRequestId(), threadId, listOptions));
+    },
+    deleteThread: async (threadId) => {
+      await ensureInitialized();
+      return client.request(createCodexThreadDeleteRequest(options.nextRequestId(), threadId));
     },
     interrupt: async (threadId, turnId) => {
       await ensureInitialized();

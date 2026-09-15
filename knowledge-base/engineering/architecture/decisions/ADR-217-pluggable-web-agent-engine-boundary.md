@@ -77,6 +77,9 @@ The negotiated session also owns a bounded `thread/turns/list` history request
 with opaque cursor validation, capped page size, and explicit sort/item-view
 options. This is a provider seam only: neutral cursor replay remains
 unsupported until persisted turn/item responses have a complete translator.
+Remote erasure uses the documented `thread/delete` request and returns
+`confirmed` only for an exact empty acknowledgement; malformed acknowledgements
+fail closed and an erased active thread is removed from the runtime cache.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

@@ -6,6 +6,7 @@ import {
   createCodexThreadResumeRequest,
   createCodexThreadReadRequest,
   createCodexThreadStartRequest,
+  createCodexThreadDeleteRequest,
   createCodexThreadTurnsListRequest,
   createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
@@ -80,6 +81,15 @@ describe("Codex App Server protocol requests", () => {
     expect(() => createCodexTurnInterruptRequest("rpc-8", "thread-1", "turn\n1")).toThrowError(
       expect.objectContaining({ code: "codex_thread_invalid" }),
     );
+  });
+
+  it("builds a server-owned thread deletion request", () => {
+    expect(createCodexThreadDeleteRequest("rpc-13", "thread-1")).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-13",
+      method: "thread/delete",
+      params: { threadId: "thread-1" },
+    });
   });
 
   it("builds a bounded paginated thread-history request and rejects unsafe cursors", () => {

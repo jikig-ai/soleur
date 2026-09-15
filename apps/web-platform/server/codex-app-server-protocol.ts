@@ -111,6 +111,10 @@ export function createCodexThreadReadRequest(id: string, threadId: string, inclu
   return request(id, "thread/read", { threadId: assertThreadId(threadId), includeTurns });
 }
 
+export function createCodexThreadDeleteRequest(id: string, threadId: string): CodexRpcRequest {
+  return request(id, "thread/delete", { threadId: assertThreadId(threadId) });
+}
+
 export interface CodexThreadTurnsListOptions {
   cursor?: string | null;
   limit?: number;

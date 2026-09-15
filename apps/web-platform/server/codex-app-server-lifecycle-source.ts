@@ -131,7 +131,18 @@ export function createCodexAppServerLifecycleSource(
       const active = await ensureRuntime(lease);
       await active.session.respondToApproval(requestId, decision);
     },
-    erase: async (_context: EngineRunContext, _session: NativeSessionReference, _lease: CodexCredentialLease): Promise<"confirmed" | "unsupported"> => "unsupported",
+    erase: async (_context: EngineRunContext, session: NativeSessionReference, lease: CodexCredentialLease): Promise<"confirmed" | "unsupported"> => {
+      const active = await ensureRuntime(lease);
+      const result = await active.session.deleteThread(session.resumeHandle);
+      if (Object.keys(result).length > 0) {
+        throw Object.assign(new Error("Codex thread deletion acknowledgement is invalid"), { code: "codex_erase_ack_invalid" });
+      }
+      if (active.thread?.resumeHandle === session.resumeHandle) {
+        active.thread = null;
+        active.turnId = null;
+      }
+      return "confirmed";
+    },
     dispose: async () => {
       const active = runtime;
       runtime = null;

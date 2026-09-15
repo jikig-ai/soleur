@@ -64,9 +64,11 @@ describe("Codex App Server lifecycle source", () => {
     ]);
   });
 
-  it("routes approval responses and keeps cursor replay and erase explicit", async () => {
+  it("routes approval responses, keeps cursor replay explicit, and confirms remote erasure", async () => {
     const events = createCodexAppServerEventBridge();
-    const request = vi.fn();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({});
     const notify = vi.fn();
     const respond = vi.fn(async () => undefined);
     const connection = {
@@ -78,7 +80,8 @@ describe("Codex App Server lifecycle source", () => {
     await expect(source.respondToApproval(context, "approval-1", "deny", lease)).resolves.toBeUndefined();
     expect(respond).toHaveBeenCalledWith("approval-1", { decision: "decline" });
     await expect(source.resumeFromCursor(context, null, lease)).rejects.toMatchObject({ code: "codex_operation_unsupported" });
-    await expect(source.erase(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("unsupported");
+    await expect(source.erase(context, { resumeHandle: "thread-1", sessionId: null }, lease)).resolves.toBe("confirmed");
+    expect(request.mock.calls.map(([rpcRequest]) => rpcRequest.method)).toEqual(["initialize", "thread/delete"]);
   });
 
   it("fails closed on malformed interrupt and reconciliation responses", async () => {
@@ -88,7 +91,8 @@ describe("Codex App Server lifecycle source", () => {
       .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
       .mockResolvedValueOnce({ turn: { id: "turn-1" } })
       .mockResolvedValueOnce({ accepted: true })
-      .mockResolvedValueOnce({ thread: { id: "other-thread", turns: [] } });
+      .mockResolvedValueOnce({ thread: { id: "other-thread", turns: [] } })
+      .mockResolvedValueOnce({ accepted: true });
     const connection = {
       client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), receive: vi.fn(), close: vi.fn(), pendingCount: () => 0 },
       events,
@@ -98,5 +102,6 @@ describe("Codex App Server lifecycle source", () => {
     await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
     await expect(source.cancel(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_cancel_ack_invalid" });
     await expect(source.reconcile(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_reconcile_invalid" });
+    await expect(source.erase(context, { resumeHandle: "thread-1", sessionId: null }, lease)).rejects.toMatchObject({ code: "codex_erase_ack_invalid" });
   });
 });

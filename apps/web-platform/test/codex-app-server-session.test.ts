@@ -86,4 +86,19 @@ describe("Codex App Server session coordinator", () => {
       params: { threadId: "thread-1", limit: 10, sortDirection: "asc", itemsView: "full" },
     });
   });
+
+  it("deletes a persisted thread through the negotiated server-owned session", async () => {
+    const client = {
+      request: vi.fn()
+        .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+        .mockResolvedValueOnce({}),
+      notify: vi.fn(async () => undefined),
+      respond: vi.fn(async () => undefined),
+    };
+    const session = createCodexAppServerSession(client, { nextRequestId: () => "rpc" });
+    await expect(session.deleteThread("thread-1")).resolves.toEqual({});
+    expect(client.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "initialize", "thread/delete",
+    ]);
+  });
 });
