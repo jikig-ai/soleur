@@ -84,6 +84,7 @@ declare -A FLAG_ENV_VARS=(
   ["support"]="FLAG_SUPPORT"
   ["support-live"]="FLAG_SUPPORT_LIVE"
   ["guided-tour"]="FLAG_GUIDED_TOUR"
+  ["codex-engine"]="FLAG_CODEX_ENGINE"
 )
 
 # --- arg parsing ------------------------------------------------------------

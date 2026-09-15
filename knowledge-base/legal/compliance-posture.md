@@ -202,6 +202,17 @@ Contract (mirrors plugins/soleur/skills/gdpr-gate/SKILL.md §"Critical-finding e
 | BYOK delegation consent ENFORCEMENT (gate + withdrawal + server-owned version) | #4625 / PR #4627 | 2026-05-29 | Single-user-incident threshold. Closes the live joint-controllership exposure left by PR-B: `resolve_byok_key_owner` activated a delegation WITHOUT checking acceptance (a grantee's prompts processed under the grantor's key, grantor seeing cost telemetry, BEFORE consent). Migration 083 adds `current_byok_side_letter_version()` (SQL source of truth, == TS `BYOK_SIDE_LETTER_VERSION`, CI parity gate) and an acceptance-EXISTS clause to the resolver (gate-in-SQL — zero TS call-site changes, 064 TOCTOU intact, own-key short-circuit preserved). The accept route stops trusting client-supplied `side_letter_version` and stamps the server constant. Migration 084 adds the `byok_delegation_withdrawals` WORM ledger (NO UNIQUE — append-only + Art. 17 multi-row safety; `user_id` NULLABLE for anonymise) + `withdraw_byok_delegation_consent(p_delegation_id)` grantee-only SECURITY DEFINER RPC (derives `auth.uid()`, no `p_user_id` — SS-F3) + a second resolver clause (version-agnostic `NOT EXISTS(withdrawal newer than latest acceptance)`, COALESCE+`>=` closes NULL/tie fail-open) + a per-turn consent re-gate in `check_and_record_byok_delegation_use` that stops in-flight billing within one turn and debits the grantee (`consent_withdrawn` attribution; ADR-040 sibling decision). Withdrawal added to DSAR Art. 15+20 + Art. 17 cascade (`anonymise_byok_delegation_withdrawals` step 5.12). DPD §2.3(w) + Privacy Policy + GDPR Policy §5.3 updated in lockstep; Delegation Consent Side Letter rewritten as versioned in-app Art. 26 arrangement; migration 074 header Art. 6/26 conflation corrected. All gated by `BYOK_DELEGATIONS_ENABLED` (default OFF); flag flip is CLO-sign-off-gated (post-merge, AC10/AC11). No new sub-processor. |
 | Vendor checklist gate added | #670 / PR #732 | 2026-03-18 | PR template and constitution updated with vendor compliance section |
 
+### Agent-engine processing (migration 138 / PR #8082)
+
+The Web Platform now records workspace engine defaults, immutable conversation and routine run
+bindings, and bounded lifecycle events for continuity and audit. These records are included in
+the DSAR export where they identify the requesting user and are anonymised or cascaded during
+account erasure. Codex customer-content execution remains disabled until both authentication
+modes have reviewed vendor/DPA, transfer-geography, retention/erasure, and CLO evidence; no Codex
+transfer is permitted while that qualification gate is closed. This is an amendment to the
+existing Web Platform processing activity and introduces no new sub-processor. The release
+checklist is `knowledge-base/project/specs/feat-pluggable-web-agent-engines/migration-checklist.md`.
+
 ## How to Update This Document
 
 - When a DPA is signed, updated, or revoked: update the Vendor DPA Status table

@@ -60,6 +60,15 @@ export const DSAR_TABLE_ALLOWLIST: Readonly<Record<string, DsarTableSpec>> = {
   // Account profile (Art. 15: identification data).
   users: { ownerField: "id", article: "15" },
 
+  // Engine workspace defaults and immutable run records (migration 138).
+  workspace_engine_settings: { ownerField: "updated_by", article: "15" },
+  agent_engine_runs: { ownerField: "created_by", article: "15+20" },
+  agent_engine_events: {
+    ownerField: "run_id",
+    article: "15",
+    joinVia: { parentTable: "agent_engine_runs", parentJoinColumn: "run_id" },
+  },
+
   // BYOK encrypted credentials (Art. 15: encrypted ciphertext returned
   // base64-encoded; the user provided the underlying key, hence 15+20).
   api_keys: { ownerField: "user_id", article: "15+20" },

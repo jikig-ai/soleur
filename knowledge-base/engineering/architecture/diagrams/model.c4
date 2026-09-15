@@ -84,6 +84,27 @@ model {
       claude = container "Agent Runtime" {
         technology "Claude Code"
         description "Executes agent workflows with full orchestration tools"
+
+        registry = component "Engine Registry" {
+          technology "Reviewed definitions"
+          description "Checks engine availability, authentication modes, capabilities, and qualification evidence"
+        }
+        binding = component "Run Binding and Ledger" {
+          technology "Supabase RPC + event ledger"
+          description "Binds each conversation or routine run to one engine and records lifecycle events"
+        }
+        adapter = component "Claude Code Adapter" {
+          technology "Neutral lifecycle adapter"
+          description "Translates the shared execution contract to Claude transport behavior"
+        }
+        factory = component "Reviewed Adapter Factory" {
+          technology "Registry-gated composition"
+          description "Creates only enabled adapters for the persisted engine identity"
+        }
+        composition = component "Adapter Composition" {
+          technology "Injected provider transports"
+          description "Keeps Claude and future engine transports behind provider-specific seams"
+        }
       }
       skillloader = container "Skill Loader" {
         technology "Plugin Discovery"
@@ -261,6 +282,14 @@ model {
       }
     }
   }
+
+  platform.webapp.api -> platform.engine.claude.registry "Validates settings and execution eligibility"
+  platform.webapp.api -> platform.engine.claude.binding "Binds runs before dispatch and persists events"
+  platform.engine.claude.registry -> platform.engine.claude.adapter "Selects a qualified adapter"
+  platform.engine.claude.binding -> platform.engine.claude.adapter "Supplies the immutable run binding"
+  platform.engine.claude.registry -> platform.engine.claude.factory "Gates adapter creation"
+  platform.engine.claude.factory -> platform.engine.claude.composition "Resolves provider composition"
+  platform.engine.claude.composition -> platform.engine.claude.adapter "Builds neutral lifecycle adapters"
 
   // ---- External systems (third-party, outside the platform boundary) ------
   anthropic = system "Anthropic API" {
