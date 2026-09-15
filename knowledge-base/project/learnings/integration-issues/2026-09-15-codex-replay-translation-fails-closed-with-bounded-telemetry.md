@@ -66,6 +66,7 @@ path alone cannot show that replay drift is visible.
 16. A bounded `gh pr checks` probe yielded no captured output after its timeout even though the process had exited. **Prevention:** avoid chaining a sleep to a status probe at the yield boundary; run the status command directly and print its exit code.
 17. A 30-second sleep used as a polling delay also yielded an undefined result at the tool timeout boundary. **Prevention:** use short direct status probes instead of timeout-length sleeps.
 18. The first local constraint-gate invocation yielded before returning its session identifier, making its result unrecoverable from that tool call. **Prevention:** always print and retain the session ID when `yield_time_ms` can be reached, then resume with `write_stdin`.
+19. The legal mirror-ratchet gate caught canonical-only additions to the three published legal mirrors. **Prevention:** every legal disclosure amendment must update canonical and Eleventy mirror surfaces together, then rerun the ratchet before pushing.
 
 ## Related
 

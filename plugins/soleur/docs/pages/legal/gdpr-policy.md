@@ -338,6 +338,20 @@ believe your personal data is present in a repository a User has given Jikigai a
 
 <!-- End: operator-assisted and granted-access processing -->
 
+### 3.15 Workspace agent-engine configuration and run records
+
+The Web Platform stores a workspace's default agent engine and authentication mode, immutable
+conversation and routine run bindings, and bounded lifecycle-event metadata needed for continuity,
+reconciliation, and audit. These records contain identifiers, status, sequence, and timestamps;
+they do not store prompts, credentials, native provider handles, or repository content. The lawful
+basis is contract performance (Article 6(1)(b)) for providing the selected execution service, with
+legitimate interest (Article 6(1)(f)) for bounded operational audit. Records follow the workspace
+retention period and are included in the self-serve access export when they identify the requesting
+user; account erasure applies the migration 138 anonymisation/cascade path. Codex remains disabled
+for customer content until auth-mode-specific vendor, transfer, retention, erasure, and CLO evidence
+is reviewed, so this release creates no Codex data transfer. This amends the existing Web Platform
+processing activity and adds no sub-processor.
+
 ## 4. Categories of Personal Data
 
 ### 4.1 Data NOT Collected by Soleur
