@@ -25,4 +25,21 @@ describe("engine observability", () => {
     const observability = createEngineObservability(() => { throw new Error("sink unavailable"); });
     expect(() => observability.emit("engine_dispatch_failed", { engineId: "codex" })).not.toThrow();
   });
+
+  it("accepts replay-drop telemetry without provider payload metadata", () => {
+    const sink = vi.fn();
+    const observability = createEngineObservability(sink);
+    observability.emit("engine_replay_item_dropped", {
+      engineId: "codex",
+      itemType: "reasoning",
+      reason: "unsupported_item",
+    });
+    expect(sink).toHaveBeenCalledWith("engine_replay_item_dropped", {
+      engineId: "codex",
+      itemType: "reasoning",
+      reason: "unsupported_item",
+    });
+    expect(sink.mock.calls[0][1]).not.toHaveProperty("content");
+    expect(sink.mock.calls[0][1]).not.toHaveProperty("output");
+  });
 });

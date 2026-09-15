@@ -120,6 +120,9 @@ namespaces, and output values remain excluded from replay payloads.
 Persisted `userMessage` items emit a fixed `User input recorded` progress message
 keyed by their bounded item identity; user content and attachment metadata remain
 excluded because the neutral event contract has no message-role field.
+When a persisted item has no qualified neutral mapping, the lifecycle source may
+emit `engine_replay_item_dropped` with only the bounded engine/item type and a
+reason; provider payloads and identities are never included in this telemetry.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerEventBridge } from "@/server/codex-app-server-event-bridge";
 import { createCodexAppServerTransport } from "@/server/codex-code-adapter";
 import { createCodexAppServerLifecycleSource } from "@/server/codex-app-server-lifecycle-source";
+import { createEngineObservability } from "@/server/agent-engine-observability";
 
 const context = { runId: "run-1" } as never;
 const lease = { accessToken: "opaque", expiresAt: Date.now() + 60_000 };
@@ -274,6 +275,44 @@ describe("Codex App Server lifecycle source", () => {
     await expect((async () => {
       for await (const _event of transport.resumeFromCursor(context, "cursor-1", lease)) { /* no-op */ }
     })()).rejects.toMatchObject({ code: "codex_replay_invalid" });
+  });
+
+  it("emits safe telemetry when replay drops unsupported provider items", async () => {
+    const events = createCodexAppServerEventBridge();
+    const request = vi.fn()
+      .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+      .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+      .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+      .mockResolvedValueOnce({
+        data: [{
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "reasoning", id: "reason-1", summary: ["private"], content: ["private"] }],
+        }],
+      });
+    const connection = {
+      client: { request, notify: vi.fn(), respond: vi.fn(), receiveLine: vi.fn(), close: vi.fn(), receive: vi.fn(), pendingCount: () => 0 },
+      events,
+      dispose: vi.fn(async () => undefined),
+    };
+    const sink = vi.fn();
+    const source = createCodexAppServerLifecycleSource({
+      open: vi.fn(async () => connection),
+      nextRequestId: () => "rpc",
+      observability: createEngineObservability(sink),
+    });
+    await source.start(context, { text: "Inspect", attachmentIds: [] }, lease);
+    const transport = createCodexAppServerTransport(source);
+    const replayed = [];
+    for await (const event of transport.resumeFromCursor(context, "cursor-1", lease)) replayed.push(event);
+    expect(replayed).toEqual([
+      { runId: "run-1", eventId: "codex:turn:turn-1:status", sequence: 1, payload: { type: "status", status: "completed" } },
+    ]);
+    expect(sink).toHaveBeenCalledWith("engine_replay_item_dropped", {
+      engineId: "codex",
+      itemType: "reasoning",
+      reason: "unsupported_item",
+    });
   });
 
   it("fails closed on malformed interrupt and reconciliation responses", async () => {

@@ -5,7 +5,8 @@ export type EngineObservabilityEvent =
   | "engine_dispatch_progress"
   | "engine_dispatch_completed"
   | "engine_dispatch_failed"
-  | "engine_session_reconciled";
+  | "engine_session_reconciled"
+  | "engine_replay_item_dropped";
 
 export interface EngineObservabilityMetadata {
   engineId?: string;
@@ -18,6 +19,8 @@ export interface EngineObservabilityMetadata {
   status?: string;
   failureClass?: string;
   sequence?: number;
+  itemType?: string;
+  reason?: string;
 }
 
 export type EngineObservabilitySink = (

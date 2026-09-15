@@ -4,6 +4,7 @@ import type {
   EngineRunStatus,
   NativeSessionReference,
 } from "./agent-engine-contract";
+import type { EngineObservability } from "./agent-engine-observability";
 import type { CodexCredentialLease, CodexAppServerEventSource } from "./codex-code-adapter";
 import { createCodexAppServerSession, type CodexAppServerSession } from "./codex-app-server-session";
 import type { CodexAppServerStdioConnection } from "./codex-app-server-stdio";
@@ -13,6 +14,7 @@ export interface CodexAppServerLifecycleSourceOptions {
   open(lease: CodexCredentialLease): Promise<CodexAppServerStdioConnection>;
   nextRequestId: () => string;
   cwd?: string;
+  observability?: EngineObservability;
 }
 
 interface RuntimeConnection {
@@ -62,7 +64,16 @@ function reconcileStatus(result: Record<string, unknown>, expectedThreadId: stri
 
 const REPLAY_APPROVAL_STATUSES = new Set(["awaitingApproval", "approvalRequired", "needsApproval", "waiting"]);
 
-function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent>[] {
+function safeReplayItemType(value: unknown): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 96) return "unknown";
+  if ([...value].some((character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 0x1f || codePoint === 0x7f || codePoint === 0x2028 || codePoint === 0x2029;
+  })) return "unknown";
+  return value;
+}
+
+function replayItems(items: unknown[], observability?: EngineObservability): ReturnType<typeof createCodexReplayEvent>[] {
   const replay = [] as ReturnType<typeof createCodexReplayEvent>[];
   for (const item of items) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -85,12 +96,19 @@ function replayItems(items: unknown[]): ReturnType<typeof createCodexReplayEvent
     if ((type === "agentMessage" || type === "plan" || type === "fileChange" || reviewLifecycle || compactionLifecycle || webSearchActivity || imageViewActivity || functionOutputActivity || userMessageActivity || approvalWaiting || commandOutcome || mcpOutcome || dynamicOutcome || collabOutcome) && translated.length === 0) {
       throw Object.assign(new Error("Codex replay item is malformed"), { code: "codex_replay_invalid" });
     }
+    if (translated.length === 0) {
+      observability?.emit("engine_replay_item_dropped", {
+        engineId: "codex",
+        itemType: safeReplayItemType(itemRecord.type),
+        reason: type ? "unsupported_item" : "malformed_item",
+      });
+    }
     for (const event of translated) replay.push(createCodexReplayEvent(event));
   }
   return replay;
 }
 
-function replayHistory(result: Record<string, unknown>): ReturnType<typeof createCodexReplayEvent>[] {
+function replayHistory(result: Record<string, unknown>, observability?: EngineObservability): ReturnType<typeof createCodexReplayEvent>[] {
   const data = result.data;
   if (!Array.isArray(data) || data.length > 100) {
     throw Object.assign(new Error("Codex replay history result is invalid"), { code: "codex_replay_invalid" });
@@ -104,7 +122,7 @@ function replayHistory(result: Record<string, unknown>): ReturnType<typeof creat
     if (turnRecord.items !== undefined && !Array.isArray(turnRecord.items)) {
       throw Object.assign(new Error("Codex replay items are invalid"), { code: "codex_replay_invalid" });
     }
-    replay.push(...replayItems(turnRecord.items ?? []));
+    replay.push(...replayItems(turnRecord.items ?? [], observability));
     const turnEvents = translateCodexPersistedTurn(turn);
     if (turnRecord.id !== undefined && turnRecord.status !== undefined && turnEvents.length === 0) {
       throw Object.assign(new Error("Codex replay turn is malformed"), { code: "codex_replay_invalid" });
@@ -184,7 +202,7 @@ export function createCodexAppServerLifecycleSource(
         itemsView: "full",
       });
       return (async function* () {
-        for (const event of replayHistory(result)) yield event;
+        for (const event of replayHistory(result, options.observability)) yield event;
       })();
     },
     respondToApproval: async (_context: EngineRunContext, requestId: string, decision: "allow" | "deny", lease: CodexCredentialLease) => {
