@@ -17,14 +17,14 @@ Plan: `knowledge-base/project/plans/2026-09-15-fix-health-monitor-supabase-keywo
   is much smaller (no new workflow steps, no second issue family, no YAML test harness).
 - **If you agree:** the plan's Phase 2 and the ADR-222 inventory section move to a follow-up PR;
   #7884 stays open until it merges.
-- **Status:** open.
+- **Status:** resolved 2026-09-15 by lead — rejected; operator explicitly scoped both halves into this PR, and the reconcile half is small after plan-review cuts.
 
 ## T-1 — Alarm name (Taste)
 
 - **Plan:** `pronounceable_name = "soleur app database readiness"`.
 - **Alternative (CTO devex P2):** `"soleur app database down"` reads more plainly in an inbox subject.
 - Either works; the reconcile matches monitors by URL, so a later rename is free.
-- **Status:** open.
+- **Status:** resolved 2026-09-15 by lead — keep "soleur app database readiness"; it reads correctly in both the down and the recovered email.
 
 ## T-2 — Keep the plan-added config-drift check (P6) (Taste)
 
@@ -32,4 +32,4 @@ Plan: `knowledge-base/project/plans/2026-09-15-fix-health-monitor-supabase-keywo
   web-platform drift plan has filed six auto-closed issues in ~7 weeks and does not reliably surface a
   vendor-side disarm of this alarm. CTO and architecture review supported keeping it narrow.
 - **Alternative (DHH, code-simplicity):** cut it and fix the noisy drift channel instead.
-- **Status:** open.
+- **Status:** resolved 2026-09-15 by lead — keep; it is the only detector of a vendor-side disarm of the new alarm.
