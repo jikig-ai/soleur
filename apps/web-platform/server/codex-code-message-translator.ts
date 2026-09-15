@@ -196,6 +196,16 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
       : [];
   }
 
+  if (type === "mcpToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
+    return [{
+      sourceId: `mcp:${itemId}:status`,
+      payload: {
+        type: "progress",
+        message: statusType(record?.status) === "completed" ? "MCP tool completed" : "MCP tool failed",
+      },
+    }];
+  }
+
   if (type === "commandExecution" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `command:${itemId}:status`,

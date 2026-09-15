@@ -160,6 +160,29 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("replays MCP tool outcomes as status metadata without connector data", () => {
+    expect(translateCodexPersistedItem({
+      type: "mcpToolCall",
+      id: "mcp-1",
+      server: "private-server",
+      tool: "lookup",
+      status: "completed",
+      arguments: { email: "person@example.com" },
+      result: { secret: "private" },
+    })).toEqual([
+      {
+        sourceId: "mcp:mcp-1:status",
+        payload: { type: "progress", message: "MCP tool completed" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "mcpToolCall", id: "mcp-2", status: "failed", error: "private" })).toEqual([
+      {
+        sourceId: "mcp:mcp-2:status",
+        payload: { type: "progress", message: "MCP tool failed" },
+      },
+    ]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
