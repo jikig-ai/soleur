@@ -137,6 +137,26 @@ export function createCodexThreadTurnsListRequest(
   return request(id, "thread/turns/list", params);
 }
 
+export interface CodexThreadItemsListOptions {
+  turnId?: string | null;
+  cursor?: string | null;
+  limit?: number;
+}
+
+export function createCodexThreadItemsListRequest(
+  id: string,
+  threadId: string,
+  options: CodexThreadItemsListOptions = {},
+): CodexRpcRequest {
+  const params: Record<string, unknown> = {
+    threadId: assertThreadId(threadId),
+    limit: assertHistoryLimit(options.limit ?? 50),
+  };
+  if (options.turnId !== undefined && options.turnId !== null) params.turnId = assertThreadId(options.turnId);
+  if (options.cursor !== undefined && options.cursor !== null) params.cursor = assertCursor(options.cursor);
+  return request(id, "thread/items/list", params);
+}
+
 export function createCodexTurnStartRequest(id: string, threadId: string, input: string): CodexRpcRequest {
   return request(id, "turn/start", {
     threadId: assertThreadId(threadId),

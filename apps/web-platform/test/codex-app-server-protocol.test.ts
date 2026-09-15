@@ -7,6 +7,7 @@ import {
   createCodexThreadReadRequest,
   createCodexThreadStartRequest,
   createCodexThreadDeleteRequest,
+  createCodexThreadItemsListRequest,
   createCodexThreadTurnsListRequest,
   createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
@@ -126,6 +127,28 @@ describe("Codex App Server protocol requests", () => {
     );
     expect(() => createCodexThreadTurnsListRequest("rpc-12", "thread-1", { limit: 101 })).toThrowError(
       expect.objectContaining({ code: "codex_history_limit_invalid" }),
+    );
+  });
+
+  it("builds a bounded persisted-item request with an optional turn filter", () => {
+    expect(createCodexThreadItemsListRequest("rpc-14", "thread-1", {
+      turnId: "turn-1",
+      cursor: "cursor-2",
+      limit: 20,
+    })).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-14",
+      method: "thread/items/list",
+      params: { threadId: "thread-1", turnId: "turn-1", cursor: "cursor-2", limit: 20 },
+    });
+    expect(createCodexThreadItemsListRequest("rpc-15", "thread-1")).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-15",
+      method: "thread/items/list",
+      params: { threadId: "thread-1", limit: 50 },
+    });
+    expect(() => createCodexThreadItemsListRequest("rpc-16", "thread-1", { turnId: "turn\n1" })).toThrowError(
+      expect.objectContaining({ code: "codex_thread_invalid" }),
     );
   });
 

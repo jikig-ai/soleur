@@ -101,4 +101,25 @@ describe("Codex App Server session coordinator", () => {
       "initialize", "thread/delete",
     ]);
   });
+
+  it("lists persisted items through the negotiated server-owned session", async () => {
+    const client = {
+      request: vi.fn()
+        .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+        .mockResolvedValueOnce({ data: [], nextCursor: null }),
+      notify: vi.fn(async () => undefined),
+      respond: vi.fn(async () => undefined),
+    };
+    const session = createCodexAppServerSession(client, { nextRequestId: () => "rpc" });
+    await expect(session.listItems("thread-1", { turnId: "turn-1", limit: 10 })).resolves.toEqual({
+      data: [],
+      nextCursor: null,
+    });
+    expect(client.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "initialize", "thread/items/list",
+    ]);
+    expect(client.request.mock.calls[1][0]).toMatchObject({
+      params: { threadId: "thread-1", turnId: "turn-1", limit: 10 },
+    });
+  });
 });

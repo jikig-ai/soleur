@@ -80,6 +80,10 @@ unsupported until persisted turn/item responses have a complete translator.
 Remote erasure uses the documented `thread/delete` request and returns
 `confirmed` only for an exact empty acknowledgement; malformed acknowledgements
 fail closed and an erased active thread is removed from the runtime cache.
+The session also exposes the experimental `thread/items/list` seam with an
+optional validated turn filter, allowing a later replay translator to fetch
+persisted items without resuming a thread or accepting provider envelopes at
+the neutral boundary.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

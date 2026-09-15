@@ -117,6 +117,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Interrupt/reconciliation slice: cancellation uses `turn/interrupt` with exact acknowledgement validation, and reconciliation reads the bound thread with conservative status mapping (4 lifecycle-source tests green).
   - [x] Thread history request slice: the negotiated session builds bounded `thread/turns/list` requests with fail-closed opaque cursors, capped pages, and explicit sort/item-view options; neutral cursor replay remains unsupported until response-item translation is qualified (2 protocol/session tests green).
   - [x] Remote erasure slice: the lifecycle source calls server-built `thread/delete`, confirms only an exact empty acknowledgement, and clears an erased active thread from runtime state (3 protocol/session/lifecycle tests green).
+  - [x] Thread item request slice: the negotiated session builds bounded experimental `thread/items/list` requests with optional validated turn filtering and cursors; response translation remains deferred until the neutral replay mapping is qualified (2 protocol/session tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).
