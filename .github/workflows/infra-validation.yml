@@ -78,6 +78,10 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
+      # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
+      - ".github/workflows/apply-git-data-root-key.yml"
+      - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
@@ -1583,6 +1587,23 @@ jobs:
           TF_DATA_DIR: ${{ runner.temp }}/rung2-tf
         run: |
           terraform init -backend=false -input=false
+          terraform validate
+
+      # (#8189, ADR-220) The git-data root-key root's drift-guards: the additive-only allowlist
+      # (executed against synthesized plan fixtures), the root census, every prevent_destroy,
+      # the distinct state key, git-data-state parity and the parent apply's path exclusion.
+      - name: Run git-data root-key root drift-guards
+        run: bash apps/web-platform/infra/git-data-root-key.test.sh
+
+      # (#8189) Same gap as the rung-2 root above: detect-changes collapses the nested root to
+      # apps/web-platform/infra, so the `validate` matrix never parses it. -backend=false, the
+      # readonly lock, and TF_DATA_DIR out of the repo tree for the same reasons.
+      - name: Terraform validate the git-data root-key root
+        working-directory: apps/web-platform/infra/git-data-root-key
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/git-data-root-key-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
 
 
