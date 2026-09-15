@@ -164,6 +164,10 @@ print(re.sub(r'(^\w+://[^:]+:)([^@]*)(@)', lambda m: m.group(1)+os.environ['NEWP
 done < "$_tmp/targets"
 
 echo "==> verifying Doppler holds the new password (by hash, never by value)"
+# Exported BEFORE the check that reads it. It used to sit after this block, so
+# the python KeyError'd and every run bailed here with exit 7 -- after the PATCH
+# and the Doppler rewrite, skipping the connectivity proof and the sweep (#7966).
+TARGETS="$_tmp/targets"; export TARGETS
 if ! doppler secrets -p "$PROJECT" -c "$CONFIG" --json \
      | NEWPW="$NEWPW" python3 -c "
 import json,sys,os,re,hashlib
@@ -183,7 +187,6 @@ sys.exit(1 if bad else 0)
   echo "ERROR: at least one secret does NOT carry the new password." >&2
   _bail_with_recovery
 fi
-TARGETS="$_tmp/targets"; export TARGETS
 
 if command -v docker >/dev/null; then
   echo "==> proving the new credential authenticates"
@@ -210,8 +213,21 @@ select count(*) as terminated from (
   where usename = '${ROLE}' and pid <> pg_backend_pid()
 ) t;
 SQL
-    timeout 180 docker run --rm -i --env-file "$_tmp/denv" postgres:16-alpine \
-      sh -c 'psql "$PGURL" --no-psqlrc -tAq -f -' < "$_tmp/sweep.sql" 2>&1 | sed 's/^/    terminated=/'
+    # A failed sweep used to die silently under set -e/pipefail, leaving the
+    # recovery file behind. Doppler is already verified here, so the recovery
+    # file is no longer needed -- remove it, but fail LOUD: sessions opened with
+    # the leaked password may still be alive. ON_ERROR_STOP makes a SQL error
+    # (e.g. a permission refusal) a non-zero exit instead of a printed line.
+    if ! timeout 180 docker run --rm -i --env-file "$_tmp/denv" postgres:16-alpine \
+         sh -c 'psql "$PGURL" --no-psqlrc -v ON_ERROR_STOP=1 -tAq -f -' \
+         < "$_tmp/sweep.sql" > "$_tmp/sweep.out" 2>&1; then
+      rm -f "$RECOVERY"
+      echo "ERROR: the session sweep FAILED. The password IS rotated and Doppler IS updated," >&2
+      echo "       but sessions opened with the leaked password may still be established." >&2
+      echo "       Re-run the sweep (pg_terminate_backend for usename='${ROLE}') before closing out." >&2
+      exit 8
+    fi
+    sed 's/^/    terminated=/' "$_tmp/sweep.out"
   fi
 else
   echo "WARN: docker absent -- connectivity was NOT proven. Verify before relying on this." >&2
