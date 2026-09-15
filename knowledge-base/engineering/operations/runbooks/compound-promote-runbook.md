@@ -118,7 +118,8 @@ counts open PRs only, so a closed proposal won't block next week's run.
 If a merged promotion turns out to be a false positive, demote it via the
 standard rule-retirement path: append the rule's ID to
 `scripts/retired-rule-ids.txt` with format `<id> | <YYYY-MM-DD> | <PR> | <breadcrumb>`.
-The next `rule-prune` cron tick removes the rule from `AGENTS.rules.md` and
+Removing the body from `AGENTS.rules.md` (and its pointer from `AGENTS.md`) is a
+human edit in the same PR — `scripts/rule-prune.sh` never edits the corpus — and
 the linter rejects any future reintroduction of the retired ID.
 
 ## Sharp edges

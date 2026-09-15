@@ -1626,6 +1626,11 @@ if want_scripts; then
   # actually scanned; -unit asserts the linter can still fail.
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
+  # #8030 / PR #8175: rules migrated out of AGENTS.rules.md are invisible to every check that
+  # reads that file. The live run checks each registry row's placement and body hash; the unit
+  # suite is the mutation matrix. Registered explicitly — scripts/*.test.sh is not auto-globbed.
+  run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
+  run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
   # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.

@@ -1943,6 +1943,7 @@ integration-id
 integration-issues
 integration-test
 integration-tests
+integrity-hash
 intended-drop
 intent-classification
 interactive-mode
@@ -3184,6 +3185,7 @@ rule
 rule-audit
 rule-budget
 rule-c
+rule-corpus
 rule-d
 rule-exists-no-gate-enforces-it
 rule-governance

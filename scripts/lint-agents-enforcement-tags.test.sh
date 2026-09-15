@@ -106,11 +106,12 @@ t1_real_tree() {
   # Mirrors MIN_CHECKS in lint-agents-enforcement-tags.py (source of truth) --
   # update both together. 30->26 / 28->27 on 2026-09-10 (PR #8034): five
   # domain-scoped rules moved into the skill phase that already enforced them.
-  if [[ "$skills" =~ ^[0-9]+$ && "$skills" -ge 26 ]]; then
-    pass "T1 skill units performed (>=26, got ${skills})"
+  # 26->24 / 27->25 on 2026-09-14 (PR #8175): tranche 2 moved two more.
+  if [[ "$skills" =~ ^[0-9]+$ && "$skills" -ge 24 ]]; then
+    pass "T1 skill units performed (>=24, got ${skills})"
   else fail "T1 skill units performed" "got '${skills}'"; fi
-  if [[ "$anchors" =~ ^[0-9]+$ && "$anchors" -ge 27 ]]; then
-    pass "T1 anchor checks performed (>=27, got ${anchors})"
+  if [[ "$anchors" =~ ^[0-9]+$ && "$anchors" -ge 25 ]]; then
+    pass "T1 anchor checks performed (>=25, got ${anchors})"
   else fail "T1 anchor checks performed" "got '${anchors}'"; fi
 }
 

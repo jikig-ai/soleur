@@ -6,7 +6,6 @@
 03bf4eca0d95ce52aa4858e502bc617b33c77b06d1729200df3b30de8a1816d2  hr-always-read-a-file-before-editing-it
 b143af2cc16aaee9d41f7021767431186736297be1878a4d8d0ca17e7324f3e8  hr-autonomous-loop-skill-api-budget-disclosure
 11c42d0c1d42699a28bfd10162a81eb24e7661121556e92b3ff00e3a96f2eb12  hr-before-asserting-github-issue-status
-27235260447146e8eba515c8208abd0f83a04b430b50c8544e6f9d81e54a5b76  hr-before-shipping-ship-phase-5-5-runs
 95c858983479e2ecbe39c5c86f87bbfd6a7414b35889b63e5fe0956de50caaa3  hr-bulk-delete-per-item-live-infra-role-check
 e43cb51eda7fc3abf1bd044403148da4263f24be7bf821268174c404b866b3a5  hr-dev-prd-distinct-supabase-projects
 35c3a36ccf61c9125290a6f6e30a9413e554aa8ed3cdb81430997107ea8934b5  hr-dispatch-async-must-arm-watch
@@ -26,7 +25,6 @@ f8a323e9c2570956a875ac91fa6a915df7dfad6b28513eee83dd5be0592f0c93  hr-monitor-not
 4988b61e6990ca30749b8501d7ed682cfadc6aaf9806f27e3da7f0580cb89462  hr-never-paste-secrets-via-bang-prefix
 dfc7f8d48a8b89e6eb375d13b4a47ea05bd9522ff63612c1dfa8acaa849b5738  hr-never-run-commands-with-unbounded-output
 db3bee820a8ad98c276b6fcf2187d57e63aa97577723a624385457c647b28f74  hr-never-write-to-claude-code-memory-claude
-370dbe88231171523ff3e56e02910b7f596fd7d542fe8a4f2f75fcd4a184a355  hr-new-skills-agents-or-user-facing
 316221dad125031ac573e46e12c0fcfbaf6dfbc3236dca3dc6e60452bbd320ab  hr-no-dashboard-eyeball-pull-data-yourself
 4b65039402fb981832701db9839fbcf520d8ee7aa4c574d35d1ca69fdb272fe9  hr-no-ssh-fallback-in-runbooks
 d9887c48b115bb8e8559d1859c2df9061a7eaae59232eb433ca3ba2919202f42  hr-observability-as-plan-quality-gate

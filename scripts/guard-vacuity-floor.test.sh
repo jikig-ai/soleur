@@ -718,7 +718,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=39  # +2 (#7652): repo-write-boundary, fixture-dir-operand-assert; +1 (#8149): pr-fanout-ledger
+MIN_FIRING_SUITES=40  # +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"
