@@ -1091,8 +1091,8 @@ logs:
   where: "GitHub Actions run logs (fixed verdict words; host stderr capped and filtered; no plan JSON, no key bytes, no workspace ids)"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/infra/git-data-root-key.test.sh"
-  expected_output: "a final summary line reporting N passed, 0 failed, 0 skipped, including the notify-job and allowlist-refusal census rows"
+  command: "bash apps/web-platform/infra/git-data-flag-precheck.test.sh"
+  expected_output: "0 failed, 0 skipped"
 ```
 
 ## User-Brand Impact
@@ -1396,3 +1396,8 @@ rationale). Items below correct plan statements above without rewriting them.
   moved from `git-data-cutover-access.test.sh` to `tests/scripts/test-git-data-root-token-census.sh`, which runs on
   every PR. QA: the Test Scenarios are prose without `Browser:`/`API verify:` steps; every detection control and
   verdict word named above was confirmed present with at least one emitter (2026-09-15).
+- **Preflight Check 10 (ship).** The original probe (`git-data-root-key.test.sh`, ~17 s with its 31 mutants)
+  exceeded Check 10's 15 s sandbox cap (rc 124). The probe is now the flag-precheck suite (3 s in the sandbox,
+  `42 passed, 0 failed, 0 skipped`), which exercises the fail-closed flag verdicts end to end; the root-key suite
+  still runs in `infra-validation.yml`. The incident-PIR gate also read two prospective-downtime phrases in this
+  plan as an outage report; they were reworded (no incident occurred).
