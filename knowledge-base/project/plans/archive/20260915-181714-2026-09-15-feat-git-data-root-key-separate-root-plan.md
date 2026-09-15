@@ -27,7 +27,7 @@ the operator's stated shape are recorded in
 **Deepened on:** 2026-09-15
 **Sections enhanced:** 14 (Overview, Research Insights, D-1..D-7, new Downtime & Cutover, IaC, ADR, Encryption
 Posture, Guard Contract, Phases, Observability, User-Brand Impact, Acceptance Criteria, Risks)
-**Agents used:** network-outage deep-dive, verify-the-negative + self-audit pass, security-sentinel,
+**Agents used:** network-failure deep-dive, verify-the-negative + self-audit pass, security-sentinel,
 user-impact-reviewer, observability-coverage-reviewer, test-design-reviewer, git-history-analyzer,
 terraform-architect (precedent diff), provider/runtime verification (done directly after the agent returned
 no report: schema reads, a scratch plan-JSON measurement, a Doppler CLI probe).
@@ -506,7 +506,7 @@ store volumes and the firewall.
 
 - **Blue-green (a second host, then switch): rejected.** Both store volumes attach to one server and the
   private address `10.0.1.20` is fixed in every consumer. A second host would need a new address, volume
-  moves and a consumer repoint, which is more risk than a minutes-long outage of a surface no user request
+  moves and a consumer repoint, which is more risk than minutes of unavailability on a surface no user request
   depends on.
 - **In-place key delivery: rejected.** It violates `hr-prod-host-config-change-immutable-redeploy`.
 - **Accepted: the existing replace**, whose gate already asserts both volumes are retained. It runs in a
