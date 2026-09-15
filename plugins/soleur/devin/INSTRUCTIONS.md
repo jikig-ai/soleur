@@ -7,7 +7,7 @@ current Devin session.
 
 ## Paths and entry points
 
-The installed plugin root is available via `${CLAUDE_PLUGIN_ROOT}` (Devin inherits this from Claude plugin format compatibility).
+The installed plugin root is available via `${CLAUDE_PLUGIN_ROOT}` (Devin inherits this from Claude plugin format compatibility). If the variable is unset in the session, resolve the installed root from the Devin plugin cache — `~/.local/share/devin/cli/plugins/cache/<source-slug>/0.0.0-unversioned` — and verify it by checking `.claude-plugin/plugin.json` carries `"name": "soleur"`.
 Resolve Soleur's `plugins/soleur/...` references against that root; resolve project
 files and `knowledge-base/` against the user's current project or worktree.
 Never search another harness's cache for the plugin. In shell examples,

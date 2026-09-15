@@ -555,6 +555,8 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    gh issue create --title "feat: <deferred item>" --milestone "Post-MVP / Later" --body "Deferred from #<parent-issue> during brainstorm on <date>.\n\n## What was deferred\n<description>\n\n## Why deferred\n<rationale from brainstorm>\n\n## Re-evaluation criteria\n<when to revisit>"
    ```
 
+   The body must satisfy the issue-filing gate: add `Mandated-By: wg-when-deferring-a-capability-create-a` on its own line (or `User-Impact:`/`Fix-Size:` lines, or `--label meta/machinery` for machinery findings). Prefer `--body-file <tracked-relative-or-absolute-repo-path>` over inline `--body` — the gate cannot read `/tmp` and inline quoting can fail tokenization.
+
    After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies. If no items were deferred, skip silently.
 
 8. **Switch to worktree:**

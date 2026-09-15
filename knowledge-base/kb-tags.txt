@@ -1026,6 +1026,7 @@ cross-reviewer-convergence
 cross-root-import
 cross-runner
 cross-runtime
+cross-source
 cross-tenant
 crypto
 cryptography
@@ -1185,6 +1186,7 @@ dev-server
 devdependencies
 developer-experience
 devin-cloud
+devin
 dhh-rails-reviewer
 di-seam
 diagnosability
@@ -3940,6 +3942,7 @@ tool-selection
 tool-status-chip
 tool-tier
 tool_input
+tool_name
 tool_progress
 toolchain-pinning
 tooling
@@ -3983,6 +3986,7 @@ tsx
 ttl
 turbopack
 tweets
+two-layer-gate
 two-phase-commit
 two-tier-guard
 type-filter
