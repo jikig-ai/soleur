@@ -227,17 +227,20 @@ repository. An earlier draft said "impossible"; that overstated it.
 
 Item 10 and the #8009 disposition account for **three** SSH authorities on git-data, each a distinct
 key with a fixed forced command. #8189 adds a **fourth, distinct** authority, and this record carries it
-so the accounting stays complete:
+so the accounting stays complete. As of this addendum the authority is declared, not delivered: the
+root-key apply, the fingerprint PR and the replace all run after #8189 merges, each with its own
+authorization, so the entries below are written in the future tense.
 
 - **What it is.** `tls_private_key.git_data_root` (ED25519) in the separate root
-  `apps/web-platform/infra/git-data-root-key/`. It authenticates as **root**, with **no forced command**,
-  so it can bypass every git-principal measure item 10's map protects.
-- **Where it is held.** The Doppler project `soleur-git-data-root` (not `prd`), and that root's R2 state
-  object.
-- **How it reaches the host.** Only through `hcloud_server.git_data`'s create-time `ssh_keys`, as a
-  Hetzner key object labelled `soleur-role=git-data-root`. Both the birth and the replace gate call
-  `git_data_root_key_arm`, which refuses a create unless a committed fingerprint file matches the one
-  resolved key.
+  `apps/web-platform/infra/git-data-root-key/`. Once delivered, it **will authenticate as root**, with
+  **no forced command**, so it will be able to bypass every git-principal measure item 10's map
+  protects.
+- **Where it will be held.** Once the root-key apply runs: the Doppler project `soleur-git-data-root`
+  (not `prd`), and that root's R2 state object.
+- **How it will reach the host.** Only through `hcloud_server.git_data`'s create-time `ssh_keys`, as a
+  Hetzner key object labelled `soleur-role=git-data-root`, at the next replace. Both the birth and the
+  replace gate call `git_data_root_key_arm`, which refuses a create unless a committed fingerprint file
+  matches the one resolved key. Until that file is committed, every birth and replace refuses.
 - **What it does not change.** `git_data_authorization_map_gate` still asserts exactly three distinct
   forced-command keys, correctly assigned. The root key is not a fourth `git` slot and is not in
   `cloud-init-git-data.yml`, so the rung-2 hash does not move.

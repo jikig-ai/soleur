@@ -1362,3 +1362,31 @@ Measured during `/work`; each item corrects a plan statement above without rewri
 - **Fingerprint path.** Passed to both gates by `GIT_DATA_ROOT_KEY_FINGERPRINT_FILE`, not an argument, because
   the parity suite pins the gate call shapes.
 - **Doppler CLI version.** `DopplerHQ/cli-action@5351693…` takes no version input; only the action is pinned.
+
+### Review-phase reconciliation (2026-09-15, PR #8206)
+
+The review panel's findings and their dispositions are in
+`knowledge-base/project/specs/feat-one-shot-8189-git-data-root-key/review-synthesis.md` (Groups A–D, wontfix
+rationale). Items below correct plan statements above without rewriting them.
+
+- **Downtime & Cutover, "Settings → Delete Account".** "Can wait for ssh's connect timeout" is imprecise: each
+  deletion waits up to the 30 s `execFile` timeout in `removeGitDataRepo`. The same wait applies in the
+  blocked-recovery window (from merge until the fingerprint PR lands, every replace and birth refuses), which the
+  runbook now names together with its escape hatch (a reviewed PR reverting the arm call in both gates).
+- **Downtime & Cutover, "Zero-downtime path evaluated".** The two rejected alternatives (blue-green; in-place key
+  delivery) now live in ADR-220's amendment log, "Considered options: zero-downtime key delivery".
+- **D-1, the `rotate_read_token` exception (the allowlist bullets naming it).** Removed. The root-key apply is
+  additive-only with no exception: creates are limited to the seven D-1 addresses, `importing` and moved addresses
+  are refused, and a create of `tls_private_key.git_data_root` is refused once
+  `apps/web-platform/infra/git-data-root-key.fingerprint` exists. Any rotation, of the read token or the key, is a
+  reviewed PR adding a typed allowlist arm for exactly its addresses (ADR-220 D3 amendment).
+- **D-1, the printed fingerprint "derived from `hcloud_ssh_key.git_data_root` through the Hetzner API".** The
+  printed value is now read from Terraform state (`tls_private_key.git_data_root`) and must equal the value derived
+  from the Hetzner key object's public key; a difference refuses `git_data_root_key_fingerprint_mismatch`.
+- **D-2, the single remedy line.** Replaced by per-reason remedies in an `::error::` annotation:
+  `fingerprint_file_missing`/`data_source_absent` → dispatch, commit, re-dispatch; `fingerprint`/`key_count`/`name`
+  → do not re-anchor, open an incident; `server_keys` → plan-shape defect.
+- **AC12, amended.** ADR-220's status paragraph and D6 "Until #8189 lands" were edited in place during `/work`;
+  review restored both to their dated origin/main wording and added Superseded markers instead. The restored
+  status sentence matches `git grep -n 'until #8189'`. AC12 is satisfied when every hit in ADR-220 is dated text
+  that carries a Superseded marker.
