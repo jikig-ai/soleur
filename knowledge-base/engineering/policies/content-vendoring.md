@@ -87,7 +87,9 @@ Banner + POSTURE_FAIL emit to STDOUT (not stderr) because agent runtimes (Claude
 
 ### 4.4 Pull-request-time upstream verification (CI)
 
-`.github/workflows/vendor-pin-verify.yml` runs `vendor-pin-integrity.sh --verify-upstream` on every pull request touching the vendored tree. It asserts that each `upstream-blob-sha` in NOTICE resolves to a real, fetchable object in the upstream repository, which closes the co-edit bypass: a PR that edits a lifted file AND its NOTICE pin in the same diff satisfies the local hash check tautologically, because both sides move together.
+`.github/workflows/vendor-pin-verify.yml` runs `vendor-pin-integrity.sh --verify-upstream` (the `verify-upstream-blobs` job) on every pull request touching the vendored tree. It asserts that each `upstream-blob-sha` in NOTICE resolves to a real, fetchable object in the upstream repository, which closes the co-edit bypass: a PR that edits a lifted file AND its NOTICE pin in the same diff satisfies the local hash check tautologically, because both sides move together.
+
+The merge gate is `vendor-pin-required` (#8203, ADR-032) — an always-run aggregator job that wraps `verify-upstream-blobs` behind a `detect-changes` path filter and is registered as a required status check in the CI Required ruleset. On unrelated PRs the aggregator posts a green with the verification honestly reported as skipped; on vendored-tree diffs a red `verify-upstream-blobs` result fails the required check and blocks merge. Before #8203 the binding's context was never registered, so a red could merge.
 
 Note what this layer does and does not buy. It proves each pinned blob EXISTS upstream; it does not prove the pin is CURRENT. A pin that resolves is not a pin that matches upstream `main` — that is §4.1's job, and conflating the two is why a "verify" step can read as a freshness guarantee it never made.
 

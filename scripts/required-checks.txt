@@ -235,6 +235,35 @@ credential-path-guard
 # generator's output format, only via ALLOWED_PATHS itself.
 marketplace-manifest-guard
 
+# #8203 — vendor-pin-verify.yml `vendor-pin-required` job. Always-run
+# aggregator (second instance of the #5585 pattern) that wraps the
+# path-gated `verify-upstream-blobs` job — the CI enforcement of the #8181
+# NOTICE path+commit+blob binding. Born blocking: before this entry the
+# binding's context was never required, so a red could merge.
+#
+# ⚠ CONTENT-SCOPED — TWO synthetic paths, BOTH dispositions re-derived, not
+# inherited (ADR-139 per-gate rule):
+#
+#   1. Composite action (bot-pr-with-synthetic-checks/action.yml): CHECK_NAMES
+#      derives from THIS file, so the action will post a synthetic green for
+#      vendor-pin-required on its PRs. Sound by UNREACHABILITY only —
+#      ALLOWED_PATHS = {knowledge-base/project/weakness-digest.md,
+#      knowledge-base/project/rule-metrics.json} and the guarded surface is
+#      plugins/soleur/skills/** → intersection ∅. If ALLOWED_PATHS ever gains
+#      a vendored-surface path, this synthetic becomes a fabricated binding
+#      result and the gate must be reproduced in the action's Phase-4
+#      ceiling BEFORE the path lands.
+#
+#   2. Inngest SYNTHETIC_CHECK_NAMES (apps/web-platform/server/inngest/
+#      functions/_cron-safe-commit.ts): vendor-pin-required is DELIBERATELY
+#      ABSENT. The content-vendor-drift cron is the one synthetic consumer
+#      whose PRs DO touch the vendored surface — it pushes with an App token
+#      that triggers real CI (#8166), so the check is EARNED by a real
+#      verify-upstream-blobs run. Adding the name would fabricate the
+#      binding result on exactly the re-vendor PRs the gate exists to
+#      protect. Do not add it.
+vendor-pin-required
+
 # CLA Required ruleset
 cla-check
 cla-evidence

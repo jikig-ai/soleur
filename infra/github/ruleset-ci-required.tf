@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 20 `context` strings below are public ABI for the
+# Job-name contract: the 24 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -271,6 +271,29 @@ resource "github_repository_ruleset" "ci_required" {
       # gate must be reproduced in the action's Phase-4 ceiling BEFORE it lands.
       required_check {
         context        = "marketplace-manifest-guard"
+        integration_id = var.actions_integration_id
+      }
+
+      # #8203 adds `vendor-pin-required` (24th) — vendor-pin-verify.yml's
+      # always-run aggregator and the SECOND instance of the #5585
+      # always-run-aggregator pattern (ADR-032). The upstream-blob
+      # verification (verify-upstream-blobs, the #8181 path+commit+blob
+      # binding) is path-gated behind detect-changes; this context is what
+      # makes a red binding result unmergeable rather than merely visible —
+      # before this, the verify job's context was never registered, so a red
+      # could merge (#8203's title bug).
+      #
+      # Bot-PR disposition: NOT fabricated via the composite action —
+      # CHECK_NAMES derives from scripts/required-checks.txt and the action's
+      # ALLOWED_PATHS does not intersect plugins/soleur/skills/**, so no
+      # bot PR can reach the vendored surface anyway. The Inngest re-vendor
+      # path (content-vendor-drift) pushes with an App token that triggers
+      # real CI (#8166), so its vendor-pin-required is EARNED — and
+      # SYNTHETIC_CHECK_NAMES in _cron-safe-commit.ts must never gain this
+      # name, or the binding result would be fabricated on exactly the diffs
+      # it gates. See scripts/required-checks.txt + ADR-032.
+      required_check {
+        context        = "vendor-pin-required"
         integration_id = var.actions_integration_id
       }
     }

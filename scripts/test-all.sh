@@ -2361,6 +2361,12 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
+  # (#5585 pattern instance #2). Registered HERE for the same reason: nothing
+  # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
+  # is silent AND green while the allow-list it pins decides whether the #8181
+  # NOTICE binding actually gates merges.
+  run_suite "tests/scripts/vendor-pin-gate-verdict" bash tests/scripts/test-vendor-pin-gate-verdict.sh
   # #6589 — the Sentry full-root delete path. These three gate the contract that
   # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
   # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed
