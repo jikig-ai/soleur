@@ -103,6 +103,8 @@ progress, excluding tool payloads and result content.
 Persisted collaboration tool calls emit only completed/failed status progress;
 cross-thread prompts and identities remain excluded until their isolation model
 is qualified.
+Persisted review-mode items emit only review-started/review-completed progress;
+review targets and findings remain excluded from replay payloads.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or

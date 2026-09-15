@@ -196,6 +196,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
       : [];
   }
 
+  if (type === "enteredReviewMode" || type === "exitedReviewMode") {
+    return [{
+      sourceId: `review:${itemId}:${type === "enteredReviewMode" ? "started" : "completed"}`,
+      payload: { type: "progress", message: type === "enteredReviewMode" ? "Review started" : "Review completed" },
+    }];
+  }
+
   if (type === "mcpToolCall" && (statusType(record?.status) === "completed" || statusType(record?.status) === "failed")) {
     return [{
       sourceId: `mcp:${itemId}:status`,

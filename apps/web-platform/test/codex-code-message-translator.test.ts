@@ -227,6 +227,29 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("replays review-mode lifecycle without review instructions or findings", () => {
+    expect(translateCodexPersistedItem({
+      type: "enteredReviewMode",
+      id: "review-1",
+      review: "private review target",
+    })).toEqual([
+      {
+        sourceId: "review:review-1:started",
+        payload: { type: "progress", message: "Review started" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({
+      type: "exitedReviewMode",
+      id: "review-1",
+      review: "private findings",
+    })).toEqual([
+      {
+        sourceId: "review:review-1:completed",
+        payload: { type: "progress", message: "Review completed" },
+      },
+    ]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
