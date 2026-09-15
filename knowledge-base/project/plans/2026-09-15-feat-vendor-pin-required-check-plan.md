@@ -18,6 +18,56 @@ of the #8181 path+commit+blob binding on every vendored NOTICE bundle — a
 (`vendor-pin-required`), while keeping the bot-PR result **earned** on the
 Inngest re-vendor path rather than fabricated.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-15 (same-day deepen pass, headless — all phases run
+inline: section manifest, skills/learnings matching, per-section research,
+precedent-diff, verify-the-negative, and every mechanical halt 4.5–4.11).
+**Sections enhanced:** Guard Contract (lint-parseable field names), R4/Files
+(concurrency placement), Phase 1 (anchor-match form + merge_group arm order),
+Observability (inline field values), Research Insights (empirical evidence).
+
+### Key improvements from the deepen pass
+
+1. **Concurrency placement corrected by precedent-diff** — v1 prescribed a
+   workflow-level `concurrency:` block; `tenant-integration.yml:145-165`
+   documents why that is wrong for this exact shape (a per-ref workflow-level
+   group lets a third arrival cancel the PENDING entry even with
+   `cancel-in-progress: false`, and keeping `detect-changes` + the always-run
+   aggregator inside the group risks the required context never posting).
+   Moved to job-level on `verify-upstream-blobs` per precedent.
+2. **detect-changes match form pinned** — `^`-anchored `grep -qE`
+   alternation with `$`/`/` terminators (the precedent form), explicitly not
+   a `paths:`-glob→regex translation (#3492 under-match class); the
+   `merge_group` arm is checked before the generic non-PR arm.
+3. **Issue-premise reconciliation deepened** — the issue's fabrication worry
+   aimed at `required-checks.txt`, but that file feeds only the GHA composite
+   action (sound-by-unreachability: `ALLOWED_PATHS` ∩ vendored tree = ∅,
+   verified at `action.yml:161-163`). The real fabrication surface is
+   `SYNTHETIC_CHECK_NAMES` (7-name list, verbatim test-pinned at
+   `cron-safe-commit.test.ts:636` + `cron-content-vendor-drift.test.ts:158`),
+   which stays untouched so re-vendor PRs earn the real check — PR #8166 is
+   live evidence that App-token pushes trigger the workflow.
+
+### New considerations discovered
+
+- `lint-guard-contract.py` requires the exact field token
+  `**Mutation matrix.**` — parenthetical suffixes silently zero the row count.
+- The 4.7 Observability gate rejects comment-only field values; all five
+  fields carry inline scalars/children.
+- All 18 cited issue/PR numbers verified live via `gh`; all file:line
+  attributions re-read from source (`action.yml:161`, `:294-308`,
+  `test-all.sh:78-87`/`:2360-2371`, `cron-content-vendor-drift.ts:2152`/`:2541`,
+  `_cron-safe-commit.ts:47-55`, `variables.tf:25-30`, T-rsc-7 `:661`).
+- Conditional halts evaluated and passed: 4.5 network-outage (no trigger
+  tokens), 4.55 downtime (in-place ruleset update — no
+  reboot/replace/DDL/deploy), 4.6 UBI (present, `single-user incident`),
+  4.7 Observability (5 fields, allowlisted `grep` probe verb), 4.8 PAT-shape
+  (no matches), 4.9 UI-wireframe (no UI surface), 4.10 Encryption Posture
+  (no store/connection — documented no-op), 4.11 Guard Contract (lint green,
+  structural assembly). Scheduled-work check n/a (no new cron). No new ADR —
+  ADR-032 amended, so no ordinal derivation needed.
+
 ## Overview
 
 `verify-upstream-blobs` (`plugins/soleur/skills/gdpr-gate/scripts/
@@ -158,10 +208,16 @@ artifact, not a style defect.)
   (d) new `vendor-pin-required` job — `needs: [detect-changes,
   verify-upstream-blobs]`, `if: always()`, single `run:` step invoking the
   verdict script with both results passed via `env:` + quoted `"$VAR"`;
-  (e) `concurrency: { group: vendor-pin-verify-${{ github.ref }},
-  cancel-in-progress: false }` — same eviction reasoning as
-  `tenant-integration.yml` (a displaced pending gate job concludes
-  `cancelled` → fail-closed red).
+  (e) `concurrency:` on the `verify-upstream-blobs` JOB (`group:
+  vendor-pin-verify-${{ github.ref }}`, `cancel-in-progress: false`) —
+  **job-level, not workflow-level**, matching `tenant-integration.yml:190`
+  whose comment spells out the reason: a workflow-level group would enrol
+  every PR run and every push to `main` in one per-ref mutex, and GitHub
+  cancels the PENDING entry on a third arrival regardless of
+  `cancel-in-progress` — leaving `detect-changes` and the always-run
+  aggregator outside the group keeps a required context reporting on every
+  PR while a displaced verify job concludes `cancelled` → fail-closed red on
+  the superseded SHA only.
   **detect-changes anchors (literal, per `vendor-bundle-coverage.test.sh`
   TS4's grep contract):** every conforming bundle's `plugins/soleur/skills/
   <slug>/NOTICE` + `plugins/soleur/skills/<slug>/references/` prefix (today:
@@ -272,9 +328,14 @@ artifact, not a style defect.)
    — the DROP-1 arm; (success, cancelled)→fail; (empty, *)→fail;
    (*, empty)→fail.
 2. Edit the workflow per Files-to-Edit (a)–(e). `detect-changes` uses
-   `set -uo pipefail`; `git diff --name-only "origin/${BASE_REF}...HEAD"`
-   failure exits 1; anchor match via `grep -qE` on a grouped alternation of
-   the literal anchor set. No `|| true` on the diff.
+   `set -uo pipefail`; the `merge_group` arm is checked FIRST (it IS a
+   non-PR event, so the generic non-PR `vendor=true` arm must not swallow
+   it); `git diff --name-only "origin/${BASE_REF}...HEAD"` failure exits 1;
+   anchor match via `grep -qE '^(...)'` — a `^`-anchored alternation where
+   exact files carry a `$` terminator and directory anchors a `/`
+   terminator (the `tenant-integration.yml` detect-changes form — NOT a
+   `paths:`-glob translation, which is the #3492 under-match class). No
+   `|| true` on the diff.
 3. Register the new test in `scripts/test-all.sh` (the comment there states
    `tests/scripts/` is not auto-discovered).
 
@@ -461,13 +522,13 @@ UI-surface term/glob. NONE.
 ## Observability
 
 ```yaml
-liveness_signal:    # the required-check context itself — reported on every PR; a missing
-                    # context reads "Expected — Waiting" and blocks merge (fail-visible).
-                    # apply-github-infra.yml apply failures surface as a red run on main
-                    # and via main-health-monitor.yml; the daily cron-ruleset-bypass-audit
-                    # compares live ↔ canonical.
-error_reporting:    # workflow-run failure on the PR + workflow_run surfacing via
-                    # main-health-monitor; fail_loud: yes — the check failing IS the signal
+liveness_signal: "the required-check context itself"
+  # Reported on every PR; a missing context reads "Expected — Waiting" and
+  # blocks merge (fail-visible). apply-github-infra.yml apply failures surface
+  # as a red run on main and via main-health-monitor.yml; the daily
+  # cron-ruleset-bypass-audit compares live ↔ canonical.
+error_reporting: "workflow-run failure on the PR, surfaced via main-health-monitor"
+  # fail_loud: yes — the check failing IS the signal.
 failure_modes:
   - mode: detect-changes fails → verify skipped, gate reads detect=failure → red (fail-closed)
     detection: required check red on the PR
@@ -479,7 +540,7 @@ failure_modes:
   - mode: fabricated green on a re-vendor PR (someone adds the name to SYNTHETIC_CHECK_NAMES)
     detection: 7-entry pin tests red at the first such edit
     alert_route: CI `test` check red
-logs:               # GHA run logs for vendor-pin-verify.yml; retention = GitHub default
+logs: "GHA run logs for vendor-pin-verify.yml; retention = GitHub default"
 discoverability_test:
   command:          grep -c 'vendor-pin-required' infra/github/ruleset-ci-required.tf scripts/required-checks.txt scripts/ci-required-ruleset-canonical-required-status-checks.json
   expected_output:  each file reports >= 1 occurrence (3 lines of output, each "1" or more)
@@ -523,7 +584,8 @@ are the mechanical keepers of that chain); (e) the synthetic surface —
 `required-checks.txt` feeds the composite action (unreachability-sound) and
 `SYNTHETIC_CHECK_NAMES` must never carry the name.
 
-**Mutation matrix (design-derived; each MUST drive the guard red).**
+**Mutation matrix.** Design-derived; each row is an edit that MUST drive the
+guard red.
 
 | # | Edit | Why it must red |
 |---|---|---|
@@ -574,10 +636,15 @@ matching `contents/<path>?ref=<pinned-commit>` SHA.
   from `SYNTHETIC_CHECK_NAMES`, which stays at 7 so re-vendor PRs earn the
   real run. The txt guard note must name BOTH arms — copying only the
   ALLOWED_PATHS paragraph from a sibling entry would miss the second.
-- **R4 (concurrency).** Add `concurrency` with `cancel-in-progress: false` —
-  with `true`, a re-run race cancels the pending gate job on the head SHA →
-  `cancelled` → fail-closed red blocks merge until re-run (the #7055
-  eviction class). `false` costs at most a duplicate cheap run.
+- **R4 (concurrency).** `concurrency` goes on the `verify-upstream-blobs`
+  JOB, not the workflow (`tenant-integration.yml:145-165` documents why: a
+  workflow-level group enrols every PR + every main push into the per-ref
+  mutex, and GitHub cancels the PENDING entry on a third arrival even with
+  `cancel-in-progress: false` — keeping the aggregator outside the group is
+  what guarantees a context still posts). Job-level with
+  `cancel-in-progress: false` bounds upstream-API pileup; a displaced pending
+  verify concludes `cancelled` → fail-closed red on the superseded SHA only
+  (the #7055 eviction class), and the new head SHA's run re-queues.
 - **R5 (first-merge sequencing).** `strict_required_status_checks_policy =
   true`: open PRs must rebase onto post-merge `main` to gain the context —
   self-healing; the introducing PR itself is gated by the current 23-check

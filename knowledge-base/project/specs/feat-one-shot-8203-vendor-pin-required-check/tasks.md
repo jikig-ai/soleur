@@ -38,8 +38,11 @@ Branch: `feat-one-shot-8203-vendor-pin-required-check`
       (d) add `vendor-pin-required` — `needs: [detect-changes,
           verify-upstream-blobs]`, `if: always()`, `run:` step calls the verdict
           script with both results via `env:` + quoted `"$VAR"`;
-      (e) `concurrency: { group: vendor-pin-verify-${{ github.ref }},
-          cancel-in-progress: false }`.
+      (e) `concurrency:` on the `verify-upstream-blobs` JOB ONLY
+          (`group: vendor-pin-verify-${{ github.ref }}`,
+          `cancel-in-progress: false`) — NOT workflow-level
+          (tenant-integration.yml:145-165 documents why the aggregator must
+          stay outside the group).
       Anchor set (LITERAL per-bundle paths — see plan R2): each conforming
       bundle's `plugins/soleur/skills/<slug>/NOTICE` +
       `plugins/soleur/skills/<slug>/references/` (today: gdpr-gate,
