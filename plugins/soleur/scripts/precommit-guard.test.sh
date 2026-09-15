@@ -19,6 +19,13 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/precommit-guard.sh"
 
+# assert_fixture_dir lives here; it is the guard the fixture scanners
+# (fixture-relative-assert, fixture-dir-operand-assert) recognize. The source
+# sets -euo pipefail, so the +e below restores this suite's prior contract.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$DIR/../test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
+set +e -uo pipefail
+
 TMP="$(mktemp -d -t precg.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
@@ -66,9 +73,24 @@ new_repo() { # $1 = name, $2 = branch to leave checked out
   printf '%s' "$d"
 }
 
-MAIN_REPO="$(new_repo on-main main)"
-FEAT_REPO="$(new_repo on-feat feat-x)"
-OTHER_MAIN="$(new_repo other-main main)"
+# Bound as $TMP derivations rather than captured from new_repo's stdout: the
+# fixture scanners resolve a `VAR="$TMP/x"` binding to the mktemp-abs root, but a
+# `VAR="$(new_repo …)"` call resolves inside new_repo's body where the top-level
+# $TMP binding is invisible, so the cp destinations below scanned never-bound.
+MAIN_REPO="$TMP/on-main";    new_repo on-main    main   >/dev/null
+FEAT_REPO="$TMP/on-feat";    new_repo on-feat    feat-x >/dev/null
+OTHER_MAIN="$TMP/other-main"; new_repo other-main main  >/dev/null
+# Belt for the scanner's suspenders: refuse an empty or relative root outright
+# before it reaches a cp destination or a `git -C` operand below.
+assert_fixture_dir "$MAIN_REPO"
+assert_fixture_dir "$FEAT_REPO"
+assert_fixture_dir "$OTHER_MAIN"
+# A repo that failed to build would make run_guard's `cd` exit non-zero, which
+# reads as a refusal (rc=1) in every "denied" arm below — a silent PASS. Prove
+# the fixtures exist before any arm can inherit the failure.
+for _repo in "$MAIN_REPO" "$FEAT_REPO" "$OTHER_MAIN"; do
+  [[ -d "$_repo/.git" ]] || { echo "FATAL: fixture repo missing at $_repo" >&2; exit 2; }
+done
 
 run_guard() { # $1 = command string, $2 = cwd to run the guard from
   (cd "$2" && bash "$SUT" "$1" 2>/dev/null)
