@@ -73,7 +73,7 @@ Deliverable: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/env
 - `plugins/soleur/devin/INSTRUCTIONS.md:91` — correct the credential-guard claim to state the real post-merge coverage.
 - `ADR-213` addendum — state Devin coverage plainly ("an unstated gap is the failure mode, not the gap itself").
 - PA-8 §(g) / PA-31 §(g) — dated scope clarification conditioned on this PR's merge; `compliance-posture.md` — dead-window inventory note.
-- New ADR (provisional ADR-221 — re-verify against `origin/*` at ship time) recording the per-harness hook-registry strategy: Claude-canonical settings.json, per-harness registries for Devin/Codex/OpenHands, Grok shares the Claude registry, ledger + parity test as the drift guard.
+- New ADR (provisional ADR-223 — collided with #8155's Cloud Mode ADR-221 at merge time, renumbered) recording the per-harness hook-registry strategy: Claude-canonical settings.json, per-harness registries for Devin/Codex/OpenHands, Grok shares the Claude registry, ledger + parity test as the drift guard.
 - C4: add `devin` system element to `model.c4` (mirroring `codex`/`grokBuild` shape — external system, `founder -> devin`, `devin -> platform.plugin` edges, `#external` tag, view `include` lines in `views.c4` context + containers views); update Hook Engine description's "TWO HARNESSES" enumeration to name all registry surfaces (`.claude`, `.openhands`, `.devin`, `.codex`, `.grok`-shares-Claude). Keep new edge prose free of derived cardinalities; `c4-count-parity.test.sh` green at plan time.
 
 ## Alternative Approaches Considered
@@ -146,7 +146,7 @@ discoverability_test:
 
 ### ADR
 
-New ADR (provisional **ADR-221** — the ordinal is a claim, not a reservation: re-derive against freshly-fetched `origin/*` immediately before merge per the #5990 double-collision precedent) via `/soleur:architecture`: per-harness hook registries — Claude-canonical `settings.json`; per-harness registries for Devin (`.devin/config.json`), Codex (`.codex/config.toml`), OpenHands (`.openhands/hooks.json`); Grok shares the Claude registry (twins + alias-union semantics); the disposition ledger + parity test is the drift guard. Anchors: ADR-089 third-harness clause, ADR-110 one-resolver-map, ADR-165 OpenHands protocol divergence, ADR-215 Codex minimal-subset.
+New ADR (**ADR-223** (the provisional ADR-221 collided with #8155's Cloud Mode ADR at rebase — the #5990 double-collision precedent, exercised)) via `/soleur:architecture`: per-harness hook registries — Claude-canonical `settings.json`; per-harness registries for Devin (`.devin/config.json`), Codex (`.codex/config.toml`), OpenHands (`.openhands/hooks.json`); Grok shares the Claude registry (twins + alias-union semantics); the disposition ledger + parity test is the drift guard. Anchors: ADR-089 third-harness clause, ADR-110 one-resolver-map, ADR-165 OpenHands protocol divergence, ADR-215 Codex minimal-subset.
 
 ### C4 views
 
@@ -201,7 +201,7 @@ None. Queried `gh issue list --label code-review --state open` (200 issues) agai
 - `.claude/hooks/devin-dispositions.tsv` — the disposition ledger/matrix
 - `.claude/hooks/devin-matcher-parity.test.sh` — the parity contract test
 - `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md` — Phase-0 measurements
-- `knowledge-base/engineering/architecture/decisions/ADR-221-per-harness-hook-registries.md` (provisional ordinal)
+- `knowledge-base/engineering/architecture/decisions/ADR-223-per-harness-hook-registries-with-a-disposition-ledger.md` (renumbered from provisional 221 at rebase)
 
 ## Files to Edit
 
