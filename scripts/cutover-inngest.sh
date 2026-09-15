@@ -848,8 +848,11 @@ case "$OP" in
       echo "::warning::doublefire-probe: the server did not report a usable totalCount (total_count=$TOTAL_COUNT) — the page-1 feasibility gate did not run and the scan's scale is unmeasured."
     fi
     echo "::notice::doublefire-probe: $RUN_COUNT run(s) in window (server total_count=$TOTAL_COUNT, anchor_source=$DF_ANCHOR_SOURCE, from=$DF_FROM); bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
+    # #6178 — `fromdateiso8601` accepts only whole-second `…:SSZ`; the Postgres-backed dedicated host
+    # returns microseconds (`…:34.101119Z`), so the fraction is stripped first (bucketing floors to
+    # the cron period anyway). Without it op=verify dies at jq exit 5 on every real run (run 34961424195).
     DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
-      [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ]
+      [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ]
       | group_by([.fn, .bucket])
       | map(select(length > 1))
       | map({ functionID: .[0].fn, bucket: .[0].bucket, count: length }) ')
@@ -2283,7 +2286,7 @@ case "$OP" in
     echo "::notice::2.6 doublefire-probe: $RUN_COUNT run(s) in window (server total_count=$TOTAL_COUNT); bucketing by (functionID, floor(startedAt / ${CRON_PERIOD}s))"
     # Any (functionID, floor(startedAt/period)) group with >1 run is a double-fire.
     DUPES=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" '
-      [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ]
+      [ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ]
       | group_by([.fn, .bucket])
       | map(select(length > 1))
       | map({ functionID: .[0].fn, bucket: .[0].bucket, count: length }) ')
@@ -2333,7 +2336,7 @@ case "$OP" in
       # #6178 — the SAME null-startedAt guard as the bucketing above: this is the
       # identical construct, so it carried the identical jq exit-5 crash.
       OBSERVED=$(echo "$BODY" | jq -c --argjson period "$CRON_PERIOD" \
-        '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | fromdateiso8601) / $period | floor) } ] | unique')
+        '[ .runs[] | select(.startedAt != null) | { fn: .functionID, bucket: ((.startedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) / $period | floor) } ] | unique')
       FROM_BUCKET=$(( FROM_EPOCH / CRON_PERIOD ))
       UNTIL_BUCKET=$(( UNTIL_EPOCH / CRON_PERIOD ))
       # Guard the tick loop with a hard cap so a mis-set window cannot spin.
