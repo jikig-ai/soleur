@@ -63,6 +63,9 @@ path alone cannot show that replay drift is visible.
 13. A local legal-lockstep probe compared only committed files (`origin/main...HEAD`) while the legal edits were still unstaged, so it reported a false missing-file result. **Prevention:** use the working-tree diff while validating before commit, then repeat against the pushed commit.
 14. A migration-lint probe used a root-level script path that does not exist; the canonical script is under `apps/web-platform/scripts/`. **Prevention:** resolve plan paths with `rg --files` before invoking them.
 15. A GitHub CLI job inspection requested an unsupported `steps` JSON field and failed before returning job state. **Prevention:** query the documented `gh` fields first, or use the Actions REST endpoint for step-level details.
+16. A bounded `gh pr checks` probe yielded no captured output after its timeout even though the process had exited. **Prevention:** avoid chaining a sleep to a status probe at the yield boundary; run the status command directly and print its exit code.
+17. A 30-second sleep used as a polling delay also yielded an undefined result at the tool timeout boundary. **Prevention:** use short direct status probes instead of timeout-length sleeps.
+18. The first local constraint-gate invocation yielded before returning its session identifier, making its result unrecoverable from that tool call. **Prevention:** always print and retain the session ID when `yield_time_ms` can be reached, then resume with `write_stdin`.
 
 ## Related
 
