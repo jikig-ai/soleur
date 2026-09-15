@@ -37,7 +37,8 @@ resource "doppler_secret" "git_data_root_ssh_private_key" {
 }
 
 # Read-only on the isolated config. The provider has no expiry attribute; revocation is a reviewed
-# `-replace` (the apply workflow's typed rotate_read_token input) or a removal PR (ADR-220 D3).
+# PR that adds a typed arm for exactly this address (the apply workflow's allowlist is additive-only
+# with no exceptions) or a removal PR (ADR-220 D3).
 resource "doppler_service_token" "git_data_root_read" {
   project = doppler_project.git_data_root.name
   config  = doppler_environment.git_data_root_prd.slug

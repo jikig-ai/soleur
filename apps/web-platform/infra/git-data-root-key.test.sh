@@ -9,26 +9,36 @@
 #     terraform_remote_state (the last also across the parent root's *.tf).
 #   - .github/workflows/apply-git-data-root-key.yml stays dispatch-only, SHA-pinned, reviewer-gated,
 #     serialized on the replace job's `git-data-state` literal with cancel-in-progress `is False`,
-#     applies only an additive plan (or the typed read-token rotation), never prints or uploads the
-#     plan, shreds it, and emails ops on any non-success.
+#     applies only an additive plan (a create of exactly the D-1 address set, or a no-op; no
+#     import, no moved address, no re-mint of an anchored key; NO rotation exception), gates the
+#     apply on that refusal (no `if:` / `continue-on-error` from the allowlist through the apply),
+#     prints the fingerprint from Terraform state only when it equals the Hetzner object's, never
+#     prints or uploads the plan, shreds it, and emails ops on any non-success.
 #   - apply-web-platform-infra.yml's push trigger excludes the root, and infra-validation.yml runs
 #     this suite and validates the root.
 #
-# THE ALLOWLIST IS EXECUTED, NOT RE-DECLARED. The `validate` and `allowlist` step bodies are
-# extracted from the workflow by step id (PyYAML) and run under `bash -e` with a PATH-stubbed
-# `terraform` that serves synthesized plan-JSON fixtures (cq-test-fixtures-synthesized-only: every
-# value below is a fabricated placeholder, never a real key or token).
+# THE STEP BODIES ARE EXECUTED, NOT RE-DECLARED. The `validate`, `allowlist` and `fingerprint` step
+# bodies are extracted from the workflow by step id (PyYAML) and run under `bash -e` with PATH-stubbed
+# `terraform`/`doppler`/`curl` that serve synthesized plan-JSON, state-JSON and Hetzner-listing
+# fixtures (cq-test-fixtures-synthesized-only: every value below is a fabricated placeholder or an
+# ED25519 key generated into the scratch dir at test time, never a real key or token).
 #
 # MUTATION BATTERY (harness convention, modeled on arm-heartbeats.test.sh). Every code-edit row
 # copies the file under test, applies a sed edit to the copy, asserts the edit landed on exactly the
 # expected deleted/added line counts, points an override at the copy (GD_ROOT_KEY_DIR,
 # GD_ROOT_KEY_WORKFLOW, GD_ROOT_KEY_APPLY_WF, GD_ROOT_KEY_PARENT_DIR) and re-runs this suite as a
-# child, requiring the NAMED case to print FAIL. Fixture rows run as negative cases.
+# child, requiring the NAMED case to print FAIL. Fixture rows run as negative cases. Every row is
+# DECLARED when it starts and COUNTED only on a RED verdict; the floor requires red == declared.
 #
 #   row  guard  kind     edit / fixture                                              must go RED
 #   F1   G8     fixture  tls_private_key.git_data_root actions ["forget"]            G8.fixture-forget
-#   F2   G8     fixture  read-token replace without the typed input                  G8.fixture-rotation-no-input
+#   F2   G8     fixture  read-token replace (no rotation exception)                  G8.fixture-token-replace
 #   F3   G8     fixture  empty `terraform show -json` output                         G8.fixture-empty-json
+#   F4   G8     fixture  create of an address outside the D-1 set                    G8.fixture-unexpected-create
+#   F5   G8     fixture  a D-1 create that is an import                              G8.fixture-importing
+#   F6   G8     fixture  a no-op carrying previous_address (moved)                   G8.fixture-moved
+#   F7   G8     fixture  tls key create with the fingerprint committed               G8.remint-refused
+#   F8   G8     fixture  state fingerprint differs from the Hetzner object's         G8.fingerprint-mismatch
 #   M1   G8     code     add an output block with nonsensitive( to the root          ROOT.census
 #   M2   G8     code     remove the notify-root-key-apply job                         G8.notify-job
 #   M3   G6     code     delete cancel-in-progress on the apply job                   G6.apply-cancel-in-progress-false
@@ -43,6 +53,15 @@
 #   M12  G8     code     terraform_wrapper: true                                      WF.setup-terraform
 #   M13  G8     code     drop -lockfile=readonly from init                            WF.init-readonly-lock
 #   M14  D-1    code     ignore_changes on the repo secret                            ROOT.github-secret-no-ignore-changes
+#   M15  G8     code     continue-on-error: true on the allowlist step                G8.allowlist-gates-apply
+#   M16  G8     code     if: always() on the apply step                               G8.allowlist-gates-apply
+#   M17  G8     code     notify job if: gains a trailing `&& false`                   G8.notify-job
+#   M18  G8     code     mail step if: always() -> if: false                          G8.notify-job
+#   M19  G8     code     drop hcloud_ssh_key.git_data_root from create_addrs          G8.create-set-parity
+#   M20  G8     code     re-point the allowlist's fingerprint-anchor path             G8.remint-refused
+#   M21  G8     code     drop the importing check from `additive`                     G8.fixture-importing
+#   M22  G8     code     fingerprint step reads the saved plan, not state             G8.fingerprint-match
+#   M23  G8     code     neuter the state-vs-Hetzner equality                         G8.fingerprint-mismatch
 #
 # Registered in .github/workflows/infra-validation.yml (run: bash <this path>).
 set -uo pipefail
@@ -59,15 +78,16 @@ APPLY_WF="${GD_ROOT_KEY_APPLY_WF:-${ROOT}/.github/workflows/apply-web-platform-i
 INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
 CHILD="${GD_ROOT_KEY_CHILD:-0}"
 
-MUTANT_FLOOR=17
-ASSERT_FLOOR_BASE=74
-ASSERT_FLOOR_MUTANTS=30
+MUTANT_FLOOR=31
+ASSERT_FLOOR_BASE=87
+ASSERT_FLOOR_MUTANTS=48
 
 passes=0
 fails=0
 skips=0
 cases=0
-mutants=0
+mutants=0   # rows that produced a RED verdict
+declared=0  # rows started (fixture rows + code rows); the floor requires mutants == declared
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; [[ -n "${2:-}" ]] && printf '       %s\n' "$2"; return 0; }
 
@@ -117,10 +137,11 @@ else
 fi
 
 cases=$((cases + 1))
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null && command -v jq >/dev/null 2>&1; then
-  pass "PRE.tools: python3 + PyYAML + jq available"
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null && command -v jq >/dev/null 2>&1 \
+     && command -v ssh-keygen >/dev/null 2>&1; then
+  pass "PRE.tools: python3 + PyYAML + jq + ssh-keygen available"
 else
-  fail "PRE.tools: python3 with PyYAML and jq are required — the arms below cannot run and must not read as green"
+  fail "PRE.tools: python3 with PyYAML, jq and ssh-keygen are required — the arms below cannot run and must not read as green"
 fi
 
 fact() {  # <facts-var-content> <key> -> value of the first KEY=... line
@@ -247,7 +268,10 @@ def lockv(path):
     return dict(re.findall(r'provider "registry\.terraform\.io/([^"]+)" \{\s*\n\s*version\s*=\s*"([^"]+)"', s))
 ml = lockv(os.path.join(rk, ".terraform.lock.hcl"))
 pl = lockv(os.path.join(parent, ".terraform.lock.hcl"))
-print("LOCK=%s" % ",".join("%s@%s" % kv for kv in sorted(ml.items())))
+rp = block(t, r'^\s*required_providers\s*\{') or ""
+sources = sorted(set(s.lower() for s in re.findall(r'source\s*=\s*"([^"]+)"', rp)))
+print("REQUIRED_SOURCES=%s" % ",".join(sources))
+print("LOCK_NAMES=%s" % ",".join(sorted(ml)))
 print("LOCK_PARENT_MISMATCH=%s" % ",".join(sorted(k for k in ml if pl.get(k) != ml[k])))
 PY
 )" || ROOT_FACTS="PROBE_FAILED=1"
@@ -376,11 +400,14 @@ else
 fi
 
 cases=$((cases + 1))
-if [[ "$(fact "$ROOT_FACTS" LOCK)" == "dopplerhq/doppler@1.21.2,hashicorp/tls@4.3.0,hetznercloud/hcloud@1.63.0,integrations/github@6.12.1" \
+# Parity, not literals: a provider bump lands in the parent's lock and must land here in the same PR.
+_lock_names="$(fact "$ROOT_FACTS" LOCK_NAMES)"
+if [[ -n "$_lock_names" && "$_lock_names" == "$(fact "$ROOT_FACTS" REQUIRED_SOURCES)" \
       && -z "$(fact "$ROOT_FACTS" LOCK_PARENT_MISMATCH)" ]]; then
-  pass "ROOT.lock: doppler 1.21.2, tls 4.3.0, hcloud 1.63.0, github 6.12.1, equal to the parent's lock"
+  pass "ROOT.lock: the lock pins exactly the required_providers sources, each at the parent lock's version"
 else
-  fail "ROOT.lock: locked providers drifted" "lock=$(fact "$ROOT_FACTS" LOCK) parent-mismatch=$(fact "$ROOT_FACTS" LOCK_PARENT_MISMATCH)"
+  fail "ROOT.lock: locked providers drifted from required_providers or from the parent's lock" \
+    "lock=${_lock_names} required=$(fact "$ROOT_FACTS" REQUIRED_SOURCES) parent-mismatch=$(fact "$ROOT_FACTS" LOCK_PARENT_MISMATCH)"
 fi
 
 # Parent census lower bound, reported directly.
@@ -454,6 +481,7 @@ bans = {
     "terraform_output": len(re.findall(r"\bterraform output\b", code)),
     "TF_LOG": code.count("TF_LOG"),
     "run_inputs_interp": sum(r.count("${{ inputs.") for r in runs),
+    "replace_flag": code.count("-replace"),
 }
 print("BANS=%s" % ",".join("%s:%d" % kv for kv in sorted(bans.items())))
 
@@ -469,8 +497,7 @@ print("SHRED=%d" % len(shred))
 val = next((s for s in steps if s.get("id") == "validate"), None)
 print("VALIDATE_FIRST=%d" % (1 if steps and steps[0] is val else 0))
 venv = (val or {}).get("env") or {}
-print("CONFIRM_ENV=%d" % (1 if venv.get("CONFIRM_RAW") == "${{ inputs.confirm }}"
-                            and venv.get("ROTATE_RAW") == "${{ inputs.rotate_read_token }}"
+print("CONFIRM_ENV=%d" % (1 if venv == {"CONFIRM_RAW": "${{ inputs.confirm }}"}
                             and '"APPLY-GIT-DATA-ROOT-KEY"' in str((val or {}).get("run", "")) else 0))
 if val:
     open(os.path.join(work, "validate.sh"), "w").write(str(val.get("run", "")))
@@ -483,9 +510,28 @@ if al:
     prog_nostr = re.sub(r'"(?:[^"\\]|\\.)*"', '""', prog)
     fields = sorted(set(re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)", prog_nostr)))
     print("JQ_FIELDS=%s" % ",".join(fields))
+    m = re.search(r"def create_addrs:\s*\[(.*?)\];", prog, re.S)
+    print("CREATE_SET=%s" % (",".join(sorted(re.findall(r'"([^"]+)"', m.group(1)))) if m else ""))
     ai = [i for i, s in enumerate(steps) if s is al][0]
     ap = [i for i, s in enumerate(steps) if re.search(r"terraform apply\b", str(s.get("run", "")))]
     print("ALLOWLIST_BEFORE_APPLY=%d" % (1 if ap and all(ai < i for i in ap) else 0))
+    # THE WIRING, not the content: a refusal that does not stop the apply is an annotation. No step
+    # from the allowlist through the one apply may carry `if:` (always()/false both bypass the
+    # default success() gate), and neither end may carry continue-on-error; nor may the job.
+    gate = (len(ap) == 1 and ai < ap[0]
+            and all("if" not in steps[i] for i in range(ai, ap[0] + 1))
+            and "continue-on-error" not in al and "continue-on-error" not in steps[ap[0]]
+            and "continue-on-error" not in apply)
+    print("ALLOWLIST_GATE=%d" % (1 if gate else 0))
+fp = next((s for s in steps if s.get("id") == "fingerprint"), None)
+if fp:
+    body = str(fp.get("run", ""))
+    open(os.path.join(work, "fingerprint.sh"), "w").write(body)
+    shows = re.findall(r"terraform show\b[^\n]*", body)
+    m = re.search(r"terraform show -json \| jq -r '([^']*)'", body)
+    fields = sorted(set(re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)", re.sub(r'"(?:[^"\\]|\\.)*"', '""', m.group(1))))) if m else []
+    print("FP_SOURCE=%d|%s|%s" % (len(shows), 1 if m else 0, ",".join(fields)))
+    print("FP_WD=%s" % resolve(fp.get("working-directory", "")))
 
 notify = jobs.get("notify-root-key-apply") or {}
 needs = notify.get("needs") or []
@@ -494,9 +540,13 @@ ifx = str(notify.get("if", ""))
 nsteps = notify.get("steps") or []
 mail = [s for s in nsteps if s.get("uses") == "./.github/actions/notify-ops-email"
         and (s.get("with") or {}).get("resend-api-key") == "${{ secrets.RESEND_API_KEY }}"]
+# EXACT compares: a substring check accepts `... && false`; a mail step `if: false` (or a
+# continue-on-error on it) silences the notice while the job still "runs".
+mail_ok = len(mail) == 1 and all(("if" not in m or str(m.get("if")).strip() == "always()")
+                                 and "continue-on-error" not in m for m in mail)
 print("NOTIFY=%d|%d|%d|%d|%d" % (1 if notify else 0, 1 if "apply" in needs else 0,
-      1 if ("always()" in ifx and "needs.apply.result != 'success'" in ifx) else 0,
-      1 if "environment" not in notify else 0, len(mail)))
+      1 if ifx.strip() == "always() && needs.apply.result != 'success'" else 0,
+      1 if "environment" not in notify else 0, 1 if mail_ok else 0))
 
 # Parent apply's push paths, evaluated IN ORDER (later patterns override earlier ones).
 aon = aw.get(True) or aw.get("on") or {}
@@ -537,8 +587,8 @@ else
 fi
 
 cases=$((cases + 1))
-if [[ "$(fact "$WF_FACTS" INPUTS)" == "confirm,rotate_read_token" ]]; then
-  pass "WF.inputs: exactly {confirm, rotate_read_token}"
+if [[ "$(fact "$WF_FACTS" INPUTS)" == "confirm" ]]; then
+  pass "WF.inputs: exactly {confirm} (no rotation input; a rotation is a reviewed PR adding a typed arm)"
 else
   fail "WF.inputs: input set is '$(fact "$WF_FACTS" INPUTS)'"
 fi
@@ -619,8 +669,8 @@ else
 fi
 
 cases=$((cases + 1))
-if [[ "$(fact "$WF_FACTS" BANS)" == "TF_LOG:0,run_inputs_interp:0,terraform_output:0,upload-artifact:0" ]]; then
-  pass "G8.census: no upload-artifact, terraform output, TF_LOG, or \${{ inputs. }} inside a run body"
+if [[ "$(fact "$WF_FACTS" BANS)" == "TF_LOG:0,replace_flag:0,run_inputs_interp:0,terraform_output:0,upload-artifact:0" ]]; then
+  pass "G8.census: no upload-artifact, terraform output, TF_LOG, -replace, or \${{ inputs. }} inside a run body"
 else
   fail "G8.census: a banned construct is present in the workflow" "$(fact "$WF_FACTS" BANS)"
 fi
@@ -634,22 +684,50 @@ fi
 
 cases=$((cases + 1))
 if [[ "$(fact "$WF_FACTS" VALIDATE_FIRST)" == "1" && "$(fact "$WF_FACTS" CONFIRM_ENV)" == "1" ]]; then
-  pass "WF.confirm: the validate step runs first and receives both inputs through env:"
+  pass "WF.confirm: the validate step runs first and receives exactly the confirm input through env:"
 else
-  fail "WF.confirm: input validation is not first or does not route inputs through env:" \
+  fail "WF.confirm: input validation is not first or its env: is not exactly {CONFIRM_RAW: inputs.confirm}" \
     "first=$(fact "$WF_FACTS" VALIDATE_FIRST) env=$(fact "$WF_FACTS" CONFIRM_ENV)"
 fi
 
 cases=$((cases + 1))
-if [[ "$(fact "$WF_FACTS" JQ_FIELDS)" == "actions,address,change,resource_changes" ]]; then
-  pass "G8.jq-fields: the allowlist program reads only resource_changes[].address and .change.actions"
+if [[ "$(fact "$WF_FACTS" JQ_FIELDS)" == "actions,address,change,importing,previous_address,resource_changes" ]]; then
+  pass "G8.jq-fields: the allowlist program reads only resource_changes[] address, change.actions, change.importing, previous_address"
 else
-  fail "G8.jq-fields: the allowlist program reads fields beyond address/actions" "fields=$(fact "$WF_FACTS" JQ_FIELDS)"
+  fail "G8.jq-fields: the allowlist program reads fields beyond address/actions/importing/previous_address" "fields=$(fact "$WF_FACTS" JQ_FIELDS)"
+fi
+
+# The workflow keeps a LITERAL create set (it cannot parse HCL at run time); the set it must equal is
+# derived from the root's *.tf, so adding or dropping a resource without the allowlist fails here.
+cases=$((cases + 1))
+_create_set="$(fact "$WF_FACTS" CREATE_SET)"
+if [[ -n "$_create_set" && "$_create_set" == "$(fact "$ROOT_FACTS" ADDRS)" ]]; then
+  pass "G8.create-set-parity: the allowlist's create_addrs literal equals the root's declared address set"
+else
+  fail "G8.create-set-parity: create_addrs differs from the addresses declared in the root's *.tf" \
+    "allowlist=${_create_set:-<none extracted>} root=$(fact "$ROOT_FACTS" ADDRS)"
+fi
+
+cases=$((cases + 1))
+if [[ "$(fact "$WF_FACTS" ALLOWLIST_GATE)" == "1" ]]; then
+  pass "G8.allowlist-gates-apply: no if:/continue-on-error from the allowlist step through the one apply (nor on the job)"
+else
+  fail "G8.allowlist-gates-apply: the allowlist refusal no longer gates the apply" \
+    "gate=$(fact "$WF_FACTS" ALLOWLIST_GATE) — an if: or continue-on-error lets a refused plan apply"
+fi
+
+cases=$((cases + 1))
+if [[ "$(fact "$WF_FACTS" FP_SOURCE)" == "1|1|address,public_key_fingerprint_sha256,resources,root_module,values" \
+      && "$(fact "$WF_FACTS" FP_WD)" == "apps/web-platform/infra/git-data-root-key" ]]; then
+  pass "G8.fingerprint-state-source: one terraform show -json (no plan file) piped into jq reading only the tls key's public_key_fingerprint_sha256, in the root dir"
+else
+  fail "G8.fingerprint-state-source: the fingerprint step's state read drifted (shows|state-form|fields)" \
+    "$(fact "$WF_FACTS" FP_SOURCE) wd=$(fact "$WF_FACTS" FP_WD)"
 fi
 
 cases=$((cases + 1))
 if [[ "$(fact "$WF_FACTS" NOTIFY)" == "1|1|1|1|1" ]]; then
-  pass "G8.notify-job: notify-root-key-apply needs apply, fires on always() && result != success, no environment, emails via notify-ops-email"
+  pass "G8.notify-job: notify-root-key-apply needs apply, if: is exactly always() && result != success, no environment, one ungated notify-ops-email step"
 else
   fail "G8.notify-job: the failure-notice job is missing or drifted (present|needs|if|no-env|mail)" "$(fact "$WF_FACTS" NOTIFY)"
 fi
@@ -673,37 +751,82 @@ STUB="$WORK/bin"
 mkdir -p "$STUB"
 cat > "$STUB/terraform" <<'SH'
 #!/usr/bin/env bash
-# Synthesized-fixture stub: serves $FIXTURE for `terraform show -json <plan>` only.
+# Synthesized-fixture stub. `terraform show -json <saved plan>` serves $FIXTURE; `terraform show
+# -json` with NO operand (state) serves $STATE_FIXTURE. Anything else is an unexpected invocation.
 if [[ "${1:-}" == "show" && "${2:-}" == "-json" ]]; then
-  [[ "${STUB_SHOW_RC:-0}" -eq 0 ]] || exit "$STUB_SHOW_RC"
-  cat "$FIXTURE"
-  exit 0
+  if [[ $# -eq 3 && "$3" == "${RUNNER_TEMP:-}/tfplan" ]]; then
+    [[ "${STUB_SHOW_RC:-0}" -eq 0 ]] || exit "$STUB_SHOW_RC"
+    cat "$FIXTURE"
+    exit 0
+  fi
+  if [[ $# -eq 2 && -n "${STATE_FIXTURE:-}" ]]; then
+    [[ "${STUB_STATE_RC:-0}" -eq 0 ]] || exit "$STUB_STATE_RC"
+    cat "$STATE_FIXTURE"
+    exit 0
+  fi
 fi
 echo "terraform stub: unexpected invocation: $*" >&2
 exit 64
 SH
-chmod +x "$STUB/terraform"
+cat > "$STUB/doppler" <<'SH'
+#!/usr/bin/env bash
+# Synthesized-fixture stub: `doppler secrets get HCLOUD_TOKEN ... --plain` prints $HC_TOKEN.
+if [[ "${1:-} ${2:-} ${3:-}" == "secrets get HCLOUD_TOKEN" ]]; then
+  [[ "${STUB_DOPPLER_RC:-0}" -eq 0 ]] || exit "$STUB_DOPPLER_RC"
+  printf '%s' "$HC_TOKEN"
+  exit 0
+fi
+echo "doppler stub: unexpected invocation" >&2
+exit 64
+SH
+cat > "$STUB/curl" <<'SH'
+#!/usr/bin/env bash
+# Synthesized-fixture stub: drains the header from stdin, serves $HETZNER_FIXTURE for the
+# label-selected ssh_keys listing only.
+cat >/dev/null
+case " $* " in
+  *" https://api.hetzner.cloud/v1/ssh_keys?label_selector=soleur-role%3Dgit-data-root "*) ;;
+  *) echo "curl stub: unexpected URL" >&2; exit 64 ;;
+esac
+[[ "${STUB_CURL_RC:-0}" -eq 0 ]] || exit "$STUB_CURL_RC"
+cat "$HETZNER_FIXTURE"
+SH
+chmod +x "$STUB/terraform" "$STUB/doppler" "$STUB/curl"
 
-run_validate() {  # <confirm> <rotate> -> sets V_RC V_OUT
-  V_OUT="$(cd "$WORK" && env CONFIRM_RAW="$1" ROTATE_RAW="$2" bash -e "$WORK/validate.sh" 2>&1)"
+# Fingerprint-anchor workspaces: one with the committed fingerprint file, one without.
+WS_NONE="$WORK/ws-none"
+WS_ANCHORED="$WORK/ws-anchored"
+mkdir -p "$WS_NONE" "$WS_ANCHORED/apps/web-platform/infra"
+printf 'SHA256:SYNTHETIC-placeholder-not-a-fingerprint\n' > "$WS_ANCHORED/apps/web-platform/infra/git-data-root-key.fingerprint"
+
+run_validate() {  # <confirm> -> sets V_RC V_OUT
+  V_OUT="$(cd "$WORK" && env CONFIRM_RAW="$1" bash -e "$WORK/validate.sh" 2>&1)"
   V_RC=$?
 }
 
-run_allowlist() {  # <fixture-file> <rotate-raw> [show-rc] -> sets A_RC A_OUT
-  A_OUT="$(cd "$WORK" && env PATH="$STUB:$PATH" FIXTURE="$1" ROTATE_RAW="$2" STUB_SHOW_RC="${3:-0}" \
+run_allowlist() {  # <fixture-file> <workspace: none|anchored|unset> [show-rc] -> sets A_RC A_OUT
+  local ws
+  case "$2" in
+    anchored) ws="$WS_ANCHORED" ;;
+    unset)    ws="" ;;
+    *)        ws="$WS_NONE" ;;
+  esac
+  A_OUT="$(cd "$WORK" && env PATH="$STUB:$PATH" FIXTURE="$1" GITHUB_WORKSPACE="$ws" STUB_SHOW_RC="${3:-0}" \
              RUNNER_TEMP="$WORK" bash -e "$WORK/allowlist.sh" 2>&1)"
   A_RC=$?
 }
 
 SENT="SYNTHETIC-SENTINEL-not-a-key-0000"
+TOKEN_SENT="SYNTHETIC-TOKEN-not-a-token-1111"
 fixture() {  # <name> <json-resource_changes-array> -> path
   local p="$WORK/fx-$1.json"
   printf '{"format_version":"1.2","variables":{"hcloud_token":{"value":"%s"}},"resource_changes":%s,"prior_state":{"values":{"root_module":{"resources":[{"values":{"private_key_openssh":"%s"}}]}}}}\n' \
     "$SENT" "$2" "$SENT" > "$p"
   printf '%s' "$p"
 }
-rc_entry() {  # <address> <actions-json>
-  printf '{"address":"%s","mode":"managed","change":{"actions":%s,"after":{"value":"%s"}}}' "$1" "$2" "$SENT"
+rc_entry() {  # <address> <actions-json> [extra top-level json members] [extra change json members]
+  printf '{"address":"%s","mode":"managed"%s,"change":{"actions":%s,"after":{"value":"%s"}%s}}' \
+    "$1" "${3:+,$3}" "$2" "$SENT" "${4:+,$4}"
 }
 all7() {  # <actions-json for every address> [override-address override-actions]...
   local acts="$1"; shift
@@ -723,34 +846,26 @@ all7() {  # <actions-json for every address> [override-address override-actions]
   printf '[%s]' "$out"
 }
 
-if [[ ! -s "$WORK/validate.sh" || ! -s "$WORK/allowlist.sh" ]]; then
-  cases=$((cases + 1)); fail "G8.extract: could not extract the validate/allowlist step bodies by id"
+if [[ ! -s "$WORK/validate.sh" || ! -s "$WORK/allowlist.sh" || ! -s "$WORK/fingerprint.sh" ]]; then
+  cases=$((cases + 1)); fail "G8.extract: could not extract the validate/allowlist/fingerprint step bodies by id"
 else
-  cases=$((cases + 1)); pass "G8.extract: validate and allowlist step bodies extracted by step id"
+  cases=$((cases + 1)); pass "G8.extract: validate, allowlist and fingerprint step bodies extracted by step id"
 fi
 
 # validate step
-run_validate "APPLY-GIT-DATA-ROOT-KEY" ""
+run_validate "APPLY-GIT-DATA-ROOT-KEY"
 cases=$((cases + 1))
-[[ "$V_RC" -eq 0 ]] && pass "WF.validate-accepts: exact confirm, empty rotate -> rc 0" \
+[[ "$V_RC" -eq 0 ]] && pass "WF.validate-accepts: exact confirm -> rc 0" \
   || fail "WF.validate-accepts: exact confirm rejected (rc=$V_RC)" "$V_OUT"
-run_validate "APPLY-GIT-DATA-ROOT-KEY" "ROTATE-GIT-DATA-ROOT-READ-TOKEN"
-cases=$((cases + 1))
-[[ "$V_RC" -eq 0 ]] && pass "WF.validate-rotate-exact: exact rotate literal -> rc 0" \
-  || fail "WF.validate-rotate-exact: exact rotate literal rejected (rc=$V_RC)" "$V_OUT"
 for _bad in "apply-git-data-root-key" "APPLY-GIT-DATA-ROOT-KEY " "" "REHEARSE-GIT-DATA"; do
-  run_validate "$_bad" ""
+  run_validate "$_bad"
   cases=$((cases + 1))
   [[ "$V_RC" -ne 0 ]] && pass "WF.validate-rejects-confirm: '${_bad}' -> refused" \
     || fail "WF.validate-rejects-confirm: '${_bad}' accepted as confirm"
 done
-run_validate "APPLY-GIT-DATA-ROOT-KEY" "rotate"
-cases=$((cases + 1))
-[[ "$V_RC" -ne 0 ]] && pass "WF.validate-rejects-rotate-typo: a non-empty, non-exact rotate input -> refused" \
-  || fail "WF.validate-rejects-rotate-typo: rotate typo accepted"
 
 # allowlist step
-_ok() {  # <case-id> <desc> <fixture> <rotate>
+_ok() {  # <case-id> <desc> <fixture> <workspace>
   run_allowlist "$3" "$4"
   cases=$((cases + 1))
   if [[ "$A_RC" -eq 0 && "${A_OUT%%$'\n'*}" == "verdict=ok" && "$A_OUT" != *"$SENT"* ]]; then
@@ -759,7 +874,8 @@ _ok() {  # <case-id> <desc> <fixture> <rotate>
     fail "$1: $2 -> expected verdict=ok (rc=$A_RC)" "$(printf '%s' "$A_OUT" | head -3)"
   fi
 }
-_refused() {  # <case-id> <desc> <fixture> <rotate> <verdict> [expected-line] [matrix-row]
+_refused() {  # <case-id> <desc> <fixture> <workspace> <verdict> [expected-line] [matrix-row] [show-rc]
+  [[ "${7:-}" == "row" ]] && declared=$((declared + 1))
   run_allowlist "$3" "$4" "${8:-0}"
   cases=$((cases + 1))
   if [[ "$A_RC" -ne 0 && "$A_OUT" == *"verdict=$5"* && ( -z "${6:-}" || "$A_OUT" == *"$6"* ) && "$A_OUT" != *"$SENT"* ]]; then
@@ -770,56 +886,186 @@ _refused() {  # <case-id> <desc> <fixture> <rotate> <verdict> [expected-line] [m
   fi
 }
 
-_ok "G8.allow-create-only" "all seven addresses create" "$(fixture create "$(all7 '["create"]')")" ""
-_ok "G8.allow-noop-read" "no-op everywhere, one read" \
-  "$(fixture noopread "$(all7 '["no-op"]' tls_private_key.git_data_root '["read"]')")" ""
-_ok "G8.rotation-typed-ok" "typed rotation: token replace + secret update, all else no-op" \
-  "$(fixture rot "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete","create"]' github_actions_secret.doppler_token_git_data_root '["update"]')")" \
-  "ROTATE-GIT-DATA-ROOT-READ-TOKEN"
+FX_CREATE="$(fixture create "$(all7 '["create"]')")"
+: > "$WORK/fx-empty.json"
+
+# VERDICT-HELPER SELF-TEST, both directions. Drive _ok and _refused once with a known-GREEN and once
+# with a known-RED input, require each to record exactly the verdict it was handed (and _refused to
+# declare its matrix row either way but count it only when the refusal was observed), then roll
+# every counter back.
+# Reported via printf + exit, never through the helpers under test.
+_st_p=$passes; _st_f=$fails; _st_c=$cases; _st_m=$mutants; _st_d=$declared
+_st_bad=""
+_ok "SELFTEST.ok-green" "all create" "$FX_CREATE" none >/dev/null
+[[ "$passes" -eq $((_st_p + 1)) && "$fails" -eq "$_st_f" ]] || _st_bad="${_st_bad} ok-green"
+_ok "SELFTEST.ok-red" "empty plan" "$WORK/fx-empty.json" none >/dev/null
+[[ "$passes" -eq $((_st_p + 1)) && "$fails" -eq $((_st_f + 1)) ]] || _st_bad="${_st_bad} ok-red"
+_refused "SELFTEST.refused-green" "empty plan" "$WORK/fx-empty.json" none git_data_root_key_plan_unreadable "" row >/dev/null
+[[ "$passes" -eq $((_st_p + 2)) && "$fails" -eq $((_st_f + 1)) && "$mutants" -eq $((_st_m + 1)) && "$declared" -eq $((_st_d + 1)) ]] \
+  || _st_bad="${_st_bad} refused-green"
+_refused "SELFTEST.refused-red" "all create" "$FX_CREATE" none git_data_root_key_non_additive "" row >/dev/null
+[[ "$passes" -eq $((_st_p + 2)) && "$fails" -eq $((_st_f + 2)) && "$mutants" -eq $((_st_m + 1)) && "$declared" -eq $((_st_d + 2)) ]] \
+  || _st_bad="${_st_bad} refused-red"
+[[ "$cases" -eq $((_st_c + 4)) ]] || _st_bad="${_st_bad} cases"
+if [[ -n "$_st_bad" ]]; then
+  printf '\n[FATAL] verdict-helper self-test: _ok/_refused mis-recorded:%s (passes %d->%d, fails %d->%d, mutants %d->%d, declared %d->%d).\n' \
+    "$_st_bad" "$_st_p" "$passes" "$_st_f" "$fails" "$_st_m" "$mutants" "$_st_d" "$declared" >&2
+  exit 1
+fi
+passes=$_st_p; fails=$_st_f; cases=$_st_c; mutants=$_st_m; declared=$_st_d
+
+_ok "G8.allow-create-only" "all seven D-1 addresses create, no fingerprint committed" "$FX_CREATE" none
+_ok "G8.allow-noop" "no-op everywhere" "$(fixture noop "$(all7 '["no-op"]')")" none
+_ok "G8.anchor-scoped" "fingerprint committed, only the Hetzner object is re-created" \
+  "$(fixture hkeycre "$(all7 '["no-op"]' hcloud_ssh_key.git_data_root '["create"]')")" anchored
+_ok "G8.importing-null" "explicit importing:null on a create is not an import" \
+  "$(fixture impnull "[$(rc_entry tls_private_key.git_data_root '["create"]' "" '"importing":null')]")" none
 
 _refused "G8.fixture-forget" "tls_private_key.git_data_root forget" \
-  "$(fixture forget "$(all7 '["no-op"]' tls_private_key.git_data_root '["forget"]')")" "" \
+  "$(fixture forget "$(all7 '["no-op"]' tls_private_key.git_data_root '["forget"]')")" none \
   git_data_root_key_non_additive "refused tls_private_key.git_data_root forget" row
-_refused "G8.fixture-rotation-no-input" "token replace without the typed input" "$WORK/fx-rot.json" "" \
+_refused "G8.fixture-token-replace" "read-token replace (no rotation exception)" \
+  "$(fixture tokrepl "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete","create"]' github_actions_secret.doppler_token_git_data_root '["update"]')")" none \
   git_data_root_key_non_additive "refused doppler_service_token.git_data_root_read delete,create" row
-: > "$WORK/fx-empty.json"
-_refused "G8.fixture-empty-json" "empty show -json output" "$WORK/fx-empty.json" "" \
+_refused "G8.fixture-empty-json" "empty show -json output" "$WORK/fx-empty.json" none \
   git_data_root_key_plan_unreadable "" row
-
-_refused "G8.rotation-typed-other-update" "typed rotation plus an update elsewhere" \
-  "$(fixture rotupd "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete","create"]' hcloud_ssh_key.git_data_root '["update"]')")" \
-  "ROTATE-GIT-DATA-ROOT-READ-TOKEN" git_data_root_key_non_additive "refused hcloud_ssh_key.git_data_root update"
-_refused "G8.rotation-typed-other-create" "typed rotation plus a create elsewhere" \
-  "$(fixture rotcre "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["delete","create"]' tls_private_key.git_data_root '["create"]')")" \
-  "ROTATE-GIT-DATA-ROOT-READ-TOKEN" git_data_root_key_non_additive "refused tls_private_key.git_data_root create"
-_refused "G8.rotation-typed-token-forget" "typed rotation that forgets the token" \
-  "$(fixture rotfor "$(all7 '["no-op"]' doppler_service_token.git_data_root_read '["forget"]')")" \
-  "ROTATE-GIT-DATA-ROOT-READ-TOKEN" git_data_root_key_non_additive "refused doppler_service_token.git_data_root_read forget"
-_refused "G8.rotation-typo-not-rotation" "rotation plan with a mistyped input" "$WORK/fx-rot.json" "rotate" \
-  git_data_root_key_non_additive
+_refused "G8.fixture-unexpected-create" "create of an address outside the D-1 set" \
+  "$(fixture rogue "[$(rc_entry hcloud_ssh_key.rogue '["create"]'),$(rc_entry tls_private_key.git_data_root '["no-op"]')]")" none \
+  git_data_root_key_non_additive "refused hcloud_ssh_key.rogue create" row
+_refused "G8.fixture-importing" "a D-1 create that is an import" \
+  "$(fixture importing "[$(rc_entry hcloud_ssh_key.git_data_root '["create"]' "" '"importing":{"id":"000000"}')]")" none \
+  git_data_root_key_non_additive "refused hcloud_ssh_key.git_data_root create importing" row
+_refused "G8.fixture-moved" "a no-op carrying previous_address" \
+  "$(fixture moved "[$(rc_entry doppler_project.git_data_root '["no-op"]' '"previous_address":"doppler_project.old"')]")" none \
+  git_data_root_key_non_additive "refused doppler_project.git_data_root no-op moved" row
+_refused "G8.remint-refused" "tls key create with the fingerprint committed" "$FX_CREATE" anchored \
+  git_data_root_key_remint_refused "refused tls_private_key.git_data_root create" row
+_refused "G8.anchor-unset-workspace" "GITHUB_WORKSPACE unset" "$FX_CREATE" unset git_data_root_key_anchor_unreadable
+_refused "G8.fixture-read" "a read action (the root declares no data source)" \
+  "$(fixture read "$(all7 '["no-op"]' tls_private_key.git_data_root '["read"]')")" none \
+  git_data_root_key_non_additive "refused tls_private_key.git_data_root read"
 _refused "G8.fixture-delete" "hcloud_ssh_key.git_data_root delete" \
-  "$(fixture del "$(all7 '["no-op"]' hcloud_ssh_key.git_data_root '["delete"]')")" "" git_data_root_key_non_additive \
+  "$(fixture del "$(all7 '["no-op"]' hcloud_ssh_key.git_data_root '["delete"]')")" none git_data_root_key_non_additive \
   "refused hcloud_ssh_key.git_data_root delete"
 _refused "G8.fixture-update" "doppler_secret update" \
-  "$(fixture upd "$(all7 '["no-op"]' doppler_secret.git_data_root_ssh_private_key '["update"]')")" "" \
+  "$(fixture upd "$(all7 '["no-op"]' doppler_secret.git_data_root_ssh_private_key '["update"]')")" none \
   git_data_root_key_non_additive "refused doppler_secret.git_data_root_ssh_private_key update"
 _refused "G8.fixture-replace" "tls key create-before-destroy replace" \
-  "$(fixture repl "$(all7 '["no-op"]' tls_private_key.git_data_root '["create","delete"]')")" "" \
+  "$(fixture repl "$(all7 '["no-op"]' tls_private_key.git_data_root '["create","delete"]')")" none \
   git_data_root_key_non_additive "refused tls_private_key.git_data_root create,delete"
 printf '{"resource_changes": [' > "$WORK/fx-invalid.json"
-_refused "G8.fixture-invalid-json" "truncated JSON" "$WORK/fx-invalid.json" "" git_data_root_key_plan_unreadable
+_refused "G8.fixture-invalid-json" "truncated JSON" "$WORK/fx-invalid.json" none git_data_root_key_plan_unreadable
 printf '{"format_version":"1.2"}\n' > "$WORK/fx-nochanges.json"
-_refused "G8.fixture-no-resource-changes" "no resource_changes key" "$WORK/fx-nochanges.json" "" git_data_root_key_plan_unreadable
-_refused "G8.fixture-empty-resource-changes" "resource_changes: []" "$(fixture emptyrc '[]')" "" git_data_root_key_plan_unreadable
+_refused "G8.fixture-no-resource-changes" "no resource_changes key" "$WORK/fx-nochanges.json" none git_data_root_key_plan_unreadable
+_refused "G8.fixture-empty-resource-changes" "resource_changes: []" "$(fixture emptyrc '[]')" none git_data_root_key_plan_unreadable
 _refused "G8.fixture-actions-not-array" "actions as a bare string" \
-  "$(fixture strAct '[{"address":"tls_private_key.git_data_root","change":{"actions":"create"}}]')" "" git_data_root_key_plan_unreadable
-_refused "G8.fixture-show-fails" "terraform show exits non-zero" "$WORK/fx-create.json" "" git_data_root_key_plan_unreadable "" "" 1
+  "$(fixture strAct '[{"address":"tls_private_key.git_data_root","change":{"actions":"create"}}]')" none git_data_root_key_plan_unreadable
+_refused "G8.fixture-show-fails" "terraform show exits non-zero" "$FX_CREATE" none git_data_root_key_plan_unreadable "" "" 1
+
+# fingerprint step. Two ED25519 keys generated into the scratch dir (synthesized, never committed).
+ssh-keygen -q -t ed25519 -N '' -C synthetic-a -f "$WORK/key-a" >/dev/null 2>&1
+ssh-keygen -q -t ed25519 -N '' -C synthetic-b -f "$WORK/key-b" >/dev/null 2>&1
+FP_A="$(ssh-keygen -l -E sha256 -f "$WORK/key-a.pub" 2>/dev/null | awk '{print $2}')"
+FP_B="$(ssh-keygen -l -E sha256 -f "$WORK/key-b.pub" 2>/dev/null | awk '{print $2}')"
+cases=$((cases + 1))
+if [[ "$FP_A" =~ ^SHA256:[A-Za-z0-9+/]{43}$ && "$FP_B" =~ ^SHA256:[A-Za-z0-9+/]{43}$ && "$FP_A" != "$FP_B" ]]; then
+  pass "G8.fingerprint-keys: two distinct synthesized ED25519 keys generated"
+else
+  fail "G8.fingerprint-keys: could not generate synthesized keys" "a=${FP_A} b=${FP_B}"
+fi
+state_fixture() {  # <name> <tls-fingerprint> -> path. A decoy fingerprint on another address proves the select.
+  local p="$WORK/st-$1.json"
+  printf '{"format_version":"1.0","values":{"root_module":{"resources":[{"address":"hcloud_ssh_key.git_data_root","values":{"public_key_fingerprint_sha256":"%s"}},{"address":"tls_private_key.git_data_root","values":{"private_key_openssh":"%s","public_key_fingerprint_sha256":"%s"}}]}}}\n' \
+    "$FP_B" "$SENT" "$2" > "$p"
+  printf '%s' "$p"
+}
+hetzner_fixture() {  # <name> <key-count> <name-field> -> path; every listed key carries key-a's public half
+  local p="$WORK/hz-$1.json" pub keys="" i
+  pub="$(cut -d' ' -f1-2 "$WORK/key-a.pub")"
+  for ((i = 0; i < $2; i++)); do
+    keys="${keys:+$keys,}$(printf '{"id":%d,"name":"%s","fingerprint":"aa:bb:cc","public_key":"%s"}' "$i" "$3" "$pub")"
+  done
+  printf '{"ssh_keys":[%s]}\n' "$keys" > "$p"
+  printf '%s' "$p"
+}
+run_fingerprint() {  # <state-fixture> <hetzner-fixture> [state-rc] [curl-rc] -> sets F_RC F_OUT F_SUMMARY
+  : > "$WORK/step-summary.md"
+  F_OUT="$(cd "$WORK" && env PATH="$STUB:$PATH" STATE_FIXTURE="$1" HETZNER_FIXTURE="$2" FIXTURE="$FX_CREATE" \
+             STUB_STATE_RC="${3:-0}" STUB_CURL_RC="${4:-0}" HC_TOKEN="$TOKEN_SENT" RUNNER_TEMP="$WORK" \
+             GITHUB_STEP_SUMMARY="$WORK/step-summary.md" bash -e "$WORK/fingerprint.sh" 2>&1)"
+  F_RC=$?
+  F_SUMMARY="$(cat "$WORK/step-summary.md")"
+}
+# Nothing but the fingerprint prints: no private-key sentinel, and the token only on its add-mask line.
+fp_clean() { [[ "$F_OUT" != *"$SENT"* && "$F_SUMMARY" != *"$SENT"* ]] && ! grep -v '^::add-mask::' <<<"$F_OUT" | grep -qF "$TOKEN_SENT"; }
+
+HZ_ONE="$(hetzner_fixture one 1 soleur-git-data-root)"
+run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE"
+cases=$((cases + 1))
+if [[ "$F_RC" -eq 0 ]] && grep -qxF "git_data_root_key_fingerprint=${FP_A}" <<<"$F_OUT" \
+     && [[ "$F_SUMMARY" == *"\`${FP_A}\`"* ]] && fp_clean; then
+  pass "G8.fingerprint-match: state fingerprint == Hetzner-derived -> prints the state fingerprint only"
+else
+  fail "G8.fingerprint-match: expected rc 0 printing the state fingerprint (rc=$F_RC)" "$(grep -v '^::add-mask::' <<<"$F_OUT" | head -3)"
+fi
+
+_fp_refused() {  # <case-id> <desc> <verdict-and-reason> [matrix-row] -- uses F_RC/F_OUT already set
+  cases=$((cases + 1))
+  if [[ "$F_RC" -ne 0 && "$F_OUT" == *"::error::verdict=$3"* && "$F_OUT" != *"git_data_root_key_fingerprint=SHA256"* ]] && fp_clean; then
+    pass "$1: $2 -> refused verdict=$3"
+    [[ "${4:-}" == "row" ]] && mutants=$((mutants + 1))
+  else
+    fail "$1: $2 -> expected refusal verdict=$3 (rc=$F_RC)" "$(grep -v '^::add-mask::' <<<"$F_OUT" | head -3)"
+  fi
+}
+
+# _fp_refused self-test, both directions, same contract as the allowlist helpers' above.
+_st_p=$passes; _st_f=$fails; _st_c=$cases; _st_m=$mutants
+F_RC=1; F_OUT="::error::verdict=selftest_word"; F_SUMMARY=""
+_fp_refused "SELFTEST.fp-refused-green" "synthetic refusal" selftest_word row >/dev/null
+[[ "$passes" -eq $((_st_p + 1)) && "$fails" -eq "$_st_f" && "$mutants" -eq $((_st_m + 1)) ]] || _st_bad="${_st_bad} fp-refused-green"
+F_RC=0; F_OUT="git_data_root_key_fingerprint=SHA256:selftest"
+_fp_refused "SELFTEST.fp-refused-red" "synthetic success" selftest_word row >/dev/null
+[[ "$passes" -eq $((_st_p + 1)) && "$fails" -eq $((_st_f + 1)) && "$mutants" -eq $((_st_m + 1)) && "$cases" -eq $((_st_c + 2)) ]] \
+  || _st_bad="${_st_bad} fp-refused-red"
+if [[ -n "$_st_bad" ]]; then
+  printf '\n[FATAL] verdict-helper self-test: _fp_refused mis-recorded:%s (passes %d->%d, fails %d->%d, mutants %d->%d).\n' \
+    "$_st_bad" "$_st_p" "$passes" "$_st_f" "$fails" "$_st_m" "$mutants" >&2
+  exit 1
+fi
+passes=$_st_p; fails=$_st_f; cases=$_st_c; mutants=$_st_m
+
+declared=$((declared + 1))
+run_fingerprint "$(state_fixture b "$FP_B")" "$HZ_ONE"
+_fp_refused "G8.fingerprint-mismatch" "state holds key-b, Hetzner lists key-a" git_data_root_key_fingerprint_mismatch row
+cases=$((cases + 1))
+if [[ "$F_OUT" != *"$FP_A"* && "$F_OUT" != *"$FP_B"* && -z "$F_SUMMARY" ]]; then
+  pass "G8.fingerprint-mismatch-silent: a mismatch prints neither fingerprint and writes no summary"
+else
+  fail "G8.fingerprint-mismatch-silent: a mismatch leaked a fingerprint to the log or the step summary"
+fi
+run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE" 1
+_fp_refused "G8.fingerprint-state-unreadable" "terraform show (state) exits non-zero" \
+  "git_data_root_key_fingerprint_unreadable reason=state_read_failed"
+run_fingerprint "$(state_fixture absent "")" "$HZ_ONE"
+_fp_refused "G8.fingerprint-state-absent" "no fingerprint on the tls key in state" \
+  "git_data_root_key_fingerprint_unreadable reason=state_fingerprint_malformed"
+run_fingerprint "$(state_fixture a "$FP_A")" "$HZ_ONE" 0 22
+_fp_refused "G8.fingerprint-hetzner-list-failed" "the Hetzner listing call fails" \
+  "git_data_root_key_fingerprint_unreadable reason=hetzner_list_failed"
+run_fingerprint "$(state_fixture a "$FP_A")" "$(hetzner_fixture two 2 soleur-git-data-root)"
+_fp_refused "G8.fingerprint-hetzner-count" "two keys under the label" \
+  "git_data_root_key_fingerprint_unreadable reason=hetzner_key_count"
+run_fingerprint "$(state_fixture a "$FP_A")" "$(hetzner_fixture forged 1 soleur-git-data-rooT)"
+_fp_refused "G8.fingerprint-hetzner-name" "one key under the label with the wrong name" \
+  "git_data_root_key_fingerprint_unreadable reason=hetzner_key_name"
 
 # ── 4. MUTATION BATTERY (parent run only) ──────────────────────────────────────────
 MUTANT=""
 mutate() {  # <name> <src-file> <want del/add> <sed-expr> [dir-kind: root|parent] -> sets MUTANT (file or dir)
   local name="$1" src="$2" want="$3" expr="$4" kind="${5:-}"
   local dst target del add
+  declared=$((declared + 1))
   if [[ -z "$kind" ]]; then
     dst="$WORK/mut-$name-$(basename "$src")"
     cp "$src" "$dst" || { printf '[FATAL] mutation copy failed for %s\n' "$name" >&2; exit 2; }
@@ -928,7 +1174,7 @@ if [[ "$CHILD" != "1" ]]; then
     expect_red exclusion-removed APPLY.path-exclusion GD_ROOT_KEY_APPLY_WF="$MUTANT"
   fi
   # M11 jq allowlist widened to accept forget
-  if mutate jq-forget "$WF" "1/1" 's/def base_ok: \. == \["no-op"\] or/def base_ok: . == ["forget"] or . == ["no-op"] or/'; then
+  if mutate jq-forget "$WF" "1/1" 's/(\.\[1\] == \["no-op"\] or expected_create)/(.[1] == ["no-op"] or .[1] == ["forget"] or expected_create)/'; then
     expect_red jq-forget G8.fixture-forget GD_ROOT_KEY_WORKFLOW="$MUTANT"
   fi
   # M12 terraform_wrapper true
@@ -944,13 +1190,52 @@ if [[ "$CHILD" != "1" ]]; then
     expect_red ignore-changes ROOT.github-secret-no-ignore-changes GD_ROOT_KEY_DIR="$MUTANT"
   fi
 
-  # MUTANT FLOOR, reported directly: every matrix row (3 fixture + 14 code) must have gone RED.
-  if [[ "$mutants" -lt "$MUTANT_FLOOR" ]]; then
-    printf '\n[FATAL] mutant floor: %d of %d matrix rows went RED.\n' "$mutants" "$MUTANT_FLOOR" >&2
+  # M15 continue-on-error on the allowlist: the refusal would annotate and the apply would still run
+  if mutate allowlist-coe "$WF" "0/1" 's/^        id: allowlist$/&\n        continue-on-error: true/'; then
+    expect_red allowlist-coe G8.allowlist-gates-apply GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M16 if: always() on the apply: runs after a refused allowlist
+  if mutate apply-always "$WF" "0/1" 's/^      - name: Terraform apply (saved plan)$/&\n        if: always()/'; then
+    expect_red apply-always G8.allowlist-gates-apply GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M17 notify job if: keeps both substrings but never fires
+  if mutate notify-if-suffix "$WF" "1/1" "s/^    if: always() && needs.apply.result != 'success'\$/& \&\& false/"; then
+    expect_red notify-if-suffix G8.notify-job GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M18 mail step if: false
+  if mutate mail-if-false "$WF" "1/1" '/^      - name: Email ops on a non-green root-key apply$/,/uses:/ s/^        if: always()$/        if: false/'; then
+    expect_red mail-if-false G8.notify-job GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M19 drop one address from the allowlist's create set
+  if mutate create-set-drop "$WF" "1/0" '/^            "hcloud_ssh_key.git_data_root",$/d'; then
+    expect_red create-set-drop G8.create-set-parity GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M20 re-point the fingerprint-anchor path: the re-mint refusal never arms
+  if mutate anchor-path "$WF" "1/1" 's|/apps/web-platform/infra/git-data-root-key.fingerprint" \]\]; then anchored=true|/apps/web-platform/infra/git-data-root-key.fingerprints" ]]; then anchored=true|'; then
+    expect_red anchor-path G8.remint-refused GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M21 drop the importing check
+  if mutate importing-dropped "$WF" "1/1" 's/def additive: \.\[2\] == null and /def additive: /'; then
+    expect_red importing-dropped G8.fixture-importing GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M22 the fingerprint step reads the saved plan instead of state
+  if mutate fp-reads-plan "$WF" "1/1" 's/state_fp="\$(terraform show -json | jq -r /state_fp="$(terraform show -json "$RUNNER_TEMP\/tfplan" | jq -r /'; then
+    expect_red fp-reads-plan G8.fingerprint-match GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+  # M23 neuter the state-vs-Hetzner equality
+  if mutate fp-equality "$WF" "1/1" 's/^          if \[\[ "\$state_fp" != "\$hetzner_fp" \]\]; then$/          if false; then/'; then
+    expect_red fp-equality G8.fingerprint-mismatch GD_ROOT_KEY_WORKFLOW="$MUTANT"
+  fi
+
+  # MUTANT FLOOR, reported directly. Every DECLARED row (fixture rows + code rows) must have produced
+  # a RED verdict — a row whose edit did not land, or whose child stayed green, is declared but not
+  # counted — and the declared set must not shrink below the matrix above.
+  if [[ "$mutants" -ne "$declared" || "$mutants" -lt "$MUTANT_FLOOR" ]]; then
+    printf '\n[FATAL] mutant floor: %d of %d declared matrix rows went RED (floor %d).\n' "$mutants" "$declared" "$MUTANT_FLOOR" >&2
     printf '\n=== git-data-root-key: %d passed, %d failed, %d skipped ===\n\n' "$passes" "$fails" "$skips"
     exit 1
   fi
-  printf '  ok   mutant floor: %d matrix rows went RED (floor %d)\n' "$mutants" "$MUTANT_FLOOR"
+  printf '  ok   mutant floor: %d of %d declared matrix rows went RED (floor %d)\n' "$mutants" "$declared" "$MUTANT_FLOOR"
 fi
 
 # ── 5. ACCOUNTING ──────────────────────────────────────────────────────────────────
