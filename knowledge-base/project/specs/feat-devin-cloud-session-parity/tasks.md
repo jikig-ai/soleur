@@ -50,7 +50,7 @@ Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-p
 
 ## Phase 6 — ADR + C4 + verification session
 
-- [x] ADR-219 (provisional — re-derive vs `origin/*` before merge): "Soleur Cloud Mode — sentinel-based surface detection and honest-degradation contract."
+- [x] ADR-221 (re-derived — main landed ADR-219 multi-bundle + ADR-220 git-data during this branch): "Soleur Cloud Mode — sentinel-based surface detection and honest-degradation contract."
 - [x] `model.c4`/`views.c4`: `devin` external system + edges; `c4-count-parity` green.
 - [x] Spec notes: FR1 "sibling lib" reading; NG5 revision for `PostCompaction` (probe-conditional).
 - [ ] Second post-implementation cloud session verifies SC1/SC3/SC4; file follow-up issues for post-merge ACs (issue not auto-closed).
