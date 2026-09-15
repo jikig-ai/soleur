@@ -347,7 +347,7 @@ module "git_data_userdata" {
 # private half never enters this root's state or logs. Only the public key's Hetzner id is
 # read here, by label. An empty match resolves to [] (inert); the create gates refuse a host
 # create unless it resolved to exactly the key whose SHA256 fingerprint is committed in
-# git-data-root-key.fingerprint (tests/scripts/lib/git-data-root-key-arm.sh).
+# git-data-root-key.fingerprint (tests/scripts/lib/git-data-root-key-arm-gate.sh).
 data "hcloud_ssh_keys" "git_data_root" {
   with_selector = "soleur-role=git-data-root"
 }

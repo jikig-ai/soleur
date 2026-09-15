@@ -50,30 +50,16 @@ fail() {
 source "$GATE"
 
 # ── #8189 root-key arm fixtures ───────────────────────────────────────────────────
-# The gate now ends in git_data_root_key_arm (tests/scripts/lib/git-data-root-key-arm.sh), so
+# The gate now ends in git_data_root_key_arm (tests/scripts/lib/git-data-root-key-arm-gate.sh), so
 # every plan this suite builds carries what that arm reads: data.hcloud_ssh_keys.git_data_root
 # resolved in prior_state (id NUMBER 4242), hcloud_ssh_key.default in prior_state (id "1111"),
 # both ids as strings on the born server (rc_gd_server), and a committed-anchor fingerprint
-# file. The key is SYNTHESIZED with ssh-keygen into $TMP and deleted on exit
-# (cq-test-fixtures-synthesized-only) — never committed.
-command -v ssh-keygen >/dev/null 2>&1 || { echo "FATAL: ssh-keygen is required for the root-key arm fixtures" >&2; exit 2; }
-ssh-keygen -q -t ed25519 -N '' -C 'synthesized-root-key-under-test' -f "$TMP/root-key" || { echo "FATAL: ssh-keygen (root)" >&2; exit 2; }
-ssh-keygen -q -t ed25519 -N '' -C 'synthesized-impostor-key' -f "$TMP/other-key" || { echo "FATAL: ssh-keygen (other)" >&2; exit 2; }
-ROOT_KEY_PUB="$(<"$TMP/root-key.pub")"
-OTHER_KEY_PUB="$(<"$TMP/other-key.pub")"
-ssh-keygen -l -E sha256 -f "$TMP/root-key.pub" | awk '{print $2}' > "$TMP/git-data-root-key.fingerprint"
-export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="$TMP/git-data-root-key.fingerprint"
-# The harness's mutation helpers source a COPY of the gate from $TMP, and the gate sources the
-# arm from its own directory — so the arm must sit beside that copy.
-cp "${ROOT}/tests/scripts/lib/git-data-root-key-arm.sh" "$TMP/git-data-root-key-arm.sh"
-
-# root_key_prior_state [public_key]
-root_key_prior_state() {
-  jq -nc --arg pub "${1:-$ROOT_KEY_PUB}" '{values:{root_module:{resources:[
-    {address:"data.hcloud_ssh_keys.git_data_root",mode:"data",type:"hcloud_ssh_keys",name:"git_data_root",
-     values:{with_selector:"soleur-role=git-data-root",ssh_keys:[{id:4242,name:"soleur-git-data-root",fingerprint:"00:11:22:33",labels:{"soleur-role":"git-data-root"},public_key:$pub}]}},
-    {address:"hcloud_ssh_key.default",mode:"managed",type:"hcloud_ssh_key",name:"default",values:{id:"1111"}}]}}}'
-}
+# file. root_key_fixtures and root_key_prior_state live ONCE in the shared harness, so it is
+# sourced here, ahead of the fixtures (it needs only pass/fail/TMP and GATE/PREAMBLE, all set
+# above). The keys are synthesized into $TMP and deleted on exit — never committed.
+# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
+source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
+root_key_fixtures "${ROOT}/tests/scripts/lib/git-data-root-key-arm-gate.sh"
 PRIOR_STATE="$(root_key_prior_state)"
 
 # rc_gd_server <actions-json> [ssh_keys-json] — hcloud_server.git_data carrying both key ids.
@@ -93,8 +79,7 @@ rc_gd_server() {
 # It requires pass/fail/TMP (defined above) and GATE/PREAMBLE (defined above) — hence the
 # source ordering. This suite is the harness's FIRST consumer and its migration is the
 # harness's own proof: the arm count below must be unchanged.
-# shellcheck source=tests/scripts/lib/gate-suite-harness.sh
-source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
+# (The harness itself is sourced above, ahead of the root-key fixtures.)
 
 
 # The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in

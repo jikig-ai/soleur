@@ -66,7 +66,7 @@
 # not check" must never read as "it is fine".
 #
 # ROOT-KEY ARM (#8189, ADR-220, Guard 4), the last check before PASS: git_data_root_key_arm
-# (git-data-root-key-arm.sh) requires the born host to carry exactly {default key, root key},
+# (git-data-root-key-arm-gate.sh) requires the born host to carry exactly {default key, root key},
 # the root key resolved in prior_state and hashing to the committed anchor named by
 # GIT_DATA_ROOT_KEY_FINGERPRINT_FILE. Unset or empty reads as a missing anchor and refuses.
 # The allow-set literal below is unchanged.
@@ -84,8 +84,8 @@ fi
 
 # Sourced UNCONDITIONALLY, as in git-data-host-replace-gate.sh: a declare -F guard would let
 # a same-named stub stand in for the arm; a failed source makes the call return 127 and refuse.
-# shellcheck source=tests/scripts/lib/git-data-root-key-arm.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm.sh"
+# shellcheck source=tests/scripts/lib/git-data-root-key-arm-gate.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm-gate.sh"
 
 # The birth fan-out, defined ONCE.
 #

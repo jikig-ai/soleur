@@ -69,7 +69,7 @@
 # Art.17 at-rest store + rollback backstop).
 #
 # ROOT-KEY ARM (#8189, ADR-220, Guard 4). A plan that passes every counter above is still
-# refused unless git_data_root_key_arm (git-data-root-key-arm.sh) proves the recreated host
+# refused unless git_data_root_key_arm (git-data-root-key-arm-gate.sh) proves the recreated host
 # carries exactly {default key, root key}, the root key resolved in prior_state and hashing
 # to the committed anchor named by GIT_DATA_ROOT_KEY_FINGERPRINT_FILE. Unset or empty reads
 # as a missing anchor and refuses. The allow-set above is unchanged.
@@ -95,8 +95,8 @@ fi
 # guard would let a same-named stub defined earlier in the shell stand in for the arm. A
 # failed source leaves the function undefined, and the call below then returns 127 and
 # refuses.
-# shellcheck source=tests/scripts/lib/git-data-root-key-arm.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm.sh"
+# shellcheck source=tests/scripts/lib/git-data-root-key-arm-gate.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm-gate.sh"
 
 git_data_host_replace_gate() {
   local plan_json="$1"

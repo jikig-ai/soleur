@@ -2,17 +2,30 @@
 # Shared create-gate arm: a git-data host create carries exactly the root key, by
 # fingerprint (#8189, ADR-220, Guard 4).
 #
+# NAMED ON THE `*gate*` GLOB ON PURPOSE. It grades a plan (`local plan_json`), so the preamble
+# coverage derivation in tests/scripts/test-plan-gate-preamble.sh must be able to see it; a
+# plan-grading lib named off that glob is invisible to the check. Being on the glob, it calls
+# plan_gate_assert_readable like every other plan-grading gate.
+#
 # SOURCED BY BOTH HOST-CREATING GATES, and only by them:
 #   tests/scripts/lib/git-data-host-replace-gate.sh  (apply_target=git-data-host-replace)
 #   tests/scripts/lib/git-data-host-birth-gate.sh    (apply_target=git-data-host-create)
-# tests/scripts/test-git-data-root-key-arm.sh holds the call-site census (exactly those two).
+# tests/scripts/test-git-data-root-key-arm.sh holds the call-site census (exactly those two) and
+# pins the GIT_DATA_ROOT_KEY_FINGERPRINT_FILE export in both workflow gate steps.
 #
 # WHY. The root key is minted in its own Terraform root (apps/web-platform/infra/
 # git-data-root-key/) and reaches git-data.tf only as a Hetzner id, looked up by label
 # (`data "hcloud_ssh_keys" "git_data_root"`). Anyone holding HCLOUD_TOKEN can upload a key
-# carrying that label. The one value outside that reach is the SHA256 fingerprint committed
-# by a reviewed PR in apps/web-platform/infra/git-data-root-key.fingerprint, so a create is
-# refused unless the key the plan resolved hashes to exactly that value.
+# carrying that label. The anchor is the SHA256 fingerprint committed by a reviewed PR in
+# apps/web-platform/infra/git-data-root-key.fingerprint, so a create is refused unless the key
+# the plan resolved hashes to exactly that value.
+#
+# WHOSE REACH THE ANCHOR IS OUTSIDE — ONLY ON A DISPATCH FROM `main`. The arm reads the
+# fingerprint file from the checkout of the dispatched ref. git_data_host_create is
+# environment-gated (web-platform-infra-apply, deployment branches: main), so there the anchor
+# is the reviewed one. git_data_host_replace has NO environment:, so a workflow_dispatch from a
+# branch runs that branch's checkout and supplies its own anchor: against a repo-write actor the
+# replace path's anchor is not outside reach. Tracked on #8093.
 #
 # WHAT IT READS (terraform show -json, Terraform 1.10.5, measured):
 #   - A data source fully known at plan time appears ONLY in
@@ -21,7 +34,7 @@
 #     no plan-time check can see — refused.
 #   - hcloud_ssh_keys.ssh_keys[] carries id (NUMBER), name, fingerprint, labels, public_key.
 #     Hetzner's `fingerprint` is MD5 colon-hex, not SHA256, so it is NOT compared: the SHA256
-#     is derived from `public_key` with ssh-keygen.
+#     is derived from `public_key` with ssh-keygen, fed on stdin (no temp file).
 #   - hcloud_server.ssh_keys is list(string); compared as a SET of strings.
 #   - The default key's id comes from hcloud_ssh_key.default in prior_state. It is known on
 #     every real plan (the key pre-exists and carries ignore_changes=[public_key]). If it is
@@ -31,7 +44,9 @@
 # THE PLAN JSON IS ADVERSARIAL. Every shape is type-checked: a null or non-array where an
 # array belongs is an error, never a zero-length pass. A jq failure refuses.
 #
-# REFUSAL. One verdict line, then one detail line, then the remedy:
+# REFUSAL. A workflow annotation carrying the reason WORD only (never the detail, which may carry
+# a key name), then the verdict line, the detail line, and the per-reason remedy:
+#   ::error title=git-data-root-key-arm::verdict=git_data_root_key_not_in_create reason=<word>
 #   verdict=git_data_root_key_not_in_create reason=<word>
 # with <word> one of (D-2's set, unchanged):
 #   fingerprint_file_missing  the anchor file is absent, unreadable, or not exactly one
@@ -45,21 +60,49 @@
 #   server_keys               some created hcloud_server.git_data does not carry exactly
 #                             {default key id, root key id}, or none is created, or the default
 #                             key id is not known
+# Remedy by reason:
+#   fingerprint_file_missing, data_source_absent -> the anchor or the key is not in place yet:
+#       dispatch apply-git-data-root-key.yml from main, commit the fingerprint, re-dispatch.
+#   fingerprint, key_count, name -> do NOT re-anchor. A key object changed outside Terraform;
+#       this is the runbook's Breach-triage trigger, not a setup step.
+#   server_keys -> a plan-shape defect, not a key problem.
 #
-# Usage:  source tests/scripts/lib/git-data-root-key-arm.sh
+# Usage:  source tests/scripts/lib/git-data-root-key-arm-gate.sh
 #         git_data_root_key_arm <plan.json> <fingerprint-file>   # 0=PASS, 1=REFUSE
 
+# shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
+if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
+  _GDRKA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${_GDRKA_DIR}/plan-gate-preamble.sh"
+fi
+
 _git_data_root_key_refuse() {
-  local reason="$1" detail="$2"
+  local reason="$1" detail="$2" remedy
+  case "$reason" in
+    fingerprint_file_missing|data_source_absent)
+      remedy="dispatch apply-git-data-root-key.yml from main; commit its printed fingerprint; re-dispatch" ;;
+    fingerprint|key_count|name)
+      remedy="do NOT re-anchor: a key object changed outside Terraform — open an incident (runbook git-data-luks-cutover-5274.md › Breach-triage trigger)" ;;
+    server_keys)
+      remedy="the plan does not carry exactly the default and root key ids: a plan-shape defect, not a key problem" ;;
+    *)
+      # Not reachable from this file's own calls; a word outside the set never reaches the
+      # annotation, whose value must stay a fixed word.
+      detail="unrecognised refusal word; ${detail}"
+      reason="data_source_absent"
+      remedy="dispatch apply-git-data-root-key.yml from main; commit its printed fingerprint; re-dispatch" ;;
+  esac
+  echo "::error title=git-data-root-key-arm::verdict=git_data_root_key_not_in_create reason=${reason}"
   echo "verdict=git_data_root_key_not_in_create reason=${reason}"
   echo "git_data_root_key_arm: detail: ${detail}"
-  echo "git_data_root_key_arm: remedy: dispatch apply-git-data-root-key.yml; commit its printed fingerprint; re-dispatch. After a rotation, the previous key stops authenticating at this create."
+  echo "git_data_root_key_arm: remedy: ${remedy}"
   return 1
 }
 
 git_data_root_key_arm() {
   local plan_json="${1:-}" fp_file="${2:-}"
-  local want facts reason detail root_id default_id public_key tmp_parent tmpd got lines
+  local want facts reason detail root_id default_id public_key got lines
 
   # ── The anchor ────────────────────────────────────────────────────────────────
   if [[ -z "$fp_file" || ! -f "$fp_file" || ! -r "$fp_file" ]]; then
@@ -79,10 +122,14 @@ git_data_root_key_arm() {
     return 1
   fi
 
-  if [[ -z "$plan_json" || ! -f "$plan_json" ]]; then
-    _git_data_root_key_refuse data_source_absent "plan JSON '${plan_json}' not found"
+  # The shared fail-closed preamble owns "the plan cannot be read" (missing, unparseable, no
+  # resource_changes array); its ABORT line names which. An unreadable plan cannot show the key.
+  # Written as a statement-position call (not `if !`): the coverage derivation anchors on
+  # `^\s*plan_gate_assert_readable`, the call form, so a gate that only sources it is caught.
+  plan_gate_assert_readable "git_data_root_key_arm" "$plan_json" || {
+    _git_data_root_key_refuse data_source_absent "plan JSON '${plan_json}' is not readable (the preamble's ABORT line above names why)"
     return 1
-  fi
+  }
 
   # ── The plan facts, one jq program, every shape type-checked ──────────────────
   # Emits {"reason":"ok", root_id, default_id, public_key} or {"reason":<word>,"detail":…}.
@@ -180,28 +227,15 @@ git_data_root_key_arm() {
   public_key=$(jq -r '.public_key' <<<"$facts")
 
   # ── The fingerprint, derived (Hetzner's own field is MD5) ─────────────────────
-  # The scratch parent is bound on its own line, and REFUSED unless absolute, before anything is
-  # created: a relative TMPDIR would root the key write and the rm -rf below at the runner's CWD
-  # (the checked-out repo). Fail closed with the arm's own refusal shape, never a best effort.
-  tmp_parent="${TMPDIR:-/var/tmp}"
-  case "$tmp_parent" in
-    /|//|/.|*/../*|*/..) _git_data_root_key_refuse fingerprint "TMPDIR '${tmp_parent}' is the filesystem root or carries '..'; refusing to create the hashing temp dir under it"; return 1 ;;
-    /*) : ;;
-    *) _git_data_root_key_refuse fingerprint "TMPDIR '${tmp_parent}' is not an absolute path; refusing to create the hashing temp dir relative to the current directory"; return 1 ;;
-  esac
-  tmpd="$(mktemp -d "${tmp_parent}/gd-root-key-arm.XXXXXX")" || {
-    _git_data_root_key_refuse fingerprint "could not create a temp dir to hash the resolved public_key"
-    return 1
-  }
-  printf '%s\n' "$public_key" > "${tmpd}/key.pub"
+  # The key is fed on stdin (`-f -`, OpenSSH >= 7.2; ubuntu-24.04 ships 9.6): no temp file, so
+  # nothing to own, clean up, or root at a hostile TMPDIR.
   got=""
-  if lines=$(ssh-keygen -l -E sha256 -f "${tmpd}/key.pub" 2>/dev/null); then
-    # Exactly one key in the file, exactly one SHA256 token on its line.
+  if lines=$(ssh-keygen -l -E sha256 -f - <<<"$public_key" 2>/dev/null); then
+    # Exactly one key on stdin, exactly one SHA256 token on its line.
     if [[ "$(printf '%s\n' "$lines" | wc -l)" -eq 1 ]]; then
       got=$(printf '%s\n' "$lines" | awk '{print $2}')
     fi
   fi
-  rm -rf "$tmpd"
   if [[ ! "$got" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then
     _git_data_root_key_refuse fingerprint "ssh-keygen could not derive a SHA256 fingerprint from the resolved key's public_key"
     return 1
