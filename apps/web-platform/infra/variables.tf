@@ -403,6 +403,30 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
+# Gates the `import` block beside betteruptime_monitor.app_health in
+# uptime-alerts.tf (#7884, ADR-222). Production default is `true`.
+#
+# Same reason as adopt_seo_config_entrypoint above: `mock_provider` does NOT mock
+# `import` blocks, so the credential-free `terraform test` leg would read Better
+# Stack for real and fail. tests/web-hosts-eu-pin.tftest.hcl sets this `false`.
+#
+# What `false` means depends on WHEN it is set:
+#   - before adoption (monitor 4226366 not yet in state): Terraform plans a CREATE
+#     of a SECOND monitor on https://app.soleur.ai/health, leaving the hand-made one
+#     unmanaged beside it. Never set it false in production before the adoption
+#     apply has run.
+#   - after adoption: the import is already skipped (the address is in state), so
+#     `false` changes nothing. It is the off-switch if the monitor is deleted
+#     vendor-side, where a re-attempted import would otherwise abort every plan in
+#     this root (runbook: app-database-readiness-alarm.md).
+#
+# Not covered, as for the sibling: a Doppler secret ADOPT_APP_HEALTH_MONITOR would
+# override this silently under `--name-transformer tf-var`. None exists.
+variable "adopt_app_health_monitor" {
+  type    = bool
+  default = true
+}
+
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string

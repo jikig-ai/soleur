@@ -28,7 +28,9 @@
 #   - The 4 Sentry monitors give us per-URL coverage already. BetterStack is
 #     here for VENDOR ISOLATION, not URL coverage. One probe is enough to
 #     prove "soleur.ai is reachable" when Sentry is the one that's broken.
-#   - Free-tier BetterStack caps the workplace at 10 monitors. Headroom matters.
+#   - Free-tier BetterStack object quota is finite and its cap semantics are
+#     unresolved; headroom matters. Measure it from the
+#     SOLEUR_HEARTBEAT_RECONCILE_INVENTORY marker (see the quota note below).
 #
 # AMENDED at #7798 (ADR-204), narrowly and deliberately. "Vendor isolation, not
 # URL coverage" still governs everything above; it no longer governs a property
@@ -46,15 +48,20 @@
 # one), but do not infer second-sourcing from the apex pattern. ADR-204 says so
 # explicitly. Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 #
-# Live quota measured 2026-09-07 (not counted from .tf blocks, which misses the
-# unmanaged app.soleur.ai/health monitor): 3 monitors + 9 heartbeats. Heartbeats
-# are NOT pooled against the 10-monitor cap — 12 resources already coexist. This
-# monitor is the 4th of 10. Two tracked follow-ups, both also linked from ADR-204:
+# Live quota, measured 2026-09-15 from the API (not counted from .tf blocks): 4
+# monitors + 9 heartbeats = 13 objects. The free-tier cap is UNRESOLVED: the
+# pricing page reads "10 monitors & heartbeats" (one pooled cap, which 13 live
+# objects contradict), while the reading this comment used to assert counts
+# heartbeats outside a 10-monitor cap. Neither is asserted. The measurement of
+# record is the `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n>
+# total=<n>` line the scheduled heartbeat-live-reconcile job
+# (scheduled-terraform-drift.yml) prints every run; read that before adding an
+# object. Tracked follow-ups, also linked from ADR-204:
 #   #7883 — no runtime assertion of the redirect's TARGET (only its status code);
 #           re-evaluate if a Cloudflare-side change ever reaches prod un-applied.
-#   #7884 — betteruptime monitor id 4226366 (app.soleur.ai/health) is LIVE but
-#           declared in no root, so nothing converges it and it is invisible to
-#           the #5566 coverage guard. It is why the count above is measured.
+#   #7884 — RESOLVED: the hand-made monitor 4226366 (app.soleur.ai/health) is now
+#           declared and adopted as betteruptime_monitor.app_health below, and
+#           the reconcile reports any live object no declaration accounts for.
 #
 # Why check_frequency = 180 (3 min) vs Sentry's 300s (5 min): denser probe
 # trades a tiny BetterStack-bill bump (free-tier sub-minute checks are paid;
@@ -163,6 +170,66 @@ resource "betteruptime_monitor" "app" {
   paused     = false
 }
 
+# ── Database-readiness alarm on app.soleur.ai/health (#7884, ADR-222) ──────
+#
+# /health always answers HTTP 200 (load-balancer and deploy liveness depend on
+# that, server/index.ts), so a `status` monitor stays green through a database
+# outage — which is exactly what monitor 4226366 did during the 2026-09-15 prd
+# Supabase outage. This monitor instead requires the body to carry the
+# connected Supabase check; the body flips to "supabase":"error" when that check
+# fails or exceeds its 2 s timeout (server/health.ts). A 5xx, a timeout or a
+# Cloudflare error page carries no such body either, so app-down also trips it.
+#
+# Adopted, not created: 4226366 was made by hand on 2026-03-28 and keeps its id
+# and check history. The import is gated on var.adopt_app_health_monitor
+# (variables.tf says what `false` means). Once adoption is verified the import
+# block and variable are removed by a tracked follow-up, because after a
+# vendor-side deletion Terraform re-attempts the import and aborts the plan.
+#
+# Contract pin: test/server/health-keyword-monitor-contract.test.ts reads the
+# keyword below, builds the real /health bodies and fails if the keyword stops
+# occurring exactly when Supabase is connected. Runbook:
+# knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md
+import {
+  for_each = var.adopt_app_health_monitor ? toset(["adopt"]) : toset([])
+  to       = betteruptime_monitor.app_health
+  id       = "4226366"
+}
+
+resource "betteruptime_monitor" "app_health" {
+  monitor_type = "keyword"
+  url          = "https://app.soleur.ai/health"
+  # Renamed from "app.soleur.ai/health" so the inbox subject names the failure.
+  pronounceable_name = "soleur app database readiness"
+
+  # Compact JSON, exactly as server/index.ts serializes buildHealthResponse()
+  # (no space after the colon). Better Stack matches it case-insensitively.
+  # Changing /health serialization changes this paging contract.
+  required_keyword = "\"supabase\":\"connected\""
+
+  check_frequency = 180 # free-tier 3 min, matching every sibling
+  request_timeout = 10  # sibling convention; /health is bounded by the 2 s REST check
+  # 180 (live was 0): one more failing check must follow the first, absorbing a
+  # single 2 s-timeout flap or a deploy-window restart. Worst case ~6 min to page.
+  confirmation_period = 180
+  # At least one cadence, so an intermittently failing database is not closed on
+  # every green check.
+  recovery_period  = 180
+  follow_redirects = true
+
+  # Email only, like every sibling: detection time includes reading the inbox.
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
 # ── The www→apex 301 redirect alarm (#7798, ADR-204) ───────────────────────
 #
 # This monitor exists because the one that was supposed to hold this role never
@@ -213,7 +280,7 @@ resource "betteruptime_monitor" "soleur_www_redirect" {
   # the live API at #7798 Phase 0; without this line the resource never applies.
   remember_cookies = false
 
-  check_frequency = 180 # free-tier-allowed 3 min, matching both siblings
+  check_frequency = 180 # free-tier-allowed 3 min, matching every sibling
   request_timeout = 10
 
   # 1200, deliberately NOT 900. During a Pages rebuild www transiently serves its
