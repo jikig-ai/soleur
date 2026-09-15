@@ -205,6 +205,28 @@ describe("Codex App Server event translator", () => {
     ]);
   });
 
+  it("replays collaboration tool outcomes without cross-thread payloads", () => {
+    expect(translateCodexPersistedItem({
+      type: "collabToolCall",
+      id: "collab-1",
+      tool: "delegate",
+      status: "completed",
+      senderThreadId: "thread-private",
+      prompt: "private prompt",
+    })).toEqual([
+      {
+        sourceId: "collab:collab-1:status",
+        payload: { type: "progress", message: "Collaboration tool completed" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "collabToolCall", id: "collab-2", status: "failed", receiverThreadId: "private" })).toEqual([
+      {
+        sourceId: "collab:collab-2:status",
+        payload: { type: "progress", message: "Collaboration tool failed" },
+      },
+    ]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
