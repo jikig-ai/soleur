@@ -85,6 +85,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Validate confirm token
+        id: confirm
         env:
           CONFIRM: ${{ inputs.confirm }}
         # Untrusted input via env, compared as a literal — never interpolated
@@ -100,9 +101,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install Doppler CLI
+        id: doppler
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
       - name: Verify required secrets present
+        id: secrets_check
         env:
           DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
@@ -116,8 +119,8 @@ jobs:
       # reaches git-data through web-1 (see the Reach model header).
       - name: CF Tunnel SSH bridge
         # Needed on EVERY invocation (dry-run, real cutover, rollback): main() runs
-        # prepare_luks_target + preconditions + bulk_rsync — all of which SSH to the
-        # git-data/web hosts — BEFORE the first DRY_RUN gate (acquire_freeze), so a
+        # access_gate + prepare_luks_target + preconditions + bulk_rsync — all of which SSH
+        # to the git-data/web hosts — BEFORE the first DRY_RUN gate (acquire_freeze), so a
         # dry-run rehearsal is host-touching and needs the bridge. A dry_run guard here
         # (mis-copied from an assumption that dry-run is host-free) would leave the bridge
         # un-set on the rehearsal path → SSH timeout (sibling of workspaces-luks run 29644526137).
@@ -132,6 +135,10 @@ jobs:
           server-ip: ${{ env.WEB_HOST_PRIVATE_IP }}
 
       - name: Run git-data cutover
+        # A ROLLBACK must still reach the flag-off write (Doppler only, no SSH) when the
+        # bridge failed — but never when the confirm token, the Doppler CLI or the secrets
+        # check failed. Every other mode runs only on success.
+        if: ${{ !cancelled() && (success() || (inputs.rollback && steps.confirm.outcome == 'success' && steps.doppler.outcome == 'success' && steps.secrets_check.outcome == 'success')) }}
         env:
           WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
           # Read-scoped token for the flag READ (preconditions); write-scoped for
