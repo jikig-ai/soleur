@@ -1,10 +1,10 @@
 ---
 title: "prd Supabase database unreachable 2026-09-15"
 date: 2026-09-15
-incident_pr: 8207
+incident_pr: 8215
 incident_window: "2026-09-15T14:16:06Z → 2026-09-15T15:45:16Z"
 recovery_at: "2026-09-15T15:45:16Z"
-suspected_change: "None identified. No deploy, migration or infra apply ran in the onset window. PR #8207 (docs-only) merged mid-incident and its deploy-arm migrate job surfaced the outage."
+suspected_change: "None identified. No deploy, migration or infra apply ran in the onset window. PR #8207 (a legal-doc change with no database or infra surface) merged mid-incident and its deploy-arm migrate job surfaced the outage."
 brand_survival_threshold: single-user incident
 status: resolved
 triggers: []
@@ -30,7 +30,7 @@ resolved — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the
 ## Symptom
 
 - The Supabase edge returned HTTP 504 for every sampled REST call from 14:16:06Z. The last successful call was at 14:14:56Z.
-- The Web Platform Release deploy-arm `migrate` job failed at 15:15:54Z with `Failed to connect to database: authentication did not complete within 15000ms`.
+- The Web Platform Release deploy-arm `migrate` job failed at 15:16:10Z with `Failed to connect to database: authentication did not complete within 15000ms`.
 - app.soleur.ai `/health` returned `status: ok` with `supabase: error`.
 - The Management API health endpoint reported `db` "Failed to connect to database" and `auth`, `rest` and `storage` UNHEALTHY, while `pooler` and `realtime` stayed ACTIVE_HEALTHY and the project status read ACTIVE_HEALTHY.
 - The dev project on the same platform answered normally, and the Supabase public status page showed no matching incident.
@@ -48,8 +48,8 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 | agent | 14:14:56Z | Last HTTP 200 at the Supabase edge (reconstructed from edge logs after the fact). |
 | agent | 14:16:06Z | First HTTP 504 at the Supabase edge. Every sampled REST call returns 504 from here on. Incident start. |
 | agent | ~14:33Z | 16 `canceling statement due to statement timeout` entries in Postgres logs. |
-| human | 14:51Z | PR #8207 (AUP legal-doc change, docs-only) merges. |
-| agent | 15:15:54Z | Deploy-arm `migrate` job for the #8207 merge commit fails on a database authentication timeout. First signal anyone saw. |
+| agent | 14:51Z | PR #8207 (AUP legal-doc change, no database or infra surface) auto-merges via the ship pipeline. |
+| agent | 15:16:10Z | Deploy-arm `migrate` job for the #8207 merge commit fails on a database authentication timeout. First signal anyone saw. |
 | agent | 15:16:28Z | Supavisor logs `DbHandler: Authentication timeout`. |
 | agent | 15:17Z | Agent reruns the failed release jobs (isolated failure; the previous 7 deploy-arm runs were green). `migrate` succeeds via the pooler; `deploy` starts and loops on health verification. |
 | agent | 15:33Z | Agent reads `/health`: `supabase: error` on 4 consecutive reads. |
@@ -59,10 +59,11 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 | agent-with-ack | 15:39:06Z | Operator chose restart. Management API `POST /restart` returns 200 and the project goes to RESTARTING. |
 | agent | 15:41:57Z | Postgres `received fast shutdown request`; connections terminated by administrator command. |
 | agent | 15:43:40Z | Postmaster starts. |
+| agent | 15:44:17Z | The rerun's deploy health poll reads `supabase: connected` for the first time. |
 | agent | 15:44:27Z | Postgres reloads config: `configuration file ... contains errors; unaffected changes were applied`. Several tuning parameters reset to default; `shared_buffers`, `max_connections` and three others marked as needing a restart. |
 | agent | 15:44:44Z | One flap: `auth` and `rest` briefly UNHEALTHY, `/health` `supabase: error`. |
+| agent | 15:45:04Z | Deploy-arm rerun concludes: `deploy` and `live-verify` success (live-verify finished 15:44:53Z); prod runs 2ff3e1592. |
 | agent | 15:45:16Z | All services ACTIVE_HEALTHY; `/health` `supabase: connected`. Recovered. |
-| agent | 15:45:21Z | Deploy-arm rerun completes: `deploy` and `live-verify` success; prod runs 2ff3e1592. |
 | agent | 15:46:52Z | `/health` `supabase: connected` on 3 further reads 20s apart. |
 
 ## Participants and Systems Involved
@@ -76,7 +77,7 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 ## Detection (+ MTTD)
 
 - **How detected:** manual — monitoring system vs. external/manual report. Found by accident while investigating a failed `migrate` job in #8207's post-merge release verification, not by an alert.
-- **MTTD (mean time to detect):** Unknown (external/manual report). The first human-visible signal (the failed `migrate` job, 15:15:54Z) came about 60 minutes after onset, and diagnosis was confirmed at 15:37Z.
+- **MTTD (mean time to detect):** Unknown (external/manual report). The first human-visible signal (the failed `migrate` job, 15:16:10Z) came about 60 minutes after onset, and diagnosis was confirmed at 15:37Z.
 
 ## Triggered by
 
@@ -88,7 +89,7 @@ Triage-time competing hypotheses; the post-resolution final root cause lives in 
 
 | Hypothesis | Supporting evidence | Disconfirming evidence | Status |
 |---|---|---|---|
-| A change we shipped (deploy, migration, infra apply) broke the database | #8207 merged during the window | Onset (14:16Z) predates #8207's merge (14:51Z); #8207 is docs-only; no non-PR workflow that touches Supabase ran between 13:55Z and 14:20Z; the dev project was unaffected | Rejected |
+| A change we shipped (deploy, migration, infra apply) broke the database | #8207 merged during the window | Onset (14:16Z) predates #8207's merge (14:51Z); #8207 touched no database, migration or infra surface; no non-PR workflow that touches Supabase ran between 13:55Z and 14:20Z; the dev project was unaffected | Rejected |
 | Custom-domain or DNS / edge routing failure | 504s at the edge; `/health` targets the custom API domain | The direct project host timed out identically; the pooler and realtime were healthy | Rejected |
 | Supabase platform-wide incident | Platform-side symptoms | Public status page showed no matching incident; the dev project on the same platform was healthy | Rejected as platform-wide; project-local platform fault remains open |
 | Project-local Postgres hang or resource exhaustion (memory, connections) on the default compute (no compute add-on selected) | Statement timeouts before the outage; auth/rest/storage (all Postgres-dependent) down while the pooler process stayed up; a restart cleared it; the post-restart config reload reported errors and pending-restart memory and connection parameters | No compute or memory metrics were readable through the available API; `pg_file_settings` access is denied to the service role | Open — most likely, unconfirmed |
@@ -152,7 +153,7 @@ About 45 minutes of the operator session diverted from the #7981 ship pipeline t
 
 ### Where we got lucky
 
-A docs-only PR happened to merge during the outage, and its deploy chain happened to need the database. Without that, nothing in the system would have surfaced the outage.
+A legal-doc PR with no database surface happened to merge during the outage, and its deploy chain happened to need the database. Without that, nothing in the system would have surfaced the outage.
 
 ### What went well
 
@@ -164,7 +165,7 @@ A docs-only PR happened to merge during the outage, and its deploy chain happene
 
 - No alert fired for about 90 minutes. `/health` answers `status: ok` with HTTP 200 when the database is down, and every uptime monitor checks status only (#7884).
 - Sentry was receiving app-side symptoms (`WEB-PLATFORM-4G` workspaces read errors, reaper silent fallbacks), but those issues had been recurring for a day without alert rules, so the outage was indistinguishable from background noise.
-- The first reaction to the `migrate` failure was to treat it as isolated and rerun it. That was correct as a first move, but the rerun then spent about 25 minutes looping on health verification before anyone read `/health` directly.
+- The first reaction to the `migrate` failure was to treat it as isolated and rerun it. That was correct as a first move, but its health poll then looped from 15:22Z, and `/health` was not read directly until 15:33Z (about 16 minutes after the rerun; the poll itself kept looping about 22 minutes until recovery), before anyone read `/health` directly.
 
 ## Action Items & Follow-ups
 

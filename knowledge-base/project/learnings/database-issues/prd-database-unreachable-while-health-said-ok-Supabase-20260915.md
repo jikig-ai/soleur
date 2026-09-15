@@ -21,11 +21,11 @@ Post-mortem: `knowledge-base/engineering/operations/post-mortems/prd-supabase-da
 
 ## Problem
 
-The prd Supabase Postgres stopped serving at 14:16:06Z on 2026-09-15. PostgREST, auth and storage all failed, while the Supavisor pooler and realtime stayed up. Nobody was paged. The outage surfaced by accident, about 60 minutes in, when a docs-only PR's (#8207) deploy-arm `migrate` job hit a database authentication timeout.
+The prd Supabase Postgres stopped serving at 14:16:06Z on 2026-09-15. PostgREST, auth and storage all failed, while the Supavisor pooler and realtime stayed up. Nobody was paged. The outage surfaced by accident, about 60 minutes in, when a legal-doc PR's (#8207, no database surface) deploy-arm `migrate` job hit a database authentication timeout.
 
 ## Investigation (what misled)
 
-- **Treated the `migrate` failure as isolated.** The previous 7 deploy-arm runs were green and the diff was docs-only, so the failed jobs were rerun. The rerun's `migrate` then **succeeded via the pooler**, and `deploy` spent about 25 minutes looping on its health poll before anyone read `/health` directly. A green `migrate` is not evidence the database is up: the pooler path can succeed while Postgres-dependent services are down.
+- **Treated the `migrate` failure as isolated.** The previous 7 deploy-arm runs were green and the diff had no database surface, so the failed jobs were rerun. The rerun's `migrate` then **succeeded via the pooler**, and `deploy` looped on its health poll from 15:22Z; `/health` was not read directly until 15:33Z, about 16 minutes after the rerun, and the poll kept looping about 22 minutes until recovery. A green `migrate` is not evidence the database is up: the pooler path can succeed while Postgres-dependent services are down.
 - **Project status lies by omission.** `GET /v1/projects/{ref}` read `ACTIVE_HEALTHY` throughout. Only `GET /v1/projects/{ref}/health?services=auth&services=rest&services=db&services=pooler&services=storage` showed `db` "Failed to connect to database".
 - **`/health` is liveness, not readiness.** `buildHealthResponse()` hardcodes `status: "ok"` and HTTP 200; only the `supabase` field changes. The only monitor on it checks status code (#7884).
 
@@ -43,8 +43,11 @@ Then an operator-approved `POST /v1/projects/{ref}/restart` fixed it. Recovery t
 # readiness, not liveness
 curl -sS https://app.soleur.ai/health | jq -r .supabase            # "error" while down
 # service-level truth (project status alone says ACTIVE_HEALTHY)
-curl -sS "https://api.supabase.com/v1/projects/$REF/health?services=db&services=auth&services=rest&services=pooler" \
-  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" | jq -c '[.[]|{name,status}]'
+# admin PAT: header on stdin, no .curlrc, no proxy (same discipline as scripts/supabase-logs-query.sh)
+doppler run -p soleur -c prd -- bash -c 'printf "Authorization: Bearer %s" "$SUPABASE_ACCESS_TOKEN" \
+  | curl --disable --noproxy "*" -sS --header @- \
+    "https://api.supabase.com/v1/projects/$REF/health?services=db&services=auth&services=rest&services=pooler"' \
+  | jq -c '[.[]|{name,status}]'
 # onset from edge status codes (per-minute buckets)
 doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref "$REF" --source edge_logs \
   --since <iso> --until <iso> --limit 1000 --json | jq -r '.sample[] | [.row_ts, (.event_message|split(" | ")[1])] | @tsv'
@@ -67,3 +70,4 @@ When a deploy's database step fails on an authentication timeout, read those two
 3. **The filing gate rejected the follow-up issue three times.** First, a `;` right after the `--body-file` path defeated the gate's argument parse. Second, `Fix-Size` had no measured `N lines / M files`. Third, the measured size fell inside the inline threshold. Recovery: consolidated the alerting follow-up into existing #7884 and recorded the undetermined root cause as post-mortem evidence. **Prevention:** run each `gh issue create` alone, and write `Fix-Size:` as measured digits before filing.
 4. **Management API log queries returned HTTP 429.** Recovery: narrower windows and fewer calls. **Prevention:** pace `supabase-logs-query.sh` calls. Its `CONFIG_ERROR` verdict on a 429 means rate-limited, not misconfigured.
 5. **Two diagnostics were unavailable.** `psql` is not installed locally, and `pg_file_settings` is permission-denied for the Management API query role. Recovery: `pg_settings` through the Management API `database/query` endpoint. **Prevention:** none needed; use `pg_settings` + `pending_restart`.
+6. **During diagnosis, the Supabase admin PAT and the service-role key were passed as `-H "Authorization: Bearer …"` in curl's argv.** Nothing leaked to the transcript, but the tokens were visible to `ps` and `/proc/*/cmdline` for each call, and `~/.curlrc` and proxy variables were honoured. The review caught it only in the learning's example. **Prevention:** call PAT-bearing endpoints the way `scripts/supabase-logs-query.sh` does, with the header on stdin (`--header @-`), `--disable --noproxy '*'`, under `doppler run`. `postmerge/SKILL.md` now says so.
