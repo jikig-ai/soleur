@@ -79,7 +79,7 @@ gh pr merge <N> --squash
 ```
 
 - **Merge queue active on `main`** (the current default — adopted via the `merge_queue` Terraform ruleset): `gh pr merge --squash` **enqueues** the PR; the queue handles `update-branch` + serialization + the final merge automatically. Do not hand-roll update/wait loops.
-- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>`, then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
+- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>` — **but never when both sides moved the `knowledge-base/` file count**, which a server-side merge resolves without the `kb-index` driver; merge `origin/main` locally and push instead (see [merge-pr/SKILL.md](../merge-pr/SKILL.md) §"A SERVER-SIDE update cannot run the driver"), then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
 
 ### 5. Review delegation
 
