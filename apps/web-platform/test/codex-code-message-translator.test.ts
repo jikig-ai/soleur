@@ -102,6 +102,21 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "commandExecution", id: "item-6", command: "git status", status: "completed" })).toEqual([]);
   });
 
+  it("translates persisted plan text into bounded progress", () => {
+    expect(translateCodexPersistedItem({
+      type: "plan",
+      id: "plan-1",
+      text: "1. Inspect the repository\\n2. Run focused tests",
+      review: "must-not-cross",
+    })).toEqual([
+      {
+        sourceId: "plan:plan-1",
+        payload: { type: "progress", message: "1. Inspect the repository\\n2. Run focused tests" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "plan", id: "plan-2" })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",

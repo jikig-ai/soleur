@@ -182,6 +182,13 @@ export function translateCodexPersistedItem(item: unknown): CodexTranslatedEvent
       : [];
   }
 
+  if (type === "plan") {
+    const text = nonEmptyString(record?.text);
+    return text
+      ? [{ sourceId: `plan:${itemId}`, payload: { type: "progress", message: boundedDescription(text) } }]
+      : [];
+  }
+
   if (type === "commandExecution" && APPROVAL_STATUSES.has(statusType(record?.status) ?? "")) {
     const command = nonEmptyString(record?.command);
     return command

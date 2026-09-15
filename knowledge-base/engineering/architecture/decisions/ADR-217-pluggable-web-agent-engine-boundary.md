@@ -88,6 +88,8 @@ The replay translator now admits only persisted `agentMessage` text,
 approval-waiting `commandExecution` items, and recognized turn status/usage
 records. It drops unsupported item kinds and malformed identities, preserving
 the same bounded payload rules as live notifications.
+Persisted `plan` items are also reduced to bounded neutral progress messages;
+their provider metadata and raw plan structure remain outside the contract.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or
