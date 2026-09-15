@@ -3,9 +3,10 @@ title: "CLO ruling — DPA template Schedule 4, TOM category 4: RLS posture misd
 type: clo-ruling
 date: 2026-09-15
 issue: none — referred directly by the operator, not via a GitHub issue
+pr: 8197
 attestation-authority: clo
 status: APPROVED (CLO-agent-ruled, Soleur-as-tenant-zero v1)
-disposition: DISCHARGED — defect confirmed and corrected before first execution. No Art. 33 duty, no Art. 34 duty, NO breach-register row. No counterparty notification owed, because the instrument has never been executed. One Art. 30(1)(c) gap found and closed in the same change (PA-1 §(c), `denied_jti.reason`); the limb-(g) incompleteness alleged in an earlier draft was withdrawn as mischaracterised — see §7c. One open item recorded for separate work: whether the DSAR-export machinery needs its own Processing Activity.
+disposition: DISCHARGED — defect confirmed and corrected before first execution. No Art. 33 duty, no Art. 34 duty, NO breach-register row. No counterparty notification owed, because the instrument has never been executed. One Art. 30(1)(c) gap found and closed in the same change (PA-1 §(c), `denied_jti.reason`); the limb-(g) incompleteness alleged in an earlier draft was withdrawn as mischaracterised — see §7c. Scope widened 2026-09-15 on review: the same false universal was found live in §9 of the same instrument (a token-anchored sweep had missed it past the interposed word `database`), four further stale RLS assertions were found in `article-30-register.md` (Cross-Cutting TOMs, PA-14 §(g)(2), PA-14 §(d), and one limb asserting the dropped `scope_grants_owner_select` as live), and the correction falsified two downstream grounds that are corrected here — the `denied_jti` / `mint_rate_window` / `runtime_mint_intent` "not personal data" rationale at `apps/web-platform/server/dsar-export-allowlist.ts`, and the same ground in the PUBLISHED `docs/legal/data-protection-disclosure.md` and its Eleventy mirror, which carry a raw-file SHA pin re-pinned in this PR. An anti-recurrence gate is added at `scripts/check-tom4-rls-posture.sh`, asserting against the migration corpus rather than against any wording. Open items recorded for SEPARATE work, not resolved here: whether the DSAR-export machinery needs its own Processing Activity; the DPD §2.3 founder-filter framing; a `denied_jti.reason` CHECK constraint, `REDACT_PATHS` entry and Art. 16 rectification path; and `tenant_deploy_audit`'s occupancy-based exclusion ground, which expires at the second tenant.
 signed_off_at: 2026-09-15
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 art_33_triggered: false
@@ -13,12 +14,12 @@ art_34_triggered: false
 art_33_deadline: "not due — no Art. 4(12) event occurred, so no clock started. The deployed control was at all times MORE restrictive than the text described; a misdescription in an unexecuted instrument is not a breach of security."
 awareness_anchor: "2026-09-15 — the date the CLO measured the migration corpus against the template text. No earlier anchor is asserted, because no Art. 4(12) event is found; see §6."
 execution_status: "UNEXECUTED. Five independent evidence lines at §5. The correction is therefore an edit, not an amendment to a live instrument."
-tier_classification: "Internal control record with a knowledge-base-only document edit. The corrected document is `knowledge-base/legal/data-processing-agreement-template.md`, which is unpublished and unexecuted. No document under `docs/legal/**` changes, so none of the five gates (scope-block placement, mirror-drift ratchet, raw-file SHA pin, heading-sequence parity, EXPECTED_COUNT sentinel) are engaged. Those gates attach on promotion to `docs/legal/` plus the Eleventy mirror, not on this edit."
-semver: "No TC_VERSION bump. The correction does not touch ToS §3b.4 or any document under the SHA pin."
+tier_classification: "Internal control record that ALSO edits a published surface — reclassified 2026-09-15, after the §4 ruling brought `docs/legal/data-protection-disclosure.md` and its Eleventy mirror `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` into scope. The earlier value asserted a knowledge-base-only edit and that none of the five `docs/legal/**` gates engaged; three of its four sentences became false when §4 was ruled, and it is replaced rather than amended. GATES THAT NOW ENGAGE: (1) raw-file SHA pin — `data-protection-disclosure` is pinned at `apps/web-platform/lib/legal/legal-doc-shas.ts`, so its entry MUST be re-pinned in this PR; (2) mirror-drift ratchet — canonical and mirror must be edited identically in one commit, which holds drift constant rather than growing it. GATES THAT RUN BUT PASS UNCHANGED: (3) scope-block placement — the edit adds no scope block, only a parenthetical change of ground; (4) heading-sequence parity — no heading is added, removed or reordered; (5) EXPECTED_COUNT sentinel — no legal document is added or removed. NOT APPLICABLE: the normalised body-equivalence check, whose `BODY_EQUIVALENCE_DOCS` roster is `terms-and-conditions`, `acceptable-use-policy` and `disclaimer`; `data-protection-disclosure` is not enrolled, so the raw SHA pin alone guards its canonical/mirror agreement. No numeral is asserted for this field, and the reason is now better than 'the siblings disagree': the siblings do disagree (Tier 3 at `2026-08-17-clo-ruling-cla-evidence-admin-bypass-7597.md` against Tier 1 at `2026-09-08-clo-attestation-7500-zot-last-err-redaction.md` for the same predicate), AND the Tier numerals defined at `knowledge-base/legal/tc-version-bump-policy.md` grade document-change materiality for version-bumping — a different axis from an attestation's own classification, which is what explains the divergence. The bump-policy axis is addressed at `semver:`."
+semver: "No TC_VERSION bump: `TC_VERSION` and `TC_DOCUMENT_SHA` pin `docs/legal/terms-and-conditions.md`, which this PR does not touch, and bumping it would invalidate standing T&C acceptances over a change to a different document. Corrected 2026-09-15: the earlier value also claimed the correction touches no 'document under the SHA pin', which the §4 ruling falsified — `data-protection-disclosure` is pinned at `apps/web-platform/lib/legal/legal-doc-shas.ts` and its entry must be re-pinned in this PR. Verified against `knowledge-base/legal/tc-version-bump-policy.md` § 'Non-T&C legal docs': those eight documents are notice/disclosure documents with no version constant and no WORM acceptance ledger, their per-doc SHA serves drift-detection only, and the SHA refresh is UNCONDITIONAL on every canonical edit with no TC_VERSION-bump bypass. That section also requires CLO sign-off for Tier 1 and Tier 2 changes; the DPD edit reads as Tier 2 (clarifying — no new processing, no narrowed right, but the reader's understanding shifts), and this attestation is that sign-off."
 brand_survival_threshold: single-user incident
 written_against: "the committed migration corpus at `apps/web-platform/supabase/migrations/`, measured by the CLO on 2026-09-15 in the `fix-dpa-tom4-rls-posture` worktree — not against the engineering summary, and not against the live database (see §8)."
-known_accepted_limits:
-  - "The corrected scope sentence is deliberately bounded to tables the migration corpus CREATES in the `public` schema. It therefore does NOT reach `storage.objects`, which is provisioned by the Supabase platform rather than by our migrations. This is a KNOWN AND ACCEPTED limit of the sentence, not an oversight. See §7."
+carve_outs:
+  - "The corrected scope sentence is bounded to tables the migration corpus CREATES in the `public` schema, so that sentence alone does not reach `storage.objects`. Shape (v) of the corrected TOM 4 now states the object-store measure expressly, so this is a bound on one sentence rather than a gap in the Schedule. Corrected 2026-09-15: an earlier draft of this entry recorded the object store as an accepted GAP."
   - "Measured against the committed migration corpus, not against the live production database. See §8."
 re_evaluation_triggers:
   - "A fifth RLS predicate shape entering the schema. The corrected text is written as an open enumeration precisely so this does not falsify it, but the Art. 30 register limb (g) for the new activity must record the shape, since the corrected text now defers to the register as authoritative."
@@ -31,8 +32,16 @@ re_evaluation_triggers:
 related:
   - knowledge-base/legal/data-processing-agreement-template.md
   - knowledge-base/legal/article-30-register.md
+  - knowledge-base/legal/breach-register.md
   - knowledge-base/legal/tenant-dpa-register.md
   - knowledge-base/legal/compliance-posture.md
+  - knowledge-base/legal/tc-version-bump-policy.md
+  - docs/legal/data-protection-disclosure.md
+  - plugins/soleur/docs/pages/legal/data-protection-disclosure.md
+  - apps/web-platform/lib/legal/legal-doc-shas.ts
+  - apps/web-platform/server/dsar-export-allowlist.ts
+  - scripts/check-tom4-rls-posture.sh
+  - scripts/lint-legal-registers.sh
 ---
 
 # CLO ruling — DPA Schedule 4, TOM category 4
@@ -103,7 +112,7 @@ net-of-drops count was never policied at any point in the schema's history.
 | Migration files parsed | 257 |
 | Tables with `ENABLE ROW LEVEL SECURITY` | **53** |
 | Of those, with zero policies (both methods) | **15** |
-| Tables created by the corpus, net of `DROP TABLE` | 51 |
+| Tables created by the corpus, net of `DROP TABLE` | **52** (corrected 2026-09-15 from 51 — see below) |
 | Of those, **missing** `ENABLE ROW LEVEL SECURITY` | **0** |
 
 Positive controls, cumulative method: `conversations`=13, `api_keys`=1,
@@ -116,6 +125,21 @@ Positive controls, cumulative method: `conversations`=13, `api_keys`=1,
 `processed_resend_events`, `processed_stripe_events`, `runtime_mint_intent`,
 `statutory_repin_send`, `tc_acceptances`, `tenant_deploy_audit`, `tool_attempts`,
 `workspace_member_actions`.
+
+**Correction to the created-table count, 2026-09-15.** This table first recorded
+**51** tables created net of `DROP TABLE`. The figure is **52**. The cause is the
+same class as the defect under ruling: an unanchored `DROP TABLE` pattern matched
+`ALTER PUBLICATION supabase_realtime DROP TABLE public.messages;` at migration
+`039_drop_messages_from_realtime_publication.sql`, which changes a publication's
+membership and drops no table. `messages` was therefore deleted from the model,
+along with its two live policies, and the resulting count looked plausible enough
+that two independent readers accepted it. **Nothing downstream moves.** The
+`53` RLS-enabled and `15` zero-policy figures are unaffected (they are measured
+over `ENABLE ROW LEVEL SECURITY`, not over creation), the zero-policy enumeration
+is unchanged, and the scope sentence in TOM 4 and §9 is a universal rather than a
+count — it holds at 52/52 exactly as it held at the misread 51/51. Found by
+`scripts/check-tom4-rls-posture.sh`, which anchors `DROP TABLE` at statement
+start; the anchored form is assertion 1's parser and is commented there.
 
 ### Per-claim verification of the text under review
 
@@ -341,7 +365,7 @@ engaged:
 
 A misdescription of a technical measure, in an instrument no counterparty has
 signed, is a **notice defect**, not a security breach. **`art_33_triggered:
-false`; `art_34_triggered: false`; NO row is added to
+false`; `art_34_triggered: false`; NO BREACH ROW is added to
 `knowledge-base/legal/breach-register.md`.** No supervisory-authority
 notification. No threshold in the CLO downstream-specialist catalog at
 `knowledge-base/legal/recommended-tools.md` is met.
@@ -349,36 +373,125 @@ notification. No threshold in the CLO downstream-specialist catalog at
 Materiality is **prospective only**: the defect would have become material at
 first execution, and it has been corrected before that point.
 
+**Corrected 2026-09-15.** An earlier draft of the sentence above read *"NO row
+is added to `knowledge-base/legal/breach-register.md`"*, which is false as
+written: a single row **is** added to that file's `## Excluded records` waiver
+table, recording why this ruling — which quotes Art. 33 and Art. 34 language — is
+not a determination and carries no register row. The identical row is added to
+the `NOT_TRANSCRIBED` array in `scripts/lint-legal-registers.sh`, because that
+lint's assertion (d) checks the two halves for parity. The on-point precedent is
+`2026-09-counsel-review-7625.md` (*"an Art. 30(1) record-keeping incompleteness
+is not a personal-data breach"*); the 7786 and 7500 attestations are adjacent but
+turn on different facts. The substantive holding is unchanged: no Art. 4(12)
+event, and **no breach row**.
+
 ---
 
 ## 7. Reach of the correction, and the accepted `storage.objects` limit
 
-### 7a. The defective claim existed at exactly one site
+### 7a. The defective claim existed at TWO sites, and the first sweep found only one
 
-A sweep **by claim rather than by file** — for RLS-qualified `every table`,
-`all tables`, `each table`, and for `predicate shape` — across
-`knowledge-base/`, `docs/` and `plugins/` returns **one legal-corpus hit**: the
-DPA template line now corrected. The only other `predicate shape` matches are
-engineering brainstorms and specs, which make no counterparty representation.
+A sweep **by claim rather than by file** was run for RLS-qualified `every table`,
+`all tables`, `each table`, and for `predicate shape`. It returned one hit and
+**it was wrong**. A re-sweep tolerant of an interposed word
+(`every [a-z]* ?table`) returns a second: §9 "Security TOMs", which reads *"RLS on
+every **database** table holding Customer Data"* — the same false universal, about
+the same tables, under the same heading name, in body text rather than an annex.
+The single interposed word defeated all three phrase tokens.
+
+**The methodological lesson is recorded because it cost a real defect.** A sweep
+that tokenises on an exact phrase is a file-based sweep wearing a claim-based
+disguise. Sweeping by claim means sweeping for the *proposition* — here, any
+universal quantifier within a few words of a table noun — not for a remembered
+wording of it. Left unfixed, §9 and Annex II would have contradicted each other
+inside one signed instrument.
+
+**A third phrasing, found on the same re-sweep.** `article-30-register.md`
+Cross-Cutting TOMs read *"Row-Level Security on every **multi-tenant** table;
+per-`user_id` isolation"* — the same proposition under a third qualifier, in the
+very document the corrected TOM 4 originally designated authoritative. Three
+sites, three wordings, one proposition: `every table` (found), `every database
+table` (missed), `every multi-tenant table` (missed). Re-running the sweep by
+**policy name** rather than by universal then found three further register limbs
+citing `scope_grants_owner_select`, a policy dropped at migration
+`059_workspace_keyed_rls_sweep`. All six sites are corrected in this PR, and the
+mechanical successor to this sweep is `scripts/check-tom4-rls-posture.sh`, whose
+assertion 21 resolves every policy name cited anywhere in the legal corpus against
+a net-of-drops replay — the check that no wording can defeat. Running that
+assertion by hand, before writing it, found the fifth stale site (PA-16 §(g)(6))
+that ten review agents and two CLO passes had all missed.
 
 | Site | Carries the claim | Action |
 |---|---|---|
-| `knowledge-base/legal/data-processing-agreement-template.md` Schedule 4 TOM 4 | **Yes — sole site** | **Corrected** |
-| `docs/legal/*.md` | No. Every RLS reference is activity-scoped — the beta-CRM tables in `gdpr-policy.md`, `audit_byok_use` in `data-protection-disclosure.md`. No universal, no shape enumeration. | None |
-| `plugins/soleur/docs/pages/legal/*.md` (published mirror) | No — mirrors the same scoped statements | None |
+| `data-processing-agreement-template.md` Schedule 4 TOM 4 | **Yes** | **Corrected** |
+| `data-processing-agreement-template.md` §9 "Security TOMs" | **Yes — missed by the first sweep** | **Corrected**, and recast as a summary that expressly creates no independent representation, so Schedule 4 governs alone |
+| `knowledge-base/legal/article-30-register.md` Cross-Cutting TOMs | **Yes.** *"per-`user_id` isolation"* asserted unqualified as a corpus-wide Art. 32 measure — false for the seven zero-policy Customer-Data tables, and for the workspace-keyed and founder-keyed ones | **Corrected** — predicates now recorded per activity at limb (g) rather than asserted globally |
+| `knowledge-base/legal/article-30-register.md` PA-14 §(g)(2) and §(d), and PA-16 §(g)(6) | **Yes, by naming a dropped policy.** All three asserted `scope_grants_owner_select` (`auth.uid() = founder_id`) as live; migration `059_workspace_keyed_rls_sweep` dropped it and replaced it with `scope_grants_workspace_member_select` | **Corrected** — each now names the live workspace-keyed policy and records that the readability dates from 059 |
+| `docs/legal/*.md` | No RLS universal. But `data-protection-disclosure.md` carried the **ground** this correction falsifies: the Art. 15 exclusion for the revocation / rate-limit / mint tables rested on *"not personal data"*, which this PR's own Tier A classification and PA-1 §(c) amendment contradict | **Corrected** — the ground is changed, the exclusion is not. Published surface: SHA re-pinned, mirror edited identically |
+| `plugins/soleur/docs/pages/legal/*.md` (published mirror) | Same — carries the identical fragment | **Corrected** — byte-identical edit in the same commit, per the mirror-drift ratchet |
+| `apps/web-platform/server/dsar-export-allowlist.ts` | Not an RLS claim, but the same falsified ground: `denied_jti`, `mint_rate_window` and `runtime_mint_intent` were excluded from the Art. 15 bundle on the stated basis that they are *"not personal data"* | **Corrected** — the exclusions stand; their rationale now states the real ground (a dedicated route, not impersonality), matching the DPD wording |
 | `plugins/soleur/skills/legal-generate/references/templates/dpa-global/template.md` and `dpa-us/template.md` (vendored via #8120) | No. Generic boilerplate: *"Logical access controls designed to manage electronic access to data and system functionality based on authority levels and job functions."* No RLS claim, no Soleur schema claim. | **None — and these MUST NOT be amended.** They are generation inputs for *other companies'* documents. Injecting Soleur schema facts into them would produce a template asserting a third party's database posture: a defect in the opposite direction. |
-| `knowledge-base/legal/article-30-register.md` | **Already correct** for `tenant_deploy_audit`, `tc_acceptances` and `workspace_member_actions` (*"RLS with zero policies"*, *"RLS-zero-policies + named-role REVOKE matrix"*) | None |
-| `side-letter-template.md`, `delegation-consent-side-letter-template.md`, `2026-08-06-alpha-tester-processing-annex.md` | No RLS mentions at all | None |
+| `knowledge-base/legal/article-30-register.md` per-activity limb (g), zero-policy tables | **Already correct** for `tenant_deploy_audit`, `tc_acceptances` and `workspace_member_actions` (*"RLS with zero policies"*, *"RLS-zero-policies + named-role REVOKE matrix"*). Corrected 2026-09-15: an earlier draft marked the register **as a whole** "Already correct". That assessment was made only against these three per-activity limbs; the Cross-Cutting section and PA-14 were never reached, and both were stale — see the rows above | None for these three |
+| `side-letter-template.md`, `delegation-consent-side-letter-template.md` | No RLS mentions | None |
+| `2026-08-06-alpha-tester-processing-annex.md` | **Mentions RLS** — line 26 describes Schedule 4 as covering *"Supabase row-level security"* — but only to **disclaim** Schedule 4's applicability to the plugin-local flow. It restates no universal and asserts no predicate. (An earlier draft of this table recorded "no RLS mentions at all": the conclusion was right, the stated evidence was wrong.) | None |
 
-**Self-contradiction check: negative.** The register was right and the DPA was
-wrong. Correcting the DPA **removes** an existing corpus inconsistency rather
-than creating one. No twin document is left stranded.
+**Self-contradiction check — corrected 2026-09-15: it was NOT negative.** An
+earlier draft recorded *"the register was right and the DPA was wrong"*, so that
+correcting the DPA removed an inconsistency without creating one. Measured
+against the migration corpus, the register was right in three per-activity limbs
+and wrong in four other places, and the DPA was wrong in two. Correcting only the
+DPA would have left `article-30-register.md` asserting `per-user_id` isolation
+corpus-wide and naming a policy dropped at migration 059 — while the corrected
+Schedule 4 designates that same register **authoritative** for the per-activity
+predicates. That is a twin document left stranded, and the corrigendum's claim to
+resolve a corpus inconsistency would have been false for a second time. All six
+sites are corrected in this PR, which is why its scope is wider than a
+single-line fix.
 
-**CI gates: none engaged.** The corrected file is under `knowledge-base/legal/`,
-not `docs/legal/**`. No SHA re-pin, no drift-baseline interaction, no
-`BODY_EQUIVALENCE_DOCS` concern. The template's custodian metadata does commit
-the document to the canonical/mirror pair **at publish**; those gates attach on
-promotion, not on this edit.
+**CI gates: two engage, three run and pass unchanged.** The DPA template is under
+`knowledge-base/legal/`, so none of this PR's DPA edits touch a gated path. The §4
+ruling, however, brings `docs/legal/data-protection-disclosure.md` and its Eleventy
+mirror into scope. **Engaging:** the raw-file SHA pin (`data-protection-disclosure`
+is pinned in `apps/web-platform/lib/legal/legal-doc-shas.ts` and must be re-pinned
+here) and the mirror-drift ratchet (both copies edited identically, in one commit).
+**Running but unchanged:** scope-block placement (no scope block added),
+heading-sequence parity (no heading touched), and the EXPECTED_COUNT sentinel (no
+document added or removed). `data-protection-disclosure` is not in
+`BODY_EQUIVALENCE_DOCS`, so the normalised body-equivalence check does not reach it.
+The DPA template's own promotion to `docs/legal/` remains future work, and the gates
+attach to *that* document at that point — see the re-evaluation triggers.
+
+**Scope note added 2026-09-15.** The "None" cells above record that those documents
+do not carry the RLS universal, which remains true. They are **not** a statement
+that this PR leaves every published document untouched: the §4 ruling edits
+`docs/legal/data-protection-disclosure.md` and its mirror on a different ground —
+the Art. 15 exclusion's "not personal data" rationale, falsified by this PR's own
+Tier A classification. Two propositions share one table; keep them apart.
+
+### 7a-bis. A sixth site, found by running the gate rather than by reading
+
+**Assertion 21 of `scripts/check-tom4-rls-posture.sh` — every policy name cited
+anywhere in the legal corpus must resolve to the net-of-drops live set — was run
+against the corrected tree and failed on a site nobody had looked at.**
+`article-30-register.md` PA-18 §(d) recorded *"cookie-scoped writes via
+`template_authorizations_owner_insert` policy"* — a policy that was **dropped**
+and never created. Migration `053_template_authorizations.sql:214` drops it,
+with a comment saying it survived only in earlier drafts of that migration and
+is dropped so that a re-run lands at the intended posture. There is no INSERT, UPDATE or
+DELETE policy on `template_authorizations` at all; every mutation routes through
+the SECURITY DEFINER `authorize_template` RPC.
+
+**Direction matters and is recorded.** As with the shape-(iv) tables, the stated
+posture was **weaker** than the deployed one — the register described a
+client-held write path where none exists — so this is a notice defect of the
+same class and not a security finding. It is corrected in this PR.
+
+**This is the second time the gate's logic found what review did not.** Running
+assertion 21 by hand, before writing it, found PA-16 §(g)(6); running the written
+gate found PA-18 §(d). Ten review agents and three CLO passes read this corpus
+and reached neither. That is the evidence for the CLO's ruling that the
+enumeration should stay in the instrument and be **gated** rather than removed:
+the mechanism catches what attention does not.
 
 ### 7b. The `storage.objects` limit is KNOWN AND ACCEPTED, not an oversight
 
