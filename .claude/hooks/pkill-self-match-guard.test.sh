@@ -47,6 +47,12 @@ run_case "pattern that appears nowhere else is STILL self-matching" \
   'pkill -f some-unrelated-daemon' deny
 run_case "bundled flag form -af" 'pgrep -af lonelyprocess' deny
 
+# Devin wire name `exec` reaches the gate (kind map, #8205).
+echo "--- Devin wire name ---"
+out="$(jq -nc '{tool_name:"exec", tool_input:{command:"pgrep -af lonelyprocess"}}' | bash "$HOOK" 2>/dev/null || true)"
+grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"' <<<"$out" \
+  && pass "Devin exec: -f self-match denied" || fail "Devin exec: -f self-match not denied"
+
 echo "--- must ALLOW: no -f, or not our shape ---"
 run_case "pkill without -f matches the NAME only" 'pkill node; echo node' allow
 run_case "pgrep without -f"               'pgrep sshd' allow

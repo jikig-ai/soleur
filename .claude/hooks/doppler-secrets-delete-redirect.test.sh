@@ -65,6 +65,10 @@ check "doppler secrets get allows" "<none>" \
   "$(decision_of "$(mk 'doppler secrets get FOO -p soleur -c dev --plain')")"
 check "unrelated command allows" "<none>" "$(decision_of "$(mk 'ls -la')")"
 
+# Devin wire name `exec` reaches the gated check (kind map, #8205).
+check "Devin exec: delete without redirect denies" "deny" \
+  "$(decision_of "$(jq -nc '{tool_name:"exec", tool_input:{command:"doppler secrets delete FOO -p soleur -c dev"}}')")"
+
 # --- #7164: the envelope contract ------------------------------------------
 # An ARRAY tool_input.command previously rendered across lines, matched no
 # anchored pattern above, and slipped the guard. This hook is not the designated

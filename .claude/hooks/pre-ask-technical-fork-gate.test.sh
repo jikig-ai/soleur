@@ -78,6 +78,13 @@ if [[ -z "$(jq -r '.hookSpecificOutput.permissionDecision // ""' <<<"${out:-{\}}
   echo "  PASS: N1 non-AskUserQuestion tool is untouched"; PASS=$((PASS+1))
 else echo "  FAIL: N1 hook fired on the wrong tool" >&2; FAIL=$((FAIL+1)); fi
 
+# --- Devin wire name (kind map, #8205): ask_user_question reaches the gate ---
+TOTAL=$((TOTAL+1))
+out=$(jq -nc '{tool_name:"ask_user_question",cwd:".",tool_input:{questions:[{question:"Which source should I check?",options:[{label:"Check the ADR",description:"look at the decision record"}]}]}}' | "$HOOK" 2>/dev/null)
+if [[ "$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}" 2>/dev/null)" == "deny" ]]; then
+  echo "  PASS: N2 Devin ask_user_question reaches the gate (deny)"; PASS=$((PASS+1))
+else echo "  FAIL: N2 Devin ask_user_question did not reach the gate" >&2; FAIL=$((FAIL+1)); fi
+
 # --- the hatch -------------------------------------------------------------------------------
 TOTAL=$((TOTAL+1))
 out=$(payload "How?" "Read the runbook" "read the runbook first" "Ask the owner" "ask the owner" | SOLEUR_ACK_TECHNICAL_FORK=1 "$HOOK" 2>/dev/null)
@@ -88,8 +95,8 @@ else echo "  FAIL: H1 hatch silent or ineffective" >&2; FAIL=$((FAIL+1)); fi
 
 # --- anti-vacuity ----------------------------------------------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 11 ]]; then echo "  PASS: V1 full inventory ran (11 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 11 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 12 ]]; then echo "  PASS: V1 full inventory ran (12 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 12 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="
