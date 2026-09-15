@@ -2965,6 +2965,7 @@ react-select
 react-server-components
 react-state-machine
 react-testing-library
+read-before-run
 read-cutover
 read-freshness
 read-path
@@ -3499,6 +3500,7 @@ silent
 silent-data-loss
 silent-degradation
 silent-drop
+silent-exit
 silent-failure
 silent-failure-adjacency
 silent-fallback
