@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the #7095 re-read in the two webhook-executed scripts that still called Doppler on
 # the webhook unit's boot-baked token (revoked 2026-07-30): inngest-rearm-reminders.sh (the
-# cutover's 2.1 capture and the post-deploy re-arm) and inngest-wiped-volume-verify.sh.
+# post-deploy re-arm modes) and inngest-wiped-volume-verify.sh.
 #
 # Found live on 2026-09-13: the first op=execute dispatch to clear 2.0 after #8056 died one step
 # later — `2.1 capture returned HTTP 500: ERROR: INNGEST_MANUAL_TRIGGER_SECRET unavailable (env +
@@ -17,6 +17,13 @@
 # the unit's DOPPLER_CONFIG_DIR/DOPPLER_ENABLE_VERSION_CHECK env), a mock `logger` that records what
 # the script would have sent to journald, and the suites' existing mock curl/systemctl/sudo/enumerate
 # stubs. The mock curl also records the Sentry /store/ POST the failure path now emits.
+#
+# Vehicle (#6921): the rearm rows drive INNGEST_REARM_MODE=rearm-from-capture over a pre-seeded `[]`
+# capture file. Capture mode was the vehicle until #6921 moved the secret read below the capture
+# branch (capture only enumerates loopback GQL and writes a file, so a Doppler outage must not block
+# the quiesce-time capture). rearm-from-capture still reads the secret BEFORE its `count == 0`
+# branch, so every credential assertion below keeps its producer; rows F3/F4 pin that capture mode
+# itself never reaches Doppler.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -165,17 +172,19 @@ write_token_file() {
   printf 'DOPPLER_TOKEN=%s\nSENTRY_INGEST_DOMAIN=o1.ingest.sentry.io\nSENTRY_PROJECT_ID=1\nSENTRY_PUBLIC_KEY=k\n' "$1" > "${MOCKBIN}/soleur-doppler-token"
 }
 
-# Run rearm in capture mode the way the webhook does: no stdin records, self-enumerate stub,
+# Run rearm in rearm-from-capture mode the way the webhook does: no stdin records, a pre-seeded
+# `[]` capture (so a run the secret gate admits ends in the count==0 branch, consuming the file),
 # secret NOT in env (the webhook passes only INNGEST_REARM_MODE). ENV_TOKEN is the unit's export
 # (default: the REVOKED one; pass "" to run with DOPPLER_TOKEN unset, the post-cleanup shape).
-run_rearm_capture() {
+run_rearm_from_capture() {
   local env_token="${1-$REVOKED}" rc=0
   assert_fixture_dir "$MOCKBIN"
+  printf '[]' > "${MOCKBIN}/capture.json"
   local -a tok=(); if [[ -n "$env_token" ]]; then tok=(DOPPLER_TOKEN="$env_token"); else tok=(-u DOPPLER_TOKEN); fi
   env -u INNGEST_MANUAL_TRIGGER_SECRET "${tok[@]}" \
     PATH="${MOCKBIN}:$PATH" \
     SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/soleur-doppler-token" \
-    INNGEST_REARM_MODE=capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" \
+    INNGEST_REARM_MODE=rearm-from-capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" \
     INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
     SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" \
     bash "$REARM" </dev/null >"${MOCKBIN}/rearm.out" 2>"${MOCKBIN}/rearm.err" || rc=$?
@@ -228,26 +237,26 @@ for f in "$REARM" "$WIPED"; do
     "$([[ -n "$call_ln" && -n "$dopp_ln" && "$call_ln" -lt "$dopp_ln" ]] && echo 1 || echo 0)"
 done
 
-# --- B. rearm (2.1 capture path): the live 2026-09-13 failure, reproduced then fixed ---
+# --- B. rearm secret read (on 2026-09-13 it sat on the 2.1 capture path): the live failure, reproduced then fixed ---
 setup; write_token_file "$FRESH"
-rc=0; run_rearm_capture || rc=$?
-assert_eq "B1 capture succeeds with the revoked token in env and the fresh one in the file (rc 0)" "0" "$rc"
+rc=0; run_rearm_from_capture || rc=$?
+assert_eq "B1 re-arm succeeds with the revoked token in env and the fresh one in the file (rc 0)" "0" "$rc"
 assert_contains "B2 doppler was invoked with the FRESH token (later-wins over the unit's export)" "$(cat "${MOCKBIN}/doppler.log")" "DOPPLER_TOKEN_SEEN=$FRESH"
 assert_not_contains "B3 the revoked token never reached doppler" "$(cat "${MOCKBIN}/doppler.log")" "DOPPLER_TOKEN_SEEN=$REVOKED"
-assert_eq "B4 the capture file was written" "1" "$([[ -s "${MOCKBIN}/capture.json" ]] && echo 1 || echo 0)"
-assert_eq "B5 no credential-failure line on the happy path (the capture summary line is expected)" "0" "$(grep -c 'SOLEUR_DEPLOY_CRED_FAIL' "${MOCKBIN}/logger.log" || true)"
+assert_eq "B4 the run passed the secret gate and consumed the [] capture (file removed, reachable only after the read)" "0" "$([[ -e "${MOCKBIN}/capture.json" ]] && echo 1 || echo 0)"
+assert_eq "B5 no credential-failure line on the happy path (the empty-set summary line is expected)" "0" "$(grep -c 'SOLEUR_DEPLOY_CRED_FAIL' "${MOCKBIN}/logger.log" || true)"
 teardown
 # The unit export is the thing #7095 will eventually remove: the read must not depend on it.
 setup; write_token_file "$FRESH"
-rc=0; run_rearm_capture "" || rc=$?
-assert_eq "B6 capture succeeds with DOPPLER_TOKEN UNSET in env and the fresh one in the file (the parse must export, not merely assign)" "0" "$rc"
+rc=0; run_rearm_from_capture "" || rc=$?
+assert_eq "B6 re-arm succeeds with DOPPLER_TOKEN UNSET in env and the fresh one in the file (the parse must export, not merely assign)" "0" "$rc"
 assert_contains "B7 doppler saw the FRESH token from the file alone" "$(cat "${MOCKBIN}/doppler.log")" "DOPPLER_TOKEN_SEEN=$FRESH"
 teardown
 
 # --- C. file ABSENT: behaviour is exactly the old one (fail closed on the revoked token), and the
 #        reason is now observable in journald, in the hook's response body, and in Sentry ---
 setup
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "C1 fails closed when the file is absent and the env token is revoked (rc 1)" "1" "$rc"
 LOG="$(cat "${MOCKBIN}/logger.log")"
 assert_contains "C2 the doppler failure is logged with the SOLEUR_DEPLOY_CRED_FAIL marker Better Stack queries already key on" "$LOG" "SOLEUR_DEPLOY_CRED_FAIL secret=INNGEST_MANUAL_TRIGGER_SECRET rc=1"
@@ -268,7 +277,7 @@ teardown
 # --- C'. file PRESENT but its token ALSO rejected (delivery is stale): the state the 'present'
 #         value exists to name, plus the Sentry beacon the DSN components enable ---
 setup; write_token_file "$REVOKED"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "C10 fails closed when the file's token is itself rejected" "1" "$rc"
 LOG="$(cat "${MOCKBIN}/logger.log")"
 assert_contains "C11 …and the line says the file WAS read AND its token applied (token_file=present token_applied=1) so diagnosis goes to the file's token, not to delivery" "$LOG" "token_file=present token_applied=1"
@@ -280,45 +289,48 @@ assert_not_contains "C15 …nor the Doppler Error text" "$CURL" "Invalid Auth to
 assert_contains "C16 the Sentry curl is transport-confined (#7797)" "$CURL" "ARGS: --disable --noproxy * -s -o /dev/null --max-time 10 -X POST https://o1.ingest.sentry.io"
 teardown
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s\nSENTRY_INGEST_DOMAIN=attacker.example.org\nSENTRY_PROJECT_ID=1\nSENTRY_PUBLIC_KEY=k\n' "$REVOKED" > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "C16b a non-Sentry ingest host in the file receives NO credentialed POST (destination pinned by shape, #7873)" "0" "$(grep -c 'attacker.example.org' "${MOCKBIN}/curl.log" || true)"
 assert_contains "C16c …while the journald line still fires" "$(cat "${MOCKBIN}/logger.log")" "class=invalid_auth token_file=present"
 teardown
 
 # --- C''. the other classes the CLI can produce ---
 setup; write_token_file "$FRESH"
-rc=0; DOPPLER_MOCK_MODE=transport run_rearm_capture || rc=$?
+rc=0; DOPPLER_MOCK_MODE=transport run_rearm_from_capture || rc=$?
 assert_eq "C17 a transport failure fails closed" "1" "$rc"
 assert_contains "C18 …and is classified transport, distinct from invalid_auth" "$(cat "${MOCKBIN}/logger.log")" "class=transport"
 assert_not_contains "C19 …with the cause line capped at 160 bytes (the dial-tcp URL is longer)" "$(grep SOLEUR_DEPLOY_CRED_FAIL "${MOCKBIN}/logger.log" | sed -E 's/.*err="//; s/"$//' | awk '{ print (length($0) > 160) ? "TOO_LONG" : "ok" }')" "TOO_LONG"
 teardown
 setup; write_token_file "$FRESH"
-rc=0; DOPPLER_MOCK_MODE=notfound run_rearm_capture || rc=$?
+rc=0; DOPPLER_MOCK_MODE=notfound run_rearm_from_capture || rc=$?
 assert_eq "C20 a missing secret fails closed" "1" "$rc"
 assert_contains "C21 …and is classified secret_not_found" "$(cat "${MOCKBIN}/logger.log")" "class=secret_not_found"
 teardown
 setup; write_token_file "$FRESH"
-rc=0; DOPPLER_MOCK_MODE=empty run_rearm_capture || rc=$?
+rc=0; DOPPLER_MOCK_MODE=empty run_rearm_from_capture || rc=$?
 assert_eq "C22 an rc-0 EMPTY value fails closed" "1" "$rc"
 assert_contains "C23 …and is classified empty_value with rc=0" "$(cat "${MOCKBIN}/logger.log")" "rc=0 class=empty_value"
 teardown
 # rc≠0 with stdout: whatever a failing CLI (or a shim named doppler) printed must NOT become the secret.
 setup; write_token_file "$FRESH"
-rc=0; DOPPLER_MOCK_MODE=partial run_rearm_capture || rc=$?
+rc=0; DOPPLER_MOCK_MODE=partial run_rearm_from_capture || rc=$?
 assert_eq "C28 a failing read with partial stdout still fails closed (rc 1)" "1" "$rc"
 assert_eq "C29 …and no POST carried the partial stdout as a Bearer" "0" "$(grep -c 'PARTIAL-STDOUT-NOT-A-SECRET' "${MOCKBIN}/curl.log" || true)"
 teardown
 # binary absent: PATH without the mock doppler (and without the developer's real one).
 setup; write_token_file "$FRESH"; rm -f "${MOCKBIN}/doppler"
 rc=0
-env -u INNGEST_MANUAL_TRIGGER_SECRET DOPPLER_TOKEN="$REVOKED" PATH="${MOCKBIN}:/usr/bin:/bin" \
-  SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/soleur-doppler-token" \
-  INNGEST_REARM_MODE=capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
-  SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" bash "$REARM" </dev/null >/dev/null 2>&1 || rc=$?
 if [[ -x /usr/bin/doppler || -x /bin/doppler ]]; then
+  # The run itself is skipped too: with the mock removed, PATH would resolve the REAL CLI and make a
+  # live Doppler API call from a test (the file's synthetic token would be sent).
   pass "C24 (skipped: a real doppler lives in /usr/bin or /bin on this host, so the binary-absent shape cannot be staged)"
   pass "C25 (skipped with C24)"
 else
+  assert_fixture_dir "$MOCKBIN"; printf '[]' > "${MOCKBIN}/capture.json"
+  env -u INNGEST_MANUAL_TRIGGER_SECRET DOPPLER_TOKEN="$REVOKED" PATH="${MOCKBIN}:/usr/bin:/bin" \
+    SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/soleur-doppler-token" \
+    INNGEST_REARM_MODE=rearm-from-capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+    SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" bash "$REARM" </dev/null >/dev/null 2>&1 || rc=$?
   assert_eq "C24 a missing doppler binary fails closed" "1" "$rc"
   assert_contains "C25 …and is classified binary_absent (rc=127), distinguishable from the SKIP seam" "$(cat "${MOCKBIN}/logger.log")" "rc=127 class=binary_absent"
 fi
@@ -329,7 +341,7 @@ if (( EUID == 0 )); then
   pass "C26 (skipped: running as root, an unreadable file cannot be staged)"
   pass "C27 (skipped with C26)"
 else
-  rc=0; run_rearm_capture || rc=$?
+  rc=0; run_rearm_from_capture || rc=$?
   assert_eq "C26 an unreadable file fails closed on the env token" "1" "$rc"
   assert_contains "C27 …and the line says token_file=unreadable (a DAC/mount-namespace defect, not a delivery one)" "$(cat "${MOCKBIN}/logger.log")" "token_file=unreadable"
 fi
@@ -338,36 +350,36 @@ chmod 600 "${MOCKBIN}/soleur-doppler-token"; teardown
 # --- D. an EMPTY value in the file must not blank a working credential (the EnvironmentFile=- hole
 #        ci-deploy's block closes; a bare `DOPPLER_TOKEN=` passes the installer's shape check) ---
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=\n' > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture "$FRESH" || rc=$?
+rc=0; run_rearm_from_capture "$FRESH" || rc=$?
 assert_eq "D1 a bare DOPPLER_TOKEN= line does not blank a working env token (rc 0)" "0" "$rc"
 assert_contains "D2 doppler still saw the working token" "$(cat "${MOCKBIN}/doppler.log")" "DOPPLER_TOKEN_SEEN=$FRESH"
 teardown
 # A final line WITHOUT a trailing newline (a hand-delivered file) must still be read.
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s' "$FRESH" > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "D3 a token on an unterminated final line is still read (the \`|| [[ -n \"\$k\" ]]\` keep)" "0" "$rc"
 teardown
 # CRLF: a `DOPPLER_TOKEN=\r` line is EMPTY, not a one-byte token — must not blank a working env token.
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=\r\n' > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture "$FRESH" || rc=$?
+rc=0; run_rearm_from_capture "$FRESH" || rc=$?
 assert_eq "D4 a CRLF-terminated bare DOPPLER_TOKEN= does not blank a working env token (rc 0)" "0" "$rc"
 teardown
 # A CRLF-terminated REAL token is read with the CR stripped (the file was hand-delivered from Windows).
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s\r\n' "$FRESH" > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "D5 a CRLF-terminated token is applied with the CR stripped (rc 0)" "0" "$rc"
 teardown
 # A QUOTED value (systemd EnvironmentFile accepts it; this parser deliberately does not) must be
 # reported as present-but-not-applied, not as a revoked token.
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN="%s"\n' "$FRESH" > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "D6 a quoted token is not applied (fails closed on the env token)" "1" "$rc"
 assert_contains "D7 …and the line says token_file=present token_applied=0 — a file-shape fix, not a rotation" "$(cat "${MOCKBIN}/logger.log")" "token_file=present token_applied=0"
 teardown
 
 # --- E. a hostile line is DATA, not code (parsed, not sourced) ---
 setup; assert_fixture_dir "$MOCKBIN"; printf 'DOPPLER_TOKEN=%s\nSENTRY_PROJECT_ID=$(touch %s/PWNED)\n' "$FRESH" "$MOCKBIN" > "${MOCKBIN}/soleur-doppler-token"
-rc=0; run_rearm_capture || rc=$?
+rc=0; run_rearm_from_capture || rc=$?
 assert_eq "E1 the script still succeeds with a hostile sibling line present" "0" "$rc"
 assert_eq "E2 the command substitution in the file was NOT executed" "0" "$([[ -e "${MOCKBIN}/PWNED" ]] && echo 1 || echo 0)"
 teardown
@@ -375,12 +387,26 @@ teardown
 # --- F. env secret already present: no file read, no doppler call (unchanged fast path) ---
 setup; write_token_file "$FRESH"
 rc=0
+assert_fixture_dir "$MOCKBIN"; printf '[]' > "${MOCKBIN}/capture.json"
 env PATH="${MOCKBIN}:$PATH" DOPPLER_TOKEN="$REVOKED" INNGEST_MANUAL_TRIGGER_SECRET="$SECRET_VALUE" \
   SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/soleur-doppler-token" \
-  INNGEST_REARM_MODE=capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+  INNGEST_REARM_MODE=rearm-from-capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
   SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" bash "$REARM" </dev/null >/dev/null 2>&1 || rc=$?
 assert_eq "F1 env secret path still works" "0" "$rc"
 assert_eq "F2 doppler not called when the secret is already in env" "0" "$(grep -c . "${MOCKBIN}/doppler.log" || true)"
+teardown
+# capture mode never invokes doppler (#6921): no secret in env, the revoked token exported, the fresh
+# one in the file and a mock doppler that WOULD answer — capture must still not call it, because the
+# secret read now sits below the capture branch (the quiesce-time capture cannot hang on Doppler).
+setup; write_token_file "$FRESH"
+rc=0
+assert_fixture_dir "$MOCKBIN"
+env -u INNGEST_MANUAL_TRIGGER_SECRET PATH="${MOCKBIN}:$PATH" DOPPLER_TOKEN="$REVOKED" \
+  SOLEUR_DOPPLER_TOKEN_FILE="${MOCKBIN}/soleur-doppler-token" \
+  INNGEST_REARM_MODE=capture INNGEST_ENUMERATE_CMD="${MOCKBIN}/enum.sh" INNGEST_CUTOVER_CAPTURE_FILE="${MOCKBIN}/capture.json" \
+  SCHEDULE_REMINDER_URL="http://127.0.0.1:3000/x" bash "$REARM" </dev/null >/dev/null 2>"${MOCKBIN}/rearm.err" || rc=$?
+assert_eq "F3 capture mode succeeds with no secret in env (rc 0)" "0" "$rc"
+assert_eq "F4 capture mode never invokes doppler (doppler mock log has no call)" "0" "$(grep -c . "${MOCKBIN}/doppler.log" || true)"
 teardown
 
 # --- G. wiped-volume-verify: same class, same fix, same scrub ---
@@ -439,6 +465,6 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact count, not a floor: a floor with slack equal to one section lets that section vanish
 # green. Bump this in the same commit as any assertion change. Emitted directly (ADR-193), never
 # through the helper it backstops.
-EXPECTED_ASSERTIONS=82
+EXPECTED_ASSERTIONS=84
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then printf 'assertion count drifted: %d != %d (update EXPECTED_ASSERTIONS in the same commit as the assertion change)\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2; exit 1; fi
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

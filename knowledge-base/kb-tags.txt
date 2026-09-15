@@ -1932,6 +1932,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-vacuity
 instrument-validation
 instrument-verification
 instrument-void
