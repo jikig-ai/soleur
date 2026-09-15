@@ -176,7 +176,7 @@ logs:
   where: "GitHub Actions run logs"
   retention: "GitHub Actions default (90 days)"
 discoverability_test:
-  command: "bash apps/web-platform/scripts/check-tc-document-sha.sh && printf 'legal-doc-sha-guard OK\\n'"
+  command: python3 -c "print('legal-doc-sha-guard OK' if __import__('subprocess').run(['bash','apps/web-platform/scripts/check-tc-document-sha.sh']).returncode == 0 else 'legal-doc-sha-guard RED')"
   expected_output: "legal-doc-sha-guard OK"
 ```
 
