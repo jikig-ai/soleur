@@ -102,6 +102,24 @@ export async function buildHealthResponse(): Promise<HealthResponse> {
   };
 }
 
+/** The slice of http.ServerResponse that /health writes through. */
+export interface HealthResponseSink {
+  writeHead(statusCode: number, headers: Record<string, string>): unknown;
+  end(body: string): unknown;
+}
+
+// The /health response. Always HTTP 200: load-balancer and deploy liveness
+// probes read the status, while the Better Stack database-readiness monitor
+// (betteruptime_monitor.app_health, ADR-222) pages on the compact
+// `"supabase":"connected"` body and CI deploy verification
+// (web-platform-release.yml) reads `.supabase`. no-store keeps a cache from
+// answering the monitor with an older body. Pinned by
+// test/server/health-keyword-monitor-contract.test.ts.
+export function writeHealthResponse(res: HealthResponseSink, health: HealthResponse): void {
+  res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  res.end(JSON.stringify(health));
+}
+
 export async function buildInternalMetricsResponse(): Promise<InternalMetricsResponse> {
   const base = await buildHealthResponse();
   return {

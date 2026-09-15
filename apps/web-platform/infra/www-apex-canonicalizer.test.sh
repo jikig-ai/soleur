@@ -635,7 +635,8 @@ SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
   }
 ')"
 sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
-eq_case '2' "$sib_n" \
+# 3 = soleur_apex, app, app_health (#7884). Exact, so a sibling losing its name fails here.
+eq_case '3' "$sib_n" \
   "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
 
 pn_rc=1
