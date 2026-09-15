@@ -48,20 +48,12 @@
 # one), but do not infer second-sourcing from the apex pattern. ADR-204 says so
 # explicitly. Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 #
-# Live quota, measured 2026-09-15 from the API (not counted from .tf blocks): 4
-# monitors + 9 heartbeats = 13 objects. The free-tier cap is UNRESOLVED: the
-# pricing page reads "10 monitors & heartbeats" (one pooled cap, which 13 live
-# objects contradict), while the reading this comment used to assert counts
-# heartbeats outside a 10-monitor cap. Neither is asserted. The measurement of
-# record is the `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n>
-# total=<n>` line the scheduled heartbeat-live-reconcile job
-# (scheduled-terraform-drift.yml) prints every run; read that before adding an
-# object. Tracked follow-ups, also linked from ADR-204:
+# Quota note: the free-tier cap is unresolved; read the
+# SOLEUR_HEARTBEAT_RECONCILE_INVENTORY line before adding an object (ADR-222).
+# Tracked follow-ups, also linked from ADR-204:
 #   #7883 — no runtime assertion of the redirect's TARGET (only its status code);
 #           re-evaluate if a Cloudflare-side change ever reaches prod un-applied.
-#   #7884 — RESOLVED: the hand-made monitor 4226366 (app.soleur.ai/health) is now
-#           declared and adopted as betteruptime_monitor.app_health below, and
-#           the reconcile reports any live object no declaration accounts for.
+#   #7884 — app.soleur.ai/health adopted as betteruptime_monitor.app_health (ADR-222).
 #
 # Why check_frequency = 180 (3 min) vs Sentry's 300s (5 min): denser probe
 # trades a tiny BetterStack-bill bump (free-tier sub-minute checks are paid;
@@ -173,7 +165,7 @@ resource "betteruptime_monitor" "app" {
 # ── Database-readiness alarm on app.soleur.ai/health (#7884, ADR-222) ──────
 #
 # /health always answers HTTP 200 (load-balancer and deploy liveness depend on
-# that, server/index.ts), so a `status` monitor stays green through a database
+# that, writeHealthResponse in server/health.ts), so a `status` monitor stays green through a database
 # outage — which is exactly what monitor 4226366 did during the 2026-09-15 prd
 # Supabase outage. This monitor instead requires the body to carry the
 # connected Supabase check; the body flips to "supabase":"error" when that check
@@ -182,13 +174,16 @@ resource "betteruptime_monitor" "app" {
 #
 # Adopted, not created: 4226366 was made by hand on 2026-03-28 and keeps its id
 # and check history. The import is gated on var.adopt_app_health_monitor
-# (variables.tf says what `false` means). Once adoption is verified the import
-# block and variable are removed in a follow-up PR once the post-merge read-back
-# passes, because after a vendor-side deletion Terraform re-attempts the import
-# and most likely aborts the plan (ADR-222, derived from source, not measured).
+# (variables.tf says what `false` means). The import block and variable are
+# removed in a follow-up PR once the post-merge read-back passes; #7884 stays
+# open until that removal PR merges. Kept, a vendor-side deletion makes Terraform
+# re-attempt the import (H-F, source-derived), which aborts the per-merge apply
+# and the untargeted drift plan; targeted dispatch jobs skip the import
+# (measured, ADR-222).
 #
-# Contract pin: test/server/health-keyword-monitor-contract.test.ts reads the
-# keyword below, builds the real /health bodies and fails if the keyword stops
+# Contract pin: test/server/health-keyword-monitor-contract.test.ts reads this
+# block and the import through the reconcile's parser, serves /health through
+# writeHealthResponse in each database state, and fails if the keyword stops
 # occurring exactly when Supabase is connected. Runbook:
 # knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md
 import {
@@ -203,7 +198,7 @@ resource "betteruptime_monitor" "app_health" {
   # Renamed from "app.soleur.ai/health" so the inbox subject names the failure.
   pronounceable_name = "soleur app database readiness"
 
-  # Compact JSON, exactly as server/index.ts serializes buildHealthResponse()
+  # Compact JSON, exactly as writeHealthResponse (server/health.ts) serializes it
   # (no space after the colon). Better Stack matches it case-insensitively.
   # Changing /health serialization changes this paging contract.
   required_keyword = "\"supabase\":\"connected\""

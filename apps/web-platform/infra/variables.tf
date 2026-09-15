@@ -403,25 +403,14 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
-# Gates the `import` block beside betteruptime_monitor.app_health in
-# uptime-alerts.tf (#7884, ADR-222). Production default is `true`.
-#
-# Same reason as adopt_seo_config_entrypoint above: `mock_provider` does NOT mock
-# `import` blocks, so the credential-free `terraform test` leg would read Better
-# Stack for real and fail. tests/web-hosts-eu-pin.tftest.hcl sets this `false`.
-#
-# What `false` means depends on WHEN it is set:
-#   - before adoption (monitor 4226366 not yet in state): Terraform plans a CREATE
-#     of a SECOND monitor on https://app.soleur.ai/health, leaving the hand-made one
-#     unmanaged beside it. Never set it false in production before the adoption
-#     apply has run.
-#   - after adoption: the import is already skipped (the address is in state), so
-#     `false` changes nothing. It is the off-switch if the monitor is deleted
-#     vendor-side, where a re-attempted import would otherwise abort every plan in
-#     this root (runbook: app-database-readiness-alarm.md).
-#
-# Not covered, as for the sibling: a Doppler secret ADOPT_APP_HEALTH_MONITOR would
-# override this silently under `--name-transformer tf-var`. None exists.
+# Gates the `import` of monitor 4226366 into betteruptime_monitor.app_health
+# (uptime-alerts.tf, #7884, ADR-222). `mock_provider` does not mock `import` blocks,
+# so tests/web-hosts-eu-pin.tftest.hcl sets it `false` to keep `terraform test`
+# credential-free. Never `false` in production before the adoption apply: Terraform
+# would CREATE a second monitor on /health. After adoption it is the off-switch if
+# the monitor is deleted vendor-side (runbook: app-database-readiness-alarm.md).
+# test/server/health-keyword-monitor-contract.test.ts pins the `true` default and
+# the import's for_each and id.
 variable "adopt_app_health_monitor" {
   type    = bool
   default = true
