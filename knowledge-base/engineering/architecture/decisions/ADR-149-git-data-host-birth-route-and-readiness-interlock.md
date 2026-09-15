@@ -223,6 +223,16 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Addendum — #6680 (2026-09-15): F9's "operator root key" does not exist
+
+The #8043 disposition's F9 row says the root paths for the real fence hook are "a host replace
+(cloud-init) or the operator root key the cutover already uses". The second half is false: the
+cutover never held a root key on git-data (ADR-220, Context). A host replace is the only root
+delivery path for the real fence hook. The same stale claim ("the operator root path the cutover
+uses") sits in the comments of the hash-bound `git-data-pre-receive.sh` and
+`git-data-pre-receive-placeholder.sh`. They are left untouched here,
+because editing them moves the rung-2 hash, and the fix is tracked in #8189.
+
 ### Disposition — #8128 (2026-09-13): item 8 discharged — the banner is cleared
 
 | Item | Status |

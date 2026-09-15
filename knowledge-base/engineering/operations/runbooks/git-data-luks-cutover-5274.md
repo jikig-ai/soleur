@@ -13,6 +13,9 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
 
 ## Preconditions
 
+- **#8189 merged, and a `dry_run=true` dispatch reads `role=git-data-auth verdict=ok`** (ADR-220).
+  Until then, do not start the Sequence and do not book the step-3 maintenance window: no credential
+  can reach root on the git-data host, so every forward run stops at the access gate.
 - Sub-PRs 3.A–3.C merged; both web hosts (`web-1`, `web-2`) deployed with the
   Phase-3 container (AC5). Confirm from the **deploy pipeline run**, not by SSH.
 - ADR-068 status is `adopting`. `GIT_DATA_STORE_ENABLED` is currently **OFF**
@@ -75,6 +78,11 @@ you never SSH a host to *check* whether it worked — you read Sentry/Better Sta
    preconditions + pass-1 rsync + the **set-identity verify** with NO freeze, NO
    flip, NO re-point, NO wipe. Confirm the set-identity verify reports `OK` for
    every repo.
+   Until #8189 lands, the run **fails** (red, exit 3) before `prepare_luks_target`. The expected
+   annotations are `role=web verdict=ok` and `role=git-data-jump verdict=ok`, then
+   `role=git-data-auth verdict=git_data_root_key_absent` (ADR-220). Read them without SSH:
+   `gh api repos/jikig-ai/soleur/check-runs/<job-id>/annotations --jq '.[].message'`, with the job
+   id from `gh run view <run-id> --json jobs --jq '.jobs[0].databaseId'`.
 5. **Real cutover** — dispatch `git-data-cutover.yml` with
    `confirm=CUTOVER-GIT-DATA`, `dry_run=false`, `confirm_wipe=false`. The script:
    - `prepare_luks_target`: idempotent `luksOpen` + mount at `/mnt/git-data-luks`;
@@ -132,6 +140,9 @@ Dispatch `git-data-cutover.yml` with `confirm=CUTOVER-GIT-DATA`, `rollback=true`
 (or, if the run is still in progress, the script's EXIT trap auto-rolls-back a
 mid-flip failure). Rollback sets `GIT_DATA_STORE_ENABLED=false` in Doppler `prd`,
 reloads both containers, and releases any held freeze (un-drains both hosts).
+A rollback run exits 4 (red), with one `recovery::step=<name>` warning annotation per step, when any
+step could not run. Today the sentinel removal and the web reload cannot run: nothing holds a
+git-data credential, and the systemd units they call do not exist (#8189).
 
 **Backstop — do NOT assume GitHub `origin` holds everything (it does not).**
 `replicateToGitData` force-pushes **all** refs to git-data, whereas the app's
