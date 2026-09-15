@@ -65,4 +65,25 @@ describe("Codex App Server session coordinator", () => {
     await expect(session.respondToApproval("approval-1", "deny")).resolves.toBeUndefined();
     expect(client.respond).toHaveBeenCalledWith("approval-1", { decision: "decline" });
   });
+
+  it("lists persisted turns through the negotiated server-owned session", async () => {
+    const client = {
+      request: vi.fn()
+        .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+        .mockResolvedValueOnce({ turns: [], nextCursor: null }),
+      notify: vi.fn(async () => undefined),
+      respond: vi.fn(async () => undefined),
+    };
+    const session = createCodexAppServerSession(client, { nextRequestId: () => "rpc" });
+    await expect(session.listTurns("thread-1", { cursor: null, limit: 10 })).resolves.toEqual({
+      turns: [],
+      nextCursor: null,
+    });
+    expect(client.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "initialize", "thread/turns/list",
+    ]);
+    expect(client.request.mock.calls[1][0]).toMatchObject({
+      params: { threadId: "thread-1", limit: 10, sortDirection: "asc", itemsView: "full" },
+    });
+  });
 });

@@ -19,6 +19,7 @@ export interface CodexRpcResponse {
 
 const MAX_RPC_ID_LENGTH = 128;
 const MAX_THREAD_ID_LENGTH = 256;
+const MAX_CURSOR_LENGTH = 512;
 const MAX_CWD_LENGTH = 4096;
 const MAX_INPUT_LENGTH = 16_384;
 
@@ -57,6 +58,34 @@ function assertCwd(value: unknown): string {
   return value;
 }
 
+function assertCursor(value: unknown): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > MAX_CURSOR_LENGTH || hasUnsafeCharacter(value)) {
+    throw Object.assign(new Error("Codex history cursor is invalid"), { code: "codex_cursor_invalid" });
+  }
+  return value;
+}
+
+function assertHistoryLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 100) {
+    throw Object.assign(new Error("Codex history page size is invalid"), { code: "codex_history_limit_invalid" });
+  }
+  return value;
+}
+
+function assertSortDirection(value: unknown): "asc" | "desc" {
+  if (value !== "asc" && value !== "desc") {
+    throw Object.assign(new Error("Codex history sort direction is invalid"), { code: "codex_history_sort_invalid" });
+  }
+  return value;
+}
+
+function assertItemsView(value: unknown): "notLoaded" | "summary" | "full" {
+  if (value !== "notLoaded" && value !== "summary" && value !== "full") {
+    throw Object.assign(new Error("Codex history item view is invalid"), { code: "codex_history_view_invalid" });
+  }
+  return value;
+}
+
 function request(id: unknown, method: string, params: Record<string, unknown>): CodexRpcRequest {
   return { jsonrpc: "2.0", id: assertRpcId(id), method, params };
 }
@@ -80,6 +109,28 @@ export function createCodexThreadResumeRequest(id: string, threadId: string): Co
 
 export function createCodexThreadReadRequest(id: string, threadId: string, includeTurns = false): CodexRpcRequest {
   return request(id, "thread/read", { threadId: assertThreadId(threadId), includeTurns });
+}
+
+export interface CodexThreadTurnsListOptions {
+  cursor?: string | null;
+  limit?: number;
+  sortDirection?: "asc" | "desc";
+  itemsView?: "notLoaded" | "summary" | "full";
+}
+
+export function createCodexThreadTurnsListRequest(
+  id: string,
+  threadId: string,
+  options: CodexThreadTurnsListOptions = {},
+): CodexRpcRequest {
+  const params: Record<string, unknown> = {
+    threadId: assertThreadId(threadId),
+    limit: assertHistoryLimit(options.limit ?? 50),
+    sortDirection: assertSortDirection(options.sortDirection ?? "asc"),
+    itemsView: assertItemsView(options.itemsView ?? "full"),
+  };
+  if (options.cursor !== undefined && options.cursor !== null) params.cursor = assertCursor(options.cursor);
+  return request(id, "thread/turns/list", params);
 }
 
 export function createCodexTurnStartRequest(id: string, threadId: string, input: string): CodexRpcRequest {

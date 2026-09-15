@@ -5,8 +5,10 @@ import {
   createCodexThreadReadRequest,
   createCodexThreadResumeRequest,
   createCodexThreadStartRequest,
+  createCodexThreadTurnsListRequest,
   createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
+  type CodexThreadTurnsListOptions,
 } from "./codex-app-server-protocol";
 import { createCodexAppServerHandshake } from "./codex-app-server-handshake";
 import type { CodexRpcClient } from "./codex-app-server-rpc-client";
@@ -32,6 +34,7 @@ export interface CodexAppServerSession {
   start(input: string): Promise<CodexAppServerTurn>;
   resume(threadId: string, input: string): Promise<CodexAppServerTurn>;
   readThread(threadId: string): Promise<Record<string, unknown>>;
+  listTurns(threadId: string, options?: CodexThreadTurnsListOptions): Promise<Record<string, unknown>>;
   interrupt(threadId: string, turnId: string): Promise<Record<string, unknown>>;
   respondToApproval(requestId: string, decision: "allow" | "deny"): Promise<void>;
 }
@@ -127,6 +130,10 @@ export function createCodexAppServerSession(
     readThread: async (threadId) => {
       await ensureInitialized();
       return client.request(createCodexThreadReadRequest(options.nextRequestId(), threadId, true));
+    },
+    listTurns: async (threadId, listOptions) => {
+      await ensureInitialized();
+      return client.request(createCodexThreadTurnsListRequest(options.nextRequestId(), threadId, listOptions));
     },
     interrupt: async (threadId, turnId) => {
       await ensureInitialized();

@@ -73,6 +73,10 @@ instead of silently simulating parity.
 Cancellation uses `turn/interrupt` and requires an exact empty acknowledgement;
 reconciliation uses `thread/read` and maps only recognized turn/thread states,
 falling back to `queued` when the provider state is incomplete.
+The negotiated session also owns a bounded `thread/turns/list` history request
+with opaque cursor validation, capped page size, and explicit sort/item-view
+options. This is a provider seam only: neutral cursor replay remains
+unsupported until persisted turn/item responses have a complete translator.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A

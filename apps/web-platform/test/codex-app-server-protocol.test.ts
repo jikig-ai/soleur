@@ -6,6 +6,7 @@ import {
   createCodexThreadResumeRequest,
   createCodexThreadReadRequest,
   createCodexThreadStartRequest,
+  createCodexThreadTurnsListRequest,
   createCodexTurnInterruptRequest,
   createCodexTurnStartRequest,
 } from "@/server/codex-app-server-protocol";
@@ -78,6 +79,43 @@ describe("Codex App Server protocol requests", () => {
     });
     expect(() => createCodexTurnInterruptRequest("rpc-8", "thread-1", "turn\n1")).toThrowError(
       expect.objectContaining({ code: "codex_thread_invalid" }),
+    );
+  });
+
+  it("builds a bounded paginated thread-history request and rejects unsafe cursors", () => {
+    expect(createCodexThreadTurnsListRequest("rpc-9", "thread-1", {
+      cursor: "cursor-1",
+      limit: 25,
+      sortDirection: "asc",
+      itemsView: "full",
+    })).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-9",
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        cursor: "cursor-1",
+        limit: 25,
+        sortDirection: "asc",
+        itemsView: "full",
+      },
+    });
+    expect(createCodexThreadTurnsListRequest("rpc-10", "thread-1")).toEqual({
+      jsonrpc: "2.0",
+      id: "rpc-10",
+      method: "thread/turns/list",
+      params: {
+        threadId: "thread-1",
+        limit: 50,
+        sortDirection: "asc",
+        itemsView: "full",
+      },
+    });
+    expect(() => createCodexThreadTurnsListRequest("rpc-11", "thread-1", { cursor: "cursor\n1" })).toThrowError(
+      expect.objectContaining({ code: "codex_cursor_invalid" }),
+    );
+    expect(() => createCodexThreadTurnsListRequest("rpc-12", "thread-1", { limit: 101 })).toThrowError(
+      expect.objectContaining({ code: "codex_history_limit_invalid" }),
     );
   });
 
