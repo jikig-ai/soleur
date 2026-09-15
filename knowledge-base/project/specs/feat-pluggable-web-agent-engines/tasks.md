@@ -108,6 +108,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] RPC correlation slice: pending request IDs resolve only matching results, server notifications/requests route to callbacks, provider errors are sanitized, and close/backpressure paths reject deterministically (4 RPC client tests green).
   - [x] Server-request response slice: the RPC client sends bounded JSON-RPC results for provider-initiated requests without entering the pending-call map, and surfaces closed/write-failure states (6 RPC client tests green).
   - [x] Handshake notification slice: the RPC client emits `initialized` and other server-built notifications through a separate channel path without affecting request correlation (7 RPC client tests green).
+  - [x] Handshake orchestration slice: initialize is awaited before `initialized` is emitted, and initialization failures prevent the notification from being sent (2 handshake tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).

@@ -53,6 +53,8 @@ It also sends provider-request responses through a separate bounded path, so
 approval decisions never masquerade as new client requests.
 Handshake notifications use the same framed channel through a distinct
 notification method and never consume request IDs.
+The handshake helper enforces initialize completion before sending
+`initialized`, so a failed negotiation cannot enter lifecycle dispatch.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
