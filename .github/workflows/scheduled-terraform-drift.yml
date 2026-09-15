@@ -1395,7 +1395,7 @@ jobs:
           elif [[ "$RC" == "1" ]]; then
             echo "::error::Better Stack heartbeat live-reconcile errored (auth/token, a malformed or runaway-paginated response, or an unparseable/unresolvable Terraform declaration — the ERROR marker names which)"
           elif grep -q "SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE" "${RUNNER_TEMP}/reconcile-output.txt"; then
-            echo "::warning::Better Stack unreachable after retries for at least one arm — that arm (see its UNREACHABLE marker) was skipped this run; the others reconciled (no page)"
+            echo "::warning::At least one arm printed a SOLEUR_HEARTBEAT_RECONCILE_UNREACHABLE marker after its retries, so that arm was not reconciled this run; the other arms were (no page)"
           fi
 
       # Same independent-emitters fix as the drift-check job above. Without
