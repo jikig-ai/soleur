@@ -105,6 +105,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] App Server transport bridge slice: an injectable Codex lifecycle source is translated behind the neutral transport while credentials and lifecycle side effects remain source-owned (31 adapter/translator tests green).
   - [x] App Server protocol request slice: initialize/initialized, thread start/resume, turn input, and approval responses use bounded server-built JSON-RPC envelopes with neutral decision mapping (5 protocol tests green).
   - [x] App Server JSONL codec slice: stdio frames encode one bounded JSON-RPC message per line and decode chunked input without accepting blank, malformed, or oversized frames (8 protocol tests green).
+  - [x] RPC correlation slice: pending request IDs resolve only matching results, server notifications/requests route to callbacks, provider errors are sanitized, and close/backpressure paths reject deterministically (4 RPC client tests green).
   - [x] Transport boundary slice: Codex lifecycle calls acquire the isolated lease before provider transport invocation (3 tests green).
   - [x] Credential recovery slice: expired/empty leases fail closed and revoked-provider errors normalize without secret details (5 tests green).
   - [x] Logout isolation slice: logged-out boundaries reject future acquire/refresh calls and make logout idempotent (6 tests green).

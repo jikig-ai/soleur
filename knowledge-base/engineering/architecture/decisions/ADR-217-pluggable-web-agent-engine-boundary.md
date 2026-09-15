@@ -46,6 +46,9 @@ Protocol request builders keep initialize, thread, turn, and approval envelopes
 server-owned and map neutral approval decisions to the provider vocabulary.
 The stdio seam uses a bounded JSONL codec so chunking and framing are handled
 before protocol messages reach lifecycle translation.
+An RPC correlation client bounds in-flight requests, routes server notifications
+and approval requests separately, and rejects pending work on close or provider
+errors without exposing native error details.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
