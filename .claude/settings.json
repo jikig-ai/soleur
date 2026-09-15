@@ -233,7 +233,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -251,7 +251,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -278,7 +278,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -296,7 +296,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -314,7 +314,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -359,7 +359,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -386,7 +386,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
@@ -427,7 +427,7 @@
         ]
       },
       {
-        "matcher": "ask_user_question",
+        "matcher": "^ask_user_question$",
         "hooks": [
           {
             "type": "command",
@@ -451,7 +451,7 @@
         ]
       },
       {
-        "matcher": "write",
+        "matcher": "^write$",
         "hooks": [
           {
             "type": "command",
