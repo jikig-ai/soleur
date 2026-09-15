@@ -23,7 +23,7 @@ Cross-references:
 
 Run this once after merging the PR that landed this runbook (#3517) — or after any change to the cron, classifier, or NOTICE schema — to verify NOTICE tampering produces a visible alert. The earlier form of this test mutated `pinned-commit` only, but the drift-detection logic compares per-file `upstream-blob-sha` values, so mutating `pinned-commit` alone produced "no drift detected" and silently skipped validation (issue #3540).
 
-**Scope:** this test validates the **cron-failure path** — a per-bundle arm failure (e.g. an upstream blob lookup 404) produces a typed failed outcome, a red Sentry check-in, and a `comparison-could-not-measure` Sentry event. NOTE: no `vendor/cron-failure` ISSUE is filed — arm failures surface via Sentry + the heartbeat only. It does NOT validate the happy-path auto-PR creation — that route is currently unimplemented (the detect step performs no re-vendor write, so `route: "pr"` produces no artifact and reports unhealthy by design; tracked follow-up).
+**Scope:** this test validates the **cron-failure path** — a per-bundle arm failure (e.g. an upstream blob lookup 404) produces a typed failed outcome, a red Sentry check-in, and a `comparison-could-not-measure` Sentry event. NOTE: no `vendor/cron-failure` ISSUE is filed — arm failures surface via Sentry + the heartbeat only. It does NOT validate the happy-path auto-PR creation — that route IS implemented (the `safe-commit-pr-<slug>` step writes merged bytes + NOTICE bumps before `safeCommitAndPr`; #8180); the synthetic-drift mutation here routes to a typed failure, not the PR arm.
 
 ```bash
 # 1. Create a feature branch with one upstream-blob-sha mutated to a
@@ -62,9 +62,53 @@ Expected outcome: within ~10 minutes of dispatch, the Sentry monitor shows a red
 git push origin --delete synthetic-drift-test
 ```
 
-## 2. Manual Re-vendor (drift issue landed)
+## 2. Re-vendor PRs — Clean vs. Conflicted
 
-There is no automated re-vendor write today: the `route: "pr"` arm of the cron calls `safeCommitAndPr` on a worktree nothing has written to, so it always returns `no-changes` and reports `pr-route-no-artifact` (deliberately red — the gap is tracked in a follow-up issue). When a drift issue lands, perform the re-vendor by hand:
+The batched (exit-13) route now DOES write: `safe-commit-pr-<slug>` performs a `git merge-file --diff3` three-way merge of each drifted upstream blob into its lifted path, rewrites the NOTICE record (both blob SHAs), advances `pinned-commit` + `last-verified`, and commits through `safeCommitAndPr`. The PR's "Per-file merge status" table names each file `merged` or `conflicted`.
+
+### 2a. All files `merged` (no `needs-human-review` label)
+
+The PR carries clean merged bytes and self-merges via `mergeMode: "direct"`. No operator action unless it stalls — check the PR checks and merge per normal review.
+
+### 2b. Any file `conflicted` (`needs-human-review` label, create-only)
+
+The conflicted files carry `--diff3` markers and the PR deliberately does NOT auto-merge. Resolve in place on the existing bot branch:
+
+```bash
+# 1. Check out the existing PR branch (named in the PR + the issue body).
+gh pr checkout <pr-number>
+
+# 2. Open each file the PR body marks `conflicted` and resolve the markers:
+#    <<<<<<< <lifted-path>   — our current content
+#    ||||||| upstream-pinned — the content at the OLD pinned commit
+#    =======
+#    >>>>>>> upstream-new    — the new upstream content
+#    Keep local adaptations (attribution header, local edits) AND the
+#    upstream delta; delete all four marker lines.
+
+# 3. Recompute the resolved file's pin and update its NOTICE record:
+git hash-object --no-filters plugins/soleur/skills/<slug>/references/<file>.md
+#    → replace that record's `local-blob-sha:` value in
+#      plugins/soleur/skills/<slug>/NOTICE (the record's upstream-blob-sha
+#      and the top-level pinned-commit/last-verified are already correct
+#      in the PR's NOTICE diff — do not re-derive them).
+
+# 4. Verify both gates locally before pushing:
+bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh \
+  plugins/soleur/skills/<slug>/references/<file>.md
+NOTICE_FILE=plugins/soleur/skills/<slug>/NOTICE \
+  bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh \
+  --verify-upstream
+
+# 5. Commit and push to the SAME branch — the existing PR picks up the
+#    resolution; remove the `needs-human-review` label after re-review.
+git commit -am "fix(vendor-drift): resolve re-vendor conflicts in <file>.md"
+git push
+```
+
+### 2c. Manual re-vendor (drift issue landed — no PR)
+
+Security-/license-/rollback-/archived-/renamed-class drift (exits 10–12, 15, 16, unknown) opens an ISSUE only — no PR is produced, by design. Perform the re-vendor by hand:
 
 1. Fetch the new upstream blobs: `gh api repos/<o>/<r>/git/blobs/<new-sha>` per drifted `upstream-path` (the issue names them), or `gh api repos/<o>/<r>/contents/<upstream-path>?ref=<default-branch>` and decode `content`.
 2. Write the upstream bytes into the lifted path, re-adding the line-1 attribution header (`<!-- Adapted from <upstream> (<license>) — see NOTICE -->`).
@@ -145,7 +189,7 @@ When a bundle's staleness surface emits `POSTURE_FAIL:` — `gdpr-gate.sh` durin
    ```
 
 5. Drive re-vendor:
-   - If a `ci/content-vendor-drift-*` PR is already open, ping it (none has ever existed — the auto-PR route is unimplemented; see §2).
+   - If a `ci/content-vendor-drift-<slug>-*` PR is already open, resolve it per §2 (conflicted files carry `--diff3` markers and block auto-merge until resolved).
    - Otherwise dispatch via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).
 6. The current regulated PR ships per its own gate; the staleness-driven follow-up is a separate work cycle with its own review and merge. The Active Compliance Items row tracks both.
 
