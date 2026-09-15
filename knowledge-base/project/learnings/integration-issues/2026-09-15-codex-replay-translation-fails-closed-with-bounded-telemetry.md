@@ -51,6 +51,8 @@ path alone cannot show that replay drift is visible.
 1. The first review classification dump exceeded the context budget. **Prevention:** emit only bounded counts and cap path listings.
 2. An inline shell environment assignment expanded before the command and produced `No such file or directory`. **Prevention:** export the variable in a prior command or use a literal absolute path; the companion shell learning records the reusable form.
 3. Review subagents returned usage-limit errors. **Prevention:** emit explicit review coverage and use the documented inline fallback instead of claiming independent panel results.
+4. A malformed JavaScript orchestration snippet failed before running its shell probe. **Prevention:** keep `functions.exec` snippets minimal and syntax-check the promise/brace structure before invoking tools.
+5. A shell probe using `rm -f` was rejected by the command guard. **Prevention:** use Python or a safe temporary-file lifecycle instead of destructive shell cleanup patterns.
 
 ## Related
 
