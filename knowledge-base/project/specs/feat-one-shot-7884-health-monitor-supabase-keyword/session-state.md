@@ -21,3 +21,14 @@ None. PR #8215 merged mid-planning (post-mortem now on origin/main; /work merges
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst x2, learnings-researcher, framework-docs-researcher x3, functional-discovery, cto x2, terraform-architect, spec-flow-analyzer x3, dhh/kieran/code-simplicity reviewers, architecture-strategist, cpo, security-sentinel, test-design-reviewer, observability-coverage-reviewer.
+
+## Work Phase
+
+### Phase 0.2 probe (2026-09-15, operator-authorized)
+- POST status=201; created id=4934114 name=soleur-probe-7884-20260915T171151Z (keyword `"supabase":"connected"`, email/call/sms/push false, confirmation_period 0)
+- reading1 (real keyword): up, last_checked_at 2026-09-15T17:11:55Z
+- PATCH required_keyword `"supabase":"soleur-probe-never"` status=200
+- reading2 (never keyword): down, last_checked_at 2026-09-15T17:12:10Z
+- cleanup: DELETE=204, GET-after=404
+- Pre-probe integration check: outgoing-webhooks [], slack-integrations [], email-integrations [] (no relay)
+- Decision: branch=keyword (EXPECTED_BRANCH="keyword")
