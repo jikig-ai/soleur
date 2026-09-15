@@ -66,6 +66,10 @@ consumers when the provider process exits, preserving the source error.
 The stdio process wrapper owns JSONL decoding, process exit/disposal, and the
 credential-bearing launch callback; tests inject the process so no live binary
 or network is needed for protocol verification.
+The lifecycle source composes that connection with the neutral start and
+continuation operations, reuses the negotiated session, and returns an
+explicit unsupported error for protocol operations that are not yet qualified
+instead of silently simulating parity.
 
 The reviewed registry controls which engines may appear in settings and which
 engine/auth/workflow/capability combinations are qualified for execution. A
