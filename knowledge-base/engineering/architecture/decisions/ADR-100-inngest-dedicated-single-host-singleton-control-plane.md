@@ -1365,4 +1365,3 @@ The app<->host channel is plain HTTP on the Hetzner private network: transport c
 this link is accepted, not provided (encryption-posture ledger row, exception tracked on #6897).
 The Phase-4 soak — the `adopting -> accepted` condition — starts after `op=rearm` and `op=verify`
 pass, and this ADR stays `adopting` until it completes.
-
