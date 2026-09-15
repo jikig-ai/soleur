@@ -117,6 +117,9 @@ excluded from replay payloads.
 Persisted `functionCallOutput` items emit a fixed `Function output recorded`
 progress message keyed by their bounded item identity; function names,
 namespaces, and output values remain excluded from replay payloads.
+Persisted `userMessage` items emit a fixed `User input recorded` progress message
+keyed by their bounded item identity; user content and attachment metadata remain
+excluded because the neutral event contract has no message-role field.
 Cursor replay now fetches full turn pages through the negotiated session and
 wraps those translated events in a private replay envelope consumed by the
 existing neutral transport. A missing runtime thread, malformed page, or

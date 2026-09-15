@@ -311,6 +311,21 @@ describe("Codex App Server event translator", () => {
     expect(translateCodexPersistedItem({ type: "functionCallOutput", id: "bad\noutput", output: "must fail" })).toEqual([]);
   });
 
+  it("replays user-message activity without content or attachments", () => {
+    expect(translateCodexPersistedItem({
+      type: "userMessage",
+      id: "user-1",
+      content: [{ type: "text", text: "private customer request" }, { type: "image", imageUrl: "private" }],
+      attachments: [{ id: "attachment-private" }],
+    })).toEqual([
+      {
+        sourceId: "user-message:user-1",
+        payload: { type: "progress", message: "User input recorded" },
+      },
+    ]);
+    expect(translateCodexPersistedItem({ type: "userMessage", id: "bad\nuser", content: [] })).toEqual([]);
+  });
+
   it("translates persisted turn status and usage with bounded identities", () => {
     expect(translateCodexPersistedTurn({
       id: "turn-3",
