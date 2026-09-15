@@ -1,0 +1,134 @@
+# Devin hook-matcher disposition ledger — issue #8205
+#
+# One row per hook command per registry registration, plus permissions rows.
+# Schema: registry<TAB>hook_path<TAB>event<TAB>matcher_or_tool<TAB>disposition<TAB>reason<TAB>evidence
+#
+# Dispositions:
+#   bind             — bound in .devin/config.json for the named Devin tool
+#   covered-by-twin  — an anchored lowercase twin matcher in .claude/settings.json dispatches it under Devin
+#   covered-by-plugin— plugins/soleur/hooks/hooks.json dispatches it under Devin (matcher live)
+#   already-fires    — the existing registration fires under Devin unchanged
+#   n/a              — no Devin analog exists; intentionally unbound
+#   skip             — explicitly not bound; reason documents why
+#
+# Evidence cites envelope-capture.md sections (EC§N) or test names.
+# registry values: claude-settings | soleur-plugin | devin-config | codex-config | openhands | claude-permissions
+#
+# --- .claude/settings.json — PreToolUse Bash registrations -----------------
+# Under Devin these matchers are dead (EC§1); each hook binds via .devin ^exec$
+# unless noted.
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§1 matcher dead; .devin ^exec$ entry (pre-existing)
+claude-settings	.claude/hooks/git-commit-secret-scan.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5 deny contract honored; body gate normalized to HOOK_TOOL_KIND
+claude-settings	.claude/hooks/brand-hex-commit-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	same
+claude-settings	.claude/hooks/doppler-secrets-delete-redirect.sh	PreToolUse	Bash	bind	devin-tool=exec	same
+claude-settings	.claude/hooks/background-poll-prefer-monitor.sh	PreToolUse	Bash	skip	no-analog	the hook's remedy is "use Monitor"; Devin has no Monitor tool (EC§7) — advice would be wrong
+claude-settings	.claude/hooks/cla-signed-author-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	body reads .tool_input.command (EC§7 exec shape)
+claude-settings	.claude/hooks/context-reviewed-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	same
+claude-settings	.claude/hooks/follow-through-directive-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	same
+claude-settings	.claude/hooks/grep-rewrite.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5 updatedInput honored
+claude-settings	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	Bash	bind	devin-tool=exec	Bash-arm normalized to kind
+claude-settings	.claude/hooks/no-memory-write.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/pkill-self-match-guard.sh	PreToolUse	Bash	bind	devin-tool=exec	body gate normalized to kind
+claude-settings	.claude/hooks/pre-merge-auto-close-scan.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/pre-merge-rebase.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/prod-write-defer-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; its internal "Bash" ledger literal stays raw (documented-only site)
+claude-settings	.claude/hooks/ship-net-issue-flow-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json widened to ^(Bash|exec)$ per #8155	conditional: PR #8155 merge + runtime trace (AC12); body gate normalized to kind
+#
+# --- .claude/settings.json — PreToolUse AskUserQuestion ----------------------
+# Anchored ^ask_user_question$ twins dispatch under Devin (EC§1).
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	AskUserQuestion	covered-by-twin	^ask_user_question$ twin in settings.json	EC§1 twin fires; EC§7 questions shape
+claude-settings	.claude/hooks/pre-ask-technical-fork-gate.sh	PreToolUse	AskUserQuestion	covered-by-twin	^ask_user_question$ twin in settings.json	EC§1; gate normalized to kind
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	^ask_user_question$	covered-by-twin	anchored to ^ask_user_question$ (was over-broad)	EC§1
+claude-settings	.claude/hooks/pre-ask-technical-fork-gate.sh	PreToolUse	^ask_user_question$	covered-by-twin	anchored to ^ask_user_question$	EC§1
+#
+# --- .claude/settings.json — PreToolUse write-class --------------------------
+# Anchored ^write$ twin covers write; .devin ^edit$ / ^notebook_edit$ covers
+# the rest of the class — split across registries by tool, never doubled (EC§2).
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	covered-by-twin	write via ^write$ twin; edit+notebook_edit via .devin class entry	EC§1
+claude-settings	.claude/hooks/iac-plan-write-guard.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	bind	write covered-by-twin; .devin ^(edit|notebook_edit)$ entry	EC§1; multi_edit absent under Devin (EC§7)
+claude-settings	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	bind	write covered-by-twin; .devin ^(edit|notebook_edit)$ entry	EC§1
+claude-settings	.claude/hooks/no-memory-write.sh	PreToolUse	Write|Edit|MultiEdit|NotebookEdit	bind	write covered-by-twin; .devin ^(edit|notebook_edit)$ entry	EC§1
+claude-settings	.claude/hooks/new-scheduled-cron-prefer-inngest.sh	PreToolUse	Write|Edit	bind	write covered-by-twin; .devin ^edit$ entry	EC§1
+claude-settings	.claude/hooks/worktree-write-guard.sh	PreToolUse	Write|Edit	bind	write covered-by-twin; .devin ^edit$ entry	EC§1
+claude-settings	.claude/hooks/skill-security-scan-write.sh	PreToolUse	Write	covered-by-twin	^write$ twin (Write-only matcher; no edit arm)	EC§1
+claude-settings	.claude/hooks/security_reminder_hook.py	PreToolUse	Edit	bind	devin-tool=edit; .devin ^edit$ entry (python kind dict)	EC§7 edit shape
+# lowercase twins — anchored, dispatch under Devin (EC§1)
+claude-settings	.claude/hooks/guardrails.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/iac-plan-write-guard.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/kb-domain-allowlist-guard.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/new-scheduled-cron-prefer-inngest.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/no-memory-write.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/skill-security-scan-write.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+claude-settings	.claude/hooks/worktree-write-guard.sh	PreToolUse	^write$	covered-by-twin	anchored ^write$	EC§1
+#
+# --- .claude/settings.json — PreToolUse other tools ---------------------------
+claude-settings	.claude/hooks/durable-reminder-prefer-inngest.sh	PreToolUse	CronCreate	n/a	no-analog	EC§7: no CronCreate under Devin; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/monitor-supersede-guard.sh	PreToolUse	Monitor	n/a	no-analog	EC§7: no Monitor under Devin; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/pencil-open-guard.sh	PreToolUse	mcp__pencil__open_document	already-fires	mcp wire-name identical if pencil MCP configured under Devin	name-shape identical; MCP presence under Devin unverified → no bind needed
+claude-settings	.claude/hooks/skill-invocation-logger.sh	PreToolUse	Skill	bind	devin-tool=skill; .devin ^skill$ entry	EC§7 skill envelope {skill:name}
+#
+# --- .claude/settings.json — PostToolUse -------------------------------------
+claude-settings	.claude/hooks/post-dispatch-watch-gate.sh	PostToolUse	Bash	bind	devin-tool=exec; .devin PostToolUse ^exec$	EC§5 tool_response shape; Monitor arm stays dead under Devin (no-analog)
+claude-settings	.claude/hooks/rule-incident-marker-capture.sh	PostToolUse	Bash	bind	devin-tool=exec	EC§5
+claude-settings	.claude/hooks/post-dispatch-watch-gate.sh	PostToolUse	Monitor	n/a	no-analog	EC§7
+claude-settings	.claude/hooks/monitor-arm-recorder.sh	PostToolUse	Monitor|TaskStop	n/a	no-analog	EC§7; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/agent-token-tee.sh	PostToolUse	Task	skip	unverified-payload	EC§7: run_subagent tool_response has no token stats; DEVIN-SKIP marker in body
+claude-settings	.claude/hooks/docs-cli-verification.sh	PostToolUse	Write|Edit	bind	write covered-by-twin (PostToolUse); .devin PostToolUse ^edit$	EC§5
+claude-settings	.claude/hooks/docs-cli-verification.sh	PostToolUse	^write$	covered-by-twin	anchored ^write$ (PostToolUse)	EC§1
+claude-settings	.claude/hooks/phase-surface-hint.sh	PostToolUse	Skill	bind	devin-tool=skill; .devin PostToolUse ^skill$	EC§7
+claude-settings	.claude/hooks/skill-context-queries.sh	PostToolUse	Skill	bind	devin-tool=skill; .devin PostToolUse ^skill$	EC§7
+claude-settings	.claude/hooks/pencil-collapse-guard.sh	PostToolUse	mcp__pencil__open_document	already-fires	mcp wire-name identical if pencil MCP configured	name-shape identical; unverified MCP presence
+#
+# --- .claude/settings.json — SessionStart ------------------------------------
+# ALL source-matchers are dead under Devin (EC§3). Devin coverage requires
+# matcher:"" — moved to .devin/config.json. settings.json keeps its Claude
+# semantics unchanged (each fires there on matching sources).
+claude-settings	.claude/hooks/session-rules-loader.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
+claude-settings	.claude/hooks/memory-backstop.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
+claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
+claude-settings	scripts/install-kb-merge-driver.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
+#
+# --- plugins/soleur/hooks/hooks.json -----------------------------------------
+soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	widened to ^(Bash|exec)$ per #8155	conditional on #8155 merge + runtime trace (AC12)
+soleur-plugin	plugins/soleur/hooks/codex-session-start.sh	SessionStart	startup|resume|clear|compact	n/a	codex-surface; dead under Devin is correct	EC§3
+soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3; single live registration (no cross-source dup)
+soleur-plugin	plugins/soleur/hooks/welcome-hook.sh	SessionStart	startup	skip	claude-plugin-surface	welcome banner is a Claude-plugin nicety; Devin coverage not claimed
+soleur-plugin	plugins/soleur/hooks/stop-hook.sh	Stop	(none)	already-fires	Stop fires under Devin with empty matcher	EC§3
+soleur-plugin	plugins/soleur/hooks/browser-cleanup-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
+soleur-plugin	plugins/soleur/hooks/unkept-promise-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
+#
+# --- .devin/config.json — pre-existing + new registrations -------------------
+# Pre-existing (dead matcher): replaced by the ""-matcher SessionStart set.
+devin-config	.claude/hooks/session-rules-loader.sh	SessionStart	""	bind	matcher corrected to "" (was dead)	EC§3
+devin-config	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	bind	matcher corrected to "" (was dead)	EC§3
+devin-config	.claude/hooks/guardrails.sh	PreToolUse	^exec$	bind	pre-existing live binding	EC§1
+devin-config	.claude/hooks/guardrails.sh	PreToolUse	^(edit|multi_edit|notebook_edit)$	bind	write narrowed out — ^write$ twin already covers it (double-fire fix)	EC§1,EC§2
+#
+# --- other-harness registries — enumerated, explicitly out of scope ----------
+codex-config	.codex/config.toml hooks	PreToolUse	^Bash$	n/a	this-pr-devin-scope	codex registry unchanged
+openhands	.openhands/hooks.json hooks	various	various	n/a	this-pr-devin-scope	openhands registry unchanged
+#
+# --- permissions -------------------------------------------------------------
+# .claude permissions are NOT imported by Devin (EC§6). Devin analogs live in
+# .devin/config.json permissions with Exec()/Read()/Write()/Fetch() syntax.
+claude-permissions	allow	Bash(git add -A && git commit:*)	permission	bind	Exec(git add -A && git commit) in .devin	EC§6
+claude-permissions	allow	Bash(git add && git commit:*)	permission	bind	Exec(git add && git commit) in .devin	EC§6
+claude-permissions	allow	Bash(git commit -m:*)	permission	bind	Exec(git commit -m) in .devin	EC§6
+claude-permissions	allow	Bash(git commit -F:*)	permission	bind	Exec(git commit -F) in .devin	EC§6
+claude-permissions	allow	Bash(gh pr merge:*)	permission	bind	Exec(gh pr merge) in .devin	EC§6
+claude-permissions	deny	Read(**/.env)	permission	bind	Read(**/.env) in .devin (syntax identical)	EC§6 deny measured blocking
+claude-permissions	deny	Read(**/.env.*)	permission	bind	EC§6
+claude-permissions	deny	Read(**/lib/stripe.ts)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.aws/**)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.config/gcloud/**)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.docker/config.json)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.doppler/**)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.git-credentials)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.netrc)	permission	bind	EC§6
+claude-permissions	deny	Read(~/.ssh/**)	permission	bind	EC§6
+claude-permissions	defaultMode	(scalar string)	permission	skip	no-analog-in-scope	Devin mode is CLI-flag-driven (--permission-mode); documented gap
