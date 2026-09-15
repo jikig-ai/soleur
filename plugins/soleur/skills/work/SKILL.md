@@ -1350,6 +1350,7 @@ For most features: tests + linting + following patterns is sufficient.
   to unhide code HID 1864 more lines, one file going 0 to 910 skipped. The shipped version asserts
   "files skipping MORE than before must be 0".
 
+- **A pre-merge vendor probe must replay the merge's exact transition.** Build the probe's mutation from the Terraform plan's `~ update` diff — create the object in the FROM state, PATCH the full changed attribute set in one call, read back — never from the end-state declaration alone. **Why:** #7884 — probe 1 created an already-`keyword` monitor and changed one field; the merge converts `status`→`keyword` with five fields, and a refusal there wedges every later infra apply. See `knowledge-base/project/learnings/integration-issues/2026-09-15-my-vendor-probe-tested-a-different-transition-than-the-merge-applies.md`.
 - **Analysis paralysis** - Don't overthink, read the plan and execute
 - **Skipping clarifying questions** - Ask now, not after building wrong thing
 - **Ignoring plan references** - The plan has links for a reason
