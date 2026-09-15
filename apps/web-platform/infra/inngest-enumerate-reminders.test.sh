@@ -275,6 +275,32 @@ test_fatal_cleans_spool_tempfile() {
   assert_eq "no spool temp file leaked on FATAL exit (EXIT trap fired)" "0" "$leftover"
 }
 
+# --- Test 14 (#6921 review): GraphQL error text is SCRUBBED before either stream or journald ---
+# A DB-backed inngest can surface its connection string in errors[].message (the EMAXCONNSESSION
+# pool-pressure shape inngest-inventory.sh's _pf_scrub was written for). The combined stdout+stderr
+# is the webhook response body -> the Actions run log; the logger line is journald -> Better Stack.
+# All three must carry the redaction markers and none of the credential material. Synthetic values.
+test_gql_error_text_scrubbed() {
+  local d mockbin out rc=0
+  d=$(mktemp -d); mockbin=$(mktemp -d)
+  trap 'rm -rf "$d" "$mockbin"' RETURN
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/logger.log"\n' "$mockbin" > "$mockbin/logger"
+  chmod +x "$mockbin/logger"
+  jq -nc '{errors:[{message:"pool exhausted: postgresql://user:Pw@host/db failed; retry dsn host=db.internal port=5432 user=inngest password=hunter2 sslmode=require"}]}' > "$d/page-1.json"
+  out=$(PATH="$mockbin:$PATH" INNGEST_GQL_FIXTURE_DIR="$d" ENUMERATE_NOW_MS="$NOW_MS" bash "$TARGET" 2>&1) || rc=$?
+  local journal; journal=$(cat "$mockbin/logger.log" 2>/dev/null || true)
+  assert_eq "scrub: malformed response still exits 1" "1" "$rc"
+  assert_contains "scrub: the stdout cause line keeps the diagnosable, non-secret text" "$out" "inngest-enumerate-reminders: FATAL malformed GraphQL response on page 1"
+  assert_contains "scrub: the URI is replaced by the redaction marker" "$out" "<uri-redacted>"
+  assert_contains "scrub: the DSN key=value run is replaced by the redaction marker" "$out" "<dsn-redacted>"
+  local leaked=0 tok
+  for tok in 'Pw@' 'user:Pw' 'postgresql://' 'hunter2' 'db.internal'; do
+    if [[ "$out" == *"$tok"* || "$journal" == *"$tok"* ]]; then leaked=1; echo "    leaked token: $tok"; fi
+  done
+  assert_eq "scrub: no credential material on stdout, stderr or the journald line" "0" "$leaked"
+  assert_contains "scrub: the journald line was written (and scrubbed)" "$journal" "<uri-redacted>"
+}
+
 test_future_unfired_included
 test_completed_dropped
 test_past_dropped
@@ -288,6 +314,7 @@ test_malformed_cause_no_payload_leak
 test_large_accumulator_no_argv_overflow
 test_no_argv_accumulation
 test_fatal_cleans_spool_tempfile
+test_gql_error_text_scrubbed
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

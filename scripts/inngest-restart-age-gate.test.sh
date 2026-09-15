@@ -50,6 +50,10 @@ assert_eq "resolve: inngest_down passes through unchanged" "inngest_down" \
   "$(resolve_effective_failure_mode "inngest_down" "2026-07-12T23:00:00Z" "$WINDOW" "$NOW_EPOCH")"
 assert_eq "resolve: probe_unavailable passes through unchanged" "probe_unavailable" \
   "$(resolve_effective_failure_mode "probe_unavailable" "" "$WINDOW" "$NOW_EPOCH")"
+# #6921/#8077: inngest_quiesced is never escalated — even with an ancient open issue it passes
+# through (the probe step records no failure for it; this pins the resolver can't mint a down).
+assert_eq "resolve: inngest_quiesced passes through unchanged (never escalated to inngest_down)" "inngest_quiesced" \
+  "$(resolve_effective_failure_mode "inngest_quiesced" "2026-07-12T23:00:00Z" "$WINDOW" "$NOW_EPOCH")"
 assert_eq "resolve: empty mode passes through unchanged" "" \
   "$(resolve_effective_failure_mode "" "" "$WINDOW" "$NOW_EPOCH")"
 

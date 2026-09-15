@@ -1323,7 +1323,9 @@ assert "#7674 no step tolerates failure (a continue-on-error would green-light e
 assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -qE 'registry-probe|doublefire-probe'"
 
 # --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---
-assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a web-2 double-fire detector' '$PROBE_ARMS_FILE'"
+# #6921 D5: the caveat names the web HOST (web-1's colocated scheduler), not web-2 — the cattle web-2
+# was born with web_colocate_inngest=false and has no scheduler to double-fire.
+assert "#6617 doublefire-probe carries the 2.6 scope caveat" "grep -qF 'NOT a web-host double-fire detector' '$PROBE_ARMS_FILE'"
 
 # --- (#6178) registry_empty is a BOOLEAN — never read it with jq `//`. `false // "true"` = "true"
 # in jq (it treats boolean false as empty), so `.registry_empty // "<default>"` makes a HEALTHY
@@ -2143,6 +2145,532 @@ mutate_file "webhook_path gate neutered" "$BODY_SH" 's|^      if \[\[ "\$CODE" !
 check_e11_set_equal() { [[ "$(e11_set_of "$1")" == "$P15_SET" ]]; }
 mutate_file "row20 E11 allowlist minus flushed" "$GATE_LIB" "s|^    armed\|flipping\|flushed\|done) printf 'armed' ;;|    armed\|flipping\|done) printf 'armed' ;;|" check_e11_set_equal
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# #6921 — the execute → quiesce-web → execute loop is drivable (D1 CI half, D1c, D4, D5)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# ncl <file> — the file with comment lines removed (every static pin below reads CODE, not prose
+# about code; a comment restating the old shape must not satisfy a pin on the new one).
+ncl() { grep -v '^[[:space:]]*#' "$1" || true; }
+
+# ── 2.1 (FR9): the capture's source is read with a live default and surfaced on the ONE notice ──
+# The host adds `source:"persisted"` + `captured_at` only when it resumes from the file the quiesce
+# handler wrote; a live answer carries no `source` field, so the absent field IS the live marker.
+# shellcheck disable=SC2016  # literal source lines pinned verbatim, not expansions
+S21_SRC_LINE='SOURCE=$(echo "$BODY" | jq -r '"'"'.source // "live"'"'"')'
+# shellcheck disable=SC2016
+S21_CAT_LINE='CAPTURED_AT=$(echo "$BODY" | jq -r '"'"'.captured_at // ""'"'"')'
+S21_SRC_N=$(ncl "$EXEC_ARM_FILE" | sed 's/^[[:space:]]*//' | grep -cxF -- "$S21_SRC_LINE" || true)
+S21_CAT_N=$(ncl "$EXEC_ARM_FILE" | sed 's/^[[:space:]]*//' | grep -cxF -- "$S21_CAT_LINE" || true)
+assert "#6921 FR9 2.1 reads SOURCE via .source // \"live\" and CAPTURED_AT via .captured_at // \"\" exactly once each (source=$S21_SRC_N captured_at=$S21_CAT_N)" \
+  "[[ '$S21_SRC_N' -eq 1 && '$S21_CAT_N' -eq 1 ]]"
+S21_NOTICE_N=$(ncl "$EXEC_ARM_FILE" | grep -cE '^[[:space:]]*echo "::notice::2\.1 capture: ' || true)
+# shellcheck disable=SC2016  # literal source text, not an expansion
+S21_SHAPE_N=$(ncl "$EXEC_ARM_FILE" | grep -F 'echo "::notice::2.1 capture: Σcaptured=$SIGMA_CAPTURED source=$SOURCE${CAPTURED_AT_NOTE} ' | grep -c . || true)
+S21_WARN_N=$(ncl "$EXEC_ARM_FILE" | grep -cF '::warning::2.1:' || true)
+# shellcheck disable=SC2016
+S21_NOTE_SET=$(ncl "$EXEC_ARM_FILE" | grep -cF 'CAPTURED_AT_NOTE=" captured_at=$CAPTURED_AT quiesced_since=$QUIESCED_SINCE rebooted_since_quiesce=$REBOOTED_SINCE_QUIESCE"' || true)
+assert "#6921 FR9 2.1 has ONE notice, shaped 'Σcaptured=\$SIGMA_CAPTURED source=\$SOURCE\${CAPTURED_AT_NOTE}', captured_at/quiesced_since/rebooted_since_quiesce set only on the persisted branch, no ::warning::2.1: (notices=$S21_NOTICE_N shape=$S21_SHAPE_N note=$S21_NOTE_SET warn=$S21_WARN_N)" \
+  "[[ '$S21_NOTICE_N' -eq 1 && '$S21_SHAPE_N' -eq 1 && '$S21_WARN_N' -eq 0 && '$S21_NOTE_SET' -eq 1 ]] && ncl '$EXEC_ARM_FILE' | grep -B1 -F 'CAPTURED_AT_NOTE=\" captured_at=' | grep -qF 'if [[ \"\$SOURCE\" == \"persisted\" ]]; then'"
+# The two new persisted fields are read with an empty default. quiesced_since is a number, so
+# `// ""` is safe; rebooted_since_quiesce is a BOOLEAN, and jq's `//` treats `false` as empty — the
+# registry_empty trap (#6178) — so `// ""` would print a rebooted=false resume as blank. The read line
+# is EXECUTED against false / true / absent, not grepped.
+# shellcheck disable=SC2016
+S21_QS_LINE='QUIESCED_SINCE=$(echo "$BODY" | jq -r '"'"'.quiesced_since // ""'"'"')'
+S21_QS_N=$(ncl "$EXEC_ARM_FILE" | sed 's/^[[:space:]]*//' | grep -cxF -- "$S21_QS_LINE" || true)
+# shellcheck disable=SC2016  # a literal regex over source text
+S21_RB_LINE="$(ncl "$EXEC_ARM_FILE" | sed 's/^[[:space:]]*//' | grep -E '^REBOOTED_SINCE_QUIESCE=\$\(echo "\$BODY" \| jq -r ' || true)"
+s21_rb() { # $1 JSON body → the value the 2.1 read line assigns
+  # shellcheck disable=SC2034  # BODY is read by the eval'd 2.1 read line
+  local BODY="$1" REBOOTED_SINCE_QUIESCE="__UNSET__"
+  [[ "$(printf '%s\n' "$S21_RB_LINE" | grep -c .)" -eq 1 ]] || { echo "__NOT_ONE_LINE__"; return 0; }
+  eval "$S21_RB_LINE"
+  printf '%s' "$REBOOTED_SINCE_QUIESCE"
+}
+assert "#6921 FR9 2.1 reads quiesced_since via '// \"\"' once, and rebooted_since_quiesce false-safely (false->'$(s21_rb '{"rebooted_since_quiesce":false}')' true->'$(s21_rb '{"rebooted_since_quiesce":true}')' absent->'$(s21_rb '{}')')" \
+  "[[ '$S21_QS_N' -eq 1 && '$(s21_rb '{"rebooted_since_quiesce":false}')' == false && '$(s21_rb '{"rebooted_since_quiesce":true}')' == true && -z '$(s21_rb '{}')' ]]"
+# op=capture (the standalone reader) surfaces the same source + captured_at instead of ignoring .source.
+CAP_ARM_FILE="$(mktemp)"; SCRATCH+=("$CAP_ARM_FILE")
+awk '/^  capture\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$CAP_ARM_FILE"
+# shellcheck disable=SC2016
+assert "#6921 FR9 op=capture reads .source // \"live\" + .captured_at and prints both on its notice" \
+  "ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -qxF -- \"\$S21_SRC_LINE\" && ncl '$CAP_ARM_FILE' | sed 's/^[[:space:]]*//' | grep -qxF -- \"\$S21_CAT_LINE\" && ncl '$CAP_ARM_FILE' | grep -F 'echo \"::notice::capture: ' | grep -F 'source=\$SOURCE' | grep -qF 'captured_at='"
+# PANEL MUTATION R1: `SOURCE="live"` inserted before the `# ---- 2.2` marker stayed green, because
+# render_2_2 injects SOURCE from outside the region. Pin it statically: from 2.1's read to the SEAM,
+# the ONLY write to SOURCE is 2.1's own read line (assignment, append, read, declare, := default).
+s21_source_writes() { # $1 script → count of SOURCE writers from the 2.1 marker to the SEAM marker
+  awk '/# ---- 2\.1 capture/{f=1} f&&/# ---- SEAM: operator maintenance-window steps/{exit} f' "$1" \
+    | grep -v '^[[:space:]]*#' \
+    | grep -cE '(^|[^A-Za-z0-9_])(SOURCE\+?=|\$\{SOURCE:?=)|(^|[;&|[:space:]])(read|declare|local|typeset|export|printf -v)[[:space:]][^#]*(^|[^A-Za-z0-9_$])SOURCE([^A-Za-z0-9_]|$)' || true
+}
+S21_SOURCE_WRITES="$(s21_source_writes "$BODY_SH")"
+assert "#6921 R1 nothing re-assigns SOURCE between the 2.1 read and the 2.2 gate's end (writers=$S21_SOURCE_WRITES, expected 1: the read itself)" "[[ '$S21_SOURCE_WRITES' -eq 1 ]]"
+check_source_single_writer() { [[ "$(s21_source_writes "$1")" -eq 1 ]]; }
+# shellcheck disable=SC2016
+mutate_file "R1 SOURCE re-assigned before the 2.2 marker" "$BODY_SH" 's|^\(    echo "::notice::2\.1 capture: Σcaptured=.*\)$|\1; SOURCE="live"|' check_source_single_writer
+
+# ── D1c (FR15): the rearm) arm's P2-b parser, EXECUTED against the Σ=0 body ─────────────────────
+# The on-host rearm script now prints the canonical `re-armed=0 failed=0 total=0` line on an empty
+# capture (stderr; the hook returns combined output). The parser region is run as-is in a fresh bash
+# under set -euo pipefail, reading a fixture instead of /tmp/rearm-body. The negative control (the
+# pre-D1c body, no canonical line) must still refuse — without it a parser that accepts anything
+# would pass the Σ=0 row.
+RA_REGION="$(mktemp)"; SCRATCH+=("$RA_REGION")
+awk '/^  rearm\)$/{a=1} a&&/RBODY=\$\(cat \/tmp\/rearm-body/{f=1} f{print} f&&/::notice::re-arm completed/{exit}' "$BODY_SH" > "$RA_REGION"
+RA_N=$(grep -cE '^[[:space:]]*RCOUNTS=\$\(printf .*sed -n' "$RA_REGION" || true)
+assert "#6921 FR15 P2-b parser region extracts non-vacuously (RCOUNTS parse lines=$RA_N, ends at the completion notice)" \
+  "[[ '$RA_N' -eq 1 ]] && grep -qF 'could not parse' '$RA_REGION' && tail -1 '$RA_REGION' | grep -qF '::notice::re-arm completed'"
+run_p2b() { # $1 body → stdout+stderr, then __RC=
+  local d rc=0; d="$(mktemp -d)"; printf '%s\n' "$d" >> "$RENDER_TMPDS"
+  printf '%s' "$1" > "$d/rearm-body"
+  sed "s|/tmp/rearm-body|$d/rearm-body|g" "$RA_REGION" > "$d/region.sh"
+  bash -c 'set -euo pipefail; source "$1"' _ "$d/region.sh" 2>&1 || rc=$?
+  echo "__RC=$rc"
+}
+# shellcheck disable=SC2034  # read inside assert's eval'd condition strings
+P2B_ZERO_OUT="$(run_p2b $'inngest-rearm-reminders: nothing to re-arm\ninngest-rearm-reminders: re-armed=0 failed=0 held_back=0 total=0\n')"
+# shellcheck disable=SC2034
+P2B_OLD_OUT="$(run_p2b $'inngest-rearm-reminders: nothing to re-arm\n')"
+assert "#6921 FR15 the Σ=0 canonical body (held_back=0) reconciles 0+0+0 == 0 (rc 0), never 'could not parse'" \
+  "printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qF '::notice::re-arm completed: rearmed=0 held_back=0 == Σcaptured(total)=0' && ! printf '%s\n' \"\$P2B_ZERO_OUT\" | grep -qF 'could not parse'"
+# held_back (records due before the quiesce, already fired on the web scheduler, never POSTed) is a
+# SUCCESS term: N+F+H must equal K, and F must be 0. An absent held_back field (a host script that
+# predates it) reads as 0 — it is never an unparsed body.
+# shellcheck disable=SC2034
+P2B_HELD_OUT="$(run_p2b $'inngest-rearm-reminders: held back 1 reminder(s) due before the quiesce: rem-a\ninngest-rearm-reminders: re-armed=2 failed=0 held_back=1 total=3\n')"
+assert "#6921 FR15 held_back row: re-armed=2 failed=0 held_back=1 total=3 reconciles (rc 0) and names the held-back id" \
+  "printf '%s\n' \"\$P2B_HELD_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -qF '::notice::re-arm completed: rearmed=2 held_back=1 == Σcaptured(total)=3' && printf '%s\n' \"\$P2B_HELD_OUT\" | grep -E '^::notice::re-arm held back' | grep -qF 'rem-a'"
+# shellcheck disable=SC2034
+P2B_NOHELD_OUT="$(run_p2b $'inngest-rearm-reminders: re-armed=0 failed=0 total=0\n')"
+assert "#6921 FR15 an absent held_back field reads as 0 (re-armed=0 failed=0 total=0 -> rc 0)" \
+  "printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -qx '__RC=0' && printf '%s\n' \"\$P2B_NOHELD_OUT\" | grep -qF 'rearmed=0 held_back=0 == Σcaptured(total)=0'"
+# shellcheck disable=SC2034
+P2B_SUM_OUT="$(run_p2b $'inngest-rearm-reminders: re-armed=2 failed=0 held_back=0 total=3\n')"
+assert "#6921 FR15 N+F+H != K (2+0+0 != 3) refuses as a reconciliation failure (rc 1), not a partial" \
+  "printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qF 're-arm reconciliation FAILED (P2-b): re-armed=2 + failed=0 + held_back=0 != total=3' && ! printf '%s\n' \"\$P2B_SUM_OUT\" | grep -qF 're-arm completed'"
+# shellcheck disable=SC2034
+P2B_PART_OUT="$(run_p2b $'inngest-rearm-reminders: re-arm failed for reminder_id=rem-b (HTTP 500)\ninngest-rearm-reminders: re-armed=1 failed=1 held_back=1 total=3\n')"
+assert "#6921 FR15 failed>0 with a consistent sum is a PARTIAL (rc 1) naming the missing id" \
+  "printf '%s\n' \"\$P2B_PART_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_PART_OUT\" | grep -E '^::error::re-arm PARTIAL' | grep -qF '[rem-b]' && ! printf '%s\n' \"\$P2B_PART_OUT\" | grep -qF 're-arm completed'"
+assert "#6921 rearm arm comment: a 503 is cutover-quiesce OR backend-refused (X-Soleur-Unavailable)" \
+  "awk '/^  rearm\\)\$/{f=1;next} f&&/^  [a-z-]+\\)\$/{exit} f' '$BODY_SH' | grep -E '^[[:space:]]*#' | grep -F 'X-Soleur-Unavailable' | grep -qF 'backend-refused'"
+assert "#6921 FR15 control: the pre-D1c Σ=0 body (no canonical line) still refuses as unparsed (rc 1)" \
+  "printf '%s\n' \"\$P2B_OLD_OUT\" | grep -qx '__RC=1' && printf '%s\n' \"\$P2B_OLD_OUT\" | grep -qF 'could not parse'"
+
+# ── D4 (Guard 3, FR8): 2.2 certifies the QUIESCED unit shape — RENDERED ──────────────────────────
+# The 2.2 region is extracted and executed in a fresh bash with `curl` stubbed. Unlike render_2_0's
+# fixed answer, 2.2 probes in a loop and calls curl inside $(…), so the stub answers a per-call
+# STUB_SEQ (`code:BODYNAME,…`) through a FILE-backed counter — a shell counter would die with each
+# command-substitution subshell. A `000` entry reproduces real curl's transport-failure bytes: it
+# prints `000` via -w AND exits non-zero, so the script's `|| echo "000"` appends a second 000.
+extract_2_2() { awk '/# ---- 2\.2 QUIESCE HARD GATE/{f=1} f&&/# ---- SEAM: operator maintenance-window steps/{exit} f' "$1"; }
+R22_REGION="$(mktemp)"; SCRATCH+=("$R22_REGION")
+extract_2_2 "$BODY_SH" > "$R22_REGION"
+R22_N=$(grep -cv '^[[:space:]]*#' "$R22_REGION" || true)
+R22_TMP_REFS=$(grep -c '/tmp/exec-inv' "$R22_REGION" || true)
+assert "#6921 2.2 region extraction is non-vacuous (>= 85 non-comment lines, got $R22_N; /tmp/exec-inv refs=$R22_TMP_REFS)" "[[ '$R22_N' -ge 85 && '$R22_TMP_REFS' -ge 5 ]]"
+# Synthesized fixtures (cq-test-fixtures-synthesized-only), in the on-host emitter's shapes.
+R22_QUIESCED='inngest-inventory: QUIESCED host_id=stub-web-a unit=inactive enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart'
+# The hook returns COMBINED output, so the sentinel can sit on a later line behind stderr noise.
+R22_QUIESCED_MULTI=$'ERROR: /v0/gql functions query failed (connection refused)\r\ninngest-inventory: QUIESCED host_id=stub-web-b unit=failed enabled=disabled — deliberate stop+disable (op=quiesce-web); no restart'
+R22_FATAL=$'ERROR: /v0/gql functions query failed\r\ninngest-inventory: FATAL /v0/gql functions query failed or non-array (errors=["__FETCH_FAILED__"] data_keys=[]) host_id=stub-web-a PAST_CHAR_120_MARKER'
+R22_NOT_QUIESCED='inngest-inventory: FATAL unit shape is not QUIESCED (errors=["inngest-inventory: QUIESCED"]) host_id=stub-web-a'
+# §4 DISABLED_UNATTRIBUTED: the unit is disabled with no valid quiesce marker — not a deliberate quiesce.
+R22_UNATTRIBUTED='inngest-inventory: DISABLED_UNATTRIBUTED host_id=stub-web-a unit=inactive enabled=disabled — scheduler disabled with no valid quiesce marker; not a deliberate quiesce; dispatch op=rollback'
+# What adnanh/webhook answers on an HMAC trigger-rule mismatch (403) and an unknown hook id (404), and
+# an edge 502 page: none of them carries an `inngest-inventory:` line.
+R22_FORBIDDEN='Hook rules were not satisfied.'
+R22_NOTFOUND='Hook not found.'
+R22_GATEWAY='<html><head><title>502 Bad Gateway</title></head><body>cloudflare</body></html>'
+render_2_2() { # $1 region  $2 SOURCE  $3 STUB_SEQ → stdout+stderr, __RC=, __CALLS=
+  local region="$1" src="$2" seq="$3" tmpd driver rc=0
+  tmpd="$(mktemp -d)"; printf '%s\n' "$tmpd" >> "$RENDER_TMPDS"
+  driver="$tmpd/driver.sh"
+  # Isolate the region's fixed /tmp/exec-inv scratch path per render (concurrent suites share /tmp).
+  sed "s|/tmp/exec-inv|$tmpd/exec-inv|g" "$region" > "$tmpd/region.sh"
+  {
+    printf 'cd %q || exit 97\n' "$REPO_ROOT"
+    printf 'set -euo pipefail\n'
+    printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
+    printf 'SOURCE=%q; STUB_SEQ=%q; TMPD=%q\n' "$src" "$seq" "$tmpd"
+    printf 'QUIESCED_BODY=%q; QUIESCED_MULTI_BODY=%q; FATAL_BODY=%q; NOTQ_BODY=%q; EMPTY_BODY=""\n' \
+      "$R22_QUIESCED" "$R22_QUIESCED_MULTI" "$R22_FATAL" "$R22_NOT_QUIESCED"
+    printf 'UNATTR_BODY=%q; FORBIDDEN_BODY=%q; NOTFOUND_BODY=%q; GATEWAY_BODY=%q\n' \
+      "$R22_UNATTRIBUTED" "$R22_FORBIDDEN" "$R22_NOTFOUND" "$R22_GATEWAY"
+    cat <<'DRIVER'
+curl() {
+  local o="" n entry code name
+  while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+  n=$(( $(cat "$TMPD/curl.count" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$TMPD/curl.count"
+  IFS=',' read -r -a _seq <<< "$STUB_SEQ"
+  entry="${_seq[$((n - 1))]:-}"
+  if [[ -z "$entry" ]]; then touch "$TMPD/SEQ_EXHAUSTED"; return 99; fi
+  code="${entry%%:*}"; name="${entry#*:}"
+  if [[ "$code" == "000" ]]; then printf '000'; return 28; fi
+  printf '%s' "${!name}" > "$o"
+  printf '%s' "$code"
+}
+DRIVER
+    printf 'source %q\n' "$tmpd/region.sh"
+    printf 'echo "__REGION_FELL_THROUGH__"\n'
+  } > "$driver"
+  bash "$driver" 2>&1 || rc=$?
+  echo "__RC=$rc"
+  echo "__CALLS=$(cat "$tmpd/curl.count" 2>/dev/null || echo 0)"
+  [[ -e "$tmpd/SEQ_EXHAUSTED" ]] && echo "__SEQ_EXHAUSTED__"
+  return 0
+}
+# r22_is <output> <verdict> — the verdict the render reached, from the run log alone.
+#   passed:  rc 0, the PASSED notice, fell through to the SEAM, no gate failure.
+#   still:   rc 1, STILL RUNNING, gate failure, never PASSED.
+#   unknown: rc 1, an UNKNOWN quiesce-check line, gate failure, never PASSED.
+r22_is() {
+  local out="$1" v="$2"
+  printf '%s\n' "$out" | grep -q '__SEQ_EXHAUSTED__' && return 1
+  case "$v" in
+    passed)  printf '%s\n' "$out" | grep -qx '__RC=0' && printf '%s\n' "$out" | grep -qE '^::notice::2\.2 QUIESCE HARD GATE PASSED' \
+               && printf '%s\n' "$out" | grep -qx '__REGION_FELL_THROUGH__' && ! printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' ;;
+    still)   printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qE '^quiesce check .*STILL RUNNING' \
+               && printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' && ! printf '%s\n' "$out" | grep -qE 'HARD GATE PASSED|__REGION_FELL_THROUGH__' ;;
+    unknown) printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qE '^quiesce check .*UNKNOWN' \
+               && printf '%s\n' "$out" | grep -qE '^::error::2\.2 QUIESCE HARD GATE FAILED' && ! printf '%s\n' "$out" | grep -qE 'HARD GATE PASSED|__REGION_FELL_THROUGH__|STILL RUNNING' ;;
+    *) return 1 ;;
+  esac
+}
+# shellcheck disable=SC2034  # the R22_* captures are read inside assert's eval'd condition strings
+R22_Q3="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:QUIESCED_BODY,500:QUIESCED_BODY')"
+assert "#6921 Guard3 row1: 3x QUIESCED -> PASSED" "r22_is \"\$R22_Q3\" passed"
+# r22_first_verb_is_warned <output> — the FIRST line naming op=quiesce-web is a ::warning::2.2: line
+# (an operator reads top-down; the verb that stops production scheduling is never met before the warning).
+r22_first_verb_is_warned() { printf '%s\n' "$1" | grep -m1 -F 'op=quiesce-web' | grep -qE '^::warning::2\.2: '; }
+# shellcheck disable=SC2034
+R22_FL="$(render_2_2 "$R22_REGION" live '500:FATAL_BODY,500:FATAL_BODY,500:FATAL_BODY')"
+assert "#6921 Guard3 row2: 3x FATAL + SOURCE=live -> UNKNOWN, remedy names the op=quiesce-web dispatch AFTER the maintenance-window warning" \
+  "r22_is \"\$R22_FL\" unknown && printf '%s\n' \"\$R22_FL\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'the unit is not in the quiesced shape (2.1 answered live)' | grep -qF \"gh workflow run cutover-inngest.yml --field op=quiesce-web\" && r22_first_verb_is_warned \"\$R22_FL\" && printf '%s\n' \"\$R22_FL\" | grep -E '^::warning::2\.2: ' | grep -qF 'STOPS production scheduling'"
+# shellcheck disable=SC2034
+R22_FP="$(render_2_2 "$R22_REGION" persisted '500:FATAL_BODY,500:FATAL_BODY,500:FATAL_BODY')"
+assert "#6921 Guard3 row5b: 3x FATAL + SOURCE=persisted -> UNKNOWN naming the stale on-host inventory script + the config-push read, and NOWHERE op=quiesce-web" \
+  "r22_is \"\$R22_FP\" unknown && printf '%s\n' \"\$R22_FP\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'the on-host inngest-inventory.sh likely predates the QUIESCED verdict; confirm the apply-deploy-pipeline-fix.yml run for the merge wrote /usr/local/bin/inngest-inventory.sh (read /hooks/infra-config-status sha256) and re-dispatch op=execute — do NOT re-run quiesce-web' && ! printf '%s\n' \"\$R22_FP\" | grep -qF 'op=quiesce-web'"
+# shellcheck disable=SC2034
+R22_Q2Q="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,200:EMPTY_BODY,500:QUIESCED_BODY')"
+assert "#6921 Guard3 row2m: QUIESCED,200,QUIESCED -> STILL RUNNING (a sentinel never outranks a 200; loop stops at the 200: calls=2)" \
+  "r22_is \"\$R22_Q2Q\" still && printf '%s\n' \"\$R22_Q2Q\" | grep -qx '__CALLS=2' && r22_first_verb_is_warned \"\$R22_Q2Q\""
+# shellcheck disable=SC2034
+R22_QQ2="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:QUIESCED_BODY,200:EMPTY_BODY')"
+assert "#6921 Guard3 row5: QUIESCED,QUIESCED,200 -> STILL RUNNING (the loop keeps reading after a sentinel: calls=3)" \
+  "r22_is \"\$R22_QQ2\" still && printf '%s\n' \"\$R22_QQ2\" | grep -qx '__CALLS=3'"
+# shellcheck disable=SC2034
+R22_000="$(render_2_2 "$R22_REGION" live '000:EMPTY_BODY,000:EMPTY_BODY,000:EMPTY_BODY')"
+assert "#6921 Guard3: 3x 000 -> UNREADABLE / UNKNOWN, fail-closed" \
+  "r22_is \"\$R22_000\" unknown && printf '%s\n' \"\$R22_000\" | grep -qE '^quiesce check .*UNREADABLE' && printf '%s\n' \"\$R22_000\" | grep -qx '__CALLS=3'"
+# shellcheck disable=SC2034
+R22_NQ="$(render_2_2 "$R22_REGION" live '500:NOTQ_BODY,500:NOTQ_BODY,500:NOTQ_BODY')"
+assert "#6921 Guard3 row3: a FATAL body that merely MENTIONS QUIESCED mid-line -> UNKNOWN (anchored sentinel)" "r22_is \"\$R22_NQ\" unknown"
+# shellcheck disable=SC2034
+R22_MIX="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,503:QUIESCED_MULTI_BODY,500:QUIESCED_BODY')"
+assert "#6921 Guard3 row7 (must-PASS non-canonical): 500/503 mix, different host_id, sentinel behind stderr noise -> PASSED" "r22_is \"\$R22_MIX\" passed"
+# §9 — EVERY answered non-200 body must carry the sentinel; one sentinel is not a quorum.
+# shellcheck disable=SC2034
+R22_QFF="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:FATAL_BODY,500:FATAL_BODY')"
+assert "#6921 §9 row: QUIESCED,FATAL,FATAL -> UNKNOWN (one sentinel does not certify two FATAL answers)" "r22_is \"\$R22_QFF\" unknown"
+# shellcheck disable=SC2034
+R22_Q0F="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,000:EMPTY_BODY,500:FATAL_BODY')"
+assert "#6921 §9 row: QUIESCED,000,FATAL -> UNKNOWN (a 000 is skipped, the FATAL still counts)" "r22_is \"\$R22_Q0F\" unknown"
+# shellcheck disable=SC2034
+R22_00Q="$(render_2_2 "$R22_REGION" live '000:EMPTY_BODY,000:EMPTY_BODY,500:QUIESCED_BODY')"
+assert "#6921 §9 row: 000,000,QUIESCED -> PASSED (000 is no answer; the one answered body carries the sentinel)" "r22_is \"\$R22_00Q\" passed"
+# shellcheck disable=SC2034
+R22_UA="$(render_2_2 "$R22_REGION" persisted '500:UNATTR_BODY,500:UNATTR_BODY,500:UNATTR_BODY')"
+assert "#6921 §9 row: DISABLED_UNATTRIBUTED x3 -> UNKNOWN naming the op=rollback dispatch, and NOWHERE op=quiesce-web" \
+  "r22_is \"\$R22_UA\" unknown && printf '%s\n' \"\$R22_UA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -F 'DISABLED_UNATTRIBUTED' | grep -qF 'gh workflow run cutover-inngest.yml --field op=rollback' && ! printf '%s\n' \"\$R22_UA\" | grep -qF 'op=quiesce-web'"
+# shellcheck disable=SC2034
+R22_QUA="$(render_2_2 "$R22_REGION" live '500:QUIESCED_BODY,500:UNATTR_BODY,500:QUIESCED_BODY')"
+assert "#6921 §9 row: QUIESCED,DISABLED_UNATTRIBUTED,QUIESCED -> UNKNOWN naming op=rollback (unattributed outranks the sentinel)" \
+  "r22_is \"\$R22_QUA\" unknown && printf '%s\n' \"\$R22_QUA\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'op=rollback'"
+# The remedy branches on the HTTP class BEFORE the 2.1 source: an answer the inventory script never
+# produced says nothing about the unit, so it must not send the operator to quiesce-web OR to the
+# config push.
+# shellcheck disable=SC2034
+R22_403="$(render_2_2 "$R22_REGION" live '403:FORBIDDEN_BODY,403:FORBIDDEN_BODY,403:FORBIDDEN_BODY')"
+assert "#6921 §9 row: 403 x3 -> UNKNOWN naming CF-Access/HMAC, not op=quiesce-web, not the config push" \
+  "r22_is \"\$R22_403\" unknown && printf '%s\n' \"\$R22_403\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'CF-Access' && ! printf '%s\n' \"\$R22_403\" | grep -qF 'op=quiesce-web' && ! printf '%s\n' \"\$R22_403\" | grep -qF 'predates the QUIESCED verdict'"
+# shellcheck disable=SC2034
+R22_404="$(render_2_2 "$R22_REGION" persisted '404:NOTFOUND_BODY,404:NOTFOUND_BODY,404:NOTFOUND_BODY')"
+assert "#6921 §9 row: 404 x3 -> UNKNOWN naming the undeployed inngest-inventory hook, not the stale-script remedy" \
+  "r22_is \"\$R22_404\" unknown && printf '%s\n' \"\$R22_404\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'hook is not deployed' && ! printf '%s\n' \"\$R22_404\" | grep -qF 'predates the QUIESCED verdict'"
+# shellcheck disable=SC2034
+R22_502="$(render_2_2 "$R22_REGION" live '502:GATEWAY_BODY,502:GATEWAY_BODY,502:GATEWAY_BODY')"
+assert "#6921 §9 row: 502 x3 with no inngest-inventory: line -> UNKNOWN naming the gateway, not op=quiesce-web" \
+  "r22_is \"\$R22_502\" unknown && printf '%s\n' \"\$R22_502\" | grep -E '^::error::2\.2 QUIESCE HARD GATE FAILED' | grep -qF 'gateway' && ! printf '%s\n' \"\$R22_502\" | grep -qF 'op=quiesce-web'"
+# The UNKNOWN line carries what the host said: the first 120 chars of the last NON-EMPTY body, on ONE
+# line. FATAL_BODY is CRLF-split and longer than 120 chars; its marker sits past char 120.
+R22_EXCERPT_HEAD='ERROR: /v0/gql functions query failed'
+assert "#6921 Guard3: the UNKNOWN line carries a CR/LF-stripped, 120-char excerpt of the last body" \
+  "printf '%s\n' \"\$R22_FL\" | grep -E '^quiesce check .*UNKNOWN' | grep -qF '$R22_EXCERPT_HEAD' && ! printf '%s\n' \"\$R22_FL\" | grep -qF 'PAST_CHAR_120_MARKER' && ! printf '%s\n' \"\$R22_FL\" | grep -qE '^inngest-inventory: FATAL' && ! printf '%s\n' \"\$R22_FL\" | grep -q \$'\r'"
+# shellcheck disable=SC2034
+R22_FF0="$(render_2_2 "$R22_REGION" live '500:FATAL_BODY,500:FATAL_BODY,000:EMPTY_BODY')"
+assert "#6921 §9 excerpt: FATAL,FATAL,000 -> the excerpt is the last NON-EMPTY body (a trailing 000 does not hide the FATAL)" \
+  "r22_is \"\$R22_FF0\" unknown && printf '%s\n' \"\$R22_FF0\" | grep -E '^quiesce check .*UNKNOWN' | grep -qF '$R22_EXCERPT_HEAD'"
+assert "#6921 Guard3: the 2.2 gate still feeds the SEAM withhold through STILL_RUNNING / UNKNOWN_COUNT" \
+  "ncl '$R22_REGION' | grep -qF 'if [[ \"\$STILL_RUNNING\" -gt 0 || \"\$UNKNOWN_COUNT\" -gt 0 ]]; then' && ncl '$R22_REGION' | grep -qE '^[[:space:]]*quiesced_n=0$' && ! ncl '$R22_REGION' | grep -qF 'reached_non200' && ! ncl '$R22_REGION' | grep -qF '\${SOURCE:-'"
+# In-suite mutation rows (Guard 3 #1, #3, and the §9 every-body requirement) through mutate_file.
+check_2_2_fatal_is_unknown() {
+  local f="$1" region out
+  region="$(mktemp)"; SCRATCH+=("$region")
+  extract_2_2 "$f" > "$region"
+  out="$(render_2_2 "$region" live '500:FATAL_BODY,500:FATAL_BODY,500:FATAL_BODY')"
+  r22_is "$out" unknown
+}
+# shellcheck disable=SC2016  # a literal sed program matched against the script's source text
+mutate_file "Guard3 #1 sentinel requirement dropped" "$BODY_SH" 's|^    elif \[\[ "\$answered_n" -ge 1 && "\$quiesced_n" -eq "\$answered_n" \]\]; then$|    elif [[ "$answered_n" -ge 1 ]]; then|' check_2_2_fatal_is_unknown
+check_2_2_notq_is_unknown() {
+  local f="$1" region out
+  region="$(mktemp)"; SCRATCH+=("$region")
+  extract_2_2 "$f" > "$region"
+  out="$(render_2_2 "$region" live '500:NOTQ_BODY,500:NOTQ_BODY,500:NOTQ_BODY')"
+  r22_is "$out" unknown
+}
+mutate_file "Guard3 #3 unanchored sentinel grep" "$BODY_SH" "s|^        elif grep -qE '\\^inngest-inventory: QUIESCED' /tmp/exec-inv 2>/dev/null; then\$|        elif grep -qE 'inngest-inventory: QUIESCED' /tmp/exec-inv 2>/dev/null; then|" check_2_2_notq_is_unknown
+check_2_2_qff_is_unknown() {
+  local f="$1" region out
+  region="$(mktemp)"; SCRATCH+=("$region")
+  extract_2_2 "$f" > "$region"
+  out="$(render_2_2 "$region" live '500:QUIESCED_BODY,500:FATAL_BODY,500:FATAL_BODY')"
+  r22_is "$out" unknown
+}
+# shellcheck disable=SC2016
+mutate_file "§9 every-body requirement weakened to any-body" "$BODY_SH" 's|^    elif \[\[ "\$answered_n" -ge 1 && "\$quiesced_n" -eq "\$answered_n" \]\]; then$|    elif [[ "$answered_n" -ge 1 \&\& "$quiesced_n" -ge 1 ]]; then|' check_2_2_qff_is_unknown
+
+# op=quiesce-web's secondary inventory confirm reports whether the sentinel was present.
+QW_ARM_FILE="$(mktemp)"; SCRATCH+=("$QW_ARM_FILE")
+awk '/^  quiesce-web\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$BODY_SH" > "$QW_ARM_FILE"
+assert "#6921 quiesce-web secondary confirm greps the anchored sentinel and prints present/absent, with its own 000/unreadable branch" \
+  "ncl '$QW_ARM_FILE' | grep -qF \"grep -qE '^inngest-inventory: QUIESCED' /tmp/quiesce-inv\" && ncl '$QW_ARM_FILE' | grep -qF 'QUIESCED sentinel=present' && ncl '$QW_ARM_FILE' | grep -qF 'QUIESCED sentinel=absent' && ncl '$QW_ARM_FILE' | grep -F 'echo \"::warning::quiesce-web: SECONDARY inventory confirm UNREADABLE' | grep -qF 'HTTP 000'"
+
+# ── §9 quiesce-web PREFLIGHT: the config push landed BEFORE anything is stopped — RENDERED ────────
+# The quiesce handler, the inventory QUIESCED verdict, the persisted-capture resume and the enumerate
+# scrub all ship in ONE config push. A quiesce dispatched before that push lands stops production
+# scheduling with a handler that cannot capture or certify it. So the arm reads /hooks/infra-config-status
+# and compares the host's sha256 of each script against the checkout, and refuses before the fan-out POST.
+QW_PF_NAMES="$(ncl "$QW_ARM_FILE" | sed -n 's/^[[:space:]]*for _pf_name in \(.*\); do$/\1/p')"
+QW_PF_N="$(printf '%s\n' "$QW_PF_NAMES" | grep -c . || true)"
+QW_PF_UNDELIVERED=""
+for _pf in $QW_PF_NAMES; do
+  grep -qF "|/usr/local/bin/$_pf|" "$REPO_ROOT/apps/web-platform/infra/infra-config-apply.sh" || QW_PF_UNDELIVERED+=" $_pf"
+done
+assert "#6921 §9 preflight list is the four cutover scripts, each a FILE_MAP-delivered /usr/local/bin dest (list='$QW_PF_NAMES' undelivered='${QW_PF_UNDELIVERED# }')" \
+  "[[ '$QW_PF_N' -eq 1 && '$QW_PF_NAMES' == 'ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh inngest-enumerate-reminders.sh' && -z '$QW_PF_UNDELIVERED' ]]"
+# shellcheck disable=SC2016  # literal source text, not expansions
+QW_PF_STATUS_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/infra-config-status"' | head -1 | cut -d: -f1 || true)"
+# shellcheck disable=SC2016
+QW_PF_DEPLOY_LN="$(ncl "$QW_ARM_FILE" | grep -nF '"$BASE/deploy" ||' | head -1 | cut -d: -f1 || true)"
+QW_PF_WARN_LN="$(ncl "$QW_ARM_FILE" | grep -nF 'echo "::warning::quiesce-web: this STOPS' | head -1 | cut -d: -f1 || true)"
+assert "#6921 §9 the preflight read precedes the maintenance-window warning and the fan-out POST (status=$QW_PF_STATUS_LN warn=$QW_PF_WARN_LN deploy=$QW_PF_DEPLOY_LN)" \
+  "[[ '$QW_PF_STATUS_LN' =~ ^[0-9]+\$ && '$QW_PF_WARN_LN' =~ ^[0-9]+\$ && '$QW_PF_DEPLOY_LN' =~ ^[0-9]+\$ ]] && (( QW_PF_STATUS_LN < QW_PF_WARN_LN && QW_PF_WARN_LN < QW_PF_DEPLOY_LN ))"
+QW_PF_REGION="$(mktemp)"; SCRATCH+=("$QW_PF_REGION")
+awk '/# ---- quiesce-web PREFLIGHT/{f=1} f&&/echo "::warning::quiesce-web: this STOPS/{exit} f' "$QW_ARM_FILE" > "$QW_PF_REGION"
+QW_PF_REGION_N=$(grep -cv '^[[:space:]]*#' "$QW_PF_REGION" || true)
+assert "#6921 §9 preflight region extraction is non-vacuous (>= 15 non-comment lines, got $QW_PF_REGION_N)" "[[ '$QW_PF_REGION_N' -ge 15 ]]"
+# sha of each real checkout file, for building host frames that match or diverge.
+declare -A QW_PF_SHA=()
+for _pf in ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh inngest-enumerate-reminders.sh; do
+  QW_PF_SHA[$_pf]="$(sha256sum "$REPO_ROOT/apps/web-platform/infra/$_pf" | awk '{print $1}')"
+done
+qw_pf_frame() { # $1 name to corrupt ('' none)  $2 corrupt mode: diverge|drop → a synthesized status frame
+  local bad="$1" mode="$2" files="" n sha
+  for n in ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh inngest-enumerate-reminders.sh; do
+    sha="${QW_PF_SHA[$n]}"
+    if [[ "$n" == "$bad" ]]; then
+      [[ "$mode" == drop ]] && continue
+      sha="$(printf '%s' "stub-$n" | sha256sum | awk '{print $1}')"
+    fi
+    files+="${files:+,}{\"file\":\"/usr/local/bin/$n\",\"sha256\":\"$sha\",\"status\":\"ok\",\"changed\":false}"
+  done
+  printf '{"schema_version":2,"start_ts":1,"end_ts":2,"exit_code":0,"files_written":4,"files_failed":0,"files_total":4,"files":[%s],"restarts":[]}' "$files"
+}
+render_qw_pf() { # $1 HTTP code  $2 body  $3 checkout file to REMOVE from the sandbox ('' none) → output, __RC=
+  local code="$1" body="$2" rm_name="$3" tmpd root rc=0 n
+  tmpd="$(mktemp -d)"; printf '%s\n' "$tmpd" >> "$RENDER_TMPDS"
+  root="$tmpd/checkout"; mkdir -p "$root/apps/web-platform/infra"
+  for n in ci-deploy.sh inngest-inventory.sh inngest-rearm-reminders.sh inngest-enumerate-reminders.sh; do
+    [[ "$n" == "$rm_name" ]] || cp "$REPO_ROOT/apps/web-platform/infra/$n" "$root/apps/web-platform/infra/$n"
+  done
+  sed "s|/tmp/quiesce-preflight|$tmpd/quiesce-preflight|g" "$QW_PF_REGION" > "$tmpd/region.sh"
+  {
+    printf 'cd %q || exit 97\n' "$root"
+    printf 'set -euo pipefail\n'
+    printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
+    printf 'STUB_CODE=%q; STUB_BODY=%q; TMPD=%q\n' "$code" "$body" "$tmpd"
+    cat <<'DRIVER'
+curl() {
+  local o="" a
+  for a in "$@"; do [[ "$a" == */deploy ]] && touch "$TMPD/DEPLOY_POSTED"; done
+  while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+  if [[ "$STUB_CODE" == "000" ]]; then printf '000'; return 28; fi
+  printf '%s' "$STUB_BODY" > "$o"
+  printf '%s' "$STUB_CODE"
+}
+DRIVER
+    printf 'source %q\n' "$tmpd/region.sh"
+    printf 'echo "__PREFLIGHT_PASSED__"\n'
+  } > "$tmpd/driver.sh"
+  bash "$tmpd/driver.sh" 2>&1 || rc=$?
+  echo "__RC=$rc"
+  [[ -e "$tmpd/DEPLOY_POSTED" ]] && echo "__DEPLOY_POSTED__"
+  return 0
+}
+qw_pf_refused() { # <output> <needle> — rc 1, one ::error:: naming the needle, never passed, never POSTed
+  printf '%s\n' "$1" | grep -qx '__RC=1' && printf '%s\n' "$1" | grep -E '^::error::quiesce-web PREFLIGHT: config push not landed' | grep -qF -- "$2" \
+    && ! printf '%s\n' "$1" | grep -qE '__PREFLIGHT_PASSED__|__DEPLOY_POSTED__'
+}
+# shellcheck disable=SC2034  # read inside assert's eval'd condition strings
+QW_PF_OK="$(render_qw_pf 200 "$(qw_pf_frame '' '')" '')"
+assert "#6921 §9 preflight: all four host sha256 == checkout -> passes (rc 0, no ::error::)" \
+  "printf '%s\n' \"\$QW_PF_OK\" | grep -qx '__RC=0' && printf '%s\n' \"\$QW_PF_OK\" | grep -qx '__PREFLIGHT_PASSED__' && ! printf '%s\n' \"\$QW_PF_OK\" | grep -q '^::error::'"
+# shellcheck disable=SC2034
+QW_PF_DIV="$(render_qw_pf 200 "$(qw_pf_frame inngest-inventory.sh diverge)" '')"
+assert "#6921 §9 preflight: a diverging inngest-inventory.sh -> refuses naming host=<sha> checkout=<sha>, plus the apply-deploy-pipeline-fix.yml remedy" \
+  "qw_pf_refused \"\$QW_PF_DIV\" '/usr/local/bin/inngest-inventory.sh host=$(printf '%s' stub-inngest-inventory.sh | sha256sum | awk '{print $1}') checkout=${QW_PF_SHA[inngest-inventory.sh]}' && printf '%s\n' \"\$QW_PF_DIV\" | grep -qF 'apply-deploy-pipeline-fix.yml'"
+# shellcheck disable=SC2034
+QW_PF_DROP="$(render_qw_pf 200 "$(qw_pf_frame inngest-enumerate-reminders.sh drop)" '')"
+assert "#6921 §9 preflight: inngest-enumerate-reminders.sh absent from files[] -> refuses with host=missing" \
+  "qw_pf_refused \"\$QW_PF_DROP\" '/usr/local/bin/inngest-enumerate-reminders.sh host=missing checkout=${QW_PF_SHA[inngest-enumerate-reminders.sh]}'"
+# shellcheck disable=SC2034
+QW_PF_403="$(render_qw_pf 403 'Hook rules were not satisfied.' '')"
+assert "#6921 §9 preflight: an unreadable status (HTTP 403) refuses — fail-closed, never a skipped check" \
+  "qw_pf_refused \"\$QW_PF_403\" 'HTTP 403'"
+# shellcheck disable=SC2034
+QW_PF_000="$(render_qw_pf 000 '' '')"
+assert "#6921 §9 preflight: a transport failure (000) refuses" "qw_pf_refused \"\$QW_PF_000\" 'HTTP 000'"
+# shellcheck disable=SC2034
+QW_PF_NJ="$(render_qw_pf 200 '{"exit_code":-2,"reason":"no_prior_apply"}' '')"
+assert "#6921 §9 preflight: a 200 frame with no files[] (no_prior_apply) refuses" "qw_pf_refused \"\$QW_PF_NJ\" 'no files[]'"
+# shellcheck disable=SC2034
+QW_PF_NOCO="$(render_qw_pf 200 "$(qw_pf_frame '' '')" ci-deploy.sh)"
+assert "#6921 §9 preflight: an unreadable checkout file refuses with checkout=unreadable (never compares against an empty sha)" \
+  "qw_pf_refused \"\$QW_PF_NOCO\" '/usr/local/bin/ci-deploy.sh host=${QW_PF_SHA[ci-deploy.sh]} checkout=unreadable'"
+check_qw_pf_divergence_refuses() {
+  local f="$1" arm region out
+  arm="$(mktemp)"; region="$(mktemp)"; SCRATCH+=("$arm" "$region")
+  awk '/^  quiesce-web\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$f" > "$arm"
+  awk '/# ---- quiesce-web PREFLIGHT/{f=1} f&&/echo "::warning::quiesce-web: this STOPS/{exit} f' "$arm" > "$region"
+  out="$(QW_PF_REGION="$region" render_qw_pf 200 "$(qw_pf_frame inngest-inventory.sh diverge)" '')"
+  printf '%s\n' "$out" | grep -qx '__RC=1' && ! printf '%s\n' "$out" | grep -qx '__PREFLIGHT_PASSED__'
+}
+# shellcheck disable=SC2016
+mutate_file "§9 preflight refusal neutered" "$BODY_SH" 's|^    if \[\[ "\$PF_FAIL" -ne 0 \]\]; then$|    if false; then|' check_qw_pf_divergence_refuses
+
+# ── §9 quiesce-web POLLER: lock_contention is not terminal; each quiesce failure has its own remedy ─
+# RENDERED: the poll loop (TRIGGER_TS .. the SECONDARY confirm) runs with curl answering a per-call
+# `reason:exit_code` sequence and sleep stubbed out. A lock_contention loser (a watchdog restart racing
+# the quiesce's flock) overwrites the single deploy-status slot; the winner's verdict lands after it.
+QW_POLL_REGION="$(mktemp)"; SCRATCH+=("$QW_POLL_REGION")
+awk '/^    TRIGGER_TS=\$\(date \+%s\)$/{f=1} f&&/# SECONDARY confirm/{exit} f' "$QW_ARM_FILE" > "$QW_POLL_REGION"
+QW_POLL_N=$(grep -cv '^[[:space:]]*#' "$QW_POLL_REGION" || true)
+assert "#6921 §9 poll region extraction is non-vacuous (>= 30 non-comment lines, got $QW_POLL_N)" "[[ '$QW_POLL_N' -ge 30 ]]"
+render_qw_poll() { # $1 QSEQ `reason:exit,…` → output, __RC=, __CALLS=
+  local seq="$1" tmpd rc=0
+  tmpd="$(mktemp -d)"; printf '%s\n' "$tmpd" >> "$RENDER_TMPDS"
+  sed "s|/tmp/quiesce-status|$tmpd/quiesce-status|g" "$QW_POLL_REGION" > "$tmpd/region.sh"
+  {
+    printf 'set -euo pipefail\n'
+    printf 'BASE="https://stub.invalid"; WEBHOOK_SECRET="stub"; CF_ACCESS_CLIENT_ID="stub"; CF_ACCESS_CLIENT_SECRET="stub"\n'
+    printf 'QSEQ=%q; TMPD=%q\n' "$seq" "$tmpd"
+    cat <<'DRIVER'
+sleep() { :; }
+curl() {
+  local o="" n entry
+  while [[ $# -gt 0 ]]; do [[ "$1" == "-o" ]] && o="$2"; shift; done
+  n=$(( $(cat "$TMPD/curl.count" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$TMPD/curl.count"
+  IFS=',' read -r -a _seq <<< "$QSEQ"
+  entry="${_seq[$((n - 1))]:-}"
+  [[ -n "$entry" ]] || return 7
+  printf '{"start_ts":9999999999,"end_ts":9999999999,"exit_code":%s,"component":"inngest","image":"","tag":"","reason":"%s"}' "${entry#*:}" "${entry%%:*}" > "$o"
+  printf '200'
+}
+DRIVER
+    printf 'source %q\n' "$tmpd/region.sh"
+    printf 'echo "__POLL_FELL_THROUGH__"\n'
+  } > "$tmpd/driver.sh"
+  bash "$tmpd/driver.sh" 2>&1 || rc=$?
+  echo "__RC=$rc"
+  echo "__CALLS=$(cat "$tmpd/curl.count" 2>/dev/null || echo 0)"
+  return 0
+}
+qw_poll_failed() { # <output> <calls> <needle>… — rc 1, stopped at call <calls>, the ::error:: carries every needle
+  local out="$1" calls="$2" line; shift 2
+  printf '%s\n' "$out" | grep -qx '__RC=1' && printf '%s\n' "$out" | grep -qx "__CALLS=$calls" && ! printf '%s\n' "$out" | grep -qx '__POLL_FELL_THROUGH__' || return 1
+  line="$(printf '%s\n' "$out" | grep -E '^::error::' | head -1 || true)"
+  while [[ $# -gt 0 ]]; do printf '%s' "$line" | grep -qF -- "$1" || return 1; shift; done
+}
+# shellcheck disable=SC2034
+QW_POLL_LC="$(render_qw_poll 'running:-1,lock_contention:1,quiesced:0')"
+assert "#6921 §9 poller: running, lock_contention, quiesced -> keeps polling past lock_contention and confirms (rc 0, calls=3)" \
+  "printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__RC=0' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__CALLS=3' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qx '__POLL_FELL_THROUGH__' && printf '%s\n' \"\$QW_POLL_LC\" | grep -qE '^::notice::quiesce-web: host-side QUIESCED confirmed'"
+# shellcheck disable=SC2034
+QW_POLL_LCT="$(render_qw_poll 'lock_contention:1')"
+assert "#6921 §9 poller: lock_contention to the end -> the timeout error names lock_contention as the last reason (rc 1)" \
+  "printf '%s\n' \"\$QW_POLL_LCT\" | grep -qx '__RC=1' && printf '%s\n' \"\$QW_POLL_LCT\" | grep -E '^::error::quiesce-web did not reach' | grep -qF 'lock_contention'"
+# shellcheck disable=SC2034
+QW_POLL_CF="$(render_qw_poll 'quiesce_capture_failed:1')"
+assert "#6921 §9 poller: quiesce_capture_failed -> fails fast naming the Better Stack read, restart-inngest-server.yml and the re-dispatch" \
+  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
+# shellcheck disable=SC2034
+QW_POLL_CU="$(render_qw_poll 'quiesce_capture_unavailable:1')"
+assert "#6921 §9 poller: quiesce_capture_unavailable -> fails fast naming restart-inngest-server.yml, op=rollback (disabled_unattributed) and the re-quiesce" \
+  "qw_poll_failed \"\$QW_POLL_CU\" 1 'reason=quiesce_capture_unavailable' 'INNGEST_QUIESCE_CAPTURE_UNAVAILABLE' 'restart-inngest-server.yml' 'op=rollback' 'disabled_unattributed' 'op=quiesce-web'"
+# shellcheck disable=SC2034
+QW_POLL_MW="$(render_qw_poll 'quiesce_marker_write_failed:1')"
+assert "#6921 §9 poller: quiesce_marker_write_failed -> fails fast naming /var/lib/inngest and the re-dispatch" \
+  "qw_poll_failed \"\$QW_POLL_MW\" 1 'reason=quiesce_marker_write_failed' '/var/lib/inngest' 'INNGEST_QUIESCE_MARKER_WRITE_FAILED' 'op=quiesce-web'"
+# shellcheck disable=SC2034
+QW_POLL_SU="$(render_qw_poll 'quiesced_shape_unrecognized:1')"
+assert "#6921 §9 poller: quiesced_shape_unrecognized -> fails fast, says scheduling IS stopped, names op=rollback then op=quiesce-web" \
+  "qw_poll_failed \"\$QW_POLL_SU\" 1 'reason=quiesced_shape_unrecognized' 'production scheduling IS stopped' 'op=rollback' 'op=quiesce-web'"
+# shellcheck disable=SC2034
+QW_POLL_UN="$(render_qw_poll 'bogus_reason:1')"
+assert "#6921 §9 poller: an unenumerated terminal reason still fails fast (calls=1)" \
+  "qw_poll_failed \"\$QW_POLL_UN\" 1 'unrecognized terminal reason bogus_reason'"
+
+# ── D5 (FR10): the operator text states the measured state — WHOLE FILE, comments included ──────
+# web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false; the loop
+# is drivable; the watchdog leaves a quiesced unit alone. The old premises must be gone everywhere,
+# including comments — a comment contradicting the notice beneath it is the next maintainer's trap.
+for _stale in 'KNOWN GAP (#6921)' 'web-2 freeze/recreate' 'self-arms oneshots'; do
+  _n=$(grep -cF -- "$_stale" "$BODY_SH" || true)
+  assert "#6921 FR10 whole-file: '$_stale' is gone (got $_n)" "[[ '$_n' -eq 0 ]]"
+done
+_n=$(grep -cE 'auto-restart the web scheduler|currently fails at 2\.1' "$BODY_SH" || true)
+assert "#6921 FR10 whole-file: 'auto-restart the web scheduler|currently fails at 2.1' is gone (got $_n)" "[[ '$_n' -eq 0 ]]"
+# echo_has <file> <echo-prefix> <phrase> — a NON-COMMENT echo line starting with the prefix carries the phrase.
+echo_has() { ncl "$1" | grep -F -- "echo \"$2" | grep -qF -- "$3"; }
+assert "#6921 D5 2.2 STILL RUNNING warning: a second op=execute resumes 2.1 from the persisted capture, and the watchdog leaves a quiesced unit alone" \
+  "echo_has '$EXEC_ARM_FILE' '::warning::2.2:' 'a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary' && echo_has '$EXEC_ARM_FILE' '::warning::2.2:' 'leaves a quiesced unit alone'"
+assert "#6921 D5 quiesce-web warning: capture-before-stop resume + the watchdog leaves a quiesced unit alone" \
+  "echo_has '$QW_ARM_FILE' '::warning::quiesce-web:' 'a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary' && echo_has '$QW_ARM_FILE' '::warning::quiesce-web:' 'leaves a quiesced unit alone'"
+assert "#6921 D5 SEAM 2.2a: the ONE authoritative web-2 statement — scheduler-less cattle standby, the fan-outs tolerated (not no-ops: rollback's enable fails on web-2's own unread slot), no freeze or recreate step" \
+  "echo_has '$EXEC_ARM_FILE' '  2.2a WEB-2' 'web-2 (10.0.1.11) is a scheduler-less cattle standby born with web_colocate_inngest=false' && echo_has '$EXEC_ARM_FILE' '  2.2a WEB-2' 'tolerated, not no-ops' && echo_has '$EXEC_ARM_FILE' '  2.2a WEB-2' \"reports inngest_enable_failed on web-2's OWN deploy-status slot, which CI does not read\" && echo_has '$EXEC_ARM_FILE' '  2.2a WEB-2' 'no web-2 freeze or recreate step'"
+# ONE statement: the full premise appears exactly once in the whole file (comments included); every other
+# site points at SEAM 2.2a instead of restating (and drifting from) it.
+_n=$(grep -cF 'scheduler-less cattle standby born with web_colocate_inngest=false' "$BODY_SH" || true)
+assert "#6921 D5 whole-file: the web-2 premise is stated exactly once (SEAM 2.2a) (got $_n)" "[[ '$_n' -eq 1 ]]"
+_n=$(grep -cE 'tolerated no-op|no-op on an absent unit' "$BODY_SH" || true)
+assert "#6921 D5 whole-file: no web-2 fan-out is called a no-op (got $_n)" "[[ '$_n' -eq 0 ]]"
+assert "#6921 D5 2.2 PASSED notice names the QUIESCED shape and points web-2 scope at SEAM 2.2a" \
+  "echo_has '$EXEC_ARM_FILE' '::notice::2.2 QUIESCE HARD GATE PASSED' 'QUIESCED unit shape' && echo_has '$EXEC_ARM_FILE' '::notice::2.2 QUIESCE HARD GATE PASSED' 'SEAM 2.2a'"
+assert "#6921 D5 quiesce-web completion notice: web-2 scope points at SEAM 2.2a, 2.1 resumes" \
+  "echo_has '$QW_ARM_FILE' '::notice::quiesce-web complete' 'SEAM 2.2a' && echo_has '$QW_ARM_FILE' '::notice::quiesce-web complete' '2.1 resumes from the persisted capture'"
+_n=$(ncl "$BODY_SH" | grep -F 'SCOPE CAVEAT (P2-a / DI-C3)' | grep -F 'NOT a web-host double-fire detector' | grep -cF 'SEAM 2.2a' || true)
+assert "#6921 D5 both doublefire scope caveats (doublefire-probe + verify 2.6) name the web host and point web-2 at SEAM 2.2a (got $_n)" "[[ '$_n' -eq 2 ]]"
+assert "#6921 D5 the quiesce-web #6178 poll-window comment includes the 120 s capture bound and the peer fan-out term, drift-guarded" \
+  "grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF '120 s quiesce capture bound' && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF 'peer fan-out' && grep -B7 -E '^[[:space:]]*QMAX_POLLS=[0-9]+$' '$QW_ARM_FILE' | grep -E '^[[:space:]]*#' | grep -qF 'drift-guarded by ci-deploy.test.sh'"
+# The deploy. tunnel ingress is web-1-only (tunnel.tf pins the origin to web_hosts["web-1"]): there is no
+# load balancer in front of these hooks, so no text may say there is.
+_n=$(grep -cE 'LB-routed|LB-reachable|LB-scoped|LOAD BALANCER|the LB may' "$BODY_SH" || true)
+assert "#6921 D5 whole-file: no 'LB-routed / LB-reachable / LOAD BALANCER' wording (the deploy. ingress is web-1-only) (got $_n)" "[[ '$_n' -eq 0 ]]"
+assert "#6921 D5 the tunnel fact the wording rests on still holds: tunnel.tf pins deploy. to web-1" \
+  "grep -A2 -F 'hostname = \"deploy.\${var.app_domain_base}\"' '$REPO_ROOT/apps/web-platform/infra/tunnel.tf' | grep -qF 'var.web_hosts[\"web-1\"].private_ip'"
+
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
@@ -2175,8 +2703,16 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   rows 17-20 with a known-negative. THE COMPARISON IS NOW EXACT (`-ne`), as the comment above
 #   already claimed it was: the operator was `-lt`, and a `-lt` floor is satisfied by
 #   delete-one-add-one. The failure text dictates the new number.
+# 556 -> 586 (+30) at #6921: 2.1 source/captured_at pins, the P2-b Σ=0 parser render + control, the
+#   rendered 2.2 QUIESCED gate (Guard 3 rows, excerpt, two mutate_file rows), the quiesce-web sentinel
+#   confirm, and the D5 whole-file stale-token and new-prose pins.
+# 586 -> 628 (+42) at PR #8173 review round 1 (contract §9): the §9 2.2 rows (every-body sentinel,
+#   000 skipping, DISABLED_UNATTRIBUTED, HTTP-class remedies, excerpt, warning-before-verb) + the
+#   every-body mutation, the R1 SOURCE single-writer pin + its mutation, the persisted 2.1 fields +
+#   op=capture source, the held_back P2-b rows, the rendered quiesce-web preflight (+ mutation) and
+#   poller arms, and the web-1-only / single web-2 statement pins.
 _DISPATCHED=$((PASS + FAIL))
-_EXACT_FLOOR=556
+_EXACT_FLOOR=628
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

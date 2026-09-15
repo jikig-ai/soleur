@@ -47,6 +47,23 @@ function isCutoverQuiesced(): boolean {
   return v === "1" || v === "true";
 }
 
+// Both 503s carry X-Soleur-Unavailable so a consumer (inngest-rearm-reminders.sh) can tell
+// "operator paused arming" from "the backend is not listening". Retry-After is a poll hint,
+// not the window length.
+const RETRY_AFTER_S = "120";
+
+// inngest.send surfaces a refused loopback as TypeError("fetch failed") with the
+// errno on `cause` (measured, inngest 3.54.2) — match the code, never message text.
+function isConnectionRefused(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false;
+  const cause = (err as { cause?: unknown }).cause;
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    (cause as { code?: unknown }).code === "ECONNREFUSED"
+  );
+}
+
 function bearerMatches(header: string | null, secret: string): boolean {
   if (!header) return false;
   const token = header.startsWith("Bearer ")
@@ -74,7 +91,7 @@ export async function POST(request: Request) {
   if (isCutoverQuiesced()) {
     return NextResponse.json(
       { error: "Reminder arming temporarily paused (Inngest backend cutover in progress)" },
-      { status: 503, headers: { "Retry-After": "120" } },
+      { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "cutover-quiesce" } },
     );
   }
 
@@ -139,6 +156,16 @@ export async function POST(request: Request) {
       op: "dispatch",
       extra: { reminder_id: reminderId },
     });
+    // A REFUSED connection means the scheduler is not listening — the cutover
+    // window after op=quiesce-web, or a restart. Answer like the quiesce gate
+    // (retry later) instead of a terminal-looking 502; nothing was persisted
+    // either way, so the caller must re-arm.
+    if (isConnectionRefused(err)) {
+      return NextResponse.json(
+        { error: "Reminder arming temporarily unavailable (Inngest backend not accepting connections)" },
+        { status: 503, headers: { "Retry-After": RETRY_AFTER_S, "X-Soleur-Unavailable": "backend-refused" } },
+      );
+    }
     return NextResponse.json({ error: "Dispatch failed" }, { status: 502 });
   }
 
