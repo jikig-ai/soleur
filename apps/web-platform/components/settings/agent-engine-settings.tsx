@@ -1,9 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DEFAULT_AGENT_ENGINE_ID, type EngineSettingsMetadata } from "@/server/agent-engine-contract";
 
-type Engine = EngineSettingsMetadata;
+// Keep the settings projection client-local: importing the server contract (even
+// for a constant plus a type) pulls the server-only dependency tree into the
+// browser bundle. The API response is validated by the server route; this
+// structural projection contains no secrets or provider internals.
+const DEFAULT_AGENT_ENGINE_ID = "claude-code";
+type Engine = {
+  id: string;
+  version: string;
+  transport: "local" | "remote";
+  authModes: string[];
+  enabledForNewRuns: boolean;
+  rolloutEnabled?: boolean;
+};
 
 export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [engines, setEngines] = useState<Engine[]>([]);

@@ -3,6 +3,22 @@
 
 BEGIN;
 
+-- Cross-file FK preconditions: migration 138 extends the foundational
+-- workspaces, users, and conversations tables. Fail explicitly if a
+-- drifted/partial database is missing any of them instead of surfacing a
+-- generic CREATE TABLE error (lint-migration-fk-preconditions.sh).
+DO $$ BEGIN
+  IF to_regclass('public.workspaces') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.workspaces must exist before 138';
+  END IF;
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.users must exist before 138';
+  END IF;
+  IF to_regclass('public.conversations') IS NULL THEN
+    RAISE EXCEPTION 'Precondition failed: public.conversations must exist before 138';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.workspace_engine_settings (
   workspace_id uuid PRIMARY KEY REFERENCES public.workspaces(id) ON DELETE CASCADE,
   default_engine_id text NOT NULL,

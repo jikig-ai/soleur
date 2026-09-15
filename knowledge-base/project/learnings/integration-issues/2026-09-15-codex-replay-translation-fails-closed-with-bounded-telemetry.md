@@ -60,6 +60,9 @@ path alone cannot show that replay drift is visible.
 10. Worktree cleanup encountered an unregistered root-owned directory and could not remove it. **Prevention:** inspect ownership after cleanup, report the exact environment limitation, and do not claim orphan cleanup completed when permissions prevent it.
 11. A post-resync Vitest/TypeScript probe ran from the repository root, where the app config and compiler are not installed. **Prevention:** derive the app working directory from the test package location before invoking project-local tooling.
 12. A duplicate full-gate run waited on the repository-wide advisory lock behind several sibling gates and was interrupted after twelve minutes. **Prevention:** reuse a completed full-gate result when the diff is unchanged, and treat a contended rerun as blocked evidence rather than launching another interleaved run.
+13. A local legal-lockstep probe compared only committed files (`origin/main...HEAD`) while the legal edits were still unstaged, so it reported a false missing-file result. **Prevention:** use the working-tree diff while validating before commit, then repeat against the pushed commit.
+14. A migration-lint probe used a root-level script path that does not exist; the canonical script is under `apps/web-platform/scripts/`. **Prevention:** resolve plan paths with `rg --files` before invoking them.
+15. A GitHub CLI job inspection requested an unsupported `steps` JSON field and failed before returning job state. **Prevention:** query the documented `gh` fields first, or use the Actions REST endpoint for step-level details.
 
 ## Related
 
