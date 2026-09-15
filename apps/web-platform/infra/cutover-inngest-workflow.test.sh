@@ -1799,7 +1799,7 @@ while IFS= read -r dprog; do
   assert "#6178 dedupe site $di [no-id fallback] leaves null-startedAt runs (fn-q stays 2)" "[[ '$(_fncount "$nout" fn-q)' == 2 ]]"
 done <<<"$DEDUPE_PROGS"
 assert "#6178 the dedupe loop executed both sites" "[[ '$di' -eq 2 ]]"
-VERIFY_ARM_BODY=$(grep -vE '^[[:space:]]*#' "$WF")
+VERIFY_ARM_BODY=$(grep -vE '^[[:space:]]*#' "$WF") || true
 assert "#6178 op=verify FAILS an incomplete scan (deduped RUN_COUNT < total_count) instead of printing a verdict" \
   "grep -A2 -F '(( RUN_COUNT < TOTAL_COUNT ))' <<<\"\$VERIFY_ARM_BODY\" | grep -qF '2.6 INCOMPLETE SCAN' && grep -A3 -F '2.6 INCOMPLETE SCAN' <<<\"\$VERIFY_ARM_BODY\" | grep -qE '^[[:space:]]*exit 1'"
 assert "#6178 op=verify QUALIFIES a verdict whose dedupe fell back off the run id" \
