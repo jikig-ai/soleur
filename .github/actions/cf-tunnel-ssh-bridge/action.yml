@@ -78,8 +78,10 @@
 #  cutover/verify scripts consume via `${WEB_HOST_SSH}`). The key form is
 #  mutually exclusive per caller class — the key never lands on an unused surface.
 #  No GIT_DATA_SSH: that invocation was byte-identical to WEB_HOST_SSH and could never
-#  reach the git-data host, which is reached through web-1 with its own root key
-#  (ADR-220; provisioned by #8189). Asserted by git-data-cutover-access.test.sh Guard 2.
+#  reach the git-data host, which is reached through web-1 with its own Terraform-minted
+#  root key (ADR-220). git-data-cutover.yml fetches that key and writes the ssh_config its
+#  GIT_DATA_SSH points at; the bridge never handles it. The export set is asserted by the
+#  bridge (BR) rows of git-data-cutover-access.test.sh.
 #
 # Composite actions cannot read the `secrets` context — every secret is an
 # explicit input referenced ONLY inside `env:` mappings (never a `run:` body or

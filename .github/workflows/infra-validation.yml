@@ -1524,6 +1524,11 @@ jobs:
       - name: Run git-data cutover access-path tests (ADR-220)
         run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
 
+      # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
+      # that holds the prd read token (Guard 1).
+      - name: Run git-data flag precheck tests (fail-closed flag read, Guard 1)
+        run: bash apps/web-platform/infra/git-data-flag-precheck.test.sh
+
       # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
       # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
       # from a REAL terraform render rather than a hand-copied fixture, so it needs the
