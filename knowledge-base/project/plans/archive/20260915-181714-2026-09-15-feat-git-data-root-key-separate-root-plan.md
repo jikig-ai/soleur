@@ -1399,5 +1399,5 @@ rationale). Items below correct plan statements above without rewriting them.
 - **Preflight Check 10 (ship).** The original probe (`git-data-root-key.test.sh`, ~17 s with its 31 mutants)
   exceeded Check 10's 15 s sandbox cap (rc 124). The probe is now the flag-precheck suite (3 s in the sandbox,
   `42 passed, 0 failed, 0 skipped`), which exercises the fail-closed flag verdicts end to end; the root-key suite
-  still runs in `infra-validation.yml`. The incident-PIR gate also read two prospective-downtime phrases in this
-  plan as an outage report; they were reworded (no incident occurred).
+  still runs in `infra-validation.yml`. The PIR gate also matched two phrases in this plan about downtime that
+  had not happened as a report of a past event. Both were reworded; no live event took place.
