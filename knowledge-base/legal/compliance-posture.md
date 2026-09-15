@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-09-14
+last_updated: 2026-09-15
 ---
 
 <!-- 2026-09-09: PR #7989 (ref #7995) — Withdrawal of two never-operative Art. 32 TOMs from Article 30 PA-15 §(g)(4) and §(g)(5) (Terraform-managed jikigai.com DNS verification record; targeted-apply blast-radius safeguard). Neither was ever applied: Doppler variables never populated, terraform plan failed before apply, .tf file since deleted, and and the Cloudflare zone was OBSERVED ABSENT on 2026-09-09 (`GET /zones?name=jikigai.com` returned zero; the 28-day auto-delete fires on its own clock, so this is the observation date, not the deletion date). Mirrored into the LinkedIn Page LIA §(vi), this file's LinkedIn org-page Completed row, and the two spec runbooks that still instructed an operator to execute the withdrawn steps (`specs/feat-legal-linkedin-page-4051/tasks.md`, `specs/feat-linkedin-api-reapply-4046/tasks.md`) — four artifacts, not two. **Scope: the TERRAFORM limbs of that row's operator-action tail were never executed. The tail's other two limbs are NOT withdrawn and are recorded separately in the row — the LinkedIn app privacy-policy URL was never repointed (and remains on soleur.ai, which is fortunate: jikigai.com has no A record), and the K-bis appeal WAS carried out, as Article 30 PA-15 §(c) records the one-time Microsoft Ireland transfer.** Lawful basis and balancing outcome unaffected (severable). No Art. 33/34 trigger. -->
@@ -66,7 +66,7 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 | Article 33(5) Breach Register | `knowledge-base/legal/breach-register.md` | — | 2026-09-03 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | — | 2026-03-29 | Active |
 | GDPR Policy | `docs/legal/gdpr-policy.md` | — | 2026-08-09 | Active |
-| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-09-13 | Active |
+| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-09-15 | Active |
 | Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | — | 2026-08-09 | Active |
 | LinkedIn Page LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` | — | 2026-05-19 | Draft (counsel review pending) |
 | Operator Inbox Triage LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md` | — | 2026-06-11 | Draft (counsel review pending) |
