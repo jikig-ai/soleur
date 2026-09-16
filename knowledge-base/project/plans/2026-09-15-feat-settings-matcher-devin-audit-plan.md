@@ -116,7 +116,7 @@ logs:
   retention: "GitHub Actions default"
 discoverability_test:
   command: "bash .claude/hooks/devin-matcher-parity.test.sh"
-  expected_output: "ALL TESTS PASSED"
+  expected_output: "PASS=9 FAIL=0"
 ```
 
 ## Guard Contract
