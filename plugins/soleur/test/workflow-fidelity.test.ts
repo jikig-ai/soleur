@@ -537,9 +537,18 @@ describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (meas
     }
   });
 
-  test("unaliased Grok names stay as standalone matcher tokens", () => {
+  test("unaliased Grok names stay as anchored standalone matcher tokens", () => {
     for (const name of UNALIASED_GROK_NAMES) {
-      expect(allMatchers).toContain(name);
+      // Regex-EVALUATE each matcher against the Grok wire name — never
+      // string-compare. The Devin audit (#8205) anchored these twins
+      // (`write` -> `^write$`): identical Grok coverage, but the unanchored
+      // form over-bound `todo_write` under Devin, so bare substrings are now
+      // forbidden for every matcher that fires on the name.
+      const hits = allMatchers.filter((m) => new RegExp(m).test(name));
+      expect(hits.length).toBeGreaterThan(0);
+      for (const m of hits) {
+        expect(m === name || m === `^${name}$`).toBe(true);
+      }
     }
   });
 
