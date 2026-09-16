@@ -6,7 +6,6 @@ category: infrastructure
 tags: [uptime, health, supabase, database, keyword-monitor, better-stack, readiness]
 applies_to:
   - apps/web-platform/infra/uptime-alerts.tf
-  - apps/web-platform/infra/variables.tf
   - apps/web-platform/server/health.ts
   - apps/web-platform/server/index.ts
 related_issues: [7884]
@@ -32,10 +31,9 @@ subject is the only thing that tells them apart in an inbox.
 | `soleur dot ai apex` | `https://soleur.ai/` | The marketing site is unreachable. Unrelated to the database. | ~4 min (up to 180 s + 60 s confirmation) |
 | `soleur dot ai www redirect 301` | `https://www.soleur.ai/` | `www` stopped answering a 301 to the apex. Unrelated to the database; see [www-redirect-alarm.md](www-redirect-alarm.md). | ~23 min (up to 180 s + 1200 s confirmation) |
 
-Until the first infra apply after PR #8216 renames it, the database readiness monitor still
-carries its hand-made name `app.soleur.ai/health` and is still a `status` monitor, so it cannot
-fire for a database outage yet. An alert under that old name is about the same object (id
-`4226366`).
+The monitor was adopted and renamed by the first infra apply after PR #8216 (2026-09-15 20:46Z):
+it is `soleur app database readiness`, a `keyword` monitor, id `4226366`. A page raised before
+that apply carries the old hand-made name `app.soleur.ai/health` and is about the same object.
 
 `soleur app database readiness` firing **alone** is the 2026-09-15 shape: the app is up, the
 database is not. Firing together with `soleur app dashboard` means the app itself is down, and
@@ -169,11 +167,11 @@ After any remediation, confirm recovery with the TL;DR read on three reads 20 s 
 step 4 showing every service healthy. The Better Stack incident closes by itself after
 `recovery_period` (180 s) of passing checks.
 
-## The adoption apply was refused
+## The vendor refuses a change to the monitor
 
-The first infra apply after PR #8216 imports `4226366` and converts it in place from `status` to
-`keyword`. A vendor probe on 2026-09-15 sent that exact conversion to a throwaway monitor and got
-HTTP 200 with a matching read-back (ADR-222, probe 2), so a refusal is unexpected. If it happens:
+The adoption itself is done: the first infra apply after PR #8216 imported `4226366` and converted
+it in place from `status` to `keyword` on 2026-09-15 (read-back verified). This section covers a
+later apply that the vendor refuses — a rejected `monitor_type`, keyword or timing change:
 
 1. **Signal.** The per-merge `apply` job of `apply-web-platform-infra.yml` fails and its
    `notify-apply-failure` job emails ops. Read the error:
@@ -183,32 +181,32 @@ HTTP 200 with a matching read-back (ADR-222, probe 2), so a refusal is unexpecte
    gh run view <run-id> --log-failed | grep -iE 'app_health|4226366|monitor_type|required_keyword'
    ```
 
-2. **Remedy, as a PR.** Revert `monitor_type` on `betteruptime_monitor.app_health` to `"status"`
-   and drop `required_keyword`, so the monitor is adopted without the conversion. The contract test
-   pins the type, so update its committed constant in the same PR. Merging it unblocks later infra
-   merges. The database outage alarm is then not armed, so record the vendor's error text on
-   #7884, which is still open.
+2. **Remedy, as a PR.** Revert the refused attribute to the value Better Stack currently holds, so
+   later infra merges are unblocked. If that means dropping back to `monitor_type = "status"` with
+   no `required_keyword`, the contract test pins the type, so update its committed constant in the
+   same PR — and note that the database-outage alarm is then NOT armed: file an issue carrying the
+   vendor's error text before merging, because nothing else will report the alarm is gone.
 
-## The monitor itself is gone: the import off-switch
+## The monitor itself is gone (deleted on the vendor side)
 
-This section lasts only until the import-block removal PR merges; that PR closes #7884.
+Since the adoption import was removed (#7884), a vendor-side deletion is self-healing and needs no
+code change: the provider's read of the 404 drops the object from state, and the next apply
+recreates `betteruptime_monitor.app_health` from the declaration — under a NEW id, so the check
+history of `4226366` is lost, and any dashboard or link that names the old id goes stale.
 
-`betteruptime_monitor.app_health` adopts `4226366` through an `import {}` block gated by
-`var.adopt_app_health_monitor`. If the monitor is deleted on the vendor side, Terraform re-attempts
-the import against the missing object, and every plan that targets the address or is untargeted
-aborts (ADR-222, H-F). Signals, all automated:
+Signals, all automated:
 
 - The next reconcile run (06:00 or 18:00 UTC) files or updates the `heartbeat-reconcile-mismatch`
   issue with `surface=monitors reason=absent-live resource=betteruptime_monitor.app_health`.
-- Every infra merge's `apply` job fails, and its `notify-apply-failure` job emails ops. A merge
-  can hit this before the reconcile runs.
-- The scheduled drift plan is untargeted, so it exits 1 and emails
-  `[ERROR] Terraform plan failed for web-platform` on every run.
+- The twice-daily untargeted drift plan now exits 2 (`1 to add`) instead of aborting, where the
+  kept import would have made it exit 1. It emails `[DRIFT] Infrastructure drift detected in
+  web-platform` and files or updates the `infra: drift detected in web-platform` issue
+  (`infra-drift`), and keeps doing so until an apply recreates the monitor.
+- Between the deletion and the recreating apply there is NO database-readiness alarm. Neither
+  signal says *the alarm is gone* — only that a resource is missing — which is why the reconcile
+  row is the one to act on.
 
-Targeted dispatch jobs whose `-target` set excludes the address, such as
-`apply-deploy-pipeline-fix.yml`, skip the import and keep working.
-
-Remedy, as an ordinary PR (`/soleur:one-shot` can carry it end to end):
+Do this:
 
 1. **Confirm the deletion by id, read-only.** A `404` confirms it; anything else means the
    failure has another cause, so stop here:
@@ -219,12 +217,17 @@ Remedy, as an ordinary PR (`/soleur:one-shot` can carry it end to end):
        https://uptime.betterstack.com/api/v2/monitors/4226366'
    ```
 
-2. **Set `default = false`** on `variable "adopt_app_health_monitor"` in
-   `apps/web-platform/infra/variables.tf` and merge. The apply then creates
-   `betteruptime_monitor.app_health` under a new id; the old check history is lost.
+2. **Run the apply rather than waiting for the next infra merge**, so the alarm gap closes now:
+
+   ```bash
+   gh workflow run apply-web-platform-infra.yml --ref main \
+     -f reason="recreate betteruptime_monitor.app_health after a vendor-side deletion (#7884)"
+   ```
 
 3. **Verify.** Step 2 of [Diagnose](#diagnose) shows the monitor with `monitor_type` `keyword`,
-   and the next reconcile run lists the new id in `matched=`.
+   and the next reconcile run lists the new id in `matched=`. Update any saved link that still
+   names `4226366` — including the id in this runbook and in
+   `apps/web-platform/infra/uptime-alerts.tf`.
 
 ## What this alarm does NOT cover
 

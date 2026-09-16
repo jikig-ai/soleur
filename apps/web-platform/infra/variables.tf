@@ -403,19 +403,6 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
-# Gates the `import` of monitor 4226366 into betteruptime_monitor.app_health
-# (uptime-alerts.tf, #7884, ADR-222). `mock_provider` does not mock `import` blocks,
-# so tests/web-hosts-eu-pin.tftest.hcl sets it `false` to keep `terraform test`
-# credential-free. Never `false` in production before the adoption apply: Terraform
-# would CREATE a second monitor on /health. After adoption it is the off-switch if
-# the monitor is deleted vendor-side (runbook: app-database-readiness-alarm.md).
-# test/server/health-keyword-monitor-contract.test.ts pins the `true` default and
-# the import's for_each and id.
-variable "adopt_app_health_monitor" {
-  type    = bool
-  default = true
-}
-
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string

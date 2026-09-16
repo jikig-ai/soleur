@@ -28,8 +28,10 @@ import {
 // keyword occurs in the served body exactly when the Supabase check succeeds;
 // /health answers HTTP 200 with Cache-Control: no-store in every database
 // state, through writeHealthResponse, which server/index.ts's /health branch
-// delegates to; and the gated import that adopts monitor 4226366 stays
-// reachable. Rationale: ADR-222 and the comment on betteruptime_monitor.app_health
+// delegates to; and no `import {}` addresses the monitor any more, the
+// adoption having completed in #8216 (ADR-222 H-F: a kept import aborts the
+// apply if the monitor is deleted vendor-side). Rationale: ADR-222 and the
+// comment on betteruptime_monitor.app_health
 // in apps/web-platform/infra/uptime-alerts.tf.
 //
 // The keyword is READ from the declaration (through the reconcile's own
@@ -56,11 +58,17 @@ const INFRA_DIR = path.join(APP_ROOT, "infra");
 const INDEX_PATH = path.join(APP_ROOT, "server", "index.ts");
 
 const HEALTH_URL = "https://app.soleur.ai/health";
-const ADOPTION_VARIABLE = "adopt_app_health_monitor";
 const ADOPTION_TARGET = "betteruptime_monitor.app_health";
 const ADOPTED_MONITOR_ID = '"4226366"';
-/** The import's for_each with all whitespace removed. `toset([])` in the truthy arm disables adoption. */
-const ADOPTION_FOR_EACH = `var.${ADOPTION_VARIABLE}?toset(["adopt"]):toset([])`;
+/**
+ * Rows 16 and 17 are a PAIR: 16 gates the block on a count that resolves to 1, 17 on one that
+ * resolves to 0. Both expect `alarm-conditional`, so if either variable's default flipped — or the
+ * variable were deleted, which resolves as unresolvable and ALSO yields `alarm-conditional` — the
+ * row would keep passing while silently testing the other half, or nothing. `requireBoolDefault`
+ * below makes that precondition fail loudly instead. Do not swap in a name without re-checking it.
+ */
+const TRUE_DEFAULT_VARIABLE = "adopt_seo_config_entrypoint";
+const FALSE_DEFAULT_VARIABLE = "betterstack_paid_tier";
 
 interface Violation {
   rule: string;
@@ -227,19 +235,15 @@ function checkDelegation(indexText: string, v: Violation[]): void {
   }
 }
 
-function checkAdoption(tfTexts: string[], v: Violation[]): void {
-  const gate = variablesOf(tfTexts).get(ADOPTION_VARIABLE);
-  if (gate?.kind !== "bool" || gate.value !== true) v.push({ rule: "adoption-default-not-true" });
-
+/**
+ * The adoption is DONE (#8216 imported 4226366; the read-back passed), so no `import {}` may
+ * address the monitor any more. One kept is not inert: a vendor-side deletion makes Terraform
+ * re-attempt the import against a missing object, which aborts the per-merge apply and the
+ * untargeted drift plan (ADR-222, H-F). Re-adding one is the regression this pins.
+ */
+function checkNoAdoptionImport(tfTexts: string[], v: Violation[]): void {
   const imports = importBlocks(tfTexts).filter((a) => a.get("to") === ADOPTION_TARGET);
-  if (imports.length !== 1) {
-    v.push({ rule: "adoption-import-missing" });
-    return;
-  }
-  if (imports[0].get("for_each")?.replace(/\s+/g, "") !== ADOPTION_FOR_EACH) {
-    v.push({ rule: "adoption-import-unreachable" });
-  }
-  if (imports[0].get("id") !== ADOPTED_MONITOR_ID) v.push({ rule: "adoption-import-misaddressed" });
+  if (imports.length > 0) v.push({ rule: "adoption-import-lingering" });
 }
 
 function checkHealthKeywordContract(input: ContractInput): Violation[] {
@@ -247,7 +251,7 @@ function checkHealthKeywordContract(input: ContractInput): Violation[] {
   checkMonitor(input, v);
   checkServed(input, v);
   checkDelegation(input.indexText, v);
-  checkAdoption(input.tfTexts, v);
+  checkNoAdoptionImport(input.tfTexts, v);
   return v;
 }
 
@@ -352,6 +356,19 @@ function row(id: string, mutation: string, expected: string[], mutate: (base: Co
 }
 
 const withTf = (edit: (tf: string[]) => string[]) => (b: ContractInput) => ({ ...b, tfTexts: edit(b.tfTexts) });
+
+/**
+ * Throw rather than let a count-gate row degenerate. A deleted variable resolves as unresolvable
+ * and yields the same `alarm-conditional` the row expects, so without this the row would pass
+ * while proving something else entirely.
+ */
+function requireBoolDefault(tf: string[], name: string, want: boolean): string[] {
+  const d = variablesOf(tf).get(name);
+  if (d?.kind !== "bool" || d.value !== want) {
+    throw new Error(`count-gate row needs var.${name} declared bool default ${want}, got ${JSON.stringify(d)}`);
+  }
+  return tf;
+}
 const withIndex = (find: string, repl: string) => (b: ContractInput) => ({ ...b, indexText: replaceOnce(b.indexText, find, repl) });
 
 const HEALTH_BRANCH_CALL = "writeHealthResponse(res, await buildHealthResponse());";
@@ -422,21 +439,16 @@ const ROWS: Row[] = [
     withTf((tf) => editAppHealth(tf, (b) => replaceOnce(b, "paused     = false", "paused     = true")))),
   row("15", "email = false with call/sms/push already false", ["alarm-silenced"],
     withTf((tf) => editAppHealth(tf, (b) => replaceOnce(b, "email = true", "email = false")))),
-  row("16", `count = var.${ADOPTION_VARIABLE} ? 1 : 0 (resolves to 1)`, ["alarm-conditional"],
-    withTf((tf) => editAppHealth(tf, (b) => `\n  count = var.${ADOPTION_VARIABLE} ? 1 : 0${b}`))),
-  row("17", "count gated on a false-default variable (the parser alone would drop the block)", ["alarm-conditional"],
-    withTf((tf) => editAppHealth(tf, (b) => `\n  count = var.betterstack_paid_tier ? 1 : 0${b}`))),
+  row("16", `count = var.${TRUE_DEFAULT_VARIABLE} ? 1 : 0 (resolves to 1)`, ["alarm-conditional"],
+    withTf((tf) => editAppHealth(requireBoolDefault(tf, TRUE_DEFAULT_VARIABLE, true), (b) => `\n  count = var.${TRUE_DEFAULT_VARIABLE} ? 1 : 0${b}`))),
+  row("17", `count gated on var.${FALSE_DEFAULT_VARIABLE} (false default — the parser alone would drop the block)`, ["alarm-conditional"],
+    withTf((tf) => editAppHealth(requireBoolDefault(tf, FALSE_DEFAULT_VARIABLE, false), (b) => `\n  count = var.${FALSE_DEFAULT_VARIABLE} ? 1 : 0${b}`))),
   row("18", "for_each on the monitor", ["alarm-conditional"],
     withTf((tf) => editAppHealth(tf, (b) => `\n  for_each = toset(["a"])${b}`))),
-  // Adoption gate.
-  row("19", `variable "${ADOPTION_VARIABLE}" defaults to false`, ["adoption-default-not-true"],
-    withTf((tf) => editFileWith(tf, `variable "${ADOPTION_VARIABLE}" {`, (t) =>
-      replaceOnce(t, `variable "${ADOPTION_VARIABLE}" {\n  type    = bool\n  default = true`, `variable "${ADOPTION_VARIABLE}" {\n  type    = bool\n  default = false`)))),
-  row("20", "the import's for_each is toset([])", ["adoption-import-unreachable"],
+  // The one-time adoption import stays gone (#7884).
+  row("19", "an import block addressing app_health is re-added", ["adoption-import-lingering"],
     withTf((tf) => editFileWith(tf, APP_HEALTH_HEADER, (t) =>
-      replaceOnce(t, `for_each = var.${ADOPTION_VARIABLE} ? toset(["adopt"]) : toset([])`, "for_each = toset([])")))),
-  row("21", "the import's id is another monitor", ["adoption-import-misaddressed"],
-    withTf((tf) => editFileWith(tf, APP_HEALTH_HEADER, (t) => replaceOnce(t, `id       = ${ADOPTED_MONITOR_ID}`, 'id       = "4226367"')))),
+      `import {\n  to = ${ADOPTION_TARGET}\n  id = ${ADOPTED_MONITOR_ID}\n}\n\n${t}`))),
   // Must-pass: the parser reads syntax, not text.
   row("H1", 'must-PASS: attributes reordered plus comment lines containing monitor_type = "status" and paused = true', [],
     withTf((tf) => editAppHealth(tf, (b) =>
@@ -461,9 +473,9 @@ describe("Guard 1 — health keyword monitor contract (#7884)", () => {
     expect(checkHealthKeywordContract(input)).toEqual([]);
   });
 
-  it("the matrix carries exactly rows 1-21 and must-pass rows H1-H2", () => {
+  it("the matrix carries exactly rows 1-19 and must-pass rows H1-H2", () => {
     expect(ROWS.map((r) => r.id)).toEqual([
-      ...Array.from({ length: 21 }, (_, i) => String(i + 1)),
+      ...Array.from({ length: 19 }, (_, i) => String(i + 1)),
       "H1", "H2",
     ]);
   });
