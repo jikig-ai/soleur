@@ -70,6 +70,12 @@ path alone cannot show that replay drift is visible.
 20. A combined PR-status probe (`git status`, remote SHA, PR JSON, and all checks) exceeded the tool context and was truncated before its result could be reviewed. **Prevention:** run bounded status, remote, PR, and check probes separately with explicit output caps.
 21. A qualification-record read used the live spec path after the plan had been archived, so the file lookup failed. **Prevention:** resolve archived plan artifacts with `rg --files` before reading a path copied from an earlier resume prompt.
 
+22. A broad CI-log filter matched routine PASS output and exceeded the tool output budget, truncating the diagnostics. **Prevention:** filter for suite summaries and failure annotations only, and cap each job's output independently.
+23. A migration-checklist read used a path that was not present in the archived spec. **Prevention:** list the archived spec files before opening a named artifact.
+24. A combined investigation command included full-length legal-register rows and routine CI output, truncating the useful findings. **Prevention:** select bounded line ranges or clip long Markdown rows before combining independent probes.
+25. The session-start worktree cleanup could not fast-forward the separate local `main` checkout because it has diverged from `origin/main`; cleanup itself completed and the active feature worktree was preserved. **Prevention:** treat cleanup's merge/pull warning as a separate main-checkout resync task, and use the already-fetched `origin/main` ref to resync feature worktrees without pulling from the bare root.
+26. A context patch expected a just-appended learning entry that had not reached the worktree, so the patch failed without changing the file. **Prevention:** re-read the exact anchor and apply one bounded patch, then verify `git status` and the edited lines.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-217-pluggable-web-agent-engine-boundary.md`
