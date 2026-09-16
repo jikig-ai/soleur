@@ -524,7 +524,7 @@ Two independent fixes are required for the guard to act under Devin, and
 neither alone is sufficient:
 
 1. **Dispatch** — the plugin matcher must cover `exec` (the `^(Bash|exec)$`
-   widening on #8155).
+   widening on #8155, since merged).
 2. **Body gate** — the hook's own `tool_name == "Bash"` check must not
    self-exclude `exec`; #8214 normalizes it to `HOOK_TOOL_KIND`
    (`exec` → `Bash` via `lib/hook-tool-kind.sh`), so the body semantics are

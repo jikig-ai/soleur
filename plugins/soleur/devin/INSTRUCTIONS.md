@@ -202,9 +202,9 @@ Installation does not grant hook trust. Measured hook semantics under Devin
   `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)
   are dead — loaded but never dispatched.
 - **Plugin `Stop` hooks fire** (empty matcher).
-- **The bundled credential guard is conditional**: its plugin `Bash` matcher
-  is dead under Devin until the `^(Bash|exec)$` widening ships (#8155); its
-  in-body tool gate is kind-normalized so it acts on `exec` once dispatched.
+- **The bundled credential guard is bound**: plugin `hooks.json` binds
+  `^(Bash|exec)$` (#8155), and its in-body tool gate is kind-normalized so it
+  acts on `exec`; end-to-end coverage claim awaits the post-merge runtime trace.
 - **SessionStart source matchers are dead** — `startup`, `resume`, `clear`,
   `compact` never fire; only the empty matcher `""` does.
 - **Project hooks need Devin-side registration**: this repository binds its

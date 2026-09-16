@@ -45,8 +45,9 @@ file's own semantics ("this registry is Claude-canonical").
    `^skill$`). Permissions are ported to Devin syntax
    (`Bash(prefix:*)` → `Exec(prefix)`; `Read(...)` carried verbatim).
 3. `plugins/soleur/hooks/hooks.json` stays the plugin-carrier registry;
-   `browser-snapshot-credential-guard.sh` is `covered-by-plugin` pending
-   #8155's `^(Bash|exec)$` widening plus a runtime trace (draft-held).
+   `browser-snapshot-credential-guard.sh` is `covered-by-plugin` — #8155's
+   `^(Bash|exec)$` widening merged; end-to-end claim awaits the post-merge
+   runtime trace (AC12).
 4. In-body `tool_name` gates consume a normalized kind: `hook-input.sh`
    exports `HOOK_TOOL_KIND` via `lib/hook-tool-kind.sh`
    (`exec`→`Bash`, `write`→`Write`, `edit`→`Edit`, `ask_user_question`→
