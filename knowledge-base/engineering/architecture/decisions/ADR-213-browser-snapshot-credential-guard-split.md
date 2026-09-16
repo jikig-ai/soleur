@@ -520,15 +520,17 @@ the window during which `plugins/soleur/devin/INSTRUCTIONS.md` asserted the
 guard was supported on Devin, the control was absent there — an unstated
 gap, which is the failure mode rather than the gap itself.
 
-Two independent fixes are required for the guard to act under Devin, and
-neither alone is sufficient:
-
-1. **Dispatch** — the plugin matcher must cover `exec` (the `^(Bash|exec)$`
-   widening on #8155, since merged).
-2. **Body gate** — the hook's own `tool_name == "Bash"` check must not
-   self-exclude `exec`; #8214 normalizes it to `HOOK_TOOL_KIND`
-   (`exec` → `Bash` via `lib/hook-tool-kind.sh`), so the body semantics are
-   unchanged on Claude and correct on Devin.
+The guard acts under Devin because #8155 shipped **both halves** in one
+commit (merged 2026-09-16): the plugin matcher `Bash` → `^(Bash|exec)$` AND
+the in-body gate widened to admit `exec` (`tool_name == "Bash" || "exec"`).
+Before #8155 the body self-gated `tool_name == "Bash"` — the
+fire-then-no-op defect class — so a matcher-only widening would have fired
+the hook and no-opped; at this change's base the guard already acts on
+`exec` envelopes. #8214's contribution is replacing the ad-hoc disjunction
+with the canonical `HOOK_TOOL_KIND` map (`exec` → `Bash` via
+`lib/hook-tool-kind.sh`) — a conformance requirement of this change's own
+parity contract (`devin-matcher-parity.test.sh` T9), not a precondition
+for this guard's reach.
 
 Until a post-merge runtime trace confirms both halves, Devin coverage is
 claimed for the mechanism only (`covered-by-plugin` in

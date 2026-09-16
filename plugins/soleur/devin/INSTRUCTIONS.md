@@ -203,8 +203,10 @@ Installation does not grant hook trust. Measured hook semantics under Devin
   are dead — loaded but never dispatched.
 - **Plugin `Stop` hooks fire** (empty matcher).
 - **The bundled credential guard is bound**: plugin `hooks.json` binds
-  `^(Bash|exec)$` (#8155), and its in-body tool gate is kind-normalized so it
-  acts on `exec`; end-to-end coverage claim awaits the post-merge runtime trace.
+  `^(Bash|exec)$` (#8155), which also widened its in-body tool gate to admit
+  `exec`; this change normalizes that gate onto the canonical
+  `HOOK_TOOL_KIND` map. End-to-end coverage claim awaits the post-merge
+  runtime trace.
 - **SessionStart source matchers are dead** — `startup`, `resume`, `clear`,
   `compact` never fire; only the empty matcher `""` does.
 - **`devin-session-start.sh` is bound in `hooks.json` (`""`), not `.devin`** —
