@@ -44,6 +44,17 @@ export interface BindRunInput {
   createdBy: string;
 }
 
+function lifecycleMetadata(event: EngineEvent): Record<string, string> {
+  if (event.payload.type === "status") {
+    return {
+      type: "lifecycle",
+      source_type: "status",
+      status: event.payload.status,
+    };
+  }
+  return { type: "lifecycle", source_type: event.payload.type };
+}
+
 export class AgentEnginePersistenceRepository {
   constructor(private readonly client: PersistenceClient) {}
 
@@ -106,9 +117,9 @@ export class AgentEnginePersistenceRepository {
   async appendEvent(event: EngineEvent): Promise<unknown> {
     const result = await this.client.rpc("append_agent_engine_event", {
       p_run_id: event.runId,
-      p_event_id: event.eventId,
+      p_event_id: `engine-event-${event.sequence}`,
       p_sequence: event.sequence,
-      p_payload: event.payload,
+      p_payload: lifecycleMetadata(event),
     });
     if (result.error) throw new Error(`engine event append failed: ${result.error.message}`);
     return result.data;

@@ -247,7 +247,7 @@ artifact names:
 
 ```text
 git fetch origin main
-architecture ADRs on origin/main: latest 216 → ADR-217
+Planning selected provisional ADR-217 when origin/main's latest was ADR-216; after main advanced, the implemented decision was assigned ADR-223.
 Supabase migrations on origin/main: latest 137 → 138_agent_engine_binding
 ```
 
@@ -441,7 +441,7 @@ evidence as implementation proceeds.
 - Workspace settings explain default scope, existing-conversation continuity,
   routine-run binding, both Codex auth modes, missing credentials, and capability
   gaps; the committed `.pen` wireframe exists and matches the shipped flow.
-- ADR-217, `model.c4`, and the regenerated `model.likec4.json` describe the
+- ADR-223, `model.c4`, and the regenerated `model.likec4.json` describe the
   same registry, adapter, persistence, credential, remote-execution, and
   observability boundaries.
 
@@ -501,7 +501,7 @@ evidence as implementation proceeds.
 - `apps/web-platform/test/codex-agent-adapter.test.ts`
 - `apps/web-platform/test/agent-engine-security-boundary.test.ts`
 - `apps/web-platform/test/agent-engine-dsar.test.ts`
-- `knowledge-base/engineering/architecture/decisions/ADR-217-pluggable-web-agent-runtime.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-223-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/agent-engine-consumer-inventory.md`
 - `knowledge-base/product/design/agent-engine-selection/implementation-brief.md`
 - `knowledge-base/product/design/agent-engine-selection/workspace-default-engine.pen`

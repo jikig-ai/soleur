@@ -6,7 +6,7 @@ issue: none
 supersedes: null
 ---
 
-# ADR-217: Pluggable web agent engines bind execution before dispatch
+# ADR-223: Pluggable web agent engines bind execution before dispatch
 
 ## Context
 

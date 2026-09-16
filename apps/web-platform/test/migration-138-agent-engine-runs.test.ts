@@ -30,6 +30,13 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/event key already maps to a different event/);
   });
 
+  it("rejects direct RPC payloads outside the content-free lifecycle envelope", () => {
+    expect(code).toMatch(/IF p_event_id IS DISTINCT FROM \('engine-event-' \|\| p_sequence::text\) THEN/);
+    expect(code).toMatch(/\(p_payload - 'type' - 'source_type' - 'status'\) <> '\{\}'::jsonb/);
+    expect(code).toMatch(/p_payload->>'source_type' NOT IN \('status', 'text', 'progress', 'approval', 'artifact', 'usage', 'error'\)/);
+    expect(code).toMatch(/p_payload->>'status' NOT IN \('queued', 'running', 'waiting', 'cancel_requested', 'completed', 'failed', 'cancelled'\)/);
+  });
+
   it("pins the owner RPC search path and qualifies public relations", () => {
     expect(code).toMatch(/SECURITY DEFINER[\s\S]*SET search_path = public, pg_temp/);
     expect(code).toMatch(/public\.is_workspace_owner/);

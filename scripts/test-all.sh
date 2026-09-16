@@ -2338,6 +2338,9 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
+  run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
+  run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
@@ -2361,6 +2364,12 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
+  # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
+  # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
+  # is silent AND green while the allow-list it pins decides whether the #8181
+  # NOTICE binding actually gates merges.
+  run_suite "tests/scripts/vendor-pin-gate-verdict" bash tests/scripts/test-vendor-pin-gate-verdict.sh
   # #6589 — the Sentry full-root delete path. These three gate the contract that
   # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
   # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed

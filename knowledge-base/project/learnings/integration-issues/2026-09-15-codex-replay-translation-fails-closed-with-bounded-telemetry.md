@@ -76,9 +76,37 @@ path alone cannot show that replay drift is visible.
 25. The session-start worktree cleanup could not fast-forward the separate local `main` checkout because it has diverged from `origin/main`; cleanup itself completed and the active feature worktree was preserved. **Prevention:** treat cleanup's merge/pull warning as a separate main-checkout resync task, and use the already-fetched `origin/main` ref to resync feature worktrees without pulling from the bare root.
 26. A context patch expected a just-appended learning entry that had not reached the worktree, so the patch failed without changing the file. **Prevention:** re-read the exact anchor and apply one bounded patch, then verify `git status` and the edited lines.
 
+27. A GitHub search API probe omitted the leading slash, so `gh api` treated `/search/issues` as a repository-relative route and returned 404. **Prevention:** prefix global GitHub REST routes such as `/search/issues` with `/`.
+
+28. A legal-record inspection printed full-length register rows and exceeded the tool output budget, truncating useful context. **Prevention:** select narrow line windows and clip content in the reader itself.
+
+29. The default login shell emitted repeated `Failed to create stream fd: Operation not permitted` diagnostics even though commands completed; a non-login shell removed the noise. **Prevention:** use the non-login shell for bounded worktree probes when login startup emits stream errors.
+
+30. The new migration guard test's regex did not account for the parentheses around the JSONB key-removal expression, so the first focused run failed at the assertion rather than the SQL guard. **Prevention:** match the exact reviewed SQL expression, then rerun the focused migration suite before proceeding.
+
+31. Combined GDPR-gate and legal-policy reads exceeded the output budget, truncating the relevant gate details. **Prevention:** inspect gate and policy sections in separate, narrowly bounded reads.
+
+32. The first legal mirror-ratchet run found that the canonical DPD amendment had not been added to its published mirror. **Prevention:** verify all six canonical/mirror amendment-history entries explicitly, then run the mirror ratchet.
+
+33. A repeated patch block targeted the same GDPR amendment line twice, so apply_patch rejected the patch atomically. **Prevention:** make one file-specific hunk per target and inspect the exact source line before retrying.
+
+34. The C4 freshness test needed the uncached pinned `likec4` CLI and failed with `EAI_AGAIN` under restricted network access; the approved network rerun passed. **Prevention:** request network access when a required pinned tool is absent from the local cache.
+
+35. The C4 producer test could not create its fixture under sandbox-read-only `/var/tmp`; the approved rerun passed 14/14. **Prevention:** rerun tests that require system temporary paths with the needed filesystem access.
+
+36. A C4 test invocation yielded without its session identifier being included in the forwarded output, so the first poll used a guessed ID and failed. **Prevention:** serialize the complete command result, including `session_id`, whenever execution can yield.
+
+37. Staging the final learning update was denied because this worktree's shared Git index is under the read-only `.git` path. **Prevention:** request the required Git-metadata write access before staging or committing from this managed worktree.
+
+31. A combined GDPR-gate implementation and legal-policy read exceeded the output budget and truncated the gate details. **Prevention:** inspect the gate implementation and policy sections in separate, bounded reads.
+
+32. The first legal mirror-ratchet run found that the canonical DPD amendment had not been added to its published mirror. **Prevention:** verify all six canonical/mirror amendment-history entries explicitly, then run the mirror ratchet.
+
+33. A repeated patch block targeted the same legal-history line twice, so apply_patch rejected the patch atomically. **Prevention:** make one file-specific hunk per target and inspect the exact source line before retrying.
+
 ## Related
 
-- `knowledge-base/engineering/architecture/decisions/ADR-217-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-223-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/codex-qualification-record.md`
 
 ## Tags

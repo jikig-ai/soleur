@@ -87,12 +87,14 @@ interface DiscoveredHeartbeat {
 
 /** Extract every `betteruptime_heartbeat` block (brace-matched) with its declared `paused`. */
 function parseHeartbeats(stripped: string, file: string): DiscoveredHeartbeat[] {
+  // Labels may be quoted or bare, and may contain hyphens (mirrors heartbeat-live-reconcile.ts's
+  // resourceBlocks) — a narrower header silently skips a real declaration.
   const header =
-    /resource\s+"betteruptime_heartbeat"\s+"([A-Za-z0-9_]+)"\s*\{/g;
+    /resource\s+(?:"betteruptime_heartbeat"|betteruptime_heartbeat(?![A-Za-z0-9_-]))\s+(?:"([A-Za-z_][A-Za-z0-9_-]*)"|([A-Za-z_][A-Za-z0-9_-]*))\s*\{/g;
   const out: DiscoveredHeartbeat[] = [];
   let m: RegExpExecArray | null;
   while ((m = header.exec(stripped)) !== null) {
-    const name = m[1];
+    const name = m[1] ?? m[2];
     const openBrace = header.lastIndex - 1;
     let depth = 0;
     let end = -1;

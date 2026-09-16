@@ -86,7 +86,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] New-run composition slice: bind-first dispatch composes persistence and adapter invocation without client engine selection (3 dispatch tests green).
   - [x] Routine chokepoint slice: `runRoutine` binds trusted workspace/routine identity before Inngest dispatch and fails closed on persistence errors (9 routine tests green).
 - [ ] Write ADR and update/regenerate C4 for implemented boundaries.
-  - [x] ADR-217 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence.
+  - [x] ADR-223 records persisted binding authority, adapter lifecycle, registry qualification, and the remaining service-identity consequence.
   - [x] C4 slice: canonical LikeC4 source and regenerated artifact model registry, binding/event ledger, and Claude adapter boundaries.
   - [x] C4 verification slice: freshness gate passed 3/3 and LikeC4 version-pin suite passed 2/2.
   - [x] Focused regression slice: the combined engine/settings/routine suite passes 82/82 with typecheck green after widening selectable engine state.
@@ -181,6 +181,7 @@ routine run binds the current default once; retries retain that binding.
 
 - [ ] RED-07: DSAR/export/delete, provider error sanitization, egress, replay/stale-event protection, and observability.
 - [ ] GREEN-07 (blockedBy RED-07): implement protections and wire production paths.
+- [x] Event-ledger privacy slice: persistence stores sequence-derived event IDs and only fixed lifecycle category/allowlisted status metadata; the append RPC rejects extra keys; legal notices, mirrors, and Article 30 register describe the bounded event payload; focused persistence/migration tests pass 20/20.
 - [ ] Refresh GDPR evidence, run prescribed GDPR gate, and obtain vendor/CLO disposition for both auth modes.
 - [ ] Synthetic-only qualification, feature flag, bounded live probes, QA and screenshots; customer content remains disabled without evidence.
 - [ ] Run appropriate suites/lint/typecheck/build after all GREEN tasks.

@@ -44,6 +44,15 @@ export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [
 // running CI on knowledge-base-only diffs. Consolidated from 5 byte-identical
 // per-cron copies (weekly-analytics, compound-promote, content-publisher,
 // content-vendor-drift, rule-prune) — verified identical at #5111 deepen time.
+//
+// #8203 — `vendor-pin-required` is DELIBERATELY ABSENT from this list. The
+// content-vendor-drift cron is the one synthetic consumer whose PRs DO touch
+// the guarded surface (plugins/soleur/skills/** vendored NOTICE bundles); it
+// pushes with an App token that triggers real CI (#8166), so the aggregator
+// gate is EARNED by a real verify-upstream-blobs run. Adding the name here
+// would fabricate the #8181 binding result on exactly the re-vendor diffs
+// the gate exists to protect. See the two-arm note in
+// scripts/required-checks.txt.
 export const SYNTHETIC_CHECK_NAMES = [
   "test",
   "dependency-review",

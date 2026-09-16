@@ -722,14 +722,67 @@ finds its tracking issue by the `merge-queue-revisit` **label** (#5840 today),
 not by number — the 2026-06-30 text's "pings issue #5840" describes the current
 resolution of that label, not a hardcoded id.
 
-**Producer / `merge_group` inventory as of 2026-09-14.** No trigger work is
-outstanding. Every producer of the 22 `@15368` contexts in ruleset 14145388 —
+**Producer / `merge_group` inventory as of 2026-09-15.** No trigger work is
+outstanding. Every producer of the 23 `@15368` contexts in ruleset 14145388 —
 `ci.yml`, `pr-quality-guards.yml`, `secret-scan.yml`, `dependency-review.yml`,
 `legal-doc-cross-document-gate.yml`, `tenant-integration.yml`,
-`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml` — carries
-`merge_group:` (PR-1, #5784). The CLA ruleset's two producers (`cla.yml`,
+`apply-sentry-infra.yml`, `skill-security-scan-pr-trailer.yml`,
+`vendor-pin-verify.yml` — carries `merge_group:` (PR-1, #5784; the ninth
+producer added by #8203, whose always-run aggregator is the required
+context). The CLA ruleset's two producers (`cla.yml`,
 `cla-evidence.yml`) do not, by design — the removed
 `merge-queue-cla-synthetics.yml` covered them and is on the restore list above.
 `CodeQL@57789` cannot. `infra/github/ruleset-ci-required.tf` still carries the
 `merge_queue` block deliberately absent under its "Merge queue REVERTED"
 comment; nothing in #8149 touches the ruleset.
+
+## Amendment — 2026-09-15 (#8203): 23 → 24, third always-run aggregator
+
+`required_status_checks` widened 23 → 24 by adding `vendor-pin-required`.
+The current-state grep
+(`grep -c '^      required_check {' infra/github/ruleset-ci-required.tf`)
+now returns `24`; T-rsc-7's literal and the canonical JSON moved in lockstep.
+
+**Third instance of the #5585 always-run aggregator pattern** (after
+`sentry-destroy-required`, #6589).
+`.github/workflows/vendor-pin-verify.yml` enforced the #8181
+path+commit+blob NOTICE binding via a `paths:`-filtered `verify-upstream-blobs`
+job whose context was never registered — so it could go red and the PR still
+merged (#8203's title bug). The workflow now always triggers (no `on.paths`);
+a cheap `detect-changes` job emits `vendor=true|false`; the
+`verify-upstream-blobs` job is gated on that output; and the always-run
+`vendor-pin-required` job (`if: always()`,
+`scripts/vendor-pin-gate-verdict.sh`, unit-tested) is the registered required
+context. `merge_group` is handled before the generic non-PR arm and emits
+`vendor=false`, so the queue never re-runs upstream-network verification and
+never leaves the context pending.
+
+**Schema-keyed surface ⇒ literal per-bundle anchors.** The verified surface
+is *schema-keyed*: a bundle is a skill NOTICE whose frontmatter parses and
+declares `upstream` + `pinned-commit`. `detect-changes` anchors the literal
+per-bundle paths (`plugins/soleur/skills/{gdpr-gate,legal-generate}/NOTICE`
+plus `references/`), the parser and integrity script, the workflow file, and the
+verdict pair — NOT a `plugins/soleur/skills/*/NOTICE` wildcard, because
+`vendor-bundle-coverage.test.sh` TS4 greps the literal prefixes and because
+#3492 warns that translating `paths:` globs into regexes silently
+under-matches. A NEW bundle enrollment must extend the anchor set in the
+same PR.
+
+**Earned vs fabricated across BOTH synthetic paths.** The #5585 amendment
+recorded a single synthetic path (the composite action's `CHECK_NAMES`).
+Two distinct fabricators now exist and their dispositions differ:
+
+1. *Composite action* (`bot-pr-with-synthetic-checks/action.yml`): derives
+   `CHECK_NAMES` from `scripts/required-checks.txt`, so it WILL post a
+   synthetic `vendor-pin-required` green on its PRs — sound by
+   **unreachability** (`ALLOWED_PATHS` ∩ `plugins/soleur/skills/**` = ∅),
+   the `rule-body-lint`/`sentry-destroy-required` shape.
+2. *Inngest* `SYNTHETIC_CHECK_NAMES` (`_cron-safe-commit.ts`): deliberately
+   does NOT contain `vendor-pin-required`. The content-vendor-drift cron is
+   the one synthetic consumer whose PRs touch the vendored surface; it
+   pushes with an App token that triggers real CI (#8166), so the check is
+   **earned** by a real `verify-upstream-blobs` run. Adding the name would
+   fabricate the binding result on exactly the diffs it gates.
+
+The two-arm guard note lives in `scripts/required-checks.txt` beside the
+entry; this paragraph is the decision record.

@@ -28,6 +28,8 @@ generated-date: 2026-02-20
 
 **Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
+**Amended:** September 16, 2026 — The migration 138 agent-engine event ledger is limited to content-free lifecycle metadata and sequence-derived identifiers; provider event IDs, generated text, prompts, descriptions, artifact details, usage payloads, credentials, and repository content are not persisted in event payloads. The Article 30 register now records the engine settings and run lifecycle data under the existing Web Platform processing activity. Codex customer-content execution remains disabled pending auth-mode-specific vendor, transfer, retention, deletion, and CLO qualification. Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged.
+
 ---
 
 ## 1. Introduction
@@ -352,6 +354,8 @@ user; account erasure applies the migration 138 anonymisation/cascade path. Code
 for customer content until auth-mode-specific vendor, transfer, retention, erasure, and CLO evidence
 is reviewed, so this release creates no Codex data transfer. This amends the existing Web Platform
 processing activity and adds no sub-processor.
+
+For migration 138 event rows, the payload contains only the source event category and, for status events, an allowlisted lifecycle status; the database rejects additional payload fields and provider-supplied event identifiers. The run and event records remain in the existing Article 30 Processing Activity 2 and follow its export and erasure mechanisms.
 
 ## 4. Categories of Personal Data
 

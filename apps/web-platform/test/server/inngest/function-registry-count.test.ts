@@ -112,7 +112,8 @@ const NON_INNGEST_MONITORS = new Set([
   // the monitor is real and heartbeated, it just maps to no Inngest slug.
   "scheduled-machinery-drain",
   // #6549 item 2: GHA-fired (scheduled-terraform-drift.yml → heartbeat-live-reconcile
-  // job) — the source-vs-live Better Stack heartbeat reconcile. Its final
+  // job) — the source-vs-live Better Stack heartbeat reconcile (since #7884 it also
+  // reconciles live monitors; the slug keeps its original name). Its final
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
   // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
   "scheduled-heartbeat-reconcile",

@@ -79,15 +79,39 @@ describe("AgentEnginePersistenceRepository", () => {
     expect(supabase.rpc.mock.calls[0][1]).not.toHaveProperty("p_engine_id");
   });
 
-  it("appends events idempotently through the unique event key", async () => {
+  it("stores bounded lifecycle metadata instead of text payloads or provider event IDs", async () => {
     const supabase = client();
     const repo = new AgentEnginePersistenceRepository(supabase);
-    await repo.appendEvent({ runId: "run-1", eventId: "evt-1", sequence: 1, payload: { type: "text", text: "hi" } });
+    await repo.appendEvent({
+      runId: "run-1",
+      eventId: "codex:item:native-42",
+      sequence: 1,
+      payload: { type: "text", text: "private repository contents" },
+    });
     expect(supabase.rpc).toHaveBeenCalledWith("append_agent_engine_event", {
       p_run_id: "run-1",
-      p_event_id: "evt-1",
+      p_event_id: "engine-event-1",
       p_sequence: 1,
-      p_payload: { type: "text", text: "hi" },
+      p_payload: { type: "lifecycle", source_type: "text" },
+    });
+    expect(JSON.stringify(supabase.rpc.mock.calls[0][1])).not.toContain("private repository contents");
+    expect(JSON.stringify(supabase.rpc.mock.calls[0][1])).not.toContain("native-42");
+  });
+
+  it("retains only the allowlisted status value in lifecycle metadata", async () => {
+    const supabase = client();
+    const repo = new AgentEnginePersistenceRepository(supabase);
+    await repo.appendEvent({
+      runId: "run-1",
+      eventId: "provider-status-id",
+      sequence: 2,
+      payload: { type: "status", status: "running" },
+    });
+    expect(supabase.rpc).toHaveBeenCalledWith("append_agent_engine_event", {
+      p_run_id: "run-1",
+      p_event_id: "engine-event-2",
+      p_sequence: 2,
+      p_payload: { type: "lifecycle", source_type: "status", status: "running" },
     });
   });
 

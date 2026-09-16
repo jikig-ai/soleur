@@ -1095,7 +1095,9 @@ resource "sentry_cron_monitor" "scheduled_supabase_advisor_scan" {
 }
 
 # #6549 item 2 — liveness for the source-vs-live Better Stack heartbeat reconcile job
-# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). A GHA-workflow-fired
+# (scheduled-terraform-drift.yml → heartbeat-live-reconcile). Since #7884 (ADR-222) the
+# same job also reconciles live monitors and reports unmanaged objects; the slug keeps
+# its original name. A GHA-workflow-fired
 # heartbeat (no Inngest counterpart); slug mirrors the workflow's `sentry-heartbeat`
 # check-in, so sentry-monitor-iac-parity.test.ts's code→IaC GHA-slug guard is satisfied.
 # checkin_margin_minutes=60 tracks the Inngest-dispatch cadence (≤2-3 min jitter), NOT

@@ -26,6 +26,8 @@ generated-date: 2026-02-20
 
 **Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
+**Amended:** September 16, 2026 — Web Platform agent-engine event records are limited to content-free lifecycle metadata: event category and allowlisted status where applicable, sequence, timestamps, and a sequence-derived event identifier. Provider event IDs, output text, prompts, tool or approval descriptions, artifact details, usage payloads, credentials, and repository content are excluded from the event ledger; generated conversation content remains in the existing conversation and routine processing paths. Account export and erasure follow the migration 138 scope described below. Codex customer-content execution remains disabled pending auth-mode-specific vendor, transfer, retention, deletion, and CLO qualification. Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged.
+
 ## 1. Introduction
 
 This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI) providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").

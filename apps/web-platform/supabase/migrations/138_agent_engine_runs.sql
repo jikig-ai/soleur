@@ -73,8 +73,11 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.workspace_engine_setting
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.agent_engine_runs FROM anon, authenticated;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE public.agent_engine_events FROM anon, authenticated;
 
--- Idempotent event append: an exact retry returns the existing row, while
--- reusing an event key with a different sequence or payload is rejected.
+-- Persist lifecycle metadata only. Text, prompts, progress descriptions,
+-- approval descriptions, artifacts, provider IDs, and usage payloads stay out
+-- of this ledger; outputs use the existing conversation/routine data paths.
+-- An exact retry returns the existing row, while reusing a sequence with a
+-- different metadata payload is rejected.
 CREATE OR REPLACE FUNCTION public.append_agent_engine_event(
   p_run_id uuid,
   p_event_id text,
@@ -92,8 +95,23 @@ BEGIN
   IF p_sequence IS NULL OR p_sequence < 1 THEN
     RAISE EXCEPTION 'event sequence is invalid' USING ERRCODE = '22023';
   END IF;
+  IF p_event_id IS DISTINCT FROM ('engine-event-' || p_sequence::text) THEN
+    RAISE EXCEPTION 'event id must be sequence-derived' USING ERRCODE = '22023';
+  END IF;
   IF p_payload IS NULL THEN
     RAISE EXCEPTION 'event payload is required' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_typeof(p_payload) IS DISTINCT FROM 'object'
+     OR p_payload->>'type' IS DISTINCT FROM 'lifecycle'
+     OR p_payload->>'source_type' IS NULL
+     OR p_payload->>'source_type' NOT IN ('status', 'text', 'progress', 'approval', 'artifact', 'usage', 'error')
+     OR (p_payload - 'type' - 'source_type' - 'status') <> '{}'::jsonb
+     OR (p_payload->>'source_type' = 'status' AND (
+       p_payload->>'status' IS NULL
+       OR p_payload->>'status' NOT IN ('queued', 'running', 'waiting', 'cancel_requested', 'completed', 'failed', 'cancelled')
+     ))
+     OR (p_payload->>'source_type' <> 'status' AND p_payload ? 'status') THEN
+    RAISE EXCEPTION 'event payload is not bounded lifecycle metadata' USING ERRCODE = '22023';
   END IF;
   IF auth.role() <> 'service_role' AND NOT EXISTS (
     SELECT 1 FROM public.agent_engine_runs r
