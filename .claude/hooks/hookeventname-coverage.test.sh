@@ -25,7 +25,8 @@ set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
-for h in "$HOOK_DIR"/*.sh; do
+for h in "$HOOK_DIR"/*.sh "$HOOK_DIR"/*.py; do
+  [[ -f "$h" ]] || continue
   base="$(basename "$h")"
   # Skip test scripts themselves.
   [[ "$base" == *.test.sh ]] && continue

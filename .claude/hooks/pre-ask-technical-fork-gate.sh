@@ -63,7 +63,7 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-[[ "$HOOK_TOOL_NAME" == "AskUserQuestion" ]] || exit 0
+[[ "$HOOK_TOOL_KIND" == "AskUserQuestion" ]] || exit 0
 
 if [[ "${SOLEUR_ACK_TECHNICAL_FORK:-}" == "1" ]]; then
   jq -n '{systemMessage:"pre-ask-technical-fork-gate: disarmed by SOLEUR_ACK_TECHNICAL_FORK=1"}' 2>/dev/null

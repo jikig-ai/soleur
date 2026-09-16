@@ -85,6 +85,16 @@ PAYLOAD_2=$(jq -c -n '{
 }')
 assert_deny "case-2 issue.title sink in run block" "$PAYLOAD_2" "github.event.issue.title"
 
+# ---------- Case 2b: Devin wire name `edit` reaches the gate (kind map, #8205) ----------
+PAYLOAD_2B=$(jq -c -n '{
+  tool_name: "edit",
+  tool_input: {
+    file_path: ".github/workflows/ci.yml",
+    new_string: "jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo \"${{ github.event.issue.title }}\"\n"
+  }
+}')
+assert_deny "case-2b Devin edit sink in run block" "$PAYLOAD_2B" "github.event.issue.title"
+
 # ---------- Case 3: Whitespace-only edit → allow ----------
 PAYLOAD_3=$(jq -c -n '{
   tool_name: "Edit",

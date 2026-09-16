@@ -7,7 +7,7 @@ current Devin session.
 
 ## Paths and entry points
 
-The installed plugin root is available via `${CLAUDE_PLUGIN_ROOT}` (Devin inherits this from Claude plugin format compatibility).
+The installed plugin root is available via `${CLAUDE_PLUGIN_ROOT}` (Devin inherits this from Claude plugin format compatibility). If the variable is unset in the session, resolve the installed root from the Devin plugin cache — `~/.local/share/devin/cli/plugins/cache/<source-slug>/0.0.0-unversioned` — and verify it by checking `.claude-plugin/plugin.json` carries `"name": "soleur"`.
 Resolve Soleur's `plugins/soleur/...` references against that root; resolve project
 files and `knowledge-base/` against the user's current project or worktree.
 Never search another harness's cache for the plugin. In shell examples,
@@ -195,9 +195,44 @@ claim that an independent review occurred when it did not.
 ## Hooks and completion
 
 Review and trust the plugin hooks through `/hooks` before relying on them.
-Installation does not grant hook trust. Devin supports the bundled Bash
-credential guard and Stop hooks, but hook execution does not prove that every
-Claude-only workflow primitive has an equivalent.
+Installation does not grant hook trust. Measured hook semantics under Devin
+(envelope capture: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+
+- **Wire names are lowercase**: `exec`, `write`, `edit`, `ask_user_question`,
+  `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)
+  are dead — loaded but never dispatched.
+- **Plugin `Stop` hooks fire** (empty matcher).
+- **The bundled credential guard is bound**: plugin `hooks.json` binds
+  `^(Bash|exec)$` (#8155), which also widened its in-body tool gate to admit
+  `exec`; this change normalizes that gate onto the canonical
+  `HOOK_TOOL_KIND` map. End-to-end coverage claim awaits the post-merge
+  runtime trace.
+- **SessionStart source matchers are dead** — `startup`, `resume`, `clear`,
+  `compact` never fire; only the empty matcher `""` does.
+- **`devin-session-start.sh` is bound in `hooks.json` (`""`), not `.devin`** —
+  only plugin dispatch exports `CLAUDE_PLUGIN_ROOT`, which its proof-of-local
+  sentinel and `cloud-detect.sh`'s `local` classification require. A `.devin`
+  binding would write `hook_source:"repo"` and classify every local session
+  `not-local:non-plugin-source`.
+- **Project hooks need Devin-side registration**: this repository binds its
+  hook set in `.devin/config.json` with anchored matchers; the authoritative
+  per-hook dispositions live in `.claude/hooks/devin-dispositions.tsv`.
+- **`.claude` permissions are not imported** — `.devin/config.json`
+  `permissions` uses `Exec(prefix)`/`Read(glob)`/`Write(glob)`/`Fetch(pattern)`;
+  this repository ports its allow/deny rules there. The deny rules are measured
+  live under `smart` mode (`exec git push` and `rm -rf` were rejected through a
+  `permissionDecision:"deny"` chain, not the engine's own path check); whether
+  `allow`/`deny` gate under permissive modes is unprobed. `Read()` patterns
+  rooted at `~` are registered but tilde-expansion semantics are UNMEASURED;
+  `Exec()` string-match semantics (exact vs prefix) are UNMEASURED.
+- **The tool envelope omits `.cwd`** — hooks resolve the working directory via
+  `DEVIN_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → `$PWD` (measured: hook processes
+  run with PWD at the project root and both env vars exported).
+- **Hook response contracts**: `permissionDecision:"deny"` blocks and
+  `updatedInput` rewrites, both measured live. `"ask"` and `"defer"` are
+  UNVERIFIED under Devin — envelope-capture §6 records them as registered but
+  never driven; a hook emitting either may be ignored or misrouted. The
+  `PermissionRequest` hook event itself is UNVERIFIED.
 
 Keep long-running workflows bounded by their iteration and cost gates.
 Soleur's subscription and model usage are separate charges; substitute

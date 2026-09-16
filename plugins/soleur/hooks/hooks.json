@@ -19,7 +19,12 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/codex-session-start.sh\""
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/devin-session-start.sh\""
