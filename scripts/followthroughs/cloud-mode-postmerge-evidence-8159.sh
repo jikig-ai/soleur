@@ -39,18 +39,35 @@
 #
 # RETIREMENT. When #8159 closes, this file and its companions go with it:
 #   - the soleur:followthrough directive on #8159's body (delete the
-#     <!-- soleur:followthrough script=cloud-mode-postmerge-evidence-8159.sh -->
+#     <!-- soleur:followthrough script=cloud-mode-postmerge-evidence-8159.sh earliest=… -->
 #     marker line, or it dangles against a missing script)
 #   - this file (delete)
+#   - scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh (delete)
+#   - the run_suite line for that test in scripts/test-all.sh (drop)
 
 set -uo pipefail
+
+if [[ $# -ne 0 ]]; then
+  printf 'usage: %s\n' "${0##*/}" >&2
+  exit 64
+fi
+
+# A missing binary is not an empty evidence block — a measurement that cannot
+# be made must report CANNOT ESTABLISH (3), not NOT YET (2): reporting "nothing
+# qualifies" for "could not look" is the inversion the 2-vs-3 split exists for.
+for bin in awk grep; do
+  command -v "$bin" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $bin unavailable" >&2; exit 3; }
+done
 
 PROBE="knowledge-base/project/specs/feat-devin-cloud-session-parity/cloud-probe.md"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FILE="$REPO_ROOT/$PROBE"
 
-if [[ ! -r "$FILE" ]]; then
-  echo "CANNOT ESTABLISH: $PROBE is not readable in this checkout" >&2
+# `-f` not just `-r`: a regular file is the contract — a FIFO or /dev/* name at
+# this path would block the awk read and stall the whole sequential sweep until
+# the workflow's timeout kills it.
+if [[ ! -f "$FILE" || ! -r "$FILE" ]]; then
+  echo "CANNOT ESTABLISH: $PROBE is not a readable regular file in this checkout" >&2
   exit 3
 fi
 
@@ -58,12 +75,15 @@ fi
 # the next `## ` heading or EOF) carries all three SC verdict tokens. awk, not
 # a whole-file grep: the pre-existing `## Deferral record` already names
 # "SC1/SC3/SC4" in prose, and a file-wide match would read that deferral as
-# delivered evidence.
+# delivered evidence. Fenced blocks are skipped too — a fenced template naming
+# the tokens is documentation, not a recorded verdict.
 evidence="$(awk '
+  /^```/                        { fence = !fence; next }
+  fence                         { next }
   /^## Post-merge verification/ { in_sec = 1; next }
   in_sec && /^## /              { in_sec = 0 }
   in_sec                        { print }
-' "$FILE")"
+' "$FILE")" || { echo "CANNOT ESTABLISH: awk failed reading $PROBE" >&2; exit 3; }
 
 if [[ -z "$evidence" ]]; then
   echo "NOT YET: no '## Post-merge verification' evidence block in $PROBE — #8228's session has not recorded verdicts"
@@ -72,7 +92,7 @@ fi
 
 missing=""
 for sc in SC1 SC3 SC4; do
-  grep -q "$sc" <<<"$evidence" || missing="$missing $sc"
+  grep -qF -- "$sc" <<<"$evidence" || missing="$missing $sc"
 done
 
 if [[ -n "$missing" ]]; then
