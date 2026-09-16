@@ -22,9 +22,9 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "disclaimer":
     "19c9069f166d17c179e91e9747d816d25de81156e74752cf1d67ee210f3935d6",
   "gdpr-policy":
-    "8a879987bd18d8f49b3f94cec9b7058201f6ad82fd0eb700dfee525a1b0da397",
+    "6d5094a375dd65e8528a1d101fae31d996a0542ff13d953b7badcc9491db1ca2",
   "individual-cla":
     "43836d36d4c8c96a9d0363ac70b2fe3d349c121b8ad030099f82189409830f25",
   "privacy-policy":
-    "3019f5d5ca91cd0e2ccf5570468142148e1f1f6fac218200125cbd2c962d5251",
+    "84b20e1ffab377a58fa98c54d16927ed46a742c5f2f3aa39081d331179a78faa",
 };
