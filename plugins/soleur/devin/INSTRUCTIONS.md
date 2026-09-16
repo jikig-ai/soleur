@@ -217,9 +217,20 @@ Installation does not grant hook trust. Measured hook semantics under Devin
   per-hook dispositions live in `.claude/hooks/devin-dispositions.tsv`.
 - **`.claude` permissions are not imported** — `.devin/config.json`
   `permissions` uses `Exec(prefix)`/`Read(glob)`/`Write(glob)`/`Fetch(pattern)`;
-  this repository ports its allow/deny rules there.
-- **Hook response contracts**: both `{"decision":"block"}` and Claude-shape
-  `permissionDecision:"deny"` reject the call; `updatedInput` rewrites it.
+  this repository ports its allow/deny rules there. The deny rules are measured
+  live under `smart` mode (`exec git push` and `rm -rf` were rejected through a
+  `permissionDecision:"deny"` chain, not the engine's own path check); whether
+  `allow`/`deny` gate under permissive modes is unprobed. `Read()` patterns
+  rooted at `~` are registered but tilde-expansion semantics are UNMEASURED;
+  `Exec()` string-match semantics (exact vs prefix) are UNMEASURED.
+- **The tool envelope omits `.cwd`** — hooks resolve the working directory via
+  `DEVIN_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → `$PWD` (measured: hook processes
+  run with PWD at the project root and both env vars exported).
+- **Hook response contracts**: `permissionDecision:"deny"` blocks and
+  `updatedInput` rewrites, both measured live. `"ask"` and `"defer"` are
+  UNVERIFIED under Devin — envelope-capture §6 records them as registered but
+  never driven; a hook emitting either may be ignored or misrouted. The
+  `PermissionRequest` hook event itself is UNVERIFIED.
 
 Keep long-running workflows bounded by their iteration and cost gates.
 Soleur's subscription and model usage are separate charges; substitute

@@ -386,15 +386,21 @@ hook_parse_input() {
     return 1
   fi
 
-  HOOK_CMD="${_hi_s[1]}"
-  HOOK_TOOL_NAME="${_hi_s[2]}"
   # Sibling-dep check inside the function, not only at source time: callers
   # invoke this inside `if !`, which suppresses errexit — an undefined
   # hook_tool_kind would yield HOOK_TOOL_KIND="" and silently disarm every
-  # kind-normalized gate on both harnesses (the #7164 class).
+  # kind-normalized gate on both harnesses (the #7164 class). Checked before
+  # the assignments so a failure leaves no partial state.
   declare -f hook_tool_kind >/dev/null 2>&1 || { HOOK_INPUT_REASON="internal:kind-lib"; return 1; }
+  HOOK_CMD="${_hi_s[1]}"
+  HOOK_TOOL_NAME="${_hi_s[2]}"
   HOOK_TOOL_KIND="$(hook_tool_kind "$HOOK_TOOL_NAME")"
-  HOOK_CWD="${_hi_s[3]}"
+  # Devin's PreToolUse envelope carries no .cwd (envelope-capture §5 field
+  # list) — without this fallback every HOOK_CWD-gated hook dispatches on
+  # exec and then exits on empty WORK_DIR: the fire-then-no-op class. Hook
+  # processes run with PWD at the project root and the *_PROJECT_DIR env
+  # vars are set for all three Devin dispatch paths (EC§4).
+  HOOK_CWD="${_hi_s[3]:-${DEVIN_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PWD}}}"
   HOOK_SESSION_ID="${_hi_s[4]}"
   HOOK_FILE_PATH="${_hi_s[5]}"
   return 0

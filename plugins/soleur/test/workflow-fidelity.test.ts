@@ -544,10 +544,13 @@ describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (meas
       // (`write` -> `^write$`): identical Grok coverage, but the unanchored
       // form over-bound `todo_write` under Devin, so bare substrings are now
       // forbidden for every matcher that fires on the name.
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- allMatchers are repo-controlled config strings, not user input
       const hits = allMatchers.filter((m) => new RegExp(m).test(name));
       expect(hits.length).toBeGreaterThan(0);
       for (const m of hits) {
-        expect(m === name || m === `^${name}$`).toBe(true);
+        // Only the anchored form is acceptable — bare `write` over-binds
+        // `todo_write` under Devin (envelope-capture §1, the measured defect).
+        expect(m).toBe(`^${name}$`);
       }
     }
   });

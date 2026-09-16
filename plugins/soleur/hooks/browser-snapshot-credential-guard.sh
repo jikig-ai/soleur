@@ -80,7 +80,10 @@ REDACTOR_CMD='python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact
 # Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
 # degrades to passthrough, preserving this hook's fail-open invariant.
 . "$(dirname "${BASH_SOURCE[0]}")/lib/hook-tool-kind.sh" 2>/dev/null || true
-if ! type hook_tool_kind >/dev/null 2>&1; then hook_tool_kind() { printf '%s\n' "${1-}"; }; fi
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
 
 jq_rc=0
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)" || jq_rc=$?

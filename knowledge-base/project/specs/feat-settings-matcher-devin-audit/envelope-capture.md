@@ -109,6 +109,10 @@ Setup: `.devin/config.json` `permissions.deny:["Read(**/*.devin-denied)"]`, `all
 - **`.claude/settings.json` `permissions.{allow,deny}` is NOT imported** — `read_config_from.claude` covers rules/skills/commands/MCP, not permissions. Every `Bash(…)`/`Read(…)`/`Edit(…)` permission rule in `.claude/settings.json` is dead under Devin; a Devin analog exists only via `.devin/config.json` `permissions` with `Exec(prefix)`/`Read(glob)`/`Write(glob)`/`Fetch(pattern)` syntax.
 - `PermissionRequest` hook event: **UNVERIFIED** — never fired under `smart` (auto-resolved) or `dangerous`; under `auto` the print-mode session stalled on what appeared to be an unserviceable prompt. No `devin-permreq.txt` was produced. Hooks keyed to `PermissionRequest` cannot be claimed live without further evidence.
 - `permissionDecision:"ask"`: **UNVERIFIED** — §5 measured `deny`/`block` and `updatedInput` only. Hooks that degrade to ask-on-unparseable (ADR-157's `hook_input_emit_ask` path) may be silent pass-through under Devin; no hook claims Devin-side ask behavior until probed.
+- `permissionDecision:"defer"`: **UNVERIFIED** — never emitted by a probe hook; `prod-write-defer-gate`'s enforcement action may be pass-through under Devin.
+- `~`-rooted `Read()` deny patterns: **UNVERIFIED** — only a `**` repo-relative glob was measured blocking. If Devin matches literal path strings, `read /home/user/.aws/credentials` bypasses the `Read(~/.…)` denies. Disposition rows are annotated accordingly.
+- `Exec(prefix)` allow semantics (exact vs. prefix match on compound commands): **UNVERIFIED** — only a literal exact command was measured.
+- `.cwd` envelope field: **ABSENT** from every PreToolUse/PostToolUse capture — hook bodies must not treat it as authoritative under Devin. `lib/hook-input.sh` falls back to `DEVIN_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`/`$PWD`; `resolve_command_cwd` (incidents.sh) falls back to `DEVIN_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`.
 - `SessionEnd`: not probed (no stub registered); no claim made.
 
 ## 7. Tool vocabulary — measured wire names

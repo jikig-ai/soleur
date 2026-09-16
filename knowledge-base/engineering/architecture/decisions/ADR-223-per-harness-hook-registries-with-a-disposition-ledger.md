@@ -88,10 +88,16 @@ file's own semantics ("this registry is Claude-canonical").
 
 ## Verification
 
-`bash .claude/hooks/devin-matcher-parity.test.sh` — 8 sections: coverage
-(registrations + permissions rows), bind backing (including the claimed
-`devin-tool=X` actually firing), twin backing, tool-event double-fire,
-SessionStart honesty, ledger hygiene (with must-pass/must-fail controls),
-permissions parity, SessionStart/Stop cross-registry dedup.
+`bash .claude/hooks/devin-matcher-parity.test.sh` — 9 sections: coverage
+(registrations and permission rows in BOTH registries, canon-failure
+hard-fail, file existence), bind backing (claimed `devin-tool=X` must be a
+measured vocabulary member AND actually fire), twin backing,
+registration-granularity double-fire (intra- AND cross-registry),
+SessionStart honesty, ledger hygiene (dispositions + TSV arity +
+must-pass/must-fail controls), permissions parity, SessionStart/Stop
+cross-registry dedup + the plugin-source sentinel invariant, and claim
+backing (already-fires/covered-by-plugin verified, stale rows rejected,
+bound hook bodies proven kind-normalized).
 Mutation-checked: deleting a `.devin` binding or unanchoring a twin turns it
-red.
+red; a `canon()`-unreadable command or a self-attested `already-fires` row
+does too.

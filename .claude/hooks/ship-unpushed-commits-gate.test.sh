@@ -373,9 +373,14 @@ t11_hook_ordering() {
   TOTAL=$((TOTAL + 1))
 
   # Same ordering obligation in the Devin registry (#8205): the ^exec$ block
-  # mirrors the settings Bash set and must keep the same sequence.
+  # mirrors the settings Bash set and must keep the same sequence. Absence of
+  # the registration is a FAIL, not a skip — T2 in devin-matcher-parity covers
+  # presence, but inside this suite a silent skip would read as green.
   local devin_cfg="$REPO_ROOT/.devin/config.json"
-  if [[ -f "$devin_cfg" ]] && grep -q "ship-unpushed-commits-gate.sh" "$devin_cfg"; then
+  if [[ ! -f "$devin_cfg" ]] || ! grep -q "ship-unpushed-commits-gate.sh" "$devin_cfg"; then
+    echo "FAIL: T11b ship-unpushed-commits-gate.sh missing from .devin/config.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  else
     order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
     rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
     ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)

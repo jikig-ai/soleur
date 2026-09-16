@@ -104,10 +104,14 @@ hook_parse_input "$devin_glob"
 # duplicated logic gets a parity pin).
 # ------------------------------------------------------------------------
 echo "Test 5: bash↔python map parity"
+# The wire vocabulary is DERIVED from the canonical map's case arms — a hand-
+# maintained list here would be a fourth copy that can drift unpinned.
+WIRES=$(grep -oE '^[[:space:]]+[a-z_]+\)[[:space:]]' "$SCRIPT_DIR/lib/hook-tool-kind.sh" | tr -d ' )' | tr '\n' ' ' || true)
+[[ -n "${WIRES// /}" ]] || { fail "could not derive wire vocabulary from hook-tool-kind.sh"; WIRES=""; }
+WIRES="$WIRES __unmapped__"
 if command -v python3 >/dev/null 2>&1; then
   drift=""
-  for wire in exec write edit multi_edit notebook_edit apply_patch \
-              ask_user_question run_subagent skill __unmapped__; do
+  for wire in $WIRES; do
     b="$(hook_tool_kind "$wire")"
     p="$(python3 -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR')
@@ -117,7 +121,9 @@ print(s.tool_kind('$wire'))")"
   done
   if [[ -z "$drift" ]]; then pass "maps agree"; else fail "map drift:$drift"; fi
 else
-  echo "  SKIP: python3 missing — parity unchecked"
+  # Skipping on a missing tool is how a gate becomes permanently inert on the
+  # one machine that needed it (convention: settings-hook-exec-bit.test.sh).
+  fail "python3 missing — bash↔python map parity unchecked"
 fi
 
 # Test 5b: the plugin copy (plugins/soleur/hooks/lib/hook-tool-kind.sh) claims
@@ -127,8 +133,7 @@ echo "Test 5b: bash↔plugin-copy map parity"
 PLUGIN_KIND="$SCRIPT_DIR/../../plugins/soleur/hooks/lib/hook-tool-kind.sh"
 if [[ -f "$PLUGIN_KIND" ]]; then
   drift=""
-  for wire in exec write edit multi_edit notebook_edit apply_patch \
-              ask_user_question run_subagent skill __unmapped__; do
+  for wire in $WIRES; do
     b="$(hook_tool_kind "$wire")"
     p="$( ( . "$PLUGIN_KIND"; hook_tool_kind "$wire" ) )"
     if [[ "$b" != "$p" ]]; then drift="$drift $wire(canon=$b,plugin=$p)"; fi

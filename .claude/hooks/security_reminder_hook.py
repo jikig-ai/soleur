@@ -242,6 +242,7 @@ def main() -> int:
 
         response = {
             "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": build_advisory(sink, file_path),
             }

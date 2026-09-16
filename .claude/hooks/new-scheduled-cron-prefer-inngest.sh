@@ -38,7 +38,10 @@ if [ -f "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" ]; then
   . "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" || true
 fi
 emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
-if ! type hook_tool_kind >/dev/null 2>&1; then hook_tool_kind() { printf '%s\n' "${1-}"; }; fi
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
 
 allow() {
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
