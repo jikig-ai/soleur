@@ -42,11 +42,11 @@ Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-p
 
 ## Phase 5 — Legal disclosures (FR8, TR6)
 
-- [x] Floor landed: DPD §2.1/§2.1(c)/§3.1(a) scoped to plugin-local; §2.1c names the provider-operated session + fifth table row; privacy-policy §§3/4.1/4.2/8/10 scoped + third-exception paragraph; gdpr-policy all seven scope paragraphs + §8.1 variant extended, §2.1/§7.1 predicates scoped. `Last Updated` lines untouched on all three docs (#7465 drift freeze) — additive "Corrected September 14, 2026 (#8159)" paragraphs per the #7786 convention.
-- [ ] CLO decides the ceiling: corpus-wide three-configuration taxonomy vs floor-only.
-- [x] Art. 30 register: scope-test bracket appended (provider-operated out of scope on both limbs; plugin-hook TOM absence on third-party machines recorded; D10 in-scope prohibition stated). Per-entry probe-informed wording deferred to #8172.
+- [x] Floor landed: DPD §2.1/§2.1(c)/§3.1(a) scoped to plugin-local; §2.1c names the provider-operated session + fifth table row; privacy-policy §§2/3/4.1/4.2/6/10 scoped + §4.2 third-exception paragraph + §11 premise reworded; gdpr-policy all seven scope paragraphs + §8.1 variant extended, §2.1/§7.1 predicates scoped. `Last Updated` lines untouched on all three docs (#7465 drift freeze) — additive "Corrected September 14, 2026 (#8159)" paragraphs per the #7786 convention.
+- [x] CLO decides the ceiling: corpus-wide three-configuration taxonomy vs floor-only. → **Floor-only ruled sufficient for v1** at `knowledge-base/legal/audits/2026-09-counsel-review-8159.md` §Rulings R1: every taxonomy-asserting paragraph names the third configuration directly or resolves it through the DPD §2.1c cross-reference; residual naming folds into each document's next otherwise-required edit (audit O3).
+- [x] Art. 30 register: scope-test bracket appended (provider-operated out of scope on all three limbs; plugin-hook TOM absence on third-party machines recorded; D10 in-scope prohibition stated). Per-entry probe-informed wording deferred to #8172.
 - [x] `compliance-posture.md` Completed-Work row + D10 prohibition recorded; TC_VERSION tier question flagged to CLO in the row; T&C deliberately untouched. Named Cognition vendor entry remains probe-conditional (no DPA — 2026-09-13 attestation).
-- [x] Eleventy mirrors in lockstep (identical edits both surfaces); `legal-doc-shas.ts` repinned ×3; `legal-doc-consistency.test.ts` + `legal-doc-shas-guard.test.ts` 43/43, `check-tc-document-sha.sh` clean, drift ratchet within baseline. CLO sign-off pending (SC5).
+- [x] Eleventy mirrors in lockstep (identical edits both surfaces); `legal-doc-shas.ts` repinned ×3; `legal-doc-consistency.test.ts` + `legal-doc-shas-guard.test.ts` 43/43, `check-tc-document-sha.sh` clean, drift ratchet within baseline. CLO sign-off DISCHARGED 2026-09-16 at `knowledge-base/legal/audits/2026-09-counsel-review-8159.md` (SC5): three in-PR corrections (C1–C3) applied verbatim — the posture row's §-map and stale probe clause, and the register bracket's limb count + TOM naming.
 
 ## Phase 6 — ADR + C4 + verification session
 
