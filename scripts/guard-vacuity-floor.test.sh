@@ -200,8 +200,14 @@ while IFS= read -r f; do
   is_floor_bearing "$f" && printf '%s\n' "$f" >> "$FLOOR_ALL"
 done < "$ALL_SUITES"
 
-# COVERED scope: the two directories this guard mutation-tests.
-COVERED_DIRS='^(scripts/|plugins/soleur/test/)'
+# COVERED scope: the directories this guard mutation-tests. `plugins/soleur/scripts/`
+# joined for #8159 (precommit-guard.test.sh): its floor is a literal bound adjacent
+# to the test (`PRECOMMIT_MIN_ASSERTIONS=30` then `(( CASES < … ))`), reported by a
+# direct printf + exit 1 rather than through fail(), so it is mutant-CONSTRUCTIBLE
+# and scores FIRES — the covered-bar shape. The directory's only other suite
+# (taste-profile-update.test.sh) is not floor-bearing, so widening adds exactly
+# one file to the battery. This is the "cover it" arm of ARM 4's prescribed fix.
+COVERED_DIRS='^(scripts/|plugins/soleur/test/|plugins/soleur/scripts/)'
 
 # DEFERRED scope: an EXPLICITLY DECLARED directory ledger. These carry floors this PR does
 # not mutation-test — `apps/web-platform/infra/` is a different subsystem with its own
@@ -734,7 +740,7 @@ else
   fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
 fi
 
-MIN_FIRING_SUITES=40  # +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
+MIN_FIRING_SUITES=41  # +1 (#8159): precommit-guard via COVERED_DIRS widening. +1 (#8175): lint-migrated-rule-ids. +1 (#8149): pr-fanout-ledger. +2 (#7652): repo-write-boundary, fixture-dir-operand-assert
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"

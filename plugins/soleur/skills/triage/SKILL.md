@@ -3,6 +3,10 @@ name: triage
 description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use ticket-triage agent."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 - First set the /model to Haiku
 - Then read all pending todos in the todos/ directory
 

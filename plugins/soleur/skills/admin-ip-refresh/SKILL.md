@@ -3,6 +3,10 @@ name: admin-ip-refresh
 description: "This skill should be used to refresh the prod SSH allowlist (Doppler ADMIN_IPS) after operator IP rotation. Detects drift, mutates Doppler with explicit ack."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # admin-ip-refresh
 
 Detects drift between the operator's current public IP and the Hetzner Cloud Firewall allow-list (`Doppler prd_terraform/ADMIN_IPS`), proposes a corrective Doppler mutation with explicit operator ack, and emits the exact `terraform apply` invocation for the operator to run. Does NOT call Terraform directly -- per AGENTS.md `hr-all-infrastructure-provisioning-servers`, infra apply stays operator-initiated.

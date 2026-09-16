@@ -87,7 +87,7 @@
 #   emit-review-trailer.sh [--findings <n>] [--summary <text>]
 #                          [--agents-ran <n>] [--agents-expected <n>]
 #                          [--agents-missing <comma-separated-names>]
-#                          [--mode full|degraded|inline-fallback]
+#                          [--mode full|degraded|inline-fallback|sequential-fallback]
 #
 # Exit codes:
 #   0  trailer committed and verified parseable
@@ -96,12 +96,26 @@
 #   2  usage / environment error
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# echoes commands AFTER expansion, so a bound credential reaches the transcript
+# before it reaches any command. `case "$-" in *x*)` tests whether tracing is ON
+# rather than enumerating the ways to turn it on, two of which carry no `-x`
+# token at all.
+case "$-" in
+  *x*)
+    if [ -n "${COVERAGE_KEY:+x}${TRAILER_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 usage() {
   cat <<'EOF'
 Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]
                              [--agents-ran <n>] [--agents-expected <n>]
                              [--agents-missing <comma-separated-names>]
-                             [--mode full|degraded|inline-fallback]
+                             [--mode full|degraded|inline-fallback|sequential-fallback]
 
 Pass --agents-ran AND --agents-expected or the trailer records
 `Reviewed-Coverage: unknown`, and nothing downstream can distinguish a
@@ -151,8 +165,13 @@ for _pair in "AGENTS_RAN:$AGENTS_RAN" "AGENTS_EXPECTED:$AGENTS_EXPECTED"; do
     exit 2
   fi
 done
-if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback)$ ]]; then
-  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback (got '${MODE}')" >&2
+# `sequential-fallback` is distinct from `inline-fallback`: the former means the
+# plugin subagent surface was unavailable (a Devin Cloud session) so the review
+# roles ran sequentially inline, the latter that there was no agent surface at
+# all. Both are degraded coverage, but a consumer weighting review strength can
+# legitimately score them differently.
+if [[ -n "$MODE" && ! "$MODE" =~ ^(full|degraded|inline-fallback|sequential-fallback)$ ]]; then
+  echo "emit-review-trailer: --mode must be one of full|degraded|inline-fallback|sequential-fallback (got '${MODE}')" >&2
   exit 2
 fi
 # `ran > expected` is a contradiction, and silently accepting it would let the
@@ -165,7 +184,14 @@ fi
 # DERIVE the mode rather than trusting the caller's label where the counts
 # already answer it. A caller that passes `--mode full` alongside `--agents-ran 2
 # --agents-expected 10` is either confused or overclaiming; the counts win.
-if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" ]]; then
+#
+# Exception: `sequential-fallback` is NOT a count axis — it attests that the
+# plugin subagent surface was unavailable and the roles ran inline. A cloud
+# review that ran all N roles sequentially passes N/N, which counts alone would
+# "upgrade" to `full` — silently defeating the /ship gate that keys on the
+# sequential-fallback prefix. An explicit `--mode sequential-fallback` survives
+# derivation; the counts still annotate the coverage string.
+if [[ -n "$AGENTS_RAN" && -n "$AGENTS_EXPECTED" && "$MODE" != "sequential-fallback" ]]; then
   if [[ "$AGENTS_RAN" -eq 0 ]]; then
     MODE="inline-fallback"
   elif [[ "$AGENTS_RAN" -lt "$AGENTS_EXPECTED" ]]; then

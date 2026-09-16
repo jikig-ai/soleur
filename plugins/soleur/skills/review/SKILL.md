@@ -3,6 +3,10 @@ name: review
 description: "This skill should be used when performing exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/review` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:review`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -434,6 +438,11 @@ If agent spawning is unavailable or unauthorized:
 3. Pass the coverage to the evidence trailer (Step 6): `--agents-ran 0 --agents-expected
    <N> --mode inline-fallback`. A degraded review that emits a full-strength trailer is
    worse than no trailer, because `/ship` reads that boolean and merges on it.
+   **Cloud path (Devin Cloud session):** if the reason is that plugin subagents are
+   absent (`cloud-detect.sh` → `not-local`) but the roles CAN execute sequentially
+   inline, run them inline and pass `--mode sequential-fallback` with the real counts
+   (`--agents-ran <N> --agents-expected <N>`) — `sequential-fallback` survives the
+   script's count derivation by design; never pass `--mode full` for an inline panel.
 4. Do NOT mark the PR ready on a `single-user incident` brand-survival threshold with zero
    agents. Surface the choice to the operator: degraded review is adequate evidence for a
    docs PR and is not adequate for an irreversible-blast-radius surface.
