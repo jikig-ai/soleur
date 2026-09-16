@@ -42,7 +42,6 @@ const mockMirrorWarnWithDebounce = vi.mocked(mirrorWarnWithDebounce);
 const PRD_USER: Identity = { userId: "user-prd-1", role: "prd", orgId: null };
 const DEV_USER: Identity = { userId: "user-dev-1", role: "dev", orgId: null };
 const ORG_USER: Identity = { userId: "user-org-1", role: "prd", orgId: "org-123" };
-const ORG_DEV: Identity = { userId: "user-dev-2", role: "dev", orgId: "org-456" };
 
 const ORIGINAL_ENV = process.env;
 

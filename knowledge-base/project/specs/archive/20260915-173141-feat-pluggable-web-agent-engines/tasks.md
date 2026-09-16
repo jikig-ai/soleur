@@ -46,7 +46,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Agent routine-tool slice: tenant workspace resolution and bind-first dispatch are wired into the agent-facing routine tool (9 routine-tool tests green).
   - [x] Dashboard routine slice: the authenticated Run now route resolves workspace state and binds before dispatch (15 route/tool tests green).
   - [x] Settings persistence slice: owner-scoped default-engine writes are exposed through the persistence repository (12 persistence/migration tests green).
-  - [ ] RLS catalog coverage slice: add migration 138 settings/run/event rows to the fuzz target registry and validate the refreshed database-backed CI gate.
+  - [x] RLS catalog coverage slice: migration 138 settings/run/event rows have seeded RLS targets; the database-backed `rls-fuzz` check passed on commit `9ca4c72`.
   - [x] Settings validation slice: registry definitions can be read as cloned metadata for future settings endpoints without granting execution (20 registry tests green).
   - [x] Settings API slice: authenticated GET/PUT reads and writes the workspace default through reviewed metadata and the owner RPC (7 persistence tests green).
   - [x] Settings UI slice: General settings renders the workspace default selector with owner-only writes and unavailable future engines (14 settings tests green).
@@ -184,9 +184,12 @@ routine run binds the current default once; retries retain that binding.
 - [ ] GREEN-07 (blockedBy RED-07): implement protections and wire production paths.
 - [x] Event-ledger privacy slice: persistence stores sequence-derived event IDs and only fixed lifecycle category/allowlisted status metadata; the append RPC rejects extra keys; legal notices, mirrors, and Article 30 register describe the bounded event payload; focused persistence/migration tests pass 20/20.
 - [ ] Refresh GDPR evidence, run prescribed GDPR gate, and obtain vendor/CLO disposition for both auth modes.
+  - [x] 2026-09-16 code-level GDPR gate: added the Article 30 lawful-basis and retention criteria to migration 138; Art. 17 anonymization/callsite checks pass and no Art. 9 column match was found. Migration tests pass 7/7.
+  - [ ] Provider DPA/terms, transfer geography, retention/erasure evidence, and CLO disposition remain pending for both auth modes; customer content remains disabled.
 - [ ] Synthetic-only qualification, feature flag, bounded live probes, QA and screenshots; customer content remains disabled without evidence.
 - [ ] Run appropriate suites/lint/typecheck/build after all GREEN tasks.
 - [ ] Review, QA, compound, ship and required postmerge checks.
+- [ ] Local verification follow-up: safely parallelize independent `test-all.sh` suites; tracked in #8231. CI shard parallelism remains the reference model.
 
 ## Verification evidence
 
@@ -204,3 +207,25 @@ skipped, but ended with 10 failures outside this diff: import-hook, Bun, PDF,
 and email timer timeouts; an untracked `probe-octokit.ts` lint-baseline increase;
 and a cron fixture expectation mismatch. The changed engine/settings/routine
 focused gate remains green at 13 files and 117 tests.
+
+After commit `9ca4c72`, the database-backed `rls-fuzz` check passed. The focused
+migration 138 suite passes 7/7 after adding the GDPR annotations; changed RLS
+fixture files pass ESLint, and the app TypeScript check passes.
+
+The 2026-09-16 CI ratchet failure reported 75 `@typescript-eslint/no-unused-vars`
+findings against the pinned maximum of 74. The lint report isolated three newly
+introduced findings in the changed feature-flag test and deterministic remote
+adapter; those unused declarations/imports were removed. A fresh report scanned
+2,108 files with 190 findings total and 72 `no-unused-vars` findings, with none
+in changed files. The focused ESLint ratchet test passes 15/15 after rerunning
+with the process permissions needed for ESLint's child stdout pipe.
+The `scripts/guard-vacuity-floor.test.sh` suite also passes 23/23 in isolation;
+the first full pre-commit test-all run was interrupted and provides no full-gate
+verdict, so the commit hook must complete a fresh run before this slice is closed.
+
+The subsequent full hook reached 422/427 suites, with the only counted failure
+coming from the repository-write boundary after this worktree was edited while
+the hook was still running. The nested `.github/scripts/test/run-all.sh` suite
+passes in isolation (`RC=0`), and a before/after status capture showed no status
+delta. Keep the worktree immutable during a live full-gate run; issue, ledger,
+and learning updates must wait until that session exits.

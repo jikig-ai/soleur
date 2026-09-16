@@ -1,5 +1,10 @@
 -- 138_agent_engine_runs.sql
 -- Live engine dispatch authority. routine_runs remains the terminal-only WORM log.
+-- LAWFUL_BASIS: GDPR Art. 6(1)(b) for selected execution; Art. 6(1)(f) for
+--   bounded operational lineage, as recorded in the Article 30 register.
+-- RETENTION: Workspace-owned records remain until workspace deletion; conversation-
+--   bound runs and events cascade on conversation deletion. Direct updater/creator
+--   identities are nulled before account deletion by anonymise_agent_engine_data.
 
 BEGIN;
 

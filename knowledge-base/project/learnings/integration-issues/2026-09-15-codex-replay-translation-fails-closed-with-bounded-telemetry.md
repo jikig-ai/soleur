@@ -108,6 +108,52 @@ path alone cannot show that replay drift is visible.
 
 42. A full work-skill read exceeded the output budget, and an initial multi-file patch failed on a stale comment anchor without changing files. **Prevention:** locate workflow headings first, read bounded sections, and apply small hunks against exact current text.
 
+43. Two task-file reads overlapped at their shared boundary, making the same DSAR line appear duplicated; a cleanup patch was correctly rejected because no duplicate existed. **Prevention:** use disjoint ranges when concatenating adjacent file excerpts, and verify suspected duplicates with exact line numbers before editing.
+
+44. A broad keyword search over long legal-register paragraphs exceeded the output budget and truncated the useful matches. **Prevention:** inspect named register rows or bounded sections with targeted selectors, and clip legal prose before combining results.
+
+45. A second qualification-record read used the live spec path after the plan was archived and failed; the exact archived path was listed in this same session. **Prevention:** copy the path directly from the latest `rg --files` result instead of reconstructing it.
+
+46. A compliance-posture query included broad processor terms and emitted long historical rows, truncating the current finding context. **Prevention:** search the specific vendor-table row with an exact provider name and clip the match before reading it.
+
+47. `gh run view --log-failed` returned no logs while another job kept the parent workflow in progress. **Prevention:** wait for the overall run to finish before requesting its failed-job log.
+
+48. A broad timeout/shard search over the CI workflow matched hundreds of unrelated lines and truncated the relevant job settings. **Prevention:** locate the exact job header first, then inspect only that job's bounded YAML block.
+
+49. The GitHub Actions job-log API response was saved with a `.zip` suffix but contained plain UTF-8 text, so `unzip -l` failed. **Prevention:** inspect the downloaded response type or first bytes before choosing a decoder; the job endpoint may return a text log directly.
+
+50. A 65-line excerpt from the web-platform job log exceeded the output budget because Vitest emitted long assertion payloads on individual lines. **Prevention:** select the failure lines first, clip each line, and keep the extracted context to the smallest useful window.
+
+51. A full work-skill read, broad repository search, and large status listing exceeded the output budget and hid useful details. **Prevention:** read one exact skill phase at a time, search the relevant source directories with path-specific patterns, and summarize status with counts before listing paths.
+
+52. A Node diagnostic tried to spawn `git` and hit `EPERM`; the error included the full changed-path list and was truncated. **Prevention:** run Git through the shell tool, write large path lists to a temporary file, and parse only the needed matches separately.
+
+53. A Python one-liner used escaped quotes inside an f-string expression and failed at parse time. **Prevention:** keep `python -c` snippets simple; prefer `.format()` with direct indexing or write a short script file when quoting becomes nested.
+
+54. The focused ESLint ratchet test received empty JSON from ESLint's child-process stdout pipe in the sandbox, although direct ESLint with file redirection produced a valid report. **Prevention:** when subprocess output is empty despite a zero exit, reproduce with a file redirect first and rerun the pipe-dependent gate with the approved process permissions before treating it as a code failure.
+
+55. Printing every ESLint `no-unused-vars` finding exceeded the output budget and truncated the list before the changed-file rows. **Prevention:** report aggregate counts first, then filter diagnostics to the exact changed-path set before printing locations.
+
+56. The main-branch commit guard could not resolve the shell tool's `workdir` and classified a feature-worktree commit as `main`; it blocked before staging. **Prevention:** when the hook's CWD differs from the target worktree, include `git -C <absolute-worktree-path>` so branch resolution uses the explicit checkout.
+
+57. A commit hook's test-all output was buffered while the session handle remained active; a separate shell's process listing did not show that session, and an unnecessary interrupt canceled the run. **Prevention:** use the original session handle as the liveness source, inspect a redirected log for progress, and never infer its exit from another shell's process namespace.
+
+58. Correction to #56: `guardrails:block-commit-on-main` matches `cd <worktree> && git commit` and resolves that directory, while its commit matcher does not cover `git -C <worktree> commit`; using the latter would evade the guard. **Prevention:** prefix commits with an explicit `cd <absolute-worktree-path> &&`, and never use `git -C` for the commit command.
+
+59. The follow-up issue filing gate rejected a machinery issue without a `meta/machinery` label, but that label is absent from the repository. **Prevention:** verify the required filing label exists; when it does not, use the gate's explicit `User-Impact` and measured `Fix-Size` body fields so the filing remains classifiable without inventing a label.
+
+60. The filing gate next rejected a `Fix-Size: 0 lines / 0 files` placeholder as inline-sized, so the requested follow-up was not created. A label-creation probe then confirmed `meta/machinery` already exists despite the earlier filtered listing returning no row. **Prevention:** for machinery follow-ups, use the exact machinery label and omit inline-size fields; verify labels with a direct name query before filing.
+
+61. A read-only `gh issue view` verification initially failed because the restricted sandbox could not connect to GitHub; the same query succeeded through the approved elevated network path. **Prevention:** retry remote verification through the approved network path after recording the sandbox denial, rather than treating the issue state as unknown.
+
+62. The full commit hook's repository-write boundary failed because the worktree was edited while `scripts/test-all.sh` was still running; the isolated `.github/scripts/test/run-all.sh` suite then passed with an unchanged before/after status. **Prevention:** treat a live full-gate worktree as immutable until its original session exits; perform issue, ledger, and learning edits only after the gate completes.
+
+63. A direct `git commit` invocation was blocked by the branch guard because the shell tool's `workdir` did not resolve to the target worktree; retrying with an explicit absolute `cd` reached the hook successfully. **Prevention:** use `cd /absolute/worktree && git ...` for commit and other branch-sensitive writes.
+
+64. The full commit hook returned nonzero after 6,242 seconds with a summary of 422/427 suites passing, but the tool output did not retain the individual failing suite. CI-aligned isolated runs then passed for the Bun, web-platform, and all three scripts shards (the first shard finished with 137/139 passed and two relevance skips). **Prevention:** capture long hook output to a bounded log or run the CI-aligned groups and shards before deciding whether a documented hook bypass is justified; do not claim the full aggregate gate is green without its failure identity.
+
+65. A process diagnostic probe was rejected because its search pattern embedded a commit-command literal that the shell guard treats as a write attempt. **Prevention:** use neutral process markers such as the script path or executable name when checking for live jobs; do not include commit command text in probe literals.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-223-pluggable-web-agent-engine-boundary.md`

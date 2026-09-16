@@ -1,10 +1,8 @@
 import type {
   EngineAdapter,
   EngineEvent,
-  EngineInput,
   EngineRunContext,
   EngineRunStatus,
-  NativeSessionReference,
 } from "./agent-engine-contract";
 
 export interface DeterministicRemoteScenario {
