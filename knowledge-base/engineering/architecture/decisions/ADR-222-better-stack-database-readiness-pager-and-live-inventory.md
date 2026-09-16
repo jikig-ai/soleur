@@ -20,9 +20,9 @@ related_runbooks:
 apply that imports and converges `betteruptime_monitor.app_health`; that apply and the read-back
 after it are post-merge facts, checked by the plan's AC17/AC18 and not asserted here.
 
-- **Issue:** [#7884](https://github.com/jikig-ai/soleur/issues/7884). It stays open after PR #8216
+- **Issue:** [#7884](https://github.com/jikig-ai/soleur/issues/7884). It stayed open after PR #8216
   and closes with the import-block removal PR, which carries `Closes #7884` and follows the AC17
-  read-back.
+  read-back — see the 2026-09-16 amendment below.
 - **Incident:** [prd Supabase database unreachable, 2026-09-15](../../operations/post-mortems/prd-supabase-database-unreachable-2026-09-15-postmortem.md).
 
 ## Context
@@ -223,6 +223,45 @@ arm checks declared alerts only and does not report undeclared ones.
   `Output utilization high`) are not read.
 - **Modules are not expanded.** Declarations are read from the root's own `.tf` files; a monitor
   or heartbeat declared inside a module call would not be seen.
+
+### Amendment (2026-09-16, #7884): the adoption completed and its scaffolding is removed
+
+The adoption this ADR describes as pending is done, and the one-time scaffolding is gone. Recorded
+as fact, not decision — nothing above is reversed.
+
+- The per-merge apply on the #8216 merge commit (`d8b5fa1`) printed `Import complete [id=4226366]`
+  then `Modifications complete`, with `Plan: 1 to import, … 2 to change`. The vendor accepted the
+  in-place `status` → `keyword` conversion, as probe 2 predicted; the monitor kept its id and
+  history.
+- The read-back (AC17) held for about 8 minutes across four checks: `monitor_type keyword`,
+  `required_keyword "supabase":"connected"`, `confirmation_period 180`, `request_timeout 10`,
+  `paused false`, `email true`, `status up`, `last_checked_at` advancing (20:46:39Z → 20:54:32Z).
+  The read-only reconcile (AC18) then reported `surface=monitors declared=4 live=4` with 4226366
+  in `matched=`, no `monitor-config-drift` row and no `unmanaged-live` row.
+- The `import {}` block, `variable "adopt_app_health_monitor"` and the
+  `adopt_app_health_monitor = false` override in `tests/web-hosts-eu-pin.tftest.hcl` are removed.
+  The `-target=betteruptime_monitor.app_health` line in the per-merge apply STAYS: it is what
+  converges the monitor, not what imported it.
+- **H-F is therefore retired, and the failure mode inverts.** With no import block, a vendor-side
+  deletion no longer aborts the per-merge apply or the untargeted drift plan; refresh drops the
+  object and the next apply recreates the monitor under a NEW id, losing the check history of
+  4226366. The deletion is now self-healing rather than blocking, and it still reports on two
+  channels: the reconcile's `absent-live` row, and the scheduled drift plan, which now exits 2
+  (`1 to add`) where H-F predicted an exit-1 abort — emailing `[DRIFT] Infrastructure drift
+  detected in web-platform` and filing the `infra-drift` issue twice a day until an apply runs.
+  Neither says *the alarm is gone*, only that a resource is missing, and there is an alarm gap
+  until that apply. The runbook section
+  ["The monitor itself is gone (deleted on the vendor side)"](../../operations/runbooks/app-database-readiness-alarm.md#the-monitor-itself-is-gone-deleted-on-the-vendor-side)
+  is rewritten accordingly.
+- **Two sentences elsewhere are now dead letters, left in place under the append-only rule.**
+  H-F's "interim off-switch" (set `adopt_app_health_monitor = false` in a PR) and its pointer into
+  the runbook no longer apply: the variable is gone, and the runbook section it named was
+  replaced. Decision 1's description of the gated `import {}` is likewise history, not current
+  configuration. And the `ADOPT_APP_HEALTH_MONITOR` override path listed in ADR-117's 2026-09-15
+  amendment is closed with the variable — two `tf-var` names remain there, not three.
+- The contract test's three adoption rows are replaced by one that fails if any `import {}`
+  addressing `betteruptime_monitor.app_health` is re-added (`adoption-import-lingering`), because
+  re-adding one restores H-F.
 
 ## Cost Impacts
 
