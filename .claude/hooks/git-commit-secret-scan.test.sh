@@ -14,6 +14,12 @@ HOOK="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
 GITLEAKS_TOML="$REPO_ROOT/.gitleaks.toml"
 pass=0; fail=0
 
+# Owning trap for every per-case mktemp dir (lint-trap-tempfile-ownership,
+# ADR-129). Functions still rm -rf eagerly; this is the death-mid-case net.
+_TMP_DIRS=()
+_cleanup_tmp_dirs() { ((${#_TMP_DIRS[@]} == 0)) || rm -rf "${_TMP_DIRS[@]}"; }
+trap _cleanup_tmp_dirs EXIT
+
 _report() {
   local label="$1" status="$2" detail="${3:-}"
   if [[ "$status" == "ok" ]]; then
@@ -92,7 +98,7 @@ t_substring_not_match() {
 
 # T4: clean staged content + git commit → allow.
 t_clean_commit() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main
@@ -115,7 +121,7 @@ t_clean_commit() {
 # default-pack `private-key` rule (or similar) catches. The PEM is fully
 # synthetic — random base64 padding, no real keypair.
 t_pem_blocks_commit() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main
@@ -142,7 +148,7 @@ t_pem_blocks_commit() {
 
 # T6: `git commit --amend` triggers the scan (same regex must match `--amend`).
 t_amend_triggers_scan() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main
@@ -166,7 +172,7 @@ t_amend_triggers_scan() {
 
 # T7: chained `&& git commit` triggers the scan.
 t_chained_commit() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main
@@ -197,7 +203,7 @@ t_commit_tree_not_matched() {
 
 # T9: deny reason references the terraform-show-json learning file.
 t_reason_cites_learning() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main
@@ -219,7 +225,7 @@ t_reason_cites_learning() {
 
 # T10: Devin wire name `exec` reaches the gated scan (kind map, #8205).
 t_devin_exec_triggers_scan() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
   (
     cd "$tmp"
     git init -q -b main

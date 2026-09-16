@@ -52,6 +52,9 @@ cp "$REPO_ROOT/.claude/hooks/lib/freeze-lock.sh" "$WORK/.claude/hooks/lib/"
 # hooks detected their own missing helper and declined to decide rather than
 # passing through silently. Keep this in step with the hooks' dependencies.
 cp "$REPO_ROOT/.claude/hooks/lib/hook-input.sh" "$WORK/.claude/hooks/lib/"
+# hook-tool-kind.sh is hook-input.sh's own fail-hard dependency (#8205 —
+# HOOK_TOOL_KIND canonicalization); the mirror needs it for the same reason.
+cp "$REPO_ROOT/.claude/hooks/lib/hook-tool-kind.sh" "$WORK/.claude/hooks/lib/"
 cp "$REPO_ROOT/.claude/hooks/guardrails.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/pencil-open-guard.sh" "$WORK/.claude/hooks/"
 cp "$REPO_ROOT/.claude/hooks/worktree-write-guard.sh" "$WORK/.claude/hooks/"
