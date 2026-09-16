@@ -92,8 +92,10 @@ enum_registry() { # $1 = json file
 
 # jq test() driver — regex-evaluate a matcher against a tool name.
 matches() { # $1 = matcher regex, $2 = tool name
-  [[ "$1" == "(none)" ]] && return 1
-  [[ "$1" == '""' ]] && return 0  # empty matcher fires for every tool
+  # Absent matcher ("(none)") and empty matcher ('""') both fire on EVERY tool
+  # under both harnesses — treating either as never-dispatching would let a
+  # matcherless PreToolUse entry evade T4 while dispatching everywhere.
+  [[ "$1" == "(none)" || "$1" == '""' ]] && return 0
   jq -n --arg t "$2" --arg m "$1" '$t | test($m)' 2>/dev/null | grep -q true
 }
 
@@ -144,7 +146,9 @@ for bucket in allow deny; do
   done < <(jq -r --arg b "$bucket" '.permissions[$b][]? // empty' "$SETTINGS")
 done
 
-# anti-vacuity: the enumeration must actually have found rows.
+# anti-vacuity: the enumeration must actually have found rows. 50 is a floor,
+# not a count assertion — ~100 registrations exist today; the floor only
+# catches a wholesale enumeration collapse (empty jq output, moved files).
 n_reg=$(( $(wc -l < "$WORK/settings.tsv") + $(wc -l < "$WORK/devin.tsv") + $(wc -l < "$WORK/plugin.tsv") ))
 [[ $n_reg -ge 50 ]] || { echo "  vacuous: only $n_reg registrations enumerated" >&2; t1_fail=1; }
 
@@ -155,6 +159,12 @@ echo "=== T2: every \`bind\` row is backed by an anchored live .devin entry ==="
 t2_fail=0
 while IFS=$'\t' read -r reg p ev m disp reason rest; do
   [[ "$disp" == "bind" && "$reg" != "claude-permissions" && "$reg" != "devin-config" ]] || continue
+  # The intended Devin tool is carried in the reason column as `devin-tool=X`;
+  # a bind satisfied by a matcher that never fires on X is the audit's own
+  # dead-dispatch class one layer down.
+  want_tool="${reason##*devin-tool=}"
+  [[ "$want_tool" == "$reason" ]] && want_tool=""
+  want_tool="${want_tool%%[^A-Za-z_]*}"
   found=0
   while IFS=$'\t' read -r dev m2 p2; do
     [[ "$dev" == "$ev" && "$p2" == "$p" ]] || continue
@@ -166,6 +176,10 @@ while IFS=$'\t' read -r reg p ev m disp reason rest; do
     fi
     if [[ ! "$m2" =~ ^\^.*\$$ ]]; then
       echo "  unanchored .devin matcher for $p: '$m2'" >&2; t2_fail=1; continue
+    fi
+    if [[ -n "$want_tool" ]]; then
+      matches "$m2" "$want_tool" || { echo "  .devin matcher '$m2' never fires on claimed devin-tool=$want_tool ($p)" >&2; t2_fail=1; continue; }
+      found=1; break
     fi
     for t in $DEVIN_TOOLS; do
       matches "$m2" "$t" && { found=1; break; }
@@ -186,8 +200,10 @@ while IFS=$'\t' read -r reg p ev m disp reason rest; do
   while IFS=$'\t' read -r sev sm sp; do
     [[ "$sev" == "$ev" && "$sp" == "$p" ]] || continue
     [[ "$sm" =~ ^\^[a-z_]+\$$ ]] || continue
-    tool="${sm#^}"; tool="${sm#^}"; tool="${tool%\$}"
-    matches "$sm" "$tool" && { found=1; break; }
+    # The twin must name a real Devin tool — `^x$` regex-matching `x` is
+    # trivially true, so the load-bearing check is vocabulary membership.
+    tool="${sm#^}"; tool="${tool%\$}"
+    [[ " $DEVIN_TOOLS " == *" $tool "* ]] && { found=1; break; }
   done < "$WORK/settings.tsv"
   [[ $found -eq 1 ]] || { echo "  covered-by-twin lacks anchored settings twin: $p $ev" >&2; t3_fail=1; }
 done < <(ledger_rows)
@@ -201,8 +217,11 @@ echo "=== T4: no cross-registry double-fire for any Devin tool ==="
 # registries on the same tool double-fires — measured behavior, envelope-
 # capture §3. `covered-by-plugin` rows are the single documented exemption:
 # the command is registered in both settings.json and hooks.json under Claude
-# already, and the plugin registry is its declared Devin carrier (pending
-# #8155's matcher widening).
+# already, and the plugin registry is its declared Devin carrier (#8155
+# merged).
+# Bound: cross-REGISTRY only. Two overlapping matcher groups inside one
+# registry (e.g. `^edit$` + `^(edit|…)$` in .devin) also double-fire; anchoring
+# discipline keeps that from happening today but this arm does not detect it.
 : > "$WORK/dispatch.tsv"
 for src in settings devin plugin; do
   f="$WORK/$src.tsv"
@@ -274,6 +293,10 @@ check_row "bogus" "x" && ctl_fail=1        # unknown disposition must FAIL
 if [[ $ctl_fail -eq 0 && $t6_fail -eq 0 ]]; then pass "T6: dispositions valid, skip/n/a rows carry reasons (controls exercised)"; else fail "T6 ledger hygiene"; fi
 
 echo "=== T7: permissions parity — settings rules ported to .devin syntax ==="
+# Direction is settings → .devin only: a .devin-only rule (no Claude analog)
+# passes silently. Intentional — the .devin set may legitimately carry
+# Devin-specific rules — but documented so a divergence is a choice, not a
+# blind spot.
 
 t7_fail=0
 while IFS= read -r rule; do
@@ -292,6 +315,50 @@ while IFS= read -r rule; do
 done < <(jq -r '.permissions.deny[]? | select(startswith("Read("))' "$SETTINGS")
 
 if [[ $t7_fail -eq 0 ]]; then pass "T7: every settings Bash(...)/Read(...) permission has its .devin analog"; else fail "T7 permissions parity"; fi
+
+echo "=== T8: no SessionStart/Stop cross-registry double-fire ==="
+
+# T4 covers tool events; SessionStart/Stop matchers are event-scoped, not
+# tool-scoped, so they need their own arm (plan: the 3-source
+# devin-session-start double-registration is permanently unguarded without
+# it). Under Devin a SessionStart/Stop registration fires iff its matcher is
+# absent or "" — source matchers (startup|resume|…) are measured dead. Same
+# canon-path firing from 2+ registries double-dispatches (envelope-capture §3:
+# identical SessionStart command fired once per source).
+: > "$WORK/lifecycle.tsv"
+for src in settings devin plugin; do
+  while IFS=$'\t' read -r sev sm sp; do
+    [[ "$sev" == "SessionStart" || "$sev" == "Stop" ]] || continue
+    [[ "$sm" == "(none)" || "$sm" == '""' ]] || continue
+    printf '%s\t%s\t%s\n' "$sev" "$sp" "$src" >> "$WORK/lifecycle.tsv"
+  done < "$WORK/$src.tsv"
+done
+
+t8_fail=0
+sort -u "$WORK/lifecycle.tsv" > "$WORK/lifecycle.u.tsv"
+awk -F'\t' '{k=$1"|"$2; cnt[k]++} END {for (k in cnt) if (cnt[k] > 1) print k}' \
+  "$WORK/lifecycle.u.tsv" > "$WORK/lifecycle-double.tsv"
+while IFS='|' read -r ev p; do
+  echo "  lifecycle double-fire: $p ($ev) dispatches from multiple registries" >&2; t8_fail=1
+done < "$WORK/lifecycle-double.tsv"
+
+# must-fail control: the awk above must actually flag a duplicated pair.
+printf 'Stop\tplugins/soleur/hooks/stop-hook.sh\tdup\nStop\tplugins/soleur/hooks/stop-hook.sh\tdup2\n' \
+  | awk -F'\t' '{k=$1"|"$2; cnt[k]++} END {for (k in cnt) if (cnt[k] > 1) print k}' \
+  | grep -q 'stop-hook' || { echo "  T8 control: dedup awk failed to flag a known duplicate" >&2; t8_fail=1; }
+
+# Sentinel invariant (review P1): devin-session-start.sh MUST be plugin-bound,
+# never .devin-bound — only plugin dispatch exports CLAUDE_PLUGIN_ROOT, and a
+# repo-dispatched write records hook_source:"repo", which flips cloud-detect
+# to not-local:non-plugin-source on every LOCAL session. Dedup alone cannot
+# catch a single-registration .devin binding, so assert placement directly.
+grep -F $'SessionStart\t""\tplugins/soleur/hooks/devin-session-start.sh' "$WORK/plugin.tsv" >/dev/null \
+  || { echo "  devin-session-start.sh missing plugin '' SessionStart binding" >&2; t8_fail=1; }
+if grep -F $'plugins/soleur/hooks/devin-session-start.sh' "$WORK/devin.tsv" | grep -q '^SessionStart'; then
+  echo "  devin-session-start.sh is .devin-bound — writes hook_source:repo sentinels, breaking cloud-detect local classification" >&2; t8_fail=1
+fi
+
+if [[ $t8_fail -eq 0 ]]; then pass "T8: no SessionStart/Stop hook dispatches from two registries; devin-session-start sentinel stays plugin-sourced"; else fail "T8 lifecycle double-fire"; fi
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

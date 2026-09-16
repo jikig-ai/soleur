@@ -207,6 +207,11 @@ Installation does not grant hook trust. Measured hook semantics under Devin
   acts on `exec`; end-to-end coverage claim awaits the post-merge runtime trace.
 - **SessionStart source matchers are dead** — `startup`, `resume`, `clear`,
   `compact` never fire; only the empty matcher `""` does.
+- **`devin-session-start.sh` is bound in `hooks.json` (`""`), not `.devin`** —
+  only plugin dispatch exports `CLAUDE_PLUGIN_ROOT`, which its proof-of-local
+  sentinel and `cloud-detect.sh`'s `local` classification require. A `.devin`
+  binding would write `hook_source:"repo"` and classify every local session
+  `not-local:non-plugin-source`.
 - **Project hooks need Devin-side registration**: this repository binds its
   hook set in `.devin/config.json` with anchored matchers; the authoritative
   per-hook dispositions live in `.claude/hooks/devin-dispositions.tsv`.

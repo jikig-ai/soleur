@@ -68,6 +68,17 @@ fi
 CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FILE_PATH
 ```
 
+`hook_parse_input` also exports **`HOOK_TOOL_KIND`** — the wire name normalized
+to its Claude kind via `lib/hook-tool-kind.sh` (`exec`→`Bash`, `write`→`Write`,
+`edit`→`Edit`, `ask_user_question`→`AskUserQuestion`, `run_subagent`→`Agent`,
+`skill`→`Skill`; unmapped names pass through). `HOOK_TOOL_NAME` stays byte-exact
+for telemetry. **New hooks that gate on tool identity must test
+`HOOK_TOOL_KIND`, never `HOOK_TOOL_NAME`** — under Devin the wire names are
+lowercase, so a `HOOK_TOOL_NAME == "Bash"` gate is a dead gate (measured;
+issue #8205, ADR-223). Devin dispatch lives in `.devin/config.json`, and every
+registry registration must carry a row in `.claude/hooks/devin-dispositions.tsv`
+— `devin-matcher-parity.test.sh` enforces both.
+
 `hook_parse_input` returns 0 only when the document parses **and** every
 contracted field is a string; the values are then byte-exact. Any other outcome
 returns 1 and classifies via `HOOK_INPUT_REASON`. **The return code is

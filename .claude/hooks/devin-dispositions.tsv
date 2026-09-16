@@ -96,7 +96,7 @@ claude-settings	scripts/install-kb-merge-driver.sh	SessionStart	startup|resume|c
 # --- plugins/soleur/hooks/hooks.json -----------------------------------------
 soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	^(Bash|exec)$	covered-by-plugin	#8155 merged; exec bound directly	conditional on runtime trace (AC12)
 soleur-plugin	plugins/soleur/hooks/codex-session-start.sh	SessionStart	startup|resume|clear|compact	n/a	codex-surface; dead under Devin is correct	EC§3
-soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3; single live registration (no cross-source dup)
+soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	already-fires	hooks.json matcher "" fires under Devin with CLAUDE_PLUGIN_ROOT set	EC§3; plugin-source binding required — .devin dispatch writes hook_source:repo sentinels, flipping cloud-detect to not-local:non-plugin-source on local sessions
 soleur-plugin	plugins/soleur/hooks/welcome-hook.sh	SessionStart	startup	skip	claude-plugin-surface	welcome banner is a Claude-plugin nicety; Devin coverage not claimed
 soleur-plugin	plugins/soleur/hooks/stop-hook.sh	Stop	(none)	already-fires	Stop fires under Devin with empty matcher	EC§3
 soleur-plugin	plugins/soleur/hooks/browser-cleanup-hook.sh	Stop	(none)	already-fires	Stop fires under Devin	EC§3
@@ -105,13 +105,15 @@ soleur-plugin	plugins/soleur/hooks/unkept-promise-hook.sh	Stop	(none)	already-fi
 # --- .devin/config.json — pre-existing + new registrations -------------------
 # Pre-existing (dead matcher): replaced by the ""-matcher SessionStart set.
 devin-config	.claude/hooks/session-rules-loader.sh	SessionStart	""	bind	matcher corrected to "" (was dead)	EC§3
-devin-config	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	bind	matcher corrected to "" (was dead)	EC§3
 devin-config	.claude/hooks/guardrails.sh	PreToolUse	^exec$	bind	pre-existing live binding	EC§1
 devin-config	.claude/hooks/guardrails.sh	PreToolUse	^(edit|multi_edit|notebook_edit)$	bind	write narrowed out — ^write$ twin already covers it (double-fire fix)	EC§1,EC§2
 #
-# --- other-harness registries — enumerated, explicitly out of scope ----------
-codex-config	.codex/config.toml hooks	PreToolUse	^Bash$	n/a	this-pr-devin-scope	codex registry unchanged
-openhands	.openhands/hooks.json hooks	various	various	n/a	this-pr-devin-scope	openhands registry unchanged
+# --- other-harness registries — explicitly out of scope --------------------
+# UNAUDITED: these rows are summary coverage, not per-registration rows — T1's
+# enumeration reads only claude-settings/soleur-plugin/devin-config, so edits
+# to .codex/.openhands registries do not trip the parity test.
+codex-config	.codex/config.toml hooks	PreToolUse	^Bash$	n/a	this-pr-devin-scope	codex registry unchanged; summary row, unaudited
+openhands	.openhands/hooks.json hooks	various	various	n/a	this-pr-devin-scope	openhands registry unchanged; summary row, unaudited
 #
 # --- permissions -------------------------------------------------------------
 # .claude permissions are NOT imported by Devin (EC§6). Devin analogs live in

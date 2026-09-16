@@ -371,6 +371,23 @@ t11_hook_ordering() {
     FAIL=$((FAIL + 1))
   fi
   TOTAL=$((TOTAL + 1))
+
+  # Same ordering obligation in the Devin registry (#8205): the ^exec$ block
+  # mirrors the settings Bash set and must keep the same sequence.
+  local devin_cfg="$REPO_ROOT/.devin/config.json"
+  if [[ -f "$devin_cfg" ]] && grep -q "ship-unpushed-commits-gate.sh" "$devin_cfg"; then
+    order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
+    rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
+    ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
+    if [[ -n "$rebase_line" && -n "$ship_line" && "$ship_line" -gt "$rebase_line" ]]; then
+      echo "PASS: T11b .devin hook ordering (ship-unpushed-commits-gate after pre-merge-rebase)"
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL: T11b .devin hook ordering rebase=$rebase_line ship=$ship_line"
+      FAIL=$((FAIL + 1))
+    fi
+    TOTAL=$((TOTAL + 1))
+  fi
 }
 
 # --- T12: emit_incident prefix length ≤50 chars --------------------------

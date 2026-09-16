@@ -4,7 +4,9 @@
 # Plugin hooks run in projects that may not carry this repo's
 # .claude/hooks/lib/, so the map is duplicated here. Pinned against the
 # canonical map by .claude/hooks/hook-tool-kind.test.sh — update both or
-# neither.
+# neither. multi_edit/notebook_edit/apply_patch are probed-absent from Devin's
+# vocabulary (envelope-capture §7) — speculative passthroughs; re-probe before
+# relying on them.
 
 hook_tool_kind() {
   case "${1-}" in

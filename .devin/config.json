@@ -11,10 +11,6 @@
           },
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/plugins/soleur/hooks/devin-session-start.sh\""
-          },
-          {
-            "type": "command",
             "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/memory-backstop.sh\""
           },
           {

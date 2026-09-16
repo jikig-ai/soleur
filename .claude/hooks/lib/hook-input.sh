@@ -388,6 +388,11 @@ hook_parse_input() {
 
   HOOK_CMD="${_hi_s[1]}"
   HOOK_TOOL_NAME="${_hi_s[2]}"
+  # Sibling-dep check inside the function, not only at source time: callers
+  # invoke this inside `if !`, which suppresses errexit — an undefined
+  # hook_tool_kind would yield HOOK_TOOL_KIND="" and silently disarm every
+  # kind-normalized gate on both harnesses (the #7164 class).
+  declare -f hook_tool_kind >/dev/null 2>&1 || { HOOK_INPUT_REASON="internal:kind-lib"; return 1; }
   HOOK_TOOL_KIND="$(hook_tool_kind "$HOOK_TOOL_NAME")"
   HOOK_CWD="${_hi_s[3]}"
   HOOK_SESSION_ID="${_hi_s[4]}"

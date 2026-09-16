@@ -108,6 +108,7 @@ Setup: `.devin/config.json` `permissions.deny:["Read(**/*.devin-denied)"]`, `all
 - `.devin/config.json` `permissions` is live and enforced under `smart` (deny wins).
 - **`.claude/settings.json` `permissions.{allow,deny}` is NOT imported** — `read_config_from.claude` covers rules/skills/commands/MCP, not permissions. Every `Bash(…)`/`Read(…)`/`Edit(…)` permission rule in `.claude/settings.json` is dead under Devin; a Devin analog exists only via `.devin/config.json` `permissions` with `Exec(prefix)`/`Read(glob)`/`Write(glob)`/`Fetch(pattern)` syntax.
 - `PermissionRequest` hook event: **UNVERIFIED** — never fired under `smart` (auto-resolved) or `dangerous`; under `auto` the print-mode session stalled on what appeared to be an unserviceable prompt. No `devin-permreq.txt` was produced. Hooks keyed to `PermissionRequest` cannot be claimed live without further evidence.
+- `permissionDecision:"ask"`: **UNVERIFIED** — §5 measured `deny`/`block` and `updatedInput` only. Hooks that degrade to ask-on-unparseable (ADR-157's `hook_input_emit_ask` path) may be silent pass-through under Devin; no hook claims Devin-side ask behavior until probed.
 - `SessionEnd`: not probed (no stub registered); no claim made.
 
 ## 7. Tool vocabulary — measured wire names

@@ -120,5 +120,23 @@ else
   echo "  SKIP: python3 missing — parity unchecked"
 fi
 
+# Test 5b: the plugin copy (plugins/soleur/hooks/lib/hook-tool-kind.sh) claims
+# this pin in its header — make the claim real by sourcing it into a subshell
+# and comparing the mapped vocabulary.
+echo "Test 5b: bash↔plugin-copy map parity"
+PLUGIN_KIND="$SCRIPT_DIR/../../plugins/soleur/hooks/lib/hook-tool-kind.sh"
+if [[ -f "$PLUGIN_KIND" ]]; then
+  drift=""
+  for wire in exec write edit multi_edit notebook_edit apply_patch \
+              ask_user_question run_subagent skill __unmapped__; do
+    b="$(hook_tool_kind "$wire")"
+    p="$( ( . "$PLUGIN_KIND"; hook_tool_kind "$wire" ) )"
+    if [[ "$b" != "$p" ]]; then drift="$drift $wire(canon=$b,plugin=$p)"; fi
+  done
+  if [[ -z "$drift" ]]; then pass "plugin copy agrees"; else fail "plugin map drift:$drift"; fi
+else
+  fail "plugin kind-map copy missing: $PLUGIN_KIND"
+fi
+
 echo; echo "=== hook-tool-kind: $PASS passed, $FAIL failed ==="
 (( FAIL == 0 ))

@@ -75,7 +75,12 @@ file's own semantics ("this registry is Claude-canonical").
   with `SOLEUR_HOOK_SKIP`-style markers — dead-on-Devin is now documented,
   not latent.
 - `SessionStart` under Devin fires on `""` only; the four settings
-  SessionStart hooks and the plugin `devin-session-start.sh` bind there.
+  SessionStart hooks bind there. `devin-session-start.sh` is the deliberate
+  exception — it stays plugin-bound (`hooks.json` `""`) because only plugin
+  dispatch sets `CLAUDE_PLUGIN_ROOT`, which its proof-of-local sentinel and
+  `cloud-detect.sh`'s `local` classification require; a `.devin` binding would
+  write `hook_source:repo` and flip every local Devin session to
+  `not-local:non-plugin-source` (cloud contract on a local session).
 - Adding a hook registration without a ledger row reds the parity test —
   the audit cannot silently rot.
 - `.claude` permissions stay dead under Devin by design; the `.devin`
@@ -83,8 +88,10 @@ file's own semantics ("this registry is Claude-canonical").
 
 ## Verification
 
-`bash .claude/hooks/devin-matcher-parity.test.sh` — 7 sections: coverage
-(102 registrations + permissions rows), bind backing, twin backing,
-double-fire, SessionStart honesty, ledger hygiene (with must-pass/must-fail
-controls), permissions parity. Mutation-checked: deleting a `.devin`
-binding or unanchoring a twin turns it red.
+`bash .claude/hooks/devin-matcher-parity.test.sh` — 8 sections: coverage
+(registrations + permissions rows), bind backing (including the claimed
+`devin-tool=X` actually firing), twin backing, tool-event double-fire,
+SessionStart honesty, ledger hygiene (with must-pass/must-fail controls),
+permissions parity, SessionStart/Stop cross-registry dedup.
+Mutation-checked: deleting a `.devin` binding or unanchoring a twin turns it
+red.

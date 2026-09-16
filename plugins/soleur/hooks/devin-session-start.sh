@@ -52,10 +52,12 @@ assert_fixture_dir() {
   fi && \
   mkdir -p "$_sentinel_root/.devin" && \
   _sentinel="$_sentinel_root/.devin/soleur-local-session" && \
-  # Dual registration (plugin hooks.json + repo .devin/config.json) fires this
-  # hook twice on local sessions; write order is undefined. A repo-sourced write
-  # must never mask an existing plugin-sourced sentinel on this host — that
-  # sentinel is proof-of-local, and masking it reads as permanent false-cloud.
+  # Single live registration (plugin hooks.json `""` — source matchers are
+  # dead under Devin, measured envelope-capture §3). The repo-source arm still
+  # matters: if a repo-level SessionStart registration ever fires on a cloud
+  # VM, its `repo` write must not mask an existing plugin-sourced sentinel on
+  # this host — that sentinel is proof-of-local, and masking it reads as
+  # permanent false-cloud.
   if [[ "$_sentinel_source" == "repo" && -f "$_sentinel" ]] && \
      grep -q '"hook_source"[[:space:]]*:[[:space:]]*"plugin"' "$_sentinel" 2>/dev/null; then
     :

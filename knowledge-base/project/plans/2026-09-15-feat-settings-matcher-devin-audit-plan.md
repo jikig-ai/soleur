@@ -192,7 +192,7 @@ None. Queried `gh issue list --label code-review --state open` (200 issues) agai
 | TR4 cites "ADR-089's third-harness clause" for bind-by-default | ADR-089's clause is about freeze-lock's shared location; the doctrine is Grok FR6/Guard-2 | Cite correctly in ADR + plan |
 | `multi_edit` in `.devin/config.json` | Not in Devin's documented tool vocabulary — harmless dead token | Keep (harmless) but note in ledger |
 | Advisor dissent: make the ledger generative (emit `.devin/config.json` + expected-matcher list from the TSV) | Brainstorm approach C was explicitly rejected as over-built for ~60 entries; the advisor's narrower variant is the same mechanism | Kept TSV+test (recorded brainstorm decision); the parity test's spot-check anchor row is the compensating control for the both-editable weakness — revisitable if the ledger grows |
-| `apply_patch` coverage | Real Devin write-class tool, zero coverage today | Added to write-class matcher |
+| `apply_patch` coverage | Plan-time assumption "real Devin write-class tool" was falsified by Phase 0 — absent from the measured tool vocabulary (EC§7) | NOT added to the write-class matcher; kind-map arm kept as speculative passthrough (annotated in `hook-tool-kind.sh`) |
 | FR1 "matrix" as a doc | Ledger TSV serves as the matrix AND the test's data source | Single artifact, no doc/test drift |
 
 ## Files to Create
