@@ -1771,6 +1771,14 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # The DPA Schedule 4 TOM-4 RLS-posture gate (CLO ruling 2026-09-15, #8197).
+  # Schedule 4 becomes Annex II to the Module 2/3 SCCs on execution, so every
+  # table name and predicate in it is a contractual representation. The -live
+  # line runs the 22 assertions over the real migration corpus so a schema
+  # change that falsifies the instrument reds CI; the .test.sh line is the
+  # MB-0..MB-12 mutation battery proving each assertion can actually fail.
+  run_suite "scripts/check-tom4-rls-posture" bash scripts/check-tom4-rls-posture.test.sh
+  run_suite "scripts/check-tom4-rls-posture-live" bash scripts/check-tom4-rls-posture.sh
   # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
   # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
   # the sweep over the real plans/ tree so a non-compliant Guard Contract landing

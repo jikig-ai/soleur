@@ -93,6 +93,7 @@ abort-controller
 abort-feature
 abort-signal
 abortcontroller
+absence-query
 absence-wait
 absolute-positioning
 ac-design
@@ -2209,6 +2210,7 @@ merge-base
 merge-conflict
 merge-conflicts
 merge-direction
+merge-driver
 merge-livelock
 merge-pr
 merge-queue
@@ -3657,6 +3659,7 @@ stale-filter
 stale-inherited-number
 stale-issue
 stale-lock
+stale-measurement
 stale-premise
 stale-ref
 stale-references

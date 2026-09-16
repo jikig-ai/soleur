@@ -657,3 +657,7 @@ This GDPR Policy shall be governed by and construed in accordance with the laws 
     </div>
   </div>
 </section>
+
+## Security telemetry and the Article 15 bundle
+
+Some account-keyed security telemetry — session-revocation, JWT-mint rate-limit and mint-intent records (`denied_jti`, `mint_rate_window`, `runtime_mint_intent`) — **is** personal data, but is deliberately not part of the bulk Article 15 export, because the route to it is dedicated rather than bulk: the reason for your most recent session revocation is shown to you in-product and returned by the revocation-status endpoint, and Article 15 requests for your full revocation history route to <legal@jikigai.com>. The complete exclusion list, each entry with its reason, is in the Data Protection Disclosure under "Excluded from the export, with reason".
