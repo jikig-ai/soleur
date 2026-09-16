@@ -38,16 +38,35 @@ if [[ $total -ne $((_p0 + 2)) || $fails -ne $((_f0 + 1)) ]]; then
 fi
 total=$_p0; fails=$_f0
 
+# Refuses an empty, relative, root or synthetic-fs fixture dir (byte-identical copy; the
+# fixture-dir-operand-assert suite pins every tracked copy).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d -t cmpm-8159.XXXXXXXX)"
+# mktemp can fail; an unguarded $WORK would make the trap `rm -rf ""`. Guard
+# before the trap is armed.
+assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK" 2>/dev/null' EXIT
 
-# Build a fixture tree: SUT at scripts/followthroughs/, probe file written by
-# the caller under $PROBE_REL. Echoes the fixture root for the caller to use.
+# Build a fixture tree at the absolute path the caller bound: SUT at
+# scripts/followthroughs/, the probe-file parent dir created empty. Callers
+# bind T*="$WORK/<name>" directly (a $WORK derivation, resolvable absolute) —
+# returning the root via $(new_tree name) would leave the caller's variable
+# never-bound to the write-site resolver.
 new_tree() {
-  local t="$WORK/$1"
+  local t="$1"
+  assert_fixture_dir "$t"
   mkdir -p "$t/scripts/followthroughs" "$t/$(dirname "$PROBE_REL")"
   cp "$SUT" "$t/scripts/followthroughs/"
-  printf '%s\n' "$t"
 }
 
 # run_probe <fixture-root> — executes the copied SUT, captures rc.
@@ -71,7 +90,8 @@ assert_never_close_verbs() {
 }
 
 # --- Arm 1: full evidence -> 5 --------------------------------------------
-T1=$(new_tree t1)
+T1="$WORK/t1"
+new_tree "$T1"
 cat > "$T1/$PROBE_REL" <<'EOF'
 ## Deferral record
 - post-merge SC1/SC3/SC4 verification session.
@@ -86,7 +106,8 @@ rc=$(run_probe "$T1"); assert_rc "full evidence -> ACTION REQUIRED" 5 "$rc"
 assert_never_close_verbs "arm1" "$rc"
 
 # --- Arm 2: partial evidence (missing SC4) -> 2 ----------------------------
-T2=$(new_tree t2)
+T2="$WORK/t2"
+new_tree "$T2"
 cat > "$T2/$PROBE_REL" <<'EOF'
 ## Post-merge verification (2026-09-20)
 
@@ -98,7 +119,8 @@ assert_never_close_verbs "arm2" "$rc"
 
 # --- Arm 3: deferral prose names the SCs but no heading -> 2 ---------------
 # The false-positive guard: a whole-file grep would fire 5 on this content.
-T3=$(new_tree t3)
+T3="$WORK/t3"
+new_tree "$T3"
 cat > "$T3/$PROBE_REL" <<'EOF'
 ## Deferral record
 - post-merge SC1/SC3/SC4 verification session.
@@ -109,7 +131,8 @@ assert_never_close_verbs "arm3" "$rc"
 # --- Arm 4: fenced fake evidence block -> 2 --------------------------------
 # A fenced TEMPLATE naming the tokens is documentation, not a verdict. The
 # awk fence-toggle is what keeps this from firing ACTION REQUIRED.
-T4=$(new_tree t4)
+T4="$WORK/t4"
+new_tree "$T4"
 cat > "$T4/$PROBE_REL" <<'OUTER'
 ## Checklist
 
@@ -124,20 +147,23 @@ rc=$(run_probe "$T4"); assert_rc "fenced template -> NOT YET" 2 "$rc"
 assert_never_close_verbs "arm4" "$rc"
 
 # --- Arm 5: missing file -> 3 ----------------------------------------------
-T5=$(new_tree t5)
+T5="$WORK/t5"
+new_tree "$T5"
 rc=$(run_probe "$T5"); assert_rc "missing file -> CANNOT ESTABLISH" 3 "$rc"
 assert_never_close_verbs "arm5" "$rc"
 
 # --- Arm 6: directory at probe path -> 3 ------------------------------------
 # `-f` is the contract: a non-regular file must not reach the awk read (a FIFO
 # would block the whole sequential sweep).
-T6=$(new_tree t6)
+T6="$WORK/t6"
+new_tree "$T6"
 mkdir "$T6/$PROBE_REL"
 rc=$(run_probe "$T6"); assert_rc "directory at probe path -> CANNOT ESTABLISH" 3 "$rc"
 assert_never_close_verbs "arm6" "$rc"
 
 # --- Arm 7: symlink to a FIFO -> 3 ------------------------------------------
-T7=$(new_tree t7)
+T7="$WORK/t7"
+new_tree "$T7"
 mkfifo "$WORK/fifo7" && ln -s "$WORK/fifo7" "$T7/$PROBE_REL"
 rc=$(run_probe "$T7"); assert_rc "symlink-to-FIFO -> CANNOT ESTABLISH" 3 "$rc"
 assert_never_close_verbs "arm7" "$rc"
@@ -150,7 +176,8 @@ assert_never_close_verbs "arm8" "$rc"
 # --- Arm 9: toolchain absent -> 3 -------------------------------------------
 # Restricted PATH: dirname fails too, but every route lands on CANNOT
 # ESTABLISH — never NOT YET — for a measurement that could not run.
-T9=$(new_tree t9)
+T9="$WORK/t9"
+new_tree "$T9"
 cat > "$T9/$PROBE_REL" <<'EOF'
 ## Post-merge verification
 - SC1: VERIFIED
