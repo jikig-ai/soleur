@@ -105,7 +105,8 @@ export function asTenant<T>(sql: Sql, sub: string, fn: (t: Txn) => Promise<T>): 
  * + workspace + membership; userC joins wsA as a co-member (the byok_delegations
  * grantee trigger requires a real member — and the user-isolation dimension's
  * co-member attacker); two A-owned conversations (parents for messages /
- * user_concurrency_slots seeds). Runs a self-check before returning — a silent seed
+ * user_concurrency_slots seeds); and an A-owned engine run shared by event and RPC
+ * attacks. Runs a self-check before returning — a silent seed
  * failure is a beforeAll false-green (treat any vitest `skipped > 0` as a crash trap).
  */
 export async function seedTwoTenant(sql: Sql): Promise<Ctx> {
@@ -128,7 +129,15 @@ export async function seedTwoTenant(sql: Sql): Promise<Ctx> {
   await sql`insert into conversations (id, user_id, workspace_id, status, visibility) values
     (${convA}, ${userA}, ${wsA}, 'active', 'workspace'),
     (${convA2}, ${userA}, ${wsA}, 'active', 'workspace')`;
-  const ctx: Ctx = { userA, userB, userC, wsA, wsB, orgA, convA, convA2 };
+  const [engineRun] = await sql<{ id: string }[]>`
+    insert into agent_engine_runs (
+      workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
+      adapter_version, status, created_by
+    ) values (
+      ${wsA}, 'conversation', ${convA}, 'claude-code', 'managed',
+      'rls-fuzz-fixture', 'queued', ${userA}
+    ) returning id`;
+  const ctx: Ctx = { userA, userB, userC, wsA, wsB, orgA, convA, convA2, engineRunA: engineRun.id };
   await assertTwoTenant(sql, ctx);
   return ctx;
 }
@@ -167,14 +176,6 @@ export async function seedEmailTriageItem(sql: Sql | Txn, c: Ctx): Promise<strin
  */
 export async function seedRpcCtx(sql: Sql): Promise<RpcCtx> {
   const base = await seedTwoTenant(sql);
-  const [engineRun] = await sql<{ id: string }[]>`
-    insert into agent_engine_runs (
-      workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
-      adapter_version, status, created_by
-    ) values (
-      ${base.wsA}, 'conversation', ${base.convA}, 'claude-code', 'managed',
-      'rls-fuzz-fixture', 'queued', ${base.userA}
-    ) returning id`;
   const [kb] = await sql`insert into kb_files (workspace_id, user_id, file_path, filename, visibility)
     values (${base.wsA}, ${base.userA}, ${`/a/${randomUUID()}`}, 'a', 'workspace') returning id`;
   const [msg] = await sql`insert into messages (workspace_id, template_id, conversation_id, role, content)
@@ -200,6 +201,5 @@ export async function seedRpcCtx(sql: Sql): Promise<RpcCtx> {
     inboxA: inbox.id as string,
     emailTriageA,
     scopeGrantA: grant.id as string,
-    engineRunA: engineRun.id as string,
   };
 }

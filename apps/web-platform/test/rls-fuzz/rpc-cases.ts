@@ -32,8 +32,6 @@ export interface RpcCtx extends Ctx {
   emailTriageA: string;
   /** An A-owned scope_grant (authorize_template p_grant_id cross-founder-ref target). */
   scopeGrantA: string;
-  /** An A-owned agent-engine run for the append-event authorization attack. */
-  engineRunA: string;
 }
 
 /**

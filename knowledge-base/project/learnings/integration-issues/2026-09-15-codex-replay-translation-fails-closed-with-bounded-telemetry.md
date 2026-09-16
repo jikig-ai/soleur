@@ -106,6 +106,8 @@ path alone cannot show that replay drift is visible.
 
 41. A later patch duplicated existing Session Error entries 31–33; the duplicates were removed. **Prevention:** enumerate existing IDs and verify the final sequence is unique after editing the learning log.
 
+42. A full work-skill read exceeded the output budget, and an initial multi-file patch failed on a stale comment anchor without changing files. **Prevention:** locate workflow headings first, read bounded sections, and apply small hunks against exact current text.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-223-pluggable-web-agent-engine-boundary.md`

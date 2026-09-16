@@ -46,6 +46,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] Agent routine-tool slice: tenant workspace resolution and bind-first dispatch are wired into the agent-facing routine tool (9 routine-tool tests green).
   - [x] Dashboard routine slice: the authenticated Run now route resolves workspace state and binds before dispatch (15 route/tool tests green).
   - [x] Settings persistence slice: owner-scoped default-engine writes are exposed through the persistence repository (12 persistence/migration tests green).
+  - [ ] RLS catalog coverage slice: add migration 138 settings/run/event rows to the fuzz target registry and validate the refreshed database-backed CI gate.
   - [x] Settings validation slice: registry definitions can be read as cloned metadata for future settings endpoints without granting execution (20 registry tests green).
   - [x] Settings API slice: authenticated GET/PUT reads and writes the workspace default through reviewed metadata and the owner RPC (7 persistence tests green).
   - [x] Settings UI slice: General settings renders the workspace default selector with owner-only writes and unavailable future engines (14 settings tests green).
