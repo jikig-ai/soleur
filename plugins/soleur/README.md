@@ -31,7 +31,10 @@ definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
 **Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. To work
 on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
 and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
-[compatibility instructions](devin/INSTRUCTIONS.md).
+[compatibility instructions](devin/INSTRUCTIONS.md). Devin **Cloud** sessions run under
+Soleur Cloud Mode — skills, rules, and MCP carry, but plugin subagents and
+SessionStart/SessionEnd hooks are absent, and degradation is disclosed rather than
+silent; see the [cloud-vs-local capability matrix](devin/INSTRUCTIONS.md#cloud-mode-devin-cloud-sessions).
 
 The recommended way to use Soleur is through the unified entry point:
 

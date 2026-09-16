@@ -13,6 +13,20 @@ model {
   founder -> codex "Invokes Soleur skills and company workflows"
   codex -> platform.plugin "Loads canonical skills, command wrappers, agent instructions, MCP connections, and compatible hooks"
 
+  // External system — the Devin harness on TWO execution substrates: the local
+  // CLI/Desktop (operator's machine, full plugin surface) and Devin Cloud
+  // (Cognition-managed VM — plugin subagents and plugin SessionStart/SessionEnd
+  // hooks are absent there; command hooks are documented but matcher-verified
+  // only). Soleur Cloud Mode (#8159) detects the substrate via a
+  // content-bearing sentinel and degrades honestly rather than claiming parity.
+  devin = system "Devin (CLI + Cloud)" {
+    #external
+    description "Devin CLI/Desktop locally and Devin Cloud sessions on Cognition-managed VMs. Loads the Soleur plugin in both: skills, AGENTS.md rules, and MCP carry; plugin subagents are local-only and plugin SessionStart/SessionEnd hooks never fire in cloud, so cloud sessions run under the Soleur Cloud Mode contract — sentinel-based classification (local | not-local:<reason>), capability banner, sequential-fallback review with Reviewed-Coverage disclosure, and a session-scoped acknowledgement gate before secrets or production mutation (#8159, ADR-221)."
+  }
+
+  founder -> devin "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"
+  devin -> platform.plugin "Loads skills, AGENTS.md rules, and MCP in both substrates; plugin subagents and SessionStart/SessionEnd hooks only on local"
+
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }
