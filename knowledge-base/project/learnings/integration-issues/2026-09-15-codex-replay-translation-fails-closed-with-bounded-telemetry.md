@@ -98,11 +98,13 @@ path alone cannot show that replay drift is visible.
 
 37. Staging the final learning update was denied because this worktree's shared Git index is under the read-only `.git` path. **Prevention:** request the required Git-metadata write access before staging or committing from this managed worktree.
 
-31. A combined GDPR-gate implementation and legal-policy read exceeded the output budget and truncated the gate details. **Prevention:** inspect the gate implementation and policy sections in separate, bounded reads.
+38. The post-push Dependabot alert query could not resolve GitHub from the restricted network; the approved read confirmed the remote warning reflected 2 critical, 15 high, and 14 medium alerts on the default branch. **Prevention:** use the approved network path for read-only follow-up when a remote command reports a network denial.
 
-32. The first legal mirror-ratchet run found that the canonical DPD amendment had not been added to its published mirror. **Prevention:** verify all six canonical/mirror amendment-history entries explicitly, then run the mirror ratchet.
+39. A GitHub check query used malformed jq quoting, and the subsequent full `gh run view --log-failed` output was truncated. **Prevention:** verify query quoting and obtain failed-check metadata before opening only the named job.
 
-33. A repeated patch block targeted the same legal-history line twice, so apply_patch rejected the patch atomically. **Prevention:** make one file-specific hunk per target and inspect the exact source line before retrying.
+40. Local RLS diagnostics hit a missing `pg_isready`, sandbox-blocked Docker/loopback access, and an unapplied migration 138; the migration-list JSON probe also included non-JSON CLI diagnostics. **Prevention:** use the project-supported migrated test database and do not reset or apply migrations to a shared local database without a confirmed target and state.
+
+41. A later patch duplicated existing Session Error entries 31–33; the duplicates were removed. **Prevention:** enumerate existing IDs and verify the final sequence is unique after editing the learning log.
 
 ## Related
 

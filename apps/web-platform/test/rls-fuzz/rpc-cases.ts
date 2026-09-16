@@ -32,6 +32,8 @@ export interface RpcCtx extends Ctx {
   emailTriageA: string;
   /** An A-owned scope_grant (authorize_template p_grant_id cross-founder-ref target). */
   scopeGrantA: string;
+  /** An A-owned agent-engine run for the append-event authorization attack. */
+  engineRunA: string;
 }
 
 /**
@@ -53,10 +55,14 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   claim_repo_clone_lock: (c) => `select claim_repo_clone_lock('${c.wsA}')`,
   is_workspace_member: (c) => `select is_workspace_member('${c.wsA}', auth.uid())`,
   is_workspace_owner: (c) => `select is_workspace_owner('${c.wsA}', auth.uid())`,
+  set_workspace_default_engine: (c) => `select set_workspace_default_engine('${c.wsA}','claude-code','managed')`,
+  bind_agent_engine_run: (c) =>
+    `select bind_agent_engine_run('${c.wsA}','conversation','${c.convA}',NULL,NULL,'${c.userB}')`,
   // Event append is authenticated-callable, but the run id is still tenant-
-  // scoped: tenant B must not append to tenant A's conversation-shaped UUID.
+  // scoped: use an existing tenant-A run and a valid envelope so authorization,
+  // not schema validation or a missing foreign key, decides the attack.
   append_agent_engine_event: (c) =>
-    `select append_agent_engine_event('${c.convA}','attack-event',1,'{}'::jsonb)`,
+    `select append_agent_engine_event('${c.engineRunA}','engine-event-1',1,'{"type":"lifecycle","source_type":"text"}'::jsonb)`,
   is_email_triage_workspace_owner: (c) => `select is_email_triage_workspace_owner('${c.wsA}', auth.uid())`,
   list_workspace_member_actions: (c) => `select count(*) from list_workspace_member_actions('${c.wsA}',10,null,null)`,
   invite_workspace_member: (c) =>

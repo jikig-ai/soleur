@@ -167,6 +167,14 @@ export async function seedEmailTriageItem(sql: Sql | Txn, c: Ctx): Promise<strin
  */
 export async function seedRpcCtx(sql: Sql): Promise<RpcCtx> {
   const base = await seedTwoTenant(sql);
+  const [engineRun] = await sql<{ id: string }[]>`
+    insert into agent_engine_runs (
+      workspace_id, execution_kind, conversation_id, engine_id, auth_mode,
+      adapter_version, status, created_by
+    ) values (
+      ${base.wsA}, 'conversation', ${base.convA}, 'claude-code', 'managed',
+      'rls-fuzz-fixture', 'queued', ${base.userA}
+    ) returning id`;
   const [kb] = await sql`insert into kb_files (workspace_id, user_id, file_path, filename, visibility)
     values (${base.wsA}, ${base.userA}, ${`/a/${randomUUID()}`}, 'a', 'workspace') returning id`;
   const [msg] = await sql`insert into messages (workspace_id, template_id, conversation_id, role, content)
@@ -192,5 +200,6 @@ export async function seedRpcCtx(sql: Sql): Promise<RpcCtx> {
     inboxA: inbox.id as string,
     emailTriageA,
     scopeGrantA: grant.id as string,
+    engineRunA: engineRun.id as string,
   };
 }
