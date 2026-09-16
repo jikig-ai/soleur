@@ -85,6 +85,7 @@
 653
 7898
 7980
+7981
 @ts-expect-error
 a11y
 ab-testing
@@ -98,6 +99,7 @@ absolute-positioning
 ac-design
 ac-filter
 ac-grep-scope
+acceptable-use-policy
 acceptance-criteria
 access
 access-denied
@@ -1040,6 +1042,7 @@ curated-register
 curl
 curl-based cloudflare api calls in agent
 current_user
+custody
 custom
 custom-domain
 custom-icon
@@ -1372,6 +1375,7 @@ error-cause-chain
 error-handling
 error-mapping
 esbuild
+escalation-routing
 escape-hatch
 escape-rows
 escape-testing
@@ -1480,6 +1484,7 @@ false-verdict
 falsifiable-test
 falsification
 falsification-gate
+fan-out
 fan-out-pattern
 faqpage
 fd-exhaustion
@@ -1973,6 +1978,7 @@ isolation
 issue
 issue-body-drift
 issue-body-staleness
+issue-comments
 issue-deduplication
 issue-filing
 issue-flow
@@ -2017,6 +2023,7 @@ key-rotation
 keyboard-shortcuts
 keyless-cosign
 keyword-detection
+keyword-monitor
 keyword-scanner
 kieran-rails-reviewer
 kieran-review
@@ -3099,6 +3106,7 @@ resource-management
 responsive
 responsive-design
 rest-api
+restart
 restatement
 restructure
 resume
@@ -3204,6 +3212,7 @@ rules-loader
 ruleset
 rulesets
 run-migrations
+run-records
 run_in_background
 runbook
 runbook-authoring
@@ -3811,6 +3820,7 @@ tenant-isolation
 tenant-jwt
 ternary
 terraform
+terraform-import
 terraform-plan-gates
 terraform-replace
 terraform-show-json
@@ -4085,6 +4095,7 @@ vendor-lock-in
 vendor-misclassification
 vendor-pin
 vendor-pinning
+vendor-probe
 vendor-signup
 vendor-token-mint
 vendor-topology / sentry / residency

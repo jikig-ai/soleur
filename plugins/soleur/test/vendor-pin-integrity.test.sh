@@ -625,12 +625,278 @@ for pat in '"plugins/soleur/skills/legal-generate/references/**"' '"plugins/sole
 done
 echo ""
 
+# ---------------------------------------------------------------------------
+# Guard 4 — the --verify-upstream binding check (#8181)
+#
+# Property: every NOTICE upstream-blob-sha equals the sha the Contents API
+# reports for upstream-path AT pinned-commit — path AND commit AND blob bound
+# in one call. The pre-#8181 check fetched `git/blobs/<sha>`, which proves
+# only that the object exists SOMEWHERE in the upstream store: a NOTICE
+# pinning a real blob under the wrong path passed while attesting content
+# upstream never published at that path.
+#
+# The gh stub below answers BOTH surfaces on purpose:
+#   contents/<path>?ref=<ref> — the new binding oracle, resolved per
+#     (path, ref) pair from a lookup table ("<path>|<ref>|<sha>" lines).
+#   git/blobs/<sha>           — the old existence oracle, KEPT so a reverted
+#     implementation still sees the blob-elsewhere fixture's sha as real:
+#     under the old check that fixture is GREEN, under the binding check it
+#     is RED. That asymmetry is what makes TS16b a mutation discriminator.
+# ---------------------------------------------------------------------------
+
+echo "TS16: --verify-upstream binds upstream-path + pinned-commit + blob (Guard 4, #8181)"
+
+TMP_TS16="$(mktemp -d -t vpi-ts16.XXXXXXXX)"
+assert_fixture_dir "$TMP_TS16"
+GHSTUB_DIR="$TMP_TS16/gh-stub"
+mkdir -p "$GHSTUB_DIR"
+
+cat > "$GHSTUB_DIR/gh" <<'STUB_EOF'
+#!/usr/bin/env bash
+# gh test double for --verify-upstream. See suite header for the two-surface
+# contract. $GH_STUB_TABLE holds "<path>|<ref>|<sha>" lines. The ref may
+# arrive inline (`contents/<p>?ref=<r>`) or as a `-f ref=<r>` field arg —
+# both are accepted so the stub discriminates the binding, not the syntax.
+#
+# METHOD SEMANTICS mirror real gh: a `-f` field with no explicit `-X GET`
+# makes gh POST, and POST on the contents endpoint 404s (measured on #8185
+# CI — the pre-fix run failed every binding). The stub reproduces that so
+# dropping `-X GET` turns the whole TS16 suite red.
+set -u
+if [[ "${1:-}" != "api" ]]; then
+  echo "gh stub: unhandled subcommand '$*'" >&2
+  exit 1
+fi
+shift
+url=""; ref=""; method=""; saw_field=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -f|--field)
+      saw_field=1
+      [[ "${2:-}" == ref=* ]] && ref="${2#ref=}"
+      shift 2 ;;
+    -X|--method)
+      method="$2"; shift 2 ;;
+    --jq|-H|--header)
+      shift 2 ;;
+    -*)
+      shift ;;
+    *)
+      url="$1"; shift ;;
+  esac
+done
+# gh defaults to POST when -f fields are present; contents only serves GET.
+if [[ "$saw_field" == 1 && "$method" != "GET" && "$url" == repos/*/contents/* ]]; then
+  exit 1
+fi
+case "$url" in
+  repos/*/contents/*)
+    path="${url#*contents/}"; path="${path%%\?*}"
+    [[ "$url" == *"?ref="* ]] && ref="${url##*ref=}"
+    while IFS='|' read -r p r s; do
+      if [[ "$p" == "$path" && "$r" == "$ref" ]]; then
+        printf '%s\n' "$s"
+        exit 0
+      fi
+    done < "$GH_STUB_TABLE"
+    # (path, ref) absent — the 404 arm.
+    exit 1
+    ;;
+  repos/*/git/blobs/*)
+    sha="${url##*/}"
+    while IFS='|' read -r _p _r s; do
+      [[ "$s" == "$sha" ]] && exit 0
+    done < "$GH_STUB_TABLE"
+    exit 1
+    ;;
+  *)
+    echo "gh stub: unexpected api url '$url'" >&2
+    exit 1
+    ;;
+esac
+STUB_EOF
+chmod +x "$GHSTUB_DIR/gh"
+
+PIN_A="1111111111111111111111111111111111111111"
+PIN_B="2222222222222222222222222222222222222222"
+SHA_ALPHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SHA_BETA="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+SHA_OTHER="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+SHA_MOVED="9999999999999999999999999999999999999999"
+
+# What upstream actually serves: at PIN_A alpha->SHA_ALPHA, beta->SHA_BETA,
+# other->SHA_OTHER; at PIN_B alpha->SHA_MOVED (file changed), beta unchanged.
+# The `not-a-sha` row is load-bearing for TS16e: it lets the stub ANSWER a
+# query for the malformed ref, so a missing pinned-commit validation would
+# read green instead of merely 404ing — the mutation arm is real.
+cat > "$TMP_TS16/table" <<EOF
+rules/alpha.md|$PIN_A|$SHA_ALPHA
+rules/beta.md|$PIN_A|$SHA_BETA
+rules/other.md|$PIN_A|$SHA_OTHER
+rules/alpha.md|$PIN_B|$SHA_MOVED
+rules/beta.md|$PIN_B|$SHA_BETA
+rules/alpha.md|not-a-sha|$SHA_ALPHA
+EOF
+
+make_verify_notice() {
+  # $1 = destination, $2 = pinned-commit, $3 = lifted-files body
+  cat > "$1" <<NOTICE_EOF
+---
+upstream: github.com/acme/widgets
+pinned-commit: $2
+last-verified: 2026-09-01
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+$3
+---
+
+# NOTICE (verify-upstream test fixture)
+NOTICE_EOF
+}
+
+run_verify() {
+  # $1 = NOTICE fixture path. Prints combined output; returns script rc.
+  env NOTICE_FILE="$1" GH_STUB_TABLE="$TMP_TS16/table" \
+    PATH="$GHSTUB_DIR:$PATH" bash "$INTEGRITY" --verify-upstream 2>&1
+}
+
+# TS16a — happy path: every record's path at pinned-commit resolves to the
+# pinned blob.
+make_verify_notice "$TMP_TS16/NOTICE-ok" "$PIN_A" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_BETA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-ok")
+RC=$?
+set -e
+assert_eq "0" "$RC" "valid path/commit/blob bindings pass --verify-upstream"
+assert_contains "$OUT" "verified" "success message printed on clean binding"
+
+# TS16b — mutation 1: NOTICE pins a REAL blob that lives elsewhere in the
+# upstream store (rules/other.md's sha) under rules/beta.md's path. The old
+# git/blobs existence check passes this fixture; the binding check must not.
+make_verify_notice "$TMP_TS16/NOTICE-elsewhere" "$PIN_A" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_OTHER
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-elsewhere")
+RC=$?
+set -e
+assert_eq "1" "$RC" "blob existing ELSEWHERE but not at upstream-path fails"
+assert_contains "$OUT" "rules/beta.md" "stderr names the misbound path"
+assert_contains "$OUT" "binding" "stderr identifies the failure as a binding mismatch"
+
+# TS16c — mutation 3: correct path, wrong pinned-commit. alpha exists at
+# PIN_B but resolves to a different blob (the file changed between commits).
+make_verify_notice "$TMP_TS16/NOTICE-wrongcommit" "$PIN_B" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim
+  - path: references/beta.md
+    upstream-path: rules/beta.md
+    upstream-blob-sha: $SHA_BETA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-wrongcommit")
+RC=$?
+set -e
+assert_eq "1" "$RC" "correct path at a DIFFERENT commit fails the binding"
+assert_contains "$OUT" "rules/alpha.md" "stderr names the file whose binding moved"
+
+# TS16d — mutation 3 second arm: the path does not exist at pinned-commit at
+# all (contents 404). Fail closed, not skip.
+make_verify_notice "$TMP_TS16/NOTICE-missing" "$PIN_A" \
+"  - path: references/gone.md
+    upstream-path: rules/gone.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-missing")
+RC=$?
+set -e
+assert_eq "1" "$RC" "path absent at pinned-commit fails"
+assert_contains "$OUT" "rules/gone.md" "stderr names the unresolvable path"
+
+# TS16e — fail-closed on a malformed pinned-commit: not 40-hex means the ref
+# under verification is corrupt, and a default-branch read would silently
+# attest the wrong commit. The `not-a-sha` table row above makes this arm a
+# real mutation discriminator: WITHOUT the charset check the stub resolves
+# the malformed ref to SHA_ALPHA and this test would go green.
+make_verify_notice "$TMP_TS16/NOTICE-badpin" "not-a-sha" \
+"  - path: references/alpha.md
+    upstream-path: rules/alpha.md
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-badpin")
+RC=$?
+set -e
+assert_eq "1" "$RC" "non-40-hex pinned-commit fails closed"
+assert_contains "$OUT" "pinned-commit" "stderr names the malformed field"
+
+# TS16f — mutation 4 / second member: first record binds, second does not.
+# A loop that stops at the first pass certifies this fixture as clean.
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-elsewhere")
+RC=$?
+set -e
+assert_eq "1" "$RC" "bad SECOND record still fails (loop checks every record)"
+
+# TS16g — fail-closed on an upstream path carrying URL metacharacters: a
+# `?` in the path segment would split the request early and smuggle a
+# second `ref` parameter, so the script must refuse rather than construct
+# the request (#8185 review). `rules/evil.md` itself is unregistered, so
+# without the charset guard the stub 404s and still fails — the DISCRIMINA-
+# TOR is the stderr token: only the validation path prints "unsafe".
+make_verify_notice "$TMP_TS16/NOTICE-evilpath" "$PIN_A" \
+"  - path: references/evil.md
+    upstream-path: rules/evil.md?ref=deadbeef
+    upstream-blob-sha: $SHA_ALPHA
+    local-blob-sha: ffffffffffffffffffffffffffffffffffffffff
+    status: active-verbatim"
+
+set +e
+OUT=$(run_verify "$TMP_TS16/NOTICE-evilpath")
+RC=$?
+set -e
+assert_eq "1" "$RC" "upstream path with URL metacharacters fails closed"
+assert_contains "$OUT" "unsafe" "stderr names the charset refusal, not a binding miss"
+
+rm -rf "$TMP_TS16"
+echo ""
+
 # Anti-vacuity floor (Guard 1 harness row i). Without a floor,
 # print_results greens on `FAIL -eq 0` and nothing on `PASS > 0`, so
 # replacing assert_eq with a stub that always passes reported
 # "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
 # #7710. A FLOOR, not equality: adding an assertion must not red the suite.
-# Derived from a green run (37 assertions on 2026-09-04).
+# Derived from a green run (39 assertions: 37 on 2026-09-04 + TS16g's two).
 #
 # Kept in the `print_results <floor>` form deliberately. A second, directly-
 # reported floor was written here to satisfy `scripts/guard-vacuity-floor.test.sh`
@@ -640,4 +906,4 @@ echo ""
 # EXITS 0 under neutered machinery) is fixed where it lives, at the
 # provenance-oracle dispatch check above, which now exits 1 directly instead of
 # tallying through FAIL.
-print_results 37
+print_results 39

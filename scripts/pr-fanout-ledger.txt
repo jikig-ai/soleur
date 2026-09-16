@@ -68,4 +68,4 @@ rls-authz-fuzz.yml	1	yes	yes	RLS fuzz, path-filtered to migrations/policies; can
 sentry-audit-gate.yml	1	yes	no	Sentry IaC audit, path-filtered to apps/web-platform/infra/sentry; no cancel: no concurrency block yet, next rollout candidate
 skill-security-scan-corpus.yml	1	yes	no	corpus scan, path-filtered to the scanner's rules/scripts; no cancel: no concurrency block yet, next rollout candidate
 validate-vector-config.yml	1	yes	no	vector.toml validation, path-filtered to the vector config; no cancel: no concurrency block yet, next rollout candidate
-vendor-pin-verify.yml	1	yes	no	vendored-pin verification, path-filtered to the vendored pins; no cancel: no concurrency block yet, next rollout candidate
+vendor-pin-verify.yml	3	no	no	required context vendor-pin-required, always-run aggregator over the path-gated upstream-blob verification (#8203, ADR-032 ABI); no cancel: job-level per-ref group on verify-upstream-blobs with cancel-in-progress:false; detect-changes + aggregator deliberately outside the group

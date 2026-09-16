@@ -34,7 +34,7 @@ INSTRUCTIONS:
 - Read referenced files before modifying them
 - Follow existing codebase patterns and conventions
 - Write tests for new functionality
-- Run tests relevant to your changes
+- Run tests relevant to your changes. If you create or edit a `*.test.sh` or a `tests/scripts/lib/*` file, ALSO run the repo-global ratchets no file-selected run can see: `plugins/soleur/test/fixture-relative-assert.test.sh`, `scripts/guard-vacuity-floor.test.sh`, `scripts/lint-trap-tempfile-ownership.test.sh`, `tests/scripts/test-plan-gate-preamble.sh` (#8189: four agents each shipped a green own-suite and 15 ratchet sites + 3 red ratchets between them)
 - Do NOT commit -- the lead will commit after reviewing all work
 - Do NOT modify files outside your assigned scope
 - Do NOT run package manager install commands (bun install, npm install) that create lockfiles
