@@ -172,26 +172,21 @@ resource "betteruptime_monitor" "app" {
 # fails or exceeds its 2 s timeout (server/health.ts). A 5xx, a timeout or a
 # Cloudflare error page carries no such body either, so app-down also trips it.
 #
-# Adopted, not created: 4226366 was made by hand on 2026-03-28 and keeps its id
-# and check history. The import is gated on var.adopt_app_health_monitor
-# (variables.tf says what `false` means). The import block and variable are
-# removed in a follow-up PR once the post-merge read-back passes; #7884 stays
-# open until that removal PR merges. Kept, a vendor-side deletion makes Terraform
-# re-attempt the import (H-F, source-derived), which aborts the per-merge apply
-# and the untargeted drift plan; targeted dispatch jobs skip the import
-# (measured, ADR-222).
+# Adopted, not created: 4226366 was made by hand on 2026-03-28 and imported by
+# #8216, keeping its id and check history. The one-time `import {}` block was
+# removed once the post-merge read-back passed (#7884): kept, a vendor-side
+# deletion would make Terraform re-attempt the import against a missing object
+# and abort the per-merge apply (ADR-222, H-F). Without it, a deleted monitor
+# drops out of state on refresh and the next apply recreates it under a NEW id,
+# losing 4226366's check history, with no database-readiness alarm until that
+# apply runs. Do NOT re-add the import to avoid that: it buys back the abort.
 #
 # Contract pin: test/server/health-keyword-monitor-contract.test.ts reads this
-# block and the import through the reconcile's parser, serves /health through
-# writeHealthResponse in each database state, and fails if the keyword stops
-# occurring exactly when Supabase is connected. Runbook:
+# block through the reconcile's parser, fails if any `import {}` addressing this
+# resource is re-added, serves /health through writeHealthResponse in each
+# database state, and fails if the keyword stops occurring exactly when Supabase
+# is connected. Runbook:
 # knowledge-base/engineering/operations/runbooks/app-database-readiness-alarm.md
-import {
-  for_each = var.adopt_app_health_monitor ? toset(["adopt"]) : toset([])
-  to       = betteruptime_monitor.app_health
-  id       = "4226366"
-}
-
 resource "betteruptime_monitor" "app_health" {
   monitor_type = "keyword"
   url          = "https://app.soleur.ai/health"

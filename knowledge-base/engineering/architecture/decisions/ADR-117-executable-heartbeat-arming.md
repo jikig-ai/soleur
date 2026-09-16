@@ -348,6 +348,11 @@ changing what the reconcile expects. None of the three exists in `soleur/prd_ter
 secret names read on 2026-09-15, zero matches), so today the two agree; adding one would break
 that silently.
 
+> **Updated 2026-09-16 (#7884).** `ADOPT_APP_HEALTH_MONITOR` is off that list: the
+> `adopt_app_health_monitor` variable was deleted with the one-time monitor-adoption scaffolding
+> (ADR-222 amendment of 2026-09-16), so two `tf-var` override paths remain, not three. The sweep
+> result is unchanged — none of them exists in `soleur/prd_terraform`.
+
 **2. Every mismatch row carries routing tokens.** Existing heartbeat rows gain a trailing
 `resource=<type.name>`; `logs_alert` rows gain `resource=<type.name>` immediately before
 `detail="…"`, so vendor text stays last. Every `MISMATCH` row also carries exactly one
