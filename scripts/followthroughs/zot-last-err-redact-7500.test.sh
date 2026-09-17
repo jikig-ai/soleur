@@ -65,6 +65,11 @@ foreign() { # <dt> <boot_id>
   printf '{"dt":"%s","raw":"{\\"PRIORITY\\":\\"6\\",\\"_HOSTNAME\\":\\"soleur-web-1\\",\\"message\\":\\"[zot] SOLEUR_ZOT_DISK egress FAILED: zot_last_err_src=fallback boot_id=%s zot_last_err=none\\"}"}\n' \
     "$1" "$2"
 }
+# A Phase-B-exclusive proof row. `suppressed` is emitted only by the Phase B gate (96f5b6eb5),
+# so its presence on a boot PROVES the new producer is running there. Every case asserting an
+# AUTHORITATIVE verdict (exit 0 or exit 1) must carry one, because the probe now refuses to close
+# the tracker or call the redaction broken on boot drift alone.
+proof() { row "$1" "$2" suppressed ""; }
 CLEAN_TAIL='level:info HTTP API request served in 3ms'
 COOKIE_TAIL='level:info HTTP API {headers:{Cookie:abc123}} served'
 CLIENTIP_TAIL='level:info HTTP API served clientIP:10.0.1.9'
@@ -128,14 +133,16 @@ expect() { # <name> <expected-rc> <fixture-file> <branch-marker>
 {
   row "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
   row "2026-09-17 10:05:00" "$BASELINE" fallback "$COOKIE_TAIL"
-  row "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$CLEAN_TAIL"
+  row   "2026-09-17 12:00:00" "$NEWBOOT" fallback "$CLEAN_TAIL"
+  proof "2026-09-17 12:05:00" "$NEWBOOT"
 } > "$WORK/f1"
 expect "mixed-boot window, delivered host clean -> PASS" 0 "$WORK/f1" "PASS: producer delivered"
 
 # ── Case 2: the genuine red must survive the scoping. ──────────────────────────────────────
 {
   row "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
-  row "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$COOKIE_TAIL"
+  row   "2026-09-17 12:00:00" "$NEWBOOT" fallback "$COOKIE_TAIL"
+  proof "2026-09-17 12:05:00" "$NEWBOOT"
 } > "$WORK/f2"
 expect "delivered host STILL leaking -> FAIL" 1 "$WORK/f2" "STILL carry header content"
 
@@ -188,15 +195,16 @@ expect "tier spoofed in the tail is not tier 4" 2 "$WORK/f9" "DELIVERY HAS LANDE
 # ── Case 10: a second ` zot_last_err=` must not truncate the leak out of the measurement. ──
 # The greedy read graded this CLEAN and exited 0 on a genuinely leaking delivered host.
 {
-  row "2026-09-17 12:00:00" "$NEWBOOT" fallback "level:info {headers:{Cookie:secret}} gc failed for zot_last_err=ok"
+  row   "2026-09-17 12:00:00" "$NEWBOOT" fallback "level:info {headers:{Cookie:secret}} gc failed for zot_last_err=ok"
+  proof "2026-09-17 12:05:00" "$NEWBOOT"
 } > "$WORK/f10"
 expect "second zot_last_err= cannot hide a leak" 1 "$WORK/f10" "STILL carry header content"
 
 # ── Case 11/12: each leak token is pinned INDEPENDENTLY. ───────────────────────────────────
 # One fixture carrying both tokens lets either half of the alternation be deleted silently.
-row "2026-09-17 12:00:00" "$NEWBOOT" fallback "$COOKIE_TAIL" > "$WORK/f11"
+{ row "2026-09-17 12:00:00" "$NEWBOOT" fallback "$COOKIE_TAIL"; proof "2026-09-17 12:05:00" "$NEWBOOT"; } > "$WORK/f11"
 expect "headers alone is a leak" 1 "$WORK/f11" "STILL carry header content"
-row "2026-09-17 12:00:00" "$NEWBOOT" fallback "$CLIENTIP_TAIL" > "$WORK/f12"
+{ row "2026-09-17 12:00:00" "$NEWBOOT" fallback "$CLIENTIP_TAIL"; proof "2026-09-17 12:05:00" "$NEWBOOT"; } > "$WORK/f12"
 expect "clientIP alone is a leak" 1 "$WORK/f12" "STILL carry header content"
 
 # ── Case 13: a suppressed row counts as "the subject ran" and cannot leak. ─────────────────
@@ -209,7 +217,7 @@ expect "clientIP alone is a leak" 1 "$WORK/f12" "STILL carry header content"
 expect "suppressed tier-4 row satisfies Guard 1 -> PASS" 0 "$WORK/f13" "PASS: producer delivered"
 
 # ── Case 14: a legitimate message mentioning 'headers' in prose is not a leak. ─────────────
-row "2026-09-17 12:00:00" "$NEWBOOT" fallback "level:error cannot parse headers" > "$WORK/f14"
+{ row "2026-09-17 12:00:00" "$NEWBOOT" fallback "level:error cannot parse headers"; proof "2026-09-17 12:05:00" "$NEWBOOT"; } > "$WORK/f14"
 expect "prose mentioning headers is not a leak" 0 "$WORK/f14" "PASS: producer delivered"
 
 # ── Case 15: empty corpus is channel_dark, never clean. ────────────────────────────────────
@@ -220,10 +228,27 @@ expect "zero rows -> channel_dark, not a pass" 2 "$WORK/f15" "channel_dark"
 # Emitted newest-first. Without the dt sort, tail -1 is the OLDEST row and a delivered host
 # reports NOT YET DELIVERED forever.
 {
-  row "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$CLEAN_TAIL"
-  row "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
+  proof "2026-09-17 12:05:00" "$NEWBOOT"
+  row   "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$CLEAN_TAIL"
+  row   "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
 } > "$WORK/f16"
 expect "newest-first input still grades the newest boot" 0 "$WORK/f16" "PASS: producer delivered"
+
+# ── Case 18: boot drift WITHOUT a Phase-B token is not an authoritative verdict. ───────────
+# A reboot of the un-replaced host flips boot_id with the OLD user_data in place. Neither exit 0
+# (closes a live leak tracker) nor exit 1 ("the redaction shipped and is not working") may be
+# emitted on evidence that cannot tell a reboot from a replace.
+{
+  row "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
+  row "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$COOKIE_TAIL"
+} > "$WORK/f18"
+expect "drift without a Phase-B token -> CANNOT ESTABLISH, not FAIL" 3 "$WORK/f18" "boot drift is a REBOOT, not a REPLACE"
+
+{
+  row "2026-09-17 10:00:00" "$BASELINE" fallback "$COOKIE_TAIL"
+  row "2026-09-17 12:00:00" "$NEWBOOT"  fallback "$CLEAN_TAIL"
+} > "$WORK/f19"
+expect "drift without a Phase-B token -> CANNOT ESTABLISH, not PASS" 3 "$WORK/f19" "delivery is inferred, not proven"
 
 # ── Case 17: a non-zero query exit is not a clean window. ──────────────────────────────────
 cases=$((cases + 1))
@@ -255,8 +280,8 @@ if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-if (( cases < 17 )); then
-  printf 'FATAL: case floor is 17, found %s (coverage removed?)\n' "$cases" >&2
+if (( cases < 19 )); then
+  printf 'FATAL: case floor is 19, found %s (coverage removed?)\n' "$cases" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1

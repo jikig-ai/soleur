@@ -260,15 +260,35 @@ TIER4_ROWS="$(printf '%s\n' "$DECODED" \
 TOTAL_ROWS="$(printf '%s\n' "$DECODED" | grep -cF 'SOLEUR_ZOT_DISK' || true)"
 [[ -n "$TOTAL_ROWS" ]] || TOTAL_ROWS=0
 
-# KNOWN LIMITATION, stated rather than left implicit: `boot_id != BASELINE` establishes a new
-# BOOT, not a new HOST. cloud-init's runcmd is per-instance and does not re-run on reboot, and
-# THIS host reboots as a convergence primitive (the private-NIC guard calls `reboot`; the
-# heartbeat carries `reboot_count=`). So a plain reboot of the UN-REPLACED host flips boot_id
-# with the OLD user_data still in place, and this probe reads that as delivered. The sibling
-# zot-log-channel-7440.sh hit exactly this and replaced the drift heuristic with a positive
-# delivery key. Doing the same here is a design change with more than one candidate key and a
-# second consumer to migrate, so it is tracked separately rather than smuggled into a scoping
-# fix. Until then a reboot-without-replace can produce a premature verdict in either direction.
+# DELIVERY IS INFERRED, SO AN AUTHORITATIVE VERDICT REQUIRES POSITIVE PROOF.
+#
+# `boot_id != BASELINE` establishes a new BOOT, not a new HOST. cloud-init's runcmd is
+# per-instance and does not re-run on reboot, and THIS host reboots as a convergence primitive
+# (the private-NIC guard calls `reboot`; the heartbeat carries `reboot_count=`). So a plain
+# reboot of the UN-REPLACED host flips boot_id with the OLD user_data still in place. The
+# sibling zot-log-channel-7440.sh hit exactly this, reproduced it, and replaced its own drift
+# heuristic under #7444 F-7.
+#
+# WHY THIS PROBE CANNOT SIMPLY COPY THAT FIX. The sibling's primary key is `SOLEUR_ZOT_LOG_BOOT`,
+# and `git log -S` puts that marker in 07cf8ebcb (#7444, the log-shipper) — NOT in 96f5b6eb5
+# (#7954, Phase B). Its presence proves a post-#7444 cloud-init, which is a strictly weaker claim
+# than the one this probe makes. Measured, not assumed.
+#
+# The only Phase-B-exclusive token in the emission is `zot_last_err_src=suppressed` (96f5b6eb5),
+# and it is SUFFICIENT but not NECESSARY: the gate only re-tags when it withheld a sample zot did
+# produce, so a healthy host on the dominant JSON path emits `fallback` forever. Phase B added no
+# always-present field, so no necessary-and-sufficient key exists in the current emission.
+#
+# Given that, the conservative rule: an AUTHORITATIVE verdict — exit 0 (which CLOSES a live
+# PII-leak tracker) or exit 1 (which asserts on a public issue that the redaction shipped and is
+# broken) — requires PROOF, and boot drift alone is not proof. Drift WITHOUT proof reports
+# CANNOT ESTABLISH rather than guessing in either direction. This is the direction #7960's own
+# design already argues for: "FAIL is never emitted merely for non-delivery."
+#
+# The cost is explicit: on a host that never emits a `suppressed` row, this tracker will not
+# auto-close. That is the correct failure direction for a leak tracker, and it is the argument
+# for the producer-side fix — a Phase-B revision field in the heartbeat — rather than a reason to
+# infer harder here.
 BASELINE_AT_MERGE=d0107f1f-834b-4acc-bd5a-00e53b61d835
 BASELINE="${SOLEUR_FT_BASELINE_BOOT:-$BASELINE_AT_MERGE}"
 
@@ -343,12 +363,32 @@ LEAKY="$(printf '%s\n' "$TIER4_ROWS" \
 # value, read from the trusted region). The env var is still honoured first so an operator can
 # override it without editing this file.
 
+# PROOF: a Phase-B-exclusive token observed on the boot being graded. `suppressed` is emitted
+# only by the Phase B gate (96f5b6eb5); no pre-Phase-B cloud-init can produce it.
+DELIVERY_PROVEN=0
+if printf '%s\n' "$TIER4_ROWS" | awk -F'\t' '$1 ~ /(^| )zot_last_err_src=suppressed( |$)/ { found = 1 } END { exit !found }'; then
+  DELIVERY_PROVEN=1
+fi
+
 if [[ -n "$BASELINE" && -n "$NEWEST_BOOT" && "$NEWEST_BOOT" != "$BASELINE" ]]; then
   # DELIVERED: the host has been replaced since merge. Now the leak check is a real verdict,
   # and a leak here is a genuine FAIL -- the redaction shipped and did not work. This is the
   # branch the previous revision could not express at all.
+  if [[ "$DELIVERY_PROVEN" -eq 0 ]]; then
+    echo "CANNOT ESTABLISH: boot_id ($NEWEST_BOOT) has moved past the merge-time baseline" >&2
+    echo "           ($BASELINE), but boot drift is a REBOOT, not a REPLACE — this host reboots as" >&2
+    echo "           a convergence primitive, and cloud-init's runcmd does not re-run on reboot." >&2
+    echo "           No Phase-B-exclusive token (zot_last_err_src=suppressed) was observed on this" >&2
+    echo "           boot, so delivery is inferred, not proven. Refusing to close the tracker or to" >&2
+    echo "           assert the redaction is broken on evidence that cannot tell those apart." >&2
+    echo "           ($TIER4_N tier-4 row(s) on this boot; $LEAKY carrying header content.)" >&2
+    echo "           ACTION: confirm whether a registry-host-replace actually ran. If it did and" >&2
+    echo "           this persists, the producer needs a positive delivery field — see the header." >&2
+    exit 3
+  fi
   if [[ "$LEAKY" -gt 0 ]]; then
-    echo "FAIL: the producer IS delivered (boot_id $NEWEST_BOOT != baseline $BASELINE) and" >&2
+    echo "FAIL: the producer IS delivered (proven: zot_last_err_src=suppressed on boot" >&2
+    echo "      $NEWEST_BOOT, which only the Phase B gate emits) and" >&2
     echo "      $LEAKY of $TIER4_N tier-4 row(s) STILL carry header content. The redaction" >&2
     echo "      shipped and is not working. This must not close." >&2
     exit 1
