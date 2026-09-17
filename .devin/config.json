@@ -1,5 +1,5 @@
 {
-  "requiredPlugins": ["jikig-ai/soleur#plugins/soleur"],
+  "requiredPlugins": ["https://github.com/jikig-ai/soleur#plugins/soleur"],
   "hooks": {
     "SessionStart": [
       {
