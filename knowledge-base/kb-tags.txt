@@ -1383,6 +1383,7 @@ escalation-routing
 escape-hatch
 escape-rows
 escape-testing
+escapes
 escaping
 eslint
 esm
@@ -3944,6 +3945,7 @@ tool-tier
 tool_input
 tool_name
 tool_progress
+toolchain
 toolchain-pinning
 tooling
 tooling / workflow-infra
