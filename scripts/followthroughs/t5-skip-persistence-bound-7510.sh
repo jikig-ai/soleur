@@ -129,6 +129,12 @@ SUITE_TERMINAL='git-data-runcmd-rehearsal:'
 SKIP_MARKERS=(
   'SKIP (loud): T5 '
   'SKIP (loud): S1 '
+  # T17 (#7535 Phase 2). Added in the SAME change that made the arm skip-eligible, because the
+  # suite's own roster guard (_PROBE_NAMED vs _SKIP_CALL_SITES) asserts that every arm_skip call
+  # site opens with a name this list greps for. Registering the arm there and not here would
+  # satisfy that equality by arithmetic while leaving this probe blind to the new arm — the exact
+  # "a probe that goes quiet on the arm the fix creates" failure the note above describes.
+  'SKIP (loud): T17 '
 )
 
 sampled=0
