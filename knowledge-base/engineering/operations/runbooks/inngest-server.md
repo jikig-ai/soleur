@@ -44,18 +44,43 @@ on `done`, emits a `::warning::` and writes the recovery below into the job summ
 block — the replace is often exactly what you want and the recovery is one dispatch — and it
 degrades open on an unreadable flag.
 
-**Recovery — one dispatch, no data loss:**
+**Recovery — one dispatch, then an approval, no data loss:**
 
 ```
 gh workflow run cutover-inngest.yml -f op=resume
 ```
+
+> **The run then HOLDS in `Waiting` until a human approves it.** `op=resume` writes a flag that
+> authorizes a prod scheduler start, so its job declares `environment: inngest-cutover`
+> (`cutover-inngest.yml:78`) and that environment carries a required reviewer — verified
+> 2026-09-17, the reviewer set is non-empty. **No step executes before the approval**, so a
+> dispatch that appears to produce nothing has not failed; it is waiting for you. Ask the
+> operator to approve it in the Actions UI, and confirm the state with:
+>
+> ```
+> gh run list -w cutover-inngest.yml -L 1
+> ```
+>
+> Recorded because the previous wording — "one dispatch, no data loss" — is what an engineer
+> reads mid-outage, and an unexplained `Waiting` invites a second remediation on top of a
+> recovery that is already in flight.
 
 `op=resume` exists for exactly this state. Its G1 requires the flag to be `done` (only that
 evidences a completed flip), G3 requires the host to be audible, and it then writes
 `INNGEST_CUTOVER_FLIP=flushed`. The on-host 30s timer takes the post-flush arm: start → verify it
 SERVES → re-record the marker → complete to `done`, **with no re-FLUSHALL**, so the queue
 survives. Confirm by the FSM row `reason="flushed-resume-no-reflush"` followed by a return to
-`noop-done`.
+`noop-done` — read it with:
+
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since 30m --grep inngest-cutover-flip --raw-only --limit 20
+```
+
+**G3 is a live precondition, not a formality.** It requires the host to be audible on Better
+Stack, and a *freshly replaced* host is not audible until Vector is up and shipping. If `op=resume`
+refuses on G3, that is the expected ordering — wait for the host to start shipping (read it with
+`scripts/inngest-host-state.sh`) and re-dispatch.
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
@@ -126,6 +151,35 @@ indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exac
 > `host=soleur-inngest` **AND** `host_role=dedicated`: web-1 also emits
 > `SOLEUR_INNGEST_SERVER_PROBE` with `host_name=soleur-inngest-prd`, so filtering on the
 > marker or on `host_name` selects the wrong machine while looking right.
+>
+> **Exit codes are the contract — branch on them, and do NOT treat `rc != 0` as "host down".**
+> The distinction between *the host is bad* and *I could not measure the host* is the entire
+> point of this tool, and it is carried in the exit code, not the prose:
+>
+> | rc | Meaning | What to do |
+> |---|---|---|
+> | `0` | A dedicated-host row was found and summarised. Read `SERVING=yes\|no`. | Act on the verdict — but check the age first; see STALE below. |
+> | `2` | Usage error (e.g. `--since` without a unit). Nothing was queried. | Fix the invocation. Says nothing about the host. |
+> | `3` | Credentials not injected. Nothing was queried. | Wrap in `doppler run -p soleur -c prd_terraform --`. You are not missing access. |
+> | `4` | The query **ran** and the window held no dedicated-host row. | A real finding: the host is not shipping (vector down, host down, or never booted). |
+> | `5` | The newest anchored row carried no identity/verdict fields. **No verdict emitted.** | Not evidence of ill health *or* of good. Widen `--since` and re-read. |
+> | `6` | **The read failed. Nothing was measured.** | Fix the read path (rotated credential, ClickHouse fault, DNS, missing binary). **Never report this as a host outage.** |
+>
+> `4` and `6` are the pair that matters. Until 2026-09-17 every instrument fault — a 503, an
+> absent binary, an error page, a python traceback — exited `4` and printed "the host is not
+> shipping", which is a confident diagnosis of a healthy machine produced by a broken reader.
+> If you see `6`, the tool is telling you it does not know.
+>
+> **Two things the verdict does not say.** `SERVING=yes` requires `registry_fns > 0` as well as
+> `server_active=active` and `http_code=200` — a diagnostic boot (`INNGEST_DIAGNOSTIC_BOOT=1`)
+> satisfies the first two and owns no work (#8015). And the probe timer is hourly, so a row can
+> be up to 60m old; the verdict is a statement about **then**. The output labels this itself
+> (`[Nm old]`, a `STALE` block, or `[AGE UNKNOWN]` when the timestamp will not parse) — read
+> that line before acting on the verdict.
+>
+> **`INNGEST_DIAGNOSTIC_BOOT=1` is not an env var you can just export.** The unit carries a
+> durable sentinel, so setting the variable alone produces a *second* BLOCK; it is a Doppler
+> write to `soleur-inngest/prd` and needs `inngest-bootstrap.sh` re-run with it set.
 
 Fields this runbook uses (all under `.services`):
 

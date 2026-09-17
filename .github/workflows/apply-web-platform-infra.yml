@@ -2011,7 +2011,7 @@ jobs:
           DOPPLER_TOKEN_INNGEST_ARM: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}
         run: |
           set -uo pipefail
-          RECOVER="gh workflow run cutover-inngest.yml -f op=resume"
+          RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
           if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
             echo "::warning::inherited-done preflight SKIPPED (no DOPPLER_TOKEN_INNGEST_ARM). If INNGEST_CUTOVER_FLIP is 'done', this replace leaves inngest-server refusing to start (#7228); recover with: ${RECOVER}"
             exit 0
