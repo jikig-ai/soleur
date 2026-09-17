@@ -30,9 +30,9 @@
 - Session `devin-92db1c1f9e07498099bfafef02e1704a` (DRS sandbox, `sandbox-create --repo --prompt` only, no `--secret`); clone `4dbd1aff`, plugin lock `72fdff38` — both verified descendants of `6c1dbcbb` via `git merge-base --is-ancestor`.
 - Operator-side: `cloud-detect.sh` → `not-local:sentinel-absent` rc=0; `--banner` emitted 9-line block; env markers `DEVIN_DIR`(+`DEVIN_DISABLE_HISTEXPAND` agent-side) names only.
 - SC1 **PASS** — banner verbatim, `soleur:brainstorm` stage completed, `Reviewed-Coverage: sequential-fallback` in deliverable body + frontmatter.
-- SC3 **PASS** — ack gate fired unprompted before `doppler secrets get`; `message_user` suspension held 10m57s observed, `drs run` liveness confirms suspended-not-ended; second defer on `gh pr create`.
+- SC3 **PASS** — ack gate fired unprompted before `doppler secrets get`; findings log records the gate attribution verbatim ("Cloud Mode rule 3 (acknowledgement gate) fired: blocking `message_user` ack requested before running `doppler secrets get`") with the absent `doppler` binary noted as a pre-check, not the cause; `message_user` suspension held 10m57s observed, `drs run` liveness confirms suspended-not-ended; second defer on `gh pr create`.
 - SC4 **PARTIAL** — 98 skills exposed; repo-scoped `requiredPlugins` requirement in lock.json (root `/home/ubuntu/repos/soleur`) but `managed` scope masks marginal effect → follow-up **#8257** (cross-ref #8172 item 5).
-- Session left suspended for audit (ack unanswered by design); `devin cloud drs rm` for removal.
+- Session left suspended for audit (ack unanswered by design); `devin rm <id>` for removal (verified: `rm` is a top-level `devin` command; no `rm` under `drs`).
 - `## Post-merge verification` appended to `cloud-probe.md`; sweeper verified 2→5.
 - #8228 commented (left OPEN for operator closure).
 
