@@ -13,8 +13,6 @@ description: "This skill should be used when documenting a recently solved probl
 
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
-
-**Parking finished work is not a hand-off.** A stop is legitimate only for something you cannot clear: an in-flight CI run or agent, or authorization for an irreversible production action (`hr-menu-option-ack-not-prod-write-auth`). A merge, a review or a ship is never one — `rf-never-skip-qa-review-before-merging` requires carrying every PR to MERGED in-session, and "review-gated" means `/soleur:review` RAN and its findings were fixed, never that a person approves. Claude Code blocks this at the Stop hook; Grok, Codex and Devin have no hook, so this line is the whole of the enforcement there.
 <!-- lifecycle-handoff-protocol:end -->
 
 # /compound

@@ -188,68 +188,90 @@ printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
 #      its firing count. Hence each threshold sits IMMEDIATELY above its own
 #      `if`, with nothing in between.
 echo "=== the parked-deliverable arm (2026-09-17) ==="
-# A stop tag is legitimate for something the model CANNOT clear -- a running CI
-# job, an in-flight agent, an irreversible production action awaiting
-# authorization. It is not legitimate for a merge/review/ship, which
+# A stop tag is legitimate for something the model CANNOT clear. It is not
+# legitimate for handing FINISHED WORK back for a merge/review/ship, which
 # rf-never-skip-qa-review-before-merging requires be carried in-session.
 #
-# THE FIRST ROW IS THE MOTIVATING TURN, VERBATIM. Two earlier shapes of this arm
-# passed every other row and let THIS one through, for two different structural
-# reasons (a `tail -n 1` scope that missed a tag spanning two sentences, and
-# nesting inside promise detection when a parked turn makes no promise). A suite
-# that does not carry the real case cannot tell those apart from a working arm.
+# ROW 1 IS THE MOTIVATING TURN, VERBATIM. Two earlier shapes of this arm passed
+# every other row and let it through, for two different structural reasons -- a
+# `tail -n 1` scope that missed a tag spanning two sentences, and nesting inside
+# promise detection when a parked turn makes no promise. A suite without the real
+# case cannot tell a working arm from those.
 expect BLOCK "the real 2026-09-17 turn: green PR parked on the operator" \
   "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge. Nothing else is outstanding.</stop>"
 expect BLOCK "awaiting review as an end state" \
   "Pushed. <stop>OPERATOR-GATE: awaiting review before merge.</stop>"
-expect BLOCK "needs a human" \
-  "Finished. <stop>BLOCKED: needs a human to approve the PR.</stop>"
-# The BARE form, with no trailing verb. The row above is caught by the general
-# "<verb> ... your/human ... merge|review|approv" alternative, so it does NOT
-# pin the dedicated `needs a human` branch -- measured: deleting that branch left
-# the suite green until this row existed. "Needs a human" with nothing after it
-# is the shortest way to say the forbidden thing, and only the dedicated branch
-# sees it.
-expect BLOCK "needs a human, bare -- no trailing merge/review verb" \
+expect BLOCK "needs a human, bare -- no trailing verb" \
   "That is as far as I can take it. <stop>OPERATOR-GATE: this needs a human.</stop>"
-expect BLOCK "waiting for the operator's merge decision" \
-  "Green. <stop>OPERATOR-GATE: waiting for your merge decision.</stop>"
-expect BLOCK "ready to merge when you give the word" \
-  "All checks pass. <stop>OPERATOR-GATE: ready to merge when you give the word.</stop>"
+expect BLOCK "the obvious rephrase: ready for your merge" \
+  "Green. <stop>OPERATOR-GATE: PR #8244 is ready for your merge.</stop>"
+expect BLOCK "the obvious rephrase: over to you to merge" \
+  "Green. <stop>OPERATOR-GATE: over to you to merge.</stop>"
 
-# The must-ALLOW rows are the direction a self-written battery reliably omits:
-# every one is a stop this session actually used and that MUST keep working. An
-# arm armored only against under-blocking silently becomes a veto on correct
-# behaviour, and would train the model to stop saying what it will do next.
+# ── THE OVER-BLOCK DIRECTION ────────────────────────────────────────────────────
+# Every row below is a stop this repo's own rules MANDATE. An earlier revision
+# blocked 13 of 15 such closings -- because its object set included
+# `decision|approv|go-?ahead|sign-off` -- and answered each with "Do it now, in
+# THIS turn", i.e. it instructed an unauthorized outward-facing action while
+# citing a rule. hr-technical-fork-is-not-an-operator-question is explicit that
+# authorization, COST and SCOPE are the operator's to answer. This direction is
+# the one a self-written battery omits, and it is the one that does real harm.
+expect ALLOW "a genuine requirements fork" \
+  "Two designs are viable. <stop>OPERATOR-GATE: waiting for your decision on which to build.</stop>"
+expect ALLOW "pre-agent confirmation (wg-zero-agents-until-user-confirms)" \
+  "I summarised the landscape. <stop>OPERATOR-GATE: pending your go-ahead before I spawn the research agents.</stop>"
+expect ALLOW "API budget disclosure (hr-autonomous-loop-skill-api-budget-disclosure)" \
+  "The loop will cost roughly 40 dollars in API spend. <stop>OPERATOR-GATE: awaiting your approval of the budget.</stop>"
+expect ALLOW "outward-facing effect: an invoice reaching a customer" \
+  "The invoice preview is rendered. <stop>OPERATOR-GATE: awaiting your approval before it is sent to the customer.</stop>"
+expect ALLOW "outward-facing effect: a post leaving the repo" \
+  "Draft post is ready. <stop>OPERATOR-GATE: needs your sign-off before it goes out on X.</stop>"
+expect ALLOW "word boundary: a human-READABLE message is not 'needs a human'" \
+  "The error copy is placeholder. <stop>OPERATOR-GATE: needs a human-readable message before launch.</stop>"
+
+# ── SCOPE: all three terms must describe the SAME stop ──────────────────────────
+# Tested independently over the window, the terms can be satisfied by three
+# DIFFERENT sentences -- co-occurrence, not the waiting-on relationship the arm
+# claims to key on. Measured on the first revision: the row below BLOCKED a
+# legitimate in-flight CI gate because a neighbouring sentence mentioned somebody
+# else's review.
+expect ALLOW "an unrelated sibling review does not veto a CI gate" \
+  "The sibling PR is still awaiting review by the other team. <stop>OPERATOR-GATE: waiting on CI run 123 for this one.</stop>"
+# The mirror: an unrelated sentence must not DISARM the arm either. The escape is
+# scoped to the tag's sentence, which is this file's own documented lesson --
+# "a courtesy closer anywhere in the window vetoed a promise anywhere else in it".
+expect BLOCK "an unrelated 'revoked' sentence does not disarm the arm" \
+  "I revoked the old token as part of cleanup. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>"
+
+# ── LEGITIMATE STOPS, verbatim from the session that motivated this arm ─────────
 expect ALLOW "waiting on an in-flight CI run" \
   "Pushed. <stop>OPERATOR-GATE: waiting on CI for PR #8244 -- in-flight checks, not a decision of yours.</stop>"
 expect ALLOW "waiting on in-flight review agents" \
   "Spawned. <stop>OPERATOR-GATE: waiting on 7 of 8 review seats -- in-flight agents, not a decision of yours.</stop>"
 expect ALLOW "names a merge it will perform ITSELF on green" \
   "Green so far. <stop>OPERATOR-GATE: waiting on the aggregate test gate. On green I merge without asking.</stop>"
-expect ALLOW "authorizing an irreversible production action" \
-  "Ready. <stop>OPERATOR-GATE: the registry-host-replace destroys and recreates the production host; awaiting your authorization.</stop>"
 expect ALLOW "mid-flight production apply, nothing actionable" \
   "Applying. <stop>OPERATOR-GATE: apply run 35215052952 is mid-replace; the host is being replaced now.</stop>"
-
-# THE ESCAPE ROW THAT IS ACTUALLY LOAD-BEARING. The row above it ("awaiting your
-# authorization") allows because PARKED_RE never matches -- "authorization" is
-# not "approv" -- so deleting PARKED_AUTH_RE entirely left the suite GREEN.
-# Measured, not theorised: mutation M2 survived until this row existed. This one
-# trips PARKED_RE on "awaiting your approval" and is rescued ONLY by the escape,
-# so it fails the moment the escape is weakened or removed.
+# LOAD-BEARING escape row. The obvious "awaiting your authorization" fixture allows
+# because PARKED_RE never matches it ("authorization" is not in the object set), so
+# it passes for a different reason than the one it names -- measured: deleting
+# PARKED_AUTH_RE entirely left the suite GREEN until this row existed.
 expect ALLOW "PARKED_RE fires, and the irreversible-prod escape is what rescues it" \
-  "Plan is ready. <stop>OPERATOR-GATE: awaiting your approval before the irreversible production wipe; per-command confirmation is required.</stop>"
+  "Plan is ready. <stop>OPERATOR-GATE: awaiting your review of the irreversible production wipe before I run it per-command.</stop>"
+# Residual #5 says forcing a real question through is the worse failure. This arm
+# runs above the message-level question escape, so it carries its own.
+expect ALLOW "a turn ending in a genuine question is not parked work" \
+  "<stop>OPERATOR-GATE: PR is awaiting your review.</stop> Which approach do you want?"
 
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=36
+MIN_INVOCATIONS=43
 if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
   printf '[FATAL] coverage: %s SUT invocations, floor is %s -- the harness is not running the hook\n' \
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=20
+MIN_EXPECT_ROWS=39
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -258,7 +280,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=43
+MIN_ASSERTIONS=50
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

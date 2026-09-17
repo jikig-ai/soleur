@@ -13,8 +13,6 @@ description: "This skill should be used when performing exhaustive code reviews 
 
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/review`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
-
-**Parking finished work is not a hand-off.** A stop is legitimate only for something you cannot clear: an in-flight CI run or agent, or authorization for an irreversible production action (`hr-menu-option-ack-not-prod-write-auth`). A merge, a review or a ship is never one — `rf-never-skip-qa-review-before-merging` requires carrying every PR to MERGED in-session, and "review-gated" means `/soleur:review` RAN and its findings were fixed, never that a person approves. Claude Code blocks this at the Stop hook; Grok, Codex and Devin have no hook, so this line is the whole of the enforcement there.
 <!-- lifecycle-handoff-protocol:end -->
 
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.

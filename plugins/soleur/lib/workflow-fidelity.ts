@@ -63,35 +63,6 @@ export const BRAINSTORM_ANTI_BYPASS_SENTINEL = "brainstorm-anti-bypass-protocol"
 export const PLAN_ANTI_BYPASS_SENTINEL = "plan-anti-bypass-protocol";
 export const WORK_ANTI_BYPASS_SENTINEL = "work-anti-bypass-protocol";
 export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
-
-/**
- * A stop / hand-back is legitimate only for something the agent CANNOT clear.
- *
- * Claude Code enforces this mechanically in `hooks/unkept-promise-hook.sh` (the
- * parked-deliverable arm). Grok, Codex and Devin have no Stop hook, so for them
- * this constant is the contract the lifecycle-handoff block cites.
- *
- * WHY IT EXISTS. `rf-never-skip-qa-review-before-merging` and
- * `wg-verified-work-ships-without-asking` already forbid parking finished work on
- * the operator, in prose. The class was recorded on 2026-08-04 and recurred on
- * 2026-09-17 with both rules in force, because parking READS as diligence and
- * nothing measured it. A rule that has failed twice the same way is unenforced,
- * not under-written.
- */
-export const PARKED_DELIVERABLE_STOPS = [
-  "awaiting your merge",
-  "awaiting review",
-  "needs a human",
-  "waiting for your merge decision",
-  "ready to merge when you say so",
-] as const;
-
-/** Legitimate stops that MUST keep working — the direction such a guard reliably omits. */
-export const LEGITIMATE_STOPS = [
-  "waiting on an in-flight CI run, workflow or agent",
-  "authorizing an irreversible production action (hr-menu-option-ack-not-prod-write-auth)",
-  "a genuine fork in requirements that changes what gets built",
-] as const;
 export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
 export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
 
@@ -202,6 +173,7 @@ export function workflowFidelityInstructions(harness: Harness): string {
     `- **FORBIDDEN after routing to \`one-shot\`:** inline implementation before Steps 1–8 complete; ending after push/draft PR; reporting "done" without \`${ONE_SHOT_DONE_MARKER}\`.`,
     `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → \`/work\`; \`work\` → ${workTail}.`,
     `- **Merge → deploy (never ask the operator):** after \`/ship\` queues merge, YOU poll through release workflows and invoke \`/postmerge\` — do not ask "want me to monitor?" or end the turn at MERGED.`,
+    `- **Parking finished work is not a hand-off:** a stop is legitimate only for something you cannot clear — an in-flight CI run or agent, authorization for an irreversible production action (\`hr-menu-option-ack-not-prod-write-auth\`), cost/scope, an outward-facing effect, or a genuine requirements fork. Handing a reviewed, green PR back for a merge/review/ship is none of those: \`rf-never-skip-qa-review-before-merging\` requires carrying it to MERGED in-session, and "review-gated" means \`/soleur:review\` RAN and its findings were fixed, never that a person approves. Claude Code blocks this at its Stop hook; you have no hook, so this line is your copy of the rule.`,
     `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + \`/postmerge\` verification complete — not at draft PR, not at merge alone.`,
     `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + \`/work\`; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
     "- Skill exit summaries (`## Work Phase Complete`, `## Review Phase Complete`) are **continuation gates**, not turn boundaries.",
