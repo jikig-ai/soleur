@@ -42,6 +42,10 @@ full hook parity. Generated custom agent definitions, automatic model-tier
 translation, and a Claude Workflow interpreter are outside this change.
 Revisit those when a concrete Codex workflow requires them.
 
+The replace-default semantics recorded in this ADR's Verification hold for
+Codex and not for Claude Code, whose `skills` key is additive — see ADR-224 for
+the harness-qualified placement rule and the slash-name uniqueness guard.
+
 ## Verification
 
 The native smoke test checks the installed cache, not just source JSON.
