@@ -1027,6 +1027,10 @@ describe("plugin slash-name uniqueness", () => {
   // Ack'd BY NAME so a NEW cross-root duplicate — the class this clause exists
   // to catch — still reds; mutation row M6 proves that. Adding a name here is a
   // deliberate act, not a baseline regeneration.
+  //
+  // Retired by #8236, which deletes the shared shims once the dispatch
+  // replacement lands. The issue number is inline so the ack is traceable to the
+  // thing that ends it rather than outliving its reason silently.
   const ACKED_CROSS_ROOT_DUPES = new Set(["go", "help", "sync"]);
 
   test("discovers the manifests and components it is asserting over", () => {
