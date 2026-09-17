@@ -321,24 +321,50 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # version pinned prints `mise ERROR No version is set for shim: bun` to stderr and exits
 # non-zero. This file is `set -euo pipefail` (line 2), so the bare `actual=$(bun --version)` was
 # an ABORT rather than a skipped check — and it sits ABOVE every registration emit, so the
-# observable failure was not a missing warning. It was `--enumerate` returning ZERO records at
-# rc 1 on a host where nothing about the battery was wrong, which reddened every consumer that
-# correctly fails closed on the stream's count (`scripts/battery-tag-authorship.test.sh:224-260`,
-# `plugins/soleur/test/scripts-shard-totality.test.sh`,
-# `plugins/soleur/test/fullsuite-merge-gate.test.ts`) for a cause none of them could name.
+# observable failure was not a missing warning. It was EVERY invocation of this runner exiting
+# rc 1 having emitted nothing, on a host where nothing about the battery was wrong.
 #
-# So the read is guarded and the DEGRADED case is reported rather than silently swallowed — a
-# toolchain that cannot answer its own version is worth one line of stderr, and staying silent
-# here would be the same fail-quiet class the consumers above exist to prevent. Pinned by
-# scripts/test-all-enumerate-toolchain.test.sh, whose R5 row is what stops this from being
-# "fixed" by deleting the check. (#8231)
-if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
-  expected=$(tr -d '[:space:]' < .bun-version)
-  actual=$(bun --version 2>/dev/null) || actual=""
+# WHAT THAT BREAKS. Two consumers fail closed on the `--enumerate` record stream and go red for
+# a cause neither can name: `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands`
+# root-set guard (rc AND count) and `plugins/soleur/test/scripts-shard-totality.test.sh` ›
+# `enumerate_leg()` (count only — it invokes the function as a bare statement and never reads
+# `$?`; `pipefail` IS set there, so the rc survives the pipe and is discarded at the call site).
+# `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation is the same
+# fail-closed shape on the SIBLING stream and the same prologue window.
+#
+# SCOPE, stated narrowly on purpose. This guards ONE tool. The prologue above the first
+# registration emit still aborts rc-1-with-zero-records if `tr`, `dirname`, `mktemp` or `mkdir`
+# fails, and the `dirname` sites do it with no runner-authored stderr at all. `command v as a
+# liveness claim` is a repo-wide class (tracked separately); do not read this block as closing
+# it. `scripts/orphan-process-reaper.sh` › the `logger` guard is the in-repo reference shape.
+#
+# The DEGRADED case is reported rather than silently swallowed, and the report carries the exit
+# status instead of asserting a cause this code never measured: 126 is a bad interpreter, 127 a
+# binary that vanished between `command -v` and the call, 1 a shim refusing. `timeout` and the
+# `||` arm are BOTH load-bearing and cover different failures — see the same argument made for
+# `crane` further down this file; `|| actual=""` covers a non-zero exit and cannot rescue a shim
+# that never returns (a version manager may go to the network to install a missing runtime).
+#
+# Pinned by scripts/test-all-enumerate-toolchain.test.sh, whose R5 row is what stops this from
+# being "fixed" by deleting the check. (#8231)
+if [[ -f .bun-version ]]; then
+  # `tr` gets the same treatment as `bun` below, for the same reason and one line earlier: a
+  # bare command substitution here is an ABORT under `set -e`, above every registration emit.
+  expected=$(tr -d '[:space:]' < .bun-version) || expected=""
+fi
+if [[ -n "${expected:-}" ]] && command -v bun >/dev/null 2>&1; then
+  _bun_rc=0
+  actual=$(timeout 10 bun --version 2>/dev/null) || _bun_rc=$?
+  # Normalise the COMMAND's output, not just the file's: a shim emitting CRLF or a banner line
+  # otherwise compares unequal to a byte-identical pinned version and this block emits
+  # `Bun 1.3.14 installed, expected 1.3.14` — a warning that contradicts itself.
+  actual=$(printf '%s' "${actual:-}" | tr -d '[:space:]') || actual=""
   if [[ -z "$actual" ]]; then
-    echo "WARNING: bun is on PATH but 'bun --version' failed; skipping the version check (a shim with no pinned version does this)" >&2
+    echo "WARNING: 'bun --version' produced no version (exit ${_bun_rc}); skipping the version check" >&2
   elif [[ "$actual" != "$expected" ]]; then
-    echo "WARNING: Bun $actual installed, expected $expected (from .bun-version)" >&2
+    # %q, not raw: $actual is PATH-controlled, and a shim can otherwise emit control characters
+    # or U+2028 and forge a line shaped like this runner's own status output into a CI log.
+    printf 'WARNING: Bun %q installed, expected %q (from .bun-version)\n' "$actual" "$expected" >&2
     echo "Run: bun upgrade" >&2
   fi
 fi

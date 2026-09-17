@@ -40,9 +40,20 @@ This is not a host curiosity. Three registered consumers fail closed on that str
 
 | Consumer | Fails closed on |
 |---|---|
-| `scripts/battery-tag-authorship.test.sh:224-260` | rc **and** count |
-| `plugins/soleur/test/scripts-shard-totality.test.sh:231-238` | count only — it pipes the runner, so rc is the pipe's |
-| `plugins/soleur/test/fullsuite-merge-gate.test.ts:173-176` | count (`toBeGreaterThan(0)`) |
+| `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands` root-set guard | rc **and** count |
+| `plugins/soleur/test/scripts-shard-totality.test.sh` › `enumerate_leg()` | count only |
+| `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation | rc **and** count — sibling stream, same prologue window |
+
+> **Superseded 2026-09-17 (review).** An earlier revision of this table listed
+> `plugins/soleur/test/fullsuite-merge-gate.test.ts:173-176` as a third consumer of the record
+> stream. **It is not a consumer at all.** Verified: it imports only `bun:test`, `fs` and `path`
+> and spawns no process; `--enumerate` appears in it once, as a member of `QUERY_FLAGS`, a list
+> of flags to *exclude* when deciding whether a prescribed invocation runs the battery, and the
+> `toBeGreaterThan(0)` counts fenced invocation lines in `ship/SKILL.md`. A zero-record
+> enumerate stream could not have reddened it and never can. Two review seats found this
+> independently. The claim came from the plan and was propagated without being measured — the
+> exact class the rest of this document polices. The count of consumers was wrong; the fix's
+> justification stands on `battery-tag-authorship` alone, which was measured exit 1 → exit 0.
 
 `scripts/battery-tag-authorship` measured **exit 1** before the fix and **exit 0** after it. The
 consumers are right to fail closed; the producer was wrong to hand them a zero for an environment
@@ -72,14 +83,25 @@ registrations (97.2%) are in the `scripts` group. Whatever parallel mode this wo
 overwhelmingly a statement about that one shard.
 
 After registering `scripts/test-all-enumerate-toolchain`, `all` = **435**.
-`bash scripts/lint-orphan-test-suites.sh` → `460 covered, 0 orphaned`, exit 0.
+`bash scripts/lint-orphan-test-suites.sh` → `0 orphaned`, exit 0. The covered-count tracks `main` (460 when measured, 461 after the next merge), so re-run it rather than quoting it.
 
 ### 0.1.3 Consumer fail-closed audit
 
-Confirmed by reading each consumer, table above. One honest nuance the plan did not record:
-`scripts-shard-totality.test.sh` pipes the runner (`bash "$RUNNER" --enumerate scripts | grep …`),
-so **rc is lost to the pipe** and only the count guard catches this class there. It is sufficient
-for this defect, but it is a count-only guard, not the rc-and-count shape the plan assumed.
+Confirmed by reading each consumer, table above.
+
+`scripts-shard-totality.test.sh` is count-only, and the REASON matters because an earlier
+revision of this file got it wrong. It is **not** "the pipe eats the rc": that file sets
+`pipefail`, so the runner's rc survives the pipe intact —
+
+```
+$ bash -c 'set -uo pipefail; f(){ bash -c "echo x; exit 1" | grep "^x" | cut -f1 >/dev/null; }; f; echo "fn_rc=$?"'
+fn_rc=1
+```
+
+The rc is discarded at the CALL SITE: `enumerate_leg` is invoked as a bare statement whose `$?`
+is never read, and `set -e` is deliberately off (the file's own comment says so). The conclusion
+is unchanged; the superseded mechanism is recorded because it would have misled anyone trying to
+fix it by adding `pipefail` — which is already there.
 
 ---
 
@@ -181,17 +203,44 @@ $ awk -F'\t' '$3 ~ /^skip=/ {declined++; next}
               END{printf "total=%d longest=%d (%s) ratio=%.2f\n", t, m, ml, t/m}' timing.tsv
 ```
 
+**The row set must be reconciled against the registration set first.** An earlier revision of
+this section did not do that and published three wrong numbers:
+
+```
+$ bash scripts/test-all.sh --enumerate all | awk -F'\t' '/^SUITE_REGISTRATION/{print $2}' | sort -u > /tmp/reg
+$ awk -F'\t' '{print $1}' baseline-timing.tsv | sort -u | comm -13 /tmp/reg -
+slowfixture   after1   after2   infrarunner   __run_boundary_start__   __run_boundary_end__
+```
+
+The timing log carried **441** distinct labels against **435** registrations. The extras are
+`test-all-runtime-ceiling.test.sh`'s sandbox fixtures — its nested runners inherited the exported
+`TEST_TIMING_LOG` and appended into the baseline — plus the runner's own boundary markers. (This
+suite's own `run_enumerate` clears `TEST_TIMING_LOG` for precisely this reason; the hazard was
+known while writing the suite and not applied when reading the baseline.)
+
+Reconciled over the registered population only:
+
 | Quantity | Value |
 |---|---|
-| suites counted | 502 rows (14 declined excluded) |
-| `total_suite_ms` | **2,731,532** (45.5 min) |
+| registered, timed | **429** |
+| registered, declined | **6** |
+| **conservation** | **429 + 6 = 435 = the registration count** ✅ |
+| `total_suite_ms` | **2,703,460** (45.1 min) |
 | `longest_suite_ms` | **434,912** (7.2 min) — `scripts/battery-tag-authorship-mutations` |
-| **ratio** | **6.28×** |
+| **ratio** | **6.22×** |
 | Gate (`>= 2.0×`) | **PASS — proceed** |
 
-Sum of suite time (45.5 min) against wall clock (46.5 min) is a sanity check on the row set: a
-significant double-count from nested-runner rows would push the sum ABOVE wall clock, and it does
-not.
+> **Superseded 2026-09-17 (review).** The earlier figures were `502 rows`, `14 declined`,
+> `total 2,731,532` and `ratio 6.28×`. They included 52 boundary markers and 29 fixture rows
+> (28,072 ms of nested-runner time). The gate's verdict is unchanged and the decision does not
+> turn on it, but the number the plan gates on was off by 1.0%.
+>
+> The old sanity check was also **invalid reasoning**, not merely a weaker check: it argued that
+> "a significant double-count would push the sum ABOVE wall clock, and it does not". A nested
+> fixture's time is *contained inside* its parent suite's elapsed time, so a contained
+> double-count inflates the sum without ever approaching wall clock. It returned a false
+> all-clear on contamination that was present. The conservation line above is the check that
+> catches it, and it is one command.
 
 **Against the plan's estimate.** The plan projected ~3.2× on the assumption that the longest
 relevant suite is ~14.3 min. Measured, the longest is **7.2 min**, so the ceiling is roughly twice
@@ -209,9 +258,9 @@ running it against the live broken shim: neither `REACHED comparison` nor `SURVI
 So there is no "these suites used to pass here" baseline to regress against. They were never
 **reached**. The Phase 0.1 fix did not break them; it stopped the runner dying above them.
 
-### Failure triage — 21 distinct failing suites, none attributable to this branch
+### Failure triage — 20 pre-existing failures, plus one that was mine
 
-The run log carries **78** `mise ERROR … No version is set for shim: bun` occurrences.
+The run log is not committed, so 78 — the `mise ERROR` occurrence count — is the one figure here a reader cannot re-derive from the repo. The falsifiable form of the same claim: `bun --version` exits non-zero on this host, so every bun-dependent suite fails.
 
 | Class | Example | Cause |
 |---|---|---|
@@ -272,7 +321,7 @@ lint-shell-capture-exit       0 new findings
 ### Consequence for Phase 1 and Phase 4 — a methodology blocker the plan did not anticipate
 
 Phase 1 diagnoses #7376 by repetition and attribution, and Phase 4's correctness gate is fault
-injection. Both assume a baseline in which a RED suite is a signal. With 21 suites already red for
+injection. Both assume a baseline in which a RED suite is a signal. With 20 suites already red for
 environment reasons, "interference reddened this suite" and "this suite was already red" are not
 distinguishable by the plan's stated method, and the bun-class failures are **non-deterministic in
 population** (they depend on which suites reach a bun call).
@@ -282,6 +331,23 @@ for Phase 1, not a step inside it.
 
 ---
 
+## Registration +1: what it does and does not move
+
+`--enumerate all` goes 434 → 435. No literal count assertion exists anywhere (`git grep` for
+`434`/`435` across `scripts/`, `plugins/soleur/test/`, `.github/` returns only unrelated SHAs and
+run ids), and the derived consumers absorb it: `scripts-shard-totality`'s `REF_N` is derived at
+runtime, `battery-tag-authorship`'s `MIN_ROOTS`/`MIN_CLOSURE` are `>=` floors that move up, and
+`guard-vacuity-floor`'s firing count goes 42 → 43 against a `>=` floor.
+
+**But "nothing pins the total" was a claim about COUNTS, and it missed ORDINALS.**
+`scripts/test-all.sh` › `_shard_selects` round-robins on `(_shard_ordinal - 1) % _SHARD_N`, where
+the ordinal is *static source order*. Inserting a registration shifts the ordinal of every later
+scripts-group suite, so leg assignment under `SCRIPTS_SHARD=k/3` changes for most of them.
+Nothing fails — totality is structural, and the shard-totality guard derives rather than
+restates — but `ci.yml` says in terms that any change to the registered suite set invalidates its
+simulated K table, and this branch does not re-simulate it. Recorded rather than fixed: the
+table's own prose is already stale against the live count independently of this change.
+
 ## Status
 
 | Task | State |
@@ -290,6 +356,6 @@ for Phase 1, not a step inside it.
 | 0.2.1 | Done — `wait -n -p` exact; one plan claim corrected |
 | 0.3.1 | Done — taskset/MemoryMax usable, AllowedCPUs inert; plan conditional resolved |
 | 0.4.1 / 0.4.2 | Done — 46m28s serial baseline, timing log committed |
-| **0.4a GATE** | **PASS at 6.28×** (floor 2.0×) |
+| **0.4a GATE** | **PASS at 6.22×** over the reconciled registered population (floor 2.0×) |
 | 0.5.1 / 0.5.2 GATE | Not started — needs a `tc_acquire` caller log, not instrumented by the timing-only baseline |
 | Phase 1 onward | **Blocked on the green-baseline precondition recorded above** |

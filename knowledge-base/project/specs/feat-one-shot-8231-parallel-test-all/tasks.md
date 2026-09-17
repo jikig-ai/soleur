@@ -35,14 +35,18 @@ gates, and reaching a stop verdict is a successful outcome, not a failure.
 
 ## SCOPE — this branch ships Phase 0 only (decided 2026-09-17)
 
-Phase 0 completed and **0.4a PASSED at 6.28x**, so the prize is real. Phases 1-5 are **BLOCKED**,
+Phase 0 completed and **0.4a PASSED at 6.22x**, so the prize is real. Phases 1-5 are **BLOCKED**,
 not abandoned, on a precondition the plan did not anticipate and that is outside #8231's scope to
 establish:
 
 > Phase 1 attributes interference by repetition; Phase 4 gates correctness by fault injection.
-> Both require a baseline in which a RED suite is a signal. The serial baseline measured **21
-> failing suites**, only 8 of them toolchain-adjacent — 13 are red for unrelated reasons. A verdict
+> Both require a baseline in which a RED suite is a signal. The serial baseline measured **20
+> pre-existing failing suites** (a 21st was this branch's own regression, since fixed). A verdict
 > table built on that tree is UNKNOWN by construction.
+>
+> An earlier revision said "21 failing suites, only 8 of them toolchain-adjacent — 13 unrelated".
+> The 21 was corrected one commit later and this banner was not. The 8/13 split was never sourced
+> to a command, so it is withdrawn rather than restated.
 
 #8231 therefore stays OPEN and this branch carries no `Closes`. Evidence and the exact blocker are
 in `acceptance-evidence.md`.
