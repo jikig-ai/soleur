@@ -25,6 +25,23 @@ Every unit state, journal tail and file-identity fact this runbook needs comes f
 authenticated GET**. This section is the single recipe; the rest of the runbook references it
 rather than repeating a host login.
 
+**Prerequisite — the `doppler` CLI, and a missing one is not a missing capability.** Every
+command below reads its credentials through `doppler`. On a machine without the binary the
+shell answers `doppler: command not found`, which reads to an agent as "this session cannot
+see the host" and sends it to an hourly probe or to SSH (`hr-no-ssh-fallback-in-runbooks`).
+Measured 2026-09-17 during an inngest host replace: a 20-minute blind spot on a production
+scheduler, for a one-command install. Bootstrap it first — checksum-verified, no sudo:
+
+```
+scripts/ensure-doppler.sh              # installs to ~/.local/bin, prints the path
+scripts/ensure-doppler.sh --state      # missing | unauthenticated | ready | unknown
+```
+
+The four states have different fixes and must not be collapsed: `missing` → run the script;
+`unauthenticated` → the operator runs `doppler login` (interactive, so an agent asks rather
+than attempts it) or exports `DOPPLER_TOKEN`; `unknown` → a non-token failure such as a
+network fault, where a login flow would fix nothing; `ready` → wrap the call in `doppler run`.
+
 ```
 WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
