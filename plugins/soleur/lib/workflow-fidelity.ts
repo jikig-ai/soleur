@@ -63,6 +63,35 @@ export const BRAINSTORM_ANTI_BYPASS_SENTINEL = "brainstorm-anti-bypass-protocol"
 export const PLAN_ANTI_BYPASS_SENTINEL = "plan-anti-bypass-protocol";
 export const WORK_ANTI_BYPASS_SENTINEL = "work-anti-bypass-protocol";
 export const LIFECYCLE_HANDOFF_SENTINEL = "lifecycle-handoff-protocol";
+
+/**
+ * A stop / hand-back is legitimate only for something the agent CANNOT clear.
+ *
+ * Claude Code enforces this mechanically in `hooks/unkept-promise-hook.sh` (the
+ * parked-deliverable arm). Grok, Codex and Devin have no Stop hook, so for them
+ * this constant is the contract the lifecycle-handoff block cites.
+ *
+ * WHY IT EXISTS. `rf-never-skip-qa-review-before-merging` and
+ * `wg-verified-work-ships-without-asking` already forbid parking finished work on
+ * the operator, in prose. The class was recorded on 2026-08-04 and recurred on
+ * 2026-09-17 with both rules in force, because parking READS as diligence and
+ * nothing measured it. A rule that has failed twice the same way is unenforced,
+ * not under-written.
+ */
+export const PARKED_DELIVERABLE_STOPS = [
+  "awaiting your merge",
+  "awaiting review",
+  "needs a human",
+  "waiting for your merge decision",
+  "ready to merge when you say so",
+] as const;
+
+/** Legitimate stops that MUST keep working — the direction such a guard reliably omits. */
+export const LEGITIMATE_STOPS = [
+  "waiting on an in-flight CI run, workflow or agent",
+  "authorizing an irreversible production action (hr-menu-option-ack-not-prod-write-auth)",
+  "a genuine fork in requirements that changes what gets built",
+] as const;
 export const SHIP_MERGE_DEPLOY_SENTINEL = "ship-merge-deploy-protocol";
 export const POSTMERGE_HARNESS_SENTINEL = "postmerge-harness-protocol";
 

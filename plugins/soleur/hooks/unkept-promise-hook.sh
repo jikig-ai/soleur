@@ -132,6 +132,73 @@ SENTENCES=$(printf '%s' "$PROSE" | tr '\n' '\036' \
 # Only the closing few sentences are evidence about where the turn STOPPED.
 CLOSING=$(printf '%s' "$SENTENCES" | tail -n 4)
 
+# THE PARKED-DELIVERABLE ARM (2026-09-17).
+# ----------------------------------------
+# A stop tag declares the turn is waiting on something the model cannot clear.
+# That is true of a running CI job, an in-flight agent, and an irreversible
+# production action awaiting authorization. It is NOT true of a merge, a review
+# or a ship. `rf-never-skip-qa-review-before-merging`: "Carry every PR to MERGED
+# in-session; 'awaiting review'/'needs a human' as an end state defers to an
+# operator who cannot clear it."
+#
+# WHY THE TAG ALONE WAS NOT ENOUGH. The stop-tag arm below exits 0 on the
+# PRESENCE of a tag, with nothing constraining what is being waited ON -- so the
+# one end state the corpus explicitly forbids bought an exit. This hook catches
+# "I'll do X" and then stops, and was structurally blind to the worse failure:
+# finished, green work parked on a non-technical operator with no basis to act.
+# Parking READS as diligence, which is why prose could not fix it: the corpus
+# recorded the class on 2026-08-04 and it recurred on 2026-09-17 with the rule
+# in force.
+#
+# TWO PLACEMENT FACTS, both measured against the real 2026-09-17 turn
+#   ("PR #8244 is green and awaiting your merge. Nothing else is outstanding."):
+#   * It is scoped to the WHOLE closing, not `tail -n 1`. The stop tag OPENED in
+#     one sentence and CLOSED in the next, so a last-sentence test saw only
+#     "Nothing else is outstanding.</stop>".
+#   * It runs INDEPENDENTLY of promise detection, above it. That turn contained
+#     no unkept promise -- parking is the opposite of promising -- so an arm
+#     nested in the promise path could never have fired.
+#
+# The predicate is the WAITING-ON RELATIONSHIP, not the mere mention of a merge:
+# a legitimate stop routinely names one ("waiting on CI; on green I merge without
+# asking"), and a bare /merge/ match would veto the correct behaviour.
+PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0,60}(your|operator|the[[:space:]]+operator|human|a[[:space:]]+human)[^.]{0,60}(merge|review|approv|sign-?off|decision|go-?ahead)'
+PARKED_RE="${PARKED_RE}|awaiting[[:space:]]+(review|merge)"
+PARKED_RE="${PARKED_RE}|needs?[[:space:]]+a[[:space:]]+human"
+PARKED_RE="${PARKED_RE}|ready[[:space:]]+to[[:space:]]+merge[[:space:]]+when[[:space:]]+you"
+# The sanctioned pause survives: `hr-menu-option-ack-not-prod-write-auth` requires
+# per-command confirmation before a destructive production write, so a stop that
+# names one stays legitimate even when it also says "approval".
+PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply)|ack-destroy)'
+
+if printf '%s' "$CLOSING" | grep -qiE '<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)' &&
+   printf '%s' "$CLOSING" | grep -qiE "$PARKED_RE" &&
+   ! printf '%s' "$CLOSING" | grep -qiE "$PARKED_AUTH_RE"; then
+  PARKED_REASON="Your stop tag says you are waiting on the operator to merge, review, ship or
+approve finished work. That is not a legitimate gate -- it defers to someone who
+cannot clear it.
+
+  rf-never-skip-qa-review-before-merging: \"Carry every PR to MERGED in-session;
+  'awaiting review'/'needs a human' as an end state defers to an operator who
+  cannot clear it.\" \"Review-gated\" means /soleur:review RAN and its findings were
+  fixed -- never that a person approves.
+
+  wg-verified-work-ships-without-asking: once verified, carry it through in the
+  same turn. \"Want me to open a PR?\" is a deferral.
+
+Do it now, in THIS turn: run the review if it has not run, fix its findings
+inline, and merge.
+
+Legitimate stops this arm does NOT block:
+  - waiting on an in-flight CI run, workflow, or agent
+  - authorizing an irreversible production action (hr-menu-option-ack-not-prod-write-auth)
+  - a genuine fork in requirements that changes what gets built"
+  jq -n --arg r "$PARKED_REASON" \
+    '{"decision":"block","reason":$r,"systemMessage":"unkept-promise-hook: finished work parked on the operator"}' 2>/dev/null \
+    || exit 0
+  exit 0
+fi
+
 # Escape hatch, scanned over the CLOSING sentences only -- deliberately the same
 # scope as the predicate.
 #

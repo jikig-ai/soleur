@@ -13,6 +13,8 @@ description: "This skill should be used when running functional QA before merge.
 
 <!-- lifecycle-handoff-protocol:start -->
 **Lifecycle handoff (standalone `/qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
+
+**Parking finished work is not a hand-off.** A stop is legitimate only for something you cannot clear: an in-flight CI run or agent, or authorization for an irreversible production action (`hr-menu-option-ack-not-prod-write-auth`). A merge, a review or a ship is never one — `rf-never-skip-qa-review-before-merging` requires carrying every PR to MERGED in-session, and "review-gated" means `/soleur:review` RAN and its findings were fixed, never that a person approves. Claude Code blocks this at the Stop hook; Grok, Codex and Devin have no hook, so this line is the whole of the enforcement there.
 <!-- lifecycle-handoff-protocol:end -->
 
 # Functional QA
