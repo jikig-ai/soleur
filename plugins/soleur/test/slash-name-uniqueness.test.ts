@@ -3,6 +3,26 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { collidingNames, normalizeSkillRoot, PLUGIN_ROOT } from "./helpers";
 
+// WHY THIS FILE EXISTS (design review recommended deleting it; partially declined).
+//
+// The reviewer's argument is right for clause (b): the live tree pins it, because
+// clause (b) was RED on the unmodified tree naming go/help/sync and is green only
+// because the `user-invocable: false` exemption works. If `isUserInvocable` broke,
+// the live assertion reds. A fixture adds nothing there.
+//
+// It does NOT hold for clause (a). On the live tree the only cross-root duplicates
+// are `go`, `help` and `sync`, and all three are ACKED — so the live assertion
+// filters them out and compares [] to [], which is exactly the vacuity the review
+// skill warns about ("the live corpus is clean, so the corpus assertion proves
+// nothing"). The positive direction of clause (a) — that it FLAGS a duplicate — is
+// unreachable on this tree by construction.
+//
+// Mutation row M6 proved it, and M6 was reverted. The repo's own rule is that a
+// guard's non-vacuity claim is worth its evidence, and that evidence must be a
+// COMMITTED harness rather than a comment asserting "mutation-proven". These
+// fixtures are that harness. They can be deleted when #8236 removes the ack,
+// because clause (a) then fires on the live tree unaided.
+//
 // Fixtures are SYNTHESIZED, never captured (cq-test-fixtures-synthesized-only).
 // Names here are deliberately not real component names so a rename in the live
 // tree cannot silently change what these cases assert.

@@ -1033,18 +1033,78 @@ describe("plugin slash-name uniqueness", () => {
   // thing that ends it rather than outliving its reason silently.
   const ACKED_CROSS_ROOT_DUPES = new Set(["go", "help", "sync"]);
 
+  // The roots Claude Code itself resolves: the default scan plus whatever the
+  // Claude manifest declares (the key is ADDITIVE there). Clause (c) forbids
+  // that key, so this is `["skills"]` today — derived, not assumed, so clause
+  // (b) stays correct if clause (c) is ever relaxed.
+  const claudeRoots = (() => {
+    const m = JSON.parse(
+      readFileSync(resolve(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf-8"),
+    ) as { skills?: string[] };
+    return [...new Set(["skills", ...(Array.isArray(m.skills) ? m.skills : [])])];
+  })();
+
   test("discovers the manifests and components it is asserting over", () => {
     // A guard whose inputs came back empty reports a clean sweep having looked
-    // at nothing. Bounded floors, not exact counts, so ordinary growth does not
-    // red this.
+    // at nothing, so each floor below is the emptiness this guard cannot
+    // tolerate — not a count that ordinary growth has to keep up with.
+    //
+    // `commandNames` is the load-bearing one: if command discovery returned [],
+    // clause (b) compares against an empty set and passes VACUOUSLY on every
+    // skill in the tree.
     expect(manifestDirs.length).toBeGreaterThanOrEqual(1);
     expect(commandNames.length).toBeGreaterThanOrEqual(3);
-    expect(discoverSkillsIn("skills").length).toBeGreaterThanOrEqual(90);
+    expect(claudeRoots.length).toBeGreaterThanOrEqual(1);
+    expect(discoverSkillsIn("skills").length).toBeGreaterThan(0);
   });
+
+  // The ack is pinned to its exact membership, not floored. Shrinking it is as
+  // deliberate an act as growing it: a name removed here before #8236 actually
+  // deletes the shim would red clause (a) with no reader able to tell whether
+  // that was the intended retirement or an accident.
+  test("the cross-root ack is exactly the three names #8236 retires", () => {
+    expect([...ACKED_CROSS_ROOT_DUPES].sort()).toEqual(["go", "help", "sync"]);
+  });
+
+  // The property the ADR spends three paragraphs justifying, and which NO other
+  // assertion here covers: clause (b) goes green if these skills are DELETED —
+  // greener, in fact. So the guard that stops the menu duplication would happily
+  // watch someone remove the dispatch handle it exists to preserve.
+  //
+  // `plugins/soleur/skills/go/` is the only model-invocable `Skill(soleur:go)`
+  // handle: `commands/go.md` is user-typed only, apps/web-platform wires no
+  // SlashCommand tool, and server/prompt-injection-wrap.ts dispatches on every
+  // Command Center message. ADR-113 records the measured user-facing regression
+  // when that skill is out of scope. Retired with #8236, not before.
+  for (const name of ["go", "help", "sync"]) {
+    test(`skills/${name}/ survives as a model-invocable dispatch handle`, () => {
+      const rel = `skills/${name}/SKILL.md`;
+      expect(
+        existsSync(resolve(PLUGIN_ROOT, rel)),
+        `${rel} is the only model-invocable Skill(soleur:${name}) handle. ` +
+          `Deleting it silently breaks the Command Center dispatch path; see #8236.`,
+      ).toBe(true);
+      const fm = parseComponent(rel).frontmatter;
+      expect(
+        fm["disable-model-invocation"],
+        `${rel} must stay MODEL-invocable. \`user-invocable: false\` hides it ` +
+          `from the / menu and is correct; \`disable-model-invocation: true\` ` +
+          `would hide it from the model, which is the dispatch regression.`,
+      ).toBeUndefined();
+      expect(fm["user-invocable"], `${rel} should stay hidden from the / menu`).toBe(false);
+    });
+  }
 
   for (const manifestDir of manifestDirs) {
     // Clause (a) — buys the skills-vs-skills class (two roots resolving one name).
     test(`${manifestDir}: no skill name is contributed by more than one root`, () => {
+      // A manifest resolving a single root cannot contribute a name twice, so
+      // asserting over it is structurally unable to fail. Declare that rather
+      // than letting it read as coverage.
+      if (rootsFor(manifestDir).length < 2) {
+        expect(rootsFor(manifestDir).length).toBe(1);
+        return;
+      }
       const { duplicateSkillNames } = collidingNames({
         commandNames: [],
         skillRoots: rootsFor(manifestDir),
@@ -1063,30 +1123,23 @@ describe("plugin slash-name uniqueness", () => {
 
   // Clause (b) — buys the commands-vs-skills class this PR fixes.
   //
-  // Scoped to the DEFAULT `skills/` root, deliberately, and not to every root in
-  // R(M). A per-harness root (`codex/skills/`, `devin/skills/`) exists precisely
-  // to expose a canonical `commands/<name>.md` as a SKILL on a harness that has
-  // no command surface at all — each of those shims' bodies just reads the
-  // command and follows it. Mirroring a command stem there is the intended
-  // design, so asserting disjointness over those roots would assert a property
-  // this plugin deliberately does not hold, and could only be satisfied by
-  // breaking the Codex and Devin entry points.
-  //
-  // `skills/` is the one root that shares a menu namespace with `commands/`,
-  // which is the whole defect. Stated per-root rather than per-manifest, so a
-  // future harness manifest inherits it without edit.
-  test("user-invocable skills under skills/ are disjoint from command stems", () => {
+  // Scoped to the roots the CLAUDE manifest resolves, DERIVED rather than
+  // restated: `commands/` shares a menu namespace only on Claude Code, and the
+  // per-harness roots (`codex/skills/`, `devin/skills/`) are simply not in this
+  // manifest, so their exemption falls out of the derivation instead of needing
+  // a hand-picked string and a paragraph defending it. Those roots exist to
+  // expose a canonical `commands/<name>.md` as a SKILL on a harness with no
+  // command surface, so mirroring a command stem there is the intended design.
+  test("user-invocable skills in Claude's roots are disjoint from command stems", () => {
     const { commandCollisions } = collidingNames({
       commandNames,
-      skillRoots: [
-        {
-          root: "skills",
-          skills: discoverSkillsIn("skills").map((p) => ({
-            name: getComponentName(p, "skill"),
-            userInvocable: isUserInvocable(p),
-          })),
-        },
-      ],
+      skillRoots: claudeRoots.map((root) => ({
+        root,
+        skills: discoverSkillsIn(root).map((p) => ({
+          name: getComponentName(p, "skill"),
+          userInvocable: isUserInvocable(p),
+        })),
+      })),
     });
     expect(
       commandCollisions,
