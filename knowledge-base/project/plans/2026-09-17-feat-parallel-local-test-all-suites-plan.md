@@ -4,7 +4,10 @@ date: 2026-09-17
 slug: feat-parallel-local-test-all-suites
 branch: feat-one-shot-8231-parallel-test-all
 issue: 8231
-closes: 8231
+# DESCOPED 2026-09-17: this branch ships Phase 0 only. #8231 stays OPEN — the parallel
+# scheduler is blocked on a green-baseline precondition recorded in
+# specs/feat-one-shot-8231-parallel-test-all/acceptance-evidence.md. No `closes:` key:
+# an auto-close here would shut the issue on a measurement, not on a delivered capability.
 lane: cross-domain
 type: chore
 priority: p3-low

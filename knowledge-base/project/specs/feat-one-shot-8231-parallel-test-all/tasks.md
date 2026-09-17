@@ -33,6 +33,20 @@ gates, and reaching a stop verdict is a successful outcome, not a failure.
 - [ ] **0.5.2 GATE** — a majority wall-clock share for that subset is a no-go. Record the number and
       adopt `lock:test-all` unconditionally; re-entrancy is prohibited by ADR-196 D1/D7.
 
+## SCOPE — this branch ships Phase 0 only (decided 2026-09-17)
+
+Phase 0 completed and **0.4a PASSED at 6.28x**, so the prize is real. Phases 1-5 are **BLOCKED**,
+not abandoned, on a precondition the plan did not anticipate and that is outside #8231's scope to
+establish:
+
+> Phase 1 attributes interference by repetition; Phase 4 gates correctness by fault injection.
+> Both require a baseline in which a RED suite is a signal. The serial baseline measured **21
+> failing suites**, only 8 of them toolchain-adjacent — 13 are red for unrelated reasons. A verdict
+> table built on that tree is UNKNOWN by construction.
+
+#8231 therefore stays OPEN and this branch carries no `Closes`. Evidence and the exact blocker are
+in `acceptance-evidence.md`.
+
 ## Phase 1 — Diagnose #7376 (its own commit, ahead of any fix)
 
 - [ ] 1.1.1 Record the K ≥ 7 reproduction loop in `diagnosis.md` as a command, not a script.
