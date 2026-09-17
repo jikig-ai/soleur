@@ -1051,6 +1051,7 @@ custom-icon
 cutover
 cve-2025-55130
 cwd
+cwd-envelope
 cwd-management
 cwe-22
 cwe-522

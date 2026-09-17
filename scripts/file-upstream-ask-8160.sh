@@ -96,8 +96,19 @@ cmd_prepare() {
   sha="$(resolve_sha "$sha")"
   local permalink; permalink="$(permalink_for "$sha")"
 
-  [[ -n "$out" ]] || out="$(mktemp -d "${TMPDIR:-/tmp}/upstream-8160.XXXXXXXX")"
-  mkdir -p "$out"
+  # --out must be absolute: a relative one would resolve under the repo root
+  # after the cd above, and the printed path would not be the one the operator
+  # can open.
+  if [[ -n "$out" ]]; then
+    [[ "$out" == /* ]] || die "--out must be an absolute path"
+    mkdir -p "$out"
+  else
+    # The dir IS the deliverable — email-body.txt, mailto.txt and bug-body.txt
+    # must survive script exit for the operator to send them; a trap would
+    # delete the artifacts this command exists to write.
+    # lint-trap-ownership: ok output dir intentionally outlives the process
+    out="$(mktemp -d /tmp/upstream-8160.XXXXXXXX)"
+  fi
 
   # The email body: the verbatim package, prefixed by the permalink it cites.
   {
