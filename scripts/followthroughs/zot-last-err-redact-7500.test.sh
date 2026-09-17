@@ -280,8 +280,15 @@ if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
-if (( cases < 19 )); then
-  printf 'FATAL: case floor is 19, found %s (coverage removed?)\n' "$cases" >&2
+# BOUND, not inlined. scripts/guard-vacuity-floor.test.sh builds its mutant by slicing the
+# floor block together with its THRESHOLD BINDINGS; a floor whose threshold is a bare literal
+# is unconstructible, so the suite silently leaves that meta-guard's covered population — it is
+# reported as a construction failure, not as a fired floor. Both siblings that pass it bind the
+# threshold first (markdown-lint.test.sh, zot-fill-rate-7341.test.sh). The VALUE stays a
+# literal: binding it to a variable expansion re-creates the same unconstructible shape.
+MIN_CASES=19
+if (( cases < MIN_CASES )); then
+  printf 'FATAL: case floor is %s, found %s (coverage removed?)\n' "$MIN_CASES" "$cases" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1
