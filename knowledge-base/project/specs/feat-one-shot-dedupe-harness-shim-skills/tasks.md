@@ -42,8 +42,10 @@ the follow-up, not here.
       block in `components.test.ts` — not inside the Kebab-case block — implementing
       clause (a) within-manifest duplicate names, clause (b) user-invocable skills disjoint
       from command stems, clause (c) `.claude-plugin/plugin.json` declares no `skills` key.
-      Discover manifests by **glob** over `plugins/soleur/.*-plugin/plugin.json`, never by
-      enumerating the three that exist today.
+      Discover manifests by ~~**glob** over `plugins/soleur/.*-plugin/plugin.json`~~
+      **dirent scan** — never by enumerating the three that exist today. **Corrected at
+      work-time:** Bun's `Glob` does not match dot-directories, so the glob returns `[]`
+      and would report a clean sweep having examined nothing.
 - [ ] 2.5. Add the cross-file guard-presence assertion (mutation row M8's mechanism).
 - [ ] 2.6. **Run against the unmodified tree — it MUST fail**, naming `go`, `help`, `sync`
       under clause (b). That is M1 for free. If it passes today, the guard is wrong; stop.
@@ -71,8 +73,11 @@ the follow-up, not here.
       `plugins/soleur/test/plugin-version-fallback.test.ts` for co-firing.
 - [ ] 4.6. M6 — create `plugins/soleur/devin/skills/review/SKILL.md` duplicating
       `skills/review/` → RED via clause (a). This is the skills-vs-skills class.
-- [ ] 4.7. M7 — feed `collidingNames()` empty inputs → RED against the bounded floor
-      `{ commands: >= 3, skills: >= 90, roots: >= 1 }`, never a silent pass.
+- [x] 4.7. M7 — feed `collidingNames()` empty inputs → RED against the bounded floor.
+      **Floor rewritten at review:** `skills >= 90` was a magic number and, worse, read the
+      literal `"skills"` rather than the `claudeRoots` operand clause (b) consumes. It is now
+      a per-root sweep plus pinned `manifestDirs` and an `arrayContaining` identity check on
+      `commandNames`, because a cardinality floor cannot see a count-preserving corruption.
 - [ ] 4.8. M8 — delete the guard's `describe` block → RED in the **other** file.
 - [ ] 4.9. Record per row: the `git diff` hunk **with its line range**, the reddening test's
       name, and a failure-message excerpt. Apply each as a line-scoped hunk, never a
@@ -96,11 +101,16 @@ the follow-up, not here.
 - [ ] 6.1. Re-derive the next free ADR ordinal against **freshly-fetched `origin/main`**
       (provisional today: ADR-224, with ADR-223 the highest claimed across all 83
       `refs/remotes/origin/*`). Re-check immediately before merge.
-- [ ] 6.2. Write ADR-224 — harness-neutral component-placement rule. **Harness-qualify every
+- [x] 6.2. Write ADR-224 — harness-neutral component-placement rule. **Harness-qualify every
       clause**: Claude Code's `skills` key is additive; Codex's measured behaviour is
-      replace-default. Do not amend ADR-215, whose §Verification records the opposite
-      semantics and would self-contradict.
-- [ ] 6.3. Append a one-line pointer from ADR-215 §Consequences to ADR-224. Leave ADR-215's
+      replace-default. ~~Do not amend ADR-215, whose §Verification records the opposite
+      semantics and would self-contradict.~~ **SUPERSEDED at review:** that reasoning is
+      wrong — this repo amends accepted ADRs in place with dated markers (ADR-194, ADR-213).
+      ADR-215 IS amended, with a dated amendment block. The reason ADR-224 is a separate
+      document is SCOPE: ADR-215 is single-harness, this rule governs four.
+- [x] 6.3. ~~Append a one-line pointer~~ **Append a dated AMENDMENT block** to ADR-215
+      §Consequences. What landed asserts a new normative claim (Claude's key is additive),
+      which is an amendment, not a cross-reference, and is marked as one. Leave ADR-215's
       `98` figures at lines 34 and 49 **unchanged**.
 
 ## Phase 7 — Battery and follow-ups

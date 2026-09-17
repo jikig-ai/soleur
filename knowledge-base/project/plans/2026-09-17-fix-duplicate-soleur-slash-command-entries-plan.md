@@ -957,3 +957,29 @@ not hold on the shipped tree:
 
 **Task 7.3 rescoped.** The plan names three stale-literal sites; there are four (`nfr-register.md:32`
 carries the same "61 workflow skills"). Per the filing-site net-flow gate they are inlined, not filed.
+
+### Addendum 2 — 2026-09-17 (review round)
+
+**§Test Scenarios T2/T4/T5/T6 and §Sharp Edges carry option (a′) figures and are
+SUPERSEDED.** They read `marked.length === 65`, `95 skills`, `budget 2400/2400`
+and `fleet 67 → 65`. Those are the DELETION option's numbers. This plan chose
+(b′), states so at §Decision, at "All three counters are unchanged", and in
+`tasks.md`, and nothing is deleted — so the live tree is 98 skills, budget 2442,
+marker fleet 67, and `devin-cloud-mode.test.ts` asserts `toBe(67)`. Anyone
+executing that table against the shipped branch gets four false expectations.
+Superseded here rather than edited, because the table is the record of what (a′)
+would have required.
+
+**The clause (b) description in Addendum 1 is also superseded.** It says
+"Scoped to the default `skills/` root". After review the guard DERIVES its roots
+from `.claude-plugin/plugin.json`; that equals `["skills"]` only because clause
+(c) forbids the key. ADR-224 decision 4 carries the current rule.
+
+**A premise this plan rests on was falsified by measurement.** The plan defers
+deletion because `plugins/soleur/skills/go/` is "the sole model-invocable
+`Skill(soleur:go)` handle". Probed with all three shims deleted,
+`Skill(soleur:help)` still succeeds and returns `commands/help.md` — commands are
+model-invocable and shadow same-named skills on Claude Code. Deletion is still
+deferred, but for a different and narrower reason: Codex, Devin and Grok each
+resolve `skills/{go,help,sync}` and would be affected. ADR-224 §Consequences
+carries the corrected version.

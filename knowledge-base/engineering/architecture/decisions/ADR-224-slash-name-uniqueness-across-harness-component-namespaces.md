@@ -13,7 +13,7 @@ a component becomes a slash name. Two facts collided.
 
 Claude Code loads plugin **commands** (`commands/*.md`) and plugin **skills**
 (`skills/*/SKILL.md`) into one slash menu. A name present on both sides renders
-twice. Three names are: `go`, `help` and `sync` exist as canonical commands and,
+twice. Three names do: `go`, `help` and `sync` exist as canonical commands and,
 since the Devin slash-command work, also as skill shims under `skills/`. `qa`,
 which is skill-only, renders once — the control that identifies the mechanism.
 
@@ -114,15 +114,27 @@ measured on both harnesses rather than inferred from the manifests:
 reports `/soleur:go` from both `skills/go` and `devin/skills/go`, each
 `[user,model]`.
 
-Collapsing it means deleting the shared copies, and the blocker is **dispatch,
-not discovery**. `plugins/soleur/skills/go/` is the sole model-invocable
-`Skill(soleur:go)` handle: `commands/go.md` is user-typed only, `apps/web-platform`
-wires no `SlashCommand` tool, `server/prompt-injection-wrap.ts` sends
-`Invoke /soleur:go` on every Command Center message, and
-`server/soleur-go-runner.ts` keys sticky-workflow detection on
-`toolName === "Skill"`. Deleting the shim removes the mechanism on the hottest
-path in the product, against the regression ADR-113 already recorded once. The
-ack is by name, so the condition is guarded rather than invisible.
+Collapsing it means deleting the shared copies. **An earlier version of this
+paragraph said `plugins/soleur/skills/go/` is the SOLE model-invocable
+`Skill(soleur:go)` handle and that `commands/go.md` is user-typed only. Both are
+FALSE on Claude Code, and the correction is recorded rather than silently
+applied because the false version was used to justify deferring #8236.**
+
+Measured: with all three shims deleted from a scratch plugin tree,
+`claude --plugin-dir <tree> -p '…Skill(soleur:help)…'` still succeeds and returns
+`# Soleur Help` — the heading of `commands/help.md`. Commands are model-invocable
+and SHADOW the same-named skill, so on Claude Code the command supplies the handle
+and the skill sits behind it as a fallback.
+
+What remains true, harness-qualified per decision 1: the OTHER three harnesses do
+resolve these paths — `devin skills list` reports `/soleur:go` from both roots,
+`.codex-plugin` declares `./skills`, and `.grok/config.toml` loads this tree. So
+deleting the shims is a real change on three harnesses that Claude Code happens to
+absorb. `server/prompt-injection-wrap.ts` does dispatch `Invoke /soleur:go` on
+every Command Center message and `server/soleur-go-runner.ts` does key
+sticky-workflow detection on `toolName === "Skill"` — both verified — but neither
+depends on the SKILL file, because the command answers that dispatch. The ack is
+by name, so the condition is guarded rather than invisible.
 
 Decision 4 draws the boundary that keeps decisions 2 and 5 satisfiable together.
 Without it the only way to make the guard green would be to remove the
@@ -153,29 +165,48 @@ reds against a bounded floor rather than passing over an empty corpus.
 no `SKILL.md`, so it is not a skill and this is not a collision. It pins the
 loader's own derivation rule and proves the guard does not over-reject.
 
-Per-harness discovery is verified mechanically rather than argued, on both
-harnesses that declare two roots. `node scripts/codex-plugin-smoke.mjs` reports
-101 skills — 98 canonical plus the three Codex wrappers — which is the additive
-behaviour decision 4 depends on. `devin skills list` reports `/soleur:go`,
-`/soleur:help` and `/soleur:sync` from `skills/` **and** `devin/skills/`, each
-`[user,model]`, which is decision 5's condition observed live. ADR-215's `98`
-figures are a dated record of a 95-canonical tree and are left unchanged.
+Per-harness discovery, stated at the strength the evidence actually carries.
+
+**Devin — measured.** `devin skills list` reports `/soleur:go`, `/soleur:help` and
+`/soleur:sync` from `skills/` **and** `devin/skills/`, each `[user,model]`. That is
+decision 5's condition observed live on a real harness.
+
+**Grok — measured.** `grok inspect` reports the soleur plugin at **98 skills** both
+with and without `user-invocable: false` present (branch vs `origin/main`), so
+Grok's loader does not act on the key: it cannot break Grok's `/go`, and Grok keeps
+whatever duplication it had. Caveat: the `origin/main` reading was taken in a fresh
+clone, which Grok reports as an untrusted `(project, disabled)` plugin; the skill
+COUNT is what is being compared and it is identical.
+
+**Codex — inferred, NOT measured.** An earlier version of this section cited
+`node scripts/codex-plugin-smoke.mjs` reporting "101 skills" as live proof. That
+figure is `expectedSkills`, which the script computes locally as the 98 `SKILL.md`
+directories plus an unconditional `push("go","help","sync")` — three names already
+in the 98 — before it contacts Codex at all. Only `discoveredSkills` would prove
+anything, and nothing in the repo captures it. Codex's additive-vs-replace
+behaviour here rests on the manifest declaring `./skills` explicitly, which is
+inference from configuration, not measurement.
+
+ADR-215's `98` figures are a dated record of a 95-canonical tree and are left
+unchanged.
 
 **Scope of the dedup claim.** Decision 3 is verified for **Claude Code**, whose
 frontmatter key this is.
 
-**Grok is in the same collision class and is UNMEASURED.** `.grok/config.toml`
+**Grok is in the same collision class and is now MEASURED — see §Verification.** `.grok/config.toml`
 points at this same `plugins/soleur` tree, so Grok has Claude Code's shape — the
 default `skills/` root, a live command surface, one namespace, and no
 per-harness root, hence no decision-4 exemption. `/go` duplicates there for the
 same reason it duplicated in Claude Code, and whether Grok honours
-`user-invocable: false` has not been probed (`grok inspect`, or reading the `/`
-menu for a single `/go` row, would settle it). Naming this is decision 1 applied
+`user-invocable: false` was probed with `grok inspect`: 98 skills with the key and
+98 without, so the key changes nothing there. Naming this is decision 1 applied
 to this ADR itself: a placement rule that silently drops one of the four
 harnesses it governs is the "not checked collapsed into not applicable" failure.
 The exposure is bounded — if the key is ignored, Grok keeps today's duplicate and
-nothing regresses — and decision 4's derived root set is already correct for Grok
-by construction, since Grok loads the Claude manifest's tree. Whether Devin honours `user-invocable: false` is
+nothing regresses, which the measurement confirms. Decision 4's derived root set is
+correct for Grok by the same mechanism — `.grok/config.toml` sets
+`paths = ["./plugins/soleur"]` and symlinks the tree — though that Grok reads
+`.claude-plugin/plugin.json` specifically is unverified. Whether Devin honours `user-invocable: false` is
 UNMEASURED: the `devin skills list` reading above was taken against a pre-PR
 plugin cache, so it shows the duplication but cannot show the fix. Re-run
 `devin skills list --trigger user` after a `devin plugins install` refresh to

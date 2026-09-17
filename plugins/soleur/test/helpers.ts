@@ -63,14 +63,17 @@ export function collidingNames(input: {
   commandNames: string[];
   skillRoots: SkillRootInput[];
 }): CollisionReport {
-  const seen = new Set<string>();
-  const roots: SkillRootInput[] = [];
-  for (const r of input.skillRoots) {
-    const key = normalizeSkillRoot(r.root);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    roots.push({ ...r, root: key });
-  }
+  // Roots are keyed by their NORMALIZED path. There is deliberately no
+  // `if (seen.has(key)) continue` here: it would be dead code. Duplicate
+  // spellings of one directory collapse anyway, because clause (a) accumulates
+  // each name into a Set of normalized roots (so three spellings of "skills"
+  // yield one member) and clause (b) dedupes its result through a Set. A review
+  // measured that deleting such a guard left the suite byte-identical green, and
+  // a fixture comment claimed it was load-bearing when it was not.
+  const roots: SkillRootInput[] = input.skillRoots.map((r) => ({
+    ...r,
+    root: normalizeSkillRoot(r.root),
+  }));
 
   const nameToRoots = new Map<string, Set<string>>();
   for (const r of roots) {
@@ -130,3 +133,16 @@ export function getComponentName(
 }
 
 export { PLUGIN_ROOT };
+
+// Applying an acknowledgement list to a collision report. Extracted so the
+// FILTER is testable, not just the set it reads: a review neutered the inline
+// filter to `() => false` — making clause (a) incapable of reporting anything,
+// for any manifest, forever — and every suite stayed green, because the only
+// assertion inspected `ACKED_CROSS_ROOT_DUPES`'s membership rather than what the
+// filter did with it.
+export function unackedDuplicates(
+  duplicateSkillNames: string[],
+  acked: ReadonlySet<string>,
+): string[] {
+  return duplicateSkillNames.filter((n) => !acked.has(n));
+}
