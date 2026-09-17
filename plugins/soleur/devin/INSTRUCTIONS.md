@@ -88,7 +88,7 @@ Soleur runs in two Devin environments with different enforcement surfaces:
 | Plugin subagents (`agents/**/*.md`) | yes | **no — plugin-defined agents absent** (documented limitation, corroborated both arms). Built-in fan-out substrate exists in the web-app arm (`run_subagent`, `run_workflow`) but not the Soleur roster |
 | `ask_user_question` | yes | **no — tool absent**; `message_user` (`user_question`) is blocking with no auto-approve — an unanswered ask stalls the session indefinitely (fail-closed) |
 | Plugin hooks: `SessionStart` / `SessionEnd` | yes | **no — never fire in cloud** |
-| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (both arms)**: `matcher: ""` catch-all produced nothing; corrects the "documented yes" claim |
+| Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (both arms)**: `matcher: ""` catch-all produced nothing; docs.devin.ai initially claimed cloud dispatch, then was corrected to scope hooks local-only + "best effort, fail open" (matches measurement) |
 | Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | **no — measured absent (both arms)**: SessionStart `additionalContext` never reached the session; catch-all marker test produced nothing |
 | `.devin/config.json` `requiredPlugins` | yes | documented repo-level key, honored "in cloud sessions, from each cloned repository" (plugins overview §Inheritance level 3); marginal effect unmeasured — account already installs Soleur via the managed manifest |
 
@@ -172,7 +172,11 @@ it reads hook-stdin transcript data a standalone script cannot see.
   `matcher: ""` catch-all. Cloud is a no-hook environment. Plugin-defined
   agents absent (documented limitation); built-in `run_subagent` exists in
   the web-app arm but cannot load the Soleur roster. The request should
-  cover ALL hook surfaces, not just SessionStart/SessionEnd.
+  cover ALL hook surfaces, not just SessionStart/SessionEnd. Filing package:
+  `knowledge-base/project/specs/feat-devin-upstream-asks-posture/upstream-asks.md`;
+  submission state is tracked on #8160. Detection:
+  `scheduled-devin-docs-drift.yml` watches the docs.devin.ai surfaces where a
+  capability would become visible (disposable — teardown on #8160 close).
 - **`requiredPlugins` marginal effect** — repo-level key is documented
   (plugins overview §Inheritance level 3), but the account's managed manifest
   already installs Soleur, masking the marginal effect; a clean-account arm

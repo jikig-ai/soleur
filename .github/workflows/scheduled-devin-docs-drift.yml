@@ -1,0 +1,427 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification (#8160). ADR-033 makes Inngest the canonical substrate for new crons.
+# This one runs on GitHub Actions for the same structural reason as
+# scheduled-marketplace-drift.yml:
+#
+#   (i) THE SUBJECT IS OUTSIDE THE PRODUCT. What is watched here is Cognition's public
+#       documentation (docs.devin.ai) fetched anonymously over HTTPS — no relationship to
+#       the web-platform's database, deploy state, or runtime. Dispatching from Inngest
+#       would couple the upstream-capability alarm to the web app being healthy.
+#   (ii) IT NEEDS ONLY GHA-NATIVE PERMISSIONS ON THIS REPO. `issues: write` (the verdict's
+#       destination is a GitHub issue here) plus the automatic GITHUB_TOKEN. No minted or
+#       stored token is required.
+#   (iii) NO PRODUCT SECRETS ARE CONSUMED. The only secrets are the three Sentry Crons
+#       ingest values forwarded to the heartbeat composite — a public-by-design write-only
+#       beacon, not a product secret (same forwarding as every sibling scheduled-*).
+#
+# WHAT THIS WATCHES (#8160). Soleur Cloud Mode degrades around two capabilities only
+# Cognition can close: plugin/repo HOOK DISPATCH in cloud sessions (our two-arm probe
+# measured ZERO dispatch on every registry; docs.devin.ai initially claimed `command`
+# hooks ran in cloud, then was corrected to scope hooks local-only — the filing leads
+# with the corrected state) and PLUGIN-DEFINED SUBAGENTS (`agents/**/*.md`, documented
+# local-only). This workflow is the detection half of that filing: it watches the doc
+# surfaces where either capability would become visible and files a drift issue when a
+# claim flips, a cloud-dispatch claim appears, or a release-notes entry matches the
+# capability watch.
+#
+# ANCHOR POLARITY IS THE DESIGN'S LOAD-BEARING CHOICE. A watch on the WRONG polarity is
+# blind while reporting healthy — the deepest failure here. Baseline verified
+# 2026-09-17: Cognition CORRECTED the docs after our probe — both plugin pages now scope
+# hooks to local sessions ("in local Devin sessions (the CLI and Devin Desktop)",
+# "best effort and fail open"), matching our measurement. The capability event we watch
+# for is therefore the REVERSE direction: a new claim that hooks dispatch in cloud.
+#   * hooks_locality_claim — expected-PRESENT: the corrected "local sessions / best
+#     effort" hook text. Absence or rewording means the docs moved; a human re-reads.
+#   * subagent_limitation   — expected-PRESENT: "subagents ... not in cloud (Devin
+#     )?sessions". Absence is the §2 capability candidate.
+#   * hooks_cloud_claimed   — expected-ABSENT: a line claiming hooks run/dispatch in
+#     cloud is the §1 capability becoming documented. (An admission-anchor is pointless:
+#     the docs ALREADY admit locality.)
+#   * capability_entry      — the CHANGELOG arm: <Update> blocks dated inside a 31-day
+#     window are keyword-grepped PER ITEM (one bullet incl. wrapped continuations, one
+#     **Title** paragraph, or one ### heading) for a capability keyword + "cloud"
+#     co-occurrence. Item granularity is load-bearing: whole-block matching false-fires
+#     (measured — v3000.5.20 pairs hook bullets with an unrelated /handoff "cloud
+#     session" bullet; the Sep-11 release notes pair "ClickHouse Cloud" with a plugin
+#     paragraph). The 31-day window makes an episode self-terminating — a matched entry
+#     ages out, verdict returns OK, close-on-clean retires the issue.
+#
+# The changelog surfaces are Mintlify pages: `docs.devin.ai/cli/changelog/stable.md`
+# (Update label=<version> description=<date>) and `docs.devin.ai/release-notes/overview.md`
+# (Update label=<date>). Both are fetched as `.md` (Mintlify's raw-markdown convention —
+# the HTML page is not the parse target). A page that fetches but yields no parseable
+# dated blocks is a format-drift finding, never green: the check cannot claim a clean
+# verdict on a surface it could not evaluate.
+#
+# FAIL CLOSED. An unreachable URL, an empty body, or a reformatted page are ALL findings,
+# never "no drift". The failure this design refuses is reporting green on a surface it
+# could not see.
+#
+# Security: every fetched document is UNTRUSTED INPUT — docs.devin.ai is a third party.
+# Any value derived from a fetched body (entry dates, entry labels, matched lines) passes
+# through `sanitize` (control chars stripped, `##[` workflow-command prefix neutralised,
+# backticks/`<!--`/`@` neutralised, length-bounded) before it reaches a run-log line,
+# $GITHUB_OUTPUT, or an issue body. No `github.event.*` input is consumed.
+#
+# DISPOSABLE — Ref #8253. This is a ONE-OFF, instance-shaped watcher for #8160, not a
+# general upstream-watch substrate; productising a data-driven multi-vendor watcher is
+# #8253's design problem. TEARDOWN (when #8160 closes — capabilities landed or declined):
+#   1. delete this workflow file
+#   2. delete sentry_cron_monitor.scheduled_devin_docs_drift in
+#      apps/web-platform/infra/sentry/cron-monitors.tf
+#   3. delete the ci/devin-docs-drift label
+#   4. delete the #8160 register row in plugins/soleur/devin/INSTRUCTIONS.md
+#   Nothing else is enrolled.
+
+name: "Scheduled: Devin Docs Capability Drift"
+
+on:
+  schedule:
+    # Daily. Docs change on a human release cadence; a tighter cron only multiplies
+    # runs against the same pages.
+    - cron: "23 7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+# cancel-in-progress: false serializes overlapping ticks instead of racing them; two
+# concurrent runs would both miss the other's freshly-filed issue and file duplicates.
+concurrency:
+  group: scheduled-devin-docs-drift
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No `actions/checkout`. Every input is fetched over HTTPS; checking out this repo
+      # would observe the runner's tree, which is not what is being watched. The
+      # sentry-heartbeat composite below resolves from the repo ref automatically.
+      - name: Check docs.devin.ai capability anchors
+        id: check
+        run: |
+          set -uo pipefail
+          # `set +e` is REQUIRED — Actions runs this block under `bash -e`, and a curl
+          # non-zero is a VERDICT here, not an error. Without the bracket the first failed
+          # fetch would abort the shell at that line: no finding recorded, $GITHUB_OUTPUT
+          # never written, every consumer reading "the check passed". Every capture below
+          # ALSO uses `|| rc=$?` so the property survives a future edit that drops this.
+          set +e
+
+          TMPD="$(mktemp -d)"
+
+          # Applied to EVERY value read out of a fetched document before it is echoed or
+          # embedded in a finding. Strips control/NUL bytes (which is also what stops a
+          # value forging a line break inside the heredoc-delimited $GITHUB_OUTPUT write),
+          # rewrites the `##[` workflow-command prefix to a fixed point, and neutralises
+          # the three issue-body injection vectors the plan names: backticks (fence
+          # breakout / directive-grammar), `<!--` (comment-out-the-rest-of-the-body), and
+          # `@` (mention spam). Length-bounded so a long string cannot bury a finding.
+          sanitize() {
+            printf '%s' "${1-}" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E ':a; s/##\[/#-[/g; ta' \
+              | sed -E 's/`/ʹ/g; s/<!--/<!-\x2d/g; s/@/(at)/g' \
+              | cut -c1-200
+          }
+
+          findings=()
+
+          # ---- fetch -------------------------------------------------------------------
+          # `-f` makes an HTTP error status a non-zero exit instead of a body; without it a
+          # 404's page would be evaluated as content — the classic route to "no drift" on a
+          # deleted page. `--proto '=https'` forbids scheme downgrade; `--max-redirs 2`
+          # allows Mintlify's own path redirects but no hop chain.
+          fetch_doc() { # $1=url $2=surface $3=outfile
+            local rc=0
+            curl -fsS --proto '=https' --max-redirs 2 --max-time 25 \
+              --retry 3 --retry-delay 5 --retry-connrefused \
+              -H 'Cache-Control: no-cache' "$1" -o "$3" 2>/dev/null || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              findings+=("fetch_failed[$2]: curl exited ${rc} for $(sanitize "$1"); no body was read, so every anchor on this surface was skipped — an unobserved surface is never green")
+              return 1
+            fi
+            if [[ ! -s "$3" ]]; then
+              findings+=("fetch_failed[$2]: empty body from $(sanitize "$1")")
+              return 1
+            fi
+            return 0
+          }
+
+          LIMITS_URL="https://docs.devin.ai/product-guides/plugin-ecosystem.md"
+          OVERVIEW_URL="https://docs.devin.ai/cli/extensibility/plugins/overview.md"
+          CLI_CHANGELOG_URL="https://docs.devin.ai/cli/changelog/stable.md"
+          RELEASES_URL="https://docs.devin.ai/release-notes/overview.md"
+
+          limits_ok=0 overview_ok=0 cli_ok=0 rel_ok=0
+          fetch_doc "$LIMITS_URL"        "limits"    "$TMPD/limits.md"    && limits_ok=1
+          fetch_doc "$OVERVIEW_URL"      "overview"  "$TMPD/overview.md"  && overview_ok=1
+          fetch_doc "$CLI_CHANGELOG_URL" "cli_changelog" "$TMPD/cli.md"   && cli_ok=1
+          fetch_doc "$RELEASES_URL"      "releases"  "$TMPD/releases.md"  && rel_ok=1
+
+          # ---- claim anchors -------------------------------------------------------------
+          # Mintlify source wraps sentences mid-claim (measured: the overview's "not in
+          # cloud Devin sessions" wraps onto a continuation line), so both PRESENT anchors
+          # evaluate a flattened copy of the page. The ABSENT anchor stays line-scoped — a
+          # real "hooks run in cloud" claim lives on one bullet, and flattening would let
+          # unrelated neighbouring lines forge the conjunction.
+          for pair in "limits:$TMPD/limits.md:$limits_ok" "overview:$TMPD/overview.md:$overview_ok"; do
+            surface="${pair%%:*}"; rest="${pair#*:}"; file="${rest%%:*}"; ok="${rest##*:}"
+            [[ "$ok" == "1" ]] || continue
+            flat="$(LC_ALL=C tr '\n' ' ' < "$file")"
+
+            # hooks_locality_claim (expected-PRESENT): the corrected docs scope hooks to
+            # local sessions — "registers lifecycle hooks in local Devin sessions" on the
+            # overview and "Hooks are currently best effort and fail open" on the
+            # limitations page. If this text goes, the hook contract moved.
+            if ! printf '%s' "$flat" | grep -qiE 'hooks?.{0,200}local Devin|local Devin.{0,200}hooks?|hooks?.{0,200}best effort|best effort.{0,200}hooks?'; then
+              findings+=("hooks_locality_claim_changed[${surface}]: the 'local sessions only / best effort, fail open' hook claims are absent or reworded — the hook contract moved upstream; re-read the page and re-verify (#8160 §1)")
+            fi
+
+            # subagent_limitation (expected-PRESENT): "subagents ... not in cloud (Devin
+            # )?sessions" is the §2 limitation text; its absence is the capability
+            # candidate (or a docs restructure — a human re-reads either way).
+            if ! printf '%s' "$flat" | grep -qiE 'subagent.{0,240}not in cloud'; then
+              findings+=("subagent_limitation_changed[${surface}]: the 'not in cloud (Devin )?sessions' limitation for plugin subagents is absent or reworded — verify whether agents/**/*.md now load in cloud sessions (resolves #8160 §2) or the docs merely restructured")
+            fi
+
+            # hooks_cloud_claimed (expected-ABSENT): a line claiming hooks run/dispatch in
+            # cloud is the §1 capability becoming documented. The docs already admit
+            # locality, so THIS direction — not an admission — is the watched event.
+            if grep -iE 'hook' "$file" | grep -iE 'cloud' | grep -qiE '\b(run|runs|running|dispatch|dispatched|dispatching|fire|fires|fired|work|works|working|supported|available|capable|execute|executes)\b'; then
+              findings+=("hooks_cloud_claimed[${surface}]: a line on this page now claims hooks dispatch in cloud — the #8160 §1 capability may have shipped; re-run the cloud probe (#8172) to confirm before updating the capability matrix")
+            fi
+          done
+
+          # ---- changelog arms (dated-block keyword watch) --------------------------------
+          # Mintlify emits entries as <Update ...> blocks, newest first. Only blocks dated
+          # inside the 31-day window are evaluated — the window is what lets an episode
+          # self-terminate (the entry ages out, verdict returns OK, close-on-clean retires
+          # the issue) instead of pinning one open issue forever.
+          LOOKBACK_SECS=$((31 * 86400))
+          NOW_EPOCH="$(date +%s)"
+          : > "$TMPD/scan-log"
+
+          scan_updates() { # $1=file $2=surface
+            local file="$1" surface="$2" total=0 dated=0 recent=0
+            local line lineno tag dstr dts age body label
+            while IFS= read -r line; do
+              lineno="${line%%:*}"
+              tag="${line#*:}"
+              total=$((total + 1))
+              # A date appears as label="September 16, 2026" (release notes) or
+              # description="September 16, 2026" (CLI changelog) — the regex reads either.
+              dstr="$(printf '%s' "$tag" | grep -oE '[A-Z][a-z]+ [0-9]{1,2}, [0-9]{4}' | head -1)"
+              [[ -n "$dstr" ]] || continue
+              dated=$((dated + 1))
+              dts="$(date -d "$dstr" +%s 2>/dev/null)"
+              [[ "$dts" =~ ^[0-9]+$ ]] || continue
+              age=$(( NOW_EPOCH - dts ))
+              # Tolerate one day of clock skew ahead; anything older than the window or
+              # further in the future is out of scope.
+              [[ "$age" -le "$LOOKBACK_SECS" && "$age" -ge -86400 ]] || continue
+              recent=$((recent + 1))
+              # Body = lines from the <Update> tag to the matching </Update>.
+              body="$(awk -v s="$lineno" 'NR<s{next} /<\/Update>/{exit} {print}' "$file")"
+              label="$(printf '%s' "$tag" | grep -oE 'label="[^"]*"' | head -1 | sed 's/^label="//; s/"$//')"
+              # PER-ITEM matching, not per-block: an item is one bullet (`* `/`- ` line
+              # plus its wrapped continuation lines), one `**Title**` paragraph, or a
+              # `###` section heading — the unit a human reads. (Blank-line splitting is
+              # insufficient: Mintlify changelog bullets run consecutive with no blank
+              # separator, so paragraph mode merges the whole list.) Whole-block matching
+              # pairs a hook bullet with an unrelated "cloud session" bullet two items
+              # away and false-fires (measured on v3000.5.20 and the Sep-11 release notes,
+              # the latter via a literal "ClickHouse Cloud" product name).
+              match="$(printf '%s\n' "$body" | awk '
+                /^[[:space:]]*[*-][[:space:]]/ || /^[[:space:]]*\*\*/ || /^[[:space:]]*#/ {
+                  low=tolower(buf)
+                  if (low ~ /hook|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240); exit }
+                  buf = $0; next
+                }
+                { buf = buf " " $0 }
+                END {
+                  low=tolower(buf)
+                  if (low ~ /hook|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240) }
+                }')"
+              if [[ -n "$match" ]]; then
+                findings+=("capability_entry[${surface}]: entry dated $(sanitize "$dstr") (label: $(sanitize "$label")) has an item matching the capability watch: '$(sanitize "$match")' — verify whether cloud hook dispatch or plugin subagents shipped (#8160 §1/§2)")
+              fi
+            done < <(grep -n '<Update' "$file")
+
+            if [[ "$total" -eq 0 ]]; then
+              findings+=("${surface}_format_unparseable: no <Update> blocks found — the page shape changed and capability entries cannot be evaluated")
+            elif [[ "$dated" -eq 0 ]]; then
+              findings+=("${surface}_format_unparseable: ${total} <Update> block(s) found but none carried a parseable 'Month D, YYYY' date — the recency window cannot be applied")
+            fi
+            printf '%s| %d update block(s), %d dated, %d inside the 31-day window\n' \
+              "$surface" "$total" "$dated" "$recent" >> "$TMPD/scan-log"
+          }
+
+          [[ "$cli_ok" == "1" ]] && scan_updates "$TMPD/cli.md" "cli_changelog"
+          [[ "$rel_ok" == "1" ]] && scan_updates "$TMPD/releases.md" "releases"
+
+          # ---- verdict-as-data ------------------------------------------------------------
+          finding_count="${#findings[@]}"
+          verdict="OK"
+          [[ "$finding_count" -gt 0 ]] && verdict="DRIFT"
+
+          cat "$TMPD/scan-log"
+          printf 'devin-docs-drift| %d finding(s)\n' "$finding_count"
+          for _f in "${findings[@]}"; do printf 'devin-docs-drift| %s\n' "$_f"; done
+
+          # RE-ARM before the output write: a failed append must not fall through to
+          # exit 0 leaving an EMPTY verdict, which satisfies no gate and reports nowhere.
+          set -e
+          {
+            echo "verdict=${verdict}"
+            echo "finding_count=${finding_count}"
+            echo "findings<<DEVIN_DOCS_DRIFT_FINDINGS_EOF"
+            if [[ "$finding_count" -gt 0 ]]; then printf '%s\n' "${findings[@]}"; fi
+            echo "DEVIN_DOCS_DRIFT_FINDINGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$verdict" == "DRIFT" ]]; then
+            echo "::error::Devin docs capability drift: ${finding_count} finding(s); each is printed above on a devin-docs-drift| line."
+          fi
+
+          # Always succeed. The verdict travels as DATA; letting a drift verdict fail the
+          # step would conflate "the docs changed" with "the monitor is broken" and skip
+          # every consumer gated on this step's outcome.
+          exit 0
+
+      # The gate leads with `steps.check.outcome == 'success'` — load-bearing, not
+      # defensive. Actions `==` is LOOSE: an unset output is '' which casts to 0, so a
+      # gate reading only outputs is satisfied by a step that NEVER RAN. The outcome
+      # conjunct separates "ran and found drift" from "died before writing anything".
+      # `!cancelled()` keeps the filing reachable when an unrelated step failed.
+      - name: File or update the drift issue
+        id: issue
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'DRIFT' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          FINDINGS: ${{ steps.check.outputs.findings }}
+          FINDING_COUNT: ${{ steps.check.outputs.finding_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Same inherited-errexit bracket as the check step: the `list_rc` handler below —
+          # which exists precisely so a failed lookup is not read as "nothing found" — is
+          # unreachable without it.
+          set +e
+
+          TITLE="[ci/devin-docs-drift] docs.devin.ai capability claims or release notes changed in a watched way"
+
+          # BOOTSTRAP THE LABEL FIRST, ALWAYS. `gh issue create` with an undefined `--label`
+          # HARD-FAILS, and ci/devin-docs-drift does not exist yet (this repo has shipped
+          # that exact failure before — seccomp-unenforced-alert.sh, terraform-drift).
+          gh label create "ci/devin-docs-drift" --repo "$GH_REPO" \
+            --description "Standing alarm: docs.devin.ai capability claims or release notes drifted against the #8160 watch" \
+            --color "B60205" 2>/dev/null || true
+
+          # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure
+          # into "" routes to the create branch, so an API blip files a DUPLICATE issue on
+          # every subsequent day the drift persists.
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/devin-docs-drift" -L 100 \
+            --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
+          list_rc=$?
+
+          # Built by appending indented lines: a multi-line literal at column 0 inside a
+          # `run: |` block would terminate the YAML block scalar.
+          BODY="The daily docs.devin.ai capability watch reported ${FINDING_COUNT} finding(s)."
+          BODY="${BODY}"$'\n\n'"This workflow watches the doc surfaces where the two upstream capabilities requested on #8160 would become visible: the plugin-ecosystem limitations page, the plugins reference overview, the Devin CLI changelog, and Cognition's release notes. Anchor semantics: \`hooks_locality_claim_changed\`/\`subagent_limitation_changed\` mean a documented claim moved (re-read the page); \`hooks_cloud_claimed\` means a line now claims hooks dispatch in cloud (the §1 capability); \`capability_entry\` means a release-notes item inside the 31-day window matched the capability keyword watch; \`fetch_failed\`/ \`*_format_unparseable\` mean the check could not observe its surface (fail-closed)."
+          BODY="${BODY}"$'\n\n'"### Findings"
+          BODY="${BODY}"$'\n'"\`\`\`"
+          BODY="${BODY}"$'\n'"${FINDINGS}"
+          BODY="${BODY}"$'\n'"\`\`\`"
+          BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
+          BODY="${BODY}"$'\n\n'"### What to do"
+          BODY="${BODY}"$'\n'"1. Read the finding class above. A capability finding means the watched upstream state may have changed — re-check the claim on docs.devin.ai and, if a capability shipped, re-run the relevant cloud probe arm (#8172) and update \`plugins/soleur/devin/INSTRUCTIONS.md\` §Cloud Mode."
+          BODY="${BODY}"$'\n'"2. A \`fetch_failed\` or \`format_unparseable\` finding means the check went blind — verify docs.devin.ai reachability or the Mintlify \`<Update>\`/anchor format, and update the anchors if the page was restructured."
+          BODY="${BODY}"$'\n'"3. Re-run on demand: \`gh workflow run scheduled-devin-docs-drift.yml\`"
+          BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where every anchor holds. When BOTH upstream asks are resolved or declined, close #8160 — the teardown list in the workflow header then applies (workflow + Sentry monitor + label + register row)."
+          BODY="${BODY}"$'\n\n'"Ref #8160 · disposable watcher, productization tracked at Ref #8253"
+
+          delivered=0
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::error::Could not query existing devin-docs-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
+          elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+            if gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+              delivered=1
+            else
+              echo "::error::Could not comment on devin-docs-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
+            fi
+          else
+            # NEVER report success unconditionally: with `set +e` in effect an unchecked
+            # create would fall through to a line asserting an issue exists when none does.
+            if gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+                 --label "ci/devin-docs-drift" --label "action-required"; then
+              delivered=1
+            else
+              echo "::error::devin_docs_drift_issue_filing_failed — the drift verdict reached the run log only; no action-required issue exists."
+            fi
+          fi
+
+          # FAIL THE JOB when drift was found and the alarm did not deliver. Without this
+          # the run is green, the annotation scrolls past, and the only record of real
+          # drift is a line in a log nobody reads — the alarm channel failing open.
+          echo "delivered=${delivered}" >> "$GITHUB_OUTPUT"
+          if [[ "$delivered" -ne 1 ]]; then
+            echo "::error::Drift was detected but no issue was delivered; failing the job so this is not silently green."
+            exit 1
+          fi
+
+      # CLOSE-ON-CLEAN. Closing is what keeps the dedupe guard honest: without it the
+      # first episode's issue stays open forever and the dedupe lookup then suppresses
+      # every LATER episode as comments on a stale issue. Dedupe on the SAME key the
+      # filing step uses (label + exact title), and close ALL matches — a leftover
+      # duplicate would satisfy the lookup and suppress later filings.
+      - name: Close the drift issue when every anchor holds again
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          set +e
+
+          TITLE="[ci/devin-docs-drift] docs.devin.ai capability claims or release notes changed in a watched way"
+          OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/devin-docs-drift" -L 100 \
+            --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
+          list_rc=$?
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::error::Could not query open devin-docs-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
+            exit 0
+          fi
+          while IFS= read -r n; do
+            [[ -z "$n" ]] && continue
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "Every docs.devin.ai capability anchor holds again (no findings on this run). Closed automatically by ${RUN_URL}." \
+              --reason completed || echo "::error::Could not close devin-docs-drift issue #${n}."
+          done <<< "$OPEN_NUMS"
+
+      - name: Sentry check-in (final)
+        uses: ./.github/actions/sentry-heartbeat
+        if: always()
+        # Required by the composite's docstring: its curl carries no `|| true`, so without
+        # this a Sentry ingest blip would turn a healthy run red.
+        continue-on-error: true
+        with:
+          # #7493 — all three ingest values were ALWAYS `required: true` on the composite
+          # and were once never forwarded; Actions does not enforce `required` on
+          # composite-action inputs, so the composite hit its own empty-guard and exited 0
+          # having delivered nothing. Forward all three or the heartbeat is silently dead.
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          monitor-slug: scheduled-devin-docs-drift
+          # `ok` means THE MONITOR WORKED, not that the docs are unchanged — a detected
+          # drift is a SUCCESSFUL evaluation whose surface is the issue. A drift detected
+          # but NOT delivered is a monitor failure, hence the `delivered` conjunct. This
+          # step is also the only mechanism that detects the job NOT RUNNING AT ALL:
+          # GitHub disables schedules on repo inactivity and silently drops ticks under
+          # load, and a missed tick leaves no red run to notice.
+          status: ${{ (steps.check.outcome == 'success' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'DRIFT' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}
