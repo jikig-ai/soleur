@@ -72,7 +72,9 @@ build_sandbox() {
   printf 'ignored-corpus/\n' > "$d/.markdownlintignore"
 
   # A clean synthesized corpus, spread over every asserted root, sized above the SUT's
-  # floor. 150 per root x 11 derived roots = 1650. Sized so M4 can drop a WHOLE root
+  # floor. 150 per root x 13 derived roots = 1950 (re-derived 2026-09-17: EXPECTED_ROOTS in the
+  # SUT carries 13 entries, not the 11 this line claimed; the `>= 8` guard below cannot see that
+  # drift). Sized so M4 can drop a WHOLE root
   # (-150) and still sit above MIN_SWEPT_FILES=1200 -- an earlier 170x8 sizing put the
   # drop at 1190, so M4 tripped the FLOOR and never reached the roots assertion it
   # exists to test. Re-derive this product whenever the root set or the floor moves.
@@ -90,15 +92,27 @@ build_sandbox() {
   # invisible to the whole suite.
   printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
-  # gc.auto=0 BEFORE any object-creating command. `git add -A` over ~1950 fixtures plus the
-  # commit can spawn a background `git gc --auto` that repacks loose objects while the
-  # `cp -a "$SANDBOX/."` below is still walking them, so the snapshot dies on
-  # `cannot stat .git/objects/XX` and the whole suite aborts `pristine snapshot failed`
-  # before a single mutation runs. Measured 2026-09-17 both locally and in CI on PR #8242,
-  # while four sibling PRs passed the same gate version within the same hour — i.e. a race,
-  # not a corpus regression, and one that fails the gate CLOSED (abort, exit 2) rather than
-  # reporting a false green. The sandbox is throwaway, so there is nothing for gc to buy.
-  ( cd "$d" && git init -q && git config gc.auto 0 \
+  # CONFIG-ISOLATED, AND gc.auto=0 BEFORE any object-creating command.
+  #
+  # THE HAZARD IS NOT A REPACK. `git commit` spawns a detached `git maintenance run --auto
+  # --quiet --detach` child; that process mutates `.git` while the `cp -a "$SANDBOX/."` below
+  # is still walking it, so the snapshot dies on `cannot stat .git/objects/XX` and the suite
+  # aborts `pristine snapshot failed` before a single mutation runs. `gc --auto` itself
+  # DECLINES at this size — measured 2026-09-17: 1950 fixtures produce 1950 loose objects and
+  # `git gc --auto` creates 0 packs, because gc.auto's 6700 default is never reached. Do not
+  # "correct" this comment to say gc repacks and then delete the config line: the line is what
+  # stops the child being spawned at all.
+  #
+  # Evidence it is a race and not a corpus regression: on the IDENTICAL sha 74692f5b3 the
+  # markdown-lint job was `failure` in run 35220530556 and `success` in run 35221934128.
+  # It fails the gate CLOSED (abort, exit 2), never as a false green.
+  #
+  # GIT_CONFIG_GLOBAL/SYSTEM=/dev/null keeps the "HERMETIC SANDBOX" claim in this file's header
+  # true: a host with `maintenance.strategy = incremental` set globally would otherwise run
+  # incremental-repack here and reopen the same window, so gc.auto=0 alone would not hold.
+  ( cd "$d" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+      && export GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM \
+      && git init -q && git config gc.auto 0 && git config maintenance.auto false \
       && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
     || die "sandbox git init/commit failed"

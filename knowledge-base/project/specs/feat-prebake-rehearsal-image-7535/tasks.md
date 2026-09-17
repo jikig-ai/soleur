@@ -25,9 +25,15 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
 > **Retarget (R1).** PR #7510 (`45ea9f7e9`) shipped the `run_case` and T5-mutation splits; PR #7507
 > (`dfcf7bd26`) owns R4. **Two sites remain.**
 
-> **Reconcile (R2, deepen-plan).** An implementation landed in this worktree during the deepen pass
-> and is **uncommitted** (3630 -> 3717 lines). R2 **adopts** its `arm_skip` design and withdraws
-> NG9; it names six things still owed. Task 2.0 decides the baseline before anything else.
+> **[SUPERSEDED 2026-09-17 — READ FIRST.]** The implementation that landed in this worktree during
+> the deepen pass was byte-identical to PR **#8249** and has been **DISCARDED** from this branch.
+> Measured here: target file byte-identical to `origin/main` (**3630 lines**), `grep -c T17M_APT_OK`
+> **0**, follow-through probe **unmodified**. **Tasks 2.1.x-2.7.x are therefore OWNED BY #8249, not
+> by this branch** — do not re-implement them here. Task **2.0**'s baseline decision is SETTLED
+> (discarded; implementation to #8249), so 2.0.1 and 2.0.3 no longer apply: `git status` is clean
+> and the `&&`-pair census is **1**, not 0. Every "the tree" statement below refers to #8249's head.
+>
+> **Reconcile (R2, deepen-plan).** R2 **adopts** #8249's `arm_skip` design and withdraws NG9.
 
 > **Anchor discipline.** Trust no line number from these artifacts. Locate each site by the content
 > anchors in the plan, and read the surrounding comment block first — several constraints below are
@@ -206,7 +212,8 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
 
 ### 2.8 Ship
 
-- [x] **2.8.1** Push; PR body uses **`Closes #7535`** in the **body**, never the title.
+- [x] **2.8.1** Push. **#8249's** body carries the close (in the body, never the title); THIS
+      branch's body uses `Refs #7535` and must measure `closingIssuesReferences == []`.
       **[2026-09-17] Reassigned to PR #8249** (parallel session owns the implementation); this
       branch is docs-only and uses `Refs #7535`. See the plan's `## Issue disposition`.
 - [ ] **2.8.2** Paste both guard matrices with observed outputs, every AC with its provenance tag,

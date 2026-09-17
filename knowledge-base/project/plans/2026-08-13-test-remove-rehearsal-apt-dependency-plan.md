@@ -42,11 +42,23 @@ is the residue that measurement supports.
 
 ## Revision R2 — deepen-plan, 2026-09-17 (reconciled against a concurrent implementation)
 
-**An implementation of Phase 2 landed in this worktree WHILE this plan was being deepened, and it
-is UNCOMMITTED.** Measured: the target file was 3630 lines and clean (`git diff origin/main...HEAD`
-empty) when this plan's site census was taken, and is now 3717 lines with `+101/-14` unstaged;
-`scripts/followthroughs/t5-skip-persistence-bound-7510.sh` is also modified. Neither change is
-mine — this session's scope is the plans and specs trees only — and nothing here reverts them. What
+> **[SUPERSEDED 2026-09-17 — READ THIS FIRST.]** R2 below was written while an implementation of
+> Phase 2 sat UNCOMMITTED in this worktree. That copy was **byte-identical to what shipped as PR
+> #8249** (a parallel session's work) and has been **DISCARDED**. Measured on this branch:
+> `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` is byte-identical to `origin/main` at
+> **3630 lines**, `grep -c T17M_APT_OK` is **0**, and
+> `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` is **unmodified**.
+>
+> Therefore, throughout R2 and Phase 2: **"the tree", "the tree as built", "this worktree",
+> "uncommitted", "DONE" and "(done in tree)" all refer to PR #8249's head, NOT to this branch.**
+> Every deliverable they describe is **owned by #8249**; this branch ships documentation plus two
+> fixes to `one-shot`'s collision gate. Re-measure against #8249's head before acting on any
+> figure here — it has grown since (see `## Issue disposition`).
+
+**An implementation of Phase 2 landed in this worktree WHILE this plan was being deepened.** It was
+byte-identical to PR #8249 and has since been discarded from this branch; see the banner above for
+the measured state. Neither change was mine — this session's scope is the plans and specs trees
+only — and nothing here reverts them. What
 follows reconciles the plan to them, adopting the tree where the tree is right and naming what it
 still owes. **`/work`'s first action is to decide whether that uncommitted work is the baseline
 (R2's assumption) or is to be discarded**, and to record the decision.
@@ -450,7 +462,7 @@ here; only the *name* was missing. The tree's comment says this well — keep it
 
 #### D4 — amend ADR-188. OWED. Scope extended at R2.
 
-R1's scope (image CUT + replacement trigger + revival guard) left four things the cut falsifies:
+R1's scope (image CUT + replacement trigger + revival guard) left five things the cut falsifies:
 
 1. **The image is CUT, not deferred** — with the three measurements and the two hazards.
 2. **The retry alternative's reconsideration condition becomes unsatisfiable.** It reads
@@ -494,7 +506,8 @@ Two *executable* carriers still tell the operator the cut design is owed:
 contract) and `.github/workflows/scheduled-rehearsal-skip-monitor.yml` (one site). Rewrite both to
 point at the replacement trigger. Keep the probe's counting behaviour unchanged — it is the **only**
 recurrence signal for a green decline, and D1's `arm_skip` adds a fourth arm to it. The tree
-already added `'SKIP (loud): T17 '` to `SKIP_MARKERS`; keep and assert it.
+does NOT contain `'SKIP (loud): T17 '` — measured on this branch, `SKIP_MARKERS` holds only the
+T5 and S1 markers and the probe is byte-identical to `origin/main`. **#8249 adds it; assert it there.**
 
 #### D7 — an in-suite structural census. OWED.
 P8 has no detector today: R1's answer was *a comment* plus a plan-time probe that never runs
@@ -694,12 +707,17 @@ enough — see the `Skipped:` clause in `## Verification`.
   the gate is green — measured `0 new findings, 203 baselined`.*
 - **AC15** — Invariance of what Phase 2 must not touch: `grep -c 'Acquire::Retries'` unchanged at
   **3** (NG7); no new `_skip` call site; no edit to `run_case` or the T5-mutation site (NG8).
-- **AC16** — `grep -cE '^[^#]*apt-get update.*&&.*apt-get install' <file>` is **0**, and D7's
-  in-suite census asserts the same property with its own anti-vacuity floor.
+- **AC16** — **OWNED BY #8249.** `grep -cE '^[^#]*apt-get update.*&&.*apt-get install' <file>` is
+  **0**, and D7's in-suite census asserts the same property with its own anti-vacuity floor.
+  *(Measured on this docs branch: **1**, because the file is byte-identical to `origin/main`. Assert
+  this against #8249, never against this PR — as written against this branch it is a hard red.)*
 - **AC17** — **Roster consistency, not invariance** *(rewritten at R2: R1 asserted "unchanged",
   which the tree falsifies and which was unenforceable anyway — D9)*. Five facts must agree:
   `grep -cE '^[[:space:]]*arm_skip '` == the `-eq N` stanza assertion == `_PROBE_NAMED` (with
-  `_T17_SKIPS` folded in); `_SKIP_CEILING` == the sum in its itemised stanza; and
+  a T17 term folded into `_PROBE_NAMED` — which `origin/main` does NOT have: it is
+  `_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS ))`, the stanza declares **3**, `_SKIP_CEILING` is
+  **7** with no T17 row, and `SKIP_MARKERS` has no T17 entry); `_SKIP_CEILING` == the sum in
+  its itemised stanza; and
   `SKIP_MARKERS` in `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` carries
   `SKIP (loud): T17 `. D1's `arm_skip` must be at line-start so the census sees it.
 - **AC18** — The floor is re-derived from a **measured** run (quote the terminal
@@ -730,16 +748,31 @@ enough — see the `Skipped:` clause in `## Verification`.
 - **AC25** — `bash plugins/soleur/test/c4-count-parity.test.sh` green (measured 2026-09-17:
   10 passed, 0 failed) and `git diff --stat -- knowledge-base/engineering/architecture/diagrams/`
   empty.
-- **AC26** — The `discoverability_test` command is **executed** and matches its pinned
-  `expected_output`, re-measured on the final tree.
-- **AC27** — Diff scope: only the paths in `## Files to Edit`. *(R1 failed this at the moment R2
-  was written — the follow-through probe was already modified and unlisted.)*
-- **AC28** — D9 is filed as an issue carrying its three measurements **as re-derived on
+- **AC26** — **OWNED BY #8249.** The `discoverability_test` command is executed and matches a pin
+  re-measured on #8249's merged tree. *(Deliberately unpinned here — see the `## Observability`
+  block: the former pin of `3` matched no tree that exists.)*
+- **AC27** — Diff scope, **restated 2026-09-17 for this docs branch**: the diff contains only this
+  plan, the spec, the tasks file, `knowledge-base/project/learnings/workflow-patterns/2026-09-17-*`,
+  `plugins/soleur/skills/one-shot/SKILL.md` and `scripts/markdown-lint.test.sh`. The code paths in
+  `## Files to Edit` belong to **#8249** and must NOT appear here. *(R1's version asserted the
+  `## Files to Edit` set, which this branch deliberately does not touch — as written it reds on a
+  correct tree, the rotted-probe class this plan's own Sharp Edge exists to prevent.)*
+- **AC28** — **OWNED BY #8249's ship.** D9 is filed as an issue whose number is written into this
+  AC (nothing can verify an AC that names no issue; searched 2026-09-17 — none exists). Deferred
+  here rather than filed by this docs PR: `wg-when-deferring-a-capability-create-a` mandates the
+  filing, and the review skill wires a mandated filing to a CONCUR co-sign plus a follow-through
+  probe — machinery that belongs with the code change it defers, in the file #8249 owns. What
+  this PR does instead is make the numbers correct, so the filing cannot inherit tree-derived
+  figures. It carries D9's three measurements **as re-derived on
   `origin/main`** (line-anchored census **3** vs **6** true call sites; declarable budget **13** vs
   ceiling **7**; `SKIP_MARKERS` missing `S2(`),
   and the ceiling stanza's comment records it.
 - **AC29** — After every edit inside the `bash -c '…'` recipe, `bash -n <file>` returns 0 — one
   apostrophe there is a whole-file syntax error (measured rc 2).
+- **AC30b** — **#8249** carries the close before it merges: `gh pr view 8249 --json
+  closingIssuesReferences` returns `[7535]`. Measured 2026-09-17: `[]`. Without this, #8249
+  merges and #7535 stays open — this plan's entire disposition silently fails. AC30 asserts only
+  THIS PR's field; nothing else asserts #8249's.
 - **AC30** — this PR's body uses **`Refs #7535`**, never a closing keyword, and
   `gh pr view <this-PR> --json closingIssuesReferences` returns `[]` at merge. The close belongs to
   PR #8249. **Assert the API field, not the prose:** measured 2026-09-17, this PR's body argued in
@@ -843,7 +876,8 @@ logs:
 
 **The probe and its honest limits.** It counts a token **this PR owns**: `T17M_APT_OK` is **0** on
 `origin/main` and everywhere else in the repo, and **2** on the tree as built (the variable plus
-the recipe's `echo`); D5's pin adds the third occurrence, hence `3`. `/work` MUST re-measure and
+the recipe's `echo`); with D5's pin that would be three. **No value is pinned here** — see the
+`discoverability_test` comment above. #8249's verification MUST measure and pin it, and
 re-pin the scalar on the final tree (**AC26**) — the value is the design's arithmetic, not a
 carried number.
 
@@ -958,7 +992,7 @@ issue beyond the close.
 
 **[Updated 2026-09-17] Implementation handed off to PR #8249 — this branch is docs-only.**
 Two sessions raced Phase 2. A parallel session implemented the T17-mutation and `_s1_run` sites in
-worktree `feat-7535-t17-rc-capture` and opened PR #8249 (non-draft, 107+/14-, touching only
+worktree `feat-7535-t17-rc-capture` and opened PR #8249 (non-draft, touching only
 `git-data-runcmd-rehearsal.test.sh` and `t5-skip-persistence-bound-7510.sh`). The Step 0a.5
 collision gate ran ~40 min before that PR existed, so it cleared correctly and still missed it —
 a point-in-time probe cannot see a sibling that has not opened its PR yet.
@@ -1077,7 +1111,7 @@ content anchor:
 - **Derived cardinalities.** `model.c4` embeds counts on several edges (workflow counts, monitor
   counts, emitter counts) that the actor/system rubric does not reach.
   `bash plugins/soleur/test/c4-count-parity.test.sh` is **green** — 10 passed, 0 failed, measured
-  2026-09-17 on this branch — so no embedded count moves. AC23 re-asserts it and asserts the
+  2026-09-17 on this branch — so no embedded count moves. AC25 re-asserts it and asserts the
   diagrams directory is untouched.
 
 ### Sequencing
@@ -1111,5 +1145,7 @@ version the panel endorsed, and no mechanism the panel cut is restored.
 **Assessment:** CPO measured the value proposition and recommended cutting to FR1, noting #7535
 and #7544 both sit in `Post-MVP / Later`. The operator chose FR1 plus failure-naming — the
 increment that addresses the misdiagnosis cost, which is the one value the measurement supports.
-**[Updated 2026-09-17]** Unchanged. Phase 2's implementation (PR #8249) closes the issue, which removes a `Post-MVP / Later`
+**[Updated 2026-09-17]** Unchanged. Phase 2's implementation (PR #8249) **will** close the issue
+once that PR carries a closing keyword — measured 2026-09-17 it does not
+(`closingIssuesReferences: []`); see `## Issue disposition`. That removes a `Post-MVP / Later`
 item and the standing investigative tail behind it.

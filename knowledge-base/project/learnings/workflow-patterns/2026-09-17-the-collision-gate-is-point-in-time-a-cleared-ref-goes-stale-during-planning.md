@@ -25,8 +25,7 @@ predecessors, scope-intersecting on the same file by construction, neither closi
 Nothing was missed. **The gate was right.**
 
 A sibling session then opened **PR #8249** on byte-identical scope at **13:53** — 43 minutes into
-the planning subagent's 50-minute run, in worktree `feat-7535-t17-rc-capture`, non-draft,
-107+/14-, touching the same two files the plan named.
+the planning subagent's 50-minute run, in worktree `feat-7535-t17-rc-capture`, non-draft, touching the same two files the plan named.
 
 The existing post-planning re-probe instruction did not cover it. Its wording was:
 
@@ -45,7 +44,10 @@ claimed on-disk text it had not actually written"), and the timeline fit it: wor
 13:11, the two source files modified 13:35:45 and 13:35:53 — eight seconds apart, characteristic
 of one agent making two sequential edits.
 
-The decisive test is cheap and worth reaching for **before** accusing your own subagent:
+Neither command is new here (`git worktree list --porcelain` appears in 18+ repo docs,
+`git log --all` in several learnings). What has no analogue is the COMPOSITE, used as an
+**attribution discriminator** between your own subagent and a sibling session — and its polarity.
+It is cheap and worth reaching for **before** accusing your own subagent:
 
 ```bash
 for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
@@ -78,7 +80,7 @@ a gate's own earlier output rather than to a handoff's.
 
 ## Related
 
-- [[2026-08-06-the-collision-gate-cleared-the-issues-i-passed-it-not-the-one-i-worked-on]] — the
+- `knowledge-base/project/learnings/2026-08-06-the-collision-gate-cleared-the-issues-i-passed-it-not-the-one-i-worked-on.md` — the
   first instance, where planning *re-targeted* the issue. That fix added the re-probe; this one
   removes its "not already checked" qualifier.
 - `knowledge-base/project/learnings/workflow-patterns/2026-07-18-one-shot-collision-gate-misses-prose-ref-merged-prs.md`
@@ -87,15 +89,10 @@ a gate's own earlier output rather than to a handoff's.
 - #8139 — a sibling PR found only via `test-all.sh`'s `SIBLING_RUN_DETECTED` banner, after a full
   review had been spent.
 
-## Second-order note: the handoff's stale numbers
+## Second-order note
 
-Independent of the collision, two inherited facts in the invocation were measurably wrong and
-would have shipped into the PR unchallenged:
-
-- "PR #7510 is STILL DRAFT" — it had **merged** 2026-08-19 (`45ea9f7e9`).
-- "update the `-lt 44` floor" — the floor on `main` was **`-lt 92`** (raised 77 → 92), and the
-  frozen 19-era baseline list above it must not be edited when raising, per an explicit in-file
-  convention that a prior review had already had to enforce once.
-
-Both were caught by one `gh pr view` and one `grep` before planning began. Re-measuring a handoff's
-load-bearing numbers costs seconds and is not optional.
+Two inherited numbers in the invocation were also wrong and were caught before planning began — see
+the plan's `### Premise Validation` for both, and the PR body for the dispositions. The rule they
+illustrate (re-measure a handoff's load-bearing figures) is already repo doctrine; it is noted here
+only because it is the same root cause as the timestamp above: a claim carried forward instead of
+re-derived.

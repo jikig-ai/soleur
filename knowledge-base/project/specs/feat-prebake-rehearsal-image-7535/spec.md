@@ -27,8 +27,10 @@ status: phase2-retargeted
 > while Phase 2 was blocked, so the remaining scope is **two sites, not four**.
 
 > **Reconciled 2026-09-17 (R2, deepen-plan).** An implementation of Phase 2 landed in the worktree
-> during the deepen pass and is **uncommitted** (3630 -> 3717 lines, `+101/-14`, plus a modified
-> `scripts/followthroughs/t5-skip-persistence-bound-7510.sh`). R2 adopts its `arm_skip` design and
+> during the deepen pass; it was byte-identical to PR **#8249** and has been **DISCARDED** from this
+> branch. Measured here: the target file is byte-identical to `origin/main` at **3630 lines**,
+> `grep -c T17M_APT_OK` is **0**, and the follow-through probe is **unmodified**. Every "the tree"
+> statement below refers to **#8249's head**, and every deliverable it describes is #8249's. R2 adopts its `arm_skip` design and
 > withdraws the requirements that forbade it; it also names six things the tree still owes. Every
 > line number in R1 has shifted — **all anchors are by content.** See the plan's `Revision R2`.
 
@@ -177,7 +179,7 @@ this. One transient failure produced #7501, #7535, #7544, PR #7507, a brainstorm
   step-level `env:`, so the variable is not injectable from any workflow surface today; a free-form
   string input on a required gate would make FR10's switch operator-reachable with no ack or audit.
 - **TR17 (R2)** — Record, do not fix (NG13): the roster guard's
-  `grep -cE '^[[:space:]]*arm_skip ' "$0"` returns **4** while the file has **7** executable call
+  `grep -cE '^[[:space:]]*arm_skip ' "$0"` returns **3** while the file has **6** executable call
   sites (the three S2 ones are `case`-arm one-liners the line anchor cannot see), so the declarable
   skip budget is **13** against `_SKIP_CEILING=7` (re-derived on `origin/main`) and the roster identity is blind to half the
   roster. R1's NG9 was therefore unenforceable. File it with those measurements.
@@ -221,7 +223,8 @@ plan's `Guard Contract` holds the two mutation matrices AC10 and AC11 verify.
 
 ## Issue disposition
 
-PR body uses **`Closes #7535`** — in the body, never the title. **[Updated 2026-09-17] That close
+The **implementation PR (#8249)** carries the close, in the body and never the title; this docs
+branch uses `Refs #7535`. **[Updated 2026-09-17] That close
 is carried by PR #8249, not this branch:** implementation was handed to a parallel session's PR and
 this one is docs-only, using `Refs`. See the plan's `## Issue disposition`. The issue is already retitled and
 already carries the image-cut measurements as a comment (Phase 1 task 1.10).
