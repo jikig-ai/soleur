@@ -161,22 +161,6 @@ is testable on this host and must not be written off as UNKNOWN-by-construction.
 
 ---
 
-## Phase 0.4 / 0.4a — serial baseline and the Amdahl go/no-go
-
-Pending. See `## Status` below.
-
-## Status
-
-| Task | State |
-|---|---|
-| 0.1.1 / 0.1.2 / 0.1.3 | Done — committed |
-| 0.2.1 | Done — recorded above |
-| 0.3.1 | Done — recorded above |
-| 0.4.1 / 0.4.2 / 0.4a GATE | Not started — requires an uncontended serial baseline run |
-| 0.5.1 / 0.5.2 GATE | Not started |
-
----
-
 ## Phase 0.4 / 0.4a — serial baseline and the Amdahl GATE
 
 **Run.** `TEST_TIMING_LOG` set, detached via `setsid nohup`, working tree confirmed clean at launch
@@ -250,3 +234,17 @@ population** (they depend on which suites reach a bun call).
 
 The plan assumed a green tree and does not say what to do here. Resolving this is a precondition
 for Phase 1, not a step inside it.
+
+---
+
+## Status
+
+| Task | State |
+|---|---|
+| 0.1.1 / 0.1.2 / 0.1.3 | Done — committed |
+| 0.2.1 | Done — `wait -n -p` exact; one plan claim corrected |
+| 0.3.1 | Done — taskset/MemoryMax usable, AllowedCPUs inert; plan conditional resolved |
+| 0.4.1 / 0.4.2 | Done — 46m28s serial baseline, timing log committed |
+| **0.4a GATE** | **PASS at 6.28×** (floor 2.0×) |
+| 0.5.1 / 0.5.2 GATE | Not started — needs a `tc_acquire` caller log, not instrumented by the timing-only baseline |
+| Phase 1 onward | **Blocked on the green-baseline precondition recorded above** |
