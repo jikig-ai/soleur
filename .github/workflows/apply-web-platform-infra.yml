@@ -6245,6 +6245,21 @@ jobs:
           echo "birth gate + stock preflight PASSED. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      - name: Stamp boot-trail run anchor (git-data create)
+        id: boot_anchor
+        # (#8178) STAMPED BEFORE APPLY, DELIBERATELY. The poll's predicate becomes
+        # `dt > fromUnixTimestamp(<this>)` instead of a wall-clock `now() - INTERVAL 2 HOUR`
+        # window. `host_name` pins the HOST, not the host GENERATION, so a replace
+        # re-dispatched inside a wall-clock window matches the DESTROYED host's boot_complete
+        # and reports the new one verified on the old one's evidence. Taken before apply so it
+        # bounds the boot from below; a stamp taken after would race the emit.
+        # 120 s of slack absorbs clock skew between the runner and the emitter — `dt` is
+        # emitter-assigned, so the two clocks are genuinely different.
+        run: |
+          set -euo pipefail
+          epoch=$(( $(date -u +%s) - 120 ))
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data birth)
         id: apply
         working-directory: ${{ env.INFRA_DIR }}
@@ -6294,105 +6309,78 @@ jobs:
         if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
-          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
-          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
-          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # (#8178) ONE CREDENTIAL SOURCE. The read now resolves BETTERSTACK_QUERY_* through
+          # `doppler run -p soleur -c prd_terraform`, exactly as the apply step above already
+          # does. The three GitHub secrets are gone: this step's OWN error text always told the
+          # reader to check prd_terraform while the binding read GitHub secrets, and those
+          # secrets were last written 2026-07-03 — before git-data's Logs source (#7772, closed
+          # 2026-09-04) existed. The remediation and the binding have disagreed since #6982;
+          # this makes the binding match the remediation rather than the reverse.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
         run: |
           set -uo pipefail
-          # FAIL, do not warn. A `::warning::` inside a 4000-line workflow log is not a
-          # gate, and exiting 0 here reproduces exactly the state this whole interlock
-          # exists to prevent: a GREEN birth job over a host nobody has heard from. The
-          # credentials live in prd_terraform already, so their absence is a repo-config
-          # bug, not an expected operating condition.
-          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
-            echo "::error::BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not all present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the workflow secrets; then, apply outcome ${APPLY_OUTCOME}: on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query; on failure re-dispatch is the normal remedy (the birth is additive)."
+          # (#8178) THE READ PATH IS A LIBRARY. scripts/lib/git-data-boot-signal-poll.sh owns
+          # the loop, the stdout/stderr split, the classification and the verdict, so that the
+          # mutations that matter — merging stderr into the match buffer, suppressing stderr,
+          # unconditionalising the per-poll line — have a detector. Inline here they had none,
+          # which is how a read that had NEVER succeeded (20/20 rc=22 on both real dispatches)
+          # went two dispatches without anyone being able to say why from the run log.
+          source scripts/lib/git-data-boot-signal-poll.sh || {
+            echo "::error::scripts/lib/git-data-boot-signal-poll.sh not found on this ref — the boot signal cannot be read, so this birth CANNOT be verified. Dispatch with --ref main."
+            exit 1
+          }
+
+          # FAIL, do not warn. A `::warning::` inside a 4000-line workflow log is not a gate,
+          # and exiting 0 here reproduces exactly the state this interlock exists to prevent:
+          # a GREEN birth job over a host nobody has heard from.
+          # RETARGETED AT DOPPLER_TOKEN (#8178): the query credentials are no longer bound
+          # here, so the only repo-config precondition left is the token the reader resolves
+          # them through. Checking the old three would now always fail.
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN is not present — the boot signal cannot be read, so this birth CANNOT be verified. Refusing to report success. Fix the repo secret; then, apply outcome ${APPLY_OUTCOME}: on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query; on failure re-dispatch is the normal remedy (the birth is additive)."
             exit 1
           fi
 
-          # cloud-init on a fresh host: package install, the Doppler download, luksFormat
-          # on a 10 GB volume, then the bootstrap. ~6 minutes is the observed envelope on
-          # sibling hosts; 20 polls x 30 s bounds it at 10 minutes.
-          #
-          # MODE 1 (raw SQL) TAKES THE QUERY AS THE FIRST POSITIONAL AND NO CONVENIENCE
-          # FLAGS. betterstack-query.sh detects Mode 1 by matching $1 against ^(SELECT|WITH|
-          # SHOW); passing `--since 1h` first makes $1 a flag, so it falls into Mode 2, hits
-          # the SQL as an unrecognised argument and exits 64 having sent ZERO HTTP requests.
-          # The window therefore lives INSIDE the SQL.
-          #
-          # AND DO NOT CAPTURE STDERR INTO THE MATCH BUFFER. betterstack-query.sh echoes the
-          # failing query back on the error path, and that query CONTAINS the literal
-          # 'boot_complete' — so `out=$(… 2>&1)` + `grep -q boot_complete` matches the
-          # script's own error message and reports the boot signal as received on poll 1/20.
-          # A usage error would print "boot signal received" over a host that never booted,
-          # which is precisely the green-light-over-a-dark-host this interlock exists to
-          # prevent. stdout only; rc checked separately; the match is on a PARSED FIELD.
-          found=""
-          # Consecutive transport failures, so the terminal message can tell "the host never
-          # reported" apart from "we could never ask". Without it a revoked credential or a
-          # sustained 5xx burns all 20 polls and then prints the boot-dark ::error::, sending
-          # the operator to diagnose a boot when the fault is the query path.
-          query_fails=0
-          for i in $(seq 1 20); do
-            # Field-isolated raw SQL: a bare-substring --grep would match the shared source's
-            # inngest rows quoting issue bodies. The s3Cluster arm is REQUIRED, not
-            # belt-and-braces: remote() alone is the ~40-minute hot window and a once-per-boot
-            # marker falls out of it immediately. NOTE remote() takes NO `primary` argument —
-            # only s3Cluster does; the `remote(primary, …)` form needs a NAMED COLLECTION
-            # grant this credential does not have (measured: HTTP 500 ACCESS_DENIED).
-            # set +e so the `rc=$?` capture below actually runs. GitHub invokes `run:` as
-            # `bash -e {0}` and `set -uo pipefail` above does NOT clear that inherited -e, so
-            # ANY non-zero from betterstack-query.sh (its own `exit 64` on a usage error, a
-            # rate limit, a 5xx, a credential blip) killed the whole BIRTH JOB mid-poll with
-            # no annotation, instead of retrying. The empty-result path is rc=0, so the common
-            # path polled fine and hid this. `rc=$?` must be the first command after the
-            # assignment; `set -e` is re-armed immediately after the read.
-            # (#7772) PIN THE TABLE. git-data ships to its OWN Better Stack source (2734275) since #7772, NOT the shared
-            # 2457081 that betterstack-query.sh defaults BS_TABLE to. Leaving the default does not
-            # error -- the shared table exists and answers, it just holds no rows from a host that
-            # stopped writing there -- so this reader would see zero rows on a PERFECT boot and
-            # report a dark host. On the one birth this host gets, that is a false failure.
-            export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
-            set +e
-            out=$(bash scripts/betterstack-query.sh "
-              SELECT dt,
-                     JSONExtractString(raw,'stage')        AS stage,
-                     JSONExtractString(raw,'host_name')    AS host,
-                     JSONExtractString(raw,'luks_mounted') AS luks_mounted,
-                     JSONExtractString(raw,'repo_root')    AS repo_root,
-                     JSONExtractString(raw,'hooks_path')   AS hooks_path,
-                     JSONExtractString(raw,'provision')    AS provision,
-                     JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
-              FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
-                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-              WHERE dt > now() - INTERVAL 2 HOUR
-                AND JSONExtractString(raw,'stage') = 'boot_complete'
-                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow" 2>/dev/null)
-            rc=$?
-            set -e
-            # Match the PARSED field, not free text. A row is a JSON object carrying
-            # "stage":"boot_complete"; the query text never appears on stdout.
-            if [[ $rc -eq 0 ]]; then
-              query_fails=0
-              if printf '%s' "$out" | grep -q '"stage":"boot_complete"'; then
-                found="$out"; break
-              fi
-            else
-              query_fails=$(( query_fails + 1 ))
-            fi
-            echo "poll ${i}/20: rc=${rc}, no boot_complete row yet"
-            sleep 30
-          done
+          # (#7772) PIN THE TABLE UNCONDITIONALLY, not via `:-`. git-data ships to its OWN
+          # Better Stack source since #7772, NOT the shared one betterstack-query.sh defaults
+          # to. The default does not error — the shared table exists and answers, it just holds
+          # no rows from a host that stopped writing there — so an unpinned reader sees zero
+          # rows on a PERFECT boot and reports a dark host. A `:-` default let an inherited
+          # value win; on the one birth a host gets, that is a false failure.
+          export BS_TABLE="t520508_soleur_git_data_prd_logs"
+          export BS_TABLE_S3="t520508_soleur_git_data_prd_s3"
 
-          if [[ -z "$found" && "$query_fails" -ge 20 ]]; then
-            # EVERY poll failed to reach Better Stack, so this run learned NOTHING about the
-            # host. Saying "the host booted dark" here would be a confident mis-blame of the
-            # same shape the rung-2 capture step's wrapper-failure class exists to prevent.
-            echo "::error::Could not read the boot signal at all: all 20 polls failed to query Better Stack (last rc=${rc}). This says NOTHING about whether soleur-git-data booted — check BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and the source's availability, NOT the host. The birth is UNVERIFIED (apply outcome ${APPLY_OUTCOME}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query once the query path works; on failure re-dispatch once it works."
+          # 30 polls x 30 s = 15 minutes, RAISED FROM 20 x 30 s = 10 minutes (#8178).
+          # MEASURED, not chosen for comfort: on run 34836141887 this step ran 15:14:37 ->
+          # 15:24:47 and the host's boot_complete landed 15:27:24 — 2 m 37 s AFTER the poll
+          # gave up. With the credential fix alone that birth still reports `silent`, i.e.
+          # "the host never reported" about a host that reported shortly afterwards. That is
+          # the same misattribution class this issue is about, reached by a different route.
+          # One observation is not a distribution, so this buys margin over a single measured
+          # boot rather than a guarantee — which is tolerable only because `silent` and
+          # `unreadable` are now distinct verdicts, so an exhausted budget is reported as what
+          # it is.
+          set +e
+          git_data_boot_poll 30 30 "${BOOT_TRAIL_SINCE:-}"
+          poll_rc=$?
+          set -e
+          found="${GIT_DATA_BOOT_ROW:-}"
+
+          if [[ "$poll_rc" -ne 0 ]]; then
+            echo "::error::The boot poll refused to run (rc=${poll_rc}) — see the line above. This says NOTHING about whether soleur-git-data booted; it is a workflow wiring fault. The birth is UNVERIFIED (apply outcome ${APPLY_OUTCOME})."
             exit 1
           fi
+
+          # THREE OUTCOMES, THREE REMEDIATIONS. Collapsing `unreadable` into `silent` is the
+          # defect #8178 names: it sends the operator to diagnose a boot when the fault is the
+          # read path, and it asserts a host fact the run never measured.
           if [[ -z "$found" ]]; then
-            echo "::error::No stage:boot_complete from soleur-git-data within 10 minutes (the query path answered, so this IS a statement about the host). The apply step's outcome was ${APPLY_OUTCOME}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            if [[ "${GIT_DATA_BOOT_VERDICT:-unreadable}" == "silent" ]]; then
+              echo "::error::No stage:boot_complete from soleur-git-data within the poll budget (the query path ANSWERED, so this IS a statement about the host). The apply step's outcome was ${APPLY_OUTCOME}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap), and see the runbook's partial-birth decision tree."
+            else
+              echo "::error::Could not read the boot signal at all — every poll failed to query Better Stack; the per-poll lines above name the rc and the classification. This says NOTHING about whether soleur-git-data booted — check the read path (the classification names which: credentials-rejected / table-missing / transport / reader-refusal), NOT the host. The birth is UNVERIFIED (apply outcome ${APPLY_OUTCOME}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query once the read works; on failure re-dispatch once it works."
+            fi
             exit 1
           fi
 

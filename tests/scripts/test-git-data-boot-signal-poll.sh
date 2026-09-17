@@ -147,6 +147,18 @@ d=$(mkshim s4 "$(spec '22||err' '22||err' "0|${ROW}|")")
 run_poll "$d" 3 0 "$ANCHOR" >/dev/null
 have    "S4a row after anchor on final read -> received" "VERDICT=received"
 
+# S4b The matched row is EXPORTED for the caller's per-field invariant checks. The
+# workflow asserts luks_mounted/repo_root/hooks_path/provision on it, so a poll that
+# found a row but exported nothing would make every one of those checks vacuous.
+if (
+  export BETTERSTACK_QUERY_SCRIPT="$(mkshim s4b "$(spec "0|${ROW}|")")/reader.sh"
+  export BS_TABLE=t BS_TABLE_S3=t
+  doppler() { while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift || true; "$@"; }
+  . "$LIB"; git_data_boot_poll 1 0 "$ANCHOR" >/dev/null 2>&1
+  [[ "$GIT_DATA_BOOT_ROW" == *'"stage":"boot_complete"'* ]]
+); then _report "S4b the matched row is exported to the caller" ok
+else _report "S4b the matched row is exported to the caller" bad "GIT_DATA_BOOT_ROW empty or wrong"; fi
+
 # ── S5  Answered empties then a FAILED final read -> unreadable ──────────────
 # The verdict is anchored on the FINAL read: each read queries the whole window, so
 # demanding N clean reads would let one late 5xx abort an otherwise-verified birth.
@@ -176,6 +188,18 @@ have    "S6b it is an unreadable read, not a host verdict" "VERDICT=unreadable"
 d=$(mkshim s6b "$(spec "0||betterstack-query.sh: query failed: ... stage = 'boot_complete' ...")")
 run_poll "$d" 2 0 "$ANCHOR" >/dev/null
 havent  "S6c rc=0 + boot_complete on STDERR is not received" "VERDICT=received"
+
+# S6d The VERDICT is exported, not only printed. The workflow branches on
+# silent-vs-unreadable to pick between two different remediations; if it had to parse its
+# own log back for a VERDICT= line that would be a second coupling with no detector.
+if (
+  export BETTERSTACK_QUERY_SCRIPT="$(mkshim s6d "$(spec '22||err')")/reader.sh"
+  export BS_TABLE=t BS_TABLE_S3=t
+  doppler() { while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift || true; "$@"; }
+  . "$LIB"; git_data_boot_poll 1 0 "$ANCHOR" >/dev/null 2>&1
+  [[ "$GIT_DATA_BOOT_VERDICT" == "unreadable" && "$GIT_DATA_BOOT_CLASS" == "other" ]]
+); then _report "S6d verdict and class are exported to the caller" ok
+else _report "S6d verdict and class are exported to the caller" bad "globals unset or wrong"; fi
 
 # ── S7  HTTP 200 carrying a mid-stream exception is NOT an answer ────────────
 d=$(mkshim s7 "$(spec "0|${ROW}\nCode: 241. DB::Exception: Memory limit exceeded|")")
@@ -235,7 +259,7 @@ else _report "S14a max_polls honoured exactly" bad "made $n14 reads, expected 4"
 
 # ── Assertion floor: printf + exit, never through the helper it backstops ────
 _total=$((pass + fail))
-_FLOOR=29
+_FLOOR=31
 if (( _total < _FLOOR )); then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' "$_total" "$_FLOOR" >&2
   exit 1

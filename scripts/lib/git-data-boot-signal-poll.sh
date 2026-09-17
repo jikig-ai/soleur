@@ -150,6 +150,11 @@ git_data_boot_poll_decide() {
 git_data_boot_poll() {
   local max_polls="$1" interval_s="$2" anchor="$3"
   local i rc out err found="no" answered_n=0 final_answered="no" last_class="none" verdict
+  # EXPORTED for the caller. The verdict is printed for humans AND exported for the
+  # workflow, which must branch on `silent` vs `unreadable` to choose between two
+  # different remediations — parsing its own log back for a VERDICT= line would be a
+  # second, undetectable coupling.
+  GIT_DATA_BOOT_ROW=""; GIT_DATA_BOOT_VERDICT=""; GIT_DATA_BOOT_CLASS=""
 
   # FAIL CLOSED ON AN ABSENT ANCHOR. Without it the predicate would fall back to a
   # wall-clock window, and a replace re-dispatched inside that window matches the
@@ -176,6 +181,11 @@ git_data_boot_poll() {
       # the structural half of the match-buffer fix.
       if git_data_boot_row_after_anchor "$out" "$anchor"; then
         found="yes"
+        # EXPORTED for the caller's per-field invariant assertions (luks_mounted,
+        # repo_root, hooks_path, provision, nft_metadata_drop). A global rather than
+        # stdout because stdout carries the human-readable poll transcript, and the
+        # caller must not have to parse its own log back to find the row.
+        GIT_DATA_BOOT_ROW="$(cat "$out" 2>/dev/null || true)"
         printf 'poll %d/%d: answered, boot_complete row present (dt after the run anchor)\n' "$i" "$max_polls"
         rm -f "$out" "$err"; break
       fi
@@ -211,6 +221,7 @@ git_data_boot_poll() {
   done
 
   verdict="$(git_data_boot_poll_decide "$found" "$final_answered")"
+  GIT_DATA_BOOT_VERDICT="$verdict"; GIT_DATA_BOOT_CLASS="$last_class"
   printf 'answered=%d/%d last_class=%s\n' "$answered_n" "$max_polls" "$last_class"
   printf 'VERDICT=%s\n' "$verdict"
   return 0
