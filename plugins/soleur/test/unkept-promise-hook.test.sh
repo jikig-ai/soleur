@@ -28,7 +28,15 @@ fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1"); echo "  FAIL: $1"; }
 # the identical scoping bug that produced this file's earlier correlated-fixture
 # defect, hit again by the counter added to catch a neutered harness.
 INVOCATION_LOG="$(mktemp -t unkept-inv.XXXXXXXX)"
-trap 'rm -f "$INVOCATION_LOG"' EXIT INT TERM
+# WRITTEN BY THE SUT, not by this harness. INVOCATION_LOG is appended by verdict()
+# BEFORE the hook is spawned, so it certifies what the harness intended to do.
+# SOLEUR_HOOK_TRACE is appended by the hook itself on entry, so a harness that
+# never runs it cannot satisfy the floor below. Measured: an expect() that
+# incremented both harness counters and skipped the spawn reported 50/43/39 --
+# every green-run value -- with the subject never executed.
+export SOLEUR_HOOK_TRACE
+SOLEUR_HOOK_TRACE="$(mktemp -t unkept-sut.XXXXXXXX)"
+trap 'rm -f "$INVOCATION_LOG" "$SOLEUR_HOOK_TRACE"' EXIT INT TERM
 verdict() { # <message> [extra-json] -> BLOCK | ALLOW
   echo x >> "$INVOCATION_LOG"
   local msg="$1" extra="${2:-{\}}" out
@@ -263,15 +271,112 @@ expect ALLOW "PARKED_RE fires, and the irreversible-prod escape is what rescues 
 expect ALLOW "a turn ending in a genuine question is not parked work" \
   "<stop>OPERATOR-GATE: PR is awaiting your review.</stop> Which approach do you want?"
 
+# ── each escape alternative pinned ALONE ───────────────────────────────────────
+# The single escape row tripped `irreversible`, `wipe` AND `per-command` at once,
+# so each rescued the other two: deleting any ONE of the eleven alternatives left
+# the suite green. Cardinality 1 on a redundant fixture is not coverage. These
+# three trip exactly one apiece; `hr-menu-option-ack-not-prod-write-auth` is the
+# rule the escape honours, so its own vocabulary is what needs pinning.
+expect ALLOW "escape: irreversible, alone" \
+  "Plan is ready. <stop>OPERATOR-GATE: awaiting your review of the irreversible migration.</stop>"
+expect ALLOW "escape: per-command ack, alone" \
+  "Staged. <stop>OPERATOR-GATE: awaiting your review, per-command, before I proceed.</stop>"
+# `destroy` covers `ack-destroy` by substring, so a dedicated alternative for the
+# latter is unpinnable by construction — measured: breaking it left the suite
+# green because `destroy` rescued the fixture. Removed from the pattern rather
+# than documented as equivalent; this row pins what remains.
+expect ALLOW "escape: destroy, alone (covers the ack-destroy literal too)" \
+  "Plan graded. <stop>OPERATOR-GATE: awaiting your review of the ack-destroy line.</stop>"
+
+# ── the tag alternation, and WHICH tag is selected ─────────────────────────────
+# A `BLOCKED:` parked fixture existed at HEAD and I rewrote it to OPERATOR-GATE
+# while adding rows, so every parked BLOCK row used one alternative and the other
+# went dark: narrowing the tag pattern to (OPERATOR-GATE) then survived.
+expect BLOCK "the BLOCKED: tag alternative parks work too" \
+  "Finished. <stop>BLOCKED: this is awaiting your merge.</stop>"
+# `tail -n 1` selects the LAST tag. With `head -n 1` a turn that DOCUMENTS the
+# sentinel first and parks second escapes — the self-disarm-by-documenting class
+# this hook's history is built around. The promise arm has a fixture for it; the
+# parked arm had none, because no parked fixture carried two tags.
+expect BLOCK "a documented sentinel first, real parking last" \
+  "The escape hatch is <stop>BLOCKED: what is blocking</stop> as documented. And now: <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>"
+
+# ── `ship` is in the arm's stated object set and had no fixture ────────────────
+expect BLOCK "ship is an object verb, not just merge and review" \
+  "Release notes written. <stop>OPERATOR-GATE: awaiting your ship of the 0.265.0 tag.</stop>"
+# The word boundary on `awaiting (review|merge)`. The IDENTICAL guard on
+# `needs a human` is pinned; this site was not, so one row on the boundary axis
+# read as covering the axis while covering one of its two sites.
+expect ALLOW "boundary: 'awaiting reviewers' is not 'awaiting review'" \
+  "Staffing note. <stop>OPERATOR-GATE: awaiting reviewers to be assigned by the other team.</stop>"
+
+# ── the arm's OUTPUT is the whole mechanism, so it is asserted ──────────────────
+# A Stop block changes behaviour only through what the model READS. With only
+# `.decision == "block"` asserted, PARKED_REASON could be replaced with "x" (1093
+# chars deleted) and the suite stayed green -- as could emitting the PROMISE arm's
+# reason verbatim, which would tell a parked turn to go execute a commitment it
+# never made. The promise path already has two `.reason` assertions; this arm had
+# none.
+PARKED_BODY=$(jq -n --arg m "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>" \
+  '{last_assistant_message:$m}' | bash "$HOOK" 2>/dev/null)
+PARKED_RC=$?
+EXPECT_ROWS=$((EXPECT_ROWS + 1)); echo x >> "$INVOCATION_LOG"
+printf '%s' "$PARKED_BODY" | jq -e '.reason | test("rf-never-skip-qa-review-before-merging")' >/dev/null 2>&1 \
+  && pass "parked reason cites the rule it enforces" || fail "parked reason cites the rule it enforces"
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
+printf '%s' "$PARKED_BODY" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
+  && pass "parked reason states the required action" || fail "parked reason states the required action"
+# The carve-outs are the half that prevents harm: an earlier revision blocked 13 of
+# 15 rule-mandated gates and told the model to act anyway. If the exemptions are
+# deleted from the message, the model loses the only signal that those stops remain
+# legitimate.
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
+printf '%s' "$PARKED_BODY" | jq -e '.reason | test("hr-menu-option-ack-not-prod-write-auth") and test("COST or SCOPE") and test("in-flight")' >/dev/null 2>&1 \
+  && pass "parked reason names the stops it does NOT block" || fail "parked reason names the stops it does NOT block"
+# The two block arms must be distinguishable downstream; emitting the promise arm's
+# systemMessage for a parked turn survived every row.
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
+printf '%s' "$PARKED_BODY" | jq -e '.systemMessage | test("parked on the operator")' >/dev/null 2>&1 \
+  && pass "parked systemMessage is distinct from the promise arm's" || fail "parked systemMessage is distinct from the promise arm's"
+# Protocol: this hook blocks by JSON on stdout at rc 0. Appending `exit 2` to the
+# block path (a DIFFERENT Claude Code protocol -- stderr as the reason) survived.
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
+[ "$PARKED_RC" -eq 0 ] \
+  && pass "a parked block exits 0 and speaks via stdout JSON, not rc 2" || fail "a parked block exits 0 (got rc=$PARKED_RC)"
+
+SUT_RUNS=$(wc -l < "$SOLEUR_HOOK_TRACE" 2>/dev/null | tr -d ' ')
+SUT_RUNS=${SUT_RUNS:-0}
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=43
+MIN_INVOCATIONS=51
+# THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
+# satisfy, because only the hook appends to it.
+MIN_SUT_RUNS=55
+if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
+  printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
+    "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
+  exit 1
+fi
+# The harness-side counter stays as a CONSERVATION check against the SUT-written
+# one: they must agree, so a harness that inflates its own count without spawning
+# (or a hook that runs without the harness knowing) is caught by the mismatch.
+# Direction matters. SUT_RUNS >= INVOCATIONS is the invariant: verdict() spawns the
+# hook once per call, and several rows spawn it DIRECTLY without going through
+# verdict() (the fail-open and payload-shape rows), so the SUT legitimately runs
+# more often than the harness counts. The reverse -- the harness claiming more
+# invocations than the hook actually served -- is exactly the neutered-harness
+# defect this pair exists to catch. Measured on the real suite: 43 vs 47.
+if [ "$INVOCATIONS" -gt "$SUT_RUNS" ]; then
+  printf '[FATAL] coverage: harness counted %s invocation(s) but the hook ran only %s time(s) -- the instrument is not attached to the subject\n' \
+    "$INVOCATIONS" "$SUT_RUNS" >&2
+  exit 1
+fi
 if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
   printf '[FATAL] coverage: %s SUT invocations, floor is %s -- the harness is not running the hook\n' \
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=39
+MIN_EXPECT_ROWS=51
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -280,7 +385,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=62
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -114,6 +114,14 @@ set -uo pipefail
 # Fail OPEN on every infrastructure problem: this must never be the reason a
 # session cannot end.
 command -v jq >/dev/null 2>&1 || exit 0
+# SUT-WRITTEN EXECUTION TRACE (test-only, opt-in via an env var the production
+# path never sets). The suite's coverage floor counted lines its OWN harness
+# appended before spawning anything, so it measured the harness, not the subject:
+# one line -- `expect() { EXPECT_ROWS=$((EXPECT_ROWS+1)); echo x >> "$LOG"; pass "$2"; }`
+# -- defeated all three floors at once and printed their exact green-run values
+# while the hook was never spawned for any parked row. A counter the SUT writes
+# cannot be satisfied by a harness that does not run it.
+[ -n "${SOLEUR_HOOK_TRACE:-}" ] && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE" 2>/dev/null
 HOOK_INPUT=$(cat 2>/dev/null) || exit 0
 [[ -n "$HOOK_INPUT" ]] || exit 0
 
@@ -194,7 +202,7 @@ PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0
 # a promise anywhere else in it"). Measured on the first revision: "I revoked the
 # old token as part of cleanup. <stop>OPERATOR-GATE: PR #8244 is green and awaiting
 # your merge.</stop>" ALLOWED, because `revoke` appeared in an unrelated sentence.
-PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply)|ack-destroy)'
+PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
 
 # ALL THREE TERMS ARE TESTED ON THE TAG'S OWN SENTENCE, not on the window.
 #
