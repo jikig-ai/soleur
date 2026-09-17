@@ -174,3 +174,79 @@ Pending. See `## Status` below.
 | 0.3.1 | Done — recorded above |
 | 0.4.1 / 0.4.2 / 0.4a GATE | Not started — requires an uncontended serial baseline run |
 | 0.5.1 / 0.5.2 GATE | Not started |
+
+---
+
+## Phase 0.4 / 0.4a — serial baseline and the Amdahl GATE
+
+**Run.** `TEST_TIMING_LOG` set, detached via `setsid nohup`, working tree confirmed clean at launch
+(a gate only describes the tree it was launched against). Started `2026-09-17T12:10:09Z`, finished
+`12:56:37Z` — **2,788 s (46m28s)** wall clock.
+
+Terminal marker present, `killed=0`, rc=1.
+
+```
+=== 408/435 suites passed ===
+```
+
+### 0.4a GATE — computed over the post-decline population
+
+```
+$ awk -F'\t' '$3 ~ /^skip=/ {declined++; next}
+              {n++; t+=$2; if($2>m){m=$2; ml=$1}}
+              END{printf "total=%d longest=%d (%s) ratio=%.2f\n", t, m, ml, t/m}' timing.tsv
+```
+
+| Quantity | Value |
+|---|---|
+| suites counted | 502 rows (14 declined excluded) |
+| `total_suite_ms` | **2,731,532** (45.5 min) |
+| `longest_suite_ms` | **434,912** (7.2 min) — `scripts/battery-tag-authorship-mutations` |
+| **ratio** | **6.28×** |
+| Gate (`>= 2.0×`) | **PASS — proceed** |
+
+Sum of suite time (45.5 min) against wall clock (46.5 min) is a sanity check on the row set: a
+significant double-count from nested-runner rows would push the sum ABOVE wall clock, and it does
+not.
+
+**Against the plan's estimate.** The plan projected ~3.2× on the assumption that the longest
+relevant suite is ~14.3 min. Measured, the longest is **7.2 min**, so the ceiling is roughly twice
+what the plan assumed. The prize is larger than the plan's own pessimistic case, not smaller.
+
+### The baseline's other result: the local gate was UNRUNNABLE on this host
+
+This is not a side note; it changes what the 27 non-passing suites mean.
+
+The Version Check on `origin/main` is a plain top-level `if` — it is **not** inside any
+`_ENUMERATE` conditional. Under `set -euo pipefail`, `actual=$(bun --version)` therefore aborted
+**every** invocation on this host, not only `--enumerate`. Verified by extracting main's block and
+running it against the live broken shim: neither `REACHED comparison` nor `SURVIVED` is reached.
+
+So there is no "these suites used to pass here" baseline to regress against. They were never
+**reached**. The Phase 0.1 fix did not break them; it stopped the runner dying above them.
+
+### Failure triage — 21 distinct failing suites, none attributable to this branch
+
+The run log carries **78** `mise ERROR … No version is set for shim: bun` occurrences.
+
+| Class | Example | Cause |
+|---|---|---|
+| bun/toolchain | `scripts/frontmatter-strip-parity` (3/12, the `parity(ts)` arms) | bun non-functional on this host |
+| host-specific | `scripts/lib/scratch-root.test.sh` — `HOME fallback` and `containment` both got `/home/jean/.cache/soleur/tmp` | pre-existing, host paths |
+| other pre-existing | `plugins/soleur/test/git-tripwire.test.sh` — Guard 3, 16 assertions | pre-existing, not bun-shaped |
+
+This branch's own suite is green inside the battery:
+`[ok] scripts/test-all-enumerate-toolchain (12452ms)`, 20 passed / 0 failed.
+
+`#8112 "CI: main branch tests failing"` is already open and is the existing home for main-red work.
+
+### Consequence for Phase 1 and Phase 4 — a methodology blocker the plan did not anticipate
+
+Phase 1 diagnoses #7376 by repetition and attribution, and Phase 4's correctness gate is fault
+injection. Both assume a baseline in which a RED suite is a signal. With 21 suites already red for
+environment reasons, "interference reddened this suite" and "this suite was already red" are not
+distinguishable by the plan's stated method, and the bun-class failures are **non-deterministic in
+population** (they depend on which suites reach a bun call).
+
+The plan assumed a green tree and does not say what to do here. Resolving this is a precondition
+for Phase 1, not a step inside it.

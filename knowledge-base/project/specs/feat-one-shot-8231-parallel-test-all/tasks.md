@@ -22,10 +22,10 @@ gates, and reaching a stop verdict is a successful outcome, not a failure.
 - [x] 0.3.1 Measure the constrained view (`nproc` **inside** the scope), not the exit code. Record
       which mechanism this host provides and, if no memory constraint is available, record that H2
       will terminate UNKNOWN by construction.
-- [ ] 0.4.1 Run the serial baseline with `TEST_TIMING_LOG` set, a per-suite peak-RSS sampler, and a
+- [x] 0.4.1 Run the serial baseline with `TEST_TIMING_LOG` set, a per-suite peak-RSS sampler, and a
       temporary log of every `tc_acquire` caller's pid and cmdline.
-- [ ] 0.4.2 Capture `sort -k2 -n -r "$TEST_TIMING_LOG" | head -20` verbatim.
-- [ ] **0.4a GATE** — compute `total_suite_ms ÷ longest_suite_ms` over the post-decline population.
+- [x] 0.4.2 Capture `sort -k2 -n -r "$TEST_TIMING_LOG" | head -20` verbatim.
+- [x] **0.4a GATE** — compute `total_suite_ms ÷ longest_suite_ms` over the post-decline population.
       **Below 2× stops the work** and routes to #8045.
 - [ ] 0.5.1 Derive the blocking subset from the caller log, measured **under an inherited
       `SOLEUR_ALLOW_FULL_GATE=1`** — a plain invocation takes ADR-196's refusing path and would
