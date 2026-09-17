@@ -288,7 +288,14 @@ fi
 # literal: binding it to a variable expansion re-creates the same unconstructible shape.
 MIN_CASES=19
 if (( cases < MIN_CASES )); then
-  printf 'FATAL: case floor is %s, found %s (coverage removed?)\n' "$MIN_CASES" "$cases" >&2
+  # PHRASING IS LOAD-BEARING, not style. guard-vacuity-floor.test.sh classifies a mutant as
+  # FIRES only when its output carries a floor-shaped SENTINEL from a fixed vocabulary
+  # (`[FATAL]` with literal brackets, `FAIL:`, `vacuit`, `cardinality`, `assertion floor`,
+  # `only <n>`, `assertions ran`, ...). A floor that fires correctly but reports in other words
+  # is classified CONSTRUCTION — indistinguishable from one that never ran — and the suite
+  # silently leaves that meta-guard's covered population. `only %s cases ran` is the sibling's
+  # phrasing and matches `only [0-9]`.
+  printf 'FATAL: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1
 fi
 (( fails == 0 )) || exit 1
