@@ -324,9 +324,7 @@ if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQ
 fi
 
 # ---------------------------------------------------------------------------
-# All four hold. Say what the skip does NOT cover, so it is visible rather than
-# silent — the local run also executes suites that are not in the required set
-# (that is how #8238 was found), and a silent skip would hide that.
+# Every condition held.
 # ---------------------------------------------------------------------------
 # No "and these suites go unrun" note here, deliberately: it would be FALSE.
 # test-all.sh registers every suite inside one of want_scripts / want_bun /
@@ -335,4 +333,11 @@ fi
 # which condition 2 refuses on. An earlier revision claimed a residue that does
 # not exist, which both overstated the risk and contradicted this file's own
 # containment argument.
-skippable "all ${REQUIRED_COUNT} required contexts present and green on ${HEAD_SHA:0:9}, tree clean, nothing unpushed, no apps/*/infra/** in the diff"
+# STATE ONLY WHAT WAS MEASURED. An earlier revision of this line claimed
+# "nothing unpushed" — a predicate this script no longer evaluates at all — and
+# "no apps/*/infra/** in the diff", which is FALSE on the self-retire path, where
+# the infra block is skipped precisely because the context became required and
+# the diff may well touch infra. A verdict line naming a cause the run did not
+# measure is the AP-021 class, and it is worse here than elsewhere because this
+# line is the operator's only record of why 35 minutes were skipped.
+skippable "all ${REQUIRED_COUNT} required contexts present and green on ${HEAD_SHA:0:9}; working tree clean; origin/main is an ancestor of HEAD"

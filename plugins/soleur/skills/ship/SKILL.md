@@ -384,7 +384,7 @@ if [[ "$rc" -eq 42 ]]; then
   echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
 else
   echo "battery OWED (rc=$rc) — running it"
-  # ... run the full battery below ...
+  TEST_GROUP=all bash scripts/test-all.sh
 fi
 ```
 
@@ -411,11 +411,11 @@ deliberately NOT restated here: a copy in prose drifts the moment a condition is
 edited, and the script prints its own verdict and reasoning at runtime, which is
 the channel that cannot drift.
 
-Then run the full battery (when OWED):
-
-```bash
-TEST_GROUP=all bash scripts/test-all.sh
-```
+The runner is INSIDE the `else`, deliberately. An earlier revision left the OWED
+arm as a comment and put the invocation in a separate fenced block below — so an
+agent copying the second block ran the battery regardless of `rc`, in a skill whose
+own instruction is "branch on the exit code, never on the prose". The coupling
+between two adjacent blocks is prose.
 
 **Start it on the FINAL tree, and keep its log outside the session scratchpad.** Any commit you
 can already foresee — the `Reviewed-By-Soleur` trailer, the sync with `origin/main` — invalidates a
@@ -2227,7 +2227,9 @@ done
 
 **A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
 
-**A poll whose population can SHRINK needs a floor, and must require the run it waits for to be PRESENT.** `pending == 0` is satisfied perfectly by an empty set, so a query that silently stops matching reports ALL-SETTLED having examined nothing — the same vacuity a bounded floor exists to refuse. Record the largest population seen and refuse to settle below it. **Why:** #8233 — a release watch on `gh run list --branch main --commit <sha>` went from 10 release runs to **0** as `main` advanced (the `--branch` half stopped matching the merge commit's push runs while 26 unrelated `issues` runs still did), one poll short of declaring the deploy settled. Drop `--branch`; `--commit <sha>` alone is stable. Scope the failure matcher to `push`/`workflow_run` too, or your own `gh issue create` calls will trigger `issues` workflows whose concurrency-cancellations you then report as release failures.
+**A poll whose population can SHRINK needs a floor, and must require the run it waits for to be PRESENT.** `pending == 0` is satisfied perfectly by an empty set, so a query that silently stops returning the runs you care about reports ALL-SETTLED having examined nothing — the same vacuity a bounded floor exists to refuse. Record the largest population seen and refuse to settle below it; separately, require the specific run you are waiting for (the deploy arm, the release job) to be present, not merely non-failing.
+
+**The cause is almost always `--limit` truncation, not the branch filter — CORRECTED 2026-09-17 after measurement.** An earlier revision of this rule blamed `--branch main --commit <sha>` and prescribed dropping `--branch`. That mechanism is FALSE and the remedy is a no-op: measured on two `main` commits, `gh run list --branch main --commit <sha>` and `gh run list --commit <sha>` return **identical** counts (58/58 and 0/0), and every run on those commits carries `headBranch: main` — **including the `push` runs** — so the branch filter cannot selectively drop push runs while retaining `issues` runs. What actually happens is `gh run list` returning newest-first under a `--limit`: on a busy commit the release runs are crowded off the end by unrelated `issues`/`issue_comment` traffic, which on an agent-driven repo is frequently the agent's OWN issue filings. Measured: `--limit 100` returned `push=0` where `--limit 300` returned `push=8` out of 131 runs. Raise the limit, paginate, or filter server-side by `--event push` / `--event workflow_run`; dropping `--branch` while keeping the limit rebuilds the identical watcher. **Why:** #8233 — a release watch reported 10 release runs then 0, one poll short of declaring a deploy settled over nothing.
 
 **Run every Monitor with its shell in the MAIN checkout (or `/var/tmp`), never `cd`'d into the feature worktree.** Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 

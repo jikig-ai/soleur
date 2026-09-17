@@ -187,14 +187,14 @@ PINNED_REQUIRED='[{"context":"test","integration_id":15368}]'
 new_fixture_root ROOT
 WORK="$(build_fixture "$ROOT")"
 STUB="$ROOT/stub"; make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
+assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
   "T1 clean tree + all required green on THIS sha + no infra paths -> SKIPPABLE"
 
 # =============================================================================
 # T2 — dirty tree. "CI is green" then describes a different tree.
 # =============================================================================
 printf 'uncommitted\n' > "$WORK/dirty.txt"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T2 dirty working tree -> OWED (CI verified a different tree)"
 rm -f "$WORK/dirty.txt"
 
@@ -209,7 +209,7 @@ rm -f "$WORK/dirty.txt"
 # =============================================================================
 PARENT_SHA="$( cd "$WORK" && git_fixture_env "$WORK" >/dev/null 2>&1; git rev-parse HEAD~1 )"
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$PARENT_SHA"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T3 required checks green on the PARENT sha only -> OWED (green must be green on THIS sha)"
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
 
@@ -222,13 +222,13 @@ make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
 # =============================================================================
 RERUN_RED='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$TWO_REQUIRED" "$RERUN_RED" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T4 a required context passed then was RE-RUN red -> OWED (newest attempt wins)"
 
 # The inverse, so the row above cannot pass by the gate simply ignoring order.
 RERUN_GREEN='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$TWO_REQUIRED" "$RERUN_GREEN" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
+assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
   "T4b a required context failed then was RE-RUN green -> SKIPPABLE (newest attempt wins, both directions)"
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
 
@@ -243,7 +243,7 @@ make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
 # =============================================================================
 NEWEST_FIRST_RED='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$TWO_REQUIRED" "$NEWEST_FIRST_RED" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T4c newest attempt is red and listed FIRST (production order) -> OWED (time, not array position)"
 
 # =============================================================================
@@ -256,12 +256,12 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
 # =============================================================================
 FOREIGN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":99999}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$FOREIGN_APP" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T4d a green check-run from a FOREIGN app cannot satisfy a pinned required context -> OWED"
 
 OWN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$OWN_APP" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
+assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
   "T4e the SAME pinned context satisfied by its own app -> SKIPPABLE (both directions)"
 
 # =============================================================================
@@ -274,7 +274,7 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
 STALE_STATUS='[{"context":"test","state":"success","created_at":"2020-01-01T00:00:00Z"}]'
 RED_CHECK='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$RED_CHECK" "$(head_sha_of "$WORK")" "$STALE_STATUS"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T4f a six-year-old green commit STATUS cannot override a red check-run on a pinned context -> OWED"
 
 # =============================================================================
@@ -286,12 +286,12 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
 # =============================================================================
 in_fixture "$WORK" bash -c 'mkdir -p apps/web-platform/infra && printf "x\n" > apps/web-platform/infra/deploy.sh && git add -A && git commit --quiet -m "infra change"'
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T5 diff touches apps/web-platform/infra/** -> OWED even with every required check green"
 
 in_fixture "$WORK" bash -c 'git rm -r --quiet --cached apps/web-platform >/dev/null 2>&1; rm -rf apps; mkdir -p .github/workflows && printf "x\n" > .github/workflows/apply-web-platform-infra.yml && git add -A && git commit --quiet -m "infra workflow change"'
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T5b diff touches ONLY .github/workflows/apply-web-platform-infra.yml -> OWED (the second prefix test-all.sh matches)"
 
 # =============================================================================
@@ -300,7 +300,7 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
 make_stub "$STUB" '[{"context":"test","integration_id":null},{"context":"adr-ordinals","integration_id":null},{"context":"infra-validate-required","integration_id":null}]' \
   '[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"infra-validate-required","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK")"
-assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
+assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
   "T5c infra diff + infra-validate-required IS required and green -> SKIPPABLE (condition self-retires)"
 
 # =============================================================================
@@ -318,13 +318,13 @@ STUBB="$ROOTB/stub"
 # Advance origin/main past the branch point, leaving the branch BEHIND.
 in_fixture "$WORKB" bash -c 'git checkout --quiet main && printf "newer\n" > on-main.md && git add -A && git commit --quiet -m "main advances" && git push --quiet origin main && git checkout --quiet feat-fixture'
 make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
-assert_eq "$(run_gate "$WORKB" "$STUBB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
   "T5d branch is BEHIND origin/main -> OWED (CI verified merge(HEAD,base), not this tree)"
 
 # And the inverse, so the row cannot pass by the gate simply always refusing.
 in_fixture "$WORKB" bash -c 'git merge --quiet origin/main --no-edit'
 make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
-assert_eq "$(run_gate "$WORKB" "$STUBB")" "$SKIPPABLE" \
+assert_eq "$SKIPPABLE" "$(run_gate "$WORKB" "$STUBB")" \
   "T5e after merging origin/main in -> SKIPPABLE (up to date, so the merge ref IS this tree)"
 
 # =============================================================================
@@ -337,8 +337,51 @@ assert_eq "$(run_gate "$WORKB" "$STUBB")" "$SKIPPABLE" \
 in_fixture "$WORKB" bash -c 'mkdir -p apps/web-platform/infra && printf "x\n" > apps/web-platform/infra/a.tf && git add -A && git commit --quiet -m "add infra file" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
 in_fixture "$WORKB" bash -c 'git mv apps/web-platform/infra/a.tf moved.tf && git commit --quiet -m "rename out of the infra surface"'
 make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
-assert_eq "$(run_gate "$WORKB" "$STUBB")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
   "T5f a file renamed OUT of apps/web-platform/infra/ -> OWED (the old path must still count)"
+
+# =============================================================================
+# T2b/T2c — the OTHER TWO dirty shapes. T2 only ever instantiated an UNTRACKED
+# file, so `git status --porcelain` could have been swapped for
+# `git ls-files --others` and stayed green — leaving the gate's self-declared
+# sharpest condition pinned by one of the three shapes it must catch.
+# =============================================================================
+in_fixture "$WORK" bash -c 'printf "modified\n" >> README.md'
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T2b a MODIFIED TRACKED file -> OWED (not just untracked)"
+in_fixture "$WORK" bash -c 'git checkout --quiet -- README.md'
+
+in_fixture "$WORK" bash -c 'printf "staged\n" > staged.md && git add staged.md'
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T2c a STAGED change -> OWED (the third dirty shape)"
+in_fixture "$WORK" bash -c 'git rm -q --cached staged.md && rm -f staged.md'
+
+# =============================================================================
+# T6b — conclusions outside success/failure. GitHub's branch protection treats
+# `neutral` and `skipped` as passing; this gate does NOT, which is the SAFE
+# direction (more OWED). Pinned so the choice is deliberate rather than accidental,
+# and so a future "just accept neutral" edit has to argue with a row.
+# =============================================================================
+NEUTRAL_CHECK='[{"name":"test","status":"completed","conclusion":"neutral","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$NEUTRAL_CHECK" "$(head_sha_of "$WORK")"
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T6b conclusion=neutral -> OWED (this gate requires success; GitHub would pass it)"
+SKIPPED_CHECK='[{"name":"test","status":"completed","conclusion":"skipped","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$SKIPPED_CHECK" "$(head_sha_of "$WORK")"
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T6c conclusion=skipped -> OWED (same deliberate strictness)"
+
+# =============================================================================
+# T12 — the 15s bound is asserted in SOURCE, not only behaviourally.
+# T10b's window admits anything under 40s, so widening `timeout 15` to `timeout 35`
+# was free. Pin the literal the way T11 pins INFRA_RE.
+# =============================================================================
+GATE_SRC="$(git rev-parse --show-toplevel)/plugins/soleur/skills/ship/scripts/battery-owed.sh"
+if grep -qE '^\s*REQUIRED_JSON="\$\(timeout 15 gh api' "$GATE_SRC"; then
+  assert_eq "ok" "ok" "T12 the ruleset call is bounded at the documented 15s"
+else
+  assert_eq "bound changed" "ok" "T12 the ruleset call's timeout literal is not 15 — behaviour row T10b would not notice"
+fi
 
 # =============================================================================
 # T6 — a required context ABSENT. The non-vacuity row.
@@ -347,7 +390,7 @@ new_fixture_root ROOT2
 WORK2="$(build_fixture "$ROOT2")"
 STUB2="$ROOT2/stub"
 make_stub "$STUB2" '[{"context":"test","integration_id":null},{"context":"adr-ordinals","integration_id":null},{"context":"never-ran","integration_id":null}]' "$GREEN_CHECKS" "$(head_sha_of "$WORK2")"
-assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK2" "$STUB2")" \
   "T6 a required context is ABSENT (nothing failing) -> OWED, not a vacuous skip"
 
 # =============================================================================
@@ -356,26 +399,26 @@ assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
 make_stub "$STUB2" "$TWO_REQUIRED" \
   '[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK2")"
-assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" "T7 a required context concluded failure -> OWED"
+assert_eq "$OWED" "$(run_gate "$WORK2" "$STUB2")" "T7 a required context concluded failure -> OWED"
 
 make_stub "$STUB2" "$TWO_REQUIRED" \
   '[{"name":"test","status":"in_progress","conclusion":null,"started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK2")"
-assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
+assert_eq "$OWED" "$(run_gate "$WORK2" "$STUB2")" \
   "T7b a required context still in_progress -> OWED (not-yet-green is not green)"
 
 # =============================================================================
 # T8 — the ruleset cannot be read. UNDECIDABLE, never a skip.
 # =============================================================================
 make_stub "$STUB2" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK2")" "[]" 1
-assert_eq "$(run_gate "$WORK2" "$STUB2")" "$UNDECIDABLE" \
+assert_eq "$UNDECIDABLE" "$(run_gate "$WORK2" "$STUB2")" \
   "T8 ruleset unreadable -> UNDECIDABLE (caller treats as OWED), never SKIPPABLE"
 
 # =============================================================================
 # T9 — an EMPTY required set. Refusing a trivially-satisfied skip.
 # =============================================================================
 make_stub "$STUB2" '[]' "$GREEN_CHECKS" "$(head_sha_of "$WORK2")"
-assert_eq "$(run_gate "$WORK2" "$STUB2")" "$UNDECIDABLE" \
+assert_eq "$UNDECIDABLE" "$(run_gate "$WORK2" "$STUB2")" \
   "T9 zero required contexts -> UNDECIDABLE, never a trivially-satisfied skip"
 
 # =============================================================================
@@ -394,7 +437,7 @@ make_stub "$STUB3" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK3")"
 cat > "$STUB3/gh" <<'HANGSTUB'
 #!/usr/bin/env bash
 case "$*" in
-  *rules/branches/main*) sleep 120 ;;
+  *rules/branches/main*) exec sleep 60 ;;
 esac
 exit 0
 HANGSTUB
@@ -402,9 +445,9 @@ chmod +x "$STUB3/gh"
 _t0=$(date +%s)
 _rc="$(run_gate "$WORK3" "$STUB3")"
 _elapsed=$(( $(date +%s) - _t0 ))
-assert_eq "$_rc" "$UNDECIDABLE" "T10 a hanging gh endpoint -> UNDECIDABLE, not a hang"
+assert_eq "$UNDECIDABLE" "$_rc" "T10 a hanging gh endpoint -> UNDECIDABLE, not a hang"
 if (( _elapsed < 40 )); then
-  assert_eq "bounded" "bounded" "T10b the hang returned in ${_elapsed}s (bounded well under the 120s stub sleep)"
+  assert_eq "bounded" "bounded" "T10b the hang returned in ${_elapsed}s (bounded well under the 60s stub sleep)"
 else
   assert_eq "took ${_elapsed}s" "bounded" "T10b the gate did NOT bound the hanging call"
 fi
@@ -418,28 +461,38 @@ fi
 # =============================================================================
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 # The authority: the two literals test-all.sh's _infra_in_diff block greps for.
-AUTHORITY_PREFIXES="$(grep -A 3 "_diff_names" "$REPO_ROOT/scripts/test-all.sh" \
-  | grep -oE "'(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra\.yml)'" \
-  | tr -d "'" | sort -u)"
-# The gate's own predicate, with regex escaping removed so a plain literal
-# comparison is meaningful (the gate stores it as an ERE, `\.github/...`).
+# DERIVE the set with an OPEN pattern. An earlier revision extracted with a
+# fixed two-literal alternation naming the very prefixes it expected, so a third
+# prefix added to test-all.sh was invisible and `_auth_n` was 2 BY CONSTRUCTION —
+# the row's own comment ("fails if test-all.sh grows a third") was false, and that
+# is the single thing this row exists to do. Verified: injecting a third
+# `grep -qF '...'` into the authority left every T11 row green.
+#
+# The shape, not the content: every operand of a `grep -qF '<prefix>'` inside the
+# _infra_in_diff block.
+AUTHORITY_PREFIXES="$(awk '/^_infra_in_diff=0$/,/^fi$/' "$REPO_ROOT/scripts/test-all.sh" \
+  | grep -oE "grep -qF '[^']+'" | sed -E "s/^grep -qF '//; s/'$//" | sort -u)"
 GATE_RE_LINE="$(grep -F 'INFRA_RE=' "$REPO_ROOT/plugins/soleur/skills/ship/scripts/battery-owed.sh" | tr -d '\\')"
 
-# Non-vacuity: the authority extraction must find BOTH prefixes, or this row
-# silently proves nothing about a predicate it never read.
+# Non-vacuity: the extraction must find AT LEAST the two we know of. A `>=` floor,
+# not `== 2`: the whole point is that the authority may grow.
 _auth_n="$(printf '%s\n' "$AUTHORITY_PREFIXES" | grep -c .)"
-assert_eq "$_auth_n" "2" "T11 authority extraction found both test-all.sh infra prefixes (else this row is vacuous)"
+if [[ "$_auth_n" -ge 2 ]]; then
+  assert_eq "ok" "ok" "T11 authority extraction derived $_auth_n infra prefix(es) from test-all.sh (>=2)"
+else
+  assert_eq "derived $_auth_n" "ok" "T11 authority extraction found $_auth_n prefixes — the extractor is broken, so every row below is vacuous"
+fi
 
 while IFS= read -r _p; do
   [[ -z "$_p" ]] && continue
   if printf '%s\n' "$GATE_RE_LINE" | grep -qF "$_p"; then
-    assert_eq "matched" "matched" "T11 gate matches test-all.sh infra prefix '$_p'"
+    assert_eq "ok" "ok" "T11 gate matches test-all.sh infra prefix '$_p'"
   else
-    assert_eq "MISSING" "matched" "T11 gate does NOT match test-all.sh infra prefix '$_p' — predicate drift"
+    assert_eq "MISSING" "ok" "T11 gate does NOT match test-all.sh infra prefix '$_p' — predicate drift"
   fi
 done <<< "$AUTHORITY_PREFIXES"
 
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 26
+print_results 31
