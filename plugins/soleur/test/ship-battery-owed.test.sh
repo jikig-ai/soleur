@@ -121,13 +121,14 @@ in_fixture() {
 # $1 stub dir, $2 required-contexts JSON, $3 check_runs JSON, $4 the sha that
 # JSON is served FOR, $5 statuses JSON, $6 ruleset exit code.
 make_stub() {
-  local dir="$1" required="$2" checks="$3" green_sha="${4:-}" statuses="${5:-[]}" rules_rc="${6:-0}"
+  local dir="$1" required="$2" checks="$3" green_sha="${4:-}" statuses="${5:-[]}" rules_rc="${6:-0}" checks_rc="${7:-0}"
   mkdir -p "$dir"
   printf '%s' "$required"  > "$dir/required.json"
   printf '%s' "$checks"    > "$dir/checks.json"
   printf '%s' "$statuses"  > "$dir/statuses.json"
   printf '%s' "$green_sha" > "$dir/green_sha"
   printf '%s' "$rules_rc"  > "$dir/rules_rc"
+  printf '%s' "$checks_rc" > "$dir/checks_rc"
   cat > "$dir/gh" <<'STUB'
 #!/usr/bin/env bash
 DIR="$(cd -P "$(dirname "$0")" && pwd -P)"
@@ -150,6 +151,8 @@ case "$joined" in
       | jq -c "${filter:-.}"
     exit 0 ;;
   *check-runs*)
+    crc="$(cat "$DIR/checks_rc" 2>/dev/null || echo 0)"
+    [[ "$crc" != "0" ]] && exit "$crc"
     want="$(cat "$DIR/green_sha")"
     if [[ -n "$want" && "$joined" == *"$want"* ]]; then
       # Real envelope: the API returns {"check_runs": [...]}.
@@ -174,6 +177,37 @@ run_gate() {
     git_fixture_env "$work" || exit 9
     PATH="$stub:$PATH" bash "$GATE" >/dev/null 2>&1 )
   printf '%s' "$?"
+}
+
+# run_gate discards stdout, so an OWED row proves "not 42" and nothing more --
+# it cannot tell condition 1 from condition 2 from an accidental early exit, and
+# three of this suite's refusal rows are mutually indistinguishable to it. This
+# returns the VERDICT LINE so a row can assert WHICH condition fired.
+# MUST NOT PROPAGATE THE GATE'S EXIT CODE. test-helpers.sh sets errexit, so a
+# command substitution whose function returns non-zero aborts the whole suite --
+# and this gate returns non-zero on every path but SKIPPABLE. That is why
+# run_gate above ends on `printf` rather than on the subshell: the trailing
+# success is load-bearing, not style. Measured: without the explicit `return 0`
+# this helper killed the run mid-file at the first UNDECIDABLE row, printing no
+# error and no results block, which reads exactly like a hang.
+run_gate_out() {
+  local work="$1" stub="$2" out
+  out="$( ( cd "$work" || exit 9
+            git_fixture_env "$work" >/dev/null 2>&1 || exit 9
+            PATH="$stub:$PATH" bash "$GATE" 2>&1 ) || true )"
+  printf '%s' "$out"
+  return 0
+}
+
+# Substring match on the verdict line, reported through the shared counters.
+assert_reason() {
+  local work="$1" stub="$2" needle="$3" label="$4" out
+  out="$(run_gate_out "$work" "$stub")"
+  if printf '%s' "$out" | grep -qF "$needle"; then
+    assert_eq "ok" "ok" "$label"
+  else
+    assert_eq "$out" "reason containing: $needle" "$label"
+  fi
 }
 
 GREEN_CHECKS='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
@@ -566,6 +600,75 @@ while IFS= read -r _p; do
 done <<< "$AUTHORITY_PREFIXES"
 
 # =============================================================================
+# T14 — WHICH condition fired, not merely "not 42".
+#
+# run_gate discards stdout, so every refusal row above asserts the same thing:
+# the exit code is not 42. Three of this suite's conditions are therefore
+# mutually indistinguishable to it -- a gate that refused unconditionally from
+# line 1, or one whose conditions all collapsed onto the first, would keep every
+# one of those rows green. These rows read the verdict line instead.
+# =============================================================================
+ROOTC="$(new_fixture_root_var)"; new_fixture_root ROOTC
+WORKC="$(build_fixture "$ROOTC")"
+STUBC="$ROOTC/stub"
+make_stub "$STUBC" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKC")"
+
+in_fixture "$WORKC" bash -c 'printf "dirty\n" > untracked-file.txt'
+assert_reason "$WORKC" "$STUBC" "working tree is dirty" \
+  "T14a a dirty tree refuses FOR THE DIRTY REASON (not merely non-42)"
+in_fixture "$WORKC" bash -c 'rm -f untracked-file.txt'
+
+in_fixture "$WORKC" bash -c 'git checkout --quiet main && printf "n\n" > adv.md && git add -A && git commit --quiet -m "main advances" && git push --quiet origin main && git checkout --quiet feat-fixture'
+make_stub "$STUBC" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKC")"
+assert_reason "$WORKC" "$STUBC" "not an ancestor of HEAD" \
+  "T14b a BEHIND branch refuses FOR THE ANCESTOR REASON, distinguishing it from T14a"
+in_fixture "$WORKC" bash -c 'git merge --quiet origin/main --no-edit'
+
+in_fixture "$WORKC" bash -c 'mkdir -p apps/web-platform/infra && printf "x\n" > apps/web-platform/infra/z.tf && git add -A && git commit --quiet -m "infra"'
+make_stub "$STUBC" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKC")"
+assert_reason "$WORKC" "$STUBC" "infra surface" \
+  "T14c an infra diff refuses FOR THE INFRA REASON, distinguishing it from T14a/T14b"
+
+# =============================================================================
+# T15 — the check-runs endpoint can FAIL, and the statuses branch has no
+# positive row.
+#
+# make_stub could fixture a rules-endpoint rc but the check-runs arm always
+# exited 0, so the gate's `(( rc == 0 )) || undecidable` on that call was
+# unreachable from here. And the whole lazy-statuses path -- fetch, merge, second
+# eval -- was only ever entered by T4f, where app identity discards the status
+# BEFORE ordering is consulted, so no row had ever seen the merge succeed.
+# =============================================================================
+ROOTD="$(new_fixture_root_var)"; new_fixture_root ROOTD
+WORKD="$(build_fixture "$ROOTD")"
+STUBD="$ROOTD/stub"
+
+make_stub "$STUBD" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKD")" "[]" 0 1
+assert_eq "$UNDECIDABLE" "$(run_gate "$WORKD" "$STUBD")" \
+  "T15a the check-runs endpoint failing -> UNDECIDABLE (never a skip)"
+assert_reason "$WORKD" "$STUBD" "could not read check-runs" \
+  "T15b and it names the check-runs read as the cause"
+
+# An UNPINNED required context with NO check-run, satisfied only by a legacy
+# commit status. This is the merge path: check-runs leave it ABSENT, the statuses
+# fetch fires, the two surfaces are combined, and the second eval must clear it.
+ONE_UNPINNED='[{"context":"legacy-ctx","integration_id":null}]'
+GREEN_STATUS='[{"context":"legacy-ctx","state":"success","created_at":"2026-01-01T00:00:00Z"}]'
+make_stub "$STUBD" "$ONE_UNPINNED" "[]" "$(head_sha_of "$WORKD")" "$GREEN_STATUS"
+assert_eq "$SKIPPABLE" "$(run_gate "$WORKD" "$STUBD")" \
+  "T15c an UNPINNED context satisfied only by a green legacy STATUS -> SKIPPABLE (the merge path works)"
+
+# The ordering property T4f was meant to pin, on an UNPINNED context so the
+# status is not discarded by app identity first. T4f uses PINNED_REQUIRED, so its
+# status row (app_id null) is filtered out before `sort_by` is ever consulted --
+# invert the sort to `first` and T4f stays green.
+OLD_GREEN_STATUS='[{"context":"legacy-ctx","state":"success","created_at":"2020-01-01T00:00:00Z"}]'
+NEW_RED_CHECK='[{"name":"legacy-ctx","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUBD" "$ONE_UNPINNED" "$NEW_RED_CHECK" "$(head_sha_of "$WORKD")" "$OLD_GREEN_STATUS"
+assert_eq "$OWED" "$(run_gate "$WORKD" "$STUBD")" \
+  "T15d a 2020 green STATUS cannot outrank a 2026 red check-run on an UNPINNED context -> OWED"
+
+# =============================================================================
 # T13 — parity with the premise the WHOLE gate rests on.
 #
 # The gate's containment argument is that CI's required `test` context covers
@@ -632,4 +735,4 @@ fi
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 44
+print_results 51
