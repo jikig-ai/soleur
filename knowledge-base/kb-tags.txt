@@ -748,6 +748,7 @@ closed-issue-gate
 closes-after-apply
 closes-vs-ref
 closing-keyword
+closing-keywords
 closure-gate
 cloud-init
 cloud-max-scheduling
@@ -2903,6 +2904,7 @@ prose-claims
 prose-conventions
 prose-counts
 prose-guard
+prose-guards
 prose-sweep
 prospect-anchored features
 protecthome
@@ -2921,6 +2923,7 @@ provisioning
 proxied-records
 proxy-anti-pattern
 proxy-invariants
+proxy-vs-control-surface
 prune
 pseudonymisation
 pseudonymization
@@ -3503,6 +3506,7 @@ sibling-mechanism
 sibling-migration
 sibling-pr
 sibling-race
+sibling-worktree
 sidebar
 sidebar-persistence
 sidecar

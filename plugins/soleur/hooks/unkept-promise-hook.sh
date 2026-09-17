@@ -63,6 +63,27 @@
 # more dangerous than one whose limits are written down. A structural
 # enumeration (2026-09-07) established all of these:
 #
+#   0. THE PARKED ARM IS NARROWER THAN ITS NAME, in ways measured by a structural
+#      enumeration (2026-09-17) rather than guessed. It catches only a turn that
+#      VOLUNTEERS the sentinel and phrases the parking inside a closed vocabulary:
+#        * omitting the `<stop>` tag is a complete defence, and a parked turn has
+#          no other reason to emit one (it makes no promise);
+#        * off-vocabulary parking escapes -- `the merge is yours`, `awaiting
+#          approval`, `merge when you have a moment`, `the ball is in your court`;
+#        * `PARKED_AUTH_RE` is polarity-blind, so "Nothing destructive here" in the
+#          tag's own sentence buys an exit;
+#        * five or more sentences after the tag evict it from CLOSING, as does a
+#          fenced block, an unterminated fence, and a >8 kB message whose tail
+#          starts inside a fence (the awk toggle then reads the CLOSING fence as an
+#          opening one);
+#        * `stop_hook_active` means restating the parked sentence once clears it;
+#        * `SubagentStop` is unregistered, so a sub-agent parking its deliverable
+#          on the parent is unobserved.
+#      None is closable by widening the regex -- the assembly reads ONE STRING and
+#      never consults gh, git or pipeline state, so it cannot see that a PR is open.
+#      Written down because a guard that reads complete is worse than one whose
+#      limits are stated.
+#
 #   1. VOCABULARY. The predicate is a regex over a closed set of phrasings.
 #      "We'll ...", "Going to ...", "Next: ...", "The plan is to ...",
 #      "On to the ...", and any gerund outside GERUND_RE evade it. Broadened
@@ -89,6 +110,25 @@
 # catches the three that were plain prose.
 
 set -uo pipefail
+
+# SUT-WRITTEN EXECUTION MARKER (test-only, opt-in via an env var production never
+# sets). The suite's coverage floor counted lines its OWN harness appended before
+# spawning anything, so it measured the harness and not the subject: one line --
+# `expect() { EXPECT_ROWS=$((EXPECT_ROWS+1)); echo x >> "$LOG"; pass "$2"; }` --
+# satisfied all three floors at once and printed their exact green-run values with
+# the hook never spawned for any parked row.
+#
+# EMITTED TO STDERR, NOT WRITTEN TO A PATH. A path operand here is flagged by the
+# P1b guard (fixture-relative-assert) as "not provably absolute": the value comes
+# from the environment, and a `case /*)` at the use site is invisible to a scanner
+# that reasons about BINDING. Recording it in that guard's baseline would have
+# banked a real hazard -- a hook runs from whatever CWD the session is in, so a
+# relative value would append into an arbitrary working tree. fd 2 is not a path,
+# so the hazard does not exist rather than being accepted. stdout stays reserved
+# for the block protocol; the harness counts this marker from captured stderr, so
+# a harness that never spawns the hook still counts zero.
+[ -n "${SOLEUR_HOOK_TRACE:-}" ] && printf 'SOLEUR_HOOK_RAN\n' >&2
+
 
 # Fail OPEN on every infrastructure problem: this must never be the reason a
 # session cannot end.
@@ -131,6 +171,95 @@ SENTENCES=$(printf '%s' "$PROSE" | tr '\n' '\036' \
 
 # Only the closing few sentences are evidence about where the turn STOPPED.
 CLOSING=$(printf '%s' "$SENTENCES" | tail -n 4)
+
+# THE PARKED-DELIVERABLE ARM (2026-09-17).
+# ----------------------------------------
+# Denies a stop that hands FINISHED WORK back for a merge/review/ship. That end
+# state is the one `rf-never-skip-qa-review-before-merging` names: "Carry every PR
+# to MERGED in-session; 'awaiting review'/'needs a human' as an end state defers to
+# an operator who cannot clear it."
+#
+# WHY THE TAG ALONE WAS NOT ENOUGH. The stop-tag arm below exits 0 on the PRESENCE
+# of a tag, with nothing constraining what is being waited ON, so the one end state
+# the corpus forbids bought an exit. Parking READS as diligence, which is why prose
+# could not close it: the class was recorded 2026-08-04 and recurred 2026-09-17 with
+# the rule in force.
+#
+# THE OBJECT SET IS DELIBERATELY NARROW: merge, review, ship. An earlier revision
+# also matched `decision|approv|go-?ahead|sign-off`, and review measured it blocking
+# 13 of 15 rule-MANDATED operator gates -- `wg-zero-agents-until-user-confirms`
+# ("pending your go-ahead before I spawn the agents"), the API-budget disclosure,
+# an invoice awaiting sign-off before reaching a customer, a social post awaiting
+# approval -- while answering each with "Do it now, in THIS turn". A guard that
+# fires on `wg-zero-agents-until-user-confirms` and replies "do it now" is worse
+# than no guard. `hr-technical-fork-is-not-an-operator-question` is explicit that
+# authorization, COST and SCOPE are the operator's to answer; only the delivery of
+# reviewed work is not.
+#
+# PLACEMENT, both measured against the real turn rather than reasoned:
+#   * scoped to the whole closing, not `tail -n 1` -- the tag OPENED in one sentence
+#     and CLOSED in the next, so a last-sentence test saw only the trailing clause;
+#   * runs INDEPENDENTLY of promise detection -- a parked turn makes no promise, so
+#     an arm nested in the promise path could never fire.
+PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0,60}(your|operator|the[[:space:]]+operator|human|a[[:space:]]+human)[^.]{0,60}(merge|review|ship)|awaiting[[:space:]]+(review|merge)([[:space:]]|[.,;:]|$)|needs?[[:space:]]+a[[:space:]]+human([[:space:]]|[.,;:]|$)|ready[[:space:]]+(for[[:space:]]+(you|your)|to[[:space:]]+merge[[:space:]]+when[[:space:]]+you)|(yours|over[[:space:]]+to[[:space:]]+you|handing[[:space:]]+(it[[:space:]]+)?off[[:space:]]+to[[:space:]]+you)[^.]{0,40}(merge|review|ship)'
+
+# The sanctioned pause survives: `hr-menu-option-ack-not-prod-write-auth` requires
+# per-command confirmation before a destructive production write.
+#
+# SCOPED TO THE MATCHING SENTENCE, NOT THE WINDOW -- and that is this file's own
+# documented lesson, reintroduced by the first revision of this arm and caught in
+# review. The header's SCOPING section records that a window-scoped allow arm is
+# what made the promise arm inert ("a courtesy closer anywhere in the window vetoed
+# a promise anywhere else in it"). Measured on the first revision: "I revoked the
+# old token as part of cleanup. <stop>OPERATOR-GATE: PR #8244 is green and awaiting
+# your merge.</stop>" ALLOWED, because `revoke` appeared in an unrelated sentence.
+PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:space:]]+replace|replace[[:space:]]+the[[:space:]]+(production[[:space:]]+)?host|per-command|prod(uction)?[[:space:]]+(write|mutation|apply))'
+
+# ALL THREE TERMS ARE TESTED ON THE TAG'S OWN SENTENCE, not on the window.
+#
+# The first revision tested them independently over $CLOSING, so they could be
+# satisfied by THREE DIFFERENT sentences -- which is co-occurrence, not the
+# waiting-on relationship this arm's header claims to key on. Measured in review:
+#   "The sibling PR is still awaiting review by the other team.
+#    <stop>OPERATOR-GATE: waiting on CI run 123 for this one.</stop>"   -> BLOCK
+# A legitimate in-flight CI gate, vetoed because a neighbouring sentence mentioned
+# somebody else's review. Same shape in the other direction, and same shape the
+# header's own SCOPING section records as what made the promise arm inert.
+#
+# A turn ending in a genuine QUESTION is excused here, mirroring the message-level
+# arm further down. Residual #5 records the deliberate judgement that "forcing a
+# real question through is the worse failure"; because this arm runs above that
+# escape, it would otherwise reverse that judgement for tagged turns without
+# amending the residual.
+PARKED_SENTENCE=$(printf '%s\n' "$CLOSING" | grep -iE '<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)' | tail -n 1)
+if [ -n "$PARKED_SENTENCE" ] &&
+   ! printf '%s' "$PROSE" | sed 's/[[:space:]]*$//' | tail -c 2 | grep -q '?' &&
+   printf '%s' "$PARKED_SENTENCE" | grep -qiE "$PARKED_RE" &&
+   ! printf '%s' "$PARKED_SENTENCE" | grep -qiE "$PARKED_AUTH_RE"; then
+  PARKED_REASON="Your stop tag hands finished work back for a merge, review or ship. That is not a
+legitimate gate -- it defers to someone who cannot clear it.
+
+  rf-never-skip-qa-review-before-merging: \"Carry every PR to MERGED in-session;
+  'awaiting review'/'needs a human' as an end state defers to an operator who
+  cannot clear it.\" \"Review-gated\" means /soleur:review RAN and its findings were
+  fixed -- never that a person approves.
+
+If the review has not run, run it now and fix its findings inline. If it has, and
+the checks are green, merge. Do it in THIS turn.
+
+This arm is about DELIVERY only. It does not block -- and you should still stop
+for -- any of these:
+  - an in-flight CI run, workflow or agent
+  - authorization for an irreversible production action (hr-menu-option-ack-not-prod-write-auth)
+  - COST or SCOPE, or spawning agents (hr-technical-fork-is-not-an-operator-question,
+    wg-zero-agents-until-user-confirms)
+  - an outward-facing effect that leaves the repo -- an invoice, a post, an email
+  - a genuine fork in requirements that changes what gets built"
+  jq -n --arg r "$PARKED_REASON" \
+    '{"decision":"block","reason":$r,"systemMessage":"unkept-promise-hook: finished work parked on the operator"}' 2>/dev/null \
+    || exit 0
+  exit 0
+fi
 
 # Escape hatch, scanned over the CLOSING sentences only -- deliberately the same
 # scope as the predicate.
