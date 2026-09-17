@@ -154,6 +154,36 @@ no poll at all, and completed green on 2026-09-16 with zero in-job boot verifica
 only the birth job would therefore be correct and never exercised again; fixing only `replace`
 would leave #8178's measured defect in place. Both, for those two distinct reasons.
 
+**A SECOND defect this plan did not carry, measured at implementation: the credential fix
+alone would NOT have verified the one birth we have data for.** The 20 x 30 s bound is too
+short for the boot it watches. Measured on run `34836141887` (the birth that succeeded):
+
+| Event | Time (UTC) | Source |
+|---|---|---|
+| `Poll for the git-data boot-completion signal` starts | `15:14:37` | `gh run view 34836141887 --json jobs` |
+| Poll gives up (20 x 30 s) | `15:24:47` | same, step `conclusion: failure` |
+| The host's actual `boot_complete` row | **`15:27:24.816663`** | the pre-fix control, arm A |
+
+The host reported **2 m 37 s after the poll stopped looking**. So with `BETTERSTACK_QUERY_*`
+working perfectly, that run still reports `silent` — "the host never reported" — about a host
+that reported shortly afterwards. That is the SAME defect class #8178 names (a guard asserting
+a cause that did not occur), reached by a different route, and a fix that only repairs the read
+would have shipped it intact while looking complete.
+
+Both halves are therefore in scope, and they are independent: the read fix converts
+`unreadable` into a real answer, and the bound fix is what makes that answer `received`
+rather than a false `silent`. The bound is raised to cover the measured envelope with margin
+(observed boot latency ~14 m 30 s from job start; the previous bound expired at ~10 m), and
+the measurement above is the justification — not a round number chosen for comfort. The
+suite's `max_polls` / `interval_s` parameters already exist for the hermetic run, so this
+changes a call-site argument, not a mechanism.
+
+**Residual, named rather than hidden:** one observation is not a distribution. `14 m 30 s` is
+a single measured boot on one host class; the raise buys margin over that one point, and a
+genuinely slow boot can still exhaust any finite bound. That is acceptable precisely because
+the verdict vocabulary now distinguishes `silent` from `unreadable` — an exhausted bound is
+reported as what it is, not as a read failure.
+
 ## Proposed Solution
 
 Five changes. Each buys one named property; nothing here is optional.
