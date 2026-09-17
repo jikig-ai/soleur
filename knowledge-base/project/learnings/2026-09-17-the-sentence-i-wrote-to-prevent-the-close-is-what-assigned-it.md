@@ -78,7 +78,9 @@ gh pr view 8242 --json closingIssuesReferences  ->  []
 gh issue view 7535 --json closedByPullRequestsReferences -> []
 ```
 
-And rewrite the acceptance criterion to assert the **field**, not the prose. The plan's AC30 became:
+And rewrite the acceptance criterion to assert the **field**, not the prose. The plan's AC30 read,
+*at this point in the sequence* (it was inverted hours later — see the next section, and read the
+plan for the live text):
 
 > this PR's body uses `Refs #7535`, never a closing keyword, **and
 > `gh pr view <this-PR> --json closingIssuesReferences` returns `[]` at merge.**
@@ -86,6 +88,34 @@ And rewrite the acceptance criterion to assert the **field**, not the prose. The
 
 A companion AC30b was added for the other side, because nothing asserted it: **#8249 must carry
 `[7535]` before it merges**, or the issue stays open and the whole disposition silently fails.
+
+### AC30b failed, and the failure is the better finding
+
+It failed the same day it was written. Measured at 15:57Z:
+
+```
+gh pr view 8249 --json state,mergedAt,closingIssuesReferences
+  -> MERGED 2026-09-17T13:47:30Z, closingIssuesReferences []
+gh issue view 7535 --json state,closedByPullRequestsReferences
+  -> OPEN, closedBy []
+```
+
+The implementation merged to `main` as `4dbd1affe` and #7535 was left open, closed by nothing —
+the precise outcome AC30b existed to prevent. It named the right field, on the right PR, and was
+raised as a comment there. None of that could make it true, because **its subject was another
+session's PR body**, and a merged PR's body no longer closes anything.
+
+So the criterion was not wrong; it was *unenforceable by its owner*. **An acceptance criterion
+whose subject you cannot write to is a monitor, not a gate.** It can be measured, reported and
+escalated, and it will still be sitting there unsatisfied at merge. The defect is structural: I
+wrote a gate against a control surface outside my write scope and then treated raising it as
+discharge.
+
+The fallback has to be in your own power. Here it was: the docs PR could simply take back the
+close, because by then the implementation was already on `main`, so closing the issue could no
+longer run ahead of the work. AC30 was inverted to `Closes #7535` / `[7535]`, which is a criterion
+this session can actually satisfy — and the inverse of the original trap applies with equal force,
+because a body that *says* `Closes` is no more evidence than one that said `Refs`.
 
 ## Key insight
 
@@ -182,6 +212,14 @@ convincing the false evidence becomes.
     explicitly; docker was reachable only via `newgrp docker`. **Prevention:** the `lefthook`
     absence is the load-bearing one — when hooks cannot fire, every gate they would have run becomes
     a manual step, and a session that does not notice ships unlinted.
+
+19. **AC30b — I wrote an acceptance criterion against a control surface I had no write access to,
+    and treated raising it on the other PR as discharge.** It failed within hours: #8249 merged
+    `4dbd1affe` with `closingIssuesReferences: []` and #7535 stayed open, closed by nothing.
+    Recovery: inverted AC30 so this PR takes the close, which is enforceable here because the
+    implementation was already on `main`. **Prevention:** before writing a criterion, ask *can I
+    write to the thing this asserts?* If not, it is a monitor — pair it with a fallback that is in
+    your own power, and do not mark it satisfied by having escalated it.
 
 ## Related
 

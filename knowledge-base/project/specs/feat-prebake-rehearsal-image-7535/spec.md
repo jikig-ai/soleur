@@ -223,8 +223,9 @@ plan's `Guard Contract` holds the two mutation matrices AC10 and AC11 verify.
 
 ## Issue disposition
 
-The **implementation PR (#8249)** carries the close, in the body and never the title; this docs
-branch uses `Refs #7535`. **[Updated 2026-09-17] That close
-is carried by PR #8249, not this branch:** implementation was handed to a parallel session's PR and
-this one is docs-only, using `Refs`. See the plan's `## Issue disposition`. The issue is already retitled and
-already carries the image-cut measurements as a comment (Phase 1 task 1.10).
+**This PR carries the close**, in the body and never the title. It was reassigned to the
+implementation PR (#8249) while that PR was open; **#8249 merged 2026-09-17T13:47:30Z as
+`4dbd1affe` with `closingIssuesReferences: []`**, leaving #7535 open and closed by nothing, so the
+close reverted here. Nothing is closed ahead of its implementation: that implementation is on
+`main`. The plan's `## Issue disposition` and AC30/AC30b carry the measured history. The issue is
+already retitled and already carries the image-cut measurements as a comment (Phase 1 task 1.10).

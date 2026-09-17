@@ -8,10 +8,11 @@ branch: feat-one-shot-7535-rehearsal-apt-misattribution
 phase1_branch: feat-prebake-rehearsal-image-7535
 spec_dir: knowledge-base/project/specs/feat-prebake-rehearsal-image-7535
 issue: 7535
-refs: 7535
-status: docs-only — Phase 2's implementation shipped in PR #8249 (parallel session); see `## Issue disposition`
-# `closes:` absent on purpose: plan frontmatter does NOT control issue closure — the PR body keyword
-# and GitHub's linked-issue association do. See `## Issue disposition` for what is owed.
+closes: 7535
+status: docs-only — Phase 2's implementation merged as PR #8249 (`4dbd1affe`) WITHOUT a closing link, so this PR carries the close; see `## Issue disposition`
+# This key does NOT control issue closure — the PR body keyword and GitHub's linked-issue
+# association do. It records intent; `closingIssuesReferences` is the only evidence. See
+# `## Issue disposition` for the measured history of which PR held the close and why it moved.
 lane: cross-domain
 type: test-infrastructure
 priority: p2-medium
@@ -52,8 +53,10 @@ is the residue that measurement supports.
 > Therefore, throughout R2 and Phase 2: **"the tree", "the tree as built", "this worktree",
 > "uncommitted", "DONE" and "(done in tree)" all refer to PR #8249's head, NOT to this branch.**
 > Every deliverable they describe is **owned by #8249**; this branch ships documentation plus two
-> fixes to `one-shot`'s collision gate. Re-measure against #8249's head before acting on any
-> figure here — it has grown since (see `## Issue disposition`).
+> fixes to `one-shot`'s collision gate. **#8249 MERGED 2026-09-17 13:47:30Z as `4dbd1affe`**, so
+> those deliverables are now on `main` — re-measure there, not against a PR head, and note that it
+> merged carrying **no** closing link, which is why the close moved back to this PR
+> (see `## Issue disposition`).
 
 **An implementation of Phase 2 landed in this worktree WHILE this plan was being deepened.** It was
 byte-identical to PR #8249 and has since been discarded from this branch; see the banner above for
@@ -769,16 +772,26 @@ enough — see the `Skipped:` clause in `## Verification`.
   and the ceiling stanza's comment records it.
 - **AC29** — After every edit inside the `bash -c '…'` recipe, `bash -n <file>` returns 0 — one
   apostrophe there is a whole-file syntax error (measured rc 2).
-- **AC30b** — **#8249** carries the close before it merges: `gh pr view 8249 --json
-  closingIssuesReferences` returns `[7535]`. Measured 2026-09-17: `[]`. Without this, #8249
-  merges and #7535 stays open — this plan's entire disposition silently fails. AC30 asserts only
-  THIS PR's field; nothing else asserts #8249's.
-- **AC30** — this PR's body uses **`Refs #7535`**, never a closing keyword, and
-  `gh pr view <this-PR> --json closingIssuesReferences` returns `[]` at merge. The close belongs to
-  PR #8249. **Assert the API field, not the prose:** measured 2026-09-17, this PR's body argued in
-  prose that it must not take the close and placed a closing keyword immediately before the issue
-  reference while doing so; GitHub's parser does not model the negation, so the field read `[7535]`
-  and #8249's read `[]`. A body that *says* `Refs` is not evidence — only the field is.
+- **AC30b** — **FAILED, and the failure is the finding.** It required #8249 to carry the close
+  before it merged (`gh pr view 8249 --json closingIssuesReferences` returning `[7535]`). Measured
+  after the fact: #8249 merged 2026-09-17T13:47:30Z as `4dbd1affe` with `[]`, leaving #7535 open
+  and closed by nothing. The criterion was correct, named the right field, and was raised on the
+  PR — and none of that could satisfy it, because its subject was another session's PR body. **An
+  acceptance criterion you cannot write to is a monitor, not a gate.** Its residual obligation is
+  discharged by AC30 below: where the fallback is in this PR's own power, assert THAT.
+- **AC30** — **[inverted 2026-09-17, see AC30b]** this PR's body uses **`Closes #7535`** and
+  `gh pr view <this-PR> --json closingIssuesReferences` returns **`[7535]`** at merge, with
+  `gh issue view 7535 --json state` reading `CLOSED` after. This PR carries #7535's residual
+  documentation scope and the implementation is already on `main` (`4dbd1affe`), so nothing is
+  closed ahead of its implementation — the hazard that made this criterion read `Refs`/`[]` for
+  most of this branch's life ended when #8249 merged.
+  **Assert the API field, not the prose, in BOTH directions:** measured earlier on 2026-09-17,
+  this PR's body argued in prose that it must *not* take the close and placed a closing keyword
+  immediately before the issue reference while doing so; GitHub's parser does not model the
+  negation, so the field read `[7535]` while #8249's read `[]` — the sentence written to prevent
+  the close assigned it. The inverse now applies with equal force: a body that *says* `Closes` is
+  not evidence that the link exists. Only the field is, and it is recomputed from the live body
+  after every edit.
 
 ## Observability
 Phase 2 *is* observability work: the deliverable is that a starved fixture names itself instead of
@@ -981,10 +994,11 @@ baseline (R2's assumption) or is to be discarded, and record the decision before
 
 ## Issue disposition
 
-Phase 2 completes #7535's residual scope, so the **implementation PR** (#8249) carries the close —
-in the body, never the title (`wg-use-closes-n-in-pr-body-not-title-to`). This docs branch uses
-`Refs`. Phase 1 also correctly used `Refs`,
-because it reduced the apt dependency without addressing the misattribution the issue is about.
+Phase 2 completes #7535's residual scope, so **this PR carries the close** — in the body, never the
+title (`wg-use-closes-n-in-pr-body-not-title-to`). It was assigned to the implementation PR (#8249)
+while that PR was open; #8249 merged without ever taking the link, so the close reverted here.
+Phase 1 correctly used `Refs`, because it reduced the apt dependency without addressing the
+misattribution the issue is about.
 
 The issue is already retitled to its residual scope and the `## Why the image was cut`
 measurements are already posted there (Phase 1 task 1.10), so nothing further is owed on the
@@ -997,11 +1011,27 @@ worktree `feat-7535-t17-rc-capture` and opened PR #8249 (non-draft, touching onl
 collision gate ran ~40 min before that PR existed, so it cleared correctly and still missed it —
 a point-in-time probe cannot see a sibling that has not opened its PR yet.
 
-Disposition: **#8249 is OWED a closing keyword and does not yet carry one**; this PR uses `Refs #7535`.
-Measured 2026-09-17: #8249's `closingIssuesReferences` is `[]`. Its `closes:` was
-measured empty (`gh pr view 8249 --json closingIssuesReferences -> {"closes":[]}`), so that gap was
-raised on the PR — without it #7535 stays open after the implementation merges. There is zero file
-overlap between the two PRs, so both land without conflict.
+**[Resolved 2026-09-17 15:57Z] #8249 merged without the closing link, so the close came back here.**
+The gap AC30b was written to catch is exactly what happened. Measured after #8249 merged:
+
+```
+gh pr view 8249 --json state,mergedAt,closingIssuesReferences
+  -> MERGED 2026-09-17T13:47:30Z, closingIssuesReferences []
+gh issue view 7535 --json state,closedByPullRequestsReferences
+  -> OPEN, closedBy []
+```
+
+The implementation is on `main` at `4dbd1affe` and the issue it completes was left open, closed by
+nothing. Editing a merged PR's body cannot close an issue, so the remedy is for this PR — which
+carries #7535's residual documentation scope — to take the close it originally owned. That is what
+the frontmatter and AC30 now assert. There was zero file overlap between the two PRs, so both
+landed without conflict.
+
+The transferable point is not that a link was missed; it is that **AC30b was satisfied as a
+written criterion and still failed as a control.** It named the right field on the right PR, and
+the thing it asserted was in another session's power — so it could be measured, reported and
+raised, and none of that could make it true. An acceptance criterion whose subject you cannot
+write to is a monitor, not a gate, and it needs a fallback that *is* in your power.
 
 One verified defect was raised on #8249 rather than fixed here, because the code is that PR's to
 own: its T17 verdict chain reports a **capture-server bind failure** as `a genuine vacuity

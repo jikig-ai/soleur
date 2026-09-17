@@ -212,10 +212,11 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
 
 ### 2.8 Ship
 
-- [x] **2.8.1** Push. **#8249's** body carries the close (in the body, never the title); THIS
-      branch's body uses `Refs #7535` and must measure `closingIssuesReferences == []`.
-      **[2026-09-17] Reassigned to PR #8249** (parallel session owns the implementation); this
-      branch is docs-only and uses `Refs #7535`. See the plan's `## Issue disposition`.
+- [x] **2.8.1** Push. **THIS branch's** body carries the close (in the body, never the title) and
+      must measure `closingIssuesReferences == [7535]`. Reassigned to PR #8249 on 2026-09-17 while
+      that PR was open, then **reverted here the same day: #8249 merged as `4dbd1affe` measuring
+      `[]`**, so the implementation landed on `main` with its issue left open. See the plan's
+      `## Issue disposition` and AC30b.
 - [ ] **2.8.2** Paste both guard matrices with observed outputs, every AC with its provenance tag,
       and the 2.0.1 baseline decision.
 - [ ] **2.8.3** Confirm nothing in the PR body reads as an operator checklist
