@@ -59,7 +59,7 @@ Refuse xAI CLI prompts that offer to "improve the product and model" (or similar
 grok inspect | grep -E 'soleur|Agents \(|skills'
 ```
 
-After Phase E (#6324), **67** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
+After Phase E (#6324), **68** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
 
 ### Subagents
 
