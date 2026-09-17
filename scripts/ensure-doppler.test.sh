@@ -80,8 +80,14 @@ BASE_PATH="/usr/bin:/bin"
 # make_stub <dir> <exit-code> <stderr-text>
 make_stub() {
   local dir="$1" code="$2" msg="$3"
-  mkdir -p "$dir"
-  cat > "$dir/doppler" <<EOF
+  # The redirect below writes to "$dir/doppler". An EMPTY $dir makes that `/doppler` — a write
+  # rooted at the filesystem root by an empty parent, which is exactly the P1b shape
+  # plugins/soleur/test/fixture-relative-assert.test.sh exists to catch. Guarding here is a
+  # one-line fix; adding a row to that shrink-only baseline instead would be raising the
+  # number rather than fixing the thing it counts.
+  [[ "$dir" == /* ]] || { echo "make_stub: refusing a non-absolute dir '$dir'" >&2; return 2; }
+  mkdir -p "${dir:?make_stub: dir must be a non-empty absolute path}"
+  cat > "${dir:?make_stub: dir must be a non-empty absolute path}/doppler" <<EOF
 #!/usr/bin/env bash
 if [[ -n "${msg}" ]]; then echo "${msg}" >&2; fi
 exit ${code}
