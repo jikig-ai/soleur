@@ -8,7 +8,11 @@ branch: feat-one-shot-7535-rehearsal-apt-misattribution
 phase1_branch: feat-prebake-rehearsal-image-7535
 spec_dir: knowledge-base/project/specs/feat-prebake-rehearsal-image-7535
 issue: 7535
-closes: 7535
+refs: 7535
+implementation_pr: 8249
+# `closes:` deliberately absent: Phase 2's IMPLEMENTATION shipped in PR #8249 from a
+# parallel session, which carries `Closes #7535`. This branch is docs-only and must not
+# close the issue ahead of it. See `## Issue disposition`.
 lane: cross-domain
 type: test-infrastructure
 priority: p2-medium
@@ -931,6 +935,28 @@ because it reduced the apt dependency without addressing the misattribution the 
 The issue is already retitled to its residual scope and the `## Why the image was cut`
 measurements are already posted there (Phase 1 task 1.10), so nothing further is owed on the
 issue beyond the close.
+
+**[Updated 2026-09-17] Implementation handed off to PR #8249 — this branch is docs-only.**
+Two sessions raced Phase 2. A parallel session implemented the T17-mutation and `_s1_run` sites in
+worktree `feat-7535-t17-rc-capture` and opened PR #8249 (non-draft, 107+/14-, touching only
+`git-data-runcmd-rehearsal.test.sh` and `t5-skip-persistence-bound-7510.sh`). The Step 0a.5
+collision gate ran ~40 min before that PR existed, so it cleared correctly and still missed it —
+a point-in-time probe cannot see a sibling that has not opened its PR yet.
+
+Disposition: **#8249 carries `Closes #7535`**; this PR uses `Refs #7535`. Its `closes:` was
+measured empty (`gh pr view 8249 --json closingIssuesReferences -> {"closes":[]}`), so that gap was
+raised on the PR — without it #7535 stays open after the implementation merges. There is zero file
+overlap between the two PRs, so both land without conflict.
+
+One verified defect was raised on #8249 rather than fixed here, because the code is that PR's to
+own: its T17 verdict chain reports a **capture-server bind failure** as `a genuine vacuity
+finding`. `echo T17M_APT_OK` precedes `bash /work/drive.sh`, whose bind guard exits **2**;
+`_T17M_ENV_RCS='100 125'` excludes 2 and the marker is present, so both marker-absent branches are
+false and the `else` arm certifies the finding as genuine on evidence that only ever proved apt
+succeeded. The rung already exists for T5 in the same file (`the capture server never bound :8099
+— deterministic fixture defect, not an environment skip`), and `_T5_FIXTURE_MARKER` plus
+`t17m.stdout`'s `2>&1` capture make the discriminator a one-line `grep -qF`. `INJECT=no-bind`
+exists to drive it.
 
 ## Risks & Mitigations
 | Risk | Mitigation |

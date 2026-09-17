@@ -221,5 +221,7 @@ plan's `Guard Contract` holds the two mutation matrices AC10 and AC11 verify.
 
 ## Issue disposition
 
-PR body uses **`Closes #7535`** — in the body, never the title. The issue is already retitled and
+PR body uses **`Closes #7535`** — in the body, never the title. **[Updated 2026-09-17] That close
+is carried by PR #8249, not this branch:** implementation was handed to a parallel session's PR and
+this one is docs-only, using `Refs`. See the plan's `## Issue disposition`. The issue is already retitled and
 already carries the image-cut measurements as a comment (Phase 1 task 1.10).

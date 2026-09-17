@@ -204,7 +204,9 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
 
 ### 2.8 Ship
 
-- [ ] **2.8.1** Push; PR body uses **`Closes #7535`** in the **body**, never the title.
+- [x] **2.8.1** Push; PR body uses **`Closes #7535`** in the **body**, never the title.
+      **[2026-09-17] Reassigned to PR #8249** (parallel session owns the implementation); this
+      branch is docs-only and uses `Refs #7535`. See the plan's `## Issue disposition`.
 - [ ] **2.8.2** Paste both guard matrices with observed outputs, every AC with its provenance tag,
       and the 2.0.1 baseline decision.
 - [ ] **2.8.3** Confirm nothing in the PR body reads as an operator checklist
