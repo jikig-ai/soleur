@@ -36,8 +36,8 @@ the matching `done-owner` marker lives on the **root disk**, which a replace des
 machine therefore inherits a `done` it never earned, and the flip guard refuses rather than risk
 running a **second** prod scheduler. It follows that **every** host replace strands the scheduler
 while the flag is `done` — it is deterministic, not a flake, so retrying the replace cannot fix
-it. (`apply-web-platform-infra.yml`'s `inngest_host_replace` job now warns about this before
-applying and prints the recovery in its job summary.)
+it. **Retrying is the trap**: "same image, same cloud-init, same volume, so it must be transient"
+is the reasoning that produced a second stranded host on 2026-09-17.
 
 **Recovery — one dispatch, no data loss:**
 
