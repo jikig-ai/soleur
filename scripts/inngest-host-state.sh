@@ -47,6 +47,9 @@
 #       emitted. An unparseable row is not evidence of ill health any more than of good.
 #   6 - THE READ FAILED. Nothing about the host was measured. This is NOT a statement about
 #       the host and must never be reported as one.
+#  78 - refused to run under `set -x` with a live credential in the environment (#7797).
+#       Nothing was queried. Listed here because an undocumented code is one a caller
+#       branches on wrongly — the same reason 5 and 6 are listed.
 #
 # WHY 6 EXISTS, AND WHY 4 IS NOT ALLOWED TO ABSORB IT. Until this code was added, every way
 # the instrument could fail — the query binary absent, a rejected credential, a ClickHouse
@@ -276,15 +279,15 @@ print("  cutover_flag   %s        flush_latched=%s" % (
 # negative age (a non-UTC `dt` column) failed open the same way. Both now count as stale,
 # which is the only direction that cannot mislead.
 stale = age_min is None or age_min < 0 or age_min > 5
-# SERVING= IS THE MACHINE-READABLE TOKEN. The human words stay, but `SERVING` is a
-# SUBSTRING of `NOT SERVING`, so any consumer (or test) doing `grep -q SERVING` reads a
-# crash-looping host as healthy — the T1 case in this suite did exactly that. `SERVING=yes|no`
-# cannot be matched the wrong way round.
 if stale:
     _age_note = ("   AS OF %dm AGO — NOT NECESSARILY NOW" % age_min) if age_min is not None \
         else "   AS OF AN UNKNOWN TIME — the dt on this row did not parse"
 else:
     _age_note = ""
+# SERVING= IS THE MACHINE-READABLE TOKEN. The human words stay, but `SERVING` is a
+# SUBSTRING of `NOT SERVING`, so any consumer (or test) doing `grep -q SERVING` reads a
+# crash-looping host as healthy — the T1 case in this suite did exactly that. `SERVING=yes|no`
+# cannot be matched the wrong way round.
 print("  VERDICT        %s   SERVING=%s%s" % (
     ("SERVING" if serving else "NOT SERVING"),
     ("yes" if serving else "no"),
@@ -426,9 +429,7 @@ if hits:
 ' 2>"$QERR" || scan_rc=$?
 
 # The interpreter's rc is ASSERTED, not merely captured. A captured-but-unread verdict is the
-# same silent-failure shape as the `|| true` this file just removed one layer up. SC2034
-# (unused variable) is what catches that, which is why the deterministic lints are worth
-# running before the agent panel on a guard-shaped change.
+# same silent-failure shape as the `|| true` this file just removed one layer up.
 if [[ "$scan_rc" -ne 0 ]]; then
   echo >&2
   echo "  error scan FAILED to interpret its rows (exit ${scan_rc}) — the absence of a" >&2

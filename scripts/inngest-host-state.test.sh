@@ -36,8 +36,11 @@ fail() { fails=$((fails + 1)); FAILED+=("$1"); echo "  FAIL: $1" >&2; }
 # INSTRUMENT SELF-TEST — positive control that both helpers still RECORD, driven before any
 # real case so the unwind is a reset rather than a slice.
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
-pass "instrument self-test: pass() records (EXPECTED — unwound)"
-fail "instrument self-test: fail() records (EXPECTED — unwound, not a real failure)"
+# Redirected: the assertion reads the COUNTERS, not the text, so a literal `FAIL:` on
+# every green run is pure noise to a human or agent scanning the transcript.
+{ pass "instrument self-test: pass() records"
+  fail "instrument self-test: fail() records"
+} >/dev/null 2>&1
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record (passes %s->%s, fails %s->%s, ledger %s->%s)\n' \
     "$_iv_p" "$passes" "$_iv_f" "$fails" "$_iv_n" "${#FAILED[@]}" >&2
@@ -212,6 +215,26 @@ else
   fail "expected the BLOCK line in the scan, got rc=$rc out='$out'"
 fi
 
+# The ERROR SCAN has its own host pin, and it was pinned by nothing: T8 only ever sends it a
+# row that SHOULD appear, so the scan's `host` filter could be swapped to `host_name` — the
+# wrong-machine read this whole file exists to prevent — and the suite stayed green. Measured:
+# that mutation SURVIVED while the summary block's identical mutation was killed, because the
+# summary block has T3/T3b on the exclusion side and the scan had nothing.
+#
+# The consequence is not cosmetic: web-1's systemd refusals would print under a heading that
+# says "dedicated inngest host", which is the report an operator reads mid-outage.
+echo "T8b: a refusal from ANOTHER host is excluded from the scan (the scan's own host pin)"
+make_query
+row "2026-09-17 13:00:00" soleur-inngest "$DEDICATED_MSG" > "$SANDBOX/probe.jsonl"
+row "2026-09-17 12:59:00" soleur-web-platform "BLOCK: web-1 refusal that must never appear under the dedicated-host heading" > "$SANDBOX/err.jsonl"
+res="$(run_sut)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && ! grep -q 'web-1 refusal' <<<"$out"; then
+  pass "foreign-host refusal excluded from the error scan"
+else
+  fail "a peer host's refusal reached the dedicated-host report — rc=$rc out='$out'"
+fi
+
 echo "T9: a webhook payload that merely QUOTES host_role=dedicated is not a probe row"
 # MEASURED 2026-09-17: inngest-server logs every webhook delivery as JSON carrying the full
 # `rawBody`. A GitHub pull_request event whose body quoted `host_role=dedicated` — the PR
@@ -360,31 +383,35 @@ fi
 # fixture had a row that carries those two and is MISSING a field the verdict is made of. A row
 # missing http_code used to print `http_code=?` beside a confident NOT SERVING — a verdict
 # decided by an absence.
-echo "T18: a row missing http_code yields NO verdict (exit 5), not a confident NOT SERVING"
-make_query
-row "2026-09-17 13:00:00" soleur-inngest \
-  'SOLEUR_INNGEST_SERVER_PROBE host_role=dedicated probe_schema=8 instance_id=hetzner-166317708 server_active=active registry_fns=7' \
-  > "$SANDBOX/probe.jsonl"
-res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
-rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
-if [[ "$rc" -eq 5 && -z "$out" ]]; then
-  pass "http_code absent -> exit 5, no verdict emitted"
-else
-  fail "a verdict was rendered from an absent field — rc=$rc out='$out'"
-fi
-
-echo "T18b: a row missing registry_fns also yields NO verdict (exit 5)"
-make_query
-row "2026-09-17 13:00:00" soleur-inngest \
-  'SOLEUR_INNGEST_SERVER_PROBE host_role=dedicated probe_schema=8 instance_id=hetzner-166317708 server_active=active http_code=200' \
-  > "$SANDBOX/probe.jsonl"
-res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
-rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
-if [[ "$rc" -eq 5 && -z "$out" ]]; then
-  pass "registry_fns absent -> exit 5, no verdict emitted"
-else
-  fail "a verdict was rendered without the #8015 conjunct present — rc=$rc out='$out'"
-fi
+# ── THE EXIT-5 GUARD COVERS EVERY FIELD THE VERDICT READS ──────────────────────────────────
+# Parameterised over ALL FOUR guard fields, not just the two this PR widened the guard with.
+# The first version of this block added a case per NEWLY-ADDED field (http_code, registry_fns)
+# and left the two that were already there unpinned — measured: dropping `instance_id` or
+# `server_active` from the guard SURVIVED the whole suite at 23/23. That is the fixture-shape
+# defect this PR exists to fix, committed inside the fix for it: a suite that covers the delta
+# rather than the property. One loop is both fuller coverage and fewer lines than the cases it
+# replaces.
+#
+# The row carries every field EXCEPT the one under test, so each iteration makes that field the
+# SOLE reason the guard fires — the same isolate-one-conjunct discipline as T3/T3b.
+echo "T18: a row missing ANY field the verdict reads yields NO verdict (exit 5)"
+_t18_all='instance_id=hetzner-166317708 server_active=active http_code=200 registry_fns=7'
+for _omit in instance_id server_active http_code registry_fns; do
+  make_query
+  _msg='SOLEUR_INNGEST_SERVER_PROBE host_role=dedicated probe_schema=8'
+  for _kv in $_t18_all; do
+    [[ "${_kv%%=*}" == "$_omit" ]] && continue
+    _msg="$_msg $_kv"
+  done
+  row "2026-09-17 13:00:00" soleur-inngest "$_msg" > "$SANDBOX/probe.jsonl"
+  res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+  rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+  if [[ "$rc" -eq 5 && -z "$out" ]]; then
+    pass "guard fires on absent ${_omit} -> exit 5, no verdict"
+  else
+    fail "a verdict was rendered with ${_omit} absent — rc=$rc out='$out'"
+  fi
+done
 
 # ── AN UNKNOWN AGE IS NOT A FRESH ONE ──────────────────────────────────────────────────────
 # Every fixture used the space-separated dt that parses, so `age_min = None` was unreachable
@@ -422,26 +449,16 @@ if [[ "$rc" -eq 6 && -z "$out" ]]; then
 else
   fail "an unparseable payload rendered as a host finding — rc=$rc out='$out'"
 fi
-
-# The complement, and the reason the check is `nonempty > 0 && parsed == 0` rather than a
-# bare row count: a genuinely empty window must KEEP reporting the real finding. Over-fixing
-# here would destroy the signal the script exists to carry.
-echo "T20b: a genuinely EMPTY window still reports the host finding (exit 4), not exit 6"
-make_query
-res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
-rc="$(sed -n 's/^__RC__=//p' <<<"$res")"
-if [[ "$rc" -eq 4 ]]; then
-  pass "empty window -> exit 4 (the SILENCE IS NOT HEALTH finding survives the fix)"
-else
-  fail "the real host finding was lost to the instrument-fault split — rc=$rc"
-fi
+# The over-fix control for this is T5, not a case of its own: a genuinely empty window must
+# still exit 4. Dropping the `nonempty > 0 and` conjunct is killed by T5 alone (measured), so
+# a dedicated case here is byte-identical setup with a strictly weaker assertion.
 
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 
 # printf + exit DIRECTLY, never through pass()/fail(). `[FATAL]` is the sentinel the
 # guard-vacuity-floor meta-suite matches on — a bare `FATAL:` is not in its vocabulary.
-_min_cases=23
+_min_cases=25
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

@@ -164,6 +164,7 @@ indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exac
 > | `4` | The query **ran** and the window held no dedicated-host row. | A real finding: the host is not shipping (vector down, host down, or never booted). |
 > | `5` | The newest anchored row carried no identity/verdict fields. **No verdict emitted.** | Not evidence of ill health *or* of good. Widen `--since` and re-read. |
 > | `6` | **The read failed. Nothing was measured.** | Fix the read path (rotated credential, ClickHouse fault, DNS, missing binary). **Never report this as a host outage.** |
+> | `78` | Refused to run under `set -x` with a live credential in the environment (#7797). | Nothing was queried. Re-run without shell tracing. |
 >
 > `4` and `6` are the pair that matters. Until 2026-09-17 every instrument fault — a 503, an
 > absent binary, an error page, a python traceback — exited `4` and printed "the host is not

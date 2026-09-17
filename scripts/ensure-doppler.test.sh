@@ -56,8 +56,11 @@ fail() {
 # assertions cannot see a `fail()` that counts but does not record, nor a `pass()` that
 # records nothing; only driving both and reading all three observables can.
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
-pass "instrument self-test: pass() records (EXPECTED — unwound)"
-fail "instrument self-test: fail() records (EXPECTED — unwound, not a real failure)"
+# Redirected: the assertion reads the COUNTERS, not the text, so a literal `FAIL:` on
+# every green run is pure noise to a human or agent scanning the transcript.
+{ pass "instrument self-test: pass() records"
+  fail "instrument self-test: fail() records"
+} >/dev/null 2>&1
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
   printf '[FATAL] instrument self-test: the verdict helpers did not both record (passes %s->%s, fails %s->%s, ledger %s->%s)\n' \
     "$_iv_p" "$passes" "$_iv_f" "$fails" "$_iv_n" "${#FAILED[@]}" >&2

@@ -25,7 +25,7 @@
 #
 # THIS SCRIPT NEVER AUTHENTICATES. `doppler login` is an interactive browser
 # flow; a service token is the non-interactive alternative and is the operator's
-# to mint. Three states are distinct and a caller must not collapse them, because
+# to mint. Four states are distinct and a caller must not collapse them, because
 # each has a DIFFERENT fix and only the first is this script's job:
 #
 #   missing         the binary is absent          -> run this script
@@ -33,15 +33,10 @@
 #                                                    (interactive) or exports
 #                                                    DOPPLER_TOKEN
 #   ready           authenticated                 -> wrap the call in `doppler run`
-#   unknown         the CLI failed for a reason   -> do NOT route to a login flow; the
-#                   this script does not             cause is echoed to stderr. Re-run once;
-#                   recognise (network fault,       if it persists, treat Doppler as
-#                   API outage, ...)                unavailable and say so.
-#
-# FOUR states, not three. An earlier revision of this table listed three and the sentence
-# below still said "exactly one of those words" while the code printed `unknown` as well —
-# a caller who wrote a three-way `case` from this table had no arm for the state that most
-# needs one.
+#   unknown         the CLI failed in a way this  -> do NOT route to a login flow. The
+#                   script does not recognise        cause is echoed to stderr. Re-run
+#                   (network fault, API outage)      once; if it persists, treat Doppler
+#                                                    as unavailable and say so.
 #
 # `--state` prints exactly one of those words and exits 0, so a caller can branch
 # without parsing Doppler's human-facing error text. Collapsing `unauthenticated`
@@ -51,6 +46,7 @@
 #   0 - doppler available on PATH (pre-installed or just installed), or --state answered
 #   1 - install attempted but failed (download, checksum, or extract)
 #   2 - no install path available (curl, tar, or sha256sum missing)
+#  64 - EX_USAGE: an argument other than `--state` (the sibling helpers use 64 too)
 
 set -euo pipefail
 
@@ -119,17 +115,9 @@ fi
 # none of them and takes its default arm — which, given what this script is for, is the
 # "no observability access" arm. 64 is EX_USAGE, the code the sibling helpers already use.
 if [[ $# -gt 0 ]]; then
-  case "${1:-}" in
-    -h | --help)
-      sed -n '2,5p' "$0" >&2
-      echo "usage: ensure-doppler.sh [--state]" >&2
-      exit 0
-      ;;
-    *)
-      echo "ensure-doppler.sh: unknown argument '$1' (expected --state or no argument)" >&2
-      exit 64
-      ;;
-  esac
+  echo "ensure-doppler.sh: unknown argument '$1' (expected --state or no argument)" >&2
+  echo "usage: ensure-doppler.sh [--state]" >&2
+  exit 64
 fi
 
 if command -v doppler >/dev/null 2>&1; then
