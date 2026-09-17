@@ -42,9 +42,13 @@ full hook parity. Generated custom agent definitions, automatic model-tier
 translation, and a Claude Workflow interpreter are outside this change.
 Revisit those when a concrete Codex workflow requires them.
 
-The replace-default semantics recorded in this ADR's Verification hold for
-Codex and not for Claude Code, whose `skills` key is additive — see ADR-224 for
-the harness-qualified placement rule and the slash-name uniqueness guard.
+> **Amended 2026-09-17 (#8233, ADR-224).** The replace-default semantics this
+> ADR's §Verification records hold for **Codex** and not for Claude Code, whose
+> `skills` key is additive to the default `skills/` scan. This ADR's own text is
+> unchanged and its measurements stand; the qualification is added because the
+> unqualified reading — "declaring a skills root replaces the default" — is false
+> on two of the four harnesses this plugin now ships to. The harness-qualified
+> placement rule and its guard live in ADR-224.
 
 ## Verification
 

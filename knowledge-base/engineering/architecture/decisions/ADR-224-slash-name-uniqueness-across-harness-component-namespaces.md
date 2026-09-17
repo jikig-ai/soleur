@@ -30,9 +30,20 @@ difference is load-bearing rather than incidental:
 
 Because the semantics differ per harness, a single unqualified rule about
 "registering a skills root" is wrong for at least one harness whichever way it
-is written. ADR-215 cannot carry that qualification: its §Verification is a
-dated record of the Codex replace-default measurement, and an "additive"
-addendum would make that document contradict itself.
+is written.
+
+ADR-215 is the wrong home for that qualification on grounds of **scope**, not of
+dating. ADR-215 decides "Codex reuses canonical Soleur components"; the rule
+recorded here governs four harnesses' namespaces, two of which (Claude Code,
+Grok) ADR-215 never addresses. A four-harness placement rule filed inside a
+single-harness ADR is mis-filed whatever its §Verification says.
+
+An earlier draft of this section argued instead that ADR-215 *could not* be
+amended because its §Verification is a dated measurement. That is wrong and is
+recorded here so it is not repeated: this repo amends accepted ADRs in place as
+a matter of course, annotating them with dated supersede blockquotes beside the
+stale text (ADR-194 carries six, ADR-213 three). Dated records are annotated
+here, not frozen.
 
 A second collision class had nothing guarding it. `.codex-plugin` and
 `.devin-plugin` each declare **two** roots, and `go`/`help`/`sync` exist in both,
@@ -60,13 +71,23 @@ name anyone would add to a per-harness root — is not a command.
    that dispatch records a measured user-facing failure when the skill is out of
    scope.
 
-4. **A per-harness skills root may mirror a command stem, and that is not a
-   collision.** `codex/skills/go/` and `devin/skills/go/` exist precisely to
-   expose a canonical `commands/go.md` on a harness with no command surface;
-   each shim's body reads the canonical command and follows it. Disjointness
-   between command stems and skill names is therefore asserted over the **default
-   `skills/` root only**, not over per-harness roots — asserting it there could
-   only be satisfied by breaking the Codex and Devin entry points.
+4. **Command-stem disjointness is asserted over the roots the CLAUDE manifest
+   resolves, derived from that manifest rather than restated.** `commands/`
+   shares a menu namespace only where a harness has a command surface, so the
+   guard reads `.claude-plugin/plugin.json` and asserts over
+   `["skills", ...(claude.skills ?? [])]`.
+
+   Per-harness roots are then out of scope *as a consequence*, not as a
+   hand-written carve-out: `codex/skills/` and `devin/skills/` are not in the
+   Claude manifest. That matters because those roots exist precisely to expose a
+   canonical `commands/go.md` on a harness with no command surface — each shim's
+   body reads the canonical command and follows it — so asserting disjointness
+   there could only be satisfied by breaking the Codex and Devin entry points.
+
+   Deriving rather than hardcoding `"skills"` also keeps the guard correct if
+   decision 2 is ever relaxed: a hardcoded root set would silently keep asserting
+   over one root and stop covering a newly declared one, going quiet exactly when
+   the risk it exists for materialises.
 
 5. **Within one manifest, no skill name may be contributed by more than one
    root.** Two roots resolving one name is a loader ambiguity for every harness,
@@ -122,7 +143,9 @@ the baseline, which is indistinguishable from a pass). Control GREEN. Removing
 the key from `skills/go/SKILL.md` reds naming `go`. Adding `commands/qa.md` reds
 naming `qa`; adding `commands/review.md` as well reds naming both, so the guard
 reports the whole set. Declaring a `skills` key in `.claude-plugin/plugin.json`
-reds via decision 2. Adding `devin/skills/review/` reds via decision 5 naming
+reds via decision 2, and — because decision 4 derives its root set from that
+same manifest — would additionally bring the declared root inside clause (b)'s
+scope rather than leaving it unasserted. Adding `devin/skills/review/` reds via decision 5 naming
 `review`, which proves the ack does not blind the clause. Emptying discovery
 reds against a bounded floor rather than passing over an empty corpus.
 
@@ -139,7 +162,20 @@ behaviour decision 4 depends on. `devin skills list` reports `/soleur:go`,
 figures are a dated record of a 95-canonical tree and are left unchanged.
 
 **Scope of the dedup claim.** Decision 3 is verified for **Claude Code**, whose
-frontmatter key this is. Whether Devin honours `user-invocable: false` is
+frontmatter key this is.
+
+**Grok is in the same collision class and is UNMEASURED.** `.grok/config.toml`
+points at this same `plugins/soleur` tree, so Grok has Claude Code's shape — the
+default `skills/` root, a live command surface, one namespace, and no
+per-harness root, hence no decision-4 exemption. `/go` duplicates there for the
+same reason it duplicated in Claude Code, and whether Grok honours
+`user-invocable: false` has not been probed (`grok inspect`, or reading the `/`
+menu for a single `/go` row, would settle it). Naming this is decision 1 applied
+to this ADR itself: a placement rule that silently drops one of the four
+harnesses it governs is the "not checked collapsed into not applicable" failure.
+The exposure is bounded — if the key is ignored, Grok keeps today's duplicate and
+nothing regresses — and decision 4's derived root set is already correct for Grok
+by construction, since Grok loads the Claude manifest's tree. Whether Devin honours `user-invocable: false` is
 UNMEASURED: the `devin skills list` reading above was taken against a pre-PR
 plugin cache, so it shows the duplication but cannot show the fix. Re-run
 `devin skills list --trigger user` after a `devin plugins install` refresh to

@@ -1001,6 +1001,15 @@ describe("plugin slash-name uniqueness", () => {
     // The `skills` key is ADDITIVE in Claude Code, never a replacement, so the
     // default scan is always a member. Duplicate spellings collapse inside
     // collidingNames().
+    //
+    // CAVEAT, harness-qualified per ADR-224 decision 1: this models EVERY
+    // manifest as additive, and ADR-215 §Verification measured Codex as
+    // replace-default (a single custom root HID the canonical skills). That is
+    // harmless only because `.codex-plugin` declares `./skills` explicitly today.
+    // If that declaration were ever dropped, this would inject a root Codex does
+    // not scan, report the acked dupes, and go green over ADR-215's measured
+    // failure mode. Codex's real coverage is scripts/codex-plugin-smoke.mjs
+    // (101 skills = 98 canonical + 3 wrappers), not this guard.
     const declared = Array.isArray(manifest.skills) ? manifest.skills : [];
     return ["skills", ...declared].map((root) => ({
       root,
