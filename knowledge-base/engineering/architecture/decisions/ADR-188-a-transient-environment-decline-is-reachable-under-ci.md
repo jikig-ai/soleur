@@ -422,8 +422,8 @@ warns about, one arm later.
 
 **Two guard values move with it.** The call-site cardinality assertion is now **4**, not 3
 (T5 mutation; S1 healthy; S1 mutation; T17 mutation). The roster parity check — every call site's
-message must open with a name the follow-through probe greps for — now spans `T5 `/`S1 `/`T17 `,
-and `SKIP (loud): T17 ` is registered in `scripts/followthroughs/t5-skip-persistence-bound-7510.sh`
+message must open with a name the follow-through probe greps for — now spans `T5 `/`S1 `/`T17 `, <!-- markdownlint-disable-line MD038 -->
+and `SKIP (loud): T17 ` is registered in `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` <!-- markdownlint-disable-line MD038 -->
 in the same change. Registering the arm in the suite without registering it in the probe would
 have satisfied the parity equality *by arithmetic* while leaving the observer blind to the very
 arm the change creates — so the probe's own test suite gains a case asserting the T17 marker,
