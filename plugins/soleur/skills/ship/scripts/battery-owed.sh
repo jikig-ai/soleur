@@ -212,12 +212,22 @@ command -v timeout >/dev/null 2>&1 || undecidable "timeout (coreutils) not on PA
 # satisfied — try/catch bounds exceptions, not time. rc 124 from `timeout` needs
 # no special handling: it is non-zero, so each call falls into the branch it
 # already has (undecidable for the first two, an empty set for statuses).
-# {context, integration_id} — NOT the context alone. All 26 required contexts on
-# this repo pin integration_id 15368 (GitHub Actions), and GitHub only counts a
-# check-run toward the requirement when it comes from that app. Matching on name
-# alone made this gate strictly MORE PERMISSIVE than the ruleset it calls
-# authoritative, which is the unsafe direction: any installed app with
-# `checks: write` could satisfy a required context by naming a check-run after it.
+# {context, integration_id} — NOT the context alone. GitHub only counts a
+# check-run toward a required context when it comes from the app that context
+# pins, so matching on name alone made this gate strictly MORE PERMISSIVE than
+# the ruleset it calls authoritative — the unsafe direction: any installed app
+# with `checks: write` could satisfy a required context by naming a check-run
+# after it.
+#
+# Carry each context's OWN integration_id; do NOT collapse this to a constant.
+# The app id is NOT uniform across the required set. Measured 2026-09-17 against
+# the live ruleset: 26 contexts, 25 pinned to 15368 (GitHub Actions) and `CodeQL`
+# pinned to 57789 (github-advanced-security). scripts/required-checks.txt has
+# recorded that split since #6050 and names CodeQL as the sole 57789 context —
+# an earlier revision of this comment asserted all 26 were 15368, contradicting
+# a file this gate cites as the drifted mirror it refuses to trust. The code was
+# always per-context and so was always right; only the comment overclaimed.
+# Hardcoding 15368 would leave CodeQL permanently unmatched → ABSENT → OWED.
 # --paginate here too. Without it a rules array exceeding one page truncates and
 # the gate requires FEWER contexts than the ruleset does — under-requiring, the
 # unsafe direction, and the same failure this file rejects required-checks.txt

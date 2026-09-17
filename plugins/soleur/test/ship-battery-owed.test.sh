@@ -249,10 +249,17 @@ assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
 # =============================================================================
 # T4d — APP IDENTITY. A pinned context is satisfiable only by its own app.
 #
-# All 26 required contexts on this repo pin integration_id 15368. Matching on name
-# alone made the gate strictly MORE permissive than the ruleset it calls
-# authoritative: any installed app with `checks: write` could satisfy a required
-# context by naming a check-run after it.
+# Matching on name alone made the gate strictly MORE permissive than the ruleset
+# it calls authoritative: any installed app with `checks: write` could satisfy a
+# required context by naming a check-run after it.
+#
+# The app id is NOT uniform across the required set, so T4g/T4h below pin the
+# per-context read that T4d/T4e cannot. Measured 2026-09-17 against the live
+# ruleset: 26 contexts, 25 pinned to 15368 (GitHub Actions), `CodeQL` pinned to
+# 57789 (github-advanced-security) — a split scripts/required-checks.txt has
+# recorded since #6050. An earlier revision of this comment said all 26 were
+# 15368, and every fixture in this file used 15368 or null, so replacing the
+# gate's `$r.integration_id` with the literal 15368 left the suite fully GREEN.
 # =============================================================================
 FOREIGN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":99999}}]'
 make_stub "$STUB" "$PINNED_REQUIRED" "$FOREIGN_APP" "$(head_sha_of "$WORK")"
@@ -263,6 +270,26 @@ OWN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at
 make_stub "$STUB" "$PINNED_REQUIRED" "$OWN_APP" "$(head_sha_of "$WORK")"
 assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
   "T4e the SAME pinned context satisfied by its own app -> SKIPPABLE (both directions)"
+
+# T4g/T4h — the app id is read PER CONTEXT, never as a shared constant.
+#
+# Two required contexts pinned to DIFFERENT apps, mirroring the live ruleset's
+# 15368/57789 split. Every other fixture here uses one id, so none of them can
+# tell `$r.integration_id` from a hardcoded 15368; these two can. Mutating the
+# gate's `select($r.integration_id == null or .app_id == $r.integration_id)` to
+# compare against a literal 15368 turns T4g SKIPPABLE -> OWED (the 57789 context
+# reads ABSENT). T4h is the other direction: an app id that is correct for ONE
+# required context does not satisfy a DIFFERENT one.
+SPLIT_REQUIRED='[{"context":"test","integration_id":15368},{"context":"CodeQL","integration_id":57789}]'
+SPLIT_MATCHED='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"CodeQL","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":57789}}]'
+make_stub "$STUB" "$SPLIT_REQUIRED" "$SPLIT_MATCHED" "$(head_sha_of "$WORK")"
+assert_eq "$SKIPPABLE" "$(run_gate "$WORK" "$STUB")" \
+  "T4g two required contexts pinned to DIFFERENT apps, each satisfied by its own -> SKIPPABLE"
+
+SPLIT_CROSSED='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"CodeQL","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$SPLIT_REQUIRED" "$SPLIT_CROSSED" "$(head_sha_of "$WORK")"
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T4h a green CodeQL check-run from 15368 cannot satisfy a context pinned to 57789 -> OWED"
 
 # =============================================================================
 # T4f — a legacy commit STATUS must not outrank a check-run.
@@ -495,4 +522,4 @@ done <<< "$AUTHORITY_PREFIXES"
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 31
+print_results 33
