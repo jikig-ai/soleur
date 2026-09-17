@@ -179,7 +179,7 @@ this. One transient failure produced #7501, #7535, #7544, PR #7507, a brainstorm
 - **TR17 (R2)** — Record, do not fix (NG13): the roster guard's
   `grep -cE '^[[:space:]]*arm_skip ' "$0"` returns **4** while the file has **7** executable call
   sites (the three S2 ones are `case`-arm one-liners the line anchor cannot see), so the declarable
-  skip budget is **14** against `_SKIP_CEILING=8` and the roster identity is blind to half the
+  skip budget is **13** against `_SKIP_CEILING=7` (re-derived on `origin/main`) and the roster identity is blind to half the
   roster. R1's NG9 was therefore unenforceable. File it with those measurements.
 - **TR18** — Evidence provenance: every AC discloses `[local docker]` or `[CI run <id>]`, **and** the
   quoted terminal line must show `Skipped: 0` — a green CI run is obtainable from a run in which

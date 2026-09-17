@@ -156,8 +156,9 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
       lines **with an anti-vacuity floor on its own grep**, and zero `docker run … || true`.
       **+1 to +2 assertions.**
 - [ ] **2.6.3** **D9** — file an issue recording the roster/ceiling defect with its three
-      measurements (line-anchored census **4** vs **7** true call sites; declarable budget **14** vs
-      ceiling **8**; `SKIP_MARKERS` missing `S2(`), and note it in the ceiling stanza's comment. Do
+      measurements **as re-derived on `origin/main`** (line-anchored census **3** vs **6** true call
+      sites; declarable budget **13** vs ceiling **7**; `SKIP_MARKERS` missing `S2(`), and note it in
+      the ceiling stanza's comment. Do
       not fix it here (NG13).
 - [ ] **2.6.4** Re-derive the floor from a **measured** run and add a new `# RAISED 92 -> <measured>`
       stanza covering D5, D7 and the 2.7.2 counter. **Do not touch** the frozen 19-era baseline list
@@ -177,7 +178,8 @@ Primary target: `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`. Als
 - [ ] **2.7.3** Run Guard 1 rows 1-8 and H1-H3, and Guard 2 rows 1-5 and H1-H2, recording each
       row's command and output. Rows 3, 4, 5 and 8 of Guard 1 currently fail on the tree — show each
       flipping. Guard 2 row 3 must be **demonstrated RED** with row 1's poison applied, and row 1's
-      expected `Skipped: 14 > 8` ceiling red must be quoted so it is not read as a regression.
+      expected `Skipped: 13 > 7` ceiling red (re-derived on `origin/main`; see the plan's **D9**) must be
+      quoted so it is not read as a regression.
 - [ ] **2.7.4** Run the **pre-fix control**: revert the verdict on a scratch copy and induce the
       starve by **poisoning apt in-recipe** (not with an injected token — the token is part of the
       fix, so on a reverted copy it is inert and the arm passes). The arm must emit *"the check is

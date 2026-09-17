@@ -611,7 +611,7 @@ paired with a known-negative so a baseline green cannot read as a pass.
 
 | # | Edit | Must |
 |---|---|---|
-| 1 | Empty `/etc/apt/sources.list` and remove `sources.list.d` at the top of `S1DRV`, so `apt-get update` fails **through its own handler** | its literal appears in `S1_NOTE`'s tail; every S1/S2 arm declines; **zero** `FAIL:` lines name S1 or S2. **Expect `Skipped: 14 > 8` to red the ceiling** — that is D9, a known result, not this row failing |
+| 1 | Empty `/etc/apt/sources.list` and remove `sources.list.d` at the top of `S1DRV`, so `apt-get update` fails **through its own handler** | its literal appears in `S1_NOTE`'s tail; every S1/S2 arm declines; **zero** `FAIL:` lines name S1 or S2. **Expect `Skipped: 13 > 7` to red the ceiling** — that is D9, a known result, not this row failing |
 | 2 | Same, poisoned so `install` is the failing statement | same, naming *install*; the two literals differ |
 | 3 | Change D2b's `exit "$_rc"` to `exit 2`, **with row 1's poison applied** | all five call sites flip to `harness-defect`/`fixture-defect` -> 11 hard FAILs. **Must RED** — the evidence for **D2b** (the row mutates rc preservation, not the `fixture_fail` prohibition). Without the paired poison the edited line never executes and the row reports the baseline |
 | 4 | Delete a naming echo but keep the exit, **with row 1's poison** | the arm still declines correctly, but the literal-presence AC reds |
@@ -678,7 +678,7 @@ enough — see the `Skipped:` clause in `## Verification`.
   and observed output in the PR body. Rows 3, 4, 5 and 8 currently fail on the tree as built; each
   must be shown flipping.
 - **AC11** — Guard 2 rows **1-5** and H1-H2 behave as tabled. Row 3 must be **demonstrated RED**
-  with row 1's poison applied — the evidence for **D2b** — and row 1's expected `Skipped: 14 > 8`
+  with row 1's poison applied — the evidence for **D2b** — and row 1's expected `Skipped: 13 > 7` (see **D9**)
   ceiling red must be quoted so it is not read as a regression.
 - **AC12** — A **pre-fix control that does not depend on the fix.** Revert the verdict on a scratch
   copy and induce the starve by poisoning apt inside the recipe (`--network none` is NG4). The arm
@@ -734,8 +734,9 @@ enough — see the `Skipped:` clause in `## Verification`.
   `expected_output`, re-measured on the final tree.
 - **AC27** — Diff scope: only the paths in `## Files to Edit`. *(R1 failed this at the moment R2
   was written — the follow-through probe was already modified and unlisted.)*
-- **AC28** — D9 is filed as an issue carrying its three measurements (line-anchored census **4** vs
-  **7** true call sites; declarable budget **14** vs ceiling **8**; `SKIP_MARKERS` missing `S2(`),
+- **AC28** — D9 is filed as an issue carrying its three measurements **as re-derived on
+  `origin/main`** (line-anchored census **3** vs **6** true call sites; declarable budget **13** vs
+  ceiling **7**; `SKIP_MARKERS` missing `S2(`),
   and the ceiling stanza's comment records it.
 - **AC29** — After every edit inside the `bash -c '…'` recipe, `bash -n <file>` returns 0 — one
   apostrophe there is a whole-file syntax error (measured rc 2).
@@ -830,9 +831,14 @@ logs:
   where: GitHub Actions run logs for infra-validation.yml
   retention: 90 days (GitHub default)
 
-discoverability_test:
-  command: grep -c T17M_APT_OK apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-  expected_output: 3
+# discoverability_test: DEFERRED TO PR #8249 — deliberately not pinned here.
+  # This docs branch ships no code, so the probe's subject does not exist on it. Measured
+  # 2026-09-17: this branch 0, origin/main 0, #8249 head 2. The previously pinned value of 3
+  # was arithmetic on a hypothesised final tree (variable + echo + D5's pin) and is satisfied
+  # by NO tree that exists, so an executed probe (preflight Check 10 runs it) would have failed
+  # on every branch. Pinning it to 0 instead would be worse: that asserts the ABSENCE of the fix,
+  # which is the "a guard asserting absence is backwards when absence is the permissive state"
+  # class. The probe belongs to #8249's verification, re-pinned from its merged tree.
 ```
 
 **The probe and its honest limits.** It counts a token **this PR owns**: `T17M_APT_OK` is **0** on
