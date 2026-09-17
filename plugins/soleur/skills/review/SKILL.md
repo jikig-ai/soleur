@@ -887,6 +887,20 @@ flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
 proceed with filing. Any other first-line content is treated as `DISSENT`
 (fail-safe toward fix-inline).
 
+**A claim that justifies a DEFERRAL is an assertion, and it is the one assertion nothing in this
+skill currently points at.** Every gate here aims at claims that license an ACTION — plan-quoted
+numbers get re-derived, measurements get verified before they propagate, a fix's assertions get
+mutation-tested. The claim that licenses INACTION gets none of it, because deferring reads as the
+conservative choice and its justification reads as caution rather than as a statement about how the
+system behaves. So before filing any scope-out whose rationale is "X would break" / "blocked on Y",
+name the command that falsifies it and run it; if nobody can run it, write that in the filing
+instead of stating the claim flatly. **Why:** #8233 — "`skills/go/` is the sole model-invocable
+`Skill(soleur:go)` handle" was the entire reason #8236 was deferred, reached an ADR, a test failure
+message, a guard comment, four commit messages and the issue itself, and was falsified by one probe:
+with all three skills deleted `Skill(soleur:help)` still resolved, because commands are
+model-invocable and shadow same-named skills. See
+`knowledge-base/project/learnings/2026-09-17-the-reason-i-deferred-was-the-one-claim-nobody-measured.md`.
+
 **Search for an existing tracker BEFORE invoking the CONCUR gate, not after.** The gate should
 be adjudicating the deferral, not discovering a duplicate — and a duplicate is the modal outcome
 for any finding in a subsystem that has been audited before. One issue-list query on the

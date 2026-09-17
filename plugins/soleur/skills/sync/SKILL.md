@@ -2,6 +2,11 @@
 name: sync
 description: This skill analyzes the codebase and populates the knowledge-base with conventions, patterns, and technical debt
 argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
+# `/soleur:sync` also ships as plugins/soleur/commands/sync.md. Claude Code loads
+# plugin commands AND plugin skills into one slash menu, so without this the name
+# renders twice. `user-invocable: false` leaves the menu row to the command while
+# keeping this skill model-invocable — Skill(soleur:sync) must keep working.
+user-invocable: false
 ---
 
 <!-- soleur-cloud-mode:start -->

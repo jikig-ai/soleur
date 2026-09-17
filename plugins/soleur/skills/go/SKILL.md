@@ -2,6 +2,11 @@
 name: go
 description: This skill is the unified entry point that classifies intent and routes to the right workflow skill
 argument-hint: "[what you want to do]"
+# `/soleur:go` also ships as plugins/soleur/commands/go.md. Claude Code loads
+# plugin commands AND plugin skills into one slash menu, so without this the name
+# renders twice. `user-invocable: false` leaves the menu row to the command while
+# keeping this skill model-invocable — Skill(soleur:go) must keep working.
+user-invocable: false
 ---
 
 <!-- soleur-cloud-mode:start -->
