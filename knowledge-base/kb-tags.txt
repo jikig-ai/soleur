@@ -961,6 +961,7 @@ cost-model
 cost-of-filing
 cost-of-filing-gate
 cost-slo
+could-not-measure
 count-mismatch
 counting
 counts
@@ -1948,6 +1949,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-failure
 instrument-vacuity
 instrument-validation
 instrument-verification
@@ -3404,6 +3406,7 @@ sentinel
 sentinel-drift
 sentinel-sweep
 sentinel-values
+sentinel-vocabulary
 sentry
 sentry-alerts
 sentry-api
@@ -4123,6 +4126,7 @@ verbatim
 verbs
 verdict
 verdict-cache
+verdict-machinery
 verification
 verification-decay
 verification-discipline

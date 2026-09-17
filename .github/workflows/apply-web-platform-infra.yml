@@ -1991,6 +1991,94 @@ jobs:
             exit 1
           fi
 
+      # INHERITED-`done` PREFLIGHT (2026-09-17 incident). A replace of this host leaves its
+      # scheduler REFUSING TO START, every time, and nothing said so before this step existed.
+      #
+      # `INNGEST_CUTOVER_FLIP` lives in Doppler and OUTLIVES the host. The matching
+      # `done-owner` marker lives on the host ROOT DISK, which a replace destroys. So the new
+      # machine inherits a `done` it never earned, and inngest-server-flip-guard.sh correctly
+      # refuses a prod start on it (#7228 -- the guard is preventing a SECOND prod scheduler,
+      # not malfunctioning). Measured: two replaces, 76 minutes with no live scheduler, and the
+      # cause stayed invisible until the host journal was read.
+      #
+      # This step does NOT block. The replace is often exactly what the operator wants and the
+      # recovery is one dispatch; it exists so the recovery is known BEFORE the outage rather
+      # than after. It degrades open -- an unreadable flag warns and proceeds, because failing
+      # a replace over an advisory read would be worse than the condition it advises about.
+      - name: 'Preflight - warn if this replace will strand the scheduler (#7228)'
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}
+        run: |
+          set -uo pipefail
+          RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
+          if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+            echo "::warning::inherited-done preflight SKIPPED (no DOPPLER_TOKEN_INNGEST_ARM). If INNGEST_CUTOVER_FLIP is 'done', this replace leaves inngest-server refusing to start (#7228); recover with: ${RECOVER}"
+            exit 0
+          fi
+          # rc CAPTURED, not discarded. `2>/dev/null || true` collapsed seven conditions into
+          # one "unreadable" message: secret absent (the NORMAL pre-cutover state), token
+          # revoked, wrong project/config, doppler missing, network fault, typo — and the
+          # secret genuinely holding "". That last one is a SAFE read, and it was being
+          # reported with the same alarm as a dead instrument. A revoked token additionally
+          # makes this step permanently blind, and because it degrades open on every run
+          # nobody would ever notice.
+          FLAG_RC=0
+          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
+          # Whitespace-trim to match the on-host readers EXACTLY. inngest-server-flip-guard.sh
+          # and inngest-cutover-flip.sh both `tr -d '[:space:]'` before comparing, so a single
+          # stray space made this step print "no hazard" at the one value where the guard is
+          # guaranteed to refuse the start.
+          FLAG="$(printf '%s' "$FLAG" | tr -d '[:space:]')"
+          if [[ "$FLAG_RC" -ne 0 ]]; then
+            echo "::warning::inherited-done preflight: the READ FAILED (doppler exit ${FLAG_RC}) — nothing was measured. This is not evidence the flag is safe. If it is 'done', recover after the replace with: ${RECOVER}"
+            exit 0
+          fi
+          if [[ -z "$FLAG" ]]; then
+            echo "INNGEST_CUTOVER_FLIP is unset/empty (the read succeeded)."
+            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard — but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until a cutover sets it."
+            exit 0
+          fi
+          echo "INNGEST_CUTOVER_FLIP=${FLAG}"
+          # `done` IS NOT THE ONLY STRANDING VALUE, and the else-branch used to print a
+          # reassuring "no inherited-done hazard" for every other one. inngest-server-flip-guard.sh
+          # allowlists {armed, flipping, flushed, done}; everything outside it refuses a prod
+          # start outright, and of the four inside it only `flushed` self-heals after a replace
+          # (the /mnt/data flush latch survives the replace, so `armed` and `flipping` drive the
+          # FSM to `aborted`, which is itself outside the allowlist — and op=resume's G1 accepts
+          # `done` only, so those two have no one-dispatch recovery at all).
+          if [[ "$FLAG" == "armed" || "$FLAG" == "flipping" ]]; then
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- this replace WILL strand the scheduler, and NOT via the inherited-done path. The /mnt/data flush latch survives the replace, so the FSM takes flush_already_performed -> refuse_rearm_after_done and writes flag=aborted, which is outside inngest-server-flip-guard.sh's allowlist. op=resume accepts 'done' only, so there is NO one-dispatch recovery from this state -- resolve the flag with the operator BEFORE replacing."
+          elif [[ "$FLAG" != "done" && "$FLAG" != "flushed" ]]; then
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it."
+          fi
+          if [[ "$FLAG" == "done" ]]; then
+            {
+              echo "## This replace will strand the inngest scheduler"
+              echo ""
+              echo "\`INNGEST_CUTOVER_FLIP=done\`, and the \`done-owner\` marker lives on the root disk this replace destroys."
+              echo "The new host inherits a \`done\` it never earned, so \`inngest-server\` will **refuse to start** (#7228)."
+              echo ""
+              echo "**Recovery, after the replace completes:**"
+              echo ""
+              echo '```'
+              echo "${RECOVER}"
+              echo '```'
+              echo ""
+              echo "\`op=resume\` writes \`INNGEST_CUTOVER_FLIP=flushed\`; the on-host 30s timer starts, verifies, re-records the marker and completes to \`done\` **with no re-FLUSHALL**, so the queue survives."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::INNGEST_CUTOVER_FLIP=done -- this replace WILL leave inngest-server refusing to start (#7228). Recover with: ${RECOVER} (no re-FLUSHALL; the queue survives)"
+          else
+            # Scoped to the one value this is actually true of. `flushed` is the state
+            # op=resume writes and the only allowlisted value whose FSM self-heals after a
+            # replace (record_flush_latch -> start_server -> verify -> done).
+            if [[ "$FLAG" == "flushed" ]]; then
+              echo "flag is 'flushed' -- no inherited-done hazard, and the FSM self-heals after the replace."
+            else
+              echo "flag is '${FLAG}', not 'done' -- no INHERITED-DONE hazard specifically; see the warning above for what this value does mean."
+            fi
+          fi
+
       - name: Extract backend credentials
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
