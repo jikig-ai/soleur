@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-17T18:23:57Z",
+  "generated_at": "2026-09-17T19:43:54Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1253,13 +1253,13 @@
     {
       "id": "hr-never-git-stash-in-worktrees",
       "section": "Hard Rules",
-      "hit_count": 503,
+      "hit_count": 504,
       "bypass_count": 0,
       "applied_count": 0,
       "warn_count": 0,
-      "fire_count": 503,
-      "prevented_errors": 503,
-      "last_hit": "2026-09-17T14:26:22Z",
+      "fire_count": 504,
+      "prevented_errors": 504,
+      "last_hit": "2026-09-17T18:41:32Z",
       "first_seen": "2026-04-18T14:46:41Z",
       "rule_text_prefix": ""
     },
@@ -1284,7 +1284,7 @@
     "orphan_rule_ids": [],
     "non_corpus_counts": {
       "gdpr-gate-staleness": 4,
-      "monitor-supersede": 227,
+      "monitor-supersede": 233,
       "net-issue-flow": 480,
       "post-dispatch-watch-gate": 4810,
       "guardrails-block-recursive-delete": 334,
@@ -1292,7 +1292,7 @@
       "guardrails-require-milestone": 512,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 8,
-      "git-commit-secret-scan": 339,
+      "git-commit-secret-scan": 347,
       "pre-ask-technical-fork-gate": 2,
       "net-issue-flow-timeout": 45,
       "guardrails-block-commit-on-main": 93,
