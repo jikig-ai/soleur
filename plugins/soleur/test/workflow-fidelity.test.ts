@@ -363,6 +363,24 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     const md = workflowFidelityInstructions("claude");
     expect(md).toMatch(/not reading SKILL\.md/i);
   });
+
+  // The parked-deliverable contract reaches the hookless harnesses through THIS
+  // channel and no other. An earlier revision shipped it as two exported const
+  // arrays with zero importers plus three byte-identical SKILL.md paragraphs, one
+  // of which no test read at all — a field the PR adds that nothing consumes.
+  // Asserted per harness because grok/codex/devin are the ones with no Stop hook,
+  // so for them this string IS the enforcement.
+  for (const harness of ["grok", "codex", "devin", "claude"] as const) {
+    test(`${harness} instructions carry the parked-deliverable contract`, () => {
+      const md = workflowFidelityInstructions(harness);
+      expect(md).toMatch(/Parking finished work is not a hand-off/i);
+      // The exemptions are the load-bearing half: a rule that only says "never
+      // stop" would veto the operator gates the corpus mandates.
+      expect(md).toMatch(/in-flight/i);
+      expect(md).toMatch(/hr-menu-option-ack-not-prod-write-auth/);
+      expect(md).toMatch(/rf-never-skip-qa-review-before-merging/);
+    });
+  }
 });
 
 const IN_PROCESS_READ = /in this process/i;
