@@ -65,7 +65,32 @@ pass_n=0
 fails=0
 cases=0
 
+# P1b guard (#7708). Every fixture root is asserted before anything is written under it or removed
+# with it. Two repo-global ratchets police this, and a new `*.test.sh` trips BOTH unless it gets
+# this exactly right — neither of them references a file this diff touches, so no file-selected
+# suite set can see them:
+#
+#   fixture-relative-assert.test.sh   counts operands that are not provably absolute, row by file.
+#   fixture-dir-operand-assert.test.sh asserts every tracked copy of this helper is BYTE-IDENTICAL
+#                                      to the canonical one.
+#
+# BYTE-IDENTICAL to `plugins/soleur/test/test-helpers.sh`. Do not reword it here alone — an earlier
+# revision of this file "improved" the empty-operand message to mention `rm -rf`, and that one-line
+# difference is exactly what the equality ratchet calls definition drift. Copied rather than
+# sourced, matching the precedent at `scripts/sentry-alert-reference-gate.sh:176`.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 TESTROOT="$(mktemp -d -t test-all-enum-toolchain.XXXXXXXX)"
+assert_fixture_dir "$TESTROOT"
 FAILLOG="$TESTROOT/failures.log"
 : > "$FAILLOG"
 cleanup() { rm -rf "$TESTROOT"; }
@@ -129,6 +154,10 @@ cases=0
 # than the real one.
 make_broken_bun() {
   local dir="$1"
+  # Guarded at the WRITING WINDOW, not only where TESTROOT was bound: inside this function `$dir`
+  # is a parameter, so it is not provably absolute here, and `cat > "$dir/bun"` below is the site
+  # the P1b ratchet counts.
+  assert_fixture_dir "$dir"
   mkdir -p "$dir"
   cat > "$dir/bun" <<'SHIM'
 #!/usr/bin/env bash
@@ -143,6 +172,7 @@ SHIM
 # A `bun` that works and reports the version it is told to report.
 make_working_bun() {
   local dir="$1" version="$2"
+  assert_fixture_dir "$dir"
   mkdir -p "$dir"
   cat > "$dir/bun" <<SHIM
 #!/usr/bin/env bash

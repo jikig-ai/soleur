@@ -224,6 +224,51 @@ This branch's own suite is green inside the battery:
 
 `#8112 "CI: main branch tests failing"` is already open and is the existing home for main-red work.
 
+### CORRECTION to the triage above — one of the 21 was MINE, not pre-existing
+
+The triage table lists `plugins/soleur/test/fixture-relative-assert.test.sh` as pre-existing. That
+was **wrong**, and the error is the exact class `work/SKILL.md` names: a repo-global ratchet counts
+a property across the whole tree and references no file in the diff, so no file-selected suite set
+can surface it and the baseline's red simply gets swept into "pre-existing".
+
+Measured directly instead of assumed — `git worktree add --detach origin/main` and run it there:
+
+| Tree | Result |
+|---|---|
+| `origin/main` | **62 passed, 0 failed, exit 0** |
+| this branch (before the fix) | 60 passed, **2 failed**, exit 1 |
+
+The two rows were mine: `scripts/test-all-enumerate-toolchain.test.sh:155` and `:169`,
+`cat > "$dir/bun"` inside the two fixture-builder functions, where `$dir` arrives as a parameter
+and so is not provably absolute *at the writing window* even though `TESTROOT` was guarded where it
+was bound.
+
+A second ratchet then reddened on the repair itself. `fixture-dir-operand-assert.test.sh` asserts
+every tracked copy of `assert_fixture_dir` is BYTE-IDENTICAL to the canonical one in
+`plugins/soleur/test/test-helpers.sh`; my copy had "improved" the empty-operand message to mention
+`rm -rf`, and that one-line difference is definition drift. `origin/main`: 71/0 exit 0. Restored to
+byte-identical.
+
+That second failure also falsifies a claim I had written into the code comment and the commit
+message — that no importable canonical form exists and 32 files re-derive the helper as "a real
+propagation weakness". There **is** a canonical home *and* a ratchet enforcing equality against it.
+The comment has been corrected; the superseded claim is recorded here rather than silently dropped.
+
+**Corrected counts:** 20 pre-existing failures, not 21. One (`fixture-relative-assert`) was this
+branch's regression and is fixed. `fixture-dir-operand-assert` never appeared in the baseline at
+all — it was introduced and resolved after the baseline ran.
+
+Post-fix, all of these are green on this branch:
+
+```
+fixture-relative-assert       62 passed, 0 failed   exit 0
+fixture-dir-operand-assert    71 passed, 0 failed   exit 0
+guard-vacuity-floor           23 passed, 0 failed   exit 0
+test-all-enumerate-toolchain  20 passed, 0 failed   exit 0
+lint-orphan-test-suites                             exit 0
+lint-shell-capture-exit       0 new findings
+```
+
 ### Consequence for Phase 1 and Phase 4 — a methodology blocker the plan did not anticipate
 
 Phase 1 diagnoses #7376 by repetition and attribution, and Phase 4's correctness gate is fault
