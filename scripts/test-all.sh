@@ -312,9 +312,17 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
-# environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
-# scripts shard needs no bun and no node *version pin*: it uses stock
-# ubuntu-latest node, unpinned, for the one `node --test` suite below).
+# environment. The parenthetical here used to read "TEST_GROUP=scripts in CI
+# omits setup-bun by design"; that is FALSE and has been since #7566 (verified
+# 2026-09-17: ci.yml's test-scripts job runs `oven-sh/setup-bun` and names its
+# step "bash + python3 + bun"). ci.yml corrected its own copy of the claim
+# in-place — "`setup-bun` IS required (#7332)" — and this twin was never swept,
+# so the stale sentence survived precisely where a reader of THIS file would
+# look. CI is bun-BEARING; the gate below still matters because a developer host
+# need not be, and because `command -v` answers a different question either way.
+# The node point is unchanged and still true: the scripts shard needs no node
+# *version pin* — it uses stock ubuntu-latest node, unpinned, for the one
+# `node --test` suite below.
 #
 # `command -v bun` is NOT a sufficient test for "bun works", and the difference is not cosmetic.
 # A version-manager SHIM resolves on PATH while being unable to run: a `mise` shim with no

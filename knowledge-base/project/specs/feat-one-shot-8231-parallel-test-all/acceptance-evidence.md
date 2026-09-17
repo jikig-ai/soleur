@@ -375,8 +375,10 @@ So the sole literal `production` in the corpus is a heading declaring that this 
 production edit, and the gate read it as a production context.
 
 **Verdict: no PIR.** There was no production event to report. The defect was a local-host-only
-abort in a test runner: CI never saw it (`test-scripts` omits `setup-bun` by design), nothing
-was deployed, nothing user-facing changed, and no release was blocked. `scripts/ship-pir-action-items-gate.sh --branch`
+abort in a test runner: CI never saw it (it installs a RUNNABLE bun via `setup-bun`, so the
+version read succeeds there — see the correction below; an earlier revision of this line gave the
+opposite mechanism), nothing was deployed, nothing user-facing changed, and no release was
+blocked. `scripts/ship-pir-action-items-gate.sh --branch`
 returns exit 3 (no PIR in the diff), which is consistent.
 
 ### A gate defect found while adjudicating — verified, not load-bearing here, NOT fixed in this PR
@@ -402,6 +404,41 @@ pinning suite is `plugins/soleur/test/ship-incident-pir-gate.test.ts`, which run
 therefore **cannot be run on this host** — the very defect this PR fixes is why. Shipping a
 one-line change to a safety gate with its main suite unrun is a worse trade than carrying the
 finding.
+
+## CORRECTION — "CI omits `setup-bun`" is false, and I inherited it from a stale code comment
+
+> **Superseded 2026-09-17 (#8241):** every earlier statement in this document, in the PR body, in
+> the learning and in `scripts/test-all.sh`'s Version Check comment that CI never saw this defect
+> *because `test-scripts` omits `setup-bun`*. The conclusion holds. The mechanism was backwards.
+
+Measured on `.github/workflows/ci.yml` at this commit:
+
+| Probe | Result |
+|---|---|
+| `setup-bun` step in the `test-scripts` job | **present** — `oven-sh/setup-bun@3d26778…` |
+| the job's test step name | `Run scripts-side tests (bash + python3 + bun)` |
+| `git log -S'setup-bun' -- .github/workflows/ci.yml` | added by #7566 (2026-08-17), earlier by #6325 and #3672 |
+
+So CI is bun-**bearing**. The correct mechanism is the opposite of the one published: CI installs a
+bun that RUNS, `bun --version` succeeds, and the Version Check passes normally. The defect requires
+a bun that resolves and cannot run — a version-manager shim — which is a developer-host shape. The
+defect is still local-host-only; the reason is not the one stated.
+
+**Where it came from, which is the part worth keeping.** I did not invent this. `scripts/test-all.sh`
+already carried, on `main`, the comment *"TEST_GROUP=scripts in CI omits setup-bun by design"* —
+directly above the block I was editing. It was true when written and went false when `setup-bun`
+landed. I read it, believed it, and propagated it into three new artifacts and the PR body without
+running the one-line probe that falsifies it.
+
+`ci.yml` had already corrected its **own** copy of this same claim, in place and with the receipt:
+*"`setup-bun` IS required (#7332). This comment previously asserted 'No `bun` in the scripts
+group'."* The sweep that fixed the workflow's copy never reached the runner's copy, so the stale
+sentence survived in exactly the file whose reader would most rely on it. This is the repo's
+documented propagation-failure shape: the finding is not the stale comment, it is that a correction
+was applied to the instance and not to the class.
+
+All four sites are corrected in this change: the `test-all.sh` comment (pre-existing on `main`),
+this document, the learning, and the PR body.
 
 ## Status
 

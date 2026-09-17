@@ -22,9 +22,13 @@ and it sits above every registration emit. Measured before the fix: all five `--
 returned rc 1 with **zero** records, and the full local gate was unrunnable **in every mode**.
 
 Two consumers that correctly fail closed on the record count then went red for a cause neither
-could name. CI never saw it: the `test-scripts` job omits `setup-bun` by design, so `command -v
-bun` is false there and the block is skipped. A local-host-only defect, latent since the check was
-introduced and observable only once the consumers arrived.
+could name. CI never saw it — but NOT for the reason I first published. I wrote that the
+`test-scripts` job "omits `setup-bun` by design, so `command -v bun` is false there and the block
+is skipped". That is false: `ci.yml`'s `test-scripts` runs `oven-sh/setup-bun` and names its step
+"bash + python3 + bun". The real mechanism is the opposite one — CI installs a bun that actually
+RUNS, so `bun --version` succeeds and the check passes normally. The defect needs a bun that
+resolves and CANNOT run, which is a developer-host shape. Still a local-host-only defect; the
+conclusion survived, the stated cause did not. See the Session Errors entry on inheriting it.
 
 ## Solution
 
@@ -179,6 +183,23 @@ reject for every one — the surviving member is always the inflection whose end
 coincide with the guarded boundary. The same-class recurrence rule applies: the finding here is
 that the documented fix was graded by re-running the words that motivated it, never by generating
 new ones.
+
+**I inherited a stale code comment as a premise and published it four times.** `scripts/test-all.sh`
+carried, on `main`, directly above the block I was editing: *"TEST_GROUP=scripts in CI omits
+setup-bun by design"*. True when written, false since #7566. I read it, believed it, and wrote it
+into the learning, the evidence file, the PR body and a new code comment as the reason CI never
+caught the defect. One probe falsifies it — `ci.yml`'s `test-scripts` job runs `oven-sh/setup-bun`
+and names its step "bash + python3 + bun". The real mechanism is the inverse: CI installs a bun that
+RUNS, so the version read succeeds there. The conclusion ("local-host-only") survived; the stated
+cause was backwards. Worse, `ci.yml` had already corrected its OWN copy of the identical claim, with
+the receipt in the comment — *"`setup-bun` IS required (#7332). This comment previously asserted 'No
+`bun` in the scripts group'"* — so the class had been found and the fix reached one instance only.
+Recovery: all four sites corrected in this PR, with the superseded mechanism recorded rather than
+deleted. **Prevention:** a comment adjacent to the code you are editing is the highest-risk premise
+in the file, because proximity reads as authority and nothing re-derives it. Before repeating any
+claim a comment makes about CI, run the probe — `grep -n 'setup-bun' .github/workflows/ci.yml`
+costs one second. And when a correction lands in one copy of a claim, grep the claim's SUBJECT
+repo-wide the same day: a sibling file's stale twin is where it will be re-read from.
 
 ## Related
 
