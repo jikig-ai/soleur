@@ -201,6 +201,13 @@ if (
 ); then _report "S6d verdict and class are exported to the caller" ok
 else _report "S6d verdict and class are exported to the caller" bad "globals unset or wrong"; fi
 
+# S6e The read refuses a RELATIVE redirect target. Both operands are redirect
+# destinations, so a relative path writes into the caller's CWD — in a workflow, the repo
+# checkout. Asserted in both directions so the guard cannot be a no-op.
+if ( . "$LIB"; git_data_boot_read "relative/rows" "/tmp/e.$$" 123 ) 2>/dev/null; then
+  _report "S6e relative stdout target is refused" bad "accepted a relative target"
+else _report "S6e relative stdout target is refused" ok; fi
+
 # ── S7  HTTP 200 carrying a mid-stream exception is NOT an answer ────────────
 d=$(mkshim s7 "$(spec "0|${ROW}\nCode: 241. DB::Exception: Memory limit exceeded|")")
 run_poll "$d" 2 0 "$ANCHOR" >/dev/null
@@ -259,7 +266,7 @@ else _report "S14a max_polls honoured exactly" bad "made $n14 reads, expected 4"
 
 # ── Assertion floor: printf + exit, never through the helper it backstops ────
 _total=$((pass + fail))
-_FLOOR=31
+_FLOOR=32
 if (( _total < _FLOOR )); then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' "$_total" "$_FLOOR" >&2
   exit 1

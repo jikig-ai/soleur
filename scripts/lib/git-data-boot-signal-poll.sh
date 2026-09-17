@@ -72,6 +72,14 @@ SQL
 # reader's rc. The caller captures it with `rc=$?` as the first command after the call.
 git_data_boot_read() {
   local outfile="$1" errfile="$2" anchor="$3" reader
+  # FAIL CLOSED ON A RELATIVE TARGET. Both operands are redirect destinations, so a relative
+  # path writes into the CALLER's working directory — inside a workflow that is the repo
+  # checkout, which would scatter scratch files into a tree later steps read. The caller
+  # always passes mktemp-rooted absolutes; this refuses anything else rather than trusting it.
+  # The P1b relative-operand ratchet still counts this site (a static reading cannot prove a
+  # positional absolute), and it is baselined with that itemisation rather than silently.
+  case "$outfile" in /*) : ;; *) printf 'git_data_boot_read: refusing a relative stdout target: %s\n' "$outfile" >&2; return 78 ;; esac
+  case "$errfile" in /*) : ;; *) printf 'git_data_boot_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
   reader="${BETTERSTACK_QUERY_SCRIPT:-scripts/betterstack-query.sh}"
   doppler run -p soleur -c prd_terraform -- bash "$reader" "$(git_data_boot_sql "$anchor")" \
     >"$outfile" 2>"$errfile"
@@ -166,8 +174,18 @@ git_data_boot_poll() {
     return 2
   fi
 
+  # ONE scratch directory for the whole loop, two fixed names inside it, truncated per
+  # iteration. The earlier shape made a fresh mktemp pair per poll and `rm -f`d them, which
+  # is 60 create/unlink pairs over a 30-poll budget AND leaves two operands the P1b
+  # relative-operand guard cannot prove safe (they are command-substitution results, so no
+  # static reading shows them absolute). Truncation removes both the churn and the
+  # unprovable operands rather than asserting around them.
+  local scratch
+  scratch="$(mktemp -d -t gdboot.XXXXXXXX)"
+  out="$scratch/rows"; err="$scratch/err"
+
   for (( i = 1; i <= max_polls; i++ )); do
-    out="$(mktemp -t gdboot.out.XXXXXXXX)"; err="$(mktemp -t gdboot.err.XXXXXXXX)"
+    : > "$out"; : > "$err"
     # `rc=$?` MUST be the first command after the read: `$?` binds to the immediately
     # preceding command, and any convenience line between them silently takes its place.
     set +e
@@ -187,7 +205,7 @@ git_data_boot_poll() {
         # caller must not have to parse its own log back to find the row.
         GIT_DATA_BOOT_ROW="$(cat "$out" 2>/dev/null || true)"
         printf 'poll %d/%d: answered, boot_complete row present (dt after the run anchor)\n' "$i" "$max_polls"
-        rm -f "$out" "$err"; break
+        break
       fi
       # A boot_complete row that is NOT after the anchor belongs to a PREVIOUS host
       # generation, and saying so is the point — "no row yet" would read as a slow boot
@@ -216,7 +234,6 @@ git_data_boot_poll() {
       printf 'poll %d/%d: read FAILED rc=%s class=%s body_bytes=%s stderr: %s\n' \
         "$i" "$max_polls" "$rc" "$last_class" "${body_len:-?}" "${err1:-<none>}"
     fi
-    rm -f "$out" "$err"
     (( i < max_polls )) && [[ "$interval_s" != "0" ]] && sleep "$interval_s"
   done
 
