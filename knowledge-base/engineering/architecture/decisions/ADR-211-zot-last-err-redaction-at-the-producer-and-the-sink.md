@@ -76,10 +76,23 @@ control we own.
 2. **Tier gate, first in the chain.** When the tier is `fallback`, emit only the parsed
    `message`. Degrade **closed** — with `jq` unavailable the field becomes `none`, never the raw
    line. **The provenance label does not collapse with it:** when the gate withholds a sample
-   that zot did in fact produce, the tier is tagged `fallback:suppressed`, not `none`. Without
+   that zot did in fact produce, the tier is tagged `suppressed`, not `none`. Without
    that distinction the alarm publishes "zot produced no log output to sample" on a public issue
    in the one path where that sentence is false — an ADR-166 unmeasured claim created by the
    change that exists to remove them. Caught at CLO review, not by the original suite.
+
+   > **Correction (2026-09-17, #7960 / PR #8244).** This clause read `fallback:suppressed` from
+   > adoption until now. The shipped producer emits the **flat** value —
+   > `cloud-init-registry.yml`: `ZOT_ERR_SRC=suppressed` — and its own gate asserts the flat form
+   > explicitly (`zot-disk-heartbeat-redaction.test.sh` G1-8, *"flat enum, no colon grammar"*).
+   > The colon grammar never existed in code. This is not cosmetic: a consumer was written
+   > against the ADR's string. The #7960 delivery probe's tier selector was anchored on
+   > `fallback` alone with a comment citing the colon form as the thing it was guarding against,
+   > so the flat `suppressed` fell through unnoticed — and because `suppressed` is the tag the
+   > gate applies when it works at its strongest, Guard 1 ("the subject must have run") was
+   > unsatisfiable on exactly the hosts where the redaction was most effective. The probe now
+   > accepts `fallback|suppressed` for the subject-ran question and grades only `fallback` for
+   > the leak question, since a suppressed row carries no sample.
 3. **Sink (`zot-restart-loop-alarm.sh` + its workflow).** A credential-header scrub at the
    `emit_and_exit()` chokepoint and again at the workflow publication boundary.
 4. **Render the tier inside `ZOT_ALARM_CAUSE`,** so a tier-4 sample is never presented as a cause.
