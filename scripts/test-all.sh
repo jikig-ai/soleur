@@ -2062,6 +2062,18 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
+  # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
+  # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
+  # IS a host replace), and nothing exercised a mixed-boot window before this harness.
+  #
+  # The suite asserts a BRANCH MARKER per case, not just an exit code, and that is load-bearing:
+  # the probe has six distinct `exit 2` sites, so an exit-code-only suite collapses most of its
+  # cases onto one integer. Measured — removing both `boot_id=unknown` guards leaves the exit code
+  # at 2 and is caught ONLY by the marker. Measured on the first revision, which was exit-code
+  # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
+  # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
+  run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
