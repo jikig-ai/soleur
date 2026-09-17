@@ -47,6 +47,7 @@ trap cleanup_fixture_roots EXIT INT TERM
 # The trap then iterated nothing and removed nothing, i.e. the owning-trap fix
 # was inert while looking correct, which is the exact leak the lint flagged.
 # Measured: the parent saw 0 registered roots.
+new_fixture_root_var() { printf ''; }
 new_fixture_root() {
   local __out_var="$1" __d
   __d="$(mktemp -d -t battery-owed-XXXXXX)" || return 1
@@ -109,39 +110,54 @@ in_fixture() {
 }
 
 # --- gh stub -----------------------------------------------------------------
-# KEYED ON THE REQUESTED SHA. An earlier revision served the same checks.json for
-# any sha, which made the sharpest property in the whole design — "green on THIS
-# tree" — pinned by nothing: pointing the gate at `main` or a literal left every
-# row passing. Serving green for exactly one sha is what makes T11/T12 below able
-# to fail.
+# APPLIES THE REAL `--jq` FILTER over a real API envelope. An earlier revision
+# ran `jq -c '.[]'` and ignored the filter entirely, handing the gate rows with
+# `started_at` intact — a shape the production projection never produces, because
+# it did not select that field. The rows then happened to be ordered newest-last
+# in the fixtures, so the re-run rows passed by pinning ARRAY POSITION while the
+# real gate was sorting on an all-empty key and picking the OLDEST attempt. The
+# seam sat above the exact thing under test.
 #
-# $1 stub dir, $2 required-contexts JSON, $3 check-runs JSON, $4 the sha that
-# JSON is served FOR (any other sha gets an empty set), $5 ruleset exit code.
+# $1 stub dir, $2 required-contexts JSON, $3 check_runs JSON, $4 the sha that
+# JSON is served FOR, $5 statuses JSON, $6 ruleset exit code.
 make_stub() {
-  local dir="$1" required="$2" checks="$3" green_sha="${4:-}" rules_rc="${5:-0}"
+  local dir="$1" required="$2" checks="$3" green_sha="${4:-}" statuses="${5:-[]}" rules_rc="${6:-0}"
   mkdir -p "$dir"
   printf '%s' "$required"  > "$dir/required.json"
   printf '%s' "$checks"    > "$dir/checks.json"
+  printf '%s' "$statuses"  > "$dir/statuses.json"
   printf '%s' "$green_sha" > "$dir/green_sha"
   printf '%s' "$rules_rc"  > "$dir/rules_rc"
   cat > "$dir/gh" <<'STUB'
 #!/usr/bin/env bash
 DIR="$(cd -P "$(dirname "$0")" && pwd -P)"
 joined="$*"
+# Recover the --jq filter the caller passed, so the fixture goes through the SAME
+# projection production uses.
+filter=""
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "--jq" ]] && filter="$a"
+  prev="$a"
+done
 case "$joined" in
   *rules/branches/main*)
     rc="$(cat "$DIR/rules_rc")"
     [[ "$rc" != "0" ]] && exit "$rc"
-    cat "$DIR/required.json"; exit 0 ;;
+    # Build the RAW ruleset envelope the API returns, so the gate's own filter
+    # does the projection. The fixture stays a readable context list.
+    jq -c '[{type:"required_status_checks",parameters:{required_status_checks:.}}]' < "$DIR/required.json" \
+      | jq -c "${filter:-.}"
+    exit 0 ;;
   *check-runs*)
     want="$(cat "$DIR/green_sha")"
-    # Serve the fixture ONLY for the sha it was registered for.
     if [[ -n "$want" && "$joined" == *"$want"* ]]; then
-      jq -c '.[]' < "$DIR/checks.json"
+      # Real envelope: the API returns {"check_runs": [...]}.
+      jq -c '{check_runs: .}' < "$DIR/checks.json" | jq -c "${filter:-.}"
     fi
     exit 0 ;;
   *statuses*)
-    exit 0 ;;   # no legacy statuses in these fixtures
+    jq -c "${filter:-.}" < "$DIR/statuses.json"; exit 0 ;;
 esac
 echo "gh stub: unhandled '$joined'" >&2
 exit 1
@@ -160,8 +176,10 @@ run_gate() {
   printf '%s' "$?"
 }
 
-GREEN_CHECKS='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]'
-TWO_REQUIRED='["test","adr-ordinals"]'
+GREEN_CHECKS='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+# The ruleset shape: {context, integration_id}. integration_id null = unpinned.
+TWO_REQUIRED='[{"context":"test","integration_id":null},{"context":"adr-ordinals","integration_id":null}]'
+PINNED_REQUIRED='[{"context":"test","integration_id":15368}]'
 
 # =============================================================================
 # T1 — the must-SKIP direction. All conditions hold.
@@ -202,17 +220,62 @@ make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
 # merge commit carried 121 check-runs across 63 distinct names. An
 # `any(...succeeded)` test reads `ok` for a context a human would call red.
 # =============================================================================
-RERUN_RED='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"},{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T09:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]'
+RERUN_RED='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$TWO_REQUIRED" "$RERUN_RED" "$(head_sha_of "$WORK")"
 assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
   "T4 a required context passed then was RE-RUN red -> OWED (newest attempt wins)"
 
 # The inverse, so the row above cannot pass by the gate simply ignoring order.
-RERUN_GREEN='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z"},{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T09:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]'
+RERUN_GREEN='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
 make_stub "$STUB" "$TWO_REQUIRED" "$RERUN_GREEN" "$(head_sha_of "$WORK")"
 assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
   "T4b a required context failed then was RE-RUN green -> SKIPPABLE (newest attempt wins, both directions)"
 make_stub "$STUB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK")"
+
+# =============================================================================
+# T4c — NEWEST-BY-TIME, NOT BY ARRAY POSITION.
+#
+# GitHub returns rows newest-FIRST (measured on a57cdb772: cla-evidence descends
+# 11:30 -> 03:00). So a row set whose newest element is FIRST is the production
+# order, and a gate that fell back to array position would pick the oldest. T4/T4b
+# alone cannot see this: their fixtures happen to put the newest last, so they
+# pin position and time simultaneously. This row separates them.
+# =============================================================================
+NEWEST_FIRST_RED='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T09:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$TWO_REQUIRED" "$NEWEST_FIRST_RED" "$(head_sha_of "$WORK")"
+assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+  "T4c newest attempt is red and listed FIRST (production order) -> OWED (time, not array position)"
+
+# =============================================================================
+# T4d — APP IDENTITY. A pinned context is satisfiable only by its own app.
+#
+# All 26 required contexts on this repo pin integration_id 15368. Matching on name
+# alone made the gate strictly MORE permissive than the ruleset it calls
+# authoritative: any installed app with `checks: write` could satisfy a required
+# context by naming a check-run after it.
+# =============================================================================
+FOREIGN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":99999}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$FOREIGN_APP" "$(head_sha_of "$WORK")"
+assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+  "T4d a green check-run from a FOREIGN app cannot satisfy a pinned required context -> OWED"
+
+OWN_APP='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$OWN_APP" "$(head_sha_of "$WORK")"
+assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
+  "T4e the SAME pinned context satisfied by its own app -> SKIPPABLE (both directions)"
+
+# =============================================================================
+# T4f — a legacy commit STATUS must not outrank a check-run.
+#
+# Statuses carry a real created_at while check-runs carried an empty sort key in
+# an earlier revision, so "" < any ISO made every status win regardless of age. A
+# status needs only the `repo:status` scope — the weakest GitHub token there is.
+# =============================================================================
+STALE_STATUS='[{"context":"test","state":"success","created_at":"2020-01-01T00:00:00Z"}]'
+RED_CHECK='[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$RED_CHECK" "$(head_sha_of "$WORK")" "$STALE_STATUS"
+assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
+  "T4f a six-year-old green commit STATUS cannot override a red check-run on a pinned context -> OWED"
 
 # =============================================================================
 # T5 — the infra surface. BOTH prefixes test-all.sh matches.
@@ -234,11 +297,48 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$OWED" \
 # =============================================================================
 # T5c — the infra condition SELF-RETIRES once #6480 lands.
 # =============================================================================
-make_stub "$STUB" '["test","adr-ordinals","infra-validate-required"]' \
-  '[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"},{"name":"infra-validate-required","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]' \
+make_stub "$STUB" '[{"context":"test","integration_id":null},{"context":"adr-ordinals","integration_id":null},{"context":"infra-validate-required","integration_id":null}]' \
+  '[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"infra-validate-required","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK")"
 assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
   "T5c infra diff + infra-validate-required IS required and green -> SKIPPABLE (condition self-retires)"
+
+# =============================================================================
+# T5d — THE BRANCH MUST BE UP TO DATE WITH origin/main.
+#
+# ci.yml has no push trigger for feature branches, so the `test` check-run on a
+# branch head comes from a pull_request run against refs/pull/N/merge — CI
+# verified merge(HEAD, base), not HEAD. The two trees are the same only when
+# origin/main is already an ancestor of HEAD. Without this the gate's headline
+# claim is false whenever main has advanced, which `strict: false` makes ordinary.
+# =============================================================================
+ROOTB="$(new_fixture_root_var)"; new_fixture_root ROOTB
+WORKB="$(build_fixture "$ROOTB")"
+STUBB="$ROOTB/stub"
+# Advance origin/main past the branch point, leaving the branch BEHIND.
+in_fixture "$WORKB" bash -c 'git checkout --quiet main && printf "newer\n" > on-main.md && git add -A && git commit --quiet -m "main advances" && git push --quiet origin main && git checkout --quiet feat-fixture'
+make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
+assert_eq "$(run_gate "$WORKB" "$STUBB")" "$OWED" \
+  "T5d branch is BEHIND origin/main -> OWED (CI verified merge(HEAD,base), not this tree)"
+
+# And the inverse, so the row cannot pass by the gate simply always refusing.
+in_fixture "$WORKB" bash -c 'git merge --quiet origin/main --no-edit'
+make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
+assert_eq "$(run_gate "$WORKB" "$STUBB")" "$SKIPPABLE" \
+  "T5e after merging origin/main in -> SKIPPABLE (up to date, so the merge ref IS this tree)"
+
+# =============================================================================
+# T5f — a file RENAMED OUT of the infra surface still counts as an infra diff.
+#
+# `--name-only` prints only the new path, so the gate would miss it while
+# test-all.sh's predicate catches it. Measured: --name-only gave `moved.tf`;
+# --name-status -M gave `R100 apps/web-platform/infra/a.tf moved.tf`.
+# =============================================================================
+in_fixture "$WORKB" bash -c 'mkdir -p apps/web-platform/infra && printf "x\n" > apps/web-platform/infra/a.tf && git add -A && git commit --quiet -m "add infra file" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
+in_fixture "$WORKB" bash -c 'git mv apps/web-platform/infra/a.tf moved.tf && git commit --quiet -m "rename out of the infra surface"'
+make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
+assert_eq "$(run_gate "$WORKB" "$STUBB")" "$OWED" \
+  "T5f a file renamed OUT of apps/web-platform/infra/ -> OWED (the old path must still count)"
 
 # =============================================================================
 # T6 — a required context ABSENT. The non-vacuity row.
@@ -246,7 +346,7 @@ assert_eq "$(run_gate "$WORK" "$STUB")" "$SKIPPABLE" \
 new_fixture_root ROOT2
 WORK2="$(build_fixture "$ROOT2")"
 STUB2="$ROOT2/stub"
-make_stub "$STUB2" '["test","adr-ordinals","never-ran"]' "$GREEN_CHECKS" "$(head_sha_of "$WORK2")"
+make_stub "$STUB2" '[{"context":"test","integration_id":null},{"context":"adr-ordinals","integration_id":null},{"context":"never-ran","integration_id":null}]' "$GREEN_CHECKS" "$(head_sha_of "$WORK2")"
 assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
   "T6 a required context is ABSENT (nothing failing) -> OWED, not a vacuous skip"
 
@@ -254,12 +354,12 @@ assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
 # T7 — present but not green.
 # =============================================================================
 make_stub "$STUB2" "$TWO_REQUIRED" \
-  '[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]' \
+  '[{"name":"test","status":"completed","conclusion":"failure","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK2")"
 assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" "T7 a required context concluded failure -> OWED"
 
 make_stub "$STUB2" "$TWO_REQUIRED" \
-  '[{"name":"test","status":"in_progress","conclusion":null,"started_at":"2026-01-01T00:00:00Z"},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z"}]' \
+  '[{"name":"test","status":"in_progress","conclusion":null,"started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"adr-ordinals","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}}]' \
   "$(head_sha_of "$WORK2")"
 assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
   "T7b a required context still in_progress -> OWED (not-yet-green is not green)"
@@ -267,7 +367,7 @@ assert_eq "$(run_gate "$WORK2" "$STUB2")" "$OWED" \
 # =============================================================================
 # T8 — the ruleset cannot be read. UNDECIDABLE, never a skip.
 # =============================================================================
-make_stub "$STUB2" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK2")" 1
+make_stub "$STUB2" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORK2")" "[]" 1
 assert_eq "$(run_gate "$WORK2" "$STUB2")" "$UNDECIDABLE" \
   "T8 ruleset unreadable -> UNDECIDABLE (caller treats as OWED), never SKIPPABLE"
 
@@ -342,4 +442,4 @@ done <<< "$AUTHORITY_PREFIXES"
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 19
+print_results 26

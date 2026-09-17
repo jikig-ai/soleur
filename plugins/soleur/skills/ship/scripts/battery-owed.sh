@@ -41,7 +41,15 @@ VERDICT_OWED=0
 VERDICT_SKIPPABLE=42   # see the exit contract above: NOT 1, deliberately
 VERDICT_UNDECIDABLE=2
 
-say() { printf 'battery-owed: %s\n' "$*"; }
+# Strip C0 controls, DEL and the Unicode line separators before printing.
+# Check-run names come from workflow YAML — which, on a PR, arrives IN THE DIFF
+# UNDER REVIEW — and ruleset context strings come from repo admin config. Neither
+# is trusted to be single-line: a newline inside one forges a second
+# `battery-owed: …` line in the transcript, and the obvious thing to forge is a
+# SKIPPABLE verdict. The exit code is unaffected (and SKILL.md branches on it),
+# but a forged line sitting beside the caller's own echo is worth denying.
+_sanitize() { printf '%s' "$*" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+say() { printf 'battery-owed: %s\n' "$(_sanitize "$*")"; }
 
 owed()        { say "OWED — $1";        exit "$VERDICT_OWED"; }
 skippable()   { say "SKIPPABLE — $1";   exit "$VERDICT_SKIPPABLE"; }
@@ -77,7 +85,7 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a
 # exact sha) rather than a prediction about what a later phase will do.
 
 # ---------------------------------------------------------------------------
-# Condition 1 — the local tree must BE what CI verified.
+# Condition 1 — the working tree must BE the HEAD commit.
 #
 # This is the sharpest of the four. A green run on an ancestor SHA is not
 # evidence about your working tree, and nothing downstream can recover from
@@ -108,7 +116,32 @@ HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 # returned UNDECIDABLE — so a flaky link cost a battery.
 
 # ---------------------------------------------------------------------------
-# Condition 2 — the infra shard, where this battery is the ONLY BLOCKING gate.
+# Condition 2 — THE BRANCH MUST BE UP TO DATE WITH origin/main.
+#
+# This is what makes the gate's headline claim TRUE, and without it the claim is
+# false on this repo. `.github/workflows/ci.yml` triggers on `push` for **main
+# only**, plus `pull_request` — so a feature branch gets no push-event CI at all,
+# and the `test` check-run on its head comes from a pull_request run, which
+# GitHub builds against `refs/pull/N/merge`. CI therefore verified
+# merge(HEAD, base-at-run-time), NOT the HEAD tree the local battery would run.
+#
+# Those two trees are identical exactly when origin/main is already an ancestor of
+# HEAD: the merge is then a fast-forward and its tree IS HEAD's tree. When main
+# has advanced they differ, and "CI verified this exact tree" stops being true —
+# which matters because the CI Required ruleset is `strict: false`, so a branch
+# can merge while behind and this divergence is ordinary rather than exotic.
+#
+# Refusing here rather than reasoning about whether the merge tree is "close
+# enough" keeps the gate's claim and its evidence the same sentence. The cost is
+# that a behind branch runs the battery — which is the status quo, not a
+# regression.
+# ---------------------------------------------------------------------------
+if ! git merge-base --is-ancestor refs/remotes/origin/main HEAD 2>/dev/null; then
+  owed "origin/main is not an ancestor of HEAD; CI's pull_request run verified merge(HEAD, base), not this tree"
+fi
+
+# ---------------------------------------------------------------------------
+# Condition 3 — the infra shard, where this battery is the ONLY BLOCKING gate.
 #
 # `apps/web-platform/infra/`'s registered suites are run by
 # .github/workflows/infra-validation.yml on every PR touching the path, but that
@@ -134,13 +167,24 @@ HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
   undecidable "origin/main is unresolvable; cannot scope the diff"
 fi
-CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null)"
+# `--name-status -M` and BOTH path columns, not `--name-only`: a file renamed OUT
+# of the infra surface prints only its new path under --name-only, so the gate
+# would miss it while test-all.sh's own predicate catches it. Measured on a probe
+# repo: --name-only gave `moved.tf`; --name-status -M gave
+# `R100  apps/web-platform/infra/a.tf  moved.tf`.
+CHANGED="$(git diff --name-status -M origin/main...HEAD 2>/dev/null | cut -f2-)"
 rc=$?
 (( rc == 0 )) || undecidable "could not compute the branch diff (rc=$rc)"
+# An EMPTY diff is not "no infra paths" — it is "HEAD is an ancestor of
+# origin/main" (already merged, or origin/main fetched past the branch point), in
+# which case condition 2 is a no-op regardless of what the branch touched.
+if [[ -z "${CHANGED//[[:space:]]/}" ]] && ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+  undecidable "the branch diff is empty but HEAD is not an ancestor of origin/main; cannot scope the infra check"
+fi
 INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra\.yml$)'
 
 # ---------------------------------------------------------------------------
-# Condition 3 — every required context PRESENT and green on this exact SHA.
+# Condition 4 — every required context PRESENT and green on this exact SHA.
 #
 # PRESENCE IS ASSERTED, never inferred from "nothing is failing". An empty
 # rollup on a just-pushed head satisfies "no failures" vacuously, so a
@@ -154,6 +198,12 @@ INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra
 # ---------------------------------------------------------------------------
 command -v gh >/dev/null 2>&1 || undecidable "gh not on PATH; cannot read CI state"
 command -v jq >/dev/null 2>&1 || undecidable "jq not on PATH; cannot read CI state"
+# `timeout` is coreutils and is NOT present on a stock macOS. Without this guard
+# the calls below exit 127 and land in the ruleset branch, which then blames
+# GitHub for a missing binary — and on that host the gate is permanently
+# UNDECIDABLE, so the feature silently never works. This ships to customers'
+# machines, where macOS-without-coreutils is the common case.
+command -v timeout >/dev/null 2>&1 || undecidable "timeout (coreutils) not on PATH; cannot bound the API calls"
 
 # EVERY NETWORK CALL IS BOUNDED. `gh` imposes no timeout of its own: measured
 # against a blackholed endpoint, `gh api --hostname 10.255.255.1 …` was still
@@ -162,8 +212,19 @@ command -v jq >/dev/null 2>&1 || undecidable "jq not on PATH; cannot read CI sta
 # satisfied — try/catch bounds exceptions, not time. rc 124 from `timeout` needs
 # no special handling: it is non-zero, so each call falls into the branch it
 # already has (undecidable for the first two, an empty set for statuses).
-REQUIRED_JSON="$(timeout 15 gh api 'repos/{owner}/{repo}/rules/branches/main' \
-  --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context]' 2>/dev/null)"
+# {context, integration_id} — NOT the context alone. All 26 required contexts on
+# this repo pin integration_id 15368 (GitHub Actions), and GitHub only counts a
+# check-run toward the requirement when it comes from that app. Matching on name
+# alone made this gate strictly MORE PERMISSIVE than the ruleset it calls
+# authoritative, which is the unsafe direction: any installed app with
+# `checks: write` could satisfy a required context by naming a check-run after it.
+# --paginate here too. Without it a rules array exceeding one page truncates and
+# the gate requires FEWER contexts than the ruleset does — under-requiring, the
+# unsafe direction, and the same failure this file rejects required-checks.txt
+# for. The union across every ruleset on the branch is deliberate: the CLA and CI
+# rulesets each contribute contexts.
+REQUIRED_JSON="$(timeout 15 gh api --paginate 'repos/{owner}/{repo}/rules/branches/main' \
+  --jq '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[] | {context: .context, integration_id: .integration_id}' 2>/dev/null | jq -s '.')"
 rc=$?
 (( rc == 0 )) || undecidable "could not read the branch ruleset (rc=$rc)"
 
@@ -184,7 +245,7 @@ REQUIRED_COUNT="$(jq 'length' <<<"$REQUIRED_JSON" 2>/dev/null)"
 # the `timeout`, not a page cap. The set is self-limiting anyway (the API
 # defaults to filter=latest, so rows scale with distinct checks × re-runs).
 CHECKS="$(timeout 30 gh api --paginate "repos/{owner}/{repo}/commits/${HEAD_SHA}/check-runs" \
-  --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion}' 2>/dev/null | jq -s '.')"
+  --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion, started_at: .started_at, app_id: (.app.id // null)}' 2>/dev/null | jq -s '.')"
 rc=$?
 (( rc == 0 )) || undecidable "could not read check-runs for ${HEAD_SHA:0:9} (rc=$rc)"
 
@@ -203,8 +264,13 @@ rc=$?
 eval_missing() {
   jq -r --argjson req "$REQUIRED_JSON" '
     [ $req[] as $r
-      | { name: $r,
-          state: ( [ .[] | select(.name == $r) ]
+      | { name: $r.context,
+          state: ( [ .[]
+                     | select(.name == $r.context)
+                     # App identity: a required context pinned to an integration
+                     # is satisfiable ONLY by that app. A row with no app id (a
+                     # legacy commit status) can satisfy an UNPINNED context only.
+                     | select($r.integration_id == null or .app_id == $r.integration_id) ]
                    | sort_by(.started_at // "")
                    | last
                    | if . == null then "ABSENT"
@@ -221,7 +287,7 @@ rc=$?
 
 if [[ -n "$MISSING" ]]; then
   STATUSES="$(timeout 15 gh api --paginate "repos/{owner}/{repo}/commits/${HEAD_SHA}/statuses" \
-    --jq '.[] | {name: .context, status: "completed", conclusion: (if .state == "success" then "success" else .state end), started_at: .created_at}' 2>/dev/null | jq -s '.')"
+    --jq '.[] | {name: .context, status: "completed", conclusion: (if .state == "success" then "success" else .state end), started_at: .created_at, app_id: null}' 2>/dev/null | jq -s '.')"
   rc=$?
   (( rc == 0 )) || STATUSES='[]'
   ALL="$(jq -s 'add' <<<"$CHECKS"$'\n'"$STATUSES" 2>/dev/null)"
@@ -248,7 +314,10 @@ if [[ -n "$MISSING" ]]; then
 fi
 
 # Condition 2, evaluated here because it is predicated on the LIVE required set.
-if ! jq -e --arg c "infra-validate-required" 'index($c) != null' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
+# `any(.[]; .context == $c)`, not `index($c)`: REQUIRED_JSON is an array of
+# {context, integration_id} OBJECTS, so a bare-string index never matches and the
+# condition would never retire.
+if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
   if printf '%s\n' "$CHANGED" | grep -qE "$INFRA_RE"; then
     owed "diff touches the infra surface and infra-validate-required is NOT in the live required set (#6480) — the battery is its only BLOCKING gate"
   fi

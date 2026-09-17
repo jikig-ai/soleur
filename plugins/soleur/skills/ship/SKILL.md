@@ -366,6 +366,15 @@ short-circuits under `CI`). When the tree you are about to ship is byte-identica
 what CI already verified, re-running those shards locally cannot change the merge
 decision.
 
+**One subtlety that the gate now enforces rather than assumes.** `ci.yml` has no
+push trigger for feature branches, so the `test` check-run on a branch head comes
+from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. CI
+therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
+run, and those are the same tree only when `origin/main` is already an ancestor of
+HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
+a claim it establishes rather than one it assumes. The practical consequence: to
+get the saving on a re-run, sync with `main` first.
+
 Branch on the exit code, never on the prose:
 
 ```bash
