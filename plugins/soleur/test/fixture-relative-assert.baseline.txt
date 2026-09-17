@@ -266,6 +266,7 @@
 10	plugins/soleur/test/scripts-shard-totality-mutations.sh
 2	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
+5	plugins/soleur/test/ship-battery-owed.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
 3	plugins/soleur/test/worktree-manager-atomic-config.test.sh
