@@ -117,10 +117,56 @@ if [[ -z "$DECODED" ]]; then
   exit 2
 fi
 
+# TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
+# would otherwise win the greedy match, select the delivered branch, and close this tracker
+# while Phase B had never been applied -- asserting a control is live on a host never replaced.
+# The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
+# which is correct: that is the untrusted content it exists to measure.
+#
+# DERIVED BEFORE THE TIER-4 SELECTION, and that ordering is the whole point of #7960's first
+# real post-replace run. Previously this sat BELOW the LEAKY computation, so `LEAKY` counted
+# header-bearing rows across the entire $WINDOW while `NEWEST_BOOT` described only the newest
+# row. The instant a replace lands mid-window those two describe DIFFERENT HOSTS: the newest
+# row selects the delivered branch, and the leak check then grades ~24h of PRE-replace output
+# that the redaction was never in force for -- a guaranteed false FAIL ("the redaction shipped
+# and is not working") on the one run that matters. Measured 2026-09-17: the replace applied at
+# 11:21Z and the 18:00Z sweep would have graded a window ~93% pre-replace.
+#
+# It cuts the other way too, which is why scoping BOTH operands matters rather than just the
+# leak check: an unscoped TIER4_ROWS could satisfy Guard 1 ("the subject must have run")
+# entirely from rows emitted by a host that no longer exists, and report PASS on evidence the
+# delivered producer never produced.
+NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
+
+# No boot_id anywhere in the decoded rows means delivery is UNMEASURABLE, and an unmeasurable
+# delivery state must not be graded. Without this the scoping below would select zero rows and
+# fall into Guard 1, which reports "no tier-4 row in the window" -- a true statement about the
+# wrong question.
+if [[ -z "$NEWEST_BOOT" ]]; then
+  echo "TRANSIENT: no boot_id on any decoded SOLEUR_ZOT_DISK row, so delivery cannot be" >&2
+  echo "           established and the leak check cannot be scoped to the delivered host." >&2
+  echo "           Reporting UNKNOWN rather than grading rows of unknown provenance." >&2
+  exit 2
+fi
+
 # Bound the trusted region the way scripts/lib/zot-telemetry-parse.sh does: `zot_last_err` is
 # emitted LAST and is free text, so a crafted log line could otherwise spoof a field a verdict
 # keys on. Here we WANT the tail, so cut the other direction and keep it explicit.
-TIER4_ROWS="$(printf '%s\n' "$DECODED" | grep -E 'zot_last_err_src=fallback( |$)' || true)"
+# SCOPED TO THE DELIVERED BOOT. The boot_id is read from each row's trusted region (the tail is
+# cut first, exactly as NEWEST_BOOT does above) but the FULL row is what gets printed, because
+# LEAKY below must still read the untrusted tail it exists to measure.
+TIER4_ROWS="$(printf '%s\n' "$DECODED" \
+  | grep -E 'zot_last_err_src=fallback( |$)' \
+  | awk -v want="$NEWEST_BOOT" '
+      {
+        head = $0
+        i = index(head, " zot_last_err=")
+        if (i > 0) head = substr(head, 1, i - 1)
+        if (match(head, / boot_id=[^ ]+/)) {
+          b = substr(head, RSTART + 9, RLENGTH - 9)
+          if (b == want) print $0
+        }
+      }' || true)"
 TOTAL_ROWS="$(printf '%s\n' "$DECODED" | grep -cF 'SOLEUR_ZOT_DISK' || true)"
 [[ -n "$TOTAL_ROWS" ]] || TOTAL_ROWS=0
 
@@ -128,8 +174,10 @@ TOTAL_ROWS="$(printf '%s\n' "$DECODED" | grep -cF 'SOLEUR_ZOT_DISK' || true)"
 # `zot_last_err_src=fallback` would also match a future qualified form by prefix.
 if [[ -z "$TIER4_ROWS" ]]; then
   echo "TRANSIENT: $TOTAL_ROWS SOLEUR_ZOT_DISK row(s) in $WINDOW, but NONE at tier 4" >&2
-  echo "           (zot_last_err_src=fallback). Tier 4 is the only tier the gate changes, so" >&2
-  echo "           this window cannot grade it. Not a pass." >&2
+  echo "           (zot_last_err_src=fallback) on the current boot ($NEWEST_BOOT). Tier 4 is" >&2
+  echo "           the only tier the gate changes, so this window cannot grade it. Not a pass." >&2
+  echo "           NOTE: rows from an EARLIER boot are deliberately excluded — grading them" >&2
+  echo "           would describe a host this verdict is not about." >&2
   exit 2
 fi
 
@@ -156,12 +204,6 @@ LEAKY="$(printf '%s\n' "$TIER4_ROWS" | sed -n 's/.* zot_last_err=//p' | grep -cE
 # environment; with neither it nor an override present the probe reports an UNKNOWN delivery state
 # rather than asserting "NOT YET DELIVERED", because asserting a delivery state it cannot measure
 # is exactly the unmeasured claim this whole change removes.
-# TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
-# would otherwise win the greedy match, select the delivered branch, and close this tracker
-# while Phase B had never been applied -- asserting a control is live on a host never replaced.
-# The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
-# which is correct: that is the untrusted content it exists to measure.
-NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
 # BAKED IN, not passed. sweep-followthroughs.sh runs every probe under `env -i` with only the
 # names declared in the directive's `secrets=`, so an exported SOLEUR_FT_BASELINE_BOOT is stripped
 # before this script starts. Reading it from the environment alone therefore left BASELINE empty on
@@ -184,7 +226,7 @@ if [[ -n "$BASELINE" && -n "$NEWEST_BOOT" && "$NEWEST_BOOT" != "$BASELINE" ]]; t
     exit 1
   fi
   echo "PASS: producer delivered (boot_id $NEWEST_BOOT != baseline $BASELINE);"
-  echo "      $TIER4_N tier-4 row(s) in $WINDOW, none carrying header content."
+  echo "      $TIER4_N tier-4 row(s) on this boot in $WINDOW, none carrying header content."
   exit 0
 fi
 
@@ -223,7 +265,7 @@ if [[ -n "$BASELINE" && "$NEWEST_BOOT" == "$BASELINE" ]]; then
   exit 2
 fi
 
-echo "PASS: $TIER4_N tier-4 row(s) in $WINDOW, none carrying header content."
+echo "PASS: $TIER4_N tier-4 row(s) on this boot in $WINDOW, none carrying header content."
 echo "      Phase B is delivered on this host and the tier gate is in force."
 echo "      Scope: this grades DELIVERY. Correctness is graded pre-merge by"
 echo "      apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh."
