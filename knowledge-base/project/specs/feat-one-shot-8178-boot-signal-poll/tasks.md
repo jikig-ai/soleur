@@ -75,7 +75,10 @@ own, so it defaults fail-closed to `cross-domain` (TR2).
       guard at `DOPPLER_TOKEN` (its text currently says "Fix the workflow secrets").
 - [ ] 3.3 Delete `2>/dev/null`; route stderr to a file under `${RUNNER_TEMP}`.
 - [ ] 3.4 Branch the per-poll line on whether the read answered.
-- [ ] 3.5 Pin `BS_TABLE` and `BS_TABLE_S3` unconditionally.
+- [ ] 3.5 Pin `BS_TABLE` and `BS_TABLE_S3` unconditionally, assigning from
+      `scripts/lib/betterstack-sources.sh`'s `BS_GIT_DATA_TABLE` /
+      `BS_GIT_DATA_TABLE_S3` — do NOT re-spell the identifiers as literals (FR9,
+      deepen-pass finding). The follow-through script sources the same declaration.
 - [ ] 3.6 Add `Stamp boot-trail run anchor (git-data create)` immediately before apply.
 
 ## Phase 4 — Wire the replace job (its own commit)

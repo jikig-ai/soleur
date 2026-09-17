@@ -14,6 +14,46 @@ requires_cpo_signoff: true
 
 # git-data boot-signal poll: make the read work, make its failure self-describing
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-17
+**Review rounds folded in:** 4 (CTO domain review, SpecFlow audit, scoped advisor
+consult, and a four-agent plan-review panel), plus this deepen pass.
+
+### Key improvements
+
+1. **A rival explanation was tested instead of assumed.** ADR-192 records that reads
+   against this table answered HTTP 500 `CLUSTER_DOESNT_EXIST` because the source had
+   never stored a row — dated before both cited runs, and indistinguishable from an
+   auth failure through `--fail-with-body`. Measured and refuted: the table holds 31
+   rows before 2026-09-15, oldest `dt 2026-09-04 15:15:56`.
+2. **The plan was cut back twice.** A pre-apply probe, a typed-confirm-token override,
+   a `mixed` outcome, an `ingest_dark` outcome with its control read, an early break,
+   and a pre-merge diagnostic step were all removed — each because a reviewer showed it
+   bought no property, or inverted on this source. `## What was cut` records them.
+3. **The library moved to `scripts/lib/`** after `lint-diagnosis-claims.sh` (the
+   blocking AP-021 hook) and `lint-workflow-errexit-capture.py` (AP-022) were found to
+   be path-scoped in ways that would have moved this change's prose and rc capture out
+   of their reach — in a plan about diagnostic honesty.
+4. **The run anchor became load-bearing and correctly typed.** `dt` is `DateTime64(6)`,
+   so a bare epoch integer would have matched every row while still passing a hermetic
+   stub, and `dt` is emitter-assigned, so the anchor needs a clock-skew allowance.
+5. **The follow-through predicate was rewritten** after it was found already satisfiable
+   by a row that predates the fix — #8178 could have closed without the poll ever
+   running.
+
+### New considerations discovered in this pass
+
+- `scripts/lib/betterstack-sources.sh` already owns `BS_GIT_DATA_TABLE` and
+  `BS_GIT_DATA_TABLE_S3`. FR9 originally re-spelled both as literals; the library
+  exists because #7855 found one source spelled three ways joined only by prose.
+- The classifier's rc partition is eight classes, not five, and needs a
+  `table-missing` token for the `CLUSTER_DOESNT_EXIST` shape this issue's own history
+  produced.
+- The cutover suite inlines `_bs_read_remedy`'s *text* into a generated driver rather
+  than calling it, and the hermetic suite must stub `doppler` as well as the query
+  script — otherwise every row grades rc=127.
+
 ## Overview
 
 The git-data host's boot-signal poll is the only in-job evidence that a newly born or
@@ -886,8 +926,13 @@ editing a file the suite reads.
   risk for a false-`silent` risk — and `silent` routes a dispatch toward replacing the
   fleet's most irreplaceable data store. 120 s is far below the two-hour predecessor
   window the anchor exists to exclude, so the #6969 property is preserved.
-- **FR9** — `BS_TABLE` and `BS_TABLE_S3` are pinned unconditionally, not defaulted:
-  an inherited value cannot re-point either arm.
+- **FR9** — `BS_TABLE` and `BS_TABLE_S3` are pinned unconditionally, not defaulted, so
+  an inherited value cannot re-point either arm — and the pin is **assigned from
+  `scripts/lib/betterstack-sources.sh`'s `BS_GIT_DATA_TABLE` / `BS_GIT_DATA_TABLE_S3`,
+  not re-spelled as literals**. That library already owns both identifiers, and it
+  exists because #7855 found the same source spelled three independent ways joined
+  only by prose. The poll spells them inline on main today; this change must not add a
+  fourth spelling, and the follow-through script sources the same declaration.
 - **FR10** — `git_data_host_replace` carries `id: apply` on its apply step, `id: poll`
   on the new poll step, the anchor stamp, and the `Dispatch summary` empty-outcome
   backstop and outcome-pair case with their `APPLY_OUTCOME` / `POLL_OUTCOME` `env:`
@@ -1258,6 +1303,59 @@ carried by the follow-through directive, not by a status flip.
 - A learning file capturing the class: an instrument whose only failure channel was
   `2>/dev/null`, a verdict predicate that reset on success, and a plan that had to be
   cut back twice before it was the size of its defect.
+
+## Deepen-Plan Pass (2026-09-17)
+
+### Precedent diff (gate 4.4)
+
+The plan prescribes a pattern-bound behaviour — a sourced shell library under
+`scripts/lib/` consumed by a workflow — so the precedent was grepped rather than
+assumed.
+
+| Prescribed shape | Precedent on `main` | Plan response |
+|---|---|---|
+| A library computing its own directory | `scripts/lib/betterstack-absence.sh` uses `_bs_absence_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` | Adopt verbatim rather than resolving by CWD — `cutover-inngest.sh` runs under `set -euo pipefail` from the repo root and a CWD-relative resolve is the fragile form |
+| How a consumer sources it | `# shellcheck source=scripts/lib/<name>.sh` directive plus an absolute base (`"${REPO_ROOT}/scripts/lib/…"` in followthroughs, `"${GITHUB_WORKSPACE}/…"` in the workflow) | Adopt both; the shellcheck directive is what keeps the sourced symbols analysable |
+| A source identity (table / source id / ingest URL) | **`scripts/lib/betterstack-sources.sh` already declares `BS_GIT_DATA_SOURCE_ID="2734275"`, `BS_GIT_DATA_TABLE`, `BS_GIT_DATA_TABLE_S3`** | **Finding — folded into FR9.** The plan's original FR9 would have re-spelled both identifiers as literals. That library exists precisely because #7855 found one source spelled three independent ways joined only by prose; this change would have made it four. FR9 now assigns from the declaration. |
+| The three-state read verdict | `scripts/lib/betterstack-absence.sh` (ADR-192) | Consumed, not re-derived; see `## The terminal-branch decision` |
+| A classifier for a failed read | `_bs_read_remedy()` in `scripts/cutover-inngest.sh` | Partition extracted as `bs_read_classify`; the printer stays put |
+
+The plan prescribes no SQL `SECURITY DEFINER`/`INVOKER`, no atomic-write sequence, no
+lock or circuit-breaker shape, and no new scheduled job, so the remaining precedent
+classes in gate 4.4 do not apply.
+
+### Gate dispositions
+
+| Gate | Result |
+|---|---|
+| 4.5 Network-outage deep-dive | **Skip.** No trigger pattern in `## Overview` or `## Problem Statement` (measured: 0 matches). The transport faults this plan classifies (DNS/connect/timeout/TLS at rc 6/7/28/35) are named in the classifier, not diagnosed as the defect, and the change drives no `terraform apply` against a resource carrying a `connection`/`provisioner` block. |
+| 4.55 Downtime & cutover | **Skip, evaluated not assumed.** The change adds a read and a stamp to two dispatch jobs; it introduces no reboot/replace class, no lock-taking DDL and no router change. It does make `git_data_host_replace` able to go RED, which is a *verification* change rather than an availability one, and `## Risk Analysis` prices it. |
+| 4.6 User-Brand Impact | **Pass.** Section present, 18 non-empty lines, threshold `single-user incident`, both artifacts and the exposure vector named concretely. |
+| 4.7 Observability | **Pass.** All five fields present with non-placeholder values; `discoverability_test.command` starts with `bash` (allowlisted) and carries no `ssh`. |
+| 4.8 PAT-shaped variable | **Pass.** Zero matches for any PAT-shaped variable, `TF_VAR_*` form or literal token shape. |
+| 4.9 UI wireframe | **Skip.** No UI-surface path in `## Files to Create` / `## Files to Edit` (measured: 0 matches). |
+| 4.10 Encryption posture | **Skip, trigger evaluated.** No `.tf`, `supabase/migrations/*.sql`, `cloud-init*.yml` or `docker-compose*.yml` in either Files list, and the change introduces no persistent store and no new cross-component connection — it changes which credential store feeds an existing TLS-pinned read. The section records that evaluation rather than asserting a posture it does not have. |
+| 4.11 Guard Contract | **Pass.** `scripts/lint-guard-contract.py` green (1 guard entry). Adequacy read: the Assembly names the chokepoint (the library) and specifies that the suite derives the call-site set *by grepping the workflow* rather than by listing the two steps, so a third job added later is covered by the same census — structural, not a member snapshot. |
+
+### Citation sweep
+
+Every citation was resolved live in this pass rather than carried from memory.
+
+- **Rule IDs** — `cq-assert-anchor-not-bare-token` and `hr-no-ssh-fallback-in-runbooks`
+  both resolve to active `[id: …]` entries in `AGENTS.md`. No retired or fabricated ID.
+- **ADRs** — ADR-149, ADR-192 and ADR-128 all exist under
+  `knowledge-base/engineering/architecture/decisions/`.
+- **Issues and PRs** — #8178, #8010, #6982, #7772, #7855, #7674, #7942, #8252, #6969
+  and #7898 all resolve, and each title matches the role the plan gives it. #7674 is
+  cited for the `unreadable`-vs-`silent` split, which `flush_latch_decide()`'s own
+  comment attributes to that number.
+- **Grep-shaped acceptance criteria** — FR7 scopes with `':!knowledge-base'`, FR1
+  extracts the step block by an explicit `awk` range with a non-vacuity assertion, and
+  QG10 carves out this feature's own pipeline-written spec artifacts. No AC greps a
+  scope that would match the plan's own prose.
+- **Every `knowledge-base/` path cited in this plan resolves on disk** (checked; only
+  this feature's not-yet-written `tasks.md` / `session-state.md` are excluded, and
+  `tasks.md` now exists).
 
 ## References & Research
 
