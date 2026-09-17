@@ -13,10 +13,17 @@
 #   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)
 #   1 = FAIL       (>= 1 skip observed; the deferred pre-bake / S1 extension is now owed)
 #   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample)
+#  78 = REFUSED    (running under `set -x` with a live GH_TOKEN -- see the guard below, #7797)
 #
-# There is no `*` row. Every exit this script performs is one of the three above, so any
-# OTHER code means the script did not run to a verdict (127 missing, 126 not executable,
-# 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
+# 78 IS A FOURTH ROW, ADDED AT REVIEW (#7535 Phase 2). It is deliberately NOT folded into
+# TRANSIENT: a refusal is a decision this script made about its own safety, not a failure to
+# reach a verdict, and it is fully determined by how the caller invoked it. Amending this block
+# rather than leaving it is the point -- the paragraph below says any code outside the list means
+# the script did not run to a verdict, and an unamended list would have made that claim false for
+# the one exit that is most obviously deliberate.
+#
+# Beyond those four there is no `*` row. Any OTHER code means the script did not run to a verdict
+# (127 missing, 126 not executable, 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
 # than folding it into TRANSIENT -- see scheduled-rehearsal-skip-monitor.yml. Note that
 # sweep-followthroughs.sh maps any other exit to TRANSIENT by ITS documented contract; that
 # is safe there because leaving an issue open is conservative, whereas in the monitor
@@ -27,9 +34,10 @@
 #
 # Close criteria:
 #   - Sample the most recent successful post-merge runs of infra-validation.yml on main
-#   - Grep their logs for EVERY marker in SKIP_MARKERS (T5 and S1 today, enumerated
-#     below) -- not the single `SKIP (loud): T5 MUTATION` literal this once used,
-#     which made the probe blind to the S1 arm #7572 makes skip-eligible
+#   - Grep their logs for EVERY marker in SKIP_MARKERS (T5, S1 and T17 today,
+#     enumerated below) -- not the single `SKIP (loud): T5 MUTATION` literal this
+#     once used, which made the probe blind to the S1 arm #7572 makes skip-eligible
+#     and would equally have missed the T17 arm #7535 Phase 2 makes skip-eligible
 #   - 0 occurrences  => PASS (the skip is not persistent)
 #   - >=1 occurrence => FAIL (the deferred pre-bake / S1 extension is owed)
 #

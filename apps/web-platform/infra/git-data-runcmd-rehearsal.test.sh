@@ -1508,6 +1508,37 @@ _T17M_ENV_RCS='100 125'
 # _S1_MARKER, and for the same reason: this arm's only assertion is `[ -s capture.log ]`, and an
 # empty capture is exactly what BOTH causes produce.
 _T17M_MARKER='T17M_APT_OK'
+# The FIXTURE marker. `drive.noguard.sh` is `drive.sh` with ONLY the rc-guard line removed, so it
+# still carries the :8099 bind guard, which exits 2 with this text. Without a rung keyed on it a
+# bind failure presents as marker-PRESENT + empty capture and lands on the vacuity `else` --
+# asserting "apt succeeded, so this is a genuine vacuity finding" about a deterministic fixture
+# defect. That is this issue's own misattribution class relocated from apt onto the capture
+# server, and stated more confidently than before the fix. Same rung, same reason, as T5.
+_T17M_FIXTURE_MARKER='FIXTURE: capture server never bound :8099'
+# PIN BOTH MARKERS TO THEIR PRODUCERS (review). The execution marker's producer is a bare literal
+# inside a single-quoted `bash -c` body, which takes no expansion, so nothing tied the two
+# together: renaming `_T17M_MARKER` and missing the echo would leave the grep permanently
+# unmatched, turning a genuine vacuity finding into "harness defect" and -- on any run whose rc
+# lands in _T17M_ENV_RCS -- into a silent green skip. `$0` is this file, which is where that
+# literal lives. Anchored so prose naming the marker cannot satisfy it.
+grep -qE "^ +echo ${_T17M_MARKER}\$" "$0" || {
+  echo "FAIL: the T17 mutation execution marker is absent from the in-container body — the arm would read every run as a non-execution" >&2
+  exit 1; }
+grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/drive.noguard.sh" || {
+  echo "FAIL: the fixture marker is absent from the mounted T17 driver — the fixture-defect rung is unreachable, so a deterministic bind failure would be reported as a vacuity finding" >&2
+  grep -n 'FIXTURE' "$TMP/drive.noguard.sh" >&2 || true
+  exit 1; }
+# MOUNT SOURCES EXIST (review). Same reason T5 does this at its own spin: docker exits 125 for
+# BOTH a failed image pull (environment) and a bad `-v` source (a defect in THIS file), and rc
+# alone cannot tell them apart. Since 125 is allowlisted in _T17M_ENV_RCS, a mistyped mount would
+# produce no marker, land on the env-decline rung and report a green skip forever. The paths are
+# static and this file owns all of them, so asserting them here removes the harness half of 125
+# rather than trying to classify docker's error text.
+for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noguard.sh" "$TMP/out"; do
+  [ -e "$_m" ] || {
+    echo "FAIL: T17 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
+    exit 1; }
+done
 docker run --rm \
   -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
@@ -1552,6 +1583,16 @@ _t17m_rc_note="docker rc=${_t17m_rc} (measured classes: 125 docker CLI/image pul
 # same construction as _t5m_tail, and it keeps the arm clear of the shell-capture-exit lint.
 _t17m_tail="$(tail -3 "$TMP/out/t17m.stdout" 2>/dev/null)"
 if [ -s "$TMP/out/capture.log" ]; then pass
+elif grep -qF "$_T17M_FIXTURE_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null; then
+  # FIXTURE RUNG, ABOVE BOTH MARKER RUNGS AND ABOVE THE VACUITY ELSE (review). The capture
+  # server failing to bind is DETERMINISTIC and actionable, so it must neither be absorbed into
+  # the environment bucket nor asserted as a vacuity finding. It presents as marker-PRESENT
+  # (apt succeeded, the bind guard is downstream of it) with an EMPTY capture, which is
+  # byte-identical to the shape the vacuity `else` claims to have identified -- so ordering this
+  # rung below it would make the arm assert the opposite of the truth. Same construction, and
+  # the same load-bearing ordering, as T5's fixture rung.
+  fail "T17 MUTATION: the capture server never bound :8099 — deterministic fixture defect, not a vacuity finding; whether removing the rc guard makes a healthy run emit is undemonstrated" \
+       "${_t17m_rc_note}; tail: ${_t17m_tail}"
 elif ! grep -qx "$_T17M_MARKER" "$TMP/out/t17m.stdout" 2>/dev/null \
      && printf '%s\n' $_T17M_ENV_RCS | grep -qx "$_t17m_rc"; then
   # 1: the vacuity check itself, which the taken branch never got to make.
@@ -1566,7 +1607,7 @@ else
   # Reached only when apt PROVABLY succeeded, so "vacuous" here names the emitter and not the
   # environment — the misattribution this arm previously made unconditionally.
   fail "T17 MUTATION: removing the rc guard did NOT make a healthy run emit — the check is vacuous" \
-       "${_t17m_rc_note}; ${_T17M_MARKER} present, so apt succeeded and this is a genuine vacuity finding"
+       "${_t17m_rc_note}; ${_T17M_MARKER} present and no ${_T17M_FIXTURE_MARKER%%:*}: line, so apt succeeded and the capture server bound; tail: ${_t17m_tail}"
 fi
 
 # ── S1 — the sshd_config stage must SURVIVE a fresh 24.04 boot ─────────────────────
@@ -1630,16 +1671,21 @@ export DEBIAN_FRONTEND=noninteractive
 # NAMED, NOT RESTRUCTURED -- and this site is the one that has to say why, because the other apt
 # sites in this file all got the opposite treatment. These two calls are ALREADY separate
 # statements rather than an `a && b` pair, so `set -e` DOES fire here: a failure aborts the
-# container with apt-s own rc (100), which _S1_ENV_RCS already classifies as an environment
-# decline and _s1_classify already routes to did-not-run. Nothing falls through, so there is no
-# control flow to fix. What was missing was only a NAME: rc=100 on its own does not say WHICH of
-# the two cycles starved, leaving a CI log to guess. The handlers below add that name and change
-# no behaviour -- each re-raises exactly the 100 that `set -e` would have produced, and both emit
-# BEFORE S1_FIXTURE_OK, so the classification stays did-not-run rather than fixture-defect.
+# container with apt-s own rc, which _S1_ENV_RCS classifies and _s1_classify routes to
+# did-not-run. Nothing falls through, so there is no control flow to fix. What was missing was
+# only a NAME: a bare rc does not say WHICH of the two cycles starved, leaving a CI log to guess.
+#
+# THE HANDLER RE-RAISES THE MEASURED rc, NOT A HARDCODED 100 (review). An earlier draft exited
+# 100 unconditionally and claimed in this comment to "change no behaviour". That was false and in
+# the dangerous direction: `|| {...}` catches ANY non-zero status, so an OOM-killed apt (137) was
+# rewritten to 100, which _S1_ENV_RCS allowlists -- silently converting a harness-defect FAIL
+# into a green environment skip. Capturing `$?` first and re-raising it preserves exactly what
+# `set -e` would have produced, for every rc rather than only for apt-s own.
+# Both handlers emit BEFORE S1_FIXTURE_OK, so the classification stays did-not-run.
 apt-get update -qq >/dev/null 2>&1 \
-  || { echo "FIXTURE-FAIL: S1 apt-get update starved (openssh-server spin) — mirror unreachable or index corrupt" >&2; exit 100; }
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get update starved (openssh-server spin) — mirror unreachable or index corrupt (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
 apt-get install -y -qq openssh-server >/dev/null 2>&1 \
-  || { echo "FIXTURE-FAIL: S1 apt-get install openssh-server starved — mirror unreachable or package unavailable" >&2; exit 100; }
+  || { _s1_apt_rc=$?; echo "FIXTURE-FAIL: S1 apt-get install openssh-server starved — mirror unreachable or package unavailable (rc=${_s1_apt_rc})" >&2; exit "$_s1_apt_rc"; }
 mkdir -p /etc/ssh/sshd_config.d
 cp /work/01-hardening.conf /etc/ssh/sshd_config.d/01-hardening.conf
 # Stub the emitter: D1/T5/T17 already cover the real one end-to-end. What S1 needs is a

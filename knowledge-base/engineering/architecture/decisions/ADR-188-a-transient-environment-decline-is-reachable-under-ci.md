@@ -391,3 +391,48 @@ marker set covers **both** T5 and S1 — the arm this amendment makes skip-eligi
 the standing daily monitor `.github/workflows/scheduled-rehearsal-skip-monitor.yml`, not the
 follow-through sweeper, which closes on first PASS and would retire the observer after one clean
 sample.
+
+## Amendment — 2026-09-17 (#7535 Phase 2): T17 becomes skip-eligible
+
+Same change class as the #7572 amendment above, and recorded the same way rather than left to
+drift: the code moved and this ADR is the normative record of the numbers it moved.
+
+The T17-mutation arm previously could not decline. Its `docker run` ended in `|| true`, so the
+container rc was discarded, and its sole assertion was `[ -s capture.log ]` — meaning a starved
+apt produced an empty capture that the arm reported as *"removing the rc guard did NOT make a
+healthy run emit — the check is vacuous"*. It did not skip; it mis-stated an environment failure
+as a mutation-battery finding. Capturing the rc gives it a fourth route, and that route is a
+declared skip.
+
+**Ceiling, re-itemised (5 → 7 → 8):**
+
+| Arm | Cost | Origin |
+|---|---|---|
+| T5 mutation | 2 | pre-existing (this ADR) |
+| S1 healthy | 2 | #7572 |
+| S1 mutation | 3 | #7572 |
+| T17 mutation | 1 | #7535 Phase 2 — the arm's single vacuity assertion |
+| **Ceiling** | **8** | the largest cost reachable in a single run |
+
+The T17 row is reachable in the *same* environmental condition as the other three:
+`_T17M_ENV_RCS` is the same `100 125` allowlist as `_T5M_ENV_RCS` and `_S1_ENV_RCS`, and all four
+arms pull the same image, so one unpullable image declines all of them at once. Holding the
+ceiling at 7 would have produced exactly the spurious second failure this ADR's own stanza
+warns about, one arm later.
+
+**Two guard values move with it.** The call-site cardinality assertion is now **4**, not 3
+(T5 mutation; S1 healthy; S1 mutation; T17 mutation). The roster parity check — every call site's
+message must open with a name the follow-through probe greps for — now spans `T5 `/`S1 `/`T17 `,
+and `SKIP (loud): T17 ` is registered in `scripts/followthroughs/t5-skip-persistence-bound-7510.sh`
+in the same change. Registering the arm in the suite without registering it in the probe would
+have satisfied the parity equality *by arithmetic* while leaving the observer blind to the very
+arm the change creates — so the probe's own test suite gains a case asserting the T17 marker,
+which is what actually holds the two in step.
+
+**The observation window's marker set covers three arms, not two.** The `both T5 and S1` wording
+earlier in this ADR predates T17 and should be read as the set enumerated in `SKIP_MARKERS`.
+
+**What this amendment does *not* do:** it does not widen the carve-out. T17's skip is gated on
+marker ABSENCE *and* an allowlisted rc, with a fixture-defect rung above it and a mount-source
+existence pre-check before the spin — so a deterministic bind failure and a mistyped `-v` source
+both red rather than declining. A vacuity finding with apt provably healthy still fails.
