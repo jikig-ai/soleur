@@ -356,11 +356,66 @@ sibling run. It takes no lock, runs no suite and always exits 0.
 worktree to wait for — it does not authorise shipping without the battery. The blocking form of this
 verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
-Then run the full battery:
+**Ask whether the battery is still OWED before running it (#8247).** CI's required
+`test` context aggregates `test-webplat` + `test-bun` + `test-scripts` +
+`web-platform-build`. `test-all.sh` registers every suite inside one of
+`want_scripts` / `want_bun` / `want_webplat` / `want_infra`, so a local
+`TEST_GROUP=all` is CI's `test` plus the **infra** group — and CI additionally
+runs the relevance-gated suites the local run declines (`_diff_touches`
+short-circuits under `CI`). When the tree you are about to ship is byte-identically
+what CI already verified, re-running those shards locally cannot change the merge
+decision.
+
+**One subtlety that the gate now enforces rather than assumes.** `ci.yml` has no
+push trigger for feature branches, so the `test` check-run on a branch head comes
+from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. CI
+therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
+run, and those are the same tree only when `origin/main` is already an ancestor of
+HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
+a claim it establishes rather than one it assumes. The practical consequence: to
+get the saving on a re-run, sync with `main` first.
+
+Branch on the exit code, never on the prose:
 
 ```bash
-TEST_GROUP=all bash scripts/test-all.sh
+bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
+rc=$?
+if [[ "$rc" -eq 42 ]]; then
+  echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+else
+  echo "battery OWED (rc=$rc) — running it"
+  TEST_GROUP=all bash scripts/test-all.sh
+fi
 ```
+
+**`42` is the ONLY value that skips, and the oddness is the point.** This script
+runs under `set -u`, and an unset-variable reference aborts a non-interactive bash
+script with **exit status 1** — so an earlier revision that used `1` for SKIPPABLE
+would have let one typo'd variable name in a future edit delete a 35-minute safety
+run. Every other status bash emits by accident (1, 2, 126, 127, 128+N) now falls
+through to OWED. Read it strictly: a gate that saves 35 minutes is under standing
+pressure to be read generously.
+
+**At the FIRST Phase 4 run this returns OWED**, because Phase 4 precedes the
+Phase 6 push and there is no CI for `HEAD` yet. The saving is on the RE-RUN path
+this skill mandates after a review fix, a main sync, or a Phase 5.5 advisor fix —
+and it requires the re-run to happen on a **pushed** commit, since an unpushed one
+has no check-runs for its sha and returns OWED. Measured on PR #8233: two full
+batteries, ~70 minutes, the second finishing against a head whose 26/26 required
+checks were already green on the identical SHA.
+
+The conditions, what makes each load-bearing, and the mutation rows that pin them
+live in the script and in
+[ship-battery-owed.test.sh](../../test/ship-battery-owed.test.sh). They are
+deliberately NOT restated here: a copy in prose drifts the moment a condition is
+edited, and the script prints its own verdict and reasoning at runtime, which is
+the channel that cannot drift.
+
+The runner is INSIDE the `else`, deliberately. An earlier revision left the OWED
+arm as a comment and put the invocation in a separate fenced block below — so an
+agent copying the second block ran the battery regardless of `rc`, in a skill whose
+own instruction is "branch on the exit code, never on the prose". The coupling
+between two adjacent blocks is prose.
 
 **Start it on the FINAL tree, and keep its log outside the session scratchpad.** Any commit you
 can already foresee — the `Reviewed-By-Soleur` trailer, the sync with `origin/main` — invalidates a
@@ -2171,6 +2226,12 @@ while true; do
 done
 # <!-- phase-7-poll-block:end -->
 ```
+
+**A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
+
+**A poll whose population can SHRINK needs a floor, and must require the run it waits for to be PRESENT.** `pending == 0` is satisfied perfectly by an empty set, so a query that silently stops returning the runs you care about reports ALL-SETTLED having examined nothing — the same vacuity a bounded floor exists to refuse. Record the largest population seen and refuse to settle below it; separately, require the specific run you are waiting for (the deploy arm, the release job) to be present, not merely non-failing.
+
+**The cause is almost always `--limit` truncation, not the branch filter — CORRECTED 2026-09-17 after measurement.** An earlier revision of this rule blamed `--branch main --commit <sha>` and prescribed dropping `--branch`. That mechanism is FALSE and the remedy is a no-op: measured on two `main` commits, `gh run list --branch main --commit <sha>` and `gh run list --commit <sha>` return **identical** counts (58/58 and 0/0), and every run on those commits carries `headBranch: main` — **including the `push` runs** — so the branch filter cannot selectively drop push runs while retaining `issues` runs. What actually happens is `gh run list` returning newest-first under a `--limit`: on a busy commit the release runs are crowded off the end by unrelated `issues`/`issue_comment` traffic, which on an agent-driven repo is frequently the agent's OWN issue filings. Measured: `--limit 100` returned `push=0` where `--limit 300` returned `push=8` out of 131 runs. Raise the limit, paginate, or filter server-side by `--event push` / `--event workflow_run`; dropping `--branch` while keeping the limit rebuilds the identical watcher. **Why:** #8233 — a release watch reported 10 release runs then 0, one poll short of declaring a deploy settled over nothing.
 
 **Run every Monitor with its shell in the MAIN checkout (or `/var/tmp`), never `cd`'d into the feature worktree.** Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 
