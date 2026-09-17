@@ -111,17 +111,28 @@
 
 set -uo pipefail
 
+# SUT-WRITTEN EXECUTION MARKER (test-only, opt-in via an env var production never
+# sets). The suite's coverage floor counted lines its OWN harness appended before
+# spawning anything, so it measured the harness and not the subject: one line --
+# `expect() { EXPECT_ROWS=$((EXPECT_ROWS+1)); echo x >> "$LOG"; pass "$2"; }` --
+# satisfied all three floors at once and printed their exact green-run values with
+# the hook never spawned for any parked row.
+#
+# EMITTED TO STDERR, NOT WRITTEN TO A PATH. A path operand here is flagged by the
+# P1b guard (fixture-relative-assert) as "not provably absolute": the value comes
+# from the environment, and a `case /*)` at the use site is invisible to a scanner
+# that reasons about BINDING. Recording it in that guard's baseline would have
+# banked a real hazard -- a hook runs from whatever CWD the session is in, so a
+# relative value would append into an arbitrary working tree. fd 2 is not a path,
+# so the hazard does not exist rather than being accepted. stdout stays reserved
+# for the block protocol; the harness counts this marker from captured stderr, so
+# a harness that never spawns the hook still counts zero.
+[ -n "${SOLEUR_HOOK_TRACE:-}" ] && printf 'SOLEUR_HOOK_RAN\n' >&2
+
+
 # Fail OPEN on every infrastructure problem: this must never be the reason a
 # session cannot end.
 command -v jq >/dev/null 2>&1 || exit 0
-# SUT-WRITTEN EXECUTION TRACE (test-only, opt-in via an env var the production
-# path never sets). The suite's coverage floor counted lines its OWN harness
-# appended before spawning anything, so it measured the harness, not the subject:
-# one line -- `expect() { EXPECT_ROWS=$((EXPECT_ROWS+1)); echo x >> "$LOG"; pass "$2"; }`
-# -- defeated all three floors at once and printed their exact green-run values
-# while the hook was never spawned for any parked row. A counter the SUT writes
-# cannot be satisfied by a harness that does not run it.
-[ -n "${SOLEUR_HOOK_TRACE:-}" ] && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE" 2>/dev/null
 HOOK_INPUT=$(cat 2>/dev/null) || exit 0
 [[ -n "$HOOK_INPUT" ]] || exit 0
 

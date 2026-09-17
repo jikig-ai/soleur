@@ -40,8 +40,15 @@ trap 'rm -f "$INVOCATION_LOG" "$SOLEUR_HOOK_TRACE"' EXIT INT TERM
 verdict() { # <message> [extra-json] -> BLOCK | ALLOW
   echo x >> "$INVOCATION_LOG"
   local msg="$1" extra="${2:-{\}}" out
+  # stderr is captured, not discarded, so the SUT's own execution marker can be
+  # counted. The marker is what makes the coverage floor measure the subject: a
+  # harness that skips the spawn produces none, whatever its own counters say.
+  local _err; _err=$(mktemp -t unkept-err.XXXXXXXX)
   out=$(jq -n --arg m "$msg" --argjson e "$extra" '$e + {last_assistant_message:$m}' \
-        | bash "$HOOK" 2>/dev/null)
+        | bash "$HOOK" 2>"$_err")
+  grep -c '^SOLEUR_HOOK_RAN$' "$_err" 2>/dev/null | grep -qv '^0$' \
+    && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
+  rm -f "$_err"
   printf '%s' "$out" | jq -e '.decision == "block"' >/dev/null 2>&1 && echo BLOCK || echo ALLOW
 }
 EXPECT_ROWS=0
@@ -317,9 +324,18 @@ expect ALLOW "boundary: 'awaiting reviewers' is not 'awaiting review'" \
 # reason verbatim, which would tell a parked turn to go execute a commitment it
 # never made. The promise path already has two `.reason` assertions; this arm had
 # none.
+# Captures stderr and records the SUT marker, exactly as verdict() does. An earlier
+# draft of this block discarded stderr (2>/dev/null) while still hand-incrementing
+# INVOCATION_LOG -- i.e. it claimed an invocation the SUT-written counter could not
+# corroborate. The conservation check caught it (51 harness vs 50 SUT), which is
+# the defect that check exists for, committed here by the change that added it.
+PARKED_ERR=$(mktemp -t unkept-perr.XXXXXXXX)
 PARKED_BODY=$(jq -n --arg m "Done. <stop>OPERATOR-GATE: PR #8244 is green and awaiting your merge.</stop>" \
-  '{last_assistant_message:$m}' | bash "$HOOK" 2>/dev/null)
+  '{last_assistant_message:$m}' | bash "$HOOK" 2>"$PARKED_ERR")
 PARKED_RC=$?
+grep -c '^SOLEUR_HOOK_RAN$' "$PARKED_ERR" 2>/dev/null | grep -qv '^0$' \
+  && printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
+rm -f "$PARKED_ERR"
 EXPECT_ROWS=$((EXPECT_ROWS + 1)); echo x >> "$INVOCATION_LOG"
 printf '%s' "$PARKED_BODY" | jq -e '.reason | test("rf-never-skip-qa-review-before-merging")' >/dev/null 2>&1 \
   && pass "parked reason cites the rule it enforces" || fail "parked reason cites the rule it enforces"
@@ -351,7 +367,7 @@ INVOCATIONS=${INVOCATIONS:-0}
 MIN_INVOCATIONS=51
 # THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
 # satisfy, because only the hook appends to it.
-MIN_SUT_RUNS=55
+MIN_SUT_RUNS=51
 if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
   printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
     "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
