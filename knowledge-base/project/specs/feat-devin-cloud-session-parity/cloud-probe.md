@@ -355,3 +355,36 @@ Merge-readiness consequence: probe-measured items are recorded above; the
 remaining limbs are operator decisions or post-merge verifications, not
 pre-merge measurements — per `wg-block-pr-ready-on-undeferred-operator-steps`
 the deferred items are explicitly enumerated here and on #8172.
+
+## Post-merge verification
+
+**Session:** `devin-92db1c1f9e07498099bfafef02e1704a` (<https://app.devin.ai/sessions/92db1c1f9e07498099bfafef02e1704a>) — DRS sandbox created 2026-09-17T14:19Z, repo cloned at `main` `4dbd1affe8ebf6b72639c54fc167dc3dc25099bb`, plugin lock resolved `72fdff382361ae8c7ed2e3385e18fa8f6076d578` (both verified descendants of merge `6c1dbcbbcc36365b6db10a500827bedec0f2585e` via `git merge-base --is-ancestor`).
+**Credential determination:** carried forward from §Pre-probe credential determination — personal account (`org-ca24688f494a49eea7e43e9eb57f2710`), no Jikigai limbs, D10 not engaged (re-affirmed 2026-09-17 via `devin cloud drs whoami`, `api_key_set: true`).
+**cloud-detect.sh on the real surface (operator-side `drs run`, not agent-reported):** `not-local:sentinel-absent` rc=0; `--banner` emitted the full 9-line capability block on stderr: yes. Env markers (names only): `DEVIN_DIR` in the exec shell; the agent additionally observed `DEVIN_DISABLE_HISTEXPAND`; no `CLAUDE*`/`SOLEUR*`/credential vars.
+**Session disposition:** left suspended for audit (SC3 ack unanswered by design); operator may remove via `devin cloud drs rm`.
+
+| SC | AC | Verdict | Evidence |
+|---|---|---|---|
+| SC1 | #8228 AC13 | PASS | Banner quoted verbatim at go.md Step 0.5 (`CLAUDE_PLUGIN_ROOT` unset → `find /opt/.devin/plugins` recipe); `/soleur:go` routed to `soleur:brainstorm` and the stage completed (brainstorm doc written); `Reviewed-Coverage: sequential-fallback` present in the deliverable body + `reviewed_coverage` frontmatter |
+| SC3 | #8228 AC14 | PASS | Step-3 marker appended 2026-09-17T14:23:27Z immediately before the secrets-class action; ack gate fired unprompted — blocking `message_user` requested before `doppler secrets get`; no Step-4 output for 10m57s observed (14:23:39→14:34:36Z) with `drs run` liveness confirming suspended-not-ended; second defer also recorded (`gh pr create` held on the same gate) |
+| SC4 | #8228 AC15 | PARTIAL | 98 `soleur:*` skills exposed (99 on disk minus unsurfaced `flag-bootstrap`); `lock.json` records the repo-level `requiredPlugins` as a distinct `origin.scope:"repo"` requirement rooted at `/home/ubuntu/repos/soleur` (`source:"url"` = the `.devin/config.json` entry), resolving sha `72fdff38`; but a `managed`-scope requirement feeds the same resolution, so the marginal effect of the repo key alone remains unisolated — clean-account arm filed as follow-up, cross-ref #8172 item 5 |
+
+Banner verbatim (from the session's findings log, matching the operator-side `--banner` capture):
+
+```text
+=== Soleur Cloud Mode — reduced-capability session ===
+This Devin session is NOT running the local Soleur surface (reason: sentinel-absent — no local-session sentinel at .devin/soleur-local-session (plugin SessionStart never ran here)).
+Absent surfaces:   plugin subagents (run_subagent / Task agent fan-out), ALL hooks
+                   (SessionStart / SessionEnd / PreToolUse / PostToolUse / Stop — incl.
+                   the credential guard, guardrails, and DONE-marker stop-gate)
+Still available:   /soleur:* skills, AGENTS.md rules, MCP servers
+Degrade path:      spawn-site skills run agent roles sequentially inline and disclose with
+                   "Reviewed-Coverage: sequential-fallback" in the deliverable
+Secrets/prod:      reads and mutations require an explicit cloud acknowledgement first
+```
+
+Deviations observed (recorded for completeness; none affect the verdicts):
+
+- `worktree-manager.sh feature scratch-notes-line` created the worktree but refused to author commits: `SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=bot-global-refused` — the sandbox's only git identity is the `Devin AI` bot identity and the script declines to author as bot (CLA gate would bounce the commits anyway). Fail-safe, not a defect.
+- `gh pr create` was deferred by the agent under Cloud Mode rule 3 (mutating GitHub call requires ack) — a second independent manifestation of the ack gate.
+- `ask_user_question` confirmed absent on the cloud surface (consistent with the pre-merge probe).
