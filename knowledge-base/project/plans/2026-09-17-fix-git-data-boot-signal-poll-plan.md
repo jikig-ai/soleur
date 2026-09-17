@@ -143,6 +143,17 @@ zero-create plan, so every future `git_data_host_create` dispatch is refused unt
 host is destroyed. A fix confined to the birth job would ship a guard that cannot fire
 on the route that is used. See `## Scope: both jobs, and why`.
 
+**Stated precisely, because the short form of this argument is false.** `git_data_host_create`
+is not a job that never runs — it RAN, and FAILED, in both of #8178's cited runs
+(`34822248580` and `34836141887`: `git_data_host_create = failure`, `git_data_host_replace =
+skipped`, measured). That is the entire evidence base for this issue, and a claim that the
+birth job "cannot fire" would make #8178's own measurements inexplicable. The accurate claim
+is narrower and is about the FUTURE: birth is a once-ever event, so with a live host now
+present the birth job is dormant and every subsequent boot goes through `replace` — which has
+no poll at all, and completed green on 2026-09-16 with zero in-job boot verification. Fixing
+only the birth job would therefore be correct and never exercised again; fixing only `replace`
+would leave #8178's measured defect in place. Both, for those two distinct reasons.
+
 ## Proposed Solution
 
 Five changes. Each buys one named property; nothing here is optional.
