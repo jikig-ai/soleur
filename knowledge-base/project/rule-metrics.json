@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-17T14:32:24Z",
+  "generated_at": "2026-09-17T14:38:54Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1283,15 +1283,15 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "monitor-supersede": 195,
-      "net-issue-flow": 467,
-      "post-dispatch-watch-gate": 4772,
+      "monitor-supersede": 196,
+      "net-issue-flow": 468,
+      "post-dispatch-watch-gate": 4796,
       "guardrails-block-recursive-delete": 333,
       "kb-domain-allowlist-guard": 173,
-      "guardrails-require-milestone": 510,
+      "guardrails-require-milestone": 511,
       "context-reviewed-gate": 13,
       "net-issue-flow-mandated-filing--wg-block-pr-ready-on-undeferred-operator-steps": 8,
-      "git-commit-secret-scan": 304,
+      "git-commit-secret-scan": 306,
       "pre-ask-technical-fork-gate": 2,
       "net-issue-flow-timeout": 45,
       "guardrails-block-commit-on-main": 93,
@@ -1327,7 +1327,7 @@
     ],
     "gate_override_count": 101,
     "gate_timeout_warn_count": 45,
-    "gate_failopen_warn_count": 60,
+    "gate_failopen_warn_count": 61,
     "gate_body_attributed_count": 40,
     "gate_undelivered_declaration_count": 0,
     "gate_contradictory_declaration_count": 0,
