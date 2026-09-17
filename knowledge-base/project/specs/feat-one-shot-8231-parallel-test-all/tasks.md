@@ -18,8 +18,8 @@ gates, and reaching a stop verdict is a successful outcome, not a failure.
 - [x] 0.1.2 Record `--enumerate all` and the four per-group counts; confirm the four sum to `all`.
 - [x] 0.1.3 Confirm every planned consumer fails closed on **rc and count**, copying the shape at
       `scripts/lint-orphan-test-suites.sh:229-232`.
-- [ ] 0.2.1 Record `$BASH_VERSION` and the `wait -n -p` probes, including the SIGTERM → 143 case.
-- [ ] 0.3.1 Measure the constrained view (`nproc` **inside** the scope), not the exit code. Record
+- [x] 0.2.1 Record `$BASH_VERSION` and the `wait -n -p` probes, including the SIGTERM → 143 case.
+- [x] 0.3.1 Measure the constrained view (`nproc` **inside** the scope), not the exit code. Record
       which mechanism this host provides and, if no memory constraint is available, record that H2
       will terminate UNKNOWN by construction.
 - [ ] 0.4.1 Run the serial baseline with `TEST_TIMING_LOG` set, a per-suite peak-RSS sampler, and a
