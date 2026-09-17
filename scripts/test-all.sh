@@ -2257,6 +2257,7 @@ if want_scripts; then
   # the exact shape that let a fail-open rung ship in #3366.
   run_suite "tests/scripts/plan-gate-preamble" bash tests/scripts/test-plan-gate-preamble.sh
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
+  run_suite "tests/scripts/betterstack-read-classify" bash tests/scripts/test-betterstack-read-classify.sh
   run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
   # (#7025) The rung-2 evidence-capture decision function. Registered HERE for the same
   # reason as every line around it: nothing auto-discovers tests/scripts/. This script is
