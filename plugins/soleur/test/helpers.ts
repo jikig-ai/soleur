@@ -17,9 +17,88 @@ export function discoverCommands(): string[] {
   return Array.from(new Glob("commands/*.md").scanSync(PLUGIN_ROOT));
 }
 
-// Skills are one level only (loader does NOT recurse)
+// A manifest may spell one directory several ways ("./skills", "skills",
+// "skills/"). Two DECLARATIONS of one directory are not two roots, so they must
+// compare equal or clause (a) below reports a directory colliding with itself.
+export function normalizeSkillRoot(root: string): string {
+  return root.replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+// Skills are one level only (loader does NOT recurse). `root` is plugin-relative.
+export function discoverSkillsIn(root: string): string[] {
+  const clean = normalizeSkillRoot(root);
+  return Array.from(new Glob(`${clean}/*/SKILL.md`).scanSync(PLUGIN_ROOT));
+}
+
 export function discoverSkills(): string[] {
-  return Array.from(new Glob("skills/*/SKILL.md").scanSync(PLUGIN_ROOT));
+  return discoverSkillsIn("skills");
+}
+
+// Claude Code hides a skill from the `/` menu when `user-invocable` is false,
+// while leaving it invocable by the model. Absent key means true (documented
+// default), so only an explicit `false` suppresses the menu row.
+export function isUserInvocable(relativePath: string): boolean {
+  return parseComponent(relativePath).frontmatter["user-invocable"] !== false;
+}
+
+export interface SkillEntry {
+  name: string;
+  userInvocable: boolean;
+}
+
+export interface SkillRootInput {
+  root: string;
+  skills: SkillEntry[];
+}
+
+export interface CollisionReport {
+  // clause (a): one skill name contributed by more than one distinct root
+  duplicateSkillNames: string[];
+  // clause (b): a user-invocable skill sharing a name with a command stem
+  commandCollisions: string[];
+}
+
+// Pure. Both collision classes that put two rows under one `/` name.
+export function collidingNames(input: {
+  commandNames: string[];
+  skillRoots: SkillRootInput[];
+}): CollisionReport {
+  const seen = new Set<string>();
+  const roots: SkillRootInput[] = [];
+  for (const r of input.skillRoots) {
+    const key = normalizeSkillRoot(r.root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push({ ...r, root: key });
+  }
+
+  const nameToRoots = new Map<string, Set<string>>();
+  for (const r of roots) {
+    for (const s of r.skills) {
+      const at = nameToRoots.get(s.name) ?? new Set<string>();
+      at.add(r.root);
+      nameToRoots.set(s.name, at);
+    }
+  }
+  const duplicateSkillNames = [...nameToRoots.entries()]
+    .filter(([, at]) => at.size > 1)
+    .map(([name]) => name)
+    .sort();
+
+  // A non-user-invocable skill renders no `/` row, so it cannot duplicate the
+  // command's row. That exemption is precisely what this guard protects.
+  const commands = new Set(input.commandNames);
+  const commandCollisions = [
+    ...new Set(
+      roots.flatMap((r) =>
+        r.skills
+          .filter((s) => s.userInvocable && commands.has(s.name))
+          .map((s) => s.name),
+      ),
+    ),
+  ].sort();
+
+  return { duplicateSkillNames, commandCollisions };
 }
 
 interface ParsedComponent {
