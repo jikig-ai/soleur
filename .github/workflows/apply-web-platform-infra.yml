@@ -4371,7 +4371,21 @@ jobs:
           echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"
           grep -E '^Plan:' tfplan.txt || true
 
+      - name: Stamp boot-trail run anchor (git-data replace)
+        id: boot_anchor
+        # (#8178) See the twin in git_data_host_create. The anchor matters MORE here: a
+        # replace destroys and recreates the host, and `host_name` pins the host rather than
+        # the host GENERATION — so without it a re-dispatch inside a wall-clock window
+        # matches the DESTROYED host's boot_complete and reports the NEW one verified on the
+        # old one's evidence. That is a green light over a host nobody has heard from, which
+        # is the exact state this interlock exists to prevent.
+        run: |
+          set -euo pipefail
+          epoch=$(( $(date -u +%s) - 120 ))
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
       - name: Terraform apply (git-data-host -replace) — both-volumes-preserved assert
+        id: apply
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -4418,6 +4432,85 @@ jobs:
             fi
           done
           echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+
+      - name: Poll for the git-data boot-completion signal (replace)
+        id: poll
+        # (#8178) THE REPLACE JOB HAD NO BOOT POLL AT ALL, and it is the path that actually
+        # runs: birth is a once-ever event, so with a live host present every subsequent boot
+        # comes through here. A replace completed green on 2026-09-16 with ZERO in-job boot
+        # verification. Fixing only the birth job would have shipped a correct guard onto a
+        # dormant path.
+        #
+        # ENUMERATED `if:`, not `!= 'skipped'` — a renamed `apply` id resolves to '' and only
+        # the enumerated form fails closed on that. The `id: apply` this job was missing is
+        # added in the same change; without it this condition is permanently false and the
+        # guard would ship without ever running.
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
+        run: |
+          set -uo pipefail
+          source scripts/lib/git-data-boot-signal-poll.sh || {
+            echo "::error::scripts/lib/git-data-boot-signal-poll.sh not found on this ref — the boot signal cannot be read, so this REPLACE cannot be verified. Dispatch with --ref main."
+            exit 1
+          }
+
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::error::DOPPLER_TOKEN is not present — the boot signal cannot be read, so this replace CANNOT be verified. Refusing to report success. Fix the repo secret and re-dispatch (a replace is re-runnable; unlike a birth, it is not gated on a zero-create plan)."
+            exit 1
+          fi
+
+          export BS_TABLE="t520508_soleur_git_data_prd_logs"
+          export BS_TABLE_S3="t520508_soleur_git_data_prd_s3"
+
+          # Same 30 x 30 s budget as the birth job, for the same measured reason (run
+          # 34836141887: boot_complete landed 2 m 37 s after a 10-minute budget expired).
+          set +e
+          git_data_boot_poll 30 30 "${BOOT_TRAIL_SINCE:-}"
+          poll_rc=$?
+          set -e
+          found="${GIT_DATA_BOOT_ROW:-}"
+
+          if [[ "$poll_rc" -ne 0 ]]; then
+            echo "::error::The boot poll refused to run (rc=${poll_rc}) — see the line above. This says NOTHING about whether the replaced soleur-git-data booted; it is a workflow wiring fault. The replace is UNVERIFIED (apply outcome ${APPLY_OUTCOME})."
+            exit 1
+          fi
+
+          # THE REMEDIATION DIFFERS FROM THE BIRTH JOB'S, which is why the printer was never
+          # shared: a replace IS re-dispatchable, so "re-dispatch" is a real remedy here where
+          # on the birth path it is impossible (the gate refuses a zero-create plan).
+          if [[ -z "$found" ]]; then
+            if [[ "${GIT_DATA_BOOT_VERDICT:-unreadable}" == "silent" ]]; then
+              echo "::error::No stage:boot_complete from the replaced soleur-git-data within the poll budget (the query path ANSWERED, so this IS a statement about the host). Apply outcome ${APPLY_OUTCOME}. The old host is gone and the new one has not reported: check Sentry for a git-data fatal (stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap) before re-dispatching, because a replace that keeps failing the same way will keep destroying and recreating a host that cannot boot."
+            else
+              echo "::error::Could not read the boot signal at all — every poll failed to query Better Stack; the per-poll lines above name the rc and the classification. This says NOTHING about whether the replaced host booted — check the read path (the classification names which: credentials-rejected / table-missing / transport / reader-refusal), NOT the host. The replace is UNVERIFIED (apply outcome ${APPLY_OUTCOME}); re-dispatch once the read works."
+            fi
+            exit 1
+          fi
+
+          echo "$found"
+          # Per-field invariants, same contract as the birth job. A boot_complete carrying a
+          # FALSE assertion is worse than none: the bootstrap reached its final stage with an
+          # invariant unmet. Checked per NAMED FIELD — a bare `grep -qE '\bno\b'` would match
+          # the word anywhere in the payload.
+          for f in luks_mounted repo_root hooks_path provision; do
+            if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
+              echo "::error::boot_complete arrived with ${f}=no — the replaced host is up but an invariant is unmet. Treat as a failed replace."
+              exit 1
+            fi
+            if ! printf '%s' "$found" | grep -q "\"${f}\":\"yes\""; then
+              echo "::error::boot_complete arrived WITHOUT a ${f} assertion. The emit contract and this reader have drifted; do not treat this replace as verified."
+              exit 1
+            fi
+          done
+          # nft_metadata_drop: reported, never terminal — a transient nftables install failure
+          # is a hardening regression, not a dark host, and must not destroy a healthy host
+          # holding every connected user's repositories.
+          if printf '%s' "$found" | grep -q '"nft_metadata_drop":"no"'; then
+            echo "::warning::the replaced git-data booted with nft_metadata_drop=no — the metadata-endpoint egress drop did NOT arm. The host is healthy and the replace stands; the hardening control is absent. Check stage:gitdata_nftables_metadata_warn in Sentry, then re-arm via another replace (user_data is ForceNew)."
+          fi
 
       - name: Post-replace readiness note (authoritative liveness is web-host-driven, non-SSH)
         # git-data is a deny-all blind host: this CI runner canNOT SSH it, canNOT reach it over the
