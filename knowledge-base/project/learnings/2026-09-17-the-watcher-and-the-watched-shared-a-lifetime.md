@@ -39,6 +39,36 @@ way, the same run survived a subsequent expiry and finished. If the watcher can
 kill the work, a watcher timeout and a real failure are indistinguishable from
 the outside.
 
+**Amendment, measured later the same day: the remedy above carries its own trap.**
+`setsid nohup … &` is correct, and `$!` does **not** name what it launched. `setsid`
+forks when it is not already a process-group leader, so `$!` is a short-lived parent
+that exits in under a second while the work runs on. A `while kill -0 $!` wait therefore
+falls through immediately and every line after it reports a verdict for a run that has
+not finished — which is the same "a watch that cannot wait" defect this entry is about,
+one level up from the lifetime problem, and reached by following this entry's own fix.
+
+Both controls, measured 2026-09-17:
+
+| Launch | `$!` after 1 s | Tracks the runner? |
+|---|---|---|
+| `setsid nohup bash -c 'sleep 8; …' &` | **gone** | no — work still running |
+| `nohup bash -c 'sleep 6; …' &` (no `setsid`) | alive | yes |
+
+The negative control is what makes the cause the **fork** rather than the timing. Observed
+live: `BATTERY COMPLETE rc=1` was emitted for a battery that had died in under a second on
+a mise shim fault and never ran a suite — rc=1 with no `[FAIL]` lines reads exactly like
+"the battery ran and one suite failed". Keep `setsid` (the group-kill protection is real);
+wait on the **rc file**, which this entry already names as the completion artifact:
+
+```bash
+setsid nohup bash -c '… > "$LOG" 2>&1; echo $? > "$RCF"' >/dev/null 2>&1 &
+until [ -s "$RCF" ]; do sleep 30; done
+```
+
+Corrected in `plugins/soleur/skills/ship/SKILL.md` (Phase 4), whose prescription was
+`record $!, and watch that pid` and now polls the rc file. Related: `rc=4` from
+`test-all.sh` is REFUSED — nothing ran — and is not a reap and not a test verdict.
+
 **Corollary, paid for three times in one session:** killing a runner does not reap
 its children. Each time, `--capacity` still reported contention afterwards, and the
 survivors were suites whose `cwd` had been deleted. Enumerate by the contention
