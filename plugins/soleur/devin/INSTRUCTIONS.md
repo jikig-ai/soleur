@@ -69,7 +69,7 @@ If you see a transient warning such as "plugin ... is in your settings but its c
 | Task / Agent / spawn_subagent | run_subagent tool |
 | AskUserQuestion | ask_user_question tool |
 | TodoWrite / TodoRead | todo_write tool |
-| Monitor / AwaitShell / TaskOutput | get_output with timeout for polling |
+| Monitor / AwaitShell / TaskOutput | get_output to poll a backgrounded shell's output; for wait-until-event watches (CI settle, PR merge state) a background `run_subagent` exit-coded poll loop — see **Polling / watches** below |
 | WebSearch / WebFetch / ToolSearch | web_search, webfetch tools |
 | Workflow scripts | Translate orchestration to available tools; do not execute Claude tool calls as shell JavaScript |
 
@@ -248,6 +248,9 @@ warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
 `BEHIND`, and finish the prescribed postmerge checks before claiming success.
+Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
+watches** below) rather than burning foreground turns on `sleep`-and-poll
+cycles.
 If a required capability cannot be mapped, report the exact unsupported gate
 and retain incomplete status instead of silently skipping it.
 
@@ -255,6 +258,6 @@ and retain incomplete status instead of silently skipping it.
 
 - **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
 - **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool
-- **Polling**: Use `get_output` with timeout instead of Claude's Monitor tool
+- **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
 - **MCP servers**: Devin supports the same MCP server format as Claude, so existing servers should work without modification
