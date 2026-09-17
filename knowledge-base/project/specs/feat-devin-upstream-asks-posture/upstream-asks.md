@@ -3,7 +3,17 @@
 **Tracking:** jikig-ai/soleur issue #8160. Parent: #8159 (Soleur Cloud Mode,
 shipped via PR #8155). Residual probe arms: #8172.
 **Filing channels:** `support@cognition.ai` (all sections); Devin `/bug`
-for the defect-class items (Section 3, items 3–4).
+for the defect-class items (Section 3, items 2–4).
+
+**Section-to-filing mapping:**
+
+| Package section | support@cognition.ai | Devin `/bug` |
+|---|---|---|
+| §1 hook-dispatch parity | yes | — |
+| §2 plugin-subagent parity | yes | — |
+| §3 items 1, 5, 6 (contract asks) | yes | — |
+| §3 items 2–4 (defect-class items) | yes | yes |
+
 **Evidence conventions:** *measured* means observed in a live Devin Cloud
 session during a two-arm probe run on 2026-09-15 (a `devin cloud drs` sandbox
 session and a user-facing web-app session, both on this repository at `main`).
@@ -11,9 +21,10 @@ session and a user-facing web-app session, both on this repository at `main`).
 full probe record is committed at
 `knowledge-base/project/specs/feat-devin-cloud-session-parity/cloud-probe.md`;
 the capability matrix this filing supports is `plugins/soleur/devin/INSTRUCTIONS.md`
-§Cloud Mode. This package states capability deltas only — no organization
-identifiers, session identifiers, absolute paths, environment values, or
-personal data (see the disclosure note at the foot).
+§Cloud Mode. This package states capability deltas only — no session
+identifiers, absolute paths, environment values, or personal data beyond the
+filing repository identity `jikig-ai/soleur`, which the filing requires (see
+the disclosure note at the foot).
 
 ---
 
@@ -23,19 +34,20 @@ personal data (see the disclosure note at the foot).
 discrepancy resolved as a documentation correction while this package was
 being assembled. The timeline is recorded because it is itself evidence.)*
 
-**Timeline.** At probe time (2026-09-15) both docs.devin.ai plugin pages
-asserted: *"cloud sessions run `command` hooks for every event except
+**Timeline.** At probe time (2026-09-15) the docs.devin.ai plugin-ecosystem
+page asserted: *"cloud sessions run `command` hooks for every event except
 `SessionStart` and `SessionEnd` — including `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `UserPromptSubmit`, `Stop`, and `PostCompaction`"*. Our
-probe (below) measured zero dispatch — a direct doc-versus-product
-discrepancy. Re-fetching the same pages for this filing (2026-09-17) shows
-the claim **corrected**: the plugins overview now says `hooks.json`
-registers lifecycle hooks *"in local Devin sessions (the CLI and Devin
-Desktop)"*, and both pages warn that plugin hooks are *"best effort and fail
-open — a hook that fails to load or run doesn't stop the session — so don't
-rely on them for crucial guardrails yet."* The documentation now matches our
-measurement — credit for the correction, which also independently validates
-the probe.
+`PermissionRequest`, `UserPromptSubmit`, `Stop`, and `PostCompaction`"* (the
+plugins overview already scoped hooks to local sessions — our own doc sweep
+on 2026-09-14 records it reading *"in local Devin sessions (the CLI and Devin
+Desktop)"*). Our probe (below) measured zero dispatch — a direct
+doc-versus-product discrepancy on the page carrying the broader claim.
+Re-fetching the same pages for this filing (2026-09-17) shows the ecosystem
+claim **corrected**: both plugin pages now scope hooks to local sessions, and
+both warn that plugin hooks are *"best effort and fail open — a hook that
+fails to load or run doesn't stop the session — so don't rely on them for
+crucial guardrails yet."* The documentation now matches our measurement —
+credit for the correction, which also independently validates the probe.
 
 **What we measured** (2026-09-15, both arms agree):
 
@@ -53,7 +65,7 @@ the probe.
   absent.
 - Both arms agree the surface is a **no-hook environment**, not a
   degraded-hook one. Probe items: web-app arm items 1, 2, 4, 11, 13, 14;
-  sandbox arm items 1, 2, 3, 11, 13 (`cloud-probe.md`).
+  sandbox arm items 1, 2, 4, 11, 13, 14 (`cloud-probe.md`).
 
 **Ask:**
 
@@ -84,7 +96,7 @@ plugin-defined agent profiles. The DRS sandbox arm's tool catalog lacks
 1. the fan-out substrate itself diverges between cloud surfaces (web-app vs
    DRS sandbox), which is currently undocumented; and
 2. on no cloud surface can a session spawn a plugin-defined subagent, so our
-   ~100-agent roster is unavailable in cloud and skills that fan out must
+   68-agent roster is unavailable in cloud and skills that fan out must
    degrade to sequential inline execution.
 
 **Ask:** support plugin-defined `agents/**/*.md` as subagent types in cloud
@@ -145,15 +157,17 @@ documented answer would unlock.
 
 ## Disclosure and data-protection note
 
-- This filing contains **capability deltas only**: no organization
-  identifiers, session identifiers, absolute paths, environment-variable
-  values, VM internals, or personal data. It was passed through a mechanical
-  scrub gate before submission.
+- This filing contains **capability deltas only**: no session identifiers,
+  absolute paths, environment-variable values, VM internals, or personal
+  data. The only organization identifier is the filing repository identity
+  `jikig-ai/soleur`, which the filing requires so the request can be routed.
+  It was passed through a mechanical scrub gate before submission.
 - This filing is **not** framed as a security vulnerability; the hook
   discrepancy is reported as a doc-versus-product defect.
-- **DPA disclaimer:** this request does not engage Cognition as a processor
-  of personal data; any future processing relationship is tracked separately
-  and would be gated on an Art. 28 data-processing agreement before any
-  personal-data workflow is enabled.
+- **DPA disclaimer:** capability-parity request only; any personal-data
+  workflows remain subject to a separate Art. 28 DPA. This request does not
+  engage Cognition as a processor of personal data; any future processing
+  relationship is tracked separately and would be gated on an Art. 28
+  data-processing agreement before any personal-data workflow is enabled.
 - Delivery of an emailed copy of this document is operator-attested; the
   posting log and any vendor responses are tracked on issue #8160.

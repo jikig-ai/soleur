@@ -1739,6 +1739,11 @@ if want_scripts; then
   # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #8160: the devin-docs-drift watcher's anchors fire on third-party doc text, so
+  # a polarity inversion or a dead regex is invisible until the day the watch was
+  # built for. This suite extracts the check step verbatim and drives both
+  # directions — affirmative cloud claims MUST fire, negations MUST NOT.
+  run_suite "scripts/devin-docs-drift-check" bash scripts/devin-docs-drift-check.test.sh
   # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
   # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
   # closing condition is a claim about MACHINES, and the probe is how that claim

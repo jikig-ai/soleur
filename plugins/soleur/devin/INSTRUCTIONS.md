@@ -185,8 +185,9 @@ it reads hook-stdin transcript data a standalone script cannot see.
   blocking-only and stalls indefinitely when unanswered. If an interactive
   question primitive is added to cloud, its unattended semantics need
   documenting (auto-approve would fail the ack gate open).
-- **`PostCompaction` in cloud** — documented-capable but unmeasured (no
-  dispatcher observed for any other event; needs a dedicated arm, #8172).
+- **`PostCompaction` in cloud** — cloud status undocumented post-correction
+  and unmeasured (no dispatcher observed for any event; a dedicated arm is
+  tracked at #8172).
 
 ## Domain agents
 

@@ -43,11 +43,11 @@ lane: cross-domain
 ## Phase 5 — Filing + tracking (post-merge)
 
 - [ ] 5.1 Operator: send email verbatim to `support@cognition.ai` (agent prepares `mailto:` link or paste text; body cites `blob/<merge-sha>/` permalink)
-- [ ] 5.2 Agent: compose + attempt Devin `/bug` for §1; paste handoff if interactive-only
+- [ ] 5.2 Agent: compose + attempt Devin `/bug` for §3 items 2–4 (the defect-class items); paste handoff if interactive-only
 - [ ] 5.3 Run `file-upstream-ask-8160.sh`: posting log on #8160 (destinations/dates/state + verbatim-send attestation + delivery-unverifiable note); `/bug` body re-scrub where retrievable
 - [ ] 5.4 Confirm `apply-sentry-infra.yml` applied the new monitor; `gh run list --workflow=scheduled-devin-docs-drift.yml` shows ≥1 run
 - [x] 5.5 Annotate spec FR5 with the plan-review deviation (directive cut → `Ref #8160` linkage)
 
 ## Sunset (on #8160 close)
 
-- [ ] S.1 Delete `scheduled-devin-docs-drift.yml`, the `sentry_cron_monitor` resource, the drift label, the INSTRUCTIONS.md register row
+- [ ] S.1 Delete `scheduled-devin-docs-drift.yml`, the `sentry_cron_monitor` resource, the drift label, the INSTRUCTIONS.md register row, the `NON_INNGEST_MONITORS` entry in `function-registry-count.test.ts`, and `scripts/devin-docs-drift-check.test.sh` + its `run_suite` line in `scripts/test-all.sh`

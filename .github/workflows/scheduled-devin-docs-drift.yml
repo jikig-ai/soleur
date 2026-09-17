@@ -34,9 +34,12 @@
 #     effort" hook text. Absence or rewording means the docs moved; a human re-reads.
 #   * subagent_limitation   — expected-PRESENT: "subagents ... not in cloud (Devin
 #     )?sessions". Absence is the §2 capability candidate.
-#   * hooks_cloud_claimed   — expected-ABSENT: a line claiming hooks run/dispatch in
-#     cloud is the §1 capability becoming documented. (An admission-anchor is pointless:
-#     the docs ALREADY admit locality.)
+#   * hooks_cloud_claimed   — expected-ABSENT: a non-negated line claiming hooks
+#     run/dispatch in cloud is the §1 capability becoming documented. (An
+#     admission-anchor is pointless: the docs ALREADY admit locality.)
+#   * subagent_cloud_claimed — expected-ABSENT: an additive "subagents now available
+#     in cloud" line evades the PRESENT anchor (the old limitation text can survive
+#     alongside it), so the affirmative claim gets its own anchor.
 #   * capability_entry      — the CHANGELOG arm: <Update> blocks dated inside a 31-day
 #     window are keyword-grepped PER ITEM (one bullet incl. wrapped continuations, one
 #     **Title** paragraph, or one ### heading) for a capability keyword + "cloud"
@@ -46,12 +49,18 @@
 #     paragraph). The 31-day window makes an episode self-terminating — a matched entry
 #     ages out, verdict returns OK, close-on-clean retires the issue.
 #
-# The changelog surfaces are Mintlify pages: `docs.devin.ai/cli/changelog/stable.md`
-# (Update label=<version> description=<date>) and `docs.devin.ai/release-notes/overview.md`
-# (Update label=<date>). Both are fetched as `.md` (Mintlify's raw-markdown convention —
-# the HTML page is not the parse target). A page that fetches but yields no parseable
-# dated blocks is a format-drift finding, never green: the check cannot claim a clean
-# verdict on a surface it could not evaluate.
+# Watched surfaces (all fetched as `.md` — Mintlify's raw-markdown convention; the HTML
+# page is not the parse target):
+#   * product-guides/plugin-ecosystem.md   — limitations claims (plugin scope anchors)
+#   * cli/extensibility/plugins/overview.md — the other plugin claim page (plugin scope)
+#   * cli/extensibility/hooks/overview.md   — hooks reference; silent on cloud today,
+#     so ABSENT anchors only (a cloud claim APPEARING here is itself the event)
+#   * cli/changelog/stable.md   — Update label=<version> description=<date> (changelog arm)
+#   * release-notes/overview.md — Update label=<date>, recent updates only (changelog arm)
+#   * release-notes/2026.md     — the year archive: entries that never land on, or roll
+#     off, overview still get scanned (changelog arm)
+# A page that fetches but yields no parseable dated blocks is a format-drift finding,
+# never green: the check cannot claim a clean verdict on a surface it could not evaluate.
 #
 # FAIL CLOSED. An unreachable URL, an empty body, or a reformatted page are ALL findings,
 # never "no drift". The failure this design refuses is reporting green on a surface it
@@ -71,6 +80,10 @@
 #      apps/web-platform/infra/sentry/cron-monitors.tf
 #   3. delete the ci/devin-docs-drift label
 #   4. delete the #8160 register row in plugins/soleur/devin/INSTRUCTIONS.md
+#   5. delete the "scheduled-devin-docs-drift" NON_INNGEST_MONITORS entry in
+#      apps/web-platform/test/server/inngest/function-registry-count.test.ts
+#   6. delete scripts/devin-docs-drift-check.test.sh and its run_suite line in
+#      scripts/test-all.sh
 #   Nothing else is enrolled.
 
 name: "Scheduled: Devin Docs Capability Drift"
@@ -95,7 +108,7 @@ concurrency:
 jobs:
   drift-check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       # No `actions/checkout`. Every input is fetched over HTTPS; checking out this repo
       # would observe the runner's tree, which is not what is being watched. The
@@ -123,7 +136,8 @@ jobs:
           sanitize() {
             printf '%s' "${1-}" | LC_ALL=C tr -d '\000-\037\177' \
               | sed -E ':a; s/##\[/#-[/g; ta' \
-              | sed -E 's/`/ʹ/g; s/<!--/<!-\x2d/g; s/@/(at)/g' \
+              | sed -E 's/`/ʹ/g; s/<!--/<!- -/g; s/@/(at)/g' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g' \
               | cut -c1-200
           }
 
@@ -137,7 +151,7 @@ jobs:
           fetch_doc() { # $1=url $2=surface $3=outfile
             local rc=0
             curl -fsS --proto '=https' --max-redirs 2 --max-time 25 \
-              --retry 3 --retry-delay 5 --retry-connrefused \
+              --retry 2 --retry-delay 5 --retry-connrefused --max-filesize 2000000 \
               -H 'Cache-Control: no-cache' "$1" -o "$3" 2>/dev/null || rc=$?
             if [[ "$rc" -ne 0 ]]; then
               findings+=("fetch_failed[$2]: curl exited ${rc} for $(sanitize "$1"); no body was read, so every anchor on this surface was skipped — an unobserved surface is never green")
@@ -152,46 +166,90 @@ jobs:
 
           LIMITS_URL="https://docs.devin.ai/product-guides/plugin-ecosystem.md"
           OVERVIEW_URL="https://docs.devin.ai/cli/extensibility/plugins/overview.md"
+          HOOKS_DOC_URL="https://docs.devin.ai/cli/extensibility/hooks/overview.md"
           CLI_CHANGELOG_URL="https://docs.devin.ai/cli/changelog/stable.md"
           RELEASES_URL="https://docs.devin.ai/release-notes/overview.md"
+          RELEASES_YEAR_URL="https://docs.devin.ai/release-notes/2026.md"
 
-          limits_ok=0 overview_ok=0 cli_ok=0 rel_ok=0
-          fetch_doc "$LIMITS_URL"        "limits"    "$TMPD/limits.md"    && limits_ok=1
-          fetch_doc "$OVERVIEW_URL"      "overview"  "$TMPD/overview.md"  && overview_ok=1
-          fetch_doc "$CLI_CHANGELOG_URL" "cli_changelog" "$TMPD/cli.md"   && cli_ok=1
-          fetch_doc "$RELEASES_URL"      "releases"  "$TMPD/releases.md"  && rel_ok=1
+          limits_ok=0 overview_ok=0 hooks_ok=0 cli_ok=0 rel_ok=0 rely_ok=0
+          fetch_doc "$LIMITS_URL"        "limits"        "$TMPD/limits.md"   && limits_ok=1
+          fetch_doc "$OVERVIEW_URL"      "overview"      "$TMPD/overview.md" && overview_ok=1
+          fetch_doc "$HOOKS_DOC_URL"     "hooks_overview" "$TMPD/hooks.md"   && hooks_ok=1
+          fetch_doc "$CLI_CHANGELOG_URL" "cli_changelog" "$TMPD/cli.md"      && cli_ok=1
+          fetch_doc "$RELEASES_URL"      "releases"      "$TMPD/releases.md" && rel_ok=1
+          fetch_doc "$RELEASES_YEAR_URL" "releases_year" "$TMPD/releases-year.md" && rely_ok=1
 
           # ---- claim anchors -------------------------------------------------------------
           # Mintlify source wraps sentences mid-claim (measured: the overview's "not in
           # cloud Devin sessions" wraps onto a continuation line), so both PRESENT anchors
-          # evaluate a flattened copy of the page. The ABSENT anchor stays line-scoped — a
+          # evaluate a flattened copy of the page. The ABSENT anchors stay line-scoped — a
           # real "hooks run in cloud" claim lives on one bullet, and flattening would let
           # unrelated neighbouring lines forge the conjunction.
-          for pair in "limits:$TMPD/limits.md:$limits_ok" "overview:$TMPD/overview.md:$overview_ok"; do
-            surface="${pair%%:*}"; rest="${pair#*:}"; file="${rest%%:*}"; ok="${rest##*:}"
+          #
+          # Two scope flags per surface pair (<surface>:<file>:<ok>:<scope>):
+          #   plugin — full anchor set (PRESENT locality/limitation claims + ABSENT
+          #            cloud-claim lines); limits + overview carry the claims today.
+          #   hooks  — ABSENT anchors only; the hooks reference page is silent on cloud
+          #            vs local today, so no PRESENT anchor can hold — but it is the
+          #            natural page to document cloud dispatch, so a claim APPEARING
+          #            there is itself the watched event.
+          #
+          # Two grep disciplines are load-bearing:
+          #   * no `producer | grep -q` under pipefail — grep -q closes the pipe on first
+          #     match, the producer takes SIGPIPE (rc 141), and the pipeline reports
+          #     failure even though the match succeeded. PRESENT anchors therefore test a
+          #     herestring (no producer); ABSENT anchors capture-then-test.
+          #   * ABSENT anchors must not fire on a NEGATED claim — a line like "hooks do
+          #     not run in cloud" contains hook+cloud+run. Candidate lines are required
+          #     AND-excluded on not/never/n't before they can raise a finding.
+          for pair in \
+            "limits:$TMPD/limits.md:$limits_ok:plugin" \
+            "overview:$TMPD/overview.md:$overview_ok:plugin" \
+            "hooks_overview:$TMPD/hooks.md:$hooks_ok:hooks"; do
+            surface="${pair%%:*}"; rest="${pair#*:}"; file="${rest%%:*}"; rest2="${rest#*:}"
+            ok="${rest2%%:*}"; scope="${rest2##*:}"
             [[ "$ok" == "1" ]] || continue
             flat="$(LC_ALL=C tr '\n' ' ' < "$file")"
 
-            # hooks_locality_claim (expected-PRESENT): the corrected docs scope hooks to
-            # local sessions — "registers lifecycle hooks in local Devin sessions" on the
-            # overview and "Hooks are currently best effort and fail open" on the
-            # limitations page. If this text goes, the hook contract moved.
-            if ! printf '%s' "$flat" | grep -qiE 'hooks?.{0,200}local Devin|local Devin.{0,200}hooks?|hooks?.{0,200}best effort|best effort.{0,200}hooks?'; then
-              findings+=("hooks_locality_claim_changed[${surface}]: the 'local sessions only / best effort, fail open' hook claims are absent or reworded — the hook contract moved upstream; re-read the page and re-verify (#8160 §1)")
+            if [[ "$scope" == "plugin" ]]; then
+              # hooks_locality_claim (expected-PRESENT): the corrected docs scope hooks
+              # to local sessions — "registers lifecycle hooks in local Devin sessions"
+              # on the overview and "Hooks are currently best effort and fail open" on
+              # the limitations page. If this text goes, the hook contract moved.
+              if ! grep -qiE 'hooks?.{0,200}local Devin|local Devin.{0,200}hooks?|hooks?.{0,200}best effort|best effort.{0,200}hooks?' <<<"$flat"; then
+                findings+=("hooks_locality_claim_changed[${surface}]: the 'local sessions only / best effort, fail open' hook claims are absent or reworded — the hook contract moved upstream; re-read the page and re-verify (#8160 §1)")
+              fi
+
+              # subagent_limitation (expected-PRESENT): "subagents ... not in cloud
+              # (Devin )?sessions" is the §2 limitation text; its absence is the
+              # capability candidate (or a docs restructure — a human re-reads either
+              # way).
+              if ! grep -qiE 'subagent.{0,240}not in cloud' <<<"$flat"; then
+                findings+=("subagent_limitation_changed[${surface}]: the 'not in cloud (Devin )?sessions' limitation for plugin subagents is absent or reworded — verify whether agents/**/*.md now load in cloud sessions (resolves #8160 §2) or the docs merely restructured")
+              fi
             fi
 
-            # subagent_limitation (expected-PRESENT): "subagents ... not in cloud (Devin
-            # )?sessions" is the §2 limitation text; its absence is the capability
-            # candidate (or a docs restructure — a human re-reads either way).
-            if ! printf '%s' "$flat" | grep -qiE 'subagent.{0,240}not in cloud'; then
-              findings+=("subagent_limitation_changed[${surface}]: the 'not in cloud (Devin )?sessions' limitation for plugin subagents is absent or reworded — verify whether agents/**/*.md now load in cloud sessions (resolves #8160 §2) or the docs merely restructured")
-            fi
-
-            # hooks_cloud_claimed (expected-ABSENT): a line claiming hooks run/dispatch in
-            # cloud is the §1 capability becoming documented. The docs already admit
-            # locality, so THIS direction — not an admission — is the watched event.
-            if grep -iE 'hook' "$file" | grep -iE 'cloud' | grep -qiE '\b(run|runs|running|dispatch|dispatched|dispatching|fire|fires|fired|work|works|working|supported|available|capable|execute|executes)\b'; then
+            # hooks_cloud_claimed (expected-ABSENT): a non-negated line claiming hooks
+            # run/dispatch in cloud is the §1 capability becoming documented. The docs
+            # already admit locality, so THIS direction — not an admission — is the
+            # watched event. `\bhooks?\b` word-boundary keeps "webhook" out.
+            hook_cloud_hits="$(grep -iE '\bhooks?\b' "$file" | grep -iE 'cloud' \
+              | grep -iE '\b(run|runs|running|dispatch|dispatched|dispatching|fire|fires|fired|work|works|working|supported|available|capable|execute|executes|load|loads|loading)\b' \
+              | grep -ivE '\bnot\b|\bnever\b|n.t\b' || true)"
+            if [[ -n "$hook_cloud_hits" ]]; then
               findings+=("hooks_cloud_claimed[${surface}]: a line on this page now claims hooks dispatch in cloud — the #8160 §1 capability may have shipped; re-run the cloud probe (#8172) to confirm before updating the capability matrix")
+            fi
+
+            # subagent_cloud_claimed (expected-ABSENT): an ADDITIVE cloud claim — e.g.
+            # "plugin subagents are now also available in cloud sessions" — evades the
+            # PRESENT limitation anchor (the old "not in cloud" line can survive
+            # alongside it), so the affirmative claim gets its own anchor. Bare
+            # "agents" counts too ("custom agents now work in cloud").
+            sub_cloud_hits="$(grep -iE '\b(sub)?agents?\b' "$file" | grep -iE 'cloud' \
+              | grep -iE '\b(run|runs|running|supported|available|load|loads|loading|work|works|working|dispatch)\b' \
+              | grep -ivE '\bnot\b|\bnever\b|n.t\b' || true)"
+            if [[ -n "$sub_cloud_hits" ]]; then
+              findings+=("subagent_cloud_claimed[${surface}]: a line on this page now claims plugin subagents/agents are available in cloud — the #8160 §2 capability may have shipped; verify whether agents/**/*.md load in cloud sessions")
             fi
           done
 
@@ -234,16 +292,21 @@ jobs:
               # pairs a hook bullet with an unrelated "cloud session" bullet two items
               # away and false-fires (measured on v3000.5.20 and the Sep-11 release notes,
               # the latter via a literal "ClickHouse Cloud" product name).
+              # `hook` needs a word boundary ("webhook" must not match); awk has no
+              # `\b` (it is a BACKSPACE in POSIX awk/gawk/mawk — silently never
+              # matches), so the boundary is spelled `(^|[^a-z])…([^a-z]|$)` on the
+              # already-lowercased buffer. `plugin`/`subagent` stay substring —
+              # prefix forms are intended hits.
               match="$(printf '%s\n' "$body" | awk '
                 /^[[:space:]]*[*-][[:space:]]/ || /^[[:space:]]*\*\*/ || /^[[:space:]]*#/ {
                   low=tolower(buf)
-                  if (low ~ /hook|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240); exit }
+                  if (low ~ /(^|[^a-z])hooks?([^a-z]|$)|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240); buf=""; exit }
                   buf = $0; next
                 }
                 { buf = buf " " $0 }
                 END {
                   low=tolower(buf)
-                  if (low ~ /hook|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240) }
+                  if (low ~ /(^|[^a-z])hooks?([^a-z]|$)|subagent|postcompaction|requiredplugins|plugin/ && low ~ /cloud/) { print substr(buf,1,240) }
                 }')"
               if [[ -n "$match" ]]; then
                 findings+=("capability_entry[${surface}]: entry dated $(sanitize "$dstr") (label: $(sanitize "$label")) has an item matching the capability watch: '$(sanitize "$match")' — verify whether cloud hook dispatch or plugin subagents shipped (#8160 §1/§2)")
@@ -261,6 +324,7 @@ jobs:
 
           [[ "$cli_ok" == "1" ]] && scan_updates "$TMPD/cli.md" "cli_changelog"
           [[ "$rel_ok" == "1" ]] && scan_updates "$TMPD/releases.md" "releases"
+          [[ "$rely_ok" == "1" ]] && scan_updates "$TMPD/releases-year.md" "releases_year"
 
           # ---- verdict-as-data ------------------------------------------------------------
           finding_count="${#findings[@]}"
