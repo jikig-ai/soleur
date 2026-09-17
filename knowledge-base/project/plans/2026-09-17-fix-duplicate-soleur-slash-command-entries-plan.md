@@ -915,3 +915,45 @@ UI-surface override did not fire: no path in `## Files to Edit` or `## Files to 
 matches `components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx` or any other
 UI-surface glob. The plan touches instruction markdown, two test files, two READMEs and one
 ADR. Product/UX Gate: NONE.
+
+
+---
+
+## Addendum — 2026-09-17 (work phase)
+
+Appended rather than edited: the body above is the record of what was planned, and a
+correction that overwrites it destroys the evidence of what was believed at plan time.
+
+**Falsified: "no Devin discovery probe exists."** The plan gates the (a′) follow-up on
+building `scripts/devin-plugin-smoke.*`, on the premise that `plugins/soleur/devin/skills/`
+had never been measured to load. `devin skills list` is a first-class subcommand and reports:
+
+```
+/soleur:go [user,model] (…/0.0.0-unversioned/skills/go)
+/soleur:go [user,model] (…/0.0.0-unversioned/devin/skills/go)
+```
+
+Both roots register; `help` and `sync` likewise. There is no probe to build, and the
+follow-up issue drops that task. The reading was taken against a pre-PR plugin cache, so it
+establishes that `devin/skills/` loads — it does **not** establish whether Devin honours
+`user-invocable: false`, which stays unmeasured and is scoped as such in ADR-224.
+
+**Superseded: the stated reason to defer deletion.** The real blocker is dispatch, not
+discovery. `plugins/soleur/skills/go/` is the sole model-invocable `Skill(soleur:go)` handle
+— `commands/go.md` is user-typed only, `apps/web-platform/server/` wires no `SlashCommand`
+tool, and `soleur-go-runner.ts:2162` keys sticky-workflow detection on `toolName === "Skill"`.
+
+**Corrected during implementation.** Three clauses of `## Guard Contract` as specified could
+not hold on the shipped tree:
+
+- Clause (a) would have been RED after the fix — Codex and Devin each resolve `go`/`help`/`sync`
+  from two roots today (now measured on both harnesses). Resolved with a by-name ack, so a new
+  cross-root duplicate still reds; mutation row M6 proves it.
+- Clause (b) as specified quantified over every root in `R(M)`, which could only be satisfied by
+  breaking the Codex and Devin entry points. Scoped to the default `skills/` root.
+- "**Glob-discover** every `plugins/soleur/.*-plugin/plugin.json`" does not work: Bun's `Glob`
+  does not match dot-directories, and the pattern returns `[]` — a guard reporting a clean sweep
+  having examined nothing. Replaced with a dirent scan plus a discovery floor.
+
+**Task 7.3 rescoped.** The plan names three stale-literal sites; there are four (`nfr-register.md:32`
+carries the same "61 workflow skills"). Per the filing-site net-flow gate they are inlined, not filed.

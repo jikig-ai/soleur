@@ -87,13 +87,21 @@ the description word budget stays 2442, and the cloud-mode marker fleet is
 unchanged — this ADR costs no counter churn.
 
 Decision 5 is satisfied today only with an ack. Codex and Devin each resolve
-`go`, `help` and `sync` from two roots, measured, and that is **not** fixed here:
-collapsing it means deleting the shared copies, which needs a Devin discovery
-probe first. `devin/skills/` has never been measured to load — Codex has
-`scripts/codex-plugin-smoke.mjs`, Devin has no equivalent, and
-`plugins/soleur/test/devin-plugin.test.ts` is an on-disk existence check rather
-than a discovery probe. The ack is by name, so the condition is guarded rather
-than invisible, and the follow-up is tracked.
+`go`, `help` and `sync` from two roots, and that is **not** fixed here. It is
+measured on both harnesses rather than inferred from the manifests:
+`node scripts/codex-plugin-smoke.mjs` reports 101 skills, and `devin skills list`
+reports `/soleur:go` from both `skills/go` and `devin/skills/go`, each
+`[user,model]`.
+
+Collapsing it means deleting the shared copies, and the blocker is **dispatch,
+not discovery**. `plugins/soleur/skills/go/` is the sole model-invocable
+`Skill(soleur:go)` handle: `commands/go.md` is user-typed only, `apps/web-platform`
+wires no `SlashCommand` tool, `server/prompt-injection-wrap.ts` sends
+`Invoke /soleur:go` on every Command Center message, and
+`server/soleur-go-runner.ts` keys sticky-workflow detection on
+`toolName === "Skill"`. Deleting the shim removes the mechanism on the hottest
+path in the product, against the regression ADR-113 already recorded once. The
+ack is by name, so the condition is guarded rather than invisible.
 
 Decision 4 draws the boundary that keeps decisions 2 and 5 satisfiable together.
 Without it the only way to make the guard green would be to remove the
@@ -122,8 +130,19 @@ reds against a bounded floor rather than passing over an empty corpus.
 no `SKILL.md`, so it is not a skill and this is not a collision. It pins the
 loader's own derivation rule and proves the guard does not over-reject.
 
-Codex discovery is verified mechanically rather than argued:
-`node scripts/codex-plugin-smoke.mjs` reports 101 skills — 98 canonical plus the
-three Codex wrappers — which is the additive behaviour decision 4 depends on.
-ADR-215's `98` figures are a dated record of a 95-canonical tree and are left
-unchanged.
+Per-harness discovery is verified mechanically rather than argued, on both
+harnesses that declare two roots. `node scripts/codex-plugin-smoke.mjs` reports
+101 skills — 98 canonical plus the three Codex wrappers — which is the additive
+behaviour decision 4 depends on. `devin skills list` reports `/soleur:go`,
+`/soleur:help` and `/soleur:sync` from `skills/` **and** `devin/skills/`, each
+`[user,model]`, which is decision 5's condition observed live. ADR-215's `98`
+figures are a dated record of a 95-canonical tree and are left unchanged.
+
+**Scope of the dedup claim.** Decision 3 is verified for **Claude Code**, whose
+frontmatter key this is. Whether Devin honours `user-invocable: false` is
+UNMEASURED: the `devin skills list` reading above was taken against a pre-PR
+plugin cache, so it shows the duplication but cannot show the fix. Re-run
+`devin skills list --trigger user` after a `devin plugins install` refresh to
+settle it. If Devin honours the key, its double-resolution of these three names
+closes as a side effect; if not, it persists and the decision-5 ack keeps doing
+real work.

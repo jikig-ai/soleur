@@ -108,12 +108,20 @@ the follow-up, not here.
 - [ ] 7.1. `bash scripts/test-all.sh` green, satisfying AC10: `bun --version` equals
       `.bun-version` **and** the bun shard reports a non-zero executed-test count, both
       captured in the PR body.
-- [ ] 7.2. File the (a′) follow-up issue: build `scripts/devin-plugin-smoke.*` mirroring
-      `codex-plugin-smoke.mjs`; once `devin/skills/` is **proven** to register, delete the
-      three shared shims and land the already-measured reverts (README 98→95, budget
-      2442→2400, marker fleet 67→65, the smoke-script comment) plus the repoint of the three
-      `apps/web-platform` dispatch sites.
-- [ ] 7.3. File one `type/chore` issue for the stale literals: `model.c4:117`
-      ("61 workflow skills"), `docs/_data/skills.js:11` ("4 categories, 91 skills"),
-      `knowledge-base/engineering/grok-onboarding.md:62` ("67 Soleur agents" against 68).
+- [x] 7.2. File the (a′) follow-up issue. **Rescoped at work-time — the plan's premise was
+      falsified.** `devin skills list` is a first-class subcommand and reports BOTH roots
+      registering (`skills/go` and `devin/skills/go`, each `[user,model]`), so there is no
+      `scripts/devin-plugin-smoke.*` to build; that task is dropped, not carried. The real
+      blocker is dispatch: `plugins/soleur/skills/go/` is the sole model-invocable
+      `Skill(soleur:go)` handle (`commands/go.md` is user-typed only, apps/web-platform wires
+      no SlashCommand tool, `soleur-go-runner.ts:2162` keys on `toolName === "Skill"`), so the
+      issue's binding precondition is a replacement dispatch mechanism QA'd against the
+      ADR-113 failure mode — not a discovery probe.
+- [ ] 7.3. Stale literals — **do NOT file**; the filing-site net-flow gate requires work of
+      ≤100 lines AND ≤4 files to be inlined. Four sites, one line each: `model.c4:117` and
+      `nfr-register.md:32` (both "61 workflow skills" against 98 — the plan named only the
+      first), `plugins/soleur/docs/_data/skills.js:11` ("4 categories, 91 skills"), and
+      `knowledge-base/engineering/grok-onboarding.md:62` ("**67** Soleur agents" against 68).
+      No test pins any of them (checked). `model.c4` requires
+      `bash scripts/regenerate-c4-model.sh` and staging `model.likec4.json`.
 - [ ] 7.4. Verify AC1–AC12. AC13 is post-merge and operator-facing.

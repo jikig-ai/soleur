@@ -1011,13 +1011,22 @@ describe("plugin slash-name uniqueness", () => {
     }));
   };
 
-  // Known, deliberate cross-root duplication. The Codex and Devin manifests each
-  // declare BOTH `./skills` and `./<harness>/skills`, and the three entry-point
-  // shims exist in both roots. Collapsing that is the follow-up tracked in the
-  // plan's Non-Goals — it needs a Devin discovery probe first, because
-  // `devin/skills/` has never been MEASURED to load. Ack'd BY NAME so a NEW
-  // cross-root duplicate, which is the class this clause exists to catch, still
-  // reds. Adding a name here is a deliberate act, not a baseline regeneration.
+  // Known, deliberate cross-root duplication, MEASURED rather than inferred:
+  // `devin skills list` reports /soleur:go from BOTH `skills/go` and
+  // `devin/skills/go`, each [user,model]. The Codex and Devin manifests declare
+  // two roots and the three entry-point shims live in both.
+  //
+  // Collapsing it means DELETING the shared shims, and that is blocked on
+  // dispatch, not on discovery: `plugins/soleur/skills/go/` is the only
+  // model-invocable `Skill(soleur:go)` handle — `commands/go.md` is user-typed
+  // only, apps/web-platform wires no SlashCommand tool, and
+  // server/prompt-injection-wrap.ts sends "Invoke /soleur:go" on EVERY Command
+  // Center message (ADR-113 records a measured user-facing regression when that
+  // skill is out of scope).
+  //
+  // Ack'd BY NAME so a NEW cross-root duplicate — the class this clause exists
+  // to catch — still reds; mutation row M6 proves that. Adding a name here is a
+  // deliberate act, not a baseline regeneration.
   const ACKED_CROSS_ROOT_DUPES = new Set(["go", "help", "sync"]);
 
   test("discovers the manifests and components it is asserting over", () => {
