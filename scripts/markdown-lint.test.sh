@@ -90,7 +90,20 @@ build_sandbox() {
   # invisible to the whole suite.
   printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
-  ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
+  # gc.auto=0 / maintenance.auto=false BEFORE the first object is written, and that is not
+  # hygiene. `cp -a` of this sandbox is the next statement, and git's auto-gc repacks loose
+  # objects and then REMOVES the now-empty `objects/XX` fan-out directories. `cp` enumerates
+  # those directories, then stats entries that have already gone, and dies -- taking the
+  # pristine snapshot with it:
+  #     cp: cannot stat '<sut>/./.git/objects/25': No such file or directory
+  #     FATAL: pristine snapshot failed
+  # That is a FATAL (exit 2) in a gate whose whole job is proving the linter can still fail,
+  # so the failure mode is "the guard could not run" presented as a red build. Measured
+  # 2026-09-17 both locally and in CI (job 105198403951); it is a race, so it passes on most
+  # runs, which is what kept it alive.
+  ( cd "$d" && git init -q \
+      && git config gc.auto 0 && git config maintenance.auto false \
+      && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
     || die "sandbox git init/commit failed"
 }
