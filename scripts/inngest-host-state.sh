@@ -105,13 +105,30 @@ for line in sys.stdin:
     if r.get("host") != "soleur-inngest":
         continue
     m = r.get("message")
-    if not isinstance(m, str) or "host_role=dedicated" not in m:
+    if not isinstance(m, str):
+        continue
+    # ANCHOR, NOT A BARE TOKEN (cq-assert-anchor-not-bare-token). A `"host_role=dedicated"
+    # in m` test matches ANY line CONTAINING the token, including third-party content the
+    # host merely logged. MEASURED 2026-09-17: inngest-server logs each webhook delivery as
+    # JSON carrying the full `rawBody`, so a GitHub pull_request event whose body quoted
+    # `host_role=dedicated` — the description of the PR adding this script — became the
+    # "newest probe row". Every field then parsed as absent and the summary still printed
+    # a confident `VERDICT NOT SERVING` about a healthy host.
+    if not m.startswith("SOLEUR_INNGEST_SERVER_PROBE"):
+        continue
+    if "host_role=dedicated" not in m:
         continue
     f = dict(re.findall(r"(\w+)=([^\s]+)", m))
     rows.append((o.get("dt", "")[:19], f))
 
 if not rows:
     sys.exit(4)
+
+# A row that anchored but carries no identity did not parse as a probe row. Emitting a
+# verdict over it would restate the defect above in a narrower form: absent fields must
+# never render as a health claim.
+if not rows[-1][1].get("instance_id") or not rows[-1][1].get("server_active"):
+    sys.exit(5)
 
 import datetime as _dt
 
@@ -160,6 +177,13 @@ if not serving:
     print("                 distinguish it from a boot in progress.")
 ' 2>/dev/null)"
 state_rc=$?
+
+if [[ "$state_rc" -eq 5 ]]; then
+  echo "inngest-host-state.sh: the newest anchored row carries no instance_id/server_active." >&2
+  echo "  It did not parse as a probe row, so NO VERDICT is emitted — an unparseable row is" >&2
+  echo "  not evidence of ill health any more than of good. Widen --since and re-read." >&2
+  exit 5
+fi
 
 if [[ "$state_rc" -eq 4 || -z "$state_out" ]]; then
   echo "inngest-host-state.sh: no dedicated-host probe rows in the last ${SINCE}." >&2

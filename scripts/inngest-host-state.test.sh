@@ -152,10 +152,40 @@ else
   fail "expected the BLOCK line in the scan, got rc=$rc out='$out'"
 fi
 
+echo "T9: a webhook payload that merely QUOTES host_role=dedicated is not a probe row"
+# MEASURED 2026-09-17: inngest-server logs every webhook delivery as JSON carrying the full
+# `rawBody`. A GitHub pull_request event whose body quoted `host_role=dedicated` — the PR
+# describing THIS script — became the "newest probe row"; every field parsed as absent and the
+# summary still printed a confident `VERDICT NOT SERVING` about a healthy host. The fix is an
+# anchored startswith, and this case is what keeps it.
+make_query
+{
+  row "2026-09-17 13:00:00" soleur-inngest "$DEDICATED_MSG"
+  row "2026-09-17 13:15:05" soleur-inngest '{"caller":"api","event":{"data":{"githubEvent":"pull_request","rawBody":"the pin is host_role=dedicated and host=soleur-inngest"}}}'
+} > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+out="${res%$'\001'*}"; rc="${res##*$'\001'}"
+if [[ "$rc" -eq 0 ]] && grep -q 'hetzner-166317708' <<<"$out" && ! grep -q 'rawBody\|pull_request' <<<"$out"; then
+  pass "quoted token ignored; the real probe row is still reported"
+else
+  fail "webhook payload treated as a probe row — got rc=$rc out='$out'"
+fi
+
+echo "T10: an anchored row with no identity fields yields NO verdict (exit 5)"
+make_query
+row "2026-09-17 13:20:00" soleur-inngest "SOLEUR_INNGEST_SERVER_PROBE host_role=dedicated" > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+out="${res%$'\001'*}"; rc="${res##*$'\001'}"
+if [[ "$rc" -eq 5 && -z "$out" ]]; then
+  pass "unparseable row -> exit 5, no verdict, empty stdout"
+else
+  fail "expected exit 5 with no verdict, got rc=$rc out='$out'"
+fi
+
 echo
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails"
-if [[ "$CASES_RUN" -lt 8 ]]; then
-  echo "FATAL: expected at least 8 cases, saw $CASES_RUN — suite lost coverage" >&2
+if [[ "$CASES_RUN" -lt 10 ]]; then
+  echo "FATAL: expected at least 10 cases, saw $CASES_RUN — suite lost coverage" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$CASES_RUN" ]]; then
