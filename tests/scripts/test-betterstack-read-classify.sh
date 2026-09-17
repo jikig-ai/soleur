@@ -42,7 +42,13 @@ pass=0; fail=0; FAILURES=()
 declare -F bs_read_classify >/dev/null \
   || { printf 'FAIL: bs_read_classify not defined after sourcing %s\n' "$LIB" >&2; exit 1; }
 
-_body() { local f; f="$(mktemp)"; printf '%s' "$1" > "$f"; printf '%s' "$f"; }
+# One owning scratch dir for every fixture body, removed on EXIT. Previously each _body()
+# call leaked a bare mktemp file: this suite makes ~25 of them per run, and a suite that
+# dies mid-assertion left every one behind. A standalone script can own a trap; the
+# library under test deliberately cannot (see its annotation).
+BODY_DIR="$(mktemp -d -t bsclassify.XXXXXXXX)"
+trap 'rm -rf "$BODY_DIR"' EXIT
+_body() { local f; f="$(mktemp -p "$BODY_DIR")"; printf '%s' "$1" > "$f"; printf '%s' "$f"; }
 
 want() {  # $1=label  $2=expected-token  $3=rc  $4=body-text
   local got bf; bf="$(_body "$4")"

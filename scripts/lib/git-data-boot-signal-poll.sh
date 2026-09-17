@@ -180,7 +180,16 @@ git_data_boot_poll() {
   # relative-operand guard cannot prove safe (they are command-substitution results, so no
   # static reading shows them absolute). Truncation removes both the churn and the
   # unprovable operands rather than asserting around them.
+  # SOURCED, so it cannot own a trap: this file is SOURCED into the caller's shell (the workflow
+  # step and the suite both `source` it), so a `trap ... EXIT` here would REPLACE the
+  # caller's own trap rather than add to one — silently disarming whatever cleanup the
+  # caller registered. The leak is bounded by construction: exactly ONE directory per
+  # git_data_boot_poll call, under TMPDIR, on an ephemeral Actions runner that is
+  # destroyed with the job. Explicit `rm -rf "$scratch"` was the other candidate and is
+  # rejected: it reintroduces a variable-rooted rm the P1b relative-operand guard cannot
+  # prove safe, trading a bounded leak for an unprovable destructive operand. (ADR-129)
   local scratch
+  # lint-trap-ownership: ok sourced library — a trap here would REPLACE the caller's; leak is one dir per call on an ephemeral runner (see above, ADR-129)
   scratch="$(mktemp -d -t gdboot.XXXXXXXX)"
   out="$scratch/rows"; err="$scratch/err"
 
