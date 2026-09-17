@@ -358,44 +358,49 @@ verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
 **Ask whether the battery is still OWED before running it (#8247).** CI's required
 `test` context aggregates `test-webplat` + `test-bun` + `test-scripts` +
-`web-platform-build` — the same three shards this battery runs — on the pushed head.
-When the tree you are about to ship is byte-identically what CI already verified,
-re-running them locally cannot change the merge decision. Branch on the exit code,
-never on the prose:
+`web-platform-build`. `test-all.sh` registers every suite inside one of
+`want_scripts` / `want_bun` / `want_webplat` / `want_infra`, so a local
+`TEST_GROUP=all` is CI's `test` plus the **infra** group — and CI additionally
+runs the relevance-gated suites the local run declines (`_diff_touches`
+short-circuits under `CI`). When the tree you are about to ship is byte-identically
+what CI already verified, re-running those shards locally cannot change the merge
+decision.
+
+Branch on the exit code, never on the prose:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
 rc=$?
-case "$rc" in
-  0) : ;;                                   # OWED — run the battery below
-  1) echo "battery SKIPPED: CI already verified this exact SHA (#8247)" ;;
-  *) echo "battery-owed could not decide (rc=$rc) — treating as OWED" ;;  # 2 and anything else
-esac
+if [[ "$rc" -eq 42 ]]; then
+  echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+else
+  echo "battery OWED (rc=$rc) — running it"
+  # ... run the full battery below ...
+fi
 ```
 
-**`1` is the ONLY value that skips.** Exit `2` means the gate could not evaluate its
-own conditions, and everything else is an error; both run the battery. The script is
-written so that every failure path reaches `0` or `2` and never `1`, but the caller
-must not depend on that — a gate that saves 35 minutes will be under standing
-pressure to be read generously, so read it strictly.
+**`42` is the ONLY value that skips, and the oddness is the point.** This script
+runs under `set -u`, and an unset-variable reference aborts a non-interactive bash
+script with **exit status 1** — so an earlier revision that used `1` for SKIPPABLE
+would have let one typo'd variable name in a future edit delete a 35-minute safety
+run. Every other status bash emits by accident (1, 2, 126, 127, 128+N) now falls
+through to OWED. Read it strictly: a gate that saves 35 minutes is under standing
+pressure to be read generously.
 
-**At the FIRST Phase 4 run this almost always returns OWED**, because Phase 4
-precedes the Phase 6 push and there is no CI for `HEAD` yet. That is by design: the
-saving is on the RE-RUN path this skill mandates after a review fix, a main sync, or
-a Phase 5.5 advisor fix. Measured on PR #8233 — two full batteries, ~70 minutes, the
-second finishing against a head whose 26/26 required checks were already green on the
-identical SHA.
+**At the FIRST Phase 4 run this returns OWED**, because Phase 4 precedes the
+Phase 6 push and there is no CI for `HEAD` yet. The saving is on the RE-RUN path
+this skill mandates after a review fix, a main sync, or a Phase 5.5 advisor fix —
+and it requires the re-run to happen on a **pushed** commit, since an unpushed one
+has no check-runs for its sha and returns OWED. Measured on PR #8233: two full
+batteries, ~70 minutes, the second finishing against a head whose 26/26 required
+checks were already green on the identical SHA.
 
-**What a skip does NOT cover.** The local run also executes suites that are not in
-the required set — repo-global ratchets and lint suites — and those go unrun. That is
-the accepted cost, and the script prints it. A skip is never silent.
-
-Four conditions must ALL hold before it returns `1`; the sharpest is that the working
-tree is clean and nothing is unpushed, because otherwise "CI is green" describes a
-different tree. The one that is easiest to get wrong is `apps/*/infra/**`: no required
-check runs that shard (#6480), so there the battery holds unique blocking authority
-and skipping would delete the only gate rather than avoid a duplicate. Pinned in both
-directions by [ship-battery-owed.test.sh](../../test/ship-battery-owed.test.sh).
+The conditions, what makes each load-bearing, and the mutation rows that pin them
+live in the script and in
+[ship-battery-owed.test.sh](../../test/ship-battery-owed.test.sh). They are
+deliberately NOT restated here: a copy in prose drifts the moment a condition is
+edited, and the script prints its own verdict and reasoning at runtime, which is
+the channel that cannot drift.
 
 Then run the full battery (when OWED):
 
