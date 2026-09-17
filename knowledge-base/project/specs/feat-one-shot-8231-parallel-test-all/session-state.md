@@ -78,3 +78,29 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; agents Explore, learnings-r
 spec-flow-analyzer, soleur:engineering:cto, dhh-rails-reviewer, kieran-rails-reviewer,
 code-simplicity-reviewer, architecture-strategist; gates lint-guard-contract.py,
 lint-infra-no-human-steps.py, c4-count-parity.test.sh, plus deepen-plan halts 4.6-4.11.
+
+## Compound Phase
+
+- Learning: `knowledge-base/project/learnings/2026-09-17-command-v-is-a-resolvability-probe-and-every-guard-i-wrote-to-pin-it-was-narrower-than-its-name.md`
+- Session errors inventoried: 14 (5 forwarded from the planning phase), each with a Prevention line.
+- Rule budget: `[OK] B_ALWAYS=42640`, linter exit 0. 98 rules, longest 596 chars.
+  `constitution.md` at 307 bullets vs the 300 advisory ceiling — flagged, not this PR's to fix.
+
+### Archival DELIBERATELY not run
+
+`compound`'s auto-consolidation archives a feature's plan and spec once the feature is done.
+This feature is **not** done: it is descoped to Phase 0 with #8231 OPEN, `tasks.md` carries the
+BLOCKED banner, and **36 tasks remain unchecked**. Archiving would move the plan and the spec out
+of the live path that the resumption needs.
+
+So `archive-kb.sh` was not run, and that is the decision — not the "an agent driving compound's
+phases by hand misses Step E" failure that skill warns about. The precondition for archival is a
+COMPLETED feature. When #8231's remaining phases land, archival belongs to THAT branch.
+
+### Resume prompt
+
+The parallel scheduler is blocked on a green baseline, not on design. Phase 0 measured the gate at
+**6.22x** (floor 2.0x), so the prize is real and roughly twice the plan's own estimate. What blocks
+Phase 1 is that 20 suites are red for reasons unrelated to this work, only ~8 of them
+toolchain-adjacent, so fault-injection cannot distinguish "interference reddened this" from
+"already red". Re-entry: fix the non-toolchain reds (overlaps #8112), then resume at Phase 1.
