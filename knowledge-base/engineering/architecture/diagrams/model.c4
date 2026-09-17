@@ -114,7 +114,7 @@ model {
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
-        description "61 workflow skills — brainstorm, plan, work, review, compound, etc."
+        description "98 workflow skills — brainstorm, plan, work, review, compound, etc."
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
