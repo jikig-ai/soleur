@@ -73,7 +73,7 @@ stock preflight, and a plan of that shape taken 2026-07-27 carried **nine destro
 | `prd_git_data` has **not** been hand-created in Doppler | `doppler configs -p soleur` — it must be ABSENT (Terraform creates it) |
 | **SIZING is confirmed** (#6982 / ADR-149 item 9) | `var.git_data_server_type` is `cpx22`, and ADR-068's D-SIZE addendum records WHY. Step 9's stock preflight checks **orderability**, never **adequacy** — it will happily birth an under-sized host. `user_data` is ForceNew and a type change routes through the DESTRUCTIVE `git-data-host-replace`, so the shape must be right at birth. |
 | **EMITTER verified** — it has actually emitted, not merely shipped | The rehearsal evidence named in the release record at the top of this runbook. `grep -c '$${sentry_dsn}'` proves nothing: the readiness gate checks THREADING, and a non-comment line that merely references the variable releases it. The question is whether an event ARRIVED. |
-| The Better Stack query credentials are present | The birth job's post-apply poll needs `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. If that step FAILS because they are absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
+| `DOPPLER_TOKEN` is present | **Changed 2026-09-17 (#8178).** The poll no longer binds `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` as GitHub secrets: it resolves them through `doppler run -p soleur -c prd_terraform`, the same way the apply step above it already did, so `DOPPLER_TOKEN` is now the only repo-config precondition. The old binding is why the poll had never read a row — those three secrets were last written 2026-07-03, before git-data's own Logs source existed (#7772), while the step's own error text always told the reader to check `prd_terraform`. If the poll fails because the token is absent, the boot signal is **unread** and you are back to "a green apply proves nothing" — do not re-dispatch after a green apply; run the query in "After the birth". |
 
 That last row matters more than it looks. See *"Doppler config already exists"* below.
 
@@ -366,6 +366,39 @@ channels. It still has no heartbeat of its own (deliberate — see ADR-149's D-H
 - `web-host-birth.md` — the sibling runbook
 - `git-data-luks-cutover-5274.md` — the cutover that makes the LUKS volume live
 - #6977 (this route) · #6982 (the interlock's release) · #5274 (Phase-3 GA)
+
+## Reading the poll's verdict (#8178)
+
+Since 2026-09-17 the poll reports **three** outcomes, not two, and the distinction is the
+whole point — two of them are about the HOST and one is not about the host at all.
+
+| Verdict | What it means | Where to go |
+|---|---|---|
+| `received` | The host reported `boot_complete` with a `dt` after this run's anchor. | Nowhere. The per-field invariants run next. |
+| `silent` | The read WORKED and the host has not reported inside the budget. This IS a statement about the host. | The boot chain: Sentry `stage=runcmd_early/sshd_config/volume_mount/doppler_dl/doppler_run/luks_open/bootstrap`, then the partial-birth decision tree below. |
+| `unreadable` | Every read failed. **Nothing about the host was measured.** | The READ path, never the host. The per-poll lines name the classification. |
+
+An `unreadable` run that says "the host never reported" is the defect #8178 existed to
+remove: it sends you to diagnose a boot when the fault is the query path, and it asserts a
+host fact the run never earned.
+
+The classification on an `unreadable` run names which read fault it was:
+
+| Class | Meaning |
+|---|---|
+| `credentials-rejected` | The read path refused the credentials. Rotate/verify them in `prd_terraform`; re-dispatching will not clear it. |
+| `table-missing` | ADR-192's shape — the source has never stored a row, so the PRODUCER is at fault, not the reader. |
+| `transport` | DNS / connect / timeout / TLS from the runner. Transient; re-dispatch. |
+| `reader-refusal` | `betterstack-query.sh` refused (destination pin / usage). A reader misconfiguration. |
+| `credentials-absent` / `reader-exit-1` | The wiring itself — `DOPPLER_TOKEN`, or `doppler run` failing before the reader. |
+
+The log never prints the response body, only its byte length. That is deliberate: this
+repository is public, its Actions logs are world-readable, and a ClickHouse auth failure
+body names the query username — half of a Basic-auth pair.
+
+**The poll now covers the replace job too.** It previously existed only on the birth path,
+which is once-ever; with a live host present every subsequent boot comes through
+`git_data_host_replace`, and that job had no poll at all.
 
 ## After the birth — verify the host actually booted (#6982)
 

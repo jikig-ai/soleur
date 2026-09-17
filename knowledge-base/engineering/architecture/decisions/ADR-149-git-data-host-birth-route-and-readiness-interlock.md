@@ -748,3 +748,61 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 | Include `doppler_secret.git_data_ssh_host` | **Cut from #6977; SHIPPED in #6982, and the feasibility regression was not structural.** The wedge is real only under the remedy *"give the new secret a per-PR `-target` line"* — which is not what any of its five sibling secrets do; they sit in `OPERATOR_APPLIED_EXCLUSIONS` with no per-PR target. Sourcing the value from a STATIC local rather than the computed NIC attribute leaves no edge that can reach the server, so the address is plannable and appliable with the host absent. **The operator upheld the cut on 2026-07-27 (DC-3)** and attached two mechanical constraints, recorded in release-checklist item 5: single-source from `hcloud_server_network.git_data.ip`, and land the `OPERATOR_APPLIED_EXCLUSIONS` entry in the same change. Both are now met: **DC-5 was REVERSED during #6982's review** (see the reversal note above) and the value reads `hcloud_server_network.git_data.ip` as mandated. The divergence argument — that the computed attribute is unappliable pre-birth — did not survive contact with the actual `-target` lines, which already include the NIC. The #6977 dissent is in `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md` (PR #6989); the operator's decision upholding it was added to that same file by #7003. |
 | Ship gate + suite now, enum + job in #6982 | **Considered and declined by the operator.** It would delete the interlock entirely by removing the capability, but #6977 would no longer deliver an executable route and would close on a partial. Recorded as DC-1. |
 <!-- lint-infra-ignore end -->
+
+## Amendment — 2026-09-17 (#8178): item 4's reader had never read
+
+Item 4 is satisfied host-side by *"the `stage:boot_complete` emit plus a poll that reads
+it"*, and the disposition row above records it **DONE**. The producer half held. The
+reader half had never once succeeded.
+
+**Measured.** On both real dispatches every one of the 20 polls returned `rc=22`
+(`curl --fail-with-body` on an HTTP >= 400): run
+[34822248580](https://github.com/jikig-ai/soleur/actions/runs/34822248580) (apply skipped
+by the birth gate) and run
+[34836141887](https://github.com/jikig-ai/soleur/actions/runs/34836141887) (apply SUCCESS,
+host born). The second is the sharp one — the job went RED saying *"the birth is
+UNVERIFIED"* while the host was in fact dark, and the poll could not have told that apart
+from a healthy one. The step ran `betterstack-query.sh … 2>/dev/null`, so the response
+body never reached the log and the cause was unrecoverable from `gh run view`.
+
+**Cause, and the rival explanation that was tested rather than assumed.** The identical
+query succeeds from `doppler run -p soleur -c prd_terraform` (measured 2026-09-17: full
+UNION `rc=0`/2 rows; `remote()` alone `rc=0`/0 rows — the ~40-minute hot window;
+`s3Cluster` alone `rc=0`/4 rows). Both arms answer, so the `s3Cluster` archive arm is not
+the 4xx. ADR-192's `CLUSTER_DOESNT_EXIST` shape — a source that has never stored a row
+answers HTTP 500, which `--fail-with-body` reports as the same `rc=22` as a 401 — was a
+live rival dated before both runs, and is refuted by measurement: the table holds 31 rows
+dated before 2026-09-15, oldest `dt 2026-09-04 15:15:56`. The fault is credential-side:
+the step bound three `secrets.BETTERSTACK_QUERY_*` last written 2026-07-03, before
+git-data's own Logs source existed (#7772, closed 2026-09-04), while its own error text
+had always told the reader to check `prd_terraform`.
+
+**A SECOND defect, which the credential fix alone would not have closed.** The 20 x 30 s
+budget is too short for the boot it watches. On run 34836141887 the poll ran
+`15:14:37 -> 15:24:47` and the host's `boot_complete` landed `15:27:24` — **2 m 37 s after
+the poll gave up**. With working credentials that birth still reports "the host never
+reported" about a host that reported shortly afterwards. Raised to 30 x 30 s on that
+measurement; one boot is not a distribution, so it buys margin rather than a guarantee,
+which is acceptable only because the verdicts now separate an exhausted budget from a
+failed read.
+
+**A premise nobody had asserted: `git_data_host_replace` had no poll at all**, and it is
+the path that actually runs — birth is once-ever, so with a live host present every
+subsequent boot comes through replace, and one completed green on 2026-09-16 having
+verified nothing. Its apply step also carried no `id:`, so a copied poll's
+`steps.apply.outcome` would have resolved to `''` and the guard would have shipped
+permanently skipped. Both jobs are now wired; the `if:` is enumerated so a future rename
+fails closed on that empty string.
+
+**What item 4 now means.** The reader is
+`scripts/lib/git-data-boot-signal-poll.sh`, driven hermetically by
+`tests/scripts/test-git-data-boot-signal-poll.sh`, and it reports THREE outcomes rather
+than two: `received` / `silent` / `unreadable`. The third is the one this issue is about —
+a read-path fault measures nothing about the host, and saying "the host never reported"
+there is a claim the run never earned. stdout and stderr go to separate files so the
+reader's own error echo (which contains the literal `boot_complete`) can never reach the
+match buffer. The failure log carries rc, a classification, the body's byte LENGTH and a
+scrubbed stderr line — never the body, because this repository is public and a ClickHouse
+auth body carries half a Basic-auth pair.
+
+A producer with no reader is not a signal; a reader that has never read is not a reader.
