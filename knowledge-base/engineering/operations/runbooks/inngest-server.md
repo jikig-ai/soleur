@@ -39,6 +39,11 @@ while the flag is `done` — it is deterministic, not a flake, so retrying the r
 it. **Retrying is the trap**: "same image, same cloud-init, same volume, so it must be transient"
 is the reasoning that produced a second stranded host on 2026-09-17.
 
+`apply-web-platform-infra.yml`'s `inngest_host_replace` job reads the flag before applying and,
+on `done`, emits a `::warning::` and writes the recovery below into the job summary. It does not
+block — the replace is often exactly what you want and the recovery is one dispatch — and it
+degrades open on an unreadable flag.
+
 **Recovery — one dispatch, no data loss:**
 
 ```
