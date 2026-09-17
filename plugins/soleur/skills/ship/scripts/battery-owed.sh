@@ -23,11 +23,11 @@
 # "not 42 ⇒ run", which is safe no matter how the script dies.
 #
 # WHY THIS EXISTS (#8247). CI's required `test` context aggregates
-# test-webplat + test-bun + test-scripts + web-platform-build — the same three
-# `test-all.sh` shards this battery runs — on the pushed head. The skill also
-# mandates re-running the battery after any post-Phase-4 change (a review fix, a
-# main sync, an advisor fix), and on that re-run path the work is frequently a
-# pure duplicate. Measured on PR #8233: two full batteries, ~70 min, the second
+# test-webplat + test-bun + test-scripts + web-platform-build, of which the first
+# three are the same three `test-all.sh` shards this battery runs — on the pushed
+# head. The skill also mandates re-running the battery after any post-Phase-4
+# change (a review fix, a main sync, an advisor fix), and on that re-run path the
+# work is frequently a pure duplicate. Measured on PR #8233: two full batteries, ~70 min, the second
 # finishing against a head whose 26/26 required checks were already green on the
 # identical SHA. It could not have changed the merge decision.
 #
@@ -172,7 +172,23 @@ fi
 # would miss it while test-all.sh's own predicate catches it. Measured on a probe
 # repo: --name-only gave `moved.tf`; --name-status -M gave
 # `R100  apps/web-platform/infra/a.tf  moved.tf`.
-CHANGED="$(git diff --name-status -M origin/main...HEAD 2>/dev/null | cut -f2-)"
+#
+# `tr '\t' '\n'` IS THE FIX, NOT FORMATTING. A rename emits both paths on ONE
+# tab-joined line, and INFRA_RE is `^`-anchored, so `cut -f2-` alone tests only
+# the OLD path — the gate saw renames OUT of the surface and was blind to renames
+# IN. Measured on a probe repo: `R100  src/x.tf  apps/web-platform/infra/x.tf`
+# did NOT match, so a 100%-similarity rename of a .tf file INTO the module
+# directory returned SKIPPABLE. Terraform loads every *.tf in the directory, so
+# that is a real infra change with no content diff, on the one shard no required
+# check covers. The `$`-anchored workflow alternative had the mirror bug: a
+# rename of apply-web-platform-infra.yml OUT of .github/workflows/ left the
+# literal in column 1 and never matched. Splitting the columns onto separate
+# lines tests each path independently.
+#
+# A COPY is not affected and needs no handling: without `-C` git reports the new
+# file as `A` with a single column, which already matches. Do not add `-C` in the
+# belief that it closes a gap — measured, it does not exist.
+CHANGED="$(git diff --name-status -M origin/main...HEAD 2>/dev/null | cut -f2- | tr '\t' '\n')"
 rc=$?
 (( rc == 0 )) || undecidable "could not compute the branch diff (rc=$rc)"
 # An EMPTY diff is not "no infra paths" — it is "HEAD is an ancestor of
@@ -280,12 +296,29 @@ eval_missing() {
                      # App identity: a required context pinned to an integration
                      # is satisfiable ONLY by that app. A row with no app id (a
                      # legacy commit status) can satisfy an UNPINNED context only.
-                     | select($r.integration_id == null or .app_id == $r.integration_id) ]
-                   | sort_by(.started_at // "")
-                   | last
-                   | if . == null then "ABSENT"
-                     elif (.status == "completed" and .conclusion == "success") then "ok"
-                     else "NOT-GREEN"
+                     | select($r.integration_id == null or .app_id == $r.integration_id) ] as $rows
+                   # ORDER-INDEPENDENT REFUSALS FIRST. `sort_by(.started_at // "")`
+                   # gives a null/absent started_at the key "", which sorts BEFORE
+                   # every ISO timestamp — so `last` picks an OLDER completed row
+                   # and an in-flight attempt becomes invisible. Measured: one
+                   # completed+success row plus one in_progress row with
+                   # started_at null returned "ok". That is a wrong SKIP, and it
+                   # is the same newest-wins inversion this file already fixed
+                   # once, arriving through the sort KEY instead of the sort.
+                   #
+                   # So neither refusal below consults ordering at all. Any
+                   # non-completed attempt means CI is not finished on this sha,
+                   # whatever its timestamp. And when two or more rows exist with
+                   # a missing key, "newest" is not decidable — fail toward OWED
+                   # rather than pick one. A single completed row needs no order.
+                   | if ($rows | length) == 0 then "ABSENT"
+                     elif ($rows | any(.status != "completed")) then "NOT-GREEN"
+                     elif (($rows | length) > 1
+                           and ($rows | any((.started_at // "") == ""))) then "NOT-GREEN"
+                     else ($rows
+                           | sort_by(.started_at)
+                           | last
+                           | if .conclusion == "success" then "ok" else "NOT-GREEN" end)
                      end ) }
       | select(.state != "ok") | "\(.name)=\(.state)" ]
     | join(", ")' <<<"$1" 2>/dev/null

@@ -246,6 +246,26 @@ make_stub "$STUB" "$TWO_REQUIRED" "$NEWEST_FIRST_RED" "$(head_sha_of "$WORK")"
 assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
   "T4c newest attempt is red and listed FIRST (production order) -> OWED (time, not array position)"
 
+# T4c2/T4c3 — ORDERING MUST NOT DECIDE when the sort key is absent.
+#
+# `sort_by(.started_at // "")` maps a null/missing key to "", which sorts BEFORE
+# every ISO timestamp, so `last` returns an OLDER completed row and an in-flight
+# attempt becomes invisible. Measured before the fix: one completed+success row
+# plus one in_progress row with `started_at: null` evaluated to "ok" -> SKIPPABLE.
+# That is the same newest-wins inversion this file already fixed once, arriving
+# through the sort KEY rather than the sort. Both rows below are order-independent
+# by construction: T4c2 refuses on the attempt's STATUS, T4c3 on the fact that
+# "newest" is undecidable across two rows when a key is missing.
+NULL_START_INFLIGHT='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"in_progress","conclusion":null,"started_at":null,"app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$NULL_START_INFLIGHT" "$(head_sha_of "$WORK")"
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T4c2 an in-flight attempt with a NULL started_at cannot be hidden by an older green row -> OWED"
+
+NULL_START_BOTH_GREEN='[{"name":"test","status":"completed","conclusion":"success","started_at":"2026-01-01T00:00:00Z","app":{"id":15368}},{"name":"test","status":"completed","conclusion":"failure","started_at":null,"app":{"id":15368}}]'
+make_stub "$STUB" "$PINNED_REQUIRED" "$NULL_START_BOTH_GREEN" "$(head_sha_of "$WORK")"
+assert_eq "$OWED" "$(run_gate "$WORK" "$STUB")" \
+  "T4c3 two completed attempts where one has NO started_at -> OWED (newest is undecidable)"
+
 # =============================================================================
 # T4d — APP IDENTITY. A pinned context is satisfiable only by its own app.
 #
@@ -366,6 +386,32 @@ in_fixture "$WORKB" bash -c 'git mv apps/web-platform/infra/a.tf moved.tf && git
 make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
 assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
   "T5f a file renamed OUT of apps/web-platform/infra/ -> OWED (the old path must still count)"
+
+# =============================================================================
+# T5g/T5h — the MIRROR of T5f, which T5f structurally could not reach.
+#
+# A rename emits both paths on ONE tab-joined line and INFRA_RE is `^`-anchored,
+# so testing the joined line tests the OLD path only. T5f renames OUT, putting
+# the infra path in column 1 where the anchor matches -- so T5f passed while the
+# gate was blind to every rename IN. Measured on a probe repo before the fix:
+# `R100  src/x.tf  apps/web-platform/infra/x.tf` did NOT match, i.e. a .tf file
+# renamed into the Terraform module directory returned SKIPPABLE. Terraform loads
+# every *.tf in that directory, so it is a real infra change with no content diff,
+# on the one shard no required check covers. T5h is the same bug at the workflow
+# literal, whose `$` anchor fails when the literal sits in column 1.
+# Both die if `tr '\t' '\n'` is removed from the CHANGED pipeline.
+# =============================================================================
+in_fixture "$WORKB" bash -c 'git checkout --quiet -- . && printf "y\n" > outside.tf && git add -A && git commit --quiet -m "add a tf file outside infra" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
+in_fixture "$WORKB" bash -c 'mkdir -p apps/web-platform/infra && git mv outside.tf apps/web-platform/infra/outside.tf && git commit --quiet -m "rename INTO the infra surface"'
+make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
+assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
+  "T5g a file renamed INTO apps/web-platform/infra/ -> OWED (the NEW path must also count)"
+
+in_fixture "$WORKB" bash -c 'git checkout --quiet -- . && mkdir -p .github/workflows && printf "on: push\n" > .github/workflows/apply-web-platform-infra.yml && git add -A && git commit --quiet -m "add the apply workflow" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
+in_fixture "$WORKB" bash -c 'git mv .github/workflows/apply-web-platform-infra.yml docs-old-apply.yml && git commit --quiet -m "rename the apply workflow out"'
+make_stub "$STUBB" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$WORKB")"
+assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
+  "T5h the apply-web-platform-infra workflow renamed OUT -> OWED (the \$-anchored literal in column 1)"
 
 # =============================================================================
 # T2b/T2c — the OTHER TWO dirty shapes. T2 only ever instantiated an UNTRACKED
@@ -519,7 +565,71 @@ while IFS= read -r _p; do
   fi
 done <<< "$AUTHORITY_PREFIXES"
 
+# =============================================================================
+# T13 — parity with the premise the WHOLE gate rests on.
+#
+# The gate's containment argument is that CI's required `test` context covers
+# every test-all.sh group except infra. T11 pins the infra half. Nothing pinned
+# this half: if ci.yml's `test` aggregator drops a shard from its `needs:` list,
+# the gate keeps skipping a suite CI no longer runs, and its verdict line is
+# unchanged. Measured while adding this row: `test` is `needs: [test-webplat,
+# test-bun, test-scripts, web-platform-build]` with `if: always()`, and its
+# aggregation loop sets fail=1 on ANY non-success result -- so a SKIPPED shard
+# reds the context rather than passing it. That is what makes the premise true
+# today, and it is exactly what could change without anyone editing this gate.
+#
+# DERIVE both sides. The aggregator's needs: list comes out of ci.yml; the
+# expected set comes out of the gate's own premise comment. Neither is retyped
+# here, so a shard added to one and not the other reds this row.
+# =============================================================================
+CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+AGG_NEEDS="$(awk '/^  test:/{f=1} f&&/^    needs:/{print; exit}' "$CI_YML" \
+  | sed -E 's/^[[:space:]]*needs:[[:space:]]*\[//; s/\][[:space:]]*$//' | tr ',' '\n' \
+  | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -c .)"
+if [[ "$AGG_NEEDS" -ge 4 ]]; then
+  assert_eq "ok" "ok" "T13 extracted $AGG_NEEDS shard(s) from ci.yml's test aggregator (>=4)"
+else
+  assert_eq "derived $AGG_NEEDS" "ok" "T13 extraction found $AGG_NEEDS shards — extractor broken, rows below vacuous"
+fi
+
+# DIRECTION MATTERS, and the first draft of this row had it backwards. Iterating
+# ci.yml's shards and asserting the gate NAMES each one does not catch the drift
+# that hurts: CI dropping a shard from the aggregator while the gate keeps
+# skipping on its behalf. Iterate the GATE's named shards and require ci.yml to
+# still aggregate each -- that is the direction in which silence becomes a wrong
+# SKIP.
+GATE_PREMISE="$(grep -F 'test-webplat + test-bun + test-scripts' "$REPO_ROOT/plugins/soleur/skills/ship/scripts/battery-owed.sh")"
+GATE_SHARDS="$(printf '%s\n' "$GATE_PREMISE" | grep -oE '(test-webplat|test-bun|test-scripts|web-platform-build)' | sort -u)"
+AGG_LIST="$(awk '/^  test:/{f=1} f&&/^    needs:/{print; exit}' "$CI_YML" \
+  | sed -E 's/^[[:space:]]*needs:[[:space:]]*\[//; s/\][[:space:]]*$//' | tr ',' '\n' \
+  | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep .)"
+_gate_n="$(printf '%s\n' "$GATE_SHARDS" | grep -c .)"
+if [[ "$_gate_n" -ge 4 ]]; then
+  assert_eq "ok" "ok" "T13 the gate's premise names $_gate_n shard(s) (>=4)"
+else
+  assert_eq "derived $_gate_n" "ok" "T13 premise extraction found $_gate_n shards — rows below vacuous"
+fi
+while IFS= read -r _shard; do
+  [[ -z "$_shard" ]] && continue
+  if printf '%s\n' "$AGG_LIST" | grep -qx "$_shard"; then
+    assert_eq "ok" "ok" "T13 ci.yml's test aggregator still covers '$_shard'"
+  else
+    assert_eq "MISSING" "ok" "T13 the gate skips on behalf of '$_shard' but ci.yml no longer aggregates it — premise drift"
+  fi
+done <<< "$GATE_SHARDS"
+
+# The aggregator must not treat a non-success shard as a pass. Executed, not read:
+# a `skipped` shard flowing through as green is the shape that would let the gate
+# skip a suite CI never ran.
+AGG_BODY_NONSUCCESS="$(awk '/^  test:/{f=1} f&&/^  [a-z]/&&!/^  test:/{exit} f' "$CI_YML" \
+  | grep -cE '^[[:space:]]*if \[\[ "\$result" == "success" \]\]; then')"
+if [[ "$AGG_BODY_NONSUCCESS" -ge 1 ]]; then
+  assert_eq "ok" "ok" "T13 ci.yml's aggregator continues ONLY on success, so a skipped shard reds the context"
+else
+  assert_eq "MISSING" "ok" "T13 ci.yml's aggregator no longer gates on == success — the gate's premise may be false"
+fi
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 33
+print_results 44
