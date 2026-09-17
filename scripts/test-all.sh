@@ -315,10 +315,29 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
 # scripts shard needs no bun and no node *version pin*: it uses stock
 # ubuntu-latest node, unpinned, for the one `node --test` suite below).
+#
+# `command -v bun` is NOT a sufficient test for "bun works", and the difference is not cosmetic.
+# A version-manager SHIM resolves on PATH while being unable to run: a `mise` shim with no
+# version pinned prints `mise ERROR No version is set for shim: bun` to stderr and exits
+# non-zero. This file is `set -euo pipefail` (line 2), so the bare `actual=$(bun --version)` was
+# an ABORT rather than a skipped check — and it sits ABOVE every registration emit, so the
+# observable failure was not a missing warning. It was `--enumerate` returning ZERO records at
+# rc 1 on a host where nothing about the battery was wrong, which reddened every consumer that
+# correctly fails closed on the stream's count (`scripts/battery-tag-authorship.test.sh:224-260`,
+# `plugins/soleur/test/scripts-shard-totality.test.sh`,
+# `plugins/soleur/test/fullsuite-merge-gate.test.ts`) for a cause none of them could name.
+#
+# So the read is guarded and the DEGRADED case is reported rather than silently swallowed — a
+# toolchain that cannot answer its own version is worth one line of stderr, and staying silent
+# here would be the same fail-quiet class the consumers above exist to prevent. Pinned by
+# scripts/test-all-enumerate-toolchain.test.sh, whose R5 row is what stops this from being
+# "fixed" by deleting the check. (#8231)
 if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
   expected=$(tr -d '[:space:]' < .bun-version)
-  actual=$(bun --version)
-  if [[ "$actual" != "$expected" ]]; then
+  actual=$(bun --version 2>/dev/null) || actual=""
+  if [[ -z "$actual" ]]; then
+    echo "WARNING: bun is on PATH but 'bun --version' failed; skipping the version check (a shim with no pinned version does this)" >&2
+  elif [[ "$actual" != "$expected" ]]; then
     echo "WARNING: Bun $actual installed, expected $expected (from .bun-version)" >&2
     echo "Run: bun upgrade" >&2
   fi
@@ -2647,6 +2666,13 @@ if want_scripts; then
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
+  # #8231: `--enumerate` must not depend on a WORKING bun, only on the absence of a broken one.
+  # Registered explicitly for the reason its neighbours state — repo-root `scripts/*.test.sh` is
+  # NOT in SUITE_GLOBS, so an unregistered suite here runs in zero runners and stays green
+  # forever. This one guards the producer for three consumers that fail closed on the enumerate
+  # stream's record count, including `scripts/battery-tag-authorship` two lines above, which was
+  # measured at exit 1 on a host whose only defect was an unpinned `mise` bun shim. bash-only.
+  run_suite "scripts/test-all-enumerate-toolchain" bash scripts/test-all-enumerate-toolchain.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by
