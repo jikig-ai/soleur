@@ -23,11 +23,19 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 You must be signed in (`devin auth login`) for plugin installation. Use `-y` to skip the confirmation prompt. The first install may take a few minutes because Devin clones the `jikig-ai/soleur` repository to reach the `plugins/soleur` subfolder.
 
-The `owner/repo#subdir` shorthand above is a `devin plugins install` form only. In a manifest position (`.devin/config.json` `requiredPlugins`) it parses as a local path relative to the repo root and fails with "is not a directory" — use the full-URL form there:
+The `owner/repo#subdir` shorthand above is a `devin plugins install` form only. In a manifest position (`.devin/config.json` `requiredPlugins`) it parses as a local path relative to the repo root and fails with "is not a directory". The full-URL string form (`"https://github.com/jikig-ai/soleur#plugins/soleur"`) resolves locally but is broken in cloud: the cloud resolver passes the whole string — `#subdir` fragment included — to the `git-manager.devin.ai` proxy as the repository path and the fetch 404s (measured 2026-09-17 on a `/handoff` session and a DRS sandbox, #8172). Use the `git-subdir` object form, which registers and resolves at repo level on both surfaces:
 
 ```jsonc
 // .devin/config.json
-{ "requiredPlugins": ["https://github.com/jikig-ai/soleur#plugins/soleur"] }
+{
+  "requiredPlugins": [
+    {
+      "source": "git-subdir",
+      "url": "https://github.com/jikig-ai/soleur.git",
+      "path": "plugins/soleur"
+    }
+  ]
+}
 ```
 
 If the remote install hangs or fails, clone the repository and install from the local path:
@@ -90,12 +98,12 @@ Soleur runs in two Devin environments with different enforcement surfaces:
 | Plugin hooks: `SessionStart` / `SessionEnd` | yes | **no — never fire in cloud** |
 | Plugin hooks: `command` type (PreToolUse, PostToolUse, Stop) | yes | **no — measured absent (both arms)**: `matcher: ""` catch-all produced nothing; corrects the "documented yes" claim |
 | Repo-level hooks (`.devin/config.json`, `.claude/settings.json`) | yes | **no — measured absent (both arms)**: SessionStart `additionalContext` never reached the session; catch-all marker test produced nothing |
-| `.devin/config.json` `requiredPlugins` | yes | documented repo-level key, honored "in cloud sessions, from each cloned repository" (plugins overview §Inheritance level 3); marginal effect unmeasured — account already installs Soleur via the managed manifest |
+| `.devin/config.json` `requiredPlugins` | yes | **measured honored** — repo key registered `scope: "repo"` from each repo cloned at session start; `git-subdir` object form resolves, full-URL `#subdir` string form 404s through the cloud git-manager proxy (see install section) |
 
-*Evidence class:* rows marked "measured" come from two 2026-09-15 probe arms —
-a `devin cloud drs` sandbox and a user-facing web-app session
-(`cloud-probe.md`); residual items (handoff `.devin/` sync, `PostCompaction`,
-`requiredPlugins` marginal effect) are tracked at #8172.
+*Evidence class:* rows marked "measured" come from 2026-09-15 probe arms —
+a `devin cloud drs` sandbox and a user-facing web-app session — plus the
+2026-09-17 residual arms (two `/handoff` sessions, three DRS sandboxes)
+(`cloud-probe.md`); `PostCompaction` remains unmeasured — tracked at #8172.
 
 **Detection:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` prints
 `local` or `not-local:<reason>` (`sentinel-absent`, `foreign-host`,
@@ -173,16 +181,30 @@ it reads hook-stdin transcript data a standalone script cannot see.
   agents absent (documented limitation); built-in `run_subagent` exists in
   the web-app arm but cannot load the Soleur roster. The request should
   cover ALL hook surfaces, not just SessionStart/SessionEnd.
-- **`requiredPlugins` marginal effect** — repo-level key is documented
-  (plugins overview §Inheritance level 3), but the account's managed manifest
-  already installs Soleur, masking the marginal effect; a clean-account arm
-  remains open (#8172).
+- **`requiredPlugins` `url`+`#subdir` resolver bug** — measured 2026-09-17
+  (#8172): a full-URL string requirement carries its `#plugins/soleur`
+  fragment verbatim into the `git-manager.devin.ai` fetch path and 404s
+  ("repository not found"); the same string resolves locally. The object
+  form (`{"source":"git-subdir","url":...,"path":...}`) registers and
+  resolves at repo level in cloud. Repo-level `requiredPlugins` itself is
+  confirmed honored in cloud — registered `scope: "repo"` per repo cloned
+  at session start. Fix: strip the fragment / map the string form onto the
+  `git-subdir` source in the cloud resolver.
+- **`/handoff` does not deliver the declared working state** — measured
+  2026-09-17 (#8172): the session checkout came from the warm blueprint
+  image on `main`, not the handed branch, and no uncommitted state
+  (tracked diff, untracked, gitignored `.devin/` files) materialized on the
+  filesystem — `git status` clean. CLI docs claim handoff "checks out the
+  branch you're on"; measured otherwise.
 - **`ask_user_question` in cloud** — tool absent; `message_user` is
   blocking-only and stalls indefinitely when unanswered. If an interactive
   question primitive is added to cloud, its unattended semantics need
   documenting (auto-approve would fail the ack gate open).
 - **`PostCompaction` in cloud** — documented-capable but unmeasured (no
-  dispatcher observed for any other event; needs a dedicated arm, #8172).
+  dispatcher observed for any other event; the 2026-09-17 handoff arm
+  registered a marker on the probe branch but the checkout came from
+  `main`, so the binding was never active — still needs an arm where
+  compaction actually fires, #8172).
 
 ## Domain agents
 

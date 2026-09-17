@@ -469,6 +469,7 @@ blog
 blog-authoring
 blog-post
 blue-green
+blueprint
 bodies
 body
 body-grep-comments
@@ -1682,6 +1683,7 @@ git-history
 git-identity
 git-index
 git-ls-files
+git-manager-proxy
 git-mv
 git-pull
 git-rebase
@@ -1691,6 +1693,7 @@ git-rev-parse
 git-scoping
 git-show-main
 git-stash
+git-subdir
 git-tags
 git-trailers
 git-workflow
@@ -2847,6 +2850,7 @@ probe
 probe-discipline
 probe-failure-asymmetry
 probe-first
+probe-methodology
 probe-receipt
 probes
 proc-cmdline
@@ -3097,6 +3101,7 @@ requestanimationframe
 require
 required-checks
 required-reviewer
+requiredplugins
 requirements-elicitation
 requires_cpo_signoff
 rerender
@@ -4183,6 +4188,7 @@ wai-aria
 wal
 walk
 wall-clock
+warm-image
 warm-standby
 warning-level
 watch-only
