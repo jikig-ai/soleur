@@ -18,6 +18,46 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
 | Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
+| Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
+
+## Inherited `done` after a host replace (#7228)
+
+**Symptom.** An `apply_target=inngest-host-replace` succeeds, the server is `running`, the AOF
+volume is preserved — and `inngest-server` never starts. The probe reads
+`server_active=activating http_code=000` indefinitely, and the host journal carries:
+
+```
+BLOCK: cutover flag='done' but this host carries no done-owner marker at
+/var/lib/inngest-cutover/done-owner — refusing a prod start on an INHERITED done (#7228)
+```
+
+**This is not a malfunction.** `INNGEST_CUTOVER_FLIP` lives in Doppler and **outlives the host**;
+the matching `done-owner` marker lives on the **root disk**, which a replace destroys. The new
+machine therefore inherits a `done` it never earned, and the flip guard refuses rather than risk
+running a **second** prod scheduler. It follows that **every** host replace strands the scheduler
+while the flag is `done` — it is deterministic, not a flake, so retrying the replace cannot fix
+it. (`apply-web-platform-infra.yml`'s `inngest_host_replace` job now warns about this before
+applying and prints the recovery in its job summary.)
+
+**Recovery — one dispatch, no data loss:**
+
+```
+gh workflow run cutover-inngest.yml -f op=resume
+```
+
+`op=resume` exists for exactly this state. Its G1 requires the flag to be `done` (only that
+evidences a completed flip), G3 requires the host to be audible, and it then writes
+`INNGEST_CUTOVER_FLIP=flushed`. The on-host 30s timer takes the post-flush arm: start → verify it
+SERVES → re-record the marker → complete to `done`, **with no re-FLUSHALL**, so the queue
+survives. Confirm by the FSM row `reason="flushed-resume-no-reflush"` followed by a return to
+`noop-done`.
+
+**Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
+it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
+
+**Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
+was invisible until the host journal was read — see
+[§ Reading host state without SSH](#reading-host-state-without-ssh) for the read that finds it.
 
 ## Reading host state without SSH
 
@@ -58,6 +98,29 @@ jq '.services' /tmp/ds.json
 a Cloudflare Tunnel hostname and Cloudflare picks a connector per edge colo, so a read can be
 answered by a *different* host than you meant. A redis-healthy answer from a peer is otherwise
 indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exactly this.
+
+> **This recipe CANNOT read the dedicated inngest host — use `scripts/inngest-host-state.sh`.**
+> MEASURED 2026-09-17, 12 consecutive pinned attempts: every one was answered by
+> `hetzner-123931471` (web-1); none reached the inngest host. This is not an unlucky
+> coin-flip to retry past — the `/hooks` channel **terminates on web-1**, and the dedicated
+> inngest host runs no listener and has no inbound rule (deny-all public firewall; the tunnel
+> ingress is web-1's). So a `deploy-status` read "about the inngest host" is structurally a
+> reading of a different machine, and `restart-inngest-server.yml` — same endpoint — cannot
+> reach it either, which is why its verify step fails against a host it never contacted.
+>
+> The channel that *does* reach it is journald → vector → Better Stack, which is continuous
+> rather than hourly and carries host identity **in the row**, so pinning is a filter rather
+> than a routing hope:
+>
+> ```
+> doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh
+> ```
+>
+> It prints the newest dedicated-host probe row **with its age**, a SERVING/NOT SERVING
+> verdict, and a scan of recent unit refusals. Note the pin is the conjunction
+> `host=soleur-inngest` **AND** `host_role=dedicated`: web-1 also emits
+> `SOLEUR_INNGEST_SERVER_PROBE` with `host_name=soleur-inngest-prd`, so filtering on the
+> marker or on `host_name` selects the wrong machine while looking right.
 
 Fields this runbook uses (all under `.services`):
 
