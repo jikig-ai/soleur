@@ -153,6 +153,13 @@ convincing the false evidence becomes.
 1. **Handoff claimed PR #7510 was "STILL DRAFT"; it merged 2026-08-19 (`45ea9f7e9`).** Recovery: a
    `gh pr view` at session start. **Prevention:** an inherited state claim is a claim — re-measure
    every blocker's state before acting on a handoff's scope decision.
+   **Three of this handoff's factual claims were stale, not one** (see also #2, and its "an open P1
+   (`/var/lib/zot` 100% full) may fail the post-merge deploy" — #7341 has been CLOSED since
+   2026-08-14). Each was refuted in seconds by one `gh` call. The count is the finding: a handoff's
+   *narrative* can be sound while its *state assertions* have all decayed, because prose is written
+   once and the world keeps moving. Re-measure every one before use, not the ones that look
+   suspicious — the third was caught only because it was checked on principle, having caused no
+   visible trouble.
 2. **Handoff said "update the `-lt 44` floor"; the floor on `main` is `-lt 92`.** Recovery: grepped
    the file. **Prevention:** re-derive every load-bearing number a handoff carries; ~15 seconds.
 3. **My PR body's prose assigned the closing link** (this learning). **Prevention:** assert the API
