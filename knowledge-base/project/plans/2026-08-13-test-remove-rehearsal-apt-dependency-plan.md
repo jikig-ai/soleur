@@ -9,10 +9,9 @@ phase1_branch: feat-prebake-rehearsal-image-7535
 spec_dir: knowledge-base/project/specs/feat-prebake-rehearsal-image-7535
 issue: 7535
 refs: 7535
-implementation_pr: 8249
-# `closes:` deliberately absent: Phase 2's IMPLEMENTATION shipped in PR #8249 from a
-# parallel session, which carries `Closes #7535`. This branch is docs-only and must not
-# close the issue ahead of it. See `## Issue disposition`.
+status: docs-only — Phase 2's implementation shipped in PR #8249 (parallel session); see `## Issue disposition`
+# `closes:` absent on purpose: plan frontmatter does NOT control issue closure — the PR body keyword
+# and GitHub's linked-issue association do. See `## Issue disposition` for what is owed.
 lane: cross-domain
 type: test-infrastructure
 priority: p2-medium
@@ -31,7 +30,8 @@ against today's `main`.
 
 **Phase 2 — this work.** Make the two remaining uncovered apt cycles name themselves, so a
 starved mirror is never read as a substantive finding about the emitter or as a finding about the
-mutation battery. Phase 2 completes #7535's residual scope, so the PR body uses **`Closes #7535`**
+mutation battery. Phase 2 completes #7535's residual scope; the close is carried by the
+implementation PR, not by this docs branch — see `## Issue disposition`
 (Phase 1 correctly used `Refs`).
 
 **What this plan no longer does.** An earlier revision proposed replacing all eight container
@@ -521,12 +521,20 @@ measured, `apt-update` at R4 yields four hard FAILs — so D8 generalises the pr
 for the workflow-surface corollary.
 
 #### D9 — record the skip-roster and ceiling defect. OWED (record, do not fix).
-Measured: the roster guard's `_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0")` returns
-**4**, while the file has **7** executable `arm_skip` call sites — the three S2 ones are `case`-arm
-one-liners (`did-not-run) arm_skip "S2(h-j) …" 3 ;;`) the line anchor cannot see. Consequences, all
-pre-existing and all touched by this PR:
+Measured **against `origin/main`**, 2026-09-17: the roster guard's
+`_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0")` returns **3**, while the file has **6**
+executable `arm_skip` call sites — the three S2 ones are `case`-arm one-liners
+(`did-not-run) arm_skip "S2(h-j) …" 3 ;;`) the line anchor cannot see.
 
-- The declarable skip budget is **14** against `_SKIP_CEILING=8`. One unpullable image declines
+> **Numbers corrected 2026-09-17.** R2 recorded 4 / 7 / 14 / ceiling 8. Those were measured on the
+> discarded worktree copy (which carried a T17 `arm_skip`), not on `main`, and were labelled
+> "pre-existing" — so they would have filed four wrong figures as the evidence for a pre-existing
+> defect. Re-derived on `origin/main` with the census's own regex: **3 / 6 / 13 / ceiling 7**. The
+> defect is unchanged in substance (budget still exceeds the ceiling by 6); only its magnitudes move.
+
+Consequences, all pre-existing and all touched by this PR:
+
+- The declarable skip budget is **13** against `_SKIP_CEILING=7`. One unpullable image declines
   every arm, so a legitimate ADR-188 decline already produces `skip ceiling exceeded` — the
   spurious second failure the ceiling's own stanza says it exists to prevent.
 - The `-eq N` stanza assertion and the `_PROBE_NAMED == _SKIP_CALL_SITES` identity are blind to
@@ -731,7 +739,12 @@ enough — see the `Skipped:` clause in `## Verification`.
   and the ceiling stanza's comment records it.
 - **AC29** — After every edit inside the `bash -c '…'` recipe, `bash -n <file>` returns 0 — one
   apostrophe there is a whole-file syntax error (measured rc 2).
-- **AC30** — PR body uses **`Closes #7535`** in the body, never the title.
+- **AC30** — this PR's body uses **`Refs #7535`**, never a closing keyword, and
+  `gh pr view <this-PR> --json closingIssuesReferences` returns `[]` at merge. The close belongs to
+  PR #8249. **Assert the API field, not the prose:** measured 2026-09-17, this PR's body argued in
+  prose that it must not take the close and placed a closing keyword immediately before the issue
+  reference while doing so; GitHub's parser does not model the negation, so the field read `[7535]`
+  and #8249's read `[]`. A body that *says* `Refs` is not evidence — only the field is.
 
 ## Observability
 Phase 2 *is* observability work: the deliverable is that a starved fixture names itself instead of
@@ -928,8 +941,9 @@ baseline (R2's assumption) or is to be discarded, and record the decision before
 
 ## Issue disposition
 
-Phase 2 completes #7535's residual scope, so the PR body uses **`Closes #7535`** — in the body,
-never the title (`wg-use-closes-n-in-pr-body-not-title-to`). Phase 1 correctly used `Refs`,
+Phase 2 completes #7535's residual scope, so the **implementation PR** (#8249) carries the close —
+in the body, never the title (`wg-use-closes-n-in-pr-body-not-title-to`). This docs branch uses
+`Refs`. Phase 1 also correctly used `Refs`,
 because it reduced the apt dependency without addressing the misattribution the issue is about.
 
 The issue is already retitled to its residual scope and the `## Why the image was cut`
@@ -943,7 +957,8 @@ worktree `feat-7535-t17-rc-capture` and opened PR #8249 (non-draft, 107+/14-, to
 collision gate ran ~40 min before that PR existed, so it cleared correctly and still missed it —
 a point-in-time probe cannot see a sibling that has not opened its PR yet.
 
-Disposition: **#8249 carries `Closes #7535`**; this PR uses `Refs #7535`. Its `closes:` was
+Disposition: **#8249 is OWED a closing keyword and does not yet carry one**; this PR uses `Refs #7535`.
+Measured 2026-09-17: #8249's `closingIssuesReferences` is `[]`. Its `closes:` was
 measured empty (`gh pr view 8249 --json closingIssuesReferences -> {"closes":[]}`), so that gap was
 raised on the PR — without it #7535 stays open after the implementation merges. There is zero file
 overlap between the two PRs, so both land without conflict.
@@ -1090,5 +1105,5 @@ version the panel endorsed, and no mechanism the panel cut is restored.
 **Assessment:** CPO measured the value proposition and recommended cutting to FR1, noting #7535
 and #7544 both sit in `Post-MVP / Later`. The operator chose FR1 plus failure-naming — the
 increment that addresses the misdiagnosis cost, which is the one value the measurement supports.
-**[Updated 2026-09-17]** Unchanged. Phase 2 closes the issue, which removes a `Post-MVP / Later`
+**[Updated 2026-09-17]** Unchanged. Phase 2's implementation (PR #8249) closes the issue, which removes a `Post-MVP / Later`
 item and the standing investigative tail behind it.

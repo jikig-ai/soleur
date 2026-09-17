@@ -90,7 +90,16 @@ build_sandbox() {
   # invisible to the whole suite.
   printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
-  ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
+  # gc.auto=0 BEFORE any object-creating command. `git add -A` over ~1950 fixtures plus the
+  # commit can spawn a background `git gc --auto` that repacks loose objects while the
+  # `cp -a "$SANDBOX/."` below is still walking them, so the snapshot dies on
+  # `cannot stat .git/objects/XX` and the whole suite aborts `pristine snapshot failed`
+  # before a single mutation runs. Measured 2026-09-17 both locally and in CI on PR #8242,
+  # while four sibling PRs passed the same gate version within the same hour — i.e. a race,
+  # not a corpus regression, and one that fails the gate CLOSED (abort, exit 2) rather than
+  # reporting a false green. The sandbox is throwaway, so there is nothing for gc to buy.
+  ( cd "$d" && git init -q && git config gc.auto 0 \
+      && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
     || die "sandbox git init/commit failed"
 }
