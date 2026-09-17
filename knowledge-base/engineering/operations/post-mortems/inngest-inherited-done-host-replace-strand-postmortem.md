@@ -165,13 +165,11 @@ replace: the `/mnt/data` flush latch survives, so `armed` and `flipping` drive t
 (verified at `scripts/cutover-inngest.sh:2685`). So those two states strand with *no*
 one-dispatch recovery at all.
 
-## Action Items & Follow-ups
+## Remediated in the source PR
 
-| Issue | Item | Owner | Status |
-|---|---|---|---|
-| #7695 | Nothing in-repo clears a standing `/mnt/data` flush latch, so a replace from `armed`/`flipping` reaches terminal `aborted` with no recovery verb that accepts it. The gated `inngest-volume-recut` apply_target is the designed route. | agent | open |
-
-Remediated in PR #8252 and therefore **not** carried as action items:
+Shipped in PR #8252, so these are deliberately NOT action items — they are done, and a
+row here would rot open. They are recorded because the next reader of this PIR needs to
+know which of the failures above are already closed.
 
 - A pre-dispatch preflight on `inngest_host_replace` reads `INNGEST_CUTOVER_FLIP` and warns
   before the replace, naming the recovery. It is advisory by design — it degrades open,
@@ -185,3 +183,9 @@ Remediated in PR #8252 and therefore **not** carried as action items:
 - The runbook now records that `/hooks/deploy-status` cannot reach this host, and that the
   `op=resume` recovery holds for a required-reviewer approval rather than completing on its
   own.
+
+## Action Items & Follow-ups
+
+| Issue | Item | Owner | Status |
+|---|---|---|---|
+| #7695 | Nothing in-repo clears a standing `/mnt/data` flush latch, so a replace from `armed`/`flipping` reaches terminal `aborted` with no recovery verb that accepts it. The gated `inngest-volume-recut` apply_target is the designed route. | agent | open |
