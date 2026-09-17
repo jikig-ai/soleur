@@ -23,6 +23,13 @@ devin plugins install jikig-ai/soleur#plugins/soleur -y
 
 You must be signed in (`devin auth login`) for plugin installation. Use `-y` to skip the confirmation prompt. The first install may take a few minutes because Devin clones the `jikig-ai/soleur` repository to reach the `plugins/soleur` subfolder.
 
+The `owner/repo#subdir` shorthand above is a `devin plugins install` form only. In a manifest position (`.devin/config.json` `requiredPlugins`) it parses as a local path relative to the repo root and fails with "is not a directory" — use the full-URL form there:
+
+```jsonc
+// .devin/config.json
+{ "requiredPlugins": ["https://github.com/jikig-ai/soleur#plugins/soleur"] }
+```
+
 If the remote install hangs or fails, clone the repository and install from the local path:
 
 ```bash
