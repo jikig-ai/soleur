@@ -258,3 +258,4 @@ and retain incomplete status instead of silently skipping it.
 - **Polling**: Use `get_output` with timeout instead of Claude's Monitor tool
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially
 - **MCP servers**: Devin supports the same MCP server format as Claude, so existing servers should work without modification
+- **Worktree commits**: the tool envelope omits `.cwd`, so a bare `git commit` inside `.worktrees/` is false-denied by `guardrails.sh` block-commit-on-main (it resolves `$PWD` = main checkout). Attach `git -C <worktree-abs-path>` to worktree commits until #8254 lands.
