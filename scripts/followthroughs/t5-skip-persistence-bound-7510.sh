@@ -44,6 +44,25 @@
 
 set -uo pipefail
 
+# XTRACE CREDENTIAL REFUSAL (#7797). This probe binds GH_TOKEN, and `set -x` expands every
+# command -- including the `gh` invocations carrying that token -- into a log that lands in a
+# public Actions run. Refuse to run traced rather than emit it.
+#
+# PRE-EXISTING GAP, surfaced rather than introduced (#7535 Phase 2). The repo gate
+# `lint-shell-trace-credential-refusal.py` runs in `--changed` mode, so it only scans files a
+# PR touches; this file has bound a live credential without the guard since it was written, and
+# nothing had touched it since the gate landed. Adding the T17 marker to SKIP_MARKERS brought it
+# into scope, which is the gate working as designed -- the omission is fixed here rather than
+# deferred, because the fix is the eight lines the linter itself prints.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # N-CONSECUTIVE-TRANSIENT ESCALATION (#7574). A permanently broken gh auth and a
 # healthy quiet window both exit 2 forever, and 2 is the code the carrier treats
 # as "nothing to see". So a probe that can never reach a verdict is
