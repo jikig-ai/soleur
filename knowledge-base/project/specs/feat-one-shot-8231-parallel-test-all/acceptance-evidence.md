@@ -348,6 +348,61 @@ restates — but `ci.yml` says in terms that any change to the registered suite 
 simulated K table, and this branch does not re-simulate it. Recorded rather than fixed: the
 table's own prose is already stale against the live count independently of this change.
 
+## Ship gate adjudication — the Incident-PIR signal gate fires, and no PIR is owed
+
+Recorded because the gate is mandatory and fail-toward-PIR, so a dismissal has to be auditable.
+
+`scripts/ship-incident-pir-gate.sh --pr 8241` returns **`INCIDENT-SIGNAL: yes`, exit 0**. It
+requires a conjunction — a past-tense outage token AND a production token — and both are
+satisfied by this PR's corpus. Neither is a production event.
+
+**The outage conjunct is one token: `post-mortem`, at plan line 110.** It is a bibliographic
+citation. The sentence is "the test-pipeline `decision-challenges.md` and the 2026-08-11
+post-mortem's plan/spec have been **archived** since they were written", followed by the archive
+paths to read them at. The gate's own header names this exact shape as a known false positive:
+"A `post-mortem` reference to a LOCAL test-runner retrospective then demanded a PIR for an event
+that never happened."
+
+**The production conjunct is 20 standalone `live` tokens plus one `production`.** Measured:
+
+| Token | Count | What it actually says |
+|---|---|---|
+| `live` (bounded both sides) | 20 | "a live defect", "the LIVE worktree", "read dir" — test-runner vocabulary |
+| `production` | 1 | the heading `### Phase 0 — Preconditions (no production edit)` — asserting the opposite |
+| `reproduction` | 4 | matched as `production`; see the gate defect below |
+
+So the sole literal `production` in the corpus is a heading declaring that this phase makes no
+production edit, and the gate read it as a production context.
+
+**Verdict: no PIR.** There was no production event to report. The defect was a local-host-only
+abort in a test runner: CI never saw it (`test-scripts` omits `setup-bun` by design), nothing
+was deployed, nothing user-facing changed, and no release was blocked. `scripts/ship-pir-action-items-gate.sh --branch`
+returns exit 3 (no PIR in the diff), which is consistent.
+
+### A gate defect found while adjudicating — verified, not load-bearing here, NOT fixed in this PR
+
+`PROD_RE` guards `prod(uction)?` on the **right** only: `prod(uction)?([^a-zA-Z]|$)`. The header
+documents that fix and the measured false-hit set it removed (`producer`, `produced`, `product`,
+`reproduced`). It has no **left** boundary, and `reproduction` is the one inflection where taking
+the optional `(uction)` group lands the right guard on a real word end:
+
+| Word | Verdict |
+|---|---|
+| `producer` / `produced` / `product` / `reproduced` / `reproductions` | reject (the documented fix works) |
+| `reproduction` | **MATCH** |
+
+Four of this plan's five `production`-class hits are `reproduction`. This is the same
+substring class the right-boundary fix existed to close, surviving that fix.
+
+**It is recorded rather than fixed, and it does not change the verdict above.** Removing it
+leaves the production conjunct satisfied anyway, via the 20 standalone `live` tokens — measured
+both ways. Fixing it means editing a mandatory safety gate at ship time, after a six-seat review
+that never saw that file, on a PR whose scope is two `test-all` files; and the gate's primary
+pinning suite is `plugins/soleur/test/ship-incident-pir-gate.test.ts`, which runs under `bun` and
+therefore **cannot be run on this host** — the very defect this PR fixes is why. Shipping a
+one-line change to a safety gate with its main suite unrun is a worse trade than carrying the
+finding.
+
 ## Status
 
 | Task | State |

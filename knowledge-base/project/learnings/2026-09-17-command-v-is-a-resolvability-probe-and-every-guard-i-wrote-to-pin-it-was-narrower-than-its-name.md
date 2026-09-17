@@ -163,6 +163,23 @@ from `.session-tokens.jsonl` and skill payloads from `.skill-invocations.jsonl`,
 (0 tokens)` indistinguishably for "no subagents ran" and "the log was never written". A zero from a
 cost instrument on a session that visibly spent is a measurement failure, not a clean result.
 
+**A boundary guard fixed on one side reads as fixed.** `scripts/ship-incident-pir-gate.sh`'s
+`PROD_RE` anchors `prod(uction)?` on the right — `prod(uction)?([^a-zA-Z]|$)` — and its header
+records the measurement that motivated it: bare `prod` matched 14 times in a plan and not once as
+the word, every hit being `producer`, `produced`, `product`, `reproduced`. The guard removes all
+four. It has no LEFT boundary, and `reproduction` is the single inflection where taking the
+optional `(uction)` group puts the right guard on a real word end, so `reproduction` still matches
+while `reproductions` and `reproduced` do not. Four of five `production`-class hits in this
+branch's plan are `reproduction`. Recovery: adjudicated and recorded in `acceptance-evidence.md`;
+not fixed, because it does not change this PR's verdict (20 standalone `live` tokens satisfy the
+same conjunct) and the gate's pinning suite runs under `bun`, which this host cannot run.
+**Prevention:** a substring guard is two claims, not one. When fixing a token that matched inside
+longer words, enumerate the false-hit set AND the inflections of each member, and assert the
+reject for every one — the surviving member is always the inflection whose ending happens to
+coincide with the guarded boundary. The same-class recurrence rule applies: the finding here is
+that the documented fix was graded by re-running the words that motivated it, never by generating
+new ones.
+
 ## Related
 
 - `knowledge-base/project/specs/feat-one-shot-8231-parallel-test-all/acceptance-evidence.md`
