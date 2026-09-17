@@ -92,7 +92,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 TODAY="$(date +%F)"
-if [[ ! "$OUT" < "2026-05-10" && ! "$OUT" > "$TODAY" ]]; then
+if [[ ! "$OUT" < "2026-05-10" && ! "$TODAY" < "$OUT" ]]; then
   echo "  PASS: field last-verified is within [2026-05-10, $TODAY]"
   PASS=$((PASS + 1))
 else
