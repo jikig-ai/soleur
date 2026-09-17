@@ -316,6 +316,25 @@ jobs:
             exit 1
           fi
           echo "Doppler config dev_scheduled -> environment=dev (verified)."
+          # DC-1 (#8028): a pull_request job must never hold the account-scoped
+          # Supabase Management-API token — PR-authored SQL/shell would then be
+          # able to run arbitrary queries against prd through the reload hook.
+          # The hook soaks the token's ABSENCE as a ::notice::; this is the
+          # only mechanical guard that the absence still holds. Names only;
+          # the value is never read.
+          # Capture first, then test: on a doppler error the pipe form hands jq
+          # empty input, `jq -e` exits 4, the `if` is false and the step would
+          # print "(verified)" having verified nothing (advisor consult, #8137).
+          names_json=$(doppler secrets --only-names --json -p soleur -c dev_scheduled 2>/dev/null) || names_json=""
+          if [[ -z "$names_json" ]]; then
+            echo "::error::doppler secrets --only-names -p soleur -c dev_scheduled returned empty. Cannot verify the token's absence; failing closed."
+            exit 1
+          fi
+          if printf '%s' "$names_json" | jq -e 'has("SUPABASE_ACCESS_TOKEN")' >/dev/null; then
+            echo "::error::SUPABASE_ACCESS_TOKEN is present in Doppler dev_scheduled — a pull_request job must not hold a Management-API token (#8028 DC-1). Remove it; dev CI keeps the reload hook's absence-soak by design."
+            exit 1
+          fi
+          echo "Doppler config dev_scheduled carries no SUPABASE_ACCESS_TOKEN (verified)."
 
       # Drift probe (#4241) — composite action shared with scheduled cron at
       # `.github/workflows/scheduled-dev-migration-drift.yml`. Surfaces

@@ -711,8 +711,16 @@ const GATE_SCRIPT_EXTRAS: ReadonlySet<string> = new Set(["token-efficiency-repor
  * but it IS outside the guard's population, so nothing asserts it stays that way".
  * Being in the population means the day one of them acquires a SKILL.md reference, the
  * anchoring rule applies to it without anyone remembering to widen this file.
+ *
+ * WIDENED again by #7980: `playwright-mcp-redact-proxy.py` is the stdio relay that
+ * rewrites Playwright-MCP tool results through `redact-a11y-snapshot.py` in flight.
+ * Its basename does not match `redact-*`, and choosing a non-matching name to stay
+ * out of this population was an evasion the architecture review caught — the proxy
+ * IS a gate script (it decides what reaches the transcript), so it is admitted by
+ * name and `agent-browser/SKILL.md`'s `.mcp.json` shape must reference it through
+ * the bare anchor like every other gate.
  */
-const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
+const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py)$/;
 
 /**
  * The gate references this corpus is expected to contain, as an IDENTITY SET.
@@ -726,10 +734,11 @@ const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
  *
  * Sorted `<repo-relative SKILL.md> -> <basename>` with duplicates retained, so a
  * second reference from the same file is also a diff. Derived with:
- *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|token-efficiency-report\.sh)' \
+ *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py|token-efficiency-report\.sh)' \
  *     -- 'plugins/soleur/skills/ * /SKILL.md'    (spaced: a literal glob would close this comment)
  */
 const EXPECTED_GATE_REFS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md -> playwright-mcp-redact-proxy.py",
   "plugins/soleur/skills/agent-browser/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/cf-token-scope/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/compound/SKILL.md -> token-efficiency-report.sh",

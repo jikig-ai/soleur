@@ -3,6 +3,7 @@ title: A heartbeat's arming claim must be executable — a monitor is fed, or ho
 status: accepted
 date: 2026-07-16
 amends: ADR-103
+amended_by: [ADR-222]
 supersedes: none
 issue: 6537
 ---
@@ -324,6 +325,52 @@ asserted — `describe("the ARM gate's deadlines fit its job")` in
 `plugins/soleur/test/terraform-target-parity.test.ts` pins the two-part inequality, and
 `apps/web-platform/infra/arm-heartbeats.test.sh` drives the wall-clock bound and the rollback
 behaviourally against a fake clock.
+
+### Amendment (2026-09-15, #7884)
+
+The live-reconcile the 2026-07-17 amendment added now also lists monitors and reports objects no
+declaration accounts for ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)
+owns that decision). Three changes touch this ADR's reconcile, and one limit comes with them.
+
+**1. Declarations resolve exactly, not by pattern.** A templated heartbeat such as
+`name = "soleur-web-zot-consumer-${each.key}"` was compared as the literal string, never matched
+live, and produced two false `absent-live` rows on every run since July (#6645). The reconcile now
+resolves `for_each = var.<X>` from the variable's literal map default (one instance per top-level
+key, `${each.key}` substituted) and `count = var.<X> ? 1 : 0` from its literal bool default. The
+count-gated carve-out above is therefore evaluated, not assumed. Any other shape (another
+interpolation, `for_each` over a non-variable, a variable with no literal default, another `count`
+form) fails the run with `reason=unresolvable-declaration` (rc 1) instead of guessing.
+
+**Limit, stated because it is real.** The resolver reads defaults from the `.tf` source. A Doppler
+value surfaced through `doppler run --name-transformer tf-var` (`WEB_HOSTS`,
+`BETTERSTACK_PAID_TIER`, `ADOPT_APP_HEALTH_MONITOR`) would change what Terraform applies without
+changing what the reconcile expects. None of the three exists in `soleur/prd_terraform` (164
+secret names read on 2026-09-15, zero matches), so today the two agree; adding one would break
+that silently.
+
+> **Updated 2026-09-16 (#7884).** `ADOPT_APP_HEALTH_MONITOR` is off that list: the
+> `adopt_app_health_monitor` variable was deleted with the one-time monitor-adoption scaffolding
+> (ADR-222 amendment of 2026-09-16), so two `tf-var` override paths remain, not three. The sweep
+> result is unchanged — none of them exists in `soleur/prd_terraform`.
+
+**2. Every mismatch row carries routing tokens.** Existing heartbeat rows gain a trailing
+`resource=<type.name>`; `logs_alert` rows gain `resource=<type.name>` immediately before
+`detail="…"`, so vendor text stays last. Every `MISMATCH` row also carries exactly one
+`route=<reason>~<subject>` token (for example `route=monitor-config-drift~id.4226366.paused`). The
+`logs_alert` prefix ADR-218 and `monitor-send-failed-alert.md` quote is unchanged only through
+`reason=`; the fields after it changed. The issue step escalates on the `route=` key, compared as a
+whole token, instead of on a `name=` substring match.
+
+**3. Escalation follows the latest reconcile comment.** A `route=` key emails again whenever it is
+absent from the latest bot-authored reconcile comment, and history is read only from the marker
+lines of bot-authored comments, so a human comment cannot suppress an alert.
+`reason=monitor-config-drift` emails on every run while it persists. Two consequences: the first
+run after merge re-emails every existing row once, because issue history (#6645) carries no
+`route=` tokens; and a row that clears and then returns emails again, because a fully clean run
+(rc 0, no arm unreachable) posts a `SOLEUR_HEARTBEAT_RECONCILE_CLEAR` comment that becomes the latest
+reconcile post.
+
+ADR-117 stays **amended, not superseded**: the manifest is still the substrate the reconcile reads.
 
 ## Consequences
 

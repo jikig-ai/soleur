@@ -89,6 +89,10 @@ assert_decision "(c) bg + gh run watch (no explicit loop) denies" "deny" \
 assert_decision "(d) bg + gh pr checks --watch denies" "deny" \
   "$(mk_bg true 'gh pr checks 4595 --watch')"
 
+# Devin wire name `exec` reaches the gated check (kind map, #8205).
+assert_decision "(d2) Devin exec: bg + watch denies" "deny" \
+  "$(jq -nc '{tool_name: "exec", tool_input: {command: "gh pr checks 4595 --watch", run_in_background: true}}')"
+
 assert_decision "(e) bg + while + curl denies" "deny" \
   "$(mk_bg true 'while :; do curl -s https://api.example.com/status; sleep 45; done')"
 

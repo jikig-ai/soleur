@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Ran Playwright code\n```js\nawait page.goto('http://127.0.0.1:33567/page.html');\n```\n### Page\n- Page URL: http://127.0.0.1:33567/page.html\n- Page Title: probe 7980\n### Events\n- New console entries: ../outdir/console-2026-09-14T09-50-53-451Z.log#L1"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 3
+}

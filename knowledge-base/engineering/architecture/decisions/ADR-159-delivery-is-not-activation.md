@@ -212,3 +212,25 @@ to prevent.
 | Accept it; units refresh on host recreate | The host cannot be recreated (cx33, orderable in 0 of 6 datacentres — ADR-154 and the plan both record 6/6, and this ADR halved its own evidence). The telemetry plane ages out silently and proposition 3 has no live channel to assert against. |
 | Reconcile inside `infra-config-install.sh`, which is already root | Genuinely attractive — zero new sudoers alias, one fewer file on the SSH leg. Rejected on the real reason: the installer is reachable through a **bare-command** grant that permits any arguments, and its own header records that the security boundary is therefore the helper, not sudoers. Adding a unit-restart capability there widens that boundary from *write these dests* to *write these dests and restart units*. It is also per-file and stateless, while the decision is per-unit and needs the whole delivery outcome. |
 | Fail the gate on any `active != active` | Would red the deploy gate permanently on a host where a co-location-dependent unit legitimately does not run. See the narrowing above. |
+
+## Addendum — 2026-09-13 (PR #8135, Ref #8054/#7095)
+
+**The re-deliverable credential has two consumer mechanisms, and the inventory belongs here rather
+than in a drop-in's comment.** `/etc/default/soleur-doppler-token` (delivered by `infra-config-apply.sh`,
+rendered from `server.tf`'s `webhook_doppler_token_env`) is consumed by:
+
+| mechanism | consumers | activation |
+|---|---|---|
+| systemd later-wins (`EnvironmentFile=-/etc/default/soleur-doppler-token` in a drop-in or unit body) | `vector`, `inngest-heartbeat`, `inngest-server`, `inngest-redis` (drop-ins); `container-restart-monitor`, `cron-egress-*` (unit bodies) | `daemon-reload` + the unit's next start (this ADR's Decision) |
+| in-script parsed re-read (`IFS='=' read -r`, never sourced; empty value skipped; DOPPLER_TOKEN later-wins over the unit export) | `ci-deploy.sh` (4 keys, `CRED_FILE_STATE`); `inngest-rearm-reminders.sh` and `inngest-wiped-volume-verify.sh` (`soleur_refresh_doppler_token`, 4 keys, byte-identical, pinned by `webhook-doppler-token-reread.test.sh` §A/§I) | the next hook invocation — no restart |
+
+The webhook-executed scripts are the second mechanism BY DECISION, not by omission. The #7095 plan
+proposed a second `EnvironmentFile=-` line on `webhook.service`; it was not adopted then and is not
+adopted now, because (a) `EnvironmentFile=-` tolerates an EMPTY value, so a bare `DOPPLER_TOKEN=`
+would blank the working export for every hook at once — the in-script `-n "$v"` guard is the only
+layer that holds that line for the webhook process; (b) `webhook.service` is sha256-pinned by
+`infra-config-install.sh` and rides the root SSH bootstrap leg (ADR-154), so a unit edit touches the
+sole remediation channel's own definition; (c) the in-script read activates on the next hook call
+with no restart of the listener that executes it. Recurrence record: this is the third consumer the
+#7095 sweep missed (`inngest-server` at #7095 review, `inngest-redis` at #7286, these two at #8135) —
+hence §I of the new suite derives the consumer set from `hooks.json.tmpl` instead of naming files.

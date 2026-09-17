@@ -3,6 +3,10 @@ name: drain-prs
 description: "This skill should be used when draining open remote GitHub PRs: triage every open pull request into mergeable tiers, confirm scope with the operator, then fix and merge the green ones. The PR-counterpart to drain-labeled-backlog."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/drain-prs` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:drain-prs`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -79,7 +83,7 @@ gh pr merge <N> --squash
 ```
 
 - **Merge queue active on `main`** (the current default — adopted via the `merge_queue` Terraform ruleset): `gh pr merge --squash` **enqueues** the PR; the queue handles `update-branch` + serialization + the final merge automatically. Do not hand-roll update/wait loops.
-- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>`, then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
+- **Queue inactive (fallback):** if the merge is rejected for "not up to date", run `gh pr update-branch <N>` — **but never when both sides moved the `knowledge-base/` file count**, which a server-side merge resolves without the `kb-index` driver; merge `origin/main` locally and push instead (see [merge-pr/SKILL.md](../merge-pr/SKILL.md) §"A SERVER-SIDE update cannot run the driver"), then wait for CI to go green using **Claude: Monitor tool** / **Grok: AwaitShell** (`plugins/soleur/lib/harness.ts` `pollInstructions()`) — NEVER a backgrounded poll loop (`hr-monitor-not-run-in-background-for-polling`, hook-enforced by `background-poll-prefer-monitor.sh`), then merge. Because every merge re-bases the rest under strict protection, merges serialize one at a time.
 
 ### 5. Review delegation
 

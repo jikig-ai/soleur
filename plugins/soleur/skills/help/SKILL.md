@@ -2,6 +2,11 @@
 name: help
 description: This skill lists all available Soleur commands, agents, and skills
 argument-hint: ""
+# `/soleur:help` also ships as plugins/soleur/commands/help.md. Claude Code loads
+# plugin commands AND plugin skills into one slash menu, so without this the name
+# renders twice. `user-invocable: false` leaves the menu row to the command while
+# keeping this skill model-invocable — Skill(soleur:help) must keep working.
+user-invocable: false
 ---
 
 # /soleur:help (Devin CLI entry point)

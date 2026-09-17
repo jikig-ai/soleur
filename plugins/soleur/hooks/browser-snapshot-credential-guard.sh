@@ -19,9 +19,12 @@
 #   * The Playwright MCP renders BOTH in clear.
 #
 # This hook covers the Bash path only. Property P7 ("the guards hold without the
-# acting agent having to remember them") is achieved HERE and is NOT achieved on
-# the Playwright-MCP runtime path, where the interceptor is deferred. That gap is
-# stated rather than implied.
+# acting agent having to remember them") holds on the Bash path via this
+# interceptor AND on a Playwright-MCP registration routed through
+# skills/agent-browser/scripts/playwright-mcp-redact-proxy.py (#7980), which
+# rewrites every tool result through the same redactor at the stdio boundary.
+# An unwrapped Playwright-MCP registration remains uncovered (a customer
+# registration is #8156). That gap is stated rather than implied.
 #
 # Disposition is DENY, not rewrite: ADR-162 permits exactly one PreToolUse
 # rewriter and grep-rewrite.sh holds it. Two hooks emitting updatedInput for the
@@ -74,6 +77,14 @@ REDACTOR_CMD='python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact
 # non-zero (wrong build, missing shared library, exec-format error) passes a
 # presence check and then fails exactly like an absent one. The first revision
 # of this branch used `command -v` and the suite caught it.
+# Canonical kind map (#8205): Devin wire names → Claude kinds. Absent lib
+# degrades to passthrough, preserving this hook's fail-open invariant.
+. "$(dirname "${BASH_SOURCE[0]}")/lib/hook-tool-kind.sh" 2>/dev/null || true
+if ! type hook_tool_kind >/dev/null 2>&1; then
+  hook_tool_kind() { printf '%s\n' "${1-}"; }
+  echo "WARN: hook-tool-kind.sh missing — kind gates degrade to raw-name passthrough (silent-off under Devin)" >&2
+fi
+
 jq_rc=0
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)" || jq_rc=$?
 if [[ $jq_rc -ne 0 ]]; then
@@ -84,7 +95,11 @@ if [[ $jq_rc -ne 0 ]]; then
   exit 0
 fi
 
-[[ "$TOOL" == "Bash" ]] || exit 0
+# Both names reach this check: hooks.json binds `^(Bash|exec)$` — Claude Code's
+# tool is `Bash`, Devin's is `exec`, and either envelope may arrive. The kind
+# map normalizes `exec` → `Bash`; dropping it here would silently no-op the
+# guard on exactly the surface the matcher was widened for.
+[[ "$(hook_tool_kind "$TOOL")" == "Bash" ]] || exit 0
 
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [[ -z "$CMD" ]] && exit 0

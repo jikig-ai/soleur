@@ -59,7 +59,7 @@ Refuse xAI CLI prompts that offer to "improve the product and model" (or similar
 grok inspect | grep -E 'soleur|Agents \(|skills'
 ```
 
-After Phase E (#6324), **67** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
+After Phase E (#6324), **68** Soleur agents appear as `soleur:<domain>:…` **project** rows in the `Agents` section (generated compat stubs under `.grok/agents/`). Skills and the three commands (`/go`, `/sync`, `/help`) load via the in-repo plugin.
 
 ### Subagents
 
@@ -101,7 +101,7 @@ cd plugins/soleur && bun run scripts/sync-grok-agent-compat.ts --check
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > /tmp/grok-pre-push-gate.log 2>&1; rc=$?; echo "EXIT=$rc"
 ```
 
-The gate mirrors reproducible CI: fast required jobs (`readme-counts`, `adr-ordinals`, `rule-body-lint`, `lockfile-sync`, …), `scripts/test-all.sh` (the `test` required check), `web-platform` build, and `grok-fidelity-gate.sh`. It DOES reach `infra-validation`'s suites: the gate invokes `test-all.sh` with no `TEST_GROUP`, which runs `apps/web-platform/infra/run-registered-suites.sh` as a nested suite when the diff touches that directory (#7103 R5(a)). Read the epilogue rather than launching that runner concurrently — both default `TMPDIR=/var/tmp`. CI-only checks (CodeQL, CLA, e2e, tenant-integration) still run on GitHub. Claude Code gets commit-time lint via lefthook; Grok does not — running only `grok-fidelity-gate.sh` misses the `test-scripts` shard (e.g. `B_ALWAYS` budget).
+The gate mirrors reproducible CI: fast lint steps (`readme-counts`, `adr-ordinals`, `rule-body-lint`, `lockfile-sync`, … — gate step names mirroring the scripts ci.yml runs, not required-check names), `scripts/test-all.sh` (the `test` required check), `web-platform` build, and `grok-fidelity-gate.sh`. It DOES reach `infra-validation`'s suites: the gate invokes `test-all.sh` with no `TEST_GROUP`, which runs `apps/web-platform/infra/run-registered-suites.sh` as a nested suite when the diff touches that directory (#7103 R5(a)). Read the epilogue rather than launching that runner concurrently — both default `TMPDIR=/var/tmp`. CI-only checks (CodeQL, CLA, e2e, tenant-integration) still run on GitHub. Claude Code gets commit-time lint via lefthook; Grok does not — running only `grok-fidelity-gate.sh` misses the `test-scripts` shard (e.g. `B_ALWAYS` budget).
 
 ## References
 

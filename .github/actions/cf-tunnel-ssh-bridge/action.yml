@@ -74,9 +74,14 @@
 #  TUNNEL_SERVICE_TOKEN_SECRET.
 #  When `server-ip` is EMPTY (terraform callers): TF_VAR_ci_ssh_private_key.
 #  When `server-ip` is SET (bash-ssh callers): CI_SSH_KEYFILE (chmod 600 temp key)
-#  + WEB_HOST_SSH + GIT_DATA_SSH (ready `ssh -i <keyfile> … -l root` invocations the
+#  + WEB_HOST_SSH (the ready `ssh -i <keyfile> … -l root` invocation the
 #  cutover/verify scripts consume via `${WEB_HOST_SSH}`). The key form is
 #  mutually exclusive per caller class — the key never lands on an unused surface.
+#  No GIT_DATA_SSH: that invocation was byte-identical to WEB_HOST_SSH and could never
+#  reach the git-data host, which is reached through web-1 with its own Terraform-minted
+#  root key (ADR-220). git-data-cutover.yml fetches that key and writes the ssh_config its
+#  GIT_DATA_SSH points at; the bridge never handles it. The export set is asserted by the
+#  bridge (BR) rows of git-data-cutover-access.test.sh.
 #
 # Composite actions cannot read the `secrets` context — every secret is an
 # explicit input referenced ONLY inside `env:` mappings (never a `run:` body or
@@ -102,7 +107,7 @@ inputs:
   server-ip:
     description: >-
       Optional. The address the redirect scopes to AND (for bash-ssh callers) the
-      keyfile+WEB_HOST_SSH/GIT_DATA_SSH export is enabled by. When set, the bridge
+      keyfile+WEB_HOST_SSH export is enabled by. When set, the bridge
       skips `terraform output -raw server_ip` (no terraform needed) and writes the
       CI key to a temp file + exports the ready ssh invocation the cutover scripts
       consume. When empty (default), behavior is byte-identical to the pre-input
@@ -191,7 +196,6 @@ runs:
           printf '%s\n' "$KEY" > "$KEYFILE"
           SSH_INVOCATION="ssh -i $KEYFILE -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -l root"
           printf 'WEB_HOST_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
-          printf 'GIT_DATA_SSH=%s\n' "$SSH_INVOCATION" >> "$GITHUB_ENV"
         else
           # terraform callers (apply-web-platform-infra.yml): the Go SSH client
           # authenticates with var.ci_ssh_private_key. Byte-identical to the

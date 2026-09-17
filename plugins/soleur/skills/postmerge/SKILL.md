@@ -3,6 +3,10 @@ name: postmerge
 description: "This skill should be used when verifying a merged PR deployed correctly and production is healthy."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/postmerge` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:postmerge`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -107,7 +111,7 @@ curl -sf --max-time 10 "<production-url>/health" | jq .
 
 Use `/health` (the public, middleware-/CSP-bypassed health route returning `{"status":"ok","version","build_sha","supabase","sentry",...}`), NOT `/api/health` — the latter is an authenticated API route that 307-redirects an unauthenticated probe to `/login`, so `curl -sf` fails and `HEALTH_VERIFIED` is left `false` even when production is healthy. The `build_sha` field also confirms the merge commit is the live build.
 
-**If health check succeeds:** Record the response, set `HEALTH_VERIFIED=true`, and proceed.
+**If health check succeeds:** HTTP 200 alone is NOT success — `/health` returns 200 with `status: "ok"` whatever the database state, and only `.supabase` flips to `"error"`. Require `jq -e '.supabase == "connected"'` (and the expected `build_sha`) before recording the response and setting `HEALTH_VERIFIED=true`. A 200 with `supabase: "error"` is a production database outage: set `HEALTH_VERIFIED=false`, report it prominently, and diagnose per §Production Debugging (2026-09-15 post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 
 **If health check fails or no URL configured:** set `HEALTH_VERIFIED=false`, warn, and proceed (not all PRs trigger deployments):
 
@@ -427,6 +431,12 @@ commit is unknown to this repository, and it names the path anyway, so it reads 
 like a content verdict. If Phase 4 reports files MISSING with that second wording, you
 have an unfetched commit, not a bad merge — fetch and re-run before reporting anything.
 
+**Query `actions/runs?head_sha=` with the FULL 40-char SHA, and refuse a verdict when `total_count` is below the
+runs you expect.** A short SHA matches zero runs, and a poll that reports "0 pending" over an empty set reads as
+`ALL_RUNS_COMPLETE` — a set must be proven non-empty before it can be reported drained. **Why:** PR #8135 — a
+9-char `head_sha` returned `total_count:0` on the first tick and the Monitor declared all 15 post-merge runs
+complete before any had started.
+
 **Do NOT use `git show main:<path>` here.** `main` is a LOCAL ref and it lags: in a worktree or bare-repo layout nothing fast-forwards it as a side effect of the merge, so it routinely points at a commit from before this PR landed. Reading a file that this PR ADDED through a stale `main` returns `fatal: path ... does not exist`, and the phase whose entire job is answering *"did the merge land?"* then reports **MISSING** for a file that is present in the merge commit. The failure is silent and inverted — it manufactures a false alarm about the thing it is verifying, and it gets worse the busier the repo is.
 
 `git rev-parse --short main` next to `git rev-parse --short origin/main` is the cheap tell when a result looks wrong. Prefer the merge SHA unconditionally: it is immutable, it is the exact tree that merged, and it cannot drift while the phase runs. `origin/main` is an acceptable second choice only immediately after a fetch, and even then a sibling merge can move it mid-phase.
@@ -602,6 +612,7 @@ Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" 
 
 ## Production Debugging
 
+- **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 - For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
 - For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

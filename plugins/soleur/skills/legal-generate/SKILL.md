@@ -3,9 +3,13 @@ name: legal-generate
 description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 # Legal Document Generator
 
-Generate draft legal documents from company context. Supports 8 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
+Generate draft legal documents from company context. Supports 14 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
 
 ## Supported Document Types
 
@@ -17,6 +21,17 @@ Generate draft legal documents from company context. Supports 8 document types a
 - Data Processing Agreement
 - Data Protection Disclosure
 - Disclaimer / Limitation of Liability
+- Master Services Agreement
+- Mutual NDA
+- One-Way NDA
+- Advisor Agreement
+
+Two more types are available on explicit request only — both carry blocking confirmations, so they are never offered in the menu:
+
+- Employee Offer Letter (CA-exempt scope confirm)
+- Business Associate Agreement (HIPAA/PHI confirm)
+
+Overlapping types fill a vendored template substrate ([references/templates/](references/templates/)); uncovered types and unsupported jurisdictions are generated from scratch by the agent — routing is its decision, not the menu's.
 
 ## Phase 0: Context Gathering
 
@@ -32,11 +47,24 @@ If the user provides arguments after the skill name (e.g., `/legal-generate priv
 
 ## Phase 1: Document Selection
 
-Use the **AskUserQuestion tool** to select a document type from the 8 supported types listed above.
+Use the **AskUserQuestion tool** to select a document type. Offer the four most likely types (e.g. Privacy Policy / Terms & Conditions / Mutual NDA / Master Services Agreement) and rely on the built-in **Other** free-text option for the rest — the menu never lists the gated types.
+
+## Phase 1.5: Substrate Staleness Check
+
+Before invoking the agent, check the freshness of the vendored template corpus:
+
+```bash
+NOTICE_FILE="${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/NOTICE" \
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/gdpr-gate/scripts/notice-frontmatter.sh" days-stale
+```
+
+- **>30 days** — print an advisory banner to stdout: the template corpus has not been verified against upstream recently.
+- **>90 days** — additionally print `POSTURE_FAIL:`; the operator follows the chain in `knowledge-base/engineering/policies/content-vendoring.md` to record it in `compliance-posture.md`.
+- Advisory only — generation proceeds either way; do not block on staleness.
 
 ## Phase 2: Generation
 
-Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type:
+Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
 
 ```
 Task legal-document-generator: "Generate a [document type] for [company name].
@@ -142,6 +170,27 @@ below.
           echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
           exit 2; }
    bash "$SENTINEL" "$DRAFT"
+   sentinel_rc=$?
+
+   # Vendor-residue audit — MUST run in THIS fence: the trap above deletes
+   # "$DRAFT" at block exit, so any audit in a later fence greps a dead path
+   # and can never evaluate true. All greps print hits; any hit halts.
+   residue=0
+   grep -inE 'general[-.[:space:]]?legal' "$DRAFT" && residue=1            # vendor marks
+   grep -inE 'attorney[- ]draft|prepared by[^.]{0,30}(attorney|law firm)|reviewed by[^.]{0,30}attorney' "$DRAFT" && residue=1  # credential-claim leakage
+   grep -nE '<mark' "$DRAFT" && residue=1                                 # unfilled substrate slots
+   grep -nP '\[[^\]]+\](?!\()' "$DRAFT" && residue=1                      # bare-bracket remnants (markdown links excluded)
+   grep -nE 'OPTION [AB]|\[Select one|TEMPLATE ' "$DRAFT" && residue=1    # un-deleted decision constructs / scaffold rows
+   # Advisory (cannot hard-halt): a legitimately chosen Option B carries
+   # "DecisionLayer" text. Print hits for the operator; the OPTION/[Select
+   # grep above already halts on an UNRESOLVED choice construct.
+   grep -inE 'decisionlayer|decision science research' "$DRAFT" || true
+   if (( residue )); then
+     echo "SOLEUR_LEGAL_GENERATE_HALT reason=vendor-residue draft=[$DRAFT]"
+     echo "legal-generate: the draft still carries substrate/vendor residue — see the lines above; do not present." >&2
+     exit 2
+   fi
+   exit "$sentinel_rc"
    ```
 
    The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).
@@ -154,6 +203,8 @@ below.
 No un-scanned draft ever crosses the transcript or lands on disk.
 
 ## Phase 3: Output
+
+The vendor-residue audit ran inside the Phase 2.5 fence — `$DRAFT` is deleted by the trap when that block exits, so nothing here may re-grep it. If the fence exited 2 with `reason=vendor-residue`, do not present; report the residue lines it printed.
 
 <decision_gate>
 

@@ -1,0 +1,18 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Page"
+      },
+      {
+        "type": "resource",
+        "resource": {
+          "uri": "file:///x.yml",
+          "mimeType": "text/yaml",
+          "text": "- generic [ref=e2]:\n  - generic [ref=e3]:\n    - text: Enter your password\n    - textbox \"Enter your password\" [ref=e4]: ZZQP-SENTINEL-7980\n  - generic [ref=e5]:\n    - text: Token\n    - textbox \"Token\" [ref=e6]: ZZQP-SENTINEL-7980\n  - generic [ref=e7]:\n    - text: Email address\n    - textbox \"Email address\" [ref=e8]: probe-user@example.invalid\n  - generic [ref=e9]:\n    - text: Notes\n    - textbox \"Notes\" [ref=e10]: ZZQP-BENIGN-7980\n  - button \"Go\" [ref=e11]"
+        }
+      }
+    ]
+  }
+}

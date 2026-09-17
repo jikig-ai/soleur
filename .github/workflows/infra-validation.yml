@@ -78,6 +78,10 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
+      # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
+      - ".github/workflows/apply-git-data-root-key.yml"
+      - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
       # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
@@ -573,7 +577,21 @@ jobs:
     # for survives the addition (799 + 22 = 821; 1200/821 = 1.46x). NOT re-bumped: an addition
     # this size does not move the derivation, and the block's own rule is that a ceiling meant to
     # catch a bypassed sleep mock is not raised casually.
-    timeout-minutes: 20
+    #
+    # RE-DERIVED 2026-09-15 (#8189), as the block above instructs, because that PR adds steps to
+    # this job (the git-data flag precheck suite, the git-data root-key drift-guards + its terraform
+    # validate) and grows the cutover access suite. The ~799 s basis above is stale: measured from
+    # the API over the last 10 successful `Infra Validation` runs on main, deploy-script-tests
+    # job seconds:
+    #   899 902 925 937 969 981 998 1012 1023 1030
+    # So at 20 minutes the job was already at 1200/1030 = 1.17x before this PR.
+    #   observed deploy-script-tests max (10 runs, successful only) : 1030 s
+    #   + the #8189 additions (measured locally, budgeted high)     : +90 s
+    #   new basis                                                    : ~1120 s
+    #   1120 x 1.4 = 1568 s = 26.1 min -> 27
+    # 20 -> 27 minutes. At 20 the margin would be 1200/1120 = 1.07x, i.e. one slow runner away
+    # from a cancel that lands on whatever step the clock runs out in.
+    timeout-minutes: 27
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -1423,6 +1441,10 @@ jobs:
       - name: Run inngest-wiped-volume-verify.sh tests
         run: bash apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 
+      # #7095 re-read in the two webhook scripts above (found live 2026-09-13 at op=execute 2.1).
+      - name: Run webhook-doppler-token-reread tests
+        run: bash apps/web-platform/infra/webhook-doppler-token-reread.test.sh
+
       - name: Run cat-inngest-verify-state.sh tests
         run: bash apps/web-platform/infra/cat-inngest-verify-state.test.sh
 
@@ -1509,6 +1531,21 @@ jobs:
       - name: Run git-data LUKS-at-rest cutover drift-guards
         run: bash apps/web-platform/infra/git-data-luks.test.sh
 
+      # (#6680, ADR-220) git-data-cutover's read-only proof: the access gate precedes every store
+      # probe, the store probes fail closed (a failed read is probe_failed, never a store state),
+      # probe bytes never reach the workflow-command parser, the bridge's server-ip export set is
+      # exactly {CI_SSH_KEYFILE, WEB_HOST_SSH}, and the workflow wiring and step gating. Runtime arm
+      # drives the real script against real OpenSSH in the pinned image; under CI=true a missing
+      # docker FAILS. The root token's reference census runs on every PR from scripts/test-all.sh
+      # (tests/scripts/test-git-data-root-token-census.sh), not here.
+      - name: Run git-data cutover access-path tests (ADR-220)
+        run: bash apps/web-platform/infra/git-data-cutover-access.test.sh
+
+      # (#8189) The flag read fails closed, refuses a `true` flag, and is the only step
+      # that holds the prd read token (Guard 1).
+      - name: Run git-data flag precheck tests (fail-closed flag read, Guard 1)
+        run: bash apps/web-platform/infra/git-data-flag-precheck.test.sh
+
       # (#6982) Behavioural tests for the boot emitter — the redactor's two arms, the
       # no-UUID/no-repo-path guarantee, and the delivery assertion. Extracts the emitter
       # from a REAL terraform render rather than a hand-copied fixture, so it needs the
@@ -1572,6 +1609,23 @@ jobs:
           TF_DATA_DIR: ${{ runner.temp }}/rung2-tf
         run: |
           terraform init -backend=false -input=false
+          terraform validate
+
+      # (#8189, ADR-220) The git-data root-key root's drift-guards: the additive-only allowlist
+      # (executed against synthesized plan fixtures), the root census, every prevent_destroy,
+      # the distinct state key, git-data-state parity and the parent apply's path exclusion.
+      - name: Run git-data root-key root drift-guards
+        run: bash apps/web-platform/infra/git-data-root-key.test.sh
+
+      # (#8189) Same gap as the rung-2 root above: detect-changes collapses the nested root to
+      # apps/web-platform/infra, so the `validate` matrix never parses it. -backend=false, the
+      # readonly lock, and TF_DATA_DIR out of the repo tree for the same reasons.
+      - name: Terraform validate the git-data root-key root
+        working-directory: apps/web-platform/infra/git-data-root-key
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/git-data-root-key-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
 
 

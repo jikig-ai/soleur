@@ -115,6 +115,38 @@ assert_contains "$OUT" "pii-detector/layers/data-in-transit.md:6c9eeabf17d1f0ed5
 assert_contains "$OUT" "pii-detector/layers/data-lifecycle.md:a073ef24a0527c2c3a6d738b65ea3ef9d6194abe" "data-lifecycle.md upstream line present"
 echo ""
 
+# --- TS4c: legal-generate bundle gets the same frontmatter↔table parity ---
+# The second vendored bundle (#8122) must not be a parity orphan: the #7710
+# defect class (table/frontmatter divergence undetected for 117 days) is
+# exactly what a second NOTICE reintroduces if only gdpr-gate is covered.
+LEGAL_NOTICE="$REPO_ROOT/plugins/soleur/skills/legal-generate/NOTICE"
+if [[ -f "$LEGAL_NOTICE" ]]; then
+  LG_TABLE_COUNT=$(awk '
+    /^## General-Legal\/legal-templates \(CC0-1\.0\)/ { in_tbl=1; next }
+    /^## / { in_tbl=0 }
+    in_tbl && /^\| `references\// { n++ }
+    END { print n+0 }
+  ' "$LEGAL_NOTICE")
+  if (( LG_TABLE_COUNT < 12 )); then
+    echo "  FAIL: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows (expected >= 12) — table scrape is broken, not a clean registry"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: legal-generate NOTICE body table yielded $LG_TABLE_COUNT lifted rows"
+    PASS=$((PASS + 1))
+  fi
+  echo "TS4c: legal-generate lifted-files/upstream-files counts equal the NOTICE table's row count"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" lifted-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate lifted-files entries == NOTICE table rows"
+  LG_OUT=$(NOTICE_FILE="$LEGAL_NOTICE" bash "$PARSER" upstream-files)
+  LG_LINE_COUNT=$(printf '%s\n' "$LG_OUT" | wc -l | tr -d ' ')
+  assert_eq "$LG_TABLE_COUNT" "$LG_LINE_COUNT" "legal-generate upstream-files entries == NOTICE table rows"
+else
+  echo "  FAIL: legal-generate NOTICE missing — the vendored bundle's parity guard cannot run"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
 # --- TS5: days-stale against live NOTICE prints non-negative integer ---
 echo "TS5: days-stale prints a non-negative integer for the live NOTICE"
 OUT=$(bash "$PARSER" days-stale)

@@ -18,7 +18,9 @@
 # inngest-redis.service`, mirroring the canonical ci-deploy.sh:277-287 verdict (pinned by
 # a cross-file drift-guard test). Only the ENUM is emitted — never the ExecStart string
 # (the $VAR-form connection refs stay on-host; #5503 purity). Test seams:
-# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE (CI has no systemd).
+# INVENTORY_EXECSTART, INVENTORY_REDIS_ACTIVE (CI has no systemd). The #6921/#8077 quiesce
+# verdict reads systemd through inngest_quiesce_state (byte-identical, no env override — tests
+# drive a PATH `systemctl` stub) plus INNGEST_QUIESCE_MARKER / INNGEST_CUTOVER_CAPTURE_FILE.
 #
 # Read-only: no writes, no service restart. Safe to call anytime.
 #
@@ -442,6 +444,67 @@ derive_durability_state() {
   echo "sqlite_only"
 }
 
+# Quiesce state of the web inngest unit (ADR-100 amendment 2026-09-14, CTO ruling): the
+# systemd shape says "must not be started"; the marker says "a deliberate op=quiesce-web".
+# Prints exactly one of: quiesced | disabled_unattributed | not_quiesced. Byte-identical in
+# ci-deploy.sh, inngest-inventory.sh and inngest-rearm-reminders.sh (parity test pins it).
+inngest_quiesce_state() {
+  local a e m me ae ae_epoch
+  a="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  e="$(systemctl is-enabled inngest-server.service 2>/dev/null || true)"
+  if [[ ! ( ( "$a" == inactive || "$a" == failed ) && "$e" == disabled ) ]]; then
+    echo not_quiesced
+    return 0
+  fi
+  m="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  me="$(jq -r 'if (.v == 1 and (.epoch | type) == "number") then (.epoch | floor | tostring) else "" end' "$m" 2>/dev/null || true)"
+  if [[ ! "$me" =~ ^[0-9]{9,11}$ ]]; then
+    echo disabled_unattributed
+    return 0
+  fi
+  ae="$(systemctl show -p ActiveEnterTimestamp --value inngest-server.service 2>/dev/null || true)"
+  if [[ -n "$ae" && "$ae" != "n/a" ]]; then
+    ae_epoch="$(date -d "$ae" +%s 2>/dev/null || true)"
+    if [[ "$ae_epoch" =~ ^[0-9]+$ ]] && (( ae_epoch > me )); then
+      echo disabled_unattributed
+      return 0
+    fi
+  fi
+  echo quiesced
+}
+
+# #6921/#8077 — the fixed-vocabulary facts the QUIESCED line carries (contract §4), read only
+# after inngest_quiesce_state said `quiesced` (so the marker parsed with a 9-11 digit epoch).
+# Sets Q_UNIT, Q_SINCE, Q_CAPTURE (present|consumed|absent), Q_REBOOTED (true|false). Every value
+# is an enum or digits — nothing from the marker's free-form strings reaches the body.
+#   consumed — marker carries capture_consumed_at (checked FIRST: once consumed, the rearm
+#              capture mode refuses whatever file sits on disk, so reporting `present` would lie)
+#   present  — the capture file exists and its sha256 equals marker.capture_sha256
+#   rebooted — the current boot_id differs from marker.boot_id; an unreadable boot_id on either
+#              side cannot prove "same boot", so it reports true (the conservative reading).
+Q_UNIT=""; Q_SINCE=""; Q_CAPTURE=""; Q_REBOOTED=""
+read_quiesce_facts() {
+  local m="${INNGEST_QUIESCE_MARKER:-/var/lib/inngest/quiesced-by-op}"
+  local cf="${INNGEST_CUTOVER_CAPTURE_FILE:-/var/lib/inngest/cutover-capture.json}"
+  local consumed want have mboot cboot
+  Q_UNIT="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+  [[ "$Q_UNIT" =~ ^[a-z]{1,16}$ ]] || Q_UNIT="unknown"
+  Q_SINCE="$(jq -r '.epoch | floor | tostring' "$m" 2>/dev/null || true)"
+  [[ "$Q_SINCE" =~ ^[0-9]{9,11}$ ]] || Q_SINCE="unknown"
+  consumed="$(jq -r 'if .capture_consumed_at != null then "yes" else "no" end' "$m" 2>/dev/null || true)"
+  want="$(jq -r '.capture_sha256 // "" | ascii_downcase' "$m" 2>/dev/null || true)"
+  Q_CAPTURE="absent"
+  if [[ "$consumed" == yes ]]; then
+    Q_CAPTURE="consumed"
+  elif [[ "$want" =~ ^[0-9a-f]{64}$ && -f "$cf" ]]; then
+    have="$(sha256sum "$cf" 2>/dev/null | awk '{print $1}' || true)"
+    [[ "$have" == "$want" ]] && Q_CAPTURE="present"
+  fi
+  mboot="$(jq -r '.boot_id // "" | tostring' "$m" 2>/dev/null || true)"
+  cboot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+  if [[ -n "$cboot" && "$cboot" == "$mboot" ]]; then Q_REBOOTED="false"; else Q_REBOOTED="true"; fi
+}
+
 run_inventory() {
   # --- START marker: the LITERAL first action, before any network call (Finding 8) ---
   PREFLIGHT_START_S=$(date +%s)
@@ -463,9 +526,7 @@ run_inventory() {
     fn_errs=$(echo "$fn_body" | jq -c '[(.errors // [])[].message]' 2>/dev/null || echo '["<unparseable response>"]')
     fn_errs=$(printf '%s' "$fn_errs" | _pf_scrub)   # #6258 P1: no DSN/creds to journald+stdout
     fn_keys=$(echo "$fn_body" | jq -c '((.data // {}) | keys)' 2>/dev/null || echo '[]')
-    _pf_timeout_marker gql_error 0 0 0
-    logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
-    # #6407 Defect A — /health corroboration (LIVENESS_ONLY only). The external watchdog's
+    # #6407 Defect A — /health corroboration. The external watchdog's
     # cheap /v0/gql functions curl can transiently fail (a transport blip → the
     # __FETCH_FAILED__ envelope) while inngest-server is UP and processing events. Before
     # declaring a hard down (→ inngest_down → restart + [ci/inngest-down] P1), corroborate
@@ -473,14 +534,44 @@ run_inventory() {
     # verify_inngest_health gates on):
     #   /health=200  → the HTTP server IS serving; the GQL read blipped → emit a SOFT DEGRADED
     #                  sentinel (classifier → functions_query_degraded → NO restart). #6407.
-    #   /health !=200 → wedged/stopped → keep the FATAL sentinel (inngest_down → restart, which
-    #                  recovers a wedge). is-active/ExecStart are NOT specificity-correct here
-    #                  (both read for a wedged/stopped unit); /health is the only same-signal-
-    #                  class corroborator. The full-inventory (non-liveness) caller keeps the
-    #                  original fail-loud FATAL — corroboration is a liveness-verdict concern only.
+    #                  LIVENESS_ONLY only — the full-inventory caller keeps its fail-loud FATAL.
+    #   /health !=200 + state quiesced → QUIESCED; + disabled_unattributed → DISABLED_UNATTRIBUTED
+    #                  (#6921/#8077, BOTH modes — see below).
+    #   /health !=200 otherwise → wedged/stopped → keep the FATAL sentinel (inngest_down →
+    #                  restart, which recovers a wedge). is-active/ExecStart alone are NOT
+    #                  specificity-correct here (both read for a wedged/stopped unit); /health is
+    #                  the only same-signal-class corroborator of SERVING.
+    # HOISTED out of the LIVENESS_ONLY gate (#6921 C3): the cutover 2.2 hard gate calls the FULL
+    # mode hook (/hooks/inngest-inventory), so the quiesce verdicts must be reachable there too.
+    # Cost: one ≤5 s loopback curl, on this failure branch only.
+    local health_code durability_state_dg verdict_mode qstate
+    health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
+    # #6921/#8077 — the quiesce verdicts (review-fix contract §4). Decided BEFORE the gql_error
+    # TIMEOUT marker and the ERROR logger: a quiesced host answers this branch on every 15-min
+    # tick, and neither line is a fault there. Serving (/health=200) beats state: a serving
+    # scheduler is never reported quiesced. Every field before ` — ` is fixed vocabulary
+    # (consumers parse only that region, anchored at line start); host_id precedes any
+    # variable-length text (#6425 400-char truncation).
+    if [[ "$health_code" != "200" ]]; then
+      qstate="$(inngest_quiesce_state)"
+      if [[ "$qstate" == quiesced ]]; then
+        read_quiesce_facts
+        logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=quiesced quiesced_since=$Q_SINCE capture=$Q_CAPTURE rebooted_since_quiesce=$Q_REBOOTED health_code=$health_code host_id=$HOST_ID" 2>/dev/null || true
+        echo "inngest-inventory: QUIESCED host_id=$HOST_ID unit=$Q_UNIT enabled=disabled quiesced_since=$Q_SINCE capture=$Q_CAPTURE rebooted_since_quiesce=$Q_REBOOTED — deliberate stop+disable (op=quiesce-web); no restart"
+        echo "QUIESCED: host_id=$HOST_ID inngest-server.service unit=$Q_UNIT enabled=disabled quiesced_since=$Q_SINCE (op=quiesce-web; only op=rollback re-arms)" >&2
+        exit 1
+      elif [[ "$qstate" == disabled_unattributed ]]; then
+        Q_UNIT="$(systemctl is-active inngest-server.service 2>/dev/null || true)"
+        [[ "$Q_UNIT" =~ ^[a-z]{1,16}$ ]] || Q_UNIT="unknown"
+        logger -t "$LOG_TAG" "SOLEUR_INNGEST_LIVENESS_VERDICT mode=disabled_unattributed health_code=$health_code host_id=$HOST_ID" 2>/dev/null || true
+        echo "inngest-inventory: DISABLED_UNATTRIBUTED host_id=$HOST_ID unit=$Q_UNIT enabled=disabled — scheduler disabled with no valid quiesce marker; not a deliberate quiesce; dispatch op=rollback"
+        echo "DISABLED_UNATTRIBUTED: host_id=$HOST_ID inngest-server.service unit=$Q_UNIT enabled=disabled with no valid quiesce marker (dispatch op=rollback)" >&2
+        exit 1
+      fi
+    fi
+    _pf_timeout_marker gql_error 0 0 0
+    logger -t "$LOG_TAG" "ERROR: /v0/gql functions unreachable or non-array: errors=$fn_errs data_keys=$fn_keys" 2>/dev/null || true
     if [[ -n "$LIVENESS_ONLY" ]]; then
-      local health_code durability_state_dg verdict_mode
-      health_code="${INVENTORY_INNGEST_HEALTH_CODE-$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$INNGEST_HEALTH_URL" 2>/dev/null || echo 000)}"
       durability_state_dg=$(derive_durability_state)
       if [[ "$health_code" == "200" ]]; then verdict_mode="degraded"; else verdict_mode="down"; fi
       # #6407 Defect C — SOLEUR_INNGEST_LIVENESS_VERDICT marker (journald-only; tag

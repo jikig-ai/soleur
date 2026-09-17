@@ -177,8 +177,9 @@ interpolation in cloud-init-git-data.yml, which item 1 above still requires. Not
 replacement asserts a different fact than item 1 does, so item 1's threading check is not
 automatically covered by it.
 
-THEN clear the DO-NOT-DISPATCH banner at the top of
-knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+THEN re-read the release record at the top of
+knowledge-base/engineering/operations/runbooks/git-data-birth.md (the DO-NOT-DISPATCH
+banner it replaced was cleared by PR #8128, merged 2026-09-14).
 
 Do NOT work around this by applying from a laptop. An untargeted apply runs neither the
 destroy-guard nor the stock preflight, and a plan of that shape taken 2026-07-27 carried
@@ -189,15 +190,16 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2), and clearing the runbook banner — is NOT machine-checked here. The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2) — is NOT machine-checked here (the runbook banner that used to close the list was cleared by PR #8128, merged 2026-09-14). The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
   return 0
 }
 
 # ── THE SECOND INTERLOCK: rung-2 boot evidence (#6982 A3) ─────────────────────────────
 #
 # WHY THIS EXISTS. #6982 shipped the emitter, so the sentinel gate above now RELEASES. That
-# retired the ONLY mechanical hold on the birth route, leaving the dispatch held by prose:
-# the DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149 checklist. ADR-149's own
+# retired the ONLY mechanical hold on the birth route at the time, leaving the dispatch held
+# by prose: the (since-cleared) DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149
+# checklist. ADR-149's own
 # Alternatives table rejects exactly that posture — "a capability held only by prose is held
 # until the first person who reads the runbook and not the plan" — and the workflow's own
 # comment now reads "THE BIRTH-READINESS INTERLOCK IS RELEASED", which INVITES the dispatch
@@ -917,12 +919,15 @@ git_data_rung2_rehearsal_gate: HOLD — the git-data birth route is INTERLOCKED 
 
 WHY: no rung-2 boot evidence at ${evidence}.
 
-The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. That was
-the only MECHANICAL hold on this route. What still holds it is the DO-NOT-DISPATCH banner in
-knowledge-base/engineering/operations/runbooks/git-data-birth.md — prose, in a different
-file from this button. This gate exists so that hold is mechanical too.
+The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. This gate
+is the mechanical hold for the BOOT-EVIDENCE precondition: it holds until boot evidence for
+the CURRENT template is committed (the birth job runs it beside the sentinel, authorization-map,
+plan-shape and stock-preflight gates, and behind the environment approval). The release record and the dispatch procedure live in
+knowledge-base/engineering/operations/runbooks/git-data-birth.md.
 
-WHAT IS MISSING: the rendered cloud-init has never been booted on real hardware. #6982
+WHAT IS MISSING: no committed boot evidence is bound to the CURRENT rendered template (a
+rehearsal PASSED for an earlier hash on 2026-09-13 and the host was born 2026-09-14, but a
+template edit re-HOLDs this gate until the new hash boots). Historically, #6982
 reached rung 1 only — a CONTAINER harness that never boots the rendered template — and that
 was deliberately NOT inherited as a rung-2 pass. So the first real boot of this template
 would be the production host that holds every connected user's source code.
@@ -934,8 +939,8 @@ outside the hcloud_server.git_data address), then commit ${evidence} containing:
   RUNG2_EVIDENCE_URL=<workflow run or write-up URL>
   RUNG2_TEMPLATE_SHA256=<hash-of-hashes over the template + every file()-bound payload>
 
-Carried by #7025, which owns rung 2 as its own precondition. Nothing has been planned or
-created.
+Carried by #7025, which owns rung 2 as its own precondition; the rehearsal route is
+.github/workflows/git-data-rung2-rehearsal.yml (see runbook git-data-rung2-rehearsal.md).
 HOLD
     return 1
   fi

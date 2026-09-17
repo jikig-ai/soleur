@@ -122,8 +122,9 @@ below proves.
    `logs_alert` arm: for every declared `logtail_exploration_alert` (discovered from the `.tf`,
    never listed), `GET telemetry.betterstack.com/api/v2/alerts` through the same injected fetch
    with a **second exact host pin** (never a suffix match), and a paused or absent alert prints
-   `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH … live=logs_alert reason=logs-alert-paused|logs-alert-absent
-   detail="<paused_reason>"` with rc = 2, carried by the existing deduped
+   `SOLEUR_HEARTBEAT_RECONCILE_MISMATCH … live=logs_alert reason=logs-alert-paused|logs-alert-absent`
+   followed by the routing tokens `resource=` and `route=` (#7884, ADR-117 amendment of
+   2026-09-15) and, last, `detail="<paused_reason>"`, with rc = 2, carried by the existing deduped
    `heartbeat-reconcile-mismatch` issue. The untargeted drift plan is deliberately **not** the
    detector: the per-merge targeted apply re-arms `paused = false` silently, so a vendor pause
    shows in the plan only between infra merges.

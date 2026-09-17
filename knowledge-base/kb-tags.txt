@@ -84,6 +84,8 @@
 650
 653
 7898
+7980
+7981
 @ts-expect-error
 a11y
 ab-testing
@@ -91,14 +93,17 @@ abort-controller
 abort-feature
 abort-signal
 abortcontroller
+absence-query
 absence-wait
 absolute-positioning
 ac-design
 ac-filter
 ac-grep-scope
+acceptable-use-policy
 acceptance-criteria
 access
 access-denied
+access-gate
 accessibility
 account-consolidation
 account-delete
@@ -599,6 +604,7 @@ canusetool
 cap
 cap-coupling
 cap-rpc
+capability-matrix
 capability-precedent
 capacity
 capture
@@ -793,6 +799,7 @@ commands/brainstorm
 comment-drift
 comment-mutability
 comment-rot
+comment-stripped-grep
 comments
 commit-discipline
 commit-format
@@ -873,6 +880,7 @@ consolidation
 constitution-md
 constitution.md
 constraint-precision
+consumer-enumeration
 consumer-sweep
 contagious-interview
 container
@@ -1018,6 +1026,7 @@ cross-reviewer-convergence
 cross-root-import
 cross-runner
 cross-runtime
+cross-source
 cross-tenant
 crypto
 cryptography
@@ -1035,6 +1044,7 @@ curated-register
 curl
 curl-based cloudflare api calls in agent
 current_user
+custody
 custom
 custom-domain
 custom-icon
@@ -1110,6 +1120,7 @@ delegations
 delete
 delete-path
 deletion-sweep
+delimiter-collision
 delivery
 demotion
 deny-by-default
@@ -1174,12 +1185,15 @@ dev-prod-divergence
 dev-server
 devdependencies
 developer-experience
+devin
+devin-cloud
 dhh-rails-reviewer
 di-seam
 diagnosability
 diagnosis
 diagnostic
 diagnostic-discipline
+diagnostics
 diff-predicate
 diff-range
 diff-scoping
@@ -1332,6 +1346,7 @@ empirical-verification
 enable
 encrypted-key
 encryption
+encryption-ledger
 endpoint-swap
 endpoints
 enforcement
@@ -1364,6 +1379,7 @@ error-cause-chain
 error-handling
 error-mapping
 esbuild
+escalation-routing
 escape-hatch
 escape-rows
 escape-testing
@@ -1472,6 +1488,7 @@ false-verdict
 falsifiable-test
 falsification
 falsification-gate
+fan-out
 fan-out-pattern
 faqpage
 fd-exhaustion
@@ -1774,6 +1791,7 @@ hardcoded-map-drift
 harness
 harness-adapter
 harness-fidelity
+harness-parity
 harness-reliability
 harvest-debt
 has_function_privilege
@@ -1795,6 +1813,7 @@ health-endpoint
 health-scanner
 health-snapshot
 heartbeat
+heartbeat-subshell
 helper-boundary-transform
 helper-extraction
 helper-migration
@@ -1925,6 +1944,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-vacuity
 instrument-validation
 instrument-verification
 instrument-void
@@ -1936,6 +1956,7 @@ integration-id
 integration-issues
 integration-test
 integration-tests
+integrity-hash
 intended-drop
 intent-classification
 interactive-mode
@@ -1962,6 +1983,7 @@ isolation
 issue
 issue-body-drift
 issue-body-staleness
+issue-comments
 issue-deduplication
 issue-filing
 issue-flow
@@ -1989,6 +2011,7 @@ kb-chat
 kb-concierge
 kb-domain-allowlist-guard
 kb-drift
+kb-index-driver
 kb-layout
 kb-pdf
 kb-reader
@@ -2005,6 +2028,7 @@ key-rotation
 keyboard-shortcuts
 keyless-cosign
 keyword-detection
+keyword-monitor
 keyword-scanner
 kieran-rails-reviewer
 kieran-review
@@ -2055,6 +2079,7 @@ ledger
 lefthook
 legal
 legal-agents
+legal-attestation
 legal-audit-trail
 legal-compliance
 legal-compliance-auditor
@@ -2187,12 +2212,14 @@ merge-base
 merge-conflict
 merge-conflicts
 merge-direction
+merge-driver
 merge-livelock
 merge-pr
 merge-queue
 merge-ref
 merge-semantics
 merge-strategy
+merge-tail
 merge-time-timebomb
 merge-time-verification
 message
@@ -2433,6 +2460,7 @@ operator-mint
 operator-only-step
 operator-override
 operator-precedence
+operator-recovery
 operator-role
 operator-steps
 operator-truthfulness
@@ -2578,6 +2606,7 @@ phase-e
 phase-ordering
 phase-surface-hint
 phased-rollout
+pid-identity
 pii
 pii-scrubbing
 pil
@@ -2681,6 +2710,7 @@ plugin-marketplace
 plugin-path
 plugin-root
 plugin-structure
+plugin-surfaces
 plugin-system
 plugin-versioning
 plugins/soleur
@@ -2743,6 +2773,7 @@ pr-6266
 pr-body
 pr-creation
 pr-d
+pr-fanout
 pr-g
 pr-hygiene
 pr-naming-collisions
@@ -2785,6 +2816,7 @@ premise-verification
 premises
 prescribed
 presence-guard
+presence-vs-exclusivity
 pretooluse
 pretooluse-hook
 pretooluse-hooks
@@ -2794,6 +2826,7 @@ prevention-infrastructure
 pricing-page
 pricing-source
 primitive
+printf-newline-read
 prior-art
 prior-art-discovery
 prior-decision-recovery
@@ -2823,6 +2856,7 @@ processing-register
 prod-probe
 prod-safety
 prod-state
+prod-version-drift
 prod-write-safety
 producer-consumer
 product domain without coordinator
@@ -2866,6 +2900,7 @@ prose-claims
 prose-conventions
 prose-counts
 prose-guard
+prose-sweep
 prospect-anchored features
 protecthome
 protocol
@@ -2946,6 +2981,7 @@ react-select
 react-server-components
 react-state-machine
 react-testing-library
+read-before-run
 read-cutover
 read-freshness
 read-path
@@ -2978,6 +3014,7 @@ red-green-refactor
 red-herring
 red-verification
 redaction
+redaction-proxy
 redirect
 redirect-handling
 redirect-loop
@@ -2995,6 +3032,7 @@ refactoring
 reference-files
 referrer-policy
 refreshsession
+refs-pull-merge
 regex
 regex-concurrency
 regex-fidelity
@@ -3013,6 +3051,7 @@ regression-test
 rehearsal
 rehype-highlight
 relative-path
+relay
 release
 release-announce
 release-announcements
@@ -3073,6 +3112,7 @@ resource-management
 responsive
 responsive-design
 rest-api
+restart
 restatement
 restructure
 resume
@@ -3164,6 +3204,7 @@ rule
 rule-audit
 rule-budget
 rule-c
+rule-corpus
 rule-d
 rule-exists-no-gate-enforces-it
 rule-governance
@@ -3176,6 +3217,8 @@ rule_retirement
 rules-loader
 ruleset
 rulesets
+run-migrations
+run-records
 run_in_background
 runbook
 runbook-authoring
@@ -3275,6 +3318,7 @@ sdk-read-tool
 sdk-router
 sdk-shape
 sdk-tooling
+seam
 seam-guard
 search
 search-path-injection
@@ -3474,6 +3518,7 @@ silent
 silent-data-loss
 silent-degradation
 silent-drop
+silent-exit
 silent-failure
 silent-failure-adjacency
 silent-fallback
@@ -3616,6 +3661,7 @@ stale-filter
 stale-inherited-number
 stale-issue
 stale-lock
+stale-measurement
 stale-premise
 stale-ref
 stale-references
@@ -3780,6 +3826,7 @@ tenant-isolation
 tenant-jwt
 ternary
 terraform
+terraform-import
 terraform-plan-gates
 terraform-replace
 terraform-show-json
@@ -3802,6 +3849,7 @@ test-gates
 test-harness
 test-harness-verification
 test-helpers
+test-hygiene
 test-infrastructure
 test-isolation
 test-masking
@@ -3894,6 +3942,7 @@ tool-selection
 tool-status-chip
 tool-tier
 tool_input
+tool_name
 tool_progress
 toolchain-pinning
 tooling
@@ -3937,6 +3986,7 @@ tsx
 ttl
 turbopack
 tweets
+two-layer-gate
 two-phase-commit
 two-tier-guard
 type-filter
@@ -4034,6 +4084,7 @@ vacuous-tests
 validate-csp
 validation
 validation-gate
+value-pin
 vapid
 variable-fonts
 vault
@@ -4052,6 +4103,7 @@ vendor-lock-in
 vendor-misclassification
 vendor-pin
 vendor-pinning
+vendor-probe
 vendor-signup
 vendor-token-mint
 vendor-topology / sentry / residency
@@ -4164,6 +4216,7 @@ widening
 wire-path
 wire-protocol
 wire-schema
+wire-vs-endpoints
 withisolationscope
 without
 woff2

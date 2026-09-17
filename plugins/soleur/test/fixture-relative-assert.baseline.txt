@@ -176,7 +176,7 @@
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
 1	apps/web-platform/scripts/postgrest-reload-schema.test.sh
-3	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
+4	apps/web-platform/scripts/run-migrations-schema-probe.test.sh
 1	apps/web-platform/scripts/run-migrations.sh
 1	apps/web-platform/scripts/sentry-monitors-audit.sh
 10	apps/web-platform/scripts/sentry-monitors-audit.test.sh
@@ -186,6 +186,7 @@
 21	.claude/hooks/agent-token-tee.test.sh
 1	.claude/hooks/brand-hex-commit-gate.test.sh
 1	.claude/hooks/cla-signed-author-gate.sh
+1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 2	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
@@ -265,6 +266,7 @@
 10	plugins/soleur/test/scripts-shard-totality-mutations.sh
 2	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
+10	plugins/soleur/test/ship-battery-owed.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
 3	plugins/soleur/test/worktree-manager-atomic-config.test.sh

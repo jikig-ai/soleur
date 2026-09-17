@@ -9,10 +9,23 @@
 # lives here so it is deterministically unit-testable. Behavior-preserving extraction —
 # the poll loop was verified correct by architecture-strategist before extraction.
 
+# is_inngest_start_success_reason — the reasons ci-deploy.sh writes when an operation left
+# inngest-server STARTED and healthy: `success` (the restart handler and a durable `deploy
+# inngest`) and `success_degraded_durability` (a deploy that fell back to SQLite-only — still
+# serving, so a superseding deploy did bring inngest current). Everything else at exit_code 0
+# (`quiesced`, `enabled`, an absent reason read as `unknown`) is not a start.
+is_inngest_start_success_reason() {
+  [ "$1" = "success" ] || [ "$1" = "success_degraded_durability" ]
+}
+
 # classify_restart_frame — per-poll verdict for one deploy-status frame. Mirrors the
 # workflow's `case "$EXIT_CODE"` block (the freshness guard, the exit_code sentinels,
 # and the lock_contention/terminal split) EXACTLY. Echoes one of:
-#   success          exit_code==0, component==inngest, start_ts>=fresh_floor  (loop: exit 0)
+#   success          exit_code==0, component==inngest, start_ts>=fresh_floor, reason is an
+#                    inngest START success (success | success_degraded_durability)   (loop: exit 0)
+#   other_op         exit_code==0, component==inngest, fresh, but reason is ANOTHER op's success —
+#                    op=quiesce-web writes `quiesced`, op=rollback writes `enabled` (#8077 review):
+#                    not this run's restart, so keep polling                        (loop: wait)
 #   predates         a fresh-floor miss for component==inngest (exit 0 OR failure) (loop: wait)
 #   other_component  component!=inngest (exit 0 OR failure)                    (loop: wait)
 #   still_running    exit_code==-1                                            (loop: wait)
@@ -30,8 +43,10 @@ classify_restart_frame() {
       if [ "$component" = "inngest" ]; then
         if [ "$start_ts" -lt "$fresh_floor" ]; then
           echo "predates"
-        else
+        elif is_inngest_start_success_reason "$reason"; then
           echo "success"
+        else
+          echo "other_op"
         fi
       else
         echo "other_component"
@@ -58,19 +73,22 @@ classify_restart_frame() {
 
 # deploy_status_confirms_fresh_inngest — budget-expiry adjudicator #1 (mirrors the
 # workflow's final deploy-status re-read, EXACTLY). Echoes "yes" iff the re-read is a
-# 200 + valid JSON whose .component==inngest, .exit_code==0, and .start_ts (numeric,
-# defaulting to 0 on a non-numeric read via the `-eq self` guard) >= fresh_floor.
+# 200 + valid JSON whose .component==inngest, .exit_code==0, .reason is an inngest START
+# success (is_inngest_start_success_reason — a fresh `quiesced`/`enabled` frame is not "inngest
+# current", #8077 review), and .start_ts (numeric, defaulting to 0 on a non-numeric read via
+# the `-eq self` guard) >= fresh_floor.
 # Else "no".
 #   $1 = final_http_code   $2 = final_body (JSON string)   $3 = fresh_floor
 deploy_status_confirms_fresh_inngest() {
   local final_http_code="$1" final_body="$2" fresh_floor="$3"
   if [ "$final_http_code" = "200" ] && echo "$final_body" | jq -e . >/dev/null 2>&1; then
-    local f_exit f_component f_start
+    local f_exit f_component f_start f_reason
     f_exit=$(echo "$final_body" | jq -r '.exit_code // -99')
+    f_reason=$(echo "$final_body" | jq -r '.reason // "unknown"')
     f_component=$(echo "$final_body" | jq -r '.component // "unknown"')
     f_start=$(echo "$final_body" | jq -r '.start_ts // 0')
     [ "$f_start" -eq "$f_start" ] 2>/dev/null || f_start=0
-    if [ "$f_component" = "inngest" ] && [ "$f_exit" = "0" ] && [ "$f_start" -ge "$fresh_floor" ]; then
+    if [ "$f_component" = "inngest" ] && [ "$f_exit" = "0" ] && is_inngest_start_success_reason "$f_reason" && [ "$f_start" -ge "$fresh_floor" ]; then
       echo "yes"
       return 0
     fi

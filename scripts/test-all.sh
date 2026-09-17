@@ -1626,6 +1626,11 @@ if want_scripts; then
   # actually scanned; -unit asserts the linter can still fail.
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
+  # #8030 / PR #8175: rules migrated out of AGENTS.rules.md are invisible to every check that
+  # reads that file. The live run checks each registry row's placement and body hash; the unit
+  # suite is the mutation matrix. Registered explicitly — scripts/*.test.sh is not auto-globbed.
+  run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
+  run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
   # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.
@@ -1766,6 +1771,14 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # The DPA Schedule 4 TOM-4 RLS-posture gate (CLO ruling 2026-09-15, #8197).
+  # Schedule 4 becomes Annex II to the Module 2/3 SCCs on execution, so every
+  # table name and predicate in it is a contractual representation. The -live
+  # line runs the 22 assertions over the real migration corpus so a schema
+  # change that falsifies the instrument reds CI; the .test.sh line is the
+  # MB-0..MB-12 mutation battery proving each assertion can actually fail.
+  run_suite "scripts/check-tom4-rls-posture" bash scripts/check-tom4-rls-posture.test.sh
+  run_suite "scripts/check-tom4-rls-posture-live" bash scripts/check-tom4-rls-posture.sh
   # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
   # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
   # the sweep over the real plans/ tree so a non-compliant Guard Contract landing
@@ -2049,6 +2062,18 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
+  # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
+  # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
+  # IS a host replace), and nothing exercised a mixed-boot window before this harness.
+  #
+  # The suite asserts a BRANCH MARKER per case, not just an exit code, and that is load-bearing:
+  # the probe has six distinct `exit 2` sites, so an exit-code-only suite collapses most of its
+  # cases onto one integer. Measured — removing both `boot_id=unknown` guards leaves the exit code
+  # at 2 and is caught ONLY by the marker. Measured on the first revision, which was exit-code
+  # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
+  # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
+  run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2087,6 +2112,16 @@ if want_scripts; then
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
   # than telemetry — a green boot marker must not authorize a supply-chain retirement.
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
+  # #8159: exit-code harness for the post-merge cloud-parity evidence probe. Registered
+  # explicitly (orphan-suite class above). This probe is notify-only — its verdicts feed a
+  # legal-adjacent tracker whose close is an operator judgement, so the load-bearing pins are
+  # the never-0/never-1 invariant (0 is the sweeper's close verb; 1 its fail/reopen verb) and
+  # the 2-vs-3 split: a measurement that could not run (missing file, missing toolchain,
+  # non-regular file at the probe path) must report CANNOT ESTABLISH, not NOT YET — "nothing
+  # qualifies" for "could not look" is the inversion the contract exists to express. The suite
+  # also pins the fenced-template guard: cloud-probe.md's checklist carries a fenced markdown
+  # TEMPLATE naming SC1/SC3/SC4, and a fence-blind parse reads documentation as a verdict.
+  run_suite "scripts/cloud-mode-postmerge-evidence-8159" bash scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2112,6 +2147,9 @@ if want_scripts; then
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
+  # #7966: the rotation script had never completed a run (TARGETS exported after the check that
+  # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
+  run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
@@ -2330,6 +2368,9 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
+  # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
+  run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
+  run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
   # five #6593-authored workspaces_luks resources; ABORTs any touch of the live plaintext
   # /mnt/data volume/attachment or the web-1 server, any passphrase re-mint, any destroy/forget,
@@ -2353,6 +2394,12 @@ if want_scripts; then
   run_suite "tests/scripts/destroy-guard-regex-parity" bash tests/scripts/test-destroy-guard-regex-parity.sh
   run_suite "tests/scripts/destroy-guard-sentry-scope-guard" bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh
   run_suite "tests/scripts/tenant-integration-gate-verdict" bash tests/scripts/test-tenant-integration-gate-verdict.sh
+  # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
+  # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
+  # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
+  # is silent AND green while the allow-list it pins decides whether the #8181
+  # NOTICE binding actually gates merges.
+  run_suite "tests/scripts/vendor-pin-gate-verdict" bash tests/scripts/test-vendor-pin-gate-verdict.sh
   # #6589 — the Sentry full-root delete path. These three gate the contract that
   # makes `terraform destroy` reachable at all for infra/sentry/**: the absence of
   # address-scoping in the apply (the #6074/#4929 root cause), the fail-closed

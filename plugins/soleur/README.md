@@ -31,7 +31,10 @@ definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
 **Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. To work
 on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
 and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
-[compatibility instructions](devin/INSTRUCTIONS.md).
+[compatibility instructions](devin/INSTRUCTIONS.md). Devin **Cloud** sessions run under
+Soleur Cloud Mode — skills, rules, and MCP carry, but plugin subagents and
+SessionStart/SessionEnd hooks are absent, and degradation is disclosed rather than
+silent; see the [cloud-vs-local capability matrix](devin/INSTRUCTIONS.md#cloud-mode-devin-cloud-sessions).
 
 The recommended way to use Soleur is through the unified entry point:
 
@@ -249,7 +252,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `content-writer` | Generate full article drafts with brand voice, Eleventy frontmatter, and JSON-LD |
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
-| `legal-generate` | Generate draft legal documents from company context (8 document types, 3 jurisdictions) |
+| `legal-generate` | Generate draft legal documents from company context (14 document types, 3 jurisdictions) |
 | `release-announce` | Announce releases via GitHub Releases (CI posts to Slack) |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |

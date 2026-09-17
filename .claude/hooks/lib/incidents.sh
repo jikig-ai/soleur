@@ -332,6 +332,11 @@ resolve_command_cwd() {
   if [[ -z "$dir" || ! -d "$dir" ]]; then
     dir=$(echo "$input" | jq -r '.cwd // ""' 2>/dev/null || echo "")
   fi
+  # Devin envelopes carry no .cwd (EC§5); hook PWD is the project root and
+  # the *_PROJECT_DIR envs are set under all Devin dispatch paths (EC§4).
+  if [[ -z "$dir" || ! -d "$dir" ]]; then
+    dir="${DEVIN_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-}}"
+  fi
   echo "$dir"
 }
 

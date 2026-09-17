@@ -4,7 +4,8 @@
 - **Date:** 2026-07-27
 - **Issue:** #6977
 - **Amended by:** #7003 (operator decisions DC-2, DC-3 — 2026-07-27); #7025 (DC-6 — the
-  rung-2 rehearsal route, shipped unfired, 2026-07-29); #8128 (item 8 discharged — 2026-09-13)
+  rung-2 rehearsal route, shipped unfired, 2026-07-29); #8128 (item 8 discharged — 2026-09-13);
+  #7884 (ADR-222 — reason (c)'s object cap superseded by a measured count — 2026-09-15)
 - **Supersedes / amends:** amends ADR-145 (`## Consequences`)
 - **Related:** ADR-068 (multi-host workspaces), ADR-103 (operator-applied exclusions),
   ADR-115 (dedicated-host boot convergence), ADR-130 (vendor-scope probes), ADR-143
@@ -223,6 +224,47 @@ repository. An earlier draft said "impossible"; that overstated it.
     refusal, not a silent one — and because the same disclosure also reaches the operator through
     the `apply_target` input description, which GitHub renders before any job exists.
 
+### Addendum — #8189 (2026-09-15): a root authority beside item 10's three keys
+
+Item 10 and the #8009 disposition account for **three** SSH authorities on git-data, each a distinct
+key with a fixed forced command. #8189 adds a **distinct root** authority, and this record carries it
+so the accounting stays complete. It is not the only root authority: `hcloud_ssh_key.default` (the
+operator's public key) has been delivered as a root login key, with no forced command, by every create
+of `hcloud_server.git_data`, including the host born 2026-09-14, and the create gate requires exactly
+that key and the root key. Item 10's three-key count never covered it; a count of "four" would read
+as complete, so none is given. As of this addendum the authority is declared, not delivered: the
+root-key apply, the fingerprint PR and the replace all run after #8189 merges, each with its own
+authorization, so the entries below are written in the future tense.
+
+- **What it is.** `tls_private_key.git_data_root` (ED25519) in the separate root
+  `apps/web-platform/infra/git-data-root-key/`. Once delivered, it **will authenticate as root**, with
+  **no forced command**, so it will be able to bypass every git-principal measure item 10's map
+  protects.
+- **Where it will be held.** Once the root-key apply runs: the Doppler project `soleur-git-data-root`
+  (not `prd`), and that root's R2 state object.
+- **How it will reach the host.** Only through `hcloud_server.git_data`'s create-time `ssh_keys`, as a
+  Hetzner key object labelled `soleur-role=git-data-root`, at the next replace. Both the birth and the
+  replace gate call `git_data_root_key_arm`, which refuses a create unless a committed fingerprint file
+  matches the one resolved key. Until that file is committed, every birth and replace refuses.
+- **What it does not change.** `git_data_authorization_map_gate` still asserts exactly three distinct
+  forced-command keys, correctly assigned. The root key is not a fourth `git` slot and is not in
+  `cloud-init-git-data.yml`, so the rung-2 hash does not move.
+- **Approval.** #8009 C1 was re-approved for this addition by CPO and CTO. Custody limits and residuals
+  are in ADR-220, "Amendment log".
+
+### Addendum — #6680 (2026-09-15): F9's "operator root key" does not exist
+
+The #8043 disposition's F9 row says the root paths for the real fence hook are "a host replace
+(cloud-init) or the operator root key the cutover already uses". The second half is false: the
+cutover never held a root key on git-data (ADR-220, Context). A host replace is the only root
+delivery path for the real fence hook. The same stale claim ("the operator root path the cutover
+uses") sits in the comments of the hash-bound `git-data-pre-receive.sh` and
+`git-data-pre-receive-placeholder.sh`. They are left untouched here,
+because editing them moves the rung-2 hash, and the fix is tracked in #8189.
+
+> **Superseded 2026-09-15 (#8189), as to where the fix is tracked:** #8189 left both hash-bound files
+> untouched, and the stale comment is carried by a comment on #8093 for its next batch.
+
 ### Disposition — #8128 (2026-09-13): item 8 discharged — the banner is cleared
 
 | Item | Status |
@@ -283,7 +325,7 @@ dispatches a rehearsal or a birth.
 | 1 — emitter + `sentry_dsn` threaded | **DONE.** One `/usr/local/bin/git-data-emit` (ADR-147's #6982 addendum records why it is a file and not an inline function). |
 | 2 — credential reachable in the token's single-config scope | **DONE, and it found a live boot-breaker.** The probe measured that `doppler run --config prd` under a `prd_git_data`-scoped token **exits 1** with `GIT_DATA_LUKS_KEY` absent — so `doppler run` was exiting BEFORE exec'ing the LUKS heredoc, its `set -euo pipefail` ran zero times, and the host would have booted dark with sshd up. Both invocations corrected to `--config prd_git_data`. This is exactly the "dark by construction" trap this item exists to catch, and it was sitting inside the file the interlock inspects. |
 | 3 — new addresses registered | **DONE, and the item understated the work: there are SIX sites, not three.** The gate carries `def allow:` (a PERMISSION set) *and* a separate hardcoded PRESENCE loop (a COMPLETENESS set) that nothing extracted, so a three-of-four edit was fully green — an address PERMITTED to change but not REQUIRED to appear, which is Residual 2's harm hiding behind a PASS. Set is 18 → 20. |
-| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()`). A producer with no reader is not a signal. |
+| 4 — post-apply signal | **DONE, host-side.** `stage:boot_complete` from `git-data-bootstrap.sh` **plus a poll that reads it** inside the birth job (`if: always()` at the time; since PR #8171 gated on the apply step's outcome — it runs after a green or failed apply, never after a skipped one). A producer with no reader is not a signal. |
 | 5 — `GIT_DATA_SSH_HOST` | **SHIPPED, BOTH CONSTRAINTS MET.** `doppler_secret.git_data_ssh_host` ships and its `OPERATOR_APPLIED_EXCLUSIONS` entry lands in the same change (second constraint). The first constraint — single-source from `hcloud_server_network.git_data.ip` — is now met **as written**: the value reads that computed attribute. #6982's first draft shipped `local.git_data_private_ip` and recorded the divergence as DC-5 on the grounds that the computed attribute is unappliable pre-birth; **review refuted that** and the divergence was reversed before merge. See the DC-5 reversal note below. |
 | 6 — firewall entailment | **ALREADY DISCHARGED on `main`**, verified rather than assumed: the gate splits the attachment out of the entailed loop and asserts the OUTCOME (`server_ids` ends at length 1). No code change. |
 | 7 — replace the interlock mechanism (DC-2) | **NOT SATISFIABLE AS WRITTEN — recorded here per this item's own instruction.** #6982 ships the emitter as a FILE inside `user_data` (`/usr/local/bin/git-data-emit`), not as a Terraform resource: git-data has no bake path, so there is no resource to assert. ADR-147's #6982 addendum records that divergence. Per item 7's closing clause the `${sentry_dsn}`-pinned sentinel therefore **stays exactly as shipped**, and this recording is the precondition item 7 places on clearing item 8. |
@@ -702,7 +744,7 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 | Keep the untargeted laptop apply | **Rejected** — the violation this closes; a plan of that shape carried nine destroys. |
 | Inline the gate in the workflow YAML | **Rejected on evidence.** Untestable, and it fails the parity job⇄gate pairing. An earlier draft then shipped the *interlock* inline, contradicting itself; corrected. |
 | Ship the route with no interlock, hold by convention | **Rejected.** A capability held only by prose is held until the first person who reads the runbook and not the plan — and #6982 contains items ADR-115 makes unfixable after birth. |
-| Target the heartbeat too | **Rejected — verdict STANDS, on stronger and partly different evidence (#6982, D-HB).** The recorded reason (*the feeder already shipped and is web-host-resident; creating a monitor this route cannot arm is the #6537 fed-but-paused shape*) is now *partly stale on the feeding half*: the feeder shipped, `web-git-data-probe.service` runs `doppler run` per tick and resolves its URL by indirection through `GIT_DATA_HEARTBEAT_URL_KEY`, so the URL would propagate within one 60 s tick with no `ci-deploy` redeploy, and `heartbeat-manifest.ts` carries the row with no `arming_pending`. Three findings replace it, any one disqualifying. **(a) It would wedge every merge to `main`:** the `arm_one` call for `git_data_prd` lives in the PER-MERGE `apply` job, not a birth-only step, and no-ops today only because the address is absent from tfstate — the moment the heartbeat exists, every merge unpauses it, polls 230 s, and on no-beat rolls back and returns non-zero. That converts the health of an unborn, flag-off host into a merge-blocking dependency for the whole repository. **(b) It would prove the wrong thing:** `web-git-data-probe.sh` names its own limit — a TCP connect-and-close to :22 proves the port is OPEN, not that git transport SERVES — and sshd is up before `runcmd` runs, so a host whose Doppler download 404'd, whose LUKS never mounted and whose bootstrap died ANSWERS ON :22 AND BEATS GREEN. **(c) Object cap:** live Better Stack holds 7 heartbeats + 3 monitors against a vendor-page reading of a single shared pool of ten. Item 4 is satisfied HOST-SIDE instead, by the `stage:boot_complete` emit plus a poll that reads it. #6548 keeps ownership and receives these three findings. |
+| Target the heartbeat too | **Rejected — verdict STANDS, on stronger and partly different evidence (#6982, D-HB).** The recorded reason (*the feeder already shipped and is web-host-resident; creating a monitor this route cannot arm is the #6537 fed-but-paused shape*) is now *partly stale on the feeding half*: the feeder shipped, `web-git-data-probe.service` runs `doppler run` per tick and resolves its URL by indirection through `GIT_DATA_HEARTBEAT_URL_KEY`, so the URL would propagate within one 60 s tick with no `ci-deploy` redeploy, and `heartbeat-manifest.ts` carries the row with no `arming_pending`. Three findings replace it, any one disqualifying. **(a) It would wedge every merge to `main`:** the `arm_one` call for `git_data_prd` lives in the PER-MERGE `apply` job, not a birth-only step, and no-ops today only because the address is absent from tfstate — the moment the heartbeat exists, every merge unpauses it, polls 230 s, and on no-beat rolls back and returns non-zero. That converts the health of an unborn, flag-off host into a merge-blocking dependency for the whole repository. **(b) It would prove the wrong thing:** `web-git-data-probe.sh` names its own limit — a TCP connect-and-close to :22 proves the port is OPEN, not that git transport SERVES — and sshd is up before `runcmd` runs, so a host whose Doppler download 404'd, whose LUKS never mounted and whose bootstrap died ANSWERS ON :22 AND BEATS GREEN. **(c) Object cap:** live Better Stack holds 7 heartbeats + 3 monitors against a vendor-page reading of a single shared pool of ten. Item 4 is satisfied HOST-SIDE instead, by the `stage:boot_complete` emit plus a poll that reads it. #6548 keeps ownership and receives these three findings. **Amended 2026-09-15 (#7884):** the (c) reading is superseded by measurement. The twice-daily reconcile prints `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`, and live held 4 monitors + 9 heartbeats = 13 objects that day, which contradicts a single shared pool of ten. See [ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md). |
 | Include `doppler_secret.git_data_ssh_host` | **Cut from #6977; SHIPPED in #6982, and the feasibility regression was not structural.** The wedge is real only under the remedy *"give the new secret a per-PR `-target` line"* — which is not what any of its five sibling secrets do; they sit in `OPERATOR_APPLIED_EXCLUSIONS` with no per-PR target. Sourcing the value from a STATIC local rather than the computed NIC attribute leaves no edge that can reach the server, so the address is plannable and appliable with the host absent. **The operator upheld the cut on 2026-07-27 (DC-3)** and attached two mechanical constraints, recorded in release-checklist item 5: single-source from `hcloud_server_network.git_data.ip`, and land the `OPERATOR_APPLIED_EXCLUSIONS` entry in the same change. Both are now met: **DC-5 was REVERSED during #6982's review** (see the reversal note above) and the value reads `hcloud_server_network.git_data.ip` as mandated. The divergence argument — that the computed attribute is unappliable pre-birth — did not survive contact with the actual `-target` lines, which already include the NIC. The #6977 dissent is in `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md` (PR #6989); the operator's decision upholding it was added to that same file by #7003. |
 | Ship gate + suite now, enum + job in #6982 | **Considered and declined by the operator.** It would delete the interlock entirely by removing the capability, but #6977 would no longer deliver an executable route and would close on a partial. Recorded as DC-1. |
 <!-- lint-infra-ignore end -->
