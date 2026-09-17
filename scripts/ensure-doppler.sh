@@ -29,10 +29,19 @@
 # each has a DIFFERENT fix and only the first is this script's job:
 #
 #   missing         the binary is absent          -> run this script
-#   unauthenticated binary present, no token      -> operator runs `doppler login`
+#   unauthenticated binary present, no/bad token  -> operator runs `doppler login`
 #                                                    (interactive) or exports
 #                                                    DOPPLER_TOKEN
 #   ready           authenticated                 -> wrap the call in `doppler run`
+#   unknown         the CLI failed for a reason   -> do NOT route to a login flow; the
+#                   this script does not             cause is echoed to stderr. Re-run once;
+#                   recognise (network fault,       if it persists, treat Doppler as
+#                   API outage, ...)                unavailable and say so.
+#
+# FOUR states, not three. An earlier revision of this table listed three and the sentence
+# below still said "exactly one of those words" while the code printed `unknown` as well —
+# a caller who wrote a three-way `case` from this table had no arm for the state that most
+# needs one.
 #
 # `--state` prints exactly one of those words and exits 0, so a caller can branch
 # without parsing Doppler's human-facing error text. Collapsing `unauthenticated`
@@ -59,6 +68,20 @@ if [[ "${1:-}" == "--state" ]]; then
     echo missing
     exit 0
   fi
+  # `ready` MUST MEAN INVOCABLE, NOT MERELY PRESENT. The resolver above falls back to
+  # $INSTALL_DIR, so a binary sitting in ~/.local/bin that is NOT on PATH authenticates fine
+  # and used to print a bare `ready` — after which the caller runs `doppler run ...`, gets
+  # `command not found`, and is back at "this session has no observability access", which is
+  # the misdiagnosis this whole file exists to prevent. Measured 2026-09-17 on the operator's
+  # own machine, where doppler lives at ~/.local/bin and is not on the default PATH.
+  #
+  # The non---state branch below already emits this hint; only the agent-facing branch did
+  # not, which is the wrong way round. stdout keeps the single parseable word so a caller's
+  # `case` still works; the remedy goes to stderr.
+  if ! command -v doppler >/dev/null 2>&1; then
+    echo "NOTE: doppler is at $bin but NOT on PATH for this shell — \`doppler run\` will fail. Add it:" >&2
+    echo "  export PATH=\"$(dirname "$bin"):\$PATH\"" >&2
+  fi
   # MEASURED 2026-09-17 (v3.76.5): `doppler me` writes its error to STDERR and
   # exits 1 when no token is configured. An earlier revision of this block
   # asserted the opposite — exit 0, error on stdout — and matched on the message
@@ -75,12 +98,38 @@ if [[ "${1:-}" == "--state" ]]; then
   err="$("$bin" me 2>&1 >/dev/null)" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     echo ready
-  elif grep -qiE 'must provide a token|not authenticated|invalid token|unauthorized' <<<"$err"; then
+  elif grep -qiE 'must provide a token|not authenticated|invalid[[:space:]]+(auth[[:space:]]+)?token|unauthorized|token.*(expired|revoked)' <<<"$err"; then
     echo unauthenticated
   else
+    # `unknown` DISCARDS ITS OWN EVIDENCE OTHERWISE. This is by construction the branch where
+    # the caller has least idea what to do, and it was the only branch with no next step and
+    # no diagnostic. stdout keeps the single parseable word; the cause goes to stderr.
+    echo "doppler state could not be classified; its own error was:" >&2
+    printf '  %s\n' "$err" >&2
+    echo "  Do NOT route this to \`doppler login\` — an unrecognised failure is not evidence" >&2
+    echo "  of a missing token. Re-run once; if it persists, treat Doppler as unavailable." >&2
     echo unknown
   fi
   exit 0
+fi
+
+# AN UNRECOGNISED FLAG MUST NOT TRIGGER AN INSTALL. Only `--state` was recognised and there
+# was no else-arm, so `--stat`, `--status` or `--help` fell through to the download path and
+# printed a filesystem path on stdout. A caller branching on the four state words matches
+# none of them and takes its default arm — which, given what this script is for, is the
+# "no observability access" arm. 64 is EX_USAGE, the code the sibling helpers already use.
+if [[ $# -gt 0 ]]; then
+  case "${1:-}" in
+    -h | --help)
+      sed -n '2,5p' "$0" >&2
+      echo "usage: ensure-doppler.sh [--state]" >&2
+      exit 0
+      ;;
+    *)
+      echo "ensure-doppler.sh: unknown argument '$1' (expected --state or no argument)" >&2
+      exit 64
+      ;;
+  esac
 fi
 
 if command -v doppler >/dev/null 2>&1; then
