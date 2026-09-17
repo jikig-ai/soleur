@@ -983,3 +983,40 @@ model-invocable and shadow same-named skills on Claude Code. Deletion is still
 deferred, but for a different and narrower reason: Codex, Devin and Grok each
 resolve `skills/{go,help,sync}` and would be affected. ADR-224 §Consequences
 carries the corrected version.
+
+## Addendum 3 — 2026-09-17 (ship phase, advisor consult)
+
+Appended, not edited: the paragraphs below supersede text above without removing it.
+
+**1. "The real blocker is dispatch" is SUPERSEDED.** The §Addendum (work phase) paragraph headed
+*"Superseded: the stated reason to defer deletion"* asserts that `plugins/soleur/skills/go/` is the
+sole model-invocable `Skill(soleur:go)` handle. That is measured FALSE: with all three shims deleted
+from a scratch tree, `Skill(soleur:help)` still returns `# Soleur Help` from `commands/help.md`,
+because commands are model-invocable and shadow same-named skills. The surviving reason to keep the
+shims is the other three harnesses, not Claude Code dispatch. #8236's binding precondition was
+rewritten accordingly.
+
+**2. "now measured on both harnesses" is SUPERSEDED.** The clause-(a) bullet above says Codex and
+Devin each resolve the three names from two roots, "now measured on both harnesses". Devin is
+measured (`devin skills list`). Codex is **inferred** from `.codex-plugin/plugin.json` declaring
+`./skills`; the "101 skills" figure from `codex-plugin-smoke.mjs` is `expectedSkills`, computed
+locally before the script contacts Codex, and proves nothing about two-root resolution.
+
+**3. Grok's handling of the key is UNMEASURED.** Any reading of `grok inspect`'s skill count as
+evidence that Grok ignores `user-invocable: false` is a non sequitur — the key governs menu
+visibility and cannot change a skill count on any harness, so the observable does not discriminate.
+It establishes only the safety property: Grok does not drop a skill, so `/go` cannot break there.
+
+**4. The headline acceptance criterion is documented, not observed.** No post-fix capture of the
+rendered Claude Code `/` menu exists. The single-row outcome follows from the documented semantics
+of `user-invocable` plus the measured fact that the model path is unaffected. Exposure if the key
+were ignored is bounded to today's duplicate persisting, with no regression, which is why this ships
+on documented semantics rather than blocking on a menu capture.
+
+**5. Two guard vacuities found and closed at ship time**, both measured against a GREEN control:
+the multi-root floor counted raw root declarations while `collidingNames()` compares normalized
+ones (so `["skills", "./skills"]` — one directory — satisfied it as multi-root, and mutation row M6
+went green with `review` resolving twice); and the cross-file presence guard detected deletion of
+the live block but not its neutering (an early `return` removed ten clauses, 1348 -> 1338 passing,
+while the guard stayed green). Both are fixed in `components.test.ts` and
+`slash-name-uniqueness.test.ts`.

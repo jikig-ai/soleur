@@ -66,10 +66,17 @@ name anyone would add to a per-harness root — is not a command.
 3. **A name that must reach the model but not the user's menu is suppressed with
    `user-invocable: false`, not deleted.** The key is documented Claude Code
    frontmatter: it removes the `/` row while leaving the skill model-invocable
-   and its description in context. Deletion is not equivalent — `Skill(soleur:go)`
-   is dispatched on every Command Center message, and the ADR-113 note beside
-   that dispatch records a measured user-facing failure when the skill is out of
-   scope.
+   and its description in context.
+
+   Deletion is not equivalent, but **not for the reason first written here.** An
+   earlier version of this decision argued that deleting the skill would break the
+   `Skill(soleur:go)` dispatch that `server/prompt-injection-wrap.ts` sends on
+   every Command Center message. That is FALSE on Claude Code and is measured false
+   in §Consequences: the command shadows the skill and answers that dispatch either
+   way. The surviving reason is the **other three harnesses**, which resolve these
+   paths and do not all have a command surface to fall back to. Recorded rather
+   than rewritten, because the false version was the stated basis for deferring
+   #8236.
 
 4. **Command-stem disjointness is asserted over the roots the CLAUDE manifest
    resolves, derived from that manifest rather than restated.** `commands/`
@@ -108,11 +115,13 @@ the description word budget stays 2442, and the cloud-mode marker fleet is
 unchanged — this ADR costs no counter churn.
 
 Decision 5 is satisfied today only with an ack. Codex and Devin each resolve
-`go`, `help` and `sync` from two roots, and that is **not** fixed here. It is
-measured on both harnesses rather than inferred from the manifests:
-`node scripts/codex-plugin-smoke.mjs` reports 101 skills, and `devin skills list`
-reports `/soleur:go` from both `skills/go` and `devin/skills/go`, each
-`[user,model]`.
+`go`, `help` and `sync` from two roots, and that is **not** fixed here. The two
+harnesses are known to different standards, and this paragraph previously flattened
+that difference by calling both "measured on both harnesses": **Devin is measured**
+— `devin skills list` reports `/soleur:go` from both `skills/go` and
+`devin/skills/go`, each `[user,model]`. **Codex is inferred**, from
+`.codex-plugin/plugin.json` declaring `./skills` explicitly; see §Verification for
+why `codex-plugin-smoke.mjs`'s "101 skills" proves nothing about it.
 
 Collapsing it means deleting the shared copies. **An earlier version of this
 paragraph said `plugins/soleur/skills/go/` is the SOLE model-invocable
@@ -171,12 +180,23 @@ Per-harness discovery, stated at the strength the evidence actually carries.
 `/soleur:sync` from `skills/` **and** `devin/skills/`, each `[user,model]`. That is
 decision 5's condition observed live on a real harness.
 
-**Grok — measured.** `grok inspect` reports the soleur plugin at **98 skills** both
-with and without `user-invocable: false` present (branch vs `origin/main`), so
-Grok's loader does not act on the key: it cannot break Grok's `/go`, and Grok keeps
-whatever duplication it had. Caveat: the `origin/main` reading was taken in a fresh
-clone, which Grok reports as an untrusted `(project, disabled)` plugin; the skill
-COUNT is what is being compared and it is identical.
+**Grok — one negative result, which is weaker than this section first claimed.**
+`grok inspect` reports the soleur plugin at **98 skills** both with and without
+`user-invocable: false` present (branch vs `origin/main`).
+
+An earlier version read that as "Grok's loader does not act on the key". **It does
+not support that conclusion**, and the flaw is in the instrument rather than the
+reading: `user-invocable` governs MENU VISIBILITY, not whether a skill loads, so it
+cannot change a skill count on *any* harness. Claude Code — where the key
+demonstrably works — would also report 98 both ways. An observable that returns the
+same value whether or not the hypothesis is true discriminates nothing.
+
+What the reading does establish is the safety property, which is the one this ADR
+actually leans on: the key does not make Grok **drop** a skill, so it cannot break
+Grok's `/go`. Whether Grok's `/` menu still shows `go` twice is **unmeasured**.
+Settling it needs a menu enumeration, not a count. Caveat on the comparison itself:
+the `origin/main` reading was taken in a fresh clone, which Grok reports as an
+untrusted `(project, disabled)` plugin.
 
 **Codex — inferred, NOT measured.** An earlier version of this section cited
 `node scripts/codex-plugin-smoke.mjs` reporting "101 skills" as live proof. That
@@ -190,20 +210,30 @@ inference from configuration, not measurement.
 ADR-215's `98` figures are a dated record of a 95-canonical tree and are left
 unchanged.
 
-**Scope of the dedup claim.** Decision 3 is verified for **Claude Code**, whose
-frontmatter key this is.
+**Scope of the dedup claim — stated at the strength the evidence carries.**
+Decision 3 rests on the DOCUMENTED semantics of `user-invocable` on Claude Code
+(primary source: the skills reference — "You can invoke: No | Claude can invoke:
+Yes"), plus the measured fact that the model path is unaffected. It is **not**
+backed by a post-fix capture of the rendered `/` menu, and this section previously
+said "verified for Claude Code" without one. The reproduction that opened this work
+is a pre-fix screenshot showing the duplicate rows; the post-fix single row is
+expected-by-documentation, not observed. Exposure if the key were ignored is
+bounded to today's duplicate persisting — no regression — which is why this ships
+on documented semantics rather than blocking on a menu capture.
 
-**Grok is in the same collision class and is now MEASURED — see §Verification.** `.grok/config.toml`
-points at this same `plugins/soleur` tree, so Grok has Claude Code's shape — the
-default `skills/` root, a live command surface, one namespace, and no
-per-harness root, hence no decision-4 exemption. `/go` duplicates there for the
-same reason it duplicated in Claude Code, and whether Grok honours
-`user-invocable: false` was probed with `grok inspect`: 98 skills with the key and
-98 without, so the key changes nothing there. Naming this is decision 1 applied
-to this ADR itself: a placement rule that silently drops one of the four
-harnesses it governs is the "not checked collapsed into not applicable" failure.
-The exposure is bounded — if the key is ignored, Grok keeps today's duplicate and
-nothing regresses, which the measurement confirms. Decision 4's derived root set is
+**Grok is in the same collision class, and its status is UNMEASURED.**
+`.grok/config.toml` points at this same `plugins/soleur` tree, so Grok has Claude
+Code's shape — the default `skills/` root, a live command surface, one namespace,
+and no per-harness root, hence no decision-4 exemption. `/go` duplicates there for
+the same reason it duplicated in Claude Code. Whether Grok honours
+`user-invocable: false` is **not** settled by the `grok inspect` reading: that
+compares skill COUNTS, which the key cannot change on any harness (see
+§Verification). Naming this is decision 1 applied to this ADR itself: a placement
+rule that silently drops one of the four harnesses it governs is the "not checked
+collapsed into not applicable" failure — and reporting a non-discriminating
+observable as a measurement is the same failure wearing better clothes.
+The exposure is bounded either way: if the key is ignored, Grok keeps today's
+duplicate and nothing regresses. Decision 4's derived root set is
 correct for Grok by the same mechanism — `.grok/config.toml` sets
 `paths = ["./plugins/soleur"]` and symlinks the tree — though that Grok reads
 `.claude-plugin/plugin.json` specifically is unverified. Whether Devin honours `user-invocable: false` is

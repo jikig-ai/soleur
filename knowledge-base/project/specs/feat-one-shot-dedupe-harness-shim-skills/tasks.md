@@ -135,3 +135,13 @@ the follow-up, not here.
       No test pins any of them (checked). `model.c4` requires
       `bash scripts/regenerate-c4-model.sh` and staging `model.likec4.json`.
 - [ ] 7.4. Verify AC1–AC12. AC13 is post-merge and operator-facing.
+
+## Ship-phase correction — 2026-09-17
+
+Appended, not edited. Task 7.2 above records the reason for the #8236 deferral as *"the real blocker
+is dispatch: `plugins/soleur/skills/go/` is the sole model-invocable `Skill(soleur:go)` handle"*.
+That is **measured false** — commands are model-invocable and shadow same-named skills, so
+`commands/go.md` supplies the handle and `Skill(soleur:help)` still resolves with all three shims
+deleted. The surviving blocker is the other three harnesses. #8236's binding precondition and the
+plan's Addendum 3 carry the correction; task 7.2's text is left as the dated record of what was
+believed at work time.

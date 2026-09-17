@@ -1,6 +1,8 @@
 # Mutation matrix — plugin slash-name uniqueness guard
 
-Rows M0–M8 walked 2026-09-17 against commit `513133d32`; rows M9–M10 and S1b–S11 walked against the post-review tree (see §Round 2). Restore was from a **pristine copy**, not
+Rows M0–M8 walked 2026-09-17 against commit `513133d32` (§round 1); rows S1b–S11 against
+the post-review tree (§Round 2); rows M9–M10 at ship time (§Round 3). This line previously
+pointed M9–M10 at §Round 2, which never carried rows under those labels. Restore was from a **pristine copy**, not
 `git checkout`: the fix under test was uncommitted while the battery ran, so a checkout
 restore would have reverted it and every later row would have scored the defect against
 itself.
@@ -78,11 +80,56 @@ order, it fails 2. A fixture that passes is not a fixture that discriminates.
 
 ## Axes still NOT mutated, after round 2
 
-- **The harnesses themselves.** Every row scores the guard. Devin's and Grok's
-  handling of `user-invocable: false` is measured separately (ADR-224 §Verification);
-  Codex's is inferred, not measured.
+- **The harnesses themselves.** Every row scores the guard. Per ADR-224
+  §Verification: Devin's LOADING of both roots is measured; Codex's is inferred; and
+  Grok's handling of `user-invocable: false` is **unmeasured** — the `grok inspect`
+  reading compares skill counts, which the key cannot change on any harness, so it
+  does not discriminate. No harness has a measured post-fix menu enumeration.
 - **Population growth beyond the guarded set** — a structural enumeration found the
   guard reads two of roughly ten paths by which a name reaches a user's menu
   (`commands`/`agents`/`workflows` manifest keys, nested and symlinked components,
   repo-root harness configs). Clause (c) now refuses the three REPLACE keys; the rest
   is filed, not fixed, and ADR-224's property statement is scoped to match.
+
+## Round 3 — ship-phase advisor consult (2026-09-17)
+
+Two rows that went GREEN with the property violated. Both were found by the ADR-083
+advisor consult at `/ship` Phase 5.5, both measured before being reported, and both
+re-driven here against a GREEN control with a byte-compared pristine restore.
+
+Control M0: **1349 pass / 0 fail**, before and after the battery.
+
+| Row | Mutation | Landed-check | Before fix | After fix |
+|---|---|---|---|---|
+| M9 | `declared = ["./skills"]` in `rootsFor`, **plus** a real `devin/skills/review/SKILL.md` | `grep -c 'const declared = \["./skills"\];'` = 1; probe dir present | **1348 pass / 0 fail** — clean sweep while `.devin-plugin` resolved `review` from two roots | **1348 pass / 1 fail** — floor test reds |
+| M10 | `return;` appended to the live block's opening line | `grep -A1 'describe("plugin slash-name uniqueness"'` shows `return;` | **1338 pass / 0 fail** — ten clauses gone, presence guard green | **1338 pass / 1 fail** — presence guard reds |
+
+**M9 — a floor that measured a different operand than the assertion it backstops.**
+`rootsFor` returns `["skills", ...declared]` verbatim; `collidingNames()` normalizes
+spellings before comparing. So `["skills", "./skills"]` is ONE directory that counts
+as two, and `manifestDirs.filter((d) => rootsFor(d).length >= 2)` was satisfied by a
+manifest whose clause (a) took the single-root early return. The floor existed
+precisely to stop clause (a) asserting nothing, and could be satisfied while clause
+(a) asserted nothing. Fixed by flooring on `new Set(...map(normalizeSkillRoot)).size`.
+
+**M10 — presence is not liveness.** The cross-file guard counted executable
+`describe("plugin slash-name uniqueness"` occurrences, so every neutering that keeps
+the call syntax survived it. This is the same class as the round-2 comment-stripping
+correction, one level up: that fix moved the SEARCH SPACE, this one moves the
+PROPERTY. Fixed by scoping to the block's brace extent and asserting a clause floor
+(6 static `test(` clauses, which register ~10 tests because three sit in loops) plus
+a depth-scoped top-level-`return` refusal.
+
+**A false RED found while fixing M10, worth its own line.** The first version of the
+`return` refusal was a flat regex over the block preamble. It reds the UNMUTATED tree,
+because the live block defines its `rootsFor` helper above the first clause and that
+helper contains an ordinary `return`. A check that reds a healthy guard is the shape
+that gets deleted rather than repaired — the refusal is depth-scoped for that reason,
+not for tidiness.
+
+### Axes still NOT mutated, after round 3
+
+Unchanged from round 2, plus: no row mutates the brace-walk that scopes M10's clause
+count. A brace inside a string or regex literal could unbalance it. The failure is
+loud (wrong extent produces a wrong count and reds), so it degrades toward a false
+RED rather than a false GREEN, but it is not pinned.

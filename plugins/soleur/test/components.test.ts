@@ -12,6 +12,7 @@ import {
   isUserInvocable,
   collidingNames,
   unackedDuplicates,
+  normalizeSkillRoot,
   PLUGIN_ROOT,
 } from "./helpers";
 
@@ -1009,8 +1010,12 @@ describe("plugin slash-name uniqueness", () => {
     // harmless only because `.codex-plugin` declares `./skills` explicitly today.
     // If that declaration were ever dropped, this would inject a root Codex does
     // not scan, report the acked dupes, and go green over ADR-215's measured
-    // failure mode. Codex's real coverage is scripts/codex-plugin-smoke.mjs
-    // (101 skills = 98 canonical + 3 wrappers), not this guard.
+    // failure mode. Codex's coverage is scripts/codex-plugin-smoke.mjs, not this
+    // guard — but note what that script actually establishes: its "101 skills" is
+    // `expectedSkills`, computed locally as the 98 SKILL.md directories plus an
+    // unconditional push of three names already among the 98, BEFORE it contacts
+    // Codex. Only `discoveredSkills` would prove two-root resolution, and nothing
+    // in the repo captures it. Inferred from the manifest, not measured.
     const declared = Array.isArray(manifest.skills) ? manifest.skills : [];
     return ["skills", ...declared].map((root) => ({
       root,
@@ -1026,13 +1031,23 @@ describe("plugin slash-name uniqueness", () => {
   // `devin/skills/go`, each [user,model]. The Codex and Devin manifests declare
   // two roots and the three entry-point shims live in both.
   //
-  // Collapsing it means DELETING the shared shims, and that is blocked on
-  // dispatch, not on discovery: `plugins/soleur/skills/go/` is the only
-  // model-invocable `Skill(soleur:go)` handle — `commands/go.md` is user-typed
-  // only, apps/web-platform wires no SlashCommand tool, and
-  // server/prompt-injection-wrap.ts sends "Invoke /soleur:go" on EVERY Command
-  // Center message (ADR-113 records a measured user-facing regression when that
-  // skill is out of scope).
+  // Collapsing it means DELETING the shared shims, and that is blocked on the
+  // OTHER THREE HARNESSES, not on Claude Code dispatch.
+  //
+  // CORRECTED 2026-09-17 by measurement. This comment previously said
+  // `plugins/soleur/skills/go/` is the only model-invocable `Skill(soleur:go)`
+  // handle and that `commands/go.md` is user-typed only. Both are FALSE on Claude
+  // Code: probed with all three shims deleted, `Skill(soleur:help)` still
+  // succeeds and returns `commands/help.md`, because commands are
+  // model-invocable and SHADOW the same-named skill. The correction is recorded
+  // here rather than applied silently because the false version was the stated
+  // reason #8236 was deferred — and because it survived in THIS carrier after
+  // being retracted elsewhere in the same file, leaving the file asserting both.
+  //
+  // What actually blocks the deletion: `devin skills list` resolves these three
+  // names from both roots, `.codex-plugin` declares `./skills`, and
+  // `.grok/config.toml` loads this same tree. Claude Code happens to absorb the
+  // deletion; the other three do not.
   //
   // Ack'd BY NAME so a NEW cross-root duplicate — the class this clause exists
   // to catch — still reds; mutation row M6 proves that. Adding a name here is a
@@ -1085,8 +1100,25 @@ describe("plugin slash-name uniqueness", () => {
     // At least two manifests must reach clause (a)'s real assertion rather than
     // its single-root early return — otherwise emptying `manifest.skills` sends
     // every manifest down the escape hatch, which emits a PASSING expect().
+    //
+    // COUNT DISTINCT NORMALIZED ROOTS, NOT RAW DECLARATIONS. `rootsFor` returns
+    // `["skills", ...declared]` verbatim, while `collidingNames()` collapses
+    // spellings before it compares anything. A floor over the raw list therefore
+    // measures a DIFFERENT operand than the assertion it backstops: a manifest
+    // declaring `["./skills"]` yields `["skills", "./skills"]` — ONE directory —
+    // and satisfies a `.length >= 2` floor as "multi-root" while clause (a) sees
+    // a single root and takes the early return.
+    //
+    // Measured, not reasoned: with `declared` forced to `["./skills"]` and a real
+    // `devin/skills/review/SKILL.md` added (mutation row M6, the row the matrix
+    // calls its most important), the raw-length floor reported 1348 pass / 0 fail
+    // while `.devin-plugin` still resolved `review` from two roots. That is the
+    // "floor that does not read the operand the assertion consumes" shape — the
+    // one this guard set exists to refuse — reproduced inside the guard itself.
+    const distinctRoots = (d: string) =>
+      new Set(rootsFor(d).map((r) => normalizeSkillRoot(r.root))).size;
     expect(
-      manifestDirs.filter((d) => rootsFor(d).length >= 2).length,
+      manifestDirs.filter((d) => distinctRoots(d) >= 2).length,
       "no manifest reached the multi-root path; clause (a) asserted nothing",
     ).toBeGreaterThanOrEqual(2);
   });
