@@ -257,7 +257,9 @@ every shared item; diverges only on item 7:
 5. `requiredPlugins` — plugin loaded from account-level cache
    `/opt/.devin/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-*/`;
    ~95 `soleur:*` skills + plugin `AGENTS.md` rules + MCP servers (cloudflare,
-   context7, stripe, vercel). Marginal effect unmeasurable — already installed.
+   context7, stripe, vercel). Marginal effect unmeasurable on this arm —
+   measured on the 2026-09-17 residual arms below (honored at repo scope;
+   `url`+`#subdir` form broken, `git-subdir` object form required).
 6. Handoff sync — not measured (fresh clone, not a handoff).
 7. **`run_subagent` — ABSENT in the sandbox tool catalog** (divergence — see
    §Reconciliation). Nearest surfaces: `testing_agent`, `run_workflow`,
@@ -281,6 +283,107 @@ from the feature branch — `not-local:sentinel-absent` and `--banner` emitted
 the full Cloud Mode banner to stderr, rc=0. The fail-closed degrade path is
 verified end-to-end on a real cloud box.
 
+## Results — residual arms (2026-09-17)
+
+Five sessions, operator-driven from the local CLI. Verbatim evidence: arm A
+pushed `probe-8172-findings.md` at `3ca1ad8df` (branch
+`probe-8172-handoff-arm`); arm B pushed `probe-findings.md` at `cb6f0bba7`
+(repo `jikig-ai/probe-8172-reqplugins`); arms C/D collected via
+`devin cloud drs run`.
+
+| Arm | Session / sandbox | Vehicle | Targets |
+|---|---|---|---|
+| A | `devin-378f1834966043548af7baaba2cba855` | interactive CLI `/handoff` from the `probe-8172-handoff-arm` worktree | items 5, 6, 12, 14 — file-class transfer + hooks |
+| B | `devin-22dee82457254655a818ceb7c186091a` | interactive CLI `/handoff` from a `probe-8172-reqplugins` checkout | `requiredPlugins` object-form test |
+| C | `devin-b7bf8e31073d434c980d5c6b6dc44ce1` | `devin cloud drs` sandbox, `jikig-ai/soleur` `main` | url-form failure + managed dedup corroboration |
+| D | `devin-4fdb23d0066f4d5e8c61647ea95f0461` | `devin cloud drs` sandbox on the `probe-8172-reqplugins` blueprint | verify `git-subdir` object form at repo scope |
+| E | (pre-blueprint `probe-8172-reqplugins` sandbox, warm image) | `devin cloud drs` sandbox-create before blueprint build | negative control — see below |
+
+### Item 6 — `/handoff` worktree sync: **measured NO**
+
+Arm A declared branch `probe-8172-handoff-arm` (pushed, `f7ea1d6fb`) carrying
+all four file classes. At session start the VM checkout was
+`/home/ubuntu/repos/soleur` on **`main` `a57cdb772`** — not the handed branch:
+the checkout comes from the warm blueprint image, not the `/handoff`
+declaration. After a manual `git fetch` + `checkout` (Run B):
+
+- committed marker `PROBE-8172-COMMITTED.txt` (nonce `8172-c0mm17`) present —
+  committed content transfers via git, as expected;
+- tracked modification, untracked `probe-8172-untracked.txt`, gitignored
+  `.devin/probe-8172-gitignored.txt`, and gitignored
+  `.devin/soleur-local-session` — **all absent**; `git status --porcelain` and
+  `git diff HEAD` empty in both runs;
+- `.devin/` held only `config.json` (8762 B on `main`, 9133 B on the branch —
+  the branch version carrying the probe-hook bindings).
+
+Consequence: a local sentinel **cannot arrive foreign** via `/handoff` — the
+`foreign-host` classification requires the sentinel file to travel, and no
+gitignored or uncommitted content materializes on the VM. Item 6 answered.
+
+### Item 5 — `requiredPlugins`: **measured honored, with a resolver defect**
+
+- The repo-level key IS read in cloud: `lock.json` carries
+  `origin.scope: "repo"` requirements rooted at each repo cloned at session
+  start (soleur on arms A/C/D, `probe-8172-reqplugins` on arm D).
+- The full-URL string form (`{"source":"url","url":".../soleur#plugins/soleur"}`)
+  **fails to resolve in cloud**: the fetcher passes the whole string —
+  `#subdir` fragment included — to the git-manager proxy as the repository
+  path: `fatal: repository 'https://git-manager.devin.ai/proxy/github.com/jikig-ai/soleur#plugins/soleur/' not found`
+  (arm A `resolve_failures`, 1 attempt, epoch 1789644360). The same string
+  resolves locally — a measured local/cloud asymmetry.
+- The `git-subdir` object form
+  `{"source":"git-subdir","url":".../soleur.git","path":"plugins/soleur"}`
+  **registers and resolves at repo scope** (arm D: requirement rooted at
+  `/home/ubuntu/repos/probe-8172-reqplugins`; cache populated
+  `github.com_jikig-ai_soleur_plugins_soleur-5a09ea60`; resolved sha
+  `72fdff38`).
+- Identity dedup: both source forms normalize to identity
+  `https://github.com/jikig-ai/soleur#plugins/soleur`; one successful fetch
+  satisfies every requirement sharing it. On arms C/D the managed
+  `git-subdir` fetch satisfied the repo `url`-form requirement — the
+  fragment bug is masked wherever a resolvable requirement shares the
+  identity.
+- Arm A's lock held only the repo `url`-form requirement → `resolved: []`,
+  plugin entirely absent for that session. Caveat: arm B's EARLY-vs-LATE
+  reads show requirements populate asynchronously (empty lock at session
+  start, populated ~65 s later), so the managed requirement may simply have
+  registered after arm A's read; the `url`-form fetch failure is directly
+  recorded either way.
+- Fix on this branch: `.devin/config.json` switches to the object form;
+  `devin/INSTRUCTIONS.md` corrected. Upstream request recorded in
+  INSTRUCTIONS.md §Cloud Mode.
+
+### Items 12/14 — hooks: corroborated no-dispatch
+
+Arm A's probe branch bound a `SessionStart` and a `PostCompaction` marker
+hook (`/tmp/probe-8172-*-fired.json`). No marker materialized — in Run A the
+branch config wasn't the session-start checkout; in Run B (post-checkout,
+config.json 9133 B present) still nothing. Corroborating, not independent:
+SessionStart had already run at session start and no compaction event
+occurred. `PostCompaction` remains **unmeasured** — needs an arm where
+compaction actually fires while a bound config is active. `hook_source`
+stays unreachable-by-construction (no dispatcher).
+
+### Corroborating signals (arms A–D)
+
+- `/opt/.devin/devin_id` present on both surfaces (`devin-378f…`, `devin-22de…`,
+  `devin-4fdb…`).
+- Arm A env: Devin harness vars only (`DEVIN_DIR`,
+  `DEVIN_DISABLE_HISTEXPAND`, `BASH_ENV`, `EDITOR`, …); zero `CLAUDE_*` /
+  `SOLEUR_*` — same as the 09-15 arms.
+- `cloud-detect.sh` on the arm-D box (installed plugin `72fdff38`):
+  `not-local:sentinel-absent` — correct classification of a cloud box.
+- Cloud checkouts' remotes go through `https://git-manager.devin.ai/proxy/…`.
+- `devin ssh` to the user-facing handoff session returned HTTP 403 on
+  `ssh-info`; `drs run` against sandboxes is the scriptable evidence channel.
+- Handoff/DRS sessions boot a **warm blueprint image**: arm B's VM had only
+  `soleur` under `~/repos` (the probe repo was cloned manually later, so its
+  repo-level requirement never registered there — repo-scope discovery runs
+  against repos cloned at session start); arm E, created before the
+  blueprint build, booted soleur's image instead of cloning the probe repo —
+  a `drs sandbox` is only a valid repo-config vehicle once a blueprint
+  version exists for that repo.
+
 ## Reconciliation across arms
 
 - **`run_subagent` divergence.** Web-app arm: the tool exists (`read_subagent`
@@ -294,8 +397,10 @@ verified end-to-end on a real cloud box.
   (`.devin/config.json` does not support the key) is corrected by
   `/cli/extensibility/plugins/overview` §Inheritance level 3, which documents
   repo-level `requiredPlugins` honored "in cloud sessions, from each cloned
-  repository". The managed-manifest install it observed masks the marginal
-  effect — unmeasured, not refuted.
+  repository". Measured 2026-09-17 (residual arms): the key IS honored at
+  repo scope, but the `url`+`#subdir` string form fails through the cloud
+  git-manager proxy while the `git-subdir` object form resolves — the
+  masking mechanism is identity dedup, not the managed manifest per se.
 - **`DEVIN_DIR` in `cloud-detect.sh`.** The web-app arm recommended *not*
   adding `DEVIN_DIR`, arguing it "stops distinguishing 'no Devin env' from
   'Devin env without a local sentinel'". That reasoning inverts: before the
@@ -332,21 +437,25 @@ verified end-to-end on a real cloud box.
 - **Banner session-boundary mechanism** — no `DEVIN_SESSION_ID` env;
   `/opt/.devin/devin_id` is reachable if a per-session boundary is ever
   needed. Stateless per-invocation stands.
-- **FR6 placement** — `.devin/config.json` `requiredPlugins` stands
-  (documented repo level); marginal effect deferred to the feature-branch /
-  clean-account arm.
+- **FR6 placement** — `.devin/config.json` `requiredPlugins` stands, measured
+  honored at repo scope — in the `git-subdir` object form only. The `url`+
+  `#subdir` string form is broken through the cloud git-manager proxy
+  (fragment not stripped → 404) and is replaced by the object form.
 
 ## Deferral record
 
-Not deferred; discharged on two arms. Residual items tracked by #8172:
+Not deferred; discharged on two arms plus the 2026-09-17 residual arms.
+Residual items tracked by #8172:
 
-- `/handoff` gitignored-`.devin/` sync (item 6 — needs the CLI arm);
-- `PostCompaction` dispatch (item 12 — needs an arm where compaction occurs);
-- `requiredPlugins` marginal effect on an account without the managed
-  manifest install (item 5 — feature-branch arm or clean account);
+- `PostCompaction` dispatch (item 12 — still needs an arm where compaction
+  actually fires while a bound config is active);
 - `hook_source` remains unreachable in cloud by construction (no dispatcher)
   — its design purpose is forward-defense, not a measurement gap;
-- post-merge SC1/SC3/SC4 verification session.
+- post-merge SC1/SC3/SC4 verification session;
+- operator cleanup decisions: throwaway repo `jikig-ai/probe-8172-reqplugins`
+  and its auto-created blueprint `snapshot-blueprint-4762b3ff21ec466cb0183c3cdbb13ede`,
+  probe branch `probe-8172-handoff-arm` (holds arm-A verbatim evidence —
+  keep until the issue closes).
 
 Residual operator-owned limbs the runs did not close: CLO ceiling /
 TC_VERSION / SC5 sign-offs.

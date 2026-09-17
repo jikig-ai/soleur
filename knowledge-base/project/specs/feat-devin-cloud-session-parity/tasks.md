@@ -16,7 +16,7 @@ Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-p
 - [x] `devin-session-start.sh`: unconditional content-bearing sentinel write `{host, ts, hook_source}` → `.devin/soleur-local-session`; git-root resolution + `mkdir -p`; `|| true`-guarded after the `additionalContext` emit. Repo-sourced writes never mask an existing plugin-sourced sentinel (dual-registration ordering).
 - [x] `plugins/soleur/scripts/cloud-detect.sh`: the ONE classifier — `local` (sentinel + host match + `hook_source=plugin`) or `not-local:<reason>`; single `hostname` source; no `jq` dependency; fail closed.
 - [x] `plugins/soleur/test/devin-cloud-mode.test.ts`: `local` arm + every `not-local` reason + never-value + dual-registration ordering arms.
-- [x] `.devin/config.json`: `"requiredPlugins": ["jikig-ai/soleur#plugins/soleur"]` + unknown-key tolerance verified (`jq` parses; `devin doctor --json` ok).
+- [x] `.devin/config.json`: repo-level `requiredPlugins` for Soleur + unknown-key tolerance verified (`jq` parses; `devin doctor --json` ok). Shipped first as the `url`+`#plugins/soleur` string form (#8234), then corrected to the `git-subdir` object form after #8172 residual arms measured the string form 404ing through the cloud git-manager proxy.
 - [x] `bun test plugins/soleur/test/` green (2731 pass, 0 fail).
 
 ## Phase 2 — Contract surfaces + one wiring pass (FR2, FR3, FR4, TR2, TR3)
