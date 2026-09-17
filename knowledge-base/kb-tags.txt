@@ -707,6 +707,7 @@ cjs
 cla
 cla-check
 claim-verification
+claims-vs-measurements
 classification-gate
 classifier
 classifier-gate
@@ -754,6 +755,7 @@ closure-gate
 cloud-init
 cloud-max-scheduling
 cloud-migration
+cloud-mode
 cloud-routines
 cloud-task-silence
 cloudflare
@@ -4125,6 +4127,7 @@ vendored-css
 vendored-library
 vendored-upstream
 vendorsupabase
+verbatim
 verbs
 verdict
 verdict-cache
