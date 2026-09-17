@@ -1880,6 +1880,8 @@ jobs:
               -target='hcloud_server.inngest' \
               -target='hcloud_volume.inngest_redis' \
               -target='hcloud_volume_attachment.inngest_redis' \
+              -target='hcloud_volume.inngest_redis_luks' \
+              -target='hcloud_volume_attachment.inngest_redis_luks' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_firewall.inngest' \
               -target='hcloud_firewall_attachment.inngest' \
@@ -2024,10 +2026,17 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the inngest server + its 2 id-referencing dependents
-        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis — both
-        # interpolate the NEW server id → ForceNew replace). hcloud_volume.inngest_redis is
-        # DELIBERATELY NOT -targeted so the durable Redis AOF volume is preserved. The sourced
+        # Scoped -replace of the inngest server + its 3 id-referencing dependents
+        # (hcloud_server_network.inngest, hcloud_volume_attachment.inngest_redis and — since
+        # #6894 — hcloud_volume_attachment.inngest_redis_luks; all three interpolate the NEW
+        # server id → ForceNew replace). NEITHER hcloud_volume.inngest_redis NOR
+        # hcloud_volume.inngest_redis_luks is -targeted, so BOTH durable volumes are preserved
+        # by OMISSION — the plaintext AOF and the ADR-142 additive target alike. The two sets
+        # are not the same set: the additive VOLUME joins `inngest-host` (it must be creatable)
+        # and never this one (it must never be destroyed). Its ATTACHMENT must be here, though,
+        # because inngest_host_replace_gate interpolates the server id and a replace therefore
+        # forces the attachment into the plan; without admitting it the gate aborts
+        # `out_of_scope` and a routine dispatch becomes a dead end. The sourced
         # inngest_host_replace_gate (no [ack-destroy] bypass) reads the STRUCTURED plan JSON and
         # ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |

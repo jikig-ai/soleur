@@ -105,7 +105,20 @@ inngest_host_replace_gate() {
         # unchanged and still counts delete/forget at this exact address, so a plan that DESTROYS
         # the volume aborts exactly as before. The only shape this widening newly permits is the
         # one the recovery needs: creating a volume that is missing.
-        "hcloud_volume.inngest_redis"
+        "hcloud_volume.inngest_redis",
+        # #6894 / ADR-142. The ADDITIVE target volume ATTACHMENT. It interpolates the
+        # server id exactly as its plaintext sibling does, so a replace FORCES it into the
+        # plan; without admitting it this gate aborts `inngest_out_of_scope_changes=1` and
+        # the first replace after that volume merges becomes a dead end. Not a widening of
+        # what the gate protects — it protects VOLUMES, and this is an attachment.
+        "hcloud_volume_attachment.inngest_redis_luks",
+        # And the additive VOLUME, admitted for CREATE ONLY, on the identical reasoning the
+        # plaintext admission above records: the server `user_data` embeds this volume id
+        # with no `ignore_changes`, so an absent volume makes that id unknown at plan time and
+        # every route out is refused. `luks_volume_destroyed` below is the twin backstop —
+        # it counts delete/forget at this exact address, so a plan that DESTROYS the additive
+        # target aborts, and the only newly-permitted shape is creating one that is missing.
+        "hcloud_volume.inngest_redis_luks"
       ];
       $p[0] as $plan
       | {
@@ -118,6 +131,12 @@ inngest_host_replace_gate() {
           redis_volume_destroyed: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
+              | select(.change.actions? | any(. == "delete" or . == "forget")) ]
+            | length
+          ),
+          luks_volume_destroyed: (
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis_luks")
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
@@ -134,19 +153,20 @@ inngest_host_replace_gate() {
   fi
   oos=$(echo "$counts" | jq -r '.inngest_out_of_scope_changes')
   rdel=$(echo "$counts" | jq -r '.redis_volume_destroyed')
+  ldel=$(echo "$counts" | jq -r '.luks_volume_destroyed')
   replaced=$(echo "$counts" | jq -r '.inngest_server_replaced')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
-  plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "inngest_server_replaced=${replaced}" || return 1
+  plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "luks_volume_destroyed=${ldel}" "inngest_server_replaced=${replaced}" || return 1
 
-  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} inngest_server_replaced=${replaced}"
-  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$replaced" -eq 1 ]]; then
-    echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 2 dependents replace; Redis AOF volume preserved)"
+  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced}"
+  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 ]]; then
+    echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 3 dependents replace; BOTH the Redis AOF volume and the ADR-142 additive target preserved)"
     return 0
   fi
-  echo "inngest_host_replace_gate: ABORT — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, Redis-volume destroy, or no-op)"
+  echo "inngest_host_replace_gate: ABORT — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, Redis-volume destroy, additive-target destroy, or no-op)"
   return 1
 }

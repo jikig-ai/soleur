@@ -1433,6 +1433,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.inngest",
   "hcloud_volume.inngest_redis",
   "hcloud_volume_attachment.inngest_redis",
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
+  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
+  // allowlist, because creating a volume is a billable resource change that wants
+  // the dispatch gate rather than a merge side effect. They are listed here the
+  // moment the resources exist — check_resource_partition reds on any managed
+  // address that is neither reachable nor excluded, so the coverage test would go
+  // red on the commit that declares the volume if these two lines lagged it.
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
   "hcloud_firewall_attachment.inngest",

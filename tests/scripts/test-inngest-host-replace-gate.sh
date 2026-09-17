@@ -78,6 +78,32 @@ else
   pass
 fi
 
+# --- Test 2b: FAIL — the ADR-142 ADDITIVE target volume destroyed (#6894). The TWIN of T2.
+#     `luks_volume_destroyed` is a separate counter from `redis_volume_destroyed` on purpose:
+#     the additive volume is admitted to the allow-set for CREATE (the recovery route), so the
+#     out-of-scope counter cannot see a destroy at that address and would report 0. Without
+#     this arm the twin backstop is ungraded, and an edit deleting it leaves the suite green. ---
+LUKS_VOL_DELETE="$(rc_obj 'hcloud_volume.inngest_redis_luks' '"delete","create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VOL_DELETE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T2b: an ADR-142 additive-target volume destroy must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 2c: PASS — the additive target volume CREATED (the admitted recovery shape), together
+#     with its attachment replacing. Proves the admission is real and not merely absent-from-plan:
+#     if the allow-set entry were dropped this plan would abort `out_of_scope`, and if the twin
+#     backstop over-matched (counting create as well as delete) it would abort here too. ---
+LUKS_VOL_CREATE="$(rc_obj 'hcloud_volume.inngest_redis_luks' '"create"')"
+LUKS_VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VA_REPLACE},${LUKS_VOL_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T2c: additive-target create + attachment replace must PASS (rc=0) — the admitted recovery shape"
+fi
+
 # --- Test 3: FAIL — an out-of-scope resource change (a stray web-1 update) ---
 WEB1_UPDATE="$(rc_obj 'hcloud_server.web[\"web-1\"]' '"update"')"
 write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${WEB1_UPDATE}"

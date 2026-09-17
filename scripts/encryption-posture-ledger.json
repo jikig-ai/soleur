@@ -208,6 +208,29 @@
       }
     },
     {
+      "store": "hcloud_volume.inngest_redis_luks",
+      "kind": "guest-luks-volume",
+      "device_binding": {
+        "volume": "hcloud_volume.inngest_redis_luks",
+        "attachment": "hcloud_volume_attachment.inngest_redis_luks",
+        "mapper": "inngest-redis"
+      },
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/inngest-redis-luks.tf, resource \"hcloud_volume\" \"inngest_redis_luks\" — the ADR-142 additive target volume. THE ROW IS plaintext-exception ON PURPOSE AND THE DEVICE IS NOT PLAINTEXT: at merge the volume does not exist at all, and a ledger row asserting `luks` about a device that has never been created is a claim about nothing. The volume is born RAW (no `format` attribute, so `blkid -o value -s TYPE` is a sound discriminator), luksFormatted by cloud-init on the first boot that sees it, and mounted at a STAGING path — never at /mnt/data until the reviewer-gated cutover swaps it. The mechanism flips to `luks` in the follow-up commit that records an OBSERVED cutover boot, never before; asserting encryption over the unbounded window between merge and that boot is the false at-rest claim the sibling row's reevaluate_when exists to prevent.",
+        "defends_against": "nothing yet — the device is unprovisioned at merge; the apparatus is inert until the gated cutover runs",
+        "does_not_defend": "a seized/snapshot disk taken after the cutover but before this row is flipped would be encrypted in fact while this record still reads plaintext-exception; the record is deliberately the LAGGING of the two, because the opposite lag publishes a false encryption claim",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:the volume does not exist at merge, so there is nothing to probe. It becomes verifiable on the first boot that reaches SOLEUR_INNGEST_LUKS_STAGE with the staging mapper resolved, and live-verifiable in the Layer B sense once the cutover repoints /mnt/data at /dev/mapper/inngest-redis and data_mount_devid pins this volume rather than the plaintext one. Tracked #6894.",
+        "exception": {
+          "justification": "the device is unprovisioned at merge; ADR-142's additive blue-green design requires the target volume to exist and be attached BEFORE the cutover that fills it, so there is a bounded window in which a declared store has no encrypted bytes because it has no bytes at all",
+          "tracking_issue": "#6894",
+          "reevaluate_when": "a boot is observed reaching the staging stage with the mapper resolved AND the gated cutover completes with /mnt/data repointed to /dev/mapper/inngest-redis; flip mechanism to luks in that follow-up commit, never at merge",
+          "expires_on": "2026-10-22"
+        }
+      }
+    },
+    {
       "store": "hcloud_volume.registry",
       "kind": "guest-luks-volume",
       "device_binding": {
