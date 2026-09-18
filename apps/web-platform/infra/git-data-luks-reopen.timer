@@ -1,0 +1,34 @@
+[Unit]
+# (#8210) THE STANDING RETRY for the boot-time LUKS reopen, and the reason it is its own timer.
+#
+# The unit's `Restart=on-failure` budget is 5 attempts over an hour, so a Doppler or DNS outage
+# lasting longer than that leaves the encrypted store CLOSED with no further automatic attempt.
+# Review found the unattended-restoration claim in ADR-198's Art. 32(1)(c) amendment was true
+# only inside that budget.
+#
+# The first fix hung recovery off `git-data-gc.timer` with a `Wants=` — which the simplicity
+# lens cut, correctly: a WEEKLY maintenance timer is the wrong layer and the wrong cadence for a
+# boot-critical unit, it re-fires the OnFailure reporter every week on a host nobody is fixing by
+# waiting, and it bounds recovery at 7 days. A dedicated timer answers both objections: the
+# retry lives with the unit it retries, at a cadence matched to the outage it absorbs.
+#
+# The unit is idempotent by construction — its `open` phase is a no-op when the mapper is
+# already present and its success path is SILENT on `ACTION=noop` — so a tick against a healthy
+# host costs one `cryptsetup status` and emits nothing.
+Description=Standing retry for the git-data LUKS mapper reopen (#8210)
+Documentation=https://github.com/jikig-ai/soleur/issues/8210
+
+[Timer]
+# 15 minutes: long enough that a healthy host's ticks are free, short enough that a multi-hour
+# Doppler outage self-heals within a quarter-hour of the vendor recovering rather than at the
+# next weekly maintenance window. OnUnitActiveSec (not OnCalendar) so the clock restarts from
+# the last run rather than firing a thundering burst after a long outage.
+OnUnitActiveSec=15min
+OnBootSec=15min
+RandomizedDelaySec=120
+# Persistent=true so a host that was DOWN across several intervals takes one catch-up tick on
+# boot rather than none — the same reasoning as git-data-gc.timer.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

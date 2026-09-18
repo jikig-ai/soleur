@@ -137,6 +137,15 @@ _targets=$(findmnt --fstab -n -S "$MAPPER" -o TARGET 2>>"$LOG" || true)
 [ "$(printf '%s\n' "$_targets" | grep -c .)" -eq 1 ] \
   || die "fstab names $MAPPER $(printf '%s\n' "$_targets" | grep -c .) times, expected exactly one"
 TARGET="$_targets"
+# CUTOVER-AGNOSTIC MEANS TWO NAMES, NOT ANY NAME. TARGET is read out of /etc/fstab and then
+# handed to PID 1 as a unit to start, so without this the decrypted store follows whatever a
+# garbled append or a bad #8211 rewrite put in that field. Both legal states are permitted —
+# /mnt/git-data-luks today, /mnt/git-data after the cutover — and anything else is reported as
+# action=target rather than mounted somewhere nobody is looking.
+case "$TARGET" in
+  /mnt/git-data|/mnt/git-data-luks) : ;;
+  *) die "fstab points $MAPPER at '$TARGET', which is neither /mnt/git-data nor /mnt/git-data-luks" ;;
+esac
 
 phase mount
 if ! mountpoint -q "$TARGET"; then

@@ -105,6 +105,7 @@ locals {
     git_data_luks_reopen                 = replace(file("${path.module}/../../git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
     git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${path.module}/../../git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey

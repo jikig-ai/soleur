@@ -525,6 +525,14 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # The STANDING retry. The unit's own Restart= budget is 5 attempts in an hour; past that, a
+  # longer Doppler outage would leave the encrypted store closed until someone intervened.
+  - path: /etc/systemd/system/git-data-luks-reopen.timer
+    content: |
+      ${indent(6, git_data_luks_reopen_timer)}
+    owner: root:root
+    permissions: '0644'
+
   # --- (#7772 item 2) The metadata-endpoint egress closure --------------------------------
   #
   # WHAT IT CLOSES. hcloud_firewall.git_data declares ZERO rules, which under Hetzner semantics
@@ -1110,6 +1118,10 @@ runcmd:
     systemctl daemon-reload || true
     _arm_rc=0
     _arm_err="$(systemctl enable --now git-data-luks-reopen.service 2>&1)" || _arm_rc=$?
+    # The standing-retry timer is armed in the same item and folded into the same verdict: a host
+    # whose reopen unit is armed but whose retry timer is not has the 5-attempt bound with
+    # nothing behind it, which is the state the timer exists to remove.
+    _arm_err="$${_arm_err}$(systemctl enable --now git-data-luks-reopen.timer 2>&1)" || _arm_rc=$?
     if [ "$_arm_rc" -ne 0 ]; then
       _reopen_arm_detail=/run/git-data-luks-reopen-arm.err
       [ -z "$_arm_err" ] || ( umask 077; printf '%s\n' "$_arm_err" > "$_reopen_arm_detail" ) 2>/dev/null || true

@@ -90,6 +90,9 @@ ok "$(grep -qE 'RUNDIR="\$\{GIT_DATA_REOPEN_RUNDIR:-/run/git-data-luks-reopen\}"
 ok "$(grep -qE 'DEVICE_WAIT="\$\{GIT_DATA_REOPEN_DEVICE_WAIT:-30\}"' "$SCRIPT_BODY"; echo $?)" "S10 DEVICE_WAIT seam defaults to 30"
 ok "$(grep -qE 'GIT_DATA_LUKS_DEV.*\^/dev/disk/by-id/scsi-0HC_Volume_\[0-9\]\+\$' "$SCRIPT_BODY"; echo $?)" "S11 phase config asserts the device-pin shape (M23)"
 ok "$(grep -qE 'GIT_DATA_DOPPLER_CONFIG.*\^\[a-z0-9_\]\+\$' "$SCRIPT_BODY"; echo $?)" "S11b phase config asserts the config-name shape (M23)"
+# S11c — the fstab target is allowlisted to the two legal states. Without it the decrypted store
+# follows whatever a garbled fstab append names, started by PID 1.
+ok "$(grep -qF '/mnt/git-data|/mnt/git-data-luks)' "$SCRIPT_BODY"; echo $?)" "S11c phase target allowlists the two legal mount points"
 n=$(grep -c 'doppler run --project soleur ' "$SCRIPT" || true)
 ok "$((n != 0))" "S12 no 'doppler run --project soleur ' literal anywhere in the script (p_doppler_config_scope is not line-anchored)"
 
@@ -491,6 +494,7 @@ open-sigterm|touch "$FX/luksopen_kill"|open|
 identity|touch "$FX/mapper_open"; echo /dev/sdz > "$FX/status_device"|identity|/dev/sdz
 target-none|: > "$FX/fstab_target"|target|fstab
 target-two|printf '/mnt/a\n/mnt/b\n' > "$FX/fstab_target"|target|fstab
+target-rogue|printf '/mnt/rogue\n' > "$FX/fstab_target"|target|neither
 mount|echo 1 > "$FX/mount_start_rc"; printf 'wrong fs type, bad option, bad superblock\n' > "$FX/journal"|mount|bad superblock
 identity-mount|touch "$FX/mounted"; echo /dev/sdb1 > "$FX/mount_source"|identity-mount|/dev/sdb1
 EOF
@@ -584,7 +588,7 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
-MIN_ASSERTIONS=223
+MIN_ASSERTIONS=226
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertions (floor %s) — suite did not execute fully\n' "$total" "$MIN_ASSERTIONS" >&2
