@@ -190,6 +190,58 @@ repositories may now be written there unencrypted (Article 30 PA-2 (g)(17)).
 3. Re-dispatch the dry run only after the release run's deploy has finished; it must clear the flag
    precheck.
 
+## The boot reopen failed: `stage:luks_reopen` (#8210)
+
+A `stage:luks_reopen level:fatal` event means the git-data host booted and
+`git-data-luks-reopen.service` could not reopen `/dev/mapper/git-data`. The store is absent
+until this is resolved: the fstab line is `nofail`, so the host itself is up and answering on
+:22 with nothing mounted. The event carries the phase that failed as `action=`, plus
+`result=` / `rc=` / `code=` / `restarts=` read from the unit itself, and the script's stderr as
+`detail` (capped at 180 chars by the emitter, after its redaction passes).
+
+**Key on `action=` first.** The table below has one row per value the script and its reporter can
+emit. Every check is off-host — a Doppler CLI read, a Hetzner API read or a Sentry query — because
+this host ships no journal and has no SSH fallback.
+
+| `action=` | Probable cause | Off-host check | Lever |
+|---|---|---|---|
+| `config` | `GIT_DATA_LUKS_DEV` or `GIT_DATA_DOPPLER_CONFIG` absent or malformed in `/etc/default/git-data-doppler` | The rendered payload: `bash apps/web-platform/infra/git-data-userdata-budget.sh /tmp/r.yml >/dev/null && grep -A8 'path: /etc/default/git-data-doppler' /tmp/r.yml` | A payload/tfvars defect — both values are template-rendered. Fix the payload, then `git-data-host-replace`. |
+| `key` | `GIT_DATA_LUKS_KEY` was not injected: renamed, deleted, or the token lost the config | `doppler secrets --project soleur --config prd_git_data --only-names` | Restore the secret NAME. Never a replace — a replace re-runs first boot, which needs the same key. |
+| `device` | The LUKS volume is not attached, or did not appear within 30 s | `GET /v1/servers/{id}` and compare the attached volume ids against `git_data_luks_volume_id` | Re-attach the volume (Hetzner), then let the bounded restart retry, or replace. |
+| `header` | The pinned device is not a LUKS header — wrong volume, or a damaged one | The same volume-id read as `device` | **DO NOT REPLACE.** The birth heredoc formats a blank device, so a replace against a damaged or wrong volume destroys the only copy. This is the ADR-115 second-blocker class; the lever is the ADR-068 backup/rebuild path. |
+| `open` | `luksOpen` refused the passphrase — a mis-rotation | `doppler activity --project soleur` for when the secret last changed | **DO NOT REPLACE.** Restore the previous secret version from Doppler's history; a replace with the wrong passphrase dies at the birth heredoc's `luks_open` and leaves the host dark. |
+| `identity` | The mapper is open but backed by a device other than the pin — a stale pin after a volume swap | `GET /v1/servers/{id}` attached volume ids vs the pin | Correct the pin in the payload, then replace. A host-config change is delivered by replace, never in place. |
+| `target` | `/etc/fstab` names the mapper zero times or more than once — a bad #8211 cutover | The rendered payload's fstab line, as for `config` | A payload defect. Fix, then replace. |
+| `mount` | The mount unit failed. `detail` carries the mount unit's journal tail | Read `detail` | `wrong fs type … bad superblock` is **filesystem damage**: the lever is the ADR-068 backup/rebuild path, NOT a replace. A unit/payload defect is a payload fix plus a replace. |
+| `identity-mount` | The target is mounted from something that is not the mapper | Read `detail` — it names the actual source | Same split as `mount`: damage → ADR-068; payload defect → fix and replace. |
+| `unit` | The script never ran: `doppler run` failed, exec failed, or the unit hit its start timeout. Key on `result=` (`exit-code` / `timeout` / `signal` / `start-limit-hit`) and `rc=`; `detail` carries the doppler CLI's own error line | `doppler configs --project soleur` (the config exists) and `doppler activity --project soleur` (when the token was last used) — both read-only CLI reads needing no host access | A token/config fault is corrected in Doppler; no replace. A `timeout` against a healthy Doppler is a slow boot, which the bounded restarts cover — `restarts=` on the next success row records that it recovered. |
+
+| `reopened` | Not a failure. The mapper was closed and is now open and mounted — the ordinary post-reboot success | — | None. Emitted at `info` on `luks_reopen_ok`; `restarts=` says whether a transient blip was absorbed |
+| `mounted` | Not a failure. The mapper was already open and the target was not mounted — a retry after a failed mount job | — | None, unless it repeats: a mapper open with the target unmounted at every boot means the mount unit is failing for another reason |
+| `noop` | Not a failure. Open and mounted already — the birth case, where the runcmd heredoc has just done both | — | None; this path emits nothing at all. In a REHEARSAL after a reset it is a FAIL (see below) |
+
+**Success and no-op rows.** `action=reopened` (the mapper was closed and is now open and mounted)
+and `action=mounted` (it was open, the target was not mounted) are emitted at `info` on stage
+`luks_reopen_ok`, which is deliberately routed by NO Sentry rule — the fatal router has no
+`level` condition, so routing it would page on every healthy reboot. `action=noop` (open and
+mounted already, the birth case) emits nothing at all. Read the success rows with:
+
+```bash
+bash scripts/sentry-issue.sh --host-events soleur-git-data --stage luks_reopen_ok \
+  --start 2026-09-18T00:00:00 --end 2026-09-19T00:00:00
+```
+
+**In the rehearsal, `noop` and `mounted` after a reset are a FAIL, not a pass.** A mapper cannot
+survive a hard power cycle, so the rung-2 reboot arm treats either as the probe or the host
+lying. Only `reopened` releases the evidence.
+
+**Event counts, so a repeat does not read as a new fault.** One unit failure produces exactly
+ONE event: systemd's `OnFailure=` fires once, when the unit reaches its final failed state after
+its bounded restarts, and the reporter emits once. The inherited gc-failure shape can
+double-emit only when `doppler run` succeeds and the emitter itself then exits non-zero. A
+reopen that stays broken produces THREE events per weekly gc tick, one root cause: the reopen's
+own fatal, gc's unit failure, and gc's mountpoint fatal.
+
 ## Sharp edges
 
 - **A pending approval holds `git-data-state`.** A cutover or root-key apply run waiting for its

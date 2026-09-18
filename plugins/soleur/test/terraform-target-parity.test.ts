@@ -3638,6 +3638,41 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     );
   });
 
+  test("git_data_host_replace ALSO carries the rung-2 rehearsal interlock (#8210)", () => {
+    // Until #8210 only git_data_host_create called this gate, so an un-rehearsed cloud-init
+    // payload could reach the LIVE host by replace from any ref — the route that creates the
+    // store was held while the route that REPLACES it was not. That asymmetry is load-bearing
+    // now for the same reason D9 above is: user_data is ForceNew and ADR-115 bars git-data from
+    // the reboot primitive, so a replace is the ONLY route by which a payload change (including
+    // a boot-time control like the LUKS reopen) reaches the host, and it re-runs first boot
+    // there. An un-rehearsed template's first real boot would be on the production host.
+    const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
+    expect(replaceBlock).toMatch(
+      /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
+
+    // The same three disarm shapes the sibling interlocks are pinned against: an `if:` on the
+    // step, a continue-on-error, or a refusal branch that echoes without exiting.
+    const step = /- name: Rung-2 rehearsal interlock[\s\S]*?(?=\n      - name: )/.exec(
+      replaceBlock,
+    );
+    expect(step, "Rung-2 rehearsal interlock step not found in git_data_host_replace").not.toBeNull();
+    expect(step![0]).not.toMatch(/^\s*if:/m);
+    expect(step![0]).not.toMatch(/continue-on-error/);
+    expect(step![0]).toMatch(
+      /if ! git_data_rung2_rehearsal_gate[\s\S]*?\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
+    );
+
+    // ORDERING. A gate that runs after the plan lets a held route pay for a plan and read a
+    // secret before refusing; after the apply it is not a gate at all.
+    const rRung2 = replaceBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);
+    const rPlan = replaceBlock.search(/^\s*terraform plan -no-color/m);
+    const rApply = replaceBlock.search(/^\s*terraform apply -no-color/m);
+    expect(rRung2).toBeGreaterThan(-1);
+    expect(rRung2).toBeLessThan(rPlan);
+    expect(rRung2).toBeLessThan(rApply);
+  });
+
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
     // `\s{4}` pins JOB-level indentation, matching both web precedents. `\s*` would
     // accept a step-level `environment:` at six spaces, which GitHub ignores — so the

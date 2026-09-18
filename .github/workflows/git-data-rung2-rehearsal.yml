@@ -85,9 +85,12 @@ jobs:
     # the dry_run default — and recorded in ADR-149 with the alternative (a dedicated
     # environment) and its DP-11 F8 cost, rather than left as an unstated trade.
     environment: web-platform-infra-apply
-    # Budget: Hetzner provisioning the server plus two volumes (~6m) + boot + emit + the
-    # bounded capture poll + teardown.
-    timeout-minutes: 30
+    # Budget, summed from the bounded polls this job actually contains rather than estimated:
+    # apply ~25 (Hetzner provisioning the server plus two volumes, boot, emit) + capture poll 16
+    # + settle 2 + reset 2 + reboot probe 10 = 55 min of worst case, plus teardown. The reset arm
+    # (#8210) is what pushed this past 30: a job ceiling reached INSIDE a step means the teardown
+    # gets only the runner's cancellation grace to destroy a server, two volumes and a config.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -490,11 +493,123 @@ jobs:
           fi
           exit "$rc"
 
+      # ══ (#8210) THE REBOOT ARM ═══════════════════════════════════════════════════════
+      #
+      # Everything above proves the BIRTH boot. The defect #8210 closes is invisible to it: the
+      # mapper is opened once per instance by cloud-init runcmd, so a first boot passes whether
+      # or not anything would reopen it on the SECOND. This arm is the only thing that proves
+      # the reopen path rather than asserting it — the host is hard-reset through the Hetzner
+      # API and must report the reopen unattended before its evidence can be uploaded.
+      - name: Settle before the reset
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        run: |
+          set -euo pipefail
+          # boot_complete fires BEFORE the gc_timer runcmd item and before cloud-final takes
+          # its scripts-user semaphore. A reset inside that window leaves the semaphore
+          # unclaimed, so the next boot RE-RUNS the whole runcmd — replaying boot_complete and
+          # re-opening the mapper from the birth heredoc rather than from the unit under test.
+          # The arm would then pass without the unit existing.
+          echo "settling 120s so cloud-final claims its semaphore before the reset"
+          sleep 120
+
+      - name: Hard-reset the rehearsal host (Hetzner API)
+        id: reset
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -euo pipefail
+          TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+          printf '::add-mask::%s\n' "$TOKEN"
+          # EXACT NAME, never a prefix match. `?name=` is an exact filter on the Hetzner side,
+          # so this cannot reach `soleur-git-data` (the production host) or a leftover survivor
+          # from an earlier rehearsal — both of which a `startswith(prefix)` resolution would
+          # happily return. The teardown's own `per_page=50` list is a different question
+          # (is ANY survivor left) and stays as it is.
+          body="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+                    "https://api.hetzner.cloud/v1/servers?name=${REHEARSAL_HOST}")" || {
+            echo "::error::could not resolve ${REHEARSAL_HOST} through the Hetzner API. Failing closed: an unresolved host is not a host to reset."
+            exit 1
+          }
+          ids="$(printf '%s' "$body" | jq -r --arg n "$REHEARSAL_HOST" '[.servers[]? | select(.name == $n) | .id] | .[]')"
+          n="$(printf '%s\n' "$ids" | grep -c . || true)"
+          if [[ "$n" -ne 1 ]]; then
+            echo "::error::expected exactly one server named ${REHEARSAL_HOST}, got ${n}. Refusing to reset."
+            exit 1
+          fi
+          # RECORDED BEFORE THE POST, and the order is the guard: a timestamp taken afterwards
+          # can sit after the host has already booted and emitted, so the probe's window would
+          # exclude the very row it exists to find and every healthy reset would read TRANSIENT.
+          echo "RUNG2_REBOOT_SINCE=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
+          # HARD reset (power cycle), not a graceful shutdown: an ACPI reboot leaves the
+          # question of whether systemd unmounted cleanly, and the ext4 journal replay on the
+          # mapper is part of what this arm is for.
+          action="$(curl --disable --noproxy '*' -sS -f -X POST \
+            -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+            "https://api.hetzner.cloud/v1/servers/${ids}/actions/reset")"
+          aid="$(printf '%s' "$action" | jq -r '.action.id')"
+          echo "reset action ${aid} issued for ${REHEARSAL_HOST} (server ${ids})"
+          for i in $(seq 1 24); do
+            st="$(curl --disable --noproxy '*' -sS -f -H "Authorization: Bearer ${TOKEN}" \
+              "https://api.hetzner.cloud/v1/servers/${ids}/actions/${aid}" | jq -r '.action.status')"
+            case "$st" in
+              success) echo "reset completed after $((i * 5))s"; exit 0 ;;
+              error)   echo "::error::the Hetzner reset action reported error"; exit 1 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::the reset action did not reach 'success' within 120s"
+          exit 1
+
+      - name: Probe the unattended reopen (bounded poll)
+        id: reboot_probe
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reset.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -euo pipefail
+          rc=2
+          # Same bounded shape as the capture poll above, and the same terminal semantics: 0
+          # PASS and 1 FAIL both stop; only 2 (nothing known yet) is retried, because the host
+          # is still booting. A deadline rather than an attempt count, so the teardown keeps its
+          # budget even when the reopen never reports.
+          deadline=$(( SECONDS + 10 * 60 ))
+          for attempt in $(seq 1 20); do
+            if (( SECONDS >= deadline )); then
+              echo "--- reboot-probe deadline reached after $((attempt - 1)) attempt(s) ---"
+              break
+            fi
+            echo "--- reboot probe attempt ${attempt}/20 ---"
+            rc=0
+            doppler run -p soleur -c prd_terraform -- \
+              bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
+                --host-name "$REHEARSAL_HOST" \
+                --evidence-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                --reboot-since "${RUNG2_REBOOT_SINCE}" \
+                --out /tmp/rung2/git-data-rung2-boot-evidence.env || rc=$?
+            [[ "$rc" -ne 2 ]] && break
+            sleep 30
+          done
+          echo "reboot_rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" -eq 0 ]]; then
+            echo "### Rung-2 reboot arm: PASS" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`${REHEARSAL_HOST}\` reopened /dev/mapper/git-data unattended after a hard reset (#8210)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Rung-2 reboot arm: rc=${rc}" >> "$GITHUB_STEP_SUMMARY"
+            echo "A FAIL or TRANSIENT here RELEASES NOTHING: the evidence upload below is gated on this step, so the birth and replace gates stay held." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
+
       # UPLOADED, NEVER COMMITTED. This is the release artifact for the birth interlock; the
       # operator opens a PR with it themselves after reading it. `permissions: contents: read`
       # above means this workflow could not commit it even if a later edit tried to.
       - name: Upload the evidence file as an artifact
-        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' }}
+        # (#8210) BOTH rcs. Evidence that the birth booted but the mapper never reopened
+        # unattended must not be publishable — that is the shape the reboot arm exists to catch,
+        # and gating only on capture_rc would upload it.
+        if: ${{ !inputs.teardown_only && !inputs.dry_run && steps.capture.outputs.capture_rc == '0' && steps.reboot_probe.outputs.reboot_rc == '0' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: git-data-rung2-boot-evidence

@@ -17,3 +17,22 @@ Headless plan-review (2026-09-18). Taste findings surfaced here, not auto-applie
 
 - **Source:** CTO devex (P1-4) proposed `scripts/lib/git-data-boot-booleans.sh` as the single source both readers derive their loop/regex/projection from.
 - **Planner's default:** declined as new mechanism; the existing AC30-parity check in `git-data-emit.test.sh` is the single source that REDs when the producer and a roster disagree, and the two readers' SQL projections are one column each. Revisit when a SIXTH boolean lands (#8101/#8211).
+
+## T4 — AC17's expected exit code for the follow-through probe: 1 (plan) vs 2 (shipped)
+
+- **Source:** the plan's AC17 reads "`scripts/followthroughs/git-data-reboot-evidence-landed-8210.sh`
+  exists and exits 1 against the current `main` (no reboot key yet)".
+- **Shipped:** it exits **2 (TRANSIENT)**, and the arm that would make it 1 is reserved for a
+  different state — evidence that EXISTS and records a reboot verdict that is not PASS, i.e. a
+  rehearsal really ran the reset arm and the mapper really did not reopen.
+- **Why the deviation rather than the AC:** the repo's three-state follow-through convention
+  (`git-data-birth-emitter-6982.sh` states it explicitly) makes "the thing has not happened yet"
+  TRANSIENT, because the daily sweeper posts on a FAIL. Exiting 1 today would post a daily
+  false alarm on #8210 from merge+1d until the operator schedules the PM1 dispatch — a comment
+  stream that says "broken" about a state the plan itself calls the intended safe one. The
+  probe's own contract header records all three states and why unborn-is-transient is
+  load-bearing.
+- **Measured:** `bash scripts/followthroughs/git-data-reboot-evidence-landed-8210.sh` → rc=2,
+  "origin/main's evidence carries no RUNG2_REBOOT_REOPEN key — it predates the #8210 reset arm."
+- **If the operator prefers the AC as written:** change the no-key branch to exit 1 and expect a
+  daily `action-required` comment on #8210 until PM2 lands. Nothing else moves.

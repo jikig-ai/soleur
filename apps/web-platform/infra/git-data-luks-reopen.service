@@ -34,9 +34,12 @@ Environment=HOME=/root
 Environment=TMPDIR=/run/git-data-luks-reopen
 # EnvironmentFile=- not `. <file>`: an absent token file fails inside `doppler run`, which the
 # reporter reports; a failed dot-source in dash kills the shell first. The file carries
-# DOPPLER_TOKEN (read-only prd_git_data token), GIT_DATA_LUKS_DEV (the by-id pin) and
-# GIT_DATA_DOPPLER_CONFIG (templated: the rung-2 rehearsal scopes its token to a scratch
-# config, so a hardcoded prd_git_data would exit 1 with the key absent on every rehearsal).
+# DOPPLER_TOKEN (the read-only service token scoped to this host's own config),
+# GIT_DATA_LUKS_DEV (the by-id pin) and GIT_DATA_DOPPLER_CONFIG (templated: the rung-2
+# rehearsal scopes its token to a per-run scratch config, so a hardcoded production config
+# name here would exit 1 with the key absent on every rehearsal reboot). The config name is
+# deliberately absent from this file as a LITERAL, comments included — git-data-luks.test.sh's
+# config-scope census is not line-anchored, so a name in prose is a name in the census.
 EnvironmentFile=-/etc/default/git-data-doppler
 # The script's phase file + stderr log live here. RuntimeDirectoryPreserve=yes is MANDATORY:
 # measured on 255, systemd removes the directory when the unit reaches its final failed

@@ -4225,6 +4225,29 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
+      # (#8210) THE RUNG-2 INTERLOCK ON THE REPLACE ROUTE. Until now only `git_data_host_create`
+      # called this gate, so an un-rehearsed cloud-init payload could reach the LIVE git-data
+      # host by replace from any ref — the create route was held while the route that touches
+      # the host holding every user's source was not. The asymmetry mattered the moment a
+      # payload change became the delivery mechanism for a boot-time control (the LUKS reopen):
+      # a replace is how that control ships, and shipping it un-rehearsed is precisely what the
+      # rung-2 evidence exists to refuse.
+      #
+      # Consequence, stated plainly rather than discovered: the replace route — the only
+      # remediation lever for the live host — is HELD from this PR's merge until fresh evidence
+      # lands from a `main` rehearsal. That is the intended safe state (GIT_DATA_STORE_ENABLED
+      # gates every write path, so the store serves no user traffic), and the rehearsal is
+      # dispatched in the merging session to keep the window short.
+      - name: Rung-2 rehearsal interlock (refuses an un-rehearsed payload on the live host)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-replace is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. A replace re-runs first boot from this template on the live host, so an un-rehearsed payload would have its first real boot there. The gate's message above says exactly what to commit to release it. Nothing has been planned or replaced."
+            exit 1
+          fi
+
       - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
         run: |
           set -euo pipefail
