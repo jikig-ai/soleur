@@ -517,6 +517,7 @@ Evidence lands in `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-prox
 - `knowledge-base/engineering/architecture/diagrams/model.c4` + `model.likec4.json` — description updates + regen.
 - `knowledge-base/legal/article-30-register.md` — PA-8 §(g) re-append; PA-31 §(g) assessment.
 - `knowledge-base/legal/audits/2026-09-14-clo-attestation-7980-playwright-mcp-redact-proxy.md` — dated addendum superseding row-18 evidence. (Append-only convention applies to audit files; do not rewrite findings.)
+- `knowledge-base/legal/compliance-posture.md` — changelog comment, `last_updated`, and a dated in-cell correction on the #7980 Completed row's reach (b).
 - `plugins/soleur/.claude-plugin/plugin.json` — `engines` floor ONLY if the Phase-0 probe fails the floor (conditional, CPO-flagged).
 
 Not edited: repo `.mcp.json` (dogfood keeps its headed credential-handoff
@@ -732,17 +733,17 @@ reach-boundary change a future engineer must find recorded.
 
 ## Acceptance Criteria
 
-- [ ] AC1 — `plugins/soleur/.mcp.json` exists, parses, and registers `playwright` with `command: "python3"`, an argv carrying `${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`, `--user-data-dir-name soleur-playwright-mcp-profile`, `--`, `npx`, `@playwright/mcp@0.0.78` — and no `bash`, no `--config`, no `--user-data-dir` literal.
-- [ ] AC2 — Phase-0 probe record exists at `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-proxy-time-port/plan-time-probe-record.md` evidencing (a) `mcp__plugin_soleur_playwright__*` tools registered on the engines floor (or the floor bump taken, with the minimum version named), (b) `${CLAUDE_PLUGIN_ROOT}` expansion inside the plugin `.mcp.json`, (c) coexistence with a user-scoped `playwright`.
-- [ ] AC3 — Proxy `--user-data-dir-name`: child argv gains `--user-data-dir=<resolved>` under `$XDG_CACHE_HOME`/`~/.cache`; `..`/separator basenames, flag+explicit-`--user-data-dir`, a RELATIVE `XDG_CACHE_HOME` value, and unresolvable `~` (HOME unset) all refuse to start (exit 2, reason names the setting, never the value); absent the flag, argv is byte-identical to today.
-- [ ] AC4 — `git grep -n 'mcp__playwright__\|mcp__plugin_soleur_pw__' -- plugins/soleur/skills plugins/soleur/agents` returns zero lines that instruct a call on that prefix. Permitted survivors are literals inside prose explicitly scoped to a customer's OWN `playwright` registration (e.g. agent-browser's "verify your manual wrap" `ToolSearch select:mcp__playwright__browser_snapshot` line and the separate-registration rule itself); every call site the skills prescribe resolves to `mcp__plugin_soleur_playwright__*`. The survivor set is pinned by file:line in the PR body.
-- [ ] AC5 — `qa`, `ux-audit`, `reproduce-bug`, `cf-token-scope` each instruct preference for `mcp__plugin_soleur_playwright__*` beside (not inside) the verbatim S2 paragraph; `MCP_GAP_MARKER_RE` still matches each carrier (`scripts/lint-credential-path-literals.test.sh` green).
-- [ ] AC6 — Proxy suite green including: all new flag rows, the Guard-3 plugin-registration row, and pin parity derived from the repo `.mcp.json` (mutating either manifest's pin independently reddens).
-- [ ] AC7 — `EXPECTED_GATE_REFS` still matches the tree (`plugin-root-anchoring.test.ts` green) — updated iff a SKILL.md gained a new anchored `(file, playwright-mcp-redact-proxy.py)` pair (G3 is a deduped identity set; the existing `agent-browser` pair is already pinned). New proxy mentions in SKILL.md must be `${CLAUDE_PLUGIN_ROOT}`-anchored — G2/G2b reject bare-basename invocations — so preference prose should name the SERVER (`mcp__plugin_soleur_playwright__*`), not the script path.
-- [ ] AC8 — ADR-213 carries the dated `#8156` addendum; `model.c4`/`model.likec4.json` updated and all four C4 gates green; PA-8 §(g) re-appended (append-only); the 2026-09-14 CLO audit carries a dated addendum on row-18 evidence.
-- [ ] AC9 — Option-C deferral issue filed (`deferred-scope-out`, `domain/engineering`, `type/security`), referenced from the ADR addendum and this plan's Alternatives table.
-- [ ] AC10 — `plugin.json` unchanged unless the Phase-0 probe forced the `engines` bump (then exactly that one key, with the probe record cited in the PR body). `codex-plugin.test.ts` and `devin-plugin.test.ts` green unmodified.
-- [ ] AC11 — The diff's file set is a subset of Files to Create/Edit above plus this plan's own artifacts (`plans/`, `specs/<branch>/`, `INDEX.md` if regenerated, `decision-challenges.md`).
+- [x] AC1 — `plugins/soleur/.mcp.json` exists, parses, and registers `playwright` with `command: "python3"`, an argv carrying `${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`, `--user-data-dir-name soleur-playwright-mcp-profile`, `--`, `npx`, `@playwright/mcp@0.0.78` — and no `bash`, no `--config`, no `--user-data-dir` literal.
+- [x] AC2 — Phase-0 probe record exists at `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-proxy-time-port/plan-time-probe-record.md` evidencing (a) `mcp__plugin_soleur_playwright__*` tools registered on the engines floor (or the floor bump taken, with the minimum version named), (b) `${CLAUDE_PLUGIN_ROOT}` expansion inside the plugin `.mcp.json`, (c) coexistence with a user-scoped `playwright`.
+- [x] AC3 — Proxy `--user-data-dir-name`: child argv gains `--user-data-dir=<resolved>` under `$XDG_CACHE_HOME`/`~/.cache`; `..`/separator basenames, flag+explicit-`--user-data-dir`, a RELATIVE `XDG_CACHE_HOME` value, and unresolvable `~` (HOME unset) all refuse to start (exit 2, reason names the setting, never the value); absent the flag, argv is byte-identical to today.
+- [x] AC4 — `git grep -n 'mcp__playwright__\|mcp__plugin_soleur_pw__' -- plugins/soleur/skills plugins/soleur/agents` returns zero lines that instruct a call on that prefix. Permitted survivors are literals inside prose explicitly scoped to a customer's OWN `playwright` registration (e.g. agent-browser's "verify your manual wrap" `ToolSearch select:mcp__playwright__browser_snapshot` line and the separate-registration rule itself); every call site the skills prescribe resolves to `mcp__plugin_soleur_playwright__*`. The survivor set is pinned by file:line in the PR body.
+- [x] AC5 — `qa`, `ux-audit`, `reproduce-bug`, `cf-token-scope` each instruct preference for `mcp__plugin_soleur_playwright__*` beside (not inside) the verbatim S2 paragraph; `MCP_GAP_MARKER_RE` still matches each carrier (`scripts/lint-credential-path-literals.test.sh` green).
+- [x] AC6 — Proxy suite green including: all new flag rows, the Guard-3 plugin-registration row, and pin parity derived from the repo `.mcp.json` (mutating either manifest's pin independently reddens).
+- [x] AC7 — `EXPECTED_GATE_REFS` still matches the tree (`plugin-root-anchoring.test.ts` green) — updated iff a SKILL.md gained a new anchored `(file, playwright-mcp-redact-proxy.py)` pair (G3 is a deduped identity set; the existing `agent-browser` pair is already pinned). New proxy mentions in SKILL.md must be `${CLAUDE_PLUGIN_ROOT}`-anchored — G2/G2b reject bare-basename invocations — so preference prose should name the SERVER (`mcp__plugin_soleur_playwright__*`), not the script path.
+- [x] AC8 — ADR-213 carries the dated `#8156` addendum; `model.c4`/`model.likec4.json` updated and all four C4 gates green; PA-8 §(g) re-appended (append-only); the 2026-09-14 CLO audit carries a dated addendum on row-18 evidence.
+- [x] AC9 — Option-C deferral issue filed (`deferred-scope-out`, `domain/engineering`, `type/security`), referenced from the ADR addendum and this plan's Alternatives table.
+- [x] AC10 — `plugin.json` unchanged unless the Phase-0 probe forced the `engines` bump (then exactly that one key, with the probe record cited in the PR body). `codex-plugin.test.ts` and `devin-plugin.test.ts` green unmodified.
+- [x] AC11 — The diff's file set is a subset of Files to Create/Edit above plus this plan's own artifacts (`plans/`, `specs/<branch>/`, `INDEX.md` if regenerated, `decision-challenges.md`).
 - [ ] AC12 — PR body carries `Closes #8156`, a `## Changelog` section (semver label guidance: MINOR — new plugin MCP surface), and names the Option-C deferral issue.
 
 ## Test Scenarios
@@ -831,8 +832,9 @@ Two open code-review issues touch planned files:
 
 - **Option C — plugin PostToolUse/PreToolUse hook net on `mcp__playwright__.*`**
   (transcript-only coverage of a customer's own unwrapped registration).
-  Deferred per the Alternatives table; a `deferred-scope-out` issue is a plan
-  deliverable (AC9), carrying the re-evaluation criteria and the note that
+  Deferred per the Alternatives table; filed as **#8286** (`deferred-scope-out`,
+  `domain/engineering`, `type/security`) — the AC9 deliverable, carrying the
+  re-evaluation criteria and the note that
   ADR-162's one-rewriter rule does not constrain it (it constrains
   `updatedInput` rewrites on PreToolUse, not `updatedToolOutput` on
   PostToolUse). Deepen-pass: upstream #47859 (hook output silently

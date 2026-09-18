@@ -10,6 +10,7 @@ disposition: "DISCHARGED — RE-ATTESTED 2026-09-14 against the review-round bod
 re_attested_at: 2026-09-14
 relay_rebuild_addendum: "2026-09-14 — a same-day code change after the re-attestation (the relay rebuild in `relay_server_message`, gated by `plain_id`) is folded into the C4 cell and recorded in §Addendum — relay rebuild, which also supersedes every proxy and redactor LINE citation in this file with a function or constant name. Disposition unchanged: DISCHARGED."
 aup_7981_addendum: "2026-09-15 — the `#7981 lands` trigger fires on the merge of PR #8207 (AUP §2 names a Playwright MCP server); DISCHARGED, unchanged. See §Addendum — #7981 re-evaluation trigger. The NOT ATTESTED #7981 item and the trigger below are left as written (append-only)."
+mcp_8156_addendum: "2026-09-18 — #8156 ships `plugins/soleur/.mcp.json`, so row 18's evidence ('no `plugins/soleur/.mcp.json` exists') is superseded as to the fact it recorded. See §Addendum — #8156 plugin-root registration. Disposition unchanged: DISCHARGED. Row 18 and its cell stay as written (append-only)."
 re_attested_body: "working tree of `feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy` on top of `7b69b7399`, with the ten-seat review's changes uncommitted at the time of reading: `playwright-mcp-redact-proxy.py` 663 lines, `redact-a11y-snapshot.py` 443 lines"
 superseded_disposition: "DISCHARGED — the #7947 counsel review's `#7980 lands` re-evaluation trigger is discharged and its `NOT ATTESTED — #7980's remediation` carve-out is lifted, on the registration this repository controls and only there. Every mechanism claim in both appended brackets was verified against the shipped proxy, `.mcp.json`, `cron-ux-audit.ts`, the suite and its run records, and the Phase 0 measurement — not against the plan or the PR description. ONE claim was not supported by the body and was corrected IN-CELL before merge (C1: the skills prescribe a remediation path for a refused start; they do not carry the affirmative 'stop, not a fallback' instruction the bracket asserted). No Art. 33 duty; no Art. 34 duty; NO breach-register row. #7981 stays Ref-only. One evidentiary limb NOT RUN and recorded as open; it does not bear on the ruling."
 superseded_frontmatter: "Superseded 2026-09-14 (#7980, review round): `open_limbs` now carries TWO limbs (§Re-attestation R6); `tier_classification`'s 'one in-cell correction' is now C1 plus nine review-round corrections; `attests` covers the brackets as corrected by C1 AND C2–C10; the re-evaluation trigger reading 'Any `- [Snapshot](` link observed in a wrapped session's withheld result' is superseded by the trigger below naming the do-not-read notice, because the drift arm no longer withholds the result."
@@ -842,3 +843,31 @@ The frontmatter trigger "#7981 lands or is closed without landing" fires on the 
 which widens the published AUP §2 bullet to name "a Playwright MCP server driven by Soleur agents
 or skills"; the bullet states nothing about any snapshot control. This addendum lands in that same
 PR, so it is on `main` only if the widening is. **Disposition: DISCHARGED, unchanged.**
+
+## Addendum — #8156 plugin-root registration, 2026-09-18
+
+#8156 ships `plugins/soleur/.mcp.json`, registering `playwright` through
+`playwright-mcp-redact-proxy.py` (`--user-data-dir-name soleur-playwright-mcp-profile`
+before `npx @playwright/mcp@0.0.78`). Row 18's evidence — "no `plugins/soleur/.mcp.json`
+exists" — is therefore superseded **as to the fact it recorded**: the plugin now carries a
+dedicated MCP config file, and that file registers exactly one server, wrapped.
+
+What this does NOT change, stated rather than implied:
+
+- The row-18 *finding* stands. Reach (b) as attested was "a customer is wrapped only by
+  their own configuration" for a customer's **own** `playwright` registration — and it
+  still is: the plugin registration adds a second, wrapped server under
+  `mcp__plugin_soleur_playwright__*` and reaches nothing the customer registered
+  themselves. The own-registration residual the carve-outs name is unchanged; its closer
+  (Option C, a transcript-sink hook net) is deferred at issue #8286, ADR-213 addendum
+  2026-09-18.
+- This is a dated addendum noting a new fact, **not a re-attestation of the whole
+  control** — the same scope the 2026-09-18 plan prescribed. No row, finding, carve-out
+  or trigger above is re-run or re-opened; row 18's cell stays as written.
+- Preconditions are unchanged in kind: the new reach holds only where the plugin's
+  `.mcp.json` loads (Claude Code ≥2.1.139 with the Soleur plugin installed, `python3`
+  and `npx` on `PATH`, server not disabled in `/mcp`). The PA-31 fleet overlay remains
+  unwrapped and untouched — its per-fire `.mcp.json` is what PA-31 §(g) records and the
+  plugin manifest does not bind it (PA-31 §(g) 2026-09-18 assessment).
+
+**Disposition: DISCHARGED, unchanged.**

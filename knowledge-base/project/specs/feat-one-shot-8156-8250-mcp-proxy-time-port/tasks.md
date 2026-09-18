@@ -6,20 +6,20 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
 
 ## Phase 0 — Floor probe (gating)
 
-- [ ] T0.1 Scratch-plugin probe on the `engines.claude-code >=2.1.139` floor and the
+- [x] T0.1 Scratch-plugin probe on the `engines.claude-code >=2.1.139` floor and the
       installed CLI: (a) plugin-root `.mcp.json` stdio entry registers
       `mcp__plugin_soleur_playwright__*` tools; (b) `${CLAUDE_PLUGIN_ROOT}`
       expands inside plugin `.mcp.json` `command`/`args`; (c) user-scoped
       `playwright` + plugin `playwright` coexist with both namespaces live;
       (d) macOS launch sanity; (e) record the `mcp-logs-*/` directory name used
       for the connect-failure playbook.
-- [ ] T0.2 Write `plan-time-probe-record.md` in this spec dir. If the floor
+- [x] T0.2 Write `plan-time-probe-record.md` in this spec dir. If the floor
       fails, record the minimum working version — the `engines` bump becomes a
       conditional manifest edit (AC10, CPO-flagged).
 
 ## Phase 1 — The wrapped registration
 
-- [ ] T1.1 `playwright-mcp-redact-proxy.py`: add `--user-data-dir-name
+- [x] T1.1 `playwright-mcp-redact-proxy.py`: add `--user-data-dir-name
       <basename>` — resolve under `$XDG_CACHE_HOME` (default `~/.cache`) via
       `os.path.expanduser`; inject `--user-data-dir=<abs>` into child argv only
       when child argv lacks `--user-data-dir`; refuse-to-start on
@@ -27,61 +27,61 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
       `XDG_CACHE_HOME` value, and when `~` cannot resolve (HOME unset) —
       mirroring `scripts/lib/scratch-root.sh`'s XDG semantics; update the
       module header. No behavior change when the flag is absent.
-- [ ] T1.2 Create `plugins/soleur/.mcp.json`: `playwright` → `command:
+- [x] T1.2 Create `plugins/soleur/.mcp.json`: `playwright` → `command:
       "python3"`, args `[${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py,
       --user-data-dir-name soleur-playwright-mcp-profile, --, npx,
       @playwright/mcp@0.0.78]` — no `bash`, no `--config`, no literal
       `--user-data-dir`.
-- [ ] T1.3 Proxy suite rows: flag injection + `$XDG_CACHE_HOME` + `~/.cache`
+- [x] T1.3 Proxy suite rows: flag injection + `$XDG_CACHE_HOME` + `~/.cache`
       fallback; `..`/separator refusal; flag+explicit refusal; RELATIVE
       `XDG_CACHE_HOME` refusal; HOME-unset (`~` unresolvable) refusal;
       flag-absent argv-identical regression row; plugin-registration Guard-3
       row (parse `plugins/soleur/.mcp.json`, derive pin from repo `.mcp.json`);
       one mutant per clause.
-- [ ] T1.4 `agent-browser/SKILL.md` §"Wrapping the server" rewrite:
+- [x] T1.4 `agent-browser/SKILL.md` §"Wrapping the server" rewrite:
       plugin-registered default (prefix, preconditions, `/mcp` toggle,
       separate-profile note); manual `.mcp.json` shape demoted to "advanced";
       connect-failure playbook extended with the plugin server log dir.
 
 ## Phase 2 — Skills resolve to the wrapped server
 
-- [ ] T2.1 Sweep 13 `mcp__playwright__*` literals (agent-browser 3,
+- [x] T2.1 Sweep 13 `mcp__playwright__*` literals (agent-browser 3,
       reproduce-bug 6, cf-token-scope/widen-playbook 1, plan 1, work 1) to
       `mcp__plugin_soleur_playwright__*`; retain only literals scoped to a
       customer's OWN `playwright` registration (AC4 survivor set).
-- [ ] T2.2 Add preference clause (plugin server already wrapped; other
+- [x] T2.2 Add preference clause (plugin server already wrapped; other
       `mcp__<server>__` prefixes are separate unwrapped registrations) beside
       — not inside — the verbatim S2 paragraph in `qa`, `ux-audit`,
       `reproduce-bug`, `cf-token-scope/widen-playbook`. `S2_CANONICAL`
       unchanged.
-- [ ] T2.3 `EXPECTED_GATE_REFS` update iff a SKILL.md gains a new
+- [x] T2.3 `EXPECTED_GATE_REFS` update iff a SKILL.md gains a new
       `${CLAUDE_PLUGIN_ROOT}`-anchored proxy reference (likely zero).
 
 ## Phase 3 — Records, register, deferral
 
-- [ ] T3.1 ADR-213: append `## Addendum — 2026-09-XX (#8156)` (reach (b)
+- [x] T3.1 ADR-213: append `## Addendum — 2026-09-XX (#8156)` (reach (b)
       closed; dedicated-`.mcp.json`-over-inline rationale; profile isolation;
       Option-C deferral + criteria; toggle-off/precondition caveats).
-- [ ] T3.2 `model.c4`: update `snapshotGuard` (SHIPS vs WIRES) and
+- [x] T3.2 `model.c4`: update `snapshotGuard` (SHIPS vs WIRES) and
       `playwrightMcp` ("until #8156" clause) descriptions; run
       `scripts/regenerate-c4-model.sh`; four C4 gates green.
-- [ ] T3.3 `article-30-register.md`: PA-8 §(g) re-append reach (b)
+- [x] T3.3 `article-30-register.md`: PA-8 §(g) re-append reach (b)
       (append-only); PA-31 §(g) assessment line.
-- [ ] T3.4 Dated addendum on
+- [x] T3.4 Dated addendum on
       `knowledge-base/legal/audits/2026-09-14-clo-attestation-7980-playwright-mcp-redact-proxy.md`
       superseding row-18 evidence ("no `plugins/soleur/.mcp.json` exists").
-- [ ] T3.5 File the Option-C deferral issue (`deferred-scope-out`,
+- [x] T3.5 File the Option-C deferral issue (`deferred-scope-out`,
       `domain/engineering`, `type/security`) with the re-evaluation criteria
       and upstream refs (#47859 transcript persistence, #54161 hook output
       semantics); reference it from the ADR addendum.
 
 ## Verification gates
 
-- [ ] `python3 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` green
-- [ ] `bun test plugins/soleur/test/codex-plugin.test.ts plugins/soleur/test/devin-plugin.test.ts` green unmodified
-- [ ] `bun test apps/web-platform/test/plugin-root-anchoring.test.ts` green
-- [ ] `bash scripts/lint-credential-path-literals.test.sh` green
-- [ ] AC1–AC12 checkboxes ticked in the plan; AC11 diff-scope clean
+- [x] `python3 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` green — 316/316 cases, 63/63 mutants
+- [x] `bun test plugins/soleur/test/codex-plugin.test.ts plugins/soleur/test/devin-plugin.test.ts` green unmodified — 14 pass
+- [x] `bun test apps/web-platform/test/plugin-root-anchoring.test.ts` green — 26/26 (EXPECTED_GATE_REFS unchanged)
+- [x] `bash scripts/lint-credential-path-literals.test.sh` green — 41/41; lint-legal-registers 11/11; c4 gates 4/4; cron-ux-audit 30/30; components+skill-security-scan 1353 pass
+- [x] AC1–AC11 verified (AC12 lands with the PR body); AC11 diff-scope clean
 - [ ] PR body: `Closes #8156`, `## Changelog` (MINOR — new plugin MCP
       surface), Option-C issue referenced
 

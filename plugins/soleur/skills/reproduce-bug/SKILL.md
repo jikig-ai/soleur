@@ -51,8 +51,8 @@ If the bug is UI-related or involves user flows, use Playwright to visually repr
 ### Step 1: Verify Server is Running
 
 ```
-mcp__playwright__browser_navigate({ url: "http://localhost:3000" })
-mcp__playwright__browser_snapshot({})
+mcp__plugin_soleur_playwright__browser_navigate({ url: "http://localhost:3000" })
+mcp__plugin_soleur_playwright__browser_snapshot({})
 ```
 
 If server not running, inform user to start `bin/dev`.
@@ -62,8 +62,8 @@ If server not running, inform user to start `bin/dev`.
 Based on the issue description, navigate to the relevant page:
 
 ```
-mcp__playwright__browser_navigate({ url: "http://localhost:3000/[affected_route]" })
-mcp__playwright__browser_snapshot({})
+mcp__plugin_soleur_playwright__browser_navigate({ url: "http://localhost:3000/[affected_route]" })
+mcp__plugin_soleur_playwright__browser_snapshot({})
 ```
 
 ### Step 3: Capture Screenshots
@@ -89,7 +89,7 @@ a `test -f` on the script alone is a shape check and was measured bypassable.
 ```
 
 ```
-mcp__playwright__browser_take_screenshot({ filename: "bug-[issue]-step-1.png" })
+mcp__plugin_soleur_playwright__browser_take_screenshot({ filename: "bug-[issue]-step-1.png" })
 ```
 
 ### Step 4: Follow User Flow
@@ -110,6 +110,9 @@ or a generated-credential panel — and an MCP tool result is not a shell stream
 so the redactor cannot be piped into it. On a page carrying a password or
 credential field:
 
+- Prefer the plugin-registered `mcp__plugin_soleur_playwright__*` server: its
+  registration is already wrapped, so call its `browser_snapshot` bare — no
+  file form needed. Fall back to the file form on any other registration.
 - Use the `filename:` + redactor + shred form, with a filename inside the
   working directory (the server denies paths outside it). If the server refuses
   `filename` with an error that starts `refused by
@@ -133,7 +136,7 @@ connect: `agent-browser/SKILL.md` §"Wrapping the server".
 3. **Check for console errors:**
 
    ```
-   mcp__playwright__browser_console_messages({ level: "error" })
+   mcp__plugin_soleur_playwright__browser_console_messages({ level: "error" })
    ```
 
 ### Step 5: Capture Bug State
@@ -145,7 +148,7 @@ When the bug is reproduced:
 3. Document the exact steps that triggered it
 
 ```
-mcp__playwright__browser_take_screenshot({ filename: "bug-[issue]-reproduced.png" })
+mcp__plugin_soleur_playwright__browser_take_screenshot({ filename: "bug-[issue]-reproduced.png" })
 ```
 
 ## Phase 3: Document Findings

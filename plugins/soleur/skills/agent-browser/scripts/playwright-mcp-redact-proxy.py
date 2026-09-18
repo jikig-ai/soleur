@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """Redacting stdio JSON-RPC proxy in front of the Playwright MCP server (#7980).
 
-    python3 playwright-mcp-redact-proxy.py -- npx @playwright/mcp@0.0.78 [server args...]
+    python3 playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
+
+`--user-data-dir-name` resolves its basename under $XDG_CACHE_HOME (default
+`~/.cache`, resolved with os.path.expanduser) and injects
+`--user-data-dir=<absolute path>` into the server argv, giving the wrapped
+browser its own profile directory without a literal path in the registration.
+The flag refuses to start on a basename containing `..` or a path separator,
+on a basename combined with an explicit `--user-data-dir` in the server argv,
+on a relative $XDG_CACHE_HOME, and when `~` cannot resolve (HOME unset) —
+mirroring the XDG semantics of scripts/lib/scratch-root.sh. With the flag
+absent the child argv is exactly what it was before.
 
 Sits on the transport between Claude Code and the server and rewrites the text of
 every `tools/call` result through the SAME `redact_text` the agent-browser Bash
@@ -94,13 +104,58 @@ def refuse_start(reason: str) -> NoReturn:
 # ---------------------------------------------------------------------------
 # B1 -- argv
 # ---------------------------------------------------------------------------
-def parse_argv(argv: List[str]) -> List[str]:
+def usage(msg: str) -> NoReturn:
+    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
+
+
+def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]:
+    """Resolve `--user-data-dir-name <basename>` to an absolute dir under the cache root.
+
+    XDG semantics mirror scripts/lib/scratch-root.sh: $XDG_CACHE_HOME wins when
+    set, otherwise `~/.cache` via expanduser; a relative root or an
+    unresolvable `~` refuses rather than resolving against the caller's CWD.
+    Returns None when the flag is absent (the child argv stays untouched).
+    """
+    name: Optional[str] = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--user-data-dir-name":
+            if i + 1 >= len(args):
+                refuse_start("--user-data-dir-name needs a basename argument")
+            name = args[i + 1]
+            i += 2
+        elif a.startswith("--user-data-dir-name="):
+            name = a.split("=", 1)[1]
+            i += 1
+        else:
+            refuse_start(f"unrecognised proxy flag before `--`: {a}")
+    if name is None:
+        return None
+    if not name or name == "." or ".." in name:
+        refuse_start("--user-data-dir-name must be a basename (empty, '.' or '..' refuses)")
+    if "/" in name or "\\" in name:
+        refuse_start("--user-data-dir-name must be a basename (a path separator refuses)")
+    xdg = env.get("XDG_CACHE_HOME")
+    if xdg:
+        root = xdg
+    else:
+        home = env.get("HOME")
+        if not home:
+            refuse_start("cannot resolve the profile root: neither XDG_CACHE_HOME nor HOME is set")
+        root = os.path.join(os.path.expanduser("~"), ".cache")
+    if not os.path.isabs(root):
+        refuse_start("the profile root is not absolute (a relative XDG_CACHE_HOME is ignored per the XDG spec)")
+    return os.path.join(root, name)
+
+
+def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str]]:
     if "--" not in argv:
-        refuse_start("usage: playwright-mcp-redact-proxy.py -- <server argv...> (no `--` separator)")
+        usage("no `--` separator")
     server = argv[argv.index("--") + 1 :]
     if not server:
-        refuse_start("usage: playwright-mcp-redact-proxy.py -- <server argv...> (empty server argv)")
-    return server
+        usage("empty server argv")
+    return server, profile_dir_from_args(argv[: argv.index("--")], dict(os.environ))
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +240,9 @@ def caps_open_sinks(values: List[str]) -> bool:
     return False
 
 
-def refuse_argv_and_env(server: List[str], env: Dict[str, str]) -> None:
+def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict[str, str]) -> None:
+    if profile_dir is not None and (argv_values(server, "--user-data-dir") or "--user-data-dir" in server):
+        refuse_start("--user-data-dir-name cannot be combined with an explicit --user-data-dir in the server argv")
     if "--save-session" in server:
         refuse_start("--save-session writes every response to a session.md on disk")
     if argv_values(server, "--port") or "--port" in server or env.get("PLAYWRIGHT_MCP_PORT"):
@@ -290,7 +347,7 @@ def json_strings(node: Any) -> List[str]:
 
 
 class Proxy:
-    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str]) -> None:
+    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str], profile_dir: Optional[str] = None) -> None:
         self.redact_text, self.looks_like_a11y_tree, self.max_input_bytes, self.redacted = redactor
         self.pending: Dict[str, Tuple[Any, str, str]] = {}  # id_key -> (raw id, method, tool name)
         self.out = sys.stdout.buffer
@@ -305,7 +362,10 @@ class Proxy:
         # Installed BEFORE the spawn, so a signal in between still ends the group.
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
-        argv = list(server) + ["--snapshot-mode", "none"]
+        argv = list(server)
+        if profile_dir is not None and not any(a == "--user-data-dir" or a.startswith("--user-data-dir=") for a in argv):
+            argv.append("--user-data-dir=" + profile_dir)
+        argv += ["--snapshot-mode", "none"]
         self.child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, bufsize=0, start_new_session=True)
         self.pgid = os.getpgid(self.child.pid)
         log(f"child pgid {self.pgid}")
@@ -672,11 +732,11 @@ class Proxy:
 
 
 def main(argv: List[str]) -> int:
-    server = parse_argv(argv)
+    server, profile_dir = parse_argv(argv)
     redactor = load_redactor()
     self_test(redactor[0], redactor[1], redactor[3])
-    refuse_argv_and_env(server, dict(os.environ))
-    Proxy(server, redactor).run()
+    refuse_argv_and_env(server, profile_dir, dict(os.environ))
+    Proxy(server, redactor, profile_dir).run()
 
 
 if __name__ == "__main__":

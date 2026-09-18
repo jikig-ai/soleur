@@ -466,7 +466,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      authorization pin that `test/migration-rpc-grants.test.ts` enforces.
    - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close`
      → Bash via `gh` CLI
-   - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
+   - End-to-end UI flow → Playwright MCP (`mcp__plugin_soleur_playwright__*`)
    - Cloudflare DNS / WAF / Workers → `mcp__plugin_soleur_cloudflare__*`
    - Live Stripe state → `mcp__plugin_soleur_stripe__*`
 

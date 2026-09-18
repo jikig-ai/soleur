@@ -3,7 +3,7 @@
 Rare, lazy-loaded reference. The everyday probe path lives in
 [SKILL.md](../SKILL.md); read this only when actually driving a widen.
 
-The widen is a **Playwright MCP** (`mcp__playwright__*`) operation, not
+The widen is a **Playwright MCP** (`mcp__plugin_soleur_playwright__*`) operation, not
 `soleur:agent-browser` (Vercel's CLI daemon — the surface that wedges on a stale
 socket, per #6755). Editing a token's permissions does **not** rotate the token
 value (learning `2026-03-21-cloudflare-api-token-permission-editing.md`, #992),
@@ -53,7 +53,10 @@ the token being edited. While the browser session is live:
   does not see MCP tool calls, and an MCP result cannot be piped through the
   redactor; a registration routed through `playwright-mcp-redact-proxy.py` has
   every tool result rewritten through that redactor in flight, and one not
-  routed through it is not covered by anything at runtime (#7980). For
+  routed through it is not covered by anything at runtime (#7980). Prefer the
+  plugin-registered `mcp__plugin_soleur_playwright__*` server — already
+  wrapped, so call its `browser_snapshot` bare; use the file form on any other
+  registration. For
   navigation: Use the `filename:` + redactor + shred form, with a filename
   inside the working directory (the server denies paths outside it). If the
   server refuses `filename` with an error that starts `refused by

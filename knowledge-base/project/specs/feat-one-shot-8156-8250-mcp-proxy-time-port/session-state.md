@@ -29,3 +29,12 @@
 - **CPO verdict: APPROVE-WITH-CONDITIONS** — (1) Phase-0 probe is a hard gate before any manifest edit; an engines-floor bump returns to CPO. (2) Degradation prose must not assume the plugin server exists (file-form fallback on `/mcp` toggle-off / precondition failure). (3) AC9 Option-C deferral issue ships in the same PR.
 - **user-impact-reviewer verdict: SIGN-OFF-WITH-CONDITIONS** — Finding 1 (blocking): orphan-on-own-profile (SIGKILLed session leaks the plugin's playwright-mcp child → SingletonLock contention on the soleur profile) was uncovered → bound into plan as Phase-0 probe item 5 + `failure_modes` row + playbook note. Finding 2 (minor): `disclosed_as` reconciled to docs-claimed-on-merge. Findings 3–4 covered.
 - Plan amendments committed at `52dd7718c`.
+
+## Work Phase (/work — resumed 2026-09-18)
+- Rebased onto origin/main pre-Phase-1 (legal-doc plan, Phase 0.5 check 6).
+- Phase 0 probe on Claude Code **2.1.139 exactly** (mise store install): plugin `.mcp.json` registers `plugin:soleur:playwright`, `${CLAUDE_PLUGIN_ROOT}` expands, user+plugin registrations coexist — floor holds, no engines bump. Orphan-reaping measured end-to-end: playwright-mcp self-terminates on stdio EOF; Chrome reaped even on child SIGKILL; stale SingletonLock stolen on pid-liveness. Live orphan-on-own-profile shape refuted → user-impact Finding 1 discharged by measurement.
+- T1.1–T1.4 done: `--user-data-dir-name` flag + refusals (63 mutants), `plugins/soleur/.mcp.json`, Guard-3 rows, SKILL.md §"Wrapping the server" rewrite.
+- T2 done: 13 literals swept; survivors pinned at agent-browser/SKILL.md:65,416 (customer-own-registration scope); preference clauses outside S2 canonical; `EXPECTED_GATE_REFS` unchanged (G3 deduped identity).
+- T3 done: ADR-213 addendum, model.c4 + regen, PA-8 §(g) re-append + PA-31 §(g) assessment, CLO audit §Addendum — #8156, compliance-posture in-cell correction + comment, Option-C issue **#8286** filed.
+- Gates green: proxy suite 316/316 (63 mutants); credential-path lint 41/41 + full scan; plugin-root-anchoring 26/26; codex+devin-plugin 14 pass; c4 gates 4/4; cron-ux-audit 30/30; components+skill-security-scan 1353; lint-legal-registers 11/11; adr-frontmatter 2/2; lint-workflow-install-sites OK.
+- AC1–AC11 verified; AC12 pending PR body.
