@@ -5369,7 +5369,7 @@
 - [tasks](project/specs/feat-harness-l3-phase-tool-scoping/tasks.md)
 - [Harness semantic model-tier map](project/specs/feat-harness-model-map/spec.md)
 - [Cross-harness parity census for skill invocation forms](project/specs/feat-harness-parity-gate-8299/spec.md)
-- [Tasks — cross-harness negative-space invocation gate](project/specs/feat-harness-parity-gate-8299/tasks.md)
+- [Tasks — harness-parity census (allowlist over the name index)](project/specs/feat-harness-parity-gate-8299/tasks.md)
 - [Headless Mode for Repeatable Workflows](project/specs/feat-headless-mode/spec.md)
 - [Tasks: Headless Mode for Repeatable Workflows](project/specs/feat-headless-mode/tasks.md)
 - [Headroom token-compression evaluation — decision record (no-build)](project/specs/feat-headroom-token-compression-eval/spec.md)

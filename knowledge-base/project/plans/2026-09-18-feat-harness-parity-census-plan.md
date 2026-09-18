@@ -1250,8 +1250,8 @@ population, whole-tree) are retained.
 
 ## v3 Non-Goals
 
-- **NG-M** bare mechanism nouns (82 / 29) — follow-up issue.
-- **NG-P** other agent-read docs (agents 35 / 15, references 44 / 19) — follow-up P1 issue with the
+- **NG-M** bare mechanism nouns (82 / 29) — **#8318**.
+- **NG-P** other agent-read docs (agents 35 / 15, references 44 / 19) — **#8317** (P1) with the
   glob lines to add, the human-read exclusions, and the INSTRUCTIONS.md region note.
 - **NG-U** gating `soleur:<unknown>` — reported and diffed only.
 - v2's NG1–NG6 stand (`#7453`; `#8306`; `#8307`; `UNION` kept; no `AGENTS.rules.md` rule — W11
