@@ -480,7 +480,7 @@ is exercised and the arms it protects actually ran.
 | `plugins/soleur/test/gitleaks-merge-commit.test.sh` | 0 | 27/27, 0 skipped |
 | `plugins/soleur/test/notice-frontmatter.test.sh` | 0 | all executed pass (2 skipped, unrelated to gitleaks) |
 | `plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh` | 0 | 43 pass / 0 fail / 0 skipped |
-| `apps/web-platform/infra/registry-userdata-budget.test.sh` | 0 | 16 checks / 0 failed |
+| `apps/web-platform/infra/registry-userdata-budget.test.sh` | 0 | 16 checks / 0 failed — the `bc`→`awk` fix landed on main via #8272 first; this PR's identical copy yielded at rebase |
 
 Plus `apps/web-platform` `kb-share-preview.test.ts` on Node 26: 25/25 (FR3/#8261).
 

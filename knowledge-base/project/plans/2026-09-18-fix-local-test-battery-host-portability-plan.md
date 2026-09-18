@@ -375,6 +375,9 @@ check in AC9.
 
 3.6 **`bc` (registry-userdata-budget).** Replace `| paste -sd+ - | bc 2>/dev/null || echo 0` with
 `| awk '{s+=$1} END{print s+0}'`.
+*Landed on `main` by #8272 first (the #7960 sibling), semantically identical; this branch's copy
+was dropped at rebase in favour of the merged one, so the file is no longer in this PR's diff.
+AC10 is still satisfied — by main.*
 
 ### Phase 4 — web-platform vitest on Node 22 and 26 (#8261; P5)
 
@@ -434,7 +437,7 @@ Update that file's `## Status` row "Phase 1 onward" to "precondition met <date>,
 - `plugins/soleur/test/gitleaks-rules.test.sh`: runnability probe; `_skip_arm`
 - `plugins/soleur/test/gitleaks-merge-commit.test.sh`: runnability probe; `_skip_arm`; T4/P1/`arm_dash_m` RuleID oracle
 - `plugins/soleur/test/_base-notice-frontmatter.test.sh`, `plugins/soleur/test/notice-frontmatter.test.sh`: TS-cron-5 `$EPOCHREALTIME`
-- `apps/web-platform/infra/registry-userdata-budget.test.sh`: awk sum
+- ~~`apps/web-platform/infra/registry-userdata-budget.test.sh`: awk sum~~ — landed via #8272 on main; not in this diff
 - `apps/web-platform/vitest.config.ts`: guarded `execArgv`
 - `apps/web-platform/test/kb-share-preview.test.ts`: `afterEach` destroy
 - `.github/workflows/ci.yml`, `.github/workflows/main-health-monitor.yml`: comments describing the gitleaks probe/abort behaviour
