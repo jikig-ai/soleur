@@ -668,3 +668,54 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(isDeclaredTransition("not-a-skill", "work")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Derived-view parity (#8302).
+//
+// DECLARED_TRANSITIONS is canonical and bundled, because the plugin ships as
+// ./plugins/soleur and does not carry .claude/ — a runtime read there returns
+// nothing on a customer install. But the offline transition classifier is a bash
+// script and cannot read a TypeScript const, so it reads a DERIVED JSON view.
+// Two copies means drift, so the drift is what gets pinned.
+//
+// The view lives in its own file rather than as a `transitions` key inside
+// .claude/phase-surface-map.json: that file is deep-equal'd against the bundled
+// web copy by apps/web-platform/test/phase-surface-map-parity.test.ts, so adding
+// a key there would force FSM edges through the web bundle, which has no
+// consumer for them.
+// ---------------------------------------------------------------------------
+describe("declared-transitions derived view parity", () => {
+  const REPO_ROOT = resolve(PLUGIN_ROOT, "..", "..");
+  const VIEW_PATH = join(REPO_ROOT, ".claude", "workflow-transitions.json");
+
+  test("the derived view exists and is valid JSON", () => {
+    const raw = readFileSync(VIEW_PATH, "utf-8");
+    expect(() => JSON.parse(raw)).not.toThrow();
+  });
+
+  test("the derived view deep-equals the canonical const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as Record<string, unknown>;
+    delete view._comment;
+    // Round-trip the const through JSON so readonly/tuple types normalise to
+    // plain arrays for a structural compare.
+    const canonical = JSON.parse(JSON.stringify({ transitions: DECLARED_TRANSITIONS }));
+    expect(view).toEqual(canonical);
+  });
+
+  // Direction matters: a view carrying an edge the const does not is just as
+  // wrong as one missing an edge, and only an exact compare catches both. A
+  // subset assertion would pass on a view that silently permits plan -> ship.
+  test("the view declares no edge absent from the const", () => {
+    const view = JSON.parse(readFileSync(VIEW_PATH, "utf-8")) as {
+      transitions: Record<string, string[]>;
+    };
+    for (const [from, tos] of Object.entries(view.transitions)) {
+      for (const to of tos) {
+        expect(
+          isDeclaredTransition(from, to),
+          `view declares ${from} -> ${to}, which the canonical const does not`,
+        ).toBe(true);
+      }
+    }
+  });
+});

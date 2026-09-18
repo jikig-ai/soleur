@@ -1,0 +1,30 @@
+{
+  "_comment": "DERIVED VIEW -- do not hand-edit. Canonical source is DECLARED_TRANSITIONS in plugins/soleur/lib/workflow-fidelity.ts; this file is generated from it and pinned by the `declared-transitions derived view parity` block in plugins/soleur/test/workflow-fidelity.test.ts. It exists because the offline transition classifier (scripts/classify-workflow-transitions.sh) is bash and cannot read a TypeScript const, while the const cannot be replaced by this file: the plugin ships as ./plugins/soleur and does not carry .claude/, so a runtime read returns nothing on a customer install. Kept OUT of .claude/phase-surface-map.json deliberately -- that file is deep-equal to the bundled web copy (apps/web-platform/test/phase-surface-map-parity.test.ts), so a key added there would push FSM edges through the web bundle, which has no consumer for them. Regenerate: see ADR-225.",
+  "transitions": {
+    "brainstorm": [
+      "plan",
+      "one-shot"
+    ],
+    "plan": [
+      "work"
+    ],
+    "work": [
+      "review",
+      "compound",
+      "ship",
+      "plan"
+    ],
+    "review": [
+      "compound",
+      "work"
+    ],
+    "compound": [
+      "ship"
+    ],
+    "ship": [
+      "postmerge",
+      "work"
+    ],
+    "postmerge": []
+  }
+}
