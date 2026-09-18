@@ -2345,7 +2345,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // missing file rather than on the property. It was replaced (old command kept in a dated
   // superseded note beneath the block), which is why the declaration is new although the plan
   // predates it.
-  const BASELINE_DECLARED_PROBES = 12;
+  // 13th declaration (2026-09-17): knowledge-base/project/plans/
+  // 2026-09-17-feat-upstream-devin-cloud-parity-asks-plan.md — the #8160
+  // drift-watcher liveness probe runs `gh run list` on this repo's Actions,
+  // which needs GH_TOKEN read access; unauthenticated reads cannot see run
+  // state. Declaration is genuine (the probe executes post-merge), so the
+  // baseline moves rather than the plan's line being deleted.
+  const BASELINE_DECLARED_PROBES = 13;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

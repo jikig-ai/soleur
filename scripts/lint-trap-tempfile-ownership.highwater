@@ -1,4 +1,8 @@
-78  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+79  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
+# mktemp -d output directory IS the deliverable (email/bug bodies the operator
+# sends after the run), so it must outlive the process by design; annotated
+# `# lint-trap-ownership: ok` at the site.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.
