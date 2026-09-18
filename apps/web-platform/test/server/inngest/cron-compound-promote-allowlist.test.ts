@@ -466,3 +466,20 @@ describe("Guard 4 — the post-apply shrink floor", () => {
     expect(between).toMatch(/return \{ kind: "refused", reason: "corpus-shrink-refused" \}/);
   });
 });
+
+describe("Guard 5 — the bot must not synthesize green for the corpus linters", () => {
+  // `test` carries lint-agents-rule-budget / -enforcement-tags /
+  // -migrated-rule-ids, all content-scoped over AGENTS.rules.md — the surface
+  // this cron writes. A synthesized green `test` fabricates the one verdict
+  // that can refuse a bad rule edit (#8203 doctrine, scripts/required-checks.txt).
+  it("compound-promote's synthetic check names exclude `test`", () => {
+    const src = readFileSync(SRC, "utf-8")
+      .split("\n").map((l: string) => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    const call = src.indexOf("syntheticChecks: {");
+    expect(call).toBeGreaterThan(-1);
+    const block = src.slice(call, src.indexOf("}", call));
+    // Anchored on the filter CALL, which a comment cannot produce.
+    expect(block).toMatch(/names: SYNTHETIC_CHECK_NAMES\.filter\(\(n\) => n !== "test"\)/);
+    expect(block).not.toMatch(/names: SYNTHETIC_CHECK_NAMES,/);
+  });
+});

@@ -1252,7 +1252,16 @@ export async function cronCompoundPromoteHandler({
           prDraft: true,
           prLabels: ["self-healing/auto"],
           syntheticChecks: {
-            names: SYNTHETIC_CHECK_NAMES,
+            // `test` is DELIBERATELY EXCLUDED for this cron — the #8203
+            // doctrine applied one cron over. `test` carries the corpus
+            // linters (lint-agents-rule-budget, lint-agents-enforcement-tags,
+            // lint-migrated-rule-ids, lint-agents-compound-sync), which are
+            // CONTENT-SCOPED over AGENTS.rules.md — the surface this cron
+            // writes. Synthesizing green for it fabricates the one verdict
+            // that can refuse a bad rule edit. The App-token push triggers
+            // real CI (#8166), so the context is EARNED by the real run; a
+            // draft PR with mergeMode "none" loses nothing by waiting on it.
+            names: SYNTHETIC_CHECK_NAMES.filter((n) => n !== "test"),
             summary: "self-healing/auto promotion — operator review required",
           },
           mergeMode: "none",
