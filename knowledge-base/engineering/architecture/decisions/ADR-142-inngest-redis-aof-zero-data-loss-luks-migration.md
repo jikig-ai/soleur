@@ -254,3 +254,76 @@ This addendum lands in the same merge as the apparatus and the gates — before 
 that could act on the reading. A record written after a destructive action would be a
 justification; written before, it is a precondition that the gate's twenty predicates enforce.
 `tests/scripts/lib/inngest-host-dark-gate.sh` is where those pins are executable.
+
+## Amendment — 2026-09-18 (#6894): the preserve-and-copy route is BUILT, and it is additive rather than in-place
+
+This decision said what must happen ("provision a second volume, quiesce, copy bytes, swap the
+mount") and left the shape of it open. The apparatus that implements it made four choices the
+decision did not dictate. They are recorded here because each one closes a failure this estate has
+already paid for, and because a future reader comparing the code to this ADR would otherwise read
+them as drift.
+
+### 1. ADDITIVE, not in-place: the plaintext volume survives the swap
+
+The second volume (`hcloud_volume.inngest_redis_luks`) is created and attached ALONGSIDE the live
+one, and the live one is neither destroyed nor detached by the cutover. The swap is a mount move,
+so the rollback is a mount move plus a reverse copy — not a restore from a snapshot taken at an
+unknown moment.
+
+The cost is a **plaintext copy of the AOF remaining attached** after the cutover, which is the exact
+thing this ADR exists to retire. That is deliberate and bounded: it is the rollback backstop for the
+window in which a rollback is plausible, it is tracked with an expiry in **#8285**, and the store
+actually being on the wrong volume is DETECTED (`logtail_exploration_alert.inngest_luks_wrong_volume`,
+below) rather than assumed.
+
+### 2. The authority is a POINTER in Doppler, never a signature on a device
+
+`INNGEST_LUKS_ACTIVE_VOLUME_ID` on `soleur-inngest/prd` names the volume that holds the store. The
+boot resolver reads it first and treats a LUKS signature only as corroboration; a pointer naming an
+absent device REFUSES rather than falling through to the plaintext arm.
+
+The reason is measured, not stylistic: a root-disk marker does not survive a host replace (#7228 —
+the flip's done-owner marker, and the stranding it caused), and an unprivileged `blkid -p` returns
+rc 2 on a LUKS device, which is the SAME answer it gives for "no signature at all". A design that
+authorises by signature therefore cannot tell "encrypted" from "could not look", and the wrong
+answer wipes user data. Doppler outlives the host; that is the whole argument.
+
+### 3. The trigger is a SEPARATE flag from the flip's, with its own FSM
+
+`INNGEST_LUKS_CUTOVER` (armed → copying → copied → swapped → done, plus rollback → rolled-back and a
+terminal aborted), polled by `inngest-luks-cutover.service` every 30s. It is NOT
+`INNGEST_CUTOVER_FLIP`, which owns the one authorized `FLUSHALL`. A copy that preserves data does not
+belong behind the flag that destroys it: sharing them would mean one terminal value authorising two
+opposite actions, and the wrong one is unrecoverable.
+
+Consequence for Fork L, recorded because it is easy to undo by accident: the copy is the WHOLE mount,
+not `redis/`. The flip FSM's flush latch lives at `/mnt/data/inngest-cutover/flip-done.latch`, and a
+swap onto a device without it reads, to that latch, as a recut — which would re-open a second
+`FLUSHALL` against a populated store. T2 names that path explicitly.
+
+### 4. The copy is PROVEN equal before the swap, and again before the rollback
+
+T2 compares listing, per-file sha256 and total bytes over a frozen source, and runs a read-only
+`redis-check-aof` on the copy. Each reading's READABILITY is a separate predicate from its
+comparison — an unreadable tree prints a sentinel rather than an empty listing that would compare
+equal to another empty listing. The rollback runs the same machinery with the roles reversed, so
+going back is exactly as data-safe as going forward, including writes taken after the cutover.
+
+### What this amendment does NOT change
+
+The decision itself. `-replace` of `hcloud_volume.inngest_redis` remains forbidden while the store is
+populated; the 2026-09-03 addendum's bounding (an empty, pinned, newest-row reading hands the world
+to ADR-199) is untouched. This amendment describes the route this ADR always required, now that it
+exists.
+
+### Where it lives
+
+| Element | Path |
+| --- | --- |
+| On-host FSM | `apps/web-platform/infra/inngest-luks-cutover.sh` (+ `.service`, `.timer`) |
+| Its suite | `apps/web-platform/infra/inngest-luks-cutover.test.sh` |
+| Boot resolver (pointer-authoritative) | `apps/web-platform/infra/cloud-init-inngest.yml` — both the first-boot runcmd stage and `/usr/local/bin/inngest-luks-open.sh`, which is a `write_files` payload embedded in that same file rather than a file in this repo |
+| Operator verbs | `op=luks-cutover` / `op=luks-rollback` in `.github/workflows/cutover-inngest.yml` + `scripts/cutover-inngest.sh` |
+| Wrong-volume alert | `apps/web-platform/infra/betterstack-logs-alerts.tf` (ships paused; armed post-cutover) |
+| Runbook | `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` |
+| Backstop retirement | #8285 (expires 2026-10-22) |

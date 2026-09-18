@@ -1787,6 +1787,7 @@ guard-test
 guard-testing
 guard-vacuity
 guard-window
+guarda
 guardrail
 guardrails
 guards
@@ -1899,6 +1900,7 @@ image-bake
 image-context
 image-export
 image-generation
+image-pin
 immutability
 immutable-infra
 implementation-patterns
@@ -2131,6 +2133,7 @@ lint-rule-ids
 lint-symmetry
 linter
 linting
+lints
 liquid
 list
 live
@@ -3535,6 +3538,7 @@ sign-out
 signal-choice
 signal-drift
 signal-to-noise
+signals
 signed
 signed-url
 signup-outage

@@ -38,6 +38,20 @@ Live standing alarms over this source:
   self-health via the `logs_alert` arm of `reconcile-live-heartbeats.ts`. Runbook:
   [`monitor-send-failed-alert.md`](./monitor-send-failed-alert.md). Readback (never
   `--grep PRIORITY=2`): the runbook's step-1 SQL with `JSONExtractString(raw,'PRIORITY') = '2'`.
+- **`logtail_exploration_alert.inngest_luks_wrong_volume`** (#6894 / ADR-142, evaluated every 300 s
+  over a 5400 s window) — `soleur-inngest-luks-wrong-volume-prd`. Pages when the dedicated Inngest
+  host's hourly `SOLEUR_INNGEST_SERVER_PROBE` row reports `/mnt/data` backed by a by-id alias that
+  is **not** the encrypted volume's — i.e. Redis is writing unencrypted again after the cutover
+  (an on-host rollback, a reboot that took the pre-cutover arm, or a replace whose first boot
+  resolved the plaintext volume). Nothing else notices: the scheduler is healthy in all three.
+  **Ships PAUSED** and is armed by `-var inngest_luks_cutover_complete=true` in the apply that
+  follows a confirmed `op=luks-cutover` — before the cutover the plaintext alias is the CORRECT
+  value, so an armed rule would page continuously. The watched alias is built from
+  `hcloud_volume.inngest_redis_luks.id`, never a literal. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` (6 mutation rows).
+  Runbook: [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md). Readback:
+  `--grep SOLEUR_INNGEST_SERVER_PROBE` and read `data_mount_devid` on the `host_role=dedicated` row.
 - **`scheduled-zot-restart-loop.yml`** (#6291, every 30 min) — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
