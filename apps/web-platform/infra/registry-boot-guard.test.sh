@@ -453,9 +453,11 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-# 88 before #7500; this PR adds 12 (the two-copy drift check, the order pins and the
-# degrade/tier-tag assertions). Measured, not tallied by hand.
-MIN_ASSERTIONS=104
+# 88 before #7500; #7500 added 12 (the two-copy drift check, the order pins and the degrade/tier-tag
+# assertions); #7960 adds 1 (the `err_redact_rev=` field-presence row). Measured, not tallied by
+# hand: the suite runs 105, and leaving the floor at 104 left #7960's own assertion deletable at
+# green -- exactly the slack this comment warns about.
+MIN_ASSERTIONS=105
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

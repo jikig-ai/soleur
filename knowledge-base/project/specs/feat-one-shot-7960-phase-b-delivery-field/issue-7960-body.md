@@ -6,6 +6,8 @@ Delivery watch for **#7500 Phase B** — producer-side redaction of `zot_last_er
 
 #7500's decision is made and recorded (ADR-211), and both control layers are implemented. But the **producer half is inert until the next `registry-host-replace`** — the registry host is cloud-init-only (ADR-096), so merging applies nothing to it, and nothing in that PR schedules a replace. Until one fires, the sink-side scrub is the only control in force.
 
+> **Superseded 2026-09-18 (#7960):** a `registry-host-replace` DID fire on 2026-09-17T11:21Z, so the producer half is believed in force on the current host (272 tier-4 rows on boot `78111e0e…`, 0 carrying header structure, 0 `suppressed`). It is **not provable** until `err_redact_rev` reaches the host — which is the whole reason this issue is still open. Read the paragraph above as the state at adoption, not as the state today.
+
 That is a legitimate state, not a defect. This issue exists so the interval is *watched* rather than assumed, because the failure mode for an inert change is silence: it never arrives, and nothing notices.
 
 ## What the probe grades

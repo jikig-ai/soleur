@@ -140,18 +140,25 @@ trusted region (right after `zot_last_err_src=`, ahead of the free-text `zot_las
 
 - **Contract.** An integer revision of the `zot_last_err` redaction gate (the tier gate plus per-line
   `redact()`). **What is actually consumed today is PRESENCE, not order:** every reader tests
-  `err_redact_rev=[1-9][0-9]*` and nothing compares the value to anything, so `≥ 1` means "the
-  Phase-B gate is present" and that is the whole of the enforced contract. The value is reserved
+  `err_redact_rev=[1-9][0-9]*` and nothing compares the value to anything, so `≥ 1` means the emitted row came from a
+  producer template that carried the token — which is *evidence for*, not proof of, the gate being
+  present. The producer's own comment states the obligation that makes the two equivalent ("never
+  keep the token while removing the gate"), and CI is what binds them: the heartbeat suite asserts
+  the gate (G1-s) and the token (G2-s/G2-f) in the same run, so a build that removed the gate and
+  kept the token cannot go green. That pairing, not the field, is the guarantee. The value is reserved
   for ordering: bump it when the gate changes, never decrement or reuse, never keep the token
   while removing the gate — but that reservation has **no consumer and no tripwire**, so a future
   probe that keys on `rev >= 2` MUST land its own gate-hash → revision tripwire in the same change,
   or it will read `rev=1` from a host already running the newer gate and sit at CANNOT ESTABLISH
   forever. (A hash tripwire was considered and cut here: with no value comparison there is nothing
   for it to protect.) It is a literal, not a `$VAR`, because the heartbeat runs `set -u` — a missing
-  assignment would kill the row before `LINE` is built, taking all 26 other telemetry fields dark.
-- **Accretion trigger.** This is the SECOND feature-scoped delivery token on this row after
-  `SOLEUR_ZOT_LOG_BOOT` (#7444). A THIRD is the signal to stop adding per-feature tokens and
-  generalize to one monotonic `cloudinit_rev` that every future probe can read.
+  assignment would kill the row before `LINE` is built, taking the other 28 telemetry fields on that
+  row dark (29 `key=` fields total, measured).
+- **Accretion trigger.** This is the FIRST feature-scoped delivery token on the `SOLEUR_ZOT_DISK`
+  row. (`SOLEUR_ZOT_LOG_BOOT` from #7444 is a *separate marker line* the log shipper emits, not a
+  field on this row — so it is prior art for the technique, not a second token here.) A SECOND
+  token on this row is the signal to stop adding per-feature fields and generalize to one monotonic
+  `cloudinit_rev` every future probe can read.
 - **Authoritative verdicts need proof, never drift.** The probe exits 0 (closes the tracker) or 1
   (public FAIL) only when a row on the newest real boot carries `err_redact_rev` ≥ 1 — or a tier-4
   `suppressed` row, kept as secondary corroboration — read from the trusted region of an
@@ -287,10 +294,19 @@ Art. 30 register cites it:
   rules; ingress is intra-`10.0.1.0/24` plus a Cloudflare tunnel. Any change admitting public
   ingress raises the severity of this decision **and** converts `clientIP` into Art. 4(1)
   personal data on a path this ADR explicitly does not redact.
+- **A #7960 PASS grades the TIER-4 GATE, not all of Layer 1 (2026-09-18).** The probe counts and
+  grades only tier-4 rows (`fallback`/`suppressed`), because tier 4 is the tier the gate changes.
+  Per-line `redact()` at tiers 1-3 — the other half of Layer 1, which keeps `user-agent`, `host` and
+  `range` verbatim by allowlist — is never read from the warehouse in either direction. It is
+  covered pre-merge by the producer suite (G1-b, G1-c) and at runtime by the Layer 2 sink scrub on
+  the public egress. The PASS message says which half it graded; this bullet says why.
 - **After the #7960 PASS, nothing re-grades the warehouse stream for regression (2026-09-18).**
   The sweeper skips an issue it closed itself with a PASS, so a later producer edit that broke the
   gate would not reopen #7960. What remains is the producer suite (pre-merge, on every edit to the
-  heartbeat) and the Layer 2 sink scrub on the public egress. Recorded as a known residual.
+  heartbeat) and the Layer 2 sink scrub on the public egress. **Boundary:** that suite is fixtured
+  against the CURRENT pinned zot rendering, so a zot image bump could change the header shape and
+  invalidate both the redaction and the fixtures in one change while staying green. Recorded as a
+  known residual.
 - A third-party/system-output publication surface remains ungoverned in general — no gate covers
   runtime publication of third-party output to a public artifact by agent-authored automation.
   Tracked separately; markdown/`@mention` injection from an attacker-chosen `User-Agent` is a

@@ -3,9 +3,11 @@
 #
 # WHY THIS IS A SOAK AND NOT A PRE-MERGE AC.
 #
-# Phase B lands in `cloud-init-registry.yml`. The registry host is cloud-init-only (ADR-096), so
-# merging applies NOTHING: the change is inert until the next `registry-host-replace`, and this
-# PR schedules no replace. A pre-merge AC asserting "the sample is redacted in the warehouse"
+# Phase B landed in `cloud-init-registry.yml`. The registry host is cloud-init-only (ADR-096), so
+# merging #7954 applied NOTHING: that change was inert until the next `registry-host-replace`, and
+# it scheduled none. (That is no longer true of every such change: since #7555/ADR-190,
+# `registry-host-replace-dispatch.yml` fires on a push to main that changes this template's
+# RENDERED bytes, so the PR delivering `err_redact_rev` triggers its own replace.) A pre-merge AC asserting "the sample is redacted in the warehouse"
 # would therefore be asserting a property of a host that does not yet run the code — which is
 # the un-runnable-AC class, not a gate.
 #
@@ -21,8 +23,10 @@
 #   1 = FAIL       delivery PROVEN and a tier-4 row on that boot carries header structure (R2)
 #   2 = TRANSIENT  delivery PROVEN but no tier-4 row on that boot yet (R1), or ANY
 #                  auth/query/envelope/decode failure
-#   3 = CANNOT ESTABLISH  the newest boot is not proven to run the Phase B producer (R4), or no
-#                  row carries a usable boot_id. Renders under its own sweeper heading.
+#   3 = CANNOT ESTABLISH  the newest boot is not proven to run the Phase B producer (R4); no row
+#                  carries a usable boot_id; or the grading pass produced no usable counts, which
+#                  is a PROBE DEFECT rather than an evidentiary state and says so in its message.
+#                  All three render under the sweeper's own CANNOT ESTABLISH heading.
 #
 # WHY PROOF, NEVER BOOT DRIFT. `exit 0` closes a credential-leak tracker and `exit 1` asserts on
 # a public issue that the redaction shipped and is broken; both need POSITIVE proof that the
@@ -48,7 +52,9 @@
 #
 # THREE GUARDS, each closing a way this probe could PASS while proving nothing:
 #
-#   1. SUBJECT-MUST-HAVE-RUN. Requires at least one row whose `zot_last_err_src=fallback` —
+#   1. SUBJECT-MUST-HAVE-RUN. Requires at least one tier-4 row — `zot_last_err_src=fallback` OR
+#      `suppressed`, because the gate re-tags a fully-withheld sample and a `fallback`-only
+#      selector is unsatisfiable exactly where the gate works best —
 #      i.e. tier 4 actually occurred in the window. Tier 4 is the ONLY tier the gate changes,
 #      so a window containing none makes "no header content" trivially true: every other tier
 #      is a matched diagnostic line that rarely carries a headers object anyway. Without this
@@ -102,7 +108,8 @@ if [[ ! -x "$QUERY" ]]; then
   exit 2
 fi
 
-# --limit IS NOT OPTIONAL. betterstack-query.sh defaults to LIMIT=100 (its :368), applied as an
+# --limit IS NOT OPTIONAL. betterstack-query.sh defaults to LIMIT=100 (its `LIMIT=100` default),
+# applied as an
 # inner `ORDER BY dt DESC LIMIT n`. The registry heartbeat is */5, i.e. 288 rows/24h, so the
 # default silently reads the newest ~8h20m while every message below says "$WINDOW". Every
 # sibling on this stream passes it explicitly (zot-fill-rate-7341.sh, zot-restart-loop-alarm.sh
@@ -193,14 +200,17 @@ fi
 # MIRRORS zot_newest_boot. Two invariants the previous hand-rolled form dropped, both of which
 # were false-CLOSE paths:
 #   * `[0-9a-fA-F-]+` rather than `[^ ]*` — a bare `[^ ]*` accepts any token.
-#   * `grep -v 'boot_id=unknown'` — `unknown` is the producer's /proc-unreadable DEFAULT
-#     (cloud-init-registry.yml: `[ -n "$BOOT_ID" ] || BOOT_ID=unknown`), not an identity.
-#     Accepting it scopes the grade to a pseudo-boot, so a /proc read failure alone -- on a row
-#     that carries the proof token -- could close the tracker. No attacker required.
+#   * `unknown` — the producer's /proc-unreadable DEFAULT (cloud-init-registry.yml:
+#     `[ -n "$BOOT_ID" ] || BOOT_ID=unknown`) — is not an identity. Accepting it would scope the
+#     grade to a pseudo-boot, so a /proc read failure alone, on a row carrying the proof token,
+#     could close the tracker; no attacker required. THE CHARACTER CLASS IS WHAT EXCLUDES IT:
+#     `u`, `n`, `k`, `w` are absent from `[0-9a-fA-F-]`, so `-oE` never emits `boot_id=unknown` in
+#     the first place. An earlier revision also piped through `grep -v 'boot_id=unknown'` and
+#     credited THAT with the exclusion; it could not fire (measured) and was deleted rather than
+#     left as a filter a reader would trust. Widening the class means restoring a real one.
 NEWEST_BOOT="$(printf '%s\n' "$DECODED" \
   | sed 's/ zot_last_err=.*//' \
   | grep -oE 'boot_id=[0-9a-fA-F-]+' \
-  | grep -v 'boot_id=unknown' \
   | tail -1 | cut -d= -f2)"
 
 # No boot_id anywhere in the decoded rows means delivery is UNMEASURABLE, and an unmeasurable
@@ -250,7 +260,9 @@ fi
 #      list of header NAMES does not match;
 #   2. a clientIP carrying an ADDRESS -- dotted IPv4, or two colons for IPv6 (`default` does not);
 #   3. a bare CREDENTIAL header (the producer's CRED_HDRS list) whose value is not `[REDACTED` or
-#      zot's `[******` mask -- survives a truncated or renamed `headers` wrapper. The trailing
+#      zot's asterisk mask (three or more, matching the sibling zot-log-channel-7440.sh's
+#      `\[(\*{3,}|REDACTED)`; POSIX awk has no intervals, so a three-asterisk prefix is the
+#      faithful port and a 3/4/5-asterisk mask does not post a public FAIL) -- survives a truncated or renamed `headers` wrapper. The trailing
 #      `\[` is REQUIRED and deliberate: zot renders header values as Go slices, so a real leak is
 #      `Cookie:[abc]`, while an unbracketed `authorization: denied` is prose. Measured: an
 #      unbracketed `cookie: sid=deadbeef` grades CLEAN here, as it did under the pre-#7960
@@ -258,14 +270,27 @@ fi
 #      FAIL on a delivered host.
 # A `suppressed` row whose tail is anything but `none` also counts: the gate is supposed to have
 # withheld that sample, so anything shipped under `suppressed` is a gate regression.
-# Written for POSIX awk (no interval expressions, no [[:classes:]]) so mawk and gawk agree.
+# Written for POSIX awk: no interval expressions, no [[:classes:]], no gawk extensions. VERIFIED
+# under gawk 5.4.1 in default, --posix and --traditional modes (the last two reject the gawk-only
+# constructs), which is a proxy for mawk, not mawk itself -- mawk is not installed on the authoring
+# host. The failure direction if a dialect silently declined to MATCH would be a false PASS, so the
+# integer guard below is what keeps a dialect ERROR (empty output) on the safe side.
 read -r PROOF_F PROOF_S TIER4_N LEAKY < <(printf '%s\n' "$DECODED" \
   | awk -v want="$NEWEST_BOOT" '
       BEGIN { f = 0; s = 0; t = 0; l = 0 }
       {
+        # The `: $0` fallback makes the WHOLE record the trusted head. Two things keep it
+        # unreachable for a non-producer row, and both are load-bearing: the envelope anchor above
+        # admits only the direct-POST producer envelope, and the @tsv encoding escapes an embedded
+        # newline to a literal backslash-n, so one warehouse row can never split into two awk
+        # records. A refactor that drops @tsv hands an attacker a fully-trusted synthetic head.
         i = index($0, " zot_last_err=")
         head = (i > 0) ? substr($0, 1, i - 1) : $0
         tail = (i > 0) ? substr($0, i + 14) : ""
+        # MIRRORS zot_scope_to_boot (deliberately stricter: the library uses a bare grep -F
+        # substring test). NOTE the asymmetry with NEWEST_BOOT above, which matches boot_id=
+        # unanchored: a row whose field is line-initial is selectable there and invisible here,
+        # which empties the evidence base and lands on R4 -- fail-safe, never a false close.
         if (!match(head, / boot_id=[0-9a-fA-F-]+/)) next
         b = substr(head, RSTART + 9, RLENGTH - 9)
         if (b != want) next
@@ -278,12 +303,12 @@ read -r PROOF_F PROOF_S TIER4_N LEAKY < <(printf '%s\n' "$DECODED" \
         if (head !~ /(^| )zot_last_err_src=fallback( |$)/) next
         t++
         lt = tolower(tail); leak = 0
-        if (lt ~ /headers[ \t]*[:=][ \t]*(map)?[[{][ \t]*[a-z0-9-]+[ \t]*:/) leak = 1
+        if (lt ~ /headers[ \t]*[:=][ \t]*(map)?[[{][ \t]*[a-z0-9_.-]+[ \t]*:/) leak = 1
         if (lt ~ /clientip[ \t]*[:=][ \t]*\[?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]*:[0-9a-f]*:)/) leak = 1
         rest = lt
         while (!leak && match(rest, /(^|[^a-z0-9-])(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)[ \t]*[:=][ \t]*\[/)) {
           rest = substr(rest, RSTART + RLENGTH)
-          if (rest !~ /^(redacted|\*\*\*\*\*\*)/) leak = 1
+          if (rest !~ /^(redacted|\*\*\*)/) leak = 1
         }
         if (leak) l++
       }
@@ -321,13 +346,14 @@ DELIVERY_PROVEN=0
 #   R4  no proof               -> 3  CANNOT ESTABLISH
 if [[ "$DELIVERY_PROVEN" -eq 0 ]]; then
   # R4: no proof -> CANNOT ESTABLISH
+  echo "zot-redact[#7960]: verdict=r4_unproven boot=$NEWEST_BOOT tier4=$TIER4_N leaking=$LEAKY" >&2
   echo "CANNOT ESTABLISH: boot $NEWEST_BOOT lacks err_redact_rev, and carries no" >&2
   echo "           zot_last_err_src=suppressed row, so it is NOT PROVEN to run the Phase B" >&2
   echo "           producer. ($TOTAL_ROWS row(s) in $WINDOW; $TIER4_N tier-4 row(s) on this boot," >&2
   echo "           $LEAKY graded as carrying header structure.) Refusing both to close the tracker" >&2
   echo "           and to assert the redaction is broken on a host this probe cannot identify." >&2
   echo "           EXPECTED until the registry-host-replace that delivers this field completes." >&2
-  echo "           Check the last successful run of registry-host-replace-dispatch.yml (and the" >&2
+  echo "           Check: gh run list --workflow=registry-host-replace-dispatch.yml --limit 5 (and the" >&2
   echo "           apply-web-platform-infra.yml run it dispatched): if one has completed since the" >&2
   echo "           field was merged, this reading means the field is NOT reaching the host --" >&2
   echo "           investigate now (is err_redact_rev in the newest rows' trusted region? did the" >&2
@@ -337,7 +363,8 @@ fi
 
 if [[ "$TIER4_N" -eq 0 ]]; then
   # R1: proof, T == 0 -> NOT YET (proven, ungraded)
-  echo "DELIVERY PROVEN ($PROOF_SRC) — no tier-4 row on boot $NEWEST_BOOT yet." >&2
+  echo "zot-redact[#7960]: verdict=r1_proven_ungraded proof=$PROOF_SRC boot=$NEWEST_BOOT tier4=0" >&2
+  echo "TRANSIENT: DELIVERY PROVEN ($PROOF_SRC) — no tier-4 row on boot $NEWEST_BOOT yet." >&2
   echo "           $TOTAL_ROWS SOLEUR_ZOT_DISK row(s) in $WINDOW, none at tier 4" >&2
   echo "           (zot_last_err_src=fallback|suppressed) on this boot. Tier 4 is the only tier" >&2
   echo "           the gate changes, so this window cannot grade it. Nothing to do unless this" >&2
@@ -347,14 +374,19 @@ fi
 
 if [[ "$LEAKY" -gt 0 ]]; then
   # R2: proof, T > 0, L > 0 -> FAIL
+  echo "zot-redact[#7960]: verdict=r2_fail proof=$PROOF_SRC boot=$NEWEST_BOOT tier4=$TIER4_N leaking=$LEAKY" >&2
   echo "FAIL: delivery proven ($PROOF_SRC) and $LEAKY of $TIER4_N tier-4 row(s)" >&2
   echo "      STILL carry header content on boot $NEWEST_BOOT: header structure (a header map," >&2
   echo "      an address-valued clientIP, an unmasked credential header) or a non-empty" >&2
-  echo "      suppressed sample. The redaction shipped and is not holding. This must not close." >&2
+  echo "      suppressed sample. A header map at tier 4 is a gate failure whether or not its values"  >&2
+  echo "      are masked, so this is not by itself proof that a credential egressed. This must not close." >&2
   exit 1
 fi
 
 # R3: proof, T > 0, L == 0 -> PASS
+echo "zot-redact[#7960]: verdict=r3_pass proof=$PROOF_SRC boot=$NEWEST_BOOT tier4=$TIER4_N leaking=0"
 echo "PASS: producer delivered (proof: $PROOF_SRC) — $TIER4_N tier-4 row(s) on boot $NEWEST_BOOT"
 echo "      in $WINDOW, none carrying header content."
+echo "      SCOPE: this grades the TIER-4 GATE half of ADR-211 Layer 1 -- the tier the gate changes."
+echo "      Per-line redact() at tiers 1-3 is covered pre-merge by the producer suite, not here."
 exit 0

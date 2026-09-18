@@ -165,6 +165,10 @@ fi
 # first revision did `grep -rcE ... "$DIR"/*.tf | grep -vE ':0$' | wc -l`, where the glob made
 # `-r` inert (subdirectories like modules/ were never scanned) and the count was of FILES — so
 # two assignments inside zot-registry.tf read as "exactly one".
+# SUMMED WITH awk, NOT bc (#7960): `bc` is absent on some developer hosts, and the previous
+# `paste -sd+ - | bc 2>/dev/null || echo 0` turned that absence into `decls=0` -- a FALSE RED on
+# "declared exactly once repo-wide" that looks exactly like the real divergence this check exists
+# to catch. awk is in the same coreutils-class dependency set the rest of this file already needs.
 decls=$(git -C "$REPO_ROOT" grep -chE '^[[:space:]]*registry_rationale_strip[[:space:]]*=' -- '*.tf' 2>/dev/null | awk '{ s += $1 } END { print s + 0 }')
 if [ "$decls" = "1" ]; then
   pass "registry_rationale_strip is declared exactly once repo-wide (in .tf)"

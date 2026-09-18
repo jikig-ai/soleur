@@ -198,7 +198,10 @@ expect "un-proven host still leaking -> CANNOT ESTABLISH (not FAIL)" 3 "$WORK/f4
   row  "2026-09-17 10:00:00" "$OLDBOOT" fallback "$COOKIE_TAIL"
   rowf "2026-09-17 12:00:00" unknown    fallback "$CLEAN_TAIL"
 } > "$WORK/f5"
-expect "boot_id=unknown is not a delivered identity -> not a PASS" 3 "$WORK/f5" "lacks err_redact_rev"
+# The marker pins the SELECTED BOOT, not R4's generic text: with only "lacks err_redact_rev" this
+# case passed even when the unknown-exclusion was deleted, because the probe then fell to R4 for a
+# different reason. Naming $OLDBOOT asserts the newest REAL boot was graded.
+expect "boot_id=unknown is not a delivered identity -> not a PASS" 3 "$WORK/f5" "boot $OLDBOOT lacks err_redact_rev"
 
 # ── Case 6: no boot_id at all -> CANNOT ESTABLISH (exit 3), never a pass, never NOT-YET. ───
 printf '{"dt":"2026-09-17 10:00:00","raw":"{\\"message\\":\\"SOLEUR_ZOT_DISK pcent=8 zot_last_err_src=fallback host=soleur-registry zot_last_err=%s\\"}"}\n' "$CLEAN_TAIL" > "$WORK/f6"
@@ -329,7 +332,7 @@ rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:error invalid headers: mal
 expect "N11 prose 'invalid headers: …' is not a leak" 0 "$WORK/n11" "(proof: err_redact_rev)"
 
 # N12 — a `suppressed` row must carry `none`; anything else is a gate regression.
-rowf "2026-09-18 12:00:00" "$NEWBOOT" suppressed "{level:info,headers:{Cookie:[x]}}" > "$WORK/n12"
+rowf "2026-09-18 12:00:00" "$NEWBOOT" suppressed "{level:info,headers:{Cookie:[x]}} CANARY7960" > "$WORK/n12"
 expect "N12 a suppressed row with a non-none tail is a leak" 1 "$WORK/n12" "STILL carry header content"
 
 # Leak side — each pattern branch pinned independently.
@@ -342,6 +345,29 @@ expect "N15 the header map is matched case-insensitively" 1 "$WORK/n15" "STILL c
 rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info Cookie:[abc] CANARY7960" > "$WORK/n16"
 expect "N16 a bare credential header with no wrapper is a leak" 1 "$WORK/n16" "STILL carry header content"
 
+# N20 — MUST-PASS, and the shape the delivered host actually emits. The post-#7960 producer puts
+# err_redact_rev on EVERY row and a `suppressed` row is a tier-4 row, so the steady state after
+# delivery is BOTH proofs present. That is the message the closing run prints, and until this case
+# existed it was the one branch of PROOF_SRC with no fixture at all.
+{
+  rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback   "$CLEAN_TAIL"
+  rowf "2026-09-18 12:05:00" "$NEWBOOT" suppressed none
+} > "$WORK/n20"
+expect "N20 both proofs present (the real post-delivery steady state) -> PASS" 0 "$WORK/n20" "(proof: err_redact_rev+suppressed)"
+
+# N21 — MUST-PASS. `[REDACTED` is the PRODUCER'S OWN redaction output, so grading it as a leak
+# would post a daily public FAIL on precisely the hosts where the redaction is working. N19 covers
+# zot's `[******` mask; this covers ours. Both halves of the exclusion need a fixture or half of it
+# can be deleted silently.
+rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info Authorization:[REDACTED] served CANARY7960" > "$WORK/n21"
+expect "N21 the producer's own [REDACTED] is not a leak" 0 "$WORK/n21" "(proof: err_redact_rev)"
+
+# N22 — MUST-FAIL, cardinality TWO. Every other credential fixture carries ONE header, where
+# `1-of-1` cannot distinguish the scanning loop from a single `if`. The loop exists so a MASKED
+# header cannot shadow a real one later in the same map, which is an ordinary zot header map.
+rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info Authorization:[******] Cookie:[sid=abc] CANARY7960" > "$WORK/n22"
+expect "N22 a masked header does not shadow a later real one" 1 "$WORK/n22" "STILL carry header content"
+
 # Clean side — shapes the old bare-word discriminator graded as leaks.
 rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info clientIP: default CANARY7960" > "$WORK/n17"
 expect "N17 clientIP without an address is not a leak" 0 "$WORK/n17" "(proof: err_redact_rev)"
@@ -349,6 +375,27 @@ rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:error invalid headers: [Co
 expect "N18 a list of header NAMES is not a leak" 0 "$WORK/n18" "(proof: err_redact_rev)"
 rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info Authorization:[******] CANARY7960" > "$WORK/n19"
 expect "N19 a zot-masked credential header is not a leak" 0 "$WORK/n19" "(proof: err_redact_rev)"
+
+# N23 — MUST-PASS, a SHORTER asterisk mask. The sibling zot-log-channel-7440.sh accepts
+# `\[(\*{3,}|REDACTED)`; POSIX awk has no intervals, so this probe uses a three-asterisk prefix.
+# Without this fixture that prefix can be narrowed back to a six-asterisk literal silently, and a
+# 3/4/5-asterisk mask would then post a public FAIL on a correctly-masked host.
+rowf "2026-09-18 12:00:00" "$NEWBOOT" fallback "level:info Authorization:[***] CANARY7960" > "$WORK/n23"
+expect "N23 a shorter asterisk mask is still a mask, not a leak" 0 "$WORK/n23" "(proof: err_redact_rev)"
+
+# ── reject control for expect(), the VERDICT-OWNING helper ─────────────────────────────────
+# pass()/fail() are dispatch; `expect` is what DECIDES. A control that drives only pass()/fail()
+# proves the dispatch works while `expect` decides nothing — measured: neutering expect's two
+# comparisons left this suite 35/35 green with the probe never consulted. Drive expect once with a
+# deliberately wrong code AND a wrong marker, require `fails` to have moved, then unwind (counters
+# AND the case tally, so MIN_CASES stays exact). Reports via printf/exit, never through expect().
+_e_p0=$passes; _e_f0=$fails; _e_c0=$cases
+expect "expect() reject control (this FAIL line is expected, not a real failure)" 99 "$WORK/f15" "__A_MARKER_NO_BRANCH_EVER_PRINTS__"
+if (( fails != _e_f0 + 1 )); then
+  printf 'FATAL: expect() did not register a failure for a deliberately wrong code+marker -- every case above is unbacked.\n' >&2
+  exit 1
+fi
+passes=$_e_p0; fails=$_e_f0; cases=$_e_c0
 
 # ── positive control for the verdict helpers ───────────────────────────────────────────────
 # An assertion-count floor cannot see a rewritten fail() that still counts. Drive both helpers
@@ -376,7 +423,7 @@ fi
 # reported as a construction failure, not as a fired floor. Both siblings that pass it bind the
 # threshold first (markdown-lint.test.sh, zot-fill-rate-7341.test.sh). The VALUE stays a
 # literal: binding it to a variable expansion re-creates the same unconstructible shape.
-MIN_CASES=35
+MIN_CASES=39
 if (( cases < MIN_CASES )); then
   # PHRASING IS LOAD-BEARING, not style. guard-vacuity-floor.test.sh classifies a mutant as
   # FIRES only when its output carries a floor-shaped SENTINEL from a fixed vocabulary

@@ -226,8 +226,11 @@ applies the same mechanism. The sweeper renders exit 2 and exit 3 under differen
 - **P3.** Delivery proof is read only from envelope-anchored rows, from the trusted region, on the
   newest real boot — unforgeable by log content: not from the free-text tail, a marker-quoting
   foreign row, the producer's own journald echo, or the `unknown` boot sentinel. (Forgeable by a
-  holder of an ingest token for the shared source 2457081, as the existing `suppressed` proof
-  already is; recorded as a residual, not widened.)
+  holder of an ingest token for the shared source 2457081 — as the `suppressed` proof already could
+  be, and more cheaply: `suppressed` is behaviour-gated, `err_redact_rev` is unconditional, so a
+  forger need not fabricate a plausible gate-activation event. Measured 2026-09-18: a single forged
+  row closes the tracker with or without the field, so this restates the pre-existing residual
+  rather than widening it.)
 - **P4.** Absent proof, the probe says so under a heading that is true in every state it covers,
   and names the vehicle whose completion turns that reading into "investigate".
 - **P5.** Every emitted `SOLEUR_ZOT_DISK` row carries the proof field in the trusted region, and
@@ -464,7 +467,16 @@ Contract before consumer: the producer field is the contract; the probe and its 
      `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=registry-host-replace -f reason="recovery: failed replace delivering PR #8272 (#7960)"`
      (covered by the authorization, once). A second failure is an incident: stop and report.
 6. **Pull-path health** (P7): the first two new-boot `SOLEUR_ZOT_DISK` rows show
-   `state_status=running`, `ping_rc=0`, and increasing `zot_uptime_s`.
+   `htpasswd_pull_matches=true` (the pull credential PROVEN from inside the host — this is the one
+   that answers "can the fleet pull", and it is why the field exists) AND `state_status=running`
+   with increasing `zot_uptime_s`, AND the `registry_prd` liveness monitor is up.
+   **`ping_rc` is NOT a pull-path signal and is deliberately not gated on:** it is the rc of the
+   *disk* heartbeat's curl to Better Stack, the producer's own comment records that this beat
+   "stays GREEN with zot dead", and `PING_RC` initialises to `0` and is only overwritten when
+   `pcent<85` — so `ping_rc=0` also means "ping withheld" or "df unreadable". Read `pcent`
+   alongside it if it is reported at all. The uncovered mode this closes: a new host booting with
+   an absent/bad `/etc/zot/htpasswd` answers 401, which the liveness feeder treats as healthy, so
+   the fleet cannot pull while every other signal stays green.
 7. **Probe to PASS**: loop the local probe (Monitor until-loop, bounded to 90 min after the apply
    succeeded) until exit 0. On timeout with R1 (proven, no tier-4 yet): leave it to the 18:00 cron
    and report. On R4 after a verified replace: investigate now (is the token in the newest rows'
@@ -479,14 +491,22 @@ Contract before consumer: the producer field is the contract; the probe and its 
 ## Files to Edit
 
 - `apps/web-platform/infra/cloud-init-registry.yml` — the `LINE=` token + one whole-line comment.
-- `apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh` — +3 assertions; `EXPECTED_MIN=36`.
+- `apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh` — +6 assertions (`EXPECTED_MIN=39`):
+  the three planned, plus a fallback-path emit assert, a `suppressed ⇒ zot_last_err=none` assert, and
+  reject controls for the two verdict-owning wrappers (all three added at review).
 - `apps/web-platform/infra/registry-boot-guard.test.sh` — field list + `err_redact_rev=`; `MIN_ASSERTIONS=104`.
 - `scripts/followthroughs/zot-last-err-redact-7500.sh` — decision table, `F` in the existing awk
   pass, tightened `L`, §Deleted, prose rewrite, row comments, PROOF KEY header line.
 - `scripts/followthroughs/zot-last-err-redact-7500.test.sh` — producer-extracted token, `rowf`,
-  BASELINE removal, changed + new cases, canary guard, `MIN_CASES=35`.
+  BASELINE removal, changed + new cases, canary guard, `MIN_CASES=39` (35 planned; N20-N23 added at
+  review to cover the post-delivery steady state, the producer's own `[REDACTED]`, credential
+  cardinality 2, and a short asterisk mask).
 - `knowledge-base/engineering/architecture/decisions/ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md` — amendment.
 - `knowledge-base/INDEX.md` — regenerated.
+- `apps/web-platform/infra/registry-userdata-budget.test.sh` — check 8 summed its `git grep` counts
+  with `bc`, which is absent on some developer hosts; the `|| echo 0` fallback then turned a missing
+  binary into `decls=0` and a FALSE RED on "declared exactly once repo-wide". Sums with `awk` now.
+  Unrelated to #7960, found while running the Phase 0 baseline.
 
 ## Files to Create
 
