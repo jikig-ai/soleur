@@ -52,10 +52,13 @@
 #                         than approximated, and it is why the matcher is
 #                         startup|resume|clear|compact and not compact alone.
 #
-# The transcript is still read, for ONE field: prior_boundaries, a corroboration
-# marker. It does not feed the recommendation, so an upstream format rename
-# degrades that marker and nothing else. FR7's canary -- not this hook, and not
-# its synthesized fixtures -- is the drift detector.
+# The transcript is NOT read. An earlier revision greped it once for a
+# `prior_boundaries` corroboration marker; review deleted that, because nothing
+# consumed the field and -- since the ledger resets per window while the
+# transcript accumulates across --resume -- the two numbers diverge arbitrarily,
+# so it handed the model a contradiction with no reconciliation rule. The
+# measurements in this header are what the transcript was for; they are
+# recorded, not re-derived at runtime.
 #
 # FAIL-OPEN BY CONTRACT. Every path exits 0. `trap 'exit 0' ERR EXIT`: the EXIT
 # arm is load-bearing because a `set -u` unbound-variable expansion terminates
@@ -136,6 +139,14 @@ CWD="$(jget cwd)"
 # plugins/soleur directory -- AND a Soleur plan/spec artifact. Both conjuncts
 # are load-bearing: a plugin developer's checkout has the first without the
 # second.
+# ANCHORED at the enclosing repository, matching welcome-hook.sh, which resolves
+# GIT_ROOT and tests exactly one directory. An unanchored walk is strictly wider
+# than that precedent: a Soleur checkout at ~/dev makes ~/dev/plugins/soleur and
+# ~/dev/knowledge-base/project/plans visible to EVERY unrelated repo nested
+# beneath it -- and nesting is this repo's own .worktrees/ layout, not a
+# hypothetical. So the walk stops at the first directory carrying .git (a FILE
+# in a linked worktree, a directory in a normal clone) and refuses if that root
+# did not satisfy both conjuncts.
 soleur_root() {
   local d="$CWD" i=0
   while [[ -n "$d" && "$d" != "/" && $i -lt 40 ]]; do
@@ -144,6 +155,8 @@ soleur_root() {
       printf '%s' "$d"
       return 0
     fi
+    # Repo boundary: climbing past it is what admits the nested-repo case.
+    [[ -e "$d/.git" ]] && return 1
     d="$(dirname "$d")"
     i=$((i + 1))
   done
@@ -157,7 +170,23 @@ SID_RAW="$(jget session_id)"
 SID="$(printf '%s' "$SID_RAW" | tr -cd 'A-Za-z0-9_-' | cut -c1-64)"
 LEDGER_DIR="${TMPDIR:-/tmp}/soleur-compaction"
 assert_fixture_dir "$LEDGER_DIR"
-mkdir -p "$LEDGER_DIR" 2>/dev/null || true
+# FAIL CLOSED on squatting. With TMPDIR unset this is /tmp/soleur-compaction,
+# world-reachable on a multi-user host. `mkdir -p || true` + `chmod || true`
+# degrades SILENTLY if another user pre-created the directory -- and a
+# pre-seeded <sid>.pending then flows through COMMITTED -> TRIGGER -> the
+# directive, which the model reads at elevated authority. Refuse instead:
+# the EXIT trap turns this into a silent exit 0, which is the fail-open
+# contract for the FEATURE and fail-closed for the WRITE.
+# Two calls, not `mkdir -m 0700 -p`: with -p the mode applies only to the
+# DEEPEST directory (shellcheck SC2174), so any parent this creates would take
+# the umask. The leaf is created WITHOUT -p so it is either made 0700 here or
+# already exists, and the ownership check below is what actually decides.
+mkdir -p "${LEDGER_DIR%/*}" 2>/dev/null || true
+mkdir -m 0700 "$LEDGER_DIR" 2>/dev/null || true
+if [[ ! -d "$LEDGER_DIR" ]] || [[ ! -O "$LEDGER_DIR" ]]; then
+  printf 'SOLEUR_COMPACTION_SKIPPED reason=ledger-dir-unusable path=%s\n' "$LEDGER_DIR" >&2
+  exit 0
+fi
 chmod 700 "$LEDGER_DIR" 2>/dev/null || true
 LEDGER="$LEDGER_DIR/${SID}.ledger"
 PENDING="$LEDGER_DIR/${SID}.pending"
@@ -168,8 +197,16 @@ find "$LEDGER_DIR" -maxdepth 1 -type f -mmin +10080 -delete 2>/dev/null || true
 
 # --- PreCompact (FR3) --------------------------------------------------------
 if [[ "$EVENT" == "PreCompact" ]]; then
+  # AP-020: check a contracted field's SHAPE rather than assuming it. `trigger`
+  # is model-adjacent input that (a) gates the recommendation and (b) is
+  # interpolated into text the model reads at elevated authority. Unvalidated, a
+  # multi-line value inflates the ledger's line count -- which IS count_total --
+  # and forces recommend=true. Closed set, measured at CLI 2.1.273.
   TRIGGER="$(jget trigger)"
-  [[ -n "$TRIGGER" ]] || TRIGGER="unknown"
+  case "$TRIGGER" in
+    manual|auto) : ;;
+    *) TRIGGER="unknown" ;;
+  esac
   if [[ -n "$SID" ]]; then
     # OVERWRITE, never append: PreCompact fires on no-op compactions, and only
     # SessionStart:compact proves one actually happened.
@@ -203,8 +240,10 @@ SOURCE="$(jget source)"
 if [[ "$SOURCE" != "compact" ]]; then
   if [[ -n "$SID" ]]; then
     rm -f "$PENDING" 2>/dev/null || true
-    assert_fixture_dir "$LEDGER_DIR"
-    : > "$LEDGER" 2>/dev/null || true
+    if [[ -f "$LEDGER" ]]; then
+      assert_fixture_dir "$LEDGER_DIR"
+      : > "$LEDGER" 2>/dev/null || true
+    fi
   fi
   exit 0
 fi
@@ -262,17 +301,10 @@ fi
 
 TRIGGER="$COMMITTED"
 [[ -n "$TRIGGER" ]] || TRIGGER="$(tail -1 "$LEDGER" 2>/dev/null || true)"
-[[ -n "$TRIGGER" ]] || TRIGGER="unknown"
-
-# Corroboration only. Tolerates CLI spacing (AC14) so a formatting change reds
-# the suite rather than silently returning 0. Lags the live count by exactly one
-# -- see finding 1 -- which is why it is reported and not counted.
-TRANSCRIPT="$(jget transcript_path)"
-PRIOR="na"
-if [[ -n "$TRANSCRIPT" && -r "$TRANSCRIPT" ]]; then
-  PRIOR="$(grep -cE '"subtype"[[:space:]]*:[[:space:]]*"compact_boundary"' "$TRANSCRIPT" 2>/dev/null || true)"
-  PRIOR="${PRIOR:-0}"
-fi
+case "$TRIGGER" in
+  manual|auto) : ;;
+  *) TRIGGER="unknown" ;;
+esac
 
 CLI="${SOLEUR_COMPACTION_CLI_VERSION:-}"
 if [[ -z "$CLI" ]]; then
@@ -306,7 +338,7 @@ fi
 # Pointers, never content. Nothing read out of the transcript is echoed: the
 # only transcript-derived value here is an integer (NG5, and the
 # elevated-authority framing hook-delivered text carries).
-CTX="SOLEUR_COMPACTION_DIRECTIVE count_auto=${COUNT_AUTO} count_total=${COUNT_TOTAL} trigger=${TRIGGER} recommend=${RECOMMEND} threshold=${THRESHOLD} prior_boundaries=${PRIOR} cli=${CLI} branch=${BRANCH}
+CTX="SOLEUR_COMPACTION_DIRECTIVE count_auto=${COUNT_AUTO} count_total=${COUNT_TOTAL} trigger=${TRIGGER} recommend=${RECOMMEND} threshold=${THRESHOLD} cli=${CLI} branch=${BRANCH}
 
 Context was just compacted (compaction ${COUNT_TOTAL} of this session, trigger=${TRIGGER}).
 The summary above is a paraphrase written by another model. Before editing any

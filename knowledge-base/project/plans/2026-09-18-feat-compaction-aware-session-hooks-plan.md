@@ -453,3 +453,41 @@ measurements have gone stale, not that the feature has stopped working.
   `PostCompact` binding.
 - One new AC — **AC22**: a `PreCompact` that is never followed by `SessionStart:compact` (the measured
   no-op) contributes **zero** to `count_auto`.
+
+## Addendum — 2026-09-18 (implementation review): FR7 and the transcript read are deleted
+
+The Phase 0 addendum above narrowed FR7's value ("a format rename now degrades that marker rather
+than the recommendation... FR7's value is correspondingly narrower than `## Risks & Mitigations`
+claims"). A two-lens design-validity pass took the next step and deleted the mechanism, converging
+from two directions: nothing consumed `prior_boundaries`, and the canary could not report (exit-0
+hook stderr is discarded; the cadence stamp was written before the run, so a RED verdict
+self-suppressed for seven days). Full evidence: ADR-227 `## Amendment — 2026-09-18`.
+
+Deleted: the transcript grep and the `prior_boundaries` field;
+`scripts/followthroughs/compaction-format-drift-8323.sh`;
+`.claude/hooks/compaction-drift-canary.sh` and its `.claude/settings.json` binding; four
+`SOLEUR_COMPACTION_DRIFT*` env vars; the `spaced-boundary.jsonl` fixture; the AP-020 widening and
+the `claude -> hooks` C4 edge amendment (both byte-identical to `main` again); FR7/TR9/SC6.
+
+### AC deltas this forces, on top of the Phase 0 set
+
+- **AC14** (whitespace-variant `compact_boundary` pin) — **withdrawn.** The hook no longer greps the
+  transcript, so the property does not exist. Scenario 15 deleted with it.
+- **AC17** (FR7 canary) — **withdrawn.** No canary ships.
+- **AC18** — the AP-020 clause is withdrawn; `principles-register.md` is unchanged from `main`.
+  `model.c4` keeps two amendments (the `technology` line and the surface-split description, now also
+  recording that the shipped surface is stateful across events) and gains one the earlier revision
+  missed: the OUTBOUND `hooks -> claude` edge, because the `PreCompact` arm instructs the compaction
+  summarizer, a second model consumer that "rewrites tool input before execution" does not describe.
+- **Three new ACs from the review's P1s**, each mutation-proven (revert the fix → suite reds):
+  **AC23** `trigger` is validated against `{manual, auto}` before reaching the ledger or
+  `additionalContext` (unvalidated, a multi-line value inflates `count_total`, which is a line
+  count, and can force `recommend=true` from one compaction);
+  **AC24** the scope walk stops at the enclosing repository, so a git repo nested under a Soleur
+  checkout is out of scope;
+  **AC25** an unusable or foreign-owned ledger directory causes the hook to write nothing and exit 0
+  (with `TMPDIR` unset the path is world-reachable `/tmp/soleur-compaction`, and a pre-seeded
+  `.pending` would otherwise flow into model-read text).
+
+Net issues filed by this review: **0**. The residual drift-detection capability is subsumed by the
+already-open #8324, whose ledger metric is what would actually show the hooks having stopped firing.

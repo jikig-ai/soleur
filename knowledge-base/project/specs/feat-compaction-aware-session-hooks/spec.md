@@ -78,9 +78,14 @@ Writes/replaces a `<!-- compaction-checkpoint:start -->…<!-- compaction-checkp
 
 </details>
 
-### FR7 (added at review): Transcript-format drift canary
+### FR7 (added at plan review, DELETED at implementation review)
 
-A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl` and asserts at least one `"subtype":"compact_boundary"` across N recent transcripts. Synthesized fixtures pin the shape Soleur wrote, not the shape Claude Code emits, so they structurally cannot detect an upstream rename; this is the only mechanism that can see such a rename. Its value is narrower than an earlier draft claimed, and the correction is load-bearing: since `count_auto` and `trigger` come from the ledger, a rename degrades only the `prior_boundaries` marker. The canary reports that the recorded measurements have gone **stale**, not that the feature has stopped working. Every marker also carries the `claude --version` string so drift is attributable to a CLI bump.
+A transcript-format drift canary. Deleted by the design-validity panel: nothing consumed the field
+it guarded, the canary's only output channel is discarded on an exit-0 hook, its stamp was written
+before the run so a RED verdict self-suppressed for 7 days, and — decisively — once the count moved
+to the ledger, the format the feature depends on is the stdin envelope, not the transcript. Full
+evidence in ADR-227 `## Amendment — 2026-09-18`. The residual capability (detect that the hooks
+stopped firing) is subsumed by **#8324**.
 
 ### FR5: Prose retirement
 
@@ -100,7 +105,7 @@ A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl`
 - **TR6.** Empirical payload verification before implementation: capture real `PreCompact` and `SessionStart:compact` envelopes on CLI 2.1.273, record them dated in the hook header, and confirm whether the boundary count observed at `SessionStart:compact` includes the compaction that just fired (the load-bearing unknown).
 - **TR7 (revised).** Tests: `plugins/soleur/test/compaction-state-hook.test.sh` (that path is globbed by `scripts/test-all.sh`; `plugins/soleur/hooks/` is not) with stdin fixtures for both events, 3 synthesized transcript fixtures (`cq-test-fixtures-synthesized-only`), the threshold boundary cases, the scope-guard case, the `jq`-absent case, and the 8k cap. The hooks.json binding assertion lives here, not in `components.test.ts` (which does not read `hooks.json`).
 - **TR8 (revised).** ADR-227: "The compaction signal is read from the transcript, not from a counter file", recording all seven alternatives including the checkpoint writer deleted at review (#8328).
-- **TR9 (added at review, corrected at implementation).** A drift canary (FR7), never a suite case — a suite case would break CI on a clean box. It is **not** a GitHub Actions schedule either: measured, a runner has no `~/.claude/projects`, so that registration yields a probe that can only ever report TRANSIENT. It is bound to the repo-side `SessionStart` surface (`.claude/hooks/compaction-drift-canary.sh`), stamp-gated to once per 7 days, always exit 0.
+- **TR9 (added at plan review, WITHDRAWN at implementation review).** The drift canary is deleted with FR7; see ADR-227 `## Amendment — 2026-09-18`. No canary ships, in any registration.
 
 ## Success Criteria
 
@@ -109,6 +114,10 @@ A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl`
 - SC3. In a git repo with no `plugins/soleur` directory, both events emit nothing — a non-Soleur user's compaction summary is never touched.
 - SC4. On every `SessionStart` fixture, stdout parses as JSON in full, including the failure paths.
 - SC5. Hook script exits 0 on malformed stdin, missing transcript, non-Soleur repo, kill-switch, and a `set -u` unbound-variable fault.
-- SC6. The drift canary exits non-zero when zero `compact_boundary` records are found across N recent **real** transcripts, and exits 2 — not 1 — when it cannot measure at all, so "could not check" never renders as "bad".
+- ~~SC6. The drift canary…~~ **Withdrawn with FR7/TR9** (ADR-227 `## Amendment`).
+- SC8 (added at implementation review). The hook never dereferences `transcript_path`; handing it a transcript changes nothing about its output.
+- SC9 (added at implementation review). `trigger` is validated against the closed set `{manual, auto}` before it reaches the ledger or `additionalContext`; any other value renders `trigger=unknown` and cannot satisfy the recommendation rule.
+- SC10 (added at implementation review). The scope walk stops at the enclosing repository, so a git repo nested beneath a Soleur checkout is out of scope.
+- SC11 (added at implementation review). An unusable or foreign-owned ledger directory causes the hook to write nothing and exit 0.
 - SC7 (added at implementation). A `PreCompact` that is never followed by a `SessionStart:compact` contributes nothing to `count_auto`. This is the measured no-op-compaction case; without it the recommendation fires one compaction early.
 - *(SC on the checkpoint block moved to #8328 with the writer.)*

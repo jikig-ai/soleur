@@ -47,11 +47,11 @@ Full results: the plan's `## Addendum — 2026-09-18 (Phase 0 payload probe: mea
 - [x] 3.4 `devin/INSTRUCTIONS.md` and `codex/INSTRUCTIONS.md` each carry the Claude-only degradation. The Devin note sits **outside** the "Measured hook semantics (envelope capture: …)" list — that capture does not cover this claim, and filing it as a bullet there would have attributed it to a measurement that never took place.
 - [x] 3.5 `hooks.json`: `PreCompact` (`manual|auto`) + `SessionStart` (`startup|resume|clear|compact`); no `PostCompact` key. Asserted by scenario 16 and mutation-proven (M20).
 
-## Phase 4 — Drift canary (FR7) — **DONE, with a corrected registration**
+## Phase 4 — Drift canary (FR7) — **BUILT, THEN DELETED AT REVIEW**
 
-- [x] 4.1 `scripts/followthroughs/compaction-format-drift-8323.sh`, keeping the sweeper's 0/1/2 exit contract. All four arms driven: PASS on the operator's real transcripts (9 boundaries / 40 files), FAIL on a boundary-less corpus, FAIL on a **renamed** `subtype` (the drift it exists for), TRANSIENT on a missing directory — plus a positive control proving it can still pass.
-- [x] 4.2 **Registered locally, not as a `soleur:schedule` GitHub Actions cron.** Measured: the canary reads `~/.claude/projects/**/*.jsonl`, a GitHub runner has none, and the canary correctly reports TRANSIENT when it cannot measure — so that registration yields a probe that can never PASS and never FAIL. It is bound instead to the repo-side `SessionStart` surface via `.claude/hooks/compaction-drift-canary.sh`, stamp-gated to once per 7 days, always exit 0, reporting a `SOLEUR_COMPACTION_DRIFT` marker on stderr. **AC17 and AC21 are amended accordingly** — see the plan addendum.
-  - The wrapper shipped a real bug caught by driving its arms rather than reading it: `out="$(…)"` is a simple command, so a non-zero canary status fired the `ERR` trap and the wrapper exited 0 having printed nothing. `|| rc=$?` puts it in a tested context. The same exemption is what makes `compaction-state.sh`'s `[[ -n "$PLAN" ]] && …` lines safe, which scenario 21 now pins.
+- [x] 4.1 `scripts/followthroughs/compaction-format-drift-8323.sh` written and all four arms driven.
+- [x] 4.2 Registered locally rather than as a GitHub Actions schedule (a runner has no transcripts).
+- [x] 4.3 **Both files deleted** by the design-validity panel, which converged from two directions: nothing consumed `prior_boundaries`; the canary's only output channel is discarded on an exit-0 hook; its stamp was written before the run so a RED verdict self-suppressed for 7 days; and once the count moved to the ledger, the drift surface is the stdin envelope, not the transcript. The AP-020 widening and the `claude -> hooks` C4 edge went with it — both are byte-identical to `main` again. Residual capability subsumed by #8324. Evidence: ADR-227 `## Amendment — 2026-09-18`.
 
 ## Phase 5 — ADR + C4 + register — **DONE**
 

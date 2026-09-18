@@ -16,9 +16,12 @@
 # cannot see the rule becoming too aggressive, and over-firing is precisely the
 # failure this feature exists to avoid -- a spurious "abandon your session".
 #
-# The transcript fixtures survive for ONE property: prior_boundaries, the
-# corroboration marker. A format rename degrades that marker and nothing else,
-# which is why FR7's canary -- not this suite -- is the drift detector.
+# THE HOOK DOES NOT READ THE TRANSCRIPT. An earlier revision greped it for a
+# `prior_boundaries` corroboration marker; review deleted that (nothing consumed
+# it, and the ledger resets per window while the transcript accumulates across
+# --resume, so the two numbers diverge arbitrarily). The three remaining
+# fixtures are kept only to drive scenario 17, which asserts that handing the
+# hook a transcript changes nothing about its output.
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -341,25 +344,6 @@ assert "14e orders a re-read before editing" 'has_ctx "re-read"'
 assert "14f cites the rule that mandates it" 'has_ctx "hr-always-read-a-file-before-editing-it"'
 assert "14g names the branch" 'has_ctx "feat-compaction-aware-session-hooks"'
 
-echo "== scenario 15 (AC14): the boundary grep tolerates CLI spacing =="
-# The transcript read feeds prior_boundaries ONLY. Pinning it here is what keeps
-# FR7's canary attached to a string the shipped hook actually greps.
-sid=s15
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
-run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$FIX/spaced-boundary.jsonl")"
-assert "15a spaced '\"subtype\": \"compact_boundary\"' still counted" 'has_ctx "prior_boundaries=1"'
-sid=s15b
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
-run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$FIX/two-auto.jsonl")"
-assert "15b compact spelling counted" 'has_ctx "prior_boundaries=2"'
-sid=s15c
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
-run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$FIX/no-boundary.jsonl")"
-assert "15c zero boundaries reported as 0, not as an error" 'has_ctx "prior_boundaries=0"'
-
 echo "== scenario 16 (AC13): hooks.json bindings =="
 HJ="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
 assert "16a hooks.json is valid JSON" 'jq -e . "$HJ" >/dev/null 2>&1'
@@ -374,46 +358,27 @@ assert "16f the script is executable" '[[ -x "$SUT" ]]'
 assert "16g bindings resolve via CLAUDE_PLUGIN_ROOT" \
   '[[ "$(jq -r "[.hooks[]?[]? | .hooks[]? | .command | select(test(\"compaction-state\")) | select(test(\"CLAUDE_PLUGIN_ROOT\"))] | length" "$HJ")" -eq 2 ]]'
 
-echo "== scenario 17: the directive never echoes transcript prose =="
-# NG5 / the elevated-authority constraint: the hook must emit pointers, never
-# content it read out of the transcript.
+echo "== scenario 17: the hook never dereferences transcript_path =="
+# Formerly an assertion that no transcript prose reached the directive. Since
+# review deleted the corroboration read, that property is STRUCTURAL rather than
+# behavioural -- the hook never opens the file -- so a content assertion would be
+# vacuous by construction. Pinned at the source instead, comment-stripped so the
+# measured-payload-contract header (which necessarily names the field) cannot
+# satisfy it.
+_src_nc="$(grep -vE '^[[:space:]]*#' "$SUT")"
+assert "17a no live read of transcript_path outside comments" \
+  '[[ "$(grep -cF "transcript" <<<"$_src_nc" 2>/dev/null || true)" -eq 0 ]]'
+# Control: the stripper must not simply be eating the whole file.
+assert "17b (control) the stripped source is non-trivial" '[[ "$(wc -l <<<"$_src_nc")" -gt 100 ]]'
+# And a transcript handed to the hook changes nothing about its output.
 sid=s17
 PROSE="$SANDBOX/prose.jsonl"
-printf '%s\n' '{"type":"user","message":{"role":"user","content":"CANARY-SECRET-STRING-DO-NOT-ECHO"}}' > "$PROSE"
-printf '%s\n' '{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":9,"postTokens":1},"content":"CANARY-BOUNDARY-CONTENT"}' >> "$PROSE"
+printf '%s\n' '{"type":"system","subtype":"compact_boundary","content":"CANARY-DO-NOT-ECHO"}' > "$PROSE"
 run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
 run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
 run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$PROSE")"
-assert "17a no user prose in the directive" '! has_ctx "CANARY-SECRET-STRING"'
-assert "17b no boundary content in the directive" '! has_ctx "CANARY-BOUNDARY-CONTENT"'
-assert "17c but the boundary was still counted" 'has_ctx "prior_boundaries=1"'
-
-echo "== scenario 19: a MANUAL compaction never satisfies the rule =="
-# The row that makes the rule's trigger operand load-bearing. Scenario 4
-# (manual-only) cannot: with count_auto already 0 there, deleting the
-# `trigger == auto` conjunct changes nothing and the mutation survives --
-# measured. The discriminating state is count_auto ALREADY OVER THRESHOLD with
-# the CURRENT compaction manual, which is reachable in practice the moment an
-# operator types /compact on a session that has auto-compacted twice.
-sid=s19
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-compact_cycle auto "$sid" "$IN_ROOT"
-compact_cycle auto "$sid" "$IN_ROOT"
-assert "19a two autos recommend" 'has_ctx "recommend=true"'
-compact_cycle manual "$sid" "$IN_ROOT"
-assert "19b count_auto is still 2" 'has_ctx "count_auto=2( |$)"'
-assert "19c but a manual current compaction does not recommend" 'has_ctx "recommend=false"'
-assert "19d and carries no fresh-session prose" '! has_ctx "fresh session"'
-# Same shape with an unrecognized trigger -- "not auto" must mean not auto,
-# rather than "manual specifically".
-sid=s19b
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-compact_cycle auto "$sid" "$IN_ROOT"
-compact_cycle auto "$sid" "$IN_ROOT"
-run_hook "$(jq -nc --arg cwd "$IN_ROOT" '{cwd:$cwd,hook_event_name:"PreCompact",session_id:"s19b",transcript_path:""}')"
-run_hook "$(ss_env compact "$sid" "$IN_ROOT")"
-assert "19e a PreCompact with no trigger field does not recommend" 'has_ctx "recommend=false"'
-assert "19f and reports the trigger as unknown" 'has_ctx "trigger=unknown"'
+assert "17c a supplied transcript leaks nothing" '! has_ctx "CANARY-DO-NOT-ECHO"'
+assert "17d and the directive is unaffected by it" 'has_ctx "count_auto=1( |$)"'
 
 echo "== scenario 18: sessions do not contaminate each other =="
 run_hook "$(ss_env startup s18a "$IN_ROOT")"
@@ -456,17 +421,76 @@ assert "21a directive still emitted with no plan file" 'has_ctx "SOLEUR_COMPACTI
 assert "21b stdout is valid JSON" 'printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
 assert "21c and no Plan: line is fabricated" '! has_ctx "^Plan: $"'
 
+echo "== scenario 22 (review P1): the scope walk stops at the enclosing repo =="
+# An unanchored walk is strictly wider than welcome-hook.sh, which resolves one
+# GIT_ROOT and tests exactly one directory: a Soleur checkout at ~/dev makes the
+# guard pass for every unrelated repo nested beneath it. That is not a
+# hypothetical shape -- it is this repo's own .worktrees/ layout.
+OUTER="$SANDBOX/outer"
+mkdir -p "$OUTER/plugins/soleur" "$OUTER/knowledge-base/project/plans" "$OUTER/.git"
+mkdir -p "$OUTER/nested-stranger/.git" "$OUTER/nested-stranger/src"
+run_hook "$(ss_env startup s22 "$OUTER")"
+run_hook "$(pc_env auto s22 "$OUTER")"
+assert "22a the Soleur root itself is still in scope" '[[ -n "$OUT" ]]'
+run_hook "$(pc_env auto s22b "$OUTER/nested-stranger/src")"
+assert "22b a git repo nested under a Soleur checkout is OUT of scope" '[[ -z "$OUT" ]]'
+assert "22c and exits 0" '[[ "$RC" -eq 0 ]]'
+run_hook "$(ss_env compact s22b "$OUTER/nested-stranger/src")"
+assert "22d same for SessionStart" '[[ -z "$OUT" ]]'
+# A plain subdirectory of the Soleur root (no .git of its own) must STILL be in
+# scope -- the anchor must not break the ordinary cwd-is-a-subdir case.
+mkdir -p "$OUTER/plugins/soleur/skills"
+run_hook "$(pc_env auto s22c "$OUTER/plugins/soleur/skills")"
+assert "22e a plain subdir of the Soleur root stays in scope" '[[ -n "$OUT" ]]'
+
+echo "== scenario 23 (review P1): an unusable ledger directory fails CLOSED =="
+# With TMPDIR unset the ledger root is /tmp/soleur-compaction, world-reachable
+# on a multi-user host. Degrading silently there lets a pre-seeded pending file
+# reach the directive. Simulated by making the path unusable as a directory.
+SQUAT="$SANDBOX/squat"; mkdir -p "$SQUAT"
+: > "$SQUAT/soleur-compaction"          # a FILE where the hook wants a directory
+run_hook "$(pc_env auto s23 "$IN_ROOT")" "TMPDIR=$SQUAT" "PATH=$PATH" "HOME=$HOME" \
+  "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
+assert "23a rc 0 (fail-open for the feature)" '[[ "$RC" -eq 0 ]]'
+assert "23b no summary-shaping output (fail-closed for the write)" '[[ -z "$OUT" ]]'
+assert "23c names the reason on stderr" \
+  '[[ "$(grep -cF "ledger-dir-unusable" <<<"$ERR" 2>/dev/null || true)" -gt 0 ]]'
+assert "23d and wrote nothing" '[[ ! -d "$SQUAT/soleur-compaction" ]]'
+
+echo "== scenario 24 (review P1): trigger is validated, not trusted =="
+# AP-020: `trigger` both GATES the recommendation and is interpolated into text
+# the model reads at elevated authority. Unvalidated, a multi-line value
+# inflates the ledger's line count -- which IS count_total -- and can force
+# recommend=true from a single compaction.
+sid=s24
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+run_hook "$(jq -nc --arg cwd "$IN_ROOT" --arg sid "$sid" \
+  '{cwd:$cwd,hook_event_name:"PreCompact",session_id:$sid,transcript_path:"",
+    trigger:"auto\nauto\nauto"}')"
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")"
+assert "24a a multi-line trigger does not inflate count_total" 'has_ctx "count_total=1( |$)"'
+assert "24b nor count_auto" 'has_ctx "count_auto=0( |$)"'
+assert "24c and does not recommend" 'has_ctx "recommend=false"'
+assert "24d renders as trigger=unknown" 'has_ctx "trigger=unknown"'
+assert "24e no injected line reaches additionalContext" '! has_ctx "^auto$"'
+# An unrecognized single-token trigger is equally not auto.
+sid=s24b
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+run_hook "$(pc_env "AUTO" "$sid" "$IN_ROOT")"
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")"
+assert "24f trigger matching is exact, not case-folded" 'has_ctx "trigger=unknown"'
+
 # --- coverage floors ----------------------------------------------------
 # Reported with printf + exit, NOT through fail() -- the helper these floors
 # exist to backstop is the one an edit disarms.
-MIN_CASES=103
+MIN_CASES=110
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 SUT_RUNS="$(grep -c '^ran$' "$SOLEUR_HOOK_TRACE" 2>/dev/null || true)"
-MIN_SUT_RUNS=104
+MIN_SUT_RUNS=93
 if (( ${SUT_RUNS:-0} < MIN_SUT_RUNS )); then
   printf 'FATAL: the subject ran %s times, floor is %d. The harness asserted without spawning the hook.\n' \
     "${SUT_RUNS:-0}" "$MIN_SUT_RUNS" >&2

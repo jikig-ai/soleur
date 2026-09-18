@@ -85,29 +85,10 @@ written to the knowledge base.** The ledger lives under `TMPDIR`, is keyed on
 the session id, is age-reaped after seven days, and is disposable by
 construction: losing it costs one directive, never correctness.
 
-The transcript is still read, once, for a single field — `prior_boundaries`, a
-corroboration marker inside `additionalContext`. It does not feed the rule. The
-consequence is stated plainly because it narrows a claim the plan made: an
-upstream format rename degrades that marker and nothing else, so the FR7 canary
-is a **staleness** signal for the measurements recorded in this ADR and in the
-hook's header, not a **liveness** signal for the feature.
+**The transcript is not read at all.** An earlier revision of this decision kept one grep for a
+`prior_boundaries` corroboration marker; the review panel deleted it — see `## Amendment` below.
 
 **No `PostCompact` binding ships in this slice.** See alternative (g).
-
-### First customer-shipped consumer of the transcript format
-
-This is the first Soleur component shipped to customers that dereferences
-`transcript_path` and reads conversation history. `.claude/hooks/monitor-supersede-guard.sh`
-already parses transcript internals, but it is repo-side: when it breaks, the
-operator sees it break, on their own machine, immediately. A plugin hook breaks
-silently on other people's machines. The rot economics differ, and FR7 exists
-because of that difference rather than as general diligence.
-
-The earlier answer to the rot question — "the suite's fixtures pin the parsed
-shape" — is **retracted**. The fixtures are synthesized (`cq-test-fixtures-synthesized-only`),
-so they pin the shape Soleur wrote, not the shape the CLI emits; every one of
-them stays green through a rename. Every marker also carries the
-`claude --version` string, so drift is attributable to a specific CLI bump.
 
 ## Alternatives Considered
 
@@ -179,12 +160,25 @@ one-shot exception rested on a signal the read path cannot produce. The
 directive names the branch and the plan path instead; the phase is legible in
 the artifacts it orders re-read.
 
-**(k) Registering the FR7 canary as a `soleur:schedule` GitHub Actions cron** —
-the plan's task 4.2. Rejected on measurement after the canary was written: it
-reads `~/.claude/projects/**/*.jsonl`, a GitHub runner has none, and the canary
-correctly reports TRANSIENT when it cannot measure. The registration would
-produce a probe that can never PASS and never FAIL. It is bound instead to the
-repo-side `SessionStart` surface, stamp-gated to once per seven days.
+**(l) Read the transcript count and ADD ONE.** §Context proves the lag is exactly one, twice, so
+this is the design a reader reaches for next and the ADR owes it an answer. It fails for a reason
+stated elsewhere in this record and not previously connected to it: boundaries accumulate within a
+single transcript across `--resume`, so `on_disk + 1` is an **all-time** count, not a
+**session-window** count — precisely the failure the reset arm exists to prevent (TR2). It is also
+undefined for a `--fork-session` child, whose transcript inherits a prefix of the parent's
+boundaries.
+
+**(m) Drop the `trigger` discriminator and bind `SessionStart:compact` alone.** `SessionStart:compact`
+fires exactly once per real compaction, so counting *that* event needs no `PreCompact` binding, no
+pending slot, no overwrite semantics and no cross-event state — the whole mechanism above exists to
+carry one string across an event boundary that cannot carry it. Rejected because the `SessionStart`
+envelope has no `trigger` (measured), so the rule would have to fire on manual `/compact` too. FR2
+is explicit that a manual compaction never satisfies it: an operator who types `/compact` has made a
+deliberate choice and does not need to be told to abandon the session. Recorded because it is the
+cheapest design in the set and a reader should see it was weighed.
+
+**(n) A transcript-format drift canary (FR7).** Shipped in an earlier revision of this branch and
+**deleted by the review panel** — see `## Amendment` below.
 
 ## Consequences
 
@@ -198,10 +192,25 @@ repo-side `SessionStart` surface, stamp-gated to once per seven days.
   on their own application would have their summary shaped around PR numbers and
   operator holds they do not have. This was the worst finding in the plan review
   and both conjuncts are mutation-proven.
-- **AP-020 widens.** The principle was scoped to the model-controlled hook-stdin
-  envelope; this hook dereferences `transcript_path` and reads full conversation
-  history, which is content merely *pointed at* by that envelope. See
-  `principles-register.md`.
+- **The guard's real population is Soleur DOGFOODING repos, not marketplace customers.** A
+  marketplace install puts the plugin under `~/.claude/plugins/`, never in the user's repository, so
+  the `plugins/soleur/` sentinel selects this monorepo and forks of it. The feature therefore ships
+  to every customer and fires for approximately none of them. That is the intended first posture —
+  dogfood the directive before widening it — but it is a consequence of the guard rather than an
+  accident, and an earlier draft of this ADR framed the guard purely as blast-radius control and let
+  a reader conclude customers get the directive. If the population should be Soleur *users*, the
+  sentinel to switch to is the `sync`-written knowledge-base artifact (`connectedRepoKb` in the C4),
+  not the plugin directory.
+- **`--fork-session` is a known, silent gap.** Measured: a fork gets a new `session_id`, a new
+  transcript, and fires **no `SessionStart` hook at all** — so its ledger is absent and its count
+  starts at zero, while it inherits the parent's entire compacted context. The fork is the session
+  most in need of the recommendation and is guaranteed not to receive it. It fails safe
+  (under-counts, never over-recommends) and is recorded here because nothing in the system reports it.
+- **The scope walk is anchored at the enclosing repository.** It stops at the first directory
+  carrying `.git`, matching `welcome-hook.sh`, which resolves one `GIT_ROOT` and tests exactly one
+  directory. An unanchored walk is strictly wider than that precedent: a Soleur checkout at `~/dev`
+  would make the guard pass for every unrelated repo nested beneath it, and nesting is this repo's
+  own `.worktrees/` layout rather than a hypothetical.
 - Fail-open is the contract: every path exits 0, and `trap 'exit 0' ERR EXIT`
   carries it. The `EXIT` arm is load-bearing and measured, not assumed — on bash
   5.3.15 a `set -u` unbound-variable fault with an ERR-only trap exits **127**;
@@ -227,3 +236,39 @@ repo-side `SessionStart` surface, stamp-gated to once per seven days.
 - `scripts/followthroughs/compaction-format-drift-8323.sh` — all four arms
   driven, including a renamed `subtype` going RED and a positive control still
   going GREEN.
+
+## Amendment — 2026-09-18 (review panel): the transcript read and its canary are deleted
+
+A two-lens design-validity pass (`code-simplicity-reviewer`, `architecture-strategist`) converged,
+by different routes, on the corroboration read and everything built to protect it. Recorded here
+rather than only in the PR, so a future reader does not re-propose it.
+
+**What was deleted:** the `prior_boundaries` field and the transcript grep that produced it;
+`scripts/followthroughs/compaction-format-drift-8323.sh`; `.claude/hooks/compaction-drift-canary.sh`
+and its `.claude/settings.json` binding; four `SOLEUR_COMPACTION_DRIFT*` env vars; the
+`spaced-boundary.jsonl` fixture; the AP-020 widening; and the `claude -> hooks` C4 edge amendment
+(both now byte-identical to `main` again).
+
+**Why, on four measured grounds:**
+
+1. **Nothing consumed the field.** `plan/SKILL.md` and `work/SKILL.md` read `SOLEUR_COMPACTION_DIRECTIVE`
+   and `recommend=true`; a repo-wide grep found the only other references were the canary files that
+   existed to guard it.
+2. **The number was not even a legible off-by-one.** The ledger resets per session window while the
+   transcript accumulates across `--resume`, so after any reset the two figures diverge arbitrarily.
+   The directive was handing a model two disagreeing counts with no reconciliation rule.
+3. **The canary could not report.** It exited 0 unconditionally and emitted its only finding on plain
+   stderr, which `.claude/hooks/README.md` records as discarded for an exit-0 hook — and it wrote its
+   cadence stamp *before* the run, so a RED verdict suppressed itself for seven days.
+4. **It guarded the wrong thing.** Since this decision moved the count to the ledger, the format the
+   feature depends on is the **stdin envelope** (`hook_event_name`, `source`, `trigger`, `session_id`),
+   not the transcript. A rename of `compact_boundary` cannot break the feature; a rename in the
+   envelope can, and the canary was blind to it.
+
+**What replaces it:** nothing, deliberately, and the residual risk is named rather than mitigated. No
+offline probe can observe the envelope contract — it exists only at hook-fire time. The hook fails
+open to silence, every marker carries the `claude --version` string for drift attribution, and the
+measurements this decision rests on are recorded in `compaction-state.sh`'s header so a CLI bump has
+something to be re-measured against. The aggregated signal that would actually detect "the hooks
+stopped firing" is the local ledger metric already tracked at **#8324**; no new issue was filed,
+because that one already covers it.
