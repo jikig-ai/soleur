@@ -49,4 +49,8 @@ ExecStart=/bin/sh -c 'u=git-data-luks-reopen.service; \
   [ -n "$d" ] || d="git-data luks_reopen: the unit failed before the script wrote a detail (doppler run, exec, or start timeout)"; \
   set -- /usr/local/bin/git-data-emit "git-data LUKS reopen FAILED" luks_reopen fatal "$d" "$a" "$r" "$c" "$k" "$n" "unit=$u"; \
   timeout 90 /usr/local/bin/doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- "$@" || "$@"'
-TimeoutStartSec=120
+# 150, not 120: the Doppler arm's `timeout 90` plus the direct arm's own worst case (the
+# emitter's Sentry POST -m 10 --retry 2 ≈ 33 s, plus two Better Stack POSTs at -m 10 ≈ 53 s)
+# is 143 s, so at 120 the fallback got 30 s of a 53 s worst case (review). Nothing waits on
+# this oneshot, so the extra 30 s is free.
+TimeoutStartSec=150

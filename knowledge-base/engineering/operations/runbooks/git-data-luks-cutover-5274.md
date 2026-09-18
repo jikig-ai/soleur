@@ -271,6 +271,12 @@ tick, one root cause: the reopen's own fatal, gc's unit failure, and gc's mountp
   concurrency group. A run that ends `cancelled` without executing a step was displaced, not refused.
   Re-dispatch it once the group's current holder has finished.
 - **A re-run asks for approval again.** The environment sits on the job that reads the key.
+- **The reporter's own failure is dark, and that is inherent to a host with no journal off-box.**
+  If both of `git-data-luks-reopen-failure.service`'s arms fail (Sentry and Better Stack both
+  unreachable from the host), that ladder's fatal is lost; the next hourly ladder re-emits, and a
+  later success lands `luks_reopen_ok restarts=<n>`. A host with the store closed AND both sinks
+  unreachable is dark until one recovers — as is every other git-data signal (gc's mountpoint fatal
+  uses the same emitter; the web-side probe checks TCP :22 only).
 
 ## Rotation
 

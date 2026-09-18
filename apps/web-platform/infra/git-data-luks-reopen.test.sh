@@ -168,6 +168,11 @@ done
 REP_BODY="$SCRATCH/rep.body"
 ok "$(unit_has "$REP_BODY" 'Type=oneshot')" "R1 reporter Type=oneshot"
 ok "$(unit_has "$REP_BODY" 'Environment=HOME=/root')" "R2 reporter HOME=/root"
+# The reporter's bound must exceed its Doppler arm's `timeout` plus the direct arm's worst case
+# (90 + 53 = 143 s), or a hang kills the cgroup during the fallback — the exact class M21 closes.
+_rep_tmo=$(grep -oE '^TimeoutStartSec=[0-9]+' "$REP_BODY" | grep -oE '[0-9]+' | head -1)
+_rep_to=$(grep -oE 'timeout [0-9]+ /usr/local/bin/doppler' "$REP_BODY" | grep -oE '[0-9]+' | head -1)
+ok "$([ -n "$_rep_tmo" ] && [ -n "$_rep_to" ] && [ "$_rep_tmo" -ge $((_rep_to + 53)) ]; echo $?)" "RU-tmo reporter TimeoutStartSec (${_rep_tmo:-?}) >= timeout (${_rep_to:-?}) + 53 s direct-arm worst case"
 ok "$(unit_has "$REP_BODY" 'PrivateTmp=yes')" "RU-pt reporter PrivateTmp=yes — /etc/default/git-data-doppler points DOPPLER_CONFIG_DIR at /tmp/.doppler, and a planted .doppler.yaml there redirects api-host (review)"
 ok "$(unit_has "$REP_BODY" 'LimitCORE=0')" "RU-core reporter LimitCORE=0"
 ok "$(unit_has "$REP_BODY" 'Environment=TMPDIR=/dev/shm')" "R3 reporter TMPDIR=/dev/shm (not the unit's RuntimeDirectory)"
