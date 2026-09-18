@@ -64,8 +64,8 @@ learnings; filenames are chosen at write time.
 - [x] 4.6 Add the cutover script to all four enumerating sites in the image build workflow.
 - [x] 4.7 Add the install block to `apps/web-platform/infra/inngest-bootstrap.sh`, **fail-closed** on missing assets rather than mirroring the skip arm.
 - [x] 4.8 Add the new unit to `apps/web-platform/infra/doppler-injection-bound.test.sh`'s population. **No sudoers change** — the unit is a root oneshot and the host runs no listener.
-- [ ] 4.9 Push the tag, build the image, **capture the digest**, then re-pin it at both sites. CORRECTED 2026-09-18 (see the plan's execution amendment): this is IN-PR, not post-merge — GuardA reds until the pinned tag contains the new carriers, and the repo's own precedent tags feature-branch commits. It is the LAST step before ship, after review freezes the carriers.
-- [ ] 4.9b Assert the pinned digest resolves to an image containing the cutover script, before the replace.
+- [x] 4.9 Push the tag, build the image, **capture the digest**, then re-pin it at both sites. CORRECTED 2026-09-18 (see the plan's execution amendment): this is IN-PR, not post-merge — GuardA reds until the pinned tag contains the new carriers, and the repo's own precedent tags feature-branch commits. It is the LAST step before ship, after review freezes the carriers. DONE 2026-09-18: tag `vinngest-v1.1.36` at 8841c83f0 (the review-round head), build run 35357585629 success, signed digest `sha256:73ae626273681b11f936af52198043c236cc220cbdc0cb71599eccb18d8bf700` read by command from the run's own `Signed …@sha256:` line and its `digest:` push line; re-pinned at all FOUR sites (cloud-init-inngest.yml IREF+ZIREF, cloud-init.yml IREF+ZIREF); GuardA 160/160, every carrier resolves and is byte-identical, 13 of 13.
+- [x] 4.9b Assert the pinned digest resolves to an image containing the cutover script, before the replace. DONE 2026-09-18, from the signing run's own record (GHCR is private and the read PAT is revoked — AP-016 — so no local pull exists): layers 13/16, 14/16, 15/16 of the build that produced this digest are `COPY inngest-luks-cutover.sh|.service|.timer`, the ENTRYPOINT copies all three to /tmp for the bootstrap, and the zot mirror step reports the same digest (crane copy is digest-preserving). GuardA additionally proves the tag's TREE carries the trio byte-identical to HEAD.
 - [x] 4.10 Write `apps/web-platform/infra/inngest-luks-cutover.test.sh` and register it single-line.
 
 ## Phase 5 — the writer and the plan-shape gate
@@ -90,7 +90,7 @@ learnings; filenames are chosen at write time.
 ## Ship gate
 
 - [ ] 7.1 All pre-merge acceptance criteria green.
-- [ ] 7.2 PR body carries `Ref #6894`, `Ref #7695`, `Ref #8017` — never `Closes`.
+- [x] 7.2 PR body carries `Ref #6894`, `Ref #7695`, `Ref #8017` — never `Closes`. DONE 2026-09-18: body carries exactly those three `Ref` lines, `closingIssuesReferences` is empty (0), title is `feat(inngest): additive blue-green LUKS cutover for the Redis AOF store (#6894)`.
 - [ ] 7.3 Full battery green, or every failure confirmed pre-existing on `origin/main` by the same command.
 
 ## Cross-cutting, added by the review passes
