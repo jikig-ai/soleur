@@ -1,16 +1,21 @@
-79  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
-# RAISED 78 -> 79 (#8178), ITEMISED — exactly one file:
-#   scripts/lib/git-data-boot-signal-poll.sh — the git-data boot poll's scratch dir.
-# It is SOURCED into the caller's shell (the workflow step and the suite both `source`
-# it), so a `trap ... EXIT` here would REPLACE the caller's trap rather than add to one,
-# silently disarming whatever cleanup the caller registered. The site carries a
-# `lint-trap-ownership: ok` annotation with that reason; the census counts POPULATION and
-# deliberately does not honour the escape, which is why this number moves too.
-# The leak is bounded: one directory per git_data_boot_poll call, under TMPDIR, on an
-# ephemeral Actions runner destroyed with the job. An explicit `rm -rf "$scratch"` was
-# the alternative and was rejected — it reintroduces a variable-rooted rm the P1b
-# relative-operand guard cannot prove safe, trading a bounded leak for an unprovable
-# destructive operand.
+80  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
+# mktemp -d output directory IS the deliverable (email/bug bodies the operator
+# sends after the run), so it must outlive the process by design; annotated
+# `# lint-trap-ownership: ok` at the site.
+# 80th entrant (2026-09-18, #8178): scripts/lib/git-data-boot-signal-poll.sh — the
+# git-data boot poll's scratch dir. It is SOURCED into the caller's shell (the workflow
+# step and the suite both `source` it), so a `trap ... EXIT` here would REPLACE the
+# caller's trap rather than add to one, silently disarming whatever cleanup the caller
+# registered. The site carries a `lint-trap-ownership: ok` annotation with that reason;
+# the census counts POPULATION and deliberately does not honour the escape, which is why
+# this number moves too. The leak is bounded: one directory per git_data_boot_poll call,
+# under TMPDIR, on an ephemeral Actions runner destroyed with the job. An explicit
+# `rm -rf "$scratch"` was the alternative and was rejected — it reintroduces a
+# variable-rooted rm the P1b relative-operand guard cannot prove safe, trading a bounded
+# leak for an unprovable destructive operand.
+# NOTE (#8178 merge): #8160 and #8178 each raised 78 -> 79 independently, for DIFFERENT
+# files. The merged population carries both, so the floor is 80. Neither raise is undone.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.

@@ -1792,6 +1792,11 @@ if want_scripts; then
   # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #8160: the devin-docs-drift watcher's anchors fire on third-party doc text, so
+  # a polarity inversion or a dead regex is invisible until the day the watch was
+  # built for. This suite extracts the check step verbatim and drives both
+  # directions — affirmative cloud claims MUST fire, negations MUST NOT.
+  run_suite "scripts/devin-docs-drift-check" bash scripts/devin-docs-drift-check.test.sh
   # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
   # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
   # closing condition is a claim about MACHINES, and the probe is how that claim
@@ -2165,16 +2170,8 @@ if want_scripts; then
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
   # than telemetry — a green boot marker must not authorize a supply-chain retirement.
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
-  # #8159: exit-code harness for the post-merge cloud-parity evidence probe. Registered
-  # explicitly (orphan-suite class above). This probe is notify-only — its verdicts feed a
-  # legal-adjacent tracker whose close is an operator judgement, so the load-bearing pins are
-  # the never-0/never-1 invariant (0 is the sweeper's close verb; 1 its fail/reopen verb) and
-  # the 2-vs-3 split: a measurement that could not run (missing file, missing toolchain,
-  # non-regular file at the probe path) must report CANNOT ESTABLISH, not NOT YET — "nothing
-  # qualifies" for "could not look" is the inversion the contract exists to express. The suite
-  # also pins the fenced-template guard: cloud-probe.md's checklist carries a fenced markdown
-  # TEMPLATE naming SC1/SC3/SC4, and a fence-blind parse reads documentation as a verdict.
-  run_suite "scripts/cloud-mode-postmerge-evidence-8159" bash scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh
+  # (#8159 retired 2026-09-17 — issue closed; probe script + suite deleted per
+  # the script's own RETIREMENT note.)
   # #8178's close criterion (git-data-boot-poll-8178.sh): PASS only on a post-merge git-data
   # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
   # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
