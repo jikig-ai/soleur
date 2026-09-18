@@ -336,8 +336,12 @@ directory under CWD. Both edges get suite rows.
 - The `pkill` reaper and `env -u WAYLAND_DISPLAY`/X11 prelude — Linux-only
   (the proxy itself is POSIX). With a soleur-namespaced profile there is no
   shared-profile population to reap; orphan accumulation on customer machines
-  is bounded to one plugin server per session and Claude Code reaps children
-  on exit.
+  is bounded to one plugin server per session. The residual is
+  orphan-on-own-profile: a SIGKILLed session leaking its `playwright-mcp`
+  child, which the next session's server then contends with on the same
+  profile's `SingletonLock`. Whether Claude Code's exit path reaps the child
+  is measured in Phase-0 probe item 5; the failure mode and playbook entry
+  are named in `failure_modes`.
 - The `bash -c` wrapper entirely.
 
 ## Technical Considerations
@@ -420,6 +424,12 @@ installed CLI, with a scratch plugin dir:
 3. Name-collision behaviour: a user-scoped `playwright` plus the plugin's —
    both servers listed, both tool namespaces live, no silent override.
 4. macOS sanity of the launch argv (BSD userland; no bash prelude needed).
+5. **Orphan-on-own-profile reaping** (user-impact sign-off condition): SIGKILL
+   the CLI parent while the plugin server holds the soleur profile, restart,
+   and measure whether the leaked `playwright-mcp` child contends on
+   `SingletonLock` (the 2026-07-05 mechanism, self-inflicted). If reaping
+   fails, the connect-failure playbook must name the stale-profile symptom —
+   record which arm held in the probe record.
 
 Evidence lands in `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-proxy-time-port/plan-time-probe-record.md`
 (same convention as the #7980 probe record).
@@ -586,6 +596,9 @@ failure_modes:
   - mode: "customer toggles the plugin server off in /mcp"
     detection: "`mcp__plugin_soleur_playwright__*` tools absent; skills' fallback prose"
     alert_route: "agent-facing (file-form path), not paged"
+  - mode: "orphan-on-own-profile: SIGKILLed session leaks the plugin's playwright-mcp child; next session's server contends on the soleur profile SingletonLock and Chrome tears its pages down"
+    detection: "Phase-0 probe item 5 measures exit-path reaping; live symptom is a refused/half-dead connect whose playbook entry names the stale-profile check (`pgrep -f soleur-playwright-mcp-profile` class)"
+    alert_route: "agent-facing via extended connect-failure playbook (Phase 1.4), not paged"
 
 logs:
   where: "Claude Code per-project MCP log dir (jsonl); proxy inherits server stderr there"
@@ -605,7 +618,7 @@ at_rest:
     evidence: "proxy argv injection at playwright-mcp-redact-proxy.py (--user-data-dir-name resolution); the dir is new, created by this registration"
     defends_against: "casual file-read of stored session cookies on keychain-backed platforms"
     does_not_defend: "any process running as the customer user reading the profile dir; a seized disk on a non-keychain platform; an agent instructed to exfiltrate it"
-    disclosed_as: "not-publicly-claimed — no docs/legal/** surface names this store"
+    disclosed_as: "docs-claimed on merge — Phase 1.4 adds the separate-profile note to agent-browser/SKILL.md (user-impact Finding 2); no docs/legal/** surface makes an at-rest protection claim"
     live_verification: "unavailable:customer-machine store — verified indirectly by the suite asserting the argv the proxy injects"
 in_transit:
   - connection: "Claude Code stdio client -> proxy -> @playwright/mcp child (pipes, same host)"
