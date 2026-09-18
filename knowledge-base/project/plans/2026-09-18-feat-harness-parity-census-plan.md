@@ -212,7 +212,7 @@ the census supersedes rather than sits beside the existing guard.
 
 Author the ADR. Update the brainstorm and learning figures. Run the full battery.
 
-## Guard Contract
+## Guard Contract — v1 (SUPERSEDED; retained as review record)
 
 ### Guard 1 — cross-harness invocation-form census
 
@@ -576,3 +576,249 @@ What L142 actually prescribes is *"pin it with a repo-internal test against a **
 
 Direction chosen by the operator after the panel: **invert to negative space.** v1's design
 sections above are retained as the review record; they are not the plan of record.
+
+# PLAN v2 — negative-space assertion (plan of record)
+
+## v2 Overview
+
+Invert the gate. Instead of asserting a block is **present** (which certifies how the agent
+*arrived* and says nothing about how the doc *dispatches*), assert that a harness-specific
+invocation token is **absent** — and that skills name the canonical `soleur:<name>` that the
+adapter resolves on every harness.
+
+The predicate becomes **provable complete**, because its token set is not a guess: it is read
+off `plugins/soleur/lib/harness.ts`, which is where the forms are *defined*.
+
+## v2 Measurements (re-derived 2026-09-18; every number has its command)
+
+| Quantity | Value | Derivation |
+| --- | --- | --- |
+| Population | **101** docs | `git ls-files 'plugins/soleur/skills/*/SKILL.md'` (98) + `'plugins/soleur/commands/*.md'` (3) |
+| In violation (blocks + fences stripped) | **45** | python scan, token set below |
+| Occurrences | **175** | same |
+| Compliant today | **56** | 101 − 45 |
+| In-fence occurrences (excluded, pinned) | **38** | 213 − 175 |
+| `/soleur:<name>` total | 205 | of which **57** name a command (`go`/`help`/`sync`) → legitimate per ADR-224; **135** name a skill → violation; 0 unrecognised |
+| Agent docs (deferred) | 68, **8** with Claude-only spawn prose | `git grep -l 'Task tool\|Skill tool' -- plugins/soleur/agents` |
+
+**The gate catches every instance the panel named that v1 missed:** `go.md` (25),
+`gdpr-gate` (17), `ship` (14), `plan-review` (9). `trigger-cron` correctly shows **0** — its
+references are already bare `soleur:cron-list` / `soleur:trigger-cron`, i.e. the canonical form.
+Spec-flow listed bare `soleur:<name>` among "missed triggers"; under negative space it is the
+**target** form, not a defect.
+
+## v2 Token set — derived, not guessed
+
+From `formatSkillInvocation` (`harness.ts:120-140`) and `formatAgentSpawn` (`:212-245`):
+
+| Token | Harness it is specific to |
+| --- | --- |
+| `$soleur:<name>` | codex |
+| `/soleur:<name>` where `<name>` is a **skill** | devin (and Claude's slash surface) |
+| `Skill tool`, `Task tool`, `@agent-`, `subagent_type` | claude |
+| `spawn_subagent` | grok |
+| `run_subagent` | devin |
+| `spawn_agent` | codex |
+| **`soleur:<name>` (bare)** | **none — this is the canonical form the adapter resolves** |
+
+**Exempt by construction:** `/soleur:go`, `/soleur:help`, `/soleur:sync`. Those are *commands*,
+not skills, and ADR-224 records that the command surface owns its slash name.
+
+## v2 Requirements
+
+- **V1** Population is `git ls-files` over `plugins/soleur/{skills/*/SKILL.md,commands/*.md}` — 101
+  docs. No regex participates in scoping.
+- **V2** For each doc: strip sanctioned marker blocks (`<!-- x:start -->…<!-- x:end -->`) and
+  fenced code, then assert **zero** harness-specific skill-invocation tokens in the remainder.
+- **V3** The token set is imported from a single exported constant in `harness.ts`, adjacent to
+  the `format*` functions that define the forms. One source; a new form added there widens the gate.
+- **V4** An exemption ledger with **real rows**: the `go.md` Step 2.0 adapter table and the
+  per-harness `INSTRUCTIONS.md` files legitimately enumerate harness forms — that is their job.
+  Measured need: a small number of rows, not zero. This answers v1's "ledger ships empty" defect.
+- **V5** One exact-snapshot assertion, not four floors:
+  `expect(census).toEqual({ population: 101, violations: 0, exempt: <n>, inFence: 38 })`.
+  It catches removal, addition, over-matching and under-matching in one line, which no floor did.
+  The `inFence` pin stops fenced examples becoming a laundering channel.
+- **V6** `SUPPORTED_HARNESSES` in `harness.ts` with `Harness` derived from it, `| "unknown"`
+  retained, **and `as const`** — without it the type silently degrades to `string` and nothing
+  would catch it, because nothing typechecks `plugins/` (F21).
+- **V7** A `never` exhaustiveness arm on `routingInstructions` and `pollInstructions`, so adding
+  a harness to `SUPPORTED_HARNESSES` fails to compile until the adapter implements it. Closes F27:
+  today both have `default:` arms, so a fifth harness would silently map to Claude conventions
+  while the gate compelled docs to advertise it.
+- **V8** Repoint **only** `workflow-fidelity.test.ts:373` at `SUPPORTED_HARNESSES`. Leave
+  `harness-model-map.test.ts:76` alone — its `["claude","grok"]` is deliberate, matches
+  `TIER_MAPS`' two keys, and widening it would pass vacuously via the unmapped fallback (F6/F11b).
+- **V9** Write `plugins/soleur/grok/INSTRUCTIONS.md`. `codex/` and `devin/` have one; grok does
+  not, so "the adapter resolves it" is not yet true on all four. One file; it is the prerequisite
+  that makes the canonical form honest rather than aspirational.
+- **V10** One authoring line in `plugins/soleur/skills/skill-creator/SKILL.md`. v1's NG3 and NG4
+  closed the `AGENTS.rules.md` and convergent-bullet routes without opening any other, leaving the
+  RED test as the only teaching surface (CTO #1 / spec-flow A1).
+- **V11** The failure message names, per offending doc: the token, its line, the harness it is
+  specific to, and the canonical replacement. A path list is a scoreboard, not a remediation.
+
+## v2 Non-Goals
+
+- **NG1** Agent docs (68, 8 offenders). Same defect class, separate population → **new issue**.
+- **NG2** `#7453`'s ~105 `${CLAUDE_PLUGIN_ROOT:-…}` sites. Unchanged.
+- **NG3** Mirror completeness (`#8306`). Unchanged.
+- **NG4** Helper extraction (`#8307`). Unchanged — and v2's single-assertion shape removes the
+  floors/ledger triple that made this a fourth bespoke instance.
+- **NG5** **Deleting the `UNION` array.** Dropped from scope on three independent findings: its
+  population is near-disjoint from the block set (2 of 20), it is property-defined with no
+  classifier available, and it is the only anti-omission guard in its describe (F5/F29).
+- **NG6** No `AGENTS.rules.md` rule (`cq-agents-md-tier-gate`, unchanged from v1).
+
+## v2 Implementation Phases
+
+### Phase 1 — Prerequisites (no gate yet)
+
+1. Write `plugins/soleur/grok/INSTRUCTIONS.md` (V9), mirroring the `codex/` table's shape.
+2. Add `SUPPORTED_HARNESSES` + `as const` + derived `Harness` (V6) and the `never` arms (V7).
+3. Repoint `workflow-fidelity.test.ts:373` only (V8).
+
+### Phase 2 — The mutation matrix, then the gate
+
+Write the matrix into the test file, then the census. It must be RED on today's tree with
+**45 docs / 175 occurrences**, each named with its token and line. A green first run means the
+token set is wrong.
+
+### Phase 3 — Ledger + fixtures
+
+Create the ledger with its real rows (V4) and the decoy fixtures TR6/TR7 require. The population
+function takes an **injectable root** (default: `git ls-files`) so the matrix is runnable — v1's
+matrix was not (F28/D4).
+
+### Phase 4 — Canonicalise (GREEN)
+
+Rewrite the 175 occurrences across 45 docs to the canonical form. This is a **deletion** of
+harness-specific prefixes, not an insertion of boilerplate.
+
+### Phase 5 — Authoring surface + ADR
+
+V10's skill-creator line, then ADR-226.
+
+## Guard Contract — v2 (plan of record)
+
+### Guard 2 — harness-specific invocation tokens are absent
+
+**Property.** No doc under `plugins/soleur/{skills,commands}` instructs an agent to invoke a
+skill using a form specific to one harness. Skills are named canonically and the adapter resolves
+them per harness. The detector cannot report clean over a population it failed to enumerate, nor
+over a token set narrower than the forms `harness.ts` defines.
+
+**Assembly.** Five chokepoints, none a member list: (1) population — `git ls-files` over two
+globs, injectable for tests; (2) the token set — one exported constant beside the `format*`
+functions that define the forms; (3) the strip step — sanctioned marker blocks and fenced code;
+(4) the exemption ledger — strictly parsed, real rows; (5) one exact-snapshot assertion.
+
+**Mutation matrix.** Each row must drive the suite RED **with the census's own sentinel on
+stdout**, not merely a non-zero exit — ADR-193's highest-value section is *"Why the mutation
+oracle asserts the REASON, not the exit code"*, and v1's matrix violated it (F9).
+
+| # | Mutation | Targets |
+| --- | --- | --- |
+| N1 | Reintroduce `skill: soleur:preflight` via the Skill tool in `ship/SKILL.md` | the core property, at the exact site v1 passed green |
+| N2 | Reintroduce `/soleur:trigger-cron` in `gdpr-gate/SKILL.md` | the originating defect of #8299 |
+| N3 | Add a **second** violating doc after a compliant first | a classifier that stops at the first hit |
+| N4 | Neuter the population glob to zero files | the guard's own dispatch — `0 checked` must FAIL |
+| N5 | Remove one token from the exported set | the set is load-bearing and single-sourced |
+| N6 | Move a violation **into** a fenced block | the `inFence` pin — fences must not launder |
+| N7 | Add a ledger row for a path not in the population | stale-row rot (F/B4) |
+| N8 | Delete the ledger file | fail-closed on a missing input, not "zero exemptions" |
+| N9 | Add a fifth member to `SUPPORTED_HARNESSES` without an adapter arm | **must fail to compile** (V7) |
+
+**Harness rows.**
+
+| # | Mutation | Must |
+| --- | --- | --- |
+| H1 | Delete the assertion body, keep the describe | **RED** — otherwise it pins nothing |
+| H2 | A doc whose only harness token is inside a sanctioned marker block | **PASS** — the permitted non-canonical input; without this row the matrix cannot detect a classifier that rejects everything |
+| H3 | `go.md`'s adapter table, ledger-exempt | **PASS**, counted EXEMPT not VIOLATION |
+| H4 | After N9, add the adapter arm | **PASS** — the green counterpart v1's M5 lacked (F/E2) |
+
+**Anchor.** V5 is a single exact snapshot, so there is no floor to lower separately: weakening it
+means editing the one number the assertion compares, in the same hunk as the assertion. That is
+strictly more visible than v1's four floors in a fifth file — and v1's separate-file argument was
+conceded as compliance rather than judgment (F14/L142's precondition is absent for an index-derived
+denominator). The honest limit: this proves consistency, not integrity, and is not claimed otherwise.
+
+## v2 User-Brand Impact
+
+Unchanged threshold: **`single-user incident`**, `requires_cpo_signoff: true`.
+
+**If this lands broken:** the gate reports green over a doc that still dispatches Claude-only —
+which is exactly what v1 would have done, now with a passing check attached.
+
+**If this leaks:** no new data surface. The exposure prevented is a self-hosted operator on Grok,
+Codex or Devin following plugin-shipped prose naming a form their harness does not have, hitting a
+dead command, and uninstalling without filing. **Silent churn.** v2 closes the three concrete
+instances v1 left open, including `go.md` — the first command of every session.
+
+## v2 Observability
+
+Restructured per CTO F17: the **gate** has no observability layer; the **deliverable** is layer 7.
+
+```yaml
+gate:                       # build-time, no layer — it never runs on a customer machine
+  ci: .github/workflows/ci.yml:942 (test-bun) — no registration needed
+  precommit: lefthook.yml:333 (plugin-component-test, glob plugins/soleur/**/*.md)
+              -- the faster loop, unclaimed in v1
+  failure_modes:
+    - a doc reintroduces a harness-specific token -> named with token + line + harness
+    - the token set narrows                       -> N5
+    - the population resolves to zero             -> N4 (0 checked FAILS)
+    - a fenced block is used to launder           -> the inFence pin
+deliverable:                # the canonicalised prose, layer 7
+  artifact: the 101 docs in the customer's installed plugin tree, read in-session
+  failure_modes:
+    - mode: the canonical `soleur:<name>` does not resolve on a harness
+      detection: grok has ci.yml:1320 (grok-fidelity); claude is the dev harness;
+                 codex and devin have NO live invocation-form verification
+      alert_route: none today -- declared uncovered, tracked by #8306
+discoverability_test:
+  command: bun test plugins/soleur/test/harness-parity.test.ts
+  expected_output: "101 examined, 0 violations, <n> exempt, 38 in-fence"
+```
+
+The uncovered mode is **declared** rather than omitted — v1 listed only gate-self-failures and
+left the one real layer-7 mode in User-Brand Impact with no detection row.
+
+## v2 Acceptance Criteria
+
+### Pre-merge
+
+- [ ] V-AC1 RED on today's tree: **45 docs / 175 occurrences**, each named with token, line, harness.
+- [ ] V-AC2 After Phase 4: `{population: 101, violations: 0, exempt: <n>, inFence: 38}`.
+- [ ] V-AC3 N1–N9 each RED **with the census sentinel on stdout** (not merely non-zero exit).
+- [ ] V-AC4 H1–H4 behave as specified; H2/H3/H4 PASS.
+- [ ] V-AC5 N9 fails **at compile time**: `cd plugins/soleur && npx tsc --noEmit -p <minimal tsconfig>`.
+      Nothing typechecks `plugins/` today (F21), so this AC also asserts `as const` is present.
+- [ ] V-AC6 `devin-cloud-mode.test.ts` green, `marked.length == 67` unchanged, **`UNION` intact**.
+- [ ] V-AC7 `harness-model-map.test.ts:76` unchanged — still `["claude","grok"]`.
+- [ ] V-AC8 Exactly one 4-harness array literal outside `harness.ts`:
+      `[ "$(git grep -lE '\[[^]]*"codex"[^]]*"devin"[^]]*\]' -- plugins/soleur/lib plugins/soleur/test | grep -vx plugins/soleur/lib/harness.ts | wc -l)" -eq 0 ]`
+- [ ] V-AC9 No banned plugin-root form introduced, added lines only, code paths only:
+      `! git diff origin/main...HEAD -- plugins/ scripts/ .github/ .claude/ | grep -E '^\+' | grep -q 'PLUGIN_ROOT:-'`
+      (v1's AC11 counted context and deletion lines and failed on its own prose — F7.)
+- [ ] V-AC10 `plugins/soleur/grok/INSTRUCTIONS.md` exists and names the canonical token.
+- [ ] V-AC11 `skill-creator/SKILL.md` names the obligation (V10).
+- [ ] V-AC12 `git fetch origin main && bash scripts/test-all.sh` green, with
+      `SOLEUR_ALLOW_FULL_GATE=1` so a sibling worktree cannot flip it (spec-flow §8 on AC13).
+- [ ] V-AC13 ADR-226 ordinal re-derived ref-wide immediately before merge. **Two branches already
+      claim ADR-225** (`feat-one-shot-adr142-…`, `feat-pluggable-web-agent-engines`), so 226 is
+      contended; if it moves, sweep plan + spec + every AC naming it in the same edit (F13).
+- [ ] V-AC14 `Ref #7453`, `Ref #8306`, `Ref #8307`, `Ref #8308` + the new agent-docs issue —
+      none folded in, none closed.
+
+## v2 Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| The token set is incomplete | It is read off the `format*` functions that *define* the forms, and N5 asserts it is load-bearing. This is the one thing v1 could not claim |
+| Fenced examples launder violations | The `inFence` pin (38) + N6 |
+| `as const` omitted → `Harness` degrades to `string` silently | V-AC5's real `tsc` run, since nothing typechecks `plugins/` today |
+| A fifth harness compels docs to advertise an unimplemented adapter | V7's `never` arms + N9/H4 |
+| 175 edits across 45 docs drift | They are deletions of a prefix, not 46 instantiations of a template — the 8.3% born-drift rate CTO measured applies to templates, not removals |
+| Canonicalising breaks a genuine command reference | 57 `/soleur:{go,help,sync}` hits are exempt by construction (ADR-224); H3 pins the adapter table |
