@@ -339,6 +339,16 @@ for n in $REFS; do
   # runtime error that aborts the gate -- which fails OPEN (no decision emitted), i.e. exactly
   # the direction a security gate must never fail. Caught by the suite's deny rows going to
   # `<none>`; `bash -n` cannot see it.
+  #
+  # `|| printf '%s' "$body"` for the SAME reason, one level down: under this file's
+  # `set -eo pipefail`, a non-zero status from this command substitution aborts the gate
+  # mid-loop, before the `jq -n` that emits the decision envelope -- so the tool call proceeds
+  # with no decision at all. Every sibling awk in this file is guarded; this one was the
+  # exception. Falling back to the UNSTRIPPED body is the deny-prone direction: a fenced
+  # directive then still reads as absent and the tracker lands in UNENROLLED.
+  # parity-extract:begin  (scripts/followthrough-predicate-parity.test.sh slices between these
+  # markers; they are content anchors, so editing the program below cannot silently unhook the
+  # oracle the way a shape-anchored slice does.)
   unfenced_body=$(printf '%s' "$body" | awk '
     BEGIN { fence = 0; fence_ch = ""; fence_len = 0 }
     { sub(/\r$/, "") }
@@ -351,9 +361,15 @@ for n in $REFS; do
     }
     fence { next }
     { print }
-  ')   # fence-strip
+  ' || printf '%s' "$body")   # fence-strip
+  # parity-extract:end
+  # `<!--` then ZERO OR MORE spaces, matching the consumer's ` *` at parse_directive. An exact
+  # single space is STRICTER than the authority, which is a false DENIAL on a merge gate: a
+  # `<!--soleur:followthrough` or `<!--   soleur:followthrough` tracker IS enrolled and WILL be
+  # swept, while this gate would tell the author it is not and block `gh pr ready`. Measured
+  # before the fix: consumer honours all three spacings, this gate saw one of three.
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && grep -q '^<!-- soleur:followthrough' <<<"$unfenced_body" \
+     && grep -qE '^<!-- *soleur:followthrough' <<<"$unfenced_body" \
      && grep -qE 'earliest=' <<<"$unfenced_body"; then
     # `|| true`: a body with no `script=` token is a NORMAL answer here (the tracker is simply
     # not enrolled), not an error. Without it `grep -oE`'s exit 1 on no-match propagates and the

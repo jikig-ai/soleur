@@ -1571,11 +1571,16 @@ for n in $REFS; do
     }
     fence { next }
     { print }
-  ')
+  ' || printf '%s' "$body")
+  # `|| printf` and herestrings, NOT pipes -- the same two hazards the hook copy carries fixes
+  # for. Under `set -eo pipefail` an awk failure in this command substitution aborts the gate
+  # before it emits a decision (fail-OPEN on a merge gate), and `grep -q` on a PIPE can take
+  # SIGPIPE on an early match and report false under `pipefail`. Falling back to the unstripped
+  # body is the deny-prone direction.
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && printf '%s' "$unfenced_body" | grep -q '^<!-- soleur:followthrough' \
-     && printf '%s' "$unfenced_body" | grep -qE 'earliest='; then
-    spath=$(printf '%s' "$unfenced_body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+     && grep -qE '^<!-- *soleur:followthrough' <<<"$unfenced_body" \
+     && grep -qE 'earliest=' <<<"$unfenced_body"; then
+    spath=$(grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' <<<"$unfenced_body" | head -1 | sed 's/^script=//' || true)
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi
   [ "$enrolled" = 1 ] || UNENROLLED+=("$n")

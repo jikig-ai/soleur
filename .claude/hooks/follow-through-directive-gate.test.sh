@@ -348,7 +348,11 @@ make_work_dir "$TMP" > /dev/null
 # its own directory, so a copy in a mktemp dir dies at source time and the row would measure
 # that, not the branch. Removed in the same block.
 MUT="$(dirname "$HOOK")/.tmp-hook-no-fence-branch-$$.sh"
-awk '/# DISTINGUISH "no script= in the directive" FROM/{skip=1} skip && /^  fi$/{skip=0; next} skip{next} {print}' "$HOOK" > "$MUT"
+# Anchored on the CURRENT comment. When #7490's review rewrote this block from two arms to
+# three, the old anchor stopped matching and the row reported "mutation did not land" — the
+# landing assertion doing its job. Strip from the fence-branch preamble through the fenced
+# arm's closing `fi`, leaving the generic script=-is-empty deny as the only outcome.
+awk '/# THREE WAYS TO ARRIVE HERE, AND THEY NEED DIFFERENT ADVICE/{skip=1} skip && /^  fi$/{n++; if (n==3) {skip=0}; next} skip{next} {print}' "$HOOK" > "$MUT"
 chmod +x "$MUT"
 TOTAL=$((TOTAL + 1))
 if diff -q "$HOOK" "$MUT" >/dev/null 2>&1; then
@@ -371,6 +375,44 @@ fi
 rm -f "$MUT"
 rm -rf "$TMP"
 
+# === T17e/f/g (#7490 review): the parser must AGREE WITH THE CONSUMER on every shape, not
+# just the one the retired ship template emitted. Measured before the fix, all three of these
+# PASSED this gate while `scripts/sweep-followthroughs.sh` refused to honour them — the create
+# gate green-lighting exactly the dead-tracker state it exists to prevent. The third is the
+# original #7490 bug class, still live, and it is the one the ship template's own list
+# indentation invites. ===
+ft_shape_case() {  # ft_shape_case <label> <body-printf-fmt> <expect-substring>
+  local label="$1" fmt="$2" expect="$3" TMP
+  TMP=$(mktemp -d)
+  make_work_dir "$TMP" > /dev/null
+  # shellcheck disable=SC2059
+  printf "$fmt" > "$TMP/body.md"
+  local INPUT; INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
+  run "$label" "$INPUT"
+  assert_deny "$expect"
+  rm -rf "$TMP"
+}
+ft_shape_case "T17e (#7490): a ~~~ fence is still a fence — deny names the fence" \
+  '## Verification\n\n~~~html\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n~~~\n' \
+  "CODE FENCE"
+ft_shape_case "T17f (#7490): a 3-space-indented fence is still a fence — deny names the fence" \
+  '## Verification\n\n   ```html\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n   ```\n' \
+  "CODE FENCE"
+ft_shape_case "T17g (#7490): an INDENTED unfenced directive — deny names the indentation, not a fence" \
+  '## Verification\n\n  <!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n' \
+  "INDENTED"
+
+# === T17h: the zero-space spelling `<!--soleur:` is what the CONSUMER honours (` *`), so the
+# gate must too — the mirror of the soak gate's G5-4. A false denial here blocks a legitimate
+# tracker at creation time. ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+printf '%s' $'## Verification\n\n<!--soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n' > "$TMP/body.md"
+INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
+run "T17h: zero spaces after <!-- — pass (the consumer honours it, so the gate must)" "$INPUT"
+assert_pass
+rm -rf "$TMP"
+
 # === Summary ===
 printf '\n=== Results: %d/%d passed, %d failed ===\n' "$PASS" "$TOTAL" "$FAIL"
 
@@ -383,7 +425,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
     "$((PASS + FAIL))" "$TOTAL" >&2
   exit 1
 fi
-MIN_ASSERTIONS=20
+MIN_ASSERTIONS=24
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d cases ran; floor is %d — the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

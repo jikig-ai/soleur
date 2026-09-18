@@ -442,7 +442,28 @@ fi
 # newlines collapsed) because a prose anchor that happens to straddle a line wrap
 # is a property of the reflow, not of the message — pinning the raw bytes would
 # make every reflow a false failure and tempt the fix of deleting the anchor.
-NORM_SYNC="$(sed 's/^[[:space:]]*>[[:space:]]*/ /' "$SYNC_MD" | tr '\n' ' ' | tr -s ' ')"
+# SCOPED TO THE BLOCKQUOTE — the runtime message — not the whole file. Flattening all of
+# sync.md makes every assertion below satisfiable by the PROSE that EXPLAINS the message, which
+# is the `cq-assert-anchor-not-bare-token` collision in its sharpest form: the moment a task
+# requires both "assert X" and "document X", the documentation becomes false-match surface for
+# the assertion. Measured on this very file: with `claude plugin list` deleted from the
+# blockquote and left only in the surrounding prose, the suite stayed 13/13 green.
+# The haystack is the RUNTIME MESSAGES ONLY, in both forms this file uses to carry one: a `>`
+# blockquote and an italic-quoted `*"…"*` span (the headless variant). Explanatory prose is
+# excluded by construction.
+#
+# Flattening the WHOLE file — which is what this line used to do — makes every assertion below
+# satisfiable by the prose that EXPLAINS the message. That is `cq-assert-anchor-not-bare-token`
+# in its sharpest form: the moment a task requires both "assert X" and "document X", the
+# documentation becomes false-match surface for the assertion, and the richer the rationale the
+# larger the surface. Measured on this file: with `claude plugin list` deleted from the runtime
+# message and left only in the surrounding prose, the suite stayed 13/13 GREEN.
+# The italic opener is ` *"` (SPACE star quote), not a bare `*"`. A bare `*"` also matches
+# inside a bash snippet (`[[:space:]]*"` at the plugin-root preflight), which opened a span that
+# never closed and swallowed 79 lines of prose — re-vacuating the assertion this scoping exists
+# to fix. Measured: the first attempt at this fix was itself vacuous in exactly the same way.
+NORM_SYNC="$( { sed -n 's/^[[:space:]]*>[[:space:]]*/ /p' "$SYNC_MD"; \
+                awk '/ \*"/{f=1} f{print} /"\*/{f=0}' "$SYNC_MD"; } | tr '\n' ' ' | tr -s ' ')"
 missing_props=""
 # (1) attribution: the operator's project is not at fault.
 grep -Fq "not with your project" <<<"$NORM_SYNC" || missing_props="$missing_props attribution"

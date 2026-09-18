@@ -217,3 +217,102 @@ The six enrolled probes as they stand, under `env -i`:
 #7923 (`Follow-through sweeper: comment de-duplication, a per-probe timeout, and the ungated
 --add-label enrolment path`, OPEN). Its §1 is precisely the deferred scope and records a tracker
 carrying 33 identical comments. No issue filed; it is cited in the plan's `## Not in scope`.
+
+---
+
+# Review-round corrections (2026-09-18) — figures the panel falsified
+
+Ten agents reviewed the implementation. Every counted claim in the record above was re-derived
+independently; nine reproduced exactly. These did not, and are corrected here rather than left
+standing.
+
+## The `secrets=` population was 22 → 28, not 24 → 28
+
+The `24` was **back-derived** (`28 − 4`, the four probes that gained the clause) rather than
+measured, and it is internally inconsistent with the PR's own honoured-directive figure:
+
+- honoured directives grew 25 → 31, i.e. by exactly **6**;
+- all six newly-honoured trackers declare `secrets=` after the edit;
+- therefore the declaring population must grow by 6, and `24 → 28` grows by 4.
+
+Measured through the shipped `parse_directive` over all 56 live bodies, with the six pre-edit
+bodies restored for the before-state: **22 → 28**. The missing two are #6488 and #6678, which
+already carried `secrets=` **inside their fence** — where no parser could read it — and joined
+the declaring population purely by being unfenced. The workflow comment now says so.
+
+The adjacent claim ("counting with grep gives 28 before AND after") is also wrong: grep gives
+**26 before / 28 after** by file. The point it makes — that grep answers a different question —
+survives; the number did not.
+
+## AC17 is MET: the sweeper dry run completed and was read
+
+Run `35371156340` sat queued ~28 minutes behind a repo-wide Actions backlog (13 of the 15 most
+recent runs were queued), then ran. Read from the LOG, not the conclusion — though the
+conclusion is trustworthy here, since the workflow carries no `continue-on-error`:
+
+```
+sweep done (no_directive=27 fenced_directive=0)
+```
+
+`no_directive` fell 33 → 27, exactly the six trackers this change unfenced, and zero fenced
+verdicts fired. Per-tracker, as the sweeper itself measured them:
+
+| Tracker | sweeper verdict | matches the local reading? |
+|---|---|---|
+| #7490 | not run — `earliest=2026-09-21` not reached | yes (by design) |
+| #7985 | exit 1 FAIL | yes |
+| #6678 | exit 3 CANNOT ESTABLISH | yes |
+| #6488 | exit 1 FAIL | n/a locally (no `SUPABASE_ACCESS_TOKEN`; it ran for real in CI) |
+| #5813 | exit 1 FAIL | yes |
+| **#6617** | **exit 1 FAIL** | **NO — local reads rc=0 PASS** |
+
+## UNEXPLAINED: #6617 reads PASS locally and FAIL under the sweeper
+
+This is recorded as a divergence rather than resolved, because the cause was not established.
+
+The probe looks for a `^RESULT: (PASS|FAIL)\b` line in comments whose `authorAssociation` is
+OWNER/MEMBER/COLLABORATOR. That comment exists on #6617 (`RESULT: PASS`, author `deruelle`,
+association `MEMBER`), and the probe returns rc=0 PASS locally — measured both WITH and WITHOUT
+`GH_REPO` forwarded, so repo resolution is not the difference. Under the sweeper it returns
+rc=1 with "no verdict is recorded on #6617", i.e. its comment query came back without the line.
+
+The remaining difference is the identity: the operator's token locally, `GITHUB_TOKEN`
+(`github-actions[bot]`) in CI. `authorAssociation` is a property of the comment's author and
+should not vary by reader, so that hypothesis is not confirmed — it is simply what is left.
+
+**The PR body and this record therefore state the SWEEPER's verdict, not the local one.** The
+sweeper is the authority; a local reading that contradicts it is not evidence that the tracker
+will close. The probe is enrolled and will report daily, which is the fastest way to settle it.
+
+## Smaller corrections
+
+- The AC7 `sed` prints **134** lines (the whole file), not 130. The finding it supports — `p` is
+  on the second substitution and `"\?$` matches empty at every line end — is unchanged.
+- The AC13b reader census sums to 31, not 33: the "probes citing their own directive" row is
+  **16**, not 18 (one of the counted files is a `*.test.sh`, and one is
+  `scripts/bootstrap-ccla-watch-7922.sh`, which is neither a probe nor in that directory).
+- "50 quiet, 0 false positives" was measured in-session and is now sourced here: of the 56 open
+  trackers, 6 were fenced-only and the other **50** emit no fenced verdict under the shipped
+  predicate.
+
+## Defects the panel found in code this change ADDED
+
+Recorded because all three were in the verification, not the fix — the pattern this repo's own
+rules predict for a guard-shaped PR.
+
+1. **The create-time gate's fence grep matched EVERY line.** `'^[ ]?[ ]?[ ]?(\`\`\`|~~~)'` written
+   with backslash-escaped backticks inside a single-quoted shell word: a backtick is already
+   literal there, and GNU grep reads `\`` as the buffer-start anchor, so the alternation
+   degenerated and the branch fired on any body reaching it. Caught by the indented-directive
+   row whose deny reason never appeared — not by reading.
+2. **Rule 3's `literal-default` arm dropped any path with a hyphen in its first segment.** The
+   backward walk to the nearest `-` finds the `-` of `:-` only when segment one is hyphen-free,
+   so `${OV:-knowledge-base/…}` — this repo's commonest prefix — yielded `base/…`, failed the
+   tracked-top-dir test, and vanished with no diagnostic. Now captured directly, with a
+   fixture pair (R3-M7d absent / R3-M7e present).
+3. **The `claude plugin list` assertion was satisfied by the prose explaining it.** The sync
+   suite flattened the WHOLE of `sync.md`, so the sentence "that is why `claude plugin list` is
+   named in the same breath" pinned the property. Proven by deleting the literal from the
+   runtime message only: 13/13 still green. The haystack is now the runtime messages alone —
+   and the FIRST attempt at that fix was vacuous the same way, because a bare `*"` opener also
+   matched inside a bash snippet and swallowed 79 lines of prose.

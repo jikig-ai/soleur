@@ -7,6 +7,10 @@
 # cited from followthrough-convention.md, ADR-031, the Article 30 register and several
 # learnings, and renaming it would churn point-in-time records.
 #
+# RULE 1 (#6757) -- the BANNED WORD-EXPANSION BAN. Rules 2 and 3 carry headings in both the
+# header and the body; rule 1 did not, so a reader looking for it found it only via the summary
+# line above.
+#
 # WHY: under the sweeper's non-interactive shell, `${VAR:?}` / `${VAR?}` ABORTS with
 # status 1 the instant the variable is unset/empty. In the sweep-followthroughs.sh exit
 # contract `exit 1 = FAIL = "do NOT close"`, so an unprovisioned secret posts a DAILY
@@ -63,7 +67,10 @@
 # DECLARED BLIND SPOTS (named, not silent): a path built by concatenation across lines or by
 # `printf -v`; a path assembled inside `$(cd ... && pwd)`; anything containing `..` (a
 # `$HERE/../../apps/...` script-relative literal is NOT normalised and is NOT checked); a
-# second path literal on a line that already yielded one; and anything in a `*.test.sh`
+# second path literal on a line that already yielded one; a path whose TOP-LEVEL directory is
+# not currently tracked (`plausible()` keys on the tracked top-dir set, so renaming a whole
+# top-level directory makes every reference into it silently unplausible rather than missing --
+# the one case where this rule degrades toward quiet); and anything in a `*.test.sh`
 # (rule 1's exclusion, load-bearing here because `ccla-representative-icla-7922.test.sh`
 # assigns a gitignored `node_modules/.bin/tsx` path that exists locally and not in the
 # `test-scripts` CI shard). A value that is a regex/glob pattern, a URL, or carries an
@@ -105,6 +112,7 @@ fi
 
 violations=0
 scanned=0
+# RULE 1: the banned `${VAR:?}` / `${VAR?}` word-expansion on an executable line.
 for f in "$TARGET_DIR"/*.sh; do
   [[ -e "$f" ]] || continue
   case "$f" in
@@ -177,10 +185,16 @@ function plausible(p,   top) {
     cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "braced-default"
   } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-\$[A-Za-z_][A-Za-z0-9_]*\//)) {
     cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "bare-default"
-  } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-[A-Za-z0-9_.-]+\//)) {
-    m = RSTART + RLENGTH
-    while (substr(line, m, 1) != "-") m--
-    cand = cut_at(substr(line, m + 1)); arm = "literal-default"
+  } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*:-/)) {
+    # Capture the default DIRECTLY. The first version walked backwards to the nearest `-`,
+    # which is the `-` of `:-` only when the first path segment is hyphen-free -- so
+    # `${OV:-knowledge-base/...}` yielded `base/legal/...`, whose top segment is not a tracked
+    # directory, and `plausible()` dropped the whole reference with no diagnostic. That is a
+    # silent MISS in the arm's own most likely shape: `knowledge-base/` is this repo's
+    # commonest repo-relative prefix. Measured: a seeded probe with one `knowledge-base/` and
+    # one `scripts/` absent default reported ONE miss, not two.
+    rest = substr(line, RSTART + RLENGTH)
+    if (rest ~ /^[A-Za-z0-9_.-]+\//) { cand = cut_at(rest); arm = "literal-default" }
   } else if (match(line, /"\$\{[A-Za-z_][A-Za-z0-9_]*\}\//)) {
     cand = cut_at(substr(line, RSTART + RLENGTH)); arm = "braced"
   } else if (match(line, /"\$[A-Za-z_][A-Za-z0-9_]*\//)) {
@@ -192,8 +206,7 @@ function plausible(p,   top) {
 }
 RULE3_AWK_EOF
 
-REPO_PATHS_BASE="${REPO_ROOT:-.}"
-tracked_list="$( (cd "$REPO_PATHS_BASE" 2>/dev/null && git ls-files 2>/dev/null) || true )"
+tracked_list="$( (cd "${REPO_ROOT:-.}" 2>/dev/null && git ls-files 2>/dev/null) || true )"
 # The membership set is written to a FILE and grepped as a file operand -- never
 # `printf ... | grep -qxF`. Under this script's `set -o pipefail`, `grep -q` closes the pipe on
 # its FIRST match, the producer takes SIGPIPE (141), and the pipeline exits non-zero although

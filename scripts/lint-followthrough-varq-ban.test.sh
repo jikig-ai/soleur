@@ -394,7 +394,20 @@ r3_arm R3-M6b 'X="$REPO_ROOT/scripts/followthroughs/absent-7490.sh"'            
 r3_arm R3-M7  'Q="${SOME_OVERRIDE:-${REPO_ROOT}/scripts/absent-7490.sh}"'               'braced :- default-expansion arm'
 r3_arm R3-M7b 'Q="${SOME_OVERRIDE:-$REPO_ROOT/scripts/absent-7490.sh}"'                 'bare :- default-expansion arm (the live 7761 shape)'
 r3_arm R3-M7c 'Q="${SOME_OVERRIDE:-scripts/absent-7490.sh}"'                            'literal :- default-expansion arm'
+# R3-M7d: the SAME arm with a HYPHENATED first segment. The first implementation walked
+# backwards to the nearest `-`, which is the `-` of `:-` only when segment one is hyphen-free,
+# so `knowledge-base/` -- this repo's commonest repo-relative prefix -- yielded `base/...`,
+# failed the tracked-top-dir test, and was dropped with NO diagnostic. A silent miss in the
+# arm's own most likely shape, and invisible to R3-M7c because `scripts` has no hyphen.
+r3_arm R3-M7d 'Q="${SOME_OVERRIDE:-knowledge-base/project/absent-7490.md}"'             'literal :- default, HYPHENATED first segment'
 r3_arm R3-M8  'source "${REPO_ROOT}/scripts/lib/absent-7490.sh"'                        'source arm'
+
+# R3-M7e (must-PASS): the same hyphenated shape pointing at a path that EXISTS. Without it,
+# R3-M7d is equally satisfied by an arm that reports EVERY `knowledge-base/` default as missing.
+d=$(mkcase r3_m7e)
+r3_fixture "$d" probe.sh 'Q="${SOME_OVERRIDE:-knowledge-base/project/README.md}"'
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R3-M7e must-PASS: a hyphenated-prefix default that EXISTS is not a miss" "R3-M7e expected exit 0, got $GUARD_RC: $GUARD_OUT"
 
 # --- R3-M8b: `..`-relative is a DECLARED BLIND SPOT. The row pins the declaration either way:
 # if a future revision normalises `..`, this must be re-decided deliberately, not drift. ---
@@ -550,7 +563,7 @@ fi
 # Absolute floor at the MEASURED green count; a lower bound, so adding rows never trips it --
 # re-measure and raise it in the same commit that adds a row. Reported with printf + exit 1,
 # never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=71
+MIN_ASSERTIONS=73
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
