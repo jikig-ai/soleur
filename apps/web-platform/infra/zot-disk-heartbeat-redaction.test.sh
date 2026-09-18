@@ -28,7 +28,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CI="$SCRIPT_DIR/cloud-init-registry.yml"
+CI_YML="$SCRIPT_DIR/cloud-init-registry.yml"   # NOT `CI`: runners export CI=1 and the export attribute survives reassignment
 HB_PATH="/usr/local/bin/zot-disk-heartbeat.sh"
 
 TMP="$(mktemp -d)"
@@ -60,7 +60,7 @@ extract_block() {
       if ($0 ~ /^[[:space:]]*$/) { print ""; next }
       exit
     }
-  ' "$CI" > "$out"
+  ' "$CI_YML" > "$out"
 }
 
 # THE RATIONALE STRIP, replicated from zot-registry.tf's
@@ -342,6 +342,55 @@ assert "G1-s exactly ONE degrade branch funnels all three RC=1 paths" \
 assert "G1-s the degrade path does NOT re-tag the tier" \
   "! grep -qE 'ZOT_ERR_SRC=.*redact_failed' '$RAW'"
 
+# --- Guard 2 (#7960): the delivery-proof field -------------------------------------------------
+# err_redact_rev is what the #7960 follow-through probe keys delivery on, so it must be on EVERY
+# row and in the TRUSTED region (before the first ` zot_last_err=`, the attacker-influenceable
+# free-text tail). The probe's fixtures read the token from this same LINE= assignment.
+_LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW" | head -1)"
+# Bounded on the HEAD with ( |$), not on a trailing space: a trailing space would silently pin
+# "some field must follow err_redact_rev", so moving the token to the end of the trusted region
+# would red this with a message about the VALUE CLASS rather than about placement.
+assert "G2-s exactly ONE SOLEUR_ZOT_DISK LINE= assignment, and it carries err_redact_rev (>=1)" \
+  "[[ \$(grep -cF 'LINE=\"SOLEUR_ZOT_DISK' '$RAW') -eq 1 ]] && grep -qE '(^| )err_redact_rev=[1-9][0-9]*( |\$)' <<<\"\$_LINE_ASSIGN\""
+# PLACEMENT, asserted separately from the value class: the token is in the trusted head.
+assert "G2-t err_redact_rev is in the TRUSTED region (before the first zot_last_err=)" \
+  "grep -qE '(^| )err_redact_rev=' <<<\"\${_LINE_ASSIGN%% zot_last_err=*}\""
+# Emit-level, on the suppressed (no-jq) path. Asserted on the row's HEAD, not via assert_emit,
+# which matches the whole body and so could be satisfied by a token in the free-text tail.
+_G2_OUT="$(run_hb "$TIER4_HEADERS" PATH="$NOJQ:/usr/bin:/bin")"
+assert "G2-e the POSTed row carries err_redact_rev in its trusted region (suppressed path)" \
+  "[[ -n \"\$_G2_OUT\" ]] && grep -qE '(^| )err_redact_rev=[1-9][0-9]*( |$)' <<<\"\${_G2_OUT%% zot_last_err=*}\""
+# Must-PASS, non-canonical path: the tier-1 panic sample carries the field too.
+assert_emit "G2-p the tier-1 panic row carries err_redact_rev" "$PANIC_LINE" present "err_redact_rev="
+# THE FALLBACK PATH had no field assertion at all. `fallback` is the tier the #7960 probe's T and L
+# counts key on, so a tier-conditional strip in the producer would blind the probe on exactly the
+# rows it grades while G2-s (source text), G2-e (suppressed path) and G2-p (panic path) all stayed
+# green. Asserted on the row HEAD, not the whole body.
+_G2_FB="$(run_hb "$TIER4_HEADERS")"
+assert "G2-f a fallback-tagged row carries err_redact_rev in its trusted region" \
+  "[[ -n \"\$_G2_FB\" ]] && grep -qE '(^| )zot_last_err_src=fallback( |\$)' <<<\"\$_G2_FB\" && grep -qE '(^| )err_redact_rev=[1-9][0-9]*( |\$)' <<<\"\${_G2_FB%% zot_last_err=*}\""
+# The #7960 probe grades ANY `suppressed` row whose tail is not exactly `none` as a leak -> a public
+# FAIL. That is safe only because the producer forces ZOT_LAST_ERR=none while preserving the tag.
+# Nothing asserted that invariant, so a producer edit could make the probe accuse a clean host.
+assert "G2-n a suppressed row's zot_last_err is exactly none (the probe grades any other tail as a leak)" \
+  "grep -qE ' zot_last_err=none[\"}]*\$' <<<\"\$_G2_OUT\""
+
+# --- Reject controls for the VERDICT-OWNING wrappers ---------------------------------------
+# USED_* proves the wrappers RAN and EXPECTED_MIN proves they ran N times; neither can see a
+# wrapper that always takes the pass branch. Measured: an `assert()` rewritten to `CASES++; pass`
+# and an `assert_emit` with both verdict branches inverted each left this suite fully green. Drive
+# each wrapper once with an input that MUST fail, require FAIL to have moved, then unwind the
+# counters, the transcript and the case tally so the floor stays exact. printf/exit, never through
+# the wrapper under test.
+_c_p0=$PASS; _c_f0=$FAIL; _c_c0=$CASES; _c_v0="$VERDICTS"
+assert "reject control for assert() (this FAIL line is EXPECTED)" "false"
+assert_emit "reject control for assert_emit() (this FAIL line is EXPECTED)" "$TIER2_BENIGN" absent "pcent="
+if [[ "$FAIL" -ne $((_c_f0 + 2)) ]]; then
+  printf '\n[FATAL] harness: a verdict wrapper did not register a failure for an input that MUST fail (FAIL %s -> %s) -- every assertion above is unbacked.\n' "$_c_f0" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_c_p0; FAIL=$_c_f0; CASES=$_c_c0; VERDICTS="$_c_v0"
+
 # --- Row 8 / harness (a): the guard's own dispatch ------------------------------------------
 for _w in assert assert_emit; do
   _u="USED_${_w}"
@@ -359,7 +408,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=33
+EXPECTED_MIN=39
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1
