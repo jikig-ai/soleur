@@ -61,8 +61,8 @@ The mechanisms the body still describes at length but which the revisions **cut*
 | D2's two-carve-out set | **R8** | **Replaced** by a three-class set; the ack class takes **no** skip variable |
 | ADR-226 "extends" ADR-178 | **R24** | **Relabelled** "constrained by" |
 
-Guards drop 5 → 3 (Guards 3 and 4 survive, plus one byte-equality assertion). Files to create
-18 → 12; files to edit 19 → 14. No property in P1–P5 is lost.
+Guards drop 5 → 3: Guards 3 and 4 survive intact, and Guard 5 is **reduced** to a single
+prologue/scope assertion (Ruling 1). Files to create 18 → **13**; files to edit 19 → **13**. No property in P1–P5 is lost.
 
 ## Research Insights
 
@@ -93,12 +93,12 @@ Guards drop 5 → 3 (Guards 3 and 4 survive, plus one byte-equality assertion). 
 
 | Mechanism the ask proposed | Property | What already covers it | Disposition |
 |---|---|---|---|
-| Port the peer `template.sh` library verbatim (204 L) | P2 | Five of six primitives already exist in-repo: stage progress + preflight + closing summary at `apps/cla-evidence/infra/bootstrap.sh:57-61,76-88,98-103,110,307-315`; `.env` upsert **duplicated 4×** across `plugins/soleur/skills/community/scripts/{linkedin,x,bsky,discord}-setup.sh`; `gh secret` via stdin at `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh:70-96`; hidden entry + xtrace-refusal at `provision-doppler/scripts/provision-doppler.sh:14-20` and `provision-hetzner/scripts/provision-hetzner.sh:123` | **CUT the port. EXTRACT instead.** Only cross-platform URL opening (macOS `open` / WSL `wslview`) is genuinely new — in-repo prior art is `xdg-open`-only at `community/scripts/linkedin-setup.sh:327-329`. Porting would create a *sixth* copy of the `.env` upsert. |
+| Port the peer `template.sh` library verbatim (204 L) | P2 | Five of six primitives already exist in-repo: stage progress + preflight + closing summary at `apps/cla-evidence/infra/bootstrap.sh:57-61,76-88,98-103,110,307-315`; `.env` upsert **duplicated 4×** across `plugins/soleur/skills/community/scripts/{linkedin,x,bsky,discord}-setup.sh`; `gh secret` via stdin at `plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh:70-96`; hidden entry + xtrace-refusal at `provision-doppler/scripts/provision-doppler.sh:14-20` and `provision-hetzner/scripts/provision-hetzner.sh:123` | **CUT the port. EXTRACT instead.** Only cross-platform URL opening (macOS `open` / WSL `wslview`) is genuinely new — in-repo prior art is `xdg-open`/`open`-only at `community/scripts/linkedin-setup.sh:322-333`. Scope note: `git grep wslview` returns hits **only** in this branch's own planning artifacts; it is zero across `plugins/`, `apps/` and `scripts/`, which is the claim that matters. Porting would create a *sixth* copy of the `.env` upsert. |
 | Invent a sourced-shell-library convention | P2 | `apps/cla-evidence/scripts/_cf-admin-token.sh:1-14` already establishes it: `_*.sh`, `# shellcheck shell=bash`, sourced-never-executed, documented sourcing preconditions, named call sites, companion `_cf-admin-token.test.sh` | **CUT.** Mirror the existing convention. |
 | A second capability map in `go.md` | P4 | `plugins/soleur/commands/help.md:45-82` is already a harness-aware capability map with manifest-derived counts | **CUT the second map. EXTEND the existing one**, and point `go.md` at it. |
 | Restate the five phase-boundary options from scratch | P4 | Three of five are already specified as AGENTS rules: *`/clear`* by `cm-when-proposing-to-clear-context-or`, *handoff* by `wg-end-of-work-emit-resume-prompt`, *subagent* by `cm-delegate-verbose-exploration-3-file` | **CUT the restatement.** The genuinely new content is the **ordering** (first yes wins), **Continue ruled out first**, and **`/compact` placed last**; the other three cite their existing id. **Correction:** an earlier draft of this row cited `go.md:183` as covering *Continue*. Verified at `go.md:181-185` — that block is the **lifecycle handoff chain** (`plan → work → review → qa → compound → ship`), a different axis entirely. The issue conflates pipeline handoff with context-boundary handoff; this plan does not. |
 | Author an ASD-STE100 rule set inside `operator-explain` | P5 | Registry saturated (`simple-english` 3423★, `asd-ste100` 497★, `ste100` 234★); the plain-language **register** is already written at `plugins/soleur/skills/operator-digest/SKILL.md:22-28` | **CUT.** Cite ASD-STE100 by name; point at operator-digest's Register as the single source. |
-| Cite `plugins/soleur/docs/pages/glossary.njk` as the skill's vocabulary | P5 | It is a **marketing** glossary (~8 terms: Company-as-a-Service, agentic engineering, MCP, plugin, skill) in Eleventy HTML — not a controlled vocabulary | **CUT.** Category mismatch. Vocabulary source deferred to `kb-glossary` (#8289, bundle 3); until then the skill reads the repo's own `CLAUDE.md`/`AGENTS.md` terms. |
+| Cite `plugins/soleur/docs/pages/glossary.njk` as the skill's vocabulary | P5 | It is a **marketing** glossary (**ten** terms: Company-as-a-Service, agentic engineering, MCP, vibe coding, context engineering and five siblings) in Eleventy HTML — not a controlled vocabulary | **CUT.** Category mismatch. Vocabulary source deferred to `kb-glossary` (#8289, bundle 3); until then the skill reads the repo's own `CLAUDE.md`/`AGENTS.md` terms. |
 
 Nothing in the Cut List removes a *property* — every cut replaces a new mechanism with one already on `origin/main`.
 
@@ -239,7 +239,7 @@ Headroom is zero, and `cq-skill-description-budget-headroom` requires plan-time 
 - `operator-bootstrap` — **31 words**: *"This skill should be used when post-merge steps need a runnable script, not a prose checklist. Generates an idempotent bootstrap.sh that chains every automatable step and prompts only for credential entry."*
 - `operator-rephrase` — **23 words**: *"This skill should be used when the last message did not land: re-pitch it in plain controlled English using the project's own vocabulary."*
 
-2442 + 54 = **2496**, appended to the constant's comment in the established form (`bumped +54 for #8287 (operator-bootstrap 31 + operator-rephrase 23 words, against a 2442/2442 zero-headroom baseline)`). `/work` re-measures after final wording and sets the bump to the measured delta, not to this estimate.
+2442 + 31 + 25 = **2498** (R20 rewrote the `operator-rephrase` string to 25 words; the earlier 54-word delta predates that), appended to the constant's comment in the established form (`bumped +54 for #8287 (operator-bootstrap 31 + operator-rephrase 23 words, against a 2442/2442 zero-headroom baseline)`). `/work` re-measures after final wording and sets the bump to the measured delta, not to this estimate.
 
 ### D7 — Fold the naming-convention correction into `skill-structure.md`, minimally
 
@@ -313,12 +313,12 @@ Moving `read -rs` into the sourced library drops `provision-hetzner.sh` out of t
 
 - **Register: point, do not restate.** `plugins/soleur/skills/operator-digest/SKILL.md:23-28` already defines it. A third copy would be two too many — `knowledge-base/marketing/brand-guide.md` Tone Spectrum carries a second. The skill says "Register: as defined in `operator-digest/SKILL.md` §Register" and adds only the **delta**: single message, synchronous, and *not* bound by the digest's "every line states a business consequence or it is cut", which is a digest rule that would mangle an in-the-moment restatement of a technical fact.
 - **No vocabulary source in v1.** `plugins/soleur/docs/pages/glossary.njk` is disqualified three ways: it is marketing surface with `seoTitle` / `permalink` frontmatter (`:2-6`); its ten entries are category terms (Company-as-a-Service, agentic engineering, MCP, vibe coding) rather than the operational vocabulary a founder trips on mid-session (worktree, draft PR, auto-merge, compaction, squash); and it is Nunjucks with `{{ }}` interpolation, unreadable as plain text without an Eleventy build. `kb-glossary` arrives in bundle 3 (#8289), **after** this one, so the dependency is filed forward — a scope line added to #8289 — rather than stubbed backward here.
-- **ASD-STE100: cite the discipline, do not claim conformance.** `grep -rn "ASD-STE100\|Simplified Technical English\|controlled English" plugins/ knowledge-base/` returns zero. There is no controlled vocabulary to bind to and no gate that could check conformance, so a seven-line skill *claiming* conformance to a controlled-language standard is false precision. The skill instead names the discipline as its influence and states the checkable parts: short sentences, one idea per sentence, active voice, no jargon, no file paths, no issue numbers. This narrows the issue's wording, so it is recorded in `decision-challenges.md`.
+- **ASD-STE100: cite the discipline, do not claim conformance.** `grep -rn "ASD-STE100\|Simplified Technical English\|controlled English" plugins/` returns zero (the `knowledge-base/` arm now hits this branch's own planning artifacts and only those — see R40). There is no controlled vocabulary to bind to and no gate that could check conformance, so a seven-line skill *claiming* conformance to a controlled-language standard is false precision. The skill instead names the discipline as its influence and states the checkable parts: short sentences, one idea per sentence, active voice, no jargon, no file paths, no issue numbers. This narrows the issue's wording, so it is recorded in `decision-challenges.md`.
 - **Path correction:** the live brand guide is `knowledge-base/marketing/brand-guide.md`. It is **not** under `knowledge-base/overview/`, which contains only `vision.md` — any citation pointing there is stale and must be corrected rather than followed.
 
 ### D14 — One ADR, extending ADR-178
 
-ADR-178 already decided placement and move-not-duplicate; restating it would be redundant. The ADR-worthy decision is the **generated-artifact contract** — a cross-cutting invariant with no single-file trigger, which is what `cq-agents-md-tier-gate` calls ADR-eligible. Provisional ordinal **ADR-226**: the highest on `origin/main` is ADR-224 and ADR-225 is already claimed on a pushed branch (enumerated across all 89 `origin/*` refs, not just `main`). The ordinal is provisional and re-derived immediately before merge.
+ADR-178 already decided placement and move-not-duplicate; restating it would be redundant. The ADR-worthy decision is the **generated-artifact contract** — a cross-cutting invariant with no single-file trigger, which is what `cq-agents-md-tier-gate` calls ADR-eligible. Provisional ordinal **ADR-226**, and it is at **live collision risk**. Measured across all 89 `origin/*` refs: `origin/main` tops out at ADR-224, and **ADR-225 is claimed TWICE** — `feat-one-shot-adr142-inngest-aof-luks-bluegreen` and `feat-pluggable-web-agent-engines` carry different ADR-225 files. Whichever of those two merges second must renumber to 226, taking this plan's ordinal with it. 226 is free at the time of writing and that is not a reservation. Re-derive immediately before merge, and when renumbering, sweep the whole feature's artifact set for the old ordinal in the same edit.
 
 ## User-Brand Impact
 
@@ -337,7 +337,7 @@ ADR-178 already decided placement and move-not-duplicate; restating it would be 
 
 ### ADR
 
-**Create ADR-226 — "Generated operator scripts are non-interactive by default, with two named interactive carve-outs."** Relationship to ADR-178: **extends**. This is an in-scope implementation task, not a follow-up.
+**Create ADR-226 — "Generated operator scripts are non-interactive by default, with two named interactive carve-outs."** Relationship to ADR-178: **constrained by** (R24 — the subjects are disjoint and the only touch point is a deferral; `extends` would send a reader to ADR-178 looking for an interactivity decision that is not there). This is an in-scope implementation task, not a follow-up.
 
 `## Decision` must cover, each cited to its rule:
 
@@ -672,7 +672,7 @@ The `provision-github.sh` dry-run hoist lands in this phase, because its suite c
 
 ### Phase 2 — The library, test-first
 
-Write `plugins/soleur/test/operator-script.test.sh` **before** `operator-script.sh`, driving Guards 3 and 4 red first. Then extract the library: stage progress, preflight, closing summary from `apps/cla-evidence/infra/bootstrap.sh`; the `.env` upsert from `linkedin-setup.sh:443-452` **corrected to exact-key matching**; the stdin-only GitHub secret write and the separate argv variable write from `provision-operator-digest-repo.sh:69-96`; the xtrace/TLS surround from `provision-doppler.sh:14-27`; and the additive `open_url` from `linkedin-setup.sh:322-333` **plus the new WSL arm** (`git grep wslview` returns nothing today).
+Write `plugins/soleur/test/operator-script.test.sh` **before** `operator-script.sh`, driving Guards 3 and 4 red first. Then extract the library: stage progress, preflight, closing summary from `apps/cla-evidence/infra/bootstrap.sh`; the `.env` upsert from `linkedin-setup.sh:443-452` **corrected to exact-key matching**; the stdin-only GitHub secret write and the separate argv variable write from `provision-operator-digest-repo.sh:69-96`; the xtrace/TLS surround from `provision-doppler.sh:14-27`; and the additive `open_url` from `linkedin-setup.sh:322-333` **plus the new WSL arm** (zero `wslview` hits across `plugins/`, `apps/` and `scripts/`).
 
 ### Phase 3 — `operator-bootstrap`
 
@@ -833,7 +833,7 @@ Each gets a filed issue with re-evaluation criteria and a milestone drawn from `
 - **ADR-225 is already claimed on a pushed branch.** The provisional ordinal here is ADR-226, derived across all 89 `origin/*` refs rather than `origin/main` alone, and it must be re-derived immediately before merge.
 - **`plugins/soleur/skills/flag-bootstrap/` exists with no `SKILL.md`**, which is why the directory count (99) and the skill count (98) differ. Confirm it is inert before `operator-bootstrap` lands beside it.
 
-## Plan Review Revisions (R1–R24)
+## Plan Review Revisions (R1–R40)
 
 **These revisions supersede the sections above where they conflict.** Panel: DHH, code-simplicity,
 architecture-strategist, spec-flow-analyzer (eng, escalated to 5 by the `single-user incident`
@@ -986,7 +986,7 @@ statement makes the file contradict itself. A comment on #8290 records both coup
 
 ### Net effect
 
-Guards 5 → 3. Files to create 18 → 12. Files to edit 19 → 14. Mutation rows 26 → ~14. Acceptance
+Guards 5 → 3 (see Ruling 1 — Guard 5 is reduced, not cut). Files to create 18 → **13** (Ruling 2). Files to edit 19 → **13** (Ruling 3). Mutation rows 26 → ~14. Acceptance
 criteria 23 → ~18. No property in P1–P5 is lost. Five correctness findings (the unanswerable `Door:`
 field, the holdless hold, the Phase-5.5-before-Phase-6 ordering, Guard 2's unreachable population,
 Guard 5's non-existent anchor) were **dissolved by cuts** rather than fixed, which is the outcome the
@@ -1163,3 +1163,96 @@ a short exit-code table in the library header and in `operator-bootstrap/SKILL.m
 its meaning in a generated script, and the conflict at `sentinel-pr.sh` so the next author does not
 re-derive 3 as "missing tool". This also closes a founder-facing gap the review raised separately —
 four exit codes were in play with no mapping to a remedy a non-technical operator can act on.
+
+## Deepen-Plan Reconciliation — the four rulings
+
+The Phase 4.45 post-edit audit swept the body for references to mechanisms R1–R40 cut. It found
+roughly 37 surviving sites and, more usefully, **four questions the revisions left genuinely open**.
+The `## READ THIS FIRST` block is a pointer; these are the decisions. They bind.
+
+### Ruling 1 — Guard 5 is REDUCED, not cut. Three guards survive: 3, 4, and 5′.
+
+R10 said "cut Guard 5 in full", but R18 and R26 both go on to reason *from* it, and R24's own
+"Guards 5 → 3" arithmetic is unreachable if three of five are deleted. The audit is right that this
+is incoherent. Resolving it:
+
+- **Guard 3** (secret-write paths) and **Guard 4** (total non-interactive path) survive intact.
+- **Guard 5′** replaces Guard 5: one assertion, not five rows — *every script that acquires a
+  credential carries the xtrace/TLS prologue **above** its `source` line, and the library itself never
+  expands a secret-shaped variable name.* That is the union of the two properties R18 and R26
+  established as real, minus the four mutation rows that tested the linter rather than this change.
+  It keeps the `PROLOGUE_MAX_CMDS = 0` chokepoint and drops the unsatisfiable baseline anchor (R17).
+- Guards 1 and 2 are cut outright (R9, R6). The "one byte-equality assertion" the nav block mentioned
+  was a drafting artefact of the inlined mode and does not exist — R6 removed the thing it would have
+  compared.
+
+**Guard 4 must also be re-specified against R8's three classes** before `/work` writes it: its current
+property ("every prompt has a named skip variable") is exactly what R8 showed would leave the guard
+green over a `hr-menu-option-ack-not-prod-write-auth` violation. Class 2 takes **no** skip variable
+and exits 64 unconditionally without a TTY; class 3 requires a following independent verification.
+**Guard 4 also gains the Anchor R24 promised and the body never added:** the `exit=64` no-TTY probe.
+
+### Ruling 2 — the DPA fixture is RE-PATHED, not deleted. Files to create: 13.
+
+R11 cut three characterization suites, and the audit caught that the fixture row went with them — but
+the surviving `provision-hetzner.sh` suite **still exits 3 without a fixture register**, because the
+DPA gate precedes the `--dry-run` branch and the live register is empty. Deleting the row would leave
+the one suite this PR keeps unable to run at all.
+
+The row moves to `plugins/soleur/skills/provision-hetzner/test/fixture/tenant-dpa-register.md`. That
+makes the count **18 → 13**, not 12; R24's arithmetic was off by exactly this row.
+
+**And the fixture spec carries R35's correction:** `Status` is the **7th visible column**. It is
+`awk -F'|'` field `$8` only because the leading pipe makes field 1 empty. A fixture author who reads
+"column 8" literally puts `Status` one column too far right and every assertion in the suite fails
+against a fixture that looks correct.
+
+### Ruling 3 — Files to edit: 13, not 14.
+
+Six rows are cut: `AGENTS.md` (R15 — no new rule id, so no new index pointer), the three
+`eval-harness` artefacts and the Guard 1 host (R9), and the `provision-github.sh` hoist (R12). No
+revision adds a new file: R14 folds into `components.test.ts`, R22/R27/R28/R29/R37 all land in
+`ship/SKILL.md`, R15 in `AGENTS.rules.md`, R23 in `help.md` — every one of those files is already in
+the list. The count is **13**.
+
+One consequence worth stating: `### Measured budgets` already said "adds no new rule id, so no new
+index pointer is created". That sentence was right before R15 existed and is now the authority; it
+needs only "**three** existing rule bodies" rather than two, because `cm-when-proposing-to-clear-context-or`
+joins the two `hr-*` amendments.
+
+### Ruling 4 — Phase 6 is dissolved into Phase 5.
+
+After R15 (no new rule) and R9 (no enum work, no Guard 1), Phase 6 retains the rule-body amendments
+and the `skill-structure.md` note — one and a half deliverables, both textual, both adjacent to
+Phase 5's `help.md` work. Keeping a phase boundary there implies a sequencing constraint that no
+longer exists. Phase 6's survivors move into Phase 5; the phase numbering below is stale from that
+point and `/work` should treat the phases as a dependency order, not a count.
+
+**The one ordering constraint that is real and that the body gets wrong: R31.** No phase bumps
+`SKILL_DESCRIPTION_WORD_BUDGET`; Phase 0 only re-measures it. The two new `SKILL.md` files land in
+Phases 3 and 5, so `components.test.ts` is RED from Phase 3 through the end. **The constant bump is a
+Phase 0 step**, ahead of its first consumer — the same contract-before-consumer discipline Phase 2
+already applies.
+
+### Acceptance criteria the revisions require and the body never added
+
+The audit found five properties that R7–R40 mandate with no AC behind them. `/work` adds one each:
+the Merge Danger section renders **above** `## Changelog` (R28, or the release-note truncation drops
+it silently); the section clears `PROD_RE`, `SOAK_RE` and the auto-close scan (R27); the credential
+`--reset` path, per-stage precondition and `SOLEUR_BOOTSTRAP_START_STAGE` resume exist (R21); `ship`'s
+operator-step gate gains its fourth "generate a script" option and the wiring assertion checks
+**invocation** rather than a name mention (R22); and the library never expands a secret-shaped
+variable name (R26).
+
+Three existing ACs are unsatisfiable or unfailable as written and are rewritten, not deleted: **AC7**
+against the linter's live behaviour rather than the violator baseline (R17), **AC15**'s first clause
+(already true today) against R23's rendering rule, and **AC19**, which cannot fail from this change —
+so the "no C4 impact" conclusion rests on the actor/system/relationship enumeration alone and now
+says so (R30).
+
+### Standing disposition
+
+The body below `## READ THIS FIRST` is the **audit trail**, not the build order. Where body and
+revisions conflict, the revisions win; where the revisions conflict with each other, these four
+rulings win. `/work` Phase 0 re-derives the ADR ordinal (two branches both hold ADR-225, so 226 is
+free but unreserved) and re-runs the description-budget measurement before touching anything else.

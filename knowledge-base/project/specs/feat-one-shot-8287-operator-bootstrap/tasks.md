@@ -15,12 +15,20 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 > otherwise CI is red from Phase 3 on), and the folded-in wiring assertions move to **Phase 7** (R32).
 > D2's carve-out set is replaced by a three-class set in which the destructive-write ack takes **no**
 > skip variable (R8).
+>
+> **Four rulings resolve the revisions' open questions** — see `## Deepen-Plan Reconciliation` at the
+> end of the plan. (1) Guard 5 is REDUCED to one prologue/scope assertion, not cut — three guards
+> survive: 3, 4, 5'. Guard 4 must be re-specified against R8's three classes or it goes green over a
+> rule violation. (2) The DPA fixture is RE-PATHED to `provision-hetzner/test/fixture/`, not deleted —
+> the surviving suite exits 3 without it; and `Status` is the **7th visible column**, `awk` field $8.
+> (3) Files to edit is 13. (4) Phase 6 dissolves into Phase 5, and **the description-budget bump moves
+> to Phase 0** (task 0.2) — otherwise CI is red from Phase 3 to the end.
 
 
 ## Phase 0 — Preconditions (no code)
 
 - [ ] 0.1 Confirm `plugins/soleur/skills/flag-bootstrap/` holds only `SETUP.md` and is not a live skill (D5).
-- [ ] 0.2 Re-measure the skill-description budget using `components.test.ts`'s own path; fix the bump to the measured delta, not the 54-word estimate (D6).
+- [ ] 0.2 Re-measure the skill-description budget using `components.test.ts`'s own path **and bump `SKILL_DESCRIPTION_WORD_BUDGET` here, in Phase 0** (R31 — the two new SKILL.md files land in Phases 3 and 5, so deferring the bump leaves CI red from Phase 3 on). Estimate after R20's rewrite: 2442 + 31 + 25 = 2498; use the measured delta, not the estimate.
 - [ ] 0.3 Re-derive the free ADR ordinal across every `origin/*` ref, not just `main`. Provisional is ADR-226 (D14).
 - [ ] 0.4 Read `scripts/lint-shell-trace-credential-refusal.py` `:74-76`, `:125-128`, `:142-150` in full before touching any prologue (Guard 5).
 - [ ] 0.5 Confirm `shellcheck` availability. Measured absent on this host — if still absent, `bash -n` is the syntax gate and no suite may prescribe `shellcheck`.
