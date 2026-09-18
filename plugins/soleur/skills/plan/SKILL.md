@@ -1155,7 +1155,7 @@ Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/arch
 - **Before authoring any `### Post-merge (operator)` step, run the automation-feasibility gate.** For each candidate step, check whether a loaded MCP server or CLI can execute it:
   - Supabase migration apply / `cron.job` verify / bucket-exists check / RLS spot-check → `mcp__plugin_supabase_supabase__*`
   - `gh pr ready` / `gh pr merge --squash --auto` / `gh issue close` / `gh workflow run` → `gh` CLI via Bash
-  - End-to-end UI flow → Playwright MCP (`mcp__playwright__*`)
+  - End-to-end UI flow → Playwright MCP (`mcp__plugin_soleur_playwright__*` — dedicated persistent profile; a flow needing stored auth that lives in a different registration's profile uses that registration)
   - Cloudflare DNS / WAF / Workers / Zero Trust → `mcp__plugin_soleur_cloudflare__*`
   - Stripe live-state read / customer / subscription → `mcp__plugin_soleur_stripe__*`
   - Server-side state (deploy status, service health, cron-fire timestamps) → deploy webhook at `deploy.soleur.ai/hooks/deploy-status` (HMAC + CF Access auth via Doppler `prd_terraform`) — read-only; the Inngest function-registry count is NOT in this payload, so function-desync is remediated via the container-restart path below, not diagnosed here

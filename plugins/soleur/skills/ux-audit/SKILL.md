@@ -96,7 +96,10 @@ For each route:
    control on the screenshot surface, on every registration. Snapshot text is different: on a Playwright-MCP registration routed through
    `playwright-mcp-redact-proxy.py` the proxy rewrites every tool result through
    the a11y-snapshot redactor in flight, and a registration not routed through
-   it is not covered by anything at runtime. If a snapshot is ever needed on an
+   it is not covered by anything at runtime. Prefer the plugin-registered
+   `mcp__plugin_soleur_playwright__*` server — already wrapped, so its
+   `browser_snapshot` may be called bare; use the file form on any other
+   registration. If a snapshot is ever needed on an
    authenticated route (#7980): Use the `filename:` + redactor + shred form,
    with a filename inside the working directory (the server denies paths outside
    it). If the server refuses `filename` with an error that starts `refused by

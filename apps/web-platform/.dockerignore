@@ -187,3 +187,6 @@ _plugin-vendored/**
 !_plugin-vendored/**/*.yaml
 !_plugin-vendored/**/*.sh
 !_plugin-vendored/**/*.txt
+# The workflows also `rm -f` this file after vendoring; last-match-wins makes
+# this line the in-context backstop (the **/*.json bang above would match it).
+_plugin-vendored/.mcp.json

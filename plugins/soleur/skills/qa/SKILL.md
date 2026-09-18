@@ -143,6 +143,9 @@ or a generated-credential panel — and an MCP tool result is not a shell stream
 so the redactor cannot be piped into it. On a page carrying a password or
 credential field:
 
+- Prefer the plugin-registered `mcp__plugin_soleur_playwright__*` server: its
+  registration is already wrapped, so call its `browser_snapshot` bare — no
+  file form needed. Fall back to the file form on any other registration.
 - Use the `filename:` + redactor + shred form, with a filename inside the
   working directory (the server denies paths outside it). If the server refuses
   `filename` with an error that starts `refused by
