@@ -263,6 +263,24 @@ export interface CompoundPromoteOutcome {
   run_id?: string;
 }
 
+/**
+ * What one cluster's `apply-and-pr` step DID, carried in the step's RETURN
+ * VALUE rather than pushed into a handler-scope array.
+ *
+ * Inngest memoizes a completed `step.run`'s return value and re-executes the
+ * surrounding handler body on every resume WITHOUT re-entering the callback.
+ * The accumulators used to be plain arrays in the body, mutated from inside
+ * these callbacks -- so on the pass that finally reaches the `completed`
+ * marker every cluster step is memoized, no push has happened, and the marker
+ * emitted `refusals: []` / `clusters_opened: 0` for a run that refused every
+ * cluster. That is byte-identical to a genuinely quiet corpus, which is the
+ * exact distinction #8281 exists to make. A returned value replays; a closure
+ * mutation does not.
+ */
+type ClusterOutcome =
+  | { kind: "opened" }
+  | { kind: "refused"; reason: string };
+
 /** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
 export const REFUSAL_DETAIL_CAP = 20;
 
@@ -964,25 +982,23 @@ export async function cronCompoundPromoteHandler({
       // the branch, so a replay crossing UTC midnight must not re-key it.
       const dateSuffix = runStartedAt.slice(0, 10);
 
-      await step.run(`apply-and-pr-${clusterHash.slice(0, 8)}`, async () => {
+      const outcome: ClusterOutcome = await step.run(
+        `apply-and-pr-${clusterHash.slice(0, 8)}`,
+        async (): Promise<ClusterOutcome> => {
         const octokit = new Octokit({ auth: installationToken });
 
         if (!TARGET_ALLOW_RE.test(cluster.target_path)) {
           logger.warn({ fn: "cron-compound-promote", path: cluster.target_path }, "target-path-refused");
-          refusals.push("target-path-refused");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "target-path-refused" });
           reportSilentFallback(new Error("target_path not in allowlist"), {
             feature: "cron-compound-promote", op: "target-path-refused",
             extra: { path: cluster.target_path },
           });
-          return;
+          return { kind: "refused", reason: "target-path-refused" };
         }
 
         if (cluster.proposed_diff_unified.length > MAX_DIFF_BYTES) {
           logger.warn({ fn: "cron-compound-promote" }, "diff-size-exceeded");
-          refusals.push("diff-size-exceeded");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "diff-size-exceeded" });
-          return;
+          return { kind: "refused", reason: "diff-size-exceeded" };
         }
 
         // #8274: derive the affected paths from git itself. The previous
@@ -995,25 +1011,21 @@ export async function cronCompoundPromoteHandler({
             { fn: "cron-compound-promote", hash: clusterHash, reason, detail: pathVerdict.detail },
             "diff-path-refused",
           );
-          refusals.push(reason);
-          refusalDetail.push({ cluster_hash: clusterHash, reason });
           reportSilentFallback(new Error(`diff refused: ${pathVerdict.reason}`), {
             feature: "cron-compound-promote",
             op: "diff-path-refused",
             extra: { cluster_hash: clusterHash, reason, detail: pathVerdict.detail },
           });
-          return;
+          return { kind: "refused", reason: reason };
         }
 
         if (cluster.target_path === "AGENTS.rules.md" && diffRemovesHardRule(cluster.proposed_diff_unified)) {
           logger.warn({ fn: "cron-compound-promote", hash: clusterHash }, "agents-core-hr-rule-edit-refused");
-          refusals.push("agents-core-hr-rule-edit-refused");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "agents-core-hr-rule-edit-refused" });
           reportSilentFallback(new Error("Cluster proposes hr- rule edit"), {
             feature: "cron-compound-promote", op: "agents-core-hr-rule-edit-refused",
             extra: { cluster_hash: clusterHash },
           });
-          return;
+          return { kind: "refused", reason: "agents-core-hr-rule-edit-refused" };
         }
 
         if (cluster.target_path.startsWith("plugins/soleur/skills/")) {
@@ -1030,28 +1042,27 @@ export async function cronCompoundPromoteHandler({
               owner: REPO_OWNER, repo: REPO_NAME, issue_number: firstPR.number,
               body: `Compound-promote cluster \`${clusterHash}\` proposes edits to \`${cluster.target_path}\` but this PR already touches skill files. Posting diff here instead of opening a conflicting branch.\n\n${diffBody}`,
             });
-            logger.info({ fn: "cron-compound-promote", pr: firstPR.number }, "skill-conflict-guard-comment-posted");
-            return;
+            // WARN, not info: `app_container_warn_filter` keeps level >= 40,
+            // so an info line never reaches Better Stack and this exit was
+            // invisible -- the very blindness #8281 exists to remove.
+            logger.warn({ fn: "cron-compound-promote", pr: firstPR.number }, "skill-conflict-guard-comment-posted");
+            return { kind: "refused", reason: "skill-conflict-guard" };
           }
         }
 
         const branchName = `self-healing/auto-${clusterHash}-${dateSuffix}`;
         if (!BRANCH_SHAPE_RE.test(branchName)) {
           logger.warn({ fn: "cron-compound-promote", branch: branchName }, "branch-name-shape-failed");
-          refusals.push("branch-name-shape-failed");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "branch-name-shape-failed" });
-          return;
+          return { kind: "refused", reason: "branch-name-shape-failed" };
         }
 
         const applied = await applyDiffToWorkspace(cluster.proposed_diff_unified, repoRoot);
         if (!applied) {
           logger.warn({ fn: "cron-compound-promote", hash: clusterHash }, "git-apply-check-failed");
-          refusals.push("git-apply-check-failed");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "git-apply-check-failed" });
           reportSilentFallback(new Error("git apply --check failed"), {
             feature: "cron-compound-promote", op: "git-apply-check-failed",
           });
-          return;
+          return { kind: "refused", reason: "git-apply-check-failed" };
         }
 
         // Post-apply byte budget check (frontmatter-stripped basis, #6794 —
@@ -1063,14 +1074,12 @@ export async function cronCompoundPromoteHandler({
         );
         if (postBytes > MAX_ALWAYS_LOADED_BYTES) {
           logger.warn({ fn: "cron-compound-promote", bytes: postBytes }, "byte-budget-overflow");
-          refusals.push("byte-budget-overflow");
-          refusalDetail.push({ cluster_hash: clusterHash, reason: "byte-budget-overflow" });
           reportSilentFallback(new Error("Post-apply byte budget exceeded"), {
             feature: "cron-compound-promote", op: "byte-budget-overflow",
             extra: { bytes: postBytes, cap: MAX_ALWAYS_LOADED_BYTES },
           });
           await spawnGit(["checkout", "--", "."], { cwd: repoRoot });
-          return;
+          return { kind: "refused", reason: "byte-budget-overflow" };
         }
 
         // Audit log row — atomic O_APPEND write instead of existsSync→read→
@@ -1147,8 +1156,30 @@ export async function cronCompoundPromoteHandler({
           await spawnGit(["clean", "-fd"], { cwd: repoRoot });
         }
         await spawnGit(["checkout", "main"], { cwd: repoRoot });
-        if (result.status === "committed") clustersOpened++;
-      });
+          if (result.status === "committed") {
+            return { kind: "opened" };
+          }
+          // Previously unlogged and uncounted: a non-committed exit
+          // (deletion-guard, dirty index, no changes after an allowlist drop)
+          // left the run reporting zero opened and zero refusals.
+          logger.warn(
+            { fn: "cron-compound-promote", hash: clusterHash, status: result.status },
+            "cluster-not-committed",
+          );
+          return { kind: "refused", reason: `not-committed-${result.status}` };
+        },
+      );
+
+      // Accumulate from the MEMOIZED return value, in the handler body. This
+      // is the whole point: on a replay the callback above does not re-run,
+      // but `outcome` is replayed from step state, so these arrays are correct
+      // on every pass rather than only on the first.
+      if (outcome.kind === "opened") {
+        clustersOpened++;
+      } else {
+        refusals.push(outcome.reason);
+        refusalDetail.push({ cluster_hash: clusterHash, reason: outcome.reason });
+      }
     }
 
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));

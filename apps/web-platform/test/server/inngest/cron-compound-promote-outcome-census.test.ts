@@ -136,3 +136,89 @@ describe("Guard 1 — outcome-marker census", () => {
     expect(markers).toBe(2);
   });
 });
+
+/**
+ * Extract the `apply-and-pr` step callback body — the region Inngest MEMOIZES
+ * and therefore does not re-enter on a replay.
+ *
+ * The lint wants the assembly declaration as a line comment, not docblock
+ * prose, so it sits immediately above the declaration below.
+ */
+// window-assembly: applyStepWindow — complete against the single
+// `async (): Promise<ClusterOutcome> => {` callback in the handler. The
+// function asserts that opener occurs EXACTLY once in the source, so the
+// window cannot silently become a subset of a larger set of step callbacks:
+// if a second cluster step is ever added, that uniqueness check throws rather
+// than this guard quietly covering only the first.
+export function applyStepWindow(src: string): string {
+  const opener = "async (): Promise<ClusterOutcome> => {";
+  const starts = src.split(opener).length - 1;
+  if (starts !== 1) throw new Error(`expected exactly 1 step callback, found ${starts}`);
+  const from = src.indexOf(opener) + opener.length;
+  // The callback closes with the step.run call's own `},\n      );`.
+  const closer = "\n        },\n      );";
+  const to = src.indexOf(closer, from);
+  if (to === -1) throw new Error("step callback close not found");
+  // Comment-strip: this file DOCUMENTS the very constructs the assertions
+  // below forbid, and an unstripped haystack is satisfied by the prose.
+  return src
+    .slice(from, to)
+    .split("\n")
+    .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+    .join("\n");
+}
+
+describe("Guard 3 — replay safety of the outcome accumulators", () => {
+  const MUTATED = [
+    "refusals.push(",
+    "refusalDetail.push(",
+    "clustersOpened++",
+  ];
+
+  it("no handler-scope accumulator is mutated INSIDE the memoized step callback", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const inside = applyStepWindow(src);
+    const offenders = MUTATED.filter((m) => inside.includes(m));
+    // Inngest replays the handler body but serves a completed step from memo
+    // WITHOUT re-entering its callback. An accumulator mutated in there is
+    // therefore empty on the pass that emits the marker — which reported
+    // `refusals: []` for a run that refused every cluster, indistinguishable
+    // from a quiet corpus. The datum #8281 exists to add answered "nothing
+    // happened" in both cases.
+    expect(offenders).toEqual([]);
+  });
+
+  it("non-vacuity: the accumulation DOES happen, just outside the callback", () => {
+    // Without this, deleting the accumulation entirely would satisfy the
+    // assertion above — an emptiness check with no totality companion pins
+    // nothing.
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const inside = applyStepWindow(src);
+    for (const m of MUTATED) {
+      expect(src).toContain(m);
+      expect(inside).not.toContain(m);
+    }
+  });
+
+  it("mutation row: a push moved back inside the callback is caught", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const anchor = 'return { kind: "refused", reason: "diff-size-exceeded" };';
+    expect(src).toContain(anchor); // the anchor must LAND, or the row is vacuous
+    const mutated = src.replace(
+      anchor,
+      `refusals.push("diff-size-exceeded");\n          ${anchor}`,
+    );
+    expect(mutated).not.toBe(src);
+    expect(applyStepWindow(mutated)).toContain("refusals.push(");
+  });
+
+  it("every exit of the memoized callback returns a ClusterOutcome", () => {
+    // A bare `return;` inside the callback is the old shape: it yields
+    // `undefined`, which the accumulation below reads as neither opened nor
+    // refused, silently dropping the cluster from both counts.
+    const inside = applyStepWindow(readFileSync(SRC_PATH, "utf-8"));
+    expect(inside).not.toMatch(/\breturn;\s*$/m);
+    const returns = inside.match(/\breturn \{ kind: "(opened|refused)"/g) ?? [];
+    expect(returns.length).toBeGreaterThanOrEqual(9);
+  });
+});
