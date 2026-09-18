@@ -82,7 +82,7 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_i
 
 **Present Context Summary.** Display a table of what was found and what is missing. If an existing `roadmap.md` was found, ask whether to update it or start fresh. In headless mode: default to "Update existing" if found, "Start fresh" if not.
 
-**Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (competitive-intelligence for competitive gaps, business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
+**Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (soleur:product:competitive-intelligence for competitive gaps, soleur:product:business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
 
 ## Phase 0.5: CPO Pre-Analysis
 

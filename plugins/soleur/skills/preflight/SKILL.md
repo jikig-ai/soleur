@@ -981,7 +981,7 @@ Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
 `plugins/soleur/test/preflight-discoverability-test.test.ts` (so each new adoption is a
 reviewable diff line rather than silent drift), and the checklist entry in
-`observability-coverage-reviewer` §Step 6.
+`soleur:engineering:review:observability-coverage-reviewer` §Step 6.
 
 Note what the waiver is and is not: it is a **verification waiver**, not an execution
 bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does

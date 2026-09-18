@@ -1,6 +1,6 @@
 ---
 name: triage
-description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use ticket-triage agent."
+description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use soleur:support:ticket-triage agent."
 ---
 
 <!-- soleur-cloud-mode:start -->

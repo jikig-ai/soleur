@@ -45,14 +45,14 @@ Read each document in the confirmed scope.
 
 ## Phase 2: Audit
 
-Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
+Invoke the `soleur:legal:legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
 
 If the user's input includes the word `benchmark` (either via `args` parameter or natural language), append the benchmark trigger to the Task prompt. Otherwise, send the standard audit prompt unchanged.
 
 **Standard audit prompt:**
 
 ```
-Task legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
+Task soleur:legal:legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
 
 Documents:
 [Include full content of each document]

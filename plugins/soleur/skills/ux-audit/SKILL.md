@@ -1,6 +1,6 @@
 ---
 name: ux-audit
-description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to ux-design-lead audit mode, dedupes, files capped issues.
+description: This skill should be used when auditing live web-platform UI for decay. Screenshots bot routes, delegates to soleur:product:design:ux-design-lead audit mode, dedupes, files capped issues.
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -11,7 +11,7 @@ description: This skill should be used when auditing live web-platform UI for de
 
 Recurring UX-review agent loop. Scheduled via `.github/workflows/scheduled-ux-audit.yml` on push to `main` under `apps/web-platform/{app,components}/**` and a monthly `0 9 1 * *` cron. Can be run locally in dry-run mode for calibration.
 
-**Architecture:** thin orchestrator (this skill) → delegates screenshot analysis to the `ux-design-lead` agent in audit mode. Mirrors the `soleur:competitive-analysis` / `competitive-intelligence` split.
+**Architecture:** thin orchestrator (this skill) → delegates screenshot analysis to the `soleur:product:design:ux-design-lead` agent in audit mode. Mirrors the `soleur:competitive-analysis` / `soleur:product:competitive-intelligence` split.
 
 ## Invocation
 
@@ -112,11 +112,11 @@ For each route:
    §"Wrapping the server". Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
 4. If navigation/screenshot fails for a single route, log `::warning::route capture failed: <path>` and continue — one route failure does not abort the run.
 
-### 4. Delegate to ux-design-lead (audit mode)
+### 4. Delegate to soleur:product:design:ux-design-lead (audit mode)
 
 The skill emits no intermediate `::warning::` / `::error::` annotations for parser consumption; the final JSON summary in §7.5 is the machine-readable signal. Human-readable `::warning::` lines for individual route skips remain for CI log UX.
 
-Invoke `ux-design-lead` via the Task tool with a prompt containing:
+Invoke `soleur:product:design:ux-design-lead` via the Task tool with a prompt containing:
 
 ```text
 mode: audit

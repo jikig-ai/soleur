@@ -11,7 +11,7 @@ description: "This skill should be used when auditing diffs or plans for GDPR/CC
 
 `gdpr-gate` is an **advisory** code-level gate that fires inline during `soleur:plan` Phase 2.7 and at `soleur:work` Phase 2 exit. It scans plan prose, schema migrations, and diffs for regulated-data gaps under GDPR (Articles 5/6/9/17/20/25/30/32/33/35), with secondary coverage for CCPA / CPRA and HIPAA. It never blocks. Critical findings (Article 9 special-category data) prompt operator acknowledgment + GitHub issue creation; the gate never auto-writes to `compliance-posture.md`.
 
-This is **not legal review**. Output is a heuristic, machine-generated checklist meant to compress regulator-shaped surprises out of the normal feature-design loop. Consult the `clo` agent and `legal-compliance-auditor` before merging anything load-bearing.
+This is **not legal review**. Output is a heuristic, machine-generated checklist meant to compress regulator-shaped surprises out of the normal feature-design loop. Consult the `soleur:legal:clo` agent and `soleur:legal:legal-compliance-auditor` before merging anything load-bearing.
 
 ## When to invoke
 
@@ -28,7 +28,7 @@ The gate is **read-only with respect to the canonical `soleur:plan` template**. 
 Every gate output begins, as the first non-blank line, with the literal:
 
 ```
-**This is not legal review. Findings are heuristic. Consult `clo` + `legal-compliance-auditor` before merging.**
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
 ```
 
 The disclaimer is hardcoded. A test in `plugins/soleur/test/gdpr-gate.test.ts` asserts the literal appears as the first non-blank line of every fixture output.
@@ -105,7 +105,7 @@ The 5 mandatory v1 checks (FR4 above) fire on every gate invocation. `--repo-sca
 Each finding follows this schema:
 
 ```markdown
-**This is not legal review. Findings are heuristic. Consult `clo` + `legal-compliance-auditor` before merging.**
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
 
 ### `<check_id>` — <one-line title>
 
@@ -202,9 +202,9 @@ Add new severities in this file's table FIRST, then run the three greps before w
 
 ## Boundary with sibling agents
 
-- **`data-integrity-guardian`** — migration safety + judgment-based PII review. The gate is deterministic pattern-matching; the guardian is judgment-based.
-- **`security-sentinel`** — OWASP / CWE security-of-processing flaws. Art. 32 overlaps; sentinel handles the "how", gate handles the "what".
-- **`clo`** — reads `compliance-posture.md`; the gate produces the row contract the CLO consumes. The gate never writes; the operator does.
+- **`soleur:engineering:review:data-integrity-guardian`** — migration safety + judgment-based PII review. The gate is deterministic pattern-matching; the guardian is judgment-based.
+- **`soleur:engineering:review:security-sentinel`** — OWASP / CWE security-of-processing flaws. Art. 32 overlaps; sentinel handles the "how", gate handles the "what".
+- **`soleur:legal:clo`** — reads `compliance-posture.md`; the gate produces the row contract the CLO consumes. The gate never writes; the operator does.
 - **`legal-audit`** / **`legal-generate`** — document-layer skills (privacy policy, DPA, terms). The gate is code-layer.
 
 Canonical disambiguation prose lives in `plugins/soleur/skills/review/SKILL.md` §boundaries.
@@ -324,10 +324,10 @@ follow-up gets its own review and merge.
 - **MIN precedence and operator-attested-mode banner**: precedence is (cron+notice non-999 → MIN wins; if cron > notice the binding still defends future regressions) > (cron == 999, notice != 999 → operator-attested-mode banner + fallback to notice) > (both == 999 → existing 30d/90d banners fire). When no token is available the gate emits `ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)` to STDOUT — the documented degraded state.
 - **CODEOWNERS pin on NOTICE** (#3535 defense-in-depth): `/plugins/soleur/skills/gdpr-gate/NOTICE` requires `@deruelle` review. Load-bearing only when branch protection is enforced on `main` (an operator follow-up); the cron-run-timestamp binding is the load-bearing defense.
 - **Workflow-rename silent break — THIS ALREADY HAPPENED, and worse than a rename (#7255)**: `cron-run-stale` hard-codes `scheduled-content-vendor-drift.yml`, and the documented hazard was that renaming the workflow silently breaks the binding — `gh run list` returns empty, parser falls through to 999, gate degrades to operator-attested mode without surfacing the rename. The workflow was not renamed; it was **migrated out of GitHub Actions entirely**, so there is no filename to update the call sites to. The predicted silent degradation is the state the gate has been in ever since. Two lessons for the next binding of this shape: a liveness probe keyed on a *filename* cannot survive the job changing *substrate*, and a probe whose only failure signal is its own safe default will never announce that it stopped working — it needs to distinguish "ran, and it is stale" from "could not run at all".
-- **Per-judgment advisory banners must gate on regulated-path match** (issue #3541 user-impact-reviewer P1). The operator-attested-mode banner fires only when `${#matched[@]} > 0` (a regulated-data path is being judged this commit). Otherwise it would spam every commit in subagent shells (no `GH_TOKEN`) and train operators to ignore the signal. Pre-existing 30d/90d staleness banners DO fire unconditionally — they signal gate-internal state ("rules are stale at any rate") rather than per-judgment state ("THIS regulated PR has a degraded gate"). When adding a new advisory banner, ask: does its meaning depend on what the gate is doing on THIS invocation, or on the gate's persistent state? Per-judgment banners must scope to relevance; persistent-state banners may fire unconditionally. See `knowledge-base/project/learnings/2026-05-11-runtime-advisory-banners-must-gate-on-judgment-relevance.md`.
+- **Per-judgment advisory banners must gate on regulated-path match** (issue #3541 soleur:engineering:review:user-impact-reviewer P1). The operator-attested-mode banner fires only when `${#matched[@]} > 0` (a regulated-data path is being judged this commit). Otherwise it would spam every commit in subagent shells (no `GH_TOKEN`) and train operators to ignore the signal. Pre-existing 30d/90d staleness banners DO fire unconditionally — they signal gate-internal state ("rules are stale at any rate") rather than per-judgment state ("THIS regulated PR has a degraded gate"). When adding a new advisory banner, ask: does its meaning depend on what the gate is doing on THIS invocation, or on the gate's persistent state? Per-judgment banners must scope to relevance; persistent-state banners may fire unconditionally. See `knowledge-base/project/learnings/2026-05-11-runtime-advisory-banners-must-gate-on-judgment-relevance.md`.
 - The gate transmits column NAMES to the model (Anthropic). This is itself a Chapter V transfer; it falls under Anthropic's existing DPA recorded in `compliance-posture.md` Vendor DPAs. Row values are never sent — see "Prompt template" above.
 - AGENTS.md rule ID `hr-gdpr-gate-on-regulated-data-surfaces` is **immutable** per `cq-rule-ids-are-immutable`. v2 splits retire the ID via the retired-rule-ids ledger rather than reusing.
-- `--repo-scan` against full repo history will surface Art. 9 (`Critical`) findings on pre-v1 migrations 001–040 (legacy columns matching the special-category list). The default disposition is **tracked-not-amended** — `compliance-posture.md` Active Items records the row, no amendment migration is issued, because schema rewrites against historical PII tables carry their own data-integrity risk that typically exceeds the disclosure-cure benefit. The row reads `OPEN | tracked, not amended`. Default disposition only applies when the column is **dormant or read-only with disclosure cure available**. Amendment is required and the operator MUST consult `clo` before selecting a disposition when ANY of the following hold:
+- `--repo-scan` against full repo history will surface Art. 9 (`Critical`) findings on pre-v1 migrations 001–040 (legacy columns matching the special-category list). The default disposition is **tracked-not-amended** — `compliance-posture.md` Active Items records the row, no amendment migration is issued, because schema rewrites against historical PII tables carry their own data-integrity risk that typically exceeds the disclosure-cure benefit. The row reads `OPEN | tracked, not amended`. Default disposition only applies when the column is **dormant or read-only with disclosure cure available**. Amendment is required and the operator MUST consult `soleur:legal:clo` before selecting a disposition when ANY of the following hold:
     1. **Active processing for an undisclosed special-category purpose** — production code currently writes or reads the column for a purpose not disclosed in the privacy notice. Fix is disclosure-side (privacy notice + DPIA + Art. 6/9 lawful-basis annotation) plus, if no Art. 9(2) lawful basis applies, halting processing.
     2. **Backfill with new special-category data** — schema is old but the *data* is new (placeholder/test rows replaced with real PII). This is operationally a new processing activity; Art. 35 DPIA may itself trigger.
     3. **Cross-border transfer post-Schrems II** — the column is replicated to a non-EEA processor (analytics, support, vendor) without Chapter V safeguards (DPA + SCCs + transfer impact assessment). Disclosure cure is insufficient — fix the Chapter V gap.

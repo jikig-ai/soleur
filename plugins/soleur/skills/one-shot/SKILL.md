@@ -319,7 +319,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
 
-   For each matching issue (regardless of priority), spawn a parallel `pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
+   For each matching issue (regardless of priority), spawn a parallel `soleur:engineering:workflow:pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
 
    ```bash
    gh issue close <number> --comment "Fixed in <commit-sha>"

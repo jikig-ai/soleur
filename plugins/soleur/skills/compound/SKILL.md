@@ -163,10 +163,10 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 Based on problem type detected, automatically invoke applicable agents:
 
-- **performance_issue** --> `performance-oracle`
-- **security_issue** --> `security-sentinel`
-- **database_issue** --> `data-integrity-guardian`
-- Any code-heavy issue --> `kieran-rails-reviewer` + `code-simplicity-reviewer`
+- **performance_issue** --> `soleur:engineering:review:performance-oracle`
+- **security_issue** --> `soleur:engineering:review:security-sentinel`
+- **database_issue** --> `soleur:engineering:review:data-integrity-guardian`
+- Any code-heavy issue --> `soleur:engineering:review:kieran-rails-reviewer` + `soleur:engineering:review:code-simplicity-reviewer`
 
 ## Phase 1.5: Deviation Analyst (Sequential)
 
@@ -584,9 +584,9 @@ Primary Subagent Results:
   ✓ Documentation Writer: Classified to performance-issues/, created complete markdown
 
 Specialized Agent Reviews (Auto-Triggered):
-  ✓ performance-oracle: Validated query optimization approach
-  ✓ kieran-rails-reviewer: Code examples meet Rails standards
-  ✓ code-simplicity-reviewer: Solution is appropriately minimal
+  ✓ soleur:engineering:review:performance-oracle: Validated query optimization approach
+  ✓ soleur:engineering:review:kieran-rails-reviewer: Code examples meet Rails standards
+  ✓ soleur:engineering:review:code-simplicity-reviewer: Solution is appropriately minimal
   ✓ every-style-editor: Documentation style verified
 
 File created:
@@ -639,21 +639,21 @@ Based on problem type, these agents can enhance documentation:
 
 ### Code Quality & Review
 
-- **kieran-rails-reviewer**: Reviews code examples for Rails best practices
-- **code-simplicity-reviewer**: Ensures solution code is minimal and clear
-- **pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
+- **soleur:engineering:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
+- **soleur:engineering:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
+- **soleur:engineering:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
 
 ### Specific Domain Experts
 
-- **performance-oracle**: Analyzes performance_issue category solutions
-- **security-sentinel**: Reviews security_issue solutions for vulnerabilities
-- **data-integrity-guardian**: Reviews database_issue migrations and queries
+- **soleur:engineering:review:performance-oracle**: Analyzes performance_issue category solutions
+- **soleur:engineering:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
+- **soleur:engineering:review:data-integrity-guardian**: Reviews database_issue migrations and queries
 
 ### Enhancement & Documentation
 
-- **best-practices-researcher**: Enriches solution with industry best practices
+- **soleur:engineering:research:best-practices-researcher**: Enriches solution with industry best practices
 - **every-style-editor**: Reviews documentation style and clarity
-- **framework-docs-researcher**: Links to Rails/gem documentation references
+- **soleur:engineering:research:framework-docs-researcher**: Links to Rails/gem documentation references
 
 ### When to Invoke
 

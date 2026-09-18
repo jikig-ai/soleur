@@ -19,8 +19,8 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 
 **Headless defaults for interactive gates:**
 
-- Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
-- If citation verification was skipped (fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
+- Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs soleur:marketing:fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
+- If citation verification was skipped (soleur:marketing:fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
 
 ## Phase 0: Prerequisites
 
@@ -33,8 +33,8 @@ Before generating content, verify both prerequisites. If either fails, display t
 Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
-> No brand guide found. Run the brand-architect agent first to establish brand identity:
-> `Use the brand-architect agent to define our brand.`
+> No brand guide found. Run the soleur:marketing:brand-architect agent first to establish brand identity:
+> `Use the soleur:marketing:brand-architect agent to define our brand.`
 
 Stop execution.
 
@@ -119,10 +119,10 @@ Generate a full article draft that:
 
 After generating the draft, verify all factual claims before presenting to the user.
 
-Invoke the fact-checker agent via the Task tool, passing the full draft content:
+Invoke the soleur:marketing:fact-checker agent via the Task tool, passing the full draft content:
 
 ```text
-Task fact-checker: "Verify this draft:
+Task soleur:marketing:fact-checker: "Verify this draft:
 
 <full draft text>"
 ```
@@ -133,7 +133,7 @@ Parse the returned Verification Report. For each claim:
 - **FAIL**: Insert `[FAIL: <reason>]` inline after the claim in the draft
 - **UNSOURCED**: Insert `[UNSOURCED]` inline after the claim in the draft
 
-If the fact-checker agent is unavailable (e.g., Task tool not accessible), warn: "Citation verification skipped -- fact-checker agent not available. Proceed with manual verification." Continue to Phase 3.
+If the soleur:marketing:fact-checker agent is unavailable (e.g., Task tool not accessible), warn: "Citation verification skipped -- soleur:marketing:fact-checker agent not available. Proceed with manual verification." Continue to Phase 3.
 
 Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "Edit" and the draft is regenerated in Phase 2, Phase 2.5 re-runs on the updated draft.
 
@@ -150,7 +150,7 @@ If Phase 2.5 produced a Verification Report, display the summary first (total cl
   1. Remove the unsupported statistic, quote, or claim entirely, OR
   2. Replace it with a verifiable alternative (search for a real source via WebSearch/WebFetch)
   3. Remove the `[FAIL: ...]` marker after fixing
-- After fixing all FAIL claims, re-run Phase 2.5 (fact-checker) on the updated draft.
+- After fixing all FAIL claims, re-run Phase 2.5 (soleur:marketing:fact-checker) on the updated draft.
 - If re-verification passes (all PASS/SOURCED): auto-select **Accept**. Proceed to Phase 4.
 - If FAIL claims persist after 2 fix cycles: convert remaining `[FAIL: ...]` markers to `[UNSOURCED]`, remove the specific claim text, and **Accept** the article. Do not abort — an article with conservative claims is better than no article. Note the removed claims in the GitHub audit issue.
 
@@ -195,4 +195,4 @@ Every blog post must have an `ogImage` for social sharing differentiation. This 
 - The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
 - Frontmatter fields should match existing posts in the target directory when possible. The `date:` field must be unquoted (e.g., `date: 2026-03-26`, not `date: "2026-03-26"`) -- Eleventy's `dateToRfc3339` filter requires a Date object, and quoted dates are parsed as strings.
 - If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).
-- Every factual claim, statistic, and attributed quote must have a verifiable source URL. Phase 2.5 enforces this via the fact-checker agent -- claims without citations are flagged as UNSOURCED and claims with unsupporting sources are flagged as FAIL [enforced: fact-checker agent via Phase 2.5].
+- Every factual claim, statistic, and attributed quote must have a verifiable source URL. Phase 2.5 enforces this via the soleur:marketing:fact-checker agent -- claims without citations are flagged as UNSOURCED and claims with unsupporting sources are flagged as FAIL [enforced: soleur:marketing:fact-checker agent via Phase 2.5].

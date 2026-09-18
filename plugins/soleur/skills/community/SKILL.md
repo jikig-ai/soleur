@@ -66,20 +66,20 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 
 ### `digest`
 
-Generate a multi-platform community digest. Spawns the `community-manager` agent with digest instructions.
+Generate a multi-platform community digest. Spawns the `soleur:support:community-manager` agent with digest instructions.
 
 1. Run platform detection
-2. Spawn agent: `community-manager` with prompt: "Generate a community digest covering the last 7 days. Enabled platforms: [list]. Collect data from each enabled platform and produce a unified digest."
+2. Spawn agent: `soleur:support:community-manager` with prompt: "Generate a community digest covering the last 7 days. Enabled platforms: [list]. Collect data from each enabled platform and produce a unified digest."
 3. The agent writes the digest to `knowledge-base/support/community/YYYY-MM-DD-digest.md`
 
 If `--headless` is set, skip the Discord posting approval gate (the agent handles this).
 
 ### `health`
 
-Display community health metrics across all enabled platforms. Spawns the `community-manager` agent with health instructions.
+Display community health metrics across all enabled platforms. Spawns the `soleur:support:community-manager` agent with health instructions.
 
 1. Run platform detection
-2. Spawn agent: `community-manager` with prompt: "Display community health metrics. Enabled platforms: [list]. Show metrics from each enabled platform."
+2. Spawn agent: `soleur:support:community-manager` with prompt: "Display community health metrics. Enabled platforms: [list]. Show metrics from each enabled platform."
 3. Metrics are displayed inline (no file output)
 
 ### `platforms`
@@ -99,7 +99,7 @@ List all platforms with their configuration status. Does NOT spawn an agent -- r
 
 ### `engage`
 
-Reply to recent mentions on X/Twitter or Bluesky using brand-voice drafts with human approval. Spawns the `community-manager` agent with engagement instructions.
+Reply to recent mentions on X/Twitter or Bluesky using brand-voice drafts with human approval. Spawns the `soleur:support:community-manager` agent with engagement instructions.
 
 **Platform selection:** The `--platform` flag specifies which platform to engage on. If `--platform` is not provided, use AskUserQuestion to prompt the user to choose from enabled platforms that support engagement (X/Twitter, Bluesky).
 
@@ -109,7 +109,7 @@ The selected platform must be enabled. If not configured, report the missing cre
 
 1. Run platform detection -- verify X/Twitter is enabled
 2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
-3. Spawn agent: `community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
+3. Spawn agent: `soleur:support:community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
 4. The agent fetches mentions via `community-router.sh x fetch-mentions`
 5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
 6. Each draft is presented via AskUserQuestion with options:
@@ -126,13 +126,13 @@ The selected platform must be enabled. If not configured, report the missing cre
 - Created on first run with `mkdir -p .soleur && chmod 600` before writing
 - Updated only after all mentions are processed (not per-reply)
 
-**Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
+**Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the soleur:support:community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
 
 **Flow (Bluesky):**
 
 1. Run platform detection -- verify Bluesky is enabled (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`)
 2. Read the cursor state file (`.soleur/bsky-engage-cursor`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a non-empty value, pass it as `--cursor` to the fetch command.
-3. Spawn agent: `community-manager` with prompt: "Engage with recent Bluesky mentions. Use Capability 4: Bluesky Mention Engagement. Limit: [N]. Cursor: [cursor or none]."
+3. Spawn agent: `soleur:support:community-manager` with prompt: "Engage with recent Bluesky mentions. Use Capability 4: Bluesky Mention Engagement. Limit: [N]. Cursor: [cursor or none]."
 4. The agent fetches mentions via `community-router.sh bsky get-notifications`
 5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### Bluesky`). 300-character limit.
 6. Same approval flow as X/Twitter (Accept, Edit, Skip, Skip all remaining) but with 300-character validation.
@@ -165,7 +165,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 
 - Platform detection runs at the start of every sub-command -- use `community-router.sh platforms` instead of checking env vars directly
 - All platform API calls go through `community-router.sh <platform> <command>` -- do not call platform scripts or APIs directly
-- The `community-manager` agent handles data collection, analysis, and output formatting
+- The `soleur:support:community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
 - Posting requires explicit opt-in via environment variables (defense-in-depth guard). Monitoring workflows omit these variables intentionally:
@@ -192,4 +192,4 @@ These files need updating before the integration is complete.
 Consider filing: gh issue create --title 'feat(docs): add <platform-name> to website and brand guide' --milestone 'Post-MVP / Later'
 ```
 
-This check does not block provisioning -- it is advisory only. The ops-provisioner agent has a broader version of this check for non-community tools.
+This check does not block provisioning -- it is advisory only. The soleur:operations:ops-provisioner agent has a broader version of this check for non-community tools.
