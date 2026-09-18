@@ -2721,6 +2721,7 @@ plugin-loader
 plugin-marketplace
 plugin-path
 plugin-root
+plugin-scope
 plugin-structure
 plugin-surfaces
 plugin-system

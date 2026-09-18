@@ -884,6 +884,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Create new tasks if scope expands
    - Keep user informed of major milestones
 
+**Three verification habits, each measured as a miss on #8323, and each costing a review round.** (a) **Diff per-case verdicts, never totals.** An assertion-count floor tells you a count MOVED, never which member left: a scenario-17 rewrite sliced to the scenario-18 anchor and silently took scenario 19 with it, the floor caught the drop, and it was recalibrated without checking what had gone — the deleted row was the only one covering a rule operand, and its absence was found by a CTO consult, not by any gate. (b) **Run the suite in the environment it SHIPS into before review, not as an intention.** CI checks out a DETACHED HEAD on `pull_request`, where `git rev-parse --abbrev-ref HEAD` returns the literal `HEAD`; an assertion pinning the branch name was 109/1 there and green locally. Sweep `CI=1`, `SOLEUR_SUBAGENT=1`, and a detached worktree, and treat a PASS-COUNT delta as a finding. (c) **When a mutant survives on an OPERAND, try deleting the operand before writing the killing test.** A surviving mutant has two causes — weak tests, or an operand with no behavioural justification — and writing the test promotes an accidental behaviour to a specified one. On #8323 the killing test pinned a manual compaction REVOKING an already-earned recommendation; the operand was ruled out entirely and the scenario restored inverted. See `knowledge-base/project/learnings/2026-09-18-every-defect-was-in-my-verification-not-the-feature.md`.
+
 8. **GDPR / Compliance Gate (single pass, end of Phase 2)**
 
    [skill-enforced: gdpr-gate at work Phase 2 exit]

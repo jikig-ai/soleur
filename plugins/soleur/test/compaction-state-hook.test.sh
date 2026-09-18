@@ -76,10 +76,9 @@ CASES=0
 FAILURES=()   # append-only: the verdict reads THIS, so a redirected counter
               # increment cannot silence a failure.
 
-pass() { passes=$((passes + 1)); CASES=$((CASES + 1)); printf '  ok   %s\n' "$1"; }
+pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() {
   fails=$((fails + 1))
-  CASES=$((CASES + 1))
   FAILURES+=("$1")
   printf '  FAIL %s\n' "$1"
   [[ -n "${2:-}" ]] && printf '       %s\n' "$2"
@@ -125,11 +124,16 @@ pc_env() { # <trigger> <session_id> <cwd> [transcript_path]
       prompt_id:"prompt-0001",session_id:$sid,transcript_path:$tp,trigger:$t}'
 }
 
-# CASES is incremented by pass()/fail(), NOT here: an increment inside assert()
-# sits above the verdict, so gutting the verdict while keeping the increment
-# leaves MIN_CASES reconciling exactly. Measured: `eval "$2" >/dev/null 2>&1;
-# pass "$1"` reported 115 passed, 0 failed, ALL TESTS PASSED.
+# CASES is incremented HERE, in the dispatcher -- never inside pass()/fail().
+# A counter incremented inside the verdict helpers makes the
+# `passes + fails == CASES` identity a tautology, which is precisely what
+# scripts/guard-vacuity-floor.test.sh forbids ("no CASE counter is incremented
+# inside a verdict helper"). The hole this placement leaves -- gutting the
+# dispatcher's condition while keeping the increment, which reconciles both the
+# floor AND the identity -- is closed by the assert() control immediately below,
+# not by moving the counter.
 assert() { # <name> <condition> [detail]
+  CASES=$((CASES + 1))
   if eval "$2"; then pass "$1"; else fail "$1" "${3:-$2}"; fi
 }
 
@@ -359,9 +363,9 @@ assert "12a rc 0" '[[ "$RC" -eq 0 ]]'
 assert "12b non-empty" '[[ -n "$OUT" ]]'
 # Written so a JSON emission FAILS the case rather than aborting the suite.
 if printf '%s' "$OUT" | jq -e . >/dev/null 2>&1; then
-  fail "12c PreCompact must not emit JSON" "got: ${OUT:0:120}"
+  CASES=$((CASES + 1)); fail "12c PreCompact must not emit JSON" "got: ${OUT:0:120}"
 else
-  pass "12c PreCompact emits non-JSON"
+  CASES=$((CASES + 1)); pass "12c PreCompact emits non-JSON"
 fi
 # Tokens are anchored, not bare: a bare "PR" matches the word "preserve" in
 # this very block and the row would pass on the instruction text alone
@@ -628,24 +632,32 @@ assert "26a a specs-only checkout is in scope" '[[ -n "$OUT" ]]'
 
 # (b) PLAN / SPEC discovery: asserted only in the negative, so deleting both
 #     discovery blocks shipped a directive naming no artifacts -- the payload.
+#     Built on a SYNTHETIC root, not IN_ROOT: a live-tree dependency made these
+#     rows silently take the no-match branch the moment compound archived this
+#     branch's own plan, and they would have stayed green while covering
+#     nothing. A fixture that owns its inputs cannot be de-covered by an
+#     unrelated housekeeping step.
+ARTIFACT="$SANDBOX/artifactrepo"
+mkdir -p "$ARTIFACT/knowledge-base/project/plans"
+git -C "$ARTIFACT" init -q >/dev/null 2>&1
+git -C "$ARTIFACT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i >/dev/null 2>&1
+_ab="$(git -C "$ARTIFACT" symbolic-ref --short -q HEAD 2>/dev/null || echo main)"
+: > "$ARTIFACT/knowledge-base/project/plans/2026-01-01-${_ab}-plan.md"
+mkdir -p "$ARTIFACT/knowledge-base/project/specs/${_ab}"
 sid=s26b
-run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
-compact_cycle auto "$sid" "$IN_ROOT"
-# Gated on the branch resolving: CI checks out a DETACHED HEAD on pull_request,
-# where there is no branch, so no plan glob matches and no specs/<branch>/ exists
-# -- the same coupling that made 14g red in CI. The rows still pin the discovery
-# blocks wherever a branch exists (every developer checkout), which is where the
-# mutation they exist to kill would be introduced.
-if [[ "$_expect_branch" != "unknown" ]] \
-   && compgen -G "$IN_ROOT/knowledge-base/project/plans/*-${_expect_branch}-plan.md" >/dev/null; then
-  assert "26b names a real plan path" 'has_ctx "^Plan: knowledge-base/project/plans/.*-plan\.md$"'
-  assert "26c names the spec directory" 'has_ctx "^Spec and tasks: knowledge-base/project/specs/"'
-else
-  # Never silently skip: a conditional row that vanishes is indistinguishable
-  # from one that passed. Assert the branch the OTHER way instead.
-  assert "26b (detached HEAD) no plan is fabricated" '! has_ctx "^Plan: $"'
-  assert "26c (detached HEAD) no spec is fabricated" '! has_ctx "^Spec and tasks: $"'
-fi
+run_hook "$(ss_env startup "$sid" "$ARTIFACT")"
+compact_cycle auto "$sid" "$ARTIFACT"
+assert "26b names a real plan path" 'has_ctx "^Plan: knowledge-base/project/plans/.*-plan\.md$"'
+assert "26c names the spec directory" 'has_ctx "^Spec and tasks: knowledge-base/project/specs/"'
+# Far side: the same root with the artifacts removed names neither, and
+# fabricates no empty line.
+rm -rf "$ARTIFACT/knowledge-base/project/plans" "$ARTIFACT/knowledge-base/project/specs/${_ab}"
+mkdir -p "$ARTIFACT/knowledge-base/project/specs"
+sid=s26bb
+run_hook "$(ss_env startup "$sid" "$ARTIFACT")"
+compact_cycle auto "$sid" "$ARTIFACT"
+assert "26ba with no plan present, none is named" '! has_ctx "^Plan: "'
+assert "26bb and no empty Plan line is fabricated" '! has_ctx "^Plan: $"'
 
 # (c) the 8000-char cap, sampled at 527 bytes -- a 1-of-1 at the wrong end of
 #     the range, which can only ever confirm the value it already has.
@@ -725,7 +737,7 @@ assert "27b a healthy invocation writes nothing to stderr" '[[ -z "$ERR" ]]'
 # --- coverage floors ----------------------------------------------------
 # Reported with printf + exit, NOT through fail() -- the helper these floors
 # exist to backstop is the one an edit disarms.
-MIN_CASES=148
+MIN_CASES=150
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
@@ -740,7 +752,7 @@ if (( passes + fails != CASES )); then
   exit 1
 fi
 SUT_RUNS="$(grep -c '^ran$' "$SOLEUR_HOOK_TRACE" 2>/dev/null || true)"
-MIN_SUT_RUNS=138
+MIN_SUT_RUNS=141
 if (( ${SUT_RUNS:-0} < MIN_SUT_RUNS )); then
   printf 'FATAL: the subject ran %s times, floor is %d. The harness asserted without spawning the hook.\n' \
     "${SUT_RUNS:-0}" "$MIN_SUT_RUNS" >&2
