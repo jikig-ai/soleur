@@ -356,11 +356,66 @@ sibling run. It takes no lock, runs no suite and always exits 0.
 worktree to wait for — it does not authorise shipping without the battery. The blocking form of this
 verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
 
-Then run the full battery:
+**Ask whether the battery is still OWED before running it (#8247).** CI's required
+`test` context aggregates `test-webplat` + `test-bun` + `test-scripts` +
+`web-platform-build`. `test-all.sh` registers every suite inside one of
+`want_scripts` / `want_bun` / `want_webplat` / `want_infra`, so a local
+`TEST_GROUP=all` is CI's `test` plus the **infra** group — and CI additionally
+runs the relevance-gated suites the local run declines (`_diff_touches`
+short-circuits under `CI`). When the tree you are about to ship is byte-identically
+what CI already verified, re-running those shards locally cannot change the merge
+decision.
+
+**One subtlety that the gate now enforces rather than assumes.** `ci.yml` has no
+push trigger for feature branches, so the `test` check-run on a branch head comes
+from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. CI
+therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
+run, and those are the same tree only when `origin/main` is already an ancestor of
+HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
+a claim it establishes rather than one it assumes. The practical consequence: to
+get the saving on a re-run, sync with `main` first.
+
+Branch on the exit code, never on the prose:
 
 ```bash
-TEST_GROUP=all bash scripts/test-all.sh
+bash "${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/ship/scripts/battery-owed.sh"
+rc=$?
+if [[ "$rc" -eq 42 ]]; then
+  echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+else
+  echo "battery OWED (rc=$rc) — running it"
+  TEST_GROUP=all bash scripts/test-all.sh
+fi
 ```
+
+**`42` is the ONLY value that skips, and the oddness is the point.** This script
+runs under `set -u`, and an unset-variable reference aborts a non-interactive bash
+script with **exit status 1** — so an earlier revision that used `1` for SKIPPABLE
+would have let one typo'd variable name in a future edit delete a 35-minute safety
+run. Every other status bash emits by accident (1, 2, 126, 127, 128+N) now falls
+through to OWED. Read it strictly: a gate that saves 35 minutes is under standing
+pressure to be read generously.
+
+**At the FIRST Phase 4 run this returns OWED**, because Phase 4 precedes the
+Phase 6 push and there is no CI for `HEAD` yet. The saving is on the RE-RUN path
+this skill mandates after a review fix, a main sync, or a Phase 5.5 advisor fix —
+and it requires the re-run to happen on a **pushed** commit, since an unpushed one
+has no check-runs for its sha and returns OWED. Measured on PR #8233: two full
+batteries, ~70 minutes, the second finishing against a head whose 26/26 required
+checks were already green on the identical SHA.
+
+The conditions, what makes each load-bearing, and the mutation rows that pin them
+live in the script and in
+[ship-battery-owed.test.sh](../../test/ship-battery-owed.test.sh). They are
+deliberately NOT restated here: a copy in prose drifts the moment a condition is
+edited, and the script prints its own verdict and reasoning at runtime, which is
+the channel that cannot drift.
+
+The runner is INSIDE the `else`, deliberately. An earlier revision left the OWED
+arm as a comment and put the invocation in a separate fenced block below — so an
+agent copying the second block ran the battery regardless of `rc`, in a skill whose
+own instruction is "branch on the exit code, never on the prose". The coupling
+between two adjacent blocks is prose.
 
 **Start it on the FINAL tree, and keep its log outside the session scratchpad.** Any commit you
 can already foresee — the `Reviewed-By-Soleur` trailer, the sync with `origin/main` — invalidates a
@@ -383,7 +438,7 @@ until 0, launch detached with the rc to a file, and if that file reads `4` go ba
 #8135 — two probe-then-launch attempts lost the race by seconds; two fixed-iteration Monitors timed out still
 contended after three hours; the one-script loop launched cleanly on its first `measured_runs=0`.
 
-**Identify the runner by the pid you launched, never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), record `$!`, and watch that pid: `while kill -0 <pid> && [[ "$(readlink /proc/<pid>/cwd)" == "$PWD" ]]; do sleep 15; done`. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_LOCK_TIMEOUT + 10800))`): the wait is charged against the ceiling, so `10800` under the 14400 s default leaves 3600 s of execution, under the contended readings the lib records. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
+**Identify the runner by its rc file, never by a pid and never by shape.** `tc_acquire` forks its heartbeat as a background subshell, so during a lock wait there are two `bash scripts/test-all.sh` processes with the same argv, cwd and fds; the heartbeat's fingerprint is a lone `sleep <n>` child and a silent self-exit at exactly the lock budget. If the wrapper's rc file reads 143 while such a process is still writing heartbeats, the runner is dead and the rc file is its verdict — a live runner whose budget expired would have printed `LOCK_CONTENDED_PROCEEDING` and run the battery unserialized beside the holder (the false-RED shape; expiry never aborts). Launch with `setsid nohup … &` (the new session is what keeps a group-kill off the runner), have the script write its rc as its LAST act, and wait on that FILE: `setsid nohup bash -c 'TEST_GROUP=all bash scripts/test-all.sh > "$LOG" 2>&1; echo $? > "$RCF"' >/dev/null 2>&1 &` then `until [ -s "$RCF" ]; do sleep 30; done`. **Do NOT watch `$!` — it does not track the runner.** `setsid` forks when it is not already a process-group leader, so `$!` is a short-lived parent that exits in under a second while the battery runs on, and a `kill -0 $!` loop falls through immediately: every line after it then reports a verdict for a run that has not finished. Measured 2026-09-17 with both controls — under `setsid` the pid was gone after 1 s with the runner still working, and the same launch WITHOUT `setsid` kept `$!` alive and tracking correctly, which is what makes the cause the fork rather than the timing. Observed live: `BATTERY COMPLETE rc=1` printed for a battery that had died in under a second on a mise shim fault and never ran a single suite — rc=1 with no `[FAIL]` lines reads exactly like "the battery ran and one suite failed". This is the #8137 trap below one level up: there the watched process was the runner’s own heartbeat subshell, here it is `setsid`’s forked parent, and in both the pid you can see is not the runner. The rc file is already this skill’s stated source of truth ("Read the rc file, never the background-task completion notification"), so polling it is what makes the wait agree with the verdict. **And rc is only a test verdict once the toolchain started:** grep the log for `mise ERROR|command not found` first — a shim with no resolved version exits 1 emitting no `[FAIL]` lines at all, and `rc=4` is REFUSED (nothing ran), not a reap. If you do queue inside the lock (`SOLEUR_ALLOW_FULL_GATE=1`) and raise `TC_LOCK_TIMEOUT`, raise `TC_RUNTIME_CEILING_S` with it (`$((TC_LOCK_TIMEOUT + 10800))`): the wait is charged against the ceiling, so `10800` under the 14400 s default leaves 3600 s of execution, under the contended readings the lib records. **Why:** #8137 merge tail — the runner was SIGTERM'd an hour into a queue; its orphaned heartbeat (same argv, `sleep 60` child, same log) was watched as the runner for another hour and exited at 3600 s with no banner. See `knowledge-base/project/learnings/workflow-issues/2026-09-14-the-runner-i-watched-was-its-own-heartbeat-subshell-and-ci-tested-a-tree-i-had-never-built.md`.
 
 **What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
 
@@ -1666,6 +1721,8 @@ If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
 3. **Headless mode:** If unintentional matches remain after the comparison, abort with an error listing every match — do NOT silently create the PR. The operator must either edit the body to remove the trap OR (when the match IS intentional, e.g., `Closes #N` was filtered out by step 2's heuristic incorrectly) add a `<!-- auto-close-scanner: confirm -->` marker to the body and re-run.
 4. **Interactive mode:** Use AskUserQuestion to surface every unintentional match and offer (a) edit the body to remove the trap, (b) add the `<!-- auto-close-scanner: confirm -->` marker (intentional), or (c) abort and let the operator edit manually.
 
+**Assert the FIELD, not the body text — the scanner matches this shape and still let it through.** For any PR that must NOT close its target issue, run `gh pr view <N> --json closingIssuesReferences` and require `[]`, after EVERY body edit (the field is recomputed from the live body, and a `gh pr edit` outside this skill's creation step is never re-gated). Measured 2026-09-17 on PR #8242, a docs-only PR whose whole purpose was to leave #7535 for the implementation PR: its body argued in prose that the branch must not take the close and placed a closing keyword adjacent to the ref while doing so — GitHub's parser matches keyword-then-ref and does not model the negation, so the field read `[7535]` while the implementation PR read `[]`. `auto-close-scan.sh` DOES match that sentence (verified against the exact line, rc=0, alongside a canonical positive control), and the CI scanner still reported pass on that body — so a green scan is not evidence here. The body keyword and GitHub's linked-issue association are the control surface; plan frontmatter is read by no code at all (anchored grep for `closes:`/`refs:` field access across `lib`, `scripts` and `.claude/hooks`: zero hits). Note also that a body-text scanner is blind to a sidebar link by construction. **Gate BOTH directions, and never on a PR you cannot write to.** Whenever the close is assigned to a sibling PR, assert that PR's field too and require `[7535]`-shaped non-empty *before it merges* — but treat that assertion as a monitor, not a gate, because its subject is someone else's body: raising it there cannot satisfy it, and a merged PR's body closes nothing. Same 2026-09-17 sequence: the implementation PR merged as `4dbd1affe` with `[]`, leaving the issue open and closed by nothing, so the docs PR took the close back (safe by then — the implementation was already on `main`, so no close could run ahead of its work). Keep a fallback inside your own write scope for every hand-off of this shape. See `knowledge-base/project/learnings/2026-09-17-the-sentence-i-wrote-to-prevent-the-close-is-what-assigned-it.md`.
+
 The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.github/workflows/pr-auto-close-scanner.yml) is the observational post-creation surface for PRs created outside this skill (manual `gh pr create`, GitHub UI, third-party plugins). This pre-creation scan is the only blocking surface; both share [`./scripts/auto-close-scan.sh`](./scripts/auto-close-scan.sh) so the regex stays canonical.
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
@@ -2170,6 +2227,12 @@ done
 # <!-- phase-7-poll-block:end -->
 ```
 
+**A Monitor must never HOST the work it watches — launch the work detached and let the watch only READ its completion artifact.** Every Monitor is killed at `timeout_ms` (30 min max), so a long run placed in the Monitor's own command dies when the watch expires, five minutes from done and with no verdict. It does not look like a timeout: you get no rc file, no suites-passed marker and a vanished runner — the documented *reap* signature, which is UNRESOLVED and must never be read as a result. Launch with `setsid nohup <script> &`, write the rc to a file as the script's last act, and have the Monitor poll for that file; the same run then survives an expiry and you re-arm freely. **Why:** #8233 — a 35-minute `TEST_GROUP=all` battery was run as the Monitor's command and was reaped at 30 minutes; only the epilogue's own "the check did not run, not that it passed" prevented a false green. Relaunched detached, it outlived the next expiry and completed. See [2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md](../../../../knowledge-base/project/learnings/2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md).
+
+**A poll whose population can SHRINK needs a floor, and must require the run it waits for to be PRESENT.** `pending == 0` is satisfied perfectly by an empty set, so a query that silently stops returning the runs you care about reports ALL-SETTLED having examined nothing — the same vacuity a bounded floor exists to refuse. Record the largest population seen and refuse to settle below it; separately, require the specific run you are waiting for (the deploy arm, the release job) to be present, not merely non-failing.
+
+**The cause is almost always `--limit` truncation, not the branch filter — CORRECTED 2026-09-17 after measurement.** An earlier revision of this rule blamed `--branch main --commit <sha>` and prescribed dropping `--branch`. That mechanism is FALSE and the remedy is a no-op: measured on two `main` commits, `gh run list --branch main --commit <sha>` and `gh run list --commit <sha>` return **identical** counts (58/58 and 0/0), and every run on those commits carries `headBranch: main` — **including the `push` runs** — so the branch filter cannot selectively drop push runs while retaining `issues` runs. What actually happens is `gh run list` returning newest-first under a `--limit`: on a busy commit the release runs are crowded off the end by unrelated `issues`/`issue_comment` traffic, which on an agent-driven repo is frequently the agent's OWN issue filings. Measured: `--limit 100` returned `push=0` where `--limit 300` returned `push=8` out of 131 runs. Raise the limit, paginate, or filter server-side by `--event push` / `--event workflow_run`; dropping `--branch` while keeping the limit rebuilds the identical watcher. **Why:** #8233 — a release watch reported 10 release runs then 0, one poll short of declaring a deploy settled over nothing.
+
 **Run every Monitor with its shell in the MAIN checkout (or `/var/tmp`), never `cd`'d into the feature worktree.** Once the PR merges, ANY session's `cleanup-merged` can reap that worktree, and a monitor whose shell is `cd`'d into it dies with `fatal: Unable to read current working directory` mid-watch — the post-merge release watch is exactly the one that must outlive the worktree. **Why:** #8136 — the #8074 release watch died this way while the release it was watching was red.
 
 Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
@@ -2232,7 +2295,7 @@ An admin-merge bypasses branch protection, not CI: the squash commit still lands
 
 - **If merge-commit CI concludes `success`:** the deploy arm fires and cuts prod over to this commit. Treat it as an ordinary deploy — verify it under `wg-after-a-pr-merges-to-main-verify-all` like any other (deploy job `success`, `/health` 200 with the expected `build_sha`). Do NOT dismiss a red deploy-arm run as "expected"; under this topology a red deploy arm is a **real deploy failure**.
 - **If merge-commit CI concludes `failure`:** the deploy arm still fires (the trigger is `completed`, not `success`), and `resolve-target` refuses it with a **clean skip** (`skip_reason=ci_not_green`) — the deploy-arm run concludes **green** having deployed nothing. A green release run is therefore no longer proof that prod moved; read `resolve-target`'s `should_deploy` / `skip_reason`, or the `deploy` job's own conclusion. Prod keeps the prior commit. Fix `main`; do not re-run the release. **You will also get a non-delivery email for this state** — `ci_not_green` is classified as a real non-delivery by `release-outcome`, not as "nothing was due", because main advanced and production did not. That email is expected here and is not a second fault to chase.
-- **Two runs per merge is normal.** When you look for "the release run", select the arm you mean: `gh run list --workflow web-platform-release.yml --event workflow_run --limit 1` for the deploy, `--event push` for the build. An unfiltered `--limit 1` lands on the wrong arm about half the time.
+- **Two runs per merge is normal.** When you look for "the release run", select the arm you mean AND the merge you mean: `event=workflow_run` for the deploy, `event=push` for the build, and always the merge's full SHA — `gh api "repos/{owner}/{repo}/actions/runs?head_sha=<full-40-char-merge-sha>&event=workflow_run"`. An unfiltered `--limit 1` lands on the wrong arm about half the time, and an event-filtered `--limit 1` still lands on the wrong MERGE: the deploy arm lags its merge by the whole CI run, so the newest deploy-arm run is usually the previous PR's. See `postmerge/SKILL.md` Phase 3.7.
 
 The zero-conflict-surface scoping of this hatch is still what makes it safe — but the reason is now "CI verifies the squash commit before the deploy arm fires", not "the deploy never happens". See `knowledge-base/project/learnings/best-practices/2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md` (PR #5707) **and its 2026-09-09 addendum**, which records the retirement.
 

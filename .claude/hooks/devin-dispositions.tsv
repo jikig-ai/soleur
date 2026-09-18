@@ -54,7 +54,7 @@ claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	de
 claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
-claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json binds ^(Bash|exec)$ (#8155 merged)	runtime trace pending (AC12); body gate normalized to kind
+claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json binds ^(Bash|exec)$ (#8155 merged)	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9; body gate normalized to kind
 #
 # --- .claude/settings.json — PreToolUse AskUserQuestion ----------------------
 # Anchored ^ask_user_question$ twins dispatch under Devin (EC§1).
@@ -111,7 +111,7 @@ claude-settings	.claude/hooks/supabase-loopback-warn.sh	SessionStart	startup|res
 claude-settings	scripts/install-kb-merge-driver.sh	SessionStart	startup|resume|clear|compact	bind	matcher-dead-under-devin; .devin SessionStart "" entry	EC§3
 #
 # --- plugins/soleur/hooks/hooks.json -----------------------------------------
-soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	^(Bash|exec)$	covered-by-plugin	#8155 merged; exec bound directly	conditional on runtime trace (AC12)
+soleur-plugin	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	^(Bash|exec)$	covered-by-plugin	#8155 merged; exec bound directly	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9
 soleur-plugin	plugins/soleur/hooks/codex-session-start.sh	SessionStart	startup|resume|clear|compact	n/a	codex-surface; dead under Devin is correct	EC§3
 soleur-plugin	plugins/soleur/hooks/devin-session-start.sh	SessionStart	""	already-fires	hooks.json matcher "" fires under Devin with CLAUDE_PLUGIN_ROOT set	EC§3; plugin-source binding required — .devin dispatch writes hook_source:repo sentinels, flipping cloud-detect to not-local:non-plugin-source on local sessions
 soleur-plugin	plugins/soleur/hooks/welcome-hook.sh	SessionStart	startup	skip	claude-plugin-surface	welcome banner is a Claude-plugin nicety; Devin coverage not claimed

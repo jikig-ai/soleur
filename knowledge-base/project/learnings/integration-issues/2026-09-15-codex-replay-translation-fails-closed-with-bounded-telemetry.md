@@ -168,9 +168,13 @@ path alone cannot show that replay drift is visible.
 
 72. Merge takeover repeated the sandbox network/cache and Git-index denials from error 66, and a guessed `scripts/lint-kb-structure.sh` invocation failed because that file does not exist. Broad instruction and diff reads also exceeded the output budget. **Prevention:** discover validator paths from the hook configuration before invoking them, use bounded sections and semantic comparisons, and retry actual sandbox failures through the approval path. The existing `generate-kb-index.sh --check` passed; the nonexistent invocation provides no validation evidence.
 
+73. Finishing the inherited merge resolved its original conflicts but did not establish mergeability against current main: GitHub still reported conflicts after the push. A fresh fetch exposed another generated-diagram conflict and a second ADR ordinal collision. **Prevention:** verify the live PR head and mergeability after recovery, resync against current main, regenerate derived artifacts, and recheck ordinal uniqueness before reporting the branch conflict-free.
+
+74. The recovery probe initially required every historical ADR ordinal to be unique and failed on unchanged legacy names. Comparing the complete duplicate map against current main confirmed no added collisions, and ADR-225 is unique. **Prevention:** check the newly allocated ordinal directly and compare repository-wide findings with the merge base before treating historical naming as a new regression.
+
 ## Related
 
-- `knowledge-base/engineering/architecture/decisions/ADR-224-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/codex-qualification-record.md`
 
 ## Tags

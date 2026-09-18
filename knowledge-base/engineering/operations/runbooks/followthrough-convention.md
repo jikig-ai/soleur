@@ -117,6 +117,18 @@ follow-through` runs — `.claude/hooks/follow-through-directive-gate.sh` (and t
 sweeper) reject a missing/non-executable `script=` path. For review-time filings
 the script lands in the review PR's branch.
 
+**Enrolling on a PRE-EXISTING issue** (the auto-wire only fires on issue
+create): manually add the `follow-through` label — the sweeper enumerates by
+label and never parses bodies, so an unlabeled directive is invisible; verify
+no prior directive; directive at column 0; canonical
+`script=scripts/followthroughs/<name>.sh` (a bare name fails path
+canonicalization **silently** — stderr-only, zero comments, every run);
+post-merge, verify the sweeper run log shows the script actually ran — "it
+didn't comment" is indistinguishable from "it worked". And note: the sweeper
+comments on EVERY non-0/1 verdict with no dedup, so an indefinite-horizon
+"watch for upstream" directive spams the tracker (~30 comments/month) — use a
+dedicated `scheduled-*-drift.yml` workflow + `Ref #N` for that shape instead.
+
 **First deferred-scope-out instance**: #3950 (review: cla-evidence scripts
 hardening bundle) — `scripts/followthroughs/cla-evidence-hardening-3950.sh` is the
 worked event-grep example (asserts the 4 hardening markers are intact, then

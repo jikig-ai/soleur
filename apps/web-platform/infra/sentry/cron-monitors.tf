@@ -1380,3 +1380,30 @@ resource "sentry_cron_monitor" "scheduled_machinery_drain" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# Liveness for the daily docs.devin.ai capability-drift watcher
+# (.github/workflows/scheduled-devin-docs-drift.yml, on.schedule "23 7 * * *").
+# DISPOSABLE with the watcher — delete this resource when #8160 closes (the
+# teardown list lives in the workflow header).
+#
+# WHY IT EXISTS. The watcher is the detection half of the #8160 upstream filing:
+# it is the only mechanism that notices when Cognition ships or documents cloud
+# hook dispatch / plugin subagents. A workflow that stops being scheduled
+# (GitHub disables schedules on repo inactivity and drops ticks under load) is
+# indistinguishable from docs that never changed — there is no red run to
+# notice, because there is no run.
+#
+# GHA-scheduled (not Inngest-dispatched) like its sibling
+# scheduled_marketplace_drift, so it inherits that cohort's 360-min margin for
+# GHA `schedule:` jitter rather than the Inngest cohort's 30.
+resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-devin-docs-drift"
+  schedule                = { crontab = "23 7 * * *" }
+  checkin_margin_minutes  = 360
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

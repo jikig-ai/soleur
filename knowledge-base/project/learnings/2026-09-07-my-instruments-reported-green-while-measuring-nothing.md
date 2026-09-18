@@ -363,3 +363,40 @@ text concatenates onto the summary line and the anchor misses again.
 
 Reference implementation: `plugins/soleur/test/preflight-check10-suite-integrity.test.sh`
 › `strip_ansi`.
+
+## Addendum — 2026-09-17 (#7535 / PR #8242): eight instruments, eight confident wrong answers, one family
+
+This file's rule held on a session where nothing measured was a guard and everything measured was a
+**verification command I typed myself**. Eight instruments produced a confident *answer* rather than
+an error; none failed loudly. Every one was either **unanchored** or **status-masked**.
+
+| # | Instrument | Reported | True |
+|---|---|---|---|
+| 1 | `grep -rn "closes:"` over lib/scripts/hooks | 5 consumers of the plan frontmatter key | **0** — the hits were English prose in shell comments ("the asymmetry it closes:") |
+| 2 | `markdownlint <out-of-tree path>` | **exit 0** | crashed on the ignore filter having linted nothing |
+| 3 | `grep 'AC23\*\* re-asserts'`, `grep 'left \*\*four\*\* things'` | no such text; two agent findings look false | both real — the file has no `**` at those points |
+| 4 | existence sweep for controls the plan names | `scripts/probe-verb-gate.sh` **MISSING** | exists at `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh`; the regex matched a substring mid-path |
+| 5 | `lint-infra-no-human-steps` total on HEAD vs main | "518 on both → pre-existing" | a matching **count** is the weakest evidence; the finding-**set** diff is 517/517, zero new |
+| 6 | `ls -la "$F" \| cut … \|\| echo ABSENT` | file present | `\|\|` reads `cut`'s status, so the ABSENT branch could never fire |
+| 7 | a `Monitor` predicate `all(.bucket != "pending")` | `ALL_TERMINAL fail=0 pass=9` — CI green | the set held **9** of ~73 checks; `markdown-lint` and `test-scripts`, the only two gates covering the diff, were **absent**. An incomplete set satisfies "nothing pending" trivially |
+| 8 | `gh run list --commit <sha>` | no runs, for two different SHAs | wrong query shape; `--branch` returned 14 runs immediately |
+
+Three of these nearly changed an outcome: #3 and #4 would have dismissed correct findings or filed a
+phantom one, and **#7 would have shipped on a green that excluded both relevant gates** — the
+"a green check-set answers a question about the SET you were handed" trap from `review/SKILL.md`,
+reproduced inside a monitor written to avoid it.
+
+**The sharpened rule.** The existing prevention says run the instrument against a known-positive and
+a known-negative. Add the completeness half, because #5 and #7 pass both of those and are still
+wrong: **also assert the instrument's input SET is the set you meant.** A count over an unverified
+population, and a terminal predicate over an unverified check set, are the same defect — the
+predicate is fine and the domain is wrong.
+
+Two cheap habits closed all eight:
+
+- **Anchor on a start or an emitter, never a bare token or a mid-path fragment** (#1, #3, #4).
+- **Never read a status through a pipeline, and never read a verdict over a set whose size you have
+  not asserted** (#2, #5, #6, #7, #8).
+
+Measured in one session on a docs-only PR: 8 wrong readings, 3 near-misses, 0 loud failures.
+See `knowledge-base/project/learnings/2026-09-17-the-sentence-i-wrote-to-prevent-the-close-is-what-assigned-it.md`.

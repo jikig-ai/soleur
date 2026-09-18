@@ -312,14 +312,67 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
-# environment (TEST_GROUP=scripts in CI omits setup-bun by design — the
-# scripts shard needs no bun and no node *version pin*: it uses stock
-# ubuntu-latest node, unpinned, for the one `node --test` suite below).
-if [[ -f .bun-version ]] && command -v bun >/dev/null 2>&1; then
-  expected=$(tr -d '[:space:]' < .bun-version)
-  actual=$(bun --version)
-  if [[ "$actual" != "$expected" ]]; then
-    echo "WARNING: Bun $actual installed, expected $expected (from .bun-version)" >&2
+# environment. The parenthetical here used to read "TEST_GROUP=scripts in CI
+# omits setup-bun by design"; that is FALSE and has been since #7566 (verified
+# 2026-09-17: ci.yml's test-scripts job runs `oven-sh/setup-bun` and names its
+# step "bash + python3 + bun"). ci.yml corrected its own copy of the claim
+# in-place — "`setup-bun` IS required (#7332)" — and this twin was never swept,
+# so the stale sentence survived precisely where a reader of THIS file would
+# look. CI is bun-BEARING; the gate below still matters because a developer host
+# need not be, and because `command -v` answers a different question either way.
+# The node point is unchanged and still true: the scripts shard needs no node
+# *version pin* — it uses stock ubuntu-latest node, unpinned, for the one
+# `node --test` suite below.
+#
+# `command -v bun` is NOT a sufficient test for "bun works", and the difference is not cosmetic.
+# A version-manager SHIM resolves on PATH while being unable to run: a `mise` shim with no
+# version pinned prints `mise ERROR No version is set for shim: bun` to stderr and exits
+# non-zero. This file is `set -euo pipefail` (line 2), so the bare `actual=$(bun --version)` was
+# an ABORT rather than a skipped check — and it sits ABOVE every registration emit, so the
+# observable failure was not a missing warning. It was EVERY invocation of this runner exiting
+# rc 1 having emitted nothing, on a host where nothing about the battery was wrong.
+#
+# WHAT THAT BREAKS. Two consumers fail closed on the `--enumerate` record stream and go red for
+# a cause neither can name: `scripts/battery-tag-authorship.test.sh` › the `--enumerate-commands`
+# root-set guard (rc AND count) and `plugins/soleur/test/scripts-shard-totality.test.sh` ›
+# `enumerate_leg()` (count only — it invokes the function as a bare statement and never reads
+# `$?`; `pipefail` IS set there, so the rc survives the pipe and is discarded at the call site).
+# `scripts/lint-orphan-test-suites.sh` › the `--print-suite-globs` derivation is the same
+# fail-closed shape on the SIBLING stream and the same prologue window.
+#
+# SCOPE, stated narrowly on purpose. This guards ONE tool. The prologue above the first
+# registration emit still aborts rc-1-with-zero-records if `tr`, `dirname`, `mktemp` or `mkdir`
+# fails, and the `dirname` sites do it with no runner-authored stderr at all. `command v as a
+# liveness claim` is a repo-wide class (tracked separately); do not read this block as closing
+# it. `scripts/orphan-process-reaper.sh` › the `logger` guard is the in-repo reference shape.
+#
+# The DEGRADED case is reported rather than silently swallowed, and the report carries the exit
+# status instead of asserting a cause this code never measured: 126 is a bad interpreter, 127 a
+# binary that vanished between `command -v` and the call, 1 a shim refusing. `timeout` and the
+# `||` arm are BOTH load-bearing and cover different failures — see the same argument made for
+# `crane` further down this file; `|| actual=""` covers a non-zero exit and cannot rescue a shim
+# that never returns (a version manager may go to the network to install a missing runtime).
+#
+# Pinned by scripts/test-all-enumerate-toolchain.test.sh, whose R5 row is what stops this from
+# being "fixed" by deleting the check. (#8231)
+if [[ -f .bun-version ]]; then
+  # `tr` gets the same treatment as `bun` below, for the same reason and one line earlier: a
+  # bare command substitution here is an ABORT under `set -e`, above every registration emit.
+  expected=$(tr -d '[:space:]' < .bun-version) || expected=""
+fi
+if [[ -n "${expected:-}" ]] && command -v bun >/dev/null 2>&1; then
+  _bun_rc=0
+  actual=$(timeout 10 bun --version 2>/dev/null) || _bun_rc=$?
+  # Normalise the COMMAND's output, not just the file's: a shim emitting CRLF or a banner line
+  # otherwise compares unequal to a byte-identical pinned version and this block emits
+  # `Bun 1.3.14 installed, expected 1.3.14` — a warning that contradicts itself.
+  actual=$(printf '%s' "${actual:-}" | tr -d '[:space:]') || actual=""
+  if [[ -z "$actual" ]]; then
+    echo "WARNING: 'bun --version' produced no version (exit ${_bun_rc}); skipping the version check" >&2
+  elif [[ "$actual" != "$expected" ]]; then
+    # %q, not raw: $actual is PATH-controlled, and a shim can otherwise emit control characters
+    # or U+2028 and forge a line shaped like this runner's own status output into a CI log.
+    printf 'WARNING: Bun %q installed, expected %q (from .bun-version)\n' "$actual" "$expected" >&2
     echo "Run: bun upgrade" >&2
   fi
 fi
@@ -1739,6 +1792,11 @@ if want_scripts; then
   # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #8160: the devin-docs-drift watcher's anchors fire on third-party doc text, so
+  # a polarity inversion or a dead regex is invisible until the day the watch was
+  # built for. This suite extracts the check step verbatim and drives both
+  # directions — affirmative cloud claims MUST fire, negations MUST NOT.
+  run_suite "scripts/devin-docs-drift-check" bash scripts/devin-docs-drift-check.test.sh
   # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
   # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
   # closing condition is a claim about MACHINES, and the probe is how that claim
@@ -2062,6 +2120,18 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7500 zot_last_err redaction delivery watch (tracker #7960). Registered at birth rather than
+  # after lint-orphan-test-suites.sh catches it: this probe is the only followthrough whose SUBJECT
+  # is replaced mid-window by design (ADR-096 — the registry host is cloud-init-only, so delivery
+  # IS a host replace), and nothing exercised a mixed-boot window before this harness.
+  #
+  # The suite asserts a BRANCH MARKER per case, not just an exit code, and that is load-bearing:
+  # the probe has six distinct `exit 2` sites, so an exit-code-only suite collapses most of its
+  # cases onto one integer. Measured — removing both `boot_id=unknown` guards leaves the exit code
+  # at 2 and is caught ONLY by the marker. Measured on the first revision, which was exit-code
+  # only: deleting the no-boot_id guard, deleting the trusted-region cut (while the forge
+  # succeeded), and replacing the probe invocation with the expected value all left it 6/0 green.
+  run_suite "scripts/zot-last-err-redact-7500" bash scripts/followthroughs/zot-last-err-redact-7500.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -2100,16 +2170,8 @@ if want_scripts; then
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
   # than telemetry — a green boot marker must not authorize a supply-chain retirement.
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
-  # #8159: exit-code harness for the post-merge cloud-parity evidence probe. Registered
-  # explicitly (orphan-suite class above). This probe is notify-only — its verdicts feed a
-  # legal-adjacent tracker whose close is an operator judgement, so the load-bearing pins are
-  # the never-0/never-1 invariant (0 is the sweeper's close verb; 1 its fail/reopen verb) and
-  # the 2-vs-3 split: a measurement that could not run (missing file, missing toolchain,
-  # non-regular file at the probe path) must report CANNOT ESTABLISH, not NOT YET — "nothing
-  # qualifies" for "could not look" is the inversion the contract exists to express. The suite
-  # also pins the fenced-template guard: cloud-probe.md's checklist carries a fenced markdown
-  # TEMPLATE naming SC1/SC3/SC4, and a fence-blind parse reads documentation as a verdict.
-  run_suite "scripts/cloud-mode-postmerge-evidence-8159" bash scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh
+  # (#8159 retired 2026-09-17 — issue closed; probe script + suite deleted per
+  # the script's own RETIREMENT note.)
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -2135,6 +2197,17 @@ if want_scripts; then
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
+  # 2026-09-17: every no-SSH host read is gated on the doppler CLI, so a machine without the
+  # binary makes an agent read "command not found" as "this session has no observability
+  # access" and fall back to an hourly probe or to SSH. The suite's load-bearing case is the
+  # unauthenticated/unknown split — a network fault must never route to a login flow. Explicit
+  # run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/ensure-doppler" bash scripts/ensure-doppler.test.sh
+  # 2026-09-17: web-1 also emits SOLEUR_INNGEST_SERVER_PROBE with host_name=soleur-inngest-prd,
+  # so a reader filtered on the marker (or on host_name) summarises the WRONG MACHINE while
+  # looking correct. The load-bearing case is T2 — given only web-1 rows, stdout must be EMPTY.
+  # Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/inngest-host-state" bash scripts/inngest-host-state.test.sh
   # #7966: the rotation script had never completed a run (TARGETS exported after the check that
   # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
   run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
@@ -2635,6 +2708,13 @@ if want_scripts; then
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
+  # #8231: `--enumerate` must not depend on a WORKING bun, only on the absence of a broken one.
+  # Registered explicitly for the reason its neighbours state — repo-root `scripts/*.test.sh` is
+  # NOT in SUITE_GLOBS, so an unregistered suite here runs in zero runners and stays green
+  # forever. This one guards the producer for three consumers that fail closed on the enumerate
+  # stream's record count, including `scripts/battery-tag-authorship` two lines above, which was
+  # measured at exit 1 on a host whose only defect was an unpinned `mise` bun shim. bash-only.
+  run_suite "scripts/test-all-enumerate-toolchain" bash scripts/test-all-enumerate-toolchain.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by

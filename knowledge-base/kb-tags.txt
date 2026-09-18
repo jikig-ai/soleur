@@ -469,6 +469,7 @@ blog
 blog-authoring
 blog-post
 blue-green
+blueprint
 bodies
 body
 body-grep-comments
@@ -706,6 +707,7 @@ cjs
 cla
 cla-check
 claim-verification
+claims-vs-measurements
 classification-gate
 classifier
 classifier-gate
@@ -748,10 +750,12 @@ closed-issue-gate
 closes-after-apply
 closes-vs-ref
 closing-keyword
+closing-keywords
 closure-gate
 cloud-init
 cloud-max-scheduling
 cloud-migration
+cloud-mode
 cloud-routines
 cloud-task-silence
 cloudflare
@@ -958,6 +962,7 @@ cost-model
 cost-of-filing
 cost-of-filing-gate
 cost-slo
+could-not-measure
 count-mismatch
 counting
 counts
@@ -1051,6 +1056,7 @@ custom-icon
 cutover
 cve-2025-55130
 cwd
+cwd-envelope
 cwd-management
 cwe-22
 cwe-522
@@ -1383,6 +1389,7 @@ escalation-routing
 escape-hatch
 escape-rows
 escape-testing
+escapes
 escaping
 eslint
 esm
@@ -1677,6 +1684,7 @@ git-history
 git-identity
 git-index
 git-ls-files
+git-manager-proxy
 git-mv
 git-pull
 git-rebase
@@ -1686,6 +1694,7 @@ git-rev-parse
 git-scoping
 git-show-main
 git-stash
+git-subdir
 git-tags
 git-trailers
 git-workflow
@@ -1944,6 +1953,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-failure
 instrument-vacuity
 instrument-validation
 instrument-verification
@@ -2841,6 +2851,7 @@ probe
 probe-discipline
 probe-failure-asymmetry
 probe-first
+probe-methodology
 probe-receipt
 probes
 proc-cmdline
@@ -2900,6 +2911,7 @@ prose-claims
 prose-conventions
 prose-counts
 prose-guard
+prose-guards
 prose-sweep
 prospect-anchored features
 protecthome
@@ -2918,6 +2930,7 @@ provisioning
 proxied-records
 proxy-anti-pattern
 proxy-invariants
+proxy-vs-control-surface
 prune
 pseudonymisation
 pseudonymization
@@ -3089,6 +3102,7 @@ requestanimationframe
 require
 required-checks
 required-reviewer
+requiredplugins
 requirements-elicitation
 requires_cpo_signoff
 rerender
@@ -3398,6 +3412,7 @@ sentinel
 sentinel-drift
 sentinel-sweep
 sentinel-values
+sentinel-vocabulary
 sentry
 sentry-alerts
 sentry-api
@@ -3499,6 +3514,7 @@ sibling-mechanism
 sibling-migration
 sibling-pr
 sibling-race
+sibling-worktree
 sidebar
 sidebar-persistence
 sidecar
@@ -3944,6 +3960,7 @@ tool-tier
 tool_input
 tool_name
 tool_progress
+toolchain
 toolchain-pinning
 tooling
 tooling / workflow-infra
@@ -4111,9 +4128,11 @@ vendored-css
 vendored-library
 vendored-upstream
 vendorsupabase
+verbatim
 verbs
 verdict
 verdict-cache
+verdict-machinery
 verification
 verification-decay
 verification-discipline
@@ -4170,6 +4189,7 @@ wai-aria
 wal
 walk
 wall-clock
+warm-image
 warm-standby
 warning-level
 watch-only

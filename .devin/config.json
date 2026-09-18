@@ -1,5 +1,11 @@
 {
-  "requiredPlugins": ["https://github.com/jikig-ai/soleur#plugins/soleur"],
+  "requiredPlugins": [
+    {
+      "source": "git-subdir",
+      "url": "https://github.com/jikig-ai/soleur.git",
+      "path": "plugins/soleur"
+    }
+  ],
   "hooks": {
     "SessionStart": [
       {
