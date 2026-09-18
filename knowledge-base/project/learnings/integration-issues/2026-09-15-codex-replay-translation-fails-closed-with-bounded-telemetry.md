@@ -178,6 +178,8 @@ path alone cannot show that replay drift is visible.
 
 77. The legal-scope parser hardening initially introduced a shell parse error because an apostrophe in a comment inside a single-quoted inline `awk` program terminated the surrounding shell string. **Prevention:** keep comments inside single-quoted shell-embedded programs apostrophe-free, and run the focused script immediately after editing before staging it.
 
+78. The guardrails conflict scanner had the same mnemonic-prefix blind spot as the legal-scope parser: it matched only `+++ b/`, so a staged `knowledge-base/INDEX.md` sentinel under `+++ w/` was not detected. **Prevention:** treat Git's standard `a/b/c/i/o/w` diff-side prefixes as equivalent anywhere staged-diff paths are parsed.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
