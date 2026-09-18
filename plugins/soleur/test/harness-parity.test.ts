@@ -11,8 +11,9 @@
  * R9, R9's path exclusion, R6b, and the marker grammar each have a fixture that goes RED on
  * the same CI pass that would have certified the weakening.
  *
- * The cross-file sentinel (this file asserts the tree census file carries the literal
- * `expect(noncanonical).toEqual([])`) lands with the tree census in Phase 4.
+ * The cross-file sentinel: this file asserts the tree census file carries the literal
+ * `expect(noncanonical).toEqual([])`, so deleting the gate's assertion reds a file the edit
+ * did not touch (ADR-224 §Verification does the same).
  */
 
 import { describe, test, expect } from "bun:test";
@@ -60,6 +61,15 @@ function verdicts(doc: DocResult, verdict: Site["verdict"]): Site[] {
 function nonc(doc: DocResult): Site[] {
   return verdicts(doc, "NONCANONICAL");
 }
+
+describe("harness-parity cross-file sentinel (N11, H1)", () => {
+  test("the tree census file asserts the absolute property with the exact literal", () => {
+    const tree = readFileSync(resolve(import.meta.dir, "harness-parity-tree.test.ts"), "utf-8");
+    expect(tree).toContain("expect(noncanonical).toEqual([])");
+    expect(tree).toContain("readPopulation()");
+    expect(tree).toContain("EXPECTED_SOLEUR_AGENT_COUNT");
+  });
+});
 
 describe("harness-parity fixtures — index and policy plumbing", () => {
   test("readIndex resolves a non-empty index with the registry's leaf and stem maps", () => {
