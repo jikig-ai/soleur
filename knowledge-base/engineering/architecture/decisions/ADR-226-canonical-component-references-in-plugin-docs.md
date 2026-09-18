@@ -160,8 +160,13 @@ Declared gaps, each with an issue:
   `subagent_type`) that carry no name through a sigil — 82 lines in 29 docs. No
   canonical word exists to allowlist against; the adapters translate the noun
   themselves.
-- **NG-P** (#8317, P1): other agent-read docs — agent bodies and
-  `skills/*/references/**`. Human-read surfaces stay out by design (§4). An
+- **NG-P** (#8317, P1): other agent-read docs — agent bodies (**289 sites / 68
+  docs**) and `skills/*/references/**` (**84 / 19**), measured 2026-09-18 by
+  running `classifyDoc` over each surface. The plan's `35 / 15` and `44 / 19`
+  predate the operator's R6b decision to gate bare agent leaves, which is most
+  of the residue: an agent body names its own leaf and its siblings' throughout.
+  Size #8317 from these figures, not the plan's. Human-read surfaces stay out by
+  design (§4). An
   earlier draft of this ADR called each surface "one glob line"; that is wrong
   and is corrected here, because #8317 will be picked up on the strength of it.
   `globToRegex` has no `**` support, two `regionPolicyForPath` fixtures and the
@@ -181,6 +186,15 @@ Declared gaps, each with an issue:
 - "Canonical resolves on every harness" is verified on Grok (`grok-fidelity`)
   and Claude; Codex and Devin are declared uncovered (#8306). The gate's promise
   is "no harness-specific form in agent-read prose", not "resolves everywhere".
+
+**`--fix` requires a clean tree.** It rewrites tracked files in place and is the
+remedy the gate's failure message prescribes. A grok slash and a root-relative
+path are lexically identical after a boundary character (`run /plan` vs
+`POST /invoice`), so a rewrite can consume a real byte — and because the result
+then classifies CANONICAL, the census reports clean and the loss is invisible to
+the gate. No predicate separates the two cases, so the guard is reviewability
+rather than detection: refusing a dirty tree keeps every rewrite visible in
+`git diff` and revertible with `git checkout`. `--force` overrides.
 
 **One live agent is outside the index by construction.** `discoverAgentPaths()`
 excludes `references/`, so `soleur:operations:references:service-deep-links` —
