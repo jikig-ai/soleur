@@ -145,6 +145,14 @@ fi
 
 # --- Interactive flow ---
 
+# Run ledger home. The library's default is "beside the main script", which for
+# THIS script is the plugin tree (a marketplace cache, untracked, not ignored —
+# review P2-19). The DPA gate above already requires cwd to be the monorepo
+# root, so the ledger goes under its `.soleur/` (gitignored). Set AFTER the
+# dry-run branch so the golden stdout is untouched, and BEFORE ledger_init.
+: "${SOLEUR_BOOTSTRAP_LEDGER:=$(pwd)/.soleur/bootstrap-runs.jsonl}"
+export SOLEUR_BOOTSTRAP_LEDGER
+
 echo ""
 echo "=== Hetzner provisioning for '${SLUG}' ==="
 echo ""

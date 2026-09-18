@@ -170,6 +170,13 @@ tracked, so the script survives `ship` reaping the worktree and is visible to th
 and to review; and a gitignored path (`provisioning/`, `.soleur/` — both are) would leave the
 follow-through issue's `auto_command:` pointing at a file that stops existing at ship Phase 7.
 
+A tracked home has one consequence the founder must not discover from a pushed token: the `.env`
+beside the script — and the `.env.tmp.XXXXXX` sibling the upsert creates — must be covered by the
+repository's `.gitignore` (a bare `.env` pattern does not cover the sibling; `.env*` covers both).
+The template checks this **before its first write**, `--reset` included: inside a git work tree, an
+uncovered path stops the run with `SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=<path>`, exit 64, and one
+sentence naming the fix. This repository's `.gitignore` carries both patterns.
+
 The ledger is written on the founder's machine and is committable in the founder's repository,
 which is where observability layer 7's "committed to the customer's own repository" condition is
 satisfied. Nothing is transmitted to Soleur infrastructure: the surface is the founder's own
@@ -177,7 +184,8 @@ machine, and routing it anywhere else is a data-controller event, not an observa
 
 ## What protects the founder's credentials
 
-Five vectors, four controls, all inside the library so no generated script re-decides them:
+Six vectors, five controls — four inside the library so no generated script re-decides them, one in
+the template because only the generated script knows where it lives:
 
 | Vector | Control |
 |---|---|
@@ -186,10 +194,12 @@ Five vectors, four controls, all inside the library so no generated script re-de
 | a secret echoed for progress, or a run under `set -x` | the xtrace refusal (exit 78) plus the repo-root `lint-shell-trace-credential-refusal.py` linter in CI |
 | a third-party CLI dumping unrelated secrets as a side effect of a write | the write's own output is redirected and the result confirmed by a separate read |
 | a half-populated `.env` and partly-set secrets after an interrupted run | **not** a library control — it is the precondition/`--reset` work above, and it is the author's job |
+| the `.env` (or its `.tmp.XXXXXX` sibling) sitting in a tracked directory that `.gitignore` does not cover | the template's `git check-ignore` probe on both paths before the first write — `SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED`, exit 64 (a template control, not a library one: the library does not know where it is sourced from) |
 
-The guards behind the first four live in
+The guards behind the four library controls and the template's ignore probe live in
 [`plugins/soleur/test/operator-script.test.sh`](../../test/operator-script.test.sh), whose mutation
-matrix drives each one red. The same suite proves the bake in §3 is load-bearing: the unbaked
+matrix drives each one red (the ignore probe is observed on a real git fixture, with the probe
+deleted from the generated script as the mutation). The same suite proves the bake in §3 is load-bearing: the unbaked
 template, placed at the documented location with no `CLAUDE_PLUGIN_ROOT`, exits 64.
 
 ## Related

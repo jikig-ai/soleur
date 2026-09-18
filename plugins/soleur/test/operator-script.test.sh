@@ -33,6 +33,13 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
 
+# The .env-must-be-ignored rows below create a git fixture. Sourcing this arms
+# the #7833 tripwire (an inherited GIT_DIR aborts the suite, exit 97) and gives
+# `git_fixture_env`, which sweeps GIT_*, pins a discovery ceiling at the sandbox
+# and makes config hermetic — so no fixture `git init` can reach the live repo.
+# shellcheck source=./lib/git-fixture-env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/git-fixture-env.sh"
+
 SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="${SUITE_DIR}/../scripts/lib/operator-script.sh"
 PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
@@ -1138,6 +1145,81 @@ else
   fail "terminal outcome: the baked template copy from F1 is missing"
 fi
 
+# =============================================================================
+# Guard 7 — the credentials file must be gitignored before the first write (P1-1)
+# =============================================================================
+#
+# The generated script lives in a TRACKED directory. Observed on a real git
+# fixture, never on the source text: a repo whose .gitignore does not cover the
+# .env (or its `.tmp.XXXXXX` sibling) must stop with ENV_NOT_IGNORED and write
+# nothing; a repo that covers both proceeds to the first stage.
+
+echo "== Guard 7 — .env gitignored before the first write =="
+
+gign_run() {
+  # gign_run <repo> <script-rel> — runs the baked script inside the fixture repo
+  # with the class-1/3 skip variables set and no TTY.
+  ( cd "$1" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+      SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
+      timeout 10 bash "$2" </dev/null 2>&1 )
+}
+
+gign_check() {
+  # gign_check <baked-script>  — three fixtures, one property.
+  local script="$1" v=0 repo rel="knowledge-base/project/specs/feat-y/bootstrap.sh" out rc
+  repo="$SB/gitrepo"
+  rm -rf "$repo"; mkdir -p "$repo/knowledge-base/project/specs/feat-y"
+  cp "$script" "$repo/$rel"
+  git_fixture_env "$repo" >/dev/null 2>&1 || { echo "gign: git_fixture_env refused the fixture"; return 1; }
+  git -C "$repo" init -q . || { echo "gign: git init failed"; return 1; }
+
+  # (a) nothing ignored → refuse, name the .env, write nothing
+  out="$(gign_run "$repo" "$rel")"; rc=$?
+  if [[ "$rc" -ne 64 ]] || ! grep -qF "SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=" <<<"$out" || ! grep -qF '/feat-y/.env' <<<"$out"; then
+    echo "gign: un-ignored .env was not refused with ENV_NOT_IGNORED + rc 64 (rc=${rc}): ${out}"; v=1
+  fi
+  if ! grep -qF 'The credentials file would be committed. Add it to .gitignore first' <<<"$out"; then
+    echo "gign: no plain-language sentence after the marker"; v=1
+  fi
+  if [[ -e "$repo/knowledge-base/project/specs/feat-y/.env" ]]; then
+    echo "gign: the refused run still created the .env"; v=1
+  fi
+  # (b) .env ignored, its temp sibling not → refuse, name the sibling
+  printf '.env\n' > "$repo/.gitignore"
+  out="$(gign_run "$repo" "$rel")"; rc=$?
+  if [[ "$rc" -ne 64 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=' <<<"$out" || ! grep -qF '.env.tmp.XXXXXX' <<<"$out"; then
+    echo "gign: un-ignored .env.tmp.XXXXXX sibling was not refused (rc=${rc}): ${out}"; v=1
+  fi
+  # (c) both ignored → proceeds to stage 1, writes the .env, stops at the ack
+  printf '.env*\n' > "$repo/.gitignore"
+  out="$(gign_run "$repo" "$rel")"; rc=$?
+  if grep -qF 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED' <<<"$out"; then
+    echo "gign: an ignored .env was refused"; v=1
+  fi
+  if ! grep -q '^EXAMPLE_ACCOUNT_ID=acct-1$' "$repo/knowledge-base/project/specs/feat-y/.env" 2>/dev/null; then
+    echo "gign: the ignored-.env run did not proceed to write stage 1's key (rc=${rc}): ${out}"; v=1
+  fi
+  if [[ -n "$(git -C "$repo" status --porcelain --untracked-files=all -- knowledge-base/project/specs/feat-y/.env 2>/dev/null)" ]]; then
+    echo "gign: the .env is visible to git status in the ignored fixture"; v=1
+  fi
+  return "$v"
+}
+
+if [[ -r "$gen_home/bootstrap.sh" ]]; then
+  assert_green gign_check "baked template" "$gen_home/bootstrap.sh"
+  # Mutation (P1-1): the check block deleted from the generated script.
+  cp "$gen_home/bootstrap.sh" "$SB/mut/gign-nocheck.sh"
+  perl -0777 -pi -e 's{for probe in "\$ENV_FILE" "\$\{ENV_FILE\}\.tmp\.XXXXXX"; do\n.*?\ndone\n}{}s' "$SB/mut/gign-nocheck.sh"
+  if [[ "$(md5_of "$SB/mut/gign-nocheck.sh")" == "$(md5_of "$gen_home/bootstrap.sh")" ]]; then
+    fail "mutation 'gign check block deleted' did NOT land"
+  else
+    pass "mutation 'gign check block deleted' landed (md5 differs from the baked template)"
+    assert_red gign_check "gign: template without the check writes an un-ignored .env" "$SB/mut/gign-nocheck.sh"
+  fi
+else
+  fail "Guard 7: the baked template copy from F1 is missing"
+fi
+
 # Ledger: one line BEFORE and one AFTER each stage.
 ledger_probe="$SB/ledger-probe.jsonl"
 SOLEUR_BOOTSTRAP_LEDGER="$ledger_probe" bash -c '
@@ -1191,7 +1273,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=82
+FLOOR=85
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))

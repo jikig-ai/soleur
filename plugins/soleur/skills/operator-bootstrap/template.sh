@@ -125,6 +125,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- the credentials file must be ignored by git ------------------------------
+# This script lives in a TRACKED directory (SKILL.md §Where), and its .env holds
+# live credentials. A .gitignore that does not cover it turns the founder's next
+# `git add .` into a pushed token (review P1-1). Checked BEFORE the first write —
+# `--reset` writes too — on the .env AND on the `.tmp.XXXXXX` sibling the upsert
+# creates beside it, which a bare `.env` pattern does not cover. Outside a git
+# work tree (or without git) there is nothing to commit, so the check passes.
+env_not_ignored() {
+  local dir; dir="$(dirname "$1")"
+  git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  ! git -C "$dir" check-ignore -q "$1"
+}
+for probe in "$ENV_FILE" "${ENV_FILE}.tmp.XXXXXX"; do
+  if env_not_ignored "$probe"; then
+    printf 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=%s\n' "$probe"
+    printf 'The credentials file would be committed. Add it to .gitignore first (a pattern such as .env* covers both the file and its temp sibling).\n'
+    exit 64
+  fi
+done
+unset probe
+
 if [[ -n "$RESET_KEY" ]]; then
   soleur_op_env_reset "$ENV_FILE" "$RESET_KEY"
   soleur_op_green "Forgot ${RESET_KEY}. Re-run to be asked for it again."
