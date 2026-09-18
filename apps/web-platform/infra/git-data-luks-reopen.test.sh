@@ -178,7 +178,8 @@ ok "$([ -n "$L_ARM" ] && [ -n "$L_BOOT" ] && [ "$L_ARM" -lt "$L_BOOT" ]; echo $?
 ok "$(grep -qE '^    STAGE=gitdata_luks_reopen_arm$' "$CLOUD_INIT"; echo $?)" "C15 arm item names STAGE=gitdata_luks_reopen_arm"
 n=$(grep -c '_reopen_arm_detail' "$CLOUD_INIT" || true)
 ok "$((n < 2))" "C16 arm item uses its own detail variable _reopen_arm_detail (R3(3b)(iii))"
-n=$(awk -v a="$L_ARM" -v b="$L_NFT" 'NR>a && NR<b' "$CLOUD_INIT" | grep -c '"\${STAGE}_warn" warning' || true)
+# The template is a templatefile(): the shell `${STAGE}` is written `$${STAGE}` in the source.
+n=$(awk -v a="$L_ARM" -v b="$L_NFT" 'NR>a && NR<b' "$CLOUD_INIT" | grep -cF '"$${STAGE}_warn" warning' || true)
 ok "$((n != 1))" "C17 arm failure emits a WARNING at \${STAGE}_warn (got $n)"
 
 # bootstrap: the measured boolean

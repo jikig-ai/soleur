@@ -562,6 +562,9 @@ EXPECTED_PATHS = {
     "git_data_gc_service":              "/etc/systemd/system/git-data-gc.service",
     "git_data_gc_failure_service":      "/etc/systemd/system/git-data-gc-failure.service",
     "git_data_gc_timer":                "/etc/systemd/system/git-data-gc.timer",
+    "git_data_luks_reopen":             "/usr/local/bin/git-data-luks-reopen.sh",
+    "git_data_luks_reopen_service":     "/etc/systemd/system/git-data-luks-reopen.service",
+    "git_data_luks_reopen_failure_service": "/etc/systemd/system/git-data-luks-reopen-failure.service",
     "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
 }
 
@@ -2469,7 +2472,10 @@ _R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
 # reporting site being swapped away inside any window. Measured with the arm's own analyzer, not
 # assumed: it now parses 7 reporting rows across 5 windows (it reported exactly that in the FAIL
 # that caught this change, which is the guard working).
+# (#8210) FIVE WINDOWS -> SIX: the LUKS-reopen arm item adds one reporting emit (its warning on
+# failure to arm), under its own window and its own detail variable (_reopen_arm_detail).
 _R3B_EXPECTED_SITES='gc_timer
+gitdata_luks_reopen_arm
 gitdata_nftables_metadata
 luks_err
 on_err

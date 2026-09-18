@@ -523,7 +523,10 @@ HOST_SQL="
          JSONExtractString(raw,'luks_mounted')  AS luks_mounted,
          JSONExtractString(raw,'repo_root')     AS repo_root,
          JSONExtractString(raw,'hooks_path')    AS hooks_path,
-         JSONExtractString(raw,'provision')     AS provision
+         JSONExtractString(raw,'provision')     AS provision,
+         JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'action')        AS action,
+         JSONExtractString(raw,'restarts')      AS restarts
   FROM ${_bs_source}
   WHERE ${_BS_SCOPE}
   ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
@@ -904,7 +907,10 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
-if grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"' <<<"$_bc_rows"; then
+# (#8210) luks_reopen_unit joins the terminal set. Unlike its four siblings it is MEASURED
+# (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
+# against real telemetry — see the PASS wording below, which says so.
+if grep -qE '"(luks_mounted|repo_root|hooks_path|provision|luks_reopen_unit)":"no"' <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
   printf '%s\n' "$_bc_rows" | head -5
   echo
@@ -991,7 +997,7 @@ if [[ -z "$DIVERGENCE" ]]; then
 fi
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then
-  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all four assertions positive, and no fatal. NO evidence file written."
+  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all five assertions positive, and no fatal. NO evidence file written."
   exit 0
 fi
 
@@ -1071,7 +1077,7 @@ esac
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: four of boot_complete's five terminal booleans (luks_mounted, repo_root, hooks_path, provision) are hardcoded literals in git-data-bootstrap.sh, so for those this attests that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit is MEASURED (#8210: systemctl is-enabled + Result=success on git-data-luks-reopen.service), so its 'no' would have failed this run."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

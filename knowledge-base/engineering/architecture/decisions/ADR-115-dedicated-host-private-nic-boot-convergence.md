@@ -18,6 +18,11 @@ brand_survival_threshold: single-user incident
 **Accepted — for the REGISTRY host only.** Explicitly **not** class-wide: see the normative
 blockers below. Extending it to git-data or inngest requires clearing them first.
 
+**Amended 2026-09-18 (#8210):** the first normative blocker's git-data exclusion is cleared —
+git-data has a reboot-safe storage unlock (`git-data-luks-reopen.service`, a Doppler-run
+oneshot, proven by the rung-2 reset arm). The reboot primitive is STILL not adopted for
+git-data; see the amendment under the blocker.
+
 **Amended 2026-07-15 (#6497)** to cover boot-baked *credentials* alongside the private NIC —
 also registry-host-scoped, and carrying a **second** normative blocker of its own, because the
 amendment's `replace_triggered_by` edge is a different primitive from this ADR's guarded
@@ -221,6 +226,38 @@ this amendment named the dispatch, and the dispatch cannot fire the edge.
 
 This blocker lives here rather than in the plan or the tracking issue on purpose: a constraint
 discovered during planning belongs in the durable artifact, because the ADR outlives both.
+
+#### Amendment (2026-09-18, #8210): the blocker is CLEARED for git-data's storage unlock — by a Doppler-run oneshot, not by `crypttab`
+
+> **Superseded 2026-09-18 (#8210):** the "git-data is excluded until that is fixed" clause above.
+> The `luksOpen` in `runcmd` and the `nofail` fstab line are unchanged and still per-instance;
+> what changed is that git-data now HAS the reboot-safe equivalent the blocker demanded.
+
+The equivalent is `git-data-luks-reopen.service` (`apps/web-platform/infra/`): a `Type=oneshot`
+unit after `network-online.target` that runs `git-data-luks-reopen.sh` under
+`doppler run --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback`,
+opens the mapper if it is closed, asserts its backing device is the pinned volume, and hands
+the mount to PID 1 through the fstab-generated `.mount` unit. Every failure is reported once,
+off-host, at `fatal` by an `OnFailure=` reporter carrying `action=<phase>`; the weekly
+`git-data-gc.timer` is ordered after it and pulls it in, so a failed reopen is retried weekly.
+The blocker named "`crypttab` or a keyscript" as the shape; neither was adopted, for measured
+reasons recorded in the plan's Cut List: `systemd-cryptsetup` implements no `keyscript=`
+(Debian `crypttab(5)`), and a `crypttab` keyfile on the root disk is the passphrase baked, which
+ADR-198 forbids for THIS credential. A boot unit that fetches the key over TLS from a
+config-scoped, centrally revocable token is the accepted equivalent.
+
+Proof, not assertion: the rung-2 rehearsal (`.github/workflows/git-data-rung2-rehearsal.yml`)
+gained a **reset arm** — after `boot_complete` settles, the throwaway host is hard-reset through
+the Hetzner API and the capture script's `--reboot-since` mode must observe
+`stage:luks_reopen_ok action:reopened` on either channel with no fatal after the reset
+timestamp before the evidence can be uploaded. The first PASS is the live verification of this
+amendment; its run URL is recorded on #8210 once captured.
+
+What this amendment does NOT do: it does **not** adopt the self-reboot primitive for git-data
+(this ADR still authorizes it for the registry host only), and it does not touch the SECOND
+normative blocker above (replace-on-rotation) — a passphrase rotation is still a full volume
+cutover, and the reopen's device-identity phase refuses a stale pin rather than papering over
+one.
 
 ### Authority note
 

@@ -8,6 +8,11 @@ Description=git-data bare-repo maintenance (unreachable-object reclaim)
 Documentation=https://github.com/jikig-ai/soleur/issues/6982
 Wants=network-online.target
 After=network-online.target
+# (#8210) Order after the boot-time LUKS reopen and pull it in: the weekly Persistent= timer
+# thereby becomes a standing retry of a failed reopen, and gc never runs against the reopen
+# window (its own mountpoint FATAL still fires if the store is absent after the reopen).
+Wants=git-data-luks-reopen.service
+After=git-data-luks-reopen.service
 
 # OnFailure= is a [Unit] DIRECTIVE. It was in [Service] until review ran
 # `systemd-analyze verify`, which reports "Unknown key 'OnFailure' in section [Service],

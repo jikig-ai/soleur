@@ -10,7 +10,8 @@
 > - **Rehearsal:** `git-data-rung2-rehearsal.yml` run
 >   [34768256297](https://github.com/jikig-ai/soleur/actions/runs/34768256297), dispatched
 >   from `main` `15fd63aff` with `dry_run=false`. Verdict `PASS` — `stage:boot_complete`
->   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes`, no
+>   reached carrying `luks_mounted=yes repo_root=yes hooks_path=yes provision=yes
+>   luks_reopen_unit=yes`, no
 >   `level:fatal` on Better Stack, the Better Stack source-liveness anchor answered (the Sentry
 >   one did not — next bullet); teardown verified against
 >   the Hetzner API. Read the booleans as the capture script does: they are literals
@@ -114,17 +115,21 @@ gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
 
 One human clicking twice is the real control. Treat it as **one** control, not two.
 
-**3 — The rehearsal evidence attests that a STAGE WAS REACHED, not that four invariants were
-measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
+**3 — The rehearsal evidence attests that a STAGE WAS REACHED for four of the five terminal
+booleans, not that four invariants were measured.** `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded
 literals** at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction.
 That is not nothing: each has a named upstream `FATAL:` gate followed by `exit 1` (19 in that script — a 20th `FATAL:` match is the emitter arm inside `log()`, not a gate),
 so a failure aborts *before* the emit rather than emitting `no`. Read them as "no gate
 fired", never as "four invariants were measured".
 
-Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just above the
+Exactly **two** booleans in that row are measured. The first is `nft_metadata_drop`, computed just above the
 emit by grepping the live nftables chain (`nft list chain inet soleur_git_data output` for
 `169.254.169.254`), anchored on the metadata address rather than the table name so a table
-whose rule was flushed reads `no`. It is **not** in `git-data-rung2-boot-evidence.env` —
+whose rule was flushed reads `no`. The second is `luks_reopen_unit` (#8210): `systemctl
+is-enabled` AND `Result=success` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
+armed by the runcmd item one stage earlier. Unlike `nft_metadata_drop` it is TERMINAL for both
+readers — a birth or replace that delivers an unarmed reopen unit FAILS rather than warning,
+because a replace is the only route by which that unit reaches the live host. It is **not** in `git-data-rung2-boot-evidence.env` —
 that file records the queries, and the capture projects only the four hardcoded booleans —
 so it has to be read from Better Stack separately. For the rehearsal that cleared the banner
 (run 34768256297, host `soleur-git-data-rehearsal-34768256297`) it read `yes` on the
@@ -134,7 +139,8 @@ so it has to be read from Better Stack separately. For the rehearsal that cleare
 export BS_TABLE=t520508_soleur_git_data_prd_logs
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
   "SELECT dt, JSONExtractString(raw,'stage') AS stage,
-          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+          JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
    FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
          UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
    WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data-rehearsal-34768256297'
@@ -414,7 +420,8 @@ No SSH appears below, and none is possible: git-data has no human SSH path by de
 (three `command=`/`no-pty` forced commands on a `/bin/sh` login shell — the forced-command map is the whole confinement, ADR-149 #8043 disposition — deny-all public ingress).
 
 ```bash
-# 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).
+# 1. The boot-completion signal, with its SIX assertions (#7772 added nft_metadata_drop;
+#    #8210 added the MEASURED, TERMINAL luks_reopen_unit).
 #    BS_TABLE IS PINNED: git-data ships to its own source 2734275, not the shared 2457081
 #    that betterstack-query.sh defaults to. Unpinned, this returns zero rows on a healthy
 #    host and the reading instruction below sends you down the partial-birth tree for a
@@ -434,7 +441,8 @@ BS_TABLE=t520508_soleur_git_data_prd_logs BS_TABLE_S3=t520508_soleur_git_data_pr
              JSONExtractString(raw,'repo_root')    AS repo_root,
              JSONExtractString(raw,'hooks_path')   AS hooks_path,
              JSONExtractString(raw,'provision')    AS provision,
-             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop,
+             JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE dt > fromUnixTimestamp(${ANCHOR})

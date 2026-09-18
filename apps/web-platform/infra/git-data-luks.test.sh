@@ -428,13 +428,28 @@ p_doppler_config_scope() {
   # Guard the SIBLINGS too. Scoping this to cloud-init alone let the identical W0 defect
   # survive in git-data-cutover.sh — a file that runs ON this host under the same
   # single-config token — because the guard structurally could not see it.
+  # (#8210) The reopen unit pair joins the census with a THIRD accepted shape: the exact
+  # literal `--config "$GIT_DATA_DOPPLER_CONFIG"`, read at runtime from
+  # /etc/default/git-data-doppler where the template writes `${doppler_config_name}` (A20c
+  # pins that line). Any other `$X` is NOT accepted — the variable NAME is the contract.
   for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service" \
-           "${DIR}/git-data-gc.service"; do
+           "${DIR}/git-data-gc.service" "${DIR}/git-data-luks-reopen.service" \
+           "${DIR}/git-data-luks-reopen-failure.service"; do
     [ -f "$_sib" ] || continue
     n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))
+    n_scoped=$(( n_scoped + $(grep -Fc 'doppler run --project soleur --config "$GIT_DATA_DOPPLER_CONFIG" ' "$_sib" || true) ))
   done
   if [ "$n_run" -ge 2 ] && [ "$n_run" -eq "$n_scoped" ]; then echo 1; else echo 0; fi
+}
+
+# A20c (#8210): the env file the reopen unit pair EnvironmentFile='s carries the config name
+# as the SAME templatefile interpolation the runcmd stages use, so the third shape above is
+# bound to ${doppler_config_name} and not to whatever a hand-edit put there.
+p_reopen_config_env() {
+  local block
+  block=$(awk '/^  - path: \/etc\/default\/git-data-doppler$/{f=1;next} f&&/^    content: \|/{c=1;next} f&&c&&/^    [a-z]/{exit} f&&c{print}' "$1")
+  if printf '%s\n' "$block" | grep -qxF '      GIT_DATA_DOPPLER_CONFIG=${doppler_config_name}'; then echo 1; else echo 0; fi
 }
 
 # A20b (#7025, R1): the PRODUCTION render binds ${doppler_config_name} to the config the
@@ -815,6 +830,12 @@ assert_holds    "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT"
 # report the predicate as un-flippable rather than the guard as absent.
 assert_mutation "A20 doppler-config-scope" p_doppler_config_scope "$CLOUD_INIT" \
   's/--config \$\{doppler_config_name\}/--config prd/g'
+# A20c (#8210): the reopen unit pair reads its config name from the env file, which must carry
+# the same interpolation. Mutation: hardcode it — the rung-2 rehearsal's scratch-config token
+# would then exit 1 with the key absent on every rehearsal reboot.
+assert_holds    "A20c reopen-config-env" p_reopen_config_env "$CLOUD_INIT"
+assert_mutation "A20c reopen-config-env" p_reopen_config_env "$CLOUD_INIT" \
+  's/^      GIT_DATA_DOPPLER_CONFIG=\$\{doppler_config_name\}$/      GIT_DATA_DOPPLER_CONFIG=prd_git_data/'
 
 # A20b (#7025, R1): the production caller binds that interpolation to the token's own config.
 assert_holds    "A20b doppler-config-binding" p_doppler_config_binding "$GIT_DATA_TF"

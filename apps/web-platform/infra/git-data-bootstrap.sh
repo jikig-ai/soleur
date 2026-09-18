@@ -414,9 +414,21 @@ if command -v nft >/dev/null 2>&1 &&
    nft list chain inet soleur_git_data output 2>/dev/null | grep -q '169\.254\.169\.254'; then
   _nft_drop=yes
 fi
+# (#8210) The sixth boolean (the fifth TERMINAL one), MEASURED like nft_metadata_drop and — unlike it — TERMINAL for
+# the rung-2 capture and the boot-signal poll: the runcmd arm item ran `enable --now` before
+# this script, so at birth the reopen unit must be enabled AND have completed its noop path
+# with Result=success. `is-enabled` alone would pass a unit that is armed for next boot but
+# died today; Result=success (not is-active) is what a oneshot reports whether or not
+# RemainAfterExit keeps it "active". Fail-closed by construction: a unit mid-Restart= on a
+# transient Doppler blip reads `no` here even though the host is healthy a minute later.
+_reopen_unit=no
+if systemctl is-enabled --quiet git-data-luks-reopen.service 2>/dev/null &&
+   [ "$(systemctl show -p Result --value git-data-luks-reopen.service 2>/dev/null)" = success ]; then
+  _reopen_unit=yes
+fi
 if [[ -x "$GIT_DATA_EMIT" ]]; then
   "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
     "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
-    "nft_metadata_drop=${_nft_drop}" \
+    "nft_metadata_drop=${_nft_drop}" "luks_reopen_unit=${_reopen_unit}" \
     "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi

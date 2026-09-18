@@ -4474,7 +4474,7 @@ jobs:
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
-            echo "In-job gates: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision positive)."
+            echo "In-job gates: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
             echo ""
             echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -5907,7 +5907,7 @@ jobs:
           reviewers reads the same way, with the same single reviewer: **no approval gate in
           this repo is two-party.**
 
-          ### 3. The rehearsal evidence attests a STAGE WAS REACHED, not four measurements
+          ### 3. The rehearsal evidence attests a STAGE WAS REACHED (for four of the five terminal booleans), not four measurements
 
           `luks_mounted`, `repo_root`, `hooks_path` and `provision` are **hardcoded literals**
           at the emit call in `git-data-bootstrap.sh` — they read `yes` by construction. What
@@ -5916,9 +5916,14 @@ jobs:
           before the emit rather than emitting `no`. Read them as "no gate fired", never as
           "four invariants were measured".
 
-          Exactly **one** boolean in that row is measured: `nft_metadata_drop`, computed just
-          above the emit by grepping the live nftables chain
+          Exactly **two** booleans in that row are measured. The first is `nft_metadata_drop`,
+          computed just above the emit by grepping the live nftables chain
           (`nft list chain inet soleur_git_data output` for `169.254.169.254`). It read `yes`.
+          The second is `luks_reopen_unit` (#8210): `systemctl is-enabled` AND `Result=success`
+          on `git-data-luks-reopen.service`, the boot-time LUKS reopen armed one stage earlier.
+          It is TERMINAL for the capture and for the boot-signal poll — a birth or replace that
+          delivers an unarmed reopen unit FAILS rather than warning, because a replace is the
+          only route by which that unit reaches the live host.
           It is **not** recorded in `git-data-rung2-boot-evidence.env` — that file records the
           queries, and the capture projects only the four hardcoded booleans — so it was read
           directly from Better Stack and pasted into the evidence PR's body.

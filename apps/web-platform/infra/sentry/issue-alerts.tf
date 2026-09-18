@@ -178,7 +178,7 @@ resource "sentry_issue_alert" "auth_per_user_loop" {
 # directive is absent from the `sshd -T` effective config or `-T` could not run. The rehearsal
 # row that carried the F11 measurement ("Unit sshd.service not found.") reached no rule at all;
 # the op-contract test now derives the emitter's warning vocabulary and set-compares it here.
-# `git_data_boot_fatal` above filters ten stage values and neither is among them, and the rung-2
+# `git_data_boot_fatal` above filters twelve stage values and neither is among them, and the rung-2
 # rehearsal's `_sentry_consult` is pinned to level:fatal BY DESIGN — its job is catching a boot
 # death the Better Stack read missed. ADR-198 states this plainly: as shipped, the mirror was "a
 # queryable record for whoever is already looking", which is a weaker claim than "not silent".
@@ -278,7 +278,10 @@ resource "sentry_alert" "git_data_boot_warning" {
         # `gc_report` is emitted by the git-data-gc.sh PAYLOAD (not the template): a weekly run
         # that did not complete or had per-repo failures. Before #8052 it was routed by nothing —
         # and on the pinned image every run emitted it (safe.directory inert on git 2.43).
-        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report" } },
+        # (#8210) `gitdata_luks_reopen_arm_warn`: the boot-time LUKS reopen unit failed to arm at
+        # birth — a hardening regression on a host that does not self-reboot, not a dark host,
+        # and the boot_complete boolean it also flips is what FAILS the birth/replace poll.
+        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn,sshd_config_warn,gc_report,gitdata_luks_reopen_arm_warn" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
@@ -973,7 +976,15 @@ resource "sentry_alert" "gh_pages_cert_reissue_failed" {
 # (with no runcmd_early following) is what brackets a pre-runcmd death. Alerting on its presence
 # would page on every healthy boot.
 #
-# PII: the payload is four booleans, a df percentage, an rc, and a `detail` that passes the
+# (#8210) `luks_reopen_ok` is deliberately ABSENT for the same reason, and the reason is
+# load-bearing: this rule has NO `level` condition — its filters are `stage` rows under
+# `event_frequency_count value = 0` — so an `info` row on a routed stage would page the host's
+# only fatal channel on every healthy reboot. The reopen's SUCCESS row therefore lives on its
+# own unrouted stage, and its FAILURE row (`luks_reopen`, emitted once by the OnFailure
+# reporter with action=<phase>) plus the runcmd arm item's fatal (`gitdata_luks_reopen_arm`)
+# are the two values that join the set below.
+#
+# PII: the payload is five booleans, a df percentage, an rc, and a `detail` that passes the
 # emitter's internal redactor on EVERY path — a bare-UUID rule and a repo-path rule run BEFORE
 # the 180-byte cap, because on this host the repo identifier IS the user identifier
 # (<workspace_id>.git, workspace_id === user_id). No repo path and no raw UUID can reach here.
@@ -1002,6 +1013,8 @@ resource "sentry_alert" "git_data_boot_fatal" {
         { tagged_event = { key = "stage", match = "eq", value = "gc" } },
         { tagged_event = { key = "stage", match = "eq", value = "gc_timer" } },
         { tagged_event = { key = "stage", match = "eq", value = "gitdata_nftables_metadata" } },
+        { tagged_event = { key = "stage", match = "eq", value = "gitdata_luks_reopen_arm" } },
+        { tagged_event = { key = "stage", match = "eq", value = "luks_reopen" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

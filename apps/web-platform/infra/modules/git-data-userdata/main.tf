@@ -99,6 +99,12 @@ locals {
     git_data_gc_service         = replace(file("${path.module}/../../git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service = replace(file("${path.module}/../../git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer           = replace(file("${path.module}/../../git-data-gc.timer"), local.git_data_rationale_strip, "")
+    # (#8210) The boot-time LUKS reopen: script + unit + OnFailure reporter. Same strip, same
+    # one-line shape — git-data-luks.test.sh's boot_path_files() and the birth gate's hash both
+    # derive their rosters by grepping these bindings.
+    git_data_luks_reopen                 = replace(file("${path.module}/../../git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey

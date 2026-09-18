@@ -15,6 +15,10 @@ related_runbooks:
 
 `accepted`. Implemented in #7460 (PR B of the #7570/#7534/#7544/#7481 harness work).
 
+**Amended 2026-09-18 (#8210):** the leg-(2) incumbent (the baked read-only token can fetch
+`GIT_DATA_LUKS_KEY`) is now accepted **by design** for the boot-time LUKS reopen, and #7772's
+removal intent for it is superseded. See the addendum at the end of this file.
+
 This is **not** a first-of-kind decision. `apps/web-platform/infra/inngest-host.tf` already bakes
 this exact variable with the identical rationale — a pre-Doppler fallback so the earliest `runcmd`
 can phone home. (ADR-096 does NOT record that bake — it records the container-registry
@@ -463,3 +467,51 @@ comment at all, and `cloud-init-git-data.yml` carries three, of which only the o
 no-token branch is about stages going dark on a MISSING token. That one remains correct — it
 describes a condition under which the POST does not happen at all. The other two describe stages
 reaching the sink, and inherit the narrowing above: they establish a POST and a 2xx, not storage.
+
+## Addendum — 2026-09-18 (#8210): leg (2) is accepted BY DESIGN for the boot reopen, and #7772's removal intent is superseded
+
+`## Addendum — 2026-09-04 (#7772) §5` left leg (2) recorded as *"remains failed for the
+incumbent"* under a file-read primitive against `/etc/default/git-data-doppler`, tracked for
+removal at #7772. #7772 is closed and the path was not removed. #8210 does not merely inherit
+that state — it **depends** on it, so the decision is recorded rather than left as residue.
+
+**What #8210 adds.** `git-data-luks-reopen.service` fetches `GIT_DATA_LUKS_KEY` from Doppler on
+EVERY boot, under the same baked read-only `prd_git_data` token, to reopen the LUKS mapper that
+`runcmd` opens only once per instance (ADR-115's first normative blocker, cleared in its
+2026-09-18 amendment). The passphrase therefore reaches the host's memory once per boot instead
+of once per instance; it is never written to the root disk.
+
+**Why this is the right trade, stated as a capability argument rather than a preference.** The
+alternative the sibling host uses (inngest, #7695) is a keyfile on the root disk — the
+passphrase baked. That is strictly worse *for this credential*: the token and the passphrase have
+different revocation costs. A leaked token is revoked by `terraform apply
+-replace=doppler_service_token.git_data` and is config-scoped to `prd_git_data` and read-only; a
+leaked passphrase cannot be revoked at all without re-encrypting the volume, i.e. a full cutover
+of every user's source. Baking the passphrase would convert a revocable capability into an
+irrevocable one, which is the opposite of what a root-disk snapshot threat model wants.
+
+**The conditions this acceptance is bound to** — each pinned by
+`git-data-luks-reopen.test.sh` (U17/U19/U21, the reporter rows) so the acceptance cannot decay
+into a weaker shape:
+
+- `--no-fallback` on EVERY `doppler run` the unit pair performs. Without it the Doppler CLI
+  writes the resolved secret set to its on-disk encrypted fallback cache under
+  `$DOPPLER_CONFIG_DIR` — i.e. the passphrase lands on the root disk, which is exactly what this
+  ADR forbids.
+- `--only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN`, so no other secret
+  enters that process environment, and never `--no-exit-on-missing-only-secrets` (which would
+  turn an absent key into a fail-open).
+- `TMPDIR` on tmpfs for both units: `git-data-emit`'s `_devalue` redactor writes the sed-escaped
+  passphrase to `mktemp` before `rm -f`, and on a disk-backed `/tmp` that is a root-disk write of
+  the key. `PrivateTmp=` alone does not fix this — it bind-mounts a subdirectory of the same
+  device.
+
+**Not in scope, tracked.** Two `doppler run` sites on this host still carry neither flag (the
+`STAGE=luks_open` heredoc and the `STAGE=bootstrap` invocation in `cloud-init-git-data.yml`).
+They are pre-existing and are filed as a follow-on rather than widened here.
+
+**GDPR framing** (for the encryption-posture ledger's #6897 row): this mechanism is the Art.
+32(1)(c) control — "the ability to restore the availability and access to personal data in a
+timely manner in the event of a physical or technical incident" — for the encrypted git-data
+store. Before it, a reboot left the store unavailable until a human intervened; after it, the
+store is restored unattended and a failure to restore is reported off-host within the boot.

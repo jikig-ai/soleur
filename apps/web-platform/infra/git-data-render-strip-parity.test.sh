@@ -232,10 +232,10 @@ fi
 
 n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$TF")
 CASES=$((CASES + 1))
-if [[ "$n_entries" -eq 9 ]]; then
+if [[ "$n_entries" -eq 12 ]]; then
   pass "all 9 stripped map entries are each on ONE physical line"
 else
-  fail "expected 9 single-line stripped map entries in the render module, found ${n_entries}" \
+  fail "expected 12 single-line stripped map entries in the render module, found ${n_entries}" \
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
 fi
 
