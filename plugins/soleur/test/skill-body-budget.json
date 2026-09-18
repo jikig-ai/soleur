@@ -6,10 +6,10 @@
     "one-shot": 52000,
     "qa": 37000,
     "compound": 57000,
-    "plan": 119000,
+    "plan": 120000,
     "postmerge": 48000,
-    "review": 475000,
+    "review": 477000,
     "ship": 274000,
-    "work": 360000
+    "work": 362000
   }
 }

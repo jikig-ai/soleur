@@ -206,8 +206,10 @@ the base, which closes the rename escape.
 - The ratchet's row set is the FSM's keys ∪ destinations ∪
   `ONE_SHOT_CHILD_SKILLS` (`deepen-plan`, `qa`), pinned on the TypeScript side;
   "lifecycle skill" is not only "FSM node". `preflight` (109 KB, a `ship`
-  sub-skill) and the other sub-skills remain uncapped — the sub-phase
-  normalisation deferred to #8303.
+  sub-skill) and the other sub-skills remain uncapped. That population is the
+  first thing #8305's body-weight growth report must cover (recorded there);
+  #8303 (heading-grammar normalisation) is the prerequisite for naming the
+  sub-phases at all, not the tracker for capping them.
 - No plugin runtime code calls `declaredTransitions()` or
   `isDeclaredTransition()`; they exist so the parity block and a future gate
   (below) have a typed source. `brainstorm → one-shot` is declared but unobservable by the

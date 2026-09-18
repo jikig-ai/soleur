@@ -276,9 +276,13 @@ cp "$ROOT/.claude/workflow-transitions.json" "$MIX/.claude/"
 mlog="$MIX/.claude/.skill-invocations.jsonl"
 printf '{"schema":1,"ts":"2026-09-18T17:00:00Z","skill":"soleur:plan","session_id":"m"}\n' > "$mlog"
 printf '{"schema":1,"when":"2026-09-18T17:01:00Z","name":"soleur:ship","sid":"m"}\n' >> "$mlog"
+# A truncated line (the shape a crash-mid-write or a partial archive leaves)
+# must be DROPPED, not abort the reading: `[inputs]` on parsed JSON aborted at
+# the first bad byte with rc 2 and zero rows (review advisor consult).
+printf '{"schema":1,"ts":"2026-09-18T17:02:00Z","ski' >> "$mlog"
 MOUT=$(CLASSIFY_REPO_ROOT="$MIX" bash "$SUT" --summary 2>&1); MRC=$?
-if [[ "$MRC" -eq 0 && "$MOUT" == *"WARNING: dropped 1 of 2"* && "$MOUT" == *"dropped=1"* ]]; then
-  pass "a partially unparseable log warns (dropped=1) and still classifies the rest"
+if [[ "$MRC" -eq 0 && "$MOUT" == *"WARNING: dropped 2 of 3"* && "$MOUT" == *"dropped=2"* ]]; then
+  pass "wrong-field AND malformed lines are dropped (dropped=2) and the rest is still classified"
 else
   fail "mixed log did not warn — rc=$MRC out='$MOUT'"
 fi

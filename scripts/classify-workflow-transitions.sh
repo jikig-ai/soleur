@@ -145,7 +145,12 @@ fi
 #     Their count is surfaced as `nonnode` in --summary so the exclusion is
 #     visible rather than silent.
 read -r -d '' JQ <<'JQEOF' || true
-  [inputs]
+  # `-R` + `fromjson?`: one malformed line (a truncated tail in the live log or
+  # any rotated archive) must count as DROPPED, not blank the whole reading.
+  # `[inputs]` on parsed JSON aborted at the first bad byte with rc 2 and zero
+  # rows -- loud, but the remedy was hand-editing a gitignored log. The
+  # aggregator's per-line `fromjson?` precedent is what this follows.
+  [inputs | fromjson?]
   # The producer's timestamp field is `ts` (skill-invocation-logger.sh), NOT
   # `timestamp`. Reading the generator's prose instead of a real record cost a
   # silent zero: filtering on `.timestamp` dropped all 10,260 live records and
@@ -160,7 +165,7 @@ read -r -d '' JQ <<'JQEOF' || true
   # ltrimstr, not sub(): identical for a prefix strip and ~35% cheaper at 10x
   # volume (regex compiled per record).
   | map(.skill |= ltrimstr("soleur:"))
-  | ($raw | length) as $read
+  | $read_lines as $read
   | (length) as $kept
   # Bind the edge map BEFORE piping. `X | has(.from)` evaluates `.from` against
   # X, not against the element, because `|` rebinds `.` -- the same scoping trap
@@ -196,7 +201,10 @@ JQEOF
 # `-n` so jq does not consume the first object implicitly; `[inputs]` then slurps
 # the whole stream. Errors are NOT suppressed: an empty RESULT renders exactly
 # like "no violations", so a parse failure must be loud rather than clean.
-if ! RESULT=$(jq -n --slurpfile decl "$VIEW" "$JQ" < "$MERGED"); then
+# `read` is the LINE count of the merged corpus, computed here, because after
+# `fromjson?` jq can no longer see how many lines failed to parse.
+read_lines=$(grep -c . "$MERGED" || true)
+if ! RESULT=$(jq -n -R --slurpfile decl "$VIEW" --argjson read_lines "${read_lines:-0}" "$JQ" < "$MERGED"); then
   echo "FATAL: could not classify the merged invocation log (roots: ${ROOTS[*]}) against $VIEW" >&2
   exit 2
 fi
@@ -220,13 +228,13 @@ dropped=$(printf '%s' "$RESULT" | jq -r '.dropped')
 # "undeclared=0". Fail loudly rather than reporting a zero nobody can distinguish
 # from a pass.
 if [[ "$read_n" -gt 0 && "$kept" -eq 0 ]]; then
-  echo "FATAL: read $read_n invocation record(s) and kept 0 — none carried skill + session_id + ts." >&2
+  echo "FATAL: read $read_n invocation line(s) and kept 0 — none parsed as JSON carrying skill + session_id + ts." >&2
   echo "       This is an UNPARSEABLE log, not an absence of violations. Check the producer's record shape" >&2
   echo "       (.claude/hooks/skill-invocation-logger.sh) against the filter in this script." >&2
   exit 2
 fi
 if [[ "$dropped" -gt 0 ]]; then
-  echo "WARNING: dropped $dropped of $read_n invocation record(s) for missing skill/session_id/ts." >&2
+  echo "WARNING: dropped $dropped of $read_n invocation line(s): unparseable JSON or missing skill/session_id/ts." >&2
 fi
 # Records but no lifecycle pair (every session a single node invocation): a
 # corpus the instrument cannot say anything about. Not dark, not clean -- say so.

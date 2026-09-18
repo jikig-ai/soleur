@@ -184,6 +184,13 @@ for _dir in "${INCIDENTS_DIRS[@]}"; do
   # swallowed by the `|| true` above, and that root contributes zero rows while
   # `_found_any` counts it as found -- so the null-reading sentinel is suppressed
   # exactly when a root vanished from the corpus. One line to stderr, no abort.
+  # An enumerated dir that cannot be SEARCHED hides its files from `[[ -s ]]`
+  # entirely (a mode-000 .claude), so the file-level sentinel below never
+  # fires for it. Say so at the directory level first.
+  if [[ -d "$_dir" && ! -x "$_dir" ]]; then
+    echo "SOLEUR_RULE_METRICS_ROOT_UNREADABLE root=$_dir — enumerated but not searchable; its rows are ABSENT from this aggregate" >&2
+    continue
+  fi
   if [[ -s "$_dir/.rule-incidents.jsonl" ]]; then
     if [[ -r "$_dir/.rule-incidents.jsonl" ]]; then
       cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED" || true
