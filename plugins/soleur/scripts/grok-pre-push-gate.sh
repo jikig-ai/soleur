@@ -3,7 +3,9 @@
 #
 # Mirrors the reproducible subset of .github/workflows/ci.yml required checks:
 #   Phase 1 — fast always-run jobs (seconds)
-#   Phase 2 — scripts/test-all.sh (CI `test` aggregator: webplat + bun + scripts)
+#   Phase 2 — scripts/test-all.sh --affected (diff-selected suites + always-on
+#             ratchets; the FULL battery is the CI `test` aggregator's job, and
+#             is opt-in locally via `test-all.sh --full`)
 #   Phase 3 — web-platform next build (route-file validator; CI web-platform-build)
 #   Phase 4 — plugins/soleur/scripts/grok-fidelity-gate.sh (CI grok-fidelity)
 #
@@ -11,9 +13,10 @@
 # (dev Supabase), dependency-review, skill-security-scan, creds-gated propagation probes.
 #
 # infra-validation.yml (suites under apps/web-platform/infra/) IS covered by this gate now,
-# indirectly: it invokes `bash scripts/test-all.sh` with no TEST_GROUP, so `want_infra` holds
-# and test-all.sh runs run-registered-suites.sh as a nested suite whenever the diff touches
-# that directory (#7103 R5(a)).
+# indirectly: it invokes `bash scripts/test-all.sh --affected` with no TEST_GROUP, so
+# `want_infra` holds and test-all.sh runs run-registered-suites.sh as a nested suite whenever
+# the diff touches that directory — the affected selector carries the same infra edge, so
+# coverage is unchanged by the mode (#7103 R5(a), #8322).
 #
 # So do NOT "run it alongside this gate", which is what this comment used to say. That advice
 # predates the registration and is now actively harmful: both entry points default
@@ -78,13 +81,15 @@ run_step() {
   elif (( rc == 4 )); then
     # Same class as the rc=3 arm above, and the arm that arm exists to prevent: rc=4 is
     # test-all.sh's REFUSED — NOTHING RAN — not a red diff, so routing it to [FAIL] names a
-    # cause that did not occur. Latent rather than live for the same reason rc=3 is: the only
-    # step that can produce 4 is the test-all step, and it carries SOLEUR_ALLOW_FULL_GATE=1
-    # (below), which overrides both of test-all.sh's rc=4 producers. It is arm'd anyway
-    # because the hatch is one edit away from being dropped and the mislabel would be silent.
+    # cause that did not occur. Latent rather than live: the only step that can produce 4 is
+    # the test-all step, and under --affected both full-gate refusals are exempt — what CAN
+    # still produce 4 is a DEGRADED affected run (undecidable diff, missing index, or a diff
+    # touching the runner/index itself) that then meets sibling contention, or a gutted
+    # declarations index. It is arm'd anyway because the mislabel would be silent.
     echo "[REFUSED] $name — exited 4: the run was declined before any suite started, so this says nothing about your diff." >&2
-    echo "  If this step is test-all.sh: either SOLEUR_SUBAGENT=1 was set, or a sibling full-gate run was already in flight (#7553)." >&2
-    echo "  Wait for the sibling and re-run, or re-invoke with SOLEUR_ALLOW_FULL_GATE=1 having decided the second battery is worth its cost." >&2
+    echo "  If this step is test-all.sh: affected mode degraded to the full battery and met a" >&2
+    echo "  sibling run or a subagent context — resolve the printed reason= and re-run, or wait" >&2
+    echo "  for the sibling. An AFFECTED_UNRESOLVED print names the refusal directly." >&2
     exit 4
   else
     echo "[FAIL] $name" >&2
@@ -96,12 +101,13 @@ echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
 
 # --- Phase 0: pre-launch capacity probe (#7545) — ADVISORY, never a gate ---
 #
-# Answers "can this box absorb the full gate I am about to start?" in ~3 s
+# Answers "can this box absorb the gate I am about to start?" in ~3 s
 # (measured p50 on a 16-core box with ~640 pids; it walks /proc once). Phase 2
-# below runs `test-all.sh` with no TEST_GROUP, i.e. the FULL battery — ~45 min
-# uncontended per ADR-133, not the "~4-5 minute" figure this file's header
-# carries. On a contended box that run's REDs may be interleaving rather than
-# regressions, and knowing that up front is the whole point.
+# below runs `test-all.sh --affected` — the diff-selected set plus the
+# always-on ratchets, minutes-scale rather than the ~45-min serial battery
+# (#8322). The probe still earns its place: an affected run can DEGRADE to the
+# full battery (undecidable diff, runner/index touched, FORCE_ALL), and on a
+# contended box that run's REDs may be interleaving rather than regressions.
 #
 # `timeout` is not optional: on the loaded box this probe exists to diagnose, an
 # unbounded /proc walk can block the push gate with no marker at all.
@@ -158,11 +164,15 @@ else
   echo "SKIP lockfile-sync (npm not on PATH)" >&2
 fi
 
-# --- Phase 2: full test aggregator (CI `test` required check) ---
-# SOLEUR_ALLOW_FULL_GATE=1: this gate IS the sanctioned full-gate run, so the sibling refusal
-# (#7553) must not fire on it. Same reasoning as lefthook.yml's bun-test pre-commit hook — the
-# refusal targets an opportunistic second battery, never the gate a push is required to pass.
-run_step "test-all (CI test aggregator)" env SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
+# --- Phase 2: affected test gate (#8322) ---
+# `--affected`: the suites this diff can move, plus every always-on repo-global
+# ratchet — minutes-scale, and exempt from the full-gate refusals by
+# construction, so the SOLEUR_ALLOW_FULL_GATE=1 hatch this step previously
+# carried is gone rather than merely unneeded. The full battery remains the
+# CI `test` required check's job (and `test-all.sh --full` locally). An
+# undecidable diff degrades this step to the full battery on its own — the
+# AFFECTED_FALLBACK line in its output says so.
+run_step "test-all (affected gate)" bash scripts/test-all.sh --affected
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
 # Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Decide whether `/ship` Phase 4 still owes a full local `test-all.sh` run.
+# Decide whether `/ship` Phase 4 still owes a local `test-all.sh` run.
 #
 # EXIT CONTRACT (the caller branches on this, never on the prose):
 #   42  SKIPPABLE    — CI already verified this exact tree; running it again buys nothing
-#    0  OWED         — run the battery
+#    0  OWED         — run the gate. Since #8322 that means `--affected` by
+#                     default; the FULL local battery is opt-in via
+#                     `/ship --full` (operator) → `test-all.sh --full`
 #    2  UNDECIDABLE  — could not determine; the caller MUST treat this as OWED
 #   anything else    — an error; the caller MUST treat it as OWED
 #

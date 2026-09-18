@@ -321,3 +321,12 @@ AFFECTED_SCRIPTS_LIB_LEGAL_NORMALISE_TEST_SH_PATHS=(
   "scripts/lib/legal-normalise.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+
+# plugins/soleur/test/c4-model-freshness.test.sh — re-renders the committed
+# LikeC4 artifact from the .c4 sources and byte-compares; both are data to it.
+AFFECTED_PLUGINS_SOLEUR_TEST_C4_MODEL_FRESHNESS_TEST_SH_PATHS=(
+  "knowledge-base/engineering/architecture/diagrams/"
+  "scripts/regenerate-c4-model.sh"
+  "plugins/soleur/test/c4-model-freshness.test.sh"   # self-inclusion
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
