@@ -440,17 +440,33 @@ run_hook "$(ss_env compact s20 "$IN_ROOT")" "TMPDIR=/proc/self/soleur" \
   "PATH=$PATH" "HOME=$HOME" "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
 assert "20e synthetic-fs TMPDIR: rc 0 and silent" '[[ "$RC" -eq 0 && -z "$OUT" ]]'
 
+echo "== scenario 21: a branch with no matching plan still gets a directive =="
+# The optional Plan:/Spec: lines are appended with `[[ -n "$X" ]] && CTX=...`.
+# Bash exempts the LEFT operand of && from the ERR trap, so the failing test
+# does not abort -- but that exemption is the only thing standing between a
+# plan-less branch and a hook that exits silently, and nothing else asserts it.
+# Measured by hand first, pinned here so a refactor to a plain `test && x` or a
+# reordering cannot quietly reintroduce the silent-exit.
+NOPLAN="$SANDBOX/noplan"
+mkdir -p "$NOPLAN/plugins/soleur" "$NOPLAN/knowledge-base/project/plans"
+run_hook "$(ss_env startup s21 "$NOPLAN")"
+run_hook "$(pc_env auto s21 "$NOPLAN")"
+run_hook "$(ss_env compact s21 "$NOPLAN")"
+assert "21a directive still emitted with no plan file" 'has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
+assert "21b stdout is valid JSON" 'printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
+assert "21c and no Plan: line is fabricated" '! has_ctx "^Plan: $"'
+
 # --- coverage floors ----------------------------------------------------
 # Reported with printf + exit, NOT through fail() -- the helper these floors
 # exist to backstop is the one an edit disarms.
-MIN_CASES=100
+MIN_CASES=103
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 SUT_RUNS="$(grep -c '^ran$' "$SOLEUR_HOOK_TRACE" 2>/dev/null || true)"
-MIN_SUT_RUNS=101
+MIN_SUT_RUNS=104
 if (( ${SUT_RUNS:-0} < MIN_SUT_RUNS )); then
   printf 'FATAL: the subject ran %s times, floor is %d. The harness asserted without spawning the hook.\n' \
     "${SUT_RUNS:-0}" "$MIN_SUT_RUNS" >&2

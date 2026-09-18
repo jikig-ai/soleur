@@ -39,18 +39,19 @@ Full results: the plan's `## Addendum — 2026-09-18 (Phase 0 payload probe: mea
 - [x] 2.2 Same TR1 scope guard, asserted for `PreCompact` specifically — this is the path that would otherwise reach a stranger's summarizer.
 - [x] 2.3 Scenario 12 passes, including the negative: it never asks the summarizer to reproduce file contents.
 
-## Phase 3 — Prose retirement + docs (FR5, FR6)
+## Phase 3 — Prose retirement + docs (FR5, FR6) — **DONE**
 
-- [ ] 3.1 `plan/SKILL.md`: make the two `/clear` **recommendations** conditional; leave the mandatory resume-prompt blocks byte-identical.
-- [ ] 3.2 `work/SKILL.md`: same for the `Tip: After shipping…` display; confirm an end-of-work resume prompt still fires when the hook never speaks.
-- [ ] 3.3 `plugins/soleur/README.md`: document `SOLEUR_COMPACTION_COUNT_THRESHOLD` + `SOLEUR_DISABLE_COMPACTION_HOOKS`; add the Grok row.
-- [ ] 3.4 One line each in `devin/INSTRUCTIONS.md` and `codex/INSTRUCTIONS.md` under `## Hooks and completion`.
-- [ ] 3.5 `hooks.json`: add the two bindings; assert no `PostCompact` key.
+- [x] 3.1 `plan/SKILL.md`: both `/clear` **recommendations** are now conditional on a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true`. The two `**Resume prompt (MANDATORY…)**` blocks verified **byte-identical** to `origin/main` by diff (AC15).
+- [x] 3.2 `work/SKILL.md`: the unconditional `Tip: After shipping, run /clear…` is replaced by an **unconditional** end-of-work resume prompt plus a conditional nudge. The three silent states — never compacted, kill-switched, non-Claude harness — are named at the site, so the retirement leaves no dead end.
+- [x] 3.3 `plugins/soleur/README.md`: new `## Compaction-Aware Session Hooks` section with all three env vars and a 4-row harness table (Claude supported; Codex, Devin and Grok degrade to silence, never to a false claim).
+- [x] 3.4 `devin/INSTRUCTIONS.md` and `codex/INSTRUCTIONS.md` each carry the Claude-only degradation. The Devin note sits **outside** the "Measured hook semantics (envelope capture: …)" list — that capture does not cover this claim, and filing it as a bullet there would have attributed it to a measurement that never took place.
+- [x] 3.5 `hooks.json`: `PreCompact` (`manual|auto`) + `SessionStart` (`startup|resume|clear|compact`); no `PostCompact` key. Asserted by scenario 16 and mutation-proven (M20).
 
-## Phase 4 — Drift canary (FR7)
+## Phase 4 — Drift canary (FR7) — **DONE, with a corrected registration**
 
-- [ ] 4.1 `scripts/followthroughs/compaction-format-drift-8323.sh` — reads real `~/.claude/projects/**/*.jsonl`, exits non-zero on zero `compact_boundary` records across N recent transcripts.
-- [ ] 4.2 Register it as a schedule via `soleur:schedule` — **not** a suite case (a suite case breaks CI on a clean box).
+- [x] 4.1 `scripts/followthroughs/compaction-format-drift-8323.sh`, keeping the sweeper's 0/1/2 exit contract. All four arms driven: PASS on the operator's real transcripts (9 boundaries / 40 files), FAIL on a boundary-less corpus, FAIL on a **renamed** `subtype` (the drift it exists for), TRANSIENT on a missing directory — plus a positive control proving it can still pass.
+- [x] 4.2 **Registered locally, not as a `soleur:schedule` GitHub Actions cron.** Measured: the canary reads `~/.claude/projects/**/*.jsonl`, a GitHub runner has none, and the canary correctly reports TRANSIENT when it cannot measure — so that registration yields a probe that can never PASS and never FAIL. It is bound instead to the repo-side `SessionStart` surface via `.claude/hooks/compaction-drift-canary.sh`, stamp-gated to once per 7 days, always exit 0, reporting a `SOLEUR_COMPACTION_DRIFT` marker on stderr. **AC17 and AC21 are amended accordingly** — see the plan addendum.
+  - The wrapper shipped a real bug caught by driving its arms rather than reading it: `out="$(…)"` is a simple command, so a non-zero canary status fired the `ERR` trap and the wrapper exited 0 having printed nothing. `|| rc=$?` puts it in a tested context. The same exemption is what makes `compaction-state.sh`'s `[[ -n "$PLAN" ]] && …` lines safe, which scenario 21 now pins.
 
 ## Phase 5 — ADR + C4 + register
 

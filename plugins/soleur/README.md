@@ -455,6 +455,49 @@ check regardless of how you installed.
 
 </details>
 
+## Compaction-Aware Session Hooks
+
+When a session's context is compacted, Soleur injects a short directive telling
+the model to re-read the plan and spec rather than trust the paraphrased
+summary, and — on the **second automatic compaction of the same session
+window** — recommends continuing in a fresh session at the next phase boundary.
+Before a compaction it tells the summarizer which resume identifiers to keep
+verbatim.
+
+This replaces the old unconditional "run `/clear` and resume" advice, which
+fired at fixed points regardless of whether any context had been lost.
+
+`plugins/soleur/hooks/compaction-state.sh` is bound twice in `hooks.json`:
+`PreCompact` (matcher `manual|auto`) and `SessionStart` (matcher
+`startup|resume|clear|compact`). It is read-only and fully local — nothing
+leaves the machine, and nothing is written to your repository. Its per-session
+counter lives under `TMPDIR` and is disposable.
+
+**It does nothing in a repository that is not a Soleur checkout.** A plugin
+hook is global, so the hook refuses to speak unless the project root carries
+both a `plugins/soleur` directory and a `knowledge-base/project/plans` or
+`specs` artifact. Without that guard, compacting work on your own application
+would get a summary shaped around PR numbers and operator holds it does not
+have.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `SOLEUR_DISABLE_COMPACTION_HOOKS` | unset | `1` disables both events entirely — no directive, no summary shaping, nothing written |
+| `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends |
+| `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
+
+### Harness support
+
+The compaction lifecycle is a Claude Code API. The other three harnesses
+degrade to **silence**, never to a false claim that the behaviour is present.
+
+| Harness | Compaction hooks | What you get instead |
+|---|---|---|
+| Claude Code | Yes (2.1.76+; measured on 2.1.273) | Evidence-based directive and fresh-session recommendation |
+| Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
+| Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
+| Grok Build | No | Same as Codex |
+
 ## Known Issues
 
 ### Updating the Marketplace Does Not Update the Installed Plugin

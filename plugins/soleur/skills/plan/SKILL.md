@@ -989,7 +989,7 @@ and lifecycle progression.
 3. Display the resume prompt (per AGENTS.md Communication rule). Format:
 
    ```text
-   All artifacts are on disk. Run `/clear` then paste this to resume:
+   All artifacts are on disk. Paste this to resume:
 
    /soleur:work <plan-file-path>
 
@@ -999,6 +999,17 @@ and lifecycle progression.
 
    Replace placeholders with actual values from the session. The user must be
    able to paste the command and go without re-explaining context.
+
+   **Whether to recommend `/clear` is evidence-based (#8323), not a fixed
+   point in the workflow.** Prepend "Run `/clear` first, then paste this:"
+   ONLY when this session carries a `SOLEUR_COMPACTION_DIRECTIVE` marker with
+   `recommend=true` — `compaction-state.sh` injects it into
+   `additionalContext` after the second automatic compaction of the current
+   session window. The prompt itself is unconditional; it is the *nudge* that
+   is conditional. A session that never compacted, a kill-switched hook
+   (`SOLEUR_DISABLE_COMPACTION_HOOKS=1`) and a non-Claude harness all land in
+   the no-marker branch, and emitting the prompt with no nudge is the correct
+   output there rather than a degraded one.
 
 **Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
 
@@ -1013,7 +1024,7 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 
 **Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`/soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
 
-**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk — run `/clear` before `/soleur:work` for maximum headroom. What would you like to do next?"
+**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `/soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
 
 **Options:**
 

@@ -47,6 +47,10 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/install-kb-merge-driver.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/compaction-drift-canary.sh"
           }
         ]
       }
