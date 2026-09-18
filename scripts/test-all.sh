@@ -2205,6 +2205,17 @@ if want_scripts; then
   # cf-tunnel-registry-bridge. It replaced a Doppler read of a secret that exists in no config
   # of the soleur project. Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/derive-app-domain-base" bash scripts/derive-app-domain-base.test.sh
+  # 2026-09-17: every no-SSH host read is gated on the doppler CLI, so a machine without the
+  # binary makes an agent read "command not found" as "this session has no observability
+  # access" and fall back to an hourly probe or to SSH. The suite's load-bearing case is the
+  # unauthenticated/unknown split — a network fault must never route to a login flow. Explicit
+  # run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/ensure-doppler" bash scripts/ensure-doppler.test.sh
+  # 2026-09-17: web-1 also emits SOLEUR_INNGEST_SERVER_PROBE with host_name=soleur-inngest-prd,
+  # so a reader filtered on the marker (or on host_name) summarises the WRONG MACHINE while
+  # looking correct. The load-bearing case is T2 — given only web-1 rows, stdout must be EMPTY.
+  # Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
+  run_suite "scripts/inngest-host-state" bash scripts/inngest-host-state.test.sh
   # #7966: the rotation script had never completed a run (TARGETS exported after the check that
   # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
   run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh

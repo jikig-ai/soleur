@@ -469,6 +469,7 @@ blog
 blog-authoring
 blog-post
 blue-green
+blueprint
 bodies
 body
 body-grep-comments
@@ -706,6 +707,7 @@ cjs
 cla
 cla-check
 claim-verification
+claims-vs-measurements
 classification-gate
 classifier
 classifier-gate
@@ -753,6 +755,7 @@ closure-gate
 cloud-init
 cloud-max-scheduling
 cloud-migration
+cloud-mode
 cloud-routines
 cloud-task-silence
 cloudflare
@@ -959,6 +962,7 @@ cost-model
 cost-of-filing
 cost-of-filing-gate
 cost-slo
+could-not-measure
 count-mismatch
 counting
 counts
@@ -1680,6 +1684,7 @@ git-history
 git-identity
 git-index
 git-ls-files
+git-manager-proxy
 git-mv
 git-pull
 git-rebase
@@ -1689,6 +1694,7 @@ git-rev-parse
 git-scoping
 git-show-main
 git-stash
+git-subdir
 git-tags
 git-trailers
 git-workflow
@@ -1947,6 +1953,7 @@ installation-id
 installation-takeover
 installation-token
 instrument-error
+instrument-failure
 instrument-vacuity
 instrument-validation
 instrument-verification
@@ -2844,6 +2851,7 @@ probe
 probe-discipline
 probe-failure-asymmetry
 probe-first
+probe-methodology
 probe-receipt
 probes
 proc-cmdline
@@ -3094,6 +3102,7 @@ requestanimationframe
 require
 required-checks
 required-reviewer
+requiredplugins
 requirements-elicitation
 requires_cpo_signoff
 rerender
@@ -3403,6 +3412,7 @@ sentinel
 sentinel-drift
 sentinel-sweep
 sentinel-values
+sentinel-vocabulary
 sentry
 sentry-alerts
 sentry-api
@@ -4118,9 +4128,11 @@ vendored-css
 vendored-library
 vendored-upstream
 vendorsupabase
+verbatim
 verbs
 verdict
 verdict-cache
+verdict-machinery
 verification
 verification-decay
 verification-discipline
@@ -4177,6 +4189,7 @@ wai-aria
 wal
 walk
 wall-clock
+warm-image
 warm-standby
 warning-level
 watch-only

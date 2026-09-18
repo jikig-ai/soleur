@@ -58,9 +58,35 @@ assert_eq "7b58d68461cb1fc033a063e34cc9de63d0b4144b" "$OUT" "field pinned-commit
 echo ""
 
 # --- TS3: field last-verified ---
+# The field is advanced by the weekly vendor-drift cron's attestation PRs, so
+# pinning a literal here red-lights every attestation it exists to verify —
+# the first attestation PR ever opened (#8166, advancing to 2026-09-14) failed
+# CI on exactly this line while carrying no defect of its own. Assert the
+# invariants the field is contracted to hold instead: ISO calendar-date shape,
+# never below the first recorded verification epoch (the field only advances),
+# and never future-dated (a future value asserts a comparison no artifact ran).
+#
+# Second site of the same pin: #8251 converted the sibling
+# `notice-frontmatter.test.sh` to this contract form; this base suite was
+# missed (same miss class as the TS4 hardcoded row count documented below),
+# and #8166 red-lit on `test-scripts (3/3)` a second time because of it.
 echo "TS3: field last-verified returns ISO date"
 OUT=$(bash "$PARSER" field last-verified)
-assert_eq "2026-05-10" "$OUT" "field last-verified is correct"
+if [[ "$OUT" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
+  echo "  PASS: field last-verified is ISO-dated ($OUT)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified is not an ISO calendar date (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
+TODAY="$(date +%F)"
+if [[ ! "$OUT" < "2026-05-10" && ! "$TODAY" < "$OUT" ]]; then
+  echo "  PASS: field last-verified is within [2026-05-10, $TODAY]"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: field last-verified out of range [2026-05-10, $TODAY] (got: '$OUT')"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 # --- TS4: the emitted registry agrees with the NOTICE body table ---

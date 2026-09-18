@@ -18,12 +18,99 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Fire any cron on demand | [§ On-demand cron trigger (HTTP)](#on-demand-cron-trigger-http--primary) |
 | Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
+| Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
+
+## Inherited `done` after a host replace (#7228)
+
+**Symptom.** An `apply_target=inngest-host-replace` succeeds, the server is `running`, the AOF
+volume is preserved — and `inngest-server` never starts. The probe reads
+`server_active=activating http_code=000` indefinitely, and the host journal carries:
+
+```
+BLOCK: cutover flag='done' but this host carries no done-owner marker at
+/var/lib/inngest-cutover/done-owner — refusing a prod start on an INHERITED done (#7228)
+```
+
+**This is not a malfunction.** `INNGEST_CUTOVER_FLIP` lives in Doppler and **outlives the host**;
+the matching `done-owner` marker lives on the **root disk**, which a replace destroys. The new
+machine therefore inherits a `done` it never earned, and the flip guard refuses rather than risk
+running a **second** prod scheduler. It follows that **every** host replace strands the scheduler
+while the flag is `done` — it is deterministic, not a flake, so retrying the replace cannot fix
+it. **Retrying is the trap**: "same image, same cloud-init, same volume, so it must be transient"
+is the reasoning that produced a second stranded host on 2026-09-17.
+
+`apply-web-platform-infra.yml`'s `inngest_host_replace` job reads the flag before applying and,
+on `done`, emits a `::warning::` and writes the recovery below into the job summary. It does not
+block — the replace is often exactly what you want and the recovery is one dispatch — and it
+degrades open on an unreadable flag.
+
+**Recovery — one dispatch, then an approval, no data loss:**
+
+```
+gh workflow run cutover-inngest.yml -f op=resume
+```
+
+> **The run then HOLDS in `Waiting` until a human approves it.** `op=resume` writes a flag that
+> authorizes a prod scheduler start, so its job declares `environment: inngest-cutover`
+> (`cutover-inngest.yml:78`) and that environment carries a required reviewer — verified
+> 2026-09-17, the reviewer set is non-empty. **No step executes before the approval**, so a
+> dispatch that appears to produce nothing has not failed; it is waiting for you. Ask the
+> operator to approve it in the Actions UI, and confirm the state with:
+>
+> ```
+> gh run list -w cutover-inngest.yml -L 1
+> ```
+>
+> Recorded because the previous wording — "one dispatch, no data loss" — is what an engineer
+> reads mid-outage, and an unexplained `Waiting` invites a second remediation on top of a
+> recovery that is already in flight.
+
+`op=resume` exists for exactly this state. Its G1 requires the flag to be `done` (only that
+evidences a completed flip), G3 requires the host to be audible, and it then writes
+`INNGEST_CUTOVER_FLIP=flushed`. The on-host 30s timer takes the post-flush arm: start → verify it
+SERVES → re-record the marker → complete to `done`, **with no re-FLUSHALL**, so the queue
+survives. Confirm by the FSM row `reason="flushed-resume-no-reflush"` followed by a return to
+`noop-done` — read it with:
+
+```
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since 30m --grep inngest-cutover-flip --raw-only --limit 20
+```
+
+**G3 is a live precondition, not a formality.** It requires the host to be audible on Better
+Stack, and a *freshly replaced* host is not audible until Vector is up and shipping. If `op=resume`
+refuses on G3, that is the expected ordering — wait for the host to start shipping (read it with
+`scripts/inngest-host-state.sh`) and re-dispatch.
+
+**Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
+it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
+
+**Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
+was invisible until the host journal was read — see
+[§ Reading host state without SSH](#reading-host-state-without-ssh) for the read that finds it.
 
 ## Reading host state without SSH
 
 Every unit state, journal tail and file-identity fact this runbook needs comes from **one
 authenticated GET**. This section is the single recipe; the rest of the runbook references it
 rather than repeating a host login.
+
+**Prerequisite — the `doppler` CLI, and a missing one is not a missing capability.** Every
+command below reads its credentials through `doppler`. On a machine without the binary the
+shell answers `doppler: command not found`, which reads to an agent as "this session cannot
+see the host" and sends it to an hourly probe or to SSH (`hr-no-ssh-fallback-in-runbooks`).
+Measured 2026-09-17 during an inngest host replace: a 20-minute blind spot on a production
+scheduler, for a one-command install. Bootstrap it first — checksum-verified, no sudo:
+
+```
+scripts/ensure-doppler.sh              # installs to ~/.local/bin, prints the path
+scripts/ensure-doppler.sh --state      # missing | unauthenticated | ready | unknown
+```
+
+The four states have different fixes and must not be collapsed: `missing` → run the script;
+`unauthenticated` → the operator runs `doppler login` (interactive, so an agent asks rather
+than attempts it) or exports `DOPPLER_TOKEN`; `unknown` → a non-token failure such as a
+network fault, where a login flow would fix nothing; `ready` → wrap the call in `doppler run`.
 
 ```
 WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
@@ -41,6 +128,59 @@ jq '.services' /tmp/ds.json
 a Cloudflare Tunnel hostname and Cloudflare picks a connector per edge colo, so a read can be
 answered by a *different* host than you meant. A redis-healthy answer from a peer is otherwise
 indistinguishable from a fixed host; #6425 cost 16 hours of false alarms to exactly this.
+
+> **This recipe CANNOT read the dedicated inngest host — use `scripts/inngest-host-state.sh`.**
+> MEASURED 2026-09-17, 12 consecutive pinned attempts: every one was answered by
+> `hetzner-123931471` (web-1); none reached the inngest host. This is not an unlucky
+> coin-flip to retry past — the `/hooks` channel **terminates on web-1**, and the dedicated
+> inngest host runs no listener and has no inbound rule (deny-all public firewall; the tunnel
+> ingress is web-1's). So a `deploy-status` read "about the inngest host" is structurally a
+> reading of a different machine, and `restart-inngest-server.yml` — same endpoint — cannot
+> reach it either, which is why its verify step fails against a host it never contacted.
+>
+> The channel that *does* reach it is journald → vector → Better Stack, which is continuous
+> rather than hourly and carries host identity **in the row**, so pinning is a filter rather
+> than a routing hope:
+>
+> ```
+> doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh
+> ```
+>
+> It prints the newest dedicated-host probe row **with its age**, a SERVING/NOT SERVING
+> verdict, and a scan of recent unit refusals. Note the pin is the conjunction
+> `host=soleur-inngest` **AND** `host_role=dedicated`: web-1 also emits
+> `SOLEUR_INNGEST_SERVER_PROBE` with `host_name=soleur-inngest-prd`, so filtering on the
+> marker or on `host_name` selects the wrong machine while looking right.
+>
+> **Exit codes are the contract — branch on them, and do NOT treat `rc != 0` as "host down".**
+> The distinction between *the host is bad* and *I could not measure the host* is the entire
+> point of this tool, and it is carried in the exit code, not the prose:
+>
+> | rc | Meaning | What to do |
+> |---|---|---|
+> | `0` | A dedicated-host row was found and summarised. Read `SERVING=yes\|no`. | Act on the verdict — but check the age first; see STALE below. |
+> | `2` | Usage error (e.g. `--since` without a unit). Nothing was queried. | Fix the invocation. Says nothing about the host. |
+> | `3` | Credentials not injected. Nothing was queried. | Wrap in `doppler run -p soleur -c prd_terraform --`. You are not missing access. |
+> | `4` | The query **ran** and the window held no dedicated-host row. | A real finding: the host is not shipping (vector down, host down, or never booted). |
+> | `5` | The newest anchored row carried no identity/verdict fields. **No verdict emitted.** | Not evidence of ill health *or* of good. Widen `--since` and re-read. |
+> | `6` | **The read failed. Nothing was measured.** | Fix the read path (rotated credential, ClickHouse fault, DNS, missing binary). **Never report this as a host outage.** |
+> | `78` | Refused to run under `set -x` with a live credential in the environment (#7797). | Nothing was queried. Re-run without shell tracing. |
+>
+> `4` and `6` are the pair that matters. Until 2026-09-17 every instrument fault — a 503, an
+> absent binary, an error page, a python traceback — exited `4` and printed "the host is not
+> shipping", which is a confident diagnosis of a healthy machine produced by a broken reader.
+> If you see `6`, the tool is telling you it does not know.
+>
+> **Two things the verdict does not say.** `SERVING=yes` requires `registry_fns > 0` as well as
+> `server_active=active` and `http_code=200` — a diagnostic boot (`INNGEST_DIAGNOSTIC_BOOT=1`)
+> satisfies the first two and owns no work (#8015). And the probe timer is hourly, so a row can
+> be up to 60m old; the verdict is a statement about **then**. The output labels this itself
+> (`[Nm old]`, a `STALE` block, or `[AGE UNKNOWN]` when the timestamp will not parse) — read
+> that line before acting on the verdict.
+>
+> **`INNGEST_DIAGNOSTIC_BOOT=1` is not an env var you can just export.** The unit carries a
+> durable sentinel, so setting the variable alone produces a *second* BLOCK; it is a Doppler
+> write to `soleur-inngest/prd` and needs `inngest-bootstrap.sh` re-run with it set.
 
 Fields this runbook uses (all under `.services`):
 
