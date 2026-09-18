@@ -91,6 +91,28 @@ const MAX_ALWAYS_LOADED_BYTES = 46000;
 // would let a cluster land at exactly the cap and pin the registry there.
 const PROPOSE_ALWAYS_LOADED_BUDGET = 44000;
 
+// Shrink floor for the promotion TARGET (#8281 review). A promotion is additive,
+// so the target may not lose more than a rewording's worth of bytes. 0.85 is
+// deliberately loose enough that tightening one rule's prose passes and tight
+// enough that replacing a 40 kB corpus with 40 bytes cannot. The rule-COUNT
+// floor beside it is exact: zero rule lines may be removed.
+export const MIN_TARGET_RETENTION = 0.85;
+
+/**
+ * The shrink predicate, extracted so its boundary is unit-testable without
+ * driving the handler: exactly-at-floor passes, one byte under refuses, and a
+ * rule-count drop of ONE refuses regardless of bytes.
+ */
+export function promotionShrankTarget(m: {
+  rulesBefore: number;
+  rulesAfter: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}): boolean {
+  if (m.rulesAfter < m.rulesBefore) return true;
+  return m.bytesAfter < Math.floor(m.bytesBefore * MIN_TARGET_RETENTION);
+}
+
 // #6794 (inlined per #6860): the frontmatter-strip contract
 // (scripts/lib/frontmatter-strip/SPEC.md; parity-pinned across strip.sh/py/ts by
 // scripts/lib/frontmatter-strip.test.sh). Inlined here rather than imported from
@@ -261,6 +283,9 @@ export interface CompoundPromoteOutcome {
   trigger?: "cron" | "manual";
   /** Inngest run id — the join key to a Sentry event for the same run. */
   run_id?: string;
+  /** `error` only: the thrown error's class and a scrubbed, capped message. */
+  error_class?: string;
+  error_message?: string;
 }
 
 /**
@@ -744,6 +769,20 @@ export async function cronCompoundPromoteHandler({
   const trigger: "cron" | "manual" = event?.data?.trigger === undefined ? "cron" : "manual";
   let ephemeralRoot: string | null = null;
   let installationToken = "";
+  // Hoisted ABOVE the try so the error marker can carry them. They used to be
+  // scoped inside it, so `status: "error"` was emitted with no counts at all:
+  // cluster 1 opens a PR, cluster 2's GitHub search throws 502, and the marker
+  // reported a failed run with zero work while the repo held a real PR and a
+  // promotion-log row asserting it. Under-reporting a landed write to zero.
+  let corpusCount: number | undefined;
+  let corpusInputBytes: number | undefined;
+  let clustersProposed: number | undefined;
+  let clustersOpened = 0;
+  // #8281: why a run produced nothing is the datum that was missing. One
+  // entry per refusal that fired, plus a bounded per-cluster detail so a
+  // cluster refused EVERY week is distinguishable from a quiet corpus.
+  const refusals: string[] = [];
+  const refusalDetail: { cluster_hash: string; reason: string }[] = [];
 
   try {
     // Memoized run-start timestamp — safeCommitAndPr pins commit dates from
@@ -884,7 +923,8 @@ export async function cronCompoundPromoteHandler({
 
     // #8281: the measured cost driver. The 2026-09-13 run sent 516,512 input
     // tokens and opened nothing; this is the term that made it so.
-    const corpusInputBytes = Buffer.byteLength(JSON.stringify(corpus.entries), "utf8");
+    corpusInputBytes = Buffer.byteLength(JSON.stringify(corpus.entries), "utf8");
+    corpusCount = corpus.entries.length;
 
     if (corpus.entries.length === 0) {
       await step.run("sentry-heartbeat-ok-empty", () =>
@@ -975,12 +1015,7 @@ export async function cronCompoundPromoteHandler({
     }
 
     // FR9-FR18: apply clusters and open PRs
-    let clustersOpened = 0;
-    // #8281: why a run produced nothing is the datum that was missing. One
-    // entry per refusal that fired, plus a bounded per-cluster detail so a
-    // cluster refused EVERY week is distinguishable from a quiet corpus.
-    const refusals: string[] = [];
-    const refusalDetail: { cluster_hash: string; reason: string }[] = [];
+    clustersProposed = clusterResult.clusters.length;
 
     for (const cluster of clusterResult.clusters) {
       const clusterHash = computeClusterHash(cluster.source_learnings);
@@ -1063,6 +1098,17 @@ export async function cronCompoundPromoteHandler({
           return { kind: "refused", reason: "branch-name-shape-failed" };
         }
 
+        // PRE-apply measurement for the shrink floor below. The byte budget
+        // was upper-bound only: a diff that removed every line of the corpus
+        // and left a 0-byte file was a "content edit" to every gate (allowlisted
+        // path, no structural op, under the ceiling). diffRemovesHardRule saw
+        // only `hr-` removals, so deleting every cq-/wg-/rf-/pdr-/cm- rule was
+        // refused by nothing, and a SKILL.md target had no content guard at all.
+        const targetPathAbs = join(repoRoot, cluster.target_path);
+        const preTargetBytes = Buffer.byteLength(await readFile(targetPathAbs, "utf8"), "utf8");
+        const preCorpus = await readAlwaysLoaded(repoRoot);
+        const preRuleCount = ruleLineCount(preCorpus.corpusText);
+
         const applied = await applyDiffToWorkspace(cluster.proposed_diff_unified, repoRoot);
         if (!applied) {
           logger.warn({ fn: "cron-compound-promote", hash: clusterHash }, "git-apply-check-failed");
@@ -1087,6 +1133,43 @@ export async function cronCompoundPromoteHandler({
           });
           await spawnGit(["checkout", "--", "."], { cwd: repoRoot });
           return { kind: "refused", reason: "byte-budget-overflow" };
+        }
+
+        // SHRINK FLOOR — the lower bound the ceiling above never had. A
+        // promotion is ADDITIVE by contract (ADR-092 / AP-017), so the rule
+        // count may never fall, and the target may not lose more than a
+        // rewording's worth of bytes. This is the one check that converts an
+        // implicit rename, a binary overwrite and a truncation-to-empty from
+        // silent corpus destruction into a logged refusal, whatever gate they
+        // slipped past upstream — it asserts the PROPERTY on the tree, not a
+        // proxy on the diff.
+        const postRuleCount = ruleLineCount(post.corpusText);
+        const postTargetBytes = Buffer.byteLength(await readFile(targetPathAbs, "utf8"), "utf8");
+        if (
+          promotionShrankTarget({
+            rulesBefore: preRuleCount,
+            rulesAfter: postRuleCount,
+            bytesBefore: preTargetBytes,
+            bytesAfter: postTargetBytes,
+          })
+        ) {
+          logger.warn(
+            {
+              fn: "cron-compound-promote",
+              hash: clusterHash,
+              rules_before: preRuleCount,
+              rules_after: postRuleCount,
+              bytes_before: preTargetBytes,
+              bytes_after: postTargetBytes,
+            },
+            "corpus-shrink-refused",
+          );
+          reportSilentFallback(new Error("promotion shrank its target"), {
+            feature: "cron-compound-promote", op: "corpus-shrink-refused",
+            extra: { rules_before: preRuleCount, rules_after: postRuleCount, bytes_before: preTargetBytes, bytes_after: postTargetBytes },
+          });
+          await spawnGit(["checkout", "--", "."], { cwd: repoRoot });
+          return { kind: "refused", reason: "corpus-shrink-refused" };
         }
 
         // Audit log row — atomic O_APPEND write instead of existsSync→read→
@@ -1215,7 +1298,22 @@ export async function cronCompoundPromoteHandler({
     } catch {
       // best-effort
     }
-    emitOutcomeMarker(logger, { trigger, run_id: runId, status: "error" });
+    emitOutcomeMarker(logger, {
+      trigger,
+      run_id: runId,
+      status: "error",
+      corpus_count: corpusCount,
+      clusters_proposed: clustersProposed,
+      clusters_opened: clustersOpened,
+      refusals,
+      refusal_detail: refusalDetail,
+      corpus_input_bytes: corpusInputBytes,
+      // Which stage died, so four `error` weeks are a named cause rather than
+      // an undecidable one for the #8293 gate. Bounded and scrubbed: the
+      // message can carry a model-rendered path.
+      error_class: e.constructor?.name ?? "Error",
+      error_message: safeDetail(e.message),
+    });
     return { ok: false, status: "error" };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot);

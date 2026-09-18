@@ -16,7 +16,7 @@
 // `+++ b/.github/...` and the old filter CAUGHT it (a control, not a bypass);
 // there was no row 10 at the time; and rows 1, 2, 4, 5 and 9 are bypasses that
 // went unlisted. Re-derived by replaying the old filter over each fixture.
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { beforeEach, describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -36,6 +36,8 @@ vi.hoisted(() => {
 import {
   checkDiffPaths,
   TARGET_ALLOW_RE,
+  MIN_TARGET_RETENTION,
+  promotionShrankTarget,
 } from "@/server/inngest/functions/cron-compound-promote";
 import { gitFixture } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
@@ -82,6 +84,15 @@ function patchFor(mutate: () => void): string {
   git(["reset", "-q", "--hard", "HEAD"]);
   return diff;
 }
+
+// Assertion floor. Stripping every `expect` from this file left it reporting
+// "N passed", exit 0 -- indistinguishable from a suite that pins something.
+// `requireAssertions` at the runner would be stronger, but it fails 174
+// pre-existing tests across 28 unrelated files (measured), so it is scoped
+// here: every test in this file must assert at least once.
+beforeEach(() => {
+  expect.hasAssertions();
+});
 
 describe("Guard 2 — diff path derivation (#8274)", () => {
   // -- must-PASS controls: the guard must not refuse everything -------------
@@ -359,10 +370,11 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
  * `if (!pathVerdict.ok)` block from the handler left all of Guard 2 green.
  * Two covered endpoints, one uncovered wire.
  */
+const SRC = join(
+  __dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts",
+);
+
 describe("Guard 2b — every apply site is behind the derivation", () => {
-  const SRC = join(
-    __dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts",
-  );
   /** Comment-strip: this file documents the constructs it forbids. */
   function code(): string {
     return readFileSync(SRC, "utf-8")
@@ -421,5 +433,36 @@ describe("Guard 2b — every apply site is behind the derivation", () => {
     const block = between.slice(between.indexOf("if (!pathVerdict.ok)"));
     expect(block).toMatch(/return \{ kind: "refused", reason/);
     expect(block.indexOf("return { kind:")).toBeGreaterThan(-1);
+  });
+});
+
+describe("Guard 4 — the post-apply shrink floor", () => {
+  // The byte budget was a CEILING only. A diff that emptied AGENTS.rules.md,
+  // or replaced 40 kB with 40 bytes via a binary hunk or an implicit rename,
+  // passed every gate. This floor asserts the PROPERTY on the tree.
+  it("a rule-count drop of ONE refuses regardless of bytes", () => {
+    expect(promotionShrankTarget({ rulesBefore: 98, rulesAfter: 97, bytesBefore: 1000, bytesAfter: 5000 })).toBe(true);
+  });
+  it("exactly at the retention floor passes; one byte under refuses", () => {
+    const before = 1000;
+    const floor = Math.floor(before * MIN_TARGET_RETENTION);
+    expect(promotionShrankTarget({ rulesBefore: 5, rulesAfter: 5, bytesBefore: before, bytesAfter: floor })).toBe(false);
+    expect(promotionShrankTarget({ rulesBefore: 5, rulesAfter: 5, bytesBefore: before, bytesAfter: floor - 1 })).toBe(true);
+  });
+  it("growth and a same-size rewording both pass (over-aggression control)", () => {
+    expect(promotionShrankTarget({ rulesBefore: 5, rulesAfter: 6, bytesBefore: 1000, bytesAfter: 1200 })).toBe(false);
+    expect(promotionShrankTarget({ rulesBefore: 5, rulesAfter: 5, bytesBefore: 1000, bytesAfter: 1000 })).toBe(false);
+  });
+  it("the WIRE: the handler consults the floor between the apply and the commit", () => {
+    const src = readFileSync(SRC, "utf-8")
+      .split("\n").map((l: string) => l.replace(/^\s*\/\/.*$/, "")).join("\n");
+    const apply = src.indexOf("await applyDiffToWorkspace(cluster.proposed_diff_unified");
+    const floor = src.indexOf("promotionShrankTarget({");
+    const commit = src.indexOf("await safeCommitAndPr({");
+    expect(apply).toBeGreaterThan(-1);
+    expect(floor).toBeGreaterThan(apply);
+    expect(commit).toBeGreaterThan(floor);
+    const between = src.slice(floor, commit);
+    expect(between).toMatch(/return \{ kind: "refused", reason: "corpus-shrink-refused" \}/);
   });
 });

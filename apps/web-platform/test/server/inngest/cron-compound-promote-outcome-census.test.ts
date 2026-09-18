@@ -3,12 +3,13 @@
 //
 // The property is over the SET of `return { ok: ... }` statements in the
 // handler, present and future — not over the 7 statuses that happen to exist
-// today. The census buckets each return as classified (a marker emit precedes
-// it inside its own block) or UNCLASSIFIED, and any unclassified member is RED.
+// today. The census buckets each return as classified (the marker emit
+// immediately preceding it, with no other return between) or UNCLASSIFIED,
+// and any unclassified member is RED.
 // MIN_TERMINAL_RETURNS is a floor, not the definition: adding an 8th return
 // without a marker must fail here, which is the mutation that motivated the
 // guard.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -46,30 +47,56 @@ export function censusTerminalReturns(src: string): {
   // dispatch rows below) still censuses.
   const handlerStart = src.indexOf("export async function cronCompoundPromoteHandler");
   const scoped = handlerStart === -1 ? src : src.slice(handlerStart);
-  const lineOffset = handlerStart === -1 ? 0 : src.slice(0, handlerStart).split("\n").length - 1;
-  const lines = scoped.split("\n");
+
+  // COMMENT-STRIPPED. The SUT documents the very constructs this census
+  // counts, so an unstripped haystack is satisfied by prose: a comment reading
+  // `// emitOutcomeMarker( is deliberately not called here` used to classify
+  // an unmarked return that sat beneath it.
+  const stripped = scoped
+    .split("\n")
+    .map((l) => l.replace(/^\s*\/\/.*$/, "").replace(/^\s*\*.*$/, ""))
+    .join("\n");
+
+  // Whitespace- and layout-TOLERANT. The previous anchor demanded exactly one
+  // space after `{` and none before `:`, on a single line — so `return {ok:`,
+  // `return { ok : true`, a prettier-wrapped multi-line object and the
+  // shorthand `{ ok, status }` were all INVISIBLE, and an 8th terminal return
+  // in any of those spellings left counts at 7/7 and the guard green. That is
+  // the exact mutation the guard exists to catch.
+  const RET = /return\s*\{[^}]*?\bok\s*[:,}]/g;
+
+  // BLOCK-SCOPED by construction, no line window. Split on the marker call:
+  // segment 0 precedes any marker, so a terminal return there has none;
+  // segment i>0 follows marker i, and its FIRST terminal return is the one
+  // that marker classifies. A second return in the same segment has no marker
+  // of its own and is unclassified. A 12-line look-back used to reclassify a
+  // healthy site as unclassified the moment its emit grew past 12 lines, and
+  // classified a sneaked return by a marker belonging to a different branch.
+  const segments = stripped.split(/emitOutcomeMarker\s*\(/);
+  const markers = segments.length - 1;
   const unclassified: string[] = [];
   let classified = 0;
-  let markers = 0;
-
-  lines.forEach((line, i) => {
-    if (/emitOutcomeMarker\(/.test(line)) markers += 1;
-    // Match a terminal return ANYWHERE on the line, not only at line start:
-    // `if (cond) { return { ok: true, ... }; }` is a terminal path too, and a
-    // line-anchored pattern is blind to exactly the inline form an author
-    // reaches for when adding a quick early exit. (Mutation row 1 caught this.)
-    if (!/return \{ ok: (true|false)/.test(line)) return;
-    const windowStart = Math.max(0, i - 12);
-    const preceding = lines.slice(windowStart, i).join("\n");
-    if (/emitOutcomeMarker\(/.test(preceding)) {
-      classified += 1;
-    } else {
-      unclassified.push(`L${lineOffset + i + 1}: ${line.trim()}`);
+  segments.forEach((seg, i) => {
+    const rets = seg.match(RET) ?? [];
+    if (i === 0) {
+      for (const r of rets) unclassified.push(`before any marker: ${r.trim()}`);
+      return;
     }
+    if (rets.length > 0) classified += 1;
+    for (const r of rets.slice(1)) unclassified.push(`after marker ${i}, unmarked: ${r.trim()}`);
   });
 
   return { classified, markers, unclassified };
 }
+
+// Assertion floor. Stripping every `expect` from this file left it reporting
+// "N passed", exit 0 -- indistinguishable from a suite that pins something.
+// `requireAssertions` at the runner would be stronger, but it fails 174
+// pre-existing tests across 28 unrelated files (measured), so it is scoped
+// here: every test in this file must assert at least once.
+beforeEach(() => {
+  expect.hasAssertions();
+});
 
 describe("Guard 1 — outcome-marker census", () => {
   it("every terminal return emits an outcome marker, and there are at least 7", () => {
@@ -85,13 +112,34 @@ describe("Guard 1 — outcome-marker census", () => {
 
   it("mutation row 1: an added return with no marker is UNCLASSIFIED", () => {
     const src = readFileSync(SRC_PATH, "utf-8");
+    // Four spellings the old single-line, exact-whitespace anchor could not
+    // see. Each inserts an 8th terminal return with no marker of its own.
+    const spellings = [
+      'if (Math.random() < 0) { return {ok:true, status:"sneaked"}; }',
+      'if (Math.random() < 0) { return { ok : true, status: "sneaked" }; }',
+      'if (Math.random() < 0) {\n  return {\n    ok: true,\n    status: "sneaked",\n  };\n}',
+      'if (Math.random() < 0) { const ok = true; return { ok, status: "sneaked" }; }',
+    ];
+    for (const sneak of spellings) {
+      const mutated = src.replace(
+        /(\n\s*)return \{ ok: true, status: "disabled" \};/,
+        `$1${sneak}$1return { ok: true, status: "disabled" };`,
+      );
+      expect(mutated).not.toBe(src); // the mutation must LAND, or the row is vacuous
+      const c = censusTerminalReturns(mutated);
+      expect(c.unclassified.length + (c.markers - c.classified), sneak).toBeGreaterThan(0);
+    }
+  });
+
+  it("mutation row 1b: a COMMENT naming the marker does not classify an unmarked return", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
     const mutated = src.replace(
       /(\n\s*)return \{ ok: true, status: "disabled" \};/,
-      '$1if (Math.random() < 0) { return { ok: true, status: "sneaked" }; }$1return { ok: true, status: "disabled" };',
+      '$1// emitOutcomeMarker( is deliberately not called on this path$1if (Math.random() < 0) { return { ok: true, status: "sneaked" }; }$1return { ok: true, status: "disabled" };',
     );
-    expect(mutated).not.toBe(src); // the mutation must LAND, or the row is vacuous
+    expect(mutated).not.toBe(src);
     const c = censusTerminalReturns(mutated);
-    expect(c.unclassified.length + (c.classified - c.markers)).toBeGreaterThan(0);
+    expect(c.unclassified.length + (c.markers - c.classified)).toBeGreaterThan(0);
   });
 
   it("mutation row 2: deleting a marker emit leaves its return UNCLASSIFIED", () => {
@@ -106,7 +154,7 @@ describe("Guard 1 — outcome-marker census", () => {
     );
     expect(mutated).not.toBe(src);
     const c2 = censusTerminalReturns(mutated);
-    expect(c2.unclassified.length + (c2.classified - c2.markers)).toBeGreaterThan(0);
+    expect(c2.unclassified.length + (c2.markers - c2.classified)).toBeGreaterThan(0);
   });
 
   it("mutation row 3 (dispatch): a census finding zero returns must not read as clean", () => {
