@@ -10,7 +10,11 @@
 # MEASURED PAYLOAD CONTRACT -- Claude Code 2.1.273, Linux, 2026-09-18.
 # Captured from a real marker hook bound in a throwaway project and driven by
 # headless `claude -p --continue "/compact"`. Docs are not the source here; this
-# is. Re-measure on a CLI bump -- FR7's canary exists to say when.
+# is. NOTHING DETECTS DRIFT IN IT AUTOMATICALLY -- an earlier revision shipped a
+# canary and review deleted it (ADR-227 `## Amendment`), because it watched the
+# transcript while this contract lives in the stdin envelope. Re-measure these
+# rows on a CLI bump; a matcher miss here is silent in both directions (a missing
+# PreCompact under-counts, a missing SessionStart source over-counts).
 #
 #   SessionStart:startup  keys: cwd hook_event_name session_id source transcript_path
 #                         ...and transcript_path names a file that DOES NOT YET EXIST.
@@ -92,12 +96,21 @@ assert_fixture_dir() {
 # Written before every guard, so it certifies INVOCATION rather than success.
 # The suite floors on this: a harness that asserts without spawning the hook
 # produces none of these lines.
+[[ "${SOLEUR_DISABLE_COMPACTION_HOOKS:-0}" == "1" ]] && exit 0
+
+# Coverage trace, BELOW the kill switch. It sat above it, which made the README's
+# "no directive, no summary shaping, nothing written" false -- measured: with the
+# switch set, the hook still appended. `assert_fixture_dir` validates a path
+# STRING (absolute, no `..`, not a synthetic fs); it says nothing about symlinks,
+# ownership, or file-vs-directory, so on its own it authorises an append to any
+# absolute path the process can write. Require an EXISTING regular non-symlink
+# file: a harness creates it deliberately, a stray export cannot conjure one.
 if [[ -n "${SOLEUR_HOOK_TRACE:-}" ]]; then
   assert_fixture_dir "$SOLEUR_HOOK_TRACE"
-  printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
+  if [[ -f "$SOLEUR_HOOK_TRACE" && ! -L "$SOLEUR_HOOK_TRACE" && -O "$SOLEUR_HOOK_TRACE" ]]; then
+    printf 'ran\n' >> "$SOLEUR_HOOK_TRACE"
+  fi
 fi
-
-[[ "${SOLEUR_DISABLE_COMPACTION_HOOKS:-0}" == "1" ]] && exit 0
 
 # Deliberate set -u fault, reachable only through this seam. It is the only way
 # to drive the EXIT arm of the trap above from a test: an ERR-only trap leaves
@@ -129,7 +142,19 @@ jget() { # <key>
 
 EVENT="$(jget hook_event_name)"
 CWD="$(jget cwd)"
+# Caller-supplied, and the input to the scope walk, `git -C "$ROOT"` and two
+# globs -- so it gets the same gate as the ledger root rather than being trusted
+# because it comes from the CLI. A relative or `..`-bearing value would make the
+# walk test paths against whatever cwd the hook inherited.
 [[ -n "$CWD" ]] || CWD="$PWD"
+case "$CWD" in
+  /*) [[ "$CWD" == */../* || "$CWD" == */.. ]] && CWD="$PWD" ;;
+  *) CWD="$PWD" ;;
+esac
+# A non-existent cwd makes every test at the leaf false, so the walk climbs to a
+# real Soleur ancestor and reports ITS branch and plan for a directory that is
+# not there. Refuse instead of guessing.
+[[ -d "$CWD" ]] || exit 0
 
 # --- TR1 scope guard ---------------------------------------------------------
 # A plugin hook is global. `git rev-parse --is-inside-work-tree` is true in
@@ -139,24 +164,39 @@ CWD="$(jget cwd)"
 # plugins/soleur directory -- AND a Soleur plan/spec artifact. Both conjuncts
 # are load-bearing: a plugin developer's checkout has the first without the
 # second.
-# ANCHORED at the enclosing repository, matching welcome-hook.sh, which resolves
-# GIT_ROOT and tests exactly one directory. An unanchored walk is strictly wider
-# than that precedent: a Soleur checkout at ~/dev makes ~/dev/plugins/soleur and
-# ~/dev/knowledge-base/project/plans visible to EVERY unrelated repo nested
-# beneath it -- and nesting is this repo's own .worktrees/ layout, not a
-# hypothetical. So the walk stops at the first directory carrying .git (a FILE
-# in a linked worktree, a directory in a normal clone) and refuses if that root
-# did not satisfy both conjuncts.
+# CTO ruling 2 (ADR-227 amendment). This is a RELEVANCE test -- is this project
+# one Soleur manages -- and explicitly NOT an authenticity test; no cheap
+# filesystem predicate can distinguish "my Soleur project" from "a repo I cloned
+# that looks like one", because a clone carries tracked files and Soleur's
+# artifacts are tracked. That limit is named rather than papered over, and the
+# platform baseline already exceeds it: a cloned repo reaches the model at equal
+# authority through CLAUDE.md / AGENTS.md, unconditionally and with no guard.
+#
+# The former first conjunct was a `plugins/soleur` directory, copied from
+# welcome-hook.sh. That tests whether the OPENED REPO is the Soleur monorepo --
+# which no marketplace install ever is, since `claude plugin install` puts the
+# plugin under ~/.claude/plugins/. It excluded the entire installed base, for a
+# feature whose consumers (plan/SKILL.md, work/SKILL.md) run wherever Soleur is
+# installed. Shipping that guard alongside this PR's retirement of the
+# unconditional /clear prose would have REMOVED working advice from a population
+# it could not serve. Installation itself needs no test: this file only exists
+# inside an installed, enabled plugin, so reaching this line IS the proof.
+#
+# ANCHORED at the enclosing repository, matching welcome-hook.sh's one-GIT_ROOT
+# shape: the walk stops at the first directory carrying .git (a FILE in a linked
+# worktree, a directory in a normal clone), so a stranger repo nested under a
+# Soleur checkout -- this repo's own .worktrees/ layout -- does not inherit scope.
 soleur_root() {
   local d="$CWD" i=0
   while [[ -n "$d" && "$d" != "/" && $i -lt 40 ]]; do
-    if [[ -d "$d/plugins/soleur" ]] \
-      && { [[ -d "$d/knowledge-base/project/plans" ]] || [[ -d "$d/knowledge-base/project/specs" ]]; }; then
+    if [[ -d "$d/knowledge-base/project/plans" ]] || [[ -d "$d/knowledge-base/project/specs" ]]; then
       printf '%s' "$d"
       return 0
     fi
     # Repo boundary: climbing past it is what admits the nested-repo case.
-    [[ -e "$d/.git" ]] && return 1
+    # `-e` is FALSE for a DANGLING symlink, so `-L` is needed too or a broken
+    # .git link silently stops being a boundary.
+    { [[ -e "$d/.git" ]] || [[ -L "$d/.git" ]]; } && return 1
     d="$(dirname "$d")"
     i=$((i + 1))
   done
@@ -168,6 +208,12 @@ ROOT="$(soleur_root)" || exit 0
 # --- ledger ------------------------------------------------------------------
 SID_RAW="$(jget session_id)"
 SID="$(printf '%s' "$SID_RAW" | tr -cd 'A-Za-z0-9_-' | cut -c1-64)"
+# Non-injective on two axes: `x/y`, `x.y` and `xy` all map to `xy`, and two ids
+# differing past char 64 map together. Harmless for today's UUIDs, and a
+# collision makes one session count another's compactions -- the over-firing
+# direction. Refuse a lossy id instead of sharing a key.
+[[ "$SID" == "$SID_RAW" ]] || SID=""
+umask 077   # ledger files were 0644; protection rested entirely on the dir mode
 LEDGER_DIR="${TMPDIR:-/tmp}/soleur-compaction"
 assert_fixture_dir "$LEDGER_DIR"
 # FAIL CLOSED on squatting. With TMPDIR unset this is /tmp/soleur-compaction,
@@ -183,17 +229,35 @@ assert_fixture_dir "$LEDGER_DIR"
 # already exists, and the ownership check below is what actually decides.
 mkdir -p "${LEDGER_DIR%/*}" 2>/dev/null || true
 mkdir -m 0700 "$LEDGER_DIR" 2>/dev/null || true
-if [[ ! -d "$LEDGER_DIR" ]] || [[ ! -O "$LEDGER_DIR" ]]; then
-  printf 'SOLEUR_COMPACTION_SKIPPED reason=ledger-dir-unusable path=%s\n' "$LEDGER_DIR" >&2
-  exit 0
+# `-L` FIRST: `-d` and `-O` both stat rather than lstat, so a symlink planted at
+# this predictable path satisfied both -- measured, the hook wrote through it into
+# a victim-owned directory and chmod 700'd the TARGET.
+if [[ -L "$LEDGER_DIR" ]] || [[ ! -d "$LEDGER_DIR" ]] || [[ ! -O "$LEDGER_DIR" ]]; then
+  LEDGER_DIR_UNUSABLE=1
+else
+  LEDGER_DIR_UNUSABLE=0
+  chmod 700 "$LEDGER_DIR" 2>/dev/null || true
 fi
-chmod 700 "$LEDGER_DIR" 2>/dev/null || true
 LEDGER="$LEDGER_DIR/${SID}.ledger"
 PENDING="$LEDGER_DIR/${SID}.pending"
 
 # Bounded growth. Entries are disposable by construction -- a lost ledger costs
 # one directive, never correctness.
-find "$LEDGER_DIR" -maxdepth 1 -type f -mmin +10080 -delete 2>/dev/null || true
+find "$LEDGER_DIR" -maxdepth 1 -type f \( -name '*.ledger' -o -name '*.pending' \) \
+  -mmin +10080 -delete 2>/dev/null || true
+
+# Every value interpolated into `additionalContext` is read by the model at
+# ELEVATED AUTHORITY, so each one is an injection surface. `trigger` and
+# `threshold` are closed-set / digits-only; these are free text from sources the
+# hook does not own -- a git ref name is chosen by whoever created the branch, and
+# a GIT FILENAME MAY CONTAIN NEWLINES, which `jq --arg` faithfully preserves as
+# real newlines inside the string the model reads. Reduce to a conservative
+# display charset and cap the length; an empty result becomes `unknown`.
+sanitize_display() { # <value> <fallback>
+  local v
+  v="$(printf '%s' "${1-}" | tr -cd 'A-Za-z0-9._/+@-' | cut -c1-200)"
+  printf '%s' "${v:-${2-unknown}}"
+}
 
 # --- PreCompact (FR3) --------------------------------------------------------
 if [[ "$EVENT" == "PreCompact" ]]; then
@@ -207,7 +271,9 @@ if [[ "$EVENT" == "PreCompact" ]]; then
     manual|auto) : ;;
     *) TRIGGER="unknown" ;;
   esac
-  if [[ -n "$SID" ]]; then
+  # Summary shaping does not need the ledger, so an unusable root suppresses the
+  # WRITE and not the FR3 prose.
+  if [[ -n "$SID" ]] && (( ! LEDGER_DIR_UNUSABLE )); then
     # OVERWRITE, never append: PreCompact fires on no-op compactions, and only
     # SessionStart:compact proves one actually happened.
     assert_fixture_dir "$LEDGER_DIR"
@@ -231,18 +297,36 @@ fi
 
 [[ "$EVENT" == "SessionStart" ]] || exit 0
 
+# Reached here with an unusable ledger root: PreCompact already returned above,
+# so this is the SessionStart arm and it owes the model a reason. Emitting
+# nothing made a permanent per-host disable indistinguishable from "this session
+# has not compacted" -- and the plan's own Observability block promises every
+# failure path emits a named marker.
+
 SOURCE="$(jget source)"
 
 # --- SessionStart, window reset ----------------------------------------------
 # startup / resume / clear all open a new window. Guarding only `resume` would
 # leave two of the three unscoped, which is how a long session pins
 # recommend=true forever (TR2).
-if [[ "$SOURCE" != "compact" ]]; then
+case "$SOURCE" in
+  startup|resume|clear) SOURCE_CLASS=reset ;;
+  compact)              SOURCE_CLASS=compact ;;
+  *)                    SOURCE_CLASS=unknown ;;
+esac
+
+if [[ "$SOURCE_CLASS" != "compact" ]]; then
+  # `unknown` lands here and does NOTHING -- it must not reset, because the
+  # matcher admits any source containing one of the four words and a future
+  # `precompact` would otherwise truncate the ledger at the event it counts.
+  [[ "$SOURCE_CLASS" == "reset" ]] || exit 0
   if [[ -n "$SID" ]]; then
-    rm -f "$PENDING" 2>/dev/null || true
-    if [[ -f "$LEDGER" ]]; then
-      assert_fixture_dir "$LEDGER_DIR"
-      : > "$LEDGER" 2>/dev/null || true
+    assert_fixture_dir "$LEDGER_DIR"
+    rm -f "$LEDGER" "$PENDING" 2>/dev/null || true
+    if [[ -s "$LEDGER" ]]; then
+      # A surviving ledger carries the PREVIOUS window's rows into this one and
+      # is the only state that over-counts. Never silent.
+      printf 'SOLEUR_COMPACTION_SKIPPED reason=window-reset-failed path=%s\n' "$LEDGER" >&2
     fi
   fi
   exit 0
@@ -268,6 +352,11 @@ if (( ! HAVE_JQ )); then
   exit 0
 fi
 
+if (( LEDGER_DIR_UNUSABLE )); then
+  emit "SOLEUR_COMPACTION_SKIPPED reason=ledger-dir-unusable -- the compaction ledger directory is missing, foreign-owned or a symlink, so no compaction state could be recorded. Context was just compacted: re-read the plan and spec before editing (hr-always-read-a-file-before-editing-it)."
+  exit 0
+fi
+
 if [[ -z "$SID" ]]; then
   emit "SOLEUR_COMPACTION_SKIPPED reason=no-session-id"
   exit 0
@@ -277,7 +366,13 @@ fi
 COMMITTED=""
 if [[ -f "$PENDING" ]]; then
   COMMITTED="$(head -1 "$PENDING" 2>/dev/null || true)"
-  [[ -n "$COMMITTED" ]] || COMMITTED="unknown"
+  # Re-assert the closed set BEFORE the append. The pending file is same-uid
+  # writable and its value reaches count_total and the "compaction N" sentence
+  # even where it cannot reach `recommend`.
+  case "$COMMITTED" in
+    manual|auto) : ;;
+    *) COMMITTED="unknown" ;;
+  esac
   assert_fixture_dir "$LEDGER_DIR"
   printf '%s\n' "$COMMITTED" >> "$LEDGER" 2>/dev/null || true
   rm -f "$PENDING" 2>/dev/null || true
@@ -286,8 +381,8 @@ fi
 COUNT_TOTAL=0
 COUNT_AUTO=0
 if [[ -r "$LEDGER" ]]; then
-  COUNT_TOTAL="$(grep -c . "$LEDGER" 2>/dev/null || true)"
-  COUNT_AUTO="$(grep -cx 'auto' "$LEDGER" 2>/dev/null || true)"
+  COUNT_TOTAL="$(LC_ALL=C grep -acxE 'manual|auto|unknown' "$LEDGER" 2>/dev/null || true)"
+  COUNT_AUTO="$(LC_ALL=C grep -acx 'auto' "$LEDGER" 2>/dev/null || true)"
 fi
 COUNT_TOTAL="${COUNT_TOTAL:-0}"
 COUNT_AUTO="${COUNT_AUTO:-0}"
@@ -299,39 +394,69 @@ if [[ "$COUNT_TOTAL" -eq 0 ]]; then
   exit 0
 fi
 
+# `tail -1 "$LEDGER"` as the fallback reinstated, on the missing-pending path,
+# exactly what alternative (a) is rejected for: it reports the PREVIOUS
+# compaction's trigger for the current event. Measured -- a third compaction with
+# no pending slot inherited `trigger=auto` and was not counted. Unknown is the
+# honest answer, and the closed-set rule already stops it recommending.
 TRIGGER="$COMMITTED"
-[[ -n "$TRIGGER" ]] || TRIGGER="$(tail -1 "$LEDGER" 2>/dev/null || true)"
 case "$TRIGGER" in
   manual|auto) : ;;
   *) TRIGGER="unknown" ;;
 esac
 
 CLI="${SOLEUR_COMPACTION_CLI_VERSION:-}"
-if [[ -z "$CLI" ]]; then
+if [[ -z "$CLI" ]] && command -v claude >/dev/null 2>&1; then
+  # `command -v` first: this runs with the cwd of an arbitrary repo, so resolving
+  # `claude` by bare name is a PATH question, not a given.
   CLI="$(timeout 5 claude --version 2>/dev/null | head -1 | awk '{print $1}' || true)"
 fi
-CLI="${CLI:-unknown}"
+CLI="$(sanitize_display "$CLI" unknown)"
 
-BRANCH="$(timeout 5 git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-BRANCH="${BRANCH:-unknown}"
+# `symbolic-ref --short -q` is this repo's precedent for exactly this
+# (.claude/hooks/ship-unpushed-commits-gate.sh): it exits non-zero on a detached
+# HEAD, where `rev-parse --abbrev-ref` returns the literal string `HEAD` and
+# would have the directive assert `Branch: HEAD.` to the model. CI checks out a
+# detached HEAD on pull_request, so that is the common case, not an edge one.
+BRANCH="$(timeout 5 git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+BRANCH="$(sanitize_display "$BRANCH" unknown)"
 
 PLAN=""
 if [[ "$BRANCH" != "unknown" ]]; then
   for p in "$ROOT/knowledge-base/project/plans/"*"-${BRANCH}-plan.md"; do
-    [[ -e "$p" ]] && PLAN="knowledge-base/project/plans/$(basename "$p")"
+    [[ -e "$p" ]] && PLAN="$(sanitize_display "knowledge-base/project/plans/$(basename "$p")" "")"
   done
 fi
 SPEC=""
 [[ -d "$ROOT/knowledge-base/project/specs/$BRANCH" ]] \
-  && SPEC="knowledge-base/project/specs/$BRANCH/"
+  && SPEC="$(sanitize_display "knowledge-base/project/specs/$BRANCH/" "")"
 
 THRESHOLD="${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}"
 case "$THRESHOLD" in
   ''|*[!0-9]*) THRESHOLD=2 ;;   # a non-numeric seam makes (( )) evaluate false
 esac                            # silently, skipping the branch rather than failing
+THRESHOLD=$((10#$THRESHOLD))    # `010` passes the digit filter and (( )) reads octal
+# The CTO ruling requires a floor of at least 1: with the trigger operand gone,
+# THRESHOLD=0 makes the gate true on a ledger holding ZERO auto lines. Floored to
+# the DEFAULT (2) rather than to 1 -- a deviation, recorded in ADR-227. `0` is
+# what an operator types meaning "off", and flooring to 1 would hand that person
+# the MOST aggressive setting, which is the over-firing harm delivered to someone
+# trying to disable the feature. The off switch is
+# SOLEUR_DISABLE_COMPACTION_HOOKS. Written as if/fi, not `(( )) && x`: measured on
+# bash 5.3.15 the && form does not abort under `trap ERR EXIT`, but if/fi does not
+# depend on that exemption.
+if (( THRESHOLD < 1 )); then THRESHOLD=2; fi
 
+# CTO ruling 1 (ADR-227 amendment): the gate is COUNT_AUTO alone. The current
+# event's trigger was a second operand that could only ever REVOKE -- COUNT_AUTO
+# rises only on a SessionStart:compact that commits an `auto` line, so the first
+# emission crossing the threshold always had trigger=auto and fired either way.
+# Its sole behavioural delta was retracting a recommendation already issued,
+# which overwrites a correct recommend=true with an affirmative recommend=false
+# at the moment the model can least reconstruct it. The ledger is append-only
+# within a window, so RECOMMEND is already monotonic without a sticky bit.
 RECOMMEND=false
-if [[ "$TRIGGER" == "auto" ]] && (( COUNT_AUTO >= THRESHOLD )); then
+if (( COUNT_AUTO >= THRESHOLD )); then
   RECOMMEND=true
 fi
 

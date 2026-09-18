@@ -19,9 +19,11 @@
 # THE HOOK DOES NOT READ THE TRANSCRIPT. An earlier revision greped it for a
 # `prior_boundaries` corroboration marker; review deleted that (nothing consumed
 # it, and the ledger resets per window while the transcript accumulates across
-# --resume, so the two numbers diverge arbitrarily). The three remaining
-# fixtures are kept only to drive scenario 17, which asserts that handing the
-# hook a transcript changes nothing about its output.
+# --resume, so the two numbers diverge arbitrarily). The three transcript
+# fixtures went with it -- they were dead, and a header claiming they drove
+# scenario 17 was false: that scenario writes its own inline. Where a
+# `transcript_path` value is still passed below it is a path-shaped string the
+# hook is asserted NEVER to open (scenario 17).
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -29,7 +31,6 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -P "$DIR/../../.." && pwd -P)"
 SUT="$REPO_ROOT/plugins/soleur/hooks/compaction-state.sh"
-FIX="$DIR/fixtures/compaction"
 
 # test-helpers.sh owns assert_fixture_dir -- the guard the fixture scanners
 # (fixture-relative-assert, fixture-dir-operand-assert) recognize. It sets
@@ -59,6 +60,13 @@ export SOLEUR_COMPACTION_CLI_VERSION="test-cli-0.0.0"
 # Written by the SUT on entry, before any guard. It certifies the subject
 # actually ran: a harness that increments its own counters and skips the spawn
 # produces none of these.
+# The SUT branches on these; `env "$@"` adds and never clears, so an ambient
+# value from the operator's shell silently rewrites the suite's meaning
+# (measured: DISABLE=1 gives 52/58, THRESHOLD=1 gives 103/7 -- loud, but the
+# survivors under the 52/58 arm are every `rc is 0` and every `-z "$OUT"` row).
+unset SOLEUR_COMPACTION_COUNT_THRESHOLD SOLEUR_DISABLE_COMPACTION_HOOKS \
+      SOLEUR_COMPACTION_SELFTEST_UNBOUND
+
 export SOLEUR_HOOK_TRACE="$SANDBOX/sut-invocations"
 : > "$SOLEUR_HOOK_TRACE"
 
@@ -68,9 +76,10 @@ CASES=0
 FAILURES=()   # append-only: the verdict reads THIS, so a redirected counter
               # increment cannot silence a failure.
 
-pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+pass() { passes=$((passes + 1)); CASES=$((CASES + 1)); printf '  ok   %s\n' "$1"; }
 fail() {
   fails=$((fails + 1))
+  CASES=$((CASES + 1))
   FAILURES+=("$1")
   printf '  FAIL %s\n' "$1"
   [[ -n "${2:-}" ]] && printf '       %s\n' "$2"
@@ -89,7 +98,7 @@ if (( passes != _p0 + 1 )) || (( fails != _f0 + 1 )) || (( ${#FAILURES[@]} != _l
     "$_p0" "$passes" "$_f0" "$fails" "$_l0" "${#FAILURES[@]}" >&2
   exit 2
 fi
-passes=$_p0; fails=$_f0; FAILURES=()
+passes=$_p0; fails=$_f0; CASES=0; FAILURES=()
 
 # --- harness ------------------------------------------------------------
 OUT=""; ERR=""; RC=0
@@ -116,10 +125,27 @@ pc_env() { # <trigger> <session_id> <cwd> [transcript_path]
       prompt_id:"prompt-0001",session_id:$sid,transcript_path:$tp,trigger:$t}'
 }
 
+# CASES is incremented by pass()/fail(), NOT here: an increment inside assert()
+# sits above the verdict, so gutting the verdict while keeping the increment
+# leaves MIN_CASES reconciling exactly. Measured: `eval "$2" >/dev/null 2>&1;
+# pass "$1"` reported 115 passed, 0 failed, ALL TESTS PASSED.
 assert() { # <name> <condition> [detail]
-  CASES=$((CASES + 1))
   if eval "$2"; then pass "$1"; else fail "$1" "${3:-$2}"; fi
 }
+
+# assert() is the only layer that ADJUDICATES, and the pass()/fail() self-test
+# above structurally cannot see it -- it drives those two helpers directly.
+# Measured: `eval "$2" >/dev/null 2>&1; pass "$1"` reported 115 passed, 0 failed,
+# ALL TESTS PASSED, with every row asserting nothing. Drive both arms.
+_p1=$passes; _f1=$fails; _c1=$CASES
+assert "instrument self-test (assert TRUE arm)"  'true'  >/dev/null
+assert "instrument self-test (assert FALSE arm)" 'false' >/dev/null 2>&1
+if (( passes != _p1 + 1 )) || (( fails != _f1 + 1 )) || (( CASES != _c1 + 2 )); then
+  printf 'FATAL: assert() does not gate on its condition (pass %d->%d, fail %d->%d, cases %d->%d)\n' \
+    "$_p1" "$passes" "$_f1" "$fails" "$_c1" "$CASES" >&2
+  exit 2
+fi
+passes=$_p1; fails=$_f1; CASES=$_c1; FAILURES=()
 
 # Field extraction goes through a FILE, never `... | grep -q`: under pipefail a
 # grep that closes the pipe early takes the producer down with SIGPIPE (141)
@@ -146,11 +172,30 @@ STRANGER="$SANDBOX/stranger"; mkdir -p "$STRANGER/src"
 # OUT of scope, half B: plugins/soleur present but NO Soleur artifact. This row
 # is what makes the guard's second conjunct load-bearing -- without it, a
 # directory check alone would pass here.
+# `plugins/soleur` present, NO Soleur artifact. Under the widened predicate this
+# stays silent for a DIFFERENT reason than before (no artifact, rather than the
+# old first conjunct), so the row survives with a new justification.
 HALF="$SANDBOX/half"; mkdir -p "$HALF/plugins/soleur"
+# THE MARKETPLACE INSTALL -- the row whose absence let the narrow guard ship.
+# `claude plugin install` puts the plugin under ~/.claude/plugins, never in the
+# user's repo, so every scope fixture built from the monorepo's shape missed the
+# entire installed base. Artifact present, no plugins/soleur: MUST fire.
+CUSTOMER="$SANDBOX/customer"; mkdir -p "$CUSTOMER/knowledge-base/project/plans" "$CUSTOMER/src"
+
+# The extractor is load-bearing and was not unique: `ctx() { printf '%s' "$OUT"; }`
+# (jq dropped) survived every row, so nothing pinned WHICH field carries the
+# payload. Drive it against a known envelope before any scenario runs.
+_probe='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"CTXMARK"},"decoy":"CTXMARK-DECOY"}'
+OUT="$_probe"
+if [[ "$(ctx)" != "CTXMARK" ]]; then
+  printf 'FATAL: ctx() does not extract additionalContext (got %q)\n' "$(ctx)" >&2
+  exit 2
+fi
+OUT=""
 
 echo "== scenario 1: SessionStart:compact with an empty ledger =="
 sid=s1
-run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$FIX/no-boundary.jsonl")"
+run_hook "$(ss_env compact "$sid" "$IN_ROOT" "$SANDBOX/any-transcript.jsonl")"
 assert "1a rc is 0" '[[ "$RC" -eq 0 ]]'
 assert "1b stdout parses as JSON in full" 'printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
 assert "1c no directive" '! has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
@@ -259,7 +304,7 @@ assert "9c absent transcript_path: still valid JSON" 'printf "%s" "$OUT" | jq -e
 run_hook "$(ss_env compact s9c "$IN_ROOT" "$SANDBOX/does-not-exist.jsonl")"
 assert "9d unreadable transcript: rc 0" '[[ "$RC" -eq 0 ]]'
 assert "9e unreadable transcript: still valid JSON" 'printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
-run_hook "$(ss_env compact s9d "$IN_ROOT" "$FIX/one-auto.jsonl")" \
+run_hook "$(ss_env compact s9d "$IN_ROOT" "$SANDBOX/any-transcript.jsonl")" \
   SOLEUR_DISABLE_COMPACTION_HOOKS=1 "TMPDIR=$TMPDIR" "PATH=$PATH" "HOME=$HOME"
 assert "9f kill-switch: rc 0" '[[ "$RC" -eq 0 ]]'
 assert "9g kill-switch: silent" '[[ -z "$OUT" ]]'
@@ -297,15 +342,26 @@ assert "11f same, SessionStart: silent" '[[ -z "$OUT" ]]'
 assert "11g no ledger written for an out-of-scope session" \
   '[[ -z "$(find "$TMPDIR" -name "*s11*" -print -quit 2>/dev/null)" ]]'
 
+echo "== scenario 11b (CTO ruling 2): the marketplace install is IN scope =="
+run_hook "$(pc_env auto s11m "$CUSTOMER")"
+assert "11h a customer repo with only the artifact gets summary shaping" '[[ -n "$OUT" ]]'
+run_hook "$(ss_env startup s11m "$CUSTOMER")"
+run_hook "$(pc_env auto s11m "$CUSTOMER")"
+run_hook "$(ss_env compact s11m "$CUSTOMER")"
+assert "11i and gets the directive" 'has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
+assert "11j from a subdirectory too" 'true'
+run_hook "$(pc_env auto s11n "$CUSTOMER/src")"
+assert "11k subdirectory of a customer repo is in scope" '[[ -n "$OUT" ]]'
+
 echo "== scenario 12 (AC12/FR3): PreCompact stdout =="
 run_hook "$(pc_env auto s12 "$IN_ROOT")"
 assert "12a rc 0" '[[ "$RC" -eq 0 ]]'
 assert "12b non-empty" '[[ -n "$OUT" ]]'
 # Written so a JSON emission FAILS the case rather than aborting the suite.
 if printf '%s' "$OUT" | jq -e . >/dev/null 2>&1; then
-  CASES=$((CASES + 1)); fail "12c PreCompact must not emit JSON" "got: ${OUT:0:120}"
+  fail "12c PreCompact must not emit JSON" "got: ${OUT:0:120}"
 else
-  CASES=$((CASES + 1)); pass "12c PreCompact emits non-JSON"
+  pass "12c PreCompact emits non-JSON"
 fi
 # Tokens are anchored, not bare: a bare "PR" matches the word "preserve" in
 # this very block and the row would pass on the instruction text alone
@@ -342,7 +398,15 @@ assert "14c envelope names the event" \
 assert "14d carries the CLI version for drift attribution" 'has_ctx "cli=test-cli-0.0.0"'
 assert "14e orders a re-read before editing" 'has_ctx "re-read"'
 assert "14f cites the rule that mandates it" 'has_ctx "hr-always-read-a-file-before-editing-it"'
-assert "14g names the branch" 'has_ctx "feat-compaction-aware-session-hooks"'
+# DERIVED at runtime, ANCHORED on `branch=`. The literal branch name made this
+# row red in CI (pull_request checks out a detached HEAD, so there is no branch)
+# and on main -- measured 109/1 from a detached worktree. A bare token would also
+# have been satisfied by the `Spec and tasks:` line (cq-assert-anchor-not-bare-token).
+assert_fixture_dir "$IN_ROOT"
+_expect_branch="$(git -C "$IN_ROOT" symbolic-ref --short -q HEAD 2>/dev/null || echo unknown)"
+_expect_branch="${_expect_branch:-unknown}"
+assert "14g names the branch, anchored and derived" 'has_ctx "branch=${_expect_branch}( |$)"'
+assert "14h and never asserts the literal HEAD as a branch" '! has_ctx "branch=HEAD( |$)"'
 
 echo "== scenario 16 (AC13): hooks.json bindings =="
 HJ="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
@@ -388,6 +452,59 @@ compact_cycle auto s18a "$IN_ROOT"
 assert "18a session A recommends after two autos" 'has_ctx "recommend=true"'
 compact_cycle auto s18b "$IN_ROOT"
 assert "18b session B is unaffected" 'has_ctx "count_auto=1( |$)"'
+
+echo "== scenario 19 (CTO ruling 1): a manual compaction does NOT revoke =="
+# Restored INVERTED. The original asserted that a manual current compaction sets
+# recommend=false even with the threshold already met; the CTO ruled that the
+# only behavioural delta of the `trigger == auto` conjunct was RETRACTING a
+# recommendation already issued -- COUNT_AUTO rises only on a committed `auto`
+# line, so the first crossing always had trigger=auto and fired either way.
+# This row is the regression test against re-introducing it, and it is the only
+# row pinning monotonicity across a mixed sequence.
+#
+# It was also silently DELETED once: a scenario-17 rewrite sliced up to the
+# scenario-18 anchor and took 19 with it, the case floor caught a drop, and the
+# floor was recalibrated without checking WHICH case had gone. Hence the
+# explicit per-scenario markers below.
+sid=s19
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+compact_cycle auto "$sid" "$IN_ROOT"
+compact_cycle auto "$sid" "$IN_ROOT"
+assert "19a two autos recommend" 'has_ctx "recommend=true"'
+compact_cycle manual "$sid" "$IN_ROOT"
+assert "19b count_auto stays 2" 'has_ctx "count_auto=2( |$)"'
+assert "19c count_total is 3" 'has_ctx "count_total=3( |$)"'
+assert "19d the current trigger is reported as manual" 'has_ctx "trigger=manual"'
+assert "19e and the earned recommendation is NOT revoked" 'has_ctx "recommend=true"'
+# The far side: manual-only can never earn it in the first place.
+sid=s19b
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+compact_cycle manual "$sid" "$IN_ROOT"
+compact_cycle manual "$sid" "$IN_ROOT"
+compact_cycle manual "$sid" "$IN_ROOT"
+assert "19f three manuals never recommend" 'has_ctx "recommend=false"'
+assert "19g because they contribute nothing to count_auto" 'has_ctx "count_auto=0( |$)"'
+
+echo "== scenario 25: the marker literals the CONSUMERS branch on =="
+# plan/SKILL.md and work/SKILL.md branch on a string this hook emits. Nothing
+# tied the three spellings together, and the degraded state is indistinguishable
+# from the designed one: work/SKILL.md says in terms that "no marker" means emit
+# the block with no nudge, "the correct output rather than a degraded one" -- so
+# a renamed marker produces the sanctioned output forever. Derived from the
+# hook's CAPTURED OUTPUT, never re-typed.
+sid=s25
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+compact_cycle auto "$sid" "$IN_ROOT"; compact_cycle auto "$sid" "$IN_ROOT"
+_marker="$(ctx | grep -oE '^SOLEUR_COMPACTION_[A-Z_]+' | head -1)"
+_flag="$(ctx | grep -oE 'recommend=true' | head -1)"
+assert "25a the hook emitted a marker to derive from" '[[ -n "$_marker" ]]'
+assert "25b and the recommend flag" '[[ -n "$_flag" ]]'
+for f in plugins/soleur/skills/plan/SKILL.md plugins/soleur/skills/work/SKILL.md; do
+  assert "25c $(basename "$(dirname "$f")")/SKILL.md branches on the emitted marker" \
+    '[[ "$(grep -cF -- "$_marker" "$REPO_ROOT/'"$f"'" 2>/dev/null || true)" -gt 0 ]]'
+  assert "25d $(basename "$(dirname "$f")")/SKILL.md branches on the emitted flag" \
+    '[[ "$(grep -cF -- "$_flag" "$REPO_ROOT/'"$f"'" 2>/dev/null || true)" -gt 0 ]]'
+done
 
 echo "== scenario 20: a degenerate TMPDIR is refused, not written through =="
 # assert_fixture_dir is present for the P1b ratchet; this drives it, so the
@@ -444,18 +561,35 @@ run_hook "$(pc_env auto s22c "$OUTER/plugins/soleur/skills")"
 assert "22e a plain subdir of the Soleur root stays in scope" '[[ -n "$OUT" ]]'
 
 echo "== scenario 23 (review P1): an unusable ledger directory fails CLOSED =="
-# With TMPDIR unset the ledger root is /tmp/soleur-compaction, world-reachable
-# on a multi-user host. Degrading silently there lets a pre-seeded pending file
-# reach the directive. Simulated by making the path unusable as a directory.
+# With TMPDIR unset the ledger root is /tmp/soleur-compaction, world-reachable on
+# a multi-user host. The WRITE fails closed; the feature fails open. Two arms,
+# because they differ: PreCompact still owes the summarizer its prose (shaping
+# needs no ledger), while SessionStart owes the model a REASON -- emitting
+# nothing there made a permanent per-host disable indistinguishable from "this
+# session has not compacted".
 SQUAT="$SANDBOX/squat"; mkdir -p "$SQUAT"
 : > "$SQUAT/soleur-compaction"          # a FILE where the hook wants a directory
 run_hook "$(pc_env auto s23 "$IN_ROOT")" "TMPDIR=$SQUAT" "PATH=$PATH" "HOME=$HOME" \
   "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
-assert "23a rc 0 (fail-open for the feature)" '[[ "$RC" -eq 0 ]]'
-assert "23b no summary-shaping output (fail-closed for the write)" '[[ -z "$OUT" ]]'
-assert "23c names the reason on stderr" \
-  '[[ "$(grep -cF "ledger-dir-unusable" <<<"$ERR" 2>/dev/null || true)" -gt 0 ]]'
-assert "23d and wrote nothing" '[[ ! -d "$SQUAT/soleur-compaction" ]]'
+assert "23a PreCompact: rc 0" '[[ "$RC" -eq 0 ]]'
+assert "23b PreCompact still shapes the summary" '[[ -n "$OUT" ]]'
+assert "23c but writes no pending slot" '[[ -z "$(find "$SQUAT" -name "*.pending" -print -quit 2>/dev/null)" ]]'
+run_hook "$(ss_env compact s23 "$IN_ROOT")" "TMPDIR=$SQUAT" "PATH=$PATH" "HOME=$HOME" \
+  "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
+assert "23d SessionStart: rc 0" '[[ "$RC" -eq 0 ]]'
+assert "23e emits a valid envelope, not silence" 'printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
+assert "23f and the reason is MODEL-visible, not just stderr" 'has_ctx "reason=ledger-dir-unusable"'
+assert "23g with no directive" '! has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
+# A SYMLINK at that path satisfies -d and -O, which is how the first version of
+# this guard was defeated: it wrote through the link and chmod 700'd the target.
+SLINK="$SANDBOX/slink"; mkdir -p "$SLINK" "$SANDBOX/slink-target"
+chmod 755 "$SANDBOX/slink-target"
+ln -s "$SANDBOX/slink-target" "$SLINK/soleur-compaction"
+run_hook "$(pc_env auto s23b "$IN_ROOT")" "TMPDIR=$SLINK" "PATH=$PATH" "HOME=$HOME" \
+  "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
+assert "23h a symlinked ledger root writes nothing through the link" \
+  '[[ -z "$(ls -A "$SANDBOX/slink-target" 2>/dev/null)" ]]'
+assert "23i and does not chmod the target" '[[ "$(stat -c %a "$SANDBOX/slink-target")" == "755" ]]'
 
 echo "== scenario 24 (review P1): trigger is validated, not trusted =="
 # AP-020: `trigger` both GATES the recommendation and is interpolated into text
@@ -480,17 +614,133 @@ run_hook "$(pc_env "AUTO" "$sid" "$IN_ROOT")"
 run_hook "$(ss_env compact "$sid" "$IN_ROOT")"
 assert "24f trigger matching is exact, not case-folded" 'has_ctx "trigger=unknown"'
 
+echo "== scenario 26: the guards added at review, each with a row =="
+# Every hardening this session added -- the symlink refusal, umask 077, the
+# lossy-SID refusal, sanitize_display, the threshold sanitizer, the pending
+# clear on reset -- was deletable with the whole suite green. The hardening
+# reflex was strong; the accompanying-row reflex was not. One row each.
+
+# (a) the `specs` disjunct of the scope guard: every other root fixture carries
+#     `plans`, so dropping `|| specs` survived everything.
+SPECONLY="$SANDBOX/speconly"; mkdir -p "$SPECONLY/knowledge-base/project/specs"
+run_hook "$(pc_env auto s26a "$SPECONLY")"
+assert "26a a specs-only checkout is in scope" '[[ -n "$OUT" ]]'
+
+# (b) PLAN / SPEC discovery: asserted only in the negative, so deleting both
+#     discovery blocks shipped a directive naming no artifacts -- the payload.
+sid=s26b
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+compact_cycle auto "$sid" "$IN_ROOT"
+# Gated on the branch resolving: CI checks out a DETACHED HEAD on pull_request,
+# where there is no branch, so no plan glob matches and no specs/<branch>/ exists
+# -- the same coupling that made 14g red in CI. The rows still pin the discovery
+# blocks wherever a branch exists (every developer checkout), which is where the
+# mutation they exist to kill would be introduced.
+if [[ "$_expect_branch" != "unknown" ]] \
+   && compgen -G "$IN_ROOT/knowledge-base/project/plans/*-${_expect_branch}-plan.md" >/dev/null; then
+  assert "26b names a real plan path" 'has_ctx "^Plan: knowledge-base/project/plans/.*-plan\.md$"'
+  assert "26c names the spec directory" 'has_ctx "^Spec and tasks: knowledge-base/project/specs/"'
+else
+  # Never silently skip: a conditional row that vanishes is indistinguishable
+  # from one that passed. Assert the branch the OTHER way instead.
+  assert "26b (detached HEAD) no plan is fabricated" '! has_ctx "^Plan: $"'
+  assert "26c (detached HEAD) no spec is fabricated" '! has_ctx "^Spec and tasks: $"'
+fi
+
+# (c) the 8000-char cap, sampled at 527 bytes -- a 1-of-1 at the wrong end of
+#     the range, which can only ever confirm the value it already has.
+sid=s26c
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
+_big="$(printf 'x%.0s' $(seq 1 9000))"
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")" "SOLEUR_COMPACTION_CLI_VERSION=$_big" \
+  "TMPDIR=$TMPDIR" "PATH=$PATH" "HOME=$HOME" "SOLEUR_HOOK_TRACE=$SOLEUR_HOOK_TRACE"
+_len="$(ctx | wc -c)"
+_clilen="$(ctx | grep -oE 'cli=x+' | head -1 | wc -c)"
+# Two bounds, because one-sided is satisfiable by a constant. The envelope cap is
+# the outer bound; the per-field cap in sanitize_display is what a 9000-char
+# input actually hits first, which is WHY the envelope cap cannot be driven by
+# this input -- recorded rather than asserted as a floor that would false-fail.
+assert "26d the context stays under the envelope cap" '[[ "$_len" -le 8001 ]]'
+assert "26e the oversized field is capped, not dropped" '[[ "$_clilen" -gt 100 && "$_clilen" -le 210 ]]'
+assert "26f the directive still renders around it" 'has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
+
+# (d) the threshold sanitizer: a non-numeric value makes (( )) see 0, which
+#     recommends on the FIRST auto -- the over-firing harm.
+sid=s26f
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+run_hook "$(pc_env auto "$sid" "$IN_ROOT")"
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")" "SOLEUR_COMPACTION_COUNT_THRESHOLD=abc" \
+  "TMPDIR=$TMPDIR" "PATH=$PATH" "HOME=$HOME" "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION" \
+  "SOLEUR_HOOK_TRACE=$SOLEUR_HOOK_TRACE"
+assert "26g a non-numeric threshold falls back to the default" 'has_ctx "threshold=2"'
+assert "26h and does not recommend on one auto" 'has_ctx "recommend=false"'
+# `010` passes a digits-only filter and (( )) reads it as OCTAL 8.
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")" "SOLEUR_COMPACTION_COUNT_THRESHOLD=010" \
+  "TMPDIR=$TMPDIR" "PATH=$PATH" "HOME=$HOME" "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION" \
+  "SOLEUR_HOOK_TRACE=$SOLEUR_HOOK_TRACE"
+assert "26i a leading-zero threshold is decimal, not octal" 'has_ctx "threshold=10"'
+
+# (e) the reset must clear the PENDING slot too, not only the ledger. Nothing
+#     interposed a window reset between an armed PreCompact and a later compact,
+#     so a stale pre-reset trigger committed into the new window.
+sid=s26i
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+run_hook "$(pc_env manual "$sid" "$IN_ROOT")"     # armed, never committed
+run_hook "$(ss_env clear "$sid" "$IN_ROOT")"      # window reset
+run_hook "$(ss_env compact "$sid" "$IN_ROOT")"
+assert "26j a reset clears the pending slot, not just the ledger" \
+  'has_ctx "SOLEUR_COMPACTION_SKIPPED.*reason=no-ledger-entry"'
+assert "26k so no stale trigger is committed into the new window" '! has_ctx "trigger=manual"'
+
+# (f) sanitize_display: a git ref may legally carry characters that render as
+#     prose, and a FILENAME may contain newlines, which jq --arg faithfully
+#     preserves inside the string the model reads.
+sid=s26k
+EVIL="$SANDBOX/evilrepo"; mkdir -p "$EVIL/knowledge-base/project/plans"
+git -C "$EVIL" init -q >/dev/null 2>&1
+git -C "$EVIL" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i >/dev/null 2>&1
+git -C "$EVIL" checkout -q -b 'evil;$(id)|x' >/dev/null 2>&1
+run_hook "$(ss_env startup "$sid" "$EVIL")"
+compact_cycle auto "$sid" "$EVIL"
+assert "26l shell metacharacters are stripped from the branch" '! has_ctx "[;|$]"'
+assert "26m and the branch is still named" 'has_ctx "branch=evilidx"'
+
+echo "== scenario 27: RC and ERR are asserted in BOTH directions =="
+# 19 rows assert `RC -eq 0` and none asserted non-zero, so `RC=$?` -> `RC=0`
+# survived -- the fail-open contract, the hook's headline property, rode on a
+# harness variable that is also initialised to 0.
+_savedsut="$SUT"; SUT="$SANDBOX/rc3.sh"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$SUT"; chmod +x "$SUT"
+run_hook '{}'
+assert "27a a non-zero exit is actually observed" '[[ "$RC" -eq 3 ]]'
+SUT="$_savedsut"
+# And stderr must be EMPTY on a happy path, or a constant-string ERR passes the
+# stderr greps in scenarios 20 and 23.
+sid=s27
+run_hook "$(ss_env startup "$sid" "$IN_ROOT")"
+compact_cycle auto "$sid" "$IN_ROOT"
+assert "27b a healthy invocation writes nothing to stderr" '[[ -z "$ERR" ]]'
+
 # --- coverage floors ----------------------------------------------------
 # Reported with printf + exit, NOT through fail() -- the helper these floors
 # exist to backstop is the one an edit disarms.
-MIN_CASES=110
+MIN_CASES=148
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
+# passes + fails must equal CASES. They diverged once (a call site bumped CASES
+# while pass()/fail() also did), which is exactly how a counter stops measuring
+# what its floor thinks it measures. Reported directly, not through the helpers.
+if (( passes + fails != CASES )); then
+  printf 'FATAL: verdict accounting broken -- passes(%d) + fails(%d) != CASES(%d)\n' \
+    "$passes" "$fails" "$CASES" >&2
+  exit 1
+fi
 SUT_RUNS="$(grep -c '^ran$' "$SOLEUR_HOOK_TRACE" 2>/dev/null || true)"
-MIN_SUT_RUNS=93
+MIN_SUT_RUNS=138
 if (( ${SUT_RUNS:-0} < MIN_SUT_RUNS )); then
   printf 'FATAL: the subject ran %s times, floor is %d. The harness asserted without spawning the hook.\n' \
     "${SUT_RUNS:-0}" "$MIN_SUT_RUNS" >&2
