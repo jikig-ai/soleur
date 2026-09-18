@@ -547,6 +547,7 @@ build-context
 build-errors
 build-time-inlining
 build-time-interpolation
+bulk-redirects
 bump
 bun
 bun-glob
@@ -964,6 +965,7 @@ cost-of-filing-gate
 cost-slo
 could-not-measure
 count-mismatch
+count-ripple
 counting
 counts
 coupling-test
@@ -1203,6 +1205,7 @@ diagnostics
 diff-predicate
 diff-range
 diff-scoping
+diff-shapes
 differential-gate
 digest-pin
 directive-without-delivery
@@ -1362,6 +1365,7 @@ engineering
 enoent
 entrypoint-coverage
 enum-gate
+enumerating-probe
 enumeration
 enumerations
 env
@@ -1410,6 +1414,7 @@ evidence-integration
 evidentiary-records
 exacerbation-rule
 exact-equality
+exact-match
 exec
 exfil
 exhaustive-switch
@@ -1663,6 +1668,7 @@ gh-search
 gh-secret-set
 ghcr
 git
+git-apply
 git-archaeology
 git-argv
 git-author
@@ -1781,6 +1787,7 @@ guard-test
 guard-testing
 guard-vacuity
 guard-window
+guarda
 guardrail
 guardrails
 guards
@@ -1849,6 +1856,7 @@ hook_enforcement
 hooks
 host
 host-independence
+host-parity
 host-verification
 hot-path
 how
@@ -1892,6 +1900,7 @@ image-bake
 image-context
 image-export
 image-generation
+image-pin
 immutability
 immutable-infra
 implementation-patterns
@@ -1944,6 +1953,7 @@ inline-validation
 inngest
 inngest-cron
 inngest-cutover
+inngest-replay
 inode-identity
 input-validation
 insights
@@ -2123,6 +2133,7 @@ lint-rule-ids
 lint-symmetry
 linter
 linting
+lints
 liquid
 list
 live
@@ -3390,6 +3401,7 @@ self-healing
 self-healing-tests
 self-hosted-users
 self-hosting
+self-improvement-loop
 self-leak
 self-match
 self-matching-probe
@@ -3526,6 +3538,7 @@ sign-out
 signal-choice
 signal-drift
 signal-to-noise
+signals
 signed
 signed-url
 signup-outage
@@ -3542,6 +3555,7 @@ silent-failure-adjacency
 silent-fallback
 silent-output-drop
 silent-staleness
+silent-success
 simplicity
 simplification
 single-client-id-many-flows
@@ -3905,6 +3919,7 @@ thinking-api
 thinking-indicator
 third-party-actions
 third-party-content
+third-proxy
 threat-model
 three-coupling
 three-dot-diff
@@ -3978,6 +3993,7 @@ tr9
 trace-tests
 trace/breakpoint trap
 trailers
+trailing-slash
 transaction-safety
 transcript-judging
 transition

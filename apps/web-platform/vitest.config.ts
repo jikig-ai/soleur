@@ -15,6 +15,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const componentPool =
   process.env.WEBPLAT_TEST_USE_THREADS === "1" ? undefined : "forks";
 
+// #8261 — Node >=25 ships a built-in `globalThis.localStorage` getter (returns
+// undefined without --localstorage-file). Vitest 4.1's `getWindowKeys` skips
+// globals that already exist unless they are in its own key list, which has
+// `Storage` but not `localStorage`/`sessionStorage`, so happy-dom's storage
+// never lands and component tests throw on `localStorage.getItem`. Turn Node's
+// web storage off in the workers. Node 22.x (22.3/22.4/22.12 measured) has no
+// such global, so it gets []. The descriptor check does not invoke the getter.
+// Not NODE_OPTIONS: Node 22.3 rejects the flag there.
+const workerExecArgv = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "localStorage",
+)
+  ? ["--no-experimental-webstorage"]
+  : [];
+
 export default defineConfig({
   esbuild: {
     jsx: "automatic",
@@ -36,6 +51,8 @@ export default defineConfig({
     // Inherits to both `unit` and `component` projects via `extends: true`.
     testTimeout: 16_000,
     hookTimeout: 20_000,
+    // Inherits to every project via `extends: true`; no project sets its own.
+    execArgv: workerExecArgv,
     // Guard 3 (#7833): abort the run if vitest STARTED holding an inherited git-location
     // environment. Registered here rather than in each project's `setupFiles` because those
     // re-execute per test file under `isolate: true` (measured: 1114 executions, ~1.7s wall), while

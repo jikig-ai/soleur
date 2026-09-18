@@ -1433,6 +1433,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.inngest",
   "hcloud_volume.inngest_redis",
   "hcloud_volume_attachment.inngest_redis",
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
+  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
+  // allowlist, because creating a volume is a billable resource change that wants
+  // the dispatch gate rather than a merge side effect. They are listed here the
+  // moment the resources exist — check_resource_partition reds on any managed
+  // address that is neither reachable nor excluded, so the coverage test would go
+  // red on the commit that declares the volume if these two lines lagged it.
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
   "hcloud_firewall_attachment.inngest",
@@ -2912,6 +2921,24 @@ describe("inngest-volume-recut dispatch: registration, binding, and the shared m
     expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
+  test("B6: inngest_host_replace carries the ADDITIVE attachment, and neither durable volume (#6894)", () => {
+    // A replace re-creates the server, so every attachment that interpolates the server id is
+    // ForceNew. An attachment NOT -targeted here is simply left behind: the new host boots with that
+    // volume DETACHED. For the additive LUKS volume that is harmless before the cutover and fatal
+    // after it — the pointer then names a volume that is not attached, the resolver refuses, and
+    // Redis stays down. The job's own comment claimed the target for a whole phase while the -target
+    // list carried only three lines; this is the pin that comment never had.
+    const replaceJob = extractJobBlock(wf, "inngest_host_replace");
+    const targets = extractAllTargets(replaceJob);
+    expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
+    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(true);
+    expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
+    // Both VOLUMES are preserved by OMISSION — targeting either would put a sole-copy store one
+    // replace away from a destroy.
+    expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
+    expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
+  });
+
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
     // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
     // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
@@ -2956,6 +2983,60 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
       expect(targets).toEqual(allow);
     });
   }
+});
+
+/**
+ * inngest_host SHAPE GATE (#6894, ADR-142 Guard 3): wired into the job, and its allow-set IS the
+ * job's -target set.
+ *
+ * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
+ * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
+ * registry parity block above. The call assertion follows the inngest-volume-recut "sources BOTH
+ * gates" test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * `# shellcheck source=` directive or prose cannot satisfy it.
+ */
+describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = stripComments(extractJobBlock(wf, "inngest_host"));
+  const CALL = /^\s*if ! inngest_host_shape_gate tfplan\.json; then$/m;
+
+  test("sources and CALLS inngest_host_shape_gate, with no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-host'"); // non-vacuity: the right job
+    expect(jobBlock).toMatch(
+      /^\s*source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/inngest-host-shape-gate\.sh"$/m,
+    );
+    expect(jobBlock).toMatch(CALL);
+    expect([...jobBlock.matchAll(new RegExp(CALL.source, "gm"))].length).toBe(1);
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("non-vacuity: the call check can tell a wired job from an unwired one", () => {
+    const unwired = jobBlock.replace(CALL, "          if false; then");
+    expect(CALL.test(unwired)).toBe(false);
+  });
+
+  test("the gate runs on the saved plan BEFORE the apply consumes it", () => {
+    const callAt = jobBlock.search(CALL);
+    const applyAt = jobBlock.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(callAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(callAt);
+  });
+
+  test("the gate's def allow === the job's -target set", () => {
+    const lib = readFileSync(
+      join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"),
+      "utf8",
+    );
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
+    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(allow).toEqual(targets);
+    // The passphrase pair is per-merge -targeted and must never join this allow-set.
+    expect(allow).not.toContain("random_password.inngest_redis_luks");
+    expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
 });
 
 /**

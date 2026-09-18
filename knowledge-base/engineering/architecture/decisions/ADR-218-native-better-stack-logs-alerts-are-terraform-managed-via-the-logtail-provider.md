@@ -217,3 +217,29 @@ reconcile arm covers only the alert's own health, not its firings.
   `resource_source.go`. Vendor: `betterstack.com/docs/logs/api/getting-started/` (global tokens
   accepted on the Telemetry API).
 - Plan: `knowledge-base/project/plans/archive/20260913-190954-2026-09-12-feat-betterstack-send-failed-alert-rule-plan.md`.
+
+## Amendment — 2026-09-18 (#6894): the second Logs alert
+
+This ADR's Decision 3 and its Quota consequence both rest on there being exactly one
+Terraform-managed `logtail_exploration_alert` ("keeps the free-tier alert count at one until a
+second routing is actually needed"). #6894 adds the second —
+`logtail_exploration_alert.inngest_luks_wrong_volume` — and it is the case that clause anticipated
+rather than an exception to it: a different signal class (a probe row's resolved device alias), a
+different routing rationale (the store silently returning to the plaintext volume, which no uptime
+or Sentry signal can see), and its own runbook. It followed this ADR's five-step recipe, including
+the live probe with a positive control before the SQL was written.
+
+Two things it does differently, both deliberate and both worth reading before a third is added:
+
+- **It ships PAUSED**, via `paused = !var.inngest_luks_cutover_complete`. Before the cutover the
+  condition it watches is the CORRECT state, so an armed rule would page continuously between merge
+  and the cutover — and a rule that pages when nothing is wrong is one that gets muted before it
+  matters. It is the only alert in this file whose paused state is variable-driven.
+- **That required a reconciler change**, because `reconcileLogsAlerts` treated any live-paused
+  declared alert as drift. It now reads the declared `paused` and treats a non-literal-`false`
+  declaration as intent (`plugins/soleur/lib/heartbeat-live-reconcile.ts`). Without it the drift
+  cron would have raised a `logs-alert-paused` mismatch twice daily for the whole window — a
+  standing false page introduced by an alert that exists to prevent a silent failure.
+
+The free-tier count is now two. A third still needs the same argument this one made: name the
+signal class, show no existing alert covers it, and probe the predicate live before writing it.

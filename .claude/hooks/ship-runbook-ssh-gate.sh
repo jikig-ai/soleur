@@ -89,7 +89,17 @@ VIOLATIONS=()
 for f in $RUNBOOK_FILES; do
   # Get ADDED lines only (lines starting with `+` in unified diff, minus the
   # `+++` file headers).
-  added=$(git diff --unified=0 "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//')
+  # `--no-color --no-ext-diff` are load-bearing (#8263 class): under a user's
+  # `color.diff=always` every added line arrives ANSI-wrapped so `^\+[^+]` matches
+  # nothing, `added` is empty, `continue` fires, and this gate silently passes a
+  # runbook that adds an `ssh prod-host …` step — the hr-no-ssh-fallback-in-runbooks
+  # enforcement point, failing open on ambient local config. A `diff.external`
+  # replaces the patch body wholesale for the same effect.
+  # `|| true`: "no added lines" is a NORMAL answer here (the `[[ -z ]]` below is
+  # what consumes it), but under this file's `set -eo pipefail` a no-match `grep`
+  # makes the pipeline exit 1 and kills the whole gate mid-loop — so a runbook
+  # touched with only deletions would abort the check rather than pass it.
+  added=$(git diff --unified=0 --no-color --no-ext-diff "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//') || true
   [[ -z "$added" ]] && continue
   # Match against the SSH regex.
   hits=$(printf '%s\n' "$added" | grep -niE "$SSH_RE" 2>/dev/null || true)
@@ -124,7 +134,17 @@ for v in "${VIOLATIONS[@]}"; do REASON_LINES+=("  $v"); done
 REASON_LINES+=("")
 REASON_LINES+=("Resolve via:")
 REASON_LINES+=("  (a) Move the SSH step under a heading containing 'Last-resort diagnosis' / 'Emergency only' / 'When all else fails'.")
-REASON_LINES+=("  (b) Replace with a no-SSH equivalent: Sentry search URL, 'gh run view <id>', curl to an API, doppler secrets get <KEY>.")
+# The remediation names its four substitutes in PROSE, deliberately without the
+# literal command spellings `curl` and `doppler secrets get`. This line is a
+# double-quoted bash string, not a comment, so `strip_comment` in
+# scripts/lint-shell-trace-credential-refusal.py cannot see past it: the literals
+# put this hook into that lint's scope as a credential handler (Rule A) and as an
+# unconfined curl call site (Rule D), when it binds no credential and issues no
+# request. Its `--changed` arm bypasses the baseline by design, so touching this
+# file at all surfaced both. The two ways out that the lint's own header forbids
+# are an xtrace refusal announcing a credential this hook does not have, and a
+# baseline entry calling a correct file a known violation. Keep the spellings out.
+REASON_LINES+=("  (b) Replace with a no-SSH equivalent: a Sentry search URL, 'gh run view <id>', an authenticated API request, or a Doppler secrets read for <KEY>.")
 REASON_LINES+=("  (c) Override (rare): SOLEUR_SKIP_RUNBOOK_SSH_GATE=1 <cmd>.")
 
 REASON=$(printf '%s\n' "${REASON_LINES[@]}")
