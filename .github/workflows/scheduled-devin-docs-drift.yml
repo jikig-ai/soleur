@@ -110,9 +110,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
-      # No `actions/checkout`. Every input is fetched over HTTPS; checking out this repo
-      # would observe the runner's tree, which is not what is being watched. The
-      # sentry-heartbeat composite below resolves from the repo ref automatically.
+      # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
+      # local `uses: ./` actions resolve from the runner's checkout, not the repo
+      # ref (measured 2026-09-18: run 35333427096's check-in step failed
+      # "Can't find 'action.yml'" and continue-on-error swallowed it, which is
+      # exactly the silent-heartbeat shape this monitor exists to avoid). The
+      # checkout does not compromise the watch: every input the check reads is a
+      # docs.devin.ai page fetched over HTTPS, never this repo's tree.
+      - name: Check out this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
       - name: Check docs.devin.ai capability anchors
         id: check
         run: |
