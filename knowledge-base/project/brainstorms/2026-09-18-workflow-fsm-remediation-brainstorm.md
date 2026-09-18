@@ -86,11 +86,21 @@ aggregator now merges `$REPO_ROOT/.claude` **plus** the shared checkout beside
 But it collects exactly **two** roots. It does not enumerate sibling worktrees.
 Measured live on this machine:
 
-- Shared checkout: **6,372 rows** (now read)
-- 17 sibling worktrees: **5,672 rows** (still stranded — ~47% of the corpus)
+- Read by an aggregator run from here: **23,882 rows** (shared checkout +
+  this worktree), cross-validated against the aggregator's own report of
+  23,805 kept + 77 dropped = 23,882 — exact match.
+- Stranded across **34 other sibling worktree roots**: **11,346 rows** —
+  **32% of the 35,228-row corpus**.
 
 So the blind spot is *refined*, not dismissed: the instrument went from reading
-a sliver to reading roughly half, and still reports its half as the whole.
+a sliver to reading roughly two-thirds, and still reports its two-thirds as the
+whole.
+
+**Measurement caveat, recorded because it bit this session.** A first pass
+counted only live `.rule-incidents.jsonl` files and reported 6,372 / 5,672
+(~47% stranded). That denominator was wrong: the aggregator also reads rotated
+`.rule-incidents-*.jsonl.gz` archives, which hold the majority of the history.
+Any future measurement of this residual must include the archives.
 
 ### Correction 3 — a blocking PreToolUse gate is ADR-070-noncompliant
 
@@ -130,8 +140,12 @@ zero incidents. So the failure has three independent layers, and fixing any one
 alone leaves the instrument mute:
 
 1. **Emission** — 79 of 98 rules have no call site.
-2. **Collection** — 47% of emitted rows sit in unread sibling worktrees.
+2. **Collection** — 32% of emitted rows (11,346 of 35,228) sit in 34 unread sibling worktree roots.
 3. **Cadence** — nothing runs the aggregator on a schedule.
+
+Dogfooded live this session: an aggregator run from this worktree kept 23,805
+events, dropped 77 malformed lines, and reported `rules_unused_over_8w: 81`.
+Per the correction block above, that 81 is **not** a retirement shortlist.
 
 ## Why This Approach
 

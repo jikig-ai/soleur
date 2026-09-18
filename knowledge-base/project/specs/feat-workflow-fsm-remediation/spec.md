@@ -29,8 +29,8 @@ nothing that can refuse an action.
   `PostToolUse` — it fires after dispatch and structurally cannot block
   (deliberate, per ADR-086).
 - **The instrument is mute at three independent layers:** 79 of 98 rules have no
-  emit call site; ~47% of emitted rows (5,672 of 12,044 measured live) sit in
-  sibling worktrees the aggregator does not read; and the aggregator has no
+  emit call site; 32% of emitted rows (11,346 of 35,228, counting rotated
+  `.gz` archives) sit in 34 sibling worktree roots the aggregator does not read; and the aggregator has no
   schedule (`workflow_dispatch` only since #6042).
 - **The waste compounds.** Measured against the 2026-08-13 audit: `review`
   322→430 KB, `work` 257→326 KB, `ship` 187→248 KB in 36 days (~30%), while the
@@ -70,7 +70,10 @@ nothing that can refuse an action.
 
 - **FR1** — Incident-log root resolution resolves to the git **common dir**, so
   a run from any worktree collects the same set. Read-widen only; no new write
-  site. Verify against the live figure: 6,372 shared + 5,672 stranded rows.
+  site. Verify against live figures: 23,882 currently readable vs 11,346
+  stranded (35,228 total). **Count rotated `.rule-incidents-*.jsonl.gz`
+  archives, not just live `.jsonl`** — they hold the majority of history and
+  omitting them understates the readable set and overstates the residual.
 - **FR2** — Aggregation cadence restored (scheduled, or attached to an existing
   scheduled job), with the `SOLEUR_RULE_METRICS_NO_INCIDENTS` null-reading
   marker preserved so absence stays loud.

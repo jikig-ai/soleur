@@ -367,6 +367,7 @@ audit-logging
 audit-pattern
 audit-surface-coverage
 audit-trail
+audit-verification
 audit-writer
 auth
 auth-chain
@@ -3660,6 +3661,7 @@ stale
 stale mcp binary path after extension update
 stale worktree
 stale worktrees persist after cleanup-merged reports success
+stale-artifacts
 stale-bits
 stale-claim
 stale-claim-sweep
