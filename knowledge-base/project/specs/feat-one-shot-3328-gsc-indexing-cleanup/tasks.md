@@ -37,9 +37,9 @@ Precondition: 1.4 complete (46/46 verified).
   - [ ] 2.3.2 `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`: delete "Skip instant meta-refresh redirects" block
   - [ ] 2.3.3 `plugins/soleur/test/validate-seo.test.ts`: flip instant-redirect test → stub page FAILS (exit 1, missing canonical)
   - [ ] 2.3.4 `plugins/soleur/test/seo-aeo-drift-guard.test.ts`: replace stub-existence tests with Guard-2 zero-stub fence + tf-source assertions (9 legal source_urls + ToS pair present in `seo-bulk-redirects.tf`)
-- [ ] 2.4 Comment/doc cleanup: `plugins/soleur/docs/sitemap.njk` stale comment; `plugins/soleur/skills/seo-aeo/SKILL.md` sweep-list reference to `page-redirects.njk`
+- [ ] 2.4 Comment/doc cleanup: `plugins/soleur/docs/sitemap.njk` stale comment; `plugins/soleur/skills/seo-aeo/SKILL.md` sweep-list reference to `page-redirects.njk`; `apps/web-platform/infra/seo-bulk-redirects.tf` header comment referencing the deleted `page-redirects.njk` (comment-only edit → empty apply)
 - [ ] 2.5 Internal-link equity
-  - [ ] 2.5.1 `_data/pillars.js`: add `soleur-comparisons` series (8 vs-posts) + `agentic-solo-founder` series (6 posts)
+  - [ ] 2.5.1 `_data/pillars.js`: add `soleur-comparisons` series (`soleur-vs-devin` `relation: "pillar"` + 7 cluster) + `agentic-solo-founder` series (`ai-agents-for-solo-founders` `relation: "pillar"` + 5 cluster) using `{ url, relation }` member shape
   - [ ] 2.5.2 `pillar:` frontmatter on the 14 member posts (do not reassign the 2 posts already in `billion-dollar-solo-founder`)
   - [ ] 2.5.3 `_data/site.json`: append `gdpr-policy` + `data-protection-disclosure` to `footerLegal`
   - [ ] 2.5.4 Optional bounded: ≤2 in-prose contextual links per target post where a natural anchor exists
@@ -53,4 +53,4 @@ Precondition: 1.4 complete (46/46 verified).
 ## Phase 3 — Post-merge
 
 - [ ] 3.1 `deploy-docs.yml` publishes stub-free site; spot re-curl 3–5 date-slug URLs live
-- [ ] 3.2 File GSC re-verification follow-up issue (re-pull "Why pages aren't indexed" in ~2–4 weeks) — deferral tracking
+- [x] 3.2 File GSC re-verification follow-up issue (re-pull "Why pages aren't indexed" in ~2–4 weeks) — filed at planning time: **#8332**

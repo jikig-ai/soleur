@@ -15,6 +15,59 @@ brand_survival_threshold: aggregate pattern
 
 Closes #3328
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-18
+**Sections enhanced:** 7 (Encryption Posture → schema YAML; consolidated Files to
+Create/Edit/Delete; Downtime & Cutover; precedent-diff row; `include_subdomains`
+proxied-subdomain claim corrected; #3379 status corrected; pillar-series member
+shape pinned to `{url, relation}`)
+**Research agents used:** sequential-fallback — no Task/agent tool in this
+harness; all deepen passes (gate checks, verify-the-negative, post-edit
+self-audit, precedent grep, issue-state verification) executed inline in order.
+
+### Key Improvements
+
+1. `## Encryption Posture` rewritten in the ledger schema shape (the deepen
+   4.10 halt requires fielded `at_rest`/`in_transit` entries, not prose).
+2. Consolidated `## Files to Create/Edit/Delete` added — the observability,
+   UI-surface, and diff-scope gates all key on these lists.
+3. `## Downtime & Cutover` added: the two-merge structure IS the zero-downtime
+   path (additive edge rules verified live before origin stubs are deleted;
+   CF Pages deploys are atomic).
+4. Verify-the-negative pass corrected two claims: `include_subdomains` affects
+   proxied subdomains `app`/`deploy`/`ssh`/`registry`/`www` (no `preview`
+   record exists in the zone), and #3379 is CLOSED, not an open tracker.
+5. `www-apex-canonicalizer{,-mutation}.test.sh` compatibility verified by
+   reading the harness — `dynamic "item"` appended after the explicit items is
+   outside the green-row reorder span region.
+
+### New Considerations Discovered
+
+- `seo-bulk-redirects.tf`'s own header comment references
+  `page-redirects.njk` — added to the PR-B comment-cleanup task.
+- The pillar-series member shape is `{ url, relation: "pillar"|"cluster" }`;
+  titles resolve via `collections.blog` — the plan now names which post holds
+  `relation: "pillar"` in each new series.
+
+## Deepen-Plan Gate Results
+
+Run 2026-09-18 (sequential inline passes — no Task tool available).
+
+| Gate | Result |
+|---|---|
+| 4.4 Precedent-diff | PASS — bulk-redirect item precedent lives in the same file; deviation (`dynamic "item"` vs 46 explicit `item {}` blocks) diffed in Dependencies & Risks |
+| 4.45 verify-the-negative | PASS-with-fix — `include_subdomains` claim corrected (enumerated proxied records: app/deploy/ssh/registry/www/apex; no `preview` record) |
+| 4.45 post-edit self-audit | PASS — residual-reference grep enumerated 10 files naming the deleted machinery; all covered (4 deletions, 6 edits including `seo-bulk-redirects.tf` comment) |
+| 4.5 Network-outage | SKIP — no trigger patterns; `cloudflare_list` has no file/remote-exec provisioner or SSH connection block |
+| 4.55 Downtime & Cutover | FIRED — `## Downtime & Cutover` section added; zero-downtime-by-construction |
+| 4.6 User-Brand Impact | PASS — section present, threshold `aggregate pattern` |
+| 4.7 Observability | PASS — 5-field section; `discoverability_test.command` verb `curl` is allowlisted, no SSH |
+| 4.8 PAT-shaped variable | PASS — zero regex hits |
+| 4.9 UI-Wireframe | FIRES on glob (`**/*.njk`) → resolved per Excluded clause: two `.njk` files are DELETED machine-facing stub generators (not user surfaces), the third touch is a comment-only `sitemap.njk` edit — "pure copy … no structural/layout change". Same resolution shape as `2026-08-11-fix-plugin-delivery-path-plan.md`'s recorded determination. Not a general `.njk` licence — `ux-design-lead` consult is the remedy if challenged. |
+| 4.10 Encryption Posture | FIRED on `.tf` → section rewritten in schema YAML (was prose — would have failed field checks) |
+| 4.11 Guard Contract | PASS — `python3 scripts/lint-guard-contract.py` green (2 guard entries, matrix ≥3 rows each) |
+
 ## Overview
 
 Google Search Console's "Why pages aren't indexed" report for `sc-domain:soleur.ai`
@@ -37,8 +90,8 @@ distills to three actionable items:
    pattern in `knowledge-base/project/learnings/2026-06-15-gsc-crawled-not-indexed-remediation-is-internal-linking.md`.
 3. **`api.soleur.ai` X-Robots-Tag** — resolved to **no work**: the transform
    rule already exists in `cloudflare_ruleset.seo_response_headers` and is a
-   documented no-op while `api.soleur.ai` is a DNS-only CNAME; the re-evaluation
-   tracker is #3379. See Research Reconciliation.
+   documented no-op while `api.soleur.ai` is a DNS-only CNAME; the
+   re-evaluation was closed under #3379. See Research Reconciliation.
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). No
 `spec.md` exists for this branch; `gsc-evidence.md` is the planning input.
@@ -129,8 +182,12 @@ Design constraints honored:
   list does not touch it. This decides the list question.
 - **Item semantics mirror the legal entries:** `status_code = 301`,
   `include_subdomains = "enabled"` (www date-slug variants collapse to apex
-  canonical in one hop; the documented every-proxied-subdomain caveat applies —
-  no proxied subdomain legitimately serves `/blog/YYYY-MM-DD-*` paths today),
+  canonical in one hop; the every-proxied-subdomain caveat applies — zone
+  proxied records are `app`, `deploy`, `ssh`, `registry`, `www`, apex; no
+  `preview` record exists. None serves `/blog/*` content, so a stray
+  `app.soleur.ai/blog/<date-slug>/` request that 404s today would instead 301
+  to the apex canonical — a strict improvement, consistent with the accepted
+  caveat on the 12 existing items),
   `preserve_query_string = "enabled"` (the flagged GSC URL was a `?utm_`
   variant; dropping params loses attribution). Both URL shapes
   (`<slug>/` and `<slug>/index.html`) are separate exact-match keys, per the
@@ -266,16 +323,23 @@ implementation time).
   `page-redirects.njk` (no code change — stubs were never in the sitemap).
 - `plugins/soleur/skills/seo-aeo/SKILL.md`: the bare-relative-href sweep list
   mentions `page-redirects.njk`; update the reference.
+- `apps/web-platform/infra/seo-bulk-redirects.tf`: the header comment
+  references `page-redirects.njk` as the fallback this list replaced; update
+  wording post-deletion (comment-only edit → empty apply, harmless).
 - Internal links:
-  - `plugins/soleur/docs/_data/pillars.js`: add `soleur-comparisons` series
-    (8 vs-posts as members; `soleur-vs-polsia` gains 7 inbound) and
-    `agentic-solo-founder` series (`ai-agents-for-solo-founders` as pillar +
-    `why-most-agentic-tools-plateau`, `knowledge-compounding-in-ai-development`,
-    `your-ai-team-works-from-your-actual-codebase`,
-    `best-ai-tools-for-solo-founders-2026`,
-    `loop-engineering-for-your-whole-company` — both unindexed targets gain
-    5 inbound each). Member URLs are `/blog/<canonical-slug>/` — the
-    `pillar-series.njk` include looks titles up in `collections.blog` by URL.
+  - `plugins/soleur/docs/_data/pillars.js`: add two series using the existing
+    member shape `{ url: "/blog/<slug>/", relation: "pillar" | "cluster" }`
+    (titles resolve via `collections.blog` in `pillar-series.njk`):
+    - `soleur-comparisons` — `soleur-vs-devin` as `pillar` (highest-intent
+      comparison), the other 7 vs-posts as `cluster` members;
+      `soleur-vs-polsia` gains 7 inbound aside links.
+    - `agentic-solo-founder` — `ai-agents-for-solo-founders` as `pillar`,
+      cluster members `why-most-agentic-tools-plateau`,
+      `knowledge-compounding-in-ai-development`,
+      `your-ai-team-works-from-your-actual-codebase`,
+      `best-ai-tools-for-solo-founders-2026`,
+      `loop-engineering-for-your-whole-company`; both unindexed targets gain
+      5 inbound each.
   - Add `pillar: <series-key>` to the 14 member posts' frontmatter
     (`2026-03-16/17/19/26/31-soleur-vs-*.md`, `2026-04-21-soleur-vs-devin.md`,
     `2026-05-05-soleur-vs-tanka.md`, `2026-05-07-soleur-vs-crewai.md` for the
@@ -314,7 +378,40 @@ implementation time).
 - File a GSC re-verification follow-up issue (deferral tracking): re-pull the
   "Why pages aren't indexed" report ~2–4 weeks post-merge to confirm the
   noindex-bucket entry and crawled-not-indexed rows drain. Index state is
-  Google-controlled and lags — observational, not an AC.
+  Google-controlled and lags — observational, not an AC. Filed as **#8332**
+  during planning (deferral-tracking gate).
+
+## Files to Create
+
+None — all changes are edits or deletions of existing files.
+
+## Files to Edit
+
+**PR-A:** `apps/web-platform/infra/seo-bulk-redirects.tf`
+
+**PR-B:**
+- `scripts/validate-blog-links.sh` — parity guard replaces stub-existence block
+- `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` — remove skip block
+- `plugins/soleur/test/validate-seo.test.ts` — flip instant-redirect test
+- `plugins/soleur/test/seo-aeo-drift-guard.test.ts` — zero-stub fence + tf-source assertions
+- `plugins/soleur/docs/sitemap.njk` — stale comment update
+- `plugins/soleur/skills/seo-aeo/SKILL.md` — stale `page-redirects.njk` reference
+- `plugins/soleur/docs/_data/site.json` — +2 `footerLegal` entries
+- `plugins/soleur/docs/_data/pillars.js` — +2 series
+- `apps/web-platform/infra/seo-bulk-redirects.tf` — header comment references the now-deleted `page-redirects.njk`; update wording (comment-only edit → empty apply, harmless)
+- 14 blog post frontmatter `pillar:` additions (8 vs-posts + 6 cluster posts, listed in Phase 2)
+- Up to 2 existing blog posts per target for bounded in-prose links (optional, judgment)
+
+**Pipeline artifacts (not implementation):** this plan file,
+`knowledge-base/project/specs/feat-one-shot-3328-gsc-indexing-cleanup/tasks.md`,
+`session-state.md`, `knowledge-base/INDEX.md` (regenerated by hook).
+
+## Files to Delete
+
+- `plugins/soleur/docs/page-redirects.njk`
+- `plugins/soleur/docs/_data/pageRedirects.js`
+- `plugins/soleur/docs/blog/redirects.njk`
+- `plugins/soleur/docs/_data/blogRedirects.js`
 
 ## Alternative Approaches Considered
 
@@ -446,16 +543,57 @@ discoverability_test:
 
 ## Encryption Posture
 
-Detection fired on `apps/web-platform/infra/*.tf` edit. Resolved: this plan
-introduces **no persistent data store and no new cross-component or network
-connection** — `cloudflare_list` items are configuration rows on an existing
-account-level Cloudflare resource; the redirect traffic rides the existing
-proxied TLS edge (apex + subdomains already proxied; Rule-10 HTTPS upgrade
-unchanged). `at_rest`: not applicable — no new store. `in_transit`: the
-request→301 leg is served over the existing CF edge TLS with certificate
-verification on (unchanged from current proxied serving); nothing in this
-change weakens or reconfigures TLS. No `exception` row needed — no plaintext
-mechanism and no cert-verification-off surface is introduced.
+Triggered by the `.tf` file in Files to Edit. The change introduces no
+persistent store; `cloudflare_list` items are configuration rows on an existing
+account-level Cloudflare resource. No new cross-component connection is
+created — redirect serving rides the existing proxied edge.
+
+```yaml
+at_rest:
+  - store: none introduced by this change
+    mechanism: not-applicable — no persistent store is created. The added
+               list items are vendor-side configuration rows inside the
+               existing cloudflare_list.legal_redirects object, not a new
+               store class (no volume, bucket, table, queue, cache, or log
+               sink is declared).
+    evidence: Files to Edit declares one .tf file; the diff adds a locals
+              block and a dynamic item stanza inside an existing list
+              resource — no new resource blocks of any kind.
+    defends_against: not-applicable — no data at rest is created, so there is
+                     no at-rest threat surface to defend.
+    does_not_defend: does not alter the posture of the existing list object
+                     or any other store — list contents (public URL pairs)
+                     persist under Cloudflare's own controls outside this
+                     repo's boundary, unchanged by this plan.
+    disclosed_as: no disclosure change — the rows contain only public URL
+                  strings; no new data category.
+    live_verification: `terraform plan` post-change shows `+46` item additions
+                       inside cloudflare_list.legal_redirects and zero new
+                       resources (`Plan: 0 to add, 1 to change, 0 to destroy`
+                       shape at the list level).
+
+in_transit:
+  - connection: visitor/crawler -> Cloudflare edge -> 301 response (existing
+                proxied serving; this plan adds rules to an existing phase,
+                not a new connection)
+    tls: yes — the request and 301 legs are served over the existing CF edge
+         TLS termination for soleur.ai and its proxied subdomains; the
+         load-bearing HTTPS-upgrade catch-all (seo-rulesets.tf Rule 10) is
+         unchanged.
+    cert_verification: on — nothing in this change disables verification; the
+                       verification commands are plain `curl -sI` with no -k
+                       or --insecure flags.
+    does_not_defend: request path and any query string remain visible to the
+                     Cloudflare edge (they already were); preserve_query_string
+                     deliberately forwards ?utm_* params to the canonical URL,
+                     so the params travel in the 301 Location header — by
+                     design, for attribution.
+    disclosed_as: existing CF edge disclosure, unchanged — same vendor, same
+                  terminated-TLS surface, no new data category.
+
+exception: none — no plaintext store and no disabled certificate
+           verification, so no tracking_issue / expires_on block is required.
+```
 
 ## Infrastructure (IaC)
 
@@ -491,6 +629,35 @@ Cloudflare Free tier: zone `http_request_dynamic_redirect` is FULL (10/10) —
 bypassed by design. Bulk Redirects quota is 10,000 URLs across lists
 (measured 2026-06-09); +46 on the existing list is trivially within quota.
 `regex_replace()` consolidation remains Business-tier — not used.
+
+## Downtime & Cutover
+
+**Trigger assessment:** redirect-layer change on a live public surface —
+treated as router-class for scrutiny, though no serving resource is rebooted,
+replaced, or drained.
+
+**Offline-inducing operation:** none in isolation. The only window where a URL
+could fail is a *mis-sequenced* cutover (origin stubs deleted before edge 301s
+exist) — which is exactly what the two-merge structure eliminates:
+
+- **Phase 1 (additive):** `cloudflare_list` item additions apply in place on an
+  existing account ruleset — Cloudflare evaluates the updated list atomically;
+  no in-flight request is dropped and no stub is touched. Failure mode: apply
+  errors → zero blast radius, stubs still serve.
+- **Cutover proof:** the 46/46 curl suite IS the per-stage verification — edge
+  301s must be observed live before PR-B may merge (hard precondition, not a
+  checklist nicety).
+- **Phase 2 (removal):** `deploy-docs.yml` publishes `_site` to Cloudflare
+  Pages via `wrangler pages deploy` — Pages deploys are atomic
+  (new-deployment cutover, no drain needed). At that moment every deleted-stub
+  path is already served at the edge; the origin is never consulted for those
+  paths.
+- **Rollback:** a bad list item → fix-forward list edit re-applies on merge
+  (seconds); a bad deletion → revert PR-B restores stubs (edge 301s continue
+  serving regardless — revert is belt, not load-bearing).
+
+No residual downtime is accepted; no maintenance window or operator sign-off
+is needed.
 
 ## Guard Contract
 
@@ -691,8 +858,21 @@ file path.
   so the ADR-130/Sharp-Edges credential probe is satisfied by the existing
   live items (known-granted control: the list already applies).
 - **`include_subdomains` caveat (inherited):** new items match every proxied
-  subdomain — same accepted caveat as the 12 existing items; no proxied
-  subdomain serves `/blog/YYYY-MM-DD-*` today.
+  subdomain (`app`/`deploy`/`ssh`/`registry`/`www`) — none serves `/blog/*`
+  content; a stray request 404s today and would 301 to the apex canonical
+  post-change. Same accepted caveat as the 12 existing items.
+- **Precedent diff (4.4 gate):** sibling precedent = the 12 explicit
+  `item { value { redirect { … } } }` blocks in the same file. This plan's
+  `dynamic "item"` emits byte-identical compiled config (same five fields,
+  same types) — the deviation is authoring form only: a 23-pair map + ~10-line
+  stanza instead of ~460 near-identical lines. Verified the deviation is
+  invisible to the committed guards: the canonicalizer test's span regex
+  (`^\s*item\s*\{`) counts only literal blocks in `www_canonical` (still 1)
+  and the mutation harness's reorder row operates on the explicit-item span
+  region in `legal_redirects`, which the appended dynamic block sits outside.
+  If a reviewer prefers precedent-exact form, 46 explicit items is the
+  one-line fallback — rejected in Alternatives on reviewability, not
+  correctness.
 - **Cross-list precedence:** a `www.soleur.ai/blog/<date>/` request matches
   both the extended `legal_redirects` item and `www_canonical`; rule order
   (legal first, www second — guarded by `www-apex-canonicalizer.test.sh`)
