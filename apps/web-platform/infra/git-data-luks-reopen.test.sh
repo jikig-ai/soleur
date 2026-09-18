@@ -208,6 +208,20 @@ n=$(grep -c 'luks_reopen_unit=yes' "$BS_BODY" || true)
 ok "$((n != 0))" "B2 the boolean is never a literal yes (Guard 3 M1)"
 ok "$(grep -qE 'systemctl is-enabled --quiet git-data-luks-reopen.service' "$BS_BODY"; echo $?)" "B3 the measurement queries is-enabled"
 ok "$(grep -qE 'systemctl show -p Result --value git-data-luks-reopen.service.*= *success' "$BS_BODY"; echo $?)" "B4 the measurement requires Result=success"
+# B4b/B4c — THE WAIT IS THE MEASUREMENT. `enable --now` returns at the FIRST attempt's failure
+# for a unit with Restart=on-failure (measured on systemd 261: rc=1 after 0s, Result=exit-code,
+# ActiveState=activating, ladder then succeeds with NRestarts=2), so reading Result immediately
+# samples a transient state. This boolean is TERMINAL — a `no` tells the operator to treat the
+# birth or replace as failed, and that remediation is another destroy/recreate of the host
+# holding every user's source. Without the wait, a 30-second Doppler blip orders a destructive
+# remediation of a healthy host. The bound is asserted too: an unbounded wait would hang the
+# boot on a genuinely wedged unit, which is the failure this must not trade for.
+ok "$(grep -qE 'ActiveState --value git-data-luks-reopen.service.*= *activating' "$BS_BODY"; echo $?)" "B4b the measurement waits out ActiveState=activating before reading Result"
+_wait_bound=$(grep -oE '_reopen_wait" -lt [0-9]+' "$BS_BODY" | grep -oE '[0-9]+' | head -1)
+ok "$([ -n "$_wait_bound" ] && [ "$_wait_bound" -gt 0 ] && [ "$_wait_bound" -le 600 ]; echo $?)" "B4c the wait is BOUNDED (got ${_wait_bound:-none}s; >0 and <=600)"
+_l_wait=$(grep -n 'ActiveState --value git-data-luks-reopen.service' "$BS_BODY" | head -1 | cut -d: -f1)
+_l_res=$(grep -n 'systemctl show -p Result --value git-data-luks-reopen.service' "$BS_BODY" | head -1 | cut -d: -f1)
+ok "$([ -n "$_l_wait" ] && [ -n "$_l_res" ] && [ "$_l_wait" -lt "$_l_res" ]; echo $?)" "B4d the wait precedes the Result read (line $_l_wait < $_l_res)"
 L_MEAS=$(grep -n '_reopen_unit=yes' "$BS_BODY" | head -1 | cut -d: -f1)
 L_EMIT=$(grep -n 'luks_reopen_unit=\${_reopen_unit}' "$BS_BODY" | head -1 | cut -d: -f1)
 ok "$([ -n "$L_MEAS" ] && [ -n "$L_EMIT" ] && [ "$L_MEAS" -lt "$L_EMIT" ]; echo $?)" "B5 measurement precedes the emit (Guard 3 M4)"
@@ -570,7 +584,7 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
-MIN_ASSERTIONS=220
+MIN_ASSERTIONS=223
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertions (floor %s) — suite did not execute fully\n' "$total" "$MIN_ASSERTIONS" >&2
