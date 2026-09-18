@@ -80,6 +80,7 @@ SKILLS: [N] skills
 
 MCP SERVERS:
   context7                    Framework documentation lookup
+  playwright                  Wrapped browser automation (mcp__plugin_soleur_playwright__*)
 
 Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
@@ -119,6 +120,7 @@ SKILLS: [N] skills
 
 MCP SERVERS:
   context7                    Framework documentation lookup
+  playwright                  Wrapped browser automation (plugin-root .mcp.json)
 
 Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
