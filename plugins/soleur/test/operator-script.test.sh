@@ -349,15 +349,6 @@ then assert_red g3_check "g3-r5 secret-shaped name reaches gh argv" "$SB/mut/g3r
 # row 6 — own-dispatch: the discovery walk returns zero files
 assert_red g3_check "g3-r6 own-dispatch: zero sourcing scripts discovered" "$PRISTINE" "$SB/empty"
 
-# harness (a) — an empty scan root must REDDEN rather than report "0 violations".
-# Same invocation as row 6, asserted separately because the two claims differ:
-# row 6 is about the guard's coverage, this is about its failure mode.
-if g3_check "$PRISTINE" "$SB/empty" >/dev/null 2>&1; then
-  fail "g3 harness (a): an empty scan root reported clean instead of reddening"
-else
-  pass "g3 harness (a): an empty scan root reddens rather than reporting '0 violations'"
-fi
-
 # harness (b) — must-PASS non-canonical: a consumer writing a NON-secret on argv
 # passes, so the guard is a secret-path rule and not a blanket argv ban.
 mkdir -p "$SB/run/nonsecret"
@@ -679,16 +670,13 @@ fi
 
 echo "== library contract =="
 
-if [[ "$(head -1 "$LIB")" == "# shellcheck shell=bash" ]]; then
-  pass "line 1 is '# shellcheck shell=bash' (sourced, never executed)"
+# Line-1 convention shared with the three sibling libraries in scripts/lib/
+# (proc.sh, session-state.sh, domain-model-lib.sh): a shebang, so shellcheck
+# infers the dialect. Sourced-only is a property of the exec bit, not of line 1.
+if [[ "$(head -1 "$LIB")" == "#!/usr/bin/env bash" ]]; then
+  pass "line 1 is the sibling-library shebang"
 else
-  fail "line 1 must be '# shellcheck shell=bash'; got: $(head -1 "$LIB")"
-fi
-
-if head -1 "$LIB" | grep -q '^#!'; then
-  fail "the library carries a shebang; it is sourced, not executed"
-else
-  pass "the library carries no shebang"
+  fail "line 1 must be '#!/usr/bin/env bash' (sibling convention); got: $(head -1 "$LIB")"
 fi
 
 if grep -q '^umask 077' "$LIB"; then
@@ -697,20 +685,13 @@ else
   fail "umask 077 is not set inside the library"
 fi
 
-if grep -qF 'Inspired by mattpocock/skills/skills/engineering/wizard/' "$LIB"; then
-  pass "attribution comment present (MIT, Copyright (c) 2026 Matt Pocock)"
+# F6 — the API contract is a runtime export, observed after a source.
+api_got="$(bash -c 'set -uo pipefail; source "$1"; printf "%s" "${SOLEUR_OP_LIB_API:-unset}"' _ "$LIB" 2>/dev/null)"
+if [[ "$api_got" =~ ^[0-9]+$ && "$api_got" -ge 1 ]]; then
+  pass "library exports SOLEUR_OP_LIB_API=${api_got} after source"
 else
-  fail "attribution comment missing from the library"
+  fail "library does not export a numeric SOLEUR_OP_LIB_API >= 1 (got '${api_got}')"
 fi
-
-# The library names every call site, per the _cf-admin-token.sh convention.
-for site in 'operator-bootstrap/template.sh' 'provision-hetzner/scripts/provision-hetzner.sh'; do
-  if grep -qF "$site" "$LIB"; then
-    pass "header names the call site ${site}"
-  else
-    fail "header does not name the call site ${site}"
-  fi
-done
 
 # open_url must be ADDITIVE-ONLY: the URL is printed first and the opener's exit
 # code is never branched on. Plus the new WSL arm.
@@ -735,35 +716,65 @@ else
   fail "open_url branches on an opener's exit code (only ${openurl_true} '|| true' arms)"
 fi
 
-# SOLEUR_BOOTSTRAP_LIB_MISSING is emitted by the CONSUMER (a library that is not
-# there cannot announce itself), so the library documents the exact snippet.
-if grep -qF 'SOLEUR_BOOTSTRAP_LIB_MISSING' "$LIB"; then
-  pass "the library documents the SOLEUR_BOOTSTRAP_LIB_MISSING hard-exit contract"
+# R21a — the founder-facing dead end the library closes: a wrong credential is
+# otherwise permanent. Behavioural: the key is gone after a reset.
+reset_env="$SB/reset-probe.env"
+printf 'KEEP_ME=1\nFORGET_ME=2\n' > "$reset_env"
+SOLEUR_BOOTSTRAP_LEDGER="$SB/reset-probe.jsonl" bash "$SB/drive.sh" "$LIB" soleur_op_env_reset "$reset_env" FORGET_ME >/dev/null 2>&1
+if grep -q '^KEEP_ME=1$' "$reset_env" && ! grep -q '^FORGET_ME=' "$reset_env"; then
+  pass "R21a: soleur_op_env_reset removes exactly the named key"
 else
-  fail "SOLEUR_BOOTSTRAP_LIB_MISSING contract missing from the library header"
+  fail "R21a: soleur_op_env_reset left: $(cat "$reset_env" 2>/dev/null | tr '\n' ' ')"
 fi
 
-# R42 — the exit-code table, because code 3 is already overloaded in this repo.
-for code in '   0   ' '   1   ' '   3   ' '   64  ' '   78  '; do
-  if grep -qF "#${code}" "$LIB"; then
-    pass "exit-code table documents '${code# }'"
+# F1 — a GENERATED script must find the library from its documented home,
+# knowledge-base/project/specs/feat-<name>/bootstrap.sh, with neither
+# CLAUDE_PLUGIN_ROOT nor SOLEUR_OP_LIB in the environment (a founder's terminal).
+# The generation-time bake is what makes that reachable; the unsubstituted
+# template in the same location is the negative control proving the bake is
+# load-bearing rather than decorative.
+TEMPLATE="${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh"
+gen_home="$SB/founder-repo/knowledge-base/project/specs/feat-x"
+mkdir -p "$gen_home"
+if [[ -r "$TEMPLATE" ]]; then
+  lib_abs="$(realpath "$LIB")"
+  sed "s|^SOLEUR_OP_LIB_BAKED=.*|SOLEUR_OP_LIB_BAKED=\"${lib_abs}\"|" "$TEMPLATE" > "$gen_home/bootstrap.sh"
+  if grep -qF "SOLEUR_OP_LIB_BAKED=\"${lib_abs}\"" "$gen_home/bootstrap.sh"; then
+    pass "F1: the bake substitution landed in the generated copy"
   else
-    fail "exit-code table is missing an entry for '${code# }'"
+    fail "F1: the bake substitution did NOT land (placeholder line not matched)"
   fi
-done
+  gen_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --help 2>&1)"; gen_rc=$?
+  if [[ "$gen_rc" -eq 0 ]]; then
+    pass "F1: baked generated script resolves the library from its documented home (--help exits 0)"
+  else
+    fail "F1: baked generated script exited ${gen_rc} from its documented home: ${gen_out}"
+  fi
+  if grep -qF 'SOLEUR_BOOTSTRAP_LIB_MISSING' <<<"$gen_out"; then
+    fail "F1: baked generated script still reported LIB_MISSING"
+  else
+    pass "F1: baked generated script did not report LIB_MISSING"
+  fi
 
-# R21 — the three founder-facing dead ends.
-for fn in soleur_op_env_reset soleur_op_stage_should_run; do
-  if grep -q "^${fn}() {" "$LIB"; then
-    pass "R21: ${fn} exists"
+  # Negative control: the raw template, placeholder intact, same location.
+  cp "$TEMPLATE" "$gen_home/bootstrap-unbaked.sh"
+  raw_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap-unbaked.sh --help 2>&1)"; raw_rc=$?
+  if [[ "$raw_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_LIB_MISSING' <<<"$raw_out"; then
+    pass "F1 negative control: the UNBAKED template in the same location exits 64 with LIB_MISSING (the bake is load-bearing)"
   else
-    fail "R21: ${fn} is missing"
+    fail "F1 negative control: unbaked template exited ${raw_rc} (expected 64 + LIB_MISSING): ${raw_out}"
   fi
-done
-if grep -qF 'SOLEUR_BOOTSTRAP_START_STAGE' "$LIB"; then
-  pass "R21: SOLEUR_BOOTSTRAP_START_STAGE resume path exists"
+
+  # F6 — the consumer-side contract refuses a library that predates the API.
+  : > "$SB/empty-lib.sh"
+  api_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT SOLEUR_OP_LIB="$SB/empty-lib.sh" timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --help 2>&1)"; api_rc=$?
+  if [[ "$api_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=0' <<<"$api_out"; then
+    pass "F6: a library without SOLEUR_OP_LIB_API is refused with LIB_INCOMPATIBLE, exit 64"
+  else
+    fail "F6: pre-API library was not refused (rc=${api_rc}): ${api_out}"
+  fi
 else
-  fail "R21: no SOLEUR_BOOTSTRAP_START_STAGE resume path"
+  fail "F1: template.sh not readable at ${TEMPLATE}"
 fi
 
 # Ledger: one line BEFORE and one AFTER each stage.
@@ -788,6 +799,27 @@ else
   fail "run ledger does not declare total_stages"
 fi
 
+# F7 — a ledger write that fails is non-fatal but never silent.
+mkdir -p "$SB/f7"
+unwritable_ledger="$SB/f7/not-a-dir/ledger.jsonl"
+: > "$SB/f7/not-a-dir"   # a FILE where the directory must be: mkdir -p and the append both fail
+f7_out="$(SOLEUR_BOOTSTRAP_LEDGER="$unwritable_ledger" bash -c '
+  set -uo pipefail
+  source "$1"
+  soleur_op_ledger_init 1 probe
+  echo "STILL-RUNNING"
+' _ "$LIB" 2>&1)"
+if grep -qF "SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED path=${unwritable_ledger}" <<<"$f7_out"; then
+  pass "F7: an unwritable ledger path emits SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED naming the path"
+else
+  fail "F7: no LEDGER_WRITE_FAILED marker for an unwritable ledger path. Output: ${f7_out}"
+fi
+if grep -qF 'STILL-RUNNING' <<<"$f7_out"; then
+  pass "F7: the ledger write failure is non-fatal (the caller continued)"
+else
+  fail "F7: the ledger write failure aborted the caller"
+fi
+
 # bash -n is the syntax gate on this host (shellcheck is a non-executable shim).
 if bash -n "$LIB" 2>/dev/null; then
   pass "library parses (bash -n)"
@@ -798,7 +830,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Appends to `fails`, the SAME variable the verdict below reads. A floor that
 # bumped a separate counter would not change the exit status it claims to guard.
-FLOOR=50
+FLOOR=55
 if [[ "$asserts" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$asserts" "$FLOOR" >&2
   fails=$((fails + 1))

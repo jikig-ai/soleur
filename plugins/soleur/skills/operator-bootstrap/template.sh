@@ -10,24 +10,21 @@
 #
 # <!-- Inspired by mattpocock/skills/skills/engineering/wizard/ (MIT, Copyright (c) 2026 Matt Pocock). -->
 #
-# WHAT TO EDIT: only `main()` and the `stage_*` functions below it. Everything
-# above `main()` is the contract the library expects. NEVER hand-edit
+# WHAT TO EDIT: only `main()` and the `stage_*` functions below it, plus the
+# ONE generation-time substitution of SOLEUR_OP_LIB_BAKED. Everything else above
+# `main()` is the contract the library expects. NEVER hand-edit
 # plugins/soleur/scripts/lib/operator-script.sh — the library is one file and
 # every generated script shares it.
 #
-# Exit codes: 0 ok · 1 usage/refused · 3 DPA-gate rejection · 64 missing input
-# (including a prompt with no TTY) · 78 refusing to run under xtrace.
-# Note: apps/cla-evidence/scripts/sentinel-pr.sh returns 3 for "missing tool on
-# PATH"; this repo has both meanings of 3 live. Do not re-derive it.
+# Exit codes and stdout markers: the library header ("EXIT CODES" and "STDOUT
+# MARKERS" in plugins/soleur/scripts/lib/operator-script.sh) is the single
+# source. Do not restate the table here.
 set -euo pipefail
 
 # --- PROLOGUE (must stay ABOVE the `source` line) ----------------------------
-# DUPLICATED here on purpose, never moved into the library. PROLOGUE_MAX_CMDS = 0
-# in scripts/lint-shell-trace-credential-refusal.py makes the `source` line
-# itself a counted command, and the linter's find_preamble scans only this file's
-# own lines — a caller sourcing a fully compliant library still fails Rule A.
-#
-# Stdout, not stderr: agent runtimes surface stdout and swallow stderr.
+# Duplicated here, never moved into the library — see "SOURCING PRECONDITIONS"
+# §2 in the library header for why. Stdout, not stderr: agent runtimes surface
+# stdout and swallow stderr.
 case "$-" in
   *x*)
     printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
@@ -44,17 +41,31 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 # --- library resolution ------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Resolution order, most explicit first. `CLAUDE_PLUGIN_ROOT` is the supported
-# path for a marketplace install; the relative arm is the in-repo one. Neither
-# precedent in this repo handles a non-default install root or a `sh`-invoked
-# shell where BASH_SOURCE is unavailable — stated, not silently inherited.
+# GENERATION-TIME SUBSTITUTION. The generator (operator-bootstrap/SKILL.md §3)
+# replaces the placeholder below with the ABSOLUTE path of the library resolved
+# at generation time — `realpath "${CLAUDE_PLUGIN_ROOT}/scripts/lib/operator-
+# script.sh"`. A generated script lives at
+# knowledge-base/project/specs/feat-<name>/bootstrap.sh in the FOUNDER's repo,
+# where no relative path to the plugin exists and CLAUDE_PLUGIN_ROOT is unset in
+# a founder's terminal; without the bake the only reachable outcome from that
+# location was LIB_MISSING (measured, review F1). An unsubstituted placeholder
+# is not an absolute path, so the loop below treats it as "not baked", never as
+# a path — and the loop deliberately does not spell the placeholder, so a global
+# substitution cannot rewrite the guard along with the value.
+SOLEUR_OP_LIB_BAKED="__SOLEUR_OP_LIB_BAKED__"
+
+# Resolution order, most explicit first:
+#   1. SOLEUR_OP_LIB      — explicit env override (a moved plugin, a test).
+#   2. the baked path     — what a generated script normally runs on.
+#   3. CLAUDE_PLUGIN_ROOT — a script run from inside a Claude Code session.
+#   4. hard exit 64.
 SOLEUR_OP_LIB="${SOLEUR_OP_LIB:-}"
 if [[ -z "$SOLEUR_OP_LIB" ]]; then
   for candidate in \
-    "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/scripts/lib/operator-script.sh" \
-    "${SCRIPT_DIR}/../../scripts/lib/operator-script.sh" \
-    "${SCRIPT_DIR}/.soleur/lib/operator-script.sh"
+    "$SOLEUR_OP_LIB_BAKED" \
+    "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/scripts/lib/operator-script.sh"
   do
+    [[ "$candidate" == /* ]] || continue
     [[ -r "$candidate" ]] && { SOLEUR_OP_LIB="$candidate"; break; }
   done
 fi
@@ -69,6 +80,13 @@ fi
 
 # shellcheck source=../../scripts/lib/operator-script.sh disable=SC1091
 source "$SOLEUR_OP_LIB"
+
+# API contract (library header §API). A library that loads but predates a helper
+# this script calls would fail mid-stage, after side effects; refuse up front.
+[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
 
 # --- configuration -----------------------------------------------------------
 SLUG="${SLUG:-example}"
@@ -88,9 +106,8 @@ Usage: bootstrap.sh [--reset <KEY>] [--help]
   --help          This text.
 
 Environment:
-  SOLEUR_BOOTSTRAP_START_STAGE=<n>   Resume: skip every stage below n.
-                                     \`verify-bootstrap-run.sh --last\` prints n.
   SOLEUR_BOOTSTRAP_LEDGER=<path>     Run ledger (default: beside this script).
+  SOLEUR_OP_LIB=<path>               Override the library path baked at generation.
   <SKIP VARIABLES>                   One per class-1/class-3 prompt; see below.
                                      The destructive-write ack has NONE, by rule.
 USAGE
@@ -167,17 +184,15 @@ main() {
   soleur_op_require_bins grep mktemp awk printenv stat
   soleur_op_ledger_init "$TOTAL_STAGES" "bootstrap.sh"
 
-  if soleur_op_stage_should_run 1; then
-    soleur_op_stage_begin 1 "vendor account"
-    stage_1_account
-    soleur_op_stage_end 1 "vendor account" ok 0
-  fi
+  # No resume index: every stage's precondition makes a re-run from stage 1
+  # skip what is already done, so re-run IS resume.
+  soleur_op_stage_begin 1 "vendor account"
+  stage_1_account
+  soleur_op_stage_end 1 "vendor account" ok 0
 
-  if soleur_op_stage_should_run 2; then
-    soleur_op_stage_begin 2 "provision the resource"
-    stage_2_provision
-    soleur_op_stage_end 2 "provision the resource" ok 0
-  fi
+  soleur_op_stage_begin 2 "provision the resource"
+  stage_2_provision
+  soleur_op_stage_end 2 "provision the resource" ok 0
 
   soleur_op_summary_begin "BOOTSTRAP COMPLETE."
   soleur_op_summary_line "Values were written to ${ENV_FILE} (mode 600)."

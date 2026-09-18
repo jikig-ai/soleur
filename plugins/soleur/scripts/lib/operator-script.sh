@@ -1,15 +1,22 @@
-# shellcheck shell=bash
+#!/usr/bin/env bash
 # operator-script.sh — shared primitives for Soleur-generated operator scripts.
 #
-# SOURCED, NEVER EXECUTED. That is why line 1 is the shellcheck directive and
-# not a shebang: there is ONE distribution mode (the generated script `source`s
-# this file), so there is no inlined copy to drift from and no `STAGES` byte
-# identity marker to pin. Plan 2026-09-18-feat-ship-operator-bootstrap-wizard-
-# merge-danger, revision R6.
+# SOURCED, NEVER EXECUTED. The shebang is the line-1 convention of every sibling
+# in this directory (`proc.sh`, `session-state.sh`, `domain-model-lib.sh`) and
+# is what lets shellcheck infer the dialect; the file carries no exec bit. There
+# is ONE distribution mode (the generated script `source`s this file), so there
+# is no inlined copy to drift from and no `STAGES` byte identity marker to pin.
+# Plan 2026-09-18-feat-ship-operator-bootstrap-wizard-merge-danger, revision R6.
 #
 # Home per ADR-178 §1: a shared bash primitive consumed by shipped plugin code
 # lives inside `plugins/soleur/`, alongside `proc.sh`, `session-state.sh` and
 # `domain-model-lib.sh`.
+#
+# API CONTRACT: this file exports `SOLEUR_OP_LIB_API=1`. Every consumer asserts
+# `[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]]` right after its `source` line and exits
+# 64 with `SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE` otherwise. Bump the number only on
+# a change that breaks an existing consumer (a renamed helper, a changed
+# positional contract), never on an additive one.
 #
 # Sourced (NEVER executed) by:
 #   - plugins/soleur/skills/operator-bootstrap/template.sh
@@ -44,12 +51,15 @@
 # caller.
 #
 # EXIT CODES a generated script may return (revision R42 — the repo has no
-# central table and code 3 is already overloaded, so the table lives here and in
-# operator-bootstrap/SKILL.md rather than being re-derived by the next author):
+# central table and code 3 is already overloaded, so the table lives HERE ONLY;
+# operator-bootstrap/SKILL.md and template.sh point at this section rather than
+# restating it):
 #
 #   0   success.
-#   1   usage error, or a refused call — e.g. a secret-shaped name handed to the
-#       GitHub *variable* helper, which writes on argv. Remedy: fix the call.
+#   1   usage error; a refused call — e.g. a secret-shaped name handed to the
+#       GitHub *variable* helper, which writes on argv (remedy: fix the call); or
+#       the operator DECLINED a barrier or a destructive-write ack (the
+#       `SOLEUR_BOOTSTRAP_ABORTED stage=<kind>` marker names which).
 #   3   DPA-gate rejection (tenant provisioning scripts only). CONFLICT, stated
 #       rather than renumbered: apps/cla-evidence/scripts/sentinel-pr.sh returns
 #       3 for "missing tool on PATH" and "not inside a git repository" — a class
@@ -64,21 +74,20 @@
 # STDOUT MARKERS, not stderr. Agent runtimes surface stdout and swallow stderr,
 # so a stderr-only refusal is invisible on the one surface that matters
 # (provision-doppler.sh records the same reason at its own prologue):
-#   SOLEUR_BOOTSTRAP_INPUT_REQUIRED   var=<NAME> tty=0   → exit 64
-#   SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE  name=<NAME>        → refused argv write
-#   SOLEUR_BOOTSTRAP_ABORTED          stage=<kind>       → operator declined
-#   SOLEUR_BOOTSTRAP_LIB_MISSING      path=<resolved>    → see below
+#   SOLEUR_BOOTSTRAP_INPUT_REQUIRED      var=<NAME> tty=0   → exit 64
+#   SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE     name=<NAME>        → refused argv write
+#   SOLEUR_BOOTSTRAP_ABORTED             stage=<kind>       → operator declined, exit 1
+#   SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED path=<path>       → non-fatal; the run
+#                                                            continues, the record is lost
+#   SOLEUR_BOOTSTRAP_LIB_MISSING         path=<resolved>    → exit 64
+#   SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE    need=1 got=<n>     → exit 64
 #
-# SOLEUR_BOOTSTRAP_LIB_MISSING is emitted by the CONSUMER, not by this file — a
-# library that is not there cannot announce itself. Every consumer opens with,
-# verbatim, and hard-exits rather than degrading to a stub (ADR-178 Context §1:
-# fail-closed stubs made `cleanup-merged` refuse to reap forever):
-#
-#     SOLEUR_OP_LIB="${CLAUDE_PLUGIN_ROOT:-$SCRIPT_DIR/../../..}/scripts/lib/operator-script.sh"
-#     if [[ ! -r "$SOLEUR_OP_LIB" ]]; then
-#       printf 'SOLEUR_BOOTSTRAP_LIB_MISSING path=%s\n' "$SOLEUR_OP_LIB"
-#       exit 64
-#     fi
+# SOLEUR_BOOTSTRAP_LIB_MISSING and _LIB_INCOMPATIBLE are emitted by the CONSUMER,
+# not by this file — a library that is not there cannot announce itself. The
+# canonical shape of that resolution (env override → generation-time baked path
+# → CLAUDE_PLUGIN_ROOT → hard exit 64, never a stub; ADR-178 Context §1 records
+# what fail-closed stubs did to `cleanup-merged`) is the "library resolution"
+# section of plugins/soleur/skills/operator-bootstrap/template.sh.
 #
 # <!-- Inspired by mattpocock/skills/skills/engineering/wizard/ (MIT, Copyright (c) 2026 Matt Pocock). -->
 # What is adopted is the SHAPE — a wizard that walks named stages, one journey
@@ -95,6 +104,9 @@ if [[ "${_SOLEUR_OPERATOR_SCRIPT_LOADED:-}" == "1" ]]; then
   return 0 2>/dev/null || true
 fi
 _SOLEUR_OPERATOR_SCRIPT_LOADED=1
+
+# The API contract every consumer asserts after its `source` line (header §API).
+export SOLEUR_OP_LIB_API=1
 
 # The generated `.env` holds live credentials on the founder's own disk, and a
 # default umask writes it 0644 into a directory that may sit under a cloud-sync
@@ -139,17 +151,39 @@ soleur_op_require_bins() {
 #
 # Layer 7 (cli-stdout-artifact): stdout alone is an explicit P1 rejection because
 # it does not survive the session, so the synchronous markers above are paired
-# with this durable artifact. It is committed in the FOUNDER's repository; both
-# candidate paths are gitignored in this one, so nothing here is ever committed.
-# Nothing is transmitted and no alert target exists — the surface is the
-# founder's own machine, and routing it to Soleur infrastructure would be a
-# data-controller event, not an observability improvement.
+# with this durable artifact. ONE convention: the ledger sits BESIDE the script
+# that writes it, as `bootstrap-runs.jsonl` — for a generated script that is
+# `knowledge-base/project/specs/feat-<name>/`, tracked in the FOUNDER's
+# repository, which is where the layer's "committed to the customer's own
+# repository" condition is met. Nothing is transmitted and no alert target
+# exists — the surface is the founder's own machine, and routing it to Soleur
+# infrastructure would be a data-controller event, not an observability
+# improvement.
+#
+# A write that fails (disk full, unwritable directory) is NON-FATAL — a
+# provisioning stage must not abort because its audit line could not be
+# appended — but it is never silent: `SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED
+# path=<path>` goes to stdout so the founder knows the artifact is incomplete.
 
 SOLEUR_OP_RUN_ID=""
 SOLEUR_OP_TOTAL_STAGES=0
 
+# Default: beside the MAIN script (the bottom of the source stack), never a
+# cwd-relative dotdir. `SOLEUR_BOOTSTRAP_LEDGER` overrides.
 soleur_op_ledger_path() {
-  printf '%s' "${SOLEUR_BOOTSTRAP_LEDGER:-.soleur/bootstrap-runs.jsonl}"
+  local main_script
+  if [[ -n "${SOLEUR_BOOTSTRAP_LEDGER:-}" ]]; then
+    printf '%s' "$SOLEUR_BOOTSTRAP_LEDGER"
+    return 0
+  fi
+  main_script="${BASH_SOURCE[-1]:-}"
+  # Sourced with no main script (an interactive shell, `bash -c`): the bottom of
+  # the stack is this file, and "beside the library" is not a ledger home.
+  if [[ -z "$main_script" || "$main_script" == "${BASH_SOURCE[0]}" ]]; then
+    printf './bootstrap-runs.jsonl'
+  else
+    printf '%s/bootstrap-runs.jsonl' "$(dirname "$main_script")"
+  fi
 }
 
 soleur_op_now() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
@@ -166,7 +200,9 @@ soleur_op_ledger_write() {
   path="$(soleur_op_ledger_path)"
   line="$1"
   mkdir -p "$(dirname "$path")" 2>/dev/null || true
-  printf '%s\n' "$line" >> "$path" 2>/dev/null || true
+  if ! printf '%s\n' "$line" >> "$path" 2>/dev/null; then
+    printf 'SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED path=%s\n' "$path"
+  fi
 }
 
 # soleur_op_ledger_init <total-stages> <script-name>
@@ -201,21 +237,20 @@ soleur_op_stage_end() {
     "$(soleur_op_json_escape "$2")" "$(soleur_op_json_escape "$3")" "${4:-0}")"
 }
 
-# soleur_op_stage_should_run <index>
-#   Resume (revision R21c). Without it the only supported action after a partial
-#   run is "re-run from stage 1", straight back into the non-idempotent create
-#   that produced the partial run. `verify-bootstrap-run.sh --ledger <p> --last`
-#   prints the index to resume from.
-soleur_op_stage_should_run() {
-  [[ "$1" -ge "${SOLEUR_BOOTSTRAP_START_STAGE:-1}" ]]
-}
+# There is deliberately NO resume index. Every stage opens with an "already
+# satisfied?" precondition (operator-bootstrap/SKILL.md §2), so re-running from
+# stage 1 IS resume; a start-stage variable would be a second mechanism for the
+# same property, and one the precondition already makes redundant.
 
 # ---------------------------------------------------------------------------
 # Prompts — R8's THREE carve-out classes
 # ---------------------------------------------------------------------------
 #
-#   class 1  ladder value / credential ENTRY
+#   class 1  NON-SECRET ladder value (a region, an account id, a repo slug)
 #            → named skip variable; no TTY + unset ⇒ exit 64 naming it.
+#              Credential ENTRY stays in the CALLER with its own `read -rs`
+#              behind the same gate — see provision-hetzner.sh. This helper
+#              echoes its input and must never take a secret.
 #   class 2  per-command destructive-write acknowledgement
 #            → NO SKIP VARIABLE AT ALL. No TTY ⇒ exit 64 unconditionally.
 #              An environment variable set once is exactly the "prior approval
@@ -226,7 +261,7 @@ soleur_op_stage_should_run() {
 #              independent verification of the thing attested. A barrier that is
 #              skippable and unverified attests nothing.
 #
-# A fourth class requires an ADR amendment (ADR-226).
+# A fourth class requires an ADR amendment (ADR-227).
 
 # --- MUTATION ANCHOR: start of prompt helpers ---
 
@@ -365,7 +400,7 @@ soleur_op_gh_secret_set() {
     return 1
   }
   listed="$(gh secret list -R "$repo" 2>/dev/null || true)"
-  if ! grep -q "${sec_name}" <<<"$listed"; then
+  if ! grep -qE "^${sec_name}[[:space:]]" <<<"$listed"; then
     printf 'SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=%s repo=%s\n' "$sec_name" "$repo"
     return 1
   fi

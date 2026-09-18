@@ -6,11 +6,8 @@
 set -euo pipefail
 
 # --- PROLOGUE (must stay ABOVE the `source` line) ----------------------------
-# DUPLICATED here on purpose, never moved into the library.
-# `PROLOGUE_MAX_CMDS = 0` in scripts/lint-shell-trace-credential-refusal.py makes
-# the `source` line itself a counted command, and the linter's `find_preamble`
-# scans only this file's own lines — a caller sourcing a fully compliant library
-# still fails Rule A (measured against fixtures, plan revision R26).
+# Duplicated here, never moved into the library — see "SOURCING PRECONDITIONS"
+# §2 in plugins/soleur/scripts/lib/operator-script.sh for why.
 #
 # UNCONDITIONAL, not the conditional `${HCLOUD_TOKEN:+x}` arm: this script
 # ACQUIRES its token with `read -rs` BELOW this point, so the variable is empty
@@ -46,6 +43,11 @@ if [[ ! -r "$SOLEUR_OP_LIB" ]]; then
 fi
 # shellcheck source=../../../scripts/lib/operator-script.sh disable=SC1091
 source "$SOLEUR_OP_LIB"
+# API contract (library header §API): prints nothing on success.
+[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
 
 SLUG=""
 DRY_RUN=false
@@ -174,23 +176,22 @@ echo "--- Write-class smoke-test ---"
 echo "Creating + deleting probe server '${PROBE_NAME}' (cx11, nbg1) to verify token scope."
 echo ""
 
-# CLASS 1 — credential ENTRY. The library supplies the SURROUND (named skip
-# variable, TTY gate, exit 64 naming the variable); the `read -rs` itself stays
-# in this file. Two reasons, and the first one is the real one: the prompt string
-# is the operator-facing product. The second is that
-# incident/test/redact-sentinel.test.sh Test 24 pins this file as a required
-# member of a credential-acquisition discovery set precisely because `read -rs`
-# is one of three deliberately distinct acquisition mechanisms.
+# Credential ENTRY. The library supplies the SURROUND (named skip variable, TTY
+# gate, exit 64 naming the variable); the `read -rs` itself stays in this file
+# because the prompt string is the operator-facing product (plan D12). The
+# library's class-1 helper echoes its input and is for non-secret values only.
 #
 # The TTY gate sits ABOVE the read, never below it: the property is about the
 # instant BEFORE the read, and a check that runs after it cannot see the hang.
-if [[ -n "$(soleur_op_skip_value SOLEUR_BOOTSTRAP_HCLOUD_TOKEN)" ]]; then
-  HCLOUD_TOKEN="$(soleur_op_skip_value SOLEUR_BOOTSTRAP_HCLOUD_TOKEN)"
+hcloud_token_skip="$(soleur_op_skip_value SOLEUR_BOOTSTRAP_HCLOUD_TOKEN)"
+if [[ -n "$hcloud_token_skip" ]]; then
+  HCLOUD_TOKEN="$hcloud_token_skip"
 else
   [[ -t 0 ]] || soleur_op_input_required SOLEUR_BOOTSTRAP_HCLOUD_TOKEN
   read -rs -p "Hetzner project-scoped API token: " HCLOUD_TOKEN
   echo ""
 fi
+unset hcloud_token_skip
 
 soleur_op_stage_end 1 "operator mints the project-scoped token" ok 0
 soleur_op_stage_begin 2 "write-class smoke test (billable)"
