@@ -1657,6 +1657,10 @@ if want_scripts; then
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   run_suite "tests/hooks/openhands-guardrails" bash tests/hooks/test_openhands_guardrails.sh
+  # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
+  # `test_<name>.sh` convention is outside lint-orphan-test-suites.sh's `*.test.sh`
+  # producer, so an unregistered suite here gates nothing while reading as coverage.
+  run_suite "tests/hooks/drop-sentinel-parity" bash tests/hooks/test_drop_sentinel_parity.sh
   run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
   # Hard-rule body-weakening gate (#6103, ADR-091): hermetic fixtures + a live
@@ -2542,6 +2546,10 @@ if want_scripts; then
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
   run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # #8322 — registered: was tracked but unregistered (the `test-*` convention is
+  # outside every auto-discovery surface). Guards the brownout retry in
+  # apply-sentry-infra.yml — the workflow that gates live Sentry paging rules.
+  run_suite "tests/scripts/sentry-brownout-retry" bash tests/scripts/test-sentry-brownout-retry.sh
   # #8050 — the PR-time reference gate and the `tf`/`reference` sides of the
   # projection module. The probe's reference is projected from the Terraform
   # plan; the committed copy the daily job reads is held equal to the plan by
