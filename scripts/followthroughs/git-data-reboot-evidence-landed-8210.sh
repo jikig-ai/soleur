@@ -35,7 +35,7 @@ esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EVIDENCE=apps/web-platform/infra/git-data-rung2-boot-evidence.env
-TEMPLATE="${ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
+TEMPLATE_PATH=apps/web-platform/infra/cloud-init-git-data.yml
 
 cd "$ROOT" || { echo "TRANSIENT: cannot enter the repo root"; exit 2; }
 
@@ -67,10 +67,27 @@ fi
 # that binding itself (a hash of the cloud-init template plus every file() the userdata module
 # binds), so asking it is strictly better than re-deriving the hash here — a second
 # implementation of the same derivation is a second thing to drift.
+# BOTH OPERANDS FROM `origin/main`, and the template is the one that used to leak. An earlier
+# revision read the evidence from origin/main and the TEMPLATE from the working tree, so on any
+# branch checkout it compared main's evidence against that branch's payload -- while this file's
+# own header asserted "THE READ IS OF origin/main, NEVER THE WORKING TREE". Correct under the
+# daily sweeper (which runs on main) and wrong everywhere else, which is the shape that survives
+# review: the sweeper is the only caller anyone pictures. Materialised to a temp file because the
+# gate takes a path.
 gate_lib="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-if [[ ! -r "$gate_lib" || ! -r "$TEMPLATE" ]]; then
-  echo "TRANSIENT: the evidence says PASS but the rung-2 gate library or the template could not be"
-  echo "read, so its validity for the CURRENT payload is unverified. Not a verdict about the host."
+tmpl="$(mktemp -t rung2-tmpl.XXXXXXXX.yml)" || {
+  echo "TRANSIENT: could not allocate a temp file for the template read."
+  exit 2
+}
+trap 'rm -f "${tmpl:-}"' EXIT INT TERM HUP
+if ! git show "origin/main:${TEMPLATE_PATH}" > "$tmpl" 2>/dev/null || [[ ! -s "$tmpl" ]]; then
+  echo "TRANSIENT: could not read ${TEMPLATE_PATH} from origin/main, so the evidence's validity"
+  echo "for the CURRENT payload is unverified. Not a verdict about the host."
+  exit 2
+fi
+if [[ ! -r "$gate_lib" ]]; then
+  echo "TRANSIENT: the evidence says PASS but the rung-2 gate library could not be read, so its"
+  echo "validity for the CURRENT payload is unverified. Not a verdict about the host."
   exit 2
 fi
 
@@ -84,7 +101,7 @@ if ! declare -F git_data_rung2_rehearsal_gate >/dev/null; then
   exit 2
 fi
 
-if git_data_rung2_rehearsal_gate "$TEMPLATE" >/dev/null 2>&1; then
+if git_data_rung2_rehearsal_gate "$tmpl" >/dev/null 2>&1; then
   echo "PASS: origin/main carries RUNG2_REBOOT_REOPEN=PASS and the rung-2 gate RELEASES against"
   echo "the current template — the boot-time LUKS reopen (#8210) is proven on a real reset host,"
   echo "and the birth and replace routes are no longer held by this precondition."

@@ -419,9 +419,33 @@ fi
 # this script, so at birth the reopen unit must be enabled AND have completed its noop path
 # with Result=success. `is-enabled` alone would pass a unit that is armed for next boot but
 # died today; Result=success (not is-active) is what a oneshot reports whether or not
-# RemainAfterExit keeps it "active". Fail-closed by construction: a unit mid-Restart= on a
-# transient Doppler blip reads `no` here even though the host is healthy a minute later.
+# RemainAfterExit keeps it "active".
+#
+# WAIT FOR A TERMINAL STATE FIRST, and this is the difference between a measurement and a
+# coin flip. MEASURED on systemd 261: for a unit with `Restart=on-failure`, `systemctl
+# enable --now` returns at the FIRST attempt's failure -- rc=1 after 0s, with
+# `Result=exit-code` and `ActiveState=activating` -- and the restart ladder then goes on to
+# succeed (`Result=success`, `NRestarts=2`). So sampling `Result` the instant the arm item
+# returns reads a TRANSIENT state, not the unit's verdict.
+#
+# That mattered because this boolean is TERMINAL: a `no` makes the boot-signal poll tell the
+# operator to treat the birth or replace as FAILED, and the remediation for that is another
+# destroy/recreate of the host holding every user's source. A 30-second Doppler or DNS blip
+# at birth would therefore have ordered a destructive remediation of a completely healthy
+# host -- the exact asymmetry that keeps `nft_metadata_drop` non-terminal three lines above.
+# An earlier revision of this comment recorded the transient read as "accepted"; it was not
+# acceptable, and the fix is to make the measurement exact rather than to weaken the signal.
+#
+# `activating` is the only state worth waiting on: `failed` and `active` are both terminal
+# for our purposes, and the bounded wait means a genuinely wedged unit still reports `no`
+# rather than hanging the boot.
 _reopen_unit=no
+_reopen_wait=0
+while [ "$(systemctl show -p ActiveState --value git-data-luks-reopen.service 2>/dev/null)" = activating ] \
+      && [ "$_reopen_wait" -lt 420 ]; do
+  sleep 5
+  _reopen_wait=$((_reopen_wait + 5))
+done
 if systemctl is-enabled --quiet git-data-luks-reopen.service 2>/dev/null &&
    [ "$(systemctl show -p Result --value git-data-luks-reopen.service 2>/dev/null)" = success ]; then
   _reopen_unit=yes

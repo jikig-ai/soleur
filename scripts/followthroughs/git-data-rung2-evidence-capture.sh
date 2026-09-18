@@ -198,15 +198,10 @@ if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-
   exit 64
 fi
 
-# (#8210) --reboot-since reaches the same WHERE clause through SENTRY_SINCE, and it is ALSO
-# passed to sentry-issue.sh as --start, so it is shape-validated here for the same reason
-# --host-name and --window are: an unvalidated value is SQL the caller wrote.
-if [[ -n "$REBOOT_SINCE" ]]; then
-  if [[ ! "$REBOOT_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
-    echo "refusing: --reboot-since must be ISO8601 'YYYY-MM-DDTHH:MM:SS' (it is interpolated into the Better Stack SQL and passed to Sentry as --start). Got: ${REBOOT_SINCE}" >&2
-    exit 64
-  fi
-fi
+# (#8210) --reboot-since needs no shape check of its own: it assigns SENTRY_SINCE above, and
+# the existing SENTRY_SINCE validation below applies the identical ISO8601 regex to it. A
+# second copy was cut at review -- it only shadowed that one with a different message, which
+# is a second place for the regex to drift.
 
 # `--window` REACHES THE SAME `WHERE` CLAUSE, so it gets the same treatment as --host-name.
 #

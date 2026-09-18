@@ -216,8 +216,12 @@ ok "$((n != 1))" "B6 bootstrap §1b untouched: exactly one cryptsetup luksOpen (
 
 # gc.service ordering edge
 GC_BODY="$SCRATCH/gc.body"; strip "$GC_UNIT" > "$GC_BODY"
-ok "$(unit_has "$GC_BODY" 'Wants=git-data-luks-reopen.service')" "G1 gc.service Wants= the reopen (weekly standing retry) (M12)"
-ok "$(unit_has "$GC_BODY" 'After=git-data-luks-reopen.service')" "G2 gc.service After= the reopen"
+# ORDERING ONLY. The `Wants=` was cut at review: it made a weekly maintenance timer an implicit
+# retry driver for a boot-critical unit whose real failure has already paged, and re-fired that
+# unit's OnFailure reporter every week. The NEGATIVE is asserted so it cannot drift back in.
+ok "$(unit_has "$GC_BODY" 'After=git-data-luks-reopen.service')" "G1 gc.service orders After= the reopen"
+n=$(grep -c '^Wants=git-data-luks-reopen.service' "$GC_BODY" || true)
+ok "$((n != 0))" "G2 gc.service does NOT Wants= the reopen — ordering, not a retry driver (got $n)"
 
 # Sentry routing: the success stage must be absent from every rule; the fatal stages present.
 fatal_block() { awk '/^resource "sentry_alert" "git_data_boot_fatal"/{f=1} f{print} f&&/^}/{exit}' "$ALERTS"; }

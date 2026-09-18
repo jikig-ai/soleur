@@ -8,10 +8,12 @@ Description=git-data bare-repo maintenance (unreachable-object reclaim)
 Documentation=https://github.com/jikig-ai/soleur/issues/6982
 Wants=network-online.target
 After=network-online.target
-# (#8210) Order after the boot-time LUKS reopen and pull it in: the weekly Persistent= timer
-# thereby becomes a standing retry of a failed reopen, and gc never runs against the reopen
-# window (its own mountpoint FATAL still fires if the store is absent after the reopen).
-Wants=git-data-luks-reopen.service
+# (#8210) ORDER after the boot-time LUKS reopen, do NOT pull it in. `After=` alone is the
+# real requirement: gc must not run against the reopen window, and its own mountpoint FATAL
+# still fires if the store is absent afterwards. A `Wants=` here was cut at review -- it
+# turned a weekly maintenance timer into an implicit retry driver for a boot-critical unit
+# whose genuine failure has already paged `luks_reopen` fatal, and it would re-fire that
+# unit's OnFailure reporter every week on a host nobody fixes by waiting.
 After=git-data-luks-reopen.service
 
 # OnFailure= is a [Unit] DIRECTIVE. It was in [Service] until review ran
