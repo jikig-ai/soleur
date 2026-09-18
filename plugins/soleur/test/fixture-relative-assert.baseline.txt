@@ -215,6 +215,7 @@
 2	.openhands/hooks/stop-hook.sh
 2	plugins/soleur/hooks/stop-hook.sh
 4	plugins/soleur/scripts/domain-model-drift.sh
+5	plugins/soleur/scripts/lib/operator-script.sh
 4	plugins/soleur/scripts/lib/session-state.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
@@ -260,6 +261,7 @@
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 1	plugins/soleur/test/merge-kb-index-driver-mutation.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
+1	plugins/soleur/test/operator-script.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
 7	plugins/soleur/test/resolve-target-decision.test.sh

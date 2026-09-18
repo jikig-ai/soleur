@@ -510,13 +510,24 @@ soleur_op_env_upsert() {
   before_count="$(soleur_op_env_key_count "$env_file")"
   # `.tmp.` in the name so a `.env*` ignore pattern covers the sibling too; the
   # template's not-ignored check probes this exact shape.
+  #
+  # A SOURCED library must not install an owning `trap ... EXIT`: it would REPLACE
+  # the consumer's — provision-hetzner.sh installs `cleanup`, the generated template
+  # installs `on_exit` — and `on_exit` is the terminal-outcome mechanism this whole
+  # feature rests on. Clobbering it to tidy a tempfile trades a bounded leak for the
+  # silent loss of the founder's stopped-at-stage report. So every path out of these
+  # two helpers removes its own temp explicitly; the temp is a full copy of the
+  # credentials file, which is why this is not merely tidiness.
+  # lint-trap-ownership: ok sourced library; an EXIT trap here would clobber the consumer's on_exit/cleanup, and every path below removes this temp explicitly
   tmp="$(mktemp "${env_file}.tmp.XXXXXX")" || {
     printf 'SOLEUR_BOOTSTRAP_BAD_ARG helper=env_upsert reason=mktemp-failed\n'
     return 1
   }
-  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || return 1
-  printf '%s=%s\n' "$key" "$value" >> "$tmp"
-  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$before_count" || return 1
+  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || { rm -f "$tmp"; return 1; }
+  printf '%s=%s\n' "$key" "$value" >> "$tmp" || { rm -f "$tmp"; return 1; }
+  # On success env_commit `mv`s the temp into place, so there is nothing to remove;
+  # on failure it leaves it, and this is the only frame that still holds the name.
+  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$before_count" || { rm -f "$tmp"; return 1; }
   soleur_op_ledger_note env_upsert "$key" "keys_before=${before_count}"
 }
 
@@ -531,9 +542,10 @@ soleur_op_env_reset() {
   env_file="$(readlink -f -- "$env_file" 2>/dev/null || printf '%s' "$env_file")"
   [[ -f "$env_file" ]] || return 0
   before_count="$(soleur_op_env_key_count "$env_file")"
+  # lint-trap-ownership: ok sourced library; same reason as env_upsert above — an EXIT trap here would clobber the consumer's, and every path below removes this temp explicitly
   tmp="$(mktemp "${env_file}.tmp.XXXXXX")" || return 1
-  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || return 1
-  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$(( before_count > 0 ? before_count - 1 : 0 ))" || return 1
+  soleur_op_env_filter_out "$env_file" "$key" "$tmp" || { rm -f "$tmp"; return 1; }
+  soleur_op_env_commit "$env_file" "$tmp" "$before_count" "$(( before_count > 0 ? before_count - 1 : 0 ))" || { rm -f "$tmp"; return 1; }
   soleur_op_ledger_note env_reset "$key" ""
 }
 

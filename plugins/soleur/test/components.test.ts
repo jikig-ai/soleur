@@ -330,13 +330,46 @@ describe("Decision-principles taxonomy wiring", () => {
 });
 
 describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
-  const stripHtmlComments = (raw: string) => raw.replace(/<!--[\s\S]*?-->/g, "");
+  // Loop until stable, not a single pass. A one-shot replace is incomplete
+  // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
+  // high): removing an inner `<!-- … -->` can splice its neighbours into a FRESH
+  // `<!--`, so a crafted overlap survives the strip. That matters here and not
+  // only in the abstract — this strip exists so a comment cannot satisfy the
+  // assertions below, and the surviving-comment case is exactly the one that
+  // would let a commented-out invocation certify the wiring as present.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
 
   // The skill is only ever reached from ship's operator-step gate; an orphaned
   // skill is the failure R14 folded this assertion in to catch. HTML comments
   // are stripped BEFORE matching (a comment can carry the literal and would
   // otherwise satisfy a bare regex), and the match is anchored to the option-4
   // list item of the gate, not to any mention anywhere in the file.
+  // The strip is the guard's own precondition, so it gets its own row. The
+  // fixture is the overlap CodeQL named: a single-pass replace consumes the
+  // INNER comment and splices the remainder into a fresh, live
+  // `<!-- skill: soleur:operator-bootstrap -->` — the literal the assertion
+  // below matches. Measured: one pass leaves it, the loop removes it.
+  test("stripHtmlComments survives an overlapping comment that would re-form the invocation", () => {
+    const evil = "<!<!-- x -->-- skill: soleur:operator-bootstrap -->";
+    const singlePass = evil.replace(/<!--[\s\S]*?-->/g, "");
+    expect(
+      singlePass.includes("skill: soleur:operator-bootstrap"),
+      "fixture no longer reproduces the single-pass defect — pick a new overlap or this row proves nothing",
+    ).toBe(true);
+    expect(
+      stripHtmlComments(evil).includes("skill: soleur:operator-bootstrap"),
+      "stripHtmlComments left a commented-out invocation intact — a comment can certify the wiring",
+    ).toBe(false);
+  });
+
   test("ship's operator-step gate offers option 4 as the Skill-tool invocation of soleur:operator-bootstrap", () => {
     const raw = stripHtmlComments(
       readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8"),

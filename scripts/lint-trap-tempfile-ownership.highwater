@@ -1,4 +1,4 @@
-80  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+81  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
 # 79th entrant (2026-09-17, #8160): scripts/file-upstream-ask-8160.sh — its
 # mktemp -d output directory IS the deliverable (email/bug bodies the operator
 # sends after the run), so it must outlive the process by design; annotated
@@ -19,3 +19,13 @@
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.
+# 80 -> 81 (#8287): plugins/soleur/scripts/lib/operator-script.sh allocates a
+# .env temp in env_upsert/env_reset. It is a SOURCED library, so an owning
+# `trap ... EXIT` would REPLACE the consumer's -- provision-hetzner.sh installs
+# `cleanup`, the generated bootstrap installs `on_exit`, and on_exit is the
+# terminal-outcome report this feature rests on. Tidying a tempfile is not worth
+# silently losing the founder's stopped-at-stage line. Both sites are annotated
+# `lint-trap-ownership: ok` and every path out of both helpers removes its own
+# temp explicitly (filter failure, append failure, commit failure; success mv's
+# it away), so the residual leak is a hard kill, which no trap would survive
+# either.

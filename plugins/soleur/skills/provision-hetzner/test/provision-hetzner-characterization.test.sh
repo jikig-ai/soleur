@@ -205,12 +205,22 @@ $(diff <(printf '%s\n' "$status_before") <(printf '%s\n' "$status_after") | sed 
 fi
 
 # --- Anti-vacuity floor -----------------------------------------------------
-# Reads and appends to the SAME two counters the verdict below reads.
+# REPORTS DIRECTLY (printf + exit 1), never by incrementing FAIL_COUNT (ADR-193)
+# — a floor dispatched through the suite's own pass()/fail() is disarmed by the
+# same one-line edit that disarms every assertion it backstops. This suite is
+# PROMOTED into guard-vacuity-floor's covered scope, which mutation-tests this
+# shape, so the direct form is what keeps the promotion honest.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 FLOOR=21
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
-  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
-  FAIL_COUNT=$((FAIL_COUNT + 1))
+  printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
+  printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
+  exit 1
+fi
+# Conservation: pass + fail must account for every assertion the run made.
+if [[ "$ASSERT_TOTAL" -ne $((PASS_COUNT + FAIL_COUNT)) ]]; then
+  printf '  [FAIL] accounting: pass=%s fail=%s do not reconcile to %s\n' "$PASS_COUNT" "$FAIL_COUNT" "$ASSERT_TOTAL" >&2
+  exit 1
 fi
 
 echo "Total: $((PASS_COUNT + FAIL_COUNT)) assertions, ${FAIL_COUNT} failed"

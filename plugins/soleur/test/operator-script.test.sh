@@ -660,7 +660,7 @@ then assert_red genv_check "genv-rD symlinked .env replaced by a regular file" "
 
 # row E — the append moves back AFTER the commit (non-atomic upsert)
 if mutate "genv-rE KEY=value appended after the mv" "$SB/mut/genvE.sh" <<'PROG'
-s{(  printf '%s=%s\\n' "\$key" "\$value" >> "\$tmp"\n)(  soleur_op_env_commit "\$env_file" "\$tmp" "\$before_count" "\$before_count" \|\| return 1\n)}{$2  printf '%s=%s\\n' "\$key" "\$value" >> "\$env_file"\n}
+s{(  printf '%s=%s\\n' "\$key" "\$value" >> "\$tmp" \|\| \{ rm -f "\$tmp"; return 1; \}\n)(  # On success[^\n]*\n  # on failure[^\n]*\n)(  soleur_op_env_commit "\$env_file" "\$tmp" "\$before_count" "\$before_count" \|\| \{ rm -f "\$tmp"; return 1; \}\n)}{$3  printf '%s=%s\\n' "\$key" "\$value" >> "\$env_file"\n}
 PROG
 then assert_red genv_check "genv-rE non-atomic upsert" "$SB/mut/genvE.sh"; fi
 
@@ -1905,12 +1905,24 @@ else
 fi
 
 # --- Anti-vacuity floor ------------------------------------------------------
-# Reads and appends to the SAME two counters the verdict below reads.
+# REPORTS DIRECTLY (printf + exit 1), never by incrementing FAIL_COUNT (ADR-193).
+# The floor exists to backstop the assertion machinery, so routing it THROUGH
+# that machinery makes it disarmable by the same one-line edit it is supposed to
+# catch: neuter pass()/fail() and the counters stay 0, the floor's own increment
+# is the only thing left, and a verdict read from those counters is exactly what
+# an attacker of the guard would neuter next. scripts/guard-vacuity-floor.test.sh
+# measures this shape across the repo and reddens on the fail()-routed form.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 FLOOR=136
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
-  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
-  FAIL_COUNT=$((FAIL_COUNT + 1))
+  printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
+  printf 'Total: %s assertions, %s failed\n' "$ASSERT_TOTAL" "$((FAIL_COUNT + 1))"
+  exit 1
+fi
+# Conservation: the two counters must account for every assertion the run made.
+if [[ "$ASSERT_TOTAL" -ne $((PASS_COUNT + FAIL_COUNT)) ]]; then
+  printf '  [FAIL] accounting: pass=%s fail=%s do not reconcile to %s\n' "$PASS_COUNT" "$FAIL_COUNT" "$ASSERT_TOTAL" >&2
+  exit 1
 fi
 
 echo "Total: $((PASS_COUNT + FAIL_COUNT)) assertions, ${FAIL_COUNT} failed"
