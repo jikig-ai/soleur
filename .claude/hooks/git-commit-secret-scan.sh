@@ -23,12 +23,23 @@
 # Hook exit code: 0 always (JSON output controls the gate).
 #
 # Fail-open conditions (the hook allows the commit + emits a warn):
-#   - gitleaks binary not installed on PATH
+#   - gitleaks binary not installed on PATH          (bypass "gitleaks not installed")
+#   - gitleaks on PATH but cannot run, e.g. an unpinned version-manager shim
+#                                                    (bypass "gitleaks unrunnable (rc=N)")
+#   - a RUNNABLE gitleaks exits non-zero with no report — plausibly transient
+#                                                    (bypass "gitleaks exit=N, empty report")
 #   - Not inside a git work tree
 #   - .gitleaks.toml not present at the repo root
 # These are operator-environment issues, not secret-leak signals — the
 # user should fix their tooling but a missing binary should not block
 # every commit. CI re-scans on every push as the load-bearing gate.
+# The unrunnable case is split out because it is PERMANENT and machine-wide
+# (#8266): folded into the "transient" branch it silently bypassed every
+# commit on such a host under a reason that said otherwise.
+#
+# A `bypass` row is not proof the commit landed: where lefthook runs, its own
+# `gitleaks-staged` step can still block the same commit (and, with an
+# unrunnable gitleaks, fail it — see #8271).
 
 set -euo pipefail
 
@@ -106,9 +117,28 @@ fi
 # At this point: the tool call is a `git commit` (or a chain containing one).
 # Run gitleaks against the staged index. Fail-open if gitleaks is missing.
 
+GL_REMEDIATION="CI pins gitleaks 8.24.2 — install that version or pin it in your version manager (e.g. 'mise use gitleaks@8.24.2')."
+
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "[git-commit-secret-scan] WARN: gitleaks not installed — skipping scan. Install via 'brew install gitleaks' or release page." >&2
+  echo "[git-commit-secret-scan] WARN: gitleaks not installed — skipping scan. $GL_REMEDIATION" >&2
   emit git-commit-secret-scan bypass "gitleaks not installed"
+  allow
+fi
+
+# RESOLVABLE IS NOT RUNNABLE (#8266). `command -v` only proves the name resolves;
+# an unpinned mise shim resolves and exits non-zero on every call. Probe by
+# running the tool. Bound it with timeout when one exists — stock macOS has
+# neither `timeout` nor `gtimeout`, and a missing bound must never be misread as
+# a broken gitleaks, or every macOS commit would skip the scan.
+gl_to=()
+if command -v timeout >/dev/null 2>&1; then gl_to=(timeout 10)
+elif command -v gtimeout >/dev/null 2>&1; then gl_to=(gtimeout 10); fi
+gl_probe_rc=0
+gl_probe_err="$( { "${gl_to[@]}" gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
+if [ "$gl_probe_rc" -ne 0 ]; then
+  printf '[git-commit-secret-scan] WARN: gitleaks is on PATH but cannot run (rc=%s, %q) — skipping scan. %s\n' \
+    "$gl_probe_rc" "${gl_probe_err%%$'\n'*}" "$GL_REMEDIATION" >&2
+  emit git-commit-secret-scan bypass "gitleaks unrunnable (rc=$gl_probe_rc)"
   allow
 fi
 
@@ -136,11 +166,23 @@ trap 'rm -f "$report_file"' EXIT INT TERM
 # `gitleaks git --pre-commit --staged` scans only files added to the index
 # (matches the lefthook-staged invocation byte-for-byte). The hook's CWD
 # may not be the repo root, so cd into it first.
+#
+# COLOUR IS PINNED OFF for this invocation. `gitleaks git` runs git itself and
+# inherits the user's config; under color.ui=always or color.diff=always it
+# parses ANSI-wrapped patch lines and reports ZERO findings on a staged key
+# (measured). The pin is added after any GIT_CONFIG_* entries the caller already
+# set, never replacing them. lefthook.yml's gitleaks-staged step carries the same
+# pin.
+gl_cfg_n="${GIT_CONFIG_COUNT:-0}"
+case "$gl_cfg_n" in ''|*[!0-9]*) gl_cfg_n=0 ;; esac
 scan_rc=0
 (
   cd "$repo_root" || exit 1
-  gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
-    --report-format json --report-path "$report_file" >/dev/null 2>&1
+  env "GIT_CONFIG_COUNT=$((gl_cfg_n + 2))" \
+    "GIT_CONFIG_KEY_${gl_cfg_n}=color.ui" "GIT_CONFIG_VALUE_${gl_cfg_n}=never" \
+    "GIT_CONFIG_KEY_$((gl_cfg_n + 1))=color.diff" "GIT_CONFIG_VALUE_$((gl_cfg_n + 1))=never" \
+    gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
+      --report-format json --report-path "$report_file" >/dev/null 2>&1
 ) || scan_rc=$?
 
 if [ "$scan_rc" -eq 0 ]; then

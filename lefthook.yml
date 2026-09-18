@@ -49,9 +49,13 @@ pre-commit:
     # Documented as fast-feedback companion to the load-bearing CI gate at
     # .github/workflows/secret-scan.yml. Bypass with `git commit --no-verify`
     # is intentionally possible — CI re-scans on every PR.
+    # Colour is pinned off for this invocation: gitleaks runs git itself and,
+    # under a user's color.ui=always / color.diff=always, reports ZERO findings
+    # on a staged key (measured). Same pin as .claude/hooks/git-commit-secret-scan.sh,
+    # added after any GIT_CONFIG_* entries already in the environment.
     gitleaks-staged:
       priority: 4
-      run: gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1
+      run: n=${GIT_CONFIG_COUNT:-0}; env GIT_CONFIG_COUNT=$((n + 2)) "GIT_CONFIG_KEY_$n=color.ui" "GIT_CONFIG_VALUE_$n=never" "GIT_CONFIG_KEY_$((n + 1))=color.diff" "GIT_CONFIG_VALUE_$((n + 1))=never" gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1
     # Companion linter for shapes gitleaks doesn't catch (real emails, prod-shape
     # UUIDs, Supabase project refs). Path-array glob (NOT `**/*` — gobwas
     # semantics silently no-op without explicit subdirs; see learning
