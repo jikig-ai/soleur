@@ -1090,6 +1090,7 @@ debounce
 debugging
 decision-archaeology
 decision-challenge
+decision-challenges
 decision-ladder
 decision-recording
 decision-routing
@@ -1186,6 +1187,7 @@ detector-design
 determination
 determinism
 deterministic
+deterministic-lints
 dev-db
 dev-environment
 dev-prod-divergence
@@ -1549,6 +1551,7 @@ fixture-cardinality
 fixture-design
 fixture-direction
 fixture-fidelity
+fixture-identity
 fixture-population
 fixture-provenance
 fixture-redaction
@@ -1844,6 +1847,7 @@ hmac
 honest-reporting
 honesty-surface
 hook
+hook-bypass
 hook-design
 hook-test-isolation
 hook-timeout
@@ -1954,6 +1958,7 @@ installation-detection
 installation-id
 installation-takeover
 installation-token
+instance-vs-class
 instrument-error
 instrument-failure
 instrument-vacuity
@@ -2416,6 +2421,7 @@ notifications
 npm
 npm-packaged-binary
 npx
+nul-framing
 null
 null-delimited
 null-test
@@ -3136,6 +3142,7 @@ restatement
 restructure
 resume
 resume-from-memory
+resume-not-respawn
 resume-session
 retention
 retired-rules
@@ -3459,6 +3466,7 @@ session-errors
 session-key
 session-management
 session-persistence
+session-rate-limit
 session-resume
 session-rules-loader
 session-start
