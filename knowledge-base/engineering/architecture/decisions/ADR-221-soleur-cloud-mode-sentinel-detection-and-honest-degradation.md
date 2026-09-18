@@ -16,8 +16,12 @@ re-derived against `origin/*` at merge time. Implements #8159. The Phase 0
 probe ran on two arms (DRS sandbox `devin-b9cf2c02cc8f49debdbc49ed72cdf2b5`;
 user-facing web-app session, absorbed from PR #8196) — matrix rows, FR4
 mechanism, and FR5 scope are now measured, not provisional. Residual
-verification (user-facing re-check, clean-account `requiredPlugins`, `/handoff`
-`.devin/` sync, post-merge SC1/SC3/SC4) tracks on #8172.
+verification tracks on #8172: the 2026-09-17 residual arms discharged
+`requiredPlugins` (measured honored at repo scope — `git-subdir` object
+form required; the `url`+`#subdir` string form 404s through the cloud
+git-manager proxy) and `/handoff` `.devin/` sync (measured NO — no
+uncommitted/untracked/gitignored content transfers); `PostCompaction` and
+post-merge SC1/SC3/SC4 remain.
 
 ## Context
 
@@ -124,9 +128,16 @@ safeguard.
 6. **`requiredPlugins` is added to `.devin/config.json`** so cloud sessions on
    this repo install the plugin from the cloned repository; unknown-key
    tolerance verified locally (`devin doctor` parses clean) and the repo-level
-   key is documented in plugins overview §Inheritance level 3. Its marginal
-   effect is unmeasured — the org managed manifest already installs Soleur, so
-   a clean-account arm stays on #8172.
+   key is documented in plugins overview §Inheritance level 3. **Measured
+   2026-09-17 (#8172 residual arms):** the repo key IS honored at
+   `scope: "repo"` per repo cloned at session start — but only the
+   `git-subdir` object form resolves in cloud; the `url`+`#subdir` string
+   form passes its fragment verbatim into the git-manager proxy path and
+   404s (the managed manifest's successful fetch masked the failure via
+   identity dedup wherever both requirements were present). The manifest
+   therefore uses the object form. A clean-account isolation arm is closed
+   as unnecessary — arm A's repo-only requirement produced `resolved: []`,
+   proving the key is load-bearing.
 7. **The empirical probe ran (two arms) — results are folded into the
    decisions above.** FR4 froze on the hard-defer `message_user` mechanism
    (it blocks and stalls; never auto-approves). FR5 is maximal scope: zero
@@ -148,9 +159,11 @@ safeguard.
   coverage on a `single-user incident` plan blocks `/ship` absent explicit
   acknowledgement.
 - **Residual probe debt:** the two-arm probe measured the surfaces this design
-  depends on; what remains on #8172 is confirmatory (user-facing re-check of
-  the sandbox findings, a clean-account `requiredPlugins` arm, `/handoff`
-  `.devin/` sync, post-merge SC1/SC3/SC4 verification). If upstream later ships
+  depends on; the 2026-09-17 residual arms (#8172) then discharged the
+  `requiredPlugins` question (repo scope honored; object form required) and
+  `/handoff` fidelity (no uncommitted/gitignored transfer — a local sentinel
+  cannot arrive foreign). What remains is `PostCompaction` dispatch and
+  post-merge SC1/SC3/SC4 verification. If upstream later ships
   plugin hooks in cloud before subagents (#8160's own sequence), the
   `conflicting-evidence` arm keeps detection fail-closed instead of reading
   the new sentinel writes as `local`.

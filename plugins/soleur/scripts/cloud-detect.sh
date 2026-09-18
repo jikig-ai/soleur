@@ -16,7 +16,10 @@
 #                         no-devin-env like `local` (a Claude Code session must not
 #                         activate the cloud contract).
 #   malformed          -- sentinel exists but is not a JSON object or lacks host/hook_source
-#   foreign-host       -- sentinel host != `hostname` (handoff copy / committed sentinel)
+#   foreign-host       -- sentinel host != `hostname` (committed sentinel; measured 2026-09-17:
+#                         /handoff transfers committed content only, so a gitignored sentinel
+#                         cannot travel via it — the arm remains forward-defense for any
+#                         transport that does carry the file, and for user repos that commit it)
 #   non-plugin-source  -- sentinel hook_source != "plugin" (repo-level SessionStart firing in
 #                         cloud must never read as a local session)
 #   conflicting-evidence -- valid plugin-sourced, this-host sentinel on a box whose env
@@ -106,9 +109,12 @@ classify() {
     return
   fi
 
-  # 3. Host must match — a sentinel that travelled (handoff worktree copy, a
-  #    commit in a user repo that doesn't gitignore .devin/) is not evidence of
-  #    THIS host's session. Same `hostname` invocation as the write side.
+  # 3. Host must match — a sentinel that travelled is not evidence of THIS
+  #    host's session (measured 2026-09-17: /handoff carries committed content
+  #    only, so gitignored files do not move via it; the live cause is a
+  #    commit in a user repo that doesn't gitignore .devin/, plus any future
+  #    transport that does carry the file). Same `hostname` invocation as the
+  #    write side.
   local this_host
   this_host="$(hostname 2>/dev/null || true)"
   if [[ -z "$this_host" || "$host" != "$this_host" ]]; then
@@ -151,7 +157,7 @@ emit_banner() {
       detail="local-session sentinel is unreadable, not a JSON object, or missing host/hook_source"
       ;;
     foreign-host)
-      detail="local-session sentinel was written by a different host (handoff copy or committed file)"
+      detail="local-session sentinel was written by a different host (committed file — /handoff does not carry gitignored content, measured 2026-09-17)"
       ;;
     non-plugin-source)
       detail="local-session sentinel was written by a repo-level hook, not the plugin registration"

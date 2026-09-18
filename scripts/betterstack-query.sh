@@ -102,6 +102,16 @@ e.g.  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --s
 Do NOT conclude "no access / can't verify" from this message — the correct next
 step is the doppler-wrapped re-run above. (Creds provisioning: see
 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+
+If `doppler` itself is not installed, that is ALSO not a missing capability —
+install it and re-run. The bootstrap is checksum-verified and needs no sudo:
+
+  scripts/ensure-doppler.sh              # installs to ~/.local/bin, prints the path
+  scripts/ensure-doppler.sh --state      # missing | unauthenticated | ready | unknown
+
+`unauthenticated` is the operator's to clear (`doppler login`, interactive) — it
+is NOT the same condition as `missing`, and it is NOT a network fault, which
+reports `unknown`.
 EOF
   # EXIT 3 HERE MEANS "NOTHING WAS QUERIED" -- and a sibling helper uses 3 for the opposite.
   #
