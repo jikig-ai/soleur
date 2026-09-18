@@ -825,6 +825,7 @@ community/github-community.sh
 community/github-stats
 community/scripts
 community/x-setup
+compaction
 compaction-boundary
 companion-pr
 comparedocumentposition
@@ -2741,6 +2742,7 @@ plugin-loader
 plugin-marketplace
 plugin-path
 plugin-root
+plugin-scope
 plugin-structure
 plugin-surfaces
 plugin-system
@@ -2789,6 +2791,7 @@ post-apply-verification
 post-deploy
 post-implementation-review
 post-merge
+postcompact
 postcss
 postgres
 postgres-partial-index
@@ -3478,6 +3481,7 @@ session-error
 session-errors
 session-key
 session-management
+session-manifest
 session-persistence
 session-rate-limit
 session-resume
@@ -4008,6 +4012,7 @@ trace/breakpoint trap
 trailers
 trailing-slash
 transaction-safety
+transcript
 transcript-judging
 transition
 transparency

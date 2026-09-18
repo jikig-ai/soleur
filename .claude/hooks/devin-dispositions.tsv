@@ -170,3 +170,5 @@ devin-permissions	deny	Read(~/.doppler/**)	permission	already-fires	ported verba
 devin-permissions	deny	Read(~/.git-credentials)	permission	already-fires	ported verbatim from claude deny	EC§6; ~ expansion UNMEASURED
 devin-permissions	deny	Read(~/.netrc)	permission	already-fires	ported verbatim from claude deny	EC§6; ~ expansion UNMEASURED
 devin-permissions	deny	Read(~/.ssh/**)	permission	already-fires	ported verbatim from claude deny	EC§6; ~ expansion UNMEASURED
+soleur-plugin	plugins/soleur/hooks/compaction-state.sh	SessionStart	startup|resume|clear|compact	n/a	matcher-dead + no-compaction-lifecycle	compaction is a Claude Code API; Devin emits no compact source, so the compact arm is unreachable and the reset arm would only truncate a ledger nothing writes. Plugin SessionStart hooks also never fire in cloud (ADR-221). Documented as honest degradation in devin/INSTRUCTIONS.md. #8323, ADR-227
+soleur-plugin	plugins/soleur/hooks/compaction-state.sh	PreCompact	manual|auto	n/a	no-devin-wire-name	PreCompact is a Claude Code lifecycle event with no Devin wire-name equivalent; there is no matcher to anchor. #8323, ADR-227
