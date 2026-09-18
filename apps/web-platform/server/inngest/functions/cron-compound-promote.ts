@@ -217,6 +217,134 @@ async function readAlwaysLoaded(
 export const TARGET_ALLOW_RE =
   /^(AGENTS\.rules\.md|plugins\/soleur\/skills\/[A-Za-z0-9_-]+\/SKILL\.md)$/;
 
+// =============================================================================
+// Outcome marker (#8281)
+// =============================================================================
+
+/**
+ * Every terminal path of this handler returns a `status`. Until #8281 that
+ * string was returned into the void: the only signal a run emitted was
+ * `postSentryHeartbeat({ ok: true })`, which proves LIVENESS and says nothing
+ * about WORK. Ten weeks of zero output were therefore undiagnosable — the
+ * handler was not failing, it was succeeding at nothing and saying ok.
+ *
+ * WARN is load-bearing, not stylistic: only pino WARN+ transits Vector to the
+ * Better Stack source, so an `info` marker would be unqueryable and would
+ * recreate the exact blind spot this exists to remove. Precedent:
+ * `claude-cost-marker.ts` ("Emit one SOLEUR_CLAUDE_COST WARN marker").
+ *
+ * Never throws — observability must not break a run.
+ */
+export interface CompoundPromoteOutcome {
+  status: string;
+  corpus_count?: number;
+  clusters_proposed?: number;
+  clusters_opened?: number;
+  /** One entry per refusal site that fired, in order. */
+  refusals?: string[];
+  /**
+   * Bounded per-cluster refusal detail. Carries a cluster hash and a fixed
+   * reason enum ONLY — never learning text or paths — so a recurring refusal of
+   * the SAME cluster is distinguishable from a genuinely quiet corpus.
+   */
+  refusal_detail?: { cluster_hash: string; reason: string }[];
+  /** Bytes of the corpus payload serialized into the Anthropic message. */
+  corpus_input_bytes?: number;
+}
+
+/** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
+export const REFUSAL_DETAIL_CAP = 20;
+
+export function emitOutcomeMarker(
+  logger: { warn: (obj: object, msg: string) => void },
+  outcome: CompoundPromoteOutcome,
+): void {
+  try {
+    logger.warn(
+      {
+        SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,
+        fn: "cron-compound-promote",
+        ...outcome,
+        refusal_detail: outcome.refusal_detail?.slice(0, REFUSAL_DETAIL_CAP),
+      },
+      "compound promote outcome",
+    );
+  } catch {
+    // fail-open: a marker-emit failure must never propagate into the caller.
+  }
+}
+
+// =============================================================================
+// Diff path derivation (#8274)
+// =============================================================================
+
+export type DiffPathVerdict =
+  | { ok: true; paths: string[] }
+  | { ok: false; reason: "structural-op" | "underivable" | "path-refused"; detail: string };
+
+/**
+ * Decide whether a proposal diff may be applied, deriving the affected paths
+ * from git ITSELF rather than from a hand-written header parser.
+ *
+ * Two measured facts drive the shape:
+ *
+ *  1. `git apply` with no `-p` strips ONE leading path component, whatever it
+ *     is. The shipped filter matched `+++ b/` literally, so `+++ x/…` and
+ *     `+++ w/…` wrote files it never saw and the allowlist passed vacuously.
+ *
+ *  2. `--numstat` reports only a rename's DESTINATION. A diff renaming
+ *     `AGENTS.rules.md` to an allowlisted `SKILL.md` path therefore yields a
+ *     fully-allowlisted path set while the apply DELETES the rule corpus — so a
+ *     numstat-only derivation would have shipped a second bypass of the guard
+ *     it was fixing.
+ *
+ * The structural check is the general answer to (2): `git apply --summary` is
+ * EMPTY for a pure content edit and non-empty for create, delete, rename, copy
+ * AND mode-change. Refusing any non-empty summary therefore covers shapes
+ * nobody enumerated (a proposal making a markdown file executable is not an
+ * edit), instead of enumerating rename and hoping that was the last one.
+ * Creation is deliberately included: new skills are Phase 2 (#8293).
+ */
+export async function checkDiffPaths(
+  diff: string,
+  repoRoot: string,
+): Promise<DiffPathVerdict> {
+  const summary = await spawnGitCapture(["apply", "--summary"], repoRoot, diff);
+  if (summary.exitCode !== 0) {
+    return { ok: false, reason: "underivable", detail: "git apply --summary rejected the diff" };
+  }
+  const structural = summary.stdout.trim();
+  if (structural.length > 0) {
+    return { ok: false, reason: "structural-op", detail: structural.split("\n")[0] ?? "" };
+  }
+
+  const numstat = await spawnGitCapture(["apply", "--numstat", "-z"], repoRoot, diff);
+  if (numstat.exitCode !== 0) {
+    return { ok: false, reason: "underivable", detail: "git apply --numstat rejected the diff" };
+  }
+  // `--numstat -z` emits `added\tdeleted\0path\0` per file.
+  const paths = numstat.stdout
+    .split("\0")
+    .map((field) => {
+      const tab = field.lastIndexOf("\t");
+      return tab === -1 ? field : field.slice(tab + 1);
+    })
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && !/^\d+$/.test(p));
+
+  if (paths.length === 0) {
+    // An empty derived set must REFUSE. Reading it as "no forbidden paths" is
+    // the vacuous pass a header-less diff exploited.
+    return { ok: false, reason: "underivable", detail: "no paths derivable from diff" };
+  }
+
+  const bad = paths.find((p) => !TARGET_ALLOW_RE.test(p));
+  if (bad !== undefined) {
+    return { ok: false, reason: "path-refused", detail: bad };
+  }
+  return { ok: true, paths };
+}
+
 const BRANCH_SHAPE_RE =
   /^self-healing\/auto-[0-9a-f]{64}-[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
@@ -315,6 +443,34 @@ function spawnGit(
     const child = spawn("git", args, { stdio: "ignore", ...opts });
     child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
     child.on("error", () => resolve({ exitCode: -1, signal: null }));
+  });
+}
+
+/**
+ * Run git with the diff on stdin and capture stdout. `spawnGit` uses
+ * `stdio: "ignore"`, so it cannot answer a question ABOUT a diff — only whether
+ * a command succeeded. The allowlist derivation needs git's own report of what
+ * a patch would write, which is stdout.
+ */
+function spawnGitCapture(
+  args: string[],
+  cwd: string,
+  stdin: string,
+): Promise<{ exitCode: number | null; stdout: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "ignore"] });
+    let stdout = "";
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.on("exit", (exitCode) => resolve({ exitCode, stdout }));
+    child.on("error", () => resolve({ exitCode: -1, stdout: "" }));
+    child.stdin?.on("error", () => {
+      // A diff large enough to trip EPIPE must not crash the handler; the
+      // non-zero exit below is the refusal.
+    });
+    child.stdin?.end(stdin);
   });
 }
 
@@ -466,6 +622,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
+      emitOutcomeMarker(logger, { status: "disabled" });
       return { ok: true, status: "disabled" };
     }
 
@@ -493,6 +650,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-dedup", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
+      emitOutcomeMarker(logger, { status: "deduped" });
       return { ok: true, status: "deduped" };
     }
 
@@ -511,6 +669,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-week-cap", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
+      emitOutcomeMarker(logger, { status: "week-cap-reached" });
       return { ok: true, status: "week-cap-reached" };
     }
 
@@ -562,10 +721,15 @@ export async function cronCompoundPromoteHandler({
       return { entries };
     });
 
+    // #8281: the measured cost driver. The 2026-09-13 run sent 516,512 input
+    // tokens and opened nothing; this is the term that made it so.
+    const corpusInputBytes = Buffer.byteLength(JSON.stringify(corpus.entries), "utf8");
+
     if (corpus.entries.length === 0) {
       await step.run("sentry-heartbeat-ok-empty", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
+      emitOutcomeMarker(logger, { status: "empty-corpus", corpus_count: 0 });
       return { ok: true, status: "empty-corpus" };
     }
 
@@ -639,11 +803,23 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
+      emitOutcomeMarker(logger, {
+        status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters",
+        corpus_count: corpus.entries.length,
+        clusters_proposed: clusterResult.clusters.length,
+        clusters_opened: 0,
+        corpus_input_bytes: corpusInputBytes,
+      });
       return { ok: true, status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters" };
     }
 
     // FR9-FR18: apply clusters and open PRs
     let clustersOpened = 0;
+    // #8281: why a run produced nothing is the datum that was missing. One
+    // entry per refusal that fired, plus a bounded per-cluster detail so a
+    // cluster refused EVERY week is distinguishable from a quiet corpus.
+    const refusals: string[] = [];
+    const refusalDetail: { cluster_hash: string; reason: string }[] = [];
 
     for (const cluster of clusterResult.clusters) {
       const clusterHash = computeClusterHash(cluster.source_learnings);
@@ -657,6 +833,8 @@ export async function cronCompoundPromoteHandler({
 
         if (!TARGET_ALLOW_RE.test(cluster.target_path)) {
           logger.warn({ fn: "cron-compound-promote", path: cluster.target_path }, "target-path-refused");
+          refusals.push("target-path-refused");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "target-path-refused" });
           reportSilentFallback(new Error("target_path not in allowlist"), {
             feature: "cron-compound-promote", op: "target-path-refused",
             extra: { path: cluster.target_path },
@@ -666,21 +844,35 @@ export async function cronCompoundPromoteHandler({
 
         if (cluster.proposed_diff_unified.length > MAX_DIFF_BYTES) {
           logger.warn({ fn: "cron-compound-promote" }, "diff-size-exceeded");
+          refusals.push("diff-size-exceeded");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "diff-size-exceeded" });
           return;
         }
 
-        const diffPaths = cluster.proposed_diff_unified
-          .split("\n")
-          .filter((l) => l.startsWith("+++ b/"))
-          .map((l) => l.replace("+++ b/", ""));
-        const badPath = diffPaths.find((p) => !TARGET_ALLOW_RE.test(p));
-        if (badPath) {
-          logger.warn({ fn: "cron-compound-promote", path: badPath }, "diff-path-refused");
+        // #8274: derive the affected paths from git itself. The previous
+        // `+++ b/` filter was vacuous — `git apply` strips ONE leading
+        // component whatever it is, so `+++ x/…` wrote files it never saw.
+        const pathVerdict = await checkDiffPaths(cluster.proposed_diff_unified, repoRoot);
+        if (!pathVerdict.ok) {
+          const reason = `diff-${pathVerdict.reason}`;
+          logger.warn(
+            { fn: "cron-compound-promote", hash: clusterHash, reason, detail: pathVerdict.detail },
+            "diff-path-refused",
+          );
+          refusals.push(reason);
+          refusalDetail.push({ cluster_hash: clusterHash, reason });
+          reportSilentFallback(new Error(`diff refused: ${pathVerdict.reason}`), {
+            feature: "cron-compound-promote",
+            op: "diff-path-refused",
+            extra: { cluster_hash: clusterHash, reason, detail: pathVerdict.detail },
+          });
           return;
         }
 
         if (cluster.target_path === "AGENTS.rules.md" && diffRemovesHardRule(cluster.proposed_diff_unified)) {
           logger.warn({ fn: "cron-compound-promote", hash: clusterHash }, "agents-core-hr-rule-edit-refused");
+          refusals.push("agents-core-hr-rule-edit-refused");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "agents-core-hr-rule-edit-refused" });
           reportSilentFallback(new Error("Cluster proposes hr- rule edit"), {
             feature: "cron-compound-promote", op: "agents-core-hr-rule-edit-refused",
             extra: { cluster_hash: clusterHash },
@@ -710,12 +902,16 @@ export async function cronCompoundPromoteHandler({
         const branchName = `self-healing/auto-${clusterHash}-${dateSuffix}`;
         if (!BRANCH_SHAPE_RE.test(branchName)) {
           logger.warn({ fn: "cron-compound-promote", branch: branchName }, "branch-name-shape-failed");
+          refusals.push("branch-name-shape-failed");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "branch-name-shape-failed" });
           return;
         }
 
         const applied = await applyDiffToWorkspace(cluster.proposed_diff_unified, repoRoot);
         if (!applied) {
           logger.warn({ fn: "cron-compound-promote", hash: clusterHash }, "git-apply-check-failed");
+          refusals.push("git-apply-check-failed");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "git-apply-check-failed" });
           reportSilentFallback(new Error("git apply --check failed"), {
             feature: "cron-compound-promote", op: "git-apply-check-failed",
           });
@@ -731,6 +927,8 @@ export async function cronCompoundPromoteHandler({
         );
         if (postBytes > MAX_ALWAYS_LOADED_BYTES) {
           logger.warn({ fn: "cron-compound-promote", bytes: postBytes }, "byte-budget-overflow");
+          refusals.push("byte-budget-overflow");
+          refusalDetail.push({ cluster_hash: clusterHash, reason: "byte-budget-overflow" });
           reportSilentFallback(new Error("Post-apply byte budget exceeded"), {
             feature: "cron-compound-promote", op: "byte-budget-overflow",
             extra: { bytes: postBytes, cap: MAX_ALWAYS_LOADED_BYTES },
@@ -818,6 +1016,15 @@ export async function cronCompoundPromoteHandler({
     }
 
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
+    emitOutcomeMarker(logger, {
+      status: "completed",
+      corpus_count: corpus.entries.length,
+      clusters_proposed: clusterResult.clusters.length,
+      clusters_opened: clustersOpened,
+      refusals,
+      refusal_detail: refusalDetail,
+      corpus_input_bytes: corpusInputBytes,
+    });
     return { ok: true, status: "completed", clustersOpened };
   } catch (err) {
     const e = err as Error;
@@ -834,6 +1041,7 @@ export async function cronCompoundPromoteHandler({
     } catch {
       // best-effort
     }
+    emitOutcomeMarker(logger, { status: "error" });
     return { ok: false, status: "error" };
   } finally {
     await teardownEphemeralWorkspace(ephemeralRoot);
