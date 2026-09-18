@@ -6,10 +6,20 @@ brand_survival_threshold: single-user incident
 closes: '#8281'
 brainstorm: knowledge-base/project/brainstorms/2026-09-18-wikiskill-skill-evolution-brainstorm.md
 source: https://arxiv.org/abs/2608.27454 (CC BY 4.0)
-status: draft
+status: revised-at-plan-review
 ---
 
 # Spec: WikiSkill-style Skill Evolution
+
+> **Scope revised 2026-09-18 at plan review (operator decision).** A seven-reviewer panel found
+> that four of the proposer's seven terminal statuses would mean a pattern layer fixes nothing, and
+> that the loop can be fired on demand (it is already manual-trigger allowlisted), so the cause is
+> minutes away rather than a week. **Phase 1 is now FR1 + FR3 only** — outcome telemetry and the
+> #8274 allowlist fix. FR4–FR10 (pattern layer, index, ledger reader, backfill) are deferred to
+> **#8293**, gated on (G-a) four readable weekly statuses AND (G-b) one draft PR or a named
+> `no_action` cause. FR2's streak alert is deferred with them: zero-output runs append no ledger
+> row, so a ledger-sourced streak counts a record that cannot exist.
+> Plan: `knowledge-base/project/plans/2026-09-18-feat-wikiskill-pattern-wiki-phase-1-plan.md`
 
 ## Problem Statement
 
