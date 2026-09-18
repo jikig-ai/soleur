@@ -307,6 +307,15 @@ jobs:
       # No `actions/checkout`. Every input is fetched over HTTPS, and checking out THIS repo
       # would be actively misleading: assertion 3 must observe what `main` serves to an installer
       # on raw.githubusercontent.com, not what the runner's local tree happens to contain.
+      #
+      # Consequence for the heartbeat step at the foot of this job: a `uses: ./…` action
+      # resolves from the runner's WORKSPACE, which this job never populates, so `./` can never
+      # resolve here (it never did — see the 2026-08-13 post-mortem). The composite is therefore
+      # referenced through GitHub's self-repository form `$/…`, which the runner downloads from
+      # this repository at the running commit during `Set up job`, with no checkout. Do NOT add
+      # an `actions/checkout` to "help" the heartbeat: it would write a `GITHUB_TOKEN` to disk in
+      # the one job built around untrusted input, and `scripts/lint-workflow-local-action-checkout.py`
+      # accepts `$/` without one.
       - name: Check the published marketplace manifest
         id: check
         run: |
@@ -905,18 +914,43 @@ jobs:
           fi
 
       - name: Sentry check-in (final)
-        uses: ./.github/actions/sentry-heartbeat
+        # SELF-REPOSITORY REFERENCE, not `./`. This job has no checkout (see the top of the
+        # job), and a `./` action resolves from the workspace, so `./.github/actions/…` never
+        # resolved here: the runner printed "Can't find 'action.yml' … Did you forget to run
+        # actions/checkout" on every tick and `continue-on-error` below greened the step — zero
+        # check-ins for the monitor's whole life. `$/` resolves from this repository at the
+        # running commit during `Set up job`, no checkout required (GitHub workflow-syntax
+        # reference, `jobs.<job_id>.steps[*].uses`; runner >= 2.336.0), so the composite runs at
+        # the same commit as this file, exactly like the 13 `./`+checkout sibling call sites.
+        #
+        # Direction of error is now LOUD: a `$/` download failure fails the whole job at
+        # `Set up job`, before the manifest check runs — a red run plus a Sentry missed
+        # check-in — where the `./` failure was swallowed at step time. That is every checkout
+        # sibling's posture. actionlint 1.7.7 (pinned in ci.yml) flags this line as
+        # "invalid format because ref is missing" — it predates the syntax (upstream tracker
+        # rhysd/actionlint#711); CI accepts actionlint findings (#7042 census), so the finding
+        # is recorded there, not suppressed. `scripts/lint-workflow-local-action-checkout.py`
+        # is the guard that keeps a `./` form from returning to a checkout-free job.
+        #
+        # Reference-form posture: `./` + `actions/checkout` stays canonical for jobs that
+        # already check out; `$/` is for checkout-free jobs.
+        # SOLEUR-DEBT: one `$/` site, 53 siblings on `./`+checkout; migrate the siblings to `$/` once a released actionlint parses `$/` (rhysd/actionlint#711) — sweep set on the next lines.
+        # That migration MUST sweep the four `./`-anchored consumer censuses that would go
+        # fail-open on a moved site: scripts/audit-bot-codeql-coverage.sh,
+        # scripts/check-cloudflare-token-drift.test.sh, plugins/soleur/test/terraform-target-parity.test.ts,
+        # scripts/wire-anthropic-preflight.awk.
+        uses: $/.github/actions/sentry-heartbeat
         if: always()
         # Required by the composite's docstring: its curl carries no `|| true`, so without this
-        # a Sentry ingest blip would turn a healthy run red.
+        # a Sentry ingest blip would turn a healthy run red. It is ALSO why a green step proves
+        # nothing about delivery: the evidence is the composite's `sentry-heartbeat: http_code=`
+        # log line and the check-in row Sentry's monitors API returns, never this step's outcome.
         continue-on-error: true
         with:
-          # #7493 — these three were ALWAYS `required: true` on the composite and were NEVER
-          # forwarded. Actions does not enforce `required` on composite-action inputs, so the
-          # composite hit its own empty-guard, printed a `::warning::` and exited 0: this
-          # monitor's check-in has never been delivered, and the "detects the job NOT RUNNING
-          # AT ALL" property the note below claims did not exist. Mirrors the sibling
-          # scheduled-terraform-drift.yml, which forwards the same three.
+          # These three are `required: true` on the composite, and Actions does not enforce
+          # `required` on composite-action inputs — an omitted one makes the composite hit its
+          # own empty-guard, print a `::warning::` and exit 0 (the 2026-08-13 post-mortem's first
+          # cause). Mirrors the sibling scheduled-terraform-drift.yml, which forwards the same three.
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
