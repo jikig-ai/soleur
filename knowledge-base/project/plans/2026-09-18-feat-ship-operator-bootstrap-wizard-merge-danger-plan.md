@@ -761,20 +761,26 @@ Reshaped three of the four scope items. (1) **B9**: a bare one-word `Door:` repr
 
 ## Test Scenarios
 
+> **QA 2026-09-18 (HEAD f579b91c9).** T1, T6 and T10 were written before the review round
+> cut the resume machinery and confirmed the class-2 ack takes no skip variable. Their rows below
+> carry the correction in place; the properties that survive were verified end-to-end against a
+> generated script in a scratch git repo (unattended halt, gitignore refusal, re-run idempotence,
+> ledger settle line, LIB_MISSING, `bash -x` refusal). Do not tick T1/T6/T10 as written.
+
 Written as *mutation → guard reddens*, not as *command → terminal output*. The Guard Contract matrices above are the primary battery; these are the end-to-end scenarios that sit around them.
 
 | # | Scenario | Expected |
 |---|---|---|
-| T1 | Run a generated script with stdin closed and every skip variable set | Exits 0, writes the full ledger, prompts nothing |
+| T1 | Run a generated script with stdin closed and every class-1/class-3 skip variable set | **Superseded by R8.** Reaches the class-2 destructive-write ack and exits **64** naming `destructive-write-ack(no-skip-variable-by-design)` — the ack has no skip variable by design, so a complete unattended run is impossible and that is the parity boundary, not a defect. QA-verified 2026-09-18. |
 | T2 | Run a generated script with stdin closed and one skip variable unset | Exits **64**, names the missing variable, emits `SOLEUR_BOOTSTRAP_INPUT_REQUIRED`, does **not** block (asserted under `timeout`) |
 | T3 | Run a generated script with the library file removed | Emits `SOLEUR_BOOTSTRAP_LIB_MISSING` and exits hard — never degrades to a stub |
 | T4 | Run a generated script under `bash -x` | Refuses with exit 78, marker on **stdout** |
 | T5 | Upsert `X_API_KEY`, then read the `.env` | `X_API_KEY_SECRET` survives; file mode is `600`; the mode is `600` at every instant after the first write, not only at the end |
-| T6 | Interrupt a generated script between stages, then re-run it | Second run is idempotent; the ledger shows the first run incomplete and `verify-bootstrap-run.sh --last` exits non-zero on it |
+| T6 | Interrupt a generated script between stages, then re-run it | Second run is idempotent: the completed stage reports `already satisfied` and is skipped. **The `verify-bootstrap-run.sh --last` half is superseded** — the resume machinery was cut at review as redundant with the mandated per-stage precondition (re-running from stage 1 IS resume). The ledger records the halt directly: `run_halt reason=input_required` plus `settle outcome=failed exit_code=64`. QA-verified 2026-09-18. |
 | T7 | `provision-hetzner.sh --dry-run` before and after the refactor | Byte-identical stdout, including the duplicate teardown |
 | T8 | `provision-hetzner.sh --help` and a bad-argument invocation | No teardown block, exit 1 — the trap-below-validation behaviour is preserved |
 | T9 | `provision-hetzner.sh` with a slug absent from the fixture DPA register | Exit 3, **with** the teardown block |
-| T10 | `verify-bootstrap-run.sh --self-test` on a machine with no network, no credentials and no prior run | `12/12 invariants OK`, exit 0 |
+| T10 | ~~`verify-bootstrap-run.sh --self-test`~~ | **Cut at review (R13 + design-validity pass).** `verify-bootstrap-run.sh` no longer exists; its resume index was redundant with the per-stage precondition and its printed remedy was false for the only real consumer. No replacement is owed. |
 | T11 | Generated script writes a secret to GitHub while `ps` samples its argv | The value never appears in `/proc/<pid>/cmdline` |
 | T12 | A `## Merge Danger` section whose bullets lead with a deny token | `ship-operator-step-gate.sh` blocks — proving the gate is live and the section's safety is a property of its content, not of the heading alone |
 
