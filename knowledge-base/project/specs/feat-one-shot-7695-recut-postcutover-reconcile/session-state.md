@@ -21,3 +21,10 @@
 - Skills: soleur:plan, soleur:plan-review, soleur:deepen-plan
 - Agents: repo-research-analyst, learnings-researcher, git-history-analyzer, functional-discovery, cto, spec-flow-analyzer, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist, Explore, observability-coverage-reviewer, code-quality-analyst
 - Commands: betterstack-query.sh, doppler secrets get, Hetzner API curl, inngest-host-not-serving-7674.sh (PASS), gh issue/pr, archive-kb.sh --dry-run ×4, lint-infra-no-human-steps.py
+
+## Work Phase
+- Status: complete (Phases 0–4 executed; AC1–AC15 recorded in tasks.md)
+- Commits: d78f1f09c (measurements), fe50c579e (runbook), 2bac3072a (ADR-100), + plan addendum, archive moves, tasks
+- Exit gate: `test-all.sh` REFUSED rc=4 (sibling run in `feat-harness-parity-gate-8299`); substitute set derived from consumers of touched surfaces: generate-kb-index, kb-index-merge-driver, kb-index-check-guard-mutation, lint-infra-no-human-steps, kb-domain-allowlist-guard, kb-drift-walker, rename-guard, kb-coverage.test.ts, terraform-target-parity.test.ts, model-launch-review.test.ts, fixture-env-adoption — all green. guardrails.test.sh 122/123: "lone kb-index sentinel" FAILS identically on a pristine copy of origin/main's hook files; main CI green at f5ad46390; tracked as #8263. Pre-existing, no hook file in this diff.
+- Correction found at /work: the plan's "third host, two more replaces" was false — measured nine hosts / eight replaces since Merge B (measurements.md §5); records use the measured figures.
+- GitHub state written: #8316 body edited; #8078 comment + p1→p3; #7777 comment + domain/legal→domain/engineering; PR 8248 cross-link comment; verdict comments on #7695/#8017/#8015; PR #8314 body set, closingIssuesReferences = [7695,8015,8017].
