@@ -2351,7 +2351,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // which needs GH_TOKEN read access; unauthenticated reads cannot see run
   // state. Declaration is genuine (the probe executes post-merge), so the
   // baseline moves rather than the plan's line being deleted.
-  const BASELINE_DECLARED_PROBES = 13;
+  // 14th declaration — #7960 (PR #8272) raised this 13 -> 14. PLACEMENT: two-space child of
+  // `discoverability_test:` in the #7960 plan. TRUTH: the probe is
+  // `bash scripts/followthroughs/zot-last-err-redact-7500.sh`, which reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (read-only Logs SQL) and was EXECUTED during that
+  // PR — the live run that returned `exit 3 … lacks err_redact_rev` on boot 78111e0e. NO
+  // SUBSTITUTE: the property is the CONTENT of warehouse rows the registry host POSTs, and that
+  // source has no unauthenticated read path; grepping the producer would verify the diff, not the
+  // delivery.
+  const BASELINE_DECLARED_PROBES = 14;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

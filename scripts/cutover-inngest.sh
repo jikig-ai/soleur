@@ -36,6 +36,18 @@ set -euo pipefail
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
+# The read-failure partition, shared with the git-data boot poll (#8178). Sourced HERE,
+# after the column-0 `set -euo pipefail`, deliberately: apps/web-platform/infra/
+# cutover-inngest-workflow.test.sh reconstructs a single-file view of this script with
+# `sed -n '/^set -euo pipefail$/,$p'`, so a source line above that marker is invisible to
+# roughly 120 assertions. It must also not introduce a SECOND column-0 `set -euo pipefail`,
+# which this script's own header forbids — the library therefore carries none.
+# Fail loud: a missing partition would make every rc=22 classify as `other` and send the
+# operator to rotate credentials over a table that was never written to.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/betterstack-read-classify.sh" || {
+  printf '::error::scripts/lib/betterstack-read-classify.sh not found — the read-failure partition is unavailable, so a failed read cannot be classified. Dispatch with --ref main.\n' >&2
+  exit 1
+}
 BASE="https://deploy.soleur.ai/hooks"
 
 # Shared no-SSH confirm of the on-host inngest-cutover-flip FSM terminal state via Better
@@ -122,9 +134,17 @@ _bs_read_remedy() {
     3)  echo "::error::2.0 $label read: betterstack-query.sh rc=3 — BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not injected. Check: doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain | wc -c (value-silent) must be non-zero. stderr: ${err1:-<none>}" ;;
     1)  echo "::error::2.0 $label read: doppler run or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
     22) body_len="$(wc -c < "$rowsfile" 2>/dev/null | tr -d '[:space:]' || true)"
-        body_class="other"
-        grep -qiE 'Authentication failed|Code: 516|password is incorrect' "$rowsfile" 2>/dev/null && body_class="credentials-rejected"
-        grep -qi 'maintenance' "$rowsfile" 2>/dev/null && body_class="source-under-maintenance"
+        # (#8178) The partition moved to scripts/lib/betterstack-read-classify.sh so the
+        # git-data boot poll classifies a failed read identically instead of re-deriving
+        # it. This function's OUTPUT and ARITY are unchanged — only the two inline greps
+        # became a call. `bs_read_classify` returns 0 unconditionally, which is what makes
+        # it safe under this script's `set -e`.
+        # `source-not-in-connection` (a CLUSTER_DOESNT_EXIST body: the SQL API connection
+        # does not cover the source, #7867) is a token this arm did not previously have. It
+        # falls to the `*)` default below, where an unclassified body already went. The
+        # git-data boot poll, which needs to say something different about it, reads the
+        # token directly rather than through this printer.
+        body_class="$(bs_read_classify "$rc" "$rowsfile")"
         case "$body_class" in
           credentials-rejected) echo "::error::2.0 $label read: the ClickHouse read path REJECTED the credentials (HTTP error under --fail-with-body, rc=22; body ${body_len:-?} bytes, not printed — it names the username). Rotate/verify BETTERSTACK_QUERY_{USERNAME,PASSWORD} in prd_terraform against the Better Stack query endpoint; re-dispatching without that will not clear it." ;;
           source-under-maintenance) echo "::error::2.0 $label read: the ClickHouse read path is under maintenance (HTTP error under --fail-with-body, rc=22; the 2026-09-03 503 precedent; body ${body_len:-?} bytes, not printed). Re-dispatch later." ;;
