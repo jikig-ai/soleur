@@ -182,6 +182,8 @@ path alone cannot show that replay drift is visible.
 
 79. Both notice-frontmatter suites stopped at their slow-provider timing case because `/usr/bin/time` is not installed in this environment; `set -e` exited during the timing assignment before the assertion ran. **Prevention:** use an available shell-level clock (`date +%s%N`) for bounded elapsed-time assertions rather than assuming `/usr/bin/time` exists.
 
+80. The component-project probe confirmed Node 22 exposes an undefined experimental `localStorage` unless `--localstorage-file` is supplied; the shared happy-dom setup therefore needed an in-memory fallback. The full component run exceeded the bounded 120-second window and left a Vitest child alive until it was terminated, while focused storage suites passed after the fallback. **Prevention:** keep browser-storage setup defensive and run broad component gates with explicit process cleanup and focused pass evidence.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
