@@ -180,6 +180,8 @@ path alone cannot show that replay drift is visible.
 
 78. The guardrails conflict scanner had the same mnemonic-prefix blind spot as the legal-scope parser: it matched only `+++ b/`, so a staged `knowledge-base/INDEX.md` sentinel under `+++ w/` was not detected. **Prevention:** treat Git's standard `a/b/c/i/o/w` diff-side prefixes as equivalent anywhere staged-diff paths are parsed.
 
+79. Both notice-frontmatter suites stopped at their slow-provider timing case because `/usr/bin/time` is not installed in this environment; `set -e` exited during the timing assignment before the assertion ran. **Prevention:** use an available shell-level clock (`date +%s%N`) for bounded elapsed-time assertions rather than assuming `/usr/bin/time` exists.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`

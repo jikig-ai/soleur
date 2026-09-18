@@ -336,9 +336,12 @@ echo ""
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
 STUB_DIR_5="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_5")
 make_gh_stub_sleep "$STUB_DIR_5" 10
-SECS=$( { /usr/bin/time -f "%e" \
-  bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
-  >/tmp/cron-stale-out.$$ ; } 2>&1 )
+START_NS=$(date +%s%N)
+bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
+  >/tmp/cron-stale-out.$$ \
+  || true
+END_NS=$(date +%s%N)
+SECS=$(awk -v start="$START_NS" -v end="$END_NS" 'BEGIN { printf "%.3f", (end - start) / 1000000000 }')
 OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
 rm -f /tmp/cron-stale-out.$$
 assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
