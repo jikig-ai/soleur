@@ -379,11 +379,20 @@ prev_preserved() {  # $1 = label
   fi
 }
 no_dangling_report_path() {  # $1 = label
-  local rp; rp="$(sed -n 's/^  Report at: //p' "${SC_LOG}")"
-  if [[ -z "${rp}" || -e "${rp}" ]]; then
-    echo "PASS: $1"; PASS=$((PASS + 1))
+  # Asserts the LIVE contract, not a retired one. This used to extract a path from
+  # a `  Report at: ` line and pass when it was absent OR existed — but this PR
+  # deleted that line from the script, so the extraction was permanently empty and
+  # the `-z` branch made the row unconditionally green. It had never once evaluated
+  # its predicate. Now: require the script to SAY the report is not kept (a positive
+  # anchor that a future re-add of an operator-facing path would break), and require
+  # no path-shaped `Report at:` line to come back.
+  local rp; rp="$(sed -n 's/^[[:space:]]*Report at: //p' "${SC_LOG}")"
+  if [[ -n "${rp}" ]]; then
+    echo "FAIL: $1 (a 'Report at:' path reappeared: ${rp}; GITLEAKS_OUT is removed by the EXIT trap, so any printed path dangles)"; FAIL=$((FAIL + 1))
+  elif ! grep -qF 'not kept on disk' "${SC_LOG}"; then
+    echo "FAIL: $1 (the scan log no longer states the report is not kept on disk — the anchor this row pins is gone)"; FAIL=$((FAIL + 1))
   else
-    echo "FAIL: $1 (printed report path ${rp} does not exist)"; FAIL=$((FAIL + 1))
+    echo "PASS: $1"; PASS=$((PASS + 1))
   fi
 }
 

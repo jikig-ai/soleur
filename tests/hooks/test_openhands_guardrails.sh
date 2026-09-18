@@ -39,6 +39,25 @@ run() {
     dec="$(echo "$out" | jq -r '.decision // "<none>"' 2>/dev/null || echo "<jqfail>")"; fi
   echo "${rc}:${dec}"
 }
+# Like run(), but reports "<exit>:<decision>:<reason-tag>". A bare decision cannot
+# say WHICH guard fired: a fixture on `main` denies via the commit-on-main gate, so
+# a conflict-marker row asserting only "2:deny" passes with the conflict guard fully
+# disarmed (measured — this suite's first version of that row did exactly that).
+run_reason() {
+  local payload="$1" cwd="$2" out rc dec reason tag
+  out="$(cd "$cwd" 2>/dev/null && printf '%s' "$payload" \
+    | FREEZE_LOCK_REPO_ROOT="" bash "$HOOK" 2>/dev/null)"; rc=$?
+  if [[ -z "${out//[[:space:]]/}" ]]; then dec="<none>"; reason=""; else
+    dec="$(echo "$out" | jq -r '.decision // "<none>"' 2>/dev/null || echo "<jqfail>")"
+    reason="$(echo "$out" | jq -r '.reason // ""' 2>/dev/null || echo "")"; fi
+  case "$reason" in
+    *"conflict markers"*) tag=conflict ;;
+    *"main/master"*|*"Committing directly"*) tag=on-main ;;
+    "") tag=none ;;
+    *) tag=other ;;
+  esac
+  echo "${rc}:${dec}:${tag}"
+}
 mk_term() { jq -nc --arg c "$1" --arg d "$2" '{tool_input:{command:$c}, working_dir:$d}'; }
 mk_edit() { jq -nc --arg p "$1" '{tool_input:{path:$p}}'; }
 
@@ -151,6 +170,49 @@ else
     "$(run_wwg "$(jq -nc --arg p "$WWG_REPO/.worktrees/feat-fixture/x.md" --arg w "$WWG_REPO" '{tool_input:{path:$p}, working_dir:$w}')")"
 fi
 rm -rf "$WWG_TMP"
+
+# --- conflict-marker arm (#8263 class) -------------------------------------
+# This arm did not exist before: the mirror's conflict guard was the ONE
+# safety-critical branch no suite drove, which is how it kept an unpinned
+# `git diff --cached` (and a `|| true` fail-open) long after the Claude copy was
+# hardened. The discriminating row is color.ui=always: with an unpinned diff every
+# line arrives ANSI-wrapped, `^\+<<<<<<<` matches nothing, and a real staged
+# conflict is silently ALLOWED. Both rows must deny; the second is the regression.
+CM_TMP="$(mktemp -d)"
+CM_REPO="$CM_TMP/repo"
+if ! git_fixture_env "$CM_REPO" 2>/dev/null; then
+  fail=$((fail+1)); echo "[FAIL] conflict: fixture refused by git_fixture_env" >&2
+else
+  # git_fixture_env sets the discovery ceiling/identity; it does NOT create the
+  # repo — `git init` is the caller's job (same shape as the $AD fixture above).
+  git init -q -b work "$CM_REPO"   # NOT main: commit-on-main would mask which guard fired
+  (
+    cd "$CM_REPO"
+    git config user.email t@t
+    git config user.name t
+    printf 'seed\n' > seed.txt
+    git add seed.txt
+    git -c core.hooksPath=/dev/null commit -q -m seed
+    printf 'x\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n' > conflicted.md
+    git add conflicted.md
+  ) >/dev/null 2>&1
+  # FIXTURE CONTROL: if the clean-config row does not deny, the fixture never
+  # staged a marker and every row below would be vacuous.
+  cm_clean="$(run_reason "$(mk_term 'git commit -m x' "$CM_REPO")" "$CM_REPO")"
+  if [[ "$cm_clean" != 2:deny:conflict ]]; then
+    fail=$((fail+1)); echo "[FAIL] conflict: FIXTURE BROKEN — staged conflict markers not denied under default config (got $cm_clean)" >&2
+  else
+    check "conflict: staged markers deny under default config" "2:deny:conflict" "$cm_clean"
+    git -C "$CM_REPO" config color.ui always
+    check "conflict: staged markers deny under color.ui=always (was a live bypass)" "2:deny:conflict" \
+      "$(run_reason "$(mk_term 'git commit -m x' "$CM_REPO")" "$CM_REPO")"
+    git -C "$CM_REPO" config --unset color.ui
+    git -C "$CM_REPO" config color.diff always
+    check "conflict: staged markers deny under color.diff=always" "2:deny:conflict" \
+      "$(run_reason "$(mk_term 'git commit -m x' "$CM_REPO")" "$CM_REPO")"
+  fi
+fi
+rm -rf "$CM_TMP"
 
 rm -rf "$AD" "$ADHOME" "$FZ"
 

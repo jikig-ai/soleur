@@ -263,6 +263,57 @@ _t_colour_denies() {  # $1 = config key
   fi
 }
 
+# T17/T18: a `-diff` gitattribute removes the `+` lines entirely, so `gitleaks git`
+# scans clean no matter how colour is pinned (measured: rc=1/1 finding -> rc=0/0
+# findings). Neither core.attributesFile=/dev/null nor GIT_ATTR_NOSYSTEM=1 closes
+# it — both govern the GLOBAL/SYSTEM files while `.git/info/attributes` is per-repo.
+# T17 is the regression row; T18 is the must-ALLOW control proving the guard is not
+# simply denying everything, which an absence-only row could not distinguish.
+_t_nodiff_attr() {  # $1 = withsecret|clean ; $2 = expected decision
+  # Split declarations: `local a=$1 b="...$a..."` can read $a as unset under
+  # `set -u`, because `local` may declare every name before assigning any.
+  local mode="$1"
+  local want="$2"
+  local label="T17/18 staged '-diff' file ($mode) -> $want"
+  _needs_gl "$label" || return 0
+  local tmp; tmp=$(mktemp -d); _TMP_DIRS+=("$tmp")
+  (
+    cd "$tmp"
+    git init -q -b main
+    git config user.email t@t; git config user.name t
+    cp "$GITLEAKS_TOML" .gitleaks.toml
+    if [[ "$mode" == withsecret ]]; then
+      pem=$(_mk_pem "t17_nodiff_syntheticpayload")
+      jq -n --arg p "$pem" '{key: $p}' > hidden.json
+    else
+      printf '{"note":"nothing secret here"}\n' > hidden.json
+    fi
+    mkdir -p .git/info
+    # Untracked and unreviewable — the realistic shape of this bypass.
+    echo 'hidden.json -diff' > .git/info/attributes
+    git add hidden.json .gitleaks.toml
+  )
+  # FIXTURE CONTROL: the attribute must actually blind the plain staged scan, or
+  # T17 would pass for the wrong reason (a guard that never had to fire).
+  if [[ "$mode" == withsecret ]]; then
+    local plain_rc=0
+    ( cd "$tmp" && gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1 \
+        --report-format json --report-path "$tmp/plain.json" >/dev/null 2>&1 ) || plain_rc=$?
+    if [[ "$plain_rc" -ne 0 ]]; then
+      _report "$label" fail "FIXTURE BROKEN: the -diff attribute did not blind the plain staged scan (rc=$plain_rc), so this row proves nothing"
+      return 0
+    fi
+  fi
+  local payload out
+  payload=$(jq -nc '{tool_name: "Bash", tool_input: {command: "git commit -m x"}}')
+  out=$(cd "$tmp" && CLAUDE_PROJECT_DIR="$REPO_ROOT" bash "$HOOK" <<<"$payload")
+  if [[ "$(_decision "$out")" == "$want" ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "decision=$(_decision "$out") want=$want"
+  fi
+}
+
 # T1: non-Bash tool → allow.
 t_non_bash_tool() {
   local out; out=$(_run "$REPO_ROOT" "Write" "irrelevant")
@@ -463,6 +514,8 @@ t_runnable_empty_report
 t_no_timeout_still_scans
 _t_colour_denies color.ui
 _t_colour_denies color.diff
+_t_nodiff_attr withsecret deny
+_t_nodiff_attr clean allow
 
 echo "=== $pass passed, $fail failed, ${#SKIPPED[@]} arm(s) skipped ==="
 if (( ${#SKIPPED[@]} > 0 )); then
