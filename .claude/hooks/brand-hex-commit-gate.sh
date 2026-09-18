@@ -294,7 +294,7 @@ for f in "${changed_files[@]}"; do
         fi
       done < <(printf '%s' "$seg" | grep -oE '#[0-9a-fA-F]{3,8}')
     done <<< "$segs"
-  done < <(git diff "$NAME_REF" -U0 --no-color -- "$f" 2>/dev/null | awk '
+  done < <(git diff "$NAME_REF" -U0 --no-color --no-ext-diff -- "$f" 2>/dev/null | awk '
     /^@@/      { if (match($0, /\+[0-9]+/)) { ln = substr($0, RSTART+1, RLENGTH-1) + 0 } ; next }
     /^\+\+\+/  { next }
     /^\+/      { print ln "\t" substr($0, 2); ln++ }
