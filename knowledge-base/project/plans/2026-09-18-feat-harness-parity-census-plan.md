@@ -452,3 +452,55 @@ test, a TSV, a floors file, an ADR and markdown prose inside skill documents.
 | A floor is lowered in the same diff that removes what it protected | Named in the Guard Contract Anchor, not papered over. Separate file ⇒ separate reviewable hunk; denominator is index-derived so it cannot silently narrow |
 | ADR-226 collides during the pipeline | Ordinal probed ref-wide, re-probed before merge, swept across plan + spec + ACs if it moves (AC14) |
 | Scope creep into #7453's 105 `:-` sites | NG2 + AC11 |
+
+## Plan Review — BLOCKING finding (P0). This plan requires a v2 before `/work`.
+
+**The qualification carrier does not carry the property.** Raised by `dhh-rails-reviewer`,
+verified firsthand before acceptance.
+
+`grok-harness-invoke` is a **self-invocation preamble**: it tells an agent that has already
+landed in this SKILL.md how it should have arrived. It asserts nothing about how the file
+instructs invocation of *other* skills — which is exactly what property P1 is about.
+
+Verified instance — `plugins/soleur/skills/ship/SKILL.md` carries the block, so the census scores
+it **QUALIFIED**, and its Phase 5.4 (`:504`) reads:
+
+```
+Invoke the preflight skill via the **Skill tool**:
+- If `HEADLESS_MODE=true`: `skill: soleur:preflight`, args: `--headless`
+```
+
+Grok has no Skill tool. A Grok operator running `/ship` reaches Phase 5.4 and hits a dead
+instruction. **That is the originating defect of #8299, and AC2 goes green over it.**
+
+Scale of the class, measured two ways that disagree on magnitude but not on direction: the
+reviewer counted ~71 such body lines across the 12 qualified skills; a broader line-based scan
+here counted **106** (ship 25, plan 20, brainstorm 16, work 11). Both are prose heuristics, so
+the true figure needs a real classifier — but every method agrees the qualified set is riddled.
+
+**Why every mutation row missed it.** M1–M9 and H1–H4 all test *enumeration* — is the block
+present, is the population derived, does the floor fire. Not one row tests the *implication*
+("a skill carries a valid block AND still dispatches via a Claude-only form"). Adding that row
+fails the plan against its own matrix, which is how this should have been caught before 454 lines.
+
+### Consequences for v2
+
+- A **presence** census is the wrong shape. The candidate replacement is a **negative-space**
+  assertion over a closed token set: a SKILL.md body names no harness-specific invocation token
+  (`Skill tool`, `Task tool`, `/soleur:`, `$soleur:`, `spawn_subagent`, `run_subagent`) and instead
+  names the canonical `soleur:<skill>`, which each harness's mapping document resolves. That
+  predicate is **provable complete** against `plugins/soleur/lib/harness.ts`, where the forms are
+  defined — where the trigger pattern was admittedly unprovable.
+- **Gap that blocks the replacement:** `plugins/soleur/codex/INSTRUCTIONS.md` and
+  `plugins/soleur/devin/INSTRUCTIONS.md` exist; **`plugins/soleur/grok/INSTRUCTIONS.md` does
+  not** (verified). So "cite the adapter" is not yet a real path on Grok. Writing that one file
+  is a prerequisite of the inversion.
+- The floors file, the AUTO-EXEMPT verdict, the ceiling, the trigger-count floor and rows
+  M4/M6 are all struts for an unprovable predicate. They come out with it.
+- **Self-inflicted contradiction, conceded:** the Cut List reinstated the floors file on
+  constitution L142 while the Guard Contract Anchor simultaneously measured L142's
+  credential-scoped precondition as *structurally absent*. Both halves were written into the same
+  document. The reinstatement was compliance, not judgment.
+
+Consolidation with the five remaining panel agents is pending; `tasks.md` is deliberately not
+generated, because a task breakdown derived from these phases would be stale on arrival.
