@@ -144,12 +144,27 @@ rm -f /tmp/.ilt-block.$$
 # SSH and no console converts a slow attach into an unrecoverable boot wedge; loud failure belongs
 # in the Redis unit's ExecStartPre, not in a line that bricks the boot before anything can report.
 # TWO ARMS, because counting the GOOD lines is not the same claim as "there is no BAD one": a
-# fourth fstab write that omits nofail leaves the count at 3 and the boot wedged.
-_fstab_lines="$(grep -cE 'echo "\$(DEV|MAPPER) /mnt/data ext4 defaults,nofail 0 2"' "$CLOUD_INIT")"
-if [ "$_fstab_lines" -eq 3 ]; then ok "T1.8a all three fstab writes retain nofail"; else no "T1.8a expected 3 nofail-carrying fstab writes (one per mounting arm), found ${_fstab_lines}"; fi
-_fstab_all="$(grep -cE '/mnt/data[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT")"
-_fstab_bad="$(grep -E '/mnt/data[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT" | grep -cv 'nofail' || true)"
-if [ "$_fstab_bad" -eq 0 ]; then ok "T1.8b NO /mnt/data fstab line anywhere in the file omits nofail (${_fstab_all} checked)"; else no "T1.8b ${_fstab_bad} of ${_fstab_all} /mnt/data fstab lines omit nofail — a strict fstab wedges the boot on a host with no SSH and no console"; fi
+# further fstab write that omits nofail leaves the good count intact and the boot wedged.
+# (#6894) Every writer now goes through `fstab_set`, which REPLACES the mountpoint's line: four for
+# /mnt/data (the pointer arm plus the three pre-cutover mounting arms) and one for the staging mount.
+_fstab_lines="$(grep -cE 'fstab_set /mnt/data "\$(DEV|MAPPER) /mnt/data ext4 defaults,nofail 0 2"' "$CLOUD_INIT")"
+if [ "$_fstab_lines" -eq 4 ]; then ok "T1.8a all four /mnt/data fstab writes go through fstab_set and retain nofail"; else no "T1.8a expected 4 nofail-carrying fstab_set writes for /mnt/data (pointer arm + three pre-cutover arms), found ${_fstab_lines}"; fi
+_fstab_stg="$(grep -cE 'fstab_set /mnt/data-luks "\$STAGING_MAPPER /mnt/data-luks ext4 defaults,nofail 0 2"' "$CLOUD_INIT")"
+if [ "$_fstab_stg" -eq 1 ]; then ok "T1.8a2 the staging mount's fstab write goes through fstab_set and retains nofail"; else no "T1.8a2 expected 1 nofail-carrying fstab_set write for /mnt/data-luks, found ${_fstab_stg}"; fi
+_fstab_all="$(grep -cE '/mnt/data(-luks)?[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT")"
+_fstab_bad="$(grep -E '/mnt/data(-luks)?[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT" | grep -cv 'nofail' || true)"
+if [ "$_fstab_bad" -eq 0 ]; then ok "T1.8b NO /mnt/data or /mnt/data-luks fstab line anywhere in the file omits nofail (${_fstab_all} checked)"; else no "T1.8b ${_fstab_bad} of ${_fstab_all} fstab lines omit nofail — a strict fstab wedges the boot on a host with no SSH and no console"; fi
+# T1.8c (Guard 4 row 6) NO APPEND-IF-ABSENT WRITER SURVIVES. Every earlier writer was
+# `grep -q ' /mnt/data ' /etc/fstab || echo … >> /etc/fstab`, so after a store swap the OLD line
+# stayed, and won the next boot. The shape is asserted absent over the whole file, not the stage.
+if grep -qE "grep -q ' /mnt/data(-luks)? ' /etc/fstab \|\|" "$CLOUD_INIT"; then no "T1.8c an append-if-absent /mnt/data fstab writer is back — a swapped store keeps its old line and the old line wins the next boot"; else ok "T1.8c no append-if-absent fstab writer for /mnt/data or /mnt/data-luks"; fi
+# T1.8d fstab_set REPLACES and then asserts EXACTLY ONE. Both halves, field-exact on the mountpoint
+# ($2), so /mnt/data never matches /mnt/data-luks.
+_FS_DEF="$(awk '/^    fstab_set\(\) \{$/,/^    \}$/' "$CLOUD_INIT")"
+if printf '%s\n' "$_FS_DEF" | grep -qF "\$2 != mp"; then ok "T1.8d1 fstab_set drops the mountpoint's existing line before writing (replace, not append)"; else no "T1.8d1 fstab_set does not filter the mountpoint's existing line — it appends"; fi
+if printf '%s\n' "$_FS_DEF" | grep -qF '[ "$_fs_n" -eq 1 ] ||'; then ok "T1.8d2 fstab_set asserts exactly one line for the mountpoint after writing"; else no "T1.8d2 fstab_set does not assert exactly one line"; fi
+if grep -qE '^    _fstab_n="\$\(awk .\$1 !~ /\^#/ && \$2 == "/mnt/data". /etc/fstab \| wc -l\)"$' "$CLOUD_INIT" \
+   && grep -qF '[ "$_fstab_n" -eq 1 ] ||' "$CLOUD_INIT"; then ok "T1.8e stage=fstab asserts EXACTLY ONE /mnt/data line, not merely one-or-more"; else no "T1.8e stage=fstab no longer asserts exactly one /mnt/data line"; fi
 
 # T1.9 THE EXT4 ARM MUST STILL PERMIT REDIS TO START. This is the regression test for the
 # ExecStartPre deadlock: a ONE-state gate demanding /dev/mapper/inngest-redis unconditionally
@@ -261,14 +276,193 @@ cp "$_T12/trap.sh" "$_T12/bad.sh"; printf 'false\n' >> "$_T12/bad.sh"
 _rc=0; _out="$(bash "$_T12/bad.sh" 2>&1)" || _rc=$?
 if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then ok "T1.12c a FAILED stage still exits non-zero and phones home"; else no "T1.12c the rc guard is disarmed — a failed stage exited rc=${_rc} without phoning home (out: ${_out})"; fi
 
+# ═══ TIER 1b — the delivered bytes, rendered as Terraform renders them (#6894) ═══════════════
+# T1.13 EVERY write_files SHELL SCRIPT PARSES AS DELIVERED. Terraform's template unescape is exactly
+# two transforms — dollar-dollar-brace to dollar-brace, percent-percent-brace to percent-brace — and
+# NOTHING ELSE. In particular a doubled dollar NOT followed by a brace is left doubled, and bash then
+# reads it as its own PID. The #7695 boot-reopen script was written with doubled dollars throughout
+# and failed with `syntax error near unexpected token` on the live host on every boot (Better Stack,
+# 2026-09-17 11:38:31, host soleur-inngest), while its arming marker reported success. The loopback
+# suite's BOOT2 arm rendered the block with a global doubled-dollar-to-dollar sed, which Terraform
+# never performs, so it graded bytes that were never delivered. This arm renders ONLY the two real
+# transforms. Its outside anchor is a real `templatefile()` render (measured 2026-09-18: identical).
+_T13="$(mktemp -d)"
+_t13_n=0; _t13_bad=""
+_t13_render() { sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
+  -e 's/\${inngest_volume_id}/106261946/g' -e 's/\${inngest_luks_volume_id}/106999999/g' \
+  -e 's/\${inngest_expect_luks}/false/g' -e 's/\${[a-z_][a-z_0-9]*}/TEMPLATE_VALUE/g'; }
+# split write_files into one file per content block: a `  - path:` line, then `    content: |`, then
+# every line indented at least six spaces, ended by the first line at indent four
+awk -v out="${_T13:?}" '
+  /^  - path: /{ path=$3; next }
+  path!="" && /^    content: \|$/ { n++; f=out "/wf." n; print path > (f ".path"); inblk=1; next }
+  inblk && /^      / { sub(/^      /, ""); print > f; next }
+  inblk && /^$/ { print "" > f; next }
+  inblk { inblk=0; path="" }
+' "$CLOUD_INIT"
+for _wf in "${_T13:?}"/wf.*; do
+  case "$_wf" in *.path|*.r) continue ;; esac
+  head -1 "$_wf" | grep -qE '^#!.*(ba)?sh' || continue
+  _t13_n=$((_t13_n + 1))
+  _t13_render < "$_wf" > "$_wf.r"
+  if ! bash -n "$_wf.r" 2>/dev/null; then _t13_bad="${_t13_bad} $(cat "$_wf.path")"; fi
+done
+if [ "$_t13_n" -ge 4 ]; then ok "T1.13a found ${_t13_n} write_files shell scripts to render (floor 4)"; else no "T1.13a found only ${_t13_n} write_files shell scripts — the splitter is broken and T1.13b is vacuous"; fi
+if [ -z "$_t13_bad" ]; then ok "T1.13b every write_files shell script PARSES as Terraform renders it (${_t13_n} checked)"; else no "T1.13b unparseable as delivered:${_t13_bad} — Terraform leaves a doubled dollar doubled, bash reads it as its PID"; fi
+# Positive control: the render MUST be able to see the defect it exists for.
+printf '#!/usr/bin/env bash\n_i=0; _i=$$((_i+1))\n' | _t13_render > "${_T13:?}/ctl.r"
+if bash -n "${_T13:?}/ctl.r" 2>/dev/null; then no "T1.13c POSITIVE CONTROL: the render let a doubled-dollar arithmetic expansion parse — it is rewriting doubled dollars and cannot see the #7695 defect"; else ok "T1.13c positive control: the #7695 shape fails to parse under this render"; fi
+rm -rf "${_T13:?}"
+# T1.14 NO DOUBLED DOLLAR BEFORE AN IDENTIFIER OR PAREN, outside a comment, anywhere in the file.
+# The lint form of T1.13: it names the site instead of the script.
+_t14="$(grep -nE '\$\$[A-Za-z_(0-9?#@*!-]' "$CLOUD_INIT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [ -z "$_t14" ]; then ok "T1.14 no doubled-dollar expansion in any delivered line (bash would read the PID)"; else no "T1.14 doubled-dollar expansions survive — each renders literally and bash reads the PID: $(printf '%s' "$_t14" | head -3 | tr '\n' ' ')"; fi
+
+# ═══ TIER 2 — Guard 1: nothing writes to a device carrying data (#6894) ═════════════════════
+# THE ASSEMBLY IS DERIVED, NOT LISTED. Every `blkid` call in the two device readers (the runcmd
+# stage and the boot-reopen script) is found by walking the file and must be CLASSIFIED: its own rc
+# captured into a variable, and that variable checked against exactly 0-or-2 on the next statement.
+# An unclassified site is a RED, which is what makes "a second reader that skips the probe" visible
+# (mutation row 3). The site count here is a floor, never the definition.
+_G1_STAGE="$(awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT")"
+_G1_REOPEN="$(awk '/^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{f=1;next} f&&/^    content: \|$/{c=1;next} c&&/^    owner:/{exit} c' "$CLOUD_INIT")"
+_g1_sites=0; _g1_bad=""
+_g1_classify() {  # _g1_classify <label> <text>
+  local label="$1" text="$2" prev="" rcvar="" line
+  while IFS= read -r line; do
+    case "$line" in *'#'*blkid*) [[ "$line" =~ ^[[:space:]]*# ]] && continue ;; esac
+    if [ -n "$rcvar" ]; then
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      if [[ "$line" == *"{ [ \"\$${rcvar}\" -eq 0 ] || [ \"\$${rcvar}\" -eq 2 ]; } ||"* ]]; then :; else _g1_bad="${_g1_bad} ${label}:rc-not-checked(${rcvar})"; fi
+      rcvar=""; continue
+    fi
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    # THE CALL FORM, never the bare word: `blkid` followed by whitespace and a flag. The word also
+    # appears in stage names (blkid_probe), marker fields (blkid_type=) and prose, none of which
+    # is a probe (cq-assert-anchor-not-bare-token). A bare `blkid -o` in a rogue reader still matches.
+    [[ "$line" =~ (^|[[:space:]\(\"/])blkid[[:space:]]+- ]] || continue
+    _g1_sites=$((_g1_sites + 1))
+    if [[ "$line" =~ ^[[:space:]]*[A-Z_]+=\"\$\(/usr/sbin/blkid(\ -p)?\ -o\ value\ -s\ TYPE\ \"[^\"]+\"\ 2\>/dev/null\)\"\ \|\|\ (_[a-z_]+)=\$\?$ ]]; then
+      rcvar="${BASH_REMATCH[2]}"
+      # a probe of a MAPPER must bypass the cache: across an abort-and-retry the cached type is stale
+      if [[ "$line" == *'"$MAPPER"'* || "$line" == *'"$STAGING_MAPPER"'* ]] && [[ "$line" != *'blkid -p '* ]]; then _g1_bad="${_g1_bad} ${label}:mapper-probe-without--p"; fi
+    else
+      _g1_bad="${_g1_bad} ${label}:UNCLASSIFIED[$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-60)]"
+    fi
+  done <<< "$text"
+}
+_g1_classify stage "$(printf '%s\n' "$_G1_STAGE" | sed 's/\$\${/${/g')"
+_g1_classify reopen "$(printf '%s\n' "$_G1_REOPEN" | sed -e 's/^      //' -e 's/\$\${/${/g')"
+if [ "$_g1_sites" -ge 6 ]; then ok "G1.a found ${_g1_sites} blkid probe sites across both device readers (floor 6)"; else no "G1.a found only ${_g1_sites} blkid sites — the walk is not reaching a reader"; fi
+if [ -z "$_g1_bad" ]; then ok "G1.b every blkid site captures its own rc and checks it against exactly 0-or-2; every mapper probe bypasses the cache"; else no "G1.b unclassified or unchecked probe sites:${_g1_bad}"; fi
+# Positive control: a second reader that skips the capture must be caught.
+_g1_sites=0; _g1_bad=""
+_g1_classify ctl 'BLK_TYPE="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+{ [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || exit 1
+T2="$(/usr/sbin/blkid -o value -s TYPE "$X")"'
+if [[ "$_g1_bad" == *UNCLASSIFIED* ]]; then ok "G1.c positive control: an uncaptured second probe is flagged UNCLASSIFIED"; else no "G1.c POSITIVE CONTROL: an uncaptured second probe was not flagged — G1.b is vacuous"; fi
+# G1.d the privilege assertion precedes the FIRST probe in each reader (measurements.md §1).
+_g1_order() { printf '%s\n' "$1" | awk '/id -u\)" -eq 0 \]/ && !p {p=NR} /\/usr\/sbin\/blkid/ && !b {b=NR} END { exit !(p && b && p < b) }'; }
+if _g1_order "$_G1_STAGE" && _g1_order "$_G1_REOPEN"; then ok "G1.d both readers assert root BEFORE their first blkid (unprivileged blkid reads a populated device as blank)"; else no "G1.d a device reader probes before asserting root — rc 2 from a Permission denied reads as blank and takes the luksFormat arm"; fi
+# G1.e mkfs targets ONLY a mapper, and only AFTER the luksOpen that creates it (mutation row 6).
+_g1_mkfs_bad="$(printf '%s\n' "$_G1_STAGE" | grep -E '^[[:space:]]*mkfs' | grep -vE 'mkfs\.ext4 -q "\$(MAPPER|STAGING_MAPPER)"' || true)"
+if [ -z "$_g1_mkfs_bad" ]; then ok "G1.e every mkfs in the stage targets a mapper, never a raw device"; else no "G1.e an mkfs targets something other than a mapper: ${_g1_mkfs_bad}"; fi
+_stg_open="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*\[ -e "\$STAGING_MAPPER" \] \|\| printf' | head -1 | cut -d: -f1)"
+_stg_mkfs="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*mkfs\.ext4 -q "\$STAGING_MAPPER"' | head -1 | cut -d: -f1)"
+if [ -n "$_stg_open" ] && [ -n "$_stg_mkfs" ] && [ "$_stg_open" -lt "$_stg_mkfs" ]; then ok "G1.f the staging mkfs comes after the staging luksOpen (line ${_stg_open} < ${_stg_mkfs})"; else no "G1.f staging mkfs is not after its luksOpen (open=${_stg_open:-none} mkfs=${_stg_mkfs:-none})"; fi
+# G1.g the staging arm never opens the CANONICAL mapper name: the Redis mount guard keys on it.
+_stg_region="$(printf '%s\n' "$_G1_STAGE" | awk '/STAGE=staging_wait/{f=1} f')"
+if printf '%s\n' "$_stg_region" | grep -qE 'cryptsetup luksOpen .* inngest-redis[[:space:]]|cryptsetup luksOpen .* inngest-redis[[:space:]]*2>>'; then no "G1.g the staging arm opens the canonical inngest-redis name — it would trip the Redis guard's mapper-open state"; else ok "G1.g the staging arm opens only the non-canonical inngest-redis-staging name"; fi
+
+# ═══ TIER 3 — Guard 4: the pointer decides, never the signature (#6894) ════════════════════
+# THE POPULATION IS DERIVED. Every line in a DELIVERED artifact that names the pointer is found by
+# walking the tree and must be classified into a known role; an unclassified site REDS. A reader the
+# guard has never seen is exactly mutation row 4, and a hand-listed population would already be
+# stale — a draft that named two sites was written before the cutover became the pointer's writer.
+_REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+_g4_bad=""; _g4_reads_stage=0; _g4_reads_reopen=0; _g4_total=0
+_g4_stager_count=0; _g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0
+while IFS= read -r _hit; do
+  _f="${_hit%%:*}"; _rest="${_hit#*:}"; _ln="${_rest%%:*}"; _txt="${_rest#*:}"
+  [[ "$_txt" =~ ^[[:space:]]*# ]] && continue
+  _g4_total=$((_g4_total + 1))
+  case "$_txt" in
+    *'n_inngest="$(printf'*'LUKS_ACTIVE_VOLUME_ID|'*) : ;;                                   # boot isolation admission
+    *'POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"'*)                                        # resolver / reopen READ
+      if awk -v n="$_ln" 'NR<n && /bash -s <<.LUKSEOF.$/{s=NR} NR<n && /^    LUKSEOF$/{s=0} END{exit !s}' "$_f"; then _g4_reads_stage=$((_g4_reads_stage + 1))
+      elif awk -v n="$_ln" 'NR<n && /^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{s=NR} NR<n && /^  - path: / && !/inngest-luks-open\.sh/{s=0} END{exit !s}' "$_f"; then _g4_reads_reopen=$((_g4_reads_reopen + 1))
+      else _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:read-outside-both-readers"; fi ;;
+    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$POINTER\" >> /etc/default/inngest-luks"*) : ;;  # first-boot STAGER
+    *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks'*) : ;;      # stager's own check
+    *'echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id'*) : ;;          # diagnostic text
+    # ── #6894 cutover roles. The pointer gained a WRITER (the on-host FSM) and a second READER
+    # (the dispatch's pre-write gate), so the population grew by five roles. Each is named here and
+    # ASSERTED below (G4.g/G4.h) — a role that is merely allowlisted is a site nothing grades,
+    # which is the shape this whole guard exists to refuse.
+    *'--only-secrets INNGEST_LUKS_ACTIVE_VOLUME_ID'*) _g4_unit_inject=$((_g4_unit_inject + 1)) ;;  # unit INJECTION
+    *'doppler secrets set INNGEST_LUKS_ACTIVE_VOLUME_ID "$2"'*) _g4_write_set=$((_g4_write_set + 1)) ;;    # FSM writer: set
+    *'doppler secrets delete INNGEST_LUKS_ACTIVE_VOLUME_ID'*) _g4_write_clear=$((_g4_write_clear + 1)) ;; # FSM writer: clear
+    *'current_pointer() { printf'*) _g4_fsm_read=$((_g4_fsm_read + 1)) ;;                          # FSM READ of the injected value
+    *"grep -v '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                                 # FSM stager: strip before rewrite
+    *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$1\" >> \"\$tmp\""*) : ;;                       # FSM stager: write
+    *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$1" "$ENVFILE"'*) : ;;                              # FSM stager: landed check
+    *"n=\"\$(grep -c '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) _g4_stager_count=$((_g4_stager_count + 1)) ;;  # FSM stager: CARDINALITY
+    *"! grep -q '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                              # FSM stager: removed check
+    *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
+    *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
+    *) _g4_bad="${_g4_bad} ${_f##*/}:${_ln}:UNCLASSIFIED" ;;
+  esac
+done < <(cd "$_REPO" && git grep -nF 'INNGEST_LUKS_ACTIVE_VOLUME_ID' -- apps/web-platform/infra scripts .github/workflows \
+          ':!*.test.sh' ':!*.test.ts' ':!tests/**' 2>/dev/null | sed "s|^|$_REPO/|")
+if [ "$_g4_total" -ge 5 ]; then ok "G4.a found ${_g4_total} pointer sites in delivered artifacts (floor 5)"; else no "G4.a found only ${_g4_total} pointer sites — the walk is not reaching the tree"; fi
+if [ -z "$_g4_bad" ]; then ok "G4.b every pointer site in a delivered artifact is classified (no reader the guard has never seen)"; else no "G4.b unclassified pointer sites:${_g4_bad} — classify each, or it is a reader nothing grades"; fi
+if [ "$_g4_reads_stage" -eq 1 ] && [ "$_g4_reads_reopen" -eq 1 ]; then ok "G4.c the pointer is read by BOTH device readers exactly once (first-boot resolver and boot-reopen)"; else no "G4.c pointer reads: first-boot=${_g4_reads_stage} reopen=${_g4_reads_reopen} — each reader must apply it exactly once (mutation row 4)"; fi
+# G4.g THE POINTER HAS EXACTLY ONE WRITER, and it is the on-host FSM. Two writers on a value that
+# decides which device holds the store is the shape where a race decides where user data lives — and
+# the dispatch deliberately does not write it, so its only pointer contact is a READ.
+if [ "$_g4_write_set" -eq 1 ] && [ "$_g4_write_clear" -eq 1 ]; then ok "G4.g1 the pointer has exactly one set site and one clear site, both in the on-host FSM"; else no "G4.g1 pointer writers: set=${_g4_write_set} clear=${_g4_write_clear} — expected exactly one of each"; fi
+_g4_disp_write="$(cd "$_REPO" && git grep -nE 'secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' -- scripts .github/workflows 2>/dev/null || true)"
+if [ -z "$_g4_disp_write" ]; then ok "G4.g2 no dispatch-side writer: the operator verbs read the pointer and never set it"; else no "G4.g2 a dispatch-side pointer WRITE exists (${_g4_disp_write}) — two writers decide where the store lives"; fi
+# G4.g3 the FSM's own writes go through the pointer_cmd seam, never a bare doppler call in a phase.
+# Scoped by the FUNCTION BODY, never by a line range (cq-cite-content-anchor-not-line-number): a
+# range pins where the seam sits today, which is the one thing a refactor is allowed to change.
+_g4_seam="$(awk '/^pointer_cmd\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh")"
+_g4_outside="$(awk '/^pointer_cmd\(\) \{/{f=1} f&&/^\}$/{f=0;next} !f' "$_REPO/apps/web-platform/infra/inngest-luks-cutover.sh" | grep -nE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
+_g4_inside="$(printf '%s\n' "$_g4_seam" | grep -cE '^[^#]*doppler secrets (set|delete) INNGEST_LUKS_ACTIVE_VOLUME_ID' || true)"
+_g4_bare="$_g4_outside"
+if [ -z "$_g4_bare" ] && [ "$_g4_inside" -eq 2 ]; then ok "G4.g3 both FSM pointer writes are inside the pointer_cmd seam, and no phase body writes it directly"; else no "G4.g3 seam writes=${_g4_inside} (expected 2); writes outside the seam: ${_g4_bare:-none}"; fi
+# G4.h the pointer is INJECTED into the unit, and the FSM reads the injected value rather than
+# shelling out — a read that needed its own credential would be a second failure mode mid-swap.
+if [ "$_g4_unit_inject" -ge 1 ] && [ "$_g4_fsm_read" -eq 1 ]; then ok "G4.h the unit injects the pointer and the FSM reads it exactly once, from the environment"; else no "G4.h unit injection=${_g4_unit_inject} FSM reads=${_g4_fsm_read} — the FSM must read the injected value once"; fi
+# The stager COUNTS rather than merely checking presence: systemd's EnvironmentFile is last-wins, so
+# a second pointer line would silently decide which volume the boot-reopen unit opens.
+if [ "$_g4_stager_count" -eq 1 ]; then ok "G4.j the envfile stager asserts pointer CARDINALITY, not presence (EnvironmentFile is last-wins)"; else no "G4.j the envfile stager no longer counts its pointer lines (sites=${_g4_stager_count})"; fi
+if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
+
+# G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.
+_PTR_ARM="$(printf '%s\n' "$_G1_STAGE" | awk '/^    if \[ "\$MODE" = pointer \]; then$/{f=1;next} f&&/^    else$/{exit} f')"
+if [ -n "$_PTR_ARM" ]; then ok "G4.d1 the pointer arm extracts"; else no "G4.d1 could not extract the pointer arm — G4.d2..d4 would be vacuous"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -qE '^[[:space:]]*(mkfs|printf .* cryptsetup luksFormat)|luksFormat'; then no "G4.d2 the pointer arm can FORMAT — it would hand Redis an empty store and call it the store"; else ok "G4.d2 the pointer arm never formats and never runs mkfs"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -qF '[ "$${BLK_TYPE:-}" = crypto_LUKS ] || {'; then ok "G4.d3 the pointer's device must CORROBORATE as crypto_LUKS (mutation row 3)"; else no "G4.d3 the crypto_LUKS corroboration is gone — the pointer could certify a plaintext device as the store"; fi
+if printf '%s\n' "$_PTR_ARM" | grep -qE '"\$DEV"'; then no "G4.d4 the pointer arm references the plaintext device — a fallback path exists (mutation row 2)"; else ok "G4.d4 the pointer arm never references the plaintext device (no fall-through)"; fi
+# G4.e the resolver refuses both malformed pointer shapes rather than deriving a path from them.
+_RES="$(printf '%s\n' "$_G1_STAGE" | awk '/^    STAGE=resolve$/{f=1} f&&/^    esac$/{print; exit} f')"
+if printf '%s\n' "$_RES" | grep -qF '*[!0-9]*)' && printf '%s\n' "$_RES" | grep -qF '"$PLAIN_ID"|"$LUKS_ID")' && printf '%s\n' "$_RES" | grep -qE '^      \*\)$'; then ok "G4.e the resolver has explicit arms for non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (non-numeric / one-of-two-ids / third id)"; fi
+# G4.f the arming marker MEASURES the unit, it does not trust enable's exit status.
+if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
+   && grep -qF 'if [ "$_reopen_state" = "active" ]; then' "$CLOUD_INIT"; then ok "G4.f inngest-luks-reopen-armed is emitted only when the unit reads active"; else no "G4.f the reopen arming marker trusts enable --now again — it reported success on 2026-09-17 on a boot where the unit failed"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
+# Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
+# when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
+# the measured count after the arms were final, not written ahead of them.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 26 ]; then
+if [ "$executed" -lt 57 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 26. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 26)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 57)\n' "$executed"
 fi
 
 echo ""

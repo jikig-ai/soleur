@@ -788,6 +788,17 @@ _pin_seen "the web-host vector unit from soleur-host-bootstrap.sh (heredoc surfa
   'soleur-vector-install'
 # The unit this change is about.
 _pin_seen "inngest-cutover-flip.service" 'inngest-cutover-flip\.service'
+# #6894: the LUKS cutover unit is a SECOND root doppler-run unit on the same host, and it moves the
+# store. Seen AND bound — a bound that silently lapsed would put every name in soleur-inngest/prd
+# into the environment of a root script that executes several of them.
+_pin_seen "inngest-luks-cutover.service (#6894)" 'inngest-luks-cutover\.service'
+if grep -qE '^  UNIT: +inngest-luks-cutover\.service +surface=service +bound=True' "$CONTROL_OUT"
+then
+  pass "the LUKS cutover unit's --only-secrets bound is DETECTED (its list is on continuation lines too)"
+else
+  fail "the LUKS cutover unit reads as UNBOUNDED" \
+    "$(grep -E '^  UNIT: +inngest-luks-cutover' "$CONTROL_OUT")"
+fi
 
 # THE JOIN IS LOAD-BEARING. The flip unit's bound lives ENTIRELY on continuation lines; without
 # CONT_RE the scanner reads it as unbounded and every row below is meaningless. Assert the

@@ -283,6 +283,17 @@ export interface DiscoveredLogsAlert {
   resourceName: string;
   /** The `name = "..."` attribute — how the Telemetry API keys the alert. */
   liveName: string;
+  /**
+   * Whether the resource declares `paused = false` LITERALLY.
+   *
+   * The reconciler's premise used to be "every declared alert writes `paused = false` as intent, so
+   * a live pause is always a vendor-side rejection or a hand pause". #6894 broke that premise: the
+   * wrong-volume alert ships `paused = !var.inngest_luks_cutover_complete` because before the
+   * cutover the condition it watches is the CORRECT state, so an armed rule would page continuously
+   * and get muted before it ever mattered. A variable-driven pause is intent, not drift — and
+   * reporting it twice a day would be a false page for the whole window between merge and cutover.
+   */
+  pausedIsLiteralFalse: boolean;
 }
 
 /** One alert as reported by `GET telemetry.betterstack.com/api/v2/alerts` (`data[].attributes`). */
@@ -858,7 +869,11 @@ export function parseLogsAlertBlocks(tfText: string): DiscoveredLogsAlert[] {
   const code = codeView(tfText);
   return resourceBlocks(code, "logtail_exploration_alert").map(({ resourceName, body }) => {
     const nameMatch = /\bname\s*=\s*"([^"]+)"/.exec(body);
-    return { resourceName, liveName: nameMatch ? nameMatch[1] : "" };
+    // `paused` is read from the block rather than assumed. A resource with no `paused` at all also
+    // counts as literal-false: the provider's default is unpaused, which is the same intent.
+    const pausedMatch = /^\s*paused\s*=\s*(.+?)\s*$/m.exec(body);
+    const pausedIsLiteralFalse = pausedMatch === null || pausedMatch[1].trim() === "false";
+    return { resourceName, liveName: nameMatch ? nameMatch[1] : "", pausedIsLiteralFalse };
   });
 }
 
@@ -888,7 +903,10 @@ export function reconcileLogsAlerts(
       violations.push({ kind: "logs_alert", resourceName: d.resourceName, liveName: d.liveName, live: "logs_alert", reason: "logs-alert-absent" });
       continue;
     }
-    if (l.paused) {
+    // A live pause is drift ONLY where the declaration says `paused = false`. Where the declaration
+    // is an expression, the pause is what the author asked for and the apply re-asserts it every
+    // merge — so flagging it would be a standing false page, not a finding.
+    if (l.paused && d.pausedIsLiteralFalse) {
       violations.push({
         kind: "logs_alert",
         resourceName: d.resourceName,

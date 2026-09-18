@@ -1048,8 +1048,15 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
 # question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
 # unset H is the fail-open this gate was built to close.
 FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\(|[A-Z_]+_RC=0;[[:space:]]+)?_bs_query_rows ' "$BODY_SH") || true
-assert "#7674/#8054 the shared reader has exactly 4 call sites (confirm + liveness + execute 2.0 probe + heartbeat), got $FLQ_SITES" \
-  "[[ '$FLQ_SITES' -eq 4 ]]"
+# 4 -> 6 at #6894: the LUKS cutover FSM added its OWN confirm + liveness readers. They are extra
+# CALLERS of the shared reader, not a second reader — which is the property this row protects. They
+# are a separate pair on purpose: they query a different tag, because a flip row proves nothing
+# about a unit that may never have installed (see the luks) rows below).
+assert "#7674/#8054/#6894 the shared reader has exactly 6 call sites (flip confirm + flip liveness + execute 2.0 probe + heartbeat + LUKS confirm + LUKS liveness), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 6 ]]"
+FLQ_LUKS_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-luks-cutover [0-9]+\)' "$BODY_SH") || true
+assert "#6894 the two LUKS call sites pass the CUTOVER tag (never the flip tag), got $FLQ_LUKS_SITES" \
+  "[[ '$FLQ_LUKS_SITES' -eq 2 ]]"
 FLQ_FLIP_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-cutover-flip 50\)' "$BODY_SH") || true
 assert "#7674 the confirm + liveness call sites pass the flip tag and the one-page limit unchanged, got $FLQ_FLIP_SITES" \
   "[[ '$FLQ_FLIP_SITES' -eq 2 ]]"
@@ -2782,6 +2789,83 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   every-body mutation, the R1 SOURCE single-writer pin + its mutation, the persisted 2.1 fields +
 #   op=capture source, the held_back P2-b rows, the rendered quiesce-web preflight (+ mutation) and
 #   poller arms, and the web-1-only / single web-2 statement pins.
+# ── #6894: op=luks-cutover / op=luks-rollback — the LUKS blue-green cutover writers ─────────────
+# Same contract as the sibling flag writers: the value goes in on STDIN (argv is world-readable via
+# /proc), stdout is discarded (`doppler secrets set` prints every remaining secret of the config),
+# every guard refuses BEFORE the write, and the on-host FSM is confirmed from Better Stack rather
+# than assumed. The distinctive one is the TAG: the confirm and liveness readers must key on
+# inngest-luks-cutover, not the flip's tag — the flip timer is enabled on a host where the cutover
+# trio never installed, so borrowing its rows would report a silently-undelivered unit as audible.
+LUKS_FILE="$(mktemp)"; SCRATCH+=("$LUKS_FILE")
+awk '/^            luks-cutover\|luks-rollback\)$/,/^              ;;$/' "$WF" > "$LUKS_FILE"
+LUKS_N=$(wc -l < "$LUKS_FILE" | tr -d '[:space:]')
+assert "#6894 luks) case body is a real block (non-vacuity for every row below, got $LUKS_N)" \
+  "[[ '$LUKS_N' -gt 40 ]]"
+assert "#6894 choice list offers luks-cutover and luks-rollback" \
+  "grep -qE '^[[:space:]]+-[[:space:]]*luks-cutover\$' '$WF_YAML' && grep -qE '^[[:space:]]+-[[:space:]]*luks-rollback\$' '$WF_YAML'"
+assert "#6894 both ops are in the reviewer-gated environment set (an op in the list with an unextended ternary runs ungated)" \
+  "printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-cutover'\" && printf '%s' \"\$ENV_OPS\" | grep -qF \"inputs.op == 'luks-rollback'\""
+LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_FILE" && LK_STDIN=1
+LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
+LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -q '>/dev/null' && LK_SILENT=1
+LK_FLIPW=0;  grep -qE 'secrets set INNGEST_CUTOVER_FLIP' "$LUKS_FILE" && LK_FLIPW=1
+# `|| true` because "no match" is a possible answer here, not a crash: an EMPTY line number means
+# the anchor moved, and the two assertions below require `-n` on each before comparing — so the
+# miss reds THERE, with the value printed, instead of killing the suite here with nothing said.
+LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
+LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1) || true
+LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
+LK_G1READ=0; grep -qE 'doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain' "$LUKS_FILE" && LK_G1READ=1
+# BOTH fail-closed arms, by their DISTINCT sentences: one for "the config could not be read at
+# all", one for "the name exists but its value could not be read". A count alone (or the shared
+# prefix) is satisfied by either, so deleting the second one survived the first revision of this row.
+LK_G1FC=0;   grep -qF 'could not be read at all' "$LUKS_FILE" \
+             && grep -qF 'EXISTS but its value could not be read' "$LUKS_FILE" \
+             && grep -qF 'has("INNGEST_LUKS_CUTOVER")' "$LUKS_FILE" \
+             && [[ "$(grep -c 'G1 REFUSING FAIL-CLOSED' "$LUKS_FILE")" -eq 2 ]] && LK_G1FC=1
+# ANCHORED as case ARMS, not as substrings: `present:luks-cutover-DISABLED)` contains
+# `present:luks-cutover`, so a substring grep passed a mutant that had disabled the arm (measured).
+# G1 for luks-rollback ADMITS `aborted` as its own case arm (the pointer decides at G2), and the
+# refusal text no longer asserts the FSM "has already restored the plaintext store itself" — false
+# for a rollback that refused mid-way (advisor consult at ship). Anchored as an arm, like G2's.
+LK_G1RB_ABORTED=0; grep -qE '^[[:space:]]*aborted\)' "$LUKS_FILE" \
+             && grep -qF "flag is 'aborted'. Permitted PROVISIONALLY" "$LUKS_FILE" \
+             && ! grep -qF 'has already restored the plaintext store itself' "$LUKS_FILE" && LK_G1RB_ABORTED=1
+LK_G2=0;     grep -qE '^[[:space:]]*present:luks-cutover\)' "$LUKS_FILE" \
+             && grep -qE '^[[:space:]]*absent:luks-rollback\)' "$LUKS_FILE" \
+             && grep -qE '^[[:space:]]*unreadable:\*\)' "$LUKS_FILE" \
+             && grep -qF '_luks_pointer_state' "$LUKS_FILE" && LK_G2=1
+LK_G3TAG=0;  grep -qF '_luks_liveness_count' "$LUKS_FILE" && ! grep -qF 'inngest-cutover-flip' "$LUKS_FILE" && LK_G3TAG=1
+LK_CONF=0;   grep -qF 'confirm_luks_state' "$LUKS_FILE" && LK_CONF=1
+LK_ISO=0;    grep -qF 'LK_ISO=$(date -u -d "@$LK_TS"' "$LUKS_FILE" && LK_ISO=1
+LK_TERM=0;   grep -qE '^[[:space:]]+rolled-back\)$' "$LUKS_FILE" && grep -qE '^[[:space:]]+aborted\)$' "$LUKS_FILE" && LK_TERM=1
+LK_ERRS=$(grep -cE '::error::op=' "$LUKS_FILE" || true)
+LK_RAWJQ=0;  grep -qE 'jq \.($|[^a-zA-Z_])' "$LUKS_FILE" && LK_RAWJQ=1
+assert "#6894 writes INNGEST_LUKS_CUTOVER on STDIN, never on argv (/proc is world-readable)" \
+  "[[ '$LK_STDIN' -eq 1 && '$LK_ARGV' -eq 0 ]]"
+assert "#6894 the write discards stdout (doppler secrets set prints every remaining secret of the config)" \
+  "[[ '$LK_SILENT' -eq 1 ]]"
+assert "#6894 neither verb writes the FLIP's flag — the destructive verb and the preserving one stay separate" \
+  "[[ '$LK_FLIPW' -eq 0 ]]"
+assert "#6894 the write is LAST: every guard refusal is above it (write line $LK_WRITE_LN > last G3 refusal $LK_LASTG3_LN)" \
+  "[[ -n '$LK_WRITE_LN' && -n '$LK_LASTG3_LN' && '$LK_WRITE_LN' -gt '$LK_LASTG3_LN' ]]"
+assert "#6894 G1 reads the flag AND separates unset from unreadable via the name list (a swallowed read is not 'unset')" \
+  "[[ '$LK_G1READ' -eq 1 && '$LK_G1FC' -eq 1 ]]"
+assert "#6894 G2 gates on the DURABLE pointer in both directions (absent to cut over, present to roll back, unreadable refuses)" \
+  "[[ '$LK_G2' -eq 1 ]]"
+assert "#6894 G3 liveness keys on the CUTOVER unit's own tag — a flip row proves nothing about a unit that never installed" \
+  "[[ '$LK_G3TAG' -eq 1 ]]"
+assert "#6894 the on-host FSM is CONFIRMED from Better Stack, not assumed" \
+  "[[ '$LK_CONF' -eq 1 ]]"
+assert "#6894 the confirm window is anchored at the WRITE, so a stale terminal row cannot false-succeed" \
+  "[[ -n '$LK_TS_LN' && -n '$LK_WRITE_LN' && '$LK_TS_LN' -lt '$LK_WRITE_LN' && '$LK_ISO' -eq 1 ]]"
+assert "#6894 a rolled-back or aborted FSM is reported as a FAILED dispatch, never a green one (got $LK_ERRS ::error:: arms)" \
+  "[[ '$LK_TERM' -eq 1 && '$LK_ERRS' -ge 8 ]]"
+assert "#6894 op=luks-rollback G1 admits 'aborted' as a case arm (G2's pointer decides), and no longer claims the FSM restored plaintext on every abort" \
+  "[[ '$LK_G1RB_ABORTED' -eq 1 ]]"
+assert "#6894 no raw Better Stack row is echoed by either verb (the standing purity contract)" \
+  "! grep -qE 'jq \\.(\$|[^a-zA-Z_])' '$LUKS_FILE'"
+
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
@@ -2791,7 +2875,11 @@ _DISPATCHED=$((PASS + FAIL))
 # extraction non-vacuity check, added because _bs_read_remedy now calls the shared
 # partition and an empty awk range would inline cleanly while leaving the rc=22 arm
 # dead. Derived from main's value at ship time, not carried as a literal.
-_EXACT_FLOOR=649
+# 649 -> 664 (+15) at #6894: the op=luks-cutover / op=luks-rollback writer rows (stdin-not-argv,
+#   stdout discarded, guards-before-write ordering, the pointer gate in both directions, the
+#   own-tag liveness + confirm, the write-anchored confirm window, and the terminal-flag reporting).
+#   Re-derived at the merge with main's #8178 row: 649 + 15, measured, not summed from memory.
+_EXACT_FLOOR=665
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
