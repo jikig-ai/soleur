@@ -435,6 +435,15 @@ Let `ADR=knowledge-base/engineering/architecture/decisions/ADR-211-zot-last-err-
     and `knowledge-base/project/specs/feat-one-shot-8309-adr211-accepted-legal-records/session-state.md`.
     No file under `apps/`, `scripts/`, `plugins/`, `.github/`, or matching `*.tf` appears.
 
+    **Amended 2026-09-18 (compound):** `/compound` archives this plan and the spec directory
+    to their `archive/` siblings before ship, so the three `knowledge-base/project/` paths
+    above appear at their archived paths instead. The exclusion half of this AC is unchanged
+    and is what the review enforced: nothing under `apps/`, `scripts/`, `plugins/`,
+    `.github/` or `*.tf`. Two fixes `/compound` found that would have breached it — a
+    `scripts/betterstack-query.sh` usage-block correction and a route-to-definition bullet
+    for `plugins/soleur/skills/{work,review}/SKILL.md` — were filed as #8327 rather than
+    inlined here, co-signed under `pre-existing-unrelated`.
+
 (`Closes #8309` / `Ref #7960` / `Ref #8272` in the PR body are `/ship`'s job under `wg-use-closes-n-in-pr-body-not-title-to`, not an AC here.)
 
 ## Domain Review
