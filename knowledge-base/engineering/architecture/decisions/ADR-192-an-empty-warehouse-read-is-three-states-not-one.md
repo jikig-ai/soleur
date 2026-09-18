@@ -368,6 +368,7 @@ this amendment narrows the token to, and it is no longer hypothetical.
 ## Addendum — 2026-09-18 (#8178): `CLUSTER_DOESNT_EXIST` was the connection, not the source
 
 Two readings above are **superseded**, and they are left in place as dated text:
+
 - *"The git-data source (2734275) has never stored one, which is why reads … answer HTTP 500 `CLUSTER_DOESNT_EXIST`"* (`### Consequence: the round trip creates a permanent table`).
 - *"the round trip was not successful, so the table was not created"* (`### Measured 2026-09-06`).
 
