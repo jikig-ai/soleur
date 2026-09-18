@@ -322,6 +322,8 @@ fence                        { next }
 
 ### Pre-merge (PR)
 
+_Verification-command note, applying to every AC below that asserts a zero count: `grep -c` and `git grep` **exit 1 when they match nothing**, so under `set -e` a zero-hit assertion aborts the shell before it can be read as a pass. Wrap each such command as `n=$(… || true); [[ "${n:-0}" -eq 0 ]]`. Verified against AC5's own command on an unchanged file: prints `0`, exits 1._
+
 **Stream A — docs**
 
 - [ ] AC1. Operator-surface bare-form census is zero: `git grep -nE "claude plugin (update|uninstall|install) soleur([^@a-z-]|$)" -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/learnings' ':!knowledge-base/project/brainstorms' ':!knowledge-base/marketing' ':!knowledge-base/product' ':!**/archive/**' ':!*.pen' ':!feature-request-plugin-update-surfaces-install-divergence.md'` returns no lines. Measured 2026-09-18: the unexcluded command returns 27 hits across 27 files; every exclusion is deliberate and one-line-justified — `plans`/`specs`/`learnings`/`brainstorms` are point-in-time records, `marketing`/`product` are internal audit and validation snapshots (4 files) that quote the old instruction as evidence, `*.pen` is a wireframe fixture, `archive/**` is terminal, and the root `feature-request-…md` is an upstream draft using `<name>` placeholders. **`plugins/soleur/docs/blog` is NOT excluded** — it is published; its three files are in `## Files to Edit`.
@@ -487,7 +489,9 @@ One open `code-review` issue names a planned file:
 
 **Mechanical UI-surface override, evaluated:** the glob superset in `plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` (`**/*.njk`) matches `plugins/soleur/docs/pages/getting-started.njk` and `plugins/soleur/docs/pages/claude-code-plugins.njk` in `## Files to Edit`. The same file's `## Excluded (no wireframe required)` list names "Pure copy or style tweaks with no structural/layout change" and "Docs / knowledge-base … changes". Both edits are text inside existing `<code>`/`<p>` elements and a JSON-LD string — no new element, layout or flow (AC5 pins this mechanically: zero added structural tags in the diff). The term list is the single source of truth all four enforcement layers cite; under it this change does not touch a UI surface.
 
-**Tier:** none (copy-only docs text; excluded by the term list)
+**Rule text, quoted because it is the decisive authority:** `wg-ui-feature-requires-pen-wireframe` reads *"UI surface = pages, components, modals, banners, nav/layout, flows (list: `skills/brainstorm/references/ui-surface-terms.md`); **excludes copy/style** and backend-only."* The glob superset in that list over-matches by design (it is a superset of the prose list) and the Excluded section of the same file narrows it. So the deepen-plan Phase 4.9 halt does not fire here, and `ux-design-lead` is not a skipped producer — there is no UI surface to produce for. AC5 is the mechanical proof of the "copy/style only" claim: zero structural tags added in the `.njk` diff.
+
+**Tier:** none (copy-only docs text; excluded by the rule's own carve-out)
 **Decision:** skipped — not a UI surface
 **Agents invoked:** none
 **Skipped specialists:** none (no UI feature exists here for `ux-design-lead` to design; this is not a skip of a required producer)
