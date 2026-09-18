@@ -33,46 +33,66 @@ Tick a box only after running its check in this session.
 
 ## Phase 1: Runbook (`knowledge-base/engineering/operations/runbooks/inngest-server.md`)
 
-- [ ] 1.0 Strike the superseded sentence where it is read (`~~…~~` + "superseded 2026-09-18" note,
+- [x] 1.0 Strike the superseded sentence where it is read (`~~…~~` + "superseded 2026-09-18" note,
       anchor text byte-intact); rewrite the `The latch clears only when` remediation sentence with
       the precondition (measured-empty store) before the mechanism, keeping `op=resume` is not it.
-- [ ] 1.1 Prefix the 2026-08-25 blockquote's lazy-continuation lines with `> `, then insert the
+- [x] 1.1 Prefix the 2026-08-25 blockquote's lazy-continuation lines with `> `, then insert the
       paste-ready callout from plan § Phase 1.1c after them, every line `>`-prefixed (G19 first;
       rollback is one-way; `FLUSH_LATCH_SINCE` has no application; every value names its read —
       `inngest-host-state.sh`, Doppler `INNGEST_CUTOVER_FLIP`, Hetzner `GET /v1/volumes/106261946`,
       `gh run view 34948112813`; "dormant on this volume", never "retired").
-- [ ] 1.2 Add the Quick-reference row (plan § Phase 1.2).
-- [ ] 1.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` → `OK`.
+- [x] 1.2 Add the Quick-reference row (plan § Phase 1.2).
+- [x] 1.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` → `OK`.
 
 ## Phase 2: ADR-100 addendum (append-only)
 
-- [ ] 2.1 Append `## Addendum — 2026-09-18 (#7695) — the recut target exists, and is dormant on the
+- [x] 2.1 Append `## Addendum — 2026-09-18 (#7695) — the recut target exists, and is dormant on the
       volume the cutover landed on` per plan § Architecture Decision (five items; G8 worded as the
       #8078 predicate so the file agrees with its own 2026-09-11 §7; `Ref #8285`).
-- [ ] 2.2 `git diff origin/main -- <ADR-100>` shows additions only.
+- [x] 2.2 `git diff origin/main -- <ADR-100>` shows additions only.
 
 ## Phase 3: Reconcile and archive the `issue: 7695` plan/spec pairs
 
-- [ ] 3.1 Append the reconciliation addendum to the 2026-09-02 plan (P1–P10 superseded; two replaces
+- [x] 3.1 Append the reconciliation addendum to the 2026-09-02 plan (P1–P10 superseded; two replaces
       since for other reasons; P2 met but unconsumed; P9/P10 belong to the ADR-142 path).
-- [ ] 3.2 Archive the four artifacts with `archive-kb.sh <slug>` (spec dirs and the 09-07 plan
+- [x] 3.2 Archive the four artifacts with `archive-kb.sh <slug>` (spec dirs and the 09-07 plan
       unchanged — no notes, no ticking).
-- [ ] 3.3 AC5–AC8 checks (history preserved, byte-identical archived specs, 09-10 pair untouched).
+- [x] 3.3 AC5–AC8 checks (history preserved, byte-identical archived specs, 09-10 pair untouched).
 
 ## Phase 4: GitHub records
 
-- [ ] 4.1 `gh issue view 8316 --json state` → OPEN (already filed; do not file a second).
-- [ ] 4.2 Comments + relabels: #8078 (p1→p3, link #8316), #7777 (bound scope, clause-2 cross-link,
+- [x] 4.1 `gh issue view 8316 --json state` → OPEN (already filed; do not file a second).
+- [x] 4.2 Comments + relabels: #8078 (p1→p3, link #8316), #7777 (bound scope, clause-2 cross-link,
       `domain/legal` → `domain/engineering`); edit #8316 body (`Ref #8285`, ADR-199 §Consequences
       anchor, `model.c4` `inngestRedis` description anchor, G8 wording); one comment on PR 8248
       naming #8316. No comment on #8018.
-- [ ] 4.3 Verdict comments on #7695, #8017, #8015 quoting `measurements.md` fields with the read that
+- [x] 4.3 Verdict comments on #7695, #8017, #8015 quoting `measurements.md` fields with the read that
       produced each beside it, each ending "closes on merge of PR #8314".
-- [ ] 4.4 Draft PR body; `grep -oE 'Closes #[0-9]+' <draft> | sort -u` → exactly 7695/8015/8017
+- [x] 4.4 Draft PR body; `grep -oE 'Closes #[0-9]+' <draft> | sort -u` → exactly 7695/8015/8017
       BEFORE `gh pr edit --body`; then `gh pr view 8314 --json closingIssuesReferences` → the three.
       Body names the INDEX.md / kb-tags.txt overlap with PR 8248.
 
 ## Phase 5: Verification
 
-- [ ] 5.1 AC1–AC15 from the plan, each run and recorded (AC16–AC19 are post-merge).
+- [x] 5.1 AC1–AC15 from the plan, each run and recorded (AC16–AC19 are post-merge).
 - [ ] 5.2 `bash scripts/test-all.sh` at the /ship full-battery checkpoint.
+
+## AC record (run 2026-09-18 in /work; commands per the plan)
+
+| AC | Result |
+|---|---|
+| AC1 | callout count 1; `~~…today.**~~` count 1; Remediation block carries `op=resume` is not it` and `measured empty` before `recut` |
+| AC2 | all 16 tokens ≥ 1 (`redis_keys=1261`, amended from plan-time 1081 to the measured value); G19 before G8; `op=resume` before `FLUSH_LATCH_SINCE`; every line `>`-prefixed; `retired` count 0 |
+| AC3 | `OK: no human-run infra steps in 8 scanned file(s)` |
+| AC4 | addendum count 1; `git diff origin/main -- ADR-100` has 0 `-` lines |
+| AC5 | old plan absent; 1 archived copy; `git log --follow` 5 entries |
+| AC6 | archived plan's last H2 is the 2026-09-18 addendum; archived spec dir diff vs `origin/main` empty |
+| AC7 | old spec dir absent; `find` → 1 |
+| AC8 | 2026-09-10 pair intact; 09-07 plan + spec archived, both diffs vs `origin/main` empty |
+| AC9 | all fields present; `"id": 106261946` present; PASS line present |
+| AC10 | `c4-count-parity.test.sh` exit 0 |
+| AC11 | every path in the allow-list (renames listed both sides with `--no-renames`) |
+| AC12 | intersection with PR 8248 (66 files) = `knowledge-base/INDEX.md` only |
+| AC13 | `closingIssuesReferences` → `[7695,8015,8017]` |
+| AC14 | any-case closing-keyword grep on the body → exactly the three |
+| AC15 | `cloud-init-inngest.yml` count 0 |
