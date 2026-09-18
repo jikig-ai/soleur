@@ -19,6 +19,11 @@ HOOK="$SCRIPT_DIR/follow-through-directive-gate.sh"
 PASS=0
 FAIL=0
 TOTAL=0
+# One owning trap for every tempdir this suite allocates (ADR-129, lint-trap-tempfile-ownership
+# rule (c)). Each case still `rm -rf`s its own TMP on the happy path; the root is what removes
+# them if the suite dies between allocation and cleanup.
+SUITE_TMP=$(mktemp -d)
+trap 'rm -rf "$SUITE_TMP"' EXIT
 declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
 _case=""          # set by run(); names the case a FAIL row belongs to
 
@@ -114,7 +119,7 @@ assert_deny() {
 }
 
 # === T1: fail-open on non-issue-create commands ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 INPUT=$(make_input "git status" "$TMP")
 run "T1: git status is not gh issue create — fail open" "$INPUT"
@@ -122,7 +127,7 @@ assert_pass
 rm -rf "$TMP"
 
 # === T2: fail-open on gh issue create WITHOUT follow-through label ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 INPUT=$(make_input 'gh issue create --title "test" --label bug --body "no directive needed"' "$TMP")
 run "T2: no follow-through label — fail open" "$INPUT"
@@ -130,7 +135,7 @@ assert_pass
 rm -rf "$TMP"
 
 # === T3: deny when follow-through label + body lacks directive ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -143,7 +148,7 @@ assert_deny "requires a"
 rm -rf "$TMP"
 
 # === T4: deny when directive open marker present but no closing --> ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -158,7 +163,7 @@ assert_deny "closing"
 rm -rf "$TMP"
 
 # === T5: deny when script= empty ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -171,7 +176,7 @@ assert_deny "script="
 rm -rf "$TMP"
 
 # === T6: deny when earliest= empty ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -184,7 +189,7 @@ assert_deny "earliest="
 rm -rf "$TMP"
 
 # === T7: deny when script path escapes scripts/followthroughs/ via .. traversal ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -197,7 +202,7 @@ assert_deny "does not resolve under"
 rm -rf "$TMP"
 
 # === T8: deny when script does not exist on disk ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -210,7 +215,7 @@ assert_deny "does not exist"
 rm -rf "$TMP"
 
 # === T9: deny when script is not executable ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -223,7 +228,7 @@ assert_deny "not executable"
 rm -rf "$TMP"
 
 # === T10: deny when earliest= does not parse ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -236,7 +241,7 @@ assert_deny "does not parse"
 rm -rf "$TMP"
 
 # === T11: PASS — valid directive + script + earliest ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 ## Follow-Through
@@ -260,7 +265,7 @@ run "T12: invalid WORK_DIR — fail open" "$INPUT"
 assert_pass
 
 # === T13: deny on quoted label (e.g. --label "follow-through") ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 no directive
@@ -272,7 +277,7 @@ rm -rf "$TMP"
 
 # === T14: fail-open when label substring matches but does not exactly match
 # the follow-through label (e.g., 'follow-through-meta'). ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 cat > "$TMP/body.md" <<'EOF'
 no directive needed for follow-through-meta label
@@ -288,7 +293,7 @@ rm -rf "$TMP"
 # value so the test reaches the strip path rather than the unrelated `:54`
 # label early-exit: WITHOUT the strip this denies (directive-missing), WITH it
 # the body is blanked and the hook fails open. See deepen finding D-P1-A. ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 FP_CMD=$'git add . && git commit -m \'doc: gate needs\ngh issue create --label follow-through --body "x"\nend\''
 INPUT=$(make_input "$FP_CMD" "$TMP")
@@ -300,7 +305,7 @@ rm -rf "$TMP"
 # Regression guard for the `print 2` → `print $2` typo in the BODY_INLINE perl
 # extractor: pre-fix, BODY_INLINE was the literal "2" so EVERY inline-body
 # create was wrongly denied (directive-missing). ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 DIRECTIVE='<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->'
 INPUT=$(make_input "gh issue create --label follow-through --title t --body \"$DIRECTIVE\"" "$TMP")
@@ -314,7 +319,7 @@ rm -rf "$TMP"
 # "script= is empty" message sent the author hunting for a token that is visibly present,
 # which is how the fenced form survived as the ship template's default and killed six
 # trackers. The deny must name the fence.
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 FENCED_BODY=$'## Verification\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n```\n'
 printf '%s' "$FENCED_BODY" > "$TMP/body.md"
@@ -325,7 +330,7 @@ rm -rf "$TMP"
 
 # === T17b: the MATCHED CONTROL. The same body with the two fence lines removed must PASS.
 # Without it, T17 is also satisfied by a gate that denies every body. ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 printf '%s' $'## Verification\n\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n' > "$TMP/body.md"
 INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
@@ -335,7 +340,7 @@ rm -rf "$TMP"
 
 # === T17c: a body with NO directive at all keeps the ORIGINAL deny reason. The fence branch
 # must not swallow the case it was carved out of. ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 printf '%s' $'## Verification\n\nNothing here.\n' > "$TMP/body.md"
 INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
@@ -345,7 +350,7 @@ rm -rf "$TMP"
 
 # === T17d (DISPATCH): with the fence branch reverted in a copy of the hook, the fenced body
 # falls back to the generic "script= is empty" message. The branch is the mechanism. ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 # The mutant must live BESIDE the real hook: the hook resolves `lib/incidents.sh` relative to
 # its own directory, so a copy in a mktemp dir dies at source time and the row would measure
@@ -386,7 +391,7 @@ rm -rf "$TMP"
 # indentation invites. ===
 ft_shape_case() {  # ft_shape_case <label> <body-printf-fmt> <expect-substring>
   local label="$1" fmt="$2" expect="$3" TMP
-  TMP=$(mktemp -d)
+  TMP=$(mktemp -d -p "$SUITE_TMP")
   make_work_dir "$TMP" > /dev/null
   # shellcheck disable=SC2059
   printf "$fmt" > "$TMP/body.md"
@@ -408,7 +413,7 @@ ft_shape_case "T17g (#7490): an INDENTED unfenced directive — deny names the i
 # === T17h: the zero-space spelling `<!--soleur:` is what the CONSUMER honours (` *`), so the
 # gate must too — the mirror of the soak gate's G5-4. A false denial here blocks a legitimate
 # tracker at creation time. ===
-TMP=$(mktemp -d)
+TMP=$(mktemp -d -p "$SUITE_TMP")
 make_work_dir "$TMP" > /dev/null
 printf '%s' $'## Verification\n\n<!--soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n' > "$TMP/body.md"
 INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")

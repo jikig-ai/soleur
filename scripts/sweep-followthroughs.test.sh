@@ -28,6 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/sweep-followthroughs.sh"
 
 PASS=0
+# One owning trap for every tempfile/tempdir this suite allocates (ADR-129,
+# lint-trap-tempfile-ownership rule (c)). setup_tmpdir roots and per-row fixtures all live
+# under it, so a suite that dies mid-row leaks nothing.
+SUITE_TMP=$(mktemp -d)
+trap 'rm -rf "$SUITE_TMP"' EXIT
 declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
 FAIL=0
 TOTAL=0
@@ -89,7 +94,7 @@ assert_not_contains() {
 # exists only as a safety net.
 setup_tmpdir() {
   local root
-  root=$(mktemp -d)
+  root=$(mktemp -d -p "$SUITE_TMP")
   mkdir -p "$root/scripts/followthroughs" "$root/bin"
   cat > "$root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -1447,7 +1452,7 @@ t_g4_21_no_author_bytes_in_comment() {
 t_g4_6_dialect_portability() {
   local awkbin="awk" mode="--traditional"
   if command -v mawk >/dev/null 2>&1; then awkbin="mawk"; mode=""; fi
-  local fx; fx=$(mktemp)
+  local fx; fx=$(mktemp -p "$SUITE_TMP")
   printf '   ```html\n<!-- soleur:followthrough script=x.sh -->\n   ```\n' > "$fx"
   local got
   # shellcheck disable=SC2086

@@ -87,7 +87,9 @@ echo "  PASS: SKILL.md references canonical runbook"
 # copy gone that is `x == x`. What is still worth pinning -- and what the old assertion could
 # never see, because its fixture had no fence -- is the BEHAVIOUR the ship template depends on:
 # a directive inside a fence must yield no `script=`, and must be reported as fenced.
-fenced_body=$(mktemp)
+SUITE_TMP=$(mktemp -d)   # owning trap: lint-trap-tempfile-ownership rule (c), ADR-129
+trap 'rm -rf "$SUITE_TMP"' EXIT
+fenced_body=$(mktemp -p "$SUITE_TMP")
 {
   printf '## Verification\n\n```html\n'
   grep -m1 '^<!-- soleur:followthrough' "$FIXTURE_DIR/expected-issue-body.md" \
