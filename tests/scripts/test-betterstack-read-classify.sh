@@ -99,6 +99,7 @@ want "T12e rc=22 empty body -> other"         other                   22  ''
 # design, and a fixture carrying two markers at once cannot show either one is needed.
 want "T12g rc=22 Code: 516 alone"             credentials-rejected    22  'Code: 516. DB::Exception'
 want "T12h rc=22 Maintenance (capital M)"     source-under-maintenance 22 'Service under Maintenance'
+want "T12j rc=22 AUTHENTICATION FAILED (upper case)" credentials-rejected 22 'AUTHENTICATION FAILED'
 
 # source-not-in-connection (#7867): Better Stack answers HTTP 500 CLUSTER_DOESNT_EXIST
 # when the SQL API connection does not cover the source, which --fail-with-body reports
@@ -155,6 +156,12 @@ else _report "T19 quoted value redacted, rest RETAINED" bad "got '$_s'"; fi
 _s="$(_scrub "")"
 if [[ "$_s" == "<none>" ]]; then _report "T20 empty stderr -> <none>" ok
 else _report "T20 empty stderr -> <none>" bad "got '$_s'"; fi
+_s="$(_scrub "$(printf 'first line kept\nsecond line dropped')")"
+if [[ "$_s" == "first line kept" ]]; then _report "T22 only the FIRST stderr line reaches the log" ok
+else _report "T22 only the FIRST stderr line reaches the log" bad "got '$_s'"; fi
+_s="$(_scrub "$(printf 'x%.0s' {1..300})")"
+if [[ "${#_s}" == 200 ]]; then _report "T23 the line is capped at 200 characters" ok
+else _report "T23 the line is capped at 200 characters" bad "got ${#_s}"; fi
 _s="$(bs_read_scrub_err1 "/nonexistent/err-$$")"; _src=$?
 if [[ "$_s" == "<none>" && "$_src" == 0 ]]; then _report "T21 missing errfile -> <none>, rc 0" ok
 else _report "T21 missing errfile -> <none>, rc 0" bad "got '$_s' rc=$_src"; fi
@@ -162,7 +169,7 @@ else _report "T21 missing errfile -> <none>, rc 0" bad "got '$_s' rc=$_src"; fi
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops.
 # A floor below the count lets that many assertions vanish silently.
 _total=$((pass + fail))
-_EXACT=33
+_EXACT=36
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' \
     "$_total" "$_EXACT" >&2

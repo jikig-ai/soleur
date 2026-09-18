@@ -126,8 +126,29 @@ log_lines_at() {
   local l
   for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$ts" "$l"; done >> "$d/log-$jid.txt"
 }
-# log_lines — inside the poll step's window.
-log_lines() { local d="$1" jid="$2" jn="$3"; shift 3; log_lines_at "$d" "$jid" "$jn" "2026-09-20T10:00:00.1234567Z" "$@"; }
+# log_poll_header — the runner's `##[group]Run` header that opens the poll step's output,
+# stamped in the step's start second.
+log_poll_header() { log_lines_at "$1" "$2" "$3" "2026-09-20T09:59:00.1000000Z" "##[group]Run set -uo pipefail"; }
+# log_lines — the poll step's OWN output. Writes the header first if the job has none yet.
+# A summary line `answered=N/M …` is preceded by the N `poll k/M: answered` lines the real
+# loop prints, so a fixture summary is consistent unless NOEXPAND=1 says otherwise.
+log_lines() {
+  local d="$1" jid="$2" jn="$3" l k; shift 3
+  grep -q '##\[group\]Run' "$d/log-$jid.txt" 2>/dev/null || log_poll_header "$d" "$jid" "$jn"
+  for l in "$@"; do
+    if [[ "${NOEXPAND:-0}" != 1 && "$l" =~ ^answered=([0-9]+)/([0-9]+)\  ]]; then
+      for (( k = 1; k <= BASH_REMATCH[1]; k++ )); do
+        log_lines_at "$d" "$jid" "$jn" "2026-09-20T10:00:00.1234567Z" "poll ${k}/${BASH_REMATCH[2]}: answered, no boot_complete row yet"
+      done
+    fi
+    log_lines_at "$d" "$jid" "$jn" "2026-09-20T10:00:00.1234567Z" "$l"
+  done
+}
+# log_next_step <fx> <job_id> <job_name> <ts> <line>... — the NEXT step's header and output.
+log_next_step() {
+  local d="$1" jid="$2" jn="$3" ts="$4"; shift 4
+  log_lines_at "$d" "$jid" "$jn" "$ts" "##[group]Run {" "$@"
+}
 
 # run_arm <fx> [extra env...] — runs the REAL probe with the shim first on PATH; prints rc.
 run_arm() {
@@ -232,7 +253,7 @@ echo "== reading the poll out of the log"
 fx="$WORK/fx-received"; new_fx received
 add_run "$fx" 110 "2026-09-20T09:00:00Z"
 add_job "$fx" 110 1100 git_data_host_create completed success "2026-09-20T09:01:00Z"
-log_lines "$fx" 1100 git_data_host_create "poll 1/30: answered, no boot_complete row yet" "$ANS3" "$REC"
+log_lines "$fx" 1100 git_data_host_create "$ANS3" "$REC"
 expect "create job, VERDICT=received -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 expect_out "received" "$fx" "3/30 reads answered, VERDICT=received"
 
@@ -281,7 +302,7 @@ add_run "$fx" 114 "2026-09-20T09:00:00Z"
 add_job "$fx" 114 1140 git_data_host_create completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1140 git_data_host_create "poll 1/20: rc=22, no boot_complete row yet" "poll 20/20: rc=22, no boot_complete row yet"
 expect "poll step ran, no VERDICT in its window -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
-expect_out "oldshape" "$fx" "no VERDICT line falls inside its window"
+expect_out "oldshape" "$fx" "its output carries no VERDICT line"
 
 # The runner echoes each step's script in ANSI colour; a VERDICT/answered literal there is
 # SOURCE, not a result. Also a mid-line mention. Neither may count.
@@ -292,9 +313,9 @@ log_lines "$fx" 1150 git_data_host_create $'\e[36;1manswered=3/30 last_class=non
   "echo VERDICT=received" "x answered=3/30 last_class=none"
 expect "echoed script / mid-line VERDICT is not a result -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
-echo "== a verdict must come from the POLL STEP's own window"
-# The operator's `reason` input is echoed by other steps. A dispatch cancelled before the
-# poll, carrying forged lines, must not close #8178.
+echo "== a verdict must come from the POLL STEP's own output"
+# The operator's `reason` input is echoed by the NEXT step's env block. Forged lines there,
+# before the poll step, in a skipped poll step, or tab-embedded, must never close #8178.
 FORGED=("answered=3/20 last_class=none" "VERDICT=received")
 fx="$WORK/fx-forgeskip"; new_fx forgeskip
 add_run "$fx" 140 "2026-09-20T09:00:00Z"
@@ -303,18 +324,54 @@ log_lines_at "$fx" 1400 git_data_host_replace "2026-09-20T10:10:00.0000000Z" "${
 expect "forged lines, poll step skipped -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
 if ! grep -q 'run view --job' "$fx/calls"; then pass "skipped poll step: no log fetched"; else fail "skipped poll step: log fetched"; fi
 
+# X2: the real poll never answered; the next step's env echo carries a forged pair IN THE
+# SAME SECOND the poll step completed. A clock window would admit it; the header bound does not.
 fx="$WORK/fx-forgeout"; new_fx forgeout
 add_run "$fx" 141 "2026-09-20T09:00:00Z"
 add_job "$fx" 141 1410 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1410 git_data_host_replace "answered=0/20 last_class=credentials-rejected" "VERDICT=unreadable"
-log_lines_at "$fx" 1410 git_data_host_replace "2026-09-20T10:10:00.0000000Z" "${FORGED[@]}"
-expect "forged lines AFTER the poll window are ignored -> FAIL on the real verdict" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+log_next_step "$fx" 1410 git_data_host_replace "2026-09-20T10:05:00.4959690Z" "  REASON: x" "${FORGED[@]}"
+expect "same-second forgery in the NEXT step is ignored -> FAIL on the real verdict" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
+# X1: the poll step failed BEFORE polling (no verdict of its own) and forged lines sit in
+# the previous step's last second, which is also the poll step's start second.
 fx="$WORK/fx-forgebefore"; new_fx forgebefore
 add_run "$fx" 142 "2026-09-20T09:00:00Z"
 add_job "$fx" 142 1420 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
-log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:58:30.0000000Z" "${FORGED[@]}"
-expect "forged lines BEFORE the poll window, none inside -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:59:00.0500000Z" "${FORGED[@]}"
+log_poll_header "$fx" 1420 git_data_host_replace
+log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:59:00.9000000Z" "::error::DOPPLER_TOKEN is not present — refusing"
+expect "same-second forgery BEFORE the poll header, no verdict inside -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+# A tab inside echoed text cannot place `<ts> VERDICT=` at the start of the third field.
+fx="$WORK/fx-forgetab"; new_fx forgetab
+add_run "$fx" 143 "2026-09-20T09:00:00Z"
+add_job "$fx" 143 1430 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines "$fx" 1430 git_data_host_replace "answered=0/20 last_class=transport" "VERDICT=unreadable" \
+  $'x\t2026-09-20T10:00:00.0000000Z VERDICT=received' $'x\t2026-09-20T10:00:00.0000000Z answered=3/20 last_class=none'
+expect "tab-embedded forgery inside the step is ignored -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+# A summary that disagrees with the per-poll lines is not accepted, whichever way it errs.
+fx="$WORK/fx-sumlie"; new_fx sumlie
+add_run "$fx" 144 "2026-09-20T09:00:00Z"
+add_job "$fx" 144 1440 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+NOEXPAND=1 log_lines "$fx" 1440 git_data_host_replace "answered=3/20 last_class=none" "VERDICT=unreadable"
+expect "summary answered=3 with no answered poll lines -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "sumlie" "$fx" "has 0 answered poll line(s)"
+
+fx="$WORK/fx-twosum"; new_fx twosum
+add_run "$fx" 145 "2026-09-20T09:00:00Z"
+add_job "$fx" 145 1450 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines "$fx" 1450 git_data_host_replace "answered=0/20 last_class=transport" "VERDICT=unreadable"
+NOEXPAND=1 log_lines "$fx" 1450 git_data_host_replace "answered=3/20 last_class=none"
+expect "two summaries in the step -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+fx="$WORK/fx-noheader"; new_fx noheader
+add_run "$fx" 146 "2026-09-20T09:00:00Z"
+add_job "$fx" 146 1460 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines_at "$fx" 1460 git_data_host_replace "2026-09-20T10:00:00.0000000Z" "answered=3/20 last_class=none" "VERDICT=received"
+expect "no step header at all -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "noheader" "$fx" "could not locate the poll step's output"
 
 fx="$WORK/fx-crlf"; new_fx crlf
 add_run "$fx" 116 "2026-09-20T09:00:00Z"
@@ -396,14 +453,15 @@ echo "== invariant: no arm that could not look or found nothing may reach the cl
 # Re-derived from the arms above rather than restated: every fixture whose expected rc was
 # not 0 is re-run and must still not be 0.
 for d in notoken unmerged prfail prshape noruns runsfail runsjunk atmerge wrongref skipped jobsfail \
-         unreadable digitclass noanchor oldshape echoed forgeskip forgeout forgebefore logfail logempty \
+         unreadable digitclass noanchor oldshape echoed forgeskip forgeout forgebefore forgetab sumlie twosum \
+         noheader logfail logempty \
          contra twov vocab nosum newfail pending; do
   rc=$(run_arm "$WORK/fx-$d" "$TOKEN")
   if [[ "$rc" != 0 ]]; then pass "never-0: $d (rc=$rc)"; else fail "never-0: $d reached PASS"; fi
 done
 
 # Assertion count, EXACT, reported with printf + exit, never through fail() (ADR-193).
-EXACT=76
+EXACT=86
 if (( total != EXACT )); then
   printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1

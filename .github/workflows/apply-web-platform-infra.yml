@@ -4458,20 +4458,21 @@ jobs:
           git_data_boot_verify replace 20 30 "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
           exit "$rc"
 
-      - name: Post-replace readiness note (authoritative liveness is web-host-driven, non-SSH)
+      - name: Post-replace readiness note (non-SSH)
         # git-data is a deny-all blind host: this CI runner canNOT SSH it and canNOT reach it
         # over the private net. Two gates ran in THIS job: the destroy-guard + post-apply jq
         # asserts, and (#8178) the boot-signal poll above, which reads the host's
-        # stage:boot_complete from Better Stack. The web-host-driven `git ls-remote` check over
-        # the private net (git-data.tf, hr-fresh-host-provisioning-reachable-from-terraform-apply)
-        # stays the authoritative SERVING check. This step never SSHes the host.
+        # stage:boot_complete from Better Stack. No SERVING check exists yet: the web-host
+        # `git ls-remote` probe cron is #5274 PR C (git-data.tf), and the existing web-host probe
+        # is a TCP connect to :22, which answers even when the LUKS volume never mounted. This
+        # step never SSHes the host.
         run: |
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
             echo "In-job gates: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision positive)."
             echo ""
-            echo "Authoritative serving check: the web-host-driven \`git ls-remote\` readiness/cutover check over the private net (10.0.1.20) — NOT SSH. git-data is a deny-all blind host."
+            echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dispatch summary

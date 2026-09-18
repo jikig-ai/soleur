@@ -24,11 +24,11 @@ _gdbsp_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/betterstack-sources.sh
 . "$_gdbsp_dir/betterstack-sources.sh"
 
-# Per-read wall-clock cap, seconds. A read is `doppler run` + one curl (--max-time 60 in
-# betterstack-query.sh). Without a cap a slow read path can eat the job's timeout and the
-# job is cancelled BEFORE it prints a verdict, which is the "could not tell" state this
-# change exists to remove. `timeout` exits 124 (137 if it had to kill), classified
-# `transport` by bs_read_classify.
+# Per-read wall-clock cap, seconds, around the WHOLE read: Doppler's own secret fetch and
+# the reader's curl (--max-time 60 in betterstack-query.sh). Without it a slow read path can
+# eat the job's timeout and the job is cancelled BEFORE it prints a verdict, which is the
+# "could not tell" state this change exists to remove. `timeout` exits 124 (137 if it had to
+# kill), classified `transport` by bs_read_classify.
 GIT_DATA_BOOT_READ_TIMEOUT_S="${GIT_DATA_BOOT_READ_TIMEOUT_S:-45}"
 
 # git_data_boot_sql <anchor>
@@ -72,9 +72,13 @@ SQL
 # to its own source (#7772); the reader's default is the shared one, which answers with zero
 # rows from this host and would report a perfect boot as `silent`.
 #
-# `--only-secrets` hands the reader the three query credentials and nothing else from
-# prd_terraform. Without it, every secret in that config reaches the reader's environment,
-# and a Doppler key named BS_TABLE would silently override the pin above.
+# `--only-secrets` injects only the three query credentials from prd_terraform, so a Doppler
+# key named BS_TABLE cannot override the pin above. It is NOT a credential boundary: doppler
+# builds the child environment from the parent's, so `env -u` strips the Doppler token and
+# the R2 state-backend keys the job exports, which the reader has no use for.
+# `--no-exit-on-missing-only-secrets` lets a MISSING query variable reach the reader, whose
+# own check reports it as rc 3 (`credentials-absent`); without it doppler exits 1 first,
+# which reads as a token fault.
 git_data_boot_read() {
   local outfile="$1" errfile="$2" anchor="$3" reader
   # FAIL CLOSED ON A RELATIVE TARGET: both operands are redirect destinations, and a relative
@@ -83,9 +87,12 @@ git_data_boot_read() {
   case "$errfile" in /*) : ;; *) printf 'git_data_boot_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
   reader="$(bs_absence_query_script)"
   BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
+    timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" \
     doppler run -p soleur -c prd_terraform \
       --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
-      -- timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" bash "$reader" "$(git_data_boot_sql "$anchor")" \
+      --no-exit-on-missing-only-secrets \
+      -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+      bash "$reader" "$(git_data_boot_sql "$anchor")" \
     >"$outfile" 2>"$errfile"
 }
 
@@ -219,7 +226,7 @@ git_data_boot_check_invariants() {
 # is a stage tag the host emits (cloud-init-git-data.yml); the query is Sentry, issue search
 # host_name:soleur-git-data, since this run's apply.
 _gdb_sentry_order() {
-  printf '%s' "Read Sentry for host_name:soleur-git-data since this run's apply, in this order: (1) a stage:boot_complete event or a stage:betterstack_ingest warning means the host IS UP and only its Better Stack upload failed — do not replace it; (2) a level:fatal event names the stage that failed; (3) stage:bootcmd_start with no stage:gitdata_runcmd_ok means it died in package or file setup, before any fatal handler runs; (4) no event at all means it died before its network came up, or it has no Sentry DSN."
+  printf '%s' "Read Sentry events for host_name:soleur-git-data timestamped AFTER this run's boot-trail anchor (printed by the 'Stamp boot-trail run anchor' step; events from an earlier host generation predate it), in this order: (1) a stage:betterstack_ingest warning means the host ran and its Better Stack upload failed; (2) a stage:boot_complete event means the host finished booting, either after the final read or with its upload lost — do not replace it; (3) a level:fatal event names the stage that failed; (4) stage:bootcmd_start with no stage:gitdata_runcmd_ok means it stopped in package or file setup, or its runcmd_ok emit was not delivered; (5) no event at all means it died before its network came up, or it has no Sentry DSN."
 }
 
 # git_data_boot_verify <birth|replace> <max_polls> <interval_s> <anchor> <apply_outcome>
@@ -244,7 +251,7 @@ git_data_boot_verify() {
     if [[ "$kind" == "birth" ]]; then
       tail="on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query; on failure re-dispatch is the normal remedy (the birth is additive)."
     else
-      tail="do NOT re-dispatch the replace to get a reading (it destroys and recreates the host) — verify with the runbook's 'After the birth' query and the web-host git ls-remote check."
+      tail="do NOT re-dispatch the replace to get a reading (it destroys and recreates the host) — run the runbook's 'After the birth' query with this run's boot-trail anchor."
     fi
     echo "::error::DOPPLER_TOKEN is not present — the boot signal cannot be read, so this ${kind} CANNOT be verified. Refusing to report success. Fix the repo secret; then, apply outcome ${apply}: ${tail}"
     return 1
@@ -261,9 +268,9 @@ git_data_boot_verify() {
     received) : ;;
     silent)
       if [[ "$kind" == "birth" ]]; then
-        tail="The apply step's outcome was ${apply}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete; see the runbook's partial-birth decision tree."
+        tail="The apply step's outcome was ${apply}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete; see the runbook's 'If it fails' section."
       elif [[ "$apply" == "success" ]]; then
-        tail="The replace's apply succeeded, so the previous host was destroyed and this one has not reported. Do NOT re-dispatch the replace to get another reading: each replace destroys and recreates the host."
+        tail="The replace's apply succeeded, so the previous host was destroyed and this one has not reported to Better Stack. Do NOT re-dispatch the replace to get another reading: each replace destroys and recreates the host."
       else
         tail="The apply outcome was ${apply}, so whether the previous host was destroyed is NOT measured here: read the apply step's own error and the Hetzner project before any action."
       fi
@@ -277,9 +284,9 @@ git_data_boot_verify() {
         read_note="Every read failed (answered=0/${max_polls})"
       fi
       if [[ "$kind" == "birth" ]]; then
-        tail="The birth is UNVERIFIED (apply outcome ${apply}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — run the runbook's 'After the birth' query once the read works; on failure re-dispatch once it works."
+        tail="The birth is UNVERIFIED (apply outcome ${apply}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — run the runbook's 'After the birth' query with this run's boot-trail anchor once the read works; on failure re-dispatch once it works."
       else
-        tail="The replace is UNVERIFIED (apply outcome ${apply}). Do NOT re-dispatch the replace to get a reading: once the read works, run the runbook's 'After the birth' query (read-only) and the web-host git ls-remote check."
+        tail="The replace is UNVERIFIED (apply outcome ${apply}). Do NOT re-dispatch the replace to get a reading: once the read works, run the runbook's 'After the birth' query (read-only) with this run's boot-trail anchor."
       fi
       echo "::error::${read_note}; last class=${GIT_DATA_BOOT_CLASS:-unknown}. The verdict on the final window is unmeasured, so this says NOTHING about whether the ${kind} host booted — fix the read path the class names, not the host. ${tail}"
       return 1

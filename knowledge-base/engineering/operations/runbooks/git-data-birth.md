@@ -376,7 +376,7 @@ Since #8178 the poll (both `git_data_host_create` and `git_data_host_replace`) r
 | Verdict | What it means | Where to go |
 |---|---|---|
 | `received` | The host reported `boot_complete` after this run's anchor. | Nowhere. The per-field invariants run next. |
-| `silent` | The final read ANSWERED and no `boot_complete` from this host generation was present. A statement about the host, or about its upload path. | Sentry, in this order (`host_name:soleur-git-data`, since this run's apply): (1) a `stage:boot_complete` event or a `stage:betterstack_ingest` warning means the host is UP and only its Better Stack upload failed — do not replace it; (2) a `level:fatal` event names the stage that failed; (3) `stage:bootcmd_start` with no `stage:gitdata_runcmd_ok` means it died in package or file setup, before any fatal handler runs; (4) nothing at all means it died before its network came up. Then the partial-birth decision tree below. |
+| `silent` | The final read ANSWERED and no `boot_complete` from this host generation was present. A statement about the host, or about its upload path. | Sentry events for `host_name:soleur-git-data` timestamped AFTER the run's boot-trail anchor, in this order: (1) a `stage:betterstack_ingest` warning means the host ran and its Better Stack upload failed; (2) a `stage:boot_complete` event means it finished booting, after the final read or with its upload lost — do not replace it; (3) a `level:fatal` event names the stage that failed; (4) `stage:bootcmd_start` with no `stage:gitdata_runcmd_ok` means it stopped in package or file setup, or its runcmd_ok emit was not delivered; (5) nothing at all means it died before its network came up. For a birth, then see "If it fails" above. For a replace there is no in-job remedy: do not re-dispatch it as a reading. |
 | `unreadable` | The final read failed. If `answered=0`, nothing about the host was measured; if some reads answered, they saw no `boot_complete`, but the final window is unmeasured. | The READ path, never the host. The class names which fault it was. |
 
 The class on an `unreadable` run:
@@ -394,7 +394,9 @@ The class on an `unreadable` run:
 **Re-dispatch is never how to get a reading.** After a green birth apply the birth gate
 refuses a re-dispatch. A replace can be re-dispatched, but every replace destroys and
 recreates the host holding every connected user's repositories. Once the read works, run
-the read-only query in "After the birth" and the web-host `git ls-remote` check.
+the read-only query in "After the birth" with the run's boot-trail anchor. (There is no
+web-host `git ls-remote` serving check yet; it is #5274 PR C. The existing web-host probe is
+a TCP connect to :22, which answers on a host whose LUKS volume never mounted.)
 
 The log never prints the response body, only its byte length: this repository is public,
 and a ClickHouse auth failure body names the query username.
@@ -420,7 +422,12 @@ No SSH appears below, and none is possible: git-data has no human SSH path by de
 #    bare-substring grep matches the shared source's inngest rows quoting issue bodies.
 #    NOTE `remote($BS_TABLE)` takes NO `primary` argument; only s3Cluster does. The
 #    archive arm is REQUIRED: remote() alone is the ~40-minute hot window.
-BS_TABLE=t520508_soleur_git_data_prd_logs \
+#    ANCHOR IS REQUIRED (#8178, AP-027): set ANCHOR to the epoch the run's
+#    "Stamp boot-trail run anchor" step printed. host_name does not tell host generations
+#    apart, so without it a replace whose new host never reported returns the DESTROYED
+#    host's all-yes row and this query certifies a dark host.
+ANCHOR=<epoch printed by the run's anchor step>
+BS_TABLE=t520508_soleur_git_data_prd_logs BS_TABLE_S3=t520508_soleur_git_data_prd_s3 \
   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
   SELECT dt, JSONExtractString(raw,'stage') AS stage,
              JSONExtractString(raw,'luks_mounted') AS luks_mounted,
@@ -430,7 +437,8 @@ BS_TABLE=t520508_soleur_git_data_prd_logs \
              JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-  WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'
+  WHERE dt > fromUnixTimestamp(${ANCHOR})
+    AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
     AND JSONExtractString(raw,'stage') = 'boot_complete'
   ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
 
@@ -442,7 +450,8 @@ doppler run -p soleur -c prd -- sh -c '
   q=$(printf "%s" "host_name:soleur-git-data" | jq -sRr @uri)
   curl -sS -H "Authorization: Bearer $SENTRY_ISSUE_RO_TOKEN" -H "Accept: application/json" \
     "https://sentry.io/api/0/organizations/jikigai-eu/issues/?query=$q&statsPeriod=24h" \
-  | jq -r ".[] | \"\(.shortId)  \(.count)x  \(.title)\""'
+  | jq -r ".[] | \"\(.shortId)  \(.count)x  last=\(.lastSeen)  \(.title)\""'
+#    Only issues whose `last=` is AFTER the run's anchor can describe this host generation.
 
 #    Then, for any id above:
 #    doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --latest-event <issue-id>

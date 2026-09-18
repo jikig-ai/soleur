@@ -53,6 +53,14 @@ shift || true
 exec "$@"
 STUB
 chmod +x "$SANDBOX/bin/doppler"
+# The timeout stand-in: records its argv, then runs the real timeout.
+_real_timeout="$(command -v timeout)"
+cat > "$SANDBOX/bin/timeout" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${TIMEOUT_ARGV_LOG:?}"
+exec "$_real_timeout" "\$@"
+STUB
+chmod +x "$SANDBOX/bin/timeout"
 
 # mkshim <name> <spec-file>
 # The spec file holds one line per poll: "<rc>|<stdout>|<stderr>". The last line repeats
@@ -62,7 +70,7 @@ mkshim() {
   local d="$SANDBOX/$name"
   mkdir -p "$d"
   cp "$spec" "$d/spec"
-  : > "$d/count"; : > "$d/doppler_argv"
+  : > "$d/count"; : > "$d/doppler_argv"; : > "$d/timeout_argv"
   cat > "$d/reader.sh" <<'SHIM'
 #!/usr/bin/env bash
 d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +81,7 @@ line="$(sed -n "${n}p" "$d/spec")"
 rc="${line%%|*}"; rest="${line#*|}"
 sout="${rest%%|*}"; serr="${rest#*|}"
 printf '%s\n' "BS_TABLE=${BS_TABLE:-<unset>} BS_TABLE_S3=${BS_TABLE_S3:-<unset>}" >> "$d/tables"
+printf '%s\n' "DOPPLER_TOKEN=${DOPPLER_TOKEN:-<unset>} AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-<unset>}" >> "$d/env"
 printf '%s\n' "$1" >> "$d/sql"
 [[ -n "$sout" ]] && printf '%b\n' "$sout"
 [[ -n "$serr" ]] && printf '%b\n' "$serr" >&2
@@ -87,7 +96,8 @@ SHIM
 # The harness exports a WRONG table: the library must pin its own.
 in_step() {
   local d="$1" script="$2" rc=0
-  env PATH="$SANDBOX/bin:$PATH" DOPPLER_ARGV_LOG="$d/doppler_argv" \
+  env PATH="$SANDBOX/bin:$PATH" DOPPLER_ARGV_LOG="$d/doppler_argv" TIMEOUT_ARGV_LOG="$d/timeout_argv" \
+      AWS_SECRET_ACCESS_KEY=synthetic-r2-secret \
       BETTERSTACK_QUERY_SCRIPT="$d/reader.sh" BS_TABLE=wrong_table BS_TABLE_S3=wrong_table_s3 \
       DOPPLER_TOKEN="${STEP_DOPPLER_TOKEN-dp.st.synthetic}" LIB="$LIB" \
       bash --noprofile --norc -eo pipefail -c ". \"\$LIB\"; $script" > "$SANDBOX/out" 2>&1 || rc=$?
@@ -241,9 +251,15 @@ have    "S12c the rest of the stderr line is retained"    "stderr: curl: could n
 # ── S13 The credential route and the table pin are the LIBRARY's ─────────────
 d=$(mkshim s13 "$(spec '0||')")
 run_poll "$d" 1 "$ANCHOR" >/dev/null
-if grep -qF -- "run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- timeout -k 5 45 bash" "$d/doppler_argv"; then
-  _report "S13a reads via doppler prd_terraform, only-secrets, per-read timeout" ok
-else _report "S13a reads via doppler prd_terraform, only-secrets, per-read timeout" bad "argv: $(cat "$d/doppler_argv")"; fi
+if grep -qF -- "run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD --no-exit-on-missing-only-secrets -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY bash" "$d/doppler_argv"; then
+  _report "S13a reads via doppler prd_terraform, only-secrets, missing keys reach the reader" ok
+else _report "S13a reads via doppler prd_terraform, only-secrets, missing keys reach the reader" bad "argv: $(cat "$d/doppler_argv")"; fi
+if grep -qE -- '^-k 5 45 doppler run ' "$d/timeout_argv"; then
+  _report "S13c the 45 s cap wraps the WHOLE read, doppler included" ok
+else _report "S13c the 45 s cap wraps the WHOLE read, doppler included" bad "timeout argv: $(cat "$d/timeout_argv")"; fi
+if grep -qx 'DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>' "$d/env"; then
+  _report "S13d the reader does not inherit the Doppler token or the R2 key" ok
+else _report "S13d the reader does not inherit the Doppler token or the R2 key" bad "env: $(cat "$d/env")"; fi
 if grep -qx 'BS_TABLE=t520508_soleur_git_data_prd_logs BS_TABLE_S3=t520508_soleur_git_data_prd_s3' "$d/tables"; then
   _report "S13b the library's table pin beats an inherited value" ok
 else _report "S13b the library's table pin beats an inherited value" bad "tables: $(cat "$d/tables")"; fi
@@ -266,27 +282,34 @@ in_step "$d" "set +e; git_data_boot_poll 2 0 $ANCHOR >/dev/null; case \"\$-\" in
 have    "S16a errexit is still off after the poll"        "ERREXIT=off"
 
 # ── S17 git_data_boot_verify: the whole step, both kinds ─────────────────────
+# Called EXACTLY as the workflow calls it: `rc=0; git_data_boot_verify … || rc=$?`. That
+# `||` switches errexit off inside the function, so every failure path must return non-zero
+# on its own; a test that relied on errexit would pass for the wrong reason.
+vcall() { printf 'rc=0; git_data_boot_verify %s || rc=$?; echo STEP_RC=$rc; exit $rc' "$1"; }
 verify() { # <label> <kind> <apply> <spec…>  -> rc
   local label="$1" kind="$2" apply="$3"; shift 3
-  local d; d=$(mkshim "v_$RANDOM$RANDOM" "$(spec "$@")")
-  in_step "$d" "git_data_boot_verify $kind 2 0 $ANCHOR $apply"
+  local d; d=$(mkshim "v_$label" "$(spec "$@")")
+  in_step "$d" "$(vcall "$kind 2 0 $ANCHOR $apply")"
 }
 rc_is "S17a received + all invariants -> 0" 0 "$(verify a birth success "0|${ROW}|")"
 have  "S17b says the boot signal was received" "boot signal received"
 rc_is "S17c replace received -> 0" 0 "$(verify c replace success "0|${ROW}|")"
 rc_is "S17d luks_mounted=no -> 1" 1 "$(verify d replace success "0|${ROW/luks_mounted\":\"yes/luks_mounted\":\"no}|")"
 have  "S17e names the unmet invariant" "luks_mounted=no"
+havent "S17e2 and does not go on to report success" "boot signal received"
 rc_is "S17f provision missing -> 1" 1 "$(verify f birth success "0|${ROW/,\"provision\":\"yes\"/}|")"
 have  "S17g names the missing assertion" "WITHOUT a provision assertion"
+havent "S17g2 and does not go on to report success" "boot signal received"
 rc_is "S17h nft_metadata_drop=no -> 0 (warn, never fail)" 0 "$(verify h replace success "0|${ROW/nft_metadata_drop\":\"yes/nft_metadata_drop\":\"no}|")"
 have  "S17i warns that the egress drop did not arm" "::warning::git-data booted with nft_metadata_drop=no"
 rc_is "S17j nft_metadata_drop absent -> 0" 0 "$(verify j replace success "0|${ROW/,\"nft_metadata_drop\":\"yes\"/}|")"
 have  "S17k warns that its state is UNKNOWN" "state is UNKNOWN"
 
 rc_is "S17l silent -> 1" 1 "$(verify l birth success '0||')"
-have  "S17m silent routes to Sentry, ingest-failure first" "stage:betterstack_ingest warning means the host IS UP"
+have  "S17m silent routes to Sentry events after the anchor" "timestamped AFTER this run's boot-trail anchor"
 have  "S17n silent uses a real emitted stage name" "stage:gitdata_runcmd_ok"
-have  "S17o silent birth points at the partial-birth tree" "partial-birth decision tree"
+have  "S17o silent birth points at an existing runbook section" "runbook's 'If it fails' section"
+havent "S17o2 and never names the non-existent ls-remote check" "ls-remote"
 rc_is "S17p replace silent -> 1" 1 "$(verify p replace success '0||')"
 have  "S17q replace silent forbids re-dispatch as a reading" "Do NOT re-dispatch the replace"
 rc_is "S17r replace silent after a FAILED apply -> 1" 1 "$(verify r replace failure '0||')"
@@ -300,63 +323,92 @@ have  "S17x names the FINAL read, with the count" "The FINAL read failed after 1
 havent "S17y and does not claim every read failed" "Every read failed"
 have  "S17z carries the class into the annotation" "last class=other"
 havent "S17za replace remediation never prescribes re-dispatch" "re-dispatch once"
+have  "S17zz points at the anchored runbook query" "'After the birth' query (read-only) with this run's boot-trail anchor"
 
-rc_is "S17zb refused anchor -> 1" 1 "$(d=$(mkshim vzb "$(spec '0||')"); in_step "$d" "git_data_boot_verify birth 2 0 '' success")"
+rc_is "S17zb refused anchor -> 1" 1 "$(d=$(mkshim vzb "$(spec '0||')"); in_step "$d" "$(vcall "birth 2 0 '' success")")"
 have  "S17zc says the poll refused to run" "The boot poll refused to run (rc=2)"
-rc_is "S17zd unknown kind -> 2" 2 "$(d=$(mkshim vzd "$(spec '0||')"); in_step "$d" "git_data_boot_verify rebirth 2 0 $ANCHOR success")"
-rc_is "S17ze no DOPPLER_TOKEN -> 1" 1 "$(d=$(mkshim vze "$(spec '0||')"); STEP_DOPPLER_TOKEN="" in_step "$d" "git_data_boot_verify replace 2 0 $ANCHOR success")"
+rc_is "S17zd unknown kind -> 2" 2 "$(d=$(mkshim vzd "$(spec '0||')"); in_step "$d" "$(vcall "rebirth 2 0 $ANCHOR success")")"
+rc_is "S17ze no DOPPLER_TOKEN -> 1" 1 "$(d=$(mkshim vze "$(spec '0||')"); STEP_DOPPLER_TOKEN="" in_step "$d" "$(vcall "replace 2 0 $ANCHOR success")")"
 have  "S17zf names DOPPLER_TOKEN, and replace forbids re-dispatch" "do NOT re-dispatch the replace to get a reading"
 n=$(wc -l < "$SANDBOX/vze/count")
 rc_is "S17zg no read happens without DOPPLER_TOKEN" 0 "$n"
+# The unexpected-verdict arm is reachable through the decide() seam: a vocabulary drift there
+# must fail closed, never fall through to "received".
+rc_is "S17zh an unknown verdict fails closed -> 1" 1 "$(d=$(mkshim vzh "$(spec "0|${ROW}|")"); in_step "$d" "git_data_boot_poll_decide() { echo bogus; }; $(vcall "birth 2 0 $ANCHOR success")")"
+have  "S17zi names the unexpected verdict" "unexpected verdict 'bogus'"
+havent "S17zj and does not report success" "boot signal received"
 
 # ── S18 THE WORKFLOW: each job's poll step, extracted and EXECUTED ───────────
-# The run body sources the real library from $GITHUB_WORKSPACE; here that is a stub tree
-# whose git_data_boot_verify records its arguments and returns a chosen rc.
+# Steps are cut out by NAME, comment lines dropped, so a check can only be satisfied by the
+# step it is about, and never by prose.
 extract_job() { # <job-id> -> job block
   awk -v j="  $1:" '$0==j{f=1; print; next} f && /^  [a-z_]+:$/{exit} f{print}' "$WF"
 }
-extract_poll_run() { # <job-id> -> the poll step's run: body, dedented
+extract_step() { # <job-id> <step-name-prefix> [run] -> the step's lines (or its run body), no comments
   extract_job "$1" | python3 -c '
 import sys
-lines=sys.stdin.read().split("\n"); out=[]; i=0
-while i<len(lines) and not lines[i].lstrip().startswith("- name: Poll for the git-data boot-completion signal"): i+=1
-while i<len(lines) and lines[i].strip()!="run: |": i+=1
-i+=1
-while i<len(lines) and (lines[i].startswith("          ") or lines[i].strip()==""):
-    out.append(lines[i][10:]); i+=1
-print("\n".join(out))'
+want, mode = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+lines = sys.stdin.read().split("\n"); i = 0
+while i < len(lines) and not lines[i].startswith("      - name: " + want): i += 1
+if i == len(lines): sys.exit(0)
+blk = [lines[i]]; i += 1
+while i < len(lines) and not lines[i].startswith("      - name: ") and not (lines[i] and not lines[i].startswith("      ")):
+    blk.append(lines[i]); i += 1
+if mode == "run":
+    j = 0
+    while j < len(blk) and blk[j].strip() != "run: |": j += 1
+    print("\n".join(l[10:] for l in blk[j+1:] if l.startswith("          ") or l.strip() == ""))
+else:
+    print("\n".join(l.strip() for l in blk if not l.strip().startswith("#")))' "$2" "${3:-}"
 }
 mkdir -p "$SANDBOX/ws/scripts/lib"
 cat > "$SANDBOX/ws/scripts/lib/git-data-boot-signal-poll.sh" <<'STUB'
-git_data_boot_verify() { printf 'VERIFY_ARGS=%s\n' "$*"; return "${STUB_RC:-0}"; }
+git_data_boot_verify() { printf 'VERIFY_ARGS=%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "${6-<none>}"; return "${STUB_RC:-0}"; }
 STUB
 for job in git_data_host_create:birth git_data_host_replace:replace; do
   jid="${job%%:*}"; kind="${job#*:}"
-  body="$(extract_poll_run "$jid")"
-  if [[ -z "$body" ]]; then _report "S18 $jid poll run body extracted" bad "empty"; continue; fi
+  body="$(extract_step "$jid" "Poll for the git-data boot-completion signal" run)"
+  if [[ -z "${body//[[:space:]]/}" ]]; then _report "S18 $jid poll run body extracted" bad "empty"; continue; fi
   for want_rc in 0 1; do
     rc=0
     env GITHUB_WORKSPACE="$SANDBOX/ws" STUB_RC="$want_rc" APPLY_OUTCOME=success BOOT_TRAIL_SINCE="$ANCHOR" \
-      bash --noprofile --norc -eo pipefail -c "$body" > "$SANDBOX/out" 2>&1 || rc=$?
+      bash --noprofile --norc -e -c "$body" > "$SANDBOX/out" 2>&1 || rc=$?
     rc_is "S18 $jid step exits with the verify rc ($want_rc)" "$want_rc" "$rc"
   done
-  have "S18 $jid calls verify as $kind, 20 x 30 s, anchored" "VERIFY_ARGS=$kind 20 30 $ANCHOR success"
+  if grep -qx "VERIFY_ARGS=$kind|20|30|$ANCHOR|success|<none>" "$SANDBOX/out"; then _report "S18 $jid calls verify as $kind, 20 x 30 s, anchored, nothing else" ok
+  else _report "S18 $jid calls verify as $kind, 20 x 30 s, anchored, nothing else" bad "got: $(cat "$SANDBOX/out")"; fi
+  rc=0
+  env -u BOOT_TRAIL_SINCE GITHUB_WORKSPACE="$SANDBOX/ws" APPLY_OUTCOME=success \
+    bash --noprofile --norc -e -c "$body" > "$SANDBOX/out" 2>&1 || rc=$?
+  if grep -qx "VERIFY_ARGS=$kind|20|30||success|<none>" "$SANDBOX/out"; then _report "S18 $jid passes an UNSET anchor through as empty (no default)" ok
+  else _report "S18 $jid passes an UNSET anchor through as empty (no default)" bad "got: $(cat "$SANDBOX/out")"; fi
 done
 
-# ── S19 THE WORKFLOW'S WIRING, per job ───────────────────────────────────────
+# ── S19 THE WORKFLOW'S WIRING, per job, per STEP ─────────────────────────────
+# chk <label> <step-text> <exact-line>: the line must be one of the step's own lines.
+chk() {
+  if grep -qxF -- "$3" <<<"$2"; then _report "$1" ok; else _report "$1" bad "missing line: $3"; fi
+}
+_before=$fail; chk "chk canary" "a line" "another line" >/dev/null 2>&1
+if (( fail != _before + 1 )); then printf 'FAIL: chk canary did not record a failure\n' >&2; exit 1; fi
+fail=$((fail - 1)); unset 'FAILURES[-1]'
 for job in git_data_host_create git_data_host_replace; do
+  anchor_run="$(extract_step "$job" "Stamp boot-trail run anchor" run)"
+  n_epoch="$(grep -cE '^[[:space:]]*epoch=' <<<"$anchor_run" || true)"
+  if grep -qx 'epoch=$(date -u +%s)' <<<"$anchor_run" && [[ "$n_epoch" == 1 ]]; then
+    _report "S19 $job: anchor is the stamp, assigned once, no back-skew" ok
+  else _report "S19 $job: anchor is the stamp, assigned once, no back-skew" bad "epoch lines=$n_epoch"; fi
+  apply_step="$(extract_step "$job" "Terraform apply")"
+  chk "S19 $job: apply step has id apply" "$apply_step" 'id: apply'
+  poll_step="$(extract_step "$job" "Poll for the git-data boot-completion signal")"
+  chk "S19 $job: poll step has id poll" "$poll_step" 'id: poll'
+  chk "S19 $job: poll runs after success or failure only" "$poll_step" "if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}"
+  chk "S19 $job: poll receives the apply outcome" "$poll_step" 'APPLY_OUTCOME: ${{ steps.apply.outcome }}'
+  chk "S19 $job: poll receives DOPPLER_TOKEN" "$poll_step" 'DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}'
+  chk "S19 $job: poll receives the anchor" "$poll_step" 'BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}'
+  if grep -qE '^(timeout-minutes|continue-on-error):' <<<"$poll_step"; then _report "S19 $job: poll step has no step timeout or continue-on-error" bad "found one"
+  else _report "S19 $job: poll step has no step timeout or continue-on-error" ok; fi
   blk="$(extract_job "$job")"
-  chk() { # <label> <fixed-string>
-    if grep -qF -- "$2" <<<"$blk"; then _report "S19 $job: $1" ok; else _report "S19 $job: $1" bad "missing: $2"; fi
-  }
-  chk "anchor stamped with no back-skew"  'epoch=$(date -u +%s)'
-  chk "apply step has an id"              'id: apply'
-  chk "poll step has an id"               'id: poll'
-  chk "poll runs after success or failure only" "if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}"
-  chk "poll receives the anchor"          'BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}'
-  chk "poll receives DOPPLER_TOKEN"       'DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}'
-  chk "summary reads the poll outcome"    'POLL_OUTCOME: ${{ steps.poll.outcome }}'
-  chk "summary fails a verdict-less green apply" 'success/*) echo "::error::apply succeeded but the boot-signal poll did not run to a verdict'
   if grep -qF 'secrets.BETTERSTACK_QUERY' <<<"$blk"; then _report "S19 $job: binds no stale BETTERSTACK_QUERY secret" bad "found a binding"
   else _report "S19 $job: binds no stale BETTERSTACK_QUERY secret" ok; fi
   tmo="$(grep -m1 -E '^    timeout-minutes: [0-9]+$' <<<"$blk" | grep -oE '[0-9]+$' || true)"
@@ -364,11 +416,23 @@ for job in git_data_host_create git_data_host_replace; do
   need=$(( (20 * (30 + 45 + 5) + 59) / 60 + 10 ))
   if [[ "$tmo" =~ ^[0-9]+$ ]] && (( tmo >= need )); then _report "S19 $job: timeout-minutes ($tmo) covers the poll ($need)" ok
   else _report "S19 $job: timeout-minutes covers the poll" bad "timeout-minutes='$tmo' need>=$need"; fi
+  sum_step="$(extract_step "$job" "Dispatch summary")"
+  chk "S19 $job: summary reads the apply outcome" "$sum_step" 'APPLY_OUTCOME: ${{ steps.apply.outcome }}'
+  chk "S19 $job: summary reads the poll outcome" "$sum_step" 'POLL_OUTCOME: ${{ steps.poll.outcome }}'
+  sum_run="$(extract_step "$job" "Dispatch summary" run)"
+  for pair in "success:success:0" "success:failure:0" "success:skipped:1" "success:cancelled:1" \
+              "success::1" ":success:1" "skipped:skipped:0" "failure:failure:0" "cancelled:skipped:0"; do
+    IFS=: read -r ao po want <<<"$pair"
+    rc=0
+    env GITHUB_STEP_SUMMARY="$SANDBOX/summary" REASON=r JOB_STATUS=x RUN_URL=u APPLY_OUTCOME="$ao" POLL_OUTCOME="$po" \
+      bash --noprofile --norc -e -c "$sum_run" > "$SANDBOX/out" 2>&1 || rc=$?
+    rc_is "S19 $job: summary exits $want on apply='$ao' poll='$po'" "$want" "$rc"
+  done
 done
 
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
-_EXACT=108
+_EXACT=141
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

@@ -20,10 +20,12 @@
 #   - a git_data_host_create or git_data_host_replace job in it that actually ran
 #     (conclusion != skipped) and completed;
 #   - that job's POLL STEP ran (its own conclusion, from the jobs API, is success or
-#     failure), and the log lines timestamped INSIDE that step's window carry the poll
-#     library's summary (`answered=N/M last_class=…`) and `VERDICT=…`. Lines outside the
-#     window are ignored, so free text echoed by another step (the operator's `reason`
-#     input, for one) cannot supply or add a verdict.
+#     failure), and that step's OWN output carries the poll library's summary
+#     (`answered=N/M last_class=…`), a matching number of `poll k/M: answered` lines, and
+#     `VERDICT=…`. "Its own output" is bounded by the runner, not by the clock: the lines
+#     between the poll step's `##[group]Run` header and the next step's. The next step's env
+#     block, which echoes the operator's `reason` input, starts after that header, so free
+#     text it echoes cannot supply or add a verdict, even in the same second.
 # The NEWEST job whose poll step ran decides. A job whose poll step did not run (apply
 # failed first, or the run was cancelled) proves nothing either way, and the probe looks at
 # the next-older one.
@@ -133,8 +135,6 @@ ts_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
 tab=$'\t'
 pending=0
 unevaluable=0
-# in_window <line-ts> <step-start> <step-end> — all compared at one-second resolution.
-in_window() { local t="${1:0:19}"; [[ ! "$t" < "${2:0:19}" && ! "$t" > "${3:0:19}" ]]; }
 for run_id in "${run_ids[@]}"; do
   [[ "$run_id" =~ ^[0-9]+$ ]] || _cannot "run id is not numeric: ${run_id}"
   jobs_json=$(gh api --paginate "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>"$ERRF") \
@@ -162,32 +162,31 @@ for run_id in "${run_ids[@]}"; do
       echo "run ${run_id} ${job_name} (job ${job_id}): its poll step did not run (conclusion ${poll_concl}) — not evidence either way"
       continue
     fi
-    [[ "$poll_start" =~ ^${ts_re}$ && "$poll_end" =~ ^${ts_re}$ ]] \
-      || _cannot "${job_name} (job ${job_id}): the poll step's window is unreadable (${poll_start} .. ${poll_end})"
+    [[ "$poll_start" =~ ^${ts_re}$ ]] \
+      || _cannot "${job_name} (job ${job_id}): the poll step's start time is unreadable (${poll_start})"
     log=$(gh run view --job "$job_id" --repo "$REPO" --log 2>"$ERRF") \
       || _cannot "could not read the log of ${job_name} (job ${job_id}, run ${run_id}): $(gh_err)"
     [[ -n "$log" ]] || _cannot "the log of ${job_name} (job ${job_id}, run ${run_id}) is empty"
-    # Runtime lines only: `<job>\t<step>\t<ts> VERDICT=…`. The step's own script is echoed
-    # into the log too, but each echoed line starts with an ANSI colour code after the
-    # timestamp, so anchoring the marker directly after `<ts> ` excludes it. Each hit is then
-    # kept only if its timestamp falls inside the poll step's window.
+    # THE POLL STEP'S OWN OUTPUT. gh prints `<job>\t<step>\t<ts> <text>`; the step column is
+    # `UNKNOWN STEP`, so steps are told apart by the runner's `##[group]Run` headers. The
+    # region is everything after the first header stamped at or after the poll step's start
+    # second, up to the next header. Each line is reduced to its third field, so a tab inside
+    # echoed text cannot place a line of its own choosing at the start.
     log=${log//$'\r'/}
-    verdicts=(); summaries=()
-    while IFS= read -r hit; do
-      [[ -n "$hit" ]] || continue
-      hit="${hit#"$tab"}"
-      in_window "${hit%% *}" "$poll_start" "$poll_end" && verdicts+=("${hit#*VERDICT=}")
-    done < <(grep -oE "(^|${tab})${ts_re} VERDICT=[a-z-]+$" <<<"$log" || true)
-    while IFS= read -r hit; do
-      [[ -n "$hit" ]] || continue
-      hit="${hit#"$tab"}"
-      in_window "${hit%% *}" "$poll_start" "$poll_end" \
-        && summaries+=("$(sed -E 's/.* answered=([0-9]+)\/([0-9]+) .*/\1 \2/' <<<"$hit")")
-    done < <(grep -oE "(^|${tab})${ts_re} answered=[0-9]+/[0-9]+ last_class=[a-z0-9_-]*$" <<<"$log" || true)
+    region=$(awk -v ps="${poll_start:0:19}" '
+      { line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); ts = substr(line, 1, 19) }
+      line ~ /^[0-9][0-9TZ:.-]* ##\[group\]Run / { if (started) exit; if (ts >= ps) { started = 1; next } }
+      started { print line }' <<<"$log")
+    [[ -n "$region" ]] \
+      || _cannot "${job_name} (job ${job_id}, run ${run_id}): could not locate the poll step's output in its log (no ##[group]Run header at or after ${poll_start})"
+    mapfile -t verdicts < <(grep -E "^${ts_re} VERDICT=[a-z-]+$" <<<"$region" | sed -E 's/.* VERDICT=//' || true)
+    mapfile -t summaries < <(grep -E "^${ts_re} answered=[0-9]+/[0-9]+ last_class=[a-z0-9_-]+$" <<<"$region" \
+                             | sed -E 's/.* answered=([0-9]+)\/([0-9]+) .*/\1 \2/' || true)
+    polls_answered=$(grep -cE "^${ts_re} poll [0-9]+/[0-9]+: answered" <<<"$region" || true)
     if [[ "${#verdicts[@]}" -eq 0 ]]; then
-      _cannot "${job_name} (job ${job_id}, run ${run_id}): the poll step ran (conclusion ${poll_concl}) but no VERDICT line falls inside its window — it failed before polling (read its log: a missing-token or anchor refusal) or gh's log format changed"
+      _cannot "${job_name} (job ${job_id}, run ${run_id}): the poll step ran (conclusion ${poll_concl}) but its output carries no VERDICT line — it failed before polling (read its log: a missing-token or anchor refusal) or gh's log format changed"
     fi
-    [[ "${#verdicts[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#verdicts[@]} VERDICT lines inside its poll window; the library emits exactly one"
+    [[ "${#verdicts[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#verdicts[@]} VERDICT lines in its poll step's output; the library emits exactly one"
     verdict="${verdicts[0]}"
     case "$verdict" in
       received|silent|unreadable|refused-no-anchor) : ;;
@@ -201,6 +200,10 @@ for run_id in "${run_ids[@]}"; do
     # Every other verdict carries exactly one summary line.
     [[ "${#summaries[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#summaries[@]} answered= summaries alongside VERDICT=${verdict}"
     read -r answered max_polls <<<"${summaries[0]}"
+    # The summary must agree with the per-poll lines it summarises. A forged summary cannot
+    # also forge the right number of `poll k/M: answered` lines from the real loop.
+    [[ "$answered" == "$polls_answered" ]] \
+      || _cannot "${where}: the summary says answered=${answered} but the step's output has ${polls_answered} answered poll line(s)"
     if [[ "$verdict" == "received" ]] && (( answered < 1 )); then
       _cannot "${where}: VERDICT=received with answered=0 — the log contradicts the library's contract"
     fi

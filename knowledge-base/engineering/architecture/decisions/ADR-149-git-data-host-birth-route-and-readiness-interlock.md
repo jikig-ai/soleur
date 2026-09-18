@@ -816,6 +816,15 @@ comparison is Better Stack's against the runner's, and both are NTP-synced. An e
 revision subtracted 120 s, which let a replace queued behind another replace accept the
 previous generation's row. The rule is recorded as principle **AP-027**.
 
+**Accepted residual, stated rather than hidden.** Time is the only thing separating two host
+generations: the `boot_complete` row carries no per-host identity. If a previous host is still
+booting when the next replace starts (its own poll ended `silent`, and a replace was queued or
+re-dispatched), its late `boot_complete` can be ingested after the new anchor and before the
+destroy, and the new poll would then accept it. That needs a previous boot slower than the
+10-minute budget plus a dispatch inside that window; measured healthy boots report in 8-13 s.
+Closing it needs a generation id (the Hetzner server id) in the emit and in the `WHERE`
+clause, which changes `user_data` (ForceNew) and so rides the next change to the emitter.
+
 **Closure is event-gated.** No suite can show the read working from a real runner. #8178
 closes on the first post-merge git-data dispatch whose poll answers, judged by
 `scripts/followthroughs/git-data-boot-poll-8178.sh`, and not on a `boot_complete` row (one
