@@ -6,7 +6,9 @@ closes: 8299
 lane: cross-domain
 brand_survival_threshold: single-user incident
 brainstorm: knowledge-base/project/brainstorms/2026-09-18-cross-harness-parity-gate-brainstorm.md
-status: draft
+plan: knowledge-base/project/plans/2026-09-18-feat-harness-parity-census-plan.md
+adr: ADR-226
+status: active
 ---
 
 # Spec — Cross-harness parity census
@@ -56,113 +58,108 @@ forbids.
 
 ## Functional Requirements
 
-- **FR1** The gate's **population is every tracked `plugins/soleur/skills/*/SKILL.md`**
-  (`git ls-files`-derived; **98** on 2026-09-18). The population involves no regex, so an
-  incomplete trigger pattern can never shrink it. A separate **trigger pattern** decides only
-  whether a block is *required*: `Skill tool`, `skill: soleur:`, `/soleur:<name>`, `$soleur:`,
-  `Task tool`, `Agent tool`, `invokeSkill`, `spawnAgent`, `formatSkillInvocation`,
-  `spawn_subagent`, `run_subagent`, `subagent_type`. Measured 2026-09-18: **46** trigger-bearing
-  (a narrower 6-alternative pattern found only 38 — the 8-skill gap is why the pattern is
-  widened here), **12** qualified, **34** unclassified, **52** auto-exempt. 46 + 52 = 98.
-- **FR2** Each skill resolves to exactly one of three verdicts: **QUALIFIED** (carries the
-  `harness-invoke` block, instantiated for its own skill name), **AUTO-EXEMPT** (no block AND
-  no trigger — derived, needs no ledger row, so the ledger stays load-bearing), or
-  **UNCLASSIFIED** (no block BUT has a trigger) → RED unless a ledger row covers it.
-- **FR3** Any UNCLASSIFIED member fails the suite, naming each offending path.
-- **FR4** The **required harness set** is imported from a new runtime
-  `SUPPORTED_HARNESSES` in `plugins/soleur/lib/harness.ts` (today a type-only union at `:22`),
-  with `Harness` derived from it. The set is single-sourced, so adding a harness widens the
-  requirement and REDs until skills are updated — ADR-193 §5 applied to the harness axis.
-  It is NOT inferred from what the blocks happen to name today (no block names Codex).
-- **FR5** An exemption ledger, TSV, in the `.claude/hooks/devin-dispositions.tsv` shape
-  (ADR-223 §5): one row per exemption, a closed disposition enum, and a **mandatory**
-  reason plus evidence column. A row without a date, an issue link and a falsifiable
-  reason is itself RED.
-- **FR6** Three floors, all in the separate file of TR4b, each with its ratchet direction in a
-  header (the `scripts/lint-supabase-deprecated-endpoints.highwater` inverted-header shape):
-  (a) `POPULATION` — exact tracked-SKILL.md count; any change fails until deliberately moved;
-  (b) `QUALIFIED_FLOOR` — ratchets **up** only;
-  (c) `AUTO_EXEMPT_CEILING` — ratchets **down** only, so a newly added skill with no block and
-  no trigger raises auto-exempt past the ceiling and lands RED, forcing classification.
-  Plus `UNCLASSIFIED == 0` unconditionally, and a **trigger-count floor** pinning the
-  measured 46 so a regression in the trigger pattern itself (which would silently move skills
-  into auto-exempt) fails rather than passes.
-- **FR7** The hand-listed 20-name `UNION` array in
-  `plugins/soleur/test/devin-cloud-mode.test.ts:~466` is deleted (it is the ADR-193 §5
-  anti-pattern) and its "every union member is marked" assertion re-expressed against a
-  derived population. **Measured correction:** its sibling `expect(marked.length).toBe(67)`
-  does **not** move — `MARKER_START`/`MARKER_END` are the literal `soleur-cloud-mode` comments,
-  so a `grok-harness-invoke` block is invisible to that census (64 skills + 3 devin shims = 67,
-  re-derived). An earlier draft of this spec claimed the pin moves; it does not.
-- **FR8** Backfill the **34** unclassified skills with the `grok-harness-invoke` block,
-  instantiated for each skill's own name, and normalise `one-shot`'s drifted copy
-  ("a subset **of these steps**" → "a subset") so the template holds across all 46.
-- **FR9** Insertion anchor, measured per skill — **not** uniformly after frontmatter:
-  **24 of 34** already carry a `soleur-cloud-mode` block first, so the new block goes strictly
-  **after** its `<!-- soleur-cloud-mode:end -->`. Inserting *inside* it would break the
-  non-greedy `[\s\S]*?` byte-identity assertion in `devin-cloud-mode.test.ts` for all 24.
-  The **10** with no cloud-mode block anchor on frontmatter: `architecture`,
-  `brainstorm-techniques`, `feature-tweet`, `frontend-anti-slop`, `harvest-debt`, `help`,
-  `linear-fetch`, `resolve-debt`, `skill-creator`, `social-distribute`.
-- **FR10** The block's text must not introduce a backticked path beginning `scripts/`,
-  `references/` or `assets/`: `components.test.ts:238` asserts
-  `body.match(/`(?:references|assets|scripts)\/[^`]+`/g)` is null per-skill. The canonical
-  block's existing `plugins/soleur/lib/harness.ts` citation is safe.
+Re-based on plan v3 (the allowlist predicate; v1 marker census and v2 token blocklist are
+refuted record in the plan). ADR-226 records the decision.
+
+- **FR1 Predicate.** Every token in a population doc that names a known skill, command or
+  agent is the canonical `soleur:<name>` at a prose boundary, a bare **skill** name in prose,
+  or a path component; every token naming a known agent is the registry id at a prose
+  boundary or a path component. Anything else is NONCANONICAL. Rules R1–R9, the boundary
+  allowlist, the path class, the token class and the trailing-glue strip are constants in
+  `plugins/soleur/lib/harness-parity.ts`, each with its rationale beside it.
+- **FR2 Index derived, never listed.** Skill directories and command basenames via
+  `git ls-files` with `:(glob)` magic; agents via `discoverAgentPaths()` → `pathToAgentId`
+  (67; `README*` and `references/` excluded, as the Grok compat stubs are). `INDEX_GLOBS` and
+  `POPULATION_GLOBS` are separate constants.
+- **FR3 Population derived.** `:(glob)plugins/soleur/{skills,codex/skills,devin/skills}/*/SKILL.md`
+  and `:(glob)plugins/soleur/commands/*.md` (106 docs on 2026-09-18), each glob carrying its
+  region policy; `commands/help.md` excluded by path with the reason stated.
+- **FR4 One exempt region kind.** `<!-- harness-forms:start|end -->`, honoured only under the
+  `command` policy, strict marker grammar (case, CRLF and inline text are RED "malformed
+  marker"; stray end, double start and unterminated start are RED); markers with any other
+  name are transparent content. Fenced code is classified like prose; frontmatter is not exempt.
+- **FR5 Born blocking, no baseline.** `harness-parity-tree.test.ts` asserts
+  `expect(noncanonical).toEqual([])` per doc with the per-site message
+  (`path:line: <site> — <harness>; write <canonical id>`), reports UNKNOWN-NS, and fails on
+  `0 docs examined` and on any index-invariant breach (`|AGENTS| === EXPECTED_SOLEUR_AGENT_COUNT`,
+  leaves unique and disjoint from skill names, every skill dir and command file present in
+  `CANONICAL_IDS`).
+- **FR6 Fixture self-test.** `harness-parity.test.ts` runs the classifier over synthesized
+  fixtures under `test/fixtures/harness-parity/{skills,commands}/` (the directory selects the
+  policy through the lib's own path→policy mapping) and pins every rule, both allowlists, the
+  token class, the strip, the grammar, `fixDoc` idempotence and the empty-population throw;
+  it also asserts the tree file carries the `toEqual([])` literal (cross-file sentinel).
+- **FR7 `--fix`.** `plugins/soleur/scripts/harness-parity-census.ts --report | --fix`; `--fix`
+  inverts only `/soleur:x`, `$soleur:x`, `@agent-soleur:x` and grok `/x` for a known skill,
+  never a bare leaf, a hyphen mention, an honoured region or `$x`; idempotent.
+- **FR8 Remediation.** The 1029 pre-remediation sites (62 docs) are canonical after this PR:
+  `--fix` for the mechanical shapes, hand edits for bare leaves (registry ids), `@agent-<leaf>`,
+  the grok stem, the two false positives (`"${work}"`, the rclone glob), the three go.md
+  regions, go.md's bare-repo guard line, and the two `description:` substitutions.
+- **FR9 Emit-time rendering.** Operator-pasted prompts a skill emits stay canonical in the doc
+  and carry the sentence *render the entry as the active harness's operator-typed form per
+  `formatSkillInvocation` before printing* (brainstorm, plan, work resume blocks;
+  product-roadmap `next`; gdpr-gate's manual dispatch).
+- **FR10 Adapter strings render per harness.** `pipelineInvocationSuffix(skill, harness)` and
+  the harness-agnostic lines of `workflowFidelityInstructions` go through `formatSkillRef`;
+  `invokeSkill("ship")` on Codex names `$soleur:postmerge` and not `/postmerge`.
+- **FR11 Preambles carry the general rule.** The 12 `grok-harness-invoke` carriers state
+  *any `soleur:<name>` in this document names a skill — on Grok Build, Read
+  `plugins/soleur/skills/<name>/SKILL.md` in this process*; Guard 1 pins it.
+- **FR12 Authoring surfaces.** The same bullet in `skill-creator` §Sharp Edges,
+  `compound-capture` Step 8 (with Step 8.1's skill row as `soleur:foo`) and `heal-skill`'s
+  change step; `AGENTS.rules.md`'s slash-form examples canonicalised (`/loop`, a Claude
+  built-in, stays).
 
 ## Technical Requirements
 
-- **TR1** Host: `plugins/soleur/test/harness-parity.test.ts`. It auto-runs under
-  `run_suite "plugins/soleur" bun test plugins/soleur/` (`scripts/test-all.sh:2634`) —
-  **no `ci.yml` or `lefthook.yml` registration required**. Verify this rather than assume it.
-- **TR2** Whole-tree census. Diff-scoping is forbidden: shallow `actions/checkout` breaks
-  `git merge-base HEAD origin/main` (exit 128), yielding an empty changed set and a
-  vacuous exit 0.
-- **TR3** Born blocking. No advisory phase — advisory→blocking promotion has never once
-  occurred in this repo. The ledger is the recorded escape hatch.
-- **TR4** **ADR-193 applies in part only, and the part matters.** Its Decision 5 ("the
-  population is DERIVED, never listed") binds and is load-bearing. Its Decision 1 mechanism
-  (`printf >&2` + `exit 1` rather than the suite's own `fail`; counter incremented at the call
-  site, not inside `$( … )`) does **not** bind: it is written for bash suites, its enforcing
-  guard `scripts/guard-vacuity-floor.test.sh` enumerates tracked `*.test.sh`, and a bun test is
-  outside that population entirely — there is no "suite's own verdict helper" to bypass when
-  `expect()` *is* the reporting mechanism. Because the corpus guard therefore cannot police
-  this suite's floor, TR6's mutation test is the substitute and is mandatory, not optional.
-  Fail on `0 checked` still binds.
-- **TR4b** Floors live in a committed data file **separate from the assertion**, per
-  constitution L142 ("a declared number cannot catch its own reduction, so the assertion must
-  be external to the declaration"), with an inverted-direction header naming which way each
-  ratchets. Recorded caveat: the population denominator is `git ls-files`-derived, not
-  credential-scoped, so the silent-narrowing failure L142 guards against is absent here — a
-  narrowing is a visible file deletion. The separate file buys a visibly separate diff hunk on
-  any weakening, not cryptographic integrity.
-- **TR4c** Ledger parsing is strict and fail-closed per constitution L139/L140: a missing,
-  unreadable or malformed ledger, or a row with an unrecognised disposition, is RED — never
-  silently "zero exemptions" and never a swallowed `2>/dev/null || echo ""` empty set.
-- **TR5** Anchoring per `cq-assert-anchor-not-bare-token`: anchor on `^\s*` or a call form
-  a comment cannot produce. Line-based greps over markdown die on wrap — read the file,
-  do not line-grep. Fenced-block instances resolve to ledger rows, not regex carve-outs.
-- **TR6** **Mutation test** (TR6 is a gate on the gate): deleting the assertion body must
-  turn the suite RED. A guard that passes with itself deleted pins nothing.
-- **TR7** A positive control: a planted decoy skill fixture that must be detected, plus a
-  corpus-wide zero assertion (the `redact-sentinel.test.sh` pattern).
-- **TR8** The gate's own population query must not be duplicated in prose; the regex lives
-  in exactly one constant.
+- **TR1** Host: `plugins/soleur/test/harness-parity.test.ts` and
+  `plugins/soleur/test/harness-parity-tree.test.ts`, auto-run by `bun test plugins/soleur/test/`
+  (`lefthook.yml` `plugin-component-test` on any staged `plugins/soleur/**/*.md`; `scripts/test-all.sh`
+  in CI's `test-bun` shard). No registration edit.
+- **TR2** Whole-tree census; no diff scoping, no committed baseline, no per-doc vector.
+- **TR3** `git ls-files` runs from `REPO_ROOT` derived from `PLUGIN_ROOT` with `--full-name`, so
+  `cd plugins/soleur && bun test` resolves the same population.
+- **TR4** Harness attribution in the message is a local lookup over (rule, preceding
+  character) and never a verdict input; `unrecognised sigil` is the catch-all.
+- **TR5** No `SUPPORTED_HARNESSES`, no `as const`/`never` re-derivation, no `tsc` gate — the
+  attribution table cannot blind the gate, so it needs no exhaustiveness proof.
+- **TR6** Guard 3 mutation matrix (plan v3): fixture-backed rows N5–N8 (incl. N5b–N5g) and
+  the H rows run on every CI pass; N1–N4, N9–N13 are hand-run against a pristine copy and
+  recorded in the PR body.
+- **TR7** No `${CLAUDE_PLUGIN_ROOT:-…}`/`${GROK_PLUGIN_ROOT:-…}` form introduced.
+- **TR8** No C4 edit; `c4-count-parity.test.sh` unchanged. ADR-226's ordinal is re-derived
+  across every `origin/*` ref before merge.
 
 ## Acceptance Criteria
 
-- [ ] `bun test plugins/soleur/test/harness-parity.test.ts` RED on today's tree (34 unclassified).
-- [ ] After backfill + ledger: GREEN, with zero unclassified and every ledger row dated + issue-linked.
-- [ ] Mutation test: assertion body deleted → suite RED (TR6).
-- [ ] Planted decoy detected; corpus-wide zero holds (TR7).
-- [ ] `0 checked` → RED (TR4).
-- [ ] Auto-exempt *growth* past ceiling → RED; qualified *drop* below floor → RED; trigger-count
-      *drop* → RED (FR6).
-- [ ] `SKILL_DESCRIPTION_WORD_BUDGET` (2442, description-words only) unmoved — body lines are
-      not measured, verified via `components.test.ts:156-160`.
-- [ ] `devin-cloud-mode.test.ts` still green with `marked.length == 67` unchanged (FR7).
-- [ ] `UNION` array gone from `devin-cloud-mode.test.ts`, its assertion re-expressed derived (FR7).
-- [ ] No `${CLAUDE_PLUGIN_ROOT:-…}` or `${GROK_PLUGIN_ROOT:-…}` form introduced (NG2).
-- [ ] `scripts/test-all.sh` full run green.
+Plan v3 AC1–AC17 are the contract; the load-bearing ones restated:
+
+- [ ] AC1 `--report` on the pre-remediation tree prints `1029 non-canonical sites in 62 docs`
+      with the attribution split (bare-leaf 488 / grok 339 / claude-devin 187 / claude-agent 8 /
+      claude-leaf 3 / codex 2 / grok-stem 1 / unrecognised 1) and 20 UNKNOWN-NS.
+- [ ] AC2 Post-remediation `--report` prints 0 sites; UNKNOWN-NS multiset (path, token) diffs
+      empty against AC1 apart from the plan-prescribed `soleur:<name>` metavariables; `--fix`
+      changes nothing.
+- [ ] AC3 The `--fix` commit is reproducible from its parent.
+- [ ] AC4 Fixture suite ≥ 30 tests, every fixture asserts verdict and message; both suites GREEN.
+- [ ] AC5 N1–N13 and H1–H5 observed as stated; recorded in the PR body.
+- [x] AC6 Independent spot-check greps: go.md's 8 hits all sit inside the three `harness-forms`
+      regions (lines 130-157, 191-195, 211-213); `help.md` is excluded by path; the 5 skill hits are
+      the prose compounds `/work-time` and `/work-start`, which the classifier reports as no
+      reference. `Task [a-z-]+\(` returns 2, both `Task general-purpose(` — a Claude built-in agent
+      type, not a Soleur registry leaf. The AC's literal greps are broader than the property; each
+      hit is dispositioned here rather than the grep being narrowed.
+- [x] AC9 No `${CLAUDE_PLUGIN_ROOT:-…}` / `${GROK_PLUGIN_ROOT:-…}` form INTRODUCED (TR7). The
+      added-line grep returns 4; each `+` has a matching `-` — pre-existing lines this PR edited for
+      a reference rewrite. Net new instances: 0.
+- [ ] AC7/AC8 `components.test.ts` (budget 2442), `devin-cloud-mode.test.ts` (67),
+      `workflow-fidelity.test.ts` GREEN.
+- [ ] AC10–AC12 authoring bullets, emit-time sentences and preambles present as specified.
+- [ ] AC13 ADR-226 exists; ordinal unique across `origin/*` at merge.
+- [ ] AC14 `lint-agents-rule-budget.py` `[OK]` after the AGENTS.rules.md substitutions.
+- [ ] AC15 `SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh` GREEN.
+- [ ] AC16/AC17 PR body refs; spec and tasks re-based on v3.
 
 ## Risks
 
