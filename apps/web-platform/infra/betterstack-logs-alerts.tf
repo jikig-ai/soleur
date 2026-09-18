@@ -161,3 +161,118 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
   # source_variable — all Optional+Computed; aggregation_interval is the one the API may snap to
   # a bucket size and rewrite (perpetual diff).
 }
+
+# ── #6894 / ADR-142: the store is not on the encrypted volume ───────────────────────────────────
+#
+# WHAT IT DETECTS. After the LUKS cutover, the dedicated host's own probe row resolves the device
+# backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, probe_schema=8). Post
+# cutover that alias must be the ADDITIVE volume's. Anything else is the store having moved back —
+# an on-host rollback, a reboot that took the pre-cutover arm because the pointer went missing, or
+# a replace whose first boot resolved the plaintext volume — and each of those means writes are
+# landing UNENCRYPTED again, which is the one thing this whole change exists to prevent. Nothing
+# else notices: the scheduler is healthy in every one of those states, so uptime stays green.
+#
+# WHAT IT DELIBERATELY DOES NOT DETECT: the plaintext backstop volume merely staying ATTACHED
+# while the store is correctly on the encrypted one. That is the additive design's rollback route,
+# and retiring it is a Terraform declaration change, tracked with an expiry in issue #8285.
+#
+# WHY IT SHIPS PAUSED. Before the cutover the correct value of that field IS the plaintext alias,
+# so an armed rule would page continuously from merge until the cutover — and an alert that pages
+# when nothing is wrong is one that gets muted, which is how a real page is missed later. The
+# operator arms it by flipping ONE variable in the same apply that follows a confirmed cutover:
+#   terraform apply -var inngest_luks_cutover_complete=true  (or the tfvars entry)
+# The runbook step says so, and the tracked issue carries the expiry.
+#
+# THE ID COMES FROM THE RESOURCE, never a literal: a volume re-created under a new id would
+# otherwise leave the rule watching for an alias that no longer exists — the alert would go quiet,
+# which reads exactly like health. `hcloud_volume.inngest_redis_luks.id` is the digits Hetzner
+# assigns; the by-id alias is `scsi-0HC_Volume_<id>`, the same construction the host's own resolver
+# and inngest-luks-cutover.sh use.
+locals {
+  inngest_luks_wrong_volume_alias = "scsi-0HC_Volume_${hcloud_volume.inngest_redis_luks.id}"
+
+  # The probe row is a space-separated key=value message, so the field is matched WITH its key and
+  # WITH a trailing space — `data_mount_devid=scsi-0HC_Volume_1234` is a prefix of
+  # `…_12345`, and the row has a field after this one on every emitted path. The negation is over
+  # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
+  # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
+  # LIVE-PROBED 2026-09-18 against the ClickHouse table (the step-1 requirement above), 24h window:
+  #   total=37248  probe_rows=22  host_role=dedicated rows=11
+  #   watched alias = the live PLAINTEXT alias  -> 0 rows   (quiet when the field matches)
+  #   watched alias = a wrong id                -> 11 rows  (positive control: the rule is live)
+  #   watched alias = the plaintext id TRUNCATED by one digit -> 11 rows (the trailing space is
+  #     what stops `…_10626194` from matching `…_106261946`; without it this control returns 0)
+  # The 11 non-dedicated probe rows in the same window are web-1's, which is what the host_role
+  # scope excludes — measured, not assumed.
+  inngest_luks_wrong_volume_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+      AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
+      AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+    GROUP BY time
+  SQL
+
+  inngest_luks_wrong_volume_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+}
+
+resource "logtail_exploration" "inngest_luks_wrong_volume" {
+  name      = "soleur-inngest-luks-wrong-volume-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the sibling above.
+    sql_query = replace(trimspace(local.inngest_luks_wrong_volume_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
+  exploration_id = logtail_exploration.inngest_luks_wrong_volume.id
+  name           = "soleur-inngest-luks-wrong-volume-prd"
+
+  # The probe emits hourly, so the window is an hour wide plus slack: a narrower one would report
+  # "no rows" between emissions, and with treat_as_zero that reads as healthy rather than as
+  # "nothing measured". recovery_period covers two emissions, so one good row does not close an
+  # incident the next row would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 5400
+  confirmation_period = 0
+  recovery_period     = 10800
+  on_missing_data     = "treat_as_zero"
+
+  # Armed by the operator AFTER a confirmed cutover — see "WHY IT SHIPS PAUSED" above. This is the
+  # one alert in this file whose paused state is a variable rather than a constant `false`.
+  paused = !var.inngest_luks_cutover_complete
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (probe_schema=8 data_mount_devid). Redis writes are landing unencrypted. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
+  metadata = {
+    runbook = local.inngest_luks_wrong_volume_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

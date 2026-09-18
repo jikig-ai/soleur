@@ -252,6 +252,22 @@ LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 [[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY)" == PASS ]] && pass || fail "9-secret set incl. INNGEST_REDIS_LUKS_KEY must PASS — inngest-redis-luks.tf mints it into soleur-inngest/prd at MERGE (per-merge -target), so an unadmitted name boot-bricks the host on its next re-provision (#7695, the #6178 class)"
 # Nesting holds for it too: the member is INNGEST_REDIS_LUKS_KEY, not a bare REDIS_LUKS_KEY.
 [[ "$(isolation_decision "${DARK5[@]}" REDIS_LUKS_KEY)" == FATAL ]] && pass || fail "a BARE REDIS_LUKS_KEY (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
+# (#6894, ADR-142 additive blue-green) TWO more names, the fourth and fifth instances of this class.
+# INNGEST_LUKS_CUTOVER is the cutover's trigger and INNGEST_LUKS_ACTIVE_VOLUME_ID is the pointer the
+# boot resolver reads to decide which volume is /mnt/data; op=luks-cutover writes both into THIS
+# project. From that write onward an unadmitted name is n_total != n_inngest → FATAL on the next
+# re-provision — and a re-provision is the ONLY delivery path to this host, so the cutover would
+# brick the very replace that has to follow it. Admitting them ahead of the write is a no-op for
+# the subset test (an absent name is excluded from both counters), which is why it lands now.
+[[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY INNGEST_LUKS_CUTOVER INNGEST_LUKS_ACTIVE_VOLUME_ID)" == PASS ]] && pass || fail "11-secret set incl. INNGEST_LUKS_CUTOVER + INNGEST_LUKS_ACTIVE_VOLUME_ID must PASS — op=luks-cutover writes both into soleur-inngest/prd, so an unadmitted name boot-bricks the host on the replace that must follow the cutover (#6894, the #6178 class)"
+# Each alone, so neither member rides on the other's admission.
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_LUKS_CUTOVER)" == PASS ]] && pass || fail "INNGEST_LUKS_CUTOVER alone on a dark set must PASS (the trigger may be written before the pointer)"
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_LUKS_ACTIVE_VOLUME_ID)" == PASS ]] && pass || fail "INNGEST_LUKS_ACTIVE_VOLUME_ID alone on a dark set must PASS (the pointer outlives the trigger after rollback)"
+# Nesting holds for both: a bare LUKS_CUTOVER / LUKS_ACTIVE_VOLUME_ID is foreign.
+[[ "$(isolation_decision "${DARK5[@]}" LUKS_CUTOVER)" == FATAL ]] && pass || fail "a BARE LUKS_CUTOVER (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
+[[ "$(isolation_decision "${DARK5[@]}" LUKS_ACTIVE_VOLUME_ID)" == FATAL ]] && pass || fail "a BARE LUKS_ACTIVE_VOLUME_ID (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
+# Exact-name admission, not a prefix: a lookalike must not ride in on the new alternation.
+[[ "$(isolation_decision "${DARK5[@]}" INNGEST_LUKS_CUTOVER_EXTRA)" == FATAL ]] && pass || fail "INNGEST_LUKS_CUTOVER_EXTRA must FATAL — the alternation is anchored, a suffixed lookalike is foreign"
 # Isolation still holds: an over-scoped token leaking ONE foreign name must fail closed.
 [[ "$(isolation_decision "${LIVE7[@]}" SUPABASE_SERVICE_ROLE_KEY)" == FATAL ]] && pass || fail "a foreign secret must FATAL — this is the over-scoped-credential defense the self-check exists for"
 # Floor still bites (catches the degenerate empty-read case where n_total==n_inngest==0).
