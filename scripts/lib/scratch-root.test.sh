@@ -52,7 +52,7 @@ else
 fi
 
 # --- 3. falls back to \$HOME/.cache when XDG is unset -----------------------------------
-resolve "HOME=$TMP_ROOT/home" --unset=XDG_CACHE_HOME
+resolve --unset=XDG_CACHE_HOME "HOME=$TMP_ROOT/home"
 if [[ "$RESOLVE_RC" -eq 0 && "$RESOLVE_OUT" == "$TMP_ROOT/home/.cache/soleur/tmp" ]]; then
   pass "falls back to \$HOME/.cache/soleur/tmp"
 else
@@ -114,7 +114,7 @@ fi
 #        base and handing back the shared tmp root itself (or $TMPDIR) — that is the
 #        silent fallback which would send bulk writes back onto the RAM disk while every
 #        root-scoped assertion still read clean.
-resolve "HOME=$TMP_ROOT/home2" --unset=XDG_CACHE_HOME
+resolve --unset=XDG_CACHE_HOME "HOME=$TMP_ROOT/home2"
 shared_tmp="${TMPDIR:-/tmp}"; shared_tmp="${shared_tmp%/}"
 if [[ "$RESOLVE_RC" -eq 0 \
       && "$RESOLVE_OUT" == "$TMP_ROOT/home2/.cache/soleur/tmp" \
