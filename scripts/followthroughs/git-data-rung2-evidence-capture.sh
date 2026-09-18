@@ -967,7 +967,9 @@ if [[ -n "$REBOOT_SINCE" ]]; then
     printf 'RUNG2_REBOOT_REOPEN=PASS\n'
     printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
     printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
-  } >> "$OUT"
+  # `${OUT:?}`: OUT is bound by command substitution, so an empty one appends to the CWD rather
+  # than to the evidence file — and this branch is the only writer of the reboot key.
+  } >> "${OUT:?evidence path unset}"
   echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data unattended after the reset at"
   echo "${REBOOT_SINCE} (channel ${_channel}, restarts ${_restarts:-unknown}); no fatal in either channel."
   echo "Appended RUNG2_REBOOT_REOPEN to ${OUT}."

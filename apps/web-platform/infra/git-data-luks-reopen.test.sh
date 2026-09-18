@@ -42,7 +42,26 @@ for f in "$SCRIPT" "$UNIT" "$REPORTER" "$CLOUD_INIT" "$BOOTSTRAP" "$GC_UNIT" "$A
 done
 
 SCRATCH="$(mktemp -d -t gdreopen.XXXXXXXX)"
-trap 'rm -rf "$SCRATCH"' EXIT
+# The canonical operand guard (P1a/P1b, #7652/#7708), BYTE-IDENTICAL to the definition in
+# plugins/soleur/test/test-helpers.sh — `fixture-dir-operand-assert.test.sh` compares them and
+# reds on drift, because a helper that is re-derived per file is eventually re-derived wrongly
+# (#7822). Inlined rather than sourced only because this suite lives under apps/web-platform/infra
+# and is run standalone by infra-validation.yml; the drift arm is what keeps the copy honest.
+# Every scratch write below interpolates a variable into a path, and `rm -rf ""` / `cp x ""` /
+# `> "/action"` are what an empty or relative one produces — the trap on the next line is itself
+# such a site. Asserted at the boundary, and again per fixture.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$SCRATCH"
+trap 'assert_fixture_dir "$SCRATCH"; rm -rf "$SCRATCH"' EXIT
 
 # Drop comment lines the way the module's rationale strip does, so a static row can never be
 # satisfied (or tripped) by prose. `#!` survives the strip on purpose.
@@ -226,8 +245,11 @@ done
 # systemd-analyze verify (present on every systemd host; skipped, not failed, elsewhere)
 # =====================================================================================
 if command -v systemd-analyze >/dev/null 2>&1; then
+  assert_fixture_dir "$SCRATCH"
   mkdir -p "$SCRATCH/units"
-  cp "$UNIT" "$REPORTER" "$GC_UNIT" "$DIR/git-data-gc-failure.service" "$SCRATCH/units/"
+  # EVERY operand guarded, sources included. All four are rooted at DIR, which is bound by
+  # command substitution, so an empty one turns each into a read from the filesystem root.
+  cp "${UNIT:?}" "${REPORTER:?}" "${GC_UNIT:?}" "${DIR:?}/git-data-gc-failure.service" "${SCRATCH:?}/units/"
   out=$(systemd-analyze verify "$SCRATCH/units/git-data-luks-reopen.service" "$SCRATCH/units/git-data-luks-reopen-failure.service" "$SCRATCH/units/git-data-gc.service" "$SCRATCH/units/git-data-gc-failure.service" 2>&1 || true)
   n=$(printf '%s\n' "$out" | grep -cE 'git-data-(gc|luks-reopen)[^:]*\.service:' || true)
   ok "$((n != 0))" "Y1 systemd-analyze verify is clean over the four units" "$out"
@@ -240,8 +262,9 @@ mkdir -p "$SCRATCH/bin"
 # Every stub records "<action tag at call time>|<name>|<argv>" — the phase file is read at CALL
 # time, which is what makes M15 (phase file written after the phase) observable as a wrong tag.
 STUB_PRELUDE='#!/bin/bash
+case "${FX-}" in /*) : ;; *) printf "FATAL(stub): FX is not absolute\n" >&2; exit 2 ;; esac
 _tag=$(head -n1 "$RUNDIR/action" 2>/dev/null | sed "s/^action=//")
-printf "%s|%s|%s\n" "${_tag:-none}" "$(basename "$0")" "$*" >> "$FX/calls.log"
+printf "%s|%s|%s\n" "${_tag:-none}" "$(basename "$0")" "$*" >> "${FX:?}/calls.log"
 '
 mkstub() { { printf '%s' "$STUB_PRELUDE"; cat; } > "$SCRATCH/bin/$1"; chmod +x "$SCRATCH/bin/$1"; }
 
@@ -343,7 +366,10 @@ ok "$([ ! -e "$SCRATCH/bin/systemd-escape" ]; echo $?)" "H1c systemd-escape is N
 # Fixture runner. $1 = name; the caller pre-populates $FX via `fx_*` helpers.
 FX=""; RUNDIR=""
 new_fixture() {
-  FX="$SCRATCH/fx-$1"; RUNDIR="$FX/run"; rm -rf "$FX"; mkdir -p "$FX" "$RUNDIR"
+  assert_fixture_dir "$SCRATCH"
+  FX="$SCRATCH/fx-$1"; RUNDIR="$FX/run"
+  assert_fixture_dir "$FX"; assert_fixture_dir "$RUNDIR"
+  rm -rf "$FX"; mkdir -p "$FX" "$RUNDIR"
   : > "$FX/calls.log"
   printf '/mnt/git-data-luks\n' > "$FX/fstab_target"
   export FX RUNDIR
@@ -517,7 +543,8 @@ ok "$([ "$(grep -c 'luks_reopen fatal' "$FX/emit.log")" -eq 1 ]; echo $?)" "R-ha
 ok "$(( (t1 - t0) > 20 ))" "R-hang bounded by the timeout ($((t1 - t0))s)"
 
 # --- M20: ExecStartPre clears a stale phase file ---------------------------------------------
-new_fixture m20; printf 'action=identity-mount\n' > "$RUNDIR/action"; printf 'stale\n' > "$RUNDIR/log"
+new_fixture m20; assert_fixture_dir "$RUNDIR"
+printf 'action=identity-mount\n' > "$RUNDIR/action"; printf 'stale\n' > "$RUNDIR/log"
 PRE=$(grep '^ExecStartPre=' "$UNIT_BODY" | sed 's/^ExecStartPre=//; s#/run/git-data-luks-reopen#'"$RUNDIR"'#g')
 sh -c "$PRE"
 ok "$([ ! -e "$RUNDIR/action" ] && [ ! -e "$RUNDIR/log" ]; echo $?)" "M20 ExecStartPre removes the stale action/log files"

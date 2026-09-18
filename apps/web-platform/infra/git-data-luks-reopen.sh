@@ -47,17 +47,43 @@ esac
 
 RUNDIR="${GIT_DATA_REOPEN_RUNDIR:-/run/git-data-luks-reopen}"
 DEVICE_WAIT="${GIT_DATA_REOPEN_DEVICE_WAIT:-30}"
+# THE SEAM IS AN OPERAND, SO IT IS ASSERTED BEFORE ANYTHING INTERPOLATES IT. Every write below
+# is `"$RUNDIR/<name>"`, which for an EMPTY or relative RUNDIR resolves to `/action` or to a
+# path under the CWD — a root-filesystem write, as root, on a host whose whole job is holding
+# user source. The default is absolute, but a default is not a guarantee: the seam exists so a
+# test can redirect it, and the same lever is what a mistake or an injected environment would
+# pull. `readonly` afterwards so nothing below can reintroduce the degenerate case.
+# (Shape mirrors the repo's canonical assert_fixture_dir; caught by plugins/soleur/test/
+# fixture-relative-assert.test.sh, whose P1b rule is exactly "an operand that is neither
+# provably absolute nor guarded".)
+case "$RUNDIR" in
+  "")            printf '[FATAL] GIT_DATA_REOPEN_RUNDIR is EMPTY; refusing to write to /\n' >&2; exit 2 ;;
+  */../*|*/..)   printf '[FATAL] run dir %s contains ..; refusing\n' "$RUNDIR" >&2; exit 2 ;;
+  /|//|/.)       printf '[FATAL] run dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+  /proc/*|/sys/*|/dev/*) printf '[FATAL] run dir %s is a synthetic-fs path; refusing\n' "$RUNDIR" >&2; exit 2 ;;
+  /*)            : ;;
+  *)             printf '[FATAL] run dir %s is RELATIVE; refusing\n' "$RUNDIR" >&2; exit 2 ;;
+esac
+readonly RUNDIR
+case "$DEVICE_WAIT" in
+  ''|*[!0-9]*) printf '[FATAL] device wait %s is not a positive integer; refusing\n' "$DEVICE_WAIT" >&2; exit 2 ;;
+esac
+readonly DEVICE_WAIT
 MAPPER_NAME=git-data
 MAPPER=/dev/mapper/git-data
 UNIT=git-data-luks-reopen.service
 LOG="$RUNDIR/log"
 
-mkdir -p "$RUNDIR"
-: > "$LOG"
+# `${VAR:?}` AT EVERY USE, not only the case-guard above. Two reasons, and the second is why it
+# is not redundant: an empty operand here writes to `/` as root, and the P1b scanner
+# (plugins/soleur/test/lib/fixture-scan.py) reads `readonly` as a re-binding, so a guard above it
+# does not cover a use below it. The parameter expansion aborts at the use site regardless.
+mkdir -p "${RUNDIR:?run dir unset}"
+: > "${LOG:?log path unset}"
 # Written BEFORE each phase runs, so the tag names the phase that was executing when the
 # script died — including on SIGTERM, which runs no trap.
-phase() { printf 'action=%s\n' "$1" > "$RUNDIR/action"; }
-die() { printf '%s\n' "$1" >> "$LOG"; exit 1; }
+phase() { printf 'action=%s\n' "$1" > "${RUNDIR:?}/action"; }
+die() { printf '%s\n' "$1" >> "${LOG:?}"; exit 1; }
 ACTION=noop
 
 phase config
@@ -117,7 +143,7 @@ if ! mountpoint -q "$TARGET"; then
   _munit=$(systemd-escape -p --suffix=mount "$TARGET")
   systemctl daemon-reload 2>>"$LOG" || true
   if ! systemctl start "$_munit" 2>>"$LOG"; then
-    journalctl -u "$_munit" -n 20 --no-pager -o cat >>"$LOG" 2>&1 || true
+    journalctl -u "$_munit" -n 20 --no-pager -o cat >>"${LOG:?}" 2>&1 || true
     die "systemctl start $_munit failed"
   fi
   [ "$ACTION" = reopened ] || ACTION=mounted
