@@ -21,6 +21,20 @@
 
 set -uo pipefail
 
+# Refuse to run under shell tracing while a live credential is in scope (#7797). Exit 78
+# (EX_CONFIG) lands in the TRANSIENT bucket -- the fail-safe direction, never a false PASS --
+# but it is a CONFIGURATION signal, not a network one: re-run with the credential unset to
+# trace safely. Required by scripts/lint-shell-trace-credential-refusal.py for any probe that
+# binds a credential; this one bound GH_TOKEN and carried no refusal.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 if [[ -z "${GH_TOKEN:-}" ]]; then echo "TRANSIENT: GH_TOKEN not set" >&2; exit 2; fi
 
 # READ THE WHOLE OBJECT, NOT THE PROJECTED FIELD. `--jq '.https_certificate.state'` collapses

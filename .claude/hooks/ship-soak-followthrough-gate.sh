@@ -355,7 +355,10 @@ for n in $REFS; do
   if [[ ",$labels," == *",follow-through,"* ]] \
      && grep -q '^<!-- soleur:followthrough' <<<"$unfenced_body" \
      && grep -qE 'earliest=' <<<"$unfenced_body"; then
-    spath=$(printf '%s' "$unfenced_body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+    # `|| true`: a body with no `script=` token is a NORMAL answer here (the tracker is simply
+    # not enrolled), not an error. Without it `grep -oE`'s exit 1 on no-match propagates and the
+    # gate dies mid-loop -- which fails OPEN, the one direction a merge gate must never fail.
+    spath=$(printf '%s' "$unfenced_body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//' || true)
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi
   [[ "$enrolled" == 1 ]] || UNENROLLED+=("$n")
