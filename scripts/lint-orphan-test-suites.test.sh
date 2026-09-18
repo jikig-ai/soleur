@@ -111,6 +111,16 @@ build_pristine() {
     printf '%s\n' "${REGISTRY_BATTERY_PATHS[@]}" "${CF_TUNNEL_BATTERY_PATHS[@]}" \
                   "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}" \
                   "${WEBPLAT_APP_PATHS[@]}"
+    # #8322: the SUT's affected-census arm asserts every declared AFFECTED_*_PATHS
+    # element resolves — a tracked file, or a directory prefix (trailing /). Same
+    # doctrine as the relevance arrays above: missing them reds every row for a
+    # reason unrelated to any mutation.
+    # shellcheck source=scripts/lib/test-affected-paths.sh
+    source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+    while IFS= read -r _aarr; do
+      [[ "$_aarr" == "AFFECTED_CONSUMED_EDGES" || "$_aarr" == "ALWAYS_ON_SUITES" ]] && continue
+      eval "printf '%s\n' \${${_aarr}[@]+\"\${${_aarr}[@]}\"}"
+    done < <(declare -p | LC_ALL=C grep -oE 'declare -[a-zA-Z]* AFFECTED_[A-Z0-9_]+' | awk '{print $3}')
   ) | LC_ALL=C sort -u | materialise || return 1
 
   # (4) The real inputs, copied verbatim. These are what the rows mutate.
@@ -118,6 +128,13 @@ build_pristine() {
   cp "$SUT" "$PRISTINE/scripts/lint-orphan-test-suites.sh" || return 1
   cp "$REPO_ROOT/scripts/test-all.sh" "$PRISTINE/scripts/test-all.sh" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  # #8322: the linter's census arm drives the sandbox runner's
+  # `--print-affected-set`, which sits BELOW the runner's repo-write-boundary
+  # requirement and reads the affected-declarations lib for `edge:declared`
+  # receipts — without both copies that call exits 2 and every census row
+  # reds for a reason unrelated to the row under test.
+  cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$PRISTINE/scripts/lib/" || return 1
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$PRISTINE/scripts/lib/" || return 1
   cp "$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh" "$PRISTINE/apps/web-platform/infra/" || return 1
   cp "$REPO_ROOT"/.github/workflows/*.yml "$PRISTINE/.github/workflows/" || return 1
 

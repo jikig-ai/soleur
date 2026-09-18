@@ -654,8 +654,14 @@ else
   # under-counted: `[A-Z_]+` missed the array whose name carries a digit, and an explicit two-shape
   # alternation still missed `"${NAME[@]:-}"`. Every miss is the same failure -- `want` drops, so a
   # SHORTER registry satisfies the floor and the unseen gate is the one that rots.
+  # `_AC_EDGES` is excluded by NAME, not by shape (#8322): the affected-mode
+  # classifier resolves each registration's edges into that scratch array and
+  # calls `_diff_touches` on it — a SELECTION test, not a relevance gate, and
+  # not a declaration site. Counting it would inflate `want` past
+  # RELEVANCE_ARRAYS and red the floor on a gate that does not exist.
   want=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
-         | grep -cE '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]') || {
+         | grep -E '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]' \
+         | grep -cvF '${_AC_EDGES[@') || {
     grep_rc=$?
     if (( grep_rc > 1 )); then
       echo "ERROR: could not read ${RUNNER} to count _diff_touches gates (grep exit ${grep_rc}) -- the dispatch floor could not be derived, so it is not evidence about anything." >&2
