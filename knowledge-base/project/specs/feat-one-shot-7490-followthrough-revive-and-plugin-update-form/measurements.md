@@ -100,3 +100,120 @@ ratchets down only.
 Deferred to Phase 2 by construction: the plan's own finding is that the regex is the artefact
 and three plan-time reconstructions gave 32 / 24 / 46. The floors are set from a single run of
 the COMMITTED regex, recorded in the Phase 2 section below.
+
+---
+
+# Work-phase measurements and plan corrections
+
+## Rule-3 census (deferred from 0.5, taken from the COMMITTED regex)
+
+One run of the regex as shipped, over `scripts/followthroughs/*.sh` minus `*.test.sh`:
+
+```
+rule 3 walked 74 file(s), extracted 44 repo-path ref(s), 0 missing
+```
+
+29 of the 74 walked files carry at least one reference. Floors are set from the WALK and the
+EXTRACTION separately — `MIN_REF_FILES=70`, `MIN_REFS=40` — because they count different things
+and a broken glob and a broken regex are different vacuity modes.
+
+Before the repoint the same command was RED on exactly two files, the plan's two:
+`plugin-delivery-canary-7490.sh` (genuine rot) and `inngest-cutover-flip-rollout-7761.sh`
+(the runtime artefact, now annotated per line).
+
+**Two corrections to the plan's census reasoning**, both found by running it:
+
+1. **A directory reference is legitimate and `git ls-files` lists no directories.** Four probes
+   cite a directory (`apps/cla-evidence/scripts`, `knowledge-base/legal/audits`, …). Without
+   ancestor directories in the membership set they read as rot. The set is files PLUS every
+   ancestor of a tracked file.
+2. **A seventh arm exists that the plan's six did not name:** `${OVERRIDE:-literal/path}` — a
+   `:-` default whose fallback is a bare repo-relative literal rather than a `$VAR/` expansion
+   (`QUERY="${FT8076_QUERY:-scripts/betterstack-query.sh}"`). It ships as the `literal-default`
+   arm.
+
+**A `pipefail` false-negative caught in the first implementation.** The membership test was
+`printf '%s\n' "$set" | grep -qxF -- "$cand"`. Under this script's `set -o pipefail`, `grep -q`
+closes the pipe on its first match, the ~18k-line producer takes SIGPIPE (141), and the pipeline
+exits non-zero although grep MATCHED. Measured: **22 tracked paths reported MISSING on a clean
+tree**. It greps a file operand now. This is the repo's own documented `grep -q`-on-a-pipe trap,
+hit inside the file implementing a guard.
+
+## AC7's verification command is broken as written
+
+The AC prescribes `sed -n 's/^REPORTS="\?//; s/"\?$//p'`. The `p` flag is on the SECOND
+substitution and `"\?$` matches the empty string at the end of EVERY line, so it prints the whole
+file. Measured: the AC's own command emits 130 lines and `test -r` fails.
+
+The correct extraction is a single anchored substitution:
+
+```console
+$ sed -n 's/^REPORTS="\(.*\)"$/\1/p' scripts/followthroughs/plugin-delivery-canary-7490.sh
+knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md
+$ test -r "$p" && echo readable
+readable
+```
+
+AC7's INTENT (the literal is double-quoted, so an extraction that leaves the quotes in fails)
+holds and is satisfied. The command was fixed, not the criterion.
+
+## AC8 — the repointed probe under the sweeper's own shape
+
+```console
+$ env -i PATH=<sweeper PATH + gh> HOME="$HOME" GH_TOKEN=<token> GH_REPO=jikig-ai/soleur \
+    bash scripts/followthroughs/plugin-delivery-canary-7490.sh; echo rc=$?
+PASS: canary green on run 35365847886 (compared>0), and every upstream posting slot is recorded.
+rc=0
+```
+
+## AC13b — reader census, classified
+
+`git grep -l 'soleur:followthrough' -- ':!knowledge-base' ':!*.md'` returns 31 paths, not the
+five the AC anticipated. Classified rather than inherited:
+
+| Class | Count | Disposition |
+|---|---|---|
+| The sweeper + its suite | 2 | The consumer. Changed here. |
+| The two hooks + their suites | 4 | Producers. Changed here. |
+| The sweeper workflow | 1 | Comment corrected here. |
+| Plugin-side mirror suites (`ship-followthrough-directive.test.sh`, `ship-soak-followthrough-enrollment-gate.test.ts`) | 2 | Assert the ship contract. Both re-run green. |
+| The ship stub template | 1 | Producer; emits an unfenced directive already. |
+| Probes citing their OWN directive in a header comment | 18 | Not readers. Prose. |
+| `apps/web-platform/.../\_predicate-validator.ts` + `cron-follow-through-monitor.ts` + their tests + `lib/workstream.ts` | 5 | **A DIFFERENT GRAMMAR.** `parsePredicateYaml` parses `type:`/`url:` predicates for the Inngest monitor, not `script=`/`earliest=`. It reads the HTML comment first and does not consult fences. Unaffected; the six bodies use the sweeper grammar. |
+
+## The `secrets=` and honoured-directive populations
+
+Measured through the SHIPPED `parse_directive` over all 56 open trackers:
+
+| | before | after |
+|---|---|---|
+| trackers with an HONOURED directive | 25 | **31** |
+| of those, declaring `secrets=` | 24 | **28** |
+
+The plan (and the workflow comment) said "8 to 12". Counting `secrets=` with a plain grep gives
+28 before AND after, because prose mentions it too — a third, wrong answer. The workflow comment
+now carries the measured figures and names the parser they came from.
+
+## Probe repairs, measured before and after
+
+| Probe | before | after | cause |
+|---|---|---|---|
+| `inngest-doublefire-reading-6617.sh` | rc=2 (permanent TRANSIENT) | **rc=0 PASS** | `--comments` and `--json` are mutually exclusive on current gh |
+| `gh-pages-cert-reissue-6657.sh` (#6678) | rc=2 (permanent TRANSIENT) | **rc=3 CANNOT ESTABLISH** | the API answers 200 with `https_certificate: null`; an absence, not a failure |
+
+The six enrolled probes as they stand, under `env -i`:
+
+| Tracker | rc | meaning |
+|---|---|---|
+| #7490 | 0 | PASS — will close on the first sweep on/after 2026-09-21 |
+| #7985 | 1 | FAIL — waiting on an upstream release; daily comment expected (commented on the tracker) |
+| #6678 | 3 | CANNOT ESTABLISH — actionable message instead of a silent retry |
+| #6617 | 0 | PASS |
+| #6488 | 2 | TRANSIENT locally only — `SUPABASE_ACCESS_TOKEN` is a sweeper-provided secret |
+| #5813 | 1 | FAIL — measured live state |
+
+## AC26 — the tracker the plan said to file already exists
+
+#7923 (`Follow-through sweeper: comment de-duplication, a per-probe timeout, and the ungated
+--add-label enrolment path`, OPEN). Its §1 is precisely the deferred scope and records a tracker
+carrying 33 identical comments. No issue filed; it is cited in the plan's `## Not in scope`.
