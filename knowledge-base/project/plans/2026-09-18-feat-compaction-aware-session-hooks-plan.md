@@ -15,6 +15,14 @@ requires_cpo_signoff: true
 
 ## Overview
 
+> **Superseded in part, 2026-09-18 (#8323 Phase 0):** the paragraphs below describe the compaction
+> signal as read from the transcript at `SessionStart:compact`, and the `SessionStart` binding as
+> matcher `compact`. Both are false in what shipped — the boundary is not yet on disk at that
+> moment (measured twice) and the matcher is `startup|resume|clear|compact`. The operative
+> description is `## Addendum — 2026-09-18 (Phase 0 payload probe: measured results)` at the foot
+> of this file, and ADR-227. Left standing rather than rewritten: this is the reasoning the probe
+> was designed to test, and deleting it would delete the evidence for why the probe was blocking.
+
 Soleur's "run `/clear` and resume" advice is unconditional prose in `plan` and `work`; it cannot see whether context compaction happened, how often, or in which phase. Claude Code records every compaction in the session transcript as a `compact_boundary` record carrying `compactMetadata.{trigger, preTokens, postTokens}`, and the `SessionStart` hook with matcher `compact` receives that transcript's path and injects model-visible context verbatim after the summary.
 
 This plan ships **one plugin-owned bash hook, bound twice** (`SessionStart:compact` and `PreCompact`) in `plugins/soleur/hooks/hooks.json`: after a compaction it injects a short re-read directive and, on the second auto-compaction of the session, recommends continuing in a fresh session; before a compaction it tells the summarizer which resume identifiers to keep verbatim. The unconditional `/clear` prose is then retired in favour of that signal.
@@ -163,7 +171,7 @@ One open `code-review` issue names a file this plan edits (65 scanned):
 - `plugins/soleur/test/compaction-state-hook.test.sh` — stdin-fixture suite.
 - `plugins/soleur/test/fixtures/compaction/` — **3** synthesized fixtures: `no-boundary.jsonl`, `one-auto.jsonl`, `two-auto.jsonl` (manual is a one-field flip asserted against `two-auto`; malformed input is a heredoc, not a file).
 - `scripts/followthroughs/compaction-format-drift-8323.sh` — FR7 drift canary (real transcripts, scheduled).
-- `knowledge-base/engineering/architecture/decisions/ADR-228-compaction-signal-read-from-the-transcript.md` — ordinal **provisional**; re-verify across every `origin/*` ref immediately before merge.
+- `knowledge-base/engineering/architecture/decisions/ADR-227-compaction-state-from-a-per-session-ephemeral-ledger.md` — ordinal **provisional**; re-verify across every `origin/*` ref immediately before merge.
 
 ## Files to Edit
 
@@ -220,7 +228,7 @@ A `scripts/followthroughs/`-shaped script that reads the operator's **real** `~/
 
 ### ADR
 
-**ADR-228 — "The compaction signal is read from the transcript, not from a counter file"** (create; ordinal provisional). Decision: compaction count and trigger are derived from the transcript's own `compact_boundary` records at `SessionStart:compact`; no counter store is introduced; no `PostCompact` binding ships in this slice.
+**ADR-227 — "The compaction signal is read from the transcript, not from a counter file"** (create; ordinal provisional). Decision: compaction count and trigger are derived from the transcript's own `compact_boundary` records at `SessionStart:compact`; no counter store is introduced; no `PostCompact` binding ships in this slice.
 
 `## Alternatives Considered` must record, each with its evidence: (a) the `.claude/.session-manifests` piggyback (repo-only, overwritten on every SessionStart including `compact`); (b) a repo-side counter store (un-addable `.gitignore` entry); (c) **the per-session `TMPDIR` file — accepted-conditional**, as Phase 0's fallback, so the ADR does not contradict the plan; (d) skill-prose-only (the model cannot observe its own compaction count); (e) `PostCompact` + `UserPromptSubmit` rebinding; (f) statusline `context_window` (measured unreachable from hooks — record the probe); (g) **the checkpoint writer, deleted by review**, with the two P0s that killed it, so #8328 inherits them.
 

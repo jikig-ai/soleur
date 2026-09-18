@@ -20,6 +20,17 @@ Soleur tells the operator to "run `/clear` and resume" at fixed points (`plan` e
 - Ship in `plugins/soleur/hooks/hooks.json` so marketplace installs get it, without affecting a non-Soleur repo.
 - *(Deleted at review: "keep `session-state.md` never older than the last compaction" — see #8328.)*
 
+> **Revised 2026-09-18 (second revision) after the Phase 0 payload probe.** The probe falsified
+> the mechanism this spec was written around. At `SessionStart:compact` the just-fired
+> compaction's `compact_boundary` is **not yet on disk** (measured twice: 0-of-1, then 1-of-2),
+> and the `SessionStart` envelope carries no `trigger`, so the transcript can supply neither the
+> count nor the current trigger at the moment they are needed. `PreCompact` also fires on
+> **no-op** compactions (3 fires, 2 boundaries), so counting those over-counts. What ships is the
+> plan's pre-authorized `TMPDIR` ledger, corrected to **pending-then-commit**, with the
+> `SessionStart` matcher widened to `startup|resume|clear|compact` so the window reset is exact.
+> Full measurements: the plan's `## Addendum — 2026-09-18`. The FR/TR text below is corrected in
+> place; where this spec and the plan's addendum disagree, the addendum wins.
+
 > **Revised 2026-09-18 after a six-agent plan review.** Four mechanisms in the original spec are **deleted**: the `PostCompact` checkpoint writer + its gitleaks guard (FR4/TR6's guard — deferred to **#8328**), the token-ratio clause in FR2, the phase-derivation mechanism in FR1, and the `one-shot` Step 8 edit in FR5. The canonical scope is the plan's `## Review Cuts` section; where this spec and the plan disagree, the plan wins.
 
 ## Non-Goals
@@ -36,9 +47,16 @@ Soleur tells the operator to "run `/clear` and resume" at fixed points (`plan` e
 
 ## Functional Requirements
 
-### FR1: Post-compaction directive (`SessionStart`, matcher `compact`)
+### FR1: Post-compaction directive (`SessionStart`, matcher `startup|resume|clear|compact`)
 
-`compaction-state.sh` reads the envelope's `transcript_path` and derives `count_auto` (scoped to this session's window — TR2) plus the last `compact_boundary`'s `compactMetadata.{trigger,preTokens,postTokens}`. It emits `hookSpecificOutput.additionalContext` (truncated at 8,000 chars, under the 10,000 cap) containing: compaction number, trigger, branch, plan path, the `claude --version` string, the re-read directive (`hr-always-read-a-file-before-editing-it`), and the `SOLEUR_COMPACTION_*` marker. stdout carries the JSON envelope and nothing else. **Phase derivation was deleted at review** — the last `Skill` record is not the current phase (measured: `soleur:preflight`), and inside `/soleur:one-shot` it is the child skill.
+`compaction-state.sh` derives `count_auto` and the current compaction's `trigger` from a
+**per-session ledger under `TMPDIR`**, written by the same hook across its two bindings
+(pending-then-commit; see the second revision note above). It does **not** read them from the
+transcript — measured, the transcript answers too late. The non-`compact` arm of the
+`SessionStart` matcher resets that ledger, which is what makes TR2's window scoping exact.
+The transcript is read once, for a single corroboration field (`prior_boundaries`), which does
+not feed the rule. Token counts are not reported: `preTokens`/`postTokens` on disk belong to the
+*previous* compaction. It emits `hookSpecificOutput.additionalContext` (truncated at 8,000 chars, under the 10,000 cap) containing: compaction number, trigger, branch, plan path, the `claude --version` string, the re-read directive (`hr-always-read-a-file-before-editing-it`), and the `SOLEUR_COMPACTION_*` marker. stdout carries the JSON envelope and nothing else. **Phase derivation was deleted at review** — the last `Skill` record is not the current phase (measured: `soleur:preflight`), and inside `/soleur:one-shot` it is the child skill.
 
 ### FR2: Fresh-session recommendation *(revised — ratio clause deleted)*
 
@@ -62,7 +80,7 @@ Writes/replaces a `<!-- compaction-checkpoint:start -->…<!-- compaction-checkp
 
 ### FR7 (added at review): Transcript-format drift canary
 
-A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl` and asserts at least one `"subtype":"compact_boundary"` across N recent transcripts. Synthesized fixtures pin the shape Soleur wrote, not the shape Claude Code emits, so they structurally cannot detect an upstream rename; this is the only mechanism that can. Every marker also carries the `claude --version` string so drift is attributable to a CLI bump.
+A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl` and asserts at least one `"subtype":"compact_boundary"` across N recent transcripts. Synthesized fixtures pin the shape Soleur wrote, not the shape Claude Code emits, so they structurally cannot detect an upstream rename; this is the only mechanism that can see such a rename. Its value is narrower than an earlier draft claimed, and the correction is load-bearing: since `count_auto` and `trigger` come from the ledger, a rename degrades only the `prior_boundaries` marker. The canary reports that the recorded measurements have gone **stale**, not that the feature has stopped working. Every marker also carries the `claude --version` string so drift is attributable to a CLI bump.
 
 ### FR5: Prose retirement
 
@@ -75,14 +93,14 @@ A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl`
 ## Technical Requirements
 
 - **TR1 (revised).** Scope guard is the `welcome-hook.sh` sentinel (a `plugins/soleur` directory check) **plus** a Soleur plan/spec artifact — never `git rev-parse --is-inside-work-tree`, which is true in every customer repo and would let `PreCompact` degrade a stranger's compaction summary.
-- **TR2 (revised).** `count_auto` is scoped to the current session window; boundaries accumulate within one transcript across `--resume`.
-- **TR3 (revised).** One script, `plugins/soleur/hooks/compaction-state.sh`, dispatching on `hook_event_name`; hooks.json binds it **twice** (`PreCompact`, `SessionStart:compact`). Bash + jq only, matching existing plugin hooks.
+- **TR2 (revised twice).** `count_auto` is scoped to the current session window. Boundaries accumulate within one transcript across `--resume`, which is why an all-time count is wrong; the scoping is implemented as a ledger **truncation** on any non-`compact` `SessionStart`, so it is exact rather than inferred from transcript positions.
+- **TR3 (revised twice).** One script, `plugins/soleur/hooks/compaction-state.sh`, dispatching on `hook_event_name`; hooks.json binds it **twice** — `PreCompact` (matcher `manual|auto`) and `SessionStart` (matcher `startup|resume|clear|compact`, not `compact` alone: the other three sources are what reset the window). Bash + jq only, matching existing plugin hooks.
 - **TR4 (revised).** Fail-open: no `set -e`, **`trap 'exit 0' ERR EXIT`** (the `EXIT` arm is load-bearing — `set -u` terminates without firing `ERR`), exit 0 on every path, `SOLEUR_DISABLE_COMPACTION_HOOKS=1` kill-switch; envelope built with `jq -n --arg`, with a static `printf`'d JSON literal when `jq` is unavailable; nothing read from the transcript is echoed raw.
 - **TR5 (revised).** Transcript reads are cheap, not bounded: `grep -c` and `grep | tail -1` both scan to EOF, measured **~25 ms on 31 MB** (`tac` is slower — it buffers). The earlier "<200 ms" budget and the "bounded reads" framing are retracted.
 - **TR6.** Empirical payload verification before implementation: capture real `PreCompact` and `SessionStart:compact` envelopes on CLI 2.1.273, record them dated in the hook header, and confirm whether the boundary count observed at `SessionStart:compact` includes the compaction that just fired (the load-bearing unknown).
 - **TR7 (revised).** Tests: `plugins/soleur/test/compaction-state-hook.test.sh` (that path is globbed by `scripts/test-all.sh`; `plugins/soleur/hooks/` is not) with stdin fixtures for both events, 3 synthesized transcript fixtures (`cq-test-fixtures-synthesized-only`), the threshold boundary cases, the scope-guard case, the `jq`-absent case, and the 8k cap. The hooks.json binding assertion lives here, not in `components.test.ts` (which does not read `hooks.json`).
-- **TR8 (revised).** ADR-228: "The compaction signal is read from the transcript, not from a counter file", recording all seven alternatives including the checkpoint writer deleted at review (#8328).
-- **TR9 (added at review).** A drift canary (FR7) registered as a schedule, never as a suite case — a suite case would break CI on a clean box.
+- **TR8 (revised).** ADR-227: "The compaction signal is read from the transcript, not from a counter file", recording all seven alternatives including the checkpoint writer deleted at review (#8328).
+- **TR9 (added at review, corrected at implementation).** A drift canary (FR7), never a suite case — a suite case would break CI on a clean box. It is **not** a GitHub Actions schedule either: measured, a runner has no `~/.claude/projects`, so that registration yields a probe that can only ever report TRANSIENT. It is bound to the repo-side `SessionStart` surface (`.claude/hooks/compaction-drift-canary.sh`), stamp-gated to once per 7 days, always exit 0.
 
 ## Success Criteria
 
@@ -91,5 +109,6 @@ A scheduled script reads the operator's **real** `~/.claude/projects/**/*.jsonl`
 - SC3. In a git repo with no `plugins/soleur` directory, both events emit nothing — a non-Soleur user's compaction summary is never touched.
 - SC4. On every `SessionStart` fixture, stdout parses as JSON in full, including the failure paths.
 - SC5. Hook script exits 0 on malformed stdin, missing transcript, non-Soleur repo, kill-switch, and a `set -u` unbound-variable fault.
-- SC6. The drift canary exits non-zero when zero `compact_boundary` records are found across N recent **real** transcripts.
+- SC6. The drift canary exits non-zero when zero `compact_boundary` records are found across N recent **real** transcripts, and exits 2 — not 1 — when it cannot measure at all, so "could not check" never renders as "bad".
+- SC7 (added at implementation). A `PreCompact` that is never followed by a `SessionStart:compact` contributes nothing to `count_auto`. This is the measured no-op-compaction case; without it the recommendation fires one compaction early.
 - *(SC on the checkpoint block moved to #8328 with the writer.)*

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# compaction-state.sh -- compaction-aware session hooks (#8323, ADR-228).
+# compaction-state.sh -- compaction-aware session hooks (#8323, ADR-227).
 #
 # Bound TWICE in hooks.json and dispatching on hook_event_name:
 #   PreCompact   (matcher manual|auto)                -> shape the summary (FR3)

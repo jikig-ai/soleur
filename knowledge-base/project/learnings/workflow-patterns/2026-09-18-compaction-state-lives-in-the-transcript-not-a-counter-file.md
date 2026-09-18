@@ -33,3 +33,47 @@ Before designing a state store for a harness lifecycle event, check whether the 
 3. **Filing gate rejected prose `User-Impact:`/`Fix-Size:` lines** — needs a *named* surface (route/page/CLI command) and a *measured* `N lines / M files`. Recovery: rewrote both lines. **Prevention:** copy the gate's two-line shape verbatim; "a founder gets a better prompt" is not a named surface.
 4. **Wrong telemetry-sink premise** (markers → Better Stack) in the go-route summary and the CLO prompt. Recovery: repo-research corrected it; brainstorm records the reconciliation. **Prevention:** grep the consumer before naming a sink (`hr-verify-repo-capability-claim-before-assert`).
 5. **`CLAUDE_PLUGIN_ROOT` unset at session start** → readiness probe fell back to `plugin-root-unverified` (known, #7442); Playwright MCP failed to connect (unused). **Prevention:** none new — both already tracked/benign.
+
+## Addendum — 2026-09-18 (#8323 Phase 0 probe): the Solution above is SUPERSEDED
+
+> **Superseded 2026-09-18 (#8323):** this file's title, its `## Solution` and the `## Key Insight`
+> assert that the compaction signal can be read from the transcript. The implementation's blocking
+> Phase 0 probe measured that it cannot, and the shipped design is a per-session ephemeral ledger.
+> The body above is left intact — it is the reasoning as it stood, and the premise it refutes
+> (§Problem's two wrong premises) is still correct and still load-bearing.
+
+**What the probe measured** (Claude Code 2.1.273, scratch project, headless
+`claude -p --continue "/compact"`; full table in the plan's `## Addendum — 2026-09-18`):
+
+- At `SessionStart:compact` the **just-fired** compaction's `compact_boundary` is **not on disk**.
+  Measured twice — compaction #1 read `count=0` with 1 present afterwards, compaction #2 read
+  `count=1` with 2 present. The boundary's own `timestamp` *precedes* the hook fire, so the record
+  is in memory and flushes after the hook returns. `PostCompact`, 100 ms later, reads the same
+  lagging value.
+- The `SessionStart` envelope carries **no `trigger`** (`PreCompact` has `trigger`; `SessionStart`
+  has `source`), so the last on-disk boundary yields the *previous* compaction's trigger.
+- `PreCompact` firing does **not** imply a compaction happened: 3 fires produced 2 boundaries,
+  because a `/compact` with nothing left to compact fires `PreCompact` and then no
+  `SessionStart:compact`.
+
+So "count/last-trigger/token-ratio are all one bounded `grep` away" is false in the count and the
+trigger, and the phase clause was separately deleted by the plan review. The token-ratio clause was
+deleted too (the threshold sat above the only real measurement).
+
+**What shipped instead:** a per-session ledger under `TMPDIR`, pending-then-commit —
+`PreCompact` overwrites one pending slot, `SessionStart:compact` commits it as one line and counts,
+and `SessionStart:startup|resume|clear` truncates. This is **not** the counter store §Problem
+rejected: that one lived in the user's repository and needed an un-addable `.gitignore` entry; this
+is machine-local, disposable and age-reaped. See **ADR-227**.
+
+**The Key Insight survives, with its second clause corrected.** "Check whether the harness already
+persists that state somewhere a hook can read" is still the right first question. The correction is
+that *persisted* and *readable at the moment you need it* are different properties, and only a
+probe distinguishes them — a transcript can be an append-only log of exactly the right events and
+still be one flush behind at the one instant the hook runs.
+
+**Prevention:** when a design depends on a harness having written something by the time a hook
+fires, treat the write ORDERING as a separate claim from the record's existence and probe it
+before implementing. The cheapest form is what Phase 0 did: bind a marker hook in a throwaway
+project, drive the event headlessly, and log what the hook can actually see — no operator step, a
+few minutes, and it falsified the design before a line of it was written.
