@@ -4209,7 +4209,11 @@ jobs:
       cancel-in-progress: false
     # 20 -> 40 (#8178): the boot poll (20 reads x 30 s, each read capped at 45 s by
     # git_data_boot_verify) must end in a VERDICT line rather than a cancelled job.
-    timeout-minutes: 40
+    # 40 -> 50 (#8178, pre-ship advisor consult): 40 left only ~3 min for every step that
+    # runs before `Terraform plan`, and overrunning it cancels the job MID-POLL with no
+    # VERDICT line — the "could not tell" state this PR removes. Pinned by the `need` floor
+    # in tests/scripts/test-git-data-boot-signal-poll.sh (S19); raise both or neither.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -6039,7 +6043,18 @@ jobs:
     # plus two volumes (~6m), + the boot poll (20 reads x 30 s, each read capped at 45 s,
     # worst case ~27m). No image pull on this path. Raised 20 -> 40 (#8178) so the poll
     # always reaches a VERDICT line instead of being cancelled mid-read.
-    timeout-minutes: 40
+    #
+    # 40 -> 50 (#8178, pre-ship advisor consult). 2 + 6 + 27 = 35 priced only plan, apply
+    # and the poll, and left 5 minutes for ELEVEN steps that run before `Terraform plan`:
+    # checkout, setup-terraform, the Doppler install, `Validate dispatch inputs`, three
+    # interlocks that each reach Doppler / the GitHub API / Better Stack, keygen, `Verify
+    # required secrets present`, the R2 credential extraction and `terraform init`. If those
+    # overrun, the job is cancelled MID-POLL and prints no VERDICT line at all — the exact
+    # "could not tell" state this PR exists to remove, and one the follow-through probe then
+    # reads as "the poll did not run", i.e. NOT YET forever. The margin is pinned by the
+    # `need` floor in tests/scripts/test-git-data-boot-signal-poll.sh (S19); raise both or
+    # neither.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

@@ -412,8 +412,15 @@ for job in git_data_host_create git_data_host_replace; do
   if grep -qF 'secrets.BETTERSTACK_QUERY' <<<"$blk"; then _report "S19 $job: binds no stale BETTERSTACK_QUERY secret" bad "found a binding"
   else _report "S19 $job: binds no stale BETTERSTACK_QUERY secret" ok; fi
   tmo="$(grep -m1 -E '^    timeout-minutes: [0-9]+$' <<<"$blk" | grep -oE '[0-9]+$' || true)"
-  # 20 reads x (30 s sleep + 45 s read cap + 5 s kill grace) + 10 min for plan/apply.
-  need=$(( (20 * (30 + 45 + 5) + 59) / 60 + 10 ))
+  # 20 reads x (30 s sleep + 45 s read cap + 5 s kill grace) + 10 min for plan/apply
+  # + 5 min for the steps that run BEFORE `Terraform plan`. That last term is the one an
+  # earlier revision of this floor omitted: the create job runs eleven of them (checkout,
+  # setup-terraform, the Doppler install, input validation, three interlocks that each reach
+  # Doppler / the GitHub API / Better Stack, keygen, the secrets check, the R2 credential
+  # extraction, terraform init), so a floor priced on plan+apply alone certifies a margin
+  # that does not exist. Overrunning it cancels the job MID-POLL with no VERDICT line —
+  # the "could not tell" state this suite's subject exists to remove.
+  need=$(( (20 * (30 + 45 + 5) + 59) / 60 + 10 + 5 ))
   if [[ "$tmo" =~ ^[0-9]+$ ]] && (( tmo >= need )); then _report "S19 $job: timeout-minutes ($tmo) covers the poll ($need)" ok
   else _report "S19 $job: timeout-minutes covers the poll" bad "timeout-minutes='$tmo' need>=$need"; fi
   sum_step="$(extract_step "$job" "Dispatch summary")"

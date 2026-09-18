@@ -29,6 +29,18 @@ _gdbsp_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # eat the job's timeout and the job is cancelled BEFORE it prints a verdict, which is the
 # "could not tell" state this change exists to remove. `timeout` exits 124 (137 if it had to
 # kill), classified `transport` by bs_read_classify.
+#
+# 45 < 60 DELIBERATELY, and the consequence is worth stating because it is not obvious: this
+# cap ALWAYS binds before the reader's own curl budget, so a read that would have succeeded
+# in 46-60 s is never observed as a success — it is cut and classified `transport`. That is
+# the intended trade. A healthy read of this table measures ~1-3 s, so 45 s already means the
+# read path is badly wrong, and one such read must not consume a third of the poll budget.
+# The cost is bounded and fail-closed: `transport` renders as `unreadable`, never as a host
+# verdict, so the worst outcome is a birth reported UNVERIFIED — never one wrongly verified.
+# Raising this above 60 + Doppler's fetch would make the 46-60 s band reachable, but it also
+# multiplies the job's worst-case poll wall clock by 20 — re-price `timeout-minutes` on BOTH
+# git-data jobs and the `need` floor in tests/scripts/test-git-data-boot-signal-poll.sh (S19)
+# in the same change, or the job starts being cancelled mid-poll again.
 GIT_DATA_BOOT_READ_TIMEOUT_S="${GIT_DATA_BOOT_READ_TIMEOUT_S:-45}"
 
 # git_data_boot_sql <anchor>
