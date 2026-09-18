@@ -13,6 +13,39 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-18
+**Sections enhanced:** Phase 1.1c callout (layer citations), Architecture Decision § C4 views,
+Acceptance Criteria AC1/AC2/AC5/AC7/AC11/AC13/AC14/AC15/AC18/AC19, Phase 4.3.
+**Research agents used:** git-history-analyzer (16/16 attribution claims CONFIRMED live — commit
+`000fa4715`, PRs #7778/#8019/#7887/#8191/#8248/#8314, 14 issues, ADR/runbook anchors, G1/G19
+sets, four archive dry-runs); verify-the-negative pass (11 negative claims: 10 confirm, 1 contradict
+— `model.c4`'s `inngestRedis` DESCRIPTION names the recut dispatch; C4 wording corrected);
+observability-coverage-reviewer (5 findings, all folded: every measured value in the callout now
+names its read and layer — `inngest-host-state.sh` for row fields, Doppler `INNGEST_CUTOVER_FLIP` as
+G19's authority, Hetzner `GET /v1/volumes/106261946` for the attachment, `gh run view 34948112813`
+for the latch provenance; closing comments carry the read beside each quoted field);
+code-quality-analyst AC-executability audit (8 findings, all folded: G3.7-gated awk for AC1,
+blank-line-terminated awk for AC2, `find` for AC7, anchored grep for AC5, `--no-renames` for AC11,
+case-insensitive closing-keyword grep for AC14, `(\D|$)` for AC18, paginated last-comment for AC19,
+AC15 restored). Halt gates 4.5–4.11 all pass or skip (docs-only; threshold `none` with scope-out;
+no PAT shape; no UI surface; no new store; no guard). Fan-out was deliberately scoped to four
+agents: the plan had already been through CTO, spec-flow, an advisor consult and a four-agent
+plan-review in the same session, and the deliverable is prose + issue state.
+
+### Key Improvements
+
+1. The paste-ready runbook callout is now re-measurable sentence by sentence without SSH.
+2. The C4 "no impact" claim states the one stale element description honestly and routes it.
+3. Every AC command was executed for shape against the live tree and corrected where it would have
+   false-passed (AC7) or mis-scoped (AC1, AC2).
+
+### New Considerations Discovered
+
+- `git diff --name-only` hides the delete side of a `git mv`; the diff-scope AC needs `--no-renames`.
+- Two runbook bullets carry `**Remediation:**`; any awk on that token must be gated on the G3.7 heading.
+
 ## Overview
 
 The `inngest-volume-recut` apply_target that #7695 asked for was built and merged on 2026-09-04
@@ -272,9 +305,13 @@ that path landing — this addendum does not retire anything; "dormant on this v
 **No C4 impact** — asserted from the enumeration, not from a keyword grep. External human actors:
 the operator (already modelled; no access relationship changes — this PR grants or removes no
 dispatch). External systems/vendors: Hetzner (volume/server), Doppler, Better Stack, GitHub Actions —
-all already present in `model.c4`; no element or relationship in the three `.c4` files names the
-recut or cutover dispatch (measured: the only `recut` edge is zot's; `inngestRedis`'s "STILL PLAINTEXT"
-description is 8248's to change), and nothing is added, removed or re-pointed. Containers/data stores: `soleur-inngest` host and the Redis AOF
+all already present in `model.c4`; no element or RELATIONSHIP in the three `.c4` files models the
+recut or cutover dispatch as an edge (measured: the only `recut` edge is zot's). One element
+DESCRIPTION does name it — `inngestRedis`'s prose ("becomes crypto_LUKS only when the gated
+`apply_target=inngest-volume-recut` dispatch destroys and recreates the volume") — and it is stale
+after this plan, but `model.c4` is in PR 8248's file set and 8248 already rewrites that description;
+the retire-or-keep issue #8316 carries it as a second stale-prose anchor in case 8248 does not land.
+Nothing is added, removed or re-pointed here. Containers/data stores: `soleur-inngest` host and the Redis AOF
 volume — unchanged; no new store. Actor↔surface relationships: unchanged. Derived cardinalities:
 none of this PR's files is a `model.c4` count source (no monitor, heartbeat slug, workflow or cron is
 added). `model.c4` is in PR 8248's file set and must not be edited here in any case. Verification is
@@ -415,14 +452,19 @@ bullet's blockquote depth, `>`-prefix every line, keep the file's ~100-col wrap)
 ```markdown
 > **Post-cutover status (2026-09-18, #7695).** The recut target now exists: `apply_target=inngest-volume-recut`
 > merged 2026-09-04 (PR #7778), dispatch-only, behind the `inngest-cutover` required-reviewer
-> environment. It is NOT a route from this host. On `cutover_flag=done` its Guard 2 is unreachable
-> on G19 alone (the flag set is `{rolled-back, aborted}`), and G8/G9/G13 refuse independently on the
-> live row — `server_active=active`, `http_code=200`, `redis_keys=1081` (ADR-199: a populated store
-> on a serving host is never recut; G8's `== inactive` form is #8078). As of 2026-09-18 the same
-> volume `106261946` is attached to host `166317708` (created 2026-09-17, the third host since
-> 2026-09-04, across two more replaces) with the latch intact. The durable latch STANDS since
-> `op=arm` run 34948112813 (2026-09-15): `flush_latched=true` + `cutover_flag=done` is the steady
-> state of a healthy `done` host, not a fault to clear. A second `op=arm` is refused by design.
+> environment. It is NOT a route from this host. On `INNGEST_CUTOVER_FLIP=done` (Doppler
+> `soleur-inngest/prd`, the authority G19 reads; the row's `cutover_flag` mirrors it) its Guard 2 is
+> unreachable on G19 alone (the flag set is `{rolled-back, aborted}`), and G8/G9/G13 refuse
+> independently on the live row — `server_active=active`, `http_code=200`, `redis_keys=1081`
+> (ADR-199: a populated store on a serving host is never recut; G8's `== inactive` form is #8078).
+> As of 2026-09-18 the same volume `106261946` is attached to host `166317708` (created 2026-09-17,
+> the third host since 2026-09-04, across two more replaces; Hetzner API
+> `GET /v1/volumes/106261946` → `.volume.server`) with the latch intact. The durable latch STANDS
+> since `op=arm` run 34948112813 (`gh run view 34948112813`, 2026-09-15): `flush_latched=true` +
+> `cutover_flag=done` is the steady state of a healthy `done` host, not a fault to clear. Re-measure
+> every row value above with `doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh`
+> (the Better Stack probe row; § Reading host state without SSH). A second `op=arm` is refused by
+> design.
 > The routes from here are `op=resume` for a stalled or inherited `done` (§ Inherited `done`; it
 > is still not a latch remediation) and the P1-13 rollback — and on this volume a rollback is
 > one-way: after `rolled-back`, `op=arm` G1 admits the flag but G3.7 and the on-host latch refuse
@@ -471,14 +513,19 @@ probe_schema=8 plan/spec (`feat-one-shot-8017-8015-8013-probe-schema-8`): #8013 
 4.1 #8316 is already filed (plan time) — verify `gh issue view 8316 --json state` reads OPEN; do not
 file a second one.
 4.2 Comments on #8078 and #7777 per the table; relabels on #8078 and #7777. Edit #8316's body
-(`gh issue edit 8316 --body-file`) to add `Ref #8285`, the ADR-199 §Consequences stale anchor, and
-the G8 wording of § Architecture Decision item (2). Post one comment on PR 8248: "when this merges,
+(`gh issue edit 8316 --body-file`) to add `Ref #8285`, the ADR-199 §Consequences stale anchor, the
+`model.c4` `inngestRedis` description anchor ("becomes crypto_LUKS only when the gated"), and the G8
+wording of § Architecture Decision item (2). Post one comment on PR 8248: "when this merges,
 the retire-or-keep decision for `inngest-volume-recut` is due — #8316". No comment on #8018.
 4.3 Post the #7695 verdict comment **in /work, before merge** (not deferred to /postmerge — if
 postmerge does not run, the tracker would sit closed with the 2026-09-09 "latch is NOT standing"
 comment as its last word): the verdict table, the measured row fields from `measurements.md`, the
 explicit superseding of the 2026-09-09 comment, and the sentence "closes on merge of PR #8314". Same
-timing for the #8017/#8015 comments (each quoting its own close-condition field verbatim). Add a
+timing for the #8017/#8015 comments (each quoting its own close-condition field verbatim). Every
+quoted field sits beside the one-line read that produced it (`doppler run -p soleur -c prd_terraform
+-- scripts/inngest-host-state.sh` for row fields; `doppler secrets get INNGEST_CUTOVER_FLIP -p
+soleur-inngest -c prd --plain` for the flag; the Hetzner `GET /v1/volumes/106261946` for the
+attachment) — `hr-observability-layer-citation`. Add a
 one-line cross-link comment on #7777: clause 2 of #7695's title ("nothing clears a standing /mnt/data
 flush latch") now lives on #7777.
 4.4 PR body: exactly `Closes #7695`, `Closes #8017`, `Closes #8015`; every other number as `Ref`.
@@ -528,27 +575,28 @@ register); `tests/scripts/lib/inngest-host-dark-gate.sh` (G8 fix declined — Cu
 
 ### Pre-merge (PR)
 
-- AC1 `grep -c 'Post-cutover status (2026-09-18, #7695)' knowledge-base/engineering/operations/runbooks/inngest-server.md` → `1`, and the callout sits after the paragraph anchored `There is **no `apply_target` that recuts` (verify with `grep -n` ordering, not line numbers). That anchored line still exists exactly once and now also carries `~~` and `superseded 2026-09-18` (`grep -c 'recuts `/mnt/data` today.\*\*~~' <runbook>` → `1`). Paragraph-scoped (the file hard-wraps at ~100 cols, so no same-line assertion): extract the G3.7 remediation paragraph with a flag-based awk from the line containing `**Remediation:**` to the next blank line; within that block `op=resume` is not it` is present, and `measured empty` occurs before `recut`.
-- AC2 Within the callout — extracted with a flag-based awk from the line containing `Post-cutover status (2026-09-18, #7695)` until the first following line matching `!/^[[:space:]]*>/` (the blockquote is list-nested and indented, so `^>` never matches) — each of `inngest-volume-recut`, `G19`, `G8`, `G9`, `G13`, `redis_keys=1081`, `flush_latched=true`, `34948112813`, `166317708`, `op=resume`, `rolled-back`, `#7777`, `#6894`, `#8316` occurs ≥ 1 time, the first `G19` precedes the first `G8`, and `op=resume` precedes `FLUSH_LATCH_SINCE`.
+- AC1 `grep -c 'Post-cutover status (2026-09-18, #7695)' knowledge-base/engineering/operations/runbooks/inngest-server.md` → `1`, and the callout sits after the paragraph anchored `There is **no `apply_target` that recuts` (verify with `grep -n` ordering, not line numbers). That anchored line still exists exactly once and now also carries `~~` and `superseded 2026-09-18` (`grep -c 'recuts `/mnt/data` today.\*\*~~' <runbook>` → `1`). Paragraph-scoped (the file hard-wraps at ~100 cols, so no same-line assertion; two bullets carry `**Remediation:**`, so gate on the G3.7 bullet first): `awk '/G3\.7 pre-flush-latch/{g=1} g&&/\*\*Remediation:\*\*/{f=1} f&&/^[[:space:]]*$/{exit} f' <runbook>` — within that block `op=resume` is not it` is present, and `measured empty` occurs before `recut`.
+- AC2 Within the callout — every line of it is `>`-prefixed (1.1a/1.1c), so extract with `awk '/Post-cutover status \(2026-09-18, #7695\)/{f=1} f&&/^[[:space:]]*$/{exit} f' <runbook>` (blank-line terminated; a `!/^[[:space:]]*>/` terminator would stop at the pre-existing lazy-continuation lines) — each of `inngest-volume-recut`, `INNGEST_CUTOVER_FLIP`, `G19`, `G8`, `G9`, `G13`, `redis_keys=1081`, `flush_latched=true`, `34948112813`, `166317708`, `inngest-host-state.sh`, `op=resume`, `rolled-back`, `#7777`, `#6894`, `#8316` occurs ≥ 1 time, the first `G19` precedes the first `G8`, and `op=resume` precedes `FLUSH_LATCH_SINCE`.
 - AC3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main 2>&1 | tail -1` → `OK: …`.
 - AC4 `grep -c '^## Addendum — 2026-09-18 (#7695)' knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` → `1`; `git diff origin/main -- <ADR-100>` shows additions only (no `-` lines other than context).
-- AC5 `[[ ! -e knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md ]]` and `ls knowledge-base/project/plans/archive/ | grep -c '2026-09-02-infra-inngest-volume-recut-luks-plan.md'` → `1`; `git log --follow --oneline -- knowledge-base/project/plans/archive/*2026-09-02-infra-inngest-volume-recut-luks-plan.md | wc -l` ≥ 2 (history preserved).
+- AC5 `[[ ! -e knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md ]]` and `ls knowledge-base/project/plans/archive/ | grep -c -- '-2026-09-02-infra-inngest-volume-recut-luks-plan.md$'` → `1`; `git log --follow --oneline -- knowledge-base/project/plans/archive/*2026-09-02-infra-inngest-volume-recut-luks-plan.md | wc -l` ≥ 2 (history preserved).
 - AC6 The archived plan's last H2 starts with `## Addendum — 2026-09-18 (#7695)`; the archived spec dir is byte-identical to `origin/main`'s (`git diff origin/main:<old-dir> HEAD:<archived-dir>` empty) — boxes were not ticked.
-- AC7 `[[ ! -d knowledge-base/project/specs/feat-one-shot-7695-inngest-volume-recut-luks ]]` and exactly one `knowledge-base/project/specs/archive/*feat-one-shot-7695-inngest-volume-recut-luks` directory exists.
+- AC7 `[[ ! -d knowledge-base/project/specs/feat-one-shot-7695-inngest-volume-recut-luks ]]` and `find knowledge-base/project/specs/archive -maxdepth 1 -type d -name '*feat-one-shot-7695-inngest-volume-recut-luks' | wc -l` → `1` (a `find`, not `ls 2>&1 | wc -l`, which counts the no-such-file line as 1).
 - AC8 `knowledge-base/project/plans/2026-09-10-fix-inngest-probe-schema-8-mount-devid-plan.md` and `knowledge-base/project/specs/feat-one-shot-8017-8015-8013-probe-schema-8/` still exist unarchived (#8013 open); `[[ ! -e knowledge-base/project/plans/2026-09-07-fix-inngest-bootstrap-pin-and-guard-hardening-plan.md && ! -d knowledge-base/project/specs/feat-one-shot-7695-inngest-image-pin-probe-schema ]]` and exactly one archived copy of each exists, byte-identical to `origin/main`'s (`git diff origin/main:<old-path> HEAD:<archived-path>` empty).
 - AC9 `specs/<branch>/measurements.md` exists, non-empty, and contains `cutover_flag=done`, `redis_keys=`, `probe_schema=8`, `data_mount_devid=scsi-0HC_Volume_106261946`, `registry_fns=`, a line matching `grep -E '"id": ?106261946'`, and the `inngest-host-not-serving-7674.sh` `PASS` line.
 - AC10 `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 on the branch.
-- AC11 Diff scope: every path in `git diff --name-only origin/main...HEAD` matches one of `knowledge-base/engineering/operations/runbooks/inngest-server.md`, `knowledge-base/engineering/architecture/decisions/ADR-100-*.md`, `knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md` (delete side), `knowledge-base/project/plans/archive/*`, `knowledge-base/project/specs/archive/*`, `knowledge-base/project/specs/feat-one-shot-7695-inngest-volume-recut-luks/*` (delete side), `knowledge-base/project/plans/2026-09-07-fix-inngest-bootstrap-pin-and-guard-hardening-plan.md` (delete side), `knowledge-base/project/specs/feat-one-shot-7695-inngest-image-pin-probe-schema/*` (delete side), `knowledge-base/project/specs/feat-one-shot-7695-recut-postcutover-reconcile/*`, `knowledge-base/project/plans/2026-09-18-chore-inngest-recut-postcutover-reconcile-plan.md`, `knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt`, `knowledge-base/project/learnings/*`.
+- AC11 Diff scope (run with `--no-renames` so the archive moves list BOTH sides; default rename detection would print only the destination): every path in `git diff --no-renames --name-only origin/main...HEAD` matches one of `knowledge-base/engineering/operations/runbooks/inngest-server.md`, `knowledge-base/engineering/architecture/decisions/ADR-100-*.md`, `knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md` (delete side), `knowledge-base/project/plans/archive/*`, `knowledge-base/project/specs/archive/*`, `knowledge-base/project/specs/feat-one-shot-7695-inngest-volume-recut-luks/*` (delete side), `knowledge-base/project/plans/2026-09-07-fix-inngest-bootstrap-pin-and-guard-hardening-plan.md` (delete side), `knowledge-base/project/specs/feat-one-shot-7695-inngest-image-pin-probe-schema/*` (delete side), `knowledge-base/project/specs/feat-one-shot-7695-recut-postcutover-reconcile/*`, `knowledge-base/project/plans/2026-09-18-chore-inngest-recut-postcutover-reconcile-plan.md`, `knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt`, `knowledge-base/project/learnings/*`.
 - AC12 `comm -12 <(git diff --name-only origin/main...HEAD | sort) <(gh pr diff 8248 --name-only | sort)` prints nothing other than `knowledge-base/INDEX.md` and/or `knowledge-base/kb-tags.txt`; the PR body names the overlap.
-- AC13 `gh pr view <PR> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]|sort'` → `[7695,8015,8017]`.
-- AC14 The PR body contains no `Closes #` other than those three (`grep -oE 'Closes #[0-9]+' | sort -u` → exactly 3 lines).
+- AC13 `gh pr view 8314 --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]|sort'` → `[7695,8015,8017]` (gh's `--jq` prints compact JSON, measured).
+- AC14 The PR body contains no closing keyword for any other issue (`grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | sort -u` → exactly the three, any case).
+- AC15 `git diff --no-renames --name-only origin/main...HEAD | grep -c 'cloud-init-inngest.yml'` → `0` (restated from AC11 for the brief's explicit prohibition).
 
 ### Post-merge (postmerge skill — all automatable, no operator step)
 
 - AC16 `gh issue view 7695 --json state --jq .state` → `CLOSED`; same for 8017 and 8015.
 - AC17 `gh issue view 8078 --json labels --jq '[.labels[].name]'` contains `priority/p3-low` and not `priority/p1-high`; `gh issue view 7777 …` contains `domain/engineering` and not `domain/legal`.
-- AC18 `gh issue view 8316 --json state,body --jq '[.state, (.body|test("#8285")), (.body|test("Until the host is replaced"))]'` → `["OPEN",true,true]`; `gh pr view 8248 --json comments --jq '[.comments[].body] | map(test("#8316")) | any'` → `true`.
-- AC19 The verdict comment is the LAST comment on #7695 at merge time and after (`gh issue view 7695 --json comments --jq '.comments[-1].body'` contains `superseded`, `closes on merge of PR #8314`, and `data_mount_devid=scsi-0HC_Volume_106261946`); the last comments on #8017 and #8015 contain `data_mount_devid=scsi-0HC_Volume_106261946` and `registry_fns=` respectively.
+- AC18 `gh issue view 8316 --json state,body --jq '[.state, (.body|test("#8285(\\D|$)")), (.body|test("Until the host is replaced"))]'` → `["OPEN",true,true]`; `gh pr view 8248 --json comments --jq '[.comments[].body] | map(test("#8316(\\D|$)")) | any'` → `true`.
+- AC19 The verdict comment is the LAST comment on #7695 at merge time and after (`gh api repos/jikig-ai/soleur/issues/7695/comments --paginate --jq 'last.body'` — `gh issue view --json comments` caps at 100 — contains `superseded`, `closes on merge of PR #8314`, and `data_mount_devid=scsi-0HC_Volume_106261946`); the last comments on #8017 and #8015 contain `data_mount_devid=scsi-0HC_Volume_106261946` and `registry_fns=` respectively.
 
 ## Risks & Mitigations
 

@@ -37,8 +37,10 @@ Tick a box only after running its check in this session.
       anchor text byte-intact); rewrite the `The latch clears only when` remediation sentence with
       the precondition (measured-empty store) before the mechanism, keeping `op=resume` is not it.
 - [ ] 1.1 Prefix the 2026-08-25 blockquote's lazy-continuation lines with `> `, then insert the
-      paste-ready callout from plan § Phase 1.1c after them (G19 first; rollback is one-way;
-      `FLUSH_LATCH_SINCE` has no application; "dormant on this volume", never "retired").
+      paste-ready callout from plan § Phase 1.1c after them, every line `>`-prefixed (G19 first;
+      rollback is one-way; `FLUSH_LATCH_SINCE` has no application; every value names its read —
+      `inngest-host-state.sh`, Doppler `INNGEST_CUTOVER_FLIP`, Hetzner `GET /v1/volumes/106261946`,
+      `gh run view 34948112813`; "dormant on this volume", never "retired").
 - [ ] 1.2 Add the Quick-reference row (plan § Phase 1.2).
 - [ ] 1.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` → `OK`.
 
@@ -62,14 +64,15 @@ Tick a box only after running its check in this session.
 - [ ] 4.1 `gh issue view 8316 --json state` → OPEN (already filed; do not file a second).
 - [ ] 4.2 Comments + relabels: #8078 (p1→p3, link #8316), #7777 (bound scope, clause-2 cross-link,
       `domain/legal` → `domain/engineering`); edit #8316 body (`Ref #8285`, ADR-199 §Consequences
-      anchor, G8 wording); one comment on PR 8248 naming #8316. No comment on #8018.
-- [ ] 4.3 Verdict comments on #7695, #8017, #8015 quoting `measurements.md` fields, each ending
-      "closes on merge of PR #8314".
+      anchor, `model.c4` `inngestRedis` description anchor, G8 wording); one comment on PR 8248
+      naming #8316. No comment on #8018.
+- [ ] 4.3 Verdict comments on #7695, #8017, #8015 quoting `measurements.md` fields with the read that
+      produced each beside it, each ending "closes on merge of PR #8314".
 - [ ] 4.4 Draft PR body; `grep -oE 'Closes #[0-9]+' <draft> | sort -u` → exactly 7695/8015/8017
       BEFORE `gh pr edit --body`; then `gh pr view 8314 --json closingIssuesReferences` → the three.
       Body names the INDEX.md / kb-tags.txt overlap with PR 8248.
 
 ## Phase 5: Verification
 
-- [ ] 5.1 AC1–AC14 from the plan, each run and recorded.
+- [ ] 5.1 AC1–AC15 from the plan, each run and recorded (AC16–AC19 are post-merge).
 - [ ] 5.2 `bash scripts/test-all.sh` at the /ship full-battery checkpoint.
