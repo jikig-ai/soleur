@@ -639,8 +639,17 @@ assert "26a a specs-only checkout is in scope" '[[ -n "$OUT" ]]'
 #     unrelated housekeeping step.
 ARTIFACT="$SANDBOX/artifactrepo"
 mkdir -p "$ARTIFACT/knowledge-base/project/plans"
-git -C "$ARTIFACT" init -q >/dev/null 2>&1
-git -C "$ARTIFACT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i >/dev/null 2>&1
+# Every git WRITE in this suite goes through git_fixture_env, in a subshell so the
+# ceiling/identity/config exports it makes do not leak into the shell that runs
+# the hook under test (which must see the environment it actually runs in). The
+# fixture-env-adoption ratchet counts shell suites that init/commit with no
+# builder; a hand-rolled `env -u GIT_DIR ...` is exactly the per-file copy
+# #7833 says not to write, and was the one that lost data.
+(
+  git_fixture_env "$ARTIFACT" || exit 1
+  git -C "$ARTIFACT" init -q
+  git -C "$ARTIFACT" commit -q --allow-empty -m i
+) >/dev/null 2>&1 || echo "WARN: scenario 22 fixture repo not built" >&2
 _ab="$(git -C "$ARTIFACT" symbolic-ref --short -q HEAD 2>/dev/null || echo main)"
 : > "$ARTIFACT/knowledge-base/project/plans/2026-01-01-${_ab}-plan.md"
 mkdir -p "$ARTIFACT/knowledge-base/project/specs/${_ab}"
@@ -710,9 +719,12 @@ assert "26k so no stale trigger is committed into the new window" '! has_ctx "tr
 #     preserves inside the string the model reads.
 sid=s26k
 EVIL="$SANDBOX/evilrepo"; mkdir -p "$EVIL/knowledge-base/project/plans"
-git -C "$EVIL" init -q >/dev/null 2>&1
-git -C "$EVIL" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i >/dev/null 2>&1
-git -C "$EVIL" checkout -q -b 'evil;$(id)|x' >/dev/null 2>&1
+(
+  git_fixture_env "$EVIL" || exit 1
+  git -C "$EVIL" init -q
+  git -C "$EVIL" commit -q --allow-empty -m i
+  git -C "$EVIL" checkout -q -b 'evil;$(id)|x'
+) >/dev/null 2>&1 || echo "WARN: scenario 26 hostile-branch repo not built" >&2
 run_hook "$(ss_env startup "$sid" "$EVIL")"
 compact_cycle auto "$sid" "$EVIL"
 assert "26l shell metacharacters are stripped from the branch" '! has_ctx "[;|$]"'
@@ -823,10 +835,14 @@ assert "28k and it exited on its own, not on the outer timeout" \
 DROOT="$SANDBOX/detached-root"
 mkdir -p "$DROOT/knowledge-base/project/plans" "$DROOT/knowledge-base/project/specs/unknown"
 : > "$DROOT/knowledge-base/project/specs/unknown/spec.md"
-( cd "$DROOT" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git init -q . \
-  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.email=t@t -c user.name=t add -A \
-  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.email=t@t -c user.name=t commit -qm init \
-  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git checkout -q --detach ) >/dev/null 2>&1
+(
+  cd "$DROOT" || exit 1
+  git_fixture_env "$DROOT" || exit 1
+  git init -q .
+  git add -A
+  git commit -qm init
+  git checkout -q --detach
+) >/dev/null 2>&1 || echo "WARN: scenario 28 detached-HEAD repo not built" >&2
 sid=s28d
 printf 'auto\n' > "$TMPDIR/soleur-compaction/$sid.pending" 2>/dev/null || true
 run_hook "$(ss_env compact "$sid" "$DROOT")"
