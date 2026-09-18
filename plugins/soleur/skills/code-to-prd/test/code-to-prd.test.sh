@@ -104,27 +104,9 @@ assert_file_absent() {
 # under CI=true, where the runner must provide gitleaks (ADR-188). The probe
 # mirrors the script's: timeout -> gtimeout -> bare.
 # ---------------------------------------------------------------------------
-GL_OK=0
-GL_REASON="gitleaks not on PATH"
-if command -v gitleaks >/dev/null 2>&1; then
-  gl_to=()
-  if command -v timeout >/dev/null 2>&1; then gl_to=(timeout 10)
-  elif command -v gtimeout >/dev/null 2>&1; then gl_to=(gtimeout 10); fi
-  gl_rc=0
-  gl_err="$( { ${gl_to[@]+"${gl_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_rc=$?
-  if (( gl_rc == 0 )); then GL_OK=1
-  else GL_REASON="gitleaks not runnable (rc=${gl_rc}, $(printf '%q' "${gl_err%%$'\n'*}"))"; fi
-fi
-SKIPPED=()
-_skip_arm() {  # $1 = arm label, $2 = reason
-  SKIPPED+=("$1")
-  echo "SKIP — code-to-prd.test: $1 — $2. CI pins gitleaks 8.24.2 — install that version or pin it in your version manager."
-}
-_needs_gl() {
-  [[ "${GL_OK}" == 1 ]] && return 0
-  _skip_arm "$1" "${GL_REASON}"
-  return 1
-}
+# shellcheck source=../../../../test/lib/gitleaks-probe.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../test/lib" && pwd -P)/gitleaks-probe.sh"
+gl_probe
 
 # A PATH that contains every executable on the current PATH EXCEPT gitleaks,
 # timeout and gtimeout, plus a gitleaks STUB of the given mode. Dropping PATH
@@ -422,15 +404,43 @@ assert_grep_fixed "AC5d: new PRD written" "## Coverage Caveats" "${SC_OUT}"
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+# CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
+# contract is the only thing stopping the skipped arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail would
+# drop it silently and the shard would stay green. Extracted between the markers
+# and driven through a three-row truth table, so a mutation to the SHIPPED code
+# (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    echo "FAIL: CI fail-on-skip contract — epilogue markers matched nothing — the extraction is broken, not the contract"; FAIL=$((FAIL + 1))
+    return
+  fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then echo "FAIL: CI fail-on-skip contract — CI=true with skips did not exit 1"; FAIL=$((FAIL + 1)); return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then echo "FAIL: CI fail-on-skip contract — a local skip (no CI) exited 1"; FAIL=$((FAIL + 1)); return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then echo "FAIL: CI fail-on-skip contract — CI=true with no skips exited 1"; FAIL=$((FAIL + 1)); return; fi
+  echo "PASS: CI fail-on-skip contract (3-row truth table on the real epilogue)"; PASS=$((PASS + 1))
+}
+_t_ci_contract
+
+# >>> ci-contract-epilogue
 echo "---"
-echo "PASS=${PASS} FAIL=${FAIL} SKIPPED_ARMS=${#SKIPPED[@]}"
-if (( ${#SKIPPED[@]} > 0 )); then
-  printf '  skipped: %s\n' "${SKIPPED[@]}"
+echo "PASS=${PASS} FAIL=${FAIL} SKIPPED_ARMS=${#SKIPPED_ARMS[@]}"
+if (( ${#SKIPPED_ARMS[@]} > 0 )); then
+  printf '  skipped: %s\n' "${SKIPPED_ARMS[@]}"
   if [[ "${CI:-}" == "true" ]]; then
-    echo "CI=true: ${#SKIPPED[@]} arm(s) could not run because gitleaks is not runnable on this runner — a FAILURE, not a skip (the runner must provide gitleaks 8.24.2)." >&2
+    echo "CI=true: ${#SKIPPED_ARMS[@]} arm(s) could not run because gitleaks is not runnable on this runner — a FAILURE, not a skip (the runner must provide gitleaks 8.24.2)." >&2
     exit 1
   fi
 fi
+# <<< ci-contract-epilogue
 if (( FAIL > 0 )); then
   exit 1
 fi

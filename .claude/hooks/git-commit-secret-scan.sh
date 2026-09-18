@@ -125,6 +125,23 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   allow
 fi
 
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  emit git-commit-secret-scan bypass "not inside git work tree"
+  allow
+fi
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+if [ -z "$repo_root" ] || [ ! -f "$repo_root/.gitleaks.toml" ]; then
+  echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root — skipping scan." >&2
+  emit git-commit-secret-scan bypass ".gitleaks.toml absent"
+  allow
+fi
+
+# Placed AFTER the cheap repo/config guards on purpose: the probe spawns
+# timeout+gitleaks and costs ~400 ms (measured). Above them it paid that on
+# EVERY `git commit`, including ones outside a repo or in a repo with no
+# .gitleaks.toml — calls that exit without ever scanning.
+
 # RESOLVABLE IS NOT RUNNABLE (#8266). `command -v` only proves the name resolves;
 # an unpinned mise shim resolves and exits non-zero on every call. Probe by
 # running the tool. Bound it with timeout when one exists — stock macOS has
@@ -165,18 +182,6 @@ if [ "$gl_probe_rc" -ne 0 ]; then
   printf '[git-commit-secret-scan] WARN: gitleaks is on PATH but cannot run (rc=%s, %q) — skipping scan. %s\n' \
     "$gl_probe_rc" "${gl_probe_err%%$'\n'*}" "$GL_REMEDIATION" >&2
   emit git-commit-secret-scan bypass "gitleaks unrunnable (rc=$gl_probe_rc)"
-  allow
-fi
-
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  emit git-commit-secret-scan bypass "not inside git work tree"
-  allow
-fi
-
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-if [ -z "$repo_root" ] || [ ! -f "$repo_root/.gitleaks.toml" ]; then
-  echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root — skipping scan." >&2
-  emit git-commit-secret-scan bypass ".gitleaks.toml absent"
   allow
 fi
 

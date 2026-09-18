@@ -64,24 +64,11 @@ WORKFLOW="$REPO_ROOT/.github/workflows/secret-scan.yml"
 # Runnability probe — runs the binary; `command -v` alone certifies a shim that
 # cannot scan. `timeout` is optional (stock macOS lacks it and gtimeout).
 SUITE="gitleaks-merge-commit"
-HAVE_GITLEAKS=1
-GITLEAKS_REASON=""
-_probe_err=$(mktemp)
-TO=(); if command -v timeout >/dev/null 2>&1; then TO=(timeout 10); elif command -v gtimeout >/dev/null 2>&1; then TO=(gtimeout 10); fi
-_probe_rc=0
-${TO[@]+"${TO[@]}"} gitleaks version >/dev/null 2>"$_probe_err" || _probe_rc=$?
-if [[ "$_probe_rc" != "0" ]]; then
-  HAVE_GITLEAKS=0
-  GITLEAKS_REASON="gitleaks is not runnable here (rc=$(printf '%q' "$_probe_rc"), $(printf '%q' "$(head -n1 "$_probe_err")"))"
-fi
-rm -f "$_probe_err"
+# shellcheck source=lib/gitleaks-probe.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/gitleaks-probe.sh"
+gl_probe
 
 # Per-ARM skip. See the header: CI=true turns any skip into exit 1 at the end.
-SKIPPED_ARMS=()
-_skip_arm() {
-  echo "SKIP — $1 — $2. CI pins gitleaks 8.24.2 — install that version or pin it in your version manager."
-  SKIPPED_ARMS+=("$1")
-}
 
 PASS=0
 FAIL=0
@@ -528,8 +515,35 @@ else
   fail "a PR/merge_group step uses '-m BASE..HEAD' ($pr_dash_m) — coupling is confirmed above"
 fi
 
+# CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
+# contract is the only thing stopping the skipped arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail would
+# drop it silently and the shard would stay green. Extracted between the markers
+# and driven through a three-row truth table, so a mutation to the SHIPPED code
+# (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    fail "CI fail-on-skip contract — epilogue markers matched nothing — the extraction is broken, not the contract"
+    return
+  fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then fail "CI fail-on-skip contract — CI=true with skips did not exit 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — a local skip (no CI) exited 1"; return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then fail "CI fail-on-skip contract — CI=true with no skips exited 1"; return; fi
+  pass "CI fail-on-skip contract (3-row truth table on the real epilogue)"
+}
+_t_ci_contract
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="
+# >>> ci-contract-epilogue
 if [[ "${#SKIPPED_ARMS[@]}" -gt 0 ]]; then
   echo "Skipped arms (gitleaks not runnable):"
   printf '  - %s\n' "${SKIPPED_ARMS[@]}"
@@ -538,4 +552,5 @@ if [[ "${#SKIPPED_ARMS[@]}" -gt 0 ]]; then
     exit 1
   fi
 fi
+# <<< ci-contract-epilogue
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

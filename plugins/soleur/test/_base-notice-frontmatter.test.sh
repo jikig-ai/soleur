@@ -341,40 +341,13 @@ echo ""
 # A read that is not `digits.digits` makes the CASE FAIL, never pass: under a
 # comma-radix locale or an old bash (unset EPOCHREALTIME) a lenient parse would
 # compute a zero or garbage elapsed time and `< 6 s` would pass vacuously.
-# _epoch_to_us <value> -> integer microseconds on stdout; rc 1 and no output
-# when <value> is not digits.digits.
-_epoch_to_us() {
-  [[ "$1" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
-  echo $(( ${1%.*} * 1000000 + 10#${1#*.} ))
-}
-# _wall_verdict <start> <end> <limit_us> -> "PASS" when both reads parse and
-# end - start < limit_us; otherwise "FAIL (<why>)". Always exits 0 so a caller
-# under `set -e` records the verdict instead of aborting.
-_wall_verdict() {
-  local s_us e_us
-  if ! s_us=$(_epoch_to_us "$1") || ! e_us=$(_epoch_to_us "$2"); then
-    printf 'FAIL (unparseable EPOCHREALTIME: start=%q end=%q)' "$1" "$2"
-    return 0
-  fi
-  if (( e_us - s_us < $3 )); then
-    echo "PASS"
-  else
-    echo "FAIL (elapsed $(( e_us - s_us ))us >= $3us)"
-  fi
-}
+# Wall-clock parser + its own contract rows, shared with the sibling suite.
+# Both files carried a byte-identical ~45-line copy; they have a documented
+# two-PR drift history, so there is now one copy.
+# shellcheck source=lib/wall-clock.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/wall-clock.sh"
+_wall_clock_self_test
 
-# The parser's own contract, before it is trusted with the real measurement.
-# Row 3 is the one that matters: a comma radix must FAIL the case.
-echo "TS-cron-5-parser: elapsed-time parser rejects what it cannot read"
-assert_eq "PASS" "$(_wall_verdict "100.000000" "101.500000" 6000000)" \
-  "parser: 1.5s elapsed under a 6s limit passes (positive control)"
-assert_eq "FAIL (elapsed 7000000us >= 6000000us)" "$(_wall_verdict "100.000000" "107.000000" 6000000)" \
-  "parser: 7s elapsed over a 6s limit fails"
-assert_eq "FAIL (unparseable EPOCHREALTIME: start=12\,5 end=13\,5)" "$(_wall_verdict "12,5" "13,5" 6000000)" \
-  "parser: comma-radix reads FAIL the case, never pass it"
-assert_eq "FAIL (unparseable EPOCHREALTIME: start='' end=101.000000)" "$(_wall_verdict "" "101.000000" 6000000)" \
-  "parser: an empty read (EPOCHREALTIME unset, bash < 5) fails the case"
-echo ""
 
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).

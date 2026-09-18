@@ -78,30 +78,9 @@ _mk_pem() {
 # (ADR-188; "a guard that can silently disarm must FAIL in CI and SKIP only
 # locally"). The probe mirrors the hook's: timeout -> gtimeout -> bare, so a
 # host without GNU timeout (stock macOS) is not misread as "unrunnable".
-GL_OK=0
-GL_REASON=""
-_gl_probe() {
-  local to=() errf rc=0
-  if ! command -v gitleaks >/dev/null 2>&1; then GL_REASON="gitleaks not on PATH"; return; fi
-  if command -v timeout >/dev/null 2>&1; then to=(timeout 10)
-  elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout 10); fi
-  errf=$(mktemp); _TMP_DIRS+=("$errf")
-  ${to[@]+"${to[@]}"} gitleaks version >/dev/null 2>"$errf" || rc=$?
-  if (( rc == 0 )); then GL_OK=1; return; fi
-  GL_REASON="gitleaks not runnable (rc=$rc, $(printf '%q' "$(head -1 "$errf")"))"
-}
-_gl_probe
-
-SKIPPED=()
-_skip_arm() {  # $1 = arm label, $2 = reason
-  SKIPPED+=("$1")
-  echo "SKIP — git-commit-secret-scan.test: $1 — $2. CI pins gitleaks 8.24.2 — install that version or pin it in your version manager."
-}
-_needs_gl() {  # return 1 (after recording a skip) when no runnable gitleaks
-  [[ "$GL_OK" == 1 ]] && return 0
-  _skip_arm "$1" "$GL_REASON"
-  return 1
-}
+# shellcheck source=../../plugins/soleur/test/lib/gitleaks-probe.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/gitleaks-probe.sh"
+gl_probe
 
 # Build a PATH from symlinks to the tools the hook needs, WITHOUT gitleaks and
 # WITHOUT timeout/gtimeout. Dropping one PATH entry cannot remove a tool that
@@ -152,6 +131,12 @@ STUB
 _run_stub() {
   local cwd="$1" pd="$2" errf payload
   errf=$(mktemp); _TMP_DIRS+=("$errf")
+  # Watermark the incident journal BEFORE the hook appends to it, so _last_prefix
+  # reads only THIS invocation's rows. A suite-global `tail -1` made the arms
+  # order-coupled: they passed only because each happened to expect a different
+  # prefix than its predecessor left, so inserting a case between them could make
+  # an arm assert on a row it did not produce.
+  _JOURNAL_MARK=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
   payload=$(jq -nc '{tool_name: "Bash", tool_input: {command: "git commit -m x"}}')
   OUT=$(cd "$cwd" && env PATH="$pd" CLAUDE_PROJECT_DIR="$REPO_ROOT" "$pd/bash" "$HOOK" \
           <<<"$payload" 2>"$errf") || true
@@ -159,10 +144,14 @@ _run_stub() {
 }
 
 # The last git-commit-secret-scan incident prefix the hook emitted.
+# The last git-commit-secret-scan incident prefix THIS invocation emitted — rows
+# at or below the watermark _run_stub recorded are a previous case's and ignored.
 _last_prefix() {
   local f="$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl"
   [[ -f "$f" ]] || { echo "<no incidents file>"; return; }
-  jq -r 'select(.rule_id == "git-commit-secret-scan") | .rule_text_prefix' "$f" | tail -1
+  tail -n "+$(( ${_JOURNAL_MARK:-0} + 1 ))" "$f" \
+    | jq -r 'select(.rule_id | startswith("git-commit-secret-scan")) | .rule_text_prefix' \
+    | tail -1
 }
 
 _mk_repo_with_toml() {  # prints a temp repo with .gitleaks.toml + a staged file
@@ -517,12 +506,70 @@ _t_colour_denies color.diff
 _t_nodiff_attr withsecret deny
 _t_nodiff_attr clean allow
 
-echo "=== $pass passed, $fail failed, ${#SKIPPED[@]} arm(s) skipped ==="
-if (( ${#SKIPPED[@]} > 0 )); then
-  printf '  skipped: %s\n' "${SKIPPED[@]}"
+# T19: the CI fail-on-skip contract, asserted against the epilogue's REAL BYTES.
+# That contract is the only thing stopping 8 arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail, or a
+# `set -e` interaction returning early, would drop it silently and the shard would
+# stay green. The block is extracted between the markers below and driven through
+# a three-row truth table, so a mutation to the shipped code (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    _report "T19 CI fail-on-skip contract" fail "epilogue markers matched nothing — the extraction is broken, not the contract"
+    return
+  fi
+  # row 1: CI=true AND skips present -> MUST exit 1
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; pass=1; fail=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then
+    _report "T19 CI=true + skips exits 1" fail "rc=$rc"; return
+  fi
+  # row 2: skips present but NOT CI -> must NOT exit 1 (local skip stays a skip)
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; pass=1; fail=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then
+    _report "T19 local skip does not fail" fail "rc=$rc"; return
+  fi
+  # row 3: CI=true but NO skips -> must NOT exit 1
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; pass=1; fail=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then
+    _report "T19 CI=true with no skips does not fail" fail "rc=$rc"; return
+  fi
+  _report "T19 CI fail-on-skip contract (3-row truth table on the real epilogue)" ok
+}
+# Control for the journal watermark: prove _JOURNAL_MARK actually ADVANCES across
+# invocations. Without this the scoping could be inert (a permanently-0 mark is
+# byte-identical to the old suite-global `tail -1`) and every arm would still pass
+# — inert machinery that reads as a fix.
+_t_journal_watermark() {
+  local first="${_JOURNAL_MARK:-unset}" repo pd
+  if [[ "$first" == unset ]]; then
+    _report "T20 journal watermark advances" fail "_JOURNAL_MARK never set — _run_stub did not record it"
+    return
+  fi
+  repo=$(_mk_repo_with_toml); pd=$(_mk_stub_path absent)
+  _run_stub "$repo" "$pd"
+  local second="${_JOURNAL_MARK:-unset}"
+  if [[ "$second" == unset || "$second" -le "$first" ]]; then
+    _report "T20 journal watermark advances" fail "mark did not advance ($first -> $second); _last_prefix is effectively suite-global"
+  else
+    _report "T20 journal watermark advances ($first -> $second)" ok
+  fi
+}
+_t_journal_watermark
+
+_t_ci_contract
+
+# >>> ci-contract-epilogue
+echo "=== $pass passed, $fail failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="
+if (( ${#SKIPPED_ARMS[@]} > 0 )); then
+  printf '  skipped: %s\n' "${SKIPPED_ARMS[@]}"
   if [[ "${CI:-}" == "true" ]]; then
-    echo "CI=true: ${#SKIPPED[@]} arm(s) could not run because gitleaks is not runnable on this runner — a FAILURE, not a skip (the runner must provide gitleaks 8.24.2)." >&2
+    echo "CI=true: ${#SKIPPED_ARMS[@]} arm(s) could not run because gitleaks is not runnable on this runner — a FAILURE, not a skip (the runner must provide gitleaks 8.24.2)." >&2
     exit 1
   fi
 fi
+# <<< ci-contract-epilogue
 [[ "$fail" -eq 0 ]]
