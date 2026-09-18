@@ -187,7 +187,7 @@ routine run binds the current default once; retries retain that binding.
   - [x] 2026-09-16 code-level GDPR gate: added the Article 30 lawful-basis and retention criteria to migration 138; Art. 17 anonymization/callsite checks pass and no Art. 9 column match was found. Migration tests pass 7/7.
   - [ ] Provider DPA/terms, transfer geography, retention/erasure evidence, and CLO disposition remain pending for both auth modes; customer content remains disabled.
 - [ ] Synthetic-only qualification, feature flag, bounded live probes, QA and screenshots; customer content remains disabled without evidence.
-- [ ] Run appropriate suites/lint/typecheck/build after all GREEN tasks.
+- [x] Run appropriate suites/lint/typecheck/build after all GREEN tasks: repo-wide 64 files/1,158 tests, component shards 242 files/2,047 tests, Codex 95/95, legal-scope 65/65, guardrails 123/123, notice-frontmatter 36+44 passed, scratch-root passed, ESLint and TypeScript passed.
 - [ ] Review, QA, compound, ship and required postmerge checks.
 - [ ] Local verification follow-up: safely parallelize independent `test-all.sh` suites; tracked in #8231. CI shard parallelism remains the reference model.
 

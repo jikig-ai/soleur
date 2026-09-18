@@ -186,6 +186,8 @@ path alone cannot show that replay drift is visible.
 
 81. After the initial storage fallback, `sessionStorage` still retained happy-dom's separate prototype, so `Storage.prototype.setItem` spies missed debounced ChatInput writes even though persistence worked. Normalizing both storage globals to the same prototype made the final component shard pass. **Prevention:** when providing browser API fallbacks, align the object prototype with the constructor tests and application code use for every related global.
 
+82. A task-ledger patch used the worktree path without the repository namespace and failed before changing files. **Prevention:** copy absolute paths from the active worktree context rather than abbreviating `/data/git-repositories/jikig-ai/soleur`.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
