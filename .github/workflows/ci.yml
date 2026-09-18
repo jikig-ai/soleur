@@ -498,6 +498,31 @@ jobs:
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
 
+  # Per-file byte ceiling for lifecycle SKILL.md bodies, anchored to the MERGE
+  # BASE (#8302, ADR-225). Deliberately NOT a step in the `bun` job beside the
+  # existing SKILL_DESCRIPTION_WORD_BUDGET: that job declares no fetch-depth, so
+  # at depth 1 origin/main is not a ref, the base read fails on EVERY run, and any
+  # working-tree fallback is permanently fail-open — which would degrade this
+  # guard into the 14-bump changelog it exists to replace. It sits here, in the
+  # rule-body-lint shape, because that shape is the one that actually provides a
+  # base. Base-unavailable is a hard failure, never a skip.
+  skill-body-budget:
+    # 15m — the guard is a single pass over 7 files plus one `git show`; this
+    # matches the rule-body-lint sibling rather than being separately measured.
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Lifecycle SKILL.md byte ratchet (#8302)
+        run: |
+          git fetch --no-tags --quiet origin main
+          BASE="$(git merge-base origin/main HEAD)"
+          python3 scripts/lint-skill-body-budget.py --base "$BASE"
+      - name: Guard's own suite
+        run: bash scripts/lint-skill-body-budget.test.sh
+
   # Regenerates apps/web-platform/package-lock.json under a pinned npm
   # major and diffs against the committed file. Catches the `bun add`
   # defect class (package.json changes without lockfile sync) AND the
