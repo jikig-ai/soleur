@@ -504,3 +504,40 @@ fails the plan against its own matrix, which is how this should have been caught
 
 Consolidation with the five remaining panel agents is pending; `tasks.md` is deliberately not
 generated, because a task breakdown derived from these phases would be stale on arrival.
+
+### Consolidated panel findings (4 of 6 returned; all four say do not implement)
+
+Both **simplification** agents (DHH, code-simplicity) and both **correctness/strategy** agents
+(Kieran, CTO) fired on the same scope. Per `plan-review`'s own rule — *when both panels fire on
+the same scope, prefer delete over fix* — the mechanism is the problem, not its parameters.
+
+**Verified independently by me before acceptance. Each row is a command I ran.**
+
+| # | Finding | Status |
+| --- | --- | --- |
+| F1 | **The originating defect passes the gate.** `/soleur:trigger-cron` — the exact Claude-only form that motivated #8299 — lives in `gdpr-gate:270`, `incident:39`, `product-roadmap:36`. All three are trigger-bearing with no block, so all three are in the 34 backfill, gain a block, and score **QUALIFIED**. The offending line is never examined | **CONFIRMED** |
+| F2 | **`ship/SKILL.md` scores QUALIFIED while dispatching Claude-only** at `:504` (`skill: soleur:preflight` via the Skill tool). The block is an *inbound* self-invocation contract; P1 quantifies over *outbound* instructions. Different things | **CONFIRMED** |
+| F3 | **Three spawn-site skills score AUTO-EXEMPT.** `plan-review` (5 `@agent-` spawns), `resolve-parallel`, `resolve-pr-parallel` all match **0** of the 12 trigger alternatives. They ship silently exempt on day one — P1 violated on merge day by the gate's own output | **CONFIRMED** |
+| F4 | **`invokeSkill` as a trigger alternative is circular** — it matches *exactly* the 12 blocked skills, because the block text contains `` `invokeSkill()` ``. Post-backfill the trigger set becomes a function of the census's own output | **CONFIRMED** (`diff` of the two sets is empty) |
+| F5 | **`UNION` is not subsumable.** Only **2 of 20** UNION members carry a `grok-harness-invoke` block; 18 do not. The two markers are near-disjoint populations, and "these 20 skills need cloud-mode" is derivable from nothing in this plan. Phase 6 would delete a live property and AC5 would not notice | **CONFIRMED** |
+| F6 | **`harness-model-map.test.ts:76` is `["claude","grok"]` — two-harness by design**, because `TIER_MAPS` has only those keys. Repointing it at `SUPPORTED_HARNESSES` would route codex/devin through a fallback and assert nothing. My own Research Insights said `TIER_MAPS` is claude/grok-only *two lines before* calling this a 4-harness literal. Exactly **one** real 4-harness literal exists (`workflow-fidelity.test.ts`) | **CONFIRMED** |
+| F7 | **AC11 already fails on its own prose.** `git diff origin/main...HEAD \| grep -c 'PLUGIN_ROOT:-'` → **9**, because this plan, the spec, the brainstorm and the learning all discuss the banned form (NG2 requires them to). Two of the nine are AC11's own lines. Also `grep -c` exits 1 on no match, breaking any `&&` chain | **CONFIRMED** |
+| F8 | **AC7 is not an assertion.** `git grep -c` over multiple pathspecs emits `path:count` per file with no total, and the AC has no comparison operator. `"codex"` is a bare token (`cq-assert-anchor-not-bare-token`) that legitimately appears in four single-harness test files | **CONFIRMED** |
+| F9 | **The mutation matrix asserts the exit code, not the reason.** ADR-193's highest-value section is titled *"Why the mutation oracle asserts the REASON, not the exit code."* M2/M6 add a skill directory, which independently reddens `components.test.ts` and the manifest — so AC3's "one line per row" is satisfiable by a red caused entirely by an unrelated gate | **CONFIRMED** |
+| F10 | **I scoped ADR-193 out for Decision 1 and in for Decision 5 using the same argument.** If out-of-population defeats Decision 1, it defeats Decision 5 identically — and Decision 5 was the sole cited authority for the `UNION` deletion | **CONCEDED** |
+| F11 | **`cq-test-fixtures-synthesized-only` is miscited.** It is a *secret-scan* rule over three specific globs, and `plugins/soleur/test/fixtures/` is not among them. I borrowed a rule id for its name rather than its text — the same inherited-framing habit this session's learning is about. The placement conclusion still stands on the real `fixture-*-assert.baseline.txt` precedent | **CONCEDED** |
+| F12 | **`harness.ts` has 4 lib importers, not 3** — I missed `lib/go-routing.ts`, which imports `invokeSkill`/`spawnAgent` as *values*. "3" was true of the `Harness` **type** only, plus 8 test files | **CONFIRMED** |
+| F13 | **ADR-225 is double-booked on TWO remote refs** (`feat-one-shot-adr142-…` and `feat-pluggable-web-agent-engines`). Whichever lands second must retake 226 and will collide with this plan | **CONFIRMED** |
+| F14 | **The floors collapse algebraically.** With POPULATION exact and `QUALIFIED ⊆ TRIGGER` (measured: zero block-without-trigger skills), the auto-exempt ceiling **≡** the trigger-count floor, and the QUALIFIED floor reduces to *"the ledger is empty."* Four floors are two assertions; one exact snapshot catches M1/M2/M3/M6/M9 **and** over-matching, which no floor does | **CONFIRMED** |
+| F15 | **The ledger ships with zero rows** — AC2 enumerates 46 + 52 = 98 with no EXEMPT bucket. A TSV, a strict fail-closed parser, a floor, M7, M8 and H4 all exist to represent nothing | **CONFIRMED** |
+| F16 | **The block has a measured 8.3% born-drift rate.** `git log -S` dates all 12 blocks to one commit, `949872534` (2026-09-12) — and `one-shot` diverged *in that same commit*, one author, full attention. Extrapolated to 46 hand-written copies: ~4 divergences at authoring time. The generator pattern (`sync-grok-agent-compat.ts` + `--check`, already CI-gated in this very test directory) is the established alternative | **CONFIRMED** |
+| F17 | **`## Observability` cites layer 7 for a CI-only gate.** Layer 7 is a property of the *execution* surface and requires a stdout marker paired with a durable committed artifact; this census runs in Soleur's CI. All four listed failure modes are gate-self-failures. The one genuine layer-7 mode — *the block names a Codex or Devin form that does not resolve* — appears in `## User-Brand Impact` and **nowhere** in `failure_modes:`, because nothing detects it: only grok (`ci.yml:1320 grok-fidelity`) and claude have live verification | **CONFIRMED** |
+| F18 | **P1's own disjunct makes the harness apparatus dead.** P1 says "names each form **or cites the adapter**." All **12/12** blocks cite `lib/harness.ts`. So either adapter-citation suffices — and `SUPPORTED_HARNESSES`-as-census-input, M5, H3 and "extend the 12" all buy nothing — or enumeration is required, and 0 skills are qualified and every count in the plan is wrong. The plan wants it both ways | **CONFIRMED** |
+
+**What survives review:** born-blocking (zero-for-N is measured and binding); population = `git ls-files`
+over all 98; whole-tree never diff-scoped; `SUPPORTED_HARNESSES` as a two-site union dedup on its own
+merits; and the measurement discipline itself — Kieran independently reproduced 13 of 13 counts.
+
+**What does not:** the carrier, the trigger pattern, the three-verdict model, all four floors, the
+floors file, the ledger, the `UNION` deletion, 8 of 13 matrix rows, and three of the four
+shell-prescribing ACs.
