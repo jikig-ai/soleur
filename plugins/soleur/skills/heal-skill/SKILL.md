@@ -64,6 +64,9 @@ ls -la <skill-dir>/scripts/ 2>/dev/null
 </step_3>
 
 <step_4 name="present_proposed_changes">
+
+- **Name a skill or command as `soleur:<name>` and an agent by its registry id, nothing else** — no slash, dollar or at-sign prefix, no bare agent leaf — the adapter renders the harness form (`formatSkillInvocation` / `spawnAgent`, `plugins/soleur/lib/harness.ts`); a doc that writes one harness's form names a component the other three cannot resolve (ADR-226). If a shell variable or glob collides with a skill name, brace or rename it (`"${work}"`) — never widen the gate's boundary set. `plugins/soleur/test/harness-parity-tree.test.ts` is the gate; `bun plugins/soleur/scripts/harness-parity-census.ts --fix` repairs the mechanical shapes.
+
 Present changes in this format:
 
 ```

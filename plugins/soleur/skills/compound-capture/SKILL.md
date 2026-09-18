@@ -300,11 +300,13 @@ After capturing and cross-referencing the learning, route the insight to the ski
 <!-- markdownlint-disable-next-line MD001 -- h4 under h3 is correct; linter resets at <step> tags -->
 #### 8.1 Detect Active Components
 
+- **Name a skill or command as `soleur:<name>` and an agent by its registry id, nothing else** — no slash, dollar or at-sign prefix, no bare agent leaf — the adapter renders the harness form (`formatSkillInvocation` / `spawnAgent`, `plugins/soleur/lib/harness.ts`); a doc that writes one harness's form names a component the other three cannot resolve (ADR-226). If a shell variable or glob collides with a skill name, brace or rename it (`"${work}"`) — never widen the gate's boundary set. `plugins/soleur/test/harness-parity-tree.test.ts` is the gate; `bun plugins/soleur/scripts/harness-parity-census.ts --fix` repairs the mechanical shapes.
+
 Identify which skills, agents, or commands were invoked in this session by examining the conversation history.
 
 Map detected component names to file paths:
 
-- Skill `foo` -> `plugins/soleur/skills/foo/SKILL.md`
+- Skill `soleur:foo` -> `plugins/soleur/skills/foo/SKILL.md`
 - Agent `soleur:engineering:review:baz` -> `plugins/soleur/agents/engineering/review/baz.md`
 - Command `soleur:bar` -> `plugins/soleur/commands/bar.md`
 
