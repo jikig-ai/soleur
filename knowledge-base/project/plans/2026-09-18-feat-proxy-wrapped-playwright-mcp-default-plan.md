@@ -744,7 +744,7 @@ reach-boundary change a future engineer must find recorded.
 - [x] AC9 — Option-C deferral issue filed (`deferred-scope-out`, `domain/engineering`, `type/security`), referenced from the ADR addendum and this plan's Alternatives table.
 - [x] AC10 — `plugin.json` unchanged unless the Phase-0 probe forced the `engines` bump (then exactly that one key, with the probe record cited in the PR body). `codex-plugin.test.ts` and `devin-plugin.test.ts` green unmodified.
 - [x] AC11 — The diff's file set is a subset of Files to Create/Edit above plus this plan's own artifacts (`plans/`, `specs/<branch>/`, `INDEX.md` if regenerated, `decision-challenges.md`).
-- [ ] AC12 — PR body carries `Closes #8156`, a `## Changelog` section (semver label guidance: MINOR — new plugin MCP surface), and names the Option-C deferral issue.
+- [x] AC12 — PR body carries `Closes #8156`, a `## Changelog` section (semver label guidance: MINOR — new plugin MCP surface), and names the Option-C deferral issue.
 
 ## Test Scenarios
 
