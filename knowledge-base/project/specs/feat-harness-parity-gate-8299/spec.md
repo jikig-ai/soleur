@@ -40,7 +40,7 @@ forbids.
 ## Non-Goals
 
 - NG1 **Mirror completeness** for the hand-ported trees (`.openhands/skills/` at 63/68
-  agents, `.gemini/` at 1/68 agents + 3 skills). Deferred — see follow-up issue.
+  agents, `.gemini/` at 1/68 agents + 3 skills). Deferred to **#8306**.
 - NG2 **Migrating the ~105 `${CLAUDE_PLUGIN_ROOT:-…}` sites.** Owned by ADR-179 and
   open **#7453**. This work must not bless a `:-` form nor add `${GROK_PLUGIN_ROOT:-…}`
   as a second vector.

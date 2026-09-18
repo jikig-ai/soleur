@@ -84,7 +84,7 @@ the skill tree's own prose, not to mirror completeness.
 
 | # | Decision | Rationale |
 | --- | --- | --- |
-| 1 | Scope = the census only | Mirror completeness and the `:-` migration are separate, already-owned concerns |
+| 1 | Scope = the census only | Mirror completeness (**#8306**) and the `:-` migration (**#7453**) are separate, already-owned concerns |
 | 2 | Born blocking, ledger as escape hatch | Advisory→blocking is zero-for-N in this repo |
 | 3 | Population derived by content (38), not directory (98) | ADR-193 §5; keeps every ledger row load-bearing |
 | 4 | Host = `plugins/soleur/test/harness-parity.test.ts` | Auto-registers via `test-all.sh:2634`; needs frontmatter parsing the `.py` lints lack |
@@ -188,7 +188,15 @@ candidate rather than built here.
 read-exemption-ledger triple. This is its **third** independent instance
 (`devin-dispositions.tsv` + `devin-matcher-parity.test.sh`,
 `lint-supabase-deprecated-endpoints.highwater`, and now harness parity), and
-repo-research confirmed no reusable helper exists. Filed as a follow-up, not built here.
+repo-research confirmed no reusable helper exists. Filed as **#8307**, not built here.
+
+## Deferred — filed
+
+| Issue | Scope |
+| --- | --- |
+| **#8306** | Mirror completeness for the hand-ported `.openhands` (63/68) and `.gemini` (1/68) trees, gated on the product decision of whether either is a supported harness |
+| **#8307** | Extract the derive-population / floor / exemption-ledger triple into a shared helper (this is its third bespoke instance) |
+| **#7453** | Pre-existing and open: migrate the ~105 `${CLAUDE_PLUGIN_ROOT:-…}` sites to the bare anchor per ADR-179. **Not** re-filed |
 
 ## Session Errors
 
