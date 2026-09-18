@@ -536,3 +536,100 @@ Until a post-merge runtime trace confirms both halves, Devin coverage is
 claimed for the mechanism only (`covered-by-plugin` in
 `.claude/hooks/devin-dispositions.tsv`), and `devin/INSTRUCTIONS.md` states
 the measured state rather than support. Claude `Bash` coverage is unchanged.
+
+## Addendum — 2026-09-18 (#8156): the wrapped registration is now the shipped default
+
+The #7980 addendum shipped the proxy but left the customer reach open: the
+plugin carried `playwright-mcp-redact-proxy.py` while registering no server,
+so a customer's registration was wrapped only by the customer's own
+configuration — reach (b), the default, was documented rather than delivered.
+This change closes reach (b): `plugins/soleur/.mcp.json` registers `playwright`
+with `command: "python3"` running
+`${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`
+in front of `npx @playwright/mcp@0.0.78`. On Claude Code ≥2.1.139 (the declared
+engines floor, measured at exactly 2.1.139 in the plan-time probe) the tools
+arrive as `mcp__plugin_soleur_playwright__*` — already wrapped, no customer
+configuration. The `plugin_soleur` namespace cannot collide with a customer's
+own `mcp__playwright__*`; both registrations coexist when the customer has one.
+
+**Dedicated `.mcp.json`, not inline `plugin.json` `mcpServers`.** A manifest
+entry in `plugin.json` is loaded by every harness that reads the manifest, and
+the codex deep-equality and devin `.url`-parity tests would then carry a stdio
+entry on harnesses that cannot run it. A plugin-root `.mcp.json` is read by
+Claude Code and — per the Devin CLI's own documentation, which states that a
+plugin's root `.mcp.json` and `${CLAUDE_PLUGIN_ROOT}` are honored — by Devin's
+local substrate as well; Codex's handling of a plugin-root `.mcp.json` was not
+verified and is claimed in neither direction. Where a harness does discover
+it, the discovered registration is still the wrapped proxy, so the wider
+reach is benign; the blast-radius argument is against `plugin.json`
+`mcpServers`, whose parity tests would force the entry onto harnesses that
+cannot execute it at all.
+
+**Profile isolation.** The registration passes
+`--user-data-dir-name soleur-playwright-mcp-profile`, a new proxy flag that
+resolves the basename under `$XDG_CACHE_HOME` (default `~/.cache`, XDG
+semantics mirroring `scripts/lib/scratch-root.sh`) and injects
+`--user-data-dir=<absolute>` into the child argv. A dedicated profile keeps the
+wrapped browser's lock, cookies and credential state out of any profile a
+customer's own registration uses — the real collision the issue feared, which
+is the profile dir, not the tool namespace. The flag refuses to start on a
+basename carrying `..` or a separator, on a basename combined with an explicit
+`--user-data-dir`, on a relative `XDG_CACHE_HOME`, and when `~` cannot resolve
+(HOME unset) — extending arm (i) of the fail-closed design, never loosening
+it. A `bash -c` launch (the repo `.mcp.json`'s shape) was rejected: an
+unauditable shell string inside a JSON manifest buys nothing the flag does not
+do in the file that already owns the child argv.
+
+**What this does not do.** A customer's own `playwright` registration stays
+exactly as wrapped or unwrapped as they configured it — the plugin server does
+not reach it, and the skills' preference prose plus the S2 refusal signal are
+the steering, not a mechanism. Option C, a plugin PostToolUse/PreToolUse hook
+net on `mcp__playwright__.*` emitting `updatedMCPToolOutput`, is the residual
+closer for that registration and is **deferred**: it covers the transcript
+sink only (the server's `filename:`/`page-*.yml` disk writes complete before a
+hook sees output, and a hook cannot append `--snapshot-mode none` to a launch
+it does not own), and its feasibility is not the blocker — upstream
+anthropics/claude-code #47859 and #24788 are CLOSED; #54161 documents the
+`updatedMCPToolOutput` shape. The deferral issue is **#8286**, carrying the
+re-evaluation criteria: a measured material misroute rate onto customer
+registrations, hook-rewrite persistence proven benign on the engines floor, or
+an upstream manifest-layer mechanism to wrap a user registration. ADR-162's
+one-rewriter rule does not constrain Option C — it constrains `updatedInput`
+rewrites on PreToolUse, not `updatedToolOutput` on PostToolUse.
+
+**Caveats, stated.** The plugin server exists only where the plugin's
+`.mcp.json` is discovered and can execute — measured on Claude Code ≥2.1.139
+with the plugin installed, `python3` and `npx` on `PATH`, and the server not
+disabled in `/mcp` (the toggle can switch it off without uninstalling).
+Devin's local substrate also discovers the file per its own documentation;
+on Codex discovery is unverified; under `claude --strict-mcp-config` the
+plugin-root `.mcp.json` is suppressed (measured: `TOOL-ABSENT` under the
+flag vs `TOOL-PRESENT` without it on 2.1.273), which is what keeps the
+fleet's strict-mode clone path free of the registration. Every absence
+degrades to the same shape: `mcp__plugin_soleur_playwright__*`
+not present, the file-form path the skills prescribe as the fallback. Degradation
+prose in `agent-browser/SKILL.md` §"Wrapping the server" does not assume the
+plugin server exists. `npx` runs on every session start; the 0.0.78 pin bounds
+that to a cache hit after first install. The orphan-on-own-profile failure
+mode was measured and refuted in the plan-time probe: a SIGKILLed Claude
+parent leaves the plugin's `playwright-mcp` child reaped within ~0.7 s (stdio
+EOF), a SIGKILLed `playwright-mcp` leaves Chrome reaped by the same group
+teardown, and a stale `SingletonLock` is stolen by the next launch on a
+dead-pid check — the playbook names the live-lock-holder check for the shape
+that remains.
+
+**Hosted agent-runner: reach (c) now holds by exclusion, not by absence.**
+Architecture review found that the hosted agent-runner loads the vendored
+plugin tree via `plugins: [{ type: "local" }]` on `@anthropic-ai/claude-code`
+2.1.219 — above the discovery floor — so a vendored `plugins/soleur/.mcp.json`
+would register `plugin:soleur:playwright` on the prod image, where `python3`
+does not exist and `@playwright/mcp@0.0.78` cannot resolve under firewalled
+egress: a guaranteed-failed server on every hosted session. Rather than
+suppress MCP discovery on the query path (`SdkPluginConfig.skipMcpDiscovery`
+would also unregister the plugin's sanctioned HTTP `mcpServers`), both vendor
+steps (`.github/workflows/ci.yml`, `reusable-release.yml`) now `rm -f
+"$DEST/.mcp.json"` after `cp -a`, so the hosted image's plugin tree carries no
+`.mcp.json` at all — the manifest `mcpServers` in `plugin.json` are unaffected.
+Reach (c) stays literally true, restated: **the hosted agent-runner registers
+no Playwright server, because the vendored plugin tree excludes the file.**
+The exclusion is pinned by two Guard-3 rows in the proxy suite.
