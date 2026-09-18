@@ -1313,7 +1313,8 @@
       "prod-write-defer-doppler-prd-secrets": 6,
       "durable-reminder-prefer-inngest": 2,
       "brand-hex-commit-gate": 6,
-      "encryption-posture-design-time-default": 1
+      "encryption-posture-design-time-default": 1,
+      "gdpr-gate-staleness": 4
     },
     "gate_exemptions": [
       {

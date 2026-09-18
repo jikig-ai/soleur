@@ -39,9 +39,19 @@ that host's toolchain, which changes between sessions. Re-derive the count with 
 and check CI on main, before the blocker bounds the options. Here that turned "change the plan's
 method or wait on #8112" into "fix five filed issues, then resume the plan unchanged".
 
-A second finding: on this host `lefthook` is not on PATH, and the installed `.git/hooks/pre-commit`
-shim prints `Can't find lefthook in PATH` and exits 0. The local gate whose latency #8231 exists
-to reduce does not run on this host at all. It fails open silently.
+A second finding, stated precisely because the first draft of this paragraph overstated it and was
+caught in review: `lefthook` is **not** on this host's PATH, and the shim's fail-open branch is
+real — rewriting the binary path to `/nonexistent` makes `.git/hooks/pre-commit` print
+`Can't find lefthook in PATH` and **exit 0**, so the gate would fail open silently. But the gate is
+**not** dark here today: the shim carries a hardcoded third fallback
+(`/tmp/soleur-merge-npm-cache/_npx/…/lefthook-linux-x64/bin/lefthook`), that binary exists and
+runs (`lefthook v2.1.6`), and invoking the shim executes the full pre-commit gate at rc 0.
+
+The true state is *more* fragile than "it does not run", not less: the local gate depends on a
+binary under `/tmp`, which any reboot removes — and the failure mode when it disappears is the
+silent exit-0 above, not an error. The general lesson stands and the specific host claim did not:
+a durable sentence about a host is a measurement with a shelf life, so write what the command
+returned rather than what the mechanism implies (#8271 tracks the fail-open itself).
 
 ## Session Errors
 
