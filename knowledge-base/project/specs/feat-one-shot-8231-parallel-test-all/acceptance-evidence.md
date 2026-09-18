@@ -501,8 +501,13 @@ same absence exits 1 naming the arms.
 | 1 (12:20Z) | `rc=4` — `CAPACITY_CONTENDED reason=sibling_runs measured_runs=1`; sibling worktree `feat-one-shot-7960-phase-b-delivery-field` running 870s |
 | 2 (10:54Z, queued behind attempt 1's sibling) | `rc=4` — the sibling started a NEW full-gate run 6s earlier; this session's own suite sweep was also in flight |
 
-A third attempt is queued behind a 60-second all-quiet requirement (90m cap). The
-refusal is the runner working as designed (#7553), not a failure of this change.
+| 3 (queued behind a 60s all-quiet requirement, 90m cap) | **`GAVE_UP_2H`** — the cap expired without the host ever being quiet for 60 consecutive seconds |
+
+Three attempts, zero runs. The refusal is the runner working as designed (#7553),
+not a failure of this change: a sibling worktree ran back-to-back full gates for
+the entire session, and the third attempt deliberately required a quiet window
+rather than racing for one, so it timed out instead of producing a contended
+measurement that would have had to be discarded anyway.
 
 Per plan §5.2 this is the sanctioned outcome: *"If the run is refused (rc 4), wait
 at most 2 h, then record the refusal and ship on 5.1 alone."* **AC12(b) is
