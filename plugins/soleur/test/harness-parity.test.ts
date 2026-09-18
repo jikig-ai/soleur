@@ -65,7 +65,10 @@ function nonc(doc: DocResult): Site[] {
 describe("harness-parity cross-file sentinel (N11, H1)", () => {
   test("the tree census file asserts the absolute property with the exact literal", () => {
     const tree = readFileSync(resolve(import.meta.dir, "harness-parity-tree.test.ts"), "utf-8");
-    expect(tree).toContain("expect(noncanonical).toEqual([])");
+    // Anchored on the CODE line, never a bare substring: the tree file's header comment quotes
+    // this literal, and a substring match was satisfied by the comment with the assertion
+    // deleted (measured — Guard 3 rows N11 and H1 survived the first battery).
+    expect(tree).toMatch(/^\s+expect\(noncanonical\)\.toEqual\(\[\]\);$/m);
     expect(tree).toContain("readPopulation()");
     expect(tree).toContain("EXPECTED_SOLEUR_AGENT_COUNT");
   });

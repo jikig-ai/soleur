@@ -178,6 +178,18 @@ describe("workflow-fidelity contract", () => {
     expect(inv.instruction).not.toContain("/postmerge");
   });
 
+  // Every branch of pipelineInvocationSuffix, not only `ship`: the first battery's N13 reverted
+  // the one-shot branch and the ship-only assertion above survived it.
+  test.each(["one-shot", "brainstorm", "plan", "work", "ship", "review", "compound"])(
+    "%s invokeSkill on Codex carries no grok slash form of a pipeline skill",
+    (skill) => {
+      process.env.CODEX_THREAD_ID = "thread-1";
+      const inv = invokeSkill(skill, "");
+      expect(inv.harness).toBe("codex");
+      expect(inv.instruction).not.toMatch(/(^|[^$\w:/])\/(postmerge|ship|plan|one-shot|work|review|qa|compound|brainstorm)\b/);
+    },
+  );
+
   test("work invokeSkill on Claude names the canonical tail, never the grok slash", () => {
     process.env.CLAUDECODE = "1";
     const inv = invokeSkill("work", "");

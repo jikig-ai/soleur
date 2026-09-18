@@ -1,0 +1,22 @@
+CONTROL: rc=0  151 pass  0 fail 
+N1: KILLED rc=1 — gdpr-gate/SKILL.md:270: /soleur:trigger-cron — claude/devin; write soleur:trigger-cron
+N2: KILLED rc=1 — kb-search/SKILL.md:219: /kb-search — grok; write soleur:kb-search
+N4: KILLED rc=1 — harness-parity: 0 docs examined
+N5: KILLED rc=1 — grok-slash.md
+N5b: KILLED rc=1 — grok-slash.md
+N5c: KILLED rc=1 — boundary-punctuation.md
+N5d: KILLED rc=1 — claude-agent-leaf-mention.md
+N5e: KILLED rc=1 — trailing-punctuation.md
+N5f: KILLED rc=1 — path-compound.md
+N5g: KILLED rc=1 — bare-agent-leaf.md
+N6: KILLED rc=1 — region-forms-in-skill.md
+N7: KILLED rc=1 — region-unknown-name.md
+N8: KILLED rc=1 — region-malformed.md
+N9: KILLED rc=1 — review/SKILL.md:1703: cto — bare agent leaf, dead on grok; write soleur:engineering:cto
+N10: KILLED rc=1 — index invariant
+N11: KILLED rc=1 — toEqual
+N12: KILLED rc=1 — glob
+N13: KILLED rc=1 — postmerge
+H1: KILLED rc=1 — toEqual
+ROWS=19 KILLED=19
+PRISTINE: all restored
