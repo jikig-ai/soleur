@@ -102,28 +102,37 @@ decode_rows() {
             | select(type == "object" and ('"$1"')) | '"$2"
 }
 
-# `run_query <label> <grep> <limit>` — stderr is CAPTURED, never discarded.
-# betterstack-query.sh exits 3 for "nothing was queried" and prints an
-# actionable heredoc saying so; swallowing it reports a bare number to an
-# operator who then cannot act. rc 3 is forwarded as 3, not folded into
-# a generic transient.
+# `run_query <label> <grep> <limit> <outfile>` — stderr is CAPTURED, never
+# discarded. betterstack-query.sh exits 3 for "nothing was queried" and prints
+# an actionable heredoc saying so; swallowing it reports a bare number to an
+# operator who then cannot act. rc 3 is forwarded as 3, not folded into a
+# generic transient.
+#
+# Writes to a FILE and is called as a plain statement, NOT inside `$(...)`.
+# The first revision returned stdout through a command substitution, so its
+# `exit 3` exited the SUBSHELL, the caller received an empty string, and a
+# "nothing was queried" condition was graded as a dark channel (FAIL) instead
+# of CANNOT ESTABLISH. Caught by the companion test's case 7.
 run_query() {
-  local label="$1" pattern="$2" lim="$3" out rc
-  out="$(bash "$QUERY_SH" --since "$WINDOW" --grep "$pattern" --limit "$lim" 2>&1)"
+  local label="$1" pattern="$2" lim="$3" outfile="$4" rc
+  bash "$QUERY_SH" --since "$WINDOW" --grep "$pattern" --limit "$lim" > "$outfile" 2>&1
   rc=$?
   if [ "$rc" -eq 3 ]; then
-    printf 'CANNOT ESTABLISH: betterstack-query.sh could not query (%s): %s\n' "$label" "${out:0:400}" >&2
+    printf 'CANNOT ESTABLISH: betterstack-query.sh could not query (%s): %s\n' "$label" "$(head -c 400 "$outfile")" >&2
     exit 3
   fi
   if [ "$rc" -ne 0 ]; then
-    printf 'NOT YET: betterstack-query.sh exited %s (%s): %s\n' "$rc" "$label" "${out:0:400}" >&2
+    printf 'NOT YET: betterstack-query.sh exited %s (%s): %s\n' "$rc" "$label" "$(head -c 400 "$outfile")" >&2
     exit 2
   fi
-  printf '%s' "$out"
 }
 
+QOUT="$(mktemp -t ft8281-rows.XXXXXXXX)"
+trap 'rm -f -- "$QOUT"' EXIT
+
 # --- positive control: prove the channel carries WARN markers at all ---------
-ctl="$(run_query control SOLEUR_CLAUDE_COST 5)"
+run_query control SOLEUR_CLAUDE_COST 5 "$QOUT"
+ctl="$(cat "$QOUT")"
 ctl_n="$(printf '%s\n' "$ctl" | decode_rows '.SOLEUR_CLAUDE_COST == true' '"row"' | grep -c . || true)"
 if ! numeric "$ctl_n" || [ "$ctl_n" -eq 0 ]; then
   printf 'FAIL: the positive control (SOLEUR_CLAUDE_COST decoded under .message within %s) returned 0 rows — the WARN->Vector->Better Stack channel is dark or its row shape changed. Refusing to read an absence through a dead instrument.\n' "$WINDOW" >&2
@@ -131,7 +140,8 @@ if ! numeric "$ctl_n" || [ "$ctl_n" -eq 0 ]; then
 fi
 
 # --- the assertion: a SCHEDULED outcome marker exists -----------------------
-rows="$(run_query outcome SOLEUR_COMPOUND_PROMOTE_OUTCOME "$LIMIT")"
+run_query outcome SOLEUR_COMPOUND_PROMOTE_OUTCOME "$LIMIT" "$QOUT"
+rows="$(cat "$QOUT")"
 sel='.SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote"'
 all_statuses="$(printf '%s\n' "$rows" | decode_rows "$sel" '"\(.trigger // "unset")\t\(.status // "unset")"' || true)"
 all_n="$(printf '%s\n' "$all_statuses" | grep -c . || true)"
