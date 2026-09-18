@@ -6,7 +6,7 @@
 #
 # THE ANCHOR IS THE MERGE BASE, and that is the whole design. A ceiling read from
 # the working tree lets one diff raise both the file and its limit and satisfy
-# itself -- which is exactly what SKILL_DESCRIPTION_WORD_BUDGET has done fourteen
+# itself -- which is exactly what SKILL_DESCRIPTION_WORD_BUDGET has done fifteen
 # times, each bump recorded "against an N/N zero-headroom baseline". Reading the
 # ceiling from the base makes a same-diff raise impossible, so raising one
 # requires its own reviewed PR.
@@ -67,8 +67,11 @@ mk_repo() {
   git -C "$REPO" init -q -b main
   git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
   # Two nodes only: enough to show a per-file report AND a second offender.
+  # `work: []` rather than `work: ["review"]`: the node set is keys AND
+  # destinations, so a destination with no ceiling row is itself a finding
+  # (case 12 pins that); the baseline fixture must not carry one by accident.
   cat > "$REPO/.claude/workflow-transitions.json" <<'EOF'
-{ "transitions": { "plan": ["work"], "work": ["review"] } }
+{ "transitions": { "plan": ["work"], "work": [] } }
 EOF
   mkdir -p "$REPO/plugins/soleur/skills/work"
   printf 'x%.0s' $(seq 1 1000) > "$REPO/plugins/soleur/skills/plan/SKILL.md"
@@ -89,7 +92,7 @@ if [[ "$RC" -eq 0 ]]; then pass "an in-budget tree exits 0"; else fail "in-budge
 mk_repo
 printf 'x%.0s' $(seq 1 500) >> "$REPO/plugins/soleur/skills/plan/SKILL.md"
 OUT=$(run_sut); RC=$?
-if [[ "$RC" -ne 0 && "$OUT" == *plan* && "$OUT" =~ 1[0-9]{3} ]]; then
+if [[ "$RC" -ne 0 && "$OUT" == *"plan: plugins/soleur/skills/plan/SKILL.md is 1500 bytes, ceiling is 1100 (400 over)"* ]]; then
   pass "an oversized file fails, naming the file and its number"
 else
   fail "oversize not caught — rc=$RC out=$OUT"
@@ -171,16 +174,124 @@ if [[ "$RC" -eq 0 ]]; then pass "a file 1 byte under its ceiling passes"; else f
 
 # --- 10. the guard's own discovery cannot match zero files -------------------
 # MIN_CASES equivalent: a glob or node list that resolves to nothing must fail
-# rather than report a clean sweep over an empty set.
+# rather than report a clean sweep over an empty set. The node set is the UNION
+# of the base view and the working-tree view, so the empty case needs both
+# empty -- the fixture commits the empty view as the base. Anchored on the
+# EMPTY sentinel, not on a bare non-zero rc: a missing-row error exits 1 too.
 mk_repo
 cat > "$REPO/.claude/workflow-transitions.json" <<'EOF'
 { "transitions": {} }
 EOF
+git -C "$REPO" add -A >/dev/null; git -C "$REPO" commit -qm empty-view
 OUT=$(run_sut); RC=$?
-if [[ "$RC" -ne 0 ]]; then
+if [[ "$RC" -ne 0 && "$OUT" == *"node set is EMPTY"* ]]; then
   pass "an empty node set fails rather than reporting a clean sweep"
 else
-  fail "empty node set reported clean — out=$OUT"
+  fail "empty node set reported clean or failed for another reason — rc=$RC out=$OUT"
+fi
+
+# --- 11. a row that is NOT a node is still MEASURED ---------------------------
+# The lifecycle includes sub-skills the FSM does not model (qa, deepen-plan);
+# their rows are authorised on the TS side and must be enforced here. A row
+# the per-node loop would have skipped is now checked against its file.
+mk_repo
+mkdir -p "$REPO/plugins/soleur/skills/qa"; printf 'q%.0s' $(seq 1 3000) > "$REPO/plugins/soleur/skills/qa/SKILL.md"
+cat > "$REPO/plugins/soleur/test/skill-body-budget.json" <<'EOF'
+{ "_comment": "fixture", "ceilings": { "plan": 1100, "work": 2200, "qa": 2500 } }
+EOF
+git -C "$REPO" add -A >/dev/null; git -C "$REPO" commit -qm qa-row
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -ne 0 && "$OUT" == *"qa: plugins/soleur/skills/qa/SKILL.md is 3000 bytes"* ]]; then
+  pass "a ceiling row for a non-node sub-skill is measured, not skipped"
+else
+  fail "non-node row skipped — rc=$RC out=$OUT"
+fi
+
+# --- 12. a DESTINATION-ONLY node needs a ceiling too --------------------------
+# Review found `one-shot` (46 KB, reachable from brainstorm) unmeasured because
+# it had no key. Keys-only was the window; keys-and-destinations is the property.
+mk_repo
+cat > "$REPO/.claude/workflow-transitions.json" <<'EOF'
+{ "transitions": { "plan": ["work", "review"], "work": [] } }
+EOF
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -ne 0 && "$OUT" == *"review: no ceiling"* ]]; then
+  pass "a destination-only node with no ceiling row fails"
+else
+  fail "destination-only node escaped — rc=$RC out=$OUT"
+fi
+
+# --- 13. dropping a node from the view IN THE SAME DIFF does not unmeasure it
+# The escape test-design found: bloat work/SKILL.md AND delete `work` from the
+# working-tree view -> OK over the survivors. The base view still names it.
+mk_repo
+printf 'y%.0s' $(seq 1 3000) >> "$REPO/plugins/soleur/skills/work/SKILL.md"
+cat > "$REPO/.claude/workflow-transitions.json" <<'EOF'
+{ "transitions": { "plan": [] } }
+EOF
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -ne 0 && "$OUT" == *"work: plugins/soleur/skills/work/SKILL.md is 5000 bytes"* ]]; then
+  pass "a node removed from the view in the same diff is still measured against the base"
+else
+  fail "same-diff node removal unmeasured the file — rc=$RC out=$OUT"
+fi
+
+# --- 14. bootstrap is NOT reachable by renaming the ceiling file --------------
+# The rename escape: `git mv` the ceiling file + edit BUDGET_REL in one diff, and
+# every ceiling re-seeds with the monotonic check skipped. Bootstrap is legal
+# only when the LINT is also absent at the base; here it is committed there.
+mk_repo
+mkdir -p "$REPO/scripts"; cp "$SUT" "$REPO/scripts/lint-skill-body-budget.py"
+git -C "$REPO" rm -q plugins/soleur/test/skill-body-budget.json
+git -C "$REPO" add -A >/dev/null; git -C "$REPO" commit -qm lint-present-budget-absent
+# Base now: lint PRESENT, ceiling file ABSENT. The working tree re-introduces the
+# file with re-seeded ceilings -- the shape a rename-in-one-diff produces.
+# (`git rm` also removed the now-empty directory; recreate it.)
+mkdir -p "$REPO/plugins/soleur/test"
+cat > "$REPO/plugins/soleur/test/skill-body-budget.json" <<'EOF'
+{ "_comment": "fixture", "ceilings": { "plan": 9000, "work": 9000 } }
+EOF
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -ne 0 && "$OUT" == *"RENAME or deletion"* ]]; then
+  pass "a missing base ceiling file under a present base lint is refused, not bootstrapped"
+else
+  fail "rename re-entered bootstrap — rc=$RC out=$OUT"
+fi
+
+# --- 15. a raise in a diff that touches ONLY the ceiling file is LEGAL --------
+# The documented remedy for an over-ceiling file used to be "raise it in a
+# separate PR" -- which reddened identically, because that PR was compared
+# against the same base. A gate with no passable remedy trains bypass. The
+# legal raise: base..HEAD changes nothing but the ceiling file.
+mk_repo
+cat > "$REPO/plugins/soleur/test/skill-body-budget.json" <<'EOF'
+{ "_comment": "fixture", "ceilings": { "plan": 5000, "work": 2200 } }
+EOF
+git -C "$REPO" checkout -q -b feature-raise-only
+git -C "$REPO" add -A >/dev/null; git -C "$REPO" commit -qm raise-only
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -eq 0 ]]; then
+  pass "a raise in a diff that changes only the ceiling file passes"
+else
+  fail "raise-only diff rejected — rc=$RC out=$OUT"
+fi
+
+# --- 16. a raise beside ANY other change is still refused -------------------
+# The same raise plus one byte of growth in the file it licenses: RED, naming
+# the co-travelling file. Also pins that an UNCOMMITTED growth beside a committed
+# raise is seen (the working-tree diff is part of the changed set).
+mk_repo
+cat > "$REPO/plugins/soleur/test/skill-body-budget.json" <<'EOF'
+{ "_comment": "fixture", "ceilings": { "plan": 5000, "work": 2200 } }
+EOF
+git -C "$REPO" checkout -q -b feature-raise
+git -C "$REPO" add -A >/dev/null; git -C "$REPO" commit -qm raise
+printf 'x' >> "$REPO/plugins/soleur/skills/plan/SKILL.md"
+OUT=$(run_sut); RC=$?
+if [[ "$RC" -ne 0 && "$OUT" == *"ceiling RAISED"* && "$OUT" == *"plugins/soleur/skills/plan/SKILL.md"* ]]; then
+  pass "a raise beside an uncommitted growth is refused and names the co-travelling file"
+else
+  fail "raise-plus-growth accepted — rc=$RC out=$OUT"
 fi
 
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
@@ -189,7 +300,7 @@ fi
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=10
+MIN_CASES=16
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

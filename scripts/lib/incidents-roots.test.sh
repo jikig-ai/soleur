@@ -75,12 +75,15 @@ echo "incidents-roots.test.sh"
 
 # --- 1. porcelain parse: every worktree, in order -------------------------------
 # Cardinality axis: THREE members, so a parser that stops after the first (or
-# returns only the last) is distinguishable from a correct one.
-out=$(printf '%s\n' \
+# returns only the last) is distinguishable from a correct one. Records are
+# NUL-terminated (the `-z` shape); entries are separated by an empty record.
+# Output is read back with `tr` so the comparison is on a newline-joined string.
+out=$(printf '%s\0' \
   "worktree /repo/main" "HEAD abc123" "branch refs/heads/main" "" \
   "worktree /repo/.worktrees/feat-a" "HEAD def456" "branch refs/heads/feat-a" "" \
   "worktree /repo/.worktrees/feat-b" "HEAD 789abc" "detached" "" \
-  | incidents_roots_from_porcelain)
+  | incidents_roots_from_porcelain | tr '\0' '\n')
+# $(...) strips trailing newlines, so the want has none.
 want=$'/repo/main\n/repo/.worktrees/feat-a\n/repo/.worktrees/feat-b'
 if [[ "$out" == "$want" ]]; then
   pass "porcelain parse emits every worktree path in input order"
@@ -88,15 +91,15 @@ else
   fail "porcelain parse — got '$out' want '$want'"
 fi
 
-# --- 2. porcelain parse: only `worktree ` lines ---------------------------------
-# A parser keying on whitespace rather than the line prefix would pick up the
+# --- 2. porcelain parse: only `worktree ` records -------------------------------
+# A parser keying on whitespace rather than the record prefix would pick up the
 # `branch`/`HEAD` values here.
-out=$(printf '%s\n' "worktree /repo/main" "HEAD abc" "branch refs/heads/worktree-ish" "bare" \
-  | incidents_roots_from_porcelain)
-if [[ "$out" == "/repo/main" ]]; then
-  pass "porcelain parse ignores HEAD/branch/bare lines"
+out=$(printf '%s\0' "worktree /repo/main" "HEAD abc" "branch refs/heads/worktree-ish" "bare" \
+  | incidents_roots_from_porcelain | tr '\0' '\n')
+if [[ "$out" == '/repo/main' ]]; then
+  pass "porcelain parse ignores HEAD/branch/bare records"
 else
-  fail "porcelain parse non-worktree lines — got '$out'"
+  fail "porcelain parse non-worktree records — got '$out'"
 fi
 
 # --- 3. porcelain parse: empty input is empty output, rc 0 ----------------------
@@ -107,13 +110,30 @@ else
   fail "porcelain parse empty input — rc=$rc out='$out'"
 fi
 
+# --- 3b. porcelain parse: a path containing a NEWLINE is ONE root ---------------
+# The review probe: under line framing, a worktree at "/repo/x\nworktree /FORGED"
+# enumerated /FORGED as a worktree. Under NUL framing the embedded newline is
+# just a byte in the path. Asserted as a COUNT of records plus the exact bytes,
+# so a parser that splits on \n (two records) and one that drops the record
+# (zero) are both distinguishable from correct (one).
+evil=$'/repo/x\nworktree /FORGED'
+# bash command substitution DROPS NUL bytes ("ignored null byte"), so the record
+# count is taken inside the pipeline and the bytes are read back through tr.
+nrec=$(printf '%s\0' "worktree $evil" "HEAD abc" "" | incidents_roots_from_porcelain | tr -cd '\0' | wc -c)
+out=$(printf '%s\0' "worktree $evil" "HEAD abc" "" | incidents_roots_from_porcelain | tr '\0' '\n')
+if [[ "$nrec" -eq 1 && "$out" == "$evil" ]]; then
+  pass "porcelain parse keeps a newline-bearing path as ONE record (no forged root)"
+else
+  fail "porcelain parse newline path — records=$nrec out='$out'"
+fi
+
 # --- 4. dedupe: distinct dirs all survive, FIRST-SEEN ORDER PRESERVED -----------
 # The order half is the rotation invariant (element 0 is what AGGREGATOR_ROTATE
 # truncates). Names are chosen so that a `sort` would REORDER them — "zzz" first,
 # "aaa" second — which is what makes this case able to fail.
 assert_fixture_dir "$TMP_ROOT"
 mkdir -p "$TMP_ROOT/zzz" "$TMP_ROOT/aaa" "$TMP_ROOT/mmm"
-out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/aaa" "$TMP_ROOT/mmm")
+out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/aaa" "$TMP_ROOT/mmm" | tr '\0' '\n')
 want=$(printf '%s\n%s\n%s' "$TMP_ROOT/zzz" "$TMP_ROOT/aaa" "$TMP_ROOT/mmm")
 if [[ "$out" == "$want" ]]; then
   pass "dedupe keeps distinct dirs in first-seen order (does not sort)"
@@ -122,7 +142,7 @@ else
 fi
 
 # --- 5. dedupe: the same path twice collapses ----------------------------------
-out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/zzz")
+out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/zzz" | tr '\0' '\n')
 if [[ "$out" == "$TMP_ROOT/zzz" ]]; then
   pass "dedupe collapses a repeated path"
 else
@@ -136,7 +156,7 @@ fi
 # dedupe passes cases 4 and 5 and fails only here.
 assert_fixture_dir "$TMP_ROOT"
 ln -s "$TMP_ROOT/zzz" "$TMP_ROOT/zzz-alias"
-out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/zzz-alias")
+out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/zzz-alias" | tr '\0' '\n')
 if [[ "$out" == "$TMP_ROOT/zzz" ]]; then
   pass "dedupe collapses two paths that resolve to one inode (keeps the first)"
 else
@@ -144,7 +164,7 @@ else
 fi
 
 # --- 7. dedupe: a non-existent dir is dropped ----------------------------------
-out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/does-not-exist")
+out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/does-not-exist" | tr '\0' '\n')
 if [[ "$out" == "$TMP_ROOT/zzz" ]]; then
   pass "dedupe drops a path that does not exist"
 else
@@ -162,9 +182,11 @@ chmod 000 "$TMP_ROOT/locked"
 if [[ "$(id -u)" -eq 0 ]]; then
   pass "dedupe unreadable dir — SKIPPED (running as root; mode 000 is not enforced)"
 else
-  out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/locked" "$TMP_ROOT/aaa"); rc=$?
-  if [[ "$rc" -eq 0 && "$out" == *"$TMP_ROOT/zzz"* && "$out" == *"$TMP_ROOT/aaa"* ]]; then
-    pass "dedupe survives an unreadable dir and still returns the readable ones"
+  out=$(incidents_dedupe_existing_dirs "$TMP_ROOT/zzz" "$TMP_ROOT/locked" "$TMP_ROOT/aaa" | tr '\0' '\n'); rc=$?
+  # The locked dir IS emitted (stat -L succeeds on a mode-000 dir); readability
+  # is the consumer's decision, and both consumers now say so loudly.
+  if [[ "$rc" -eq 0 && "$out" == *"$TMP_ROOT/zzz"* && "$out" == *"$TMP_ROOT/aaa"* && "$out" == *"$TMP_ROOT/locked"* ]]; then
+    pass "dedupe survives an unreadable dir, emits it, and still returns the readable ones"
   else
     fail "dedupe unreadable dir — rc=$rc out='$out'"
   fi
@@ -179,6 +201,33 @@ else
   fail "dedupe no args — rc=$rc out='$out'"
 fi
 
+# --- 10. stage 2 keeps NUL framing: a newline-bearing dir is ONE root ---------
+# The review escape: stage 1 (porcelain) was NUL-safe and stage 2 (dedupe)
+# emitted newlines, so a dir named "x<newline>/FORGED" re-split downstream.
+evil_dir="$TMP_ROOT/x"$'\n'"FORGED"
+mkdir -p "$evil_dir"
+nrec=$(incidents_dedupe_existing_dirs "$evil_dir" | tr -cd '\0' | wc -c)
+if [[ "$nrec" -eq 1 ]]; then
+  pass "dedupe emits a newline-bearing dir as ONE NUL-terminated record"
+else
+  fail "dedupe re-split a newline path — records=$nrec"
+fi
+
+# --- 11. the composition: repo root first, worktrees appended, deduped ----------
+# A real git repo with one worktree; the main worktree appears via BOTH the
+# repo-root argument and `git worktree list`, so exactly-once is exercised.
+GR="$TMP_ROOT/gitrepo"; mkdir -p "$GR" && git -C "$GR" init -q -b main 2>/dev/null \
+  && git -C "$GR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed \
+  && git -C "$GR" worktree add -q "$TMP_ROOT/gitwt" -b wt >/dev/null 2>&1 \
+  && mkdir -p "$GR/.claude" "$TMP_ROOT/gitwt/.claude"
+out=$(incidents_enumerate_log_roots "$GR" | tr '\0' '\n')
+first=$(printf '%s\n' "$out" | head -1); nroots=$(printf '%s\n' "$out" | grep -c .)
+if [[ "$first" == "$GR/.claude" && "$nroots" -eq 2 ]]; then
+  pass "composition: repo root first, sibling worktree appended, main counted exactly once"
+else
+  fail "composition — first='$first' roots=$nroots out='$out'"
+fi
+
 # --- anti-vacuity floor --------------------------------------------------------
 # Counts REAL cases (total passes minus the one self-test pass). Reported with
 # printf + exit rather than through fail(), so an edit that guts fail() cannot
@@ -189,7 +238,7 @@ fi
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=9
+MIN_CASES=12
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

@@ -28,8 +28,8 @@ nothing that can refuse an action.
   no verdict. The only state-reading component, `phase-surface-hint.sh`, is
   `PostToolUse` — it fires after dispatch and structurally cannot block
   (deliberate, per ADR-086).
-- **The instrument is mute at three independent layers:** 79 of 98 rules have no
-  emit call site; 32% of emitted rows (11,346 of 35,228, counting rotated
+- **The instrument is mute at three independent layers:** ~80 of 98 rules have no
+  emitter (18 do — 10 of them through the live `SOLEUR_RULE_APPLIED` marker transport of ADR-179 d9, which the audit's `incidents.sh` grep could not see); 32% of emitted rows (11,346 of 35,228, counting rotated
   `.gz` archives) sit in 34 sibling worktree roots the aggregator does not read; and the aggregator has no
   schedule (`workflow_dispatch` only since #6042).
 - **The waste compounds.** Measured against the 2026-08-13 audit: `review`
@@ -113,7 +113,10 @@ nothing that can refuse an action.
   directive buys two reads for identical bytes plus a new drift surface. The
   proven `references/` pattern operates at ~5% extraction, not 80%. The
   directive for `plan` must be **conditional**, matching the 7 gated directives
-  in the repo rather than the 5 unconditional ones.
+  in the repo rather than the 5 unconditional ones. *Superseded at review:* the
+  catalogue is plan-hygiene that applies to every plan; the directive is
+  unconditional, placed last, and the saving is per-turn — ADR-225 Consequences
+  and decision-challenges §3.
 - **FR10** — Per-file SKILL.md byte ceiling, **monotonically non-increasing**,
   enforced in CI.
 
@@ -132,7 +135,7 @@ nothing that can refuse an action.
 - **TR6** — The byte ceiling must be demonstrated **failing red** in CI on a
   deliberately oversized SKILL.md before merge. A ceiling that cannot be shown
   red is exactly ADR-131's "gate that could not fail". Precedent:
-  `SKILL_DESCRIPTION_WORD_BUDGET` has been bumped 14 times.
+  `SKILL_DESCRIPTION_WORD_BUDGET` has been bumped 15 times.
 - **TR7** — Edits to `workflow-fidelity.ts` trip
   `plugins/soleur/test/workflow-fidelity.test.ts` via `grok-fidelity-gate.sh`
   (mandatory pre-push). Edits to `go.md`'s routing block trip the eval-harness
@@ -143,7 +146,7 @@ nothing that can refuse an action.
 
 - [ ] An aggregator run from any worktree reports the same row count as a run
       from the shared checkout.
-- [ ] `rule-metrics.json` regenerates on a cadence without manual dispatch.
+- ~~[ ] `rule-metrics.json` regenerates on a cadence without manual dispatch.~~ Struck with FR2: #6042 removed the schedule deliberately (fresh checkouts clobber the local aggregate); ADR-225 Alternatives.
 - [ ] One declarative artifact holds both nodes and edges; a test fails if the
       TS view drifts from it.
 - [ ] `review→work`, `ship→work`, `work→plan` are declared and covered by tests.
@@ -158,7 +161,7 @@ nothing that can refuse an action.
 | Item | Why | Re-evaluation trigger |
 |---|---|---|
 | Sub-phase grammar normalization + loader | 4+ grammars; `plan` has zero `Phase` headings. Week+ migration, orthogonal to the FSM | After Track A/B land |
-| Block-mode gate | ADR-070 two-tier rule; 16/99 coverage would false-deny `/go` | At the pinned decision date |
+| Block-mode gate | ADR-070 two-tier rule; 16/98 coverage would false-deny `/go` | The gate was cut (FR7′); reconsider only from the classifier's measurement, per ADR-225 Consequences — there is no pinned date |
 | `postmerge→work` back-edge | Redundant with `ship→work` | If a real case appears |
 | Phase-surface coverage beyond the lifecycle chain | YAGNI | — |
 | Linear preflight regex false-positives on `ADR-NNN` | `[A-Z]{2,}-[0-9]+` matches every ADR citation | Own issue |

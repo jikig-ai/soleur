@@ -117,7 +117,7 @@ is not. **The ratchet, not the extraction, is what bends this curve** — only
   fall-through chain in `work`; "if explicitly requested"). 5 are unconditional,
   one of which says "always runs".
 - **Ratchet precedent and its warning.** `components.test.ts:21` holds
-  `SKILL_DESCRIPTION_WORD_BUDGET = 2442`; its comment is a changelog of **14
+  `SKILL_DESCRIPTION_WORD_BUDGET = 2442`; its comment is a changelog of **15
   bumps**, most "against a N/N zero-headroom baseline".
 - **ADR ordinal:** ADR-225 free across all 90 remote refs. Provisional.
 
@@ -210,10 +210,14 @@ record-mode event has no consumer.
 
 ### Track B — one extraction and a ratchet that can fail
 
-**Phase B1 — Extract `plan`'s `## Sharp Edges`** (150,469 B, 58%) into
-`plugins/soleur/skills/plan/references/plan-sharp-edges.md`, behind a
-**conditional** load directive naming the phase that needs it — matching the 7
-existing gated directives, not the 5 unconditional ones. Text moves verbatim.
+**Phase B1 — Extract `plan`'s `## Sharp Edges`** (151,209 B — 150,469 was a
+character count, 58%) into
+`plugins/soleur/skills/plan/references/plan-sharp-edges.md`, behind a load
+directive. Text moves verbatim. *Revised at review:* the directive is
+unconditional and placed as the last step before Plan Review, not conditional
+on a phase — the catalogue is plan-hygiene that applies to every plan, and the
+saving is per-turn (late load), not per-invocation; see ADR-225 Consequences
+and decision-challenges §3.
 
 **Phase B2 — Byte ratchet.** One ceiling per lifecycle `SKILL.md`, asserted
 against the **merge base**. Three requirements from review:
@@ -228,7 +232,7 @@ against the **merge base**. Three requirements from review:
    time-boxed to this PR, with a mutation row proving deletion reddens.
 3. **Seed with ~10% headroom**, not at post-extraction size. A zero-headroom
    seed guarantees the first bump PR within a week — the exact ritual
-   `SKILL_DESCRIPTION_WORD_BUDGET` has performed 14 times.
+   `SKILL_DESCRIPTION_WORD_BUDGET` has performed 15 times.
 
 **"Lifecycle skill" is defined as a machine-readable set** — the seven keys of
 `declaredTransitions()` — so the unclassified bucket is neither vacuous nor
@@ -304,9 +308,12 @@ copy — both outside the files this plan edits.
 **Property.** No lifecycle `SKILL.md` exceeds its pinned ceiling, and a ceiling
 can only be lowered.
 
-**Assembly.** The seven keys of `declaredTransitions()` resolved to
-`plugins/soleur/skills/<name>/SKILL.md`, **plus a red unclassified bucket** for
-a lifecycle skill with no row. `MIN_CASES` = 7.
+**Assembly.** Every key **and every destination** of the declared view, read
+from the merge base *and* the working tree, resolved to
+`plugins/soleur/skills/<name>/SKILL.md`, **plus a red unclassified bucket** in
+both directions (a node with no row; a row with no node). Eight nodes at
+introduction (`one-shot` is destination-only). Bootstrap is legal only when the
+lint is also absent at the base.
 
 **Mutation matrix.**
 
@@ -319,6 +326,10 @@ a lifecycle skill with no row. `MIN_CASES` = 7.
 | 5 | Add a **second** oversized file after a compliant first | RED — reports both |
 | 6 | Make the discovery glob match zero files | RED via `MIN_CASES` |
 | 7 | Run the job at `fetch-depth: 1` | RED — base-unavailable is a hard failure, never an accept |
+| 8 | Add a ceiling row for a name that is not a node | RED — orphan row (review) |
+| 9 | Add a destination-only node with no ceiling row | RED — keys AND destinations (review) |
+| 10 | Bloat a file AND drop its node from the view in the same diff | RED — base ∪ working-tree node set (review) |
+| 11 | `git mv` the ceiling file + edit `BUDGET_REL` in one diff | RED — bootstrap refused when the lint exists at base (review) |
 
 **Harness rows.** Must-PASS (non-canonical): a file 1 byte under its ceiling is
 green. Must-RED: delete the `expect` while keeping the `it()` name.
@@ -353,8 +364,11 @@ failure_modes:
     detection: Guard 2 row 7
     alert_route: CI red
   - mode: extracted Sharp Edges never loaded
-    detection: the load directive names its gating phase; the follow-through probe reports the transition baseline
-    alert_route: follow-through sweeper
+    detection: the load directive is unconditional at a named step (6.5, before Plan Review) with a STOP-and-report arm if the file is absent; a reachability guard in components.test.ts reds if references/plan-sharp-edges.md stops being named from plan/SKILL.md
+    alert_route: CI red (bun shard)
+  - mode: the transition probe runs where the log cannot exist (hosted sweeper, fresh checkout)
+    detection: measured at review — FAIL on every sweep; the probe is operator-run and NOT enrolled
+    alert_route: none by design; ADR-225 Alternatives table records why
 logs:
   where: .claude/.rule-incidents.jsonl and .claude/.skill-invocations.jsonl (gitignored, 0600, machine-local)
   retention: rotated to *.gz; both live and rotated files are read
@@ -490,7 +504,7 @@ Skipped — no persistent store, no new cross-component connection.
       *(v1's byte-sum check was content-blind and could pass on substituted text.)*
 - [ ] **AC13** — `plan/SKILL.md` is under 120,000 bytes, and its load directive
       names an explicit gating condition.
-- [ ] **AC14** — Ceilings carry ≥10% headroom over current sizes.
+- [ ] **AC14** — Ceilings carry ≥10% headroom over current sizes (re-seeded after the rebase onto a `main` that had grown `review`/`work`).
 - [ ] **AC15** — The ratchet job declares `fetch-depth: 0`, and a shallow
       checkout produces a hard RED rather than a skip (Guard 2 row 7).
 - [ ] **AC16** — **The ratchet is demonstrated RED.** The PR body carries the
@@ -500,9 +514,13 @@ Skipped — no persistent store, no new cross-component connection.
 - [ ] **AC19** — `ADR-225-*.md` exists; ordinal re-verified across all `origin/*`
       refs immediately before merge.
 - [ ] **AC20** — `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`
-      exists, is executable, and honours the sweeper contract
-      (0 PASS / 1 FAIL / other TRANSIENT). The tracker carries a matching
-      `soleur:followthrough` directive whose `script=` resolves.
+      exists, is executable, and honours the sweeper exit contract
+      (0 PASS / 1 FAIL / other TRANSIENT) so it reads like its siblings — but it
+      is **operator-run and NOT enrolled**: the sweeper runs on a hosted runner
+      where the gitignored invocation log cannot exist, and a synthetic fresh
+      checkout measured FAIL on every run (the #6042 locality error). The
+      tracker carries no `soleur:followthrough` directive; ADR-225 records the
+      reason and the command.
 - [ ] **AC21** — No rule pruned: the rule-id count is unchanged at 98 and the
       retired-rule registry gains no row.
 
@@ -550,7 +568,7 @@ Written as `mutation → guard reddens`.
 | Block-mode gate | ADR-070 forbids denial on a non-re-fetching layer; at 16/98 coverage it would false-deny `/go` |
 | `mandatorySuccessors()` reads the canonical JSON | The plugin does not ship `.claude/`; returns `[]` on customer installs |
 | Extract `work` / `review` bodies (v1) | Core-path: `work`'s Execution Workflow is lines 122–1281 of 1392. Two reads, identical bytes, new drift surface. The proven `references/` pattern runs at ~5% extraction, not 80% |
-| Raise emission coverage via SKILL.md prose (v1) | Zero `emit_incident` call sites appeared in any SKILL.md in five months; the mechanism does not stick |
+| Raise emission coverage via SKILL.md prose (v1) | Emission via SKILL.md is LIVE, not stalled: ADR-179 decision 9 (#7482, 2026-08-13) inverted the `source incidents.sh` form into `SOLEUR_RULE_APPLIED` markers captured hook-side — 21 sites across 7 lifecycle skills on `main`, 869 `applied` events in the live log. The audit's "4 of 10 skills" was a grep for the string `incidents.sh`, which the inverted transport no longer contains. Widening the remaining ~80 uncovered rules is a per-rule choice, not a mechanism gap, and out of scope here (corrected at review; the v1 reason "the mechanism does not stick" was false) |
 | Restore a CI aggregator schedule | Cut (C1) — #6042 removed it because fresh checkouts clobber the real aggregate |
 | Stored session state file | Fragmentation is a root-resolution property a stored file inherits identically |
 | Normalize sub-phase grammars here | 4+ grammars; week+ migration → #8303 |

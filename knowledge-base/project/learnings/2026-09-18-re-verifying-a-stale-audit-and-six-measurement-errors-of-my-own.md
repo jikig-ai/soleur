@@ -32,6 +32,14 @@ and the audit never updates**. Three framings inverted:
    It stalled at 4 of 10 planned skills sourcing `.claude/hooks/lib/incidents.sh`.
    The real question was *why it stalled*, not how to design it. Found by a
    name-keyed sweep of `knowledge-base/project/brainstorms/archive/`.
+   > **Corrected at review (2026-09-18):** this framing was itself the error it
+   > describes. It did not stall — #7482 (ADR-179 d9) inverted every
+   > `source incidents.sh` site into a `SOLEUR_RULE_APPLIED` marker the same
+   > afternoon the audit was written; 21 sites / 7 skills / 869 applied events
+   > are live on `main`. The "4 skills" count grepped for a string the new
+   > transport does not contain. Re-verifying a stale audit's NUMBERS is not the
+   > same as re-verifying its MECHANISM claims; a mechanism can be replaced
+   > without its old name surviving anywhere to grep for.
 2. **"Aggregation reads a single per-checkout fragment."** Fixed on 2026-09-11
    by PR #8029 (`65d6a1584`) — a month *after* the audit was written.
 3. **"Does the gate block or only record?"** framed as an open operator
@@ -53,7 +61,7 @@ sibling roots — 32% of a 35,228-row corpus**.
 ### A measurement instrument can be mute at layers that each look like the whole problem
 
 Three independent layers here, and fixing any one alone leaves it mute:
-**emission** (79 of 98 rules have no call site), **collection** (32% unread),
+**emission** (~80 of 98 rules have no emitter; the marker transport is live for 10), **collection** (32% unread),
 and **cadence** — `.github/workflows/rule-metrics-aggregate.yml` is
 `workflow_dispatch` only; the weekly schedule was *removed* under #6042 because
 fresh CI checkouts saw zero incidents. The cadence layer was invisible to the

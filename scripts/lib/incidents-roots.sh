@@ -23,17 +23,24 @@
 #     never sort.
 
 # incidents_roots_from_porcelain
-#   stdin : output of `git worktree list --porcelain`
-#   stdout: one worktree path per line, in input order
+#   stdin : output of `git worktree list --porcelain -z` (NUL-terminated records)
+#   stdout: one worktree path per record, NUL-terminated, in input order
 #
-# Keys on the `worktree ` line prefix rather than on whitespace: the porcelain
-# stream also carries `HEAD <sha>`, `branch <ref>`, `bare` and `detached` lines,
-# and a branch named e.g. refs/heads/worktree-ish must not be mistaken for a path.
+# NUL framing is load-bearing, not a nicety. Without `-z` git prints the path RAW,
+# and a worktree whose path contains a newline followed by `worktree /any/dir`
+# injects an arbitrary root into every consumer (reproduced at review, git 2.55:
+# the forged path was enumerated as a worktree). `-z` is the interface git
+# provides for exactly this; under it a path with an embedded newline round-trips
+# intact. Consumers MUST read with `read -r -d ''`.
+#
+# Keys on the `worktree ` record prefix rather than on whitespace: the stream also
+# carries `HEAD <sha>`, `branch <ref>`, `bare` and `detached` records, and a branch
+# named e.g. refs/heads/worktree-ish must not be mistaken for a path.
 incidents_roots_from_porcelain() {
-  local line
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    case "$line" in
-      "worktree "*) printf '%s\n' "${line#worktree }" ;;
+  local rec
+  while IFS= read -r -d '' rec || [[ -n "$rec" ]]; do
+    case "$rec" in
+      "worktree "*) printf '%s\0' "${rec#worktree }" ;;
     esac
   done
   return 0
@@ -82,7 +89,33 @@ incidents_dedupe_existing_dirs() {
     [[ -n "$key" ]] || continue
     [[ -n "${_seen[$key]+x}" ]] && continue
     _seen[$key]=1
-    printf '%s\n' "$d"
+    # NUL-terminated, like the porcelain stage above it. Review found the
+    # newline framing defended at stage 1 was re-split here: a root named
+    # ".../x\n/FORGED/.claude" passed dedupe and the consumer's newline reader
+    # yielded two roots, the second forged. Consumers MUST read with -d ''.
+    printf '%s\0' "$d"
   done
   return 0
+}
+
+# incidents_enumerate_log_roots <repo-root> [<extra-root>...]
+#   stdout: NUL-terminated, inode-deduped list of `<worktree>/.claude` dirs to
+#           read, FIRST ARGUMENT'S .claude FIRST (rotation pins element 0).
+#
+# The one composition both consumers run: repo root, any caller-supplied extra
+# roots (the aggregator passes the shared checkout beside --git-common-dir),
+# then every registered worktree, deduped by inode with first-seen order kept.
+# Extracted because the two hand copies had already diverged once -- the
+# aggregator gained an unreadable-root sentinel the classifier's copy lacked.
+incidents_enumerate_log_roots() {
+  local repo_root="${1-}" extra wt
+  [[ -n "$repo_root" ]] || return 1
+  shift
+  local -a cands=("$repo_root/.claude")
+  for extra in "$@"; do [[ -n "$extra" ]] && cands+=("$extra/.claude"); done
+  while IFS= read -r -d '' wt; do
+    [[ -n "$wt" ]] || continue
+    cands+=("$wt/.claude")
+  done < <(git -C "$repo_root" worktree list --porcelain -z 2>/dev/null | incidents_roots_from_porcelain)
+  incidents_dedupe_existing_dirs "${cands[@]}"
 }

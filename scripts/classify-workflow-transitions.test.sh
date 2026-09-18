@@ -133,7 +133,7 @@ fi
 
 # --- 7. --summary exits 0 and names a count -----------------------------------
 SOUT=$(CLASSIFY_REPO_ROOT="$ROOT" bash "$SUT" --summary 2>&1); SRC=$?
-if [[ "$SRC" -eq 0 && "$SOUT" == *"1"* ]]; then
+if [[ "$SRC" -eq 0 && "$SOUT" == *"undeclared=1 "* ]]; then
   pass "--summary exits 0 and reports the count"
 else
   fail "--summary rc=$SRC out='$SOUT'"
@@ -180,21 +180,107 @@ else
   fail "unparseable log did not fail loudly — rc=$BRC out='$BOUT'"
 fi
 
-# --- 11. a sub-skill call is UNCLASSIFIED, not a violation --------------------
+# --- 11. a sub-skill call is NOT a violation ----------------------------------
 # plan -> deepen-plan is plan invoking its own enrichment step; ship -> preflight
 # is ship invoking its own gate. Neither is a lifecycle transition. Keying only
 # on the `from` endpoint made these the DOMINANT output against real data (736
-# and 797 occurrences), burying the two genuine plan -> ship violations.
+# and 797 occurrences), burying the two genuine plan -> ship violations. The
+# non-node record is dropped from the walk and counted as `nonnode`.
 SUBSK="$TMP_ROOT/subskill"; mkdir -p "$SUBSK/.claude"
 cp "$ROOT/.claude/workflow-transitions.json" "$SUBSK/.claude/"
 slog="$SUBSK/.claude/.skill-invocations.jsonl"
 printf '{"schema":1,"ts":"2026-09-18T12:00:00Z","skill":"soleur:plan","session_id":"sessC"}\n' > "$slog"
 printf '{"schema":1,"ts":"2026-09-18T12:01:00Z","skill":"soleur:deepen-plan","session_id":"sessC"}\n' >> "$slog"
 SUOUT=$(CLASSIFY_REPO_ROOT="$SUBSK" bash "$SUT" --summary 2>&1); SURC=$?
-if [[ "$SURC" -eq 0 && "$SUOUT" == *"undeclared=0"* && "$SUOUT" == *"unclassified=1"* ]]; then
-  pass "a sub-skill call counts as unclassified, not as a violation"
+if [[ "$SURC" -eq 0 && "$SUOUT" == *"undeclared=0 "* && "$SUOUT" == *"nonnode=1 "* ]]; then
+  pass "a sub-skill call is dropped from the walk (nonnode=1), not reported as a violation"
 else
   fail "sub-skill misclassified — rc=$SURC out='$SUOUT'"
+fi
+
+# --- 12. a sub-skill hop does NOT launder the lifecycle transition around it --
+# The escape two review seats found against the pristine script: with raw
+# adjacency and a both-endpoints rule, plan -> deepen-plan -> ship produced two
+# unclassified pairs and ZERO violations, so the review-skip was invisible on the
+# most common real path. Collapsing to node records pairs plan with ship.
+LAUN="$TMP_ROOT/launder"; mkdir -p "$LAUN/.claude"
+cp "$ROOT/.claude/workflow-transitions.json" "$LAUN/.claude/"
+llog="$LAUN/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T13:00:00Z","skill":"soleur:plan","session_id":"sessL"}\n' > "$llog"
+printf '{"schema":1,"ts":"2026-09-18T13:01:00Z","skill":"soleur:deepen-plan","session_id":"sessL"}\n' >> "$llog"
+printf '{"schema":1,"ts":"2026-09-18T13:02:00Z","skill":"soleur:ship","session_id":"sessL"}\n' >> "$llog"
+LOUT=$(CLASSIFY_REPO_ROOT="$LAUN" bash "$SUT" 2>&1); LRC=$?
+if [[ "$LRC" -eq 0 && "$LOUT" == *"plan -> ship"* ]]; then
+  pass "plan -> deepen-plan -> ship still reports plan -> ship (no laundering through a sub-skill)"
+else
+  fail "sub-skill laundered the violation — rc=$LRC out='$LOUT'"
+fi
+
+# --- 13. rotated archives are part of the corpus -------------------------------
+# The producer rotates the live log into .skill-invocations-<ts>.jsonl.gz. A
+# session split across the boundary -- plan in the archive, ship live -- must
+# still pair. Reading only the live file made this pairs=1 undeclared=0 and let
+# the corpus (and the followthrough baseline) shrink silently at every rotation.
+ARCH="$TMP_ROOT/archive"; mkdir -p "$ARCH/.claude"
+cp "$ROOT/.claude/workflow-transitions.json" "$ARCH/.claude/"
+printf '{"schema":1,"ts":"2026-09-18T14:00:00Z","skill":"soleur:plan","session_id":"sessA"}\n' \
+  | gzip -c > "$ARCH/.claude/.skill-invocations-20260918T140000Z.jsonl.gz"
+printf '{"schema":1,"ts":"2026-09-18T14:05:00Z","skill":"soleur:ship","session_id":"sessA"}\n' \
+  > "$ARCH/.claude/.skill-invocations.jsonl"
+AOUT=$(CLASSIFY_REPO_ROOT="$ARCH" bash "$SUT" --summary 2>&1); ARC=$?
+if [[ "$ARC" -eq 0 && "$AOUT" == *"undeclared=1 "* && "$AOUT" == *"read=2 "* ]]; then
+  pass "a rotated .jsonl.gz archive is read and pairs across the rotation boundary"
+else
+  fail "archive not read — rc=$ARC out='$AOUT'"
+fi
+
+# --- 14. pairs follow TIMESTAMP order, not file order --------------------------
+# MERGED is a cat across roots, and one session_id can write to two roots, so
+# arrival order is not chronological. File order here is compound, ship
+# (declared); timestamps make it ship, compound (undeclared). Removing the
+# sort_by(.t) flips the verdict, which is what pins it.
+ORD="$TMP_ROOT/order"; mkdir -p "$ORD/.claude"
+cp "$ROOT/.claude/workflow-transitions.json" "$ORD/.claude/"
+olog="$ORD/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T15:09:00Z","skill":"soleur:compound","session_id":"sessO"}\n' > "$olog"
+printf '{"schema":1,"ts":"2026-09-18T15:01:00Z","skill":"soleur:ship","session_id":"sessO"}\n' >> "$olog"
+OOUT=$(CLASSIFY_REPO_ROOT="$ORD" bash "$SUT" 2>&1); ORC=$?
+if [[ "$ORC" -eq 0 && "$OOUT" == *"ship -> compound"* ]]; then
+  pass "out-of-order arrival is sorted by ts before pairing"
+else
+  fail "file order used instead of ts order — rc=$ORC out='$OOUT'"
+fi
+
+# --- 15. an EMPTY session_id is dropped, not pooled ----------------------------
+# "" passes a `!= null` test. Two records from different sessions that both
+# carry "" would pool into one phantom session and fabricate a pair.
+POOL="$TMP_ROOT/pool"; mkdir -p "$POOL/.claude"
+cp "$ROOT/.claude/workflow-transitions.json" "$POOL/.claude/"
+plog="$POOL/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T16:00:00Z","skill":"soleur:plan","session_id":""}\n' > "$plog"
+printf '{"schema":1,"ts":"2026-09-18T16:01:00Z","skill":"soleur:ship","session_id":""}\n' >> "$plog"
+printf '{"schema":1,"ts":"2026-09-18T16:02:00Z","skill":"soleur:plan","session_id":"real"}\n' >> "$plog"
+POUT=$(CLASSIFY_REPO_ROOT="$POOL" bash "$SUT" --summary 2>&1); PRC=$?
+if [[ "$PRC" -eq 0 && "$POUT" == *"undeclared=0 "* && "$POUT" == *"dropped=2"* ]]; then
+  pass "empty session_id records are dropped (dropped=2), never pooled into a phantom session"
+else
+  fail "empty session_id pooled or kept — rc=$PRC out='$POUT'"
+fi
+
+# --- 16. a PARTIALLY unparseable log warns and continues --------------------
+# Case 10 pins the all-unparseable arm. This pins the mixed one: one good record
+# plus one bad must exit 0 with dropped=1 and a WARNING, so the warning branch is
+# reachable and `if false` on it reds.
+MIX="$TMP_ROOT/mixed"; mkdir -p "$MIX/.claude"
+cp "$ROOT/.claude/workflow-transitions.json" "$MIX/.claude/"
+mlog="$MIX/.claude/.skill-invocations.jsonl"
+printf '{"schema":1,"ts":"2026-09-18T17:00:00Z","skill":"soleur:plan","session_id":"m"}\n' > "$mlog"
+printf '{"schema":1,"when":"2026-09-18T17:01:00Z","name":"soleur:ship","sid":"m"}\n' >> "$mlog"
+MOUT=$(CLASSIFY_REPO_ROOT="$MIX" bash "$SUT" --summary 2>&1); MRC=$?
+if [[ "$MRC" -eq 0 && "$MOUT" == *"WARNING: dropped 1 of 2"* && "$MOUT" == *"dropped=1"* ]]; then
+  pass "a partially unparseable log warns (dropped=1) and still classifies the rest"
+else
+  fail "mixed log did not warn — rc=$MRC out='$MOUT'"
 fi
 
 # SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
@@ -203,7 +289,7 @@ fi
 # FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=11
+MIN_CASES=16
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

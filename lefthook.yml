@@ -111,7 +111,7 @@ pre-commit:
         - "AGENTS.md"
         - "AGENTS.rules.md"
         - "plugins/soleur/skills/compound/SKILL.md"
-        - "plugins/soleur/skills/plan/SKILL.md"
+        - "plugins/soleur/skills/plan/references/plan-sharp-edges.md"
         - "scripts/lint-agents-rule-budget.py"
         - "scripts/compound-promote.sh"
         - "apps/web-platform/server/inngest/functions/cron-compound-promote.ts"

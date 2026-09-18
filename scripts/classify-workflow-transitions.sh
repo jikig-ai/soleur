@@ -18,9 +18,10 @@
 #      which also means nothing new can wedge a session, and ADR-070's two-tier
 #      rule (deny-by-default only on re-fetching layers) is not engaged at all.
 #
-# PROPERTY: for every session in the invocation log, each consecutive
-# (previous skill -> next skill) pair absent from the declared edge set is
-# reported exactly once, attributed to the session it occurred in.
+# PROPERTY: for every session in the invocation log, each consecutive pair of
+# LIFECYCLE-NODE records (non-node records removed first, so a sub-skill hop
+# collapses to the transition it encloses) whose edge is absent from the
+# declared set is reported exactly once, attributed to its session.
 #
 # Usage:
 #   scripts/classify-workflow-transitions.sh              # one row per violation
@@ -35,7 +36,16 @@ SUMMARY=0
 for arg in "$@"; do
   case "$arg" in
     --summary) SUMMARY=1 ;;
-    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    -h|--help)
+      cat <<'USAGE'
+usage: classify-workflow-transitions.sh [--summary]
+  default    one TSV row per undeclared lifecycle transition: <session_id>\t<from> -> <to>
+  --summary  one key=value line: undeclared= sessions= pairs= nonnode= read= dropped= [null_reading=1]
+env: CLASSIFY_REPO_ROOT=<dir>  read ONLY that root (skips sibling-worktree enumeration)
+exit: 0 classified (a null reading still exits 0 and says so); 2 could not classify
+USAGE
+      exit 0 ;;
+    *) echo "unknown argument: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
 
@@ -46,13 +56,15 @@ source "$SCRIPT_DIR/lib/incidents-roots.sh"
 REPO_ROOT="${CLASSIFY_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VIEW="$REPO_ROOT/.claude/workflow-transitions.json"
 
-command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required (install jq, or run this where the aggregator runs)" >&2; exit 2; }
 
 # FAIL CLOSED on a missing edge set. Classifying against an empty set would
 # report EVERY transition as undeclared -- a confident wrong answer, which is
 # worse than a missing one.
 if [[ ! -r "$VIEW" ]]; then
   echo "FATAL: declared transition view not readable at $VIEW" >&2
+  echo "       The view is repo tooling, not part of the shipped plugin (ADR-225): this probe" >&2
+  echo "       runs only in a soleur source checkout. On such a checkout, restore it from git." >&2
   exit 2
 fi
 
@@ -62,15 +74,17 @@ fi
 # different path strings is not walked twice.
 ROOTS=("$REPO_ROOT/.claude")
 if [[ -z "${CLASSIFY_REPO_ROOT:-}" ]]; then
-  while IFS= read -r _wt; do
-    [[ -n "$_wt" ]] || continue
-    ROOTS+=("$_wt/.claude")
-  done < <(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null | incidents_roots_from_porcelain)
+  # Same composition as the aggregator (scripts/lib/incidents-roots.sh).
+  # Measured 2026-09-18: the Skill logger resolves via $CLAUDE_PROJECT_DIR and
+  # every live invocation record sat in the main root, so sibling enumeration
+  # found nothing here -- it is kept for parity with the incident log (whose
+  # hook DOES fragment per root) and costs ~4 ms, but the earlier claim that
+  # the invocation log has "the same per-root fragmentation" was false.
   _dd=()
-  while IFS= read -r _d; do
+  while IFS= read -r -d '' _d; do
     [[ -n "$_d" ]] || continue
     _dd+=("$_d")
-  done < <(incidents_dedupe_existing_dirs "${ROOTS[@]}")
+  done < <(incidents_enumerate_log_roots "$REPO_ROOT")
   [[ ${#_dd[@]} -gt 0 ]] && ROOTS=("${_dd[@]}")
 fi
 
@@ -80,9 +94,25 @@ trap 'rm -f -- "$MERGED"' EXIT INT TERM
 found=0
 for d in "${ROOTS[@]}"; do
   if [[ -s "$d/.skill-invocations.jsonl" ]]; then
-    cat "$d/.skill-invocations.jsonl" >> "$MERGED" || true
-    found=1
+    if [[ -r "$d/.skill-invocations.jsonl" ]]; then
+      cat "$d/.skill-invocations.jsonl" >> "$MERGED" || true
+      found=1
+    else
+      echo "SOLEUR_WORKFLOW_TRANSITIONS_ROOT_UNREADABLE root=$d — enumerated but not readable; its records are ABSENT from this reading" >&2
+    fi
   fi
+  # ROTATED ARCHIVES. The producer rotates the live log through log-rotation.sh
+  # into .skill-invocations-<ts>.jsonl.gz, and the aggregator's sibling readers
+  # (skill-freshness-aggregate.sh, token-efficiency-report.sh) already zcat them.
+  # Reading only the live file made a session split across a rotation boundary
+  # (plan in the archive, ship in the live file) report pairs=1 undeclared=0 --
+  # and the corpus, and the followthrough's baseline with it, would have shrunk
+  # silently at every rotation. Found at review by two independent seats.
+  for _gz in "$d"/.skill-invocations-*.jsonl.gz; do
+    [[ -f "$_gz" ]] || continue
+    zcat -- "$_gz" >> "$MERGED" 2>/dev/null || true
+    found=1
+  done
 done
 
 # Absence must be LOUD. A missing log and a log of genuinely zero violations
@@ -91,7 +121,11 @@ done
 # SOLEUR_RULE_METRICS_NO_INCIDENTS.
 if [[ "$found" -eq 0 ]]; then
   echo "SOLEUR_WORKFLOW_TRANSITIONS_NO_INVOCATIONS roots=${ROOTS[*]} reason=absent — this is a NULL reading, not an all-clear" >&2
-  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 unclassified=0 (NULL READING)"
+  echo "       The producer is .claude/hooks/skill-invocation-logger.sh; its log is gitignored and exists only" >&2
+  echo "       where sessions have run. A fresh checkout or CI runner has none, by construction." >&2
+  # Same key set as the real summary line, plus an explicit flag -- one schema
+  # per flag, so a key=value consumer never sees two shapes.
+  [[ "$SUMMARY" -eq 1 ]] && echo "undeclared=0 sessions=0 pairs=0 nonnode=0 read=0 dropped=0 null_reading=1"
   exit 0
 fi
 
@@ -101,10 +135,11 @@ fi
 #     the last call of a DIFFERENT session was, which makes cross-session false
 #     positives the dominant output rather than the exception
 #   - sort within a session by timestamp, then walk consecutive pairs
-#   - a pair whose `from` is not a declared node is UNCLASSIFIED, not a
-#     violation: entry points like `go` legitimately precede a lifecycle skill
-#     and reporting them would drown the real signal. The count is surfaced in
-#     --summary so the exclusion is visible rather than silent.
+#   - records whose skill is not a declared node (go, one-shot, deepen-plan,
+#     preflight, qa, ...) are removed BEFORE pairing, so a sub-skill hop between
+#     two lifecycle nodes collapses to the lifecycle transition it encloses.
+#     Their count is surfaced as `nonnode` in --summary so the exclusion is
+#     visible rather than silent.
 read -r -d '' JQ <<'JQEOF' || true
   [inputs]
   # The producer's timestamp field is `ts` (skill-invocation-logger.sh), NOT
@@ -112,55 +147,64 @@ read -r -d '' JQ <<'JQEOF' || true
   # silent zero: filtering on `.timestamp` dropped all 10,260 live records and
   # reported "undeclared=0 pairs=0", which is indistinguishable from a clean
   # run. `dropped` below exists so that can never be silent again.
+  #
+  # `session_id != ""` as well as `!= null`: an empty string passes a null test
+  # and would POOL every such record into one phantom session, fabricating pairs.
   | . as $raw
-  | map(select(.skill != null and .session_id != null and ((.ts // .timestamp) != null)))
-  | map(.t = (.ts // .timestamp))
-  | map(.skill |= sub("^soleur:"; ""))
+  | map(select(.skill != null and .session_id != null and .session_id != "" and .ts != null))
+  | map(.t = .ts)
+  # ltrimstr, not sub(): identical for a prefix strip and ~35% cheaper at 10x
+  # volume (regex compiled per record).
+  | map(.skill |= ltrimstr("soleur:"))
   | ($raw | length) as $read
   | (length) as $kept
+  # Bind the edge map BEFORE piping. `X | has(.from)` evaluates `.from` against
+  # X, not against the element, because `|` rebinds `.` -- the same scoping trap
+  # as `list | index(.key)`. It fails loudly ("Cannot check whether object has a
+  # null key"), but the `index` variant would silently never match.
+  | ($decl[0].transitions) as $T
+  # LIFECYCLE NODES ONLY, then pair. The first version paired RAW adjacent
+  # records and required both endpoints to be nodes, which was correct about one
+  # thing (ship -> preflight is not a lifecycle transition) and wrong about the
+  # thing that matters: plan -> deepen-plan -> ship produced two unclassified
+  # pairs and ZERO violations, so the review-skip was invisible on exactly the
+  # most common real path (plan -> deepen-plan occurs 736 times in the corpus).
+  # Filtering each session to node records first collapses the sub-skill hop
+  # and pairs plan with ship, which the edge set then refuses. Two review seats
+  # found this independently against the pristine script.
+  | map(select(. as $r | $T | has($r.skill))) as $nodes
+  | ($kept - ($nodes | length)) as $nonnode
+  | $nodes
   | group_by(.session_id)
   | map(sort_by(.t))
   | map(. as $s | [range(1; ($s | length))]
         | map({ session: $s[0].session_id, from: $s[. - 1].skill, to: $s[.].skill }))
   | flatten
-  # Bind the edge map AND each field BEFORE piping. `X | has(.from)` evaluates
-  # `.from` against X, not against the element, because `|` rebinds `.` -- the
-  # same scoping trap as `list | index(.key)`. It does not error quietly either:
-  # it fails with "Cannot check whether object has a null key", which is at
-  # least loud, but the `index` variant would silently never match.
-  | ($decl[0].transitions) as $T
   | { read: $read,
       kept: $kept,
       dropped: ($read - $kept),
+      nonnode: $nonnode,
       pairs: length,
       sessions: (map(.session) | unique | length),
-      # BOTH endpoints must be lifecycle nodes. A transition whose destination
-      # is a SUB-SKILL of the current node is not a lifecycle transition at all:
-      # measured against 16 months of real sessions, keying only on `from` made
-      # ship -> preflight (797), plan -> deepen-plan (736), review -> qa (549)
-      # and compound -> compound-capture (124) read as violations, which is an
-      # instrument misreporting itself rather than a finding.
-      unclassified: (map(select(. as $p | (($T | has($p.from)) and ($T | has($p.to))) | not)) | length),
-      violations: (map(select(. as $p | ($T | has($p.from)) and ($T | has($p.to))))
-                   | map(select(. as $p | ($T[$p.from] // []) | index($p.to) == null))) }
+      violations: map(select(. as $p | ($T[$p.from] // []) | index($p.to) == null)) }
 JQEOF
 
 # `-n` so jq does not consume the first object implicitly; `[inputs]` then slurps
 # the whole stream. Errors are NOT suppressed: an empty RESULT renders exactly
 # like "no violations", so a parse failure must be loud rather than clean.
 if ! RESULT=$(jq -n --slurpfile decl "$VIEW" "$JQ" < "$MERGED"); then
-  echo "FATAL: could not classify $MERGED against $VIEW" >&2
+  echo "FATAL: could not classify the merged invocation log (roots: ${ROOTS[*]}) against $VIEW" >&2
   exit 2
 fi
 if [[ -z "$RESULT" ]]; then
-  echo "FATAL: classification produced no output for $MERGED — treating as unresolved, not clean" >&2
+  echo "FATAL: classification produced no output (roots: ${ROOTS[*]}) — treating as unresolved, not clean" >&2
   exit 2
 fi
 
 n=$(printf '%s' "$RESULT" | jq -r '.violations | length')
 pairs=$(printf '%s' "$RESULT" | jq -r '.pairs')
 sessions=$(printf '%s' "$RESULT" | jq -r '.sessions')
-unclassified=$(printf '%s' "$RESULT" | jq -r '.unclassified')
+nonnode=$(printf '%s' "$RESULT" | jq -r '.nonnode')
 read_n=$(printf '%s' "$RESULT" | jq -r '.read')
 kept=$(printf '%s' "$RESULT" | jq -r '.kept')
 dropped=$(printf '%s' "$RESULT" | jq -r '.dropped')
@@ -182,9 +226,12 @@ if [[ "$dropped" -gt 0 ]]; then
 fi
 
 if [[ "$SUMMARY" -eq 1 ]]; then
-  echo "undeclared=$n sessions=$sessions pairs=$pairs unclassified=$unclassified read=$read_n dropped=$dropped"
+  echo "undeclared=$n sessions=$sessions pairs=$pairs nonnode=$nonnode read=$read_n dropped=$dropped"
   exit 0
 fi
 
-printf '%s' "$RESULT" | jq -r '.violations[] | "  \(.session)\t\(.from) -> \(.to)"'
+# @tsv escapes tabs/newlines inside the fields, which come straight from the
+# log's `skill`/`session_id` (unshaped by the producer); a raw interpolation let a
+# crafted skill name forge extra rows and columns.
+printf '%s' "$RESULT" | jq -r '.violations[] | [.session, (.from + " -> " + .to)] | @tsv | "  " + .'
 exit 0

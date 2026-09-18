@@ -1,9 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { resolve, join } from "path";
 import { tmpdir } from "os";
 import {
+  pipelineInvocationSuffix,
   isPipelineSkill,
   isHandoffSkill,
   isOneShotRoute,
@@ -602,8 +604,9 @@ describe("Guard 2 — Skill/Monitor stay; aliased Grok twins are forbidden (meas
 // (workflow-fidelity.ts, workflowFidelityInstructions). Putting a back-edge
 // there would instruct the model to re-enter planning after every work run.
 // A permitted transition and a mandatory successor are different concepts and
-// must not share a function — the assertions at :113-119 pin the latter with
-// toEqual, so this is enforced rather than merely documented.
+// must not share a function — the `mandatorySuccessors maps lifecycle handoffs`
+// test pins the latter with toEqual, so this is enforced rather than merely
+// documented. (A content anchor, not a line number: cq-cite-content-anchor.)
 // ---------------------------------------------------------------------------
 describe("declaredTransitions — permitted edges, including back-edges", () => {
   test("every lifecycle node declares its edge set", () => {
@@ -643,9 +646,40 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
     expect(mandatorySuccessors("ship")).not.toContain("work");
   });
 
+  // THE WIRE BETWEEN THE TWO FUNCTIONS. The toEqual pins on mandatorySuccessors
+  // and the edge-set pins above are two covered endpoints; nothing above says
+  // the successors collection is CONSISTENT with the edge set. Review's escape:
+  // `case "plan": return ["work", "ship"]` in mandatorySuccessors renders an
+  // instruction to skip review while isDeclaredTransition("plan","ship") stays
+  // false and every test above stays green. Successors must be a subset of the
+  // declared edges, node by node.
+  test("every mandatory successor is a declared transition (successors ⊆ edges)", () => {
+    for (const from of Object.keys(DECLARED_TRANSITIONS)) {
+      for (const to of mandatorySuccessors(from)) {
+        expect(
+          isDeclaredTransition(from, to),
+          `mandatorySuccessors(${from}) names ${to}, which is not a declared edge`,
+        ).toBe(true);
+      }
+    }
+  });
+
   test("the rendered directive never names a back-edge", () => {
-    const rendered = workflowFidelityInstructions("claude");
-    expect(rendered).not.toContain("invoke next: /plan, /work");
+    // pipelineInvocationSuffix is the emitter of "invoke next:"; the first
+    // version of this test negated that string against
+    // workflowFidelityInstructions, which never emits it, so the negative was
+    // vacuously green (review F8). Positive anchor first, then the negative on
+    // the same emitter for the node that carries a back-edge.
+    // review and compound take the generic "invoke next:" branch; plan, work
+    // and ship carry bespoke prose. Each is anchored on the string it emits.
+    expect(pipelineInvocationSuffix("review")).toContain("invoke next: /compound");
+    expect(pipelineInvocationSuffix("review")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("compound")).toContain("invoke next: /ship");
+    expect(pipelineInvocationSuffix("compound")).not.toContain("/work");
+    expect(pipelineInvocationSuffix("work")).toContain("/review");
+    expect(pipelineInvocationSuffix("work")).not.toContain("/plan");
+    expect(pipelineInvocationSuffix("ship")).toContain("/postmerge");
+    expect(pipelineInvocationSuffix("ship")).not.toContain("/work");
   });
 
   // Typo guard: every destination must itself be a declared node, so a mistyped
@@ -685,10 +719,22 @@ describe("declaredTransitions — permitted edges, including back-edges", () => 
 // consumer for them.
 // ---------------------------------------------------------------------------
 describe("declared-transitions derived view parity", () => {
-  const REPO_ROOT = resolve(PLUGIN_ROOT, "..", "..");
+  // Walk up to the marker the precedent (phase-surface-map-parity.test.ts)
+  // walks to, rather than a hard-coded `../..` — the precedent's own header
+  // calls that shape brittle.
+  function findRepoRoot(start: string): string {
+    let dir = start;
+    for (let i = 0; i < 8; i++) {
+      if (existsSync(join(dir, ".claude", "workflow-transitions.json"))) return dir;
+      dir = resolve(dir, "..");
+    }
+    throw new Error("repo root with .claude/workflow-transitions.json not found above " + start);
+  }
+  const REPO_ROOT = findRepoRoot(PLUGIN_ROOT);
   const VIEW_PATH = join(REPO_ROOT, ".claude", "workflow-transitions.json");
 
   test("the derived view exists and is valid JSON", () => {
+    expect(existsSync(VIEW_PATH)).toBe(true);
     const raw = readFileSync(VIEW_PATH, "utf-8");
     expect(() => JSON.parse(raw)).not.toThrow();
   });
@@ -717,5 +763,56 @@ describe("declared-transitions derived view parity", () => {
         ).toBe(true);
       }
     }
+  });
+
+  // THE RATCHET'S NODE SET IS THIS SET. scripts/lint-skill-body-budget.py derives
+  // "lifecycle skill" from the view's keys and destinations, and refuses a node
+  // with no ceiling row and a row with no node. That is enforced in Python at
+  // CI time; this pins the same identity from the TS side so the budget file
+  // cannot drift from the const between CI runs, and so the ratchet's scope
+  // guard does not depend on a job named for a different concern.
+  test("skill-body-budget.json ceilings are exactly the lifecycle set (FSM keys ∪ destinations ∪ ONE_SHOT_CHILD_SKILLS)", () => {
+    const BUDGET = join(PLUGIN_ROOT, "test", "skill-body-budget.json");
+    const budget = JSON.parse(readFileSync(BUDGET, "utf-8")) as { ceilings: Record<string, number> };
+    // "Lifecycle skill" is NOT only "FSM node": IMPLEMENTATION_TAIL and
+    // ONE_SHOT_CHILD_SKILLS run qa and deepen-plan on every pipeline, and the
+    // FSM does not model them. Review measured deepen-plan at 72 KB with no
+    // ceiling while the ratchet's node set said the lifecycle was covered.
+    const nodes = new Set<string>(Object.keys(DECLARED_TRANSITIONS));
+    for (const tos of Object.values(DECLARED_TRANSITIONS)) for (const to of tos) nodes.add(to);
+    for (const s of ONE_SHOT_CHILD_SKILLS) nodes.add(s);
+    expect(Object.keys(budget.ceilings).sort()).toEqual([...nodes].sort());
+  });
+
+  // GUARD 1 ROW 4 — a CENSUS of edge-set readers, not a snapshot. Every file
+  // that reads the const or the view is enumerated from the tree and compared
+  // to a pinned list, with test files classified explicitly as non-readers. A
+  // second reader added without joining this list reds it. Review found the
+  // reader this would have caught: lint-skill-body-budget.py consumed the view
+  // while ADR-225 named only bash and TypeScript as its reader classes.
+  test("census: every reader of the edge set is a known reader", () => {
+    const out = execFileSync(
+      "git",
+      ["grep", "-l", "-E", "workflow-transitions\\.json|DECLARED_TRANSITIONS|declaredTransitions\\(|isDeclaredTransition\\(", "--",
+        ".", ":!knowledge-base", ":!*.md"],
+      { cwd: REPO_ROOT, encoding: "utf-8" },
+    );
+    const found = out.split("\n").filter(Boolean).sort();
+    const nonReaders = new Set([
+      "plugins/soleur/test/workflow-fidelity.test.ts",
+      "scripts/classify-workflow-transitions.test.sh",
+      "scripts/lint-skill-body-budget.test.sh",
+    ]);
+    const readers = found.filter((f) => !nonReaders.has(f));
+    expect(readers).toEqual([
+      ".claude/workflow-transitions.json",
+      "plugins/soleur/lib/workflow-fidelity.ts",
+      "plugins/soleur/test/skill-body-budget.json",
+      "scripts/classify-workflow-transitions.sh",
+      "scripts/lint-skill-body-budget.py",
+    ]);
+    // Totality: the census must have SEEN the non-readers it classifies, or the
+    // classification is over a set that never contained them.
+    for (const nr of nonReaders) expect(found, `census did not reach ${nr}`).toContain(nr);
   });
 });

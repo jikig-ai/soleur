@@ -47,7 +47,7 @@ then `ls <source>/<path>`. Repo-relative correctness is not shipped correctness.
 
 The plan's best idea was a byte ceiling anchored to the **merge base**, so a
 diff could not raise a ceiling and satisfy it in one commit — the fix for a
-budget constant that had been bumped 14 times, each "against a N/N zero-headroom
+budget constant that had been bumped 15 times, each "against a N/N zero-headroom
 baseline".
 
 It specified the assertion in `plugins/soleur/test/components.test.ts`. That
@@ -125,7 +125,7 @@ every defect in them went with it.
 5. **Wrote a byte-sum conservation check** that is content-blind and passes on
    equal-sized substituted text. — *Prevention:* exact diff, or nothing.
 6. **Seeded ceilings at zero headroom** — the precise pattern the plan cited as
-   the cause of 14 prior bumps. — *Prevention:* when citing a failure mode,
+   the cause of 15 prior bumps. — *Prevention:* when citing a failure mode,
    check the new design does not reproduce it.
 7. **Measured "conditional reference loads" twice with too-short capture
    windows** (reported 0 of 12 both times; the answer is 7 of 12). Third

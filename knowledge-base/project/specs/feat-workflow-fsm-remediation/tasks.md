@@ -48,9 +48,13 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 - [x] 3.5 **NOT NEEDED, because of 3.4:** `phase-surface-map.json` is untouched,
       so `apps/web-platform/server/phase-surface-map.ts` needs no lockstep edit
       and its existing parity test still passes unmodified.
-- [x] 3.6 Parity test across all three views (Guard 1 rows 1–3)
+- [x] 3.6 Parity test across the TWO views (Guard 1 rows 1–2). Row 3 (web copy)
+      is N/A after deviation 3.4: the web copy carries no edge set.
 - [x] 3.7 Census assertion over edge-set readers, classifying test files
-      explicitly as non-readers (Guard 1 row 4)
+      explicitly as non-readers (Guard 1 row 4). **Landed at review, not at
+      work** — it was ticked while unimplemented; the reader it would have
+      caught (`lint-skill-body-budget.py` consuming the view) was found by the
+      architecture seat instead.
 - [x] 3.8 Verify AC5–AC10; run `bash scripts/grok-fidelity-gate.sh`
 
 ## Phase 4: Track A — offline classifier
@@ -67,18 +71,20 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
 
 ## Phase 5: Track B — extraction
 
-- [x] 5.1 Extract `plan`'s `## Sharp Edges` (150,469 B) verbatim into
+- [x] 5.1 Extract `plan`'s `## Sharp Edges` (151,209 B) verbatim into
       `plugins/soleur/skills/plan/references/plan-sharp-edges.md`
-- [x] 5.2 Replace it with a **conditional** load directive naming the gating
-      phase — match the 7 gated directives, not the 5 unconditional ones
+- [x] 5.2 Replace it with a load directive. **Revised at review:** unconditional,
+      placed as step 6.5 before Plan Review, with a STOP arm on a missing file;
+      the conditional premise was measured false (decision-challenges §3)
 - [x] 5.3 Verify AC12 by exact diff against the git base (not a byte sum)
 - [x] 5.4 Verify AC13: `plan/SKILL.md` under 120,000 bytes
 
 ## Phase 6: Track B — ratchet
 
 - [x] 6.1 Seed `plugins/soleur/test/skill-body-budget.json` with ≥10% headroom
-      over current sizes (zero-headroom seeding reproduces the 14-bump ritual)
-- [x] 6.2 Define "lifecycle skill" as the seven `declaredTransitions()` keys
+      over current sizes (zero-headroom seeding reproduces the 15-bump ritual)
+- [x] 6.2 Define "lifecycle skill" as the `declaredTransitions()` keys ∪
+      destinations ∪ `ONE_SHOT_CHILD_SKILLS` (revised at review: 10 rows, not 7)
 - [x] 6.3 Add the ratchet job to `.github/workflows/ci.yml` with
       `fetch-depth: 0` — **not** the bun shard, which has no fetch depth and
       would make the merge-base read fail on every run
@@ -101,8 +107,10 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
       the merge-base ratchet placement.
 - [x] 7.2 Create `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`
       honouring the sweeper contract (0 PASS / 1 FAIL / other TRANSIENT)
-- [ ] 7.3 Add the `soleur:followthrough` directive to the tracker with a
-      `script=` path that resolves (the gate hook blocks otherwise)
+- [~] 7.3 **STRUCK at review.** The sweeper runs on a hosted runner against a
+      fresh checkout where the gitignored invocation log cannot exist; a
+      synthetic fresh checkout measured FAIL on every sweep. The probe is
+      operator-run; ADR-225 and the probe header record why. No directive.
 - [ ] 7.4 Verify AC18–AC20
 
 ## Phase 8: Exit

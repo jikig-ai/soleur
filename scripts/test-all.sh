@@ -2294,9 +2294,10 @@ if want_scripts; then
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
   # #8302 / ADR-225: the offline transition classifier and the SKILL.md byte ratchet.
   # scripts/lib/incidents-roots.test.sh rides the scripts/lib/*.test.sh glob; these two do
-  # not sit under a globbed directory, so they are registered here explicitly. The ratchet
-  # suite ALSO runs as a ci.yml step (fetch-depth: 0 job); registering it here too keeps the
-  # local gate honest rather than leaving it CI-only.
+  # not sit under a globbed directory, so they are registered here explicitly. This is the
+  # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
+  # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
+  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
   run_suite "scripts/lint-skill-body-budget" bash scripts/lint-skill-body-budget.test.sh
   run_suite "tests/scripts/weakness-miner" bash tests/scripts/test-weakness-miner.sh

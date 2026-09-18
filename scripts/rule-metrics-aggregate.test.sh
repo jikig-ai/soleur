@@ -27,6 +27,7 @@ TOTAL=0
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
 
+
 make_fixture_repo() {
   local root
   root=$(mktemp -d)
@@ -93,6 +94,19 @@ assert_eq() {
   fi
   TOTAL=$((TOTAL + 1))
 }
+
+# Instrument self-test (ADR-193): drive assert_eq through BOTH branches once and
+# require both counters to move, before any real case. Review measured this
+# suite's `assert_eq` condition -> `if true` at 86/86 green -- and this suite is
+# the only pin on the widened root enumeration, the PR's central change.
+# Reports with printf + exit, never through the helper it guards.
+assert_eq "instrument self-test (pass path)" "1" "1" >/dev/null
+assert_eq "instrument self-test (fail path — expected, subtracted below)" "1" "2" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
+  printf 'FATAL: assert_eq is not dispatching (PASS=%s FAIL=%s TOTAL=%s)\n' "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 2
+fi
+PASS=0; FAIL=0; TOTAL=0
 
 rule_field() {
   local metrics="$1" id="$2" field="$3"
@@ -942,14 +956,14 @@ t25_monitor_supersede_plus_orphan_isolates_real_orphan
 t26_retired_id_exempt_and_deretired_id_orphan
 t27_novel_unprefixed_hook_id_needs_no_exemption
 
-# --- T26: incidents are merged across worktree AND shared checkout ---------
+# --- T30: incidents are merged across worktree AND shared checkout ---------
 # Regression for the null-reading bug. Hooks write into $CWD/.claude, so logs
 # land in BOTH a worktree and the shared checkout; gitignored means untracked,
 # NOT absent. Reading only one root (or preferring the worktree copy when it
 # exists) reports nearly every rule unused. Uses a real git worktree because the
 # resolution path under test is `git rev-parse --git-common-dir`.
-t26_incidents_merged_across_worktree_and_shared() {
-  command -v git >/dev/null 2>&1 || { echo "SKIP: T26 needs git"; return; }
+t30_incidents_merged_across_worktree_and_shared() {
+  command -v git >/dev/null 2>&1 || { echo "FAIL: T30 needs git — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
   local base shared wt
   base=$(mktemp -d); shared="$base/shared"; wt="$base/wt"
   mkdir -p "$shared"
@@ -957,13 +971,13 @@ t26_incidents_merged_across_worktree_and_shared() {
   git -C "$shared" config user.email t@t.t; git -C "$shared" config user.name t
   echo seed > "$shared/seed.txt"; git -C "$shared" add -A >/dev/null
   git -C "$shared" commit -qm seed >/dev/null
-  git -C "$shared" worktree add -q -b t26branch "$wt" >/dev/null 2>&1 || { echo "SKIP: T26 worktree add failed"; return; }
+  git -C "$shared" worktree add -q -b t30branch "$wt" >/dev/null 2>&1 || { echo "FAIL: T30 worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
 
   # A SECOND worktree, so the enumeration below is exercised against more than one
   # member. With a single sibling, a loop that stops after the first is
   # indistinguishable from a correct one.
   local sib="$base/sib"
-  git -C "$shared" worktree add -q -b t26sibling "$sib" >/dev/null 2>&1 || { echo "SKIP: T26 sibling worktree add failed"; return; }
+  git -C "$shared" worktree add -q -b t30sibling "$sib" >/dev/null 2>&1 || { echo "FAIL: T30 sibling worktree add failed — the central-change pin cannot SKIP (a skipped pin is a pass-count delta with no floor)"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); return; }
   mkdir -p "$sib/.claude"
 
   # The script resolves REPO_ROOT as SCRIPT_DIR/.., so it must live in the worktree.
@@ -998,7 +1012,7 @@ EOF
   a=$(jq -r '.rules[] | select(.id=="hr-rule-a-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
   b=$(jq -r '.rules[] | select(.id=="hr-rule-b-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
   c=$(jq -r '.rules[] | select(.id=="hr-rule-c-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
-  assert_eq "T26 worktree-local incident counted" "1" "$a"
+  assert_eq "T30 worktree-local incident counted" "1" "$a"
 
   # EXACTLY ONE, not merely non-zero (#8302). The shared checkout is reachable by
   # TWO routes -- `git rev-parse --git-common-dir` and its own row in
@@ -1006,24 +1020,24 @@ EOF
   # inode dedupe this log is cat'd twice and this reads 2. A `>= 1` assertion here
   # would pass in both worlds, and because the counts are a commutative reduce the
   # doubling is invisible everywhere else.
-  assert_eq "T26 shared-checkout incident counted EXACTLY once (dedupe, not double-count)" "1" "$b"
+  assert_eq "T30 shared-checkout incident counted EXACTLY once (dedupe, not double-count)" "1" "$b"
 
   # The stranded-sibling half: a worktree that is neither this root nor the shared
   # checkout. Before the enumeration landed this was unreachable and read `missing`.
-  assert_eq "T26 SIBLING worktree incident counted exactly once" "1" "$c"
+  assert_eq "T30 SIBLING worktree incident counted exactly once" "1" "$c"
   rm -rf "$base"
 }
 
-# --- T27: absence of EVERY root is loud -----------------------------------
-t27_no_incidents_anywhere_is_loud() {
+# --- T31: absence of EVERY root is loud -----------------------------------
+t31_no_incidents_anywhere_is_loud() {
   local root err
   root=$(make_fixture_repo)
   rm -f "$root/.claude/.rule-incidents.jsonl"
   err=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null || true)
   if printf '%s' "$err" | grep -q 'SOLEUR_RULE_METRICS_NO_INCIDENTS'; then
-    echo "PASS: T27 absent log emits SOLEUR_RULE_METRICS_NO_INCIDENTS"; PASS=$((PASS+1))
+    echo "PASS: T31 absent log emits SOLEUR_RULE_METRICS_NO_INCIDENTS"; PASS=$((PASS+1))
   else
-    echo "FAIL: T27 absent log was SILENT — a null reading is indistinguishable from zero hits"; FAIL=$((FAIL+1))
+    echo "FAIL: T31 absent log was SILENT — a null reading is indistinguishable from zero hits"; FAIL=$((FAIL+1))
   fi
   TOTAL=$((TOTAL+1))
   rm -rf "$root"
@@ -1058,11 +1072,72 @@ t29_hook_emitter_families_not_orphan() {
   rm -rf "$root"
 }
 
-t26_incidents_merged_across_worktree_and_shared
-t27_no_incidents_anywhere_is_loud
+# --- T32: rule_id is SHAPE-gated -- free text cannot become a committed key ---
+# With the read widened to sibling worktrees (#8302), a row written by a session
+# this checkout does not control can reach the committed aggregate. Every
+# downstream key (non_corpus_counts, hook_input_fault_reasons, orphan_rule_ids)
+# uses rule_id VERBATIM, so a path- or identity-shaped rule_id lands in a public
+# file through a key name, and a NUMERIC rule_id aborted the whole run (jq:
+# Cannot index object with number). Both must be dropped, the run must still
+# exit 0, and the good row beside them must still count.
+t32_rule_id_shape_gate() {
+  local root out rc keys
+  root=$(make_fixture_repo)
+  cat >> "$root/.claude/.rule-incidents.jsonl" <<'EOF'
+{"schema":1,"rule_id":"gh pr merge 123 --body \"user@example.com /home/user/secret-path\"","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":123,"event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"x\n\tforged","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"hook-input-/home/user/.ssh/id_ed25519","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"cost-of-filing-flip-inline","event_type":"applied","timestamp":"2026-06-29T00:00:00Z"}
+{"schema":1,"rule_id":"hr-rule-a-synthetic-test","event_type":"applied","timestamp":"zzz /home/user/secret gh pr merge --body user@example.com"}
+EOF
+  out=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" --dry-run 2>/dev/null); rc=$?
+  assert_eq "T32 a numeric rule_id no longer aborts the aggregation" "0" "$rc"
+  keys=$(printf '%s' "$out" | jq -r '[.summary.non_corpus_counts, .summary.hook_input_fault_reasons] | map(keys[]?) | .[]' 2>/dev/null | tr '\n' '|' || true)
+  case "$keys" in
+    *user@example.com*|*secret-path*|*id_ed25519*|*forged*)
+      echo "FAIL: T32 free-text rule_id reached a committed key: $keys"; FAIL=$((FAIL+1)) ;;
+    *) echo "PASS: T32 no path/identity/newline-shaped rule_id reaches a committed key"; PASS=$((PASS+1)) ;;
+  esac
+  TOTAL=$((TOTAL+1))
+  # Positive control: the well-formed non-corpus id beside the forged rows is
+  # still counted, so the gate is a shape check and not a blanket drop.
+  assert_eq "T32 a well-formed non-corpus id beside the forged rows still counts" "1" \
+    "$(printf '%s' "$out" | jq -r '.summary.non_corpus_counts["cost-of-filing-flip-inline"] // 0')"
+  # timestamp is the SECOND free-text channel: it is copied verbatim into
+  # rules[].last_hit. A forged one must be dropped, not sorted to the top.
+  # `.rules[]?`: a fixture whose output has no rules array must read as "no
+  # last_hit", not abort the suite with jq's rc 5 (an x=$(cmd) whose non-zero
+  # exit is a normal answer -- review caught the suite dying here with no summary).
+  local lh; lh=$(printf '%s' "$out" | jq -r '.rules[]? | select(.id=="hr-rule-a-synthetic-test") | .last_hit' 2>/dev/null || true)
+  case "$lh" in
+    *secret*|*user@*) echo "FAIL: T32 forged timestamp reached last_hit: $lh"; FAIL=$((FAIL+1)) ;;
+    *) echo "PASS: T32 a free-text timestamp is dropped before it can become last_hit"; PASS=$((PASS+1)) ;;
+  esac
+  TOTAL=$((TOTAL+1))
+  rm -rf "$root"
+}
+
+t30_incidents_merged_across_worktree_and_shared
+t31_no_incidents_anywhere_is_loud
+t32_rule_id_shape_gate
 t28_retired_rule_id_is_not_orphan
 t29_hook_emitter_families_not_orphan
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
+# Conservation + anti-vacuity floor, reported directly (never through assert_eq).
+# PASS is the floored counter: it is non-empty in the passing state and EMPTY
+# when the machinery is neutered, which a TOTAL floor cannot see. The bound is
+# a literal adjacent to the test so guard-vacuity-floor.test.sh can construct
+# its mutant; derive it from a green run and ratchet upward only.
+if [[ "$((PASS + FAIL))" -ne "$TOTAL" ]]; then
+  printf 'FATAL: verdict accounting broken — PASS(%s) + FAIL(%s) != TOTAL(%s)\n' "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+MIN_PASSES=90
+if [[ "$FAIL" -eq 0 && "$PASS" -lt "$MIN_PASSES" ]]; then
+  printf 'FATAL: anti-vacuity floor — %s assertions passed, expected at least %s\n' "$PASS" "$MIN_PASSES" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

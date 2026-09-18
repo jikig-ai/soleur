@@ -1,16 +1,29 @@
 #!/usr/bin/env bash
-# Follow-through verification for #8302 (ADR-225).
+# Follow-through verification for #8302 (ADR-225). OPERATOR-RUN, NOT SWEEPER-ENROLLED.
 #
-# Exit semantics (per sweep-followthroughs.sh contract):
+# Exit semantics (the sweep-followthroughs.sh contract, kept so the script reads
+# the same way as its siblings):
 #   0 = PASS       — the transition instrument is alive and produced a reading
 #   1 = FAIL       — the instrument went dark (present but yielding nothing)
-#   * = TRANSIENT  — could not run at all; retry next sweep
+#   * = TRANSIENT  — could not run at all; retry
+#
+# WHY THIS IS NOT ENROLLED IN THE SWEEPER. The sweeper runs on a hosted runner
+# against a fresh checkout. `.claude/.skill-invocations.jsonl` is gitignored and
+# machine-local -- it exists only where sessions ran -- so on that runner every
+# root is empty, the classifier prints NULL READING, and this probe exits 1 on
+# EVERY sweep. Measured at review in a synthetic fresh checkout: FAIL, rc=1. That
+# is the #6042 locality error (a CI schedule for the aggregator saw zero
+# incidents on every run and was removed) reproduced one row down, and ADR-225's
+# own Alternatives table cites #6042 as the reason not to restore that schedule.
+# A probe that cannot PASS where it runs is not a soak; it is a daily false alarm
+# that trains the operator to ignore FAIL. So: no `soleur:followthrough`
+# directive on #8302. Run this by hand on the operator machine:
+#
+#     bash scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh
 #
 # WHAT THIS ASSERTS, AND WHY IT IS NOT A DECISION.
-# The obvious thing to enrol here would be "decide whether to promote the gate to
-# blocking". That has no pass/fail encoding -- a decision is not a measurement,
-# and the sweeper closes a tracker on PASS, so encoding one would either
-# auto-close on a decision nobody made or never close at all.
+# The obvious thing to encode here would be "decide whether to promote the gate to
+# blocking". That has no pass/fail encoding -- a decision is not a measurement.
 #
 # What IS falsifiable is whether the instrument still works. The failure mode
 # this whole change exists to prevent is a mechanism that reports success while
@@ -23,14 +36,18 @@
 # A dark instrument is a FAIL even though nothing is "broken" in the ordinary
 # sense -- that asymmetry is the point. Silence must not read as an all-clear.
 #
-# Baseline recorded 2026-09-18 at adoption, against 10,260 invocation records:
-#   undeclared=427  sessions=1334  pairs=8800  unclassified=6023
-# The delta is printed for the operator; it is NOT a pass condition, because a
-# count moving up or down is evidence to read rather than a threshold to trip.
+# Baseline recorded 2026-09-18 at adoption, under the NODE-ONLY walk (sub-skill
+# hops collapsed to the lifecycle transition they enclose; see the classifier
+# header), against 10,268 invocation records spanning 2026-05-04..2026-09-18:
+#   undeclared=604  sessions=1259  pairs=4922  nonnode=3936
+# The earlier raw-adjacency reading (427 of 8,800) is superseded: it could not
+# see plan -> deepen-plan -> ship as a review skip. The delta is printed for the
+# operator; it is NOT a pass condition, because a count moving up or down is
+# evidence to read rather than a threshold to trip.
 set -uo pipefail
 
-BASELINE_UNDECLARED=427
-BASELINE_PAIRS=8800
+BASELINE_UNDECLARED=604
+BASELINE_PAIRS=4922
 BASELINE_DATE=2026-09-18
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -61,11 +78,20 @@ if [[ "$OUT" == *"NULL READING"* ]]; then
   exit 1
 fi
 
-now_undeclared=$(sed -n 's/.*undeclared=\([0-9]*\).*/\1/p' <<<"$OUT")
-now_pairs=$(sed -n 's/.*pairs=\([0-9]*\).*/\1/p' <<<"$OUT")
+# Anchored at line start and on the summary line's own shape: a leading-greedy
+# `.*undeclared=` binds to the LAST occurrence, and OUT is 2>&1-merged.
+now_undeclared=$(sed -n 's/^undeclared=\([0-9][0-9]*\) .*/\1/p' <<<"$OUT" | head -1)
+now_pairs=$(sed -n 's/^undeclared=[0-9]* sessions=[0-9]* pairs=\([0-9][0-9]*\) .*/\1/p' <<<"$OUT" | head -1)
 
 if [[ -z "$now_undeclared" || -z "$now_pairs" ]]; then
   echo "FAIL: could not parse a reading out of the classifier summary." >&2
+  echo "$OUT" >&2
+  exit 1
+fi
+# A reading with records but ZERO pairs (every session a single invocation) is
+# a corpus the instrument cannot say anything about -- not alive, not dark.
+if [[ "$now_pairs" -eq 0 ]]; then
+  echo "FAIL: records were read but no lifecycle pair formed (pairs=0); the instrument has nothing to classify." >&2
   echo "$OUT" >&2
   exit 1
 fi

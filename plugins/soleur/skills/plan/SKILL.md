@@ -285,7 +285,9 @@ These findings inform the next step.
 
 If the feature description matches any of the patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive substring match on the feature description), read [plan-network-outage-checklist.md](./references/plan-network-outage-checklist.md) and require its output in the `## Hypotheses` section of the final plan.
 
+<!-- lint-infra-ignore start: describes a gate trigger / a past defect; prescribes no operator step (pre-existing on main, surfaced when #8301 staged this file) -->
 Also fire this gate when the feature description names `terraform apply` (with or without `-target=`) against a resource whose definition contains `provisioner "file"`, `provisioner "remote-exec"`, or a `connection { type = "ssh" ... }` block. The provisioner block makes SSH a hard apply-time dependency that the prose-only keyword scan won't detect. **Why:** #3061 — apply on `terraform_data.deploy_pipeline_fix` hit `ssh: handshake failed: connection reset by peer` despite zero SSH keywords in the plan, because the firewall allowlist had drifted out from under the operator's egress IP.
+<!-- lint-infra-ignore end -->
 
 The checklist enforces an L3->L7 diagnostic order: firewall allow-list and DNS/routing MUST be verified before sshd/fail2ban/service-layer hypotheses. Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, this is a hard rule -- plans that propose sshd or fail2ban fixes without first verifying firewall + egress IP are workflow violations.
 
@@ -773,7 +775,9 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 
 **Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
 
+<!-- lint-infra-ignore start: describes a gate trigger / a past defect; prescribes no operator step (pre-existing on main, surfaced when #8301 staged this file) -->
 **Why:** the preflight Check 10 execution-boundary work (merged 2026-08-10) absorbed FIVE adversarial review rounds; every round found real defects in the previous round's fixes, and ~20 findings reduced to the one class above. Instances: a mount-set closure assertion scoped to `BWRAP_ARGS=( … )` while `GIT_BIND`, `BWRAP_PROC` and the exec line also injected mounts (three separate one-line edits each re-opened the operator's credential surface with the whole suite green — verified against live bwrap reaching the Doppler token, `~/.ssh` and the gh token store); a parity floor counting ITERATIONS rather than distinct shapes; a suppression grep anchored on `test`/`it`/`describe`, which are rebindable; and an anti-vacuity gate with NO floor on its own dispatch. Those were not five discoveries — they were ONE enumeration nobody performed, found five times by different means, at ~880k subagent tokens and five CI cycles. The root cause was at plan time: that plan specified CONTROLS and 13 Test Scenarios all of the shape "command X -> terminal Y", and ZERO of the shape "mutation M -> guard G reddens". For a change whose deliverable WAS guards, the scenarios tested the thing being guarded. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
+<!-- lint-infra-ignore end -->
 
 ### 3. SpecFlow Analysis
 
@@ -893,6 +897,24 @@ Examples:
 - ❌ `knowledge-base/project/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
 - ❌ `knowledge-base/project/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
 - ❌ `knowledge-base/project/plans/feat-user-auth-plan.md` (missing date prefix)
+
+### 6.5. Sharp Edges verification pass
+
+**Read [plan-sharp-edges.md](./references/plan-sharp-edges.md) now, ONCE — the
+plan file is complete (Acceptance Criteria land last, so this is the first
+point at which there is a finished plan to check) — and apply it as a
+verification pass over the plan before handing it to Plan Review.** It is a
+~150 KB / ~58k-token catalogue of plan-writing traps, each written against a
+concrete past failure; most entries (diff-scope ACs, census-over-enumeration,
+universal-negative claims, verification commands that cannot fail) apply to
+ANY plan, so the load is not conditional on the plan's shape. It sits here, at
+the end of the run, deliberately: the Read tool pages it in three ~25k-token
+pages, and a block loaded at turn k is re-sent on every turn after k — loading
+it last is what keeps it off every earlier turn (ADR-225 records the ledger).
+Read all three pages; the paging notice on page 1 is not the catalogue. **If
+the file is not present, STOP and report that the plugin install is
+incomplete**: a silently-absent catalogue is the ADR-151 failure mode this repo
+has already paid for once.
 
 ## Plan Review (Always Runs)
 
@@ -1078,17 +1100,3 @@ was interrupted mid-run; Phase 0.7 continues it in place rather than duplicating
 
 **Archive completed plans:**
 Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
-
-## Sharp Edges
-
-**Read [plan-sharp-edges.md](./references/plan-sharp-edges.md) now** — but only
-when one applies to the plan in hand. This is consult-on-demand reference
-material, not a phase: it is a catalogue of specific traps (a provider schema
-that rejects a field combination, an `awk` range that self-matches, a grep that
-proves a symbol unused while an interpolated call site exists), each written
-against a concrete past failure. Load it when drafting an Acceptance Criterion
-whose verification command is non-trivial, when the plan prescribes a CLI
-invocation or a provider resource, or when a gate in Phases 2.5–2.12 fires.
-
-Skip it for a plan whose deliverable is a copy change, a dependency bump, or a
-refactor behind existing tests — none of the entries reach those.

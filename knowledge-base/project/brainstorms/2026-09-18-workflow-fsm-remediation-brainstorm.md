@@ -75,6 +75,17 @@ skill-enforced rules.
 The question for this cycle is therefore *why it stalled*, not *how to design
 it*. Re-deriving the design would repeat work the institution already did.
 
+> **Superseded 2026-09-18 (#8301 review, git-history seat):** it did not stall.
+> #2876 shipped all six planned skills; at the audit commit there were 22
+> `emit_incident` sites in 8 SKILL.md files; 4.5 hours later #7482 (ADR-179
+> decision 9) inverted every `source incidents.sh` site into a
+> `SOLEUR_RULE_APPLIED` marker captured by `.claude/hooks/rule-incident-marker-capture.sh`.
+> On `main` today: 21 marker sites across 7 lifecycle skills, 869 `applied`
+> events in the live log. The "4 skills" figure above is a grep for the string
+> `incidents.sh`, which the inverted transport no longer contains — the four
+> hits are prose mentions, not sources. A seventh measurement error of this
+> session, of the same class as the six below.
+
 ### Correction 2 — cross-worktree fragmentation is half-fixed, and the residue is measurable
 
 The audit says aggregation "reads a single per-checkout fragment." That was
@@ -169,7 +180,7 @@ weeks. The intervention is mechanical body-extraction into `references/` plus a
 
 The precedent here is a warning, not an encouragement:
 `SKILL_DESCRIPTION_WORD_BUDGET` in `plugins/soleur/test/components.test.ts`
-currently sits at 2,442 and **has been bumped 14 times**. A ceiling that can be
+currently sits at 2,442 and **has been bumped 15 times**. A ceiling that can be
 raised is not a ratchet; it is a changelog. Track B's ceiling must be
 non-increasing by construction or it becomes the fifteenth bump.
 

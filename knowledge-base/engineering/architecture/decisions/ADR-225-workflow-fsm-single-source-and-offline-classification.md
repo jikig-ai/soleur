@@ -54,9 +54,14 @@ classification was missing.
 
 **1. The canonical edge set is a bundled TypeScript const.**
 `DECLARED_TRANSITIONS` in `plugins/soleur/lib/workflow-fidelity.ts` is the source
-of truth. `.claude/workflow-transitions.json` is a *derived view*, generated from
-it and pinned by a parity block that fails in both directions — a view carrying
-an edge the const lacks is exactly as wrong as one missing an edge.
+of truth. `.claude/workflow-transitions.json` is a *derived view*: **hand-mirrored
+(there is no generator)** and pinned by a parity block that fails in both
+directions — a view carrying an edge the const lacks is exactly as wrong as one
+missing an edge. The view has two consumers, both unable to read a TypeScript
+const: the offline classifier (bash, decision 3) and the SKILL.md byte ratchet
+(python, decision 4), which derives its lifecycle node set from the view's keys
+and destinations. A reader census in the parity block enumerates every consumer
+from the tree, so a third one cannot join unlisted.
 
 The view is a separate file rather than a `transitions` key inside
 `.claude/phase-surface-map.json`, because that file is deep-equal'd against the
@@ -85,12 +90,20 @@ set. No new `PreToolUse` surface, nothing that can wedge a session, and ADR-070'
 two-tier rule — deny-by-default only on re-fetching layers — is not engaged at
 all, because nothing denies.
 
-**4. The SKILL.md byte ratchet is anchored to the merge base, in a
-`fetch-depth: 0` job.** Anchoring to the working tree would let one diff raise
-both a file and its own ceiling. Placing it in the `bun` job — beside the
-existing `SKILL_DESCRIPTION_WORD_BUDGET` — would put the base read in a job with
-no fetch depth, where it fails on every run and any fallback is permanently
-fail-open.
+**4. The SKILL.md byte ratchet is anchored to the merge base and runs as a step
+in the required `rule-body-lint` job.** Anchoring to the working tree would let
+one diff raise both a file and its own ceiling. Placing it in the `bun` job —
+beside the existing `SKILL_DESCRIPTION_WORD_BUDGET` — would put the base read in
+a job with no fetch depth, where it fails on every run and any fallback is
+permanently fail-open. A *separate* job would have been advisory until someone
+pinned it in `infra/github/ruleset-ci-required.tf`, and ADR-116 records that
+advisory → blocking promotion has never happened here; `rule-body-lint` is
+already required (ADR-092) and already fetches at depth 0, so the ratchet blocks
+from its first run. Its node set is every key *and* every destination of the
+view, read from the base *and* the working tree, so a destination-only node
+(`one-shot`) is covered and a node dropped from the view in the same diff is
+still measured. Bootstrap (no ceiling file at the base) is legal only when the
+lint itself is also absent at the base, which closes the rename escape.
 
 ## Alternatives Considered
 
@@ -102,23 +115,72 @@ fail-open.
 | One function for both concepts | A back-edge in the successors collection renders as an instruction to re-enter that phase |
 | `transitions` key inside `phase-surface-map.json` | Forces FSM edges through the web bundle via that file's deep-equal parity test |
 | Ratchet beside the existing word budget | That job has no `fetch-depth`; the base read fails every run |
+| Ratchet as its own CI job | Not a required context; under auto-merge a red ratchet would not block, and ADR-116 records that advisory gates stay advisory |
+| Enrol the transition probe in the follow-through sweeper | The sweeper runs on a hosted runner against a fresh checkout, where the gitignored invocation log cannot exist; measured: FAIL on every sweep — the #6042 locality error one row up, reproduced |
 | Restore a CI schedule for the rule-metrics aggregator | Removed deliberately under #6042: fresh checkouts committed all-zero snapshots that clobbered the real local aggregate |
-| Raise emission coverage via SKILL.md prose | Zero `emit_incident` call sites appeared in any SKILL.md in five months; the mechanism does not stick |
+| Raise emission coverage via SKILL.md prose | Emission via SKILL.md is LIVE, not stalled: ADR-179 decision 9 (#7482, 2026-08-13) inverted the `source incidents.sh` form into `SOLEUR_RULE_APPLIED` markers captured hook-side — 21 sites across 7 lifecycle skills on `main`, 869 `applied` events in the live `.jsonl` logs across all roots on 2026-09-18 (excluding rotated archives). The audit's "4 of 10 skills" was a grep for the string `incidents.sh`, which the inverted transport no longer contains. Widening the remaining ~80 uncovered rules is a per-rule choice, not a mechanism gap, and out of scope here |
 
 ## Consequences
 
 - The edge set can be read from bash (the derived view) and from TypeScript (the
   const) without either being a runtime dependency of the other.
-- Two copies exist, so drift is possible; the parity block is what makes it
-  detectable rather than latent.
+- Two copies exist **in this repository only** (the view never ships), so drift
+  is possible here; the parity block — a required check via `grok-fidelity` —
+  is what makes it detectable rather than latent.
 - Classification is on-demand rather than continuous. Nothing pages on an
   undeclared transition — by design, since ADR-131's open question is precisely
   whether another always-on gate earns its keep.
-- Measured at adoption: **427 undeclared node→node transitions of 8,800** across
-  ~16 months of sessions (1,334 sessions, 10,260 invocation records). The largest
-  are `brainstorm → compound` (123), `compound → plan` (97) and `review → ship`
-  (46). `plan → ship` occurs twice. `postmerge → work` — the edge rejected as
-  redundant — occurs 7 times, which is recorded here rather than acted on.
+- Measured at adoption, under the node-only walk (records for non-node skills
+  such as `deepen-plan`, `preflight`, `qa`, `one-shot` are removed *before*
+  pairing, so a sub-skill hop collapses to the lifecycle transition it
+  encloses): **604 undeclared transitions of 4,922 lifecycle pairs** across
+  1,259 sessions and 10,268 invocation records spanning 2026-05-04 → 2026-09-18
+  (~4.5 months; the invocation logger was added 2026-05-04). The largest are
+  `brainstorm → compound` (125), `compound → plan` (109), `review → ship` (51)
+  and `ship → plan` (50 — a session chaining a second pipeline, which the
+  terminal-node graph correctly refuses to call declared). `plan → ship` occurs
+  **7** times; a raw-adjacency walk saw 2, and review showed the other 5 were
+  laundered through `plan → deepen-plan → ship`, which that walk classified as
+  two unclassified pairs and zero violations. `postmerge → work` — the edge
+  rejected as redundant — occurs 7 times, recorded here rather than acted on.
+- The transition probe (`scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`)
+  is **operator-run**, not sweeper-enrolled, for the reason in the Alternatives
+  table; its baseline is the reading above.
+- **The extraction's economics, measured at review, are not what the plan
+  claimed.** The ratchet bounds `SKILL.md` bytes — the load paid at turn 0.
+  `plan/references/plan-sharp-edges.md` is 151,209 B and **~58k tokens** by the
+  harness's own count (dense ~874 B lines, not bytes/4), it is read in three
+  ~25k-token pages, and the load fires on ~95% of `plan` runs (the only
+  pre-load exit is the "finished plan, return the path" arm). Per invocation
+  the extraction is therefore **+~1 KB and three extra tool turns**, not
+  "150 KB saved". What it does buy is per-turn: a block injected at turn 0 is
+  re-sent on every turn of the run, a block injected at the end is re-sent on
+  none of the earlier ones, so placing the load last avoids ~58k × k cache-read
+  tokens per run, where k is the number of turns before the pass. That is
+  plausibly large and **unmeasured** — no turn telemetry exists. The directive
+  is therefore unconditional and placed as the final step before Plan Review,
+  which is also where a verification pass belongs (Acceptance Criteria land
+  last). A reachability guard in `components.test.ts` reds if a
+  `references/*.md` stops being named from its skill, so an extraction cannot
+  orphan its target silently. Two consequences to carry: (a) 151 KB of
+  model-loaded prose left the `skill-security-scan` and `scratch-path-collision`
+  scan surfaces, which walk `skills/*/SKILL.md` only — a pre-existing scope
+  boundary (126 `references/*.md` already sit outside it) that this move
+  crosses in size, recorded here rather than widened; (b) at measured growth
+  (plan +8.5 KB, work +31 KB, review +47 KB per 14 days) the seeded ceilings
+  bind in roughly two to three weeks — by design, since the ratchet exists to
+  force the next extraction to be argued rather than absorbed.
+- The ratchet's row set is the FSM's keys ∪ destinations ∪
+  `ONE_SHOT_CHILD_SKILLS` (`deepen-plan`, `qa`), pinned on the TypeScript side;
+  "lifecycle skill" is not only "FSM node". `preflight` (109 KB, a `ship`
+  sub-skill) and the other sub-skills remain uncapped — the sub-phase
+  normalisation deferred to #8303.
+- No plugin runtime code calls `declaredTransitions()` or
+  `isDeclaredTransition()`; they exist so the parity block and a future gate
+  (below) have a typed source, and the reader census reds if a consumer appears
+  unlisted. `brainstorm → one-shot` is declared but unobservable by the
+  classifier, because `one-shot` is not a node and its records are removed
+  before pairing.
 - A gate remains buildable on top of this without rework: the edge set is
   declarative and the classifier already resolves state per session. Whether one
   is warranted is deferred to the measurement this ADR makes possible, not to a
@@ -127,12 +189,26 @@ fail-open.
 ## Verification
 
 - `plugins/soleur/test/workflow-fidelity.test.ts` — edge set, the `plan → ship`
-  absence, `mandatorySuccessors` forward-only, derived-view parity in both
-  directions. Runs under `grok-fidelity-gate.sh` as a mandatory pre-push gate.
-- `scripts/classify-workflow-transitions.test.sh` — 11 assertions including a
-  present-but-unparseable log failing loudly rather than reporting zero.
-- `scripts/lint-skill-body-budget.test.sh` — 10 assertions including the
-  same-diff ceiling raise, the unavailable base, and the empty node set.
-- `scripts/lib/incidents-roots.test.sh` — inode dedupe and first-seen ordering.
-- `scripts/rule-metrics-aggregate.test.sh` T26 — the shared checkout counted
-  exactly once and a sibling worktree counted at all.
+  absence, `mandatorySuccessors` forward-only **and a subset of the declared
+  edges** (the wire between the two functions), derived-view parity in both
+  directions, budget-file keys equal to the node set, and a reader census. Runs
+  in the required `grok-fidelity` CI check (and as a pre-push gate under the
+  Grok harness only).
+- `scripts/classify-workflow-transitions.test.sh` — 16 assertions including a
+  present-but-unparseable log failing loudly, sub-skill hops not laundering the
+  enclosing transition, rotated `.jsonl.gz` archives read, and timestamp order
+  over file order.
+- `scripts/lint-skill-body-budget.test.sh` — 16 assertions including the
+  same-diff ceiling raise, the unavailable base, the empty node set, an orphan
+  ceiling row, a destination-only node, same-diff node removal, and the rename
+  escape from bootstrap, and the legal raise-only diff.
+- `scripts/lib/incidents-roots.test.sh` — 12 assertions: NUL-framed
+  `--porcelain -z` parsing (a newline-bearing path is one record, not a forged
+  root, at both stages), inode dedupe, first-seen ordering, and the shared
+  enumerate→dedupe composition both consumers call.
+- `scripts/rule-metrics-aggregate.test.sh` T30 — the shared checkout counted
+  exactly once and a sibling worktree counted at all; T32 — a free-text or
+  non-string `rule_id` from any root neither aborts the run nor reaches a
+  committed key; a free-text `timestamp` is dropped before it can become `last_hit`.
+- `plugins/soleur/test/components.test.ts` — every `references/*.md` is named
+  from its skill (the extraction cannot orphan its target).
