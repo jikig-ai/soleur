@@ -79,6 +79,6 @@ Closes: #7490 · semver:patch · lane: cross-domain (no spec.md — fail-closed 
 
 ## Phase 7: Cross-cutting
 
-- [ ] 7.1 `bash scripts/test-all.sh` full battery green (AC22)
+- [ ] 7.1 `bash scripts/test-all.sh` full battery green (AC22) — REFUSED at the work phase (rc=4, sibling full-gate run in flight). 35 substitute suites derived from consumers + the diff's new vocabulary, all green. The full battery runs at the `/ship` Phase 4 checkpoint, which is where AC22 asks for it.
 - [x] 7.2 Plan-path resolution check (AC23)
-- [ ] 7.3 PR body: `Closes #7490`, `semver:patch`, diff-scope list, Phase 0 CLI output, `### Unfenced trackers` table (AC24)
+- [x] 7.3 PR body: `Closes #7490`, `semver:patch`, diff-scope list, Phase 0 CLI output, `### Unfenced trackers` table (AC24)
