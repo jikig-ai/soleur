@@ -233,7 +233,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 RAW="$WORK/diff.raw"
 diff_rc=0
-git -c core.quotePath=false diff -U0 --no-color --diff-filter=d "$MERGE_BASE" -- \
+# --src-prefix/--dst-prefix/--no-ext-diff are load-bearing (#8238): the awk below
+# strips a `b/` header prefix, and a user's diff.mnemonicprefix rewrites it to
+# `w/` (worktree side), so every path failed the file lookup and the lint
+# reported "0 violations" on developer hosts. `--no-color` already covers color.*.
+git -c core.quotePath=false diff -U0 --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --diff-filter=d "$MERGE_BASE" -- \
       "$CANONICAL_DIR" "$MIRROR_DIR" > "$RAW" 2>"$WORK/diff.err" || diff_rc=$?
 if (( diff_rc != 0 )); then
   echo "::error::git diff failed (rc=${diff_rc}) while computing added lines; refusing to report clean" >&2

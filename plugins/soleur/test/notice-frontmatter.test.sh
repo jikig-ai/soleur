@@ -351,23 +351,37 @@ assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (work
 rm -rf "$STUB_DIR_EMPTY"
 echo ""
 
+# --- Wall-clock helpers for TS-cron-5 (#8250) ---
+# TS-cron-5 used GNU time by its absolute path (the `time -f "%e"` form), absent on
+# macOS and on minimal Linux hosts, where the call exited 127 and `set -e`
+# aborted the whole suite mid-run. Two $EPOCHREALTIME reads (bash 5+, no
+# coreutils) replace it, split into integer microseconds with ${t%.*}/${t#*.}
+# — the scripts/test-all.sh idiom — so no float parsing is involved.
+#
+# A read that is not `digits.digits` makes the CASE FAIL, never pass: under a
+# comma-radix locale or an old bash (unset EPOCHREALTIME) a lenient parse would
+# compute a zero or garbage elapsed time and `< 6 s` would pass vacuously.
+# Wall-clock parser + its own contract rows, shared with the sibling suite.
+# Both files carried a byte-identical ~45-line copy; they have a documented
+# two-PR drift history, so there is now one copy.
+# shellcheck source=lib/wall-clock.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/wall-clock.sh"
+_wall_clock_self_test
+
+
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
 STUB_DIR_5="$(mktemp -d)"
 make_gh_stub_sleep "$STUB_DIR_5" 10
-START_NS=$(date +%s%N)
-bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
-  >/tmp/cron-stale-out.$$ \
-  || true
-END_NS=$(date +%s%N)
-SECS=$(awk -v start="$START_NS" -v end="$END_NS" 'BEGIN { printf "%.3f", (end - start) / 1000000000 }')
+T_START="${EPOCHREALTIME:-}"
+GH_TOKEN=stub-token PATH="$STUB_DIR_5:$PATH" bash "$PARSER" cron-run-stale >/tmp/cron-stale-out.$$
+T_END="${EPOCHREALTIME:-}"
 OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
 rm -f /tmp/cron-stale-out.$$
 assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
-# Compare floats via awk; emit "PASS"/"FAIL" string and assert it.
-WALL_OK=$(awk -v t="$SECS" 'BEGIN { print (t < 6 ? "PASS" : "FAIL") }')
-assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (got: ${SECS}s)"
+WALL_OK=$(_wall_verdict "$T_START" "$T_END" 6000000)
+assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (start=${T_START:-<unset>} end=${T_END:-<unset>})"
 rm -rf "$STUB_DIR_5"
 echo ""
 
