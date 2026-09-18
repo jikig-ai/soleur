@@ -46,7 +46,7 @@ Spec: `knowledge-base/project/specs/feat-8322-affected-test-gate/spec.md`
 
 ## Phase 5 — Verification
 
-- [ ] 5.1 Mutation matrix executed (rows a–p, RED→GREEN evidence).
-- [ ] 5.2 Enumerate consumers green: `battery-tag-authorship.test.sh`, `scripts-shard-totality.test.sh`, `lint-orphan-test-suites.sh`.
-- [ ] 5.3 `c4-count-parity.test.sh` green; `gitleaks-staged`; `migrated-rule-id-lint`; `skill-security-scan-advisory`; `plugin-component-test`.
-- [ ] 5.4 Human review of live `bash scripts/test-all.sh --print-affected-set` on this diff before push.
+- [x] 5.1 Mutation matrix executed (rows a–p, RED→GREEN evidence).
+- [x] 5.2 Enumerate consumers green: `battery-tag-authorship.test.sh`, `scripts-shard-totality.test.sh`, `lint-orphan-test-suites.sh`.
+- [x] 5.3 `c4-count-parity.test.sh` green; `gitleaks-staged`; `migrated-rule-id-lint`; `skill-security-scan-advisory`; `plugin-component-test`.
+- [x] 5.4 Human review of live `bash scripts/test-all.sh --print-affected-set` on this diff before push.
