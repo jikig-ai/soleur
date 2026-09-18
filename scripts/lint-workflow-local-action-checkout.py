@@ -32,15 +32,19 @@ fails the job loudly before any step runs. One explicit reject outside that rule
 carrying an `@` — GitHub rejects it at setup, but actionlint 1.7.7 ACCEPTS it (measured), so
 this lint names it.
 
-SECOND SURFACE, zero floor. No `.github/actions/*/action.yml` `runs.steps[].uses` may start with
-`./`: a nested `./` resolves from the CALLER's workspace, which no lint can see, and GitHub
-documents `$/` for composite steps. The actions directory is the sibling of the scanned
-workflows directory (`<dir>/../actions`), so a tree copied under `mktemp -d` scans both.
+SECOND SURFACE. No composite step under `.github/actions/**` may `uses:` a `./` path (a nested
+`./` resolves from the CALLER's workspace, which no lint can see; GitHub documents `$/` for
+composite steps), and the `$/…@ref` reject applies there too. The walk is RECURSIVE — an action
+at `.github/actions/<a>/<b>/action.yml` resolves fine for GitHub, so a one-level glob would let
+`git mv` move a composite out of the guard's reach with every caller still working. The actions
+directory is the sibling of the scanned workflows directory (`<dir>/../actions`), so a tree
+copied under `mktemp -d` scans both; the count is printed so "scanned nothing" is legible, and
+a tree whose workflows reference `./.github/actions/…` while that directory is ABSENT exits 2
+rather than silently walking zero composites.
 
 NAMED NON-PROPERTIES (so the claim is not overstated). `if:` is compared as a string, never
 evaluated — a `./` step whose `if:` legitimately narrows its checkout's is a loud false positive
-with an obvious fix. The checkout's `with:` (`sparse-checkout:`, `path:`, `repository:`) is not
-inspected. Whether the checkout ref is pinned (`@v4` vs `@<sha>`) is a separate property.
+with an obvious fix. Whether the checkout ref is pinned (`@v4` vs `@<sha>`) is a separate property.
 Job-level `uses:` (a reusable-workflow call) is not a step and is skipped. A job that checks out
 via `run: git clone` is not recognised as checked out (0 such jobs today).
 
@@ -83,12 +87,32 @@ def load(path: Path):
     """Parse one YAML file; any failure is a usage/parse error naming the file."""
     try:
         return yaml.safe_load(path.read_text(encoding="utf8"))
-    except (UnicodeDecodeError, OSError, yaml.YAMLError) as exc:
+    except (UnicodeDecodeError, OSError, RecursionError, yaml.YAMLError) as exc:
         raise ValueError(f"cannot parse {path}: {str(exc).splitlines()[0]}") from exc
 
 
 def checkout_usable(checkout: dict, step: dict) -> bool:
-    """A checkout with no `if:` serves every later step; a conditional one only its twin."""
+    """A checkout serves a later step only if it is guaranteed to have RUN and SUCCEEDED.
+
+    Four ways a checkout fails to populate the path the action lives at, each measured as a
+    live escape before this guard closed it: `continue-on-error: true` (the job stays green with
+    an empty workspace — the original defect one step earlier); `with: repository:` (a different
+    repo's tree); `with: path:` (a workspace subdirectory, so `./…` still resolves to nothing);
+    and `with: sparse-checkout:` whose cone excludes `.github`. Zero checkouts in the tree carry
+    any of them today, so this is fail-closed against a future edit, not a live reclassification.
+    A checkout with no `if:` serves every later step; a conditional one only its twin.
+    """
+    if checkout.get("continue-on-error") is True:
+        return False
+    with_ = checkout.get("with")
+    if isinstance(with_, dict):
+        if "repository" in with_ or "path" in with_:
+            return False  # checks out a different repo, or into a workspace subdirectory
+        sparse = with_.get("sparse-checkout")
+        if sparse is not None:
+            patterns = sparse.split() if isinstance(sparse, str) else list(sparse or [])
+            if not any(str(pat).lstrip("/").startswith(".github") for pat in patterns):
+                return False  # a cone that excludes .github cannot materialise the action
     if "if" not in checkout:
         return True
     return str(checkout.get("if")) == str(step.get("if"))
@@ -106,6 +130,8 @@ def main(argv: list[str]) -> int:
     scanned = 0
     local_steps = 0
     self_steps = 0
+    actions_scanned = 0
+    references_actions_dir = False
 
     try:
         for wf in sorted(list(root.glob("*.yml")) + list(root.glob("*.yaml"))):
@@ -145,6 +171,8 @@ def main(argv: list[str]) -> int:
                         continue
                     if uses.startswith("./"):
                         local_steps += 1
+                        if uses.startswith("./.github/actions/"):
+                            references_actions_dir = True
                         if not any(checkout_usable(c, step) for c in checkouts):
                             findings.append(
                                 f"::error file={wf}::{wf.name}: job '{job_name}', step '{label}' uses "
@@ -157,7 +185,8 @@ def main(argv: list[str]) -> int:
 
         # Second surface: composites must not nest `./` (it would resolve from the CALLER's workspace).
         if actions_root.is_dir():
-            for action in sorted(actions_root.glob("*/action.yml")) + sorted(actions_root.glob("*/action.yaml")):
+            for action in sorted(actions_root.rglob("action.yml")) + sorted(actions_root.rglob("action.yaml")):
+                actions_scanned += 1
                 doc = load(action)
                 runs = doc.get("runs") if isinstance(doc, dict) else None
                 steps = (runs or {}).get("steps") or [] if isinstance(runs, dict) else []
@@ -167,17 +196,30 @@ def main(argv: list[str]) -> int:
                     if not isinstance(step, dict):
                         return usage_error(f"{action}: step[{idx}] is not a mapping")
                     uses = step.get("uses")
-                    if isinstance(uses, str) and uses.startswith("./"):
-                        rel = f"{action.parent.parent.name}/{action.parent.name}/{action.name}"
+                    if not isinstance(uses, str):
+                        continue
+                    rel = action.relative_to(actions_root.parent)
+                    if uses.startswith("./"):
                         findings.append(
                             f"::error file={action}::{rel}: step[{idx}] uses '{uses}' inside a composite "
                             f"— a nested ./ resolves from the caller's workspace; use $/{uses[2:]}"
+                        )
+                    elif uses.startswith("$/") and "@" in uses:
+                        findings.append(
+                            f"::error file={action}::{rel}: step[{idx}] uses '{uses}' — a self-repository "
+                            f"reference must not carry an @ref suffix (GitHub rejects it at Set up job; "
+                            f"actionlint 1.7.7 does not)"
                         )
     except ValueError as exc:
         return usage_error(str(exc))
 
     if scanned == 0:
         return usage_error(f"scanned 0 workflows under {root} — wrong path?")
+    if references_actions_dir and not actions_root.is_dir():
+        return usage_error(
+            f"{scanned} workflows reference ./.github/actions/… but {actions_root} is not a "
+            f"directory — the composite surface would be scanned with zero files; wrong tree?"
+        )
     same_repo = local_steps + self_steps
     if same_repo < MIN_SAME_REPO_STEPS:
         return usage_error(
@@ -193,8 +235,8 @@ def main(argv: list[str]) -> int:
 
     print(
         f"{NAME}: OK — {scanned} workflows scanned, {local_steps} local-action steps, "
-        f"{self_steps} self-repository steps; every local-action step is preceded by "
-        f"actions/checkout in its job"
+        f"{self_steps} self-repository steps, {actions_scanned} composite action file(s); "
+        f"every local-action step is preceded by actions/checkout in its job"
     )
     return 0
 

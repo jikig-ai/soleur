@@ -33,7 +33,8 @@
 # header variable: the URL carries the public key, and runner masking is substring-only.
 #
 # HOW CALLERS REFERENCE THIS ACTION. A job that runs `actions/checkout` references it as
-# `./.github/actions/sentry-heartbeat` (13 sites). A job WITHOUT a checkout must use GitHub's
+# `./.github/actions/sentry-heartbeat` (13 steps across 12 workflow files —
+# scheduled-terraform-drift.yml carries two). A job WITHOUT a checkout must use GitHub's
 # self-repository form `$/.github/actions/sentry-heartbeat`: a `./` action resolves from the
 # runner's workspace, which a checkout-free job never populates, so the runner prints
 # "Can't find 'action.yml' … Did you forget to run actions/checkout" and the caller's

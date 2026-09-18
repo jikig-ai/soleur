@@ -311,11 +311,18 @@ jobs:
       # Consequence for the heartbeat step at the foot of this job: a `uses: ./…` action
       # resolves from the runner's WORKSPACE, which this job never populates, so `./` can never
       # resolve here (it never did — see the 2026-08-13 post-mortem). The composite is therefore
-      # referenced through GitHub's self-repository form `$/…`, which the runner downloads from
-      # this repository at the running commit during `Set up job`, with no checkout. Do NOT add
-      # an `actions/checkout` to "help" the heartbeat: it would write a `GITHUB_TOKEN` to disk in
-      # the one job built around untrusted input, and `scripts/lint-workflow-local-action-checkout.py`
-      # accepts `$/` without one.
+      # referenced through GitHub's self-repository form `$/…`, which the runner fetches from
+      # this repository at the running commit during `Set up job`, with no checkout.
+      #
+      # Precisely: `$/` DOES land this repository's archive on the runner, under `_actions/`
+      # (staged via `_staging/`), which is outside `$GITHUB_WORKSPACE` — measured, because the
+      # first dispatch of this change failed extraction on an unrelated committed dangling
+      # symlink in `test/fixtures/`. The property this job keeps is the one assertion 3 needs:
+      # the WORKSPACE stays empty, so nothing can read a local tree in place of what `main`
+      # serves on raw.githubusercontent.com. Do NOT add an `actions/checkout` to "help" the
+      # heartbeat: it would write a `GITHUB_TOKEN` into `.git/config` in the one job built
+      # around untrusted input (checkout's `persist-credentials` defaults to true), and
+      # `scripts/lint-workflow-local-action-checkout.py` accepts `$/` without one.
       - name: Check the published marketplace manifest
         id: check
         run: |

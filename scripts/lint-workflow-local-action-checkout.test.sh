@@ -43,14 +43,14 @@ mkwf() { # <name> <body>  (into the workflows dir under test)
   mkdir -p "$TMP/wf"
   printf '%s\n' "$2" > "$TMP/wf/$1"
 }
-mkaction() { # <name> <body>  (into the sibling actions dir the lint derives from the workflows dir)
+mkaction() { # <path> <body>  (into the sibling actions dir the lint derives from the workflows dir)
   mkdir -p "$TMP/actions/$1"
   printf '%s\n' "$2" > "$TMP/actions/$1/action.yml"
 }
 run_lint() { python3 "$SUT" "$TMP/wf" >"$TMP/out" 2>"$TMP/err"; RC=$?; }
 # reset() restores the filler, never a bare directory — a bare `rm -rf` would drop every case
 # below the floor and every RED below would then be measuring the floor, not the rule.
-reset() { rm -rf "$TMP/wf" "$TMP/actions"; cp -r "$TMP/filler" "$TMP/wf"; }
+reset() { rm -rf "$TMP/wf" "$TMP/actions"; cp -r "$TMP/filler" "$TMP/wf"; mkdir -p "$TMP/actions"; }
 n_findings() { grep -c '^::error file=' "$TMP/err"; }
 
 # --- must-PASS (i): the filler alone is clean, asserted BEFORE any case runs -----------------
@@ -61,7 +61,7 @@ if [[ "$RC" -eq 0 ]]; then
 else
   fail "(i) the filler tree is not clean: rc=$RC: $(head -1 "$TMP/err")"
 fi
-same_repo="$(sed -nE 's/^lint-workflow-local-action-checkout: OK — ([0-9]+) workflows scanned, ([0-9]+) local-action steps, ([0-9]+) self-repository steps.*/\2+\3/p' "$TMP/out")"
+same_repo="$(sed -nE 's/^lint-workflow-local-action-checkout: OK — ([0-9]+) workflows scanned, ([0-9]+) local-action steps, ([0-9]+) self-repository steps, ([0-9]+) composite action file\(s\).*/\2+\3/p' "$TMP/out")"
 if [[ -n "$same_repo" ]] && [[ "$((same_repo))" -ge 30 ]]; then
   pass "(i) the OK line has the canonical shape and the filler carries >= 30 same-repo steps ($((same_repo)))"
 else
@@ -263,6 +263,7 @@ TARGET=scheduled-domain-model-drift.yml
 if [[ -f "$LIVE/$TARGET" ]]; then
   mkdir -p "$TMP/live9"
   cp -r "$LIVE" "$TMP/live9/workflows" || { echo "  FATAL: could not copy the live workflows tree"; exit 2; }
+  cp -r "$ROOT/.github/actions" "$TMP/live9/actions" || { echo "  FATAL: could not copy the live actions tree"; exit 2; }
   python3 "$SUT" "$TMP/live9/workflows" >"$TMP/out" 2>"$TMP/err"; crc=$?
   control_n="$(n_findings)"
   python3 - "$TMP/live9/workflows/$TARGET" <<'PY' || { echo "  FATAL: row 9 mutator failed"; exit 2; }
@@ -384,7 +385,7 @@ jobs:
       - uses: ./.github/actions/x"
 run_lint
 if [[ "$RC" -eq 0 ]]; then
-  pass "(b) a checkout carrying with: (the live shape) satisfies a later ./ step"
+  pass "(b) a checkout carrying with: fetch-depth/persist-credentials (the live shape) satisfies a later ./ step"
 else
   fail "(b) the live checkout shape was rejected: rc=$RC: $(head -1 "$TMP/err")"
 fi
@@ -489,6 +490,155 @@ else
   fail "(h) a qualifying earlier checkout was ignored in favour of a later conditional one: rc=$RC"
 fi
 
+# --- RED 13: a composite nested DEEPER than one level (a `git mv` must not move it out of reach)
+reset
+mkaction outer/inner 'name: nested
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/y
+    - run: echo hi
+      shell: bash'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "actions/outer/inner/action.yml" "$TMP/err"; then
+  pass "13 a ./ inside a composite nested two levels deep is REFUSED (the walk is recursive)"
+else
+  fail "13 a nested composite escaped the walk — a git mv moves any action out of reach: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- RED 14: the $/…@ref reject applies inside a composite too, not only in workflows --------
+reset
+mkaction selfat 'name: selfat
+runs:
+  using: composite
+  steps:
+    - uses: $/.github/actions/y@v1
+    - run: echo hi
+      shell: bash'
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "actions/selfat/action.yml" "$TMP/err" && grep -q '@' "$TMP/err"; then
+  pass "14 a \$/…@ref inside a composite is REFUSED (the reject is not workflow-only)"
+else
+  fail "14 a \$/…@ref inside a composite slipped through — GitHub rejects it at setup: rc=$RC"
+fi
+
+# --- RED 15: a checkout carrying continue-on-error is NOT a usable checkout ------------------
+reset
+mkwf coe.yml "name: coe
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        continue-on-error: true
+      - uses: ./.github/actions/x"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "coe.yml: job 'j'" "$TMP/err"; then
+  pass "15 a checkout that may fail (continue-on-error) does not satisfy a later ./ step"
+else
+  fail "15 a continue-on-error checkout was accepted — the original defect, one step earlier: rc=$RC"
+fi
+
+# --- RED 16: workflows reference ./.github/actions/… but the actions root is ABSENT -----------
+# Without this the composite surface walks zero files and still reports OK.
+reset
+rm -rf "$TMP/actions"
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'composite surface' "$TMP/err"; then
+  pass "16 an absent actions root with ./.github/actions references exits 2 (never a silent zero-file walk)"
+else
+  fail "16 a missing actions directory reported OK while scanning zero composites: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- must-PASS (j): the composite count is REPORTED, so 'scanned nothing' is legible ---------
+reset
+mkaction clean 'name: clean
+runs:
+  using: composite
+  steps:
+    - uses: $/.github/actions/y
+    - run: echo hi
+      shell: bash'
+run_lint
+if [[ "$RC" -eq 0 ]] && grep -qE ' 1 composite action file\(s\)' "$TMP/out"; then
+  pass "(j) a clean composite is accepted and the composite-file count appears in the OK line"
+else
+  fail "(j) the composite count is absent from the OK line, or a clean composite was flagged: rc=$RC: $(head -1 "$TMP/out")"
+fi
+
+# --- RED 17: a checkout whose sparse cone excludes .github cannot materialise the action ------
+reset
+mkwf sparse.yml "name: sparse
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: apps/web-platform
+      - uses: ./.github/actions/x"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "sparse.yml: job 'j'" "$TMP/err"; then
+  pass "17 a sparse checkout excluding .github does not satisfy a ./ step"
+else
+  fail "17 a .github-excluding sparse cone was accepted — the workspace has no action to resolve: rc=$RC"
+fi
+
+# ...and a cone that INCLUDES .github does satisfy it (the guard must not reject every sparse form).
+reset
+mkwf sparseok.yml "name: sparseok
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          sparse-checkout: |
+            .github
+            apps
+      - uses: ./.github/actions/x"
+run_lint
+if [[ "$RC" -eq 0 ]]; then
+  pass "17 a sparse cone that INCLUDES .github is accepted (the rule is not 'reject all sparse')"
+else
+  fail "17 a legitimate .github-including sparse checkout was rejected: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- RED 18: with: path: / with: repository: put the tree somewhere ./ does not resolve -------
+reset
+mkwf wpath.yml "name: wpath
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          path: src
+      - uses: ./.github/actions/x"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "wpath.yml: job 'j'" "$TMP/err"; then
+  pass "18 a checkout into a workspace subdirectory (with: path:) does not satisfy a ./ step"
+else
+  fail "18 with: path: was accepted — ./ resolves at the workspace root, not the subdirectory: rc=$RC"
+fi
+
+reset
+mkwf wrepo.yml "name: wrepo
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@$SHA
+        with:
+          repository: other/repo
+      - uses: ./.github/actions/x"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "wrepo.yml: job 'j'" "$TMP/err"; then
+  pass "18 a checkout of a DIFFERENT repository does not satisfy a ./ step"
+else
+  fail "18 with: repository: was accepted — the workspace holds another repo's tree: rc=$RC"
+fi
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -517,7 +667,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=29
+FAIL_FLOOR_MIN=38
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
