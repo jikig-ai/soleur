@@ -118,14 +118,12 @@ own, so it defaults fail-closed to `cross-domain` (TR2).
       `plugins/soleur/test/c4-count-parity.test.sh` (QG9) — prose only, no count moves.
 - [x] 6.5 `git-data-birth.md`: readiness row, `## After the birth` parity note, and the
       replace arm of the partial-birth decision tree.
-- [ ] 6.6 Write the learning file (at /compound).
+- [x] 6.6 Write the learning file — knowledge-base/project/learnings/2026-09-18-the-measured-facts-my-resume-brief-handed-me-were-the-defects.md
 
 ## Phase 7 — Gates
 
-- [ ] 7.1 QG2 — execute every mutation and harness row; record each verdict.
-- [ ] 7.2 QG5 / QG6 — FR coverage assertions and the NFR2 credential-leak fixture.
-- [ ] 7.3 QG7 — `actionlint` on the workflow; `bash -c` on extracted snippets. Never
-      `bash -n` on the workflow file.
-- [ ] 7.4 QG8 / QG10 — lint battery and citation resolution, both exiting non-zero on
-      failure.
+- [x] 7.1 QG2 — three batteries at review: 24 rows (31/32 killed, 1 equivalent), then 25/25 on the second-pass survivors. Verdicts in the PR body.
+- [x] 7.2 QG5 / QG6 — FR1 (no BETTERSTACK_QUERY binding), FR2 (stderr reaches the log), FR8 (anchor), FR9 (table pin) and the NFR2 scrub fixtures are named assertions in the two suites.
+- [x] 7.3 QG7 — actionlint (docker rhysd/actionlint) clean except 4 SC1083 warnings byte-identical on origin/main; each poll step's run body is extracted and EXECUTED by the suite.
+- [x] 7.4 QG8 / QG10 — lint-guard-contract, lint-infra-no-human-steps --changed, lint-diagnosis-claims, lint-workflow-errexit-capture, lint-shell-trace-credential-refusal, the fixture ratchets and guard-vacuity-floor all green; QG10 citation check PASS.
 - [ ] 7.5 QG11 — post-merge, event-gated; carried by the follow-through directive.
