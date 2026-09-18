@@ -541,3 +541,16 @@ merits; and the measurement discipline itself — Kieran independently reproduce
 **What does not:** the carrier, the trigger pattern, the three-verdict model, all four floors, the
 floors file, the ledger, the `UNION` deletion, 8 of 13 matrix rows, and three of the four
 shell-prescribing ACs.
+
+### Architecture-strategist findings (5 of 6 returned; verdict unanimous)
+
+| # | Finding | Status |
+| --- | --- | --- |
+| F19 | **The auto-exempt ceiling is a net-count identity, not a RED-by-default mechanism.** A PR that adds one non-triggering skill AND deletes one auto-exempt skill lands every floor exactly on its threshold — `pop 98≥98, trig 46≥46, auto 52≤52, unc 0` — **GREEN**, with the new skill silently exempt. This is the same shape ADR-193's own Consequences record having shipped and falsified: *"deriving `deferred` as 'everything not covered' makes the two sets a partition of one list, so the sum always equals the total and the arm can never fail."* Reproduced one level up, in the plan that cites the ADR | **CONFIRMED** (arithmetic run) |
+| F20 | **The population excludes the front door.** `plugins/soleur/commands/go.md` — the router, first command of every session — is outside the glob and **has the defect today**: `:122` names Claude and Grok only; Codex appears **3** times in the whole file against Claude 17, Grok 19, Devin 9. A Codex operator running `/soleur:go` hits an incomplete routing table the census reports GREEN over. Also outside: 68 agent docs, **8** of which carry Claude-only spawn prose | **CONFIRMED** |
+| F21 | **Nothing typechecks `plugins/`.** `grep -c tsc scripts/test-all.sh` → **0**; the only tracked tsconfig is `apps/web-platform/tsconfig.json` and `ci.yml:907` runs tsc with `working-directory: apps/web-platform`. So `typeof SUPPORTED_HARNESSES[number]` written **without `as const`** silently degrades `Harness` to `string`, destroying every narrowing in `harness.ts` — and bun strips types, so the suite stays green. **AC8 is unverifiable by the means the plan prescribes** | **CONFIRMED** |
+| F22 | The `markerBlock()` mechanism sentence is wrong: `:491` already pins exactly one `MARKER_END`, so non-greediness is irrelevant. The break is span inclusion. Conclusion holds, stated cause does not | **CONCEDED** |
+
+**The anchor argument is self-serving, and now demonstrably so.** It defends the *population* denominator (`git ls-files`, index-derived, narrowing visible) — but the denominator that actually carries the property is the **trigger** count, which is regex-derived from prose. A skill narrows out of it by rewording, which is invisible and looks editorial. F19's GREEN sequence needs no floor edit at all.
+
+What L142 actually prescribes is *"pin it with a repo-internal test against a **committed inventory**."* The plan implements a **number**, not an inventory. A committed list of the 52 auto-exempt names turns every F19 sequence RED, and costs 52 lines — not the "~60 ledger rows asserting nothing real" the ADR alternatives list rejects, which was a strawman for this.
