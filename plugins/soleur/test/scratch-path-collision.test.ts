@@ -94,7 +94,7 @@ const ALLOWLIST: readonly Waiver[] = [
       "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",
   },
   {
-    file: "skills/plan/SKILL.md",
+    file: "skills/plan/references/plan-sharp-edges.md",
     text: "/tmp/.doppler",
     reason:
       "Incident prose (#6536): names doppler's own real cache dir as the diagnosed root cause (the heartbeat unit lacked PrivateTmp=true). Documents a system path, does not prescribe writing scratch there.",
