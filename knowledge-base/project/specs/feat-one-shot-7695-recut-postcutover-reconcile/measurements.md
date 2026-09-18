@@ -83,3 +83,24 @@ RC=0
 | #7674 probe rc == 0 | rc=0 | yes |
 
 Delta vs plan time (2026-09-18 ~14:00Z): `redis_keys` 1081 → 1261, `data_bytes` 38671222 → 46548668, `uptime_s` 90359 → 93969. Same boot_id `ef763c72`, same host `166317708`, same volume. No premise moved.
+
+## 5. Dedicated-host instance history since Merge B — `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 15d --grep SOLEUR_INNGEST_SERVER_PROBE --limit 2000`, grouped by `instance_id` (first/last `dt`)
+
+```
+hetzner-162809678  126 rows  first=2026-09-03 15:47  last=2026-09-08 19:06   (pre-schema host; created 2026-08-20)
+hetzner-165279348    8 rows  first=2026-09-09 08:41  last=2026-09-09 14:43
+hetzner-165327294    4 rows  first=2026-09-09 15:17  last=2026-09-09 17:18
+hetzner-165340214    4 rows  first=2026-09-09 17:33  last=2026-09-09 19:34
+hetzner-165351540    4 rows  first=2026-09-09 19:53  last=2026-09-09 21:53
+hetzner-165360464   22 rows  first=2026-09-09 22:08  last=2026-09-10 20:11   (probe_schema=7)
+hetzner-165451537  160 rows  first=2026-09-10 21:00  last=2026-09-17 11:10   (probe_schema=8; the 2026-09-15 cutover host — op=arm run 34948112813)
+hetzner-166305436    3 rows  first=2026-09-17 11:38  last=2026-09-17 12:38   (inherited-done incident, first replace)
+hetzner-166317708   28 rows  first=2026-09-17 12:49  last=2026-09-18 14:54   (current; op=resume recovery)
+```
+
+**Correction to the plan (2026-09-18 plan text said "the third host since 2026-09-04, across two more
+replaces").** Measured: the current host is the NINTH dedicated host since Merge B (2026-09-04) —
+eight replaces: five on 2026-09-09 (probe_schema 4→7 iterations + the user_data cap recreate), one on
+2026-09-10 (probe_schema=8), two on 2026-09-17 (inherited-done incident). None was the recut Dispatch
+A/C sequence. The durable latch was written on host `165451537` (2026-09-15 arm) and survived both
+2026-09-17 replaces. The runbook callout and the addenda use these measured figures, not the plan's.
