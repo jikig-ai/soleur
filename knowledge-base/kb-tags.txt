@@ -1054,6 +1054,7 @@ cto
 cto-fork
 cto-routing
 cto-ruling
+ctx-logger
 curated-register
 curl
 curl-based cloudflare api calls in agent
@@ -2202,6 +2203,7 @@ markdown-table
 markdown-tables
 markdownlint
 marker
+marker-shape
 marker-telemetry
 marker-tests
 marker-vocabulary

@@ -12,7 +12,7 @@ symptoms:
 root_cause: missing_workflow_step
 resolution_type: workflow_improvement
 severity: high
-tags: [post-merge, deploy-arm, push-arm, build-sha, adr-217, short-sha, worktree, cleanup-merged, notification-vs-verdict, inngest, anthropic-credits]
+tags: [post-merge, deploy-arm, push-arm, build-sha, adr-217, short-sha, worktree, cleanup-merged, notification-vs-verdict, inngest, anthropic-credits, ctx-logger, marker-shape]
 synced_to: [ship]
 ---
 
@@ -21,7 +21,7 @@ synced_to: [ship]
 ## Problem
 
 PR #8276 merged at 22:07:36Z as `8efd7eeb3`. Twelve workflow runs queued on the merge
-commit; `Web Platform Release` went green at ~22:15Z. I told the operator the new promoter
+commit; `Web Platform Release` went green at 22:20Z. I told the operator the new promoter
 code was live and, per the plan's post-merge step, fired `cron/compound-promote.manual-trigger`
 at 22:21:21Z, then polled Better Stack for the `SOLEUR_COMPOUND_PROMOTE_OUTCOME` marker the
 new code emits.
@@ -39,7 +39,7 @@ sitting in the GitHub runner queue. `postmerge/SKILL.md` Phase 3.7 documents thi
 two-arm split and prescribes the predicate — I read it after the fire.
 
 The old code makes the same Anthropic call and cannot emit a marker, so the poll was
-structurally unable to succeed. The real deploy landed at ~23:09Z; a second fire at 23:10:59Z
+structurally unable to succeed. The deploy job succeeded at 23:10:45Z; a second fire at 23:10:59Z
 ran on the new code.
 
 Three more instruments failed the same way in the same hour:
@@ -76,8 +76,17 @@ equivalent gates run by hand and disclosed.
 The production finding the fires produced is recorded on #8281 and #8293: both runs died in
 `anthropic-cluster` with `Anthropic API 400 invalid_request_error: "Your credit balance is too
 low"` (`req_011CfBgjSypLscvFsr4RGwFo`); `cron-anthropic-credit-probe` had logged the same
-hourly since ≥20:47Z, so the account was dry before the merge. With `retries: 1` the terminal
-`status=error` marker follows Inngest's retry, which had not fired 55+ minutes later.
+hourly since 09:47:02Z, ~12.5 h before the merge. The retry fired 32 s after the first 400 and
+the terminal marker followed at 23:11:54Z — 55 s after the fire — and I reported it as *not yet
+emitted* for the next twenty minutes, because it reached Better Stack as `util.inspect` text,
+one field per row (`  SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,` … `} compound promote outcome`).
+`emitOutcomeMarker` writes through Inngest's `ctx.logger`, a console-backed ProxyLogger the
+client deliberately leaves unconfigured (`client.ts`), while the cost marker that decodes writes
+through a pino instance (`claude-cost-marker.ts`). Every field-isolated reader — my poll, the
+runbook's decode, the #8281 probe's positive control — is blind to it. That is the #8281 defect
+inside the #8281 fix a second time, and it is a code change (route the marker through pino) that
+belongs in its own PR against #8281, not in this docs change. The review found it; I had
+measured the absence three times and attributed it to Inngest's retry backoff.
 
 ## Key Insight
 
@@ -87,9 +96,10 @@ action.** When a pipeline is split into arms, the arm whose name matches what yo
 know is the one that runs first and proves least. Gate on the served SHA, not on any run's
 conclusion — the predicate is cheap, immutable, and already written in `postmerge` Phase 3.7.
 
-The same hour produced three instruments that returned an answer without measuring: an empty
+The same hour produced four instruments that returned an answer without measuring: an empty
 run list read as drained, a reaped worktree under a live watch, a notification exit code
-standing in for the recorded rc. Each is an instance of
+standing in for the recorded rc, and a structured decoder whose empty result I reported as
+"not emitted" while the emission sat in the raw rows as text. Each is an instance of
 `2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran`,
 and each was caught by the same move — asking what the instrument would show if the thing it
 watches did not exist.
@@ -104,9 +114,13 @@ watches did not exist.
    `ALL_RUNS_COMPLETE`.** — Recovery: full 40-char SHA plus an `EMPTY_LIST … retrying` branch.
    — **Prevention:** already in postmerge Phase 4 (#8135); the ship amendment repeats "full
    SHA, never short" at the site where the poll is written.
-3. **Feature worktree reaped under a live Monitor by a sibling `cleanup-merged`.** — Recovery:
-   `git worktree add --detach .worktrees/postmerge-8276 origin/main`. — **Prevention:** ship
-   protocol step 2 amendment: post-merge from a detached main worktree.
+3. **Feature worktree reaped under a live Monitor by a sibling `cleanup-merged`** — the reap is
+   lease-gated (`is_lease_active`, `max(expected_duration, 4h)`), and this session had run ~6 h,
+   so the precondition was lease expiry plus merge, not merge alone. — Recovery:
+   `git worktree add --detach .worktrees/postmerge-8276 origin/main`, anchored at the common dir
+   so it does not nest inside the doomed worktree. — **Prevention:** ship protocol step 2
+   amendment, aligned with the existing #8136 rule in Phase 7 ("Run every Monitor…"), which
+   already named this hazard and which I had not read.
 4. **`COMMIT_RC=124` with the hook tree orphaned to systemd holding the flock; notification
    said exit 0.** — Recovery: read the recorded rc line, reaped by pid after a `/proc/<pid>/cwd`
    check, `LEFTHOOK=0` with gates run by hand and disclosed. — **Prevention:** third measured
@@ -120,6 +134,15 @@ watches did not exist.
    busy-`main` ship.
 6. **Monitor-supersede hook listed already-expired monitors as live.** — Recovery: stopped one
    defensively (no-op). — **Prevention:** none needed; harmless lag.
+7. **Read "no decoded marker" as "the marker has not been emitted" three times, and wrote that
+   into #8281 and #8293.** The marker had landed 55 s after the fire, as multi-line text my
+   field-isolated decoder cannot see. — Recovery: the review's code-quality seat ran a substring
+   query and found the rows; verified by re-querying `"compound promote outcome"` and
+   `"SOLEUR_COMPOUND_PROMOTE_OUTCOME: true"` as plain strings. — **Prevention:** an absence read
+   through a structured decoder needs a positive control *of the same producer* — the probe's
+   `SOLEUR_CLAUDE_COST` control proved the channel, not the marker's shape. When a decode returns
+   nothing, grep the raw string once before concluding the emission did not happen. Code fix
+   (marker through pino) in a follow-up PR; the #8281 record corrected.
 
 ## Related
 
@@ -129,6 +152,13 @@ watches did not exist.
 - `2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran.md`
 - `security-issues/2026-09-18-the-third-proxy-the-review-falsified-my-own-fix-and-the-learning-that-recommended-it.md`
   — the pre-merge learning of the same PR.
-- `best-practices/2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md` — why an admin
-  merge is not a deploy either.
+- `best-practices/2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md` — its 2026-09-09
+  addendum: an admin merge still deploys, but only after merge-commit CI concludes; the deploy
+  arm lags either way.
+- `ship/SKILL.md` Phase 7 "Run every Monitor with its shell in…" (#8136) — the prior home of the
+  reaped-worktree hazard; step 2 now points at it instead of restating it.
+- `2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md` — the earlier instance of the
+  same class.
+- `2026-09-17-the-watcher-and-the-watched-shared-a-lifetime.md` §"A pipe destroys the exit code"
+  — the `tee`-masks-rc mechanism behind session error 4.
 - #8281, #8293 — the production finding.
