@@ -261,3 +261,22 @@ Three guards, plus two the review round added:
     pattern is a copy in every consumer, not a write-up — when a PR introduces a self-test block,
     the same PR ports it to every sibling suite, because the sibling that goes without it is the
     one nobody re-reads.
+
+26. **A CI guard reported a file path nobody wrote, and the path was its own tokenizer's
+    artefact.** `Block PR body citing files not in diff` failed on PR #8321 with
+    `Orphan citations: skippingspecs/feat-.../upstream-reports.md`. No such string exists in the
+    body: `skipping` is the tail of one inline-code span and `specs/feat-.../upstream-reports.md`
+    is the whole of another, ~40 characters apart. `check-pr-body-vs-diff.sh` strips code spans
+    with a naive backtick-pairing regex whose character class cannot express "a run of N
+    backticks closes a run of N", so the four-backtick span I used to quote a three-backtick
+    fence desynchronised the pairing for the rest of the line — gluing two spans together AND
+    dropping every real citation on that line from the denominator. It invented a false finding
+    and lost its true inputs in the same stroke, which is this PR's own subject matter arriving
+    from a different subsystem. — Recovery: reworded the body to drop the nested backtick run,
+    re-ran the gate against the live body (`cites no file paths`, rc 0), and filed **#8336**
+    (different subsystem ⇒ file-tracked, not inlined, per the compound triage rule). —
+    **Prevention:** when a guard names an artefact, grep the SOURCE for that exact string before
+    believing it. A finding that cannot be located in the input is a finding about the
+    instrument. Two filing gates also corrected me here and both were right: the body path had
+    to be a literal (not `$BODY`) so the justification could be read, and "the guard is
+    imperfect" is `meta/machinery`, never a user-impact claim.
