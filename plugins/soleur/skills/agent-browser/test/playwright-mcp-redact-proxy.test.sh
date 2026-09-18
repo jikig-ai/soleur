@@ -355,6 +355,47 @@ session argv "$PROXY" --env FAKE_PW_ARGV_OUT="$WORK/argv-out" --send "$INIT" --e
 assert_true 'FR4: child argv ends with --snapshot-mode none' bash -c 'test -f "$1" && [[ "$(tail -n 2 "$1" | tr "\n" " ")" == "--snapshot-mode none " ]]' _ "$WORK/argv-out"
 
 # ---------------------------------------------------------------------------
+# FR15 — --user-data-dir-name: profile-dir injection and refusals (#8156)
+# ---------------------------------------------------------------------------
+UDD=(--proxy-arg --user-data-dir-name --proxy-arg soleur-test-profile)
+session argv-udd "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd" --send "$INIT" --end eof >/dev/null
+assert_true 'FR15: --user-data-dir=<XDG_CACHE_HOME>/<name> injected once, before --snapshot-mode' bash -c 'test -f "$1" && [[ "$(grep -c "^--user-data-dir=" "$1")" == "1" ]] && grep -qxF -- "--user-data-dir=$2/soleur-test-profile" "$1" && [[ "$(tail -n 2 "$1" | tr "\n" " ")" == "--snapshot-mode none " ]]' _ "$WORK/argv-udd" "$WORK/xdg"
+session argv-udd-home "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=" --env "HOME=$WORK/home" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-home" --send "$INIT" --end eof >/dev/null
+assert_true 'FR15: XDG_CACHE_HOME empty → profile resolves under $HOME/.cache' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/.cache/soleur-test-profile" "$1"' _ "$WORK/argv-udd-home" "$WORK/home"
+assert_true 'FR15: flag absent → child argv carries no --user-data-dir (unchanged behaviour)' bash -c 'test -f "$1" && ! grep -q -- "--user-data-dir" "$1"' _ "$WORK/argv-out"
+r="$(session udd-dotdot "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '..' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a .. basename refuses to start' "$r" '..'
+r="$(session udd-sep "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a/b' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a basename containing / refuses to start' "$r" 'separator'
+r="$(session udd-sep-bs "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg 'a\b' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a basename containing a backslash refuses to start' "$r" 'separator'
+r="$(session udd-conflict "$PROXY" "${UDD[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-data-dir=/x)"
+assert_refused_start 'FR15: the flag combined with an explicit --user-data-dir refuses to start' "$r" 'explicit'
+r="$(session udd-relxdg "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME=relative/cache --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a relative XDG_CACHE_HOME refuses to start' "$r" 'absolute'
+r="$(session udd-nohome "$PROXY" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: XDG_CACHE_HOME and HOME both unset refuses to start' "$r" 'HOME is set'
+r="$(session udd-missing "$PROXY" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: --user-data-dir-name with no argument refuses to start' "$r" 'basename argument'
+r="$(session udd-unknown "$PROXY" --proxy-arg --bogus-flag --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: an unrecognised proxy flag refuses to start' "$r" 'unrecognised'
+r="$(session udd-dup "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: the flag given twice refuses to start' "$r" 'twice'
+r="$(session udd-dash "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a basename beginning with - refuses to start' "$r" "leading '-'"
+# the = spelling, and a root that only resolves after realpath normalisation
+UDDEQ=(--proxy-arg --user-data-dir-name=eq-profile)
+session argv-udd-eq "$PROXY" "${UDDEQ[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-eq" --send "$INIT" --end eof >/dev/null
+assert_true 'FR15: --user-data-dir-name=<name> injects the same profile dir' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/eq-profile" "$1"' _ "$WORK/argv-udd-eq" "$WORK/xdg"
+r="$(session udd-eqempty "$PROXY" --proxy-arg '--user-data-dir-name=' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: --user-data-dir-name= (empty value) refuses to start' "$r" 'basename'
+mkdir -p "$WORK/sub" "$WORK/xdg-real"; ln -sfn "$WORK/xdg-real" "$WORK/xdg-link"
+session argv-udd-dotroot "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/sub/.." --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-dotroot" --send "$INIT" --end eof >/dev/null
+assert_true 'FR15: a .. inside the profile ROOT is realpath-normalised — the child argv never sees it' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/soleur-test-profile" "$1" && ! grep -qF ".." "$1"' _ "$WORK/argv-udd-dotroot" "$WORK"
+session argv-udd-sym "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg-link" --env FAKE_PW_ARGV_OUT="$WORK/argv-udd-sym" --send "$INIT" --end eof >/dev/null
+assert_true 'FR15: a symlinked profile ROOT resolves to its target before the basename joins' bash -c 'test -f "$1" && grep -qxF -- "--user-data-dir=$2/soleur-test-profile" "$1" && ! grep -qF "xdg-link" "$1"' _ "$WORK/argv-udd-sym" "$WORK/xdg-real"
+
+# ---------------------------------------------------------------------------
 # FR5 — refuse to start (no child spawned)
 # ---------------------------------------------------------------------------
 NOSIB="$WORK/nosib"; mkdir -p "$NOSIB"; cp "$PROXY" "$NOSIB/proxy.py"
@@ -405,6 +446,99 @@ r="$(session debugfile "$PROXY" --env DEBUG_FILE="$WORK/dbg" --send "$INIT" --en
 assert_refused_start 'FR5: DEBUG_FILE refuses to start' "$r" 'DEBUG_FILE'
 r="$(session debugother "$PROXY" --env 'DEBUG=express:router,-pw:*' --send "$INIT" --send "$SNAP" --end eof)"
 assert_redacted_result 'FR5 companion: an unrelated DEBUG namespace (plus a pw exclusion) starts and serves' "$r" 3 1
+# FR5 (sink table): every argv flag that re-opens a raw sink, swaps the browser
+# the proxy launched, or injects page material — in both spellings, plus the
+# PLAYWRIGHT_MCP_* env twin (the child inherits the session env wholesale).
+for pair in \
+  '--storage-state:PLAYWRIGHT_MCP_STORAGE_STATE' \
+  '--secrets:PLAYWRIGHT_MCP_SECRETS_FILE' \
+  '--output-dir:PLAYWRIGHT_MCP_OUTPUT_DIR' \
+  '--init-script:PLAYWRIGHT_MCP_INIT_SCRIPT' \
+  '--init-page:PLAYWRIGHT_MCP_INIT_PAGE' \
+  '--cdp-endpoint:PLAYWRIGHT_MCP_CDP_ENDPOINT' \
+  '--endpoint:PLAYWRIGHT_MCP_ENDPOINT' \
+  '--extension:PLAYWRIGHT_MCP_EXTENSION' \
+  '--executable-path:PLAYWRIGHT_MCP_EXECUTABLE_PATH' \
+  '--grant-permissions:PLAYWRIGHT_MCP_GRANT_PERMISSIONS' \
+  '--save-trace:PLAYWRIGHT_MCP_SAVE_TRACE' \
+  '--save-video:PLAYWRIGHT_MCP_SAVE_VIDEO' \
+  '--ignore-https-errors:PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS' \
+  '--no-sandbox:PLAYWRIGHT_MCP_SANDBOX' \
+  '--daemon:PLAYWRIGHT_MCP_DAEMON'; do
+  flag="${pair%%:*}"; envvar="${pair##*:}"
+  r="$(session "sink-$flag" "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" "$flag=/tmp/x")"
+  assert_refused_start "FR5: $flag=<v> in the wrapped argv refuses to start" "$r" "$flag"
+  r="$(session "sinkenv-${envvar#PLAYWRIGHT_MCP_}" "$PROXY" --env "$envvar=/tmp/x" --send "$INIT" --end eof --timeout 3)"
+  assert_refused_start "FR5: $envvar refuses to start" "$r" "$envvar"
+done
+r="$(session sink-aufa "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --allow-unrestricted-file-access)"
+assert_refused_start 'FR5: bare --allow-unrestricted-file-access refuses to start' "$r" 'allow-unrestricted-file-access'
+r="$(session sinkenv-aufa "$PROXY" --env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS=1 --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR5: PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS refuses to start' "$r" 'PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS'
+r="$(session sink-savesess-eq "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --save-session=/x)"
+assert_refused_start 'FR5: --save-session=<v> (the = spelling) refuses to start' "$r" 'save-session'
+r="$(session sinkenv-savesess "$PROXY" --env PLAYWRIGHT_MCP_SAVE_SESSION=1 --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR5: PLAYWRIGHT_MCP_SAVE_SESSION refuses to start' "$r" 'PLAYWRIGHT_MCP_SAVE_SESSION'
+r="$(session sinkenv-udd "$PROXY" --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR5: PLAYWRIGHT_MCP_USER_DATA_DIR refuses to start (the env form of an audited argv setting)' "$r" 'PLAYWRIGHT_MCP_USER_DATA_DIR'
+r="$(session sinkenv-snap "$PROXY" --env PLAYWRIGHT_MCP_SNAPSHOT_MODE=full --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR5: PLAYWRIGHT_MCP_SNAPSHOT_MODE refuses to start (the proxy owns the flag)' "$r" 'PLAYWRIGHT_MCP_SNAPSHOT_MODE'
+# a bare valued flag as the LAST server arg would bind an appended
+# `--user-data-dir=`/`--snapshot-mode` token as its value — refused, whatever
+# the flag
+r="$(session trailcfg "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config)"
+assert_refused_start 'FR5: a trailing --config would swallow an appended flag into its value — refuses' "$r" 'expects a value'
+r="$(session trailua "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-agent)"
+assert_refused_start 'FR5: a trailing --user-agent (valued, not a sink) refuses the same way' "$r" 'expects a value'
+r="$(session midua "$PROXY" --send "$INIT" --send "$SNAP" --end eof --server python3 "$STUB" --user-agent suite-ua)"
+assert_redacted_result 'FR5 companion: a valued flag with its value mid-argv starts and serves' "$r" 3 1
+# the config-file forms of the same sinks (audited argv stays allowed)
+printf '{"saveTrace": true}\n' > "$WORK/cfg-trace.json"
+r="$(session cfgtrace "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-trace.json")"
+assert_refused_start 'FR5: config saveTrace refuses to start' "$r" 'saveTrace'
+printf '{"secrets": "/tmp/s.json"}\n' > "$WORK/cfg-secrets.json"
+r="$(session cfgsecrets "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-secrets.json")"
+assert_refused_start 'FR5: config secrets refuses to start' "$r" 'secrets'
+printf '{"outputDir": "/tmp/o"}\n' > "$WORK/cfg-outdir.json"
+r="$(session cfgoutdir "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-outdir.json")"
+assert_refused_start 'FR5: config outputDir refuses to start' "$r" 'outputDir'
+printf '{"allowUnrestrictedFileAccess": true}\n' > "$WORK/cfg-aufa.json"
+r="$(session cfgaufa "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-aufa.json")"
+assert_refused_start 'FR5: config allowUnrestrictedFileAccess refuses to start' "$r" 'allowUnrestrictedFileAccess'
+printf '{"extension": true}\n' > "$WORK/cfg-ext.json"
+r="$(session cfgext "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ext.json")"
+assert_refused_start 'FR5: config extension refuses to start' "$r" 'extension'
+printf '{"browser": {"cdpEndpoint": "ws://127.0.0.1:1"}}\n' > "$WORK/cfg-cdp.json"
+r="$(session cfgcdp "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-cdp.json")"
+assert_refused_start 'FR5: config browser.cdpEndpoint refuses to start' "$r" 'cdpEndpoint'
+printf '{"browser": {"initScript": "/tmp/x.js"}}\n' > "$WORK/cfg-initscript.json"
+r="$(session cfginitscript "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-initscript.json")"
+assert_refused_start 'FR5: config browser.initScript refuses to start' "$r" 'initScript'
+printf '{"browser": {"launchOptions": {"executablePath": "/tmp/x"}}}\n' > "$WORK/cfg-execpath.json"
+r="$(session cfgexecpath "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-execpath.json")"
+assert_refused_start 'FR5: config browser.launchOptions.executablePath refuses to start' "$r" 'executablePath'
+printf '{"browser": {"launchOptions": {"args": ["--remote-debugging-port=9222"]}}}\n' > "$WORK/cfg-rdbg.json"
+r="$(session cfgrdbg "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-rdbg.json")"
+assert_refused_start 'FR5: config launchOptions.args with a remote debugging flag refuses to start' "$r" 'remote debugging'
+printf '{"browser": {"userDataDir": "/tmp/p"}}\n' > "$WORK/cfg-udd.json"
+r="$(session cfgudd "$PROXY" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-udd.json")"
+assert_refused_start 'FR5: config browser.userDataDir conflicts with --user-data-dir-name' "$r" 'userDataDir'
+r="$(session cfgudd-ok "$PROXY" --send "$INIT" --send "$SNAP" --end eof --server python3 "$STUB" --config="$WORK/cfg-udd.json")"
+assert_redacted_result 'FR5 companion: config browser.userDataDir WITHOUT the profile flag is the audited form — starts and serves' "$r" 3 1
+printf '{"browser": {"contextOptions": {"storageState": "/tmp/s.json"}}}\n' > "$WORK/cfg-ctxstorage.json"
+r="$(session cfgctxstorage "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxstorage.json")"
+assert_refused_start 'FR5: config browser.contextOptions.storageState refuses to start' "$r" 'storageState'
+printf '{"browser": {"contextOptions": {"permissions": ["clipboard-read"]}}}\n' > "$WORK/cfg-ctxperms.json"
+r="$(session cfgctxperms "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxperms.json")"
+assert_refused_start 'FR5: config browser.contextOptions.permissions refuses to start' "$r" 'permissions'
+printf '{"browser": {"contextOptions": {"ignoreHTTPSErrors": true}}}\n' > "$WORK/cfg-ctxhttps.json"
+r="$(session cfgctxhttps "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxhttps.json")"
+assert_refused_start 'FR5: config browser.contextOptions.ignoreHTTPSErrors refuses to start' "$r" 'ignoreHTTPSErrors'
+printf '{"browser": {"launchOptions": {"chromiumSandbox": false}}}\n' > "$WORK/cfg-sandbox.json"
+r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
+assert_refused_start 'FR5: config browser.launchOptions.chromiumSandbox refuses to start' "$r" 'chromiumSandbox'
+r="$(session traildaemon "$PROXY" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --daemon)"
+assert_refused_start 'FR5: a trailing --daemon (hidden valued option) would swallow an appended flag — refuses' "$r" 'expects a value'
 usage_rc=0; python3 "$PROXY" -- </dev/null >"$WORK/usage.out" 2>"$WORK/usage.err" || usage_rc=$?
 assert_true 'B1: empty server argv → exit 2, usage on stderr, nothing on stdout' bash -c '[[ "$1" == "2" ]] && grep -qF "refusing to start: usage:" "$2" && [[ ! -s "$3" ]]' _ "$usage_rc" "$WORK/usage.err" "$WORK/usage.out"
 usage_rc=0; python3 "$PROXY" python3 "$STUB" </dev/null >"$WORK/usage2.out" 2>"$WORK/usage2.err" || usage_rc=$?
@@ -486,6 +620,50 @@ r="$(odd error-and-result)"; assert_withheld 'row 31: an error frame that also c
 r="$(odd error-string)"; assert_withheld 'row 31: a non-object error → withheld' "$r" 3 'unrecognised shape'
 r="$(odd error-message-tree)"; assert_withheld 'row 46: an error message carrying tree rows → withheld' "$r" 3 'tree-shaped'
 r="$(odd error-no-data)"; assert_true 'row 31 companion: a data-less prose error forwarded byte-identical' bash -c '[[ "$(fact "$1" 3 rawline | base64 -d)" == "{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32000,\"message\":\"boom\"}}" ]]' _ "$r"
+r="$(odd error-code-string)"; assert_withheld 'B9: a non-integer error code → withheld' "$r" 3 'unrecognised shape'
+r="$(odd error-code-bool)"; assert_withheld 'B9: a boolean error code → withheld (bool is not an int code)' "$r" 3 'unrecognised shape'
+# the error frame is REBUILT from {id, code, message}: a key hung on the
+# top-level frame never reaches the client even when it carries a sentinel
+python3 - "$WORK/error-top-extra.json" <<'PY'
+import base64, json, sys
+line = '{"jsonrpc":"2.0","id":{id},"error":{"code":-32000,"message":"boom"},"stolen":"ZZQP-SENTINEL-7980"}'
+json.dump({"raw_b64": base64.b64encode(line.encode()).decode()}, open(sys.argv[1], "w"))
+PY
+r="$(session errtopextra "$PROXY" --env FAKE_PW_RESULT_FILE="$WORK/error-top-extra.json" --send "$INIT" --send "$SNAP" --end eof)"
+assert_true 'B9: error frame rebuilt — a stolen top-level key never reaches the client' bash -c '[[ "$(fact "$1" 3 found)" == "1" && "$(fact "$1" 3 jsonrpc_error)" == "1" ]] && ! stdout_has "$1" stolen && ! stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"
+# vet_other_result: a matched non-tools/call result forwards only when no
+# string anywhere in the frame is tree-shaped or redactable (the
+# resources/read-class bypass the result-shape whitelist)
+INITRES="$WORK/initres"; mkdir -p "$INITRES"; cp "$CAPTURES/"*.json "$INITRES/"
+python3 - "$INITRES/initialize.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["result"]["instructions"] = '- textbox "Token" [ref=e1]: ZZQP-SENTINEL-7980\n- button "Go" [ref=e2]'
+json.dump(d, open(sys.argv[1], "w"))
+PY
+r="$(session initres "$PROXY" --env FAKE_PW_FIXTURE_DIR="$INITRES" --send "$INIT" --end eof)"
+assert_withheld 'B9: a tree string inside an initialize result is withheld, not forwarded' "$r" 1 'non-tools/call'
+PING='{"jsonrpc":"2.0","id":40,"method":"ping"}'
+r="$(session ping "$PROXY" --send "$INIT" --send "$PING" --end eof)"
+assert_true 'B9: a clean non-tools/call result (ping) is forwarded' delivered_ok "$r" 40
+printf '{"result": {"data": "- textbox \\"Token\\" [ref=e1]: ZZQP-SENTINEL-7980\\n- button \\"Go\\" [ref=e2]"}}\n' > "$WORK/ping-tree.json"
+r="$(session pingtree "$PROXY" --env FAKE_PW_PING_RESULT_FILE="$WORK/ping-tree.json" --send "$INIT" --send "$PING" --end eof)"
+assert_withheld 'B9: a tree in a ping result (a method the proxy does not know) is withheld' "$r" 40 'non-tools/call'
+# log-scrub: client- and server-controlled strings reaching stderr can never
+# forge a line in the persisted MCP logs
+r="$(session logsan "$PROXY" --send "$INIT" --send '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"browser_snapshot\nFORGED-LINE","arguments":{"_meta":{}}}}' --end eof)"
+assert_withheld 'log-scrub: the _meta refusal is still delivered for a newline-bearing tool name' "$r" 12 '_meta'
+assert_true 'log-scrub: a newline in the tool name is scrubbed to one stderr line, never forging a second' bash -c 'stderr_has "$1" "refused tool=browser_snapshot FORGED-LINE" && ! grep -q "^FORGED-LINE" "$1/stderr.txt"' _ "$r"
+INITSAN="$WORK/initsan"; mkdir -p "$INITSAN"; cp "$CAPTURES/"*.json "$INITSAN/"
+python3 - "$INITSAN/initialize.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["result"]["serverInfo"]["name"] = "pw\nFORGED-INIT"
+json.dump(d, open(sys.argv[1], "w"))
+PY
+r="$(session initsan "$PROXY" --env FAKE_PW_FIXTURE_DIR="$INITSAN" --send "$INIT" --send "$SNAP" --end eof)"
+assert_true 'log-scrub: a newline-bearing serverInfo name cannot forge a stderr line either' bash -c 'stderr_has "$1" "wrapping pw FORGED-INIT" && ! grep -q "^FORGED-INIT" "$1/stderr.txt"' _ "$r"
+assert_redacted_result 'log-scrub: the session still serves after the scrubbed serverInfo' "$r" 3 1
 r="$(odd run-code-escaped)"; assert_withheld 'row 49: a JSON-escaped tree (browser_run_code_unsafe shape) → withheld' "$r" 3 'JSON-escaped'
 r="$(odd evaluate-escaped-object)"; assert_withheld 'row 49: a tree inside a pretty-printed JSON object → withheld' "$r" 3 'JSON-escaped'
 r="$(odd run-code-escaped-one-row)"; assert_withheld 'row 56: a ONE-ROW escaped tree (single-locator ariaSnapshot) → withheld' "$r" 3 'JSON-escaped'
@@ -584,15 +762,24 @@ assert_stderr_marker 'FR14: the signal is named on stderr' "$r" 'child exited rc
 # ---------------------------------------------------------------------------
 # FR13 / NFR1 / NFR3 — structure, with the redactor as oracle
 # ---------------------------------------------------------------------------
-fr13_literals() {  # <proxy> — exit 0 when no credential-shaped literal sits outside self_test's `row =`
+fr13_literals() {  # <proxy> — exit 0 when no credential-shaped literal sits outside self_test's `row =` or the refusal tables
   python3 - "$1" "$REDACTOR" <<'PY'
 import ast, importlib.util, sys
 t = ast.parse(open(sys.argv[1]).read())
 spec = importlib.util.spec_from_file_location("r", sys.argv[2]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 doc = ast.get_docstring(t, clean=False)
-st = next(n for n in ast.walk(t) if isinstance(n, ast.FunctionDef) and n.name == "self_test")
+funcs = {n.name: n for n in ast.walk(t) if isinstance(n, ast.FunctionDef)}
+st = funcs["self_test"]
 rows = [a.value for a in ast.walk(st) if isinstance(a, ast.Assign) and any(isinstance(x, ast.Name) and x.id == "row" for x in a.targets)]
 exempt = {id(c) for r in rows for c in ast.walk(r)}
+# The refusal surface legitimately NAMES the settings it refuses ("secrets",
+# "--secrets", PLAYWRIGHT_MCP_SECRETS_FILE): those constants are labels and
+# setting names, never payload text, so the sink tables and the whole
+# refuse_argv_and_env body are exempt by the same mechanism as self_test's row.
+tables = [n for n in ast.walk(t) if isinstance(n, ast.Assign) and any(isinstance(x, ast.Name) and x.id in ("SINK_FLAGS", "SINK_ENV_ONLY", "VALUE_FLAGS") for x in n.targets)]
+exempt |= {id(c) for a in tables for c in ast.walk(a) if isinstance(c, ast.Constant)}
+if funcs.get("refuse_argv_and_env") is not None:
+    exempt |= {id(c) for c in ast.walk(funcs["refuse_argv_and_env"]) if isinstance(c, ast.Constant)}
 consts = [n for n in ast.walk(t) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 bad = [n.value for n in consts if n.value != doc and id(n) not in exempt and m._is_credential_name(n.value)]
 shaped_row = [c.value for r in rows for c in ast.walk(r) if isinstance(c, ast.Constant) and isinstance(c.value, str) and m._is_credential_name(c.value)]
@@ -662,7 +849,7 @@ mutant 03-dispatch pump_client_to_server 'if "method" in req and "id" in req:' '
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m03 "$MUTANT_PATH" --send "$INIT" --send "$SNAP" --end eof --timeout 3)"; red 'row 3: dispatch broken → the redacted result is never delivered (own-dispatch)' bash -c 'started "$1" && [[ "$(fact "$1" 3 found)" == "0" ]]' _ "$r"; fi
 mutant 05-swallow-load load_redactor '        refuse_start(f"cannot load {REDACTOR_BASENAME}: {type(exc).__name__}")' '        return (lambda t: t.replace("ZZQP-SENTINEL-7980", "<redacted>"), lambda t: t.startswith("- "), 4194304, "<redacted>")'
 if [[ -n "$MUTANT_PATH" ]]; then BROKEN="$WORK/broken"; mkdir -p "$BROKEN"; cp "$MUTANT_PATH" "$BROKEN/proxy.py"; printf 'def (\n' > "$BROKEN/redact-a11y-snapshot.py"; r="$(session m05 "$BROKEN/proxy.py" --send "$INIT" --end eof --timeout 3)"; red 'row 5: load error swallowed → proxy starts and answers initialize' bash -c 'started "$1" && [[ "$(fact "$1" 1 found)" == "1" ]]' _ "$r"; fi
-mutant 06-no-flag __init__ 'argv = list(server) + ["--snapshot-mode", "none"]' 'argv = list(server)'
+mutant 06-no-flag __init__ 'argv += ["--snapshot-mode", "none"]' 'pass'
 if [[ -n "$MUTANT_PATH" ]]; then session m06 "$MUTANT_PATH" --env FAKE_PW_ARGV_OUT="$WORK/m06-argv" --send "$INIT" --end eof >/dev/null; red 'row 6: flag not appended → the stub ran and its argv lacks it' bash -c 'test -f "$1" && ! grep -qx -- "--snapshot-mode" "$1"' _ "$WORK/m06-argv"; fi
 mutant 07-forward-filename refuse_request 'if name == "browser_snapshot" and "filename" in args:' 'if False and "filename" in args:'
 if [[ -n "$MUTANT_PATH" ]]; then session m07 "$MUTANT_PATH" --env FAKE_PW_REQUEST_LOG="$WORK/m07-req" --send "$INIT" --send "$(FILENAME_REQ 10 "$WORK/m07-raw.yml")" --end eof >/dev/null; red 'row 7: filename forwarded → stub writes the raw file and logs the call' bash -c 'test -s "$1" && grep -qF filename "$2"' _ "$WORK/m07-raw.yml" "$WORK/m07-req"; fi
@@ -680,8 +867,8 @@ mutant 13-classify-pending-only pump_server_to_client '        if "result" not i
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m13 "$MUTANT_PATH" --env FAKE_PW_ROOTS_COLLIDE=1 --send "$INIT" --send "$SNAP" --end eof --timeout 3)"; red 'row 13: responses keyed on pending alone → a colliding roots/list breaks delivery' bash -c 'started "$1" && ! delivered_ok "$1" 3' _ "$r"; fi
 mutant 14-strict-decoder pump_server_to_client 'msg = json.loads(line.decode("utf-8", errors="replace"))' 'msg = json.loads(line.decode("utf-8", errors="strict"))'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m14 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/invalid-utf8.json" --send "$INIT" --send "$SNAP" --end eof --timeout 3)"; red 'row 14: strict decoder → the invalid byte drops or leaks the result' bash -c 'started "$1" && { [[ "$(fact "$1" 3 found)" == "0" ]] || leaks "$1" 3; }' _ "$r"; fi
-mutant 15-no-refuse-argv refuse_argv_and_env 'if "--save-session" in server:' 'if False:'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m15 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --save-session)"; red 'row 15: --save-session check removed → proxy starts' started "$r"; reap_group "$r"; fi
+mutant 15-no-refuse-argv refuse_argv_and_env '        if flag_present(server, flag):' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m15 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --save-session)"; red 'row 15: the argv sink-flag check removed → --save-session starts' started "$r"; reap_group "$r"; fi
 mutant 16-wide-whitelist rewrite_result 'if not isinstance(result, dict) or not set(result.keys()) <= RESULT_KEYS:' 'if not isinstance(result, dict):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m16 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/structured-content.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 16: whitelist widened → structuredContent tree leaks' leaks "$r" 3; fi
 mutant 17-resource-ignored rewrite_result '                else:
@@ -728,7 +915,7 @@ if [[ -n "$MUTANT_PATH" ]]; then beside "$WORK/m29" "$WORK/v-false"; r="$(sessio
 mutant 30-bare-id id_key 'return json.dumps(rid, sort_keys=True)' 'return json.dumps(str(rid))'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m30 "$MUTANT_PATH" --send "$INIT" --send "$LIST" --send '{"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"browser_snapshot","arguments":{}}}' --end eof --timeout 3)"; red 'row 30: ids keyed by their string form → 2 and "2" collide' bash -c 'started "$1" && ! delivered_ok "$1" "\"2\""' _ "$r"; fi
 mutant 31-error-shape-forwarded vet_error 'if "result" in msg or not isinstance(err, dict) or not set(err.keys()) <= ERROR_KEYS:' 'if False:'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m31 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/error-with-data.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 31: error data forwarded raw → sentinel leaks' bash -c 'started "$1" && stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"; fi
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m31 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/error-with-data.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 31: the error-shape bound removed → the malformed frame is RELAYED (rebuilt, data dropped) instead of withheld' bash -c '[[ "$(fact "$1" 3 found)" == "1" && "$(fact "$1" 3 jsonrpc_error)" == "1" ]]' _ "$r"; fi
 mutant 32-no-cap rewrite_result 'if len(text.encode("utf-8", "surrogatepass")) > self.max_input_bytes:' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m32 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$WORK/big.json" --send "$INIT" --send "$SNAP" --end eof --timeout 30)"; red 'row 32: size cap removed → oversized text forwarded (not withheld)' delivered_ok "$r" 3; fi
 mutant 33-quotes-input rewrite_result 'return error_result(rid, tool, "result exceeds the redactor'"'"'s size cap")' 'return error_result(rid, tool, "cap: " + text[:100])'
@@ -754,7 +941,7 @@ mutant 40-debug-wildcard debug_pattern_enables_pw '        if ch == "*":
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m40 "$MUTANT_PATH" --env 'DEBUG=*:response' --send "$INIT" --end eof --timeout 3)"; red 'row 40: debug wildcard not modelled → DEBUG=*:response starts' started "$r"; fi
 mutant 41-ini-config-skipped refuse_argv_and_env '            refuse_start("the config file is not JSON, so its raw-sink settings cannot be checked")' '            cfg = {}'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m41 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-save.ini")"; red 'row 41: a non-JSON config skipped → an INI saveSession starts' started "$r"; fi
-mutant 42-port refuse_argv_and_env 'if argv_values(server, "--port") or "--port" in server or env.get("PLAYWRIGHT_MCP_PORT"):' 'if False:'
+mutant 42-port refuse_argv_and_env 'if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m42 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --port 8931)"; red 'row 42: --port check removed → proxy starts' started "$r"; fi
 mutant 43-caps refuse_argv_and_env 'if caps_open_sinks(argv_values(server, "--caps")) or caps_open_sinks([env.get("PLAYWRIGHT_MCP_CAPS", "")]):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m43 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --caps=devtools)"; red 'row 43: --caps check removed → devtools starts' started "$r"; fi
@@ -767,14 +954,14 @@ if [[ -n "$MUTANT_PATH" ]]; then r="$(session m46 "$MUTANT_PATH" --env FAKE_PW_R
 mutant 47-reuse-overwrites pump_client_to_server '            if key in self.pending:' '            if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m47 "$MUTANT_PATH" --send "$INIT" --send "$SNAP" --send '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' --end eof)"; red 'row 47: reuse not refused → no refusal, one answer for two requests' bash -c 'started "$1" && [[ "$(fact "$1" 3 count)" == "1" ]] && ! stderr_has "$1" "reusing a pending id"' _ "$r"; fi
 mutant 48-route-by-method-only pump_server_to_client 'if method == "tools/call" or (isinstance(result, dict) and "content" in result):' 'if method == "tools/call":'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m48 "$MUTANT_PATH" --env FAKE_PW_FIXTURE_DIR="$INITTREE" --send "$INIT" --end eof)"; red 'row 48: routed by method only → a tree answering initialize leaks' leaks "$r" 1; fi
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m48 "$MUTANT_PATH" --env FAKE_PW_FIXTURE_DIR="$INITTREE" --send "$INIT" --end eof)"; red 'row 48: routed by method only → a content-bearing initialize result is withheld by vet_other_result instead of redacted and delivered' bash -c '[[ "$(fact "$1" 1 found)" == "1" && "$(fact "$1" 1 isError)" == "true" ]]' _ "$r"; fi
 mutant 49-no-escaped-check rewrite_result 'if self.escaped_tree_in(text):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m49 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/run-code-escaped.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 49: escaped-tree check removed → the escaped tree leaks' leaks "$r" 3; fi
 mutant 50-kill-only-live-child teardown '        if not self.wait_group_empty(self.grace):' '        if child.poll() is None and not self.wait_group_empty(self.grace):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m50 "$MUTANT_PATH" --env FAKE_PW_GRANDCHILD=1 --send "$INIT" --end eof --timeout 4)"; red 'row 50: escalation keyed on the direct child → the grandchild survives' bash -c 'started "$1" && [[ "$(cat "$1/group_after")" -gt 0 ]]' _ "$r"; reap_group "$r"; fi
 mutant 51-save-video refuse_argv_and_env '        if cfg.get("saveVideo"):' '        if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m51 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-video.json")"; red 'row 51: saveVideo check removed → proxy starts' started "$r"; fi
-mutant 52-output-mode refuse_argv_and_env 'if any(v != "stdout" for v in argv_values(server, "--output-mode")):' 'if False:'
+mutant 52-output-mode refuse_argv_and_env 'if any(v != "stdout" for v in argv_values(server, "--output-mode") + [env.get("PLAYWRIGHT_MCP_OUTPUT_MODE", "stdout")]):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m52 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --output-mode file)"; red 'row 52: --output-mode check removed → proxy starts' started "$r"; fi
 mutant 53-config-server refuse_argv_and_env 'if isinstance(srv, dict) and (srv.get("port") is not None or srv.get("host") is not None):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m53 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-port.json")"; red 'row 53: config server.port check removed → proxy starts' started "$r"; fi
@@ -784,8 +971,52 @@ mutant 55-any-id-plain plain_id '        return isinstance(value, str) and not s
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m55 "$MUTANT_PATH" --env FAKE_PW_CANCEL=1 --send "$INIT" --send "$SNAP" --end eof)"; red 'row 55: requestId not vetted → a tree row rides a cancellation to the client' bash -c 'started "$1" && stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"; fi
 mutant 56-escaped-needs-newline escaped_tree_in '            if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):' '            if any("\n" in s and self.looks_like_a11y_tree(s) for s in json_strings(parsed)):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m56 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/run-code-escaped-one-row.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 56: escaped check requires a newline → a one-row tree leaks' leaks "$r" 3; fi
-EXPECTED_MUTANTS=56   # rows 1-56 without row 4, with 22a/22b; exactly one mutation row each
-EXPECTED_RED_ROWS=56
+mutant 57-udd-no-inject __init__ '        if profile_dir is not None:' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then session m57 "$MUTANT_PATH" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/m57-argv" --send "$INIT" --end eof >/dev/null; red 'row 57: profile flag parsed but never injected → stub argv lacks --user-data-dir' bash -c 'test -f "$1" && ! grep -q -- "--user-data-dir" "$1"' _ "$WORK/m57-argv"; fi
+mutant 58-udd-dotdot-ok profile_dir_from_args '    if not name or name == "." or ".." in name:' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m58 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg '..' --send "$INIT" --end eof --timeout 3)"; red 'row 58: the .. check removed → a traversal basename starts the proxy' started "$r"; fi
+mutant 59-udd-sep-ok profile_dir_from_args '    if "/" in name or "\\" in name:' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m59 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg 'a/b' --send "$INIT" --end eof --timeout 3)"; red 'row 59: the separator check removed → a nested basename starts the proxy' started "$r"; fi
+mutant 60-udd-relxdg-ok profile_dir_from_args '    if not os.path.isabs(root):' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m60 "$MUTANT_PATH" "${UDD[@]}" --env XDG_CACHE_HOME=relative/cache --send "$INIT" --end eof --timeout 3)"; red 'row 60: the absolute-root check removed → a relative XDG_CACHE_HOME starts the proxy' started "$r"; fi
+mutant 61-udd-conflict-ok refuse_argv_and_env '    if profile_dir is not None and (argv_values(server, "--user-data-dir") or flag_present(server, "--user-data-dir")):' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m61 "$MUTANT_PATH" "${UDD[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-data-dir=/x)"; red 'row 61: the conflict check removed → flag + explicit --user-data-dir starts the proxy' started "$r"; fi
+mutant 62-udd-nohome-ok profile_dir_from_args '        if not home:' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m62 "$MUTANT_PATH" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"; red 'row 62: the HOME check removed → the refusal no longer names the setting' bash -c 'started "$1" || ! stderr_has "$1" "HOME is set"' _ "$r"; fi
+mutant 63-udd-missing-ok profile_dir_from_args '            if i + 1 >= len(args):' '            if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m63 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --timeout 3)"; red 'row 63: the missing-argument check removed → a bare flag crashes instead of refusing cleanly' bash -c '[[ "$(rcof "$1")" != "2" ]] || ! stderr_has "$1" "refusing to start"' _ "$r"; fi
+mutant 64-udd-dup-ok profile_dir_from_args '            if name is not None:' '            if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m64 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"; red 'row 64: the duplicate-flag check removed → the second value silently wins' started "$r"; fi
+mutant 65-udd-dash-ok profile_dir_from_args '    if name.startswith("-"):' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m65 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --timeout 3)"; red 'row 65: the leading-dash check removed → a flag-like value becomes a profile name' started "$r"; fi
+mutant 66-sink-flags-off refuse_argv_and_env '    for flag, envvar, why in SINK_FLAGS:' '    for flag, envvar, why in []:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m66 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --storage-state=/x)"; red 'row 66: the sink-flag table dropped → --storage-state starts' started "$r"; fi
+mutant 67-sink-env-off refuse_argv_and_env '    for envvar, why in SINK_ENV_ONLY:' '    for envvar, why in []:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m67 "$MUTANT_PATH" --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --timeout 3)"; red 'row 67: the env-only sink table dropped → PLAYWRIGHT_MCP_USER_DATA_DIR starts' started "$r"; fi
+mutant 68-trailing-ok refuse_argv_and_env '    if server and server[-1] in VALUE_FLAGS:' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m68 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config)"; red 'row 68: the trailing-valued-flag check dropped → a bare --config starts' started "$r"; fi
+mutant 69-eq-form-missed flag_present '    return any(a == flag or a.startswith(flag + "=") for a in server)' '    return any(a == flag for a in server)'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m69 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --storage-state=/x)"; red 'row 69: flag_present blind to the = spelling → --storage-state=/x starts' started "$r"; fi
+mutant 70-cfg-browser-off refuse_argv_and_env '        if isinstance(browser, dict):' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m70 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-cdp.json")"; red 'row 70: the config browser block dropped → browser.cdpEndpoint starts' started "$r"; fi
+mutant 71-cfg-secrets-ok refuse_argv_and_env '        if cfg.get("secrets"):' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m71 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-secrets.json")"; red 'row 71: the config secrets check dropped → secrets starts' started "$r"; fi
+mutant 72-realpath-off profile_dir_from_args '    return os.path.join(os.path.realpath(root), name)' '    return os.path.join(root, name)'
+if [[ -n "$MUTANT_PATH" ]]; then session m72 "$MUTANT_PATH" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/sub/.." --env FAKE_PW_ARGV_OUT="$WORK/m72-argv" --send "$INIT" --end eof >/dev/null; red 'row 72: realpath removed → the .. reaches the child argv verbatim' bash -c 'test -f "$1" && grep -qF ".." "$1"' _ "$WORK/m72-argv"; fi
+mutant 73-log-scrub-off log '    sys.stderr.write(f"{PREFIX} {msg.translate(_LOG_SCRUB)}\n")' '    sys.stderr.write(f"{PREFIX} {msg}\n")'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m73 "$MUTANT_PATH" --send "$INIT" --send '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"x\nFORGED-LINE","arguments":{"_meta":{}}}}' --end eof)"; red 'row 73: log scrub removed → the tool name forges a second stderr line' bash -c 'grep -q "^FORGED-LINE" "$1/stderr.txt"' _ "$r"; fi
+mutant 74-err-code-any vet_error '        if not isinstance(err.get("code"), int) or isinstance(err.get("code"), bool):' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m74 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/error-code-bool.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 74: the code-type check dropped → a boolean error code is relayed verbatim' bash -c '[[ "$(fact "$1" 3 found)" == "1" && "$(fact "$1" 3 jsonrpc_error)" == "1" ]]' _ "$r"; fi
+mutant 75-other-unvetted vet_other_result '        if any(self.looks_like_a11y_tree(s) or self.redact_text(s) != s for s in json_strings(msg)):' '        if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m75 "$MUTANT_PATH" --env FAKE_PW_PING_RESULT_FILE="$WORK/ping-tree.json" --send "$INIT" --send "$PING" --end eof)"; red 'row 75: the non-tools/call scan dropped → a ping result carries the tree to the client' leaks "$r" 40; fi
+mutant 76-cfg-ctx-off refuse_argv_and_env '            ctx = browser.get("contextOptions")
+            if isinstance(ctx, dict):' '            ctx = browser.get("contextOptions")
+            if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m76 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxstorage.json")"; red 'row 76: the contextOptions arm dropped → a config storageState starts' started "$r"; fi
+mutant 77-cfg-sandbox-ok refuse_argv_and_env '                if lo.get("chromiumSandbox") is False:' '                if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m77 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"; red 'row 77: the chromiumSandbox check dropped → a config disabling the sandbox starts' started "$r"; fi
+EXPECTED_MUTANTS=77   # rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; exactly one mutation row each
+EXPECTED_RED_ROWS=77
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)
@@ -875,6 +1106,85 @@ pats = re.findall(r'pkill -9 -f "([^"]+)"', s)
 # at pkill time $prof is EXPANDED in the pattern, while the wrapper's own command line still holds it literally
 sys.exit(0 if len(pats) >= 3 and all(not re.search(p.replace("$prof", "/scratch/.cache/playwright-mcp-profile"), s) for p in pats) else 1)
 PY
+
+# ---------------------------------------------------------------------------
+# Guard 3 — plugins/soleur/.mcp.json ships the proxy-wrapped registration (#8156)
+# ---------------------------------------------------------------------------
+PLUGIN_MCP="$REPO_ROOT/plugins/soleur/.mcp.json"
+g3_shape() {  # <mcp.json> — exit 0 when playwright is the ONLY key and is the required wrapped registration
+  python3 - "$1" "$PIN" <<'PY'
+import json, sys
+path, pin = sys.argv[1:]
+d = json.load(open(path))
+if set(d.get("mcpServers", {})) != {"playwright"}:
+    sys.exit(1)
+e = d["mcpServers"]["playwright"]
+expected = [
+    "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py",
+    "--user-data-dir-name",
+    "soleur-playwright-mcp-profile",
+    "--",
+    "npx",
+    f"@playwright/mcp@{pin}",
+]
+sys.exit(0 if e["command"] == "python3" and e["args"] == expected else 1)
+PY
+}
+assert_true 'Guard 3: plugins/soleur/.mcp.json playwright entry is the wrapped registration (python3, ${CLAUDE_PLUGIN_ROOT} proxy, profile flag, pin parity, sole mcpServers key)' g3_shape "$PLUGIN_MCP"
+# The rest of the manifest contract — never `bash`, never `--config`, never a
+# literal `--user-data-dir` — is carried by g3_shape's exact argv equality; a
+# separate literal grep cannot fail while it passes, so it is not an assertion.
+# The plugin's playwright server lives in .mcp.json ALONE: a manifest
+# mcpServers entry would register a SECOND, unwrapped server. Asserted absent
+# against the positive proof that plugin.json DOES carry mcpServers.
+assert_true 'Guard 3: plugin.json carries mcpServers but NO playwright entry (the plugin server is .mcp.json-only)' python3 - "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if d.get("mcpServers") and "playwright" not in d["mcpServers"] else 1)
+PY
+# The vendored plugin tree must NOT carry .mcp.json at all: the hosted
+# agent-runner loads the vendored root via plugins:[{type:"local"}] and the
+# prod image has no python3 and no @playwright/mcp@0.0.78 — a vendored
+# registration is a guaranteed-failed server every session. Both vendor steps
+# exclude the file; these rows pin the exclusion as LIVE lines (a commented-out
+# rm cannot satisfy them) ordered AFTER the cp -a that produced the tree.
+for wf in ci.yml reusable-release.yml; do
+  assert_true "Guard 3: $wf vendored plugin tree excludes plugins/soleur/.mcp.json (live line, ordered after the cp -a)" python3 - "$REPO_ROOT/.github/workflows/$wf" <<'PY'
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+cp = [i for i, l in enumerate(lines) if "cp -a --no-dereference plugins/soleur" in l and not l.lstrip().startswith("#")]
+rm = [i for i, l in enumerate(lines) if l.strip() == 'rm -f "$DEST/.mcp.json"']
+sys.exit(0 if cp and rm and min(rm) > max(cp) else 1)
+PY
+done
+# In-context backstop (the vendor rm runs in the workflow, not the Dockerfile):
+# the `!_plugin-vendored/**/*.json` bang would otherwise re-include .mcp.json.
+# Last-match-wins — the exclude must come AFTER the bang.
+assert_true 'Guard 3: .dockerignore re-excludes _plugin-vendored/.mcp.json after the **/*.json re-include' python3 - "$REPO_ROOT/apps/web-platform/.dockerignore" <<'PY'
+import sys
+lines = [l.strip() for l in open(sys.argv[1])]
+inc = [i for i, l in enumerate(lines) if l == "!_plugin-vendored/**/*.json"]
+exc = [i for i, l in enumerate(lines) if l == "_plugin-vendored/.mcp.json"]
+sys.exit(0 if inc and exc and max(exc) > max(inc) else 1)
+PY
+g3_mut() {  # <label> <python-mutation-src> — the mutated manifest must fail g3_shape
+  cases=$((cases + 1))
+  local f="$WORK/g3-mut.json"
+  MUTATION="$2" python3 - "$PLUGIN_MCP" "$f" <<'PY'
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+exec(os.environ["MUTATION"])
+json.dump(d, open(sys.argv[2], "w"))
+PY
+  if g3_shape "$f"; then bad "$1 — mutant survived"; else ok "$1"; fi
+}
+g3_mut 'Guard 3 mutant 1: command bash instead of python3' 'd["mcpServers"]["playwright"]["command"] = "bash"'
+g3_mut 'Guard 3 mutant 2: a literal --user-data-dir replaces the name flag' 'd["mcpServers"]["playwright"]["args"][1:3] = ["--user-data-dir=/tmp/x"]'
+g3_mut 'Guard 3 mutant 3: the pin drifts from .mcp.json' 'd["mcpServers"]["playwright"]["args"][-1] = "@playwright/mcp@9.9.9"'
+g3_mut 'Guard 3 mutant 4: the proxy dropped → an unwrapped npx registration' 'd["mcpServers"]["playwright"]["args"] = ["--", "npx", "@playwright/mcp@0.0.78"]'
+g3_mut 'Guard 3 mutant 6: a second mcpServers key → not the pinned key set' 'd["mcpServers"]["other"] = {"command": "npx", "args": ["x"]}'
+assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][0])" "$1" 2>/dev/null' _ "$PLUGIN_MCP"
+
 reap_all
 assert_true 'hygiene: sessions recorded their child groups, and none still holding a stub outlives the reap' bash -c '[[ "$1" -gt 0 && -z "$2" ]]' _ "$(grep -c . "$PGIDS" || true)" "$(stub_groups)"
 
@@ -891,7 +1201,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=284
+MIN_ASSERTIONS=419
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -19,6 +19,8 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Dedicated-host cutover (#6178) | [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178) |
 | Read ANY host/unit state | [§ Reading host state without SSH](#reading-host-state-without-ssh) |
 | Scheduler dead after a host replace | [§ Inherited `done`](#inherited-done-after-a-host-replace-7228) |
+| Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
+| Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
 ## Inherited `done` after a host replace (#7228)
 
@@ -1333,7 +1335,8 @@ ADR-100, amendment 2026-09-14.
      dispatched). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
      **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
-     `done` only). The latch clears only when the host's `/mnt/data` volume is **recut** — never by SSH, and
+     `done` only). The latch clears only when the store is measured empty AND the host's `/mnt/data`
+     volume is **recut** (`apply_target=inngest-volume-recut`, ADR-199 Guard 2) — never by SSH, and
      **not** by an `inngest-host-replace`.
 
      > **Corrected 2026-08-25 (#7674).** This previously said the recut happens "via the
@@ -1343,13 +1346,47 @@ ADR-100, amendment 2026-09-14.
      > created 2026-08-20 — six weeks later, across a replace, latch preserved. Nor does
      > `op=verify-wiped-volume` help: it wipes `/var/lib/inngest`, not `/mnt/data`.
      >
-     > There is **no `apply_target` that recuts `/mnt/data` today.** The design for one
+     > ~~There is **no `apply_target` that recuts `/mnt/data` today.**~~ *(superseded 2026-09-18 —
+     > see the Post-cutover status callout below)* The design for one
      > (`inngest-volume-recut`, five guard layers, required-reviewer environment, typed confirm) is
      > recorded in the #7674 plan and tracked for the PR that opens the cutover window. Until it is
      > built, a standing latch has no in-repo remediation, and pretending otherwise is what left
      > this gate's operator-facing message pointing at a window that could not clear it. If that recut has ALREADY happened but
-     the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
-     after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
+     > the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
+     > after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
+
+     > **Post-cutover status (2026-09-18, #7695).** The recut target now exists:
+     > `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778), dispatch-only, behind the
+     > `inngest-cutover` required-reviewer environment. It is NOT a route from this host. On
+     > `INNGEST_CUTOVER_FLIP=done` (Doppler `soleur-inngest/prd`, the authority G19 reads; the row's
+     > `cutover_flag` mirrors it) its Guard 2 is unreachable on G19 alone (the flag set is
+     > `{rolled-back, aborted}`), and G8/G9/G13 refuse independently on the live row —
+     > `server_active=active`, `http_code=200`, `redis_keys=1261` (ADR-199: a populated store on a
+     > serving host is never recut; G8's `== inactive` form is #8078). As of 2026-09-18 the same
+     > volume `106261946` is attached to host `166317708` (created 2026-09-17; the ninth dedicated
+     > host since 2026-09-04, re-attached across eight replaces — measured from the probe rows'
+     > `instance_id`; Hetzner API `GET /v1/volumes/106261946` → `.volume.server`) with the latch
+     > intact. The durable latch STANDS since `op=arm` run 34948112813 (`gh run view 34948112813`,
+     > 2026-09-15, on host `165451537`) and survived both 2026-09-17 replaces (onto `166305436`,
+     > then `166317708`): `flush_latched=true` with `cutover_flag=done` is the steady state of a
+     > healthy `done` host, not a fault to clear. (The 2026-08-25 callout's "latch preserved"
+     > describes the file's LOCATION surviving a replace; the row of 2026-09-09, boot `906c015b`,
+     > read `flush_latched=false`, so the standing record dates from this arm.) A second `op=arm` is
+     > refused by design.
+     > Re-measure every row value above with
+     > `doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh` (the Better Stack
+     > probe row; § Reading host state without SSH).
+     > The routes from here are `op=resume` for a stalled or inherited `done` (§ Inherited `done`;
+     > it is still not a latch remediation) and the P1-13 rollback (§ Rollback sequence; behind the
+     > `inngest-cutover` environment; only when the dedicated scheduler must be stopped) — and on
+     > this volume a rollback is one-way: after `rolled-back`, `op=arm` G1 admits the flag, G3.7
+     > refuses BEFORE any write (the flag stays `rolled-back`), and if that pre-filter is narrowed
+     > the on-host latch refuses into terminal `aborted` (#7777). The `FLUSH_LATCH_SINCE` narrowing
+     > above has no application here — no recut has happened and the latch rows are genuine. The
+     > latch's real precondition is a measured-empty store, which this volume cannot reach without
+     > #7777; the plaintext posture is #6894's (ADR-142, additive), and the target's fate — dormant
+     > on this volume, retire-or-keep undecided — is decided on #8316.
+
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
      timer then drives the forward FSM **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**.
@@ -1691,6 +1728,10 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
 
 ### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
 
+> **One-way on volume `106261946` (2026-09-18, #7695):** a re-arm after `rolled-back` is refused while the
+> durable flush latch stands — read the G3.7 "Post-cutover status" callout under § Dedicated-host cutover
+> before dispatching.
+
 1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
    first writes `INNGEST_CUTOVER_FLIP=rollback` on `soleur-inngest/prd` itself (the still-enabled
    timer then stops `inngest-server` on its next poll), confirms `"flag":"rolled-back"` /
@@ -1784,6 +1825,9 @@ quiesced/disabled from `op=execute` 2.2, so **recover via the same rollback path
 `gh workflow run cutover-inngest.yml --field op=rollback` to bring the web schedulers back,
 fix the Redis state (the non-zero `DBSIZE` means stale dark queue state — investigate why the
 dark Redis was not empty), then re-arm from `op=execute`.
+
+> **On volume `106261946` (2026-09-18, #7695):** a re-arm after `rolled-back` is refused — see the G3.7
+> "Post-cutover status" callout under § Dedicated-host cutover before choosing this path.
 
 ### Heartbeat suppression window (P2-14)
 

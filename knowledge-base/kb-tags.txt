@@ -2668,6 +2668,7 @@ plan-premise
 plan-premise-falsification
 plan-premises
 plan-probe
+plan-prose
 plan-quality
 plan-quality-gate
 plan-review
