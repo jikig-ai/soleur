@@ -305,6 +305,88 @@ run "T16: inline --body with valid directive — pass" "$INPUT"
 assert_pass
 rm -rf "$TMP"
 
+# === T17 (#7490): a directive INSIDE A CODE FENCE denies, and the reason SAYS SO. ===
+# The presence check greps the raw body, so a fenced directive satisfies it; the awk parser
+# skips fences, so `script=` comes back empty and both land in the same branch. The generic
+# "script= is empty" message sent the author hunting for a token that is visibly present,
+# which is how the fenced form survived as the ship template's default and killed six
+# trackers. The deny must name the fence.
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+FENCED_BODY=$'## Verification\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n```\n'
+printf '%s' "$FENCED_BODY" > "$TMP/body.md"
+INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
+run "T17 (#7490): fenced directive — deny names the code fence" "$INPUT"
+assert_deny "CODE FENCE"
+rm -rf "$TMP"
+
+# === T17b: the MATCHED CONTROL. The same body with the two fence lines removed must PASS.
+# Without it, T17 is also satisfied by a gate that denies every body. ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+printf '%s' $'## Verification\n\n<!-- soleur:followthrough script=scripts/followthroughs/ok-1234.sh earliest=2026-05-22T00:00:00Z -->\n' > "$TMP/body.md"
+INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
+run "T17b: the SAME body unfenced — pass (the fence branch narrows, not denies-everything)" "$INPUT"
+assert_pass
+rm -rf "$TMP"
+
+# === T17c: a body with NO directive at all keeps the ORIGINAL deny reason. The fence branch
+# must not swallow the case it was carved out of. ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+printf '%s' $'## Verification\n\nNothing here.\n' > "$TMP/body.md"
+INPUT=$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")
+run "T17c: no directive at all — deny still names the MISSING directive, not a fence" "$INPUT"
+assert_deny "requires a"
+rm -rf "$TMP"
+
+# === T17d (DISPATCH): with the fence branch reverted in a copy of the hook, the fenced body
+# falls back to the generic "script= is empty" message. The branch is the mechanism. ===
+TMP=$(mktemp -d)
+make_work_dir "$TMP" > /dev/null
+# The mutant must live BESIDE the real hook: the hook resolves `lib/incidents.sh` relative to
+# its own directory, so a copy in a mktemp dir dies at source time and the row would measure
+# that, not the branch. Removed in the same block.
+MUT="$(dirname "$HOOK")/.tmp-hook-no-fence-branch-$$.sh"
+awk '/# DISTINGUISH "no script= in the directive" FROM/{skip=1} skip && /^  fi$/{skip=0; next} skip{next} {print}' "$HOOK" > "$MUT"
+chmod +x "$MUT"
+TOTAL=$((TOTAL + 1))
+if diff -q "$HOOK" "$MUT" >/dev/null 2>&1; then
+  echo "[T$TOTAL] T17d mutation did NOT land — the fence branch is not where this row mutates"
+  FAIL=$((FAIL + 1))
+elif grep -q 'CODE FENCE' "$MUT"; then
+  echo "[T$TOTAL] T17d mutation left the fence reason behind — the row would be vacuous"
+  FAIL=$((FAIL + 1))
+else
+  printf '%s' "$FENCED_BODY" > "$TMP/body.md"
+  MUT_OUT=$(printf '%s' "$(make_input "gh issue create --label follow-through --title t --body-file $TMP/body.md" "$TMP")" | "$MUT" 2>&1 || true)
+  if printf '%s' "$MUT_OUT" | grep -q 'script=. is empty'; then
+    echo "[T$TOTAL] T17d with the fence branch reverted, the fenced body falls back to the generic reason"
+    PASS=$((PASS + 1))
+  else
+    echo "[T$TOTAL] T17d FAIL: expected the generic script=-is-empty reason from the mutant, got: $(printf '%s' "$MUT_OUT" | head -c 200)"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+rm -f "$MUT"
+rm -rf "$TMP"
+
 # === Summary ===
 printf '\n=== Results: %d/%d passed, %d failed ===\n' "$PASS" "$TOTAL" "$FAIL"
+
+# === ADR-193 accounting + floor. This suite had NEITHER: PASS+FAIL was never reconciled
+# against TOTAL, so a case whose `run` fired but whose assert helper was never reached
+# vanished silently, and no floor existed at all, so deleting cases summarised green. Both are
+# reported with printf + exit 1 DIRECTLY, never through the counters they police. ===
+if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
+  printf '[FATAL] accounting: PASS+FAIL (%d) != TOTAL (%d) — a case ran without recording a verdict\n' \
+    "$((PASS + FAIL))" "$TOTAL" >&2
+  exit 1
+fi
+MIN_ASSERTIONS=20
+if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] only %d cases ran; floor is %d — the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]] || exit 1

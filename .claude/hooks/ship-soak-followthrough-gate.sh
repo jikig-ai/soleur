@@ -330,10 +330,32 @@ for n in $REFS; do
   # Fail-open on a gh error for this tracker (cannot prove non-enrollment).
   [[ "$labels" == "__ERR__" || "$body" == "__ERR__" ]] && continue
   enrolled=0
+  # FENCE-STRIP BEFORE THE ENROLMENT GREP (#7490). The sweeper SKIPS fenced blocks, so a
+  # directive inside a code fence enrols nothing — this gate must agree with the consumer or it
+  # certifies a tracker the sweeper will never evaluate. Measured: six open trackers were dead
+  # exactly this way, and this gate read every one of them as enrolled. Same dialect-safe
+  # predicate and column-0 anchor as scripts/sweep-followthroughs.sh.
+  # NOT `local`: this loop is at the script's top level, and `local` outside a function is a
+  # runtime error that aborts the gate -- which fails OPEN (no decision emitted), i.e. exactly
+  # the direction a security gate must never fail. Caught by the suite's deny rows going to
+  # `<none>`; `bash -n` cannot see it.
+  unfenced_body=$(printf '%s' "$body" | awk '
+    BEGIN { fence = 0; fence_ch = ""; fence_len = 0 }
+    { sub(/\r$/, "") }
+    /^[ ]?[ ]?[ ]?(```|~~~)/ {
+      fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
+      while (substr(fl, fn + 1, 1) == fc) fn++
+      if (!fence) { fence = 1; fence_ch = fc; fence_len = fn; next }
+      if (fc == fence_ch && fn >= fence_len) { fence = 0; fence_ch = ""; fence_len = 0; next }
+      next
+    }
+    fence { next }
+    { print }
+  ')   # fence-strip
   if [[ ",$labels," == *",follow-through,"* ]] \
-     && grep -q '<!-- soleur:followthrough' <<<"$body" \
-     && grep -qE 'earliest=' <<<"$body"; then
-    spath=$(printf '%s' "$body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
+     && grep -q '^<!-- soleur:followthrough' <<<"$unfenced_body" \
+     && grep -qE 'earliest=' <<<"$unfenced_body"; then
+    spath=$(printf '%s' "$unfenced_body" | grep -oE 'script=scripts/followthroughs/[^[:space:]]+\.sh' | head -1 | sed 's/^script=//')
     [[ -n "$spath" && -f "$spath" ]] && enrolled=1
   fi
   [[ "$enrolled" == 1 ]] || UNENROLLED+=("$n")

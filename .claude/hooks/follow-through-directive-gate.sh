@@ -185,6 +185,25 @@ SCRIPT_REL=$(printf '%s\n' "$PARSED" | awk '/^script /{print $2; exit}')
 EARLIEST=$(printf '%s\n' "$PARSED" | awk '/^earliest /{print $2; exit}')
 
 if [[ -z "$SCRIPT_REL" ]]; then
+  # DISTINGUISH "no script= in the directive" FROM "the directive is inside a code fence"
+  # (#7490). The presence check above greps the RAW body, so a fenced directive satisfies it;
+  # the awk parser below skips fences, so SCRIPT_REL comes back empty. Both land here, and the
+  # generic "script= is empty" message sends the author looking for a missing token that is
+  # right there in front of them — which is how the fenced form survived as the template's
+  # default. The predicate is the same fence rule the parser above uses.
+  if grep -qE '^[[:space:]]{0,3}(\`\`\`|~~~)' <<<"$PARSED_BODY" \
+     && grep -qE 'script=scripts/followthroughs/' <<<"$PARSED_BODY"; then
+    emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
+      "Follow-through directive is INSIDE a code fence" "$CMD"
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: the `soleur:followthrough` directive is inside a CODE FENCE. The daily sweeper deliberately skips fenced blocks (a fenced directive is an example, not an enrolment), so this issue would rot open with the directive visibly present. Remove the fence delimiters and leave the `<!-- soleur:followthrough ... -->` line at column 0."
+      }
+    }'
+    exit 0
+  fi
   emit_incident "wg-pm-class-followthrough-for-operator-dogfood" deny \
     "Follow-through directive MUST set script=<path>" "$CMD"
   jq -n '{
