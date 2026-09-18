@@ -42,19 +42,50 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 # records the right key name AND the value would pass a presence-only check.
 SENTINEL='SENTINEL-NEVER-PRINT-a1b2c3d4'
 
-fails=0
-asserts=0
+# ONE counter per outcome. The self-test below, the anti-vacuity floor and the
+# verdict at the bottom ALL read these two names — a shadow pair (`fails` next
+# to `FAIL_COUNT`) let a dropped increment print [FAIL] while the verdict
+# reported 0 failed and exited 0 (review P1-5).
 PASS_COUNT=0
 FAIL_COUNT=0
 
-pass() { asserts=$((asserts + 1)); PASS_COUNT=$((PASS_COUNT + 1)); echo "  [ok] $1"; }
-fail() { asserts=$((asserts + 1)); FAIL_COUNT=$((FAIL_COUNT + 1)); fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "  [ok] $1"; }
+fail() { FAIL_COUNT=$((FAIL_COUNT + 1)); echo "  [FAIL] $1" >&2; }
+
+# assert_red <guard> <label> <args...> — the guard must exit non-zero.
+assert_red() {
+  local guard="$1" label="$2"; shift 2
+  local out rc
+  out="$("$guard" "$@" 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    pass "${label}: drove ${guard} RED"
+  else
+    fail "${label}: ${guard} stayed GREEN over the mutation — the guard does not see it"
+  fi
+}
+
+# assert_green <guard> <label> <args...> — the guard must exit zero.
+assert_green() {
+  local guard="$1" label="$2"; shift 2
+  local out rc
+  out="$("$guard" "$@" 2>&1)"; rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    pass "${label}: ${guard} GREEN"
+  else
+    fail "${label}: ${guard} unexpectedly RED:
+${out}"
+  fi
+}
 
 # --- ADR-193 instrument self-test -------------------------------------------
-# Drive BOTH assertion helpers once each and refuse to continue unless BOTH
-# counters moved. Reported through `printf` + `exit`, never through the helpers
-# it backstops — a self-test that reports via the instrument it is testing cannot
-# fail when that instrument is the thing that is broken.
+# Drive all FOUR helpers through a known outcome and refuse to continue unless
+# each moved the counter the verdict reads. Reported through `printf` + `exit`,
+# never through the helpers it backstops — a self-test that reports via the
+# instrument it is testing cannot fail when that instrument is the thing that
+# is broken. Two of the four are KNOWN-NEGATIVES: `assert_red true` and
+# `assert_green false` must each register a FAILURE, so an inverted comparison
+# inside either helper (`-ne 0` → `-ge 0`) is caught here rather than passing
+# every mutation row silently (review P2-21).
 _st_p=$PASS_COUNT; _st_f=$FAIL_COUNT
 pass "instrument self-test: pass() reached" >/dev/null
 fail "instrument self-test: fail() reached (expected, not a real failure)" 2>/dev/null
@@ -63,9 +94,31 @@ if [[ "$PASS_COUNT" -ne $((_st_p + 1)) || "$FAIL_COUNT" -ne $((_st_f + 1)) ]]; t
     "$_st_p" "$PASS_COUNT" "$_st_f" "$FAIL_COUNT" >&2
   exit 2
 fi
-fails=0; asserts=0; PASS_COUNT=0; FAIL_COUNT=0
-echo "  [ok] instrument self-test: both helpers dispatch"
-asserts=$((asserts + 1)); PASS_COUNT=$((PASS_COUNT + 1))
+_st_f=$FAIL_COUNT
+assert_red true "instrument self-test known-negative" >/dev/null 2>&1
+if [[ "$FAIL_COUNT" -ne $((_st_f + 1)) ]]; then
+  printf 'INSTRUMENT SELF-TEST FAILED: assert_red did not register a failure for a guard that exited 0 (fail %s->%s)\n' \
+    "$_st_f" "$FAIL_COUNT" >&2
+  exit 2
+fi
+_st_f=$FAIL_COUNT
+assert_green false "instrument self-test known-negative" >/dev/null 2>&1
+if [[ "$FAIL_COUNT" -ne $((_st_f + 1)) ]]; then
+  printf 'INSTRUMENT SELF-TEST FAILED: assert_green did not register a failure for a guard that exited 1 (fail %s->%s)\n' \
+    "$_st_f" "$FAIL_COUNT" >&2
+  exit 2
+fi
+_st_p=$PASS_COUNT
+assert_red false "instrument self-test known-positive" >/dev/null 2>&1
+assert_green true "instrument self-test known-positive" >/dev/null 2>&1
+if [[ "$PASS_COUNT" -ne $((_st_p + 2)) ]]; then
+  printf 'INSTRUMENT SELF-TEST FAILED: assert_red/assert_green did not register a pass for the expected outcome (pass %s->%s)\n' \
+    "$_st_p" "$PASS_COUNT" >&2
+  exit 2
+fi
+# Unwind the accounting the self-test perturbed; count the self-test itself once.
+PASS_COUNT=1; FAIL_COUNT=0
+echo "  [ok] instrument self-test: pass/fail dispatch; assert_red/assert_green each register a known-negative"
 
 [[ -r "$LIB" ]] || { printf 'HARNESS: library not readable at %s\n' "$LIB" >&2; exit 2; }
 command -v timeout >/dev/null 2>&1 || { printf 'HARNESS: `timeout` is required for the no-TTY probes\n' >&2; exit 2; }
@@ -148,29 +201,6 @@ mutate() {
   fi
   pass "mutation '${label}' landed (md5 differs from pristine; bash -n clean)"
   return 0
-}
-
-assert_red() {
-  local guard="$1" label="$2"; shift 2
-  local out rc
-  out="$("$guard" "$@" 2>&1)"; rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    pass "${label}: drove ${guard} RED"
-  else
-    fail "${label}: ${guard} stayed GREEN over the mutation — the guard does not see it"
-  fi
-}
-
-assert_green() {
-  local guard="$1" label="$2"; shift 2
-  local out rc
-  out="$("$guard" "$@" 2>&1)"; rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    pass "${label}: ${guard} GREEN"
-  else
-    fail "${label}: ${guard} unexpectedly RED:
-${out}"
-  fi
 }
 
 # =============================================================================
@@ -1085,13 +1115,13 @@ else
 fi
 
 # --- Anti-vacuity floor ------------------------------------------------------
-# Appends to `fails`, the SAME variable the verdict below reads. A floor that
-# bumped a separate counter would not change the exit status it claims to guard.
+# Reads and appends to the SAME two counters the verdict below reads.
+ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 FLOOR=73
-if [[ "$asserts" -lt "$FLOOR" ]]; then
-  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$asserts" "$FLOOR" >&2
-  fails=$((fails + 1))
+if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
+  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-echo "Total: ${asserts} assertions, ${fails} failed"
-[[ "$fails" -eq 0 ]]
+echo "Total: $((PASS_COUNT + FAIL_COUNT)) assertions, ${FAIL_COUNT} failed"
+[[ "$FAIL_COUNT" -eq 0 ]]

@@ -23,17 +23,19 @@ SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="${SUITE_DIR}/../scripts/provision-hetzner.sh"
 FIXTURE_KB="${SUITE_DIR}/fixture/knowledge-base"
 
-fails=0
-asserts=0
+# ONE counter per outcome: the self-test, the anti-vacuity floor and the verdict
+# all read these two names (review P1-5 — a shadow `fails` beside `FAIL_COUNT`
+# let a dropped increment print [FAIL] and exit 0).
 PASS_COUNT=0
 FAIL_COUNT=0
 
-pass() { asserts=$((asserts + 1)); PASS_COUNT=$((PASS_COUNT + 1)); echo "  [ok] $1"; }
-fail() { asserts=$((asserts + 1)); FAIL_COUNT=$((FAIL_COUNT + 1)); fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); echo "  [ok] $1"; }
+fail() { FAIL_COUNT=$((FAIL_COUNT + 1)); echo "  [FAIL] $1" >&2; }
 
 # Instrument self-test (ADR-193): drive both helpers once each and refuse to
 # continue unless both counters moved. A battery whose helpers are neutered
-# reports a clean run, so this must run BEFORE any real assertion.
+# reports a clean run, so this must run BEFORE any real assertion. Reported via
+# printf + exit, never via the helpers under test.
 _st_p=$PASS_COUNT; _st_f=$FAIL_COUNT
 pass "instrument self-test: pass() reached" >/dev/null
 fail "instrument self-test: fail() reached (expected, not a real failure)" 2>/dev/null
@@ -42,10 +44,9 @@ if [[ "$PASS_COUNT" -ne $((_st_p + 1)) || "$FAIL_COUNT" -ne $((_st_f + 1)) ]]; t
     "$_st_p" "$PASS_COUNT" "$_st_f" "$FAIL_COUNT" >&2
   exit 2
 fi
-# Reset the accounting the self-test perturbed.
-fails=0; asserts=0; PASS_COUNT=0; FAIL_COUNT=0
+# Unwind the accounting the self-test perturbed; count the self-test itself once.
+PASS_COUNT=1; FAIL_COUNT=0
 echo "  [ok] instrument self-test: both helpers dispatch"
-asserts=$((asserts + 1)); PASS_COUNT=$((PASS_COUNT + 1))
 
 [[ -f "$SCRIPT" ]] || { printf 'HARNESS: script not found at %s\n' "$SCRIPT" >&2; exit 2; }
 [[ -d "$FIXTURE_KB" ]] || { printf 'HARNESS: fixture register not found at %s\n' "$FIXTURE_KB" >&2; exit 2; }
@@ -178,13 +179,13 @@ else
 fi
 
 # --- Anti-vacuity floor -----------------------------------------------------
-# Appends to `fails`, which is what the verdict below reads — a floor that only
-# bumped a separate counter would not change the exit status it claims to guard.
+# Reads and appends to the SAME two counters the verdict below reads.
+ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
 FLOOR=16
-if [[ "$asserts" -lt "$FLOOR" ]]; then
-  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$asserts" "$FLOOR" >&2
-  fails=$((fails + 1))
+if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
+  printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-echo "Total: ${asserts} assertions, ${fails} failed"
-[[ "$fails" -eq 0 ]]
+echo "Total: $((PASS_COUNT + FAIL_COUNT)) assertions, ${FAIL_COUNT} failed"
+[[ "$FAIL_COUNT" -eq 0 ]]
