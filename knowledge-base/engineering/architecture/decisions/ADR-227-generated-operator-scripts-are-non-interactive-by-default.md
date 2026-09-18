@@ -55,8 +55,11 @@ Seven points, each of which a generated operator script must satisfy.
 1. **The generated script SOURCES the shared library; it never inlines it.**
    One distribution mode, not two.
 
-2. **Non-interactive is the default, not a flag.** Every prompt has a named skip
-   variable, so a complete run is expressible with no TTY at all.
+2. **Non-interactive is the default, not a flag.** Every class-1 (ladder value)
+   and class-3 (out-of-band barrier) prompt has a named skip variable, so a run
+   is expressible with no TTY up to the first destructive-write acknowledgement
+   — which by point 3 has no skip variable, so a *complete* unattended run is
+   impossible by design and the script says so (point 4) rather than hanging.
 
 3. **The destructive-write acknowledgement takes NO skip variable.** It is the
    one prompt that cannot be pre-answered. A skip variable there would let
@@ -82,12 +85,12 @@ Seven points, each of which a generated operator script must satisfy.
 ## Alternatives considered
 
 **A. Inline the library under an immutable `STAGES` marker (the upstream
-shape).** Rejected. A sourced library's first line is `# shellcheck shell=bash`
-with no shebang; an inlined one must open with a shebang, `set -euo pipefail`
-and the xtrace prologue above any command. The two regions differ in their first
-five lines by construction, so no byte-identity guard can hold over both — and
-the generated artifact lives in a gitignored directory, so no CI check could
-observe drift in it anyway. Sourcing keeps the consistency invariant the marker
+shape).** Rejected. A sourced library sets no shell options and carries no
+prologue; an inlined region must open with `set -euo pipefail` and the xtrace
+prologue above any command. The two regions differ in their first lines by
+construction, so no byte-identity guard can hold over both — and a guard over
+every generated copy would have to walk every founder's repository to see its
+population. Sourcing keeps the consistency invariant the marker
 existed to buy (one library file; the skill authors only stages; never
 hand-edit it) while deleting the drift class rather than policing it with a
 guard that cannot see its own population. It also removes three mutually
@@ -122,9 +125,10 @@ nothing, which is indistinguishable from success in the ledger and on stdout.
   so the refactor is demonstrated behaviour-preserving rather than asserted to
   be. The other three `provision-*` scripts are deliberately left for a
   follow-up: they ship with their own refactors.
-- A generated script is ephemeral by default — built for one run, deleted when
-  the job is done — and is committed only when the procedure is one the repo
-  should be able to repeat.
+- A generated script lives at `knowledge-base/project/specs/feat-<name>/bootstrap.sh`
+  — the rule's own `<feature>/` prefix, and tracked, so it survives `ship`
+  reaping the worktree and the follow-through issue's `auto_command:` keeps
+  pointing at a file that exists. It may be deleted once that issue closes.
 
 ## Attribution
 

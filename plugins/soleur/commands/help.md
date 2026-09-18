@@ -72,9 +72,7 @@ AGENTS: [N] agents across [M] categories
 
 SKILLS: [N] skills
   Start here: /soleur:go <what you want> picks the right skill for you.
-  Not routed from /soleur:go -- invoke these two directly via the Skill tool:
-    soleur:operator-bootstrap  Turn post-merge steps into a runnable bootstrap.sh
-    soleur:operator-rephrase   Say the last message again, in plain sentences
+  The operator-* family is not routed from /soleur:go; invoke it via the Skill tool.
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
    operator-*, kb-*, and so on. Order the families largest first. List skills with
@@ -113,9 +111,7 @@ AGENTS: [N] agents across [M] categories
 
 SKILLS: [N] skills
   Start here: /soleur:go <what you want> picks the right skill for you.
-  Not routed from /soleur:go -- invoke these two directly as /soleur:<skill>:
-    /soleur:operator-bootstrap  Turn post-merge steps into a runnable bootstrap.sh
-    /soleur:operator-rephrase   Say the last message again, in plain sentences
+  The operator-* family is not routed from /soleur:go; invoke it as /soleur:<skill>.
   [List all skills found with brief descriptions, grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
    operator-*, kb-*, and so on. Order the families largest first. List skills with
@@ -151,9 +147,7 @@ AGENTS: [N] agents across [M] categories
 
 SKILLS: [N] skills
   Start here: /go <what you want> picks the right skill for you.
-  Not routed from /go — invoke these two directly:
-    /operator-bootstrap   Turn post-merge steps into a runnable bootstrap.sh
-    /operator-rephrase    Say the last message again, in plain sentences
+  The operator-* family is not routed from /go; invoke it as /<skill-name>.
   (list all skills — invoke as /<skill-name> — grouped by the token before the
    first hyphen: flag-*, cron-*, provision-*, release-*, resolve-*, legal-*,
    operator-*, kb-*, and so on. Order the families largest first. List skills with
