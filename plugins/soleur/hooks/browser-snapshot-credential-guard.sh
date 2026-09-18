@@ -23,8 +23,11 @@
 # interceptor AND on a Playwright-MCP registration routed through
 # skills/agent-browser/scripts/playwright-mcp-redact-proxy.py (#7980), which
 # rewrites every tool result through the same redactor at the stdio boundary.
-# An unwrapped Playwright-MCP registration remains uncovered (a customer
-# registration is #8156). That gap is stated rather than implied.
+# An unwrapped Playwright-MCP registration remains uncovered — #8156 shipped
+# the plugin's own wrapped registration (mcp__plugin_soleur_playwright__*), but
+# a customer's OWN playwright entry is still exactly as wrapped as they
+# configured it; the transcript-sink closer for that surface is Option C,
+# deferred at #8286. That gap is stated rather than implied.
 #
 # Disposition is DENY, not rewrite: ADR-162 permits exactly one PreToolUse
 # rewriter and grep-rewrite.sh holds it. Two hooks emitting updatedInput for the

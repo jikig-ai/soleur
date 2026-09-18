@@ -2,9 +2,9 @@
 """One proxy session for the suite (#7980). stdlib only.
 
     proxy-session-driver.py --out <dir> --proxy <proxy.py> --server <argv...>
-        [--env K=V]... [--send <json-line>]... [--end eof|sigterm|sigkill|killchild|none] [--timeout S]
+        [--proxy-arg <arg>]... [--env K=V]... [--send <json-line>]... [--end eof|sigterm|sigkill|killchild|none] [--timeout S]
 
-Launches `python3 <proxy.py> -- <server argv...>` in a NEW SESSION (so the
+Launches `python3 <proxy.py> <proxy-arg...> -- <server argv...>` in a NEW SESSION (so the
 proxy's own pid is the group we assert on for a SIGKILLed proxy), writes each
 --send line, reads until every sent request id has a reply or the timeout
 lapses, then ends the session per --end and waits. Writes into <out>:
@@ -27,12 +27,13 @@ import time
 
 
 def parse(argv):
-    o = {"env": {}, "send": [], "end": "eof", "timeout": 8.0, "out": None, "proxy": None, "server": []}
+    o = {"env": {}, "send": [], "end": "eof", "timeout": 8.0, "out": None, "proxy": None, "proxy_args": [], "server": []}
     i = 0
     while i < len(argv):
         a = argv[i]
         if a == "--out": o["out"] = argv[i + 1]; i += 2
         elif a == "--proxy": o["proxy"] = argv[i + 1]; i += 2
+        elif a == "--proxy-arg": o["proxy_args"].append(argv[i + 1]); i += 2
         elif a == "--env": k, v = argv[i + 1].split("=", 1); o["env"][k] = v; i += 2
         elif a == "--send": o["send"].append(argv[i + 1]); i += 2
         elif a == "--end": o["end"] = argv[i + 1]; i += 2
@@ -55,7 +56,7 @@ def main():
     env = dict(os.environ); env.update(o["env"])
     err_path = os.path.join(o["out"], "stderr.txt")
     err = open(err_path, "wb")
-    p = subprocess.Popen([sys.executable, o["proxy"], "--"] + o["server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    p = subprocess.Popen([sys.executable, o["proxy"]] + o["proxy_args"] + ["--"] + o["server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=err, env=env, bufsize=0, start_new_session=True)
     sel = selectors.DefaultSelector(); sel.register(p.stdout, selectors.EVENT_READ)
     buf = bytearray(); raw = bytearray(); objs = []

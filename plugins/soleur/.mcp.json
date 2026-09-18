@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py",
+        "--user-data-dir-name",
+        "soleur-playwright-mcp-profile",
+        "--",
+        "npx",
+        "@playwright/mcp@0.0.78"
+      ]
+    }
+  }
+}
