@@ -490,6 +490,14 @@ leaked passphrase cannot be revoked at all without re-encrypting the volume, i.e
 of every user's source. Baking the passphrase would convert a revocable capability into an
 irrevocable one, which is the opposite of what a root-disk snapshot threat model wants.
 
+**Priced honestly, revocation is not cheap — it is a replace-gated store-availability action.**
+`user_data` bakes that token and is ForceNew, so `-replace=doppler_service_token.git_data` revokes
+the leaked token AND removes the live host's ability to reopen its mapper on every subsequent boot;
+re-baking a fresh one requires a host replace, which #8210 put behind the rung-2 gate. So the
+argument above is a claim about the ceiling on the DAMAGE (a token is revocable at all, a passphrase
+is not), never a claim that exercising it is free. A rotation needs an evidence-fresh replace window
+and a store-unavailability budget, and should not be cited later as an unqualified cheap lever.
+
 **The conditions this acceptance is bound to** — each pinned by
 `git-data-luks-reopen.test.sh` (U17/U19/U21, the reporter rows) so the acceptance cannot decay
 into a weaker shape:
@@ -515,3 +523,11 @@ They are pre-existing and are filed as a follow-on rather than widened here.
 timely manner in the event of a physical or technical incident" — for the encrypted git-data
 store. Before it, a reboot left the store unavailable until a human intervened; after it, the
 store is restored unattended and a failure to restore is reported off-host within the boot.
+
+**The unattended limb is bounded, and the bound is part of the control.** The unit retries five
+times in an hour (`Restart=on-failure`, `RestartSec=60`, `StartLimitBurst=5`); past that budget the
+standing retry is `git-data-luks-reopen.timer` at `OnUnitActiveSec=15min`. So "restored unattended"
+means: within ~5 minutes for a transient fault, and within ~15 minutes of the upstream recovering
+for an outage longer than that. A dedicated timer rather than the weekly `git-data-gc.timer` is what
+makes the second number a quarter-hour instead of up to seven days — review found the earlier
+wording true only inside the 5-attempt budget.

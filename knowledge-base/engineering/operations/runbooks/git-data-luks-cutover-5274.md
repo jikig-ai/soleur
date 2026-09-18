@@ -214,8 +214,7 @@ this host ships no journal and has no SSH fallback.
 | `target` | `/etc/fstab` names the mapper zero times or more than once — a bad #8211 cutover | The rendered payload's fstab line, as for `config` | A payload defect. Fix, then replace. |
 | `mount` | The mount unit failed. `detail` carries the mount unit's journal tail | Read `detail` | `wrong fs type … bad superblock` is **filesystem damage**: the lever is the ADR-068 backup/rebuild path, NOT a replace. A unit/payload defect is a payload fix plus a replace. |
 | `identity-mount` | The target is mounted from something that is not the mapper | Read `detail` — it names the actual source | Same split as `mount`: damage → ADR-068; payload defect → fix and replace. |
-| `unit` | The script never ran: `doppler run` failed, exec failed, or the unit hit its start timeout. Key on `result=` (`exit-code` / `timeout` / `signal` / `start-limit-hit`) and `rc=`; `detail` carries the doppler CLI's own error line | `doppler configs --project soleur` (the config exists) and `doppler activity --project soleur` (when the token was last used) — both read-only CLI reads needing no host access | A token/config fault is corrected in Doppler; no replace. A `timeout` against a healthy Doppler is a slow boot, which the bounded restarts cover — `restarts=` on the next success row records that it recovered. |
-
+| `unit` | The script never ran: `doppler run` failed, exec failed, or the unit hit its start timeout. Key on `result=` (`exit-code` / `timeout` / `signal` / `start-limit-hit`) and `rc=`; `detail` carries the doppler CLI's own error line | `doppler configs --project soleur` (the config exists) and `doppler activity --project soleur` (when the token was last used) — both read-only CLI reads needing no host access | A token/config fault is corrected in Doppler; no replace. A `timeout` against a healthy Doppler is a slow boot, which the bounded restarts cover — `restarts=` on the next success row records that it recovered. **An ABSENT `/etc/default/git-data-doppler` lands here, not on `config`:** the unit's `EnvironmentFile=-` makes a missing file a no-op rather than an error, so `DOPPLER_TOKEN` is unset and `doppler run` dies before the script reaches a phase. The off-host check is the same rendered-payload read as the `config` row — a `write_files` entry that failed to render leaves no file at all. |
 | `reopened` | Not a failure. The mapper was closed and is now open and mounted — the ordinary post-reboot success | — | None. Emitted at `info` on `luks_reopen_ok`; `restarts=` says whether a transient blip was absorbed |
 | `mounted` | Not a failure. The mapper was already open and the target was not mounted — a retry after a failed mount job | — | None, unless it repeats: a mapper open with the target unmounted at every boot means the mount unit is failing for another reason |
 | `noop` | Not a failure. Open and mounted already — the birth case, where the runcmd heredoc has just done both | — | None; this path emits nothing at all. In a REHEARSAL after a reset it is a FAIL (see below) |
@@ -241,6 +240,16 @@ its bounded restarts, and the reporter emits once. The inherited gc-failure shap
 double-emit only when `doppler run` succeeds and the emitter itself then exits non-zero. A
 reopen that stays broken produces THREE events per weekly gc tick, one root cause: the reopen's
 own fatal, gc's unit failure, and gc's mountpoint fatal.
+
+**But a host that stays broken REPEATS, roughly four times an hour, and that is deliberate.**
+`git-data-luks-reopen.timer` starts the unit every 15 minutes, and a timer start inside the
+still-open `StartLimitIntervalSec=1h` window is refused with `Result=start-limit-hit` — itself a
+failed start, so `OnFailure=` fires and the reporter emits again. So the count above is one event
+per FAILURE, not one per outage: expect roughly 96 a day while the store stays closed, collapsed by
+Sentry into a single issue with a rising count. That is the correct signal for an unresolved fatal
+and it is the price of the standing retry that makes recovery from a multi-hour Doppler outage
+unattended. It is NOT a new fault each time — read the issue's FIRST event for the `action=` that
+matters, and expect the tail to repeat until the lever in the table above is pulled.
 
 ## Sharp edges
 
@@ -289,6 +298,17 @@ host fails inside that window, it stays down until post-merge steps 1 and 2 are 
   Art. 17 erasure-failure event (`op:git-data-bare-repo-erasure`). **Those events are expected in this
   window** while the host is down. No repository exists, so nothing is left behind.
 - Keep the window short: run post-merge steps 1 and 2 back to back.
+
+**Break-glass for the rung-2 interlock (#8210), and it is not a bypass.** `git_data_host_replace`
+now calls `git_data_rung2_rehearsal_gate`, which binds the landed evidence to a hash of the
+cloud-init template **at the dispatched ref**. So an emergency replace is refused whenever `main`'s
+payload has drifted since the last rehearsal — including when the host is already down. The route is
+to dispatch `git-data-host-replace` **from the last ref whose template still matches the evidence**
+(`git log --oneline -- apps/web-platform/infra/cloud-init-git-data.yml` names the candidates; the
+gate's refusal prints the hash it wanted). That ref is not a weaker payload — it is precisely the
+payload a rehearsal booted and reset, which is the property the gate exists to require. Dispatching
+it needs no PR, no SSH and no gate edit. Re-rehearse and land evidence for the newer payload
+afterwards; do not carry the old ref forward as a standing dispatch source.
 
 **Escape hatch.** If the root-key apply cannot succeed (for example a provider or Doppler failure the
 dispatch cannot get past) and a recovery replace is needed, the route is **a reviewed PR** that reverts

@@ -29,6 +29,13 @@ RandomizedDelaySec=120
 # Persistent=true so a host that was DOWN across several intervals takes one catch-up tick on
 # boot rather than none — the same reasoning as git-data-gc.timer.
 Persistent=true
+# ACCEPTED COST, recorded here so it is not read later as a defect: on a host that stays broken,
+# a tick inside the unit's still-open StartLimitIntervalSec=1h window is REFUSED with
+# Result=start-limit-hit, which is itself a failed start, so OnFailure= fires and the reporter
+# emits again — roughly four fatals an hour until the fault is fixed. Sentry collapses them into
+# one issue with a rising count, which is the right signal for an unresolved fatal, and the
+# alternative (silence with the store closed) is the defect #8210 exists to remove. The operator
+# reading is in git-data-luks-cutover-5274.md, under "a host that stays broken REPEATS".
 
 [Install]
 WantedBy=timers.target

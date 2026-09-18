@@ -253,6 +253,35 @@ the Hetzner API and the capture script's `--reboot-since` mode must observe
 timestamp before the evidence can be uploaded. The first PASS is the live verification of this
 amendment; its run URL is recorded on #8210 once captured.
 
+**Equivalent in OUTCOME, not in ORDERING — and the difference is what #8211 has to buy back.** A
+`crypttab` entry or a keyscript runs inside PID 1's `cryptsetup` → `local-fs.target` ordering; this
+oneshot runs `After=network-online.target`, i.e. *after* the fstab mount job has already skipped on
+`nofail`, which is exactly why `git-data-luks-reopen.sh` has to hand-start the `.mount` unit itself.
+The consequence is that no consumer can be ordered on the store **by construction** — the property
+[ADR-119](ADR-119-luks-at-rest-for-the-live-workspaces-volume.md) §(e) ruled must be structural for
+the identical hazard on web-1. The reopen is therefore correct in what it achieves and weaker in how
+a consumer can depend on it; the residual is carried by #8211 contract clauses (h) and (i)
+(`nofail,noauto,x-systemd.requires=` on the rewritten fstab line, plus `chattr +i` on the unmounted
+mountpoint), not by this ADR.
+
+**The fleet stays bifurcated, deliberately.** inngest's sibling unit (#7695) uses a BAKED keyfile
+with `DefaultDependencies=no` / `Before=local-fs.target`, and its own comment records that a
+`doppler run` wrapper is impossible at that ordering. The two shapes cannot converge: the credential
+posture ADR-198 mandates for THIS passphrase forces the network-online ordering that inngest's
+pre-network position forbids. git-data's shape is the intended target for the web hosts (#6931) —
+their volumes carry no comparable pre-network constraint — and inngest's ordering is the reason the
+fleet keeps two answers rather than a defect to close.
+
+**What the rung-2 gate does and does not check, recorded so the next reader does not over-read it.**
+`git_data_rung2_rehearsal_gate` binds landed evidence to a hash of the payload, and #8210 added the
+`RUNG2_REBOOT_REOPEN` key that a rehearsal's reset arm writes. The gate checks the evidence's SHAPE
+and its binding to the template; it does not assert that the reboot verdict is `PASS`. Today that
+is covered outside the gate — the #8210 follow-through probe reads the key from `origin/main` and
+FAILs on any non-`PASS` — so the property is instrumented but not interlocked. Closing that gap is
+[#8010](https://github.com/jikig-ai/soleur/issues/8010)'s subject (the gate checking assertion shape
+rather than that a rehearsal passed), and it is named here rather than fixed here because widening
+the gate in this change would have shipped an un-rehearsed interlock into the replace route.
+
 What this amendment does NOT do: it does **not** adopt the self-reboot primitive for git-data
 (this ADR still authorizes it for the registry host only), and it does not touch the SECOND
 normative blocker above (replace-on-rotation) — a passphrase rotation is still a full volume

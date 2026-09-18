@@ -54,7 +54,7 @@ rehearsal reset arm, two ADR amendments, one C4 edge.
 | `Restart=on-failure` is legal on a oneshot | Verified on 255 and 261; `Result`/`ExecMainStatus`/`ExecMainCode`/`NRestarts` all survive `start-limit-hit` |
 | Doppler CLI 3.75.3 (pinned, not the host's 3.76.5) | Repeated `--only-secrets`, `--no-fallback`, `--config` all parse; child exit codes forward (measured 7) |
 | `cryptsetup isLuks` rc table | 0 LUKS / 1 not-LUKS / 4 absent. `findmnt --fstab` exits 1 on no match |
-| Budget | 15,444 → 17,840 B of a 32,768 cap |
+| Budget | 15,444 → 18,432 B of a 32,768 cap |
 
 ## Deviation from the plan
 
