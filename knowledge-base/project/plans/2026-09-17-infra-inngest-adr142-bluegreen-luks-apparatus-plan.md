@@ -1876,3 +1876,75 @@ and no acceptance criterion already covers are listed here.
 | 7 | Remove the new `SyslogIdentifier` from the log-shipper allowlist, or change it in one of the two files. | Suite RED — every observability detection routes through that one exact-value list, and a mismatch is silent. |
 | 8 | Delete the mapper close from the rollback contract. | Suite RED — a failed rollback would leave the mapper open, the Redis guard refusing every start, and no verb able to close it. |
 | 9 | Add a new sudoers grant for the cutover. | Diff assertion FAILS — the unit is a root oneshot, the host runs no listener, and the grant would have no caller while standing as a live capability. |
+
+## Amendment — 2026-09-18 (execution): what the build changed, and the one step this plan got wrong
+
+Append-only. Nothing above is edited; this section records where execution diverged from the plan
+and why, so a reader comparing the two does not have to guess which is current.
+
+### 1. The image tag cycle is IN-PR, not post-merge (task 4.9 was wrong)
+
+The plan sequences the tag push and digest re-pin as post-merge work, on the reasoning that the
+digest cannot be known before the build. The first half is true; the conclusion is not. GuardA in
+`cloud-init-inngest-bootstrap.test.sh` compares **every baked carrier** against the blob at the
+pinned tag and reds on any drift — so the moment this PR changes `vector.toml`,
+`inngest-bootstrap.sh` or adds the cutover trio, CI is red until a new tag exists and the pin moves.
+The repo's own precedent agrees: `vinngest-v1.1.34` and `v1.1.35` are both tagged at **feature-branch
+commits**, built, and re-pinned inside the PR that changed the carriers.
+
+Executed as: finalise the carriers, push `vinngest-v1.1.36` at that commit, let the build publish,
+then re-pin `<tag>@sha256:<digest>` at all four sites in the same PR. **Consequence for review:** any
+later change to a baked carrier needs another tag, so the tag cycle is the LAST step before ship,
+after review has frozen those files.
+
+### 2. The additive plan gate is `inngest_host_shape_gate` (Option C, per-address)
+
+Filed in the plan as `inngest-luks-additive-gate.sh`. Built as
+`tests/scripts/lib/inngest-host-shape-gate.sh`, grading each of the 18 addresses against an explicit
+permitted-action set rather than asserting a create-shaped whitelist. The rename is not cosmetic: a
+create-shaped gate says nothing about an UPDATE, and an update to the live AOF volume on the
+`inngest-host` dispatch was exactly the hole (measured on the sibling replace gate: a plan replacing
+the server while resizing the live volume printed PASS).
+
+**Volume-only first step, as a precondition rather than a hope:** the gate is what makes "the first
+dispatch plans the new volume and its attachment, and touches nothing else" checkable. No new
+`apply_target`, and no positive action permitted on the live volume, its attachment, the server, or
+the passphrase pair.
+
+**The passphrase pair is absent from BOTH dispatches**, enforced on each side by its own counter
+(`luks_passphrase_in_graph` on the replace gate; the forbidden-address set on the shape gate), so a
+plan that pulls `random_password.inngest_redis_luks` or `doppler_secret.inngest_redis_luks_key` into
+the graph aborts with that name rather than with a generic out-of-scope count.
+
+### 3. The live-volume create arm is RESTORED on the replace gate, bounded by `before == null`
+
+The Option C ruling read as "live volume: no-op ONLY". Applied literally, that withdrew the #7695
+recovery route — a bare create of a volume that is ABSENT from state after a partial recut — which
+the recut job's own recovery text still prescribes. A create whose `before` is null cannot harm a
+store, because there is no store. The gate permits exactly that shape and refuses an update, a
+replace, and a create whose `before` is an object.
+
+### 4. Guard 3's premise, restated for THIS unit
+
+The host-audibility gate (#7674) rests on "a guard-refused host still emits rows". For the LUKS
+cutover that premise needed re-deriving rather than inheriting, because the failure it must catch is
+a unit that was never INSTALLED. So G3 counts rows under `inngest-luks-cutover`'s own
+`SyslogIdentifier`, never the flip's: the flip timer is enabled on a host where the LUKS trio never
+landed, and borrowing its rows would report that host as ready to act. Silence on the cutover tag is
+therefore a real finding — the bootstrap's fail-closed install emits `reason=install_missing` on
+exactly that path — and every refusal names its remediation in the same line rather than leaving the
+operator to infer one.
+
+### 5. Defects the build found in itself, recorded because they are the plan's own failure classes
+
+- `resume_writers` started `inngest-server.service` unconditionally, which would re-arm a scheduler
+  an operator had quiesced (caught by `ci-deploy.test.sh`'s start-writer inventory, not by me). The
+  freeze now records what was active and the resume starts exactly that set.
+- A SIGTERM between the freeze and the resume left every writer stopped: a signal does not fire the
+  `ERR` trap. Fixed with a TERM handler — and `PHASE=frozen` had to move ABOVE the first stop,
+  because a kill mid-stop otherwise resumed nothing at all.
+- The passphrase was first dereferenced MID-SWAP, with the store unmounted, where `set -u` would
+  kill the script without the trap. Asserted present before anything stops.
+- The script traced its own passphrase (no xtrace refusal, #7797) and leaked a tempfile in `/etc` on
+  death (ADR-129). Both caught by repo lints in CI, neither by the local hook set — `lefthook` was
+  absent from this session's PATH for the first three commits.

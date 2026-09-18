@@ -2122,6 +2122,7 @@ lint-rule-ids
 lint-symmetry
 linter
 linting
+lints
 liquid
 list
 live
@@ -3523,6 +3524,7 @@ sign-out
 signal-choice
 signal-drift
 signal-to-noise
+signals
 signed
 signed-url
 signup-outage
