@@ -102,6 +102,32 @@ describe("Codex App Server session coordinator", () => {
     ]);
   });
 
+  it("starts a fresh provider thread after deleting the bound thread", async () => {
+    const client = {
+      request: vi.fn()
+        .mockResolvedValueOnce({ serverInfo: { name: "codex" } })
+        .mockResolvedValueOnce({ thread: { id: "thread-1", sessionId: null } })
+        .mockResolvedValueOnce({ turn: { id: "turn-1" } })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ thread: { id: "thread-2", sessionId: null } })
+        .mockResolvedValueOnce({ turn: { id: "turn-2" } }),
+      notify: vi.fn(async () => undefined),
+      respond: vi.fn(async () => undefined),
+    };
+    const session = createCodexAppServerSession(client, { nextRequestId: () => "rpc" });
+
+    await expect(session.start("first")).resolves.toMatchObject({
+      thread: { resumeHandle: "thread-1" },
+    });
+    await expect(session.deleteThread("thread-1")).resolves.toEqual({});
+    await expect(session.start("second")).resolves.toMatchObject({
+      thread: { resumeHandle: "thread-2" },
+    });
+    expect(client.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "initialize", "thread/start", "turn/start", "thread/delete", "thread/start", "turn/start",
+    ]);
+  });
+
   it("lists persisted items through the negotiated server-owned session", async () => {
     const client = {
       request: vi.fn()

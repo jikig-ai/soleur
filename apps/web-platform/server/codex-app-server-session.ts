@@ -146,7 +146,12 @@ export function createCodexAppServerSession(
     },
     deleteThread: async (threadId) => {
       await ensureInitialized();
-      return client.request(createCodexThreadDeleteRequest(options.nextRequestId(), threadId));
+      const result = await client.request(createCodexThreadDeleteRequest(options.nextRequestId(), threadId));
+      if (thread?.resumeHandle === threadId) {
+        thread = null;
+        threadStart = null;
+      }
+      return result;
     },
     interrupt: async (threadId, turnId) => {
       await ensureInitialized();
