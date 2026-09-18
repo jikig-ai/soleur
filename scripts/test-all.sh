@@ -2107,6 +2107,14 @@ if want_scripts; then
   # #6297 while the key is still unminted. The suite mutation-proves that guard, so a regression
   # to structural matching must redden CI rather than silently false-close a tracker.
   run_suite "scripts/anthropic-admin-key-6297" bash scripts/followthroughs/anthropic-admin-key-6297.test.sh
+  # #8281: exit-code harness for the compound-promote outcome soak. Registered explicitly
+  # (orphan-suite class above). Same CONTAMINATION arm as 6297 one entry up: the probe's first
+  # revision `grep -c`'d the marker name over undecoded rows, so an echo of the PR's own body
+  # would have auto-closed #8281 with the weekly path dark. The suite also pins the DARKNESS
+  # arm (no SOLEUR_CLAUDE_COST control ⇒ FAIL, never a clean zero), the trigger==cron
+  # requirement (a manual fire cannot close it), and the rc-3 forwarding — whose first revision
+  # `exit 3`'d inside a `$(...)` and so exited a subshell; the suite's case 7 caught it.
+  run_suite "scripts/compound-promote-outcome-8281" bash scripts/followthroughs/compound-promote-outcome-8281.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
