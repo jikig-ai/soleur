@@ -306,6 +306,69 @@ outcomes by joining the marker's `run_id` to the Sentry tag `inngest.run_id`
 The marker is the deny-side half of that join; the Sentry event is the
 outcome-side half. Neither alone is the answer.
 
+### `SOLEUR_COMPOUND_PROMOTE_OUTCOME` — what the weekly self-improvement run DID
+
+Emitted by `apps/web-platform/server/inngest/functions/cron-compound-promote.ts`
+`emitOutcomeMarker()` at pino **WARN** (same `app_container_warn_filter`, same
+path as the cost markers) on **every** terminal exit of the promoter — the
+census guard `cron-compound-promote-outcome-census.test.ts` fails the build if
+a return is added without one. Before #8281 the promoter had been silently dead
+since 2026-07-06: every exit returned a `status` string that reached nowhere,
+so the only signal was the Sentry heartbeat, which proves LIVENESS, not work
+(measured: a completed 516,512-input-token Anthropic call producing nothing,
+invisible for ten weeks).
+
+Fields: `status` (closed union: `disabled` | `deduped` | `week-cap-reached` |
+`empty-corpus` | `anthropic-truncated` | `no-qualifying-clusters` | `completed`
+| `error` — eight values from seven return sites), `trigger` (`cron` for the
+`0 0 * * 0` fire, `manual` for `cron/compound-promote.manual-trigger`; BOTH
+dispatch the same handler, so this field is the only thing that distinguishes
+them), `run_id` (join key to Sentry `inngest.run_id`), `corpus_count`,
+`corpus_input_bytes`, `clusters_proposed`, `clusters_opened`, `refusals[]`
+(one enum per refused cluster), `refusal_detail[]` (`{cluster_hash, reason}`,
+capped at 20, enum-only — never a path or learning text), and on `error`
+only, `error_class` + a scrubbed `error_message`.
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 50 \
+  | jq -R -r 'fromjson? | . as $r | ($r.raw|fromjson?).message
+              | select(.SOLEUR_COMPOUND_PROMOTE_OUTCOME == true and .fn == "cron-compound-promote")
+              | [$r.dt, .trigger, .status, (.corpus_count//"-"), (.clusters_proposed//"-"),
+                 (.clusters_opened//"-"), ((.refusals//[])|join(","))] | @tsv'
+```
+
+Reading it:
+
+- **Field-isolate, never substring.** GitHub webhook payloads (issue and PR
+  bodies) reach this source, and every artifact of #8281 quotes the marker
+  name. A `grep -c` over undecoded `raw` counted this PR's own description as
+  an emission. The `select` on `.fn` is what makes a row an emission.
+- **`completed` with `clusters_opened: 0` is the interesting case**, and
+  `refusals[]` is what separates "the corpus had nothing to propose"
+  (`no-qualifying-clusters`, or `completed` with empty refusals) from "every
+  cluster was refused" — the two states #8281 was filed to distinguish. The
+  refusal enums name the gate: `diff-structural-op` / `diff-path-refused` /
+  `diff-underivable` (the allowlist), `corpus-shrink-refused` (the post-apply
+  floor), `skill-conflict-guard`, `byte-budget-overflow`, `not-committed-*`.
+  `refusal_detail[].cluster_hash` recurring week over week is a cluster the
+  proposer keeps producing and the gates keep refusing.
+- **`refusals` is derived from the step's RETURN VALUE**, so it is correct on
+  a replayed run. An earlier revision pushed into a handler-scope array from
+  inside the memoized step and emitted `[]` on every real run.
+- **The per-refusal WARN line one row over carries `detail`** (git's own
+  diagnosis, scrubbed and capped at 200 bytes): `--grep '"fn":"cron-compound-promote"'`
+  and read `.message.detail` for the offending path or git's error text.
+- **A dark channel reads as zero.** Before grading an absence, confirm
+  `SOLEUR_CLAUDE_COST` rows exist in the same window — same emitter class,
+  same path. The #8281 soak probe (`scripts/followthroughs/compound-promote-outcome-8281.sh`)
+  does this and requires `trigger == "cron"`, so a manual fire cannot close it.
+
+The manual trigger is agent-invocable on every harness: Claude Code `Skill
+tool soleur:trigger-cron`, Grok `/trigger-cron`, Devin `/soleur:trigger-cron`,
+Codex `$soleur:trigger-cron`; the event is derived from `EXPECTED_CRON_FUNCTIONS`
+in `cron-manifest.ts`, not a second list.
+
 ### `SOLEUR_RUN_REPORT_SWEEP` — the 12:00Z run-report arm changed state
 
 Emitted by `cron-stale-deferred-scope-outs.ts` `sweepRunReports` at pino

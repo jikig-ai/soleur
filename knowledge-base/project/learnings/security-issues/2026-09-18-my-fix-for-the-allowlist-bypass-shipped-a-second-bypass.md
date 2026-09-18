@@ -130,3 +130,31 @@ everything.
 - `knowledge-base/project/learnings/2026-09-18-the-loop-was-not-failing-it-was-succeeding-at-nothing-and-said-ok.md`
 - `knowledge-base/project/plans/2026-09-18-feat-wikiskill-pattern-wiki-phase-1-plan.md` (Guard 2)
 - #8274 (closed by that plan), #8281 (parent), #8293 (deferred pattern layer)
+
+## Addendum — 2026-09-18, same day, review of PR #8276
+
+**The Solution above shipped a THIRD bypass, and the Prevention bullet that recommended it was
+wrong.** Three review seats independently measured, and the author reproduced, that
+`git apply --summary` is EMPTY for an **implicit rename** — a `diff --git a/X b/Y` whose
+`---`/`+++` disagree with no `rename from`/`rename to` headers. `--numstat` reports only Y.
+`git apply` deletes X at rc 0. The rename row this learning added caught the rename only because
+`git mv` emits the explicit headers; a model authoring a diff is under no such obligation.
+
+So the sentence "Prefer the tool's **authority** output (what it will do) … `--summary` describes
+the operation" was a category error. `--summary` describes what git can *parse from the headers*.
+It is a third proxy, one layer down from the header parser this learning replaced — and the
+learning was written in the confidence of having just found the second bypass, which is exactly
+when the third is least suspected.
+
+**What actually is the authority:** apply the patch to a throwaway index (`GIT_INDEX_FILE` +
+`git apply --cached`) and read `git diff-index --cached -z HEAD`. That reports what the apply
+*did* — every path on both sides with its status and both modes — rather than what any output
+format *said it would do*. Raw format, not `--name-status`: the latter reports a mode-only
+change as plain `M`, which an all-`M` rule accepted (caught by the pre-existing mode-change row
+during the rework).
+
+The Prevention bullet, corrected: when a guard derives its protected set from a tool, prefer the
+tool's **effect** on a sandbox over any of its **reports** about intended effect — and treat every
+report format, however authoritative it reads, as one more input shape to enumerate. The three
+formats tried here (`+++` headers, `--summary`, `--numstat`) each had a shape they could not see,
+and each was found by asking "what input does this format render as nothing?"

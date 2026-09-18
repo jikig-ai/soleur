@@ -133,7 +133,7 @@ ten weeks and the marker will say so on the first run).
 1.1 Emit `SOLEUR_COMPOUND_PROMOTE_OUTCOME` at **WARN**, **inlined** in `cron-compound-promote.ts`
 (no new module — one caller). Fields: `status`, `corpus_count`, `clusters_proposed`,
 `clusters_opened`, `refusals` (a `string[]` appended at each existing refusal site),
-`prompt_input_bytes`, and a bounded `refusal_detail` (≤20 `{cluster_hash, reason}` entries) so a
+`corpus_input_bytes`, and a bounded `refusal_detail` (≤20 `{cluster_hash, reason}` entries) so a
 *recurring* refusal of the same cluster is distinguishable from a quiet corpus.
 1.2 Call it on **all 7** terminal paths (:469, :496, :514, :569, :642, :821, :837).
 1.3 **Guard 1** (below) — written before the emit.
@@ -378,3 +378,67 @@ Design constraints the follow-up inherits (each verified this session):
 9. Legitimate two-file diff (`AGENTS.rules.md` + `SKILL.md`) → **applies** (must-PASS control).
 10. Same cluster refused on consecutive runs → `refusal_detail` shows the repeated `cluster_hash`.
 11. Census with a stubbed empty return-set → RED.
+
+## Review corrections — 2026-09-18 (12-seat panel on PR #8276)
+
+Append-only. Each entry quotes the claim as written above, then what was measured. The claims are
+left in place so the next reader can see what was believed at plan time and why it was wrong.
+
+**The load-bearing invariant was FALSE.** Guard 2's design rested on "`git apply --summary` is
+EMPTY for a pure content edit and non-empty for create/delete/rename/copy/mode-change". Measured
+(git 2.55.0, three seats independently plus the author): `--summary` is ALSO empty for an
+**implicit rename** — a `diff --git a/X b/Y` whose `---`/`+++` disagree with no `rename from`/
+`rename to` headers. `--numstat` reports only Y; `git apply` rc 0; X is **deleted**. Row 4 (AC4b)
+caught the rename only because `git mv` emits the explicit headers. A model authoring a diff emits
+whatever it likes. The shipped derivation now applies the patch to a throwaway index and reads
+`git diff-index --cached -z HEAD`, which names both sides by construction; `--summary` is not used.
+The Risks row "Derivation comes from `git apply`'s own reporting" described a derivation that was
+itself a proxy. `code-quality` verified the empty-summary claim across six shapes and pronounced it
+true; it never tested the seventh — the plan's own §Research Insights lesson, landing on its review.
+
+**AC2 was never met.** "Verify in the census test by asserting the emitted record's level" — the
+census is a source scan and asserts no level. The level is pinned by `emitOutcomeMarker`'s parameter
+type (`{ warn: … }`), which is a stronger pin than the plan asked for, but not the one it claimed.
+
+**AC7 is violated by this branch.** It adds two files under `knowledge-base/project/learnings/`,
+which is the proposer's INPUT corpus — so the first marker's `corpus_count` is +2 against the
+pre-PR baseline. Recorded here rather than unticked silently.
+
+**AC8 / the Observability block say "7 known values"; there are 8.** `anthropic-truncated` and
+`no-qualifying-clusters` are emitted from one site, which is where 7 came from (7 returns). A
+discoverability test written to 7 would not recognise a healthy `anthropic-truncated` row.
+
+**"exactly one per run" does not hold.** `emitOutcomeMarker` is body code, so on a retried run
+the `error` marker re-fires per attempt. The marker now carries `run_id`, which is the dedup key.
+
+**The Risks row "files a weekly Sentry EVENT (`logger.ts:123-125` auto-mirrors WARN+)" is wrong
+twice.** `mirrorToSentry` (`server/logger.ts:40-80`) adds a **breadcrumb** at WARN and calls
+`captureException` only at error/fatal with an `err` field. No event is filed. And `:123-125` is
+the `logMethod` call site, not the mechanism — a `cq-cite-content-anchor-not-line-number` miss
+inside the plan that added a bullet about citing mechanisms precisely.
+
+**"this plan adds no data surface … counts and status strings only" was false for the diff as
+shipped.** `detail` carried a model-rendered path — unbounded, unscrubbed, with U+2028/9 and ESC
+surviving `JSON.stringify` — to Better Stack on a WARN line and to Sentry as an `extra`. Now scrubbed
+and capped at 200 bytes (`safeDetail`). The `refusal_detail` enum-only claim was true; `detail`
+lived on the adjacent line.
+
+**Guard 2's Assembly ("the guard greps for `apply` argv occurrences") was specified and never
+shipped.** Every Guard 2 row drove `checkDiffPaths` in isolation; deleting the `if (!pathVerdict.ok)`
+block from the handler left the whole suite green. Guard 2b now ships the census with an
+UNCLASSIFIED bucket, mutation-proven both ways.
+
+**Guard 1's mutation row 3 ("emit a status outside the known set → RED") was specified and not
+shipped as a test.** It is now satisfied by the compiler instead: `status` is the closed union
+`CompoundPromoteStatus` on both the marker and the handler result, proven by mutating one literal
+to `"dedupped"` and watching `tsc` red. Harness row (a) is subsumed by the per-file assertion floor.
+
+**The soak probe (AC9) could not implement its own close criterion.** The marker carried no trigger
+field and both triggers dispatch one handler, so a manual fire in the window closed #8281 with the
+scheduled path dark; and it substring-grepped `raw`, which GitHub webhook bodies reach — this PR's
+own description would have satisfied it. Now decodes structurally, requires `trigger == "cron"`,
+carries a positive control, and anchors to a merge floor.
+
+**Measured but out of scope, filed separately:** `vitest`'s `expect.requireAssertions` fails 174
+pre-existing tests across 28 unrelated files — tests that cannot fail. The two suites in this PR
+carry a per-file `beforeEach(expect.hasAssertions)` instead.

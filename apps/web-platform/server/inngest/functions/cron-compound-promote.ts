@@ -257,8 +257,24 @@ export const TARGET_ALLOW_RE =
  *
  * Never throws — observability must not break a run.
  */
+/**
+ * The closed set of terminal statuses. A union rather than `string` so a
+ * status outside the set is a TYPE error — the plan's Guard 1 mutation row 3
+ * ("emit a status outside the known set → RED") is satisfied by the compiler
+ * rather than by a regex, and the 8 literals cannot silently become 9.
+ */
+export type CompoundPromoteStatus =
+  | "disabled"
+  | "deduped"
+  | "week-cap-reached"
+  | "empty-corpus"
+  | "anthropic-truncated"
+  | "no-qualifying-clusters"
+  | "completed"
+  | "error";
+
 export interface CompoundPromoteOutcome {
-  status: string;
+  status: CompoundPromoteStatus;
   corpus_count?: number;
   clusters_proposed?: number;
   clusters_opened?: number;
@@ -319,7 +335,13 @@ export function emitOutcomeMarker(
         SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,
         fn: "cron-compound-promote",
         ...outcome,
+        // Both arrays capped — `refusals` used to be spread uncapped, so the
+        // "one pathological run cannot flood the sink" property held for only
+        // one of the two. The total is recorded so a capped list is
+        // distinguishable from a complete one.
+        refusals: outcome.refusals?.slice(0, REFUSAL_DETAIL_CAP),
         refusal_detail: outcome.refusal_detail?.slice(0, REFUSAL_DETAIL_CAP),
+        refusals_total: outcome.refusals?.length,
       },
       "compound promote outcome",
     );
@@ -565,7 +587,7 @@ interface Cluster {
 
 interface HandlerResult {
   ok: boolean;
-  status: string;
+  status: CompoundPromoteStatus;
   clustersOpened?: number;
 }
 
@@ -818,6 +840,13 @@ export async function cronCompoundPromoteHandler({
       };
     });
 
+    // Recover the workspace path from the MEMOIZED step return BEFORE the
+    // enabled branch. On a resumed request `read-config` is memoized, its
+    // callback (which set `ephemeralRoot`) does not run, and the `disabled`
+    // return below left `ephemeralRoot` null — so `teardownEphemeralWorkspace`
+    // short-circuited and the depth-1 clone leaked on every disabled run.
+    ephemeralRoot = config.ephemeralRoot;
+
     if (!config.enabled) {
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
@@ -827,7 +856,6 @@ export async function cronCompoundPromoteHandler({
     }
 
     const repoRoot = config.repoRoot;
-    ephemeralRoot = config.ephemeralRoot;
 
     // FR3: dedup check via Octokit
     const dedupResult = await step.run("dedup-check", async () => {
@@ -1238,14 +1266,20 @@ export async function cronCompoundPromoteHandler({
         // git pipeline halted the loop here; the non-throwing helper
         // continues — so reset the worktree or cluster A's residue rides
         // into cluster B's commit (promotion-log.md is in EVERY allowlist).
-        if (result.status !== "committed") {
-          // reset --hard covers staged AND unstaged residue (a dirty-index
-          // failure means something was staged); clean -fd removes new files
-          // the diff created. The clone is ephemeral — nothing else lives here.
-          await spawnGit(["reset", "--hard", "HEAD"], { cwd: repoRoot });
-          await spawnGit(["clean", "-fd"], { cwd: repoRoot });
+        // UNCONDITIONAL, not only on the non-committed branch. checkDiffPaths
+        // permits a multi-file diff while `allowedPaths` stages only the
+        // target, so a committed cluster can still leave a second allowlisted
+        // file dirty — and it rode into the next cluster's commit. reset
+        // --hard after a successful commit is a no-op for the committed
+        // content and discards exactly that residue. The clone is ephemeral.
+        await spawnGit(["reset", "--hard", "HEAD"], { cwd: repoRoot });
+        await spawnGit(["clean", "-fd"], { cwd: repoRoot });
+        const back = await spawnGit(["checkout", "main"], { cwd: repoRoot });
+        if (back.exitCode !== 0) {
+          // A failed return to main leaves the NEXT cluster branching from
+          // this cluster's tip, so cluster A's commit lands inside B's PR.
+          throw new Error(`checkout main failed between clusters (rc ${back.exitCode})`);
         }
-        await spawnGit(["checkout", "main"], { cwd: repoRoot });
           if (result.status === "committed") {
             return { kind: "opened" };
           }

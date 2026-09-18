@@ -38,7 +38,7 @@ Scope is the plan's Steps 0–3 only. The pattern layer is deferred to **#8293**
 
 - [ ] 3.1 Emit `SOLEUR_COMPOUND_PROMOTE_OUTCOME` at **WARN**, inlined (no new module).
       Fields: `status`, `corpus_count`, `clusters_proposed`, `clusters_opened`,
-      `refusals: string[]`, `prompt_input_bytes`, `refusal_detail` (≤20 `{cluster_hash, reason}`).
+      `refusals: string[]`, `corpus_input_bytes`, `refusal_detail` (≤20 `{cluster_hash, reason}`).
 - [ ] 3.2 Call it on all 7 terminal paths (:469, :496, :514, :569, :642, :821, :837).
 - [ ] 3.3 Append a reason to `refusals` at each existing refusal site — no new log lines, no
       per-reason counter state.
