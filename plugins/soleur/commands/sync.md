@@ -130,15 +130,23 @@ When one of these fires, report to the user verbatim:
 > didn't run. This is a problem with the Soleur installation, not with your
 > project. The most likely fix is to reinstall the Soleur plugin — updating the
 > marketplace alone does not update an installed plugin. Run
-> `claude plugin marketplace update soleur && claude plugin update soleur`, then
-> start a new session. If the same line comes back, reinstall outright with
-> `claude plugin uninstall soleur && claude plugin install soleur`. If it still
-> comes back, this is a bug in Soleur: please report it with this line. Everything
-> else in this run completed normally.
+> `claude plugin marketplace update && claude plugin update soleur@<marketplace>`,
+> then start a new session. `<marketplace>` is the id `claude plugin list` prints
+> beside `soleur` — `soleur-marketplace` if you installed from the published
+> marketplace. If the same line comes back, reinstall outright with
+> `claude plugin uninstall soleur@<marketplace> && claude plugin install soleur@<marketplace>`.
+> If it still comes back, this is a bug in Soleur: please report it with this line.
+> Everything else in this run completed normally.
 
 Give the commands, not just the advice. The message names the marketplace-vs-install
 distinction, and a founder who is told that and handed no command is left exactly where the
-report that opened #7474 started. The reinstall fallback is still worth naming, though it is no
+report that opened #7474 started. The plugin half is QUALIFIED (`soleur@<marketplace>`) rather
+than bare: upstream anthropics/claude-code#76882 (collaborator comment 5310894439, 2026-08-17)
+records that the bare plugin name can fail with "Plugin not found" on current releases. It stays
+a PLACEHOLDER rather than a literal because the marketplace half differs by install path —
+`soleur-marketplace` on the published path, `soleur` when the monorepo was added directly — and
+this string is read by an operator whose path this code does not know. That is why
+`claude plugin list` is named in the same breath: without it the placeholder is not runnable. The reinstall fallback is still worth naming, though it is no
 longer the only thing that can converge an install: `plugin.json` carried a frozen `0.0.0-dev`
 sentinel until 2026-08-12, which is why an install could sit months stale while reporting success
 (measured in ADR-178). The manifests are keyless now and the recorded version changes with every

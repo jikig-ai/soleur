@@ -163,7 +163,7 @@ a `test -f` on the script alone is a shape check and was measured bypassable.
   || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
        echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
-       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code." >&2
        echo "  Nothing has been captured yet, so nothing has leaked." >&2
        exit 2; }
 ```
