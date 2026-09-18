@@ -775,3 +775,14 @@ variable "inngest_expect_luks" {
   type        = bool
   default     = false
 }
+
+# #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
+# (betterstack-logs-alerts.tf). FALSE until the cutover has completed and been confirmed: before
+# the swap, /mnt/data is legitimately backed by the plaintext volume, so an armed rule would page
+# continuously — and a rule that pages when nothing is wrong is a rule that gets muted.
+# Flipped to true in the apply that follows a confirmed op=luks-cutover.
+variable "inngest_luks_cutover_complete" {
+  description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
+  type        = bool
+  default     = false
+}

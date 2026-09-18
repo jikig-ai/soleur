@@ -413,6 +413,76 @@ _flip_liveness_count() {
   printf '%s' "$n"
 }
 
+# ── #6894: the LUKS cutover FSM's own liveness + confirm readers ────────────────────────────────
+# Keyed on the CUTOVER unit's tag, NOT the flip's. They are two units with two timers, and the
+# question these gates ask is "can the host act on this write?" — which for a write to
+# INNGEST_LUKS_CUTOVER is answered only by inngest-luks-cutover.service. Using the flip's rows
+# would report audible on a host where the cutover trio never installed (the install_missing arm
+# in inngest-bootstrap.sh), i.e. exactly the silently-dead-delivery case this estate has paid for.
+LUKS_LIVENESS_SINCE="15m"
+_luks_liveness_count() {
+  local rows rc=0 n
+  rows=$(_bs_query_rows "$LUKS_LIVENESS_SINCE" inngest-luks-cutover 50) || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "::warning::LUKS liveness read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the host) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  n=$(printf '%s\n' "$rows" \
+    | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
+        'fromjson? | .raw? | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
+    | grep -c '^1$' || true)
+  case "$n" in
+    ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
+  esac
+  printf '%s' "$n"
+}
+
+# confirm_luks_state <since-space-timestamp> — the terminal flag the on-host FSM reached, or
+# `timeout`. Keys on the emitter's `flag` field, never `reason`. Never echoes a raw row.
+# `aborted` is tested FIRST so a window containing both terminals reports the unsafe one.
+# The window is generous because this FSM COPIES the store before it swaps.
+confirm_luks_state() {
+  local since="$1" i rows raw rc
+  for i in $(seq 1 60); do   # 60 x 15s = 900s, matching the unit's TimeoutStartSec plus shipping lag
+    rc=0
+    rows=$(_bs_query_rows "$since" inngest-luks-cutover 100) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
+    fi
+    raw=$(printf '%s\n' "$rows" | jq -r 'try (.raw) catch empty' 2>/dev/null || true)
+    # TRANSITION ROWS ONLY — never the heartbeat. G1 deliberately permits arming from `aborted` and
+    # from `rolled-back` (the documented abort -> fix -> re-dispatch loop), and in those states the
+    # host emits `{"flag":"aborted","reason":"noop-aborted"}` on its own cadence. Those rows are
+    # OLDER than this write but land inside the window, so keying on the flag alone made the first
+    # iteration report "the FSM aborted" while the copy was still running — the dispatch asserting
+    # an outcome the host never produced. The `reason` field is what separates the two.
+    _transitions() { printf '%s\n' "$raw" | grep -E "\"flag\":\"$1\"" | grep -v '"reason":"noop-'; }
+    if _transitions aborted | grep -q .; then echo "aborted"; return 0; fi
+    if _transitions rolled-back | grep -q .; then echo "rolled-back"; return 0; fi
+    if _transitions done | grep -qE '"exit_code":0'; then echo "done"; return 0; fi
+    echo "confirm: awaiting a terminal LUKS FSM flag (attempt $i/60 since $since)" >&2
+    sleep 15
+  done
+  echo "timeout"; return 0
+}
+
+# _luks_pointer_state — `present`, `absent`, or `unreadable`. The pointer is what makes the
+# encrypted volume canonical, so "is this host already cut over?" is answered by it, never by the
+# flag. ABSENCE IS READ FROM THE NAME LIST, never from a failed `get`: a get failure is equally
+# consistent with a dead token, and treating that as "absent" would authorise a second cutover on
+# a host that already has one.
+_luks_pointer_state() {
+  local names rc=0
+  names=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 || -z "$names" ]]; then printf '%s' 'unreadable'; return 0; fi
+  if printf '%s' "$names" | jq -e 'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")' >/dev/null 2>&1; then
+    printf '%s' 'present'
+  else
+    printf '%s' 'absent'
+  fi
+}
+
 # #6178 — the doublefire probe's STARTED_AT lower bound, forwarded as ?from=.
 #
 # Emits TWO space-separated fields: "<ISO-8601 Z> <anchor_source>", where
@@ -1912,7 +1982,7 @@ case "$OP" in
       clear)
         echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). No apply_target recuts THIS volume yet (`registry-luks-recut` and `workspaces-luks-recut` exist, but for other volumes); the inngest one is designed and tracked in #7695, and until it is built there is no in-repo mechanism that clears this latch. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). CORRECTED #6894: `apply_target=inngest-volume-recut` DOES exist (it shipped in #7695) and is the dispatch that clears this latch — but it is refused while the store is populated, and this store measures 442 keys, so it is not available here. The route for a populated store is the ADDITIVE cutover (op=luks-cutover), which PRESERVES /mnt/data and therefore preserves this latch too: it does not clear it either. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
         echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME, so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) — check that before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
@@ -2741,6 +2811,117 @@ case "$OP" in
 
     printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
     echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
+    ;;
+
+  luks-cutover|luks-rollback)
+    # --- #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
+    # volume, and its reverse. Both are ONE Doppler write to INNGEST_LUKS_CUTOVER on
+    # soleur-inngest/prd; every byte of work happens on-host, in inngest-luks-cutover.service.
+    #
+    # THE FLAG IS NOT THE FLIP'S. INNGEST_CUTOVER_FLIP owns the one authorized FLUSHALL; this flag
+    # owns a copy that PRESERVES data. Sharing them would put a destructive verb and a preserving
+    # one behind one value, and the wrong terminal state would authorise the wrong action.
+    #
+    # Four guards, in this order, every one fail-closed and every one BEFORE the write:
+    #   G1 the flag is not in-flight and not already `done`
+    #   G2 the durable pointer says whether this host is already cut over — required ABSENT for
+    #      luks-cutover and PRESENT for luks-rollback
+    #   G3 the host is audible ON THIS UNIT'S OWN TAG, so the write can actually be acted on
+    #   G4 the write itself is stdin-fed and stdout-discarded
+    # then a Better Stack confirm that the on-host FSM reached the expected terminal flag.
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+      echo "::error::op=$OP: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing before any write."; exit 1
+    fi
+    LK_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain 2>/dev/null || echo "__UNSET_OR_UNREADABLE__")
+    # An absent name and a failed read are the same CLI outcome, so they are separated by the name
+    # list — the same reasoning as _luks_pointer_state. Unset is a legitimate pre-cutover state.
+    if [[ "$LK_CUR" == "__UNSET_OR_UNREADABLE__" ]]; then
+      LK_NAMES=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null || true)
+      if [[ -z "$LK_NAMES" ]]; then
+        echo "::error::op=$OP: G1 REFUSING FAIL-CLOSED — soleur-inngest/prd could not be read at all (token or network), so the current FSM state is UNKNOWN. This is NOT a statement about the host. Nothing was written."; exit 1
+      fi
+      if printf '%s' "$LK_NAMES" | jq -e 'has("INNGEST_LUKS_CUTOVER")' >/dev/null 2>&1; then
+        echo "::error::op=$OP: G1 REFUSING FAIL-CLOSED — INNGEST_LUKS_CUTOVER EXISTS but its value could not be read. A swallowed read must never be treated as unset. Nothing was written."; exit 1
+      fi
+      LK_CUR=""
+    fi
+    LK_WANT=armed;      LK_EXPECT=done
+    [[ "$OP" == "luks-rollback" ]] && { LK_WANT=rollback; LK_EXPECT=rolled-back; }
+    if [[ "$OP" == "luks-cutover" ]]; then
+      case "$LK_CUR" in
+        ''|aborted|rolled-back)
+          echo "::notice::op=luks-cutover: G1 — flag is '${LK_CUR:-unset}', a non-terminal-for-this-verb state; arming is permitted." ;;
+        done)
+          echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is 'done': this host has ALREADY been cut over to the encrypted volume. Re-arming would re-copy the live store over itself. If you meant to go back, dispatch op=luks-rollback."; exit 1 ;;
+        *)
+          echo "::error::op=luks-cutover: G1 REFUSING — INNGEST_LUKS_CUTOVER is '$LK_CUR', an IN-FLIGHT state. The on-host FSM is mid-cutover (it re-fires every 30s and resumes from its own state); writing 'armed' now would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows, then re-dispatch. Do NOT SSH the host."; exit 1 ;;
+      esac
+    else
+      case "$LK_CUR" in
+        done)
+          echo "::notice::op=luks-rollback: G1 — flag is 'done', which evidences a COMPLETED cutover; the reverse is permitted." ;;
+        rolled-back)
+          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is already 'rolled-back'; this host is on the plaintext volume. Nothing to roll back."; exit 1 ;;
+        aborted)
+          # An abort BEFORE the swap leaves the host on plaintext with the pointer ABSENT, and G2
+          # refuses that below. An abort DURING A ROLLBACK (the reverse copy refused — a detached
+          # backstop, a T2 mismatch, a mapper that survived luksClose) leaves the host on the
+          # ENCRYPTED store with the pointer PRESENT and no other verb able to reach it: the FSM does
+          # not re-drive a rollback on its own, because the condition that refused it may need the
+          # operator (re-attach the backstop). The pointer is the declared authority for where the
+          # store is, so G2 decides — the flag alone says only that something stopped.
+          echo "::notice::op=luks-rollback: G1 — flag is 'aborted'. Permitted PROVISIONALLY: if the pointer is PRESENT (G2) the encrypted store is live and a rollback was interrupted, so the reverse is the way back; if it is absent, G2 refuses." ;;
+        *)
+          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is '${LK_CUR:-unset}', not 'done' (nor 'aborted'). An IN-FLIGHT flag means the on-host FSM is still driving — 'copied' re-drives the swap's bookkeeping forward every 30s, 'rollback' is a rollback already in progress — and writing over it would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows and read the reason field. Do NOT SSH the host."; exit 1 ;;
+      esac
+    fi
+    # G2 — the DURABLE pointer. It outlives the host (Doppler), unlike the root-disk marker whose
+    # loss on a replace is #7228, so it is the authority on "which volume holds the store".
+    LK_PTR="$(_luks_pointer_state)"
+    case "$LK_PTR:$OP" in
+      unreadable:*)
+        echo "::error::op=$OP: G2 REFUSING FAIL-CLOSED — the INNGEST_LUKS_ACTIVE_VOLUME_ID pointer could not be read. Nothing was written."; exit 1 ;;
+      present:luks-cutover)
+        echo "::error::op=luks-cutover: G2 REFUSING — the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID is SET, so this host already serves from the encrypted volume, whatever the flag says. Arming would copy the live encrypted store onto the staging volume and swap again."; exit 1 ;;
+      absent:luks-rollback)
+        echo "::error::op=luks-rollback: G2 REFUSING — the durable pointer is ABSENT, so no swap is recorded and there is nothing to roll back. (The on-host arm refuses this too; refusing here means the flag is not parked in a state the operator then has to clear.)"; exit 1 ;;
+      *)
+        echo "::notice::op=$OP: G2 — pointer is $LK_PTR, as this verb requires." ;;
+    esac
+    # G3 — HOST-AUDIBILITY, on inngest-luks-cutover rows specifically (#7674's ruling, applied to
+    # this unit). A write to a host that is not running THIS timer recovers nothing and parks the
+    # flag in a state G1 then refuses. Refusing forfeits nothing the write would have achieved.
+    LK_LIVE_N="$(_luks_liveness_count)"
+    case "$(resume_liveness_decide "$LK_LIVE_N")" in
+      audible)
+        echo "::notice::op=$OP: G3 — host is audible ($LK_LIVE_N inngest-luks-cutover row(s) from $INNGEST_HOST_NAME within $LUKS_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
+      silent)
+        echo "::error::op=$OP: G3 REFUSING — ZERO inngest-luks-cutover rows from host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME within $LUKS_LIVENESS_SINCE, while the read path itself SUCCEEDED. Either the host is dark, or the cutover trio never installed — inngest-bootstrap.sh emits reason=install_missing on that path, and the unit polls every 30s once it is installed, so silence here is a real finding. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      unreadable)
+        echo "::error::op=$OP: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). Verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, then re-dispatch. Nothing was changed."; exit 1 ;;
+      *)
+        echo "::error::op=$OP: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
+    esac
+    # G4 — the write. Captured BEFORE it so the confirm window cannot admit a terminal row from an
+    # earlier run of the same FSM. Value on STDIN, never argv (/proc is world-readable), stdout
+    # discarded (`doppler secrets set` prints every remaining secret of the config).
+    LK_TS=$(date -u +%s)
+    printf '%s' "$LK_WANT" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=$OP: writing INNGEST_LUKS_CUTOVER=$LK_WANT FAILED. Nothing on the host has changed — re-dispatch. Do NOT SSH the host."; exit 1; }
+    echo "::notice::op=$OP: wrote INNGEST_LUKS_CUTOVER=$LK_WANT to soleur-inngest/prd. The 30s on-host timer picks it up: freeze writers -> copy the whole mount -> prove it byte-identical -> swap -> verify, rolling back automatically if the verification fails."
+    LK_ISO=$(date -u -d "@$LK_TS" +'%Y-%m-%d %H:%M:%S')
+    LK_STATE=$(confirm_luks_state "$LK_ISO")
+    if [[ "$LK_STATE" == "$LK_EXPECT" ]]; then
+      echo "::notice::op=$OP: FSM confirmed '$LK_EXPECT' via Better Stack (since $LK_ISO). The store is on $( [[ "$OP" == luks-cutover ]] && echo 'the ENCRYPTED volume' || echo 'the PLAINTEXT volume' ), proven byte-identical before the swap."
+    else
+      case "$LK_STATE" in
+        rolled-back)
+          echo "::error::op=luks-cutover: the FSM rolled back. The post-swap verification failed, so the host reverse-copied to the plaintext volume and cleared the pointer — THE STORE IS INTACT and the scheduler is running on it. Read the reason field (t3-failed-rc*) on the inngest-luks-cutover rows before re-dispatching. Do NOT SSH the host."; exit 1 ;;
+        aborted)
+          echo "::error::op=$OP: the FSM aborted. Every refusal resumes the writers before it lands, so the scheduler is running on the store it was on before this dispatch. The reason field on the inngest-luks-cutover rows names which guard refused (t1-unreadable, t2-*, mount-not-quiesced, staging-*, pointer-*, luks-key-absent). Fix that condition and re-dispatch; the flag is terminal, so nothing re-fires meanwhile. Do NOT SSH the host."; exit 1 ;;
+        *)
+          echo "::error::op=$OP: no terminal LUKS FSM flag within 900s since $LK_ISO (the write DID land). That is not itself a statement about the store: the confirm path may have failed (a betterstack-query.sh ::warning:: above names that case). The on-host FSM holds a flock and resumes from its own state on the next 30s tick, so do NOT re-dispatch blind — read the inngest-luks-cutover rows first. Do NOT SSH the host."; exit 1 ;;
+      esac
+    fi
     ;;
 
   *)
