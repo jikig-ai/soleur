@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-18T17:50:50Z",
+  "generated_at": "2026-09-18T17:57:53Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1283,8 +1283,8 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "skill-security-scan": 32,
-      "monitor-supersede": 285,
+      "skill-security-scan": 35,
+      "monitor-supersede": 286,
       "net-issue-flow": 535,
       "post-dispatch-watch-gate": 5055,
       "guardrails-block-recursive-delete": 355,
