@@ -1371,7 +1371,9 @@ pass, and this ADR stays `adopting` until it completes.
 The 2026-08-25 addendum's "there is still no `apply_target` that recuts `/mnt/data`" is superseded,
 not edited. `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778, Merge B) behind the
 `inngest-cutover` required-reviewer environment, dispatch-only, with the later `probe_schema` fixes
-(through #8019 → `probe_schema=8`) live on the host. It has never been dispatched.
+(through #8019 → `probe_schema=8`) live on the host. It has never been dispatched: across every
+`workflow_dispatch` run of `apply-web-platform-infra.yml` (`gh api …/actions/runs/<id>/jobs`, read
+2026-09-18) the `inngest_volume_recut` job has no conclusion other than `skipped`.
 
 Against the live row of 2026-09-18 (`scripts/inngest-host-state.sh`: `cutover_flag=done`,
 `server_active=active`, `http_code=200`, `redis_keys=1261`, `flush_latched=true`,
@@ -1383,8 +1385,9 @@ never recuts a populated store on a serving host. G8 refuses for the right outco
 records as the #8078 defect class; it is re-graded p3 rather than fixed while its consumer is dormant.
 
 The durable flush latch stands since the 2026-09-15 `op=arm` (run 34948112813, host `165451537`)
-and survived both 2026-09-17 replaces (onto `166305436`, then `166317708`) — the volume that
-survives a host replace is the design (`inngest-cutover-flip.sh`). The store can therefore be emptied only through
+and survived both 2026-09-17 replaces (onto `166305436`, then `166317708`) — re-attaching the same
+`hcloud_volume` is `apply_target=inngest-host-replace`'s contract, and `/mnt/data` is where
+`inngest-cutover-flip.sh` writes the latch so it survives that replace. The store can therefore be emptied only through
 the append-only latch clear #7777 defers, which makes the target **dormant on volume `106261946`**.
 
 The plaintext posture of that volume is #6894's and is carried by ADR-142's additive blue-green path

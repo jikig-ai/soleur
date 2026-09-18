@@ -1728,9 +1728,9 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
 
 ### Rollback sequence (P1-13) — mirrors the forward gate, stop the dedicated host FIRST
 
-> **One-way on volume `106261946` (2026-09-18, #7695).** After `rolled-back`, `op=arm` G1 admits the flag
-> but G3.7 refuses before any write while the durable flush latch stands (it has since the 2026-09-15
-> arm) — read the G3.7 "Post-cutover status" callout under § Dedicated-host cutover before dispatching.
+> **One-way on volume `106261946` (2026-09-18, #7695):** a re-arm after `rolled-back` is refused while the
+> durable flush latch stands — read the G3.7 "Post-cutover status" callout under § Dedicated-host cutover
+> before dispatching.
 
 1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
    first writes `INNGEST_CUTOVER_FLIP=rollback` on `soleur-inngest/prd` itself (the still-enabled
