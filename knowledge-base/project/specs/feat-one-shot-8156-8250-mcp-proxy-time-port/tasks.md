@@ -107,6 +107,13 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
       enumeration + launch-degradation playbook (display-less/Chrome-absent/
       Wayland)
 
+- [x] Ship + post-merge verification (2026-09-18): PR #8275 merged as
+      `0bb97c229` (squash, auto-merge); 12/12 post-merge workflows settled
+      (11 success, 1 conditional skip); vendored `.mcp.json` exclusion
+      observed executing in Web Platform Release run 35369612030; plugin
+      release `v3.278.17` tagged at the merge commit and ships the
+      registration; web release `web-v0.276.19`.
+
 ## Out of scope
 
 - #8250 (test-portability chore) — explicitly not planned.
