@@ -26,3 +26,6 @@
 ## Sign-off Phase (pre-/work)
 - Threshold: `single-user incident` → CPO + user-impact-reviewer sign-off required.
 - Sign-off question: "the fix for #8156 ships a stdio MCP server that spawns `python3`+`npx` on every customer session, with a persistent browser profile under the user cache dir."
+- **CPO verdict: APPROVE-WITH-CONDITIONS** — (1) Phase-0 probe is a hard gate before any manifest edit; an engines-floor bump returns to CPO. (2) Degradation prose must not assume the plugin server exists (file-form fallback on `/mcp` toggle-off / precondition failure). (3) AC9 Option-C deferral issue ships in the same PR.
+- **user-impact-reviewer verdict: SIGN-OFF-WITH-CONDITIONS** — Finding 1 (blocking): orphan-on-own-profile (SIGKILLed session leaks the plugin's playwright-mcp child → SingletonLock contention on the soleur profile) was uncovered → bound into plan as Phase-0 probe item 5 + `failure_modes` row + playbook note. Finding 2 (minor): `disclosed_as` reconciled to docs-claimed-on-merge. Findings 3–4 covered.
+- Plan amendments committed at `52dd7718c`.
