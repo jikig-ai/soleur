@@ -450,4 +450,101 @@ this document, the learning, and the PR body.
 | 0.4.1 / 0.4.2 | Done — 46m28s serial baseline, timing log committed |
 | **0.4a GATE** | **PASS at 6.22×** over the reconciled registered population (floor 2.0×) |
 | 0.5.1 / 0.5.2 GATE | Not started — needs a `tc_acquire` caller log, not instrumented by the timing-only baseline |
-| Phase 1 onward | **Blocked on the green-baseline precondition recorded above** |
+| Phase 1 onward | **Precondition met 2026-09-18 (PR #8270).** AC12(a): all nine suites green alone, 0 skipped arms. **AC12(b): met** — the 5.2 battery ran uncontended (442 suites, 434 passed) with all 4 red rows classified: 3 were this session's own regressions, fixed and re-verified, and the 4th is a boundary-check false positive caused by committing mid-run. Zero pre-existing failures. |
+
+## Green-baseline precondition — measured 2026-09-18 (PR #8270, post-review)
+
+### Host facts
+
+| Fact | Value |
+|---|---|
+| OS / kernel | Linux 7.2.5-3-omarchy, 16 cores |
+| Node | 26 (`vitest` 4.1.0) |
+| bash | 5.3 (the `${a[@]+…}` guard targets bash 3.2, verified separately from source) |
+| gitleaks | **8.24.2, runnable** — via a mise shim that now resolves |
+| lefthook | not on PATH; `.git/hooks/pre-commit` reaches it via a hardcoded `/tmp` fallback |
+| absent | `shellcheck`, `/usr/bin/time`, `bc` |
+
+### 5.1 — each suite alone, re-derived AFTER the rebase and AFTER the review fixes
+
+All nine exit 0, **with zero skipped arms**. Both facts matter: the skip contract
+is exercised and the arms it protects actually ran.
+
+| Suite | rc | Result |
+|---|---|---|
+| `.claude/hooks/guardrails.test.sh` | 0 | 127 pass / 0 fail |
+| `.claude/hooks/git-commit-secret-scan.test.sh` | 0 | 18 pass / 0 fail / 0 skipped |
+| `scripts/lint-legal-scope-block-placement.test.sh` | 0 | 71 pass / 0 fail |
+| `scripts/lib/scratch-root.test.sh` | 0 | all pass |
+| `plugins/soleur/test/gitleaks-rules.test.sh` | 0 | 44/44, 0 skipped |
+| `plugins/soleur/test/gitleaks-merge-commit.test.sh` | 0 | 27/27, 0 skipped |
+| `plugins/soleur/test/notice-frontmatter.test.sh` | 0 | all executed pass (2 skipped, unrelated to gitleaks) |
+| `plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh` | 0 | 43 pass / 0 fail / 0 skipped |
+| `apps/web-platform/infra/registry-userdata-budget.test.sh` | 0 | 16 checks / 0 failed — the `bc`→`awk` fix landed on main via #8272 first; this PR's identical copy yielded at rebase |
+
+Plus `apps/web-platform` `kb-share-preview.test.ts` on Node 26: 25/25 (FR3/#8261).
+
+**Supersedes an earlier record of "20 declared skipped arms."** That measurement
+was taken when gitleaks was not runnable on this host. It is now pinned at 8.24.2,
+so every arm executes and the skip list is empty. Recording the stale figure would
+have asserted coverage this run did not have — in the direction that reads as
+*less* coverage, which is why it was worth re-deriving rather than transcribing.
+
+The ADR-188 contract was verified in BOTH directions for all three skip-arm suites:
+with a PATH lacking gitleaks they skip and exit 0 locally, and under `CI=true` the
+same absence exits 1 naming the arms.
+
+### 5.2 — full serial battery: REFUSED (rc 4), twice
+
+| Attempt | Outcome |
+|---|---|
+| 1 (12:20Z) | `rc=4` — `CAPACITY_CONTENDED reason=sibling_runs measured_runs=1`; sibling worktree `feat-one-shot-7960-phase-b-delivery-field` running 870s |
+| 2 (10:54Z, queued behind attempt 1's sibling) | `rc=4` — the sibling started a NEW full-gate run 6s earlier; this session's own suite sweep was also in flight |
+
+| 3 (queued behind a 60s all-quiet requirement, 90m cap) | **`GAVE_UP_2H`** — cap expired; the host was never quiet |
+| 4-5 | **watcher defect, not a refusal** — two watchers counted `test-all.sh` with a substring grep that matched their own `bash -c` argv, so the quiet counter could never advance. Re-armed with an `argv[1]=="scripts/test-all.sh"` count, which cannot self-match |
+| 6 | **RAN.** Host quiet at 15:08:38Z; preamble recorded `siblings: 0`, `suite siblings: 0`, no banner |
+
+The refusals are the runner working as designed (#7553), not a failure of this
+change: five sibling worktrees ran back-to-back full gates across the session
+(`feat-one-shot-7960-…`, `feat-one-shot-adr142-…`, `feat-workflow-fsm-remediation`,
+`feat-harness-parity-gate-8299` twice). Attempt 6 caught a quiet window.
+
+### 5.2 result — `rc=1`, 442 suites: 434 passed, 4 failed, 0 killed, 4 skipped
+
+Every red row classified per §5.2. **Zero pre-existing failures; all four are
+this session's own work or its own instrument.**
+
+| Row | Classification | Disposition |
+|---|---|---|
+| `scripts/lint-trap-tempfile-ownership` | Real defect introduced by the review's own fix: `test/lib/gitleaks-probe.sh` allocated a tempfile with no owning trap (rule c), pushing the class-b high-water 80 → 81 | Fixed `53d50080c` — stderr captured inline; a sourced library cannot own an EXIT trap without stealing the caller's. Re-verified rc 0 alone |
+| `plugins/soleur/test/fixture-cd-containment.test.sh` | Real defect, mine: the conflict-marker fixture added to the OpenHands suite opened an unguarded `cd "$CM_REPO"` and then ran `git config`/`add`/`commit` — the 2026-08-20 incident shape | Fixed `4352e5847` — `git -C` throughout, explicit paths for file writes. Re-verified 20/20 alone |
+| `plugins/soleur/test/fixture-relative-assert.test.sh` | Real, count-only drift: 77 → 78 guarded sites in `lint-legal-scope-block-placement.test.sh`, from the second harness guard | Fixed `4352e5847` — baseline regenerated only after confirming the new site carries the same guard as the one above it and the ratchet reports no violation against it. Delta is exactly one row. Re-verified 62/62 alone |
+| `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` | **False positive, and the cause was the operator, not a suite.** The runner samples the repo boundary exactly twice (first suite, end of run) and flags any HEAD/ref movement. HEAD moved five times inside the window (15:51–17:52) — every one a commit or rebase made by this session *while the battery ran*. The runner states outright that it cannot attribute the change to a suite | No code defect. Process error recorded below |
+
+The first three are all the **#8322 class**: a repo-global ratchet references no
+changed file, so the file-selected runs that verified each edit were structurally
+blind to them. They surfaced only here — evidence *for* #8322's non-negotiable
+condition (ratchets always in the affected set), not against the proposal.
+
+**Process error — do not write to the repo while a gate run is in flight.**
+Committing during the battery invalidated its read-only boundary check and cost a
+false FATAL plus ~10 minutes to disambiguate against the reflog.
+
+Per plan §5.2 this is the sanctioned outcome: *"If the run is refused (rc 4), wait
+at most 2 h, then record the refusal and ship on 5.1 alone."* **AC12(b) is
+therefore NOT claimed.** AC12(a) is claimed, on the table above.
+
+The host was never quiet during this session because a sibling worktree ran
+back-to-back full gates throughout — which is itself evidence for #8231's premise
+that serial full-gate runs are the contended resource.
+
+### Repo-global ratchets (the blind spot a file-selected run cannot see)
+
+Re-run after the review fixes, all clean: `guard-vacuity-floor` 23/0,
+`lint-orphan-test-suites` 465 covered / 0 orphaned, `lint-guard-contract` rc 0,
+`lint-window-closure-assertion` rc 0, `lint-shell-capture-exit` 0 new findings
+(one NEW finding introduced by a review fix was fixed at source, not re-baselined).
+
+`shellcheck` is **not installed on this host** — that instrument did not pass, it
+did not run.
