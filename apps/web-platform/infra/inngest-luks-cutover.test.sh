@@ -432,6 +432,17 @@ world guard-rel
 call_copy "$W/mnt/data" "mnt/data-luks"
 if [ "$RC" -ne 0 ] && reason_seen copy-dst-unsafe; then ok "copy_store: a RELATIVE destination is refused"; else no "copy_store relative: rc=$RC"; fi
 
+# ═══ #7797: tracing with a live credential is refused, not traced ══════════════════════════════
+world xtrace
+RC=0
+env -i PATH="$W/bin:/usr/bin:/bin" INNGEST_REDIS_LUKS_KEY=synthesized-test-key LUKS_FLAG=armed LUKS_UID=0 \
+  bash -x "$SUT" --fixture-seams > "$W/xtrace.out" 2>&1 < /dev/null || RC=$?
+if [ "$RC" -eq 78 ] && ! grep -qF 'synthesized-test-key' "$W/xtrace.out"; then ok "xtrace: refuses with exit 78 and the passphrase never reaches the trace (#7797)"; else no "xtrace: rc=$RC leaked=$(grep -c 'synthesized-test-key' "$W/xtrace.out")"; fi
+RC=0
+env -i PATH="$W/bin:/usr/bin:/bin" LUKS_FLAG=done LUKS_UID=0 LUKS_STATE_DIR="$W/state" LUKS_LOGGER_CMD="$W/bin/logger" \
+  bash -x "$SUT" --fixture-seams > /dev/null 2>&1 < /dev/null || RC=$?
+if [ "$RC" -eq 0 ]; then ok "xtrace: with no credential bound, tracing is allowed (the refusal is about the credential, not about -x)"; else no "xtrace positive control: rc=$RC"; fi
+
 # ═══ Structural pins ═══════════════════════════════════════════════════════════════════════
 # Every Doppler write discards stdout: `doppler secrets set|delete` prints EVERY remaining secret,
 # and this unit's stdout is the journal Vector ships to Better Stack.
@@ -456,7 +467,7 @@ _unverified="$(awk '/^ *copy_store "/{c=NR; getline nxt; if (nxt !~ /t2_verify/)
 if [ "$_copies" -ge 3 ] && [ "$_unverified" -eq 0 ] && [ "$(grep -cE '^[^#]*cp -a ' "$SUT")" -eq 1 ]; then ok "structural: ${_copies} copy sites, each immediately T2-verified, through one cp -a"; else no "structural: copy sites=${_copies} unverified=${_unverified} cp-a=$(grep -cE '^[^#]*cp -a ' "$SUT")"; fi
 
 # ═══ FLOOR — reported directly, never through ok()/no() ═══════════════════════════════════════
-_floor=61
+_floor=63
 if [ "$executed" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$executed" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
 printf '\n=== inngest-luks-cutover.test.sh: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$executed" "$_floor"

@@ -54,6 +54,17 @@
 # inside the unit that moves the store. argv is the one channel `doppler run` cannot supply.
 set -Eeuo pipefail
 
+# #7797: this script binds the LUKS passphrase and the Redis password, and `set -x` would write
+# both to stderr — which journald ships off-box under the SyslogIdentifier below. Refuse instead.
+case "$-" in
+  *x*)
+    if [ -n "${INNGEST_REDIS_LUKS_KEY:+x}${INNGEST_REDIS_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 readonly LOG_TAG="inngest-luks-cutover"
 readonly GUARD_REV="6894"
 
