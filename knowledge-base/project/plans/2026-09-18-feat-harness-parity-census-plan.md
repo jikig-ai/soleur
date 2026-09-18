@@ -822,3 +822,25 @@ left the one real layer-7 mode in User-Brand Impact with no detection row.
 | A fifth harness compels docs to advertise an unimplemented adapter | V7's `never` arms + N9/H4 |
 | 175 edits across 45 docs drift | They are deletions of a prefix, not 46 instantiations of a template — the 8.3% born-drift rate CTO measured applies to templates, not removals |
 | Canonicalising breaks a genuine command reference | 57 `/soleur:{go,help,sync}` hits are exempt by construction (ADR-224); H3 pins the adapter table |
+
+## v2 review — BLOCKING (code-simplicity, 1 of 3 returned). v2 needs a v3.
+
+Verified firsthand before acceptance.
+
+| # | Finding | Status |
+| --- | --- | --- |
+| G1 | **The token set fires on REFERENCE prose, not just DISPATCH instructions — and that is the dimension the property lives on.** In `gdpr-gate/SKILL.md`, of 13 token hits exactly **one** (`:270`, "dispatch the cron manually via `/soleur:trigger-cron`") is the property. L12/18/19/24 are cross-references to another skill's phase ("fires inline during `/soleur:plan` Phase 2.7") and are **correct as written**. L20/21/38 document what the **operator types** (`/soleur:gdpr-gate "<scope>"`); rewriting those to bare `soleur:gdpr-gate` makes them *wrong*, because that form is agent-facing and no operator can type it on any harness. Reviewer's site inspection: ~2 of 42 occurrences across the three largest offenders are the property | **CONFIRMED** |
+| G2 | **So v2's "these are deletions of a prefix, not insertions" is false**, and the born-drift exemption it bought does not apply. The honest edit at a reference site is a *rewording* into harness-neutral prose, not a strip — ~174 rewordings at sites whose current text is correct, which is its own risk class | **CONCEDED** |
+| G3 | **v2 loses the one real property v1 had.** `git grep -ln 'grok-harness-invoke' -- plugins/soleur/test plugins/soleur/scripts .github lefthook.yml scripts` → **exit 1, no hits**. Nothing pins the 12 blocks. v2 *strips* them and asserts nothing, so deleting a block makes the census **greener** while Grok loses its instruction. Needs one line: pin the count at 12, beside `devin-cloud-mode.test.ts:496` | **CONFIRMED** |
+| G4 | **`plugins/soleur/grok/` does not exist**, and no harness is shown to read such a file. V9/V-AC10 assert existence, not loading. Grok's real surfaces are `.grok/agents/` at repo root and the 12 in-doc blocks — so G3's pin is the cheaper honest move | **CONFIRMED** |
+| G5 | **My `inFence: 38` is arithmetically wrong.** I derived it as `213 − 175`, but raw = body + in-fence + **in-marker-block**, and the blocks hold ~21 tokens — so the subtraction over-counts in-fence by the block population. Reviewer measured 22–26 under four readings, never 38 | **CONCEDED** |
+| G6 | **V-AC1's `45 docs / 175 occurrences` cannot both be true of one implementation.** Sweeping four readings of the unspecified details: the reading yielding 175 occurrences yields **43** docs; the reading yielding 45 docs yields **185**. `population 101` reproduces exactly | **CONCEDED** |
+| G7 | **N5 passes vacuously — the same defect class I cut from v1.** After Phase 4 `violations: 0`; remove a token from the exported set and it is still 0, so the snapshot still matches. N5 only moves `inFence`, meaning that pin was load-bearing by accident. Restate as one mutation: remove the token **and** reintroduce a violation in that form | **CONFIRMED by inspection** |
+| G8 | **`go.md`'s 12 hits are all inside the Step 2.0 adapter table and per-harness paragraphs** — i.e. exactly what V4/H3 declare exempt. So the "marquee catch" the plan headlines is a ledger row, not a fix. And because the ledger is **per-path**, exempting `go.md` also exempts `:122` ("delegate to `soleur:work`. **Claude:** Skill tool") — a genuine dispatch instruction in the router | **CONFIRMED** |
+| G9 | Items 5+6+7 (`as const` → `never` arms → a new tsconfig) are a mutually-justifying triangle: each exists to make the next observable, and none is required by the property. A runtime `expect(SUPPORTED_HARNESSES).toEqual([...])` buys what matters without a new build surface | **CONCEDED** |
+
+### The pattern across three iterations, stated plainly
+
+v1's **carrier** tested the wrong thing (inbound arrival vs outbound dispatch). v2's **classifier** tests the wrong *linguistic role* (any token occurrence vs a dispatch instruction). Both were measured correctly and both measured the wrong predicate. A token scan cannot distinguish "this doc tells an agent to dispatch" from "this doc mentions another skill" — and the property only lives on the former.
+
+**Implication for v3:** the population is not 45 docs / 175 occurrences. It is the dispatch sites only — a far smaller set — and the gate cannot be a pure token scan. Two panel agents are still out; v3 waits for them rather than being written reflexively, because writing a third design before the review of the second has landed is how the first two got here.
