@@ -1343,6 +1343,14 @@ carried by the follow-through directive, not by a status flip.
    secrets under Terraform. Re-evaluation trigger: the next time a read against a
    non-default Better Stack source is added to CI.
 
+**Noted at /work, not filed (2026-09-18).** `actionlint` (docker `rhysd/actionlint:latest`,
+bundled shellcheck) reports four `SC1083` warnings in `apply-web-platform-infra.yml`, all in
+one `run:` body of the `inngest_volume_recut` job: literal `{`/`}` inside the escaped operator
+recipe in its Guard-2 `::error::` string. The findings are byte-identical on `origin/main`, so
+this branch adds none. Not filed: they are warnings inside a deliberately literal message, with
+no user-visible consequence, so the `wg-defer-only-after-inline-triage` test fails. This line is
+the durable record.
+
 ## Documentation Plan
 
 - ADR-149 amendment and the two `model.c4` edge corrections (above).

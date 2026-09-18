@@ -46,3 +46,19 @@ soleur:plan, soleur:deepen-plan; agents repo-research-analyst, learnings-researc
 soleur:engineering:cto, spec-flow-analyzer, plan-review panel (code-simplicity-reviewer,
 architecture-strategist, dhh-rails-reviewer, kieran-rails-reviewer); gdpr-gate.sh,
 lint-guard-contract.py, lint-infra-no-human-steps.py; gh, doppler, git.
+
+## Work Phase (resumed 2026-09-18)
+- Rebased onto origin/main 4b087c388 (merge-tree measured clean at that SHA; main's #8252
+  edit to apply-web-platform-infra.yml is in `inngest_host_replace`, not a git-data job).
+- Phase 5 DONE: scripts/followthroughs/git-data-boot-poll-8178.sh + .test.sh (63/0; 24/24
+  mutants killed; one live end-to-end run through the real `gh` → NOT YET on pre-fix runs).
+  Registered in scripts/test-all.sh.
+- Phase 6 was NOT fully done at resume: 6.2 (ADR-192 addendum) and 6.3 (AP-027) were absent
+  from the diff. Both now written; ADR-149's amendment cites AP-027 and the probe.
+- Plan corrections: directive needs `secrets=GH_TOKEN`; unreadable log exits 3 (the sweeper
+  renders 2 as NOT YET); frontmatter `closes:` -> `ref:`.
+- OWED AT SHIP, right after merge (a missing script makes the sweeper `fail` daily, so NOT
+  before merge): add to #8178's body
+  `<!-- soleur:followthrough script=scripts/followthroughs/git-data-boot-poll-8178.sh earliest=<merge+1d> secrets=GH_TOKEN -->`
+  and the `follow-through` label. PR body uses `Ref #8178`, never `Closes`.
+- Deferred filings owed (plan §Deferred Items 1-2) are handled at the Phase 4 filing gate.
