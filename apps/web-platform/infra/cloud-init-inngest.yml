@@ -923,7 +923,19 @@ runcmd:
         STAGE=staging_verify
         mounted_from /mnt/data-luks "$STAGING_MAPPER" || { echo "FATAL: /mnt/data-luks is not mounted from $STAGING_MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
         backing_is "$STAGING_MAPPER" "$STAGING_DEV" || { echo "FATAL: $STAGING_MAPPER is not backed by $STAGING_DEV — the staging mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        luks_emit staging_verify 0 "$${STG_TYPE:-empty}"
+        # THE EMIT CARRIES ITS MEASUREMENTS, not just its name (#6894 AC-33). A stage name proves
+        # the stage RAN; it is satisfiable while the staging path is a directory on the root disk
+        # under a mountpoint shadow — a recorded root cause in this estate. So the three readings
+        # the two assertions above just made are shipped off-box, where the follow-through re-checks
+        # them: the staging mount's resolved source, the mapper's sysfs backing, and the LIVE
+        # mount's source (which must differ — the staging arm must disturb nothing).
+        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | head -1)"
+        _sv_dm="$(basename "$(readlink -f "$STAGING_MAPPER")" 2>/dev/null)"
+        _sv_back="$(ls "/sys/class/block/$${_sv_dm}/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+        _sv_want="$(basename "$(readlink -f "$STAGING_DEV")" 2>/dev/null)"
+        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | head -1)"
+        luks_emit staging_verify 0 "$${STG_TYPE:-empty}" \
+          "stg_src=$${_sv_src:-unreadable} stg_backing=$${_sv_back:-unreadable} stg_dev=$${_sv_want:-unreadable} stg_devid=$${LUKS_ID} live_src=$${_sv_live:-unreadable}"
       fi
     fi
     # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
