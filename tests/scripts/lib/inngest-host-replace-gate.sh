@@ -40,8 +40,23 @@
 # NO [ack-destroy] BYPASS: a destructive prod host recreate is authorized by the menu-ack
 # workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a commit trailer.
 #
-# PASS (rc=0) iff:
-#   inngest_out_of_scope_changes==0 && redis_volume_destroyed==0 && inngest_server_replaced==1
+# PER-ADDRESS PERMITTED ACTIONS (#6894 CTO ruling, Option C). Allow-set MEMBERSHIP only says an
+# address may appear; these counters say WHAT it may do. Before them, a plan replacing the server
+# while UPDATING (resizing) the live AOF volume printed PASS — measured on a synthesized
+# `hcloud_server.inngest ["delete","create"]` + `hcloud_volume.inngest_redis ["update"]` fixture —
+# because an update is neither a delete nor out of the allow-set.
+#   hcloud_volume.inngest_redis                 no-op | create of an ABSENT volume (before == null)
+#                                                                     → redis_volume_touched
+#   hcloud_volume.inngest_redis_luks            no-op | create        → luks_volume_touched
+#   hcloud_volume_attachment.inngest_redis{,_luks}
+#                                               no-op | create | replace (delete+create, either order)
+#                                                                     → attachment_touched
+#   random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key
+#                                               ABSENT (any entry, a no-op included)
+#                                                                     → luks_passphrase_in_graph
+#
+# PASS (rc=0) iff every counter is 0 and inngest_server_replaced==1. The ABORT line names the first
+# failing counter as `reason=<token>`.
 # redis_volume_destroyed==0 is INTENTIONALLY REDUNDANT with the out-of-scope counter
 # (a Redis-volume delete is also an out-of-allow-set change) — kept as a named, loud
 # backstop so an operator sees "Redis AOF volume would be destroyed" specifically.
@@ -65,7 +80,7 @@ fi
 
 inngest_host_replace_gate() {
   local plan_json="$1"
-  local counts oos rdel replaced
+  local counts oos rdel ldel replaced rvt lvt att lpig reason
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope. (Not, as an
@@ -88,8 +103,13 @@ inngest_host_replace_gate() {
         "hcloud_server_network.inngest",
         "hcloud_volume_attachment.inngest_redis",
         "doppler_service_token.inngest",
-        # #7695. THE AOF VOLUME, admitted for CREATE ONLY — this is the recovery route out of a
-        # partial `inngest-volume-recut` apply, and without it there was NO route at all.
+        # #7695 admitted this address for CREATE ONLY as the recovery route out of a partial
+        # `inngest-volume-recut` apply. `redis_volume_touched` below (#6894 CTO ruling) keeps that
+        # route and nothing else: a no-op, or a bare create whose `before` is null — a volume that
+        # does not exist, so there is no store to harm. An update, or a create that replaces a
+        # prior object, aborts. The ruling first read "no-op ONLY"; that withdrew the only route
+        # out of a partial recut, which the recovery text of the recut job still prescribes, so the
+        # create-of-absent arm was restored on the reasoning recorded here:
         #
         # Measured: after a partial recut the volume is destroyed and out of state, and every
         # dispatch refused. `inngest-volume-recut` aborts because Guard 2 runs before the plan and
@@ -105,10 +125,50 @@ inngest_host_replace_gate() {
         # unchanged and still counts delete/forget at this exact address, so a plan that DESTROYS
         # the volume aborts exactly as before. The only shape this widening newly permits is the
         # one the recovery needs: creating a volume that is missing.
-        "hcloud_volume.inngest_redis"
+        "hcloud_volume.inngest_redis",
+        # #6894 / ADR-142. The ADDITIVE target volume ATTACHMENT. It interpolates the
+        # server id exactly as its plaintext sibling does, so a replace FORCES it into the
+        # plan; without admitting it this gate aborts `inngest_out_of_scope_changes=1` and
+        # the first replace after that volume merges becomes a dead end. Not a widening of
+        # what the gate protects — it protects VOLUMES, and this is an attachment.
+        "hcloud_volume_attachment.inngest_redis_luks",
+        # And the additive VOLUME, admitted for CREATE ONLY, on the identical reasoning the
+        # plaintext admission above records: the server `user_data` embeds this volume id
+        # with no `ignore_changes`, so an absent volume makes that id unknown at plan time and
+        # every route out is refused. `luks_volume_destroyed` below is the twin backstop —
+        # it counts delete/forget at this exact address, so a plan that DESTROYS the additive
+        # target aborts, and the only newly-permitted shape is creating one that is missing.
+        "hcloud_volume.inngest_redis_luks"
       ];
+      def pair: ["random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key"];
+      def attachments: ["hcloud_volume_attachment.inngest_redis", "hcloud_volume_attachment.inngest_redis_luks"];
       $p[0] as $plan
       | {
+          redis_volume_touched: (
+            # The live plaintext AOF: a replace must never resize, relabel or re-create it. The one
+            # admitted change is the #7695 recovery — creating it when it is ABSENT (before == null).
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis")
+              | select((.change.actions == ["no-op"]) or (.change.actions == ["create"] and .change.before == null) | not) ]
+            | length
+          ),
+          luks_volume_touched: (
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis_luks")
+              | select(.change.actions as $a | ([["no-op"], ["create"]] | index([$a])) == null) ]
+            | length
+          ),
+          attachment_touched: (
+            # A replace re-creates the server, so each attachment is legitimately replaced; a bare
+            # update, delete or forget is a detach/re-point this dispatch never needs.
+            [ $plan.resource_changes[]?
+              | select(IN(.address; attachments[]))
+              | select(.change.actions as $a | ([["no-op"], ["create"], ["delete", "create"], ["create", "delete"]] | index([$a])) == null) ]
+            | length
+          ),
+          luks_passphrase_in_graph: (
+            [ $plan.resource_changes[]? | select(IN(.address; pair[])) ] | length
+          ),
           inngest_out_of_scope_changes: (
             [ $plan.resource_changes[]?
               | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
@@ -118,6 +178,12 @@ inngest_host_replace_gate() {
           redis_volume_destroyed: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
+              | select(.change.actions? | any(. == "delete" or . == "forget")) ]
+            | length
+          ),
+          luks_volume_destroyed: (
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis_luks")
               | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
@@ -134,19 +200,36 @@ inngest_host_replace_gate() {
   fi
   oos=$(echo "$counts" | jq -r '.inngest_out_of_scope_changes')
   rdel=$(echo "$counts" | jq -r '.redis_volume_destroyed')
+  ldel=$(echo "$counts" | jq -r '.luks_volume_destroyed')
   replaced=$(echo "$counts" | jq -r '.inngest_server_replaced')
+  rvt=$(echo "$counts" | jq -r '.redis_volume_touched')
+  lvt=$(echo "$counts" | jq -r '.luks_volume_touched')
+  att=$(echo "$counts" | jq -r '.attachment_touched')
+  lpig=$(echo "$counts" | jq -r '.luks_passphrase_in_graph')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
-  plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "inngest_server_replaced=${replaced}" || return 1
+  plan_gate_assert_numeric "inngest_host_replace_gate" "inngest_out_of_scope_changes=${oos}" "redis_volume_destroyed=${rdel}" "luks_volume_destroyed=${ldel}" "inngest_server_replaced=${replaced}" \
+    "redis_volume_touched=${rvt}" "luks_volume_touched=${lvt}" "attachment_touched=${att}" "luks_passphrase_in_graph=${lpig}" || return 1
 
-  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} inngest_server_replaced=${replaced}"
-  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$replaced" -eq 1 ]]; then
-    echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 2 dependents replace; Redis AOF volume preserved)"
+  echo "inngest_out_of_scope_changes=${oos} redis_volume_destroyed=${rdel} luks_volume_destroyed=${ldel} inngest_server_replaced=${replaced} redis_volume_touched=${rvt} luks_volume_touched=${lvt} attachment_touched=${att} luks_passphrase_in_graph=${lpig}"
+  if [[ "$oos" -eq 0 && "$rdel" -eq 0 && "$ldel" -eq 0 && "$replaced" -eq 1 && "$rvt" -eq 0 && "$lvt" -eq 0 && "$att" -eq 0 && "$lpig" -eq 0 ]]; then
+    echo "inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted (server + 3 dependents replace; BOTH the Redis AOF volume and the ADR-142 additive target preserved)"
     return 0
   fi
-  echo "inngest_host_replace_gate: ABORT — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, Redis-volume destroy, or no-op)"
+  # reason=<token>: the FIRST failing counter, most specific first.
+  reason=unknown
+  if   [[ "$lpig" -ne 0 ]]; then reason=luks_passphrase_in_graph
+  elif [[ "$rdel" -ne 0 ]]; then reason=redis_volume_destroyed
+  elif [[ "$rvt"  -ne 0 ]]; then reason=redis_volume_touched
+  elif [[ "$ldel" -ne 0 ]]; then reason=luks_volume_destroyed
+  elif [[ "$lvt"  -ne 0 ]]; then reason=luks_volume_touched
+  elif [[ "$att"  -ne 0 ]]; then reason=attachment_touched
+  elif [[ "$oos"  -ne 0 ]]; then reason=inngest_out_of_scope_changes
+  elif [[ "$replaced" -ne 1 ]]; then reason=server_not_replaced
+  fi
+  echo "inngest_host_replace_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-host recreate (out-of-scope change, any action on the live Redis AOF volume, an update/delete/forget of the additive target, a bare attachment update/delete/forget, the LUKS passphrase pair in the plan, or no server replace)"
   return 1
 }

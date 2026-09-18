@@ -598,14 +598,14 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
       `resource "logtail_exploration_alert" "second" {\n  name = "soleur-second-prd"\n}`,
     ].join("\n");
     expect(parseLogsAlertBlocks(tf)).toEqual([
-      { resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" },
-      { resourceName: "second", liveName: "soleur-second-prd" },
+      { resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true },
+      { resourceName: "second", liveName: "soleur-second-prd", pausedIsLiteralFalse: true },
     ]);
   });
 
   it("flags a declared alert that is paused live as logs-alert-paused, carrying paused_reason", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
       [{ name: "soleur-monitor-send-failed-prd", paused: true, pausedReason: "complexity issues, too many failures" }],
     );
     expect(v).toEqual([
@@ -620,9 +620,42 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
     ]);
   });
 
+  // #6894: a DECLARED pause is intent, not drift. The wrong-volume alert ships
+  // `paused = !var.inngest_luks_cutover_complete` because before the cutover the condition it
+  // watches is the correct state — so an armed rule would page continuously and get muted before it
+  // ever mattered, and reporting the pause would be a standing false page for that whole window.
+  it("does NOT flag a live pause when the declaration is an expression rather than literal false", () => {
+    const v = reconcileLogsAlerts(
+      [{ resourceName: "inngest_luks_wrong_volume", liveName: "soleur-inngest-luks-wrong-volume-prd", pausedIsLiteralFalse: false }],
+      [{ name: "soleur-inngest-luks-wrong-volume-prd", paused: true, pausedReason: null }],
+    );
+    expect(v).toEqual([]);
+  });
+
+  it("still flags an expression-paused alert that is ABSENT live — the pause exemption is not an absence exemption", () => {
+    const v = reconcileLogsAlerts(
+      [{ resourceName: "inngest_luks_wrong_volume", liveName: "soleur-inngest-luks-wrong-volume-prd", pausedIsLiteralFalse: false }],
+      [],
+    );
+    expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
+  });
+
+  it("parseLogsAlertBlocks reads the declared paused: literal false, an expression, and absent", () => {
+    const tf = [
+      `resource "logtail_exploration_alert" "literal" {\n  name = "a"\n  paused = false\n}`,
+      `resource "logtail_exploration_alert" "expr" {\n  name = "b"\n  paused = !var.some_flag\n}`,
+      `resource "logtail_exploration_alert" "absent" {\n  name = "c"\n}`,
+    ].join("\n");
+    expect(parseLogsAlertBlocks(tf).map((a) => [a.resourceName, a.pausedIsLiteralFalse])).toEqual([
+      ["literal", true],
+      ["expr", false],
+      ["absent", true],
+    ]);
+  });
+
   it("flags a declared alert missing from the live payload as logs-alert-absent", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
       [{ name: "Output utilization high", paused: true, pausedReason: "Manually paused" }],
     );
     expect(v.map((x) => x.reason)).toEqual(["logs-alert-absent"]);
@@ -630,7 +663,7 @@ describe("logs_alert arm — reconcileLogsAlerts + parseLogsAlertBlocks (#8097)"
 
   it("returns no violations when every declared alert is present and unpaused (foreign paused alerts ignored)", () => {
     const v = reconcileLogsAlerts(
-      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd" }],
+      [{ resourceName: "monitor_send_failed", liveName: "soleur-monitor-send-failed-prd", pausedIsLiteralFalse: true }],
       [
         { name: "soleur-monitor-send-failed-prd", paused: false, pausedReason: "" },
         { name: "Output utilization high", paused: true, pausedReason: "Manually paused" },

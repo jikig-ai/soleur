@@ -81,3 +81,71 @@ resource "doppler_secret" "inngest_redis_luks_key" {
   value      = random_password.inngest_redis_luks.result
   visibility = "masked"
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# THE ADR-142 ADDITIVE TARGET VOLUME (#6894)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# WHY A SECOND VOLUME RATHER THAN A RECUT OF THE FIRST. `apply_target=inngest-
+# volume-recut` exists and is the CHEAP path, and it is unusable here — not as a
+# matter of preference but because two records forbid it in conjunction:
+#
+#   ADR-199  permits the destroy ONLY on a measured-empty store (G13: redis_keys == 0,
+#            "redis_keys > 0 routes to ADR-142, with no override").
+#   ADR-142  states this store can never BE empty: "armed future reminders sit in the
+#            AOF at arbitrary future fire-times ... Draining to empty would mean
+#            waiting until the last armed reminder fires — unbounded."
+#
+# MEASURED 2026-09-17 under all three pins (host=soleur-inngest, host_role=dedicated,
+# probe_schema=8): redis_keys=442, redis_expires=431, of which ?estate?:key:*=431 is
+# exactly the armed-reminder set ADR-142 names. So G13 refuses, and it refuses
+# permanently rather than transiently. The recut is not a path that is currently
+# blocked; it is a path this volume never had.
+#
+# THIS VOLUME IS INERT AT MERGE, AND THAT IS THE DESIGN. It is created, attached
+# alongside the live plaintext volume, and mounted at a STAGING path — never at
+# /mnt/data. Nothing copies data here until the reviewer-gated cutover runs. The
+# two-copy state IS the verified-restorable backup (ADR-142), and it beats a
+# snapshot: a live mountable device the cutover rehearses, not a blob nobody has
+# restored.
+#
+# NO `format` ATTRIBUTE, AND THAT IS LOAD-BEARING — the same reasoning the recut
+# apparatus records for the plaintext volume. The device must be born RAW so
+# `blkid -o value -s TYPE` is a sound discriminator: "" means empty and may be
+# luksFormatted, `crypto_LUKS` means already cut, anything else is a signature we
+# refuse to destroy. Declaring `format = "ext4"` would make the guard's empty arm
+# unreachable and the first boot would mount a plaintext ext4 filesystem at the
+# staging path — the precise outcome this volume exists to avoid. The precedents
+# omit it for this reason (hcloud_volume.workspaces_luks, and the recut's
+# `ignore_changes` note on hcloud_volume.inngest_redis).
+#
+# SIZE TRACKS THE SOURCE EXACTLY. `var.inngest_redis_volume_size` is the same input
+# hcloud_volume.inngest_redis uses, so the target can never be born smaller than the
+# volume whose bytes it must hold. `location` must match the server's for the
+# attachment to be legal.
+resource "hcloud_volume" "inngest_redis_luks" {
+  name     = "soleur-inngest-redis-store-luks"
+  size     = var.inngest_redis_volume_size
+  location = var.location
+
+  labels = {
+    app = "soleur-web-platform"
+  }
+}
+
+# Attached ALONGSIDE the live plaintext volume — the additive design's two-copy
+# state. The plaintext volume keeps serving /mnt/data throughout; this one receives
+# the byte-copy under a clean-stop freeze and becomes /mnt/data only at the swap.
+#
+# THE `-target=` SETS ARE NOT THE SAME SET. Both this volume and this attachment
+# join `inngest-host`. Only the ATTACHMENT joins `inngest-host-replace`, because
+# that dispatch preserves the durable AOF by OMISSION — its target set names the
+# server, its network attachment and the plaintext volume's attachment, and
+# deliberately not the plaintext VOLUME. Adding a volume there would break the
+# invariant the workflow states in those words. The attachment must be there,
+# though: inngest-host-replace-gate.sh interpolates the server id, so a replace
+# forces this attachment into the plan and the gate aborts `out_of_scope` without it.
+resource "hcloud_volume_attachment" "inngest_redis_luks" {
+  volume_id = hcloud_volume.inngest_redis_luks.id
+  server_id = hcloud_server.inngest.id
+}

@@ -1002,7 +1002,11 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    **One consequence to know.** `lefthook` pre-commit runs the full battery behind this lock on any
    staged `*.{ts,tsx,js,jsx}`, so a `git commit` can now wait up to an hour before the suite even
    starts (it was 15 minutes). CI is unaffected — `tc_acquire` returns early on `CI`. The escape
-   hatches are `git commit --no-verify` and `LEFTHOOK=0`.
+   hatches are `git commit --no-verify` and `LEFTHOOK=0` — and the NARROWER one to reach for first is
+   `LEFTHOOK_EXCLUDE=bun-test`, which skips only the battery and leaves gitleaks, markdown-lint and every
+   other hook running. Before starting such a commit, read the pushed head's CI failure list (`gh pr checks`)
+   and `git log HEAD..origin/main`: a ratchet CI already reported, or one main already fixed, is 74 minutes
+   the hook will spend re-measuring (#6894, `2026-09-18-my-mutation-harness-counted-a-crash-as-a-kill-and-the-fixture-stacked-x-on-x.md`).
 
    **Re-run each touched shard under the environments it SHIPS into, not only yours.** `CI=1` and
    `SOLEUR_SUBAGENT=1` change control flow (CI exemptions, subagent refusals), so a suite can be
