@@ -156,7 +156,7 @@ W="$W"; printf '%s\n' "\$*" >> "\$W/systemctl.log"
 case "\$1" in
   stop)  rm -f "\$W/units/\$2" ;;
   start) : > "\$W/units/\$2" ;;
-  is-active) u="\${@: -1}"; [ -e "\$W/units/\$u" ] ;;
+  is-active|is-enabled) u="\${@: -1}"; [ -e "\$W/units/\$u" ] ;;
 esac
 EOF
   cat > "$b/redis-cli" <<EOF
@@ -268,7 +268,10 @@ W="$W"; printf '%s\n' "\$*" >> "\$W/systemctl.log"
 case "\$1" in
   stop) rm -f "\$W/units/\$2" ;;
   start) : > "\$W/units/\$2" ;;
-  is-active) n=\$(grep -c '^is-active' "\$W/systemctl.log"); u="\${@: -1}"; [ "\$u" = inngest-redis.service ] && [ "\$n" -gt 2 ] && exit 0; [ -e "\$W/units/\$u" ] ;;
+  # Redis comes back only AFTER the freeze has proven it stopped: 4 pre-freeze reads + 2 post-stop
+  # reads, so the 7th onward (T2's own re-check) reports active. The fixture is keyed to the
+  # freeze's read COUNT deliberately — it models a unit that restarts during the copy window.
+  is-active|is-enabled) n=\$(grep -c '^is-active' "\$W/systemctl.log"); u="\${@: -1}"; [ "\$u" = inngest-redis.service ] && [ "\$n" -gt 6 ] && exit 0; [ -e "\$W/units/\$u" ] ;;
 esac
 EOF
 chmod +x "$W/bin/systemctl"
@@ -366,7 +369,7 @@ W="$W"; printf '%s\n' "\$*" >> "\$W/systemctl.log"
 case "\$1" in
   stop)  rm -f "\$W/units/\$2"; if [ "\$2" = inngest-redis.service ] && [ ! -e "\$W/hung" ]; then printf '%s' "\$PPID" > "\$W/sut.pid"; : > "\$W/hung"; sleep 2; fi ;;
   start) : > "\$W/units/\$2" ;;
-  is-active) [ -e "\$W/units/\${@: -1}" ] ;;
+  is-active|is-enabled) [ -e "\$W/units/\${@: -1}" ] ;;
 esac
 EOF
 chmod +x "$W/bin/systemctl"
@@ -381,6 +384,23 @@ mkdir -p "$W/proc/4242/fd"; ln -s "$W/mnt/data/redis/canary" "$W/proc/4242/fd/3"
 run armed
 if [ "$RC" -ne 0 ] && reason_seen mount-not-quiesced; then ok "quiesce: a process still holding a file under the store aborts the run"; else no "quiesce: rc=$RC"; fi
 if [ -e "$W/units/inngest-redis.service" ]; then ok "quiesce abort: writers resumed"; else no "quiesce abort: writers left stopped"; fi
+
+# ═══ The resume set is RECORDED, never assumed (#8077 Guard 2 #6c) ════════════════════════════
+# An unconditional `start inngest-server.service` re-arms a scheduler an operator quiesced. The
+# freeze records what was ACTIVE; the resume starts exactly that.
+world quiesced-server
+rm -f "$W/units/inngest-server.service"      # the operator stopped the scheduler before the cutover
+run armed
+if [ "$RC" -eq 0 ] && [ -e "$W/units/inngest-redis.service" ] && [ ! -e "$W/units/inngest-server.service" ]; then ok "resume: a unit that was NOT running before the freeze is not started by it (no re-arm of a quiesced scheduler)"; else no "resume quiesced: rc=$RC redis=$([ -e "$W/units/inngest-redis.service" ] && echo up || echo down) server=$([ -e "$W/units/inngest-server.service" ] && echo STARTED || echo down)"; fi
+if grep -qx 'start inngest-redis.service' "$W/systemctl.log" && ! grep -qx 'start inngest-server.service' "$W/systemctl.log"; then ok "resume: the start set is derived from the recorded freeze set, not from a fixed list"; else no "resume set: $(grep '^start ' "$W/systemctl.log" | tr '\n' '|')"; fi
+
+world resume-no-record
+run armed
+rm -f "$W/state/frozen-active"
+: > "$W/flag.log"
+rm -f "$W/units/inngest-server-probe.timer"   # disabled by the operator; must stay disabled
+run swapped "$LUKS_ID"
+if [ "$RC" -eq 0 ] && [ -e "$W/units/inngest-redis.service" ] && [ ! -e "$W/units/inngest-server-probe.timer" ]; then ok "resume: with no record (a reboot mid-cutover), the ENABLED set is used — a disabled unit is still not started"; else no "resume fallback: rc=$RC probe=$([ -e "$W/units/inngest-server-probe.timer" ] && echo STARTED || echo down)"; fi
 
 # ═══ Resume arms ═════════════════════════════════════════════════════════════════════════════
 world copied-valid
@@ -467,7 +487,7 @@ _unverified="$(awk '/^ *copy_store "/{c=NR; getline nxt; if (nxt !~ /t2_verify/)
 if [ "$_copies" -ge 3 ] && [ "$_unverified" -eq 0 ] && [ "$(grep -cE '^[^#]*cp -a ' "$SUT")" -eq 1 ]; then ok "structural: ${_copies} copy sites, each immediately T2-verified, through one cp -a"; else no "structural: copy sites=${_copies} unverified=${_unverified} cp-a=$(grep -cE '^[^#]*cp -a ' "$SUT")"; fi
 
 # ═══ FLOOR — reported directly, never through ok()/no() ═══════════════════════════════════════
-_floor=63
+_floor=66
 if [ "$executed" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$executed" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
 printf '\n=== inngest-luks-cutover.test.sh: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$executed" "$_floor"

@@ -254,10 +254,21 @@ keyspace_sum() {  # prints "<keys> <expires>" or "__UNREADABLE__"
 is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # ── Freeze / quiesce / resume ──────────────────────────────────────────────────────────────────
+# THE RESUME SET IS RECORDED, NOT ASSUMED (#8077 Guard 2 #6c). An unconditional `start
+# inngest-server.service` re-arms a scheduler an operator deliberately quiesced — the class
+# ci-deploy.test.sh's start-writer inventory exists to catch. So the freeze records which units
+# were ACTIVE before it stopped them, into this FSM's own state dir (the run that resumes may be a
+# later 30s tick, or a later boot), and the resume starts exactly those and nothing else.
+FROZEN_RECORD() { printf '%s/frozen-active' "$STATE_DIR"; }
 freeze_writers() {
-  local u
+  local u active=""
   # PHASE first: a failure or a kill DURING the stops must still resume what was already stopped.
   PHASE=frozen
+  for u in $FREEZE_TIMERS $FREEZE_SERVICES; do
+    if systemctl_cmd is-active --quiet "$u"; then active="$active $u"; fi
+  done
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "$active" > "$(FROZEN_RECORD)" 2>/dev/null || true
   for u in $FREEZE_TIMERS; do systemctl_cmd stop "$u"; done
   for u in $FREEZE_SERVICES; do systemctl_cmd stop "$u"; done
   for u in $FREEZE_SERVICES; do
@@ -281,9 +292,20 @@ assert_quiesced() {
   [[ -z "$holders" ]] || refuse mount-not-quiesced "pids still holding $*:$holders"
 }
 resume_writers() {
-  local u
-  for u in inngest-redis.service inngest-server.service; do systemctl_cmd start "$u"; done
-  for u in $FREEZE_TIMERS; do systemctl_cmd start "$u"; done
+  local u recorded=""
+  recorded="$(cat "$(FROZEN_RECORD)" 2>/dev/null || true)"
+  if [[ -z "${recorded// /}" ]]; then
+    # No record: this process did not perform the freeze (a resume after a reboot or a kill). Fall
+    # back to the ENABLED set — still never starting a unit the operator has disabled, and still
+    # never starting one unconditionally.
+    for u in $FREEZE_TIMERS $FREEZE_SERVICES; do
+      if systemctl_cmd is-enabled --quiet "$u" 2>/dev/null; then recorded="$recorded $u"; fi
+    done
+  fi
+  # Redis before the server (its only client), timers last so nothing re-fires mid-resume.
+  for u in inngest-redis.service inngest-server.service $FREEZE_TIMERS; do
+    case " $recorded " in *" $u "*) systemctl_cmd start "$u" ;; esac
+  done
 }
 resume_writers_best_effort() { resume_writers 2>/dev/null || true; }
 
