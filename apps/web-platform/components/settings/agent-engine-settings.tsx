@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Keep the settings projection client-local: importing the server contract (even
 // for a constant plus a type) pulls the server-only dependency tree into the
@@ -21,14 +21,17 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [selected, setSelected] = useState<string>(DEFAULT_AGENT_ENGINE_ID);
   const [authMode, setAuthMode] = useState<string>("managed");
   const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
+  const settingsRevision = useRef(0);
   const isEngineSelectable = (engine: Engine): boolean =>
     engine.enabledForNewRuns && (engine.rolloutEnabled ?? engine.id === DEFAULT_AGENT_ENGINE_ID);
   const selectedEngine = engines.find((engine) => engine.id === selected);
 
   useEffect(() => {
+    const revision = settingsRevision.current;
     void fetch("/api/dashboard/settings/agent-engine")
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("settings unavailable")))
       .then((payload: { engines: Engine[]; defaultEngineId: string; defaultAuthMode?: string }) => {
+        if (settingsRevision.current !== revision) return;
         setEngines(payload.engines);
         setSelected(payload.defaultEngineId);
         setAuthMode(payload.defaultAuthMode ?? "managed");
@@ -37,7 +40,12 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
       .catch(() => setStatus("error"));
   }, []);
 
-  async function save(engineId: string, nextAuthMode = authMode) {
+  async function save(
+    engineId: string,
+    nextAuthMode = authMode,
+    rollback: { engineId: string; authMode: string } = { engineId: selected, authMode },
+  ) {
+    settingsRevision.current += 1;
     setSelected(engineId);
     setStatus("saving");
     try {
@@ -49,6 +57,8 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
       if (!response.ok) throw new Error("save failed");
       setStatus("ready");
     } catch {
+      setSelected(rollback.engineId);
+      setAuthMode(rollback.authMode);
       setStatus("error");
     }
   }
@@ -74,8 +84,9 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
                 disabled={!isOwner || status === "loading" || status === "saving" || !selectable}
                 onChange={() => {
                   const nextMode = engine.authModes.includes(authMode) ? authMode : engine.authModes[0] ?? "managed";
+                  const rollback = { engineId: selected, authMode };
                   setAuthMode(nextMode);
-                  void save(engine.id, nextMode);
+                  void save(engine.id, nextMode, rollback);
                 }}
               />
               <span>
@@ -97,8 +108,9 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
               disabled={!isOwner || status === "loading" || status === "saving" || !isEngineSelectable(selectedEngine)}
               onChange={(event) => {
                 const nextMode = event.target.value;
+                const rollback = { engineId: selected, authMode };
                 setAuthMode(nextMode);
-                void save(selected, nextMode);
+                void save(selected, nextMode, rollback);
               }}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2"
             >

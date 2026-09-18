@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 
 import { AgentEngineSettings } from "@/components/settings/agent-engine-settings";
 
@@ -23,6 +24,54 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("AgentEngineSettings", () => {
+  const availableSettings = {
+    defaultEngineId: "claude-code",
+    defaultAuthMode: "managed",
+    engines: [
+      { id: "claude-code", version: "v1", transport: "local", authModes: ["managed", "api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+      { id: "codex", version: "v1", transport: "remote", authModes: ["api-key"], enabledForNewRuns: true, rolloutEnabled: true },
+    ],
+  };
+
+  it("keeps the persisted engine and authentication mode when changing engines fails", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
+    fetchMock.mockResolvedValueOnce({ ok: false });
+    const view = render(<AgentEngineSettings isOwner />);
+    fireEvent.click(await view.findByLabelText(/codex/));
+    await view.findByRole("alert");
+    expect(view.getByLabelText(/Claude Code/)).toBeChecked();
+    expect(view.getByLabelText("Authentication mode")).toHaveValue("managed");
+  });
+
+  it("keeps the last successful auth mode after a later save rejects", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
+    fetchMock.mockResolvedValueOnce({ ok: true });
+    fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+    const view = render(<AgentEngineSettings isOwner />);
+    const mode = await view.findByLabelText("Authentication mode");
+    fireEvent.change(mode, { target: { value: "api-key" } });
+    await waitFor(() => expect(mode).not.toBeDisabled());
+    expect(mode).toHaveValue("api-key");
+    fireEvent.change(mode, { target: { value: "managed" } });
+    await view.findByRole("alert");
+    expect(mode).toHaveValue("api-key");
+  });
+
+  it("ignores an obsolete load response after newer settings have been saved", async () => {
+    let finishOldLoad!: (response: unknown) => void;
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => { finishOldLoad = resolve; }));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
+    fetchMock.mockResolvedValueOnce({ ok: true });
+    const view = render(<StrictMode><AgentEngineSettings isOwner /></StrictMode>);
+    fireEvent.click(await view.findByLabelText(/codex/));
+    await waitFor(() => expect(view.getByLabelText(/codex/)).not.toBeDisabled());
+    await act(async () => {
+      finishOldLoad({ ok: true, json: async () => availableSettings });
+    });
+    expect(view.getByLabelText(/codex/)).toBeChecked();
+    expect(view.getByLabelText("Authentication mode")).toHaveValue("api-key");
+  });
+
   it("loads the workspace default and renders future engines as unavailable", async () => {
     const { findByLabelText } = render(<AgentEngineSettings isOwner />);
     const claude = await findByLabelText(/Claude Code/);
