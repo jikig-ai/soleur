@@ -148,12 +148,12 @@ _parsed=$(printf '%s' "$CMD" | perl -0777 -ne '
 _mode=$(printf '%s' "$_parsed" | head -1)
 case "$_mode" in
   all)
-    DELTA=$(git -C "$WORK_DIR" diff HEAD -U0 -- '*.md' 2>/dev/null || true) ;;
+    DELTA=$(git -C "$WORK_DIR" diff --no-color --no-ext-diff --no-relative HEAD -U0 -- '*.md' 2>/dev/null || true) ;;
   pathspec)
     mapfile -t _paths < <(printf '%s\n' "$_parsed" | tail -n +2)
-    DELTA=$(git -C "$WORK_DIR" diff HEAD -U0 -- "${_paths[@]}" 2>/dev/null || true) ;;
+    DELTA=$(git -C "$WORK_DIR" diff --no-color --no-ext-diff --no-relative HEAD -U0 -- "${_paths[@]}" 2>/dev/null || true) ;;
   *)
-    DELTA=$(git -C "$WORK_DIR" diff --cached -U0 -- '*.md' 2>/dev/null || true) ;;
+    DELTA=$(git -C "$WORK_DIR" diff --no-color --no-ext-diff --no-relative --cached -U0 -- '*.md' 2>/dev/null || true) ;;
 esac
 
 # 4. Fire only on a REMOVED or CHANGED `last_reviewed` line. A re-bump shows
