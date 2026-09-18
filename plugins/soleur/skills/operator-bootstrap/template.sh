@@ -114,7 +114,8 @@ USAGE
 }
 
 # --- argument validation -----------------------------------------------------
-# Deliberately ABOVE the trap: a usage error must print no teardown banner.
+# Deliberately ABOVE the EXIT trap installed below: a usage error must print no
+# "Stopped during stage" banner, and `--reset` is not a stage.
 RESET_KEY=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -130,6 +131,35 @@ if [[ -n "$RESET_KEY" ]]; then
   exit 0
 fi
 
+# --- terminal outcome --------------------------------------------------------
+# ONE trap. On a non-zero exit inside a stage it tells the founder which stage
+# stopped, that nothing else was changed, and the one command that resumes —
+# and it settles the stage in the ledger as `failed` with the exit code, so the
+# ledger can say something other than "ok" (review P2-12). A library refusal
+# (INPUT_REQUIRED, ABORTED) has already printed its own marker and sentence and
+# written its `run_halt` line before this fires; the trap adds the stage context.
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
+CURRENT_STAGE_INDEX=0
+CURRENT_STAGE_NAME=""
+on_exit() {
+  local rc=$?
+  [[ "$rc" -ne 0 && "$CURRENT_STAGE_INDEX" -gt 0 ]] || return 0
+  printf 'Stopped during stage %s (%s). Nothing else was changed. Run: bash %s — already-done steps are skipped.\n' \
+    "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" "$SCRIPT_PATH"
+  soleur_op_stage_end "$CURRENT_STAGE_INDEX" "$CURRENT_STAGE_NAME" failed "$rc"
+}
+trap on_exit EXIT
+
+# run_stage <index> <name> <function>
+#   Begin/settle around every stage, and the context the EXIT trap reports.
+run_stage() {
+  CURRENT_STAGE_INDEX="$1"; CURRENT_STAGE_NAME="$2"
+  soleur_op_stage_begin "$1" "$2"
+  "$3"
+  soleur_op_stage_end "$1" "$2" ok 0
+  CURRENT_STAGE_INDEX=0; CURRENT_STAGE_NAME=""
+}
+
 # =============================================================================
 # STAGES — everything below this line is yours. Replace the examples.
 # =============================================================================
@@ -138,12 +168,17 @@ fi
 # independent verification. Re-run is not idempotent over a non-idempotent create
 # unless the precondition makes it so, and a founder who is interrupted has no
 # safe action without it.
+#
+# The library sets `umask 077`, and every child a stage starts INHERITS it: a
+# file a stage writes for someone else (a public key, a config the vendor CLI
+# reads) lands 0600. Escape per command, never globally:
+#   (umask 022; printf '%s\n' "$pubkey" > "$HOME/.ssh/id.pub")
 
 # EXAMPLE class-3 barrier: the founder does something outside the script, and the
 # script VERIFIES it rather than believing the answer.
 stage_1_account() {
   # Precondition — already satisfied?
-  if [[ -f "$ENV_FILE" ]] && grep -q '^EXAMPLE_ACCOUNT_ID=' "$ENV_FILE"; then
+  if [[ -f "$ENV_FILE" ]] && grep -aq '^EXAMPLE_ACCOUNT_ID=' "$ENV_FILE"; then
     soleur_op_yellow "  already satisfied: EXAMPLE_ACCOUNT_ID is recorded"
     return 0
   fi
@@ -166,33 +201,52 @@ stage_1_account() {
 
 # EXAMPLE class-2 gate: a per-command acknowledgement for a destructive or
 # billable write. NO SKIP VARIABLE — automation must not be able to supply it.
+#
+# The precondition asks the VENDOR, never only a local marker written after the
+# create: between "create succeeded" and "marker written" a Ctrl-C leaves a
+# resource the next run cannot see, and it creates a second one (review P1-2).
+# Two controls close that window here — REPLACE the vendor read, KEEP the shape:
+#   1. `example_resource_exists` is the vendor-side read (hcloud server list,
+#      gh api, doppler projects get). It is what makes re-run safe.
+#   2. an ATTEMPTED marker is written BEFORE the create. A re-run that finds it
+#      without the PROVISIONED marker stops and sends the founder to the console
+#      instead of creating again; `--reset EXAMPLE_PROVISION_ATTEMPTED` clears it
+#      once they have looked.
+example_resource_exists() {
+  # REPLACE with the vendor read. The stand-in consults the local record only
+  # because this template has no vendor to ask.
+  [[ -f "$ENV_FILE" ]] && grep -aq '^EXAMPLE_PROVISIONED=' "$ENV_FILE"
+}
+
 stage_2_provision() {
-  if [[ -f "$ENV_FILE" ]] && grep -q '^EXAMPLE_PROVISIONED=' "$ENV_FILE"; then
-    soleur_op_yellow "  already satisfied: resource is provisioned"
+  if example_resource_exists "$SLUG"; then
+    soleur_op_yellow "  already satisfied: the resource exists at the vendor"
     return 0
+  fi
+  if [[ -f "$ENV_FILE" ]] && grep -aq '^EXAMPLE_PROVISION_ATTEMPTED=' "$ENV_FILE"; then
+    soleur_op_red "  A previous run started this create and was interrupted before it could record the result."
+    soleur_op_red "  Check the vendor console for '${SLUG}'. If nothing exists there, run:"
+    soleur_op_red "    bash ${SCRIPT_PATH} --reset EXAMPLE_PROVISION_ATTEMPTED"
+    return 1
   fi
 
   echo "  This creates a billable resource in the vendor account."
   soleur_op_ack_or_die "  Create it now? Type 'yes': "
 
+  soleur_op_env_upsert "$ENV_FILE" EXAMPLE_PROVISION_ATTEMPTED "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   # ... the destructive write goes here ...
-
   soleur_op_env_upsert "$ENV_FILE" EXAMPLE_PROVISIONED "yes"
+  soleur_op_env_reset "$ENV_FILE" EXAMPLE_PROVISION_ATTEMPTED
 }
 
 main() {
-  soleur_op_require_bins grep mktemp awk printenv stat
+  soleur_op_require_bins grep mktemp printenv sed date
   soleur_op_ledger_init "$TOTAL_STAGES" "bootstrap.sh"
 
   # No resume index: every stage's precondition makes a re-run from stage 1
   # skip what is already done, so re-run IS resume.
-  soleur_op_stage_begin 1 "vendor account"
-  stage_1_account
-  soleur_op_stage_end 1 "vendor account" ok 0
-
-  soleur_op_stage_begin 2 "provision the resource"
-  stage_2_provision
-  soleur_op_stage_end 2 "provision the resource" ok 0
+  run_stage 1 "vendor account" stage_1_account
+  run_stage 2 "provision the resource" stage_2_provision
 
   soleur_op_summary_begin "BOOTSTRAP COMPLETE."
   soleur_op_summary_line "Values were written to ${ENV_FILE} (mode 600)."

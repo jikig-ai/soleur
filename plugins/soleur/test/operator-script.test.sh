@@ -805,7 +805,7 @@ then assert_red g4_check "g4-r1 prompt with no skip variable" "$SB/mut/g4r1.sh";
 # row 2 — the no-TTY exit becomes a mute 1, which is today's unattributed
 # provision-hetzner.sh behaviour
 if mutate "g4-r2 no-TTY exit 64 -> 1" "$SB/mut/g4r2.sh" <<'PROG'
-s{tty=0\\n' "\$1"\n  exit 64}{tty=0\\n' "\$1"\n  exit 1}
+s{  soleur_op_run_halt input_required "\$1"\n  exit 64}{  soleur_op_run_halt input_required "\$1"\n  exit 1}
 PROG
 then assert_red g4_check "g4-r2 unattributed exit 1 instead of 64" "$SB/mut/g4r2.sh"; fi
 
@@ -1064,6 +1064,80 @@ else
   fail "F1: template.sh not readable at ${TEMPLATE}"
 fi
 
+# =============================================================================
+# Terminal outcome — every refusal is a marker PLUS a sentence, and the ledger
+# can say something other than "ok" (review P2-12, P2-13)
+# =============================================================================
+
+echo "== terminal outcome =="
+
+rb_out="$(bash "$SB/drive.sh" "$LIB" soleur_op_require_bins grep nonexistent-bin-xyz </dev/null 2>/dev/null)"; rb_rc=$?
+if [[ "$rb_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_MISSING_BINARY bin=nonexistent-bin-xyz' <<<"$rb_out"; then
+  pass "require_bins: a missing binary emits SOLEUR_BOOTSTRAP_MISSING_BINARY on STDOUT and exits 64"
+else
+  fail "require_bins: expected the marker on stdout and rc 64 (rc=${rb_rc}): ${rb_out}"
+fi
+if grep -qF 'Install nonexistent-bin-xyz first, then run again.' <<<"$rb_out"; then
+  pass "require_bins: the marker is followed by the plain-language remedy"
+else
+  fail "require_bins: no plain-language remedy after the marker: ${rb_out}"
+fi
+
+to_ledger="$SB/to-ledger.jsonl"
+to_out="$(SOLEUR_BOOTSTRAP_LEDGER="$to_ledger" drive_blocked "$LIB" soleur_op_barrier SOLEUR_TEST_SKIP_BARRIER 'x: ')"
+if grep -qF 'This step needs you to type an answer. Run this script in your own terminal, or set SOLEUR_TEST_SKIP_BARRIER and run again.' <<<"$to_out"; then
+  pass "INPUT_REQUIRED (class 1/3): the sentence names the variable to set"
+else
+  fail "INPUT_REQUIRED (class 1/3): no founder sentence naming the variable: ${to_out}"
+fi
+if grep -qE '"event":"run_halt","reason":"input_required","var":"SOLEUR_TEST_SKIP_BARRIER"' "$to_ledger" 2>/dev/null; then
+  pass "INPUT_REQUIRED: the ledger carries a run_halt line naming the variable"
+else
+  fail "INPUT_REQUIRED: no run_halt line in the ledger: $(cat "$to_ledger" 2>/dev/null)"
+fi
+to_out="$(SOLEUR_BOOTSTRAP_LEDGER="$to_ledger" drive_blocked "$LIB" soleur_op_ack_or_die 'Create? ')"
+if grep -qF 'no setting can answer it for you' <<<"$to_out" && ! grep -qF 'or set ' <<<"$to_out"; then
+  pass "INPUT_REQUIRED (class 2): the sentence hands the run to a person and names NO variable to set"
+else
+  fail "INPUT_REQUIRED (class 2): wrong remedy sentence for the ack: ${to_out}"
+fi
+
+# The template's EXIT trap, observed on the baked copy from F1: a run that stops
+# inside a stage prints the stage, the fact that nothing else changed, and the
+# resume command; the ledger settles the stage as failed with the exit code.
+if [[ -r "$gen_home/bootstrap.sh" ]]; then
+  tpl_env_dir="$SB/founder-repo/knowledge-base/project/specs/feat-x"
+  rm -f "$tpl_env_dir/.env" "$tpl_env_dir/bootstrap-runs.jsonl"
+  tpl_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB \
+    SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 SOLEUR_BOOTSTRAP_ACCOUNT_ID=acct-1 \
+    timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"; tpl_rc=$?
+  if [[ "$tpl_rc" -eq 64 ]] && grep -qF 'Stopped during stage 2 (provision the resource). Nothing else was changed. Run: bash ' <<<"$tpl_out" \
+     && grep -qF 'already-done steps are skipped.' <<<"$tpl_out"; then
+    pass "template trap: a stop inside stage 2 prints the stage, 'nothing else was changed' and the resume command (rc 64)"
+  else
+    fail "template trap: expected the 'Stopped during stage 2' banner and rc 64 (rc=${tpl_rc}): ${tpl_out}"
+  fi
+  if grep -qE '"phase":"settle","stage_index":2,.*"outcome":"failed","exit_code":64' "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null \
+     && grep -qF '"event":"run_halt"' "$tpl_env_dir/bootstrap-runs.jsonl"; then
+    pass "template trap: the ledger settles stage 2 as failed/64 and carries the run_halt line"
+  else
+    fail "template trap: ledger lacks the failed settle or the run_halt: $(cat "$tpl_env_dir/bootstrap-runs.jsonl" 2>/dev/null)"
+  fi
+  if grep -qF 'Stopped during stage 1' <<<"$tpl_out"; then
+    fail "template trap: stage 1 completed but was reported as stopped"
+  else
+    pass "template trap: a completed stage is not reported as stopped"
+  fi
+  help_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT -u SOLEUR_OP_LIB timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh --bogus 2>&1)"
+  if grep -qF 'Stopped during stage' <<<"$help_out"; then
+    fail "template trap: a usage error printed the stage banner (the trap is installed above argument validation)"
+  else
+    pass "template trap: a usage error prints no stage banner"
+  fi
+else
+  fail "terminal outcome: the baked template copy from F1 is missing"
+fi
+
 # Ledger: one line BEFORE and one AFTER each stage.
 ledger_probe="$SB/ledger-probe.jsonl"
 SOLEUR_BOOTSTRAP_LEDGER="$ledger_probe" bash -c '
@@ -1117,7 +1191,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=73
+FLOOR=82
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))

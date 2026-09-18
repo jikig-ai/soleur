@@ -90,8 +90,16 @@ replace the example stages. Rules:
   `soleur_op_gh_variable_set` (argv, and it refuses secret-shaped names). Do not merge them.
 - **Write `.env` values through `soleur_op_env_upsert`.** It is exact-key: the trailing `=` is what
   stops an upsert of `X_API_KEY` from removing `X_API_KEY_SECRET`.
-- **Call `soleur_op_stage_begin` / `soleur_op_stage_end` around every stage**, so the run ledger
-  carries a begin and a settle record and a partial run is decidable from the artifact alone.
+- **Run every stage through the template's `run_stage <index> <name> <function>`.** It calls
+  `soleur_op_stage_begin` / `soleur_op_stage_end` and records the stage the template's one `EXIT`
+  trap reports on: a stop inside a stage prints `Stopped during stage N (<name>). Nothing else was
+  changed. Run: bash <path> — already-done steps are skipped.` and settles the stage in the ledger
+  as `failed` with the exit code. A stage called outside `run_stage` is invisible to both.
+- **A destructive stage's precondition asks the vendor, never only a local marker written after the
+  create.** Between "create succeeded" and "marker written" a Ctrl-C leaves a resource the next run
+  cannot see, and it creates a second one. Keep the template's two controls: the vendor-side read
+  and the `*_ATTEMPTED` marker written *before* the create, which stops a re-run and sends the
+  founder to the console (`--reset <KEY>_ATTEMPTED` clears it once they have looked).
 - **Open a URL with `soleur_op_open_url`.** It prints the URL first and never branches on the
   opener's exit code, so a headless box degrades to "here is the URL" instead of to a failed stage.
 
@@ -143,7 +151,13 @@ Two founder-facing dead ends the library closes, and the generated script must e
   library.
 
 SIGINT is **not** handled specially: a founder's Ctrl-C leaves a state byte-identical to a crash, and
-the ledger's completed-set-versus-declared-total comparison is what detects both.
+the ledger's completed-set-versus-declared-total comparison is what detects both. What every
+non-zero exit *inside a stage* gets is the template's single `EXIT` trap: one sentence naming the
+stage, the fact that nothing else was changed, and the resume command; plus a `failed` settle line
+in the ledger. Every library refusal prints its marker **and** one plain sentence
+(`INPUT_REQUIRED` → what to type or set, or that only a person at a terminal can answer;
+`ABORTED` → "Stopped. Nothing was created."; `MISSING_BINARY` → "Install <bin> first, then run
+again."), and writes a `run_halt` ledger line before exiting.
 
 ## Where the artifact lives
 

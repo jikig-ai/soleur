@@ -13,10 +13,19 @@
 # `domain-model-lib.sh`.
 #
 # API CONTRACT: this file exports `SOLEUR_OP_LIB_API=1`. Every consumer asserts
-# `[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]]` right after its `source` line and exits
-# 64 with `SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE` otherwise. Bump the number only on
-# a change that breaks an existing consumer (a renamed helper, a changed
-# positional contract), never on an additive one.
+# `[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]]` right after its `source` line and exits
+# 64 with `SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=<n>` otherwise. EQUALITY,
+# not `-ge`: the library auto-updates with the plugin while a generated script
+# is frozen in the founder's repository, so "library newer than script" is the
+# only incompatibility that can occur — and a `-ge` gate admits exactly that
+# case, then dies mid-stage on a renamed helper (measured by the review lead).
+# Bump the number only on a change that breaks an existing consumer (a renamed
+# helper, a changed positional contract), never on an additive one.
+#
+# PORTABILITY: bash 3.2 (the /bin/bash macOS ships), the floor `proc.sh` in this
+# directory declares. So: no negative array subscripts (`${a[-1]}` is 4.3+), no
+# `${var^^}` (4.0+), no `mapfile`, no `declare -A`. `readlink -f` may be absent
+# on older macOS — every use falls back to the unresolved path.
 #
 # Sourced (NEVER executed) by:
 #   - plugins/soleur/skills/operator-bootstrap/template.sh
@@ -30,14 +39,18 @@
 #   1. `set -euo pipefail` is already in effect. This file sets no shell options
 #      of its own except `umask`, because a sourced library that changes the
 #      caller's error handling changes the caller's control flow.
-#   2. The caller carries its OWN xtrace-refusal and TLS-strip prologue ABOVE
-#      the `source` line. It is DUPLICATED there, never moved in here:
-#      `PROLOGUE_MAX_CMDS = 0` in scripts/lint-shell-trace-credential-refusal.py
-#      makes a `source` line itself a counted command, and `find_preamble` only
-#      ever scans a file's OWN lines — a caller sourcing a fully compliant
-#      library still fails Rule A (measured, revision R26).
-#   3. `mktemp`, `grep`, `awk`, `printenv`, `stat` and `chmod` are on PATH.
-#      `gh` is required only by the two GitHub helpers.
+#   2. The caller carries its OWN xtrace-refusal prologue ABOVE the `source`
+#      line. It is DUPLICATED there, never moved in here: `PROLOGUE_MAX_CMDS = 0`
+#      in scripts/lint-shell-trace-credential-refusal.py makes a `source` line
+#      itself a counted command, and `find_preamble` only ever scans a file's
+#      OWN lines — a caller sourcing a fully compliant library still fails Rule
+#      A (measured, revision R26). The caller does NOT strip SSL_CERT_FILE /
+#      SSL_CERT_DIR / CURL_CA_BUNDLE: `gh` and `hcloud` are Go clients that read
+#      those for their root CA pool, and a founder behind a TLS-inspecting proxy
+#      needs them (the linter requires only the xtrace refusal — measured).
+#   3. `grep`, `sed`, `date`, `dirname`, `mkdir`, `mv`, `chmod`, `mktemp`, `rm`,
+#      `readlink` and `printenv` are on PATH — the binaries this file actually
+#      calls, and only those. `gh` is required only by the two GitHub helpers.
 #
 # LIBRARY INVARIANT (revision R26) — THIS FILE NEVER EXPANDS A SECRET-SHAPED
 # VARIABLE NAME. The credential linter's `^scripts/lib/` exclusion is
@@ -67,27 +80,49 @@
 #       as "missing tool".
 #   64  missing input — a required binary, a required environment variable, or a
 #       prompt that cannot be answered because stdin is not a TTY. Remedy: the
-#       marker line names the variable to set.
+#       sentence under the marker names it. For a class-1/class-3 prompt, set
+#       the named variable; for the class-2 destructive-write ack there is NO
+#       variable to set — hand the run to a person at a terminal.
 #   78  refusing to run under shell tracing while holding a live credential
 #       (#7797). Remedy: re-run without `-x`.
 #
+#   Exit 1 has a FOURTH meaning under the caller's `set -e`: a `soleur_op_gh_*`
+#   helper that `return 1`s (write failed, verify failed, unsafe name) ends the
+#   caller with status 1 unless the call is guarded. The marker line above the
+#   exit says which.
+#
 # STDOUT MARKERS, not stderr. Agent runtimes surface stdout and swallow stderr,
 # so a stderr-only refusal is invisible on the one surface that matters
-# (provision-doppler.sh records the same reason at its own prologue):
-#   SOLEUR_BOOTSTRAP_INPUT_REQUIRED      var=<NAME> tty=0   → exit 64
-#   SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE     name=<NAME>        → refused argv write
-#   SOLEUR_BOOTSTRAP_ABORTED             stage=<kind>       → operator declined, exit 1
-#   SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED path=<path>       → non-fatal; the run
-#                                                            continues, the record is lost
-#   SOLEUR_BOOTSTRAP_LIB_MISSING         path=<resolved>    → exit 64
-#   SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE    need=1 got=<n>     → exit 64
+# (provision-doppler.sh records the same reason at its own prologue). On a
+# hosted agent surface (a cloud session, a CI step) these markers are the ONLY
+# durable signal besides the ledger: grep for `SOLEUR_BOOTSTRAP_` in the step
+# log. Every refusal is the marker PLUS one plain sentence for the founder.
+#   SOLEUR_BOOTSTRAP_INPUT_REQUIRED       var=<NAME> tty=0          → exit 64
+#   SOLEUR_BOOTSTRAP_MISSING_BINARY       bin=<bin>                 → exit 64
+#   SOLEUR_BOOTSTRAP_ABORTED              stage=<barrier|ack>       → operator declined, exit 1
+#   SOLEUR_BOOTSTRAP_BAD_ARG              key=<KEY> [reason=<r>]    → refused .env write, return 1
+#                                         helper=<h> reason=<r>       (mktemp failed)
+#   SOLEUR_BOOTSTRAP_ENV_READ_FAILED      path=<path>               → grep exit 2 on the .env; no mv, return 1
+#   SOLEUR_BOOTSTRAP_ENV_KEYCOUNT_DROP    before=<n> after=<m> path=<path>
+#                                                                   → filter lost keys; no mv, return 1
+#   SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE      name=<NAME> reason=secret-shaped-name-on-argv
+#                                                                   → refused argv write, return 1
+#   SOLEUR_BOOTSTRAP_SECRET_WRITE_FAILED  name=<NAME> repo=<repo>   → return 1
+#   SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=<NAME> repo=<repo>   → return 1 (write may have landed)
+#   SOLEUR_BOOTSTRAP_VARIABLE_WRITE_FAILED name=<NAME> repo=<repo>  → return 1
+#   SOLEUR_BOOTSTRAP_LEDGER_WRITE_FAILED  path=<path>               → non-fatal; the run
+#                                                                     continues, the record is lost
+#   SOLEUR_BOOTSTRAP_LIB_MISSING          path=<last-rejected>      → exit 64
+#   SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE     need=1 got=<n>            → exit 64
+#   SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED      path=<path>               → exit 64 (template.sh)
 #
-# SOLEUR_BOOTSTRAP_LIB_MISSING and _LIB_INCOMPATIBLE are emitted by the CONSUMER,
-# not by this file — a library that is not there cannot announce itself. The
-# canonical shape of that resolution (env override → generation-time baked path
-# → CLAUDE_PLUGIN_ROOT → hard exit 64, never a stub; ADR-178 Context §1 records
-# what fail-closed stubs did to `cleanup-merged`) is the "library resolution"
-# section of plugins/soleur/skills/operator-bootstrap/template.sh.
+# SOLEUR_BOOTSTRAP_LIB_MISSING, _LIB_INCOMPATIBLE and _ENV_NOT_IGNORED are
+# emitted by the CONSUMER, not by this file — a library that is not there cannot
+# announce itself. The canonical shape of that resolution (env override →
+# CLAUDE_PLUGIN_ROOT → generation-time baked path → hard exit 64, never a stub;
+# ADR-178 Context §1 records what fail-closed stubs did to `cleanup-merged`) is
+# the "library resolution" section of
+# plugins/soleur/skills/operator-bootstrap/template.sh.
 #
 # <!-- Inspired by mattpocock/skills/skills/engineering/wizard/ (MIT, Copyright (c) 2026 Matt Pocock). -->
 # What is adopted is the SHAPE — a wizard that walks named stages, one journey
@@ -135,11 +170,14 @@ soleur_op_yellow() { printf '%b%s%b\n' "$SOLEUR_OP_YELLOW" "$*" "$SOLEUR_OP_NC";
 #   MCP/CLI/REST) runs BEFORE any prompt; a value outside the two interactive
 #   carve-outs that is missing is a hard failure with a named remedy, never a
 #   prompt.
+#   STDOUT marker plus one plain sentence: agent runtimes surface stdout and
+#   swallow stderr, and a founder reads the sentence, not the marker.
 soleur_op_require_bins() {
   local bin
   for bin in "$@"; do
     command -v "$bin" >/dev/null 2>&1 || {
-      soleur_op_red "missing ${bin} on PATH"
+      printf 'SOLEUR_BOOTSTRAP_MISSING_BINARY bin=%s\n' "$bin"
+      printf 'Install %s first, then run again.\n' "$bin"
       exit 64
     }
   done
@@ -290,7 +328,7 @@ soleur_op_stage_end() {
 #              independent verification of the thing attested. A barrier that is
 #              skippable and unverified attests nothing.
 #
-# A fourth class requires an ADR amendment (ADR-227).
+# A fourth class requires an ADR amendment (ADR-228).
 
 # --- MUTATION ANCHOR: start of prompt helpers ---
 
@@ -301,13 +339,40 @@ soleur_op_skip_value() {
   printenv "$1" 2>/dev/null || true
 }
 
-# soleur_op_input_required <VAR-NAME-or-reason>
+# soleur_op_run_halt <reason> <name>
+#   The ledger's TERMINAL line for a run that stops before its stages settle:
+#   `reason` is `input_required` or `aborted`, `name` the variable or the stage
+#   kind. Without it the ledger could only ever say "ok" (review P2-12).
+soleur_op_run_halt() {
+  soleur_op_ledger_write "$(printf '{"ts":"%s","run_id":"%s","event":"run_halt","reason":"%s","var":"%s"}' \
+    "$(soleur_op_now)" "$SOLEUR_OP_RUN_ID" "$(soleur_op_json_escape "$1")" "$(soleur_op_json_escape "$2")")"
+}
+
+# soleur_op_input_required <VAR-NAME-or-reason> [ack]
 #   The no-TTY refusal. Emitted BEFORE any read, never after. Today's behaviour
 #   in provision-hetzner.sh is fail-closed but MUTE — EOF read into an empty ACK
 #   and `exit 1` with "Aborted." — the right outcome with an unattributed cause.
+#   The marker is for the agent; the sentence after it is for the founder. The
+#   second argument `ack` selects the class-2 sentence: there is no variable to
+#   set, so the only remedy is a person at a terminal.
 soleur_op_input_required() {
   printf 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED var=%s tty=0\n' "$1"
+  if [[ "${2:-}" == "ack" ]]; then
+    printf 'This step needs a person to type yes. Run this script in your own terminal; no setting can answer it for you.\n'
+  else
+    printf 'This step needs you to type an answer. Run this script in your own terminal, or set %s and run again.\n' "$1"
+  fi
+  soleur_op_run_halt input_required "$1"
   exit 64
+}
+
+# soleur_op_aborted <kind>
+#   The operator declined. Marker, plain sentence, ledger line, exit 1.
+soleur_op_aborted() {
+  printf 'SOLEUR_BOOTSTRAP_ABORTED stage=%s\n' "$1"
+  printf 'Stopped. Nothing was created.\n'
+  soleur_op_run_halt aborted "$1"
+  exit 1
 }
 
 # soleur_op_value <SKIP-VAR> <prompt> <out-var-name>   [class 1]
@@ -338,22 +403,16 @@ soleur_op_barrier() {
   fi
   [[ -t 0 ]] || soleur_op_input_required "$var_name"
   read -r -p "$prompt_text" reply
-  [[ "$reply" == "yes" ]] || {
-    printf 'SOLEUR_BOOTSTRAP_ABORTED stage=barrier\n'
-    exit 1
-  }
+  [[ "$reply" == "yes" ]] || soleur_op_aborted barrier
 }
 
 # soleur_op_ack_or_die <prompt>                       [class 2]
 #   NO skip variable, by design and by rule. Do not add one.
 soleur_op_ack_or_die() {
   local prompt_text="$1" reply
-  [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)"
+  [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack
   read -r -p "$prompt_text" reply
-  [[ "$reply" == "yes" ]] || {
-    printf 'SOLEUR_BOOTSTRAP_ABORTED stage=ack\n'
-    exit 1
-  }
+  [[ "$reply" == "yes" ]] || soleur_op_aborted ack
 }
 
 # --- MUTATION ANCHOR: end of prompt helpers ---
