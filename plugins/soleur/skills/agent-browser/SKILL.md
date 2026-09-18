@@ -48,7 +48,7 @@ fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and
 
 1. Set the launch flag: `export AGENT_BROWSER_ARGS="--no-sandbox"` (see above).
 2. If it still fails, a stale/wedged daemon may be holding the socket. Clear it:
-   `pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* "/run/user/$(id -u)/agent-browser/"*`
+   `pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* "/run/user/$UID/agent-browser/"*`
    then retry. (Never kill `playwright-mcp` processes — those are a separate stack.)
    The commonest cause is a daemon whose worktree was REAPED: resolve each match's
    `/proc/<pid>/cwd` and expect one ending `(deleted)`, often weeks old and inherited
