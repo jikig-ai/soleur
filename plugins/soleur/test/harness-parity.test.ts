@@ -139,7 +139,7 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
       const [dir, name] = f.split("/");
       expect(here).toContain(name);
     }
-    expect(onDisk.length).toBeGreaterThanOrEqual(28); // the plan's Phase 2 table has 28 file rows
+    expect(onDisk.length).toBeGreaterThanOrEqual(30); // the plan's Phase 2 table has 28 file rows
   });
 });
 
@@ -173,6 +173,28 @@ describe("harness-parity fixtures — must-PASS (permitted contexts)", () => {
     const doc = fixture("skills", "path-home-relative.md");
     expect(nonc(doc)).toEqual([]);
     expect(verdicts(doc, "PATH").map((s) => s.raw).sort()).toEqual(["plan", "work"]);
+  });
+
+  // The class that shipped three corruptions: a `/` after a delimiter that CLOSES a span is a
+  // path separator. The pre-existing fix-refuses-unsound.md covered only the half where the
+  // rewrite stays visibly non-canonical (`~/`, `!/`), which is the SELF-REPAIRING half — this
+  // is the half where the rewrite classifies CANONICAL and the loss becomes invisible.
+  test("path-closing-delimiter.md: a slash after a closing delimiter is a PATH, not a sigil", () => {
+    const doc = fixture("skills", "path-closing-delimiter.md");
+    expect(nonc(doc)).toEqual([]);
+    expect(verdicts(doc, "PATH").map((s) => s.raw).sort()).toEqual(
+      ["agent-browser", "deploy", "rclone", "rclone-"].sort(),
+    );
+    // And the fixer must leave the bytes alone, because the classifier reports no site.
+    const text = readFileSync(resolve(FIXTURE_ROOT, "skills/path-closing-delimiter.md"), "utf-8");
+    expect(fixDoc(text, index)).toBe(text);
+  });
+
+  // The must-TRIP direction of the same discriminator: inside an OPEN delimiter the slash IS
+  // the grok sigil, so widening the path class to swallow these would be a silent narrowing.
+  test("grok-slash-open-delimiter.md: a slash inside an open delimiter is still NONCANONICAL", () => {
+    const hits = nonc(fixture("skills", "grok-slash-open-delimiter.md"));
+    expect(hits.map((h) => h.token).sort()).toEqual(["plan", "ship", "work"]);
   });
 
   test("path-compound.md: not a reference at all (R9 path exclusion — N5f)", () => {
@@ -449,6 +471,7 @@ describe("harness-parity fixtures — fixDoc and census", () => {
         "skills/fix-refuses-unsound.md",
         "skills/fix-roundtrip.md",
         "skills/frontmatter.md",
+        "skills/grok-slash-open-delimiter.md",
         "skills/grok-slash.md",
         "skills/grok-stem.md",
         "skills/metavariable.md",

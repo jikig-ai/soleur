@@ -24,7 +24,7 @@
 import { execFileSync } from "child_process";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
-import { REPO_ROOT, census, fixDoc, formatReport, readIndex, readPopulation } from "../lib/harness-parity";
+import { REPO_ROOT, census, classifyDoc, fixDoc, formatReport, readIndex, readPopulation } from "../lib/harness-parity";
 
 const args = new Set(process.argv.slice(2));
 const mode = args.has("--fix") ? "fix" : args.has("--report") ? "report" : undefined;
@@ -57,7 +57,18 @@ const docs = readPopulation();
 
 if (mode === "fix") {
   let changed = 0;
+  let skipped = 0;
   for (const doc of docs) {
+    // A malformed marker leaves the region state unreliable, and `fixDoc` mirrors that state to
+    // decide what is exempt — so rewriting such a doc can edit inside a region the author meant
+    // to protect. Report it and leave it; the marker is RED in the gate either way.
+    const pre = classifyDoc(doc.text, index, doc.regionPolicy, doc.path);
+    if (pre.errors.length > 0) {
+      console.log(`skipped ${doc.path} — malformed marker, fix the marker first:`);
+      for (const e of pre.errors) console.log(`  ${e}`);
+      skipped += 1;
+      continue;
+    }
     const fixed = fixDoc(doc.text, index, doc.regionPolicy);
     if (fixed !== doc.text) {
       writeFileSync(resolve(REPO_ROOT, doc.path), fixed);
@@ -66,7 +77,7 @@ if (mode === "fix") {
     }
   }
   const after = census(readPopulation(), index);
-  console.log(`harness-parity --fix: ${changed} docs rewritten; ${after.noncanonical.length} non-canonical sites remain (hand edits)`);
+  console.log(`harness-parity --fix: ${changed} docs rewritten, ${skipped} skipped for malformed markers; ${after.noncanonical.length} non-canonical sites remain (hand edits)`);
   process.exit(0);
 }
 

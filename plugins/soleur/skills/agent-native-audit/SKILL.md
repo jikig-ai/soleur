@@ -195,7 +195,9 @@ Tasks:
    - Agent self-describes in responses
    - Suggested prompts/actions
    - Empty state guidance
-   - Slash commands (soleur:help, /tools)
+   - Slash commands the AUDITED product exposes — a `help` command, a `tools` command, and
+     the like. These are the target app's affordances, not Soleur's: name them without a
+     leading slash so they are not read as Soleur component references
 2. Score against 7 mechanisms
 
 Format:

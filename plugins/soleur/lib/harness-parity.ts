@@ -167,6 +167,28 @@ export const BOUNDARY: ReadonlySet<string> = new Set([
 export const PATH_PREV = /[A-Za-z0-9_./~]/;
 
 /**
+ * The other half of the path class: a slash after a delimiter that CLOSES a span is a path
+ * separator, not a sigil. A glob segment, a command substitution's closing paren, or a closing
+ * backtick or quote all put a real path separator next to a component name — while the same
+ * name inside an OPEN delimiter (a backticked, parenthesised or quoted slash form) is the grok
+ * sigil. The two are lexically identical apart from what precedes the delimiter, so parity over
+ * the line prefix is the only available discriminator: an odd count means the delimiter closes.
+ *
+ * This lives with the path class rather than inside `fixDoc` so the classifier and the fixer
+ * share one predicate — a site that is a PATH is not reported, so there is nothing for the fixer
+ * to rewrite, and the two cannot disagree. Measured: without it, the fixer rewrote a working
+ * `cp` glob in the rclone install one-liner into a dead one, and the result classified CANONICAL
+ * — so the census called that doc clean forever and the gate could never find it again (#8299).
+ *
+ * (This comment names no glob literally: a star-slash inside a block comment closes it.)
+ */
+export function closesSpan(prev2: string, linePrefix: string): boolean {
+  if (prev2 === "*" || prev2 === ")" || prev2 === "]" || prev2 === "}") return true;
+  if (prev2 !== "`" && prev2 !== '"' && prev2 !== "'") return false;
+  return (linePrefix.split(prev2).length - 1) % 2 === 1;
+}
+
+/**
  * The token class: a maximal run of `[A-Za-z0-9_:-]`. `:` so `soleur:product:cpo` is one token;
  * `-` so `deepen-plan` and `re-plan` are whole tokens that name nothing rather than a bare `plan`
  * (N5c). `_` for shell identifiers.
@@ -346,14 +368,26 @@ interface Classified {
  * Classify one token. `raw` as matched, `before` the preceding character (`"\n"` at line start),
  * `prev2` the character before that (`""` when absent).
  */
-function classifyToken(raw: string, before: string, prev2: string, index: Index): Classified | undefined {
+function classifyToken(
+  raw: string,
+  before: string,
+  prev2: string,
+  index: Index,
+  linePrefix = "",
+): Classified | undefined {
   const t = raw.replace(TRAILING_GLUE, "");
   const atb = before === "\n" || BOUNDARY.has(before);
-  const pathctx = before === "/" && PATH_PREV.test(prev2);
+  const pathctx = before === "/" && (PATH_PREV.test(prev2) || closesSpan(prev2, linePrefix));
 
   // R1–R3: the namespace sentinel. `raw`, not `t`, so `/soleur:<metavar>` (raw `soleur:`) trips R1.
   if (raw.startsWith("soleur:")) {
-    if (!atb) return { verdict: "NONCANONICAL", shape: "ns-sigil", fix: raw.replace(TRAILING_GLUE, "") || raw };
+    if (!atb) {
+      // `raw` of a bare `soleur:` strips to the truthy "soleur", so a `|| raw` fallback never
+      // fires and the message told the author to write a bare word naming nothing. Keep the
+      // namespace punctuation whenever stripping would leave no name after the colon.
+      const stripped = raw.replace(TRAILING_GLUE, "");
+      return { verdict: "NONCANONICAL", shape: "ns-sigil", fix: stripped.includes(":") ? stripped : raw };
+    }
     return index.canonicalIds.has(t) ? { verdict: "CANONICAL" } : { verdict: "UNKNOWN-NS" };
   }
   // R4: `@agent-soleur:product:cpo` — the namespace appears inside the token.
@@ -462,7 +496,7 @@ export function classifyDoc(text: string, index: Index, regionPolicy: RegionPoli
       const s = m.index ?? 0;
       const before = s > 0 ? line[s - 1] : "\n";
       const prev2 = s > 1 ? line[s - 2] : "";
-      const c = classifyToken(raw, before, prev2, index);
+      const c = classifyToken(raw, before, prev2, index, s > 1 ? line.slice(0, s - 2) : "");
       if (c === undefined) continue;
       const token = raw.replace(TRAILING_GLUE, "");
       let verdict = c.verdict;
@@ -543,25 +577,26 @@ export function fixDoc(text: string, index: Index, regionPolicy: RegionPolicy = 
         const s = m.index ?? 0;
         const before = s > 0 ? line[s - 1] : "\n";
         const prev2 = s > 1 ? line[s - 2] : "";
-        const c = classifyToken(raw, before, prev2, index);
+        const c = classifyToken(raw, before, prev2, index, s > 1 ? line.slice(0, s - 2) : "");
         if (c === undefined || c.verdict !== "NONCANONICAL") continue;
         let replacement: string | undefined;
         if (c.shape === "ns-sigil" && (before === "/" || before === "$")) replacement = raw;
         else if (c.shape === "agent-mention" && before === "@" && raw.startsWith("agent-soleur:")) replacement = raw.slice("agent-".length);
         else if (c.shape === "sigil-skill" && before === "/") replacement = `soleur:${raw}`;
         if (replacement === undefined) continue;
-        // Post-condition: never emit a rewrite that does not itself classify clean. `fixDoc`
-        // splices at `s - 1`, i.e. it CONSUMES the character before the token, so a rewrite is
-        // only sound when that character was the sigil. Where it was not (a path character the
-        // path class does not cover, a novel prefix), the splice destroys a real byte and the
-        // result is non-canonical in a shape `--fix` cannot repair — so leave the site for the
-        // hand edit the census message already prescribes.
+        // The consumed byte is guaranteed to be the sigil: a `/` that is a path separator
+        // classifies PATH via `closesSpan`/`PATH_PREV` above, so it is never a NONCANONICAL
+        // site and never reaches here. One predicate, in the classifier, shared by both.
+        //
+        // Post-condition: never emit a rewrite that does not itself classify clean — the
+        // residual guard for shapes where the consumed byte was not a boundary character
+        // (`~/plan`, `!/plan`), whose rewrite stays visibly non-canonical.
         // The splice consumes the character at `s - 1`, so after it the token's predecessor is
         // `prev2` and ITS predecessor is `line[s - 3]` — classify against those, not against the
         // sigil that is about to disappear.
         const newBefore = s > 1 ? prev2 : "\n";
         const newPrev2 = s > 2 ? line[s - 3] : "";
-        const after = classifyToken(replacement, newBefore, newPrev2, index);
+        const after = classifyToken(replacement, newBefore, newPrev2, index, "");
         if (after !== undefined && after.verdict !== "CANONICAL") continue;
         out += line.slice(last, s - 1) + replacement;
         last = s + raw.length;
