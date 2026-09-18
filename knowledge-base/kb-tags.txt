@@ -1207,6 +1207,7 @@ diagnostics
 diff-predicate
 diff-range
 diff-scoping
+diff-shapes
 differential-gate
 digest-pin
 directive-without-delivery
@@ -1366,6 +1367,7 @@ engineering
 enoent
 entrypoint-coverage
 enum-gate
+enumerating-probe
 enumeration
 enumerations
 env
@@ -1668,6 +1670,7 @@ gh-search
 gh-secret-set
 ghcr
 git
+git-apply
 git-archaeology
 git-argv
 git-author
@@ -1952,6 +1955,7 @@ inline-validation
 inngest
 inngest-cron
 inngest-cutover
+inngest-replay
 inode-identity
 input-validation
 insights
@@ -3400,6 +3404,7 @@ self-healing
 self-healing-tests
 self-hosted-users
 self-hosting
+self-improvement-loop
 self-leak
 self-match
 self-matching-probe
@@ -3553,6 +3558,7 @@ silent-failure-adjacency
 silent-fallback
 silent-output-drop
 silent-staleness
+silent-success
 simplicity
 simplification
 single-client-id-many-flows
@@ -3916,6 +3922,7 @@ thinking-api
 thinking-indicator
 third-party-actions
 third-party-content
+third-proxy
 threat-model
 three-coupling
 three-dot-diff
