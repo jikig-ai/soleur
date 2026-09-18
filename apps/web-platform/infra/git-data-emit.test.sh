@@ -670,7 +670,16 @@ passes=$_can_p0; fails=$_can_f0
 # projections each equal (or, for projections, contain) exactly that set. Enumerating five names
 # instead would make this guard restate the thing it is checking.
 NON_TERMINAL="nft_metadata_drop disk_pct inode_pct"
-_terminal="$(printf '%s\n' $_producer_keys | grep -vxF -e nft_metadata_drop -e disk_pct -e inode_pct | sort -u | tr '\n' ' ')"
+# DERIVED FROM THE VARIABLE, not from a second hand-typed copy of the same three names. The
+# first revision spelled them again in the grep, so `declared ONCE, here` was false: NON_TERMINAL
+# was dead (shellcheck SC2034 named it), and adding a fourth non-terminal to it would have
+# changed nothing while the comment said otherwise. Word-splitting is the point, so the
+# expansion is deliberately unquoted; the non-vacuity floor below catches a derivation that
+# collapses.
+# shellcheck disable=SC2086
+_terminal="$(printf '%s\n' $_producer_keys \
+  | grep -vxF $(for _nt in $NON_TERMINAL; do printf -- '-e\n%s\n' "$_nt"; done) \
+  | sort -u | tr '\n' ' ')"
 _root="$(cd "$DIR/../../.." && pwd)"
 _poll="$_root/scripts/lib/git-data-boot-signal-poll.sh"
 _cap="$_root/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
