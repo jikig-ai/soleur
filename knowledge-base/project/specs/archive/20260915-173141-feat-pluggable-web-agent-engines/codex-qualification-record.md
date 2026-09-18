@@ -32,6 +32,8 @@ remote response is stored in this record.
 | DPA, geography, approval, and deletion evidence gate | `test/agent-engine-data-egress-policy.test.ts` | PASS; missing evidence fails closed |
 | Persisted engine binding and no alternate adapter | `test/agent-engine-dispatch.test.ts` | PASS for synthetic fixtures |
 | Lifecycle telemetry without payload or credential fields | `test/agent-engine-observability.test.ts`, `test/agent-engine-dispatch.test.ts` | PASS for synthetic fixtures |
+| Remote erasure and post-erasure thread reset | `test/codex-app-server-session.test.ts`, `test/codex-app-server-lifecycle-source.test.ts` | PASS; exact delete acknowledgement required and the next start creates a fresh provider thread |
+| Codex adapter and App Server regression suite | `vitest run test/codex-*.test.ts` | PASS: 10 files, 95 tests |
 | Restart/reconcile, cancellation, attachment handling, and live provider usage | No live provider qualification run yet | PENDING |
 
 ## Release decision
