@@ -65,7 +65,7 @@ Derived from plan **v2 + deepen pass** (6-reviewer consolidation + CTO/CPO/terra
 
 ## Phase 6 — Follow-through wiring
 
-- [ ] 6.1 `scripts/followthroughs/git-data-reboot-evidence-landed-8210.sh` (exit 0 when `origin/main`'s evidence carries `RUNG2_REBOOT_REOPEN=PASS` and the rung-2 gate RELEASEs; exit 1 now); directive + `follow-through` label on #8210 at ship
+- [ ] 6.1 `scripts/followthroughs/git-data-reboot-evidence-landed-8210.sh` (exit 0 when `main`'s evidence carries `RUNG2_REBOOT_REOPEN=PASS` and the rung-2 gate RELEASEs; exit 2 TRANSIENT now — T4 — and 2 on any non-main checkout); directive + `follow-through` label on #8210 at ship
 
 ## Phase 7 — Verification and ship prep
 

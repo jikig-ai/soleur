@@ -36,3 +36,14 @@ Headless plan-review (2026-09-18). Taste findings surfaced here, not auto-applie
   "origin/main's evidence carries no RUNG2_REBOOT_REOPEN key — it predates the #8210 reset arm."
 - **If the operator prefers the AC as written:** change the no-key branch to exit 1 and expect a
   daily `action-required` comment on #8210 until PM2 lands. Nothing else moves.
+
+> **Addendum 2026-09-18 (review, pattern seat HIGH):** the probe as first shipped could NEVER
+> return 0. It materialised main's template to a lone `mktemp` file and called the rung-2 gate
+> with it; the gate derives the evidence, the render module and every bound payload from the
+> template's DIRECTORY, so it HOLD-ed on "no evidence at /tmp/…" every run, and the probe then
+> printed a wrong cause ("the payload has been edited since") forever. A `git archive` export
+> fixes the paths and then fails Guard 4's provenance read (not a git work tree). The gate wants
+> a `main` checkout with history — which is what the sweeper provides — so the probe now reads
+> the checkout it stands in and refuses, TRANSIENT, when `HEAD != origin/main`. On this branch it
+> therefore reports "this checkout is not origin/main" (rc=2); under the sweeper it reads main.
+> AC17's expected rc against today's main is unchanged (2).
