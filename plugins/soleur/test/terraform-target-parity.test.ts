@@ -2986,6 +2986,60 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
 });
 
 /**
+ * inngest_host SHAPE GATE (#6894, ADR-142 Guard 3): wired into the job, and its allow-set IS the
+ * job's -target set.
+ *
+ * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
+ * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
+ * registry parity block above. The call assertion follows the inngest-volume-recut "sources BOTH
+ * gates" test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * `# shellcheck source=` directive or prose cannot satisfy it.
+ */
+describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = stripComments(extractJobBlock(wf, "inngest_host"));
+  const CALL = /^\s*if ! inngest_host_shape_gate tfplan\.json; then$/m;
+
+  test("sources and CALLS inngest_host_shape_gate, with no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-host'"); // non-vacuity: the right job
+    expect(jobBlock).toMatch(
+      /^\s*source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/inngest-host-shape-gate\.sh"$/m,
+    );
+    expect(jobBlock).toMatch(CALL);
+    expect([...jobBlock.matchAll(new RegExp(CALL.source, "gm"))].length).toBe(1);
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("non-vacuity: the call check can tell a wired job from an unwired one", () => {
+    const unwired = jobBlock.replace(CALL, "          if false; then");
+    expect(CALL.test(unwired)).toBe(false);
+  });
+
+  test("the gate runs on the saved plan BEFORE the apply consumes it", () => {
+    const callAt = jobBlock.search(CALL);
+    const applyAt = jobBlock.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(callAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(callAt);
+  });
+
+  test("the gate's def allow === the job's -target set", () => {
+    const lib = readFileSync(
+      join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"),
+      "utf8",
+    );
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
+    expect(targets.length).toBe(18); // non-vacuity floor
+    expect(allow).toEqual(targets);
+    // The passphrase pair is per-merge -targeted and must never join this allow-set.
+    expect(allow).not.toContain("random_password.inngest_redis_luks");
+    expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
  * JOB <=> GATE-LIB PAIRING.
  *
  * Two INVERSE, near-identically-named registry gates now exist (host-replace PRESERVES the

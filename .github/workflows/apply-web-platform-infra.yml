@@ -1865,6 +1865,9 @@ jobs:
         # EXACTLY the inngest-host set enumerated in OPERATOR_APPLIED_EXCLUSIONS
         # (terraform-target-parity.test.ts). Pure create — the destroy-guard below fails
         # the dispatch on ANY resource delete (a net-new host apply must add, never remove).
+        # Since #6894 the plan must ALSO pass inngest_host_shape_gate (ADR-142 Guard 3): every
+        # action must be in the gate's per-address permitted table (creates PERMITTED, never
+        # REQUIRED), and the gate's allow-set is exactly the -target= list below.
         run: |
           set -uo pipefail
           # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a
@@ -1914,6 +1917,26 @@ jobs:
           if [[ "$resource_deletes" -gt 0 || "$nested_deletes" -gt 0 ]]; then
             echo "::error::inngest-host plan shows destructive change(s) (${resource_deletes} resource delete(s) + ${nested_deletes} nested-block removal(s)) — provisioning a brand-new host is additive-only. Aborting."
             terraform show -no-color tfplan | grep -E 'will be destroyed|Plan:' | head -20 >&2
+            exit 1
+          fi
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # #6894 (ADR-142 Guard 3) — the plan-SHAPE gate. The destroy-guard above only refuses
+          # deletes; this grades every entry against a per-address permitted table (creates
+          # permitted, never required) and refuses the LUKS passphrase pair's presence outright.
+          # Sourced — the SAME bytes tests/scripts/test-inngest-host-shape-gate.sh exercises.
+          # shellcheck source=tests/scripts/lib/inngest-host-shape-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/inngest-host-shape-gate.sh"
+          if ! inngest_host_shape_gate tfplan.json; then
+            echo "::error::inngest-host plan-shape gate ABORTED (inngest_host_shape_gate, ADR-142 Guard 3). The reason= token above names the first failing property. NO [ack-destroy] bypass on this path."
+            echo "::error::Remediation depends on the reason:"
+            echo "::error::  • old_volume_touched / old_attachment_touched → the plan acts on the LIVE plaintext AOF volume or its attachment (a create is legal only alongside a from-scratch server). Do NOT apply: that volume holds the only copy of the armed reminders. Find what forced the change (a size/location/label edit, or the volume leaving state) and revert it."
+            echo "::error::  • server_touched → hcloud_server.inngest would be updated or replaced. A user_data edit force-replaces the host (no ignore_changes=[user_data]) — that is the separately-gated 'inngest-host-replace' dispatch; an in-place update (e.g. server_type) reboots the sole scheduler."
+            echo "::error::  • luks_passphrase_in_graph → random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key appear in this plan. They are per-merge -targeted and nothing in this job's target set depends on them; their presence means the target set or dependency graph changed. Stop — a mint here strands any LUKS header cut from the existing key."
+            echo "::error::  • luks_volume_touched / luks_attachment_touched / network_touched / firewall_touched / generated_secret_touched → an update, delete or forget on an address this dispatch may only create. doppler_touched → a Doppler delete/forget."
+            echo "::error::  • forget_present / resource_deletes / nested_deletes / out_of_scope → a state removal, a destroy, a nested-block removal, or an action outside the 18-address -target set. Inspect the plan output below."
+            echo "::error::  • allow_unpartitioned → the gate itself is inconsistent (an allow-set address with no permitted-actions rule). Fix tests/scripts/lib/inngest-host-shape-gate.sh."
+            grep -E 'will be created|will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
           terraform show -no-color tfplan | grep -E '^Plan:' || true

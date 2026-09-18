@@ -2327,6 +2327,9 @@ if want_scripts; then
   # an unregistered suite here never gates and the failure is silent-and-green.
   run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
+  # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
+  # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.
+  run_suite "tests/scripts/inngest-host-shape-gate" bash tests/scripts/test-inngest-host-shape-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
