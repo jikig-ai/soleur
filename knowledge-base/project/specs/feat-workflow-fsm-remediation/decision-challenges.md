@@ -70,3 +70,11 @@ where a verification pass belongs), and ADR-225 records the honest ledger.
 per-invocation claim was false), or ask for the per-turn saving to be measured
 before deciding. This is a User-Challenge per ADR-084: the direction you set
 is implemented, and the premise you set it on was wrong.
+
+> **Appended 2026-09-18 (#8301 review, coverage consult) to §2:** the cause
+> of the largest edge is now known. `brainstorm/SKILL.md` invokes
+> `skill: soleur:compound` as a designed sub-step, so `brainstorm -> compound`
+> (125) is a node skill used as a sub-skill — the non-node filter cannot see
+> it. Declaring the edge (`brainstorm: [plan, one-shot, compound]`) would make
+> the classifier honest about it; that is an edge-set change you did not rule
+> on, so it is recorded here rather than made.

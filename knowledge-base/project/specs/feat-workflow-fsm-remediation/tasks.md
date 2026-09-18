@@ -54,7 +54,9 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
       explicitly as non-readers (Guard 1 row 4). **Landed at review, not at
       work** — it was ticked while unimplemented; the reader it would have
       caught (`lint-skill-body-budget.py` consuming the view) was found by the
-      architecture seat instead.
+      architecture seat instead. Then DELETED at the simplification pass: the
+      ratchet no longer reads the view, and parity keeps the view correct for
+      every reader.
 - [x] 3.8 Verify AC5–AC10; run `bash scripts/grok-fidelity-gate.sh`
 
 ## Phase 4: Track A — offline classifier
@@ -105,8 +107,10 @@ extraction were cut — do not reinstate them from the spec's superseded FRs.
       filename differs from the plan's provisional one) covering four decisions:
       bundled const, separated transition functions, offline classification, and
       the merge-base ratchet placement.
-- [x] 7.2 Create `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`
-      honouring the sweeper contract (0 PASS / 1 FAIL / other TRANSIENT)
+- [~] 7.2 ~~Create `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`~~
+      Created, then DELETED at the review simplification pass: it could not PASS
+      where the sweeper runs, and as an operator-run script it was a wrapper
+      around `classify --summary`. The classifier warns on null/empty readings.
 - [~] 7.3 **STRUCK at review.** The sweeper runs on a hosted runner against a
       fresh checkout where the gitignored invocation log cannot exist; a
       synthetic fresh checkout measured FAIL on every sweep. The probe is

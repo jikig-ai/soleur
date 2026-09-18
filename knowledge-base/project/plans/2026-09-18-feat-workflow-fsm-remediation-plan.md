@@ -255,7 +255,7 @@ reddening on 94 unrelated files.
 - `plugins/soleur/test/skill-body-budget.json` — seeded ceilings
 - `plugins/soleur/skills/plan/references/plan-sharp-edges.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-225-workflow-fsm-single-source-of-truth.md`
-- `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`
+- ~~`scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`~~ (created, then deleted at review — see ADR-225 Consequences)
 
 ## User-Brand Impact
 
@@ -281,9 +281,10 @@ Two guards. (v1's Guard 1 went with the gate.)
 **Property.** The bundled TS edge set, the derived JSON view, and the web
 copy are structurally equal; no commit can change one without the others.
 
-**Assembly.** Every reader of the edge set. Chokepoint: the bundled const.
-A **census** over `grep -rn "phase-surface-map\|declaredTransitions"`, with
-test files classified explicitly as non-readers, not a pinned list.
+**Assembly.** The bundled const and its one mirrored view. *Revised at
+review:* the census over readers was built, then deleted at the simplification
+pass — parity keeps the view correct for every reader, so a census guards only
+the accuracy of a comment; and the ratchet no longer reads the view at all.
 
 **Mutation matrix.**
 
@@ -292,7 +293,7 @@ test files classified explicitly as non-readers, not a pinned list.
 | 1 | Add an edge to the TS const only | RED |
 | 2 | Add an edge to the JSON view only | RED |
 | 3 | Add an edge to the web copy only | RED |
-| 4 | Add a **second** reader left unlisted | RED — census, not snapshot |
+| 4 | ~~Add a **second** reader left unlisted~~ | N/A at review — the census was deleted (see Assembly); the view has one reader |
 | 5 | Stub the test's read to return `{}` | RED — targets the guard's own dispatch |
 | 6 | Add `plan -> ship` to the edge set | RED — the absence assertion is the product requirement |
 
@@ -513,14 +514,9 @@ Skipped — no persistent store, no new cross-component connection.
 - [ ] **AC18** — `bash plugins/soleur/test/c4-count-parity.test.sh` passes.
 - [ ] **AC19** — `ADR-225-*.md` exists; ordinal re-verified across all `origin/*`
       refs immediately before merge.
-- [ ] **AC20** — `scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`
-      exists, is executable, and honours the sweeper exit contract
-      (0 PASS / 1 FAIL / other TRANSIENT) so it reads like its siblings — but it
-      is **operator-run and NOT enrolled**: the sweeper runs on a hosted runner
-      where the gitignored invocation log cannot exist, and a synthetic fresh
-      checkout measured FAIL on every run (the #6042 locality error). The
-      tracker carries no `soleur:followthrough` directive; ADR-225 records the
-      reason and the command.
+- ~~[ ] **AC20** — the follow-through probe~~ Struck at review: the probe could
+      not PASS where the sweeper runs and, operator-run, was a wrapper around
+      `classify --summary`; deleted. The classifier warns on null and empty readings.
 - [ ] **AC21** — No rule pruned: the rule-id count is unchanged at 98 and the
       retired-rule registry gains no row.
 
@@ -537,7 +533,7 @@ Written as `mutation → guard reddens`.
 3. Add an edge to the web copy only → parity RED.
 4. Add `plan -> ship` → absence assertion RED.
 5. Put `"plan"` into `mandatorySuccessors("work")` → existing suite RED.
-6. New edge-set reader left unlisted → census RED.
+6. ~~New edge-set reader left unlisted → census RED.~~ (census deleted at review)
 7. Two sibling roots sharing one inode → union equals distinct sum, not double.
 8. Mode-000 sibling root → aggregation completes.
 9. Enumeration that prepends a sibling → `INCIDENTS_DIRS[0]` assertion RED.

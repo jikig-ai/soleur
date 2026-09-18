@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Incident-log root enumeration for scripts/rule-metrics-aggregate.sh.
 #
-# Source-only: defines two pure functions and runs nothing. Tests live in the
+# Source-only: defines three pure functions and runs nothing. Tests live in the
 # sibling scripts/lib/incidents-roots.test.sh, which sources this file directly —
 # that is the whole reason the logic is here rather than inline in the aggregator.
 # The aggregator's one existing seam, INCIDENTS_REPO_ROOT, is defined as an
@@ -98,21 +98,20 @@ incidents_dedupe_existing_dirs() {
   return 0
 }
 
-# incidents_enumerate_log_roots <repo-root> [<extra-root>...]
+# incidents_enumerate_log_roots <repo-root>
 #   stdout: NUL-terminated, inode-deduped list of `<worktree>/.claude` dirs to
-#           read, FIRST ARGUMENT'S .claude FIRST (rotation pins element 0).
+#           read, THE REPO ROOT'S .claude FIRST (rotation pins element 0).
 #
-# The one composition both consumers run: repo root, any caller-supplied extra
-# roots (the aggregator passes the shared checkout beside --git-common-dir),
-# then every registered worktree, deduped by inode with first-seen order kept.
-# Extracted because the two hand copies had already diverged once -- the
-# aggregator gained an unreadable-root sentinel the classifier's copy lacked.
+# Repo root, then every registered worktree (the main worktree included, which
+# is what --git-common-dir/.. used to add separately), deduped by inode with
+# first-seen order kept. It lives in this lib rather than inline in the
+# aggregator because the aggregator's only seam, INCIDENTS_REPO_ROOT, is an
+# EXCLUSIVE override that disables enumeration -- the composition cannot be
+# unit-tested through it.
 incidents_enumerate_log_roots() {
-  local repo_root="${1-}" extra wt
+  local repo_root="${1-}" wt
   [[ -n "$repo_root" ]] || return 1
-  shift
   local -a cands=("$repo_root/.claude")
-  for extra in "$@"; do [[ -n "$extra" ]] && cands+=("$extra/.claude"); done
   while IFS= read -r -d '' wt; do
     [[ -n "$wt" ]] || continue
     cands+=("$wt/.claude")

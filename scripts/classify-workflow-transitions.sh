@@ -41,7 +41,7 @@ for arg in "$@"; do
 usage: classify-workflow-transitions.sh [--summary]
   default    one TSV row per undeclared lifecycle transition: <session_id>\t<from> -> <to>
   --summary  one key=value line: undeclared= sessions= pairs= nonnode= read= dropped= [null_reading=1]
-env: CLASSIFY_REPO_ROOT=<dir>  read ONLY that root (skips sibling-worktree enumeration)
+env: CLASSIFY_REPO_ROOT=<dir>  read ONLY that root (skips the main-checkout/sibling enumeration)
 exit: 0 classified (a null reading still exits 0 and says so); 2 could not classify
 USAGE
       exit 0 ;;
@@ -50,6 +50,7 @@ USAGE
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # shellcheck source=lib/incidents-roots.sh
 source "$SCRIPT_DIR/lib/incidents-roots.sh"
 
@@ -72,14 +73,17 @@ fi
 # both resolve through the hook's own dirname -- so it gets the same treatment:
 # enumerate sibling worktrees, then dedupe by inode so a root reachable by two
 # different path strings is not walked twice.
+# WHERE THE LOG IS. The Skill logger (.claude/hooks/skill-invocation-logger.sh)
+# is registered via $CLAUDE_PROJECT_DIR and, measured 2026-09-18, every one of
+# 10,290 live invocation records sat in the MAIN checkout's .claude -- zero in
+# any sibling worktree. The incident log fragments per root; this one does not.
+# But this script may run FROM a worktree, where $REPO_ROOT/.claude has no log:
+# the review's simplification pass tried "one root" and got a NULL reading from
+# exactly this worktree. The shared enumeration (repo root, main worktree,
+# siblings, inode-deduped) is how the main checkout is reached from anywhere;
+# the sibling entries are empty today and cost ~4 ms.
 ROOTS=("$REPO_ROOT/.claude")
 if [[ -z "${CLASSIFY_REPO_ROOT:-}" ]]; then
-  # Same composition as the aggregator (scripts/lib/incidents-roots.sh).
-  # Measured 2026-09-18: the Skill logger resolves via $CLAUDE_PROJECT_DIR and
-  # every live invocation record sat in the main root, so sibling enumeration
-  # found nothing here -- it is kept for parity with the incident log (whose
-  # hook DOES fragment per root) and costs ~4 ms, but the earlier claim that
-  # the invocation log has "the same per-root fragmentation" was false.
   _dd=()
   while IFS= read -r -d '' _d; do
     [[ -n "$_d" ]] || continue
@@ -223,6 +227,11 @@ if [[ "$read_n" -gt 0 && "$kept" -eq 0 ]]; then
 fi
 if [[ "$dropped" -gt 0 ]]; then
   echo "WARNING: dropped $dropped of $read_n invocation record(s) for missing skill/session_id/ts." >&2
+fi
+# Records but no lifecycle pair (every session a single node invocation): a
+# corpus the instrument cannot say anything about. Not dark, not clean -- say so.
+if [[ "$kept" -gt 0 && "$pairs" -eq 0 ]]; then
+  echo "WARNING: $kept record(s) formed ZERO lifecycle pairs; undeclared=0 here is an empty reading, not a clean one." >&2
 fi
 
 if [[ "$SUMMARY" -eq 1 ]]; then

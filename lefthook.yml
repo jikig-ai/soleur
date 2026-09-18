@@ -89,6 +89,18 @@ pre-commit:
         - "AGENTS.rules.md"
         - "scripts/retired-rule-ids.txt"
       run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
+    skill-body-budget-lint:
+      priority: 5
+      # #8302 / ADR-225: the lifecycle SKILL.md byte ratchet, anchored to the merge
+      # base. Registered here so the LOCAL gate sees a red before push (CI's
+      # rule-body-lint job is the required context; without this entry the lint's
+      # staged/unstaged diff arms were dead code and a contributor learned of a
+      # red only after pushing). ~0.1 s. Base-unavailable is a hard failure
+      # inside the lint, never a skip -- fetch origin main first.
+      glob:
+        - "plugins/soleur/skills/*/SKILL.md"
+        - "plugins/soleur/test/skill-body-budget.json"
+      run: python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"
     migrated-rule-id-lint:
       priority: 5
       # #8030: placement + body hash of rules migrated out of AGENTS.rules.md. Runs after

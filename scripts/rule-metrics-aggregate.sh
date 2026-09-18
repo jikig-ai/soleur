@@ -56,34 +56,21 @@ OUT="$REPO_ROOT/knowledge-base/project/rule-metrics.json"
 # seeing an empty log. Never widen past it.
 INCIDENTS_DIRS=("$REPO_ROOT/.claude")
 if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
-  _common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"
-  if [[ -n "$_common_dir" ]]; then
-    case "$_common_dir" in /*) : ;; *) _common_dir="$REPO_ROOT/$_common_dir" ;; esac
-    _shared_root="$(cd "$_common_dir/.." 2>/dev/null && pwd || true)"
-    if [[ -n "$_shared_root" && "$_shared_root/.claude" != "$REPO_ROOT/.claude" ]]; then
-      INCIDENTS_DIRS+=("$_shared_root/.claude")
-    fi
-  fi
-
-  # SIBLING WORKTREES (#8302). The two roots above are the repo root and the
-  # shared checkout; a session running in ANOTHER worktree writes to that
-  # worktree's own .claude, which neither reaches. Measured 2026-09-18 on one
-  # machine: 23,882 rows readable from here against 11,346 stranded across 34
-  # sibling roots -- 32% of the corpus, reported as the whole. (Point-in-time;
-  # the brainstorm and learning carry the derivation.)
-  #
-  # One shared composition (scripts/lib/incidents-roots.sh) enumerates,
-  # appends `/.claude`, and dedupes BY INODE, NOT BY STRING: `git worktree
-  # list` yields the main worktree by its own path while --git-common-dir
-  # yields it as `<common>/..`; same inode, different strings, and an
-  # un-deduped union cats one log twice into a commutative reduce.
-  _extra=()
-  [[ ${#INCIDENTS_DIRS[@]} -gt 1 ]] && _extra=("${INCIDENTS_DIRS[1]%/.claude}")
+  # EVERY ROOT, ONCE (#8029 -> #8302). A session running in ANY worktree writes
+  # to that worktree's own .claude. `git worktree list` yields the main worktree
+  # (which is also what --git-common-dir/.. resolved to before #8302) and every
+  # sibling; scripts/lib/incidents-roots.sh dedupes them BY INODE, NOT BY
+  # STRING, because the same directory reaches this list under different
+  # spellings, and an un-deduped union cats one log twice into a commutative
+  # reduce where the inflation is invisible. Measured 2026-09-18 on one
+  # machine: 23,882 rows readable from the two pre-#8302 roots against 11,346
+  # stranded across 34 sibling roots -- 32% of the corpus, reported as the
+  # whole. (Point-in-time; the brainstorm and learning carry the derivation.)
   _deduped=()
   while IFS= read -r -d '' _d; do
     [[ -n "$_d" ]] || continue
     _deduped+=("$_d")
-  done < <(incidents_enumerate_log_roots "$REPO_ROOT" ${_extra[@]+"${_extra[@]}"})
+  done < <(incidents_enumerate_log_roots "$REPO_ROOT")
   # PIN ELEMENT 0. AGGREGATOR_ROTATE truncates INCIDENTS_DIRS[0]; dedupe drops a
   # non-existent dir, so on a fresh checkout with no .claude yet the repo root
   # could vanish and a SIBLING's live log be promoted into the rotation slot.
@@ -237,7 +224,7 @@ if [[ -s "$INCIDENTS_MERGED" ]]; then
   # (a path, an identity string, an embedded newline) into a public file
   # through a key name, satisfying the CLO condition by the letter (no new
   # FIELD) and defeating it in substance. Measured at review: a row with
-  # rule_id "gh pr merge 123 --body \"jean@example.invalid /home/jean/secret\""
+  # rule_id "gh pr merge 123 --body \"user@example.com /home/user/secret\""
   # committed that string as a non_corpus_counts key, and a row with
   # `"rule_id":123` aborted the whole aggregation (jq: Cannot index object with
   # number). A closed alphabet -- the corpus id shape plus the documented

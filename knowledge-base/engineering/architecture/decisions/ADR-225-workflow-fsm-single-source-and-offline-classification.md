@@ -57,11 +57,10 @@ classification was missing.
 of truth. `.claude/workflow-transitions.json` is a *derived view*: **hand-mirrored
 (there is no generator)** and pinned by a parity block that fails in both
 directions — a view carrying an edge the const lacks is exactly as wrong as one
-missing an edge. The view has two consumers, both unable to read a TypeScript
-const: the offline classifier (bash, decision 3) and the SKILL.md byte ratchet
-(python, decision 4), which derives its lifecycle node set from the view's keys
-and destinations. A reader census in the parity block enumerates every consumer
-from the tree, so a third one cannot join unlisted.
+missing an edge. The view has one consumer: the offline classifier (bash,
+decision 3). A `bun -e` read of the const from that script was weighed at
+review (bun is present wherever the classifier runs) and not taken — see the
+Alternatives table — so the mirror stays.
 
 The view is a separate file rather than a `transitions` key inside
 `.claude/phase-surface-map.json`, because that file is deep-equal'd against the
@@ -99,11 +98,16 @@ permanently fail-open. A *separate* job would have been advisory until someone
 pinned it in `infra/github/ruleset-ci-required.tf`, and ADR-116 records that
 advisory → blocking promotion has never happened here; `rule-body-lint` is
 already required (ADR-092) and already fetches at depth 0, so the ratchet blocks
-from its first run. Its node set is every key *and* every destination of the
-view, read from the base *and* the working tree, so a destination-only node
-(`one-shot`) is covered and a node dropped from the view in the same diff is
-still measured. Bootstrap (no ceiling file at the base) is legal only when the
-lint itself is also absent at the base, which closes the rename escape.
+from its first run. Its row set is the ceiling file itself — base rows ∪
+working-tree rows — so a row removed in the same diff is still measured against
+its base ceiling; *which* rows exist (FSM keys ∪ destinations ∪
+`ONE_SHOT_CHILD_SKILLS`, so `one-shot`, `qa` and `deepen-plan` are covered) is
+pinned on the TypeScript side in the required `grok-fidelity` check. The lint
+reads no view. A ceiling may rise, or a row be retired, only in a diff whose
+sole change is the ceiling file (base..HEAD, staged and unstaged), so a raise
+structurally cannot ride with the growth it would license. Bootstrap (no
+ceiling file at the base) is legal only when the lint itself is also absent at
+the base, which closes the rename escape.
 
 ## Alternatives Considered
 
@@ -116,6 +120,7 @@ lint itself is also absent at the base, which closes the rename escape.
 | `transitions` key inside `phase-surface-map.json` | Forces FSM edges through the web bundle via that file's deep-equal parity test |
 | Ratchet beside the existing word budget | That job has no `fetch-depth`; the base read fails every run |
 | Ratchet as its own CI job | Not a required context; under auto-merge a red ratchet would not block, and ADR-116 records that advisory gates stay advisory |
+| Read the const from bash via `bun -e` instead of keeping a mirrored view | Considered at review: bun is mandatory on the operator machine and in the CI scripts shard, so the premise "bash cannot read a TS const" is false where the classifier runs. Not taken in this PR: it trades one parity test for a runtime dependency on the plugin's TS module from repo tooling, and reverses a decision the plan carried through review. Either is defensible; the reason recorded here is that the mirror was the decision reviewed, not that the alternative cannot work |
 | Enrol the transition probe in the follow-through sweeper | The sweeper runs on a hosted runner against a fresh checkout, where the gitignored invocation log cannot exist; measured: FAIL on every sweep — the #6042 locality error one row up, reproduced |
 | Restore a CI schedule for the rule-metrics aggregator | Removed deliberately under #6042: fresh checkouts committed all-zero snapshots that clobbered the real local aggregate |
 | Raise emission coverage via SKILL.md prose | Emission via SKILL.md is LIVE, not stalled: ADR-179 decision 9 (#7482, 2026-08-13) inverted the `source incidents.sh` form into `SOLEUR_RULE_APPLIED` markers captured hook-side — 21 sites across 7 lifecycle skills on `main`, 869 `applied` events in the live `.jsonl` logs across all roots on 2026-09-18 (excluding rotated archives). The audit's "4 of 10 skills" was a grep for the string `incidents.sh`, which the inverted transport no longer contains. Widening the remaining ~80 uncovered rules is a per-rule choice, not a mechanism gap, and out of scope here |
@@ -143,9 +148,34 @@ lint itself is also absent at the base, which closes the rename escape.
   laundered through `plan → deepen-plan → ship`, which that walk classified as
   two unclassified pairs and zero violations. `postmerge → work` — the edge
   rejected as redundant — occurs 7 times, recorded here rather than acted on.
-- The transition probe (`scripts/followthroughs/workflow-fsm-transition-baseline-8302.sh`)
-  is **operator-run**, not sweeper-enrolled, for the reason in the Alternatives
-  table; its baseline is the reading above.
+- There is no follow-through probe. One was written, could not PASS where the
+  sweeper runs (Alternatives table), and as an operator-run script was a
+  wrapper around `classify --summary` restating this section's numbers — the
+  simplification pass deleted it. The classifier itself warns on a null reading,
+  on an unparseable log (rc 2), and on records that form zero pairs. The
+  baseline lives here; re-baseline by editing this section.
+- **The reading needs interpretation, not just counting.** Of the 604,
+  `brainstorm → compound` (125) is `brainstorm/SKILL.md` invoking `compound` as
+  a designed sub-step — a node skill used as a sub-skill, which the non-node
+  filter cannot see; `compound → plan`, `ship → plan`, `postmerge → plan/work`
+  (~190) are sessions chaining a second feature; 65 are self-loops. Over half
+  the undeclared edges are not review-skips. Whether to declare
+  `brainstorm → compound` is the edge-set question recorded in
+  decision-challenges §2.
+- **The committed aggregate is now a function of which worktrees exist at
+  regeneration time.** `cleanup-merged` deletes sibling worktrees and their
+  logs, so hits and `last_hit` for rules exercised only there regress on the
+  next regeneration; measured: `rules_unused_over_8w` 81 with the widened read
+  vs 98 narrow. That is the local-producer model (ADR-091) made more visible,
+  not a new class; archiving a worktree's log before deletion would be a new
+  write site, which the CLO condition on this change forbids without its own
+  review. Read the per-rule counters as a lower bound.
+- **The ratchet is satisfied by its own remedy.** It bounds `SKILL.md` bytes;
+  `references/` is unbounded, and appending 300 KB to
+  `plan-sharp-edges.md` leaves the lint green (measured). That is by design —
+  the ratchet exists to force each extraction to be argued — and #8305 (the
+  body-weight growth report) is where total loaded weight, references included,
+  gets tracked.
 - **The extraction's economics, measured at review, are not what the plan
   claimed.** The ratchet bounds `SKILL.md` bytes — the load paid at turn 0.
   `plan/references/plan-sharp-edges.md` is 151,209 B and **~58k tokens** by the
@@ -157,7 +187,10 @@ lint itself is also absent at the base, which closes the rename escape.
   re-sent on every turn of the run, a block injected at the end is re-sent on
   none of the earlier ones, so placing the load last avoids ~58k × k cache-read
   tokens per run, where k is the number of turns before the pass. That is
-  plausibly large and **unmeasured** — no turn telemetry exists. The directive
+  plausibly large and **unmeasured** — no turn telemetry exists — but the
+  break-even is ~8 turns before the pass and a `plan` run's research and
+  drafting exceed that by an order of magnitude, so it is structural rather
+  than speculative. The directive
   is therefore unconditional and placed as the final step before Plan Review,
   which is also where a verification pass belongs (Acceptance Criteria land
   last). A reachability guard in `components.test.ts` reds if a
@@ -177,8 +210,7 @@ lint itself is also absent at the base, which closes the rename escape.
   normalisation deferred to #8303.
 - No plugin runtime code calls `declaredTransitions()` or
   `isDeclaredTransition()`; they exist so the parity block and a future gate
-  (below) have a typed source, and the reader census reds if a consumer appears
-  unlisted. `brainstorm → one-shot` is declared but unobservable by the
+  (below) have a typed source. `brainstorm → one-shot` is declared but unobservable by the
   classifier, because `one-shot` is not a node and its records are removed
   before pairing.
 - A gate remains buildable on top of this without rework: the edge set is
@@ -191,21 +223,22 @@ lint itself is also absent at the base, which closes the rename escape.
 - `plugins/soleur/test/workflow-fidelity.test.ts` — edge set, the `plan → ship`
   absence, `mandatorySuccessors` forward-only **and a subset of the declared
   edges** (the wire between the two functions), derived-view parity in both
-  directions, budget-file keys equal to the node set, and a reader census. Runs
+  directions, and budget-file keys equal to the lifecycle set. Runs
   in the required `grok-fidelity` CI check (and as a pre-push gate under the
   Grok harness only).
 - `scripts/classify-workflow-transitions.test.sh` — 16 assertions including a
   present-but-unparseable log failing loudly, sub-skill hops not laundering the
   enclosing transition, rotated `.jsonl.gz` archives read, and timestamp order
   over file order.
-- `scripts/lint-skill-body-budget.test.sh` — 16 assertions including the
-  same-diff ceiling raise, the unavailable base, the empty node set, an orphan
-  ceiling row, a destination-only node, same-diff node removal, and the rename
-  escape from bootstrap, and the legal raise-only diff.
+- `scripts/lint-skill-body-budget.test.sh` — 15 assertions including the
+  same-diff ceiling raise, the unavailable base, the empty row set, a row for a
+  sub-skill the FSM does not model, same-diff row removal, the rename escape
+  from bootstrap, the legal raise-only diff, and a raise beside an uncommitted
+  growth.
 - `scripts/lib/incidents-roots.test.sh` — 12 assertions: NUL-framed
   `--porcelain -z` parsing (a newline-bearing path is one record, not a forged
   root, at both stages), inode dedupe, first-seen ordering, and the shared
-  enumerate→dedupe composition both consumers call.
+  enumerate→dedupe composition both readers call.
 - `scripts/rule-metrics-aggregate.test.sh` T30 — the shared checkout counted
   exactly once and a sibling worktree counted at all; T32 — a free-text or
   non-string `rule_id` from any root neither aborts the run nor reaches a

@@ -20,7 +20,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/classify-workflow-transitions.sh"
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot run its SUT (an exit-0 skip reads as green)"; exit 1; }
 
 TMP_ROOT=$(mktemp -d -t classifytest.XXXXXXXX) || { echo "FATAL: cannot create scratch root" >&2; exit 1; }
 : "${TMP_ROOT:?}"

@@ -24,8 +24,8 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "FAIL: jq missing — this suite cannot run its SUT (an exit-0 skip reads as green)"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "FAIL: python3 missing — this suite cannot run its SUT"; exit 1; }
 
 
 make_fixture_repo() {

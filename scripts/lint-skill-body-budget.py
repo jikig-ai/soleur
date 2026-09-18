@@ -24,23 +24,17 @@ shape), and an unavailable base is a HARD FAILURE rather than a skip.
 ONE-SIDED BY DESIGN. Driving a number DOWN never reds. A two-sided pin would
 punish exactly the behaviour the ratchet exists to encourage.
 
-The node set comes from .claude/workflow-transitions.json, so "lifecycle skill" is
-a machine-readable set rather than a hand-listed one -- a skill added to the
-lifecycle cannot silently escape the ratchet, and an empty set fails rather than
-reporting a clean sweep over nothing. Three refinements, each closing a measured
-escape from review:
-
-  - KEYS AND DESTINATIONS. A destination-only node (`one-shot`, reachable from
-    brainstorm) has no key and was unmeasured while being the orchestrator every
-    `/go fix` routes to. The set is keys | all destinations.
-  - BASE AND WORKING TREE. Reading the view from the working tree alone let one
-    diff drop a node from the view AND bloat that node's SKILL.md: the ratchet
-    then reported OK over the survivors. The set is the union of the view at
-    the base and the view in the working tree, so a removed node is still
-    measured against the base ceiling in the diff that removes it.
-  - ORPHAN ROWS. A ceiling row for a name that is not a node is an UNCLASSIFIED
-    row and fails, mirroring the node-with-no-row bucket below. Without it, a
-    row could outlive its node silently.
+THE ROW SET IS THE CEILING FILE ITSELF -- base rows ∪ working-tree rows. Which
+skills belong in it is pinned on the TypeScript side (workflow-fidelity.test.ts:
+budget keys == FSM keys ∪ destinations ∪ ONE_SHOT_CHILD_SKILLS, in the required
+grok-fidelity check), because only the TS constants know the lifecycle includes
+sub-skills the FSM does not model (qa, deepen-plan). This lint reads no view: an
+earlier version derived the set from .claude/workflow-transitions.json and the
+simplification pass showed every property that bought (a destination-only node
+covered, a node dropped in the same diff still measured) is equally bought by
+the union of base and current rows, which the lint already parses. A row
+removed in the diff is still measured against its base ceiling; an empty row set
+fails rather than reporting a clean sweep over nothing.
 """
 
 from __future__ import annotations
@@ -52,7 +46,6 @@ import sys
 from pathlib import Path
 
 BUDGET_REL = "plugins/soleur/test/skill-body-budget.json"
-VIEW_REL = ".claude/workflow-transitions.json"
 
 
 def git_show(ref: str, path: str) -> tuple[int, str, str]:
@@ -98,41 +91,6 @@ def main() -> int:
             "       tree would let one diff raise a ceiling and satisfy itself, which is\n"
             "       the defect this guard exists to prevent. In CI: check out with\n"
             "       fetch-depth: 0 and fetch origin/main first. Locally: `git fetch origin main`.",
-            file=sys.stderr,
-        )
-        return 2
-
-    # --- the node set defines what must be covered ---------------------------
-    view_path = Path(VIEW_REL)
-    if not view_path.is_file():
-        print(f"FATAL: {VIEW_REL} not readable — cannot determine the lifecycle node set.", file=sys.stderr)
-        return 2
-    try:
-        wt_view = json.loads(view_path.read_text()).get("transitions", {})
-    except json.JSONDecodeError as exc:
-        print(f"FATAL: {VIEW_REL} is not valid JSON: {exc}", file=sys.stderr)
-        return 2
-    rc_v, base_view_raw, _ = git_show(args.base, VIEW_REL)
-    base_view: dict = {}
-    if rc_v == 0:
-        try:
-            base_view = json.loads(base_view_raw).get("transitions", {})
-        except json.JSONDecodeError as exc:
-            print(f"FATAL: {VIEW_REL} at base '{args.base}' is not valid JSON: {exc}", file=sys.stderr)
-            return 2
-    node_set: set[str] = set()
-    for view in (wt_view, base_view):
-        node_set.update(view.keys())
-        for dests in view.values():
-            node_set.update(dests)
-    nodes = sorted(node_set)
-
-    # An empty node set would make every check below vacuously true and report a
-    # clean sweep over nothing. That is the anti-vacuity floor.
-    if not nodes:
-        print(
-            "FATAL: the lifecycle node set is EMPTY — this guard would pass over zero\n"
-            "       files and report success. Refusing to report OK.",
             file=sys.stderr,
         )
         return 2
@@ -193,6 +151,16 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # --- the row set: base rows ∪ working-tree rows ---------------------------
+    node_set: set[str] = set(base_ceilings) | set(current)
+    if not node_set:
+        print(
+            "FATAL: the ceiling file declares NO rows at base or in the working tree — this\n"
+            "       guard would pass over zero files and report success. Refusing to report OK.",
+            file=sys.stderr,
+        )
+        return 2
+
     # --- the changed-file set decides whether a raise is legal --------------
     # `git diff --name-only <base> HEAD` plus the working tree: CI runs on a
     # committed HEAD, but the local gate may run on an uncommitted tree, and a
@@ -208,26 +176,23 @@ def main() -> int:
         changed.update(line for line in r.stdout.splitlines() if line)
     raise_only_diff = changed == {BUDGET_REL}
 
-    # Orphan rows are pinned on the TypeScript side (workflow-fidelity.test.ts:
-    # budget keys == FSM nodes ∪ destinations ∪ ONE_SHOT_CHILD_SKILLS), because
-    # the lifecycle also includes sub-skills the FSM does not model (qa,
-    # deepen-plan) and only the TS constants know that set. Here every ROW is
-    # measured and every NODE must have a row; a row the TS side does not
-    # authorise reds there.
-    # --- per-row checks: every node needs a row; every row is measured --------
-    for node in sorted(node_set | set(current)):
+    # --- per-row checks: every row (base or current) is measured ------------
+    for node in sorted(node_set):
         skill = Path(f"plugins/soleur/skills/{node}/SKILL.md")
 
         # A lifecycle skill with no row is UNCLASSIFIED and fails. Without this,
         # adding a skill to the lifecycle silently escapes the ratchet.
-        if node not in current:  # only reachable for a NODE with no row
+        if node not in current and raise_only_diff:
+            continue  # a budget-only diff may retire a row (the TS pin decides which rows exist)
+        if node not in current:  # a row present at base, removed in this diff
             errors.append(
-                f"{node}: no ceiling in {BUDGET_REL} — every lifecycle skill needs one, "
-                f"or it escapes the ratchet entirely"
+                f"{node}: ceiling row REMOVED from {BUDGET_REL} (base had {base_ceilings[node]}). "
+                f"Removing a row is not an escape hatch; the file is still measured against its "
+                f"base ceiling. Lower the ceiling instead, or land the removal in a budget-only diff."
             )
-            continue
-
-        ceiling = current[node]
+            ceiling = base_ceilings[node]
+        else:
+            ceiling = current[node]
 
         # Monotonic: a ceiling may fall, never rise -- EXCEPT in a diff whose
         # only change is the ceiling file itself. Review found the earlier text
@@ -267,7 +232,7 @@ def main() -> int:
             print(f"  - {e}", file=sys.stderr)
         return 1
 
-    scope = f"{len(node_set | set(current))} lifecycle skill(s)"
+    scope = f"{len(node_set)} lifecycle skill(s)"
     suffix = " [bootstrap: no base ceilings]" if bootstrap else ""
     print(f"lint-skill-body-budget: OK ({scope} within ceilings, base={args.base}){suffix}")
     return 0

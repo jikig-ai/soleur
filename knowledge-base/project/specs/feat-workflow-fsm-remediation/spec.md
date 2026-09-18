@@ -74,6 +74,10 @@ nothing that can refuse an action.
   stranded (35,228 total). **Count rotated `.rule-incidents-*.jsonl.gz`
   archives, not just live `.jsonl`** — they hold the majority of history and
   omitting them understates the readable set and overstates the residual.
+  *Consequence surfaced at review:* widening the read makes rows from sessions
+  this checkout does not control reachable, so `rule_id`, `error` and
+  `timestamp` are shape-gated before any becomes a key or value of the committed
+  aggregate (T32). Not scope creep; FR1's own blast radius.
 - ~~**FR2** — Aggregation cadence restored.~~ **SUPERSEDED at plan time
   (Cut C1).** Already bought by the ADR-091 local-producer model; the weekly
   `schedule:` was removed deliberately under #6042 because fresh CI checkouts
@@ -150,10 +154,13 @@ nothing that can refuse an action.
 - [ ] One declarative artifact holds both nodes and edges; a test fails if the
       TS view drifts from it.
 - [ ] `review→work`, `ship→work`, `work→plan` are declared and covered by tests.
-- [ ] The transition gate records a violation for an undeclared transition and
-      blocks nothing; its record path emits a rule-fire.
+- ~~[ ] The transition gate records a violation for an undeclared transition and
+      blocks nothing; its record path emits a rule-fire.~~ Struck with FR7 (the
+      gate was cut; classification is offline — FR7′).
 - [ ] CI fails on a SKILL.md exceeding its pinned ceiling, demonstrated red.
-- [ ] A pinned calendar date for the block/no-block decision is recorded.
+- ~~[ ] A pinned calendar date for the block/no-block decision is recorded.~~
+      Struck: ADR-225 defers the block/no-block question to measurement, not to a
+      date; the Deferred table on this page says the same.
 - [ ] No rule was pruned.
 
 ## Deferred

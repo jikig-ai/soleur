@@ -1,5 +1,4 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { resolve, join } from "path";
@@ -784,35 +783,4 @@ describe("declared-transitions derived view parity", () => {
     expect(Object.keys(budget.ceilings).sort()).toEqual([...nodes].sort());
   });
 
-  // GUARD 1 ROW 4 — a CENSUS of edge-set readers, not a snapshot. Every file
-  // that reads the const or the view is enumerated from the tree and compared
-  // to a pinned list, with test files classified explicitly as non-readers. A
-  // second reader added without joining this list reds it. Review found the
-  // reader this would have caught: lint-skill-body-budget.py consumed the view
-  // while ADR-225 named only bash and TypeScript as its reader classes.
-  test("census: every reader of the edge set is a known reader", () => {
-    const out = execFileSync(
-      "git",
-      ["grep", "-l", "-E", "workflow-transitions\\.json|DECLARED_TRANSITIONS|declaredTransitions\\(|isDeclaredTransition\\(", "--",
-        ".", ":!knowledge-base", ":!*.md"],
-      { cwd: REPO_ROOT, encoding: "utf-8" },
-    );
-    const found = out.split("\n").filter(Boolean).sort();
-    const nonReaders = new Set([
-      "plugins/soleur/test/workflow-fidelity.test.ts",
-      "scripts/classify-workflow-transitions.test.sh",
-      "scripts/lint-skill-body-budget.test.sh",
-    ]);
-    const readers = found.filter((f) => !nonReaders.has(f));
-    expect(readers).toEqual([
-      ".claude/workflow-transitions.json",
-      "plugins/soleur/lib/workflow-fidelity.ts",
-      "plugins/soleur/test/skill-body-budget.json",
-      "scripts/classify-workflow-transitions.sh",
-      "scripts/lint-skill-body-budget.py",
-    ]);
-    // Totality: the census must have SEEN the non-readers it classifies, or the
-    // classification is over a set that never contained them.
-    for (const nr of nonReaders) expect(found, `census did not reach ${nr}`).toContain(nr);
-  });
 });
