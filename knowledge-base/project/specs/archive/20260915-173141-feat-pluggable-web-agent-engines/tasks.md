@@ -188,7 +188,8 @@ routine run binds the current default once; retries retain that binding.
   - [ ] Provider DPA/terms, transfer geography, retention/erasure evidence, and CLO disposition remain pending for both auth modes; customer content remains disabled.
 - [ ] Synthetic-only qualification, feature flag, bounded live probes, QA and screenshots; customer content remains disabled without evidence.
 - [x] Run appropriate suites/lint/typecheck/build after all GREEN tasks: repo-wide 64 files/1,158 tests, component shards 242 files/2,047 tests, Codex 95/95, legal-scope 65/65, guardrails 123/123, notice-frontmatter 36+44 passed, scratch-root passed, ESLint and TypeScript passed.
-- [ ] Review, QA, compound, ship and required postmerge checks.
+- [x] Final review and QA: bounded security review found and fixed the migration 138 cross-workspace conversation-binding gap; migration regression and engine/Codex/settings suites pass 23 files/210 tests, app lint has 0 errors, TypeScript passes, production build passes, and the existing UI wireframe/screenshot remains recorded. CLO/vendor disposition and customer-content enablement remain pending.
+- [ ] Compound, ship and required postmerge checks.
 - [ ] Local verification follow-up: safely parallelize independent `test-all.sh` suites; tracked in #8231. CI shard parallelism remains the reference model.
 
 ## Verification evidence

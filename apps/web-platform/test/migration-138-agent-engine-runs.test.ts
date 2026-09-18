@@ -57,6 +57,12 @@ describe("migration 138: agent engine live runs", () => {
     expect(code).toMatch(/auth\.role\(\) = 'service_role'[\s\S]*is_workspace_member\(p_workspace_id, p_created_by\)/);
   });
 
+  it("binds conversation runs only when the conversation belongs to the workspace", () => {
+    expect(code).toMatch(
+      /IF p_conversation_id IS NOT NULL AND NOT EXISTS \([\s\S]*FROM public\.conversations[\s\S]*WHERE id = p_conversation_id[\s\S]*AND workspace_id = p_workspace_id[\s\S]*conversation does not belong to workspace/,
+    );
+  });
+
   it("does not use transactional-incompatible concurrent indexes", () => {
     expect(code).not.toMatch(/CONCURRENTLY/i);
   });

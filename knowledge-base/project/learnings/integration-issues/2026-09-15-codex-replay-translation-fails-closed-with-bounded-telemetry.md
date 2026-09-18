@@ -188,6 +188,14 @@ path alone cannot show that replay drift is visible.
 
 82. A task-ledger patch used the worktree path without the repository namespace and failed before changing files. **Prevention:** copy absolute paths from the active worktree context rather than abbreviating `/data/git-repositories/jikig-ai/soleur`.
 
+83. Final-gate probes initially invoked root-level `bun run lint` and `bun run typecheck`, but those scripts are declared only in `apps/web-platform/package.json`; the resulting failures were command-scope errors, not code failures. **Prevention:** read the target package scripts and run app checks from `apps/web-platform`.
+
+84. A focused Vitest command launched from the repository root could not resolve the app's `@/` alias; rerunning from `apps/web-platform` passed. **Prevention:** execute alias-dependent app tests from the package root.
+
+85. A PR-check query requested unsupported `gh pr checks --json conclusion`; GitHub CLI exposes `state` and `bucket` for that command. **Prevention:** inspect the command's supported JSON fields before constructing status projections.
+
+86. Final security review found that migration 138's SECURITY DEFINER bind RPC validated membership in the supplied workspace but not that the conversation UUID belonged to that workspace. **Prevention:** every resource ID accepted alongside a tenant ID must be checked against the resource's stored tenant before insertion, with a cross-tenant regression assertion.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`

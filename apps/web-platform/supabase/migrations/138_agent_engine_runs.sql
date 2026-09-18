@@ -225,6 +225,14 @@ BEGIN
   IF auth.role() <> 'service_role' AND p_created_by IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'created_by must match authenticated user' USING ERRCODE = '42501';
   END IF;
+  IF p_conversation_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+      FROM public.conversations
+     WHERE id = p_conversation_id
+       AND workspace_id = p_workspace_id
+  ) THEN
+    RAISE EXCEPTION 'conversation does not belong to workspace' USING ERRCODE = '42501';
+  END IF;
   INSERT INTO public.agent_engine_runs(
     workspace_id, execution_kind, conversation_id, routine_id, routine_run_id,
     engine_id, auth_mode, adapter_version, status, created_by
