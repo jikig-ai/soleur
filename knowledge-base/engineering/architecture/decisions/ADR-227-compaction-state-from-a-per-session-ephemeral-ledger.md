@@ -19,8 +19,11 @@ Soleur told the operator to "run `/clear` and resume" at two fixed points, the
 end of `plan` and the end of `work`, regardless of whether context compaction
 had ever occurred. On a session with no compaction the nudge is noise; on a
 session that auto-compacted twice mid-`/work` it arrives long after the model
-lost the branch, PR and plan state it needed. Locally, 8 of 22 recent sessions
-compacted, 11 boundaries in total, so both halves of that mismatch are real
+lost the branch, PR and plan state it needed. Locally, 7 of the 22 most recent
+transcripts had compacted, 12 boundaries in total (re-derived at review; an
+earlier draft said 8 and 11, measured on a window that has since moved — the
+figure decays by construction, so read it as an order of magnitude), so both
+halves of that mismatch are real
 rather than hypothetical.
 
 Claude Code 2.1.76+ exposes the compaction lifecycle to hooks (`PreCompact`,
@@ -160,6 +163,13 @@ one-shot exception rested on a signal the read path cannot produce. The
 directive names the branch and the plan path instead; the phase is legible in
 the artifacts it orders re-read.
 
+**(k) Registering the drift canary as a GitHub Actions schedule.** Rejected on
+measurement before the canary itself was deleted: it reads
+`~/.claude/projects/**/*.jsonl`, a runner has none, and it correctly reports
+TRANSIENT when it cannot measure — so that registration yields a probe that can
+never PASS and never FAIL. Kept as a tombstone, superseded by (n); an
+unexplained hole in the lettering reads as a lost alternative.
+
 **(l) Read the transcript count and ADD ONE.** §Context proves the lag is exactly one, twice, so
 this is the design a reader reaches for next and the ADR owes it an answer. It fails for a reason
 stated elsewhere in this record and not previously connected to it: boundaries accumulate within a
@@ -183,7 +193,9 @@ cheapest design in the set and a reader should see it was weighed.
 ## Consequences
 
 - The feature is **Claude Code only**. Codex, Devin and Grok Build degrade to
-  silence and say so in their `INSTRUCTIONS.md`; the skill-prose fallback keeps
+  silence. Codex and Devin say so in their `INSTRUCTIONS.md`; Grok has no such
+  file by design, so `plugins/soleur/README.md` is its documented surface and
+  carries the row; the skill-prose fallback keeps
   the end-of-work resume prompt firing everywhere, with no `/clear` nudge.
 - A **plugin hook is global**, so the scope guard is load-bearing rather than
   hygienic. It is `welcome-hook.sh`'s sentinel — a `plugins/soleur` directory —
@@ -213,14 +225,20 @@ cheapest design in the set and a reader should see it was weighed.
   own `.worktrees/` layout rather than a hypothetical.
 - Fail-open is the contract: every path exits 0, and `trap 'exit 0' ERR EXIT`
   carries it. The `EXIT` arm is load-bearing and measured, not assumed — on bash
-  5.3.15 a `set -u` unbound-variable fault with an ERR-only trap exits **127**;
+  5.3.15 a `set -u` unbound-variable fault with an ERR-only trap exits **1**,
+  measured by driving THIS HOOK through its `SOLEUR_COMPACTION_SELFTEST_UNBOUND`
+  seam (an earlier draft said 127, taken from a `bash -c` one-liner — that shape
+  exits 127 where a script with statements after the fault exits 1, so the
+  snippet was not representative of the subject; the conclusion stands, its
+  cited evidence did not);
   with the EXIT arm it returns 0. Any non-zero exit other than 2 makes Claude
   Code silently drop the whole JSON output.
 
 ## Verification
 
-- `plugins/soleur/test/compaction-state-hook.test.sh` — 103 cases over 104
-  subject invocations, with an instrument self-test that drives both assertion
+- `plugins/soleur/test/compaction-state-hook.test.sh` — 148 cases over 138
+  subject invocations, identical under `CI=1`, `SOLEUR_SUBAGENT=1`, both
+  together, and on a detached HEAD (the shape CI checks out on `pull_request`), with an instrument self-test that drives both assertion
   arms and refuses to continue unless both counters and the failure ledger move,
   plus case and subject-invocation floors reported with `printf` + `exit` rather
   than through the helpers they backstop.
@@ -233,9 +251,10 @@ cheapest design in the set and a reader should see it was weighed.
   instrument defect rather than a result — the md5 landed-check proved *a* byte
   changed while the `replace` had hit the header comment quoting the trap line,
   so the row was scored against an unmutated subject.
-- `scripts/followthroughs/compaction-format-drift-8323.sh` — all four arms
-  driven, including a renamed `subtype` going RED and a positive control still
-  going GREEN.
+(An earlier bullet here cited the drift canary's four driven arms. That was
+evidence for a mechanism the first amendment below deletes, so it is removed
+rather than restated — a §Verification section is where a deletion round is
+least likely to be swept and most likely to be believed.)
 
 ## Amendment — 2026-09-18 (review panel): the transcript read and its canary are deleted
 
@@ -272,3 +291,81 @@ measurements this decision rests on are recorded in `compaction-state.sh`'s head
 something to be re-measured against. The aggregated signal that would actually detect "the hooks
 stopped firing" is the local ledger metric already tracked at **#8324**; no new issue was filed,
 because that one already covers it.
+
+## Amendment — 2026-09-18 (CTO ruling 1): the gate drops the trigger conjunct
+
+The shipped gate was `trigger == "auto" AND count_auto >= THRESHOLD`. It is now
+`count_auto >= THRESHOLD` alone.
+
+`COUNT_AUTO` rises only at a `SessionStart:compact` that commits an `auto` line,
+so the first emission crossing the threshold always carried `trigger=auto` and
+fired under both forms. The set of sessions that ever see `recommend=true` is
+therefore **identical** either way, and the conjunct's only behavioural delta was
+**retracting** a recommendation already issued. Measured: `auto, auto` →
+`recommend=true`; a subsequent `manual` → `recommend=false`, with the evidence
+still intact in the ledger. Because the directive is the only carrier and a later
+one evicts its predecessor from context, that retraction is not "the marker is
+absent" — it is an affirmative, wrong claim overwriting a correct one at elevated
+authority, at the moment the model can least reconstruct it. An operator typing
+`/compact` after watching two auto-compactions is not evidence the session got
+healthier.
+
+Monotonicity needs no sticky bit. The ledger is append-only within a window, so
+`RECOMMEND` is a monotone function of a monotone input — **the ledger is the
+sticky bit**. A `RECOMMENDED` sentinel line was considered and rejected: it would
+inflate `count_total` and add a second reset site to the window-reset arm.
+
+`trigger` stays computed, shape-validated and emitted. It is now the *sole* input
+to `count_auto` (through the `PreCompact` write), the AP-020 validation is what
+stops a malformed envelope forging an `auto` line, and `trigger=` in the marker is
+the residual observer of the envelope drift this ADR's first amendment
+deliberately left unguarded.
+
+**Threshold floor, with a recorded deviation.** With the conjunct gone,
+`THRESHOLD=0` would make the gate true on a ledger holding zero auto lines. The
+ruling required a floor of at least 1; the implementation floors to the **default
+(2)**. `0` is what an operator types meaning "off", and flooring to 1 would hand
+that person the *most* aggressive setting — the over-firing harm delivered to
+someone trying to disable the feature. The off switch is
+`SOLEUR_DISABLE_COMPACTION_HOOKS`. `010` is additionally read as decimal, since a
+digits-only filter passes it and `(( ))` would read octal.
+
+**Provenance note.** A test scenario in this branch asserted the rejected
+behaviour, added earlier in the same session precisely because a mutation had
+shown the `trigger` operand was otherwise untested. That is the error worth
+recording: a surviving mutant on an operand has two possible causes — weak tests,
+or *an operand with no behavioural justification* — and writing the killing test
+promoted an accidental behaviour to a specified one. Try deleting the operand
+first; only write the test if deletion changes behaviour you can defend.
+
+## Amendment — 2026-09-18 (CTO ruling 2): the scope guard gates on the artifact
+
+The guard required a `plugins/soleur` directory AND a Soleur plan/spec artifact.
+It now requires the artifact alone, still anchored at the enclosing repository.
+
+`plugins/soleur` is a monorepo-shaped sentinel. `claude plugin install` places the
+plugin under `~/.claude/plugins/` and never in the user's repository, so the
+conjunct was false for the **entire marketplace population**, permanently and by
+design of the install path. Shipping it alongside this PR's retirement of the
+unconditional `/clear` prose would have removed working advice from a population
+the feature could not serve — that combination, not the narrowness alone, was the
+merge blocker. `welcome-hook.sh` is not authority here: it carries the same defect,
+and precedent inherited from an unexamined bug is not precedent. Installation needs
+no test, because this file exists only inside an installed, enabled plugin; a
+`CLAUDE_PLUGIN_ROOT` conjunct was rejected as vacuously true at runtime and as a
+silent total-failure mode if that variable is substitution-only rather than
+exported.
+
+**This guard is blast-radius and relevance control, and explicitly NOT a security
+boundary.** A review seat demonstrated the predicate is forgeable — a repository
+containing only the two directories received the full directive — which corrects
+this ADR's earlier claim that the population is "the monorepo and its forks". No
+cheap filesystem predicate can distinguish a Soleur project of mine from a clone
+that looks like one, because a clone carries tracked files and Soleur's artifacts
+are tracked. Naming that limit is the honest output rather than pretending a
+different directory name closes it. The marginal exposure over the platform
+baseline is small: a cloned repository already reaches the model at equal or
+higher authority through `CLAUDE.md` / `AGENTS.md`, loaded unconditionally with no
+guard of any kind. Independently of the guard, every free-text value interpolated
+into the directive is now shape-checked — a git filename may contain newlines and
+`jq --arg` preserves them faithfully inside the string the model reads.

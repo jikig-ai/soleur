@@ -170,7 +170,7 @@ One open `code-review` issue names a file this plan edits (65 scanned):
 - `plugins/soleur/hooks/compaction-state.sh` — one script, dispatching on `hook_event_name` (two events).
 - `plugins/soleur/test/compaction-state-hook.test.sh` — stdin-fixture suite.
 - `plugins/soleur/test/fixtures/compaction/` — **3** synthesized fixtures: `no-boundary.jsonl`, `one-auto.jsonl`, `two-auto.jsonl` (manual is a one-field flip asserted against `two-auto`; malformed input is a heredoc, not a file).
-- `scripts/followthroughs/compaction-format-drift-8323.sh` — FR7 drift canary (real transcripts, scheduled).
+- ~~`scripts/followthroughs/compaction-format-drift-8323.sh` — FR7 drift canary~~ — **built, then deleted at implementation review** (ADR-227 `## Amendment`).
 - `knowledge-base/engineering/architecture/decisions/ADR-227-compaction-state-from-a-per-session-ephemeral-ledger.md` — ordinal **provisional**; re-verify across every `origin/*` ref immediately before merge.
 
 ## Files to Edit
@@ -290,8 +290,8 @@ error_reporting:
   destination: "markers inside additionalContext (model-visible, recorded in the transcript); stderr for diagnostics. stdout carries the JSON envelope ONLY — a stray byte there invalidates the whole output."
   fail_loud: "no — fail-open by contract; every failure path emits a valid envelope plus a named marker instead of a non-zero exit"
 failure_modes:
-  - mode: "transcript_path missing, unreadable, or malformed JSON"
-    detection: "SOLEUR_COMPACTION_SKIPPED reason=transcript-unreadable, inside additionalContext"
+  - mode: "the ledger directory is missing, foreign-owned, or a symlink"
+    detection: "SOLEUR_COMPACTION_SKIPPED reason=ledger-dir-unusable, inside additionalContext"
     alert_route: "read in-session; asserted by the suite"
   - mode: "jq unavailable"
     detection: "a static printf'd JSON envelope carrying reason=jq-unavailable — the envelope cannot be built with jq in this state, so it is emitted literally"
@@ -299,9 +299,9 @@ failure_modes:
   - mode: "hook runs in a non-Soleur repo (global plugin install)"
     detection: "silent exit 0 by design (TR1 scope guard)"
     alert_route: "n/a — this is the correct behaviour, not a degradation"
-  - mode: "upstream renames compactMetadata or compact_boundary"
-    detection: "FR7 drift canary against REAL transcripts — the only mechanism that can see this; synthesized fixtures structurally cannot"
-    alert_route: "scheduled run files an issue on zero boundaries across N recent transcripts"
+  - mode: "upstream renames a stdin envelope field (hook_event_name, source, trigger, session_id)"
+    detection: "NONE, deliberately — no offline probe can observe a contract that exists only at hook-fire time. The hook fails open to silence and every marker carries the claude --version string for attribution. The FR7 canary that once sat here watched the TRANSCRIPT, which since the ledger change cannot break the feature; it was deleted at review (ADR-227 Amendment). The aggregated signal that would show the hooks having stopped firing is tracked at #8324."
+    alert_route: "n/a — named residual risk, not a mitigated one"
 logs:
   where: "the session transcript (additionalContext is recorded there); stderr to the Claude Code debug log"
   retention: "as long as the user's ~/.claude/projects transcripts are retained — local only, nothing shipped"
@@ -337,11 +337,11 @@ Not applicable — Phase 2.11 detection does not fire: no `*.tf`, no migrations,
 - [x] **AC11 (TR2)** — A fixture holding 3 boundaries across a simulated `--resume` yields `count_auto` scoped to the current session window, not 3.
 - [x] **AC12** — `PreCompact` emits non-empty, **non-JSON** stdout and rc 0. Written so the assertion cannot abort the suite: `if jq -e . <<<"$out" >/dev/null 2>&1; then fail "PreCompact emitted JSON"; fi`.
 - [x] **AC13** — `hooks.json` binds exactly two events (`PreCompact` matcher `manual|auto`, `SessionStart` matcher `compact`) to the hook, contains **no** `PostCompact` key, remains valid JSON, and the script is mode 100755.
-- [x] **AC14** — The `compact_boundary` grep pattern is pinned by a fixture whose spacing differs (`"subtype": "compact_boundary"`), so a CLI formatting change reds the suite rather than silently returning 0.
+- [~] **AC14 (WITHDRAWN at implementation review)** — the hook no longer greps the transcript, so the spacing pin has no subject; scenario 15 was deleted with it. Original text: The `compact_boundary` grep pattern is pinned by a fixture whose spacing differs (`"subtype": "compact_boundary"`), so a CLI formatting change reds the suite rather than silently returning 0.
 - [x] **AC15 (TR5)** — Every `/clear` **recommendation** in `plan/SKILL.md` and `work/SKILL.md` is conditional, AND the mandatory resume-prompt blocks are byte-identical to `origin/main`. Verify with `git diff origin/main -- <file>` scoped to the resume-prompt regions, not a heading count. `work/SKILL.md` must still emit an end-of-work resume prompt when the hook never fires (no compaction, non-Claude harness, kill-switch) — the spec-flow dead-end.
 - [x] **AC16** — `README.md` documents `SOLEUR_COMPACTION_COUNT_THRESHOLD` and `SOLEUR_DISABLE_COMPACTION_HOOKS`, and carries a Grok row; `devin/` and `codex/INSTRUCTIONS.md` each carry the Claude-only line.
-- [x] **AC17 (FR7)** — The drift canary exists, runs against real `~/.claude/projects/**/*.jsonl`, exits non-zero when zero boundaries are found across N recent transcripts, and is registered — **not** as a suite case, and **not** as a GitHub Actions schedule either: measured, a runner has no `~/.claude/projects`, so that would be a probe that can only report TRANSIENT. Bound to the repo-side `SessionStart` surface via `.claude/hooks/compaction-drift-canary.sh`, stamp-gated to 7 days.
-- [x] **AC18** — `model.c4` amends the `hooks` **`technology`** line and its surface-split description; `principles-register.md` AP-020 is amended for the transcript-dereference relationship; `c4-count-parity.test.sh` and the `c4-*.test.ts` suites are green.
+- [~] **AC17 (WITHDRAWN at implementation review)** — no canary ships, in any registration (ADR-227 `## Amendment`). Original text: The drift canary exists, runs against real `~/.claude/projects/**/*.jsonl`, exits non-zero when zero boundaries are found across N recent transcripts, and is registered — **not** as a suite case, and **not** as a GitHub Actions schedule either: measured, a runner has no `~/.claude/projects`, so that would be a probe that can only report TRANSIENT. Bound to the repo-side `SessionStart` surface via `.claude/hooks/compaction-drift-canary.sh`, stamp-gated to 7 days.
+- [x] **AC18 (amended)** — `model.c4` amends the `hooks` **`technology`** line and its surface-split description, and adds the OUTBOUND `hooks -> claude` edge for the compaction summarizer. The AP-020 clause is **withdrawn**: the widening existed only because the hook dereferenced `transcript_path`, so `principles-register.md` is byte-identical to `main`. `c4-count-parity.test.sh`, `c4-model-freshness.test.sh` and the `c4-*.test.ts` suites are green.
 - [x] **AC19** — Fixtures are synthesized (`cq-test-fixtures-synthesized-only`): no real session ids, no paths outside this repo, no live tokens.
 - [ ] **AC20** — Full battery green: `TEST_GROUP=all bash scripts/test-all.sh`, verdict read from the rc file. **OPEN at work-phase exit, deliberately.** The run returned **rc=4 — REFUSED, nothing ran**: a sibling worktree held a full-gate run (measured, #7553). That is neither a pass nor a fail, and overriding it with `SOLEUR_ALLOW_FULL_GATE=1` would put two full gates on one box, which is the condition the refusal exists to prevent. Substitutes run in the meantime, derived from the diff's new `SOLEUR_COMPACTION_*` vocabulary and from consumers of the changed artifacts rather than from memory: `compaction-state-hook` 103/103, `hookeventname-coverage`, `settings-hook-exec-bit`, `hook-input-contract` 111/111, `devin-matcher-parity` 9/9, `c4-model-freshness`, `c4-count-parity`, `gitleaks-rules` 44/44, `lane-frontmatter`, `kb-search-lockstep`, `generate-kb-index`, `fixture-relative-assert` 62/62, `fixture-dir-operand-assert` 71/71, `components` 1331 pass, `devin-cloud-mode`, `devin-plugin`, `codex-plugin`, `fullsuite-merge-gate`, `observability-schema-parity`, `workflow-fidelity`, and 4 vitest c4 suites (36 tests) run CI-equivalent without Doppler. The battery runs at the `/ship` Phase 4 checkpoint (ADR-183), which is its sanctioned position.
 - [x] **AC21** — The diff is a subset of `## Files to Create` / `## Files to Edit` plus the pipeline-written artifacts (`knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`, this plan).
@@ -491,3 +491,30 @@ the `claude -> hooks` C4 edge amendment (both byte-identical to `main` again); F
 
 Net issues filed by this review: **0**. The residual drift-detection capability is subsumed by the
 already-open #8324, whose ledger metric is what would actually show the hooks having stopped firing.
+
+## Addendum — 2026-09-18 (ten-seat panel): two CTO rulings and the harness vacuity
+
+Full evidence in ADR-227's two `## Amendment — 2026-09-18 (CTO ruling …)` sections.
+Recorded here because the AC list above is what a resumed session greps.
+
+**AC23–AC25 (added last round) stand.** **AC26–AC28 are new:**
+
+- **AC26** — the recommendation gate is `count_auto >= THRESHOLD` alone. A manual
+  compaction after the threshold is met does **not** revoke the recommendation
+  (scenario 19, restored inverted). `0`, non-numeric and `010` thresholds all
+  resolve safely.
+- **AC27** — the scope guard requires a Soleur plan/spec artifact and nothing
+  else, so a marketplace install is in scope (scenario 11b). The
+  `plugins/soleur` conjunct is gone.
+- **AC28** — the suite is green in every environment it ships into: `CI=1`,
+  `SOLEUR_SUBAGENT=1`, both, and on a **detached HEAD**. That last one was red
+  before the panel: assertion 14g pinned the literal branch name, and CI checks
+  out a detached HEAD on `pull_request`.
+
+**Process errors this round, recorded rather than smoothed over.** I applied
+fixes to the worktree while ten report-only agents were reading it, which the
+skill's own sharp edge forbids — two seats reported the tree shifting under
+them, and one had to re-run its battery. I recalibrated an assertion floor after
+a drop without checking *which* case had gone, and a scenario-17 rewrite had
+silently taken scenario 19 with it. And I twice measured an exit code with a
+`bash -c` one-liner rather than the subject, getting 127 where the hook gives 1.
