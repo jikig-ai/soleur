@@ -691,12 +691,18 @@ function stripIsApplied(
   return chain.every((re) => re.test(src));
 }
 
-// Index of the `)` closing the `(` at `open`, or -1. Parens inside `"…"` do not count.
+// Index of the `)` closing the `(` at `open`, or -1. Parens inside `"…"` do not count. Quote
+// state is LINE-SCOPED, like the comment stripper's: HCL strings never span lines, so a heredoc
+// line with an odd quote count can mis-see only its own line, never swallow the rest of the span.
 function balancedCloseParen(text: string, open: number): number {
   let depth = 0;
   let inStr = false;
   for (let i = open; i < text.length; i++) {
     const c = text[i];
+    if (c === "\n") {
+      inStr = false;
+      continue;
+    }
     if (inStr) {
       if (c === "\\") i++;
       else if (c === '"') inStr = false;
@@ -718,6 +724,7 @@ function splitTopLevelArgs(argText: string): string[] {
   let cur = "";
   for (let i = 0; i < argText.length; i++) {
     const c = argText[i];
+    if (c === "\n") inStr = false; // line-scoped, as in balancedCloseParen
     if (inStr) {
       if (c === "\\") {
         cur += c + (argText[i + 1] ?? "");
@@ -1222,7 +1229,9 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
       for (const m of src.matchAll(/replace\s*\(/g)) {
         const open = m.index! + m[0].length - 1;
         const end = balancedCloseParen(src, open);
-        if (end === -1) continue;
+        // An unbalanceable call is a test defect, never a host with no strip: a `continue` here
+        // would silently exempt a fourth host from the wrapper requirement.
+        if (end === -1) throw new Error(`${f}: replace( at offset ${open} never balances`);
         const args = splitTopLevelArgs(src.slice(open + 1, end));
         if (!/^\s*templatefile\s*\(/.test(args[0] ?? "")) continue;
         const local = /^local\.([a-z0-9_]+_rationale_strip)$/.exec(args[1] ?? "");
