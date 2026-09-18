@@ -331,20 +331,64 @@ assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (work
 rm -rf "$STUB_DIR_EMPTY"
 echo ""
 
+# --- Wall-clock helpers for TS-cron-5 (#8250) ---
+# TS-cron-5 used GNU time by its absolute path (the `time -f "%e"` form), absent on
+# macOS and on minimal Linux hosts, where the call exited 127 and `set -e`
+# aborted the whole suite mid-run. Two $EPOCHREALTIME reads (bash 5+, no
+# coreutils) replace it, split into integer microseconds with ${t%.*}/${t#*.}
+# — the scripts/test-all.sh idiom — so no float parsing is involved.
+#
+# A read that is not `digits.digits` makes the CASE FAIL, never pass: under a
+# comma-radix locale or an old bash (unset EPOCHREALTIME) a lenient parse would
+# compute a zero or garbage elapsed time and `< 6 s` would pass vacuously.
+# _epoch_to_us <value> -> integer microseconds on stdout; rc 1 and no output
+# when <value> is not digits.digits.
+_epoch_to_us() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+  echo $(( ${1%.*} * 1000000 + 10#${1#*.} ))
+}
+# _wall_verdict <start> <end> <limit_us> -> "PASS" when both reads parse and
+# end - start < limit_us; otherwise "FAIL (<why>)". Always exits 0 so a caller
+# under `set -e` records the verdict instead of aborting.
+_wall_verdict() {
+  local s_us e_us
+  if ! s_us=$(_epoch_to_us "$1") || ! e_us=$(_epoch_to_us "$2"); then
+    printf 'FAIL (unparseable EPOCHREALTIME: start=%q end=%q)' "$1" "$2"
+    return 0
+  fi
+  if (( e_us - s_us < $3 )); then
+    echo "PASS"
+  else
+    echo "FAIL (elapsed $(( e_us - s_us ))us >= $3us)"
+  fi
+}
+
+# The parser's own contract, before it is trusted with the real measurement.
+# Row 3 is the one that matters: a comma radix must FAIL the case.
+echo "TS-cron-5-parser: elapsed-time parser rejects what it cannot read"
+assert_eq "PASS" "$(_wall_verdict "100.000000" "101.500000" 6000000)" \
+  "parser: 1.5s elapsed under a 6s limit passes (positive control)"
+assert_eq "FAIL (elapsed 7000000us >= 6000000us)" "$(_wall_verdict "100.000000" "107.000000" 6000000)" \
+  "parser: 7s elapsed over a 6s limit fails"
+assert_eq "FAIL (unparseable EPOCHREALTIME: start=12\,5 end=13\,5)" "$(_wall_verdict "12,5" "13,5" 6000000)" \
+  "parser: comma-radix reads FAIL the case, never pass it"
+assert_eq "FAIL (unparseable EPOCHREALTIME: start='' end=101.000000)" "$(_wall_verdict "" "101.000000" 6000000)" \
+  "parser: an empty read (EPOCHREALTIME unset, bash < 5) fails the case"
+echo ""
+
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
 STUB_DIR_5="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_5")
 make_gh_stub_sleep "$STUB_DIR_5" 10
-SECS=$( { /usr/bin/time -f "%e" \
-  bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
-  >/tmp/cron-stale-out.$$ ; } 2>&1 )
+T_START="${EPOCHREALTIME:-}"
+GH_TOKEN=stub-token PATH="$STUB_DIR_5:$PATH" bash "$PARSER" cron-run-stale >/tmp/cron-stale-out.$$
+T_END="${EPOCHREALTIME:-}"
 OUT=$(cat /tmp/cron-stale-out.$$ 2>/dev/null)
 rm -f /tmp/cron-stale-out.$$
 assert_eq "999" "$OUT" "cron-run-stale=999 when gh times out"
-# Compare floats via awk; emit "PASS"/"FAIL" string and assert it.
-WALL_OK=$(awk -v t="$SECS" 'BEGIN { print (t < 6 ? "PASS" : "FAIL") }')
-assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (got: ${SECS}s)"
+WALL_OK=$(_wall_verdict "$T_START" "$T_END" 6000000)
+assert_eq "PASS" "$WALL_OK" "cron-run-stale wall-clock <6s (start=${T_START:-<unset>} end=${T_END:-<unset>})"
 rm -rf "$STUB_DIR_5"
 echo ""
 

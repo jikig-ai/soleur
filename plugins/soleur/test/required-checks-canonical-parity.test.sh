@@ -61,7 +61,8 @@ ACTION_YML="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
 SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
 # 4th gitleaks install site (#7307). main-health-monitor.yml runs TEST_GROUP=all,
-# so it needs the same gitleaks three suites hard-ABORT without; an unregistered
+# so it needs the same gitleaks the gitleaks suites FAIL without under CI=true (#8266:
+# they skip per arm and any skip fails under CI); an unregistered
 # copy drifts silently and makes the monitor scan with a different gitleaks than CI.
 MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
 CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"

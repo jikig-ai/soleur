@@ -21,12 +21,35 @@ CONFIG="$REPO_ROOT/.gitleaks.toml"
 # gitleaks. A blanket `exit 0` here used to skip the arity/anchor guards too,
 # which meant an allowlist widening could land un-guarded on any runner lacking
 # the binary.
+#
+# RUNNABILITY, not resolvability (#8266). `command -v gitleaks` succeeds on an
+# unpinned version-manager shim (mise: "No version is set for shim: gitleaks")
+# that exits non-zero on every call — every fixture row then scanned nothing and
+# reported a config regression that did not exist. The probe runs the binary.
+# `timeout` is optional (stock macOS has neither timeout nor gtimeout): absent,
+# the probe runs unbounded rather than misreporting a runnable gitleaks.
+SUITE="gitleaks-rules"
 HAVE_GITLEAKS=1
-if ! command -v gitleaks >/dev/null 2>&1; then
+GITLEAKS_REASON=""
+_probe_err=$(mktemp)
+TO=(); if command -v timeout >/dev/null 2>&1; then TO=(timeout 10); elif command -v gtimeout >/dev/null 2>&1; then TO=(gtimeout 10); fi
+_probe_rc=0
+${TO[@]+"${TO[@]}"} gitleaks version >/dev/null 2>"$_probe_err" || _probe_rc=$?
+if [[ "$_probe_rc" != "0" ]]; then
   HAVE_GITLEAKS=0
-  echo "NOTE: gitleaks not installed — fixture rows (T1-T7, T11) skipped;"
-  echo "      config-text guards (T8/T9/T10/T11b) still run."
+  GITLEAKS_REASON="gitleaks is not runnable here (rc=$(printf '%q' "$_probe_rc"), $(printf '%q' "$(head -n1 "$_probe_err")"))"
 fi
+rm -f "$_probe_err"
+
+# Per-ARM skip, never per-suite. A skipped arm is not a pass: under CI=true the
+# suite exits 1 at the end naming every skipped arm (CI installs the pinned
+# binary, so a skip there is a broken environment); locally it exits 0 after
+# listing them, so an unrunnable host tool is not reported as a config verdict.
+SKIPPED_ARMS=()
+_skip_arm() {
+  echo "SKIP — $1 — $2. CI pins gitleaks 8.24.2 — install that version or pin it in your version manager."
+  SKIPPED_ARMS+=("$1")
+}
 
 PASS=0
 FAIL=0
@@ -405,6 +428,12 @@ for row in \
   fi
 done
 
+else
+  # One SKIP line per fixture arm, so the operator sees exactly which
+  # behavioural rows did not run (the config-text guards below still do).
+  for arm in T1 T2 T3 T4 T5 T6 T7 T7b T7d T7e T7c T11; do
+    _skip_arm "$SUITE: $arm" "$GITLEAKS_REASON"
+  done
 fi  # HAVE_GITLEAKS
 
 echo "T8: the placeholder allowlist stays a SINGLE entry"
@@ -553,5 +582,13 @@ else
 fi
 
 echo ""
-echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed, ${#SKIPPED_ARMS[@]} arm(s) skipped ==="
+if [[ "${#SKIPPED_ARMS[@]}" -gt 0 ]]; then
+  echo "Skipped arms (gitleaks not runnable):"
+  printf '  - %s\n' "${SKIPPED_ARMS[@]}"
+  if [[ "${CI:-}" == "true" ]]; then
+    echo "FAIL: ${#SKIPPED_ARMS[@]} arm(s) skipped under CI=true — CI installs the pinned gitleaks 8.24.2, so every arm above must run there."
+    exit 1
+  fi
+fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

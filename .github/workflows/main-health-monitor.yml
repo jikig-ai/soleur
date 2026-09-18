@@ -74,8 +74,11 @@ permissions:
 # TOOLCHAIN PINS — this workflow runs `TEST_GROUP=all`, i.e. the suites of EVERY
 # CI shard, so its environment must be the UNION of those shards' toolchains.
 # Before #7307 it carried none of them, which is why its coverage was already
-# partly vacuous: 3 suites hard-ABORT without gitleaks and c4-model-freshness
-# self-skips without likec4 — and a self-skip reads as PASS.
+# partly vacuous: 3 suites went RED without gitleaks (they hard-ABORTed then;
+# since #8266 the gitleaks suites probe runnability and skip per arm, and any
+# skip FAILS under CI=true — so the absence still reds them here, now naming
+# the skipped arms) and c4-model-freshness self-skips without likec4 — and a
+# self-skip reads as PASS.
 #
 # Two of the three literals ALREADY have a mechanical pin-parity guard, and this
 # workflow is registered with both rather than documented as an exception — an
@@ -226,10 +229,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cloud-init
 
-      # gitleaks: three suites hard-ABORT without it rather than skipping —
-      # gitleaks-merge-commit.test.sh ("skipping it would defeat its purpose"),
-      # code-to-prd.test.sh, and .claude/hooks/git-commit-secret-scan.test.sh.
-      # Measured on run 31328156153: all three RED purely for its absence.
+      # gitleaks: the gitleaks suites (gitleaks-merge-commit.test.sh,
+      # gitleaks-rules.test.sh, code-to-prd.test.sh and
+      # .claude/hooks/git-commit-secret-scan.test.sh) probe RUNNABILITY
+      # (`gitleaks version` exits 0, not `command -v`) and skip only the arms
+      # that need the binary. Under CI=true — set on every Actions run — any
+      # skipped arm FAILS the suite, naming the arms, so without this install
+      # the monitor goes RED rather than green over skipped coverage.
+      # History: measured on run 31328156153, three of them went RED purely for
+      # its absence (then via a hard ABORT exit 2).
       # Same pinned + checksum-verified shape as ci.yml's test-scripts shard.
       - name: Install gitleaks (pinned, sha-verified)
         run: |
@@ -267,7 +275,7 @@ jobs:
           command -v cloud-init
           command -v python3
           command -v jq
-          command -v gitleaks
+          gitleaks version >/dev/null   # runnable, not merely resolvable (#8266)
           command -v likec4
           docker info >/dev/null
 
