@@ -30,6 +30,8 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/rule-metrics-constants.sh
 source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
+# shellcheck source=lib/incidents-roots.sh
+source "$SCRIPT_DIR/lib/incidents-roots.sh"
 
 REPO_ROOT="${INCIDENTS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
@@ -61,6 +63,38 @@ if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
     if [[ -n "$_shared_root" && "$_shared_root/.claude" != "$REPO_ROOT/.claude" ]]; then
       INCIDENTS_DIRS+=("$_shared_root/.claude")
     fi
+  fi
+
+  # SIBLING WORKTREES (#8302). The two roots above are the repo root and the
+  # shared checkout; a session running in ANOTHER worktree writes to that
+  # worktree's own .claude, which neither reaches. Measured on one machine:
+  # 23,882 rows readable from here against 11,346 stranded across 34 sibling
+  # roots -- 32% of the corpus, reported as the whole.
+  while IFS= read -r _wt; do
+    [[ -n "$_wt" ]] || continue
+    INCIDENTS_DIRS+=("$_wt/.claude")
+  done < <(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null | incidents_roots_from_porcelain)
+
+  # DEDUPE BY INODE, NOT BY STRING. `git worktree list` yields the main worktree
+  # by its own path while the block above derives the same directory from
+  # --git-common-dir: two different strings, one inode. An un-deduped union cats
+  # that log twice, and because the counts are a commutative reduce the inflation
+  # is invisible -- it reads as real data. See scripts/lib/incidents-roots.sh.
+  _deduped=()
+  while IFS= read -r _d; do
+    [[ -n "$_d" ]] || continue
+    _deduped+=("$_d")
+  done < <(incidents_dedupe_existing_dirs "${INCIDENTS_DIRS[@]}")
+
+  # ELEMENT 0 IS LOAD-BEARING: AGGREGATOR_ROTATE=1 truncates INCIDENTS_DIRS[0],
+  # so it must stay this repo root's own .claude. Dedupe drops directories that
+  # do not exist, and on a fresh checkout $REPO_ROOT/.claude is exactly that --
+  # which would silently promote a SIBLING worktree's live log into the rotation
+  # slot. Re-prepend rather than trusting the filtered order.
+  if [[ ${#_deduped[@]} -eq 0 || "${_deduped[0]}" != "$REPO_ROOT/.claude" ]]; then
+    INCIDENTS_DIRS=("$REPO_ROOT/.claude" ${_deduped[@]+"${_deduped[@]}"})
+  else
+    INCIDENTS_DIRS=("${_deduped[@]}")
   fi
 fi
 INCIDENTS="${INCIDENTS_DIRS[0]}/.rule-incidents.jsonl"
@@ -157,7 +191,12 @@ INCIDENTS_MERGED="$_tmpdir/incidents-merged.jsonl"
 # rotated archive within each. Counts are commutative and first_seen/last_hit
 # come from event timestamps, so order does not matter.
 for _dir in "${INCIDENTS_DIRS[@]}"; do
-  [[ -s "$_dir/.rule-incidents.jsonl" ]] && cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED"
+  # `|| true` is load-bearing (#8302). Under `set -euo pipefail` the `cat` is the
+  # LAST member of this AND-OR list, so unlike the `[[ -s ]]` test its failure DOES
+  # trip errexit and aborts the whole aggregation. Widening the root set above makes
+  # another user's worktree reachable for the first time, so an EACCES here would
+  # take down a run that should simply skip that root.
+  [[ -s "$_dir/.rule-incidents.jsonl" ]] && { cat "$_dir/.rule-incidents.jsonl" >> "$INCIDENTS_MERGED" || true; }
   for _gz in "$_dir"/.rule-incidents-*.jsonl.gz; do
     [[ -e "$_gz" ]] || continue
     zcat "$_gz" 2>/dev/null >> "$INCIDENTS_MERGED" || true

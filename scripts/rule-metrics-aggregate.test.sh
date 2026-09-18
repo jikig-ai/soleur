@@ -959,10 +959,21 @@ t26_incidents_merged_across_worktree_and_shared() {
   git -C "$shared" commit -qm seed >/dev/null
   git -C "$shared" worktree add -q -b t26branch "$wt" >/dev/null 2>&1 || { echo "SKIP: T26 worktree add failed"; return; }
 
+  # A SECOND worktree, so the enumeration below is exercised against more than one
+  # member. With a single sibling, a loop that stops after the first is
+  # indistinguishable from a correct one.
+  local sib="$base/sib"
+  git -C "$shared" worktree add -q -b t26sibling "$sib" >/dev/null 2>&1 || { echo "SKIP: T26 sibling worktree add failed"; return; }
+  mkdir -p "$sib/.claude"
+
   # The script resolves REPO_ROOT as SCRIPT_DIR/.., so it must live in the worktree.
+  # EVERY file the relocated script resolves via ${BASH_SOURCE[0]} must be copied
+  # too: `source` is fail-closed, so an omission aborts before the first assertion
+  # and renders as a whole-suite RED rather than a skipped check.
   mkdir -p "$wt/scripts/lib" "$wt/.claude" "$shared/.claude" "$wt/knowledge-base/project"
   cp "$AGGREGATOR" "$wt/scripts/"
   cp "$SCRIPT_DIR/lib/rule-metrics-constants.sh" "$wt/scripts/lib/"
+  cp "$SCRIPT_DIR/lib/incidents-roots.sh" "$wt/scripts/lib/"
   cat > "$wt/AGENTS.md" <<'EOF'
 # Agent Instructions
 
@@ -970,21 +981,36 @@ t26_incidents_merged_across_worktree_and_shared() {
 
 - Rule A synthetic fixture bullet for aggregator tests [id: hr-rule-a-synthetic-test].
 - Rule B synthetic fixture bullet for aggregator tests [id: hr-rule-b-synthetic-test].
+- Rule C synthetic fixture bullet for aggregator tests [id: hr-rule-c-synthetic-test].
 EOF
   local now; now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-a-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
     "$now" > "$wt/.claude/.rule-incidents.jsonl"
   printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-b-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
     "$now" > "$shared/.claude/.rule-incidents.jsonl"
+  printf '{"schema":1,"timestamp":"%s","rule_id":"hr-rule-c-synthetic-test","event_type":"deny","rule_text_prefix":"x","command_snippet":""}\n' \
+    "$now" > "$sib/.claude/.rule-incidents.jsonl"
 
   # INCIDENTS_REPO_ROOT deliberately UNSET: that is the real-world path.
   ( cd "$wt" && env -u INCIDENTS_REPO_ROOT bash "$wt/scripts/rule-metrics-aggregate.sh" >/dev/null 2>&1 ) || true
   local out="$wt/knowledge-base/project/rule-metrics.json"
-  local a b
+  local a b c
   a=$(jq -r '.rules[] | select(.id=="hr-rule-a-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
   b=$(jq -r '.rules[] | select(.id=="hr-rule-b-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
+  c=$(jq -r '.rules[] | select(.id=="hr-rule-c-synthetic-test") | .hit_count' "$out" 2>/dev/null || echo missing)
   assert_eq "T26 worktree-local incident counted" "1" "$a"
-  assert_eq "T26 shared-checkout incident ALSO counted (merge, not pick-one)" "1" "$b"
+
+  # EXACTLY ONE, not merely non-zero (#8302). The shared checkout is reachable by
+  # TWO routes -- `git rev-parse --git-common-dir` and its own row in
+  # `git worktree list` -- as two different path strings naming one inode. Without
+  # inode dedupe this log is cat'd twice and this reads 2. A `>= 1` assertion here
+  # would pass in both worlds, and because the counts are a commutative reduce the
+  # doubling is invisible everywhere else.
+  assert_eq "T26 shared-checkout incident counted EXACTLY once (dedupe, not double-count)" "1" "$b"
+
+  # The stranded-sibling half: a worktree that is neither this root nor the shared
+  # checkout. Before the enumeration landed this was unreachable and read `missing`.
+  assert_eq "T26 SIBLING worktree incident counted exactly once" "1" "$c"
   rm -rf "$base"
 }
 
