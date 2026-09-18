@@ -1580,7 +1580,7 @@ be stated (done); agent-read vs human-typed boundary belongs in the ADR (done).
       lower than on `origin/main` by exactly the number of W11 substitutions (`/loop` is a Claude
       built-in, not a Soleur skill — it stays).
 - [ ] **AC15** `git fetch origin main && SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh` GREEN.
-- [ ] **AC16** Issues exist and are `Ref #N` in the PR body: NG-M (82 / 29 + the dual-voice
+- [ ] **AC16** `Ref #8318` (NG-M) and `Ref #8317` (NG-P) in the PR body — filed at plan time: NG-M (82 / 29 + the dual-voice
       declaration), NG-P (P1, `single-user incident`, glob lines, human-read exclusions, INSTRUCTIONS.md
       note, `model.c4:118`). `Ref #7453`, `#8306`, `#8307`, `#8308` — none folded, none closed.
       `Closes #8299`.
@@ -1670,3 +1670,68 @@ both answers are recorded.
 | Kieran 10 | case / HTML-entity not-gated rows | mechanical | listed |
 
 **Declined, with reason:** CPO 4 only (above). Everything else is in the plan of record.
+
+## Appendix — the measurement classifier (`census4.py`, produced the 1029 / 62 baseline)
+
+Scratch Python, not shipped; `/work` Phase 1 ports it to TypeScript and must reproduce its output before any doc edit. Region handling here is the loose scratch form; the plan's strict marker grammar supersedes it.
+
+```python
+#!/usr/bin/env python3
+"""v3.1 predicate: post-panel. Index from discoverAgentPaths() rule (67), trailing-punct strip, R9 path
+exclusion, '#' in BOUNDARY, bare agent leaves gated, help.md excluded by path, harness-forms only in commands/."""
+import re, subprocess, sys, collections, json
+def ls(*pats): return subprocess.check_output(['git','ls-files','--full-name',*pats]).decode().split()
+skills=[p.split('/')[-2] for p in ls(':(glob)plugins/soleur/skills/*/SKILL.md')]
+cmds=[p.split('/')[-1][:-3] for p in ls(':(glob)plugins/soleur/commands/*.md')]
+agent_paths=[p for p in ls('plugins/soleur/agents/**/*.md') if '/references/' not in p and not p.split('/')[-1].startswith('README')]
+agents=['soleur:'+p[len('plugins/soleur/agents/'):-3].replace('/',':') for p in agent_paths]
+CANON=set('soleur:'+n for n in skills+cmds)|set(agents)
+SKILLNAMES=set(skills+cmds); LEAVES=set(a.split(':')[-1] for a in agents)
+STEMS=set(a.replace(':','-') for a in agents)
+BOUNDARY=set(' \t`"\'([{*<>|,;.=+&?→—–#'); PATHPREV=re.compile(r'[A-Za-z0-9_./]'); TOK=re.compile(r'[A-Za-z0-9_:-]+')
+POP=ls(':(glob)plugins/soleur/skills/*/SKILL.md',':(glob)plugins/soleur/commands/*.md',':(glob)plugins/soleur/codex/skills/*/SKILL.md',':(glob)plugins/soleur/devin/skills/*/SKILL.md')
+EXCLUDED_BY_PATH={'plugins/soleur/commands/help.md'}
+MARK=re.compile(r'^\s*<!-- ([a-z0-9-]+):(start|end) -->\s*$')
+def classify(line,m,policy):
+    raw=m.group(0); s=m.start(); c=line[s-1] if s>0 else '^'
+    t=raw.rstrip(':_-')                     # trailing punctuation glue (Kieran #1); raw kept for R1/R4
+    atb=(c=='^' or c in BOUNDARY)
+    pathctx=(c=='/' and s>=2 and PATHPREV.match(line[s-2]))
+    if raw.startswith('soleur:'):
+        if not atb: return 'NONCANONICAL','ns-sigil'
+        return ('CANONICAL','') if t in CANON else ('UNKNOWN-NS','')
+    if 'soleur:' in raw: return 'NONCANONICAL','agent-mention'
+    if t in STEMS: return ('PATH','') if pathctx else ('NONCANONICAL','grok-stem')
+    if t in SKILLNAMES:
+        if atb: return 'BARE',''
+        if pathctx: return 'PATH',''
+        return 'NONCANONICAL','sigil-skill'
+    if t in LEAVES:
+        if pathctx: return 'PATH',''
+        return 'NONCANONICAL',('bare-agent-leaf' if atb else 'sigil-agent-leaf')
+    if not atb and not pathctx:
+        parts=t.split('-')
+        for i in range(1,len(parts)):
+            suf='-'.join(parts[i:])
+            if suf in SKILLNAMES or suf in LEAVES or suf in STEMS: return 'NONCANONICAL','hyphen-absorbed'
+    return None,''
+per=collections.defaultdict(collections.Counter); shape=collections.Counter(); hits=[]
+for p in POP:
+    if p in EXCLUDED_BY_PATH: continue
+    policy='command' if p.startswith('plugins/soleur/commands/') else 'skill'
+    inreg=None
+    for ln,line in enumerate(open(p,encoding='utf-8'),1):
+        mm=MARK.match(line)
+        if mm: inreg=mm.group(1) if mm.group(2)=='start' else None; continue
+        for m in TOK.finditer(line):
+            v,sh=classify(line,m,policy)
+            if v is None: continue
+            if inreg=='harness-forms' and policy=='command': v='EXEMPT'
+            per[p][v]+=1
+            if v=='NONCANONICAL': shape[sh]+=1; hits.append((p,ln,m.group(0),sh,line[m.start()-1] if m.start()>0 else '^'))
+tot=collections.Counter()
+for p in per: tot.update(per[p])
+print('population',len(POP)-len(EXCLUDED_BY_PATH),'(+help.md excluded) | canonical ids',len(CANON),'| agents',len(agents))
+print(dict(tot)); print('docs with NONCANONICAL:',sum(1 for p in per if per[p]['NONCANONICAL'])); print('shapes:',dict(shape))
+json.dump({'per':{p:dict(per[p]) for p in per},'hits':hits},open(sys.argv[1],'w'),indent=1) if len(sys.argv)>1 else None
+```
