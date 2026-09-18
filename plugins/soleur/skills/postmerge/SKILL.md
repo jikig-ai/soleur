@@ -294,13 +294,20 @@ If `PIPELINE_GATE_CHANGE` is unset, skip to Phase 4.
 | push arm | `on: push` to `main` | `release` only (build + publish) |
 | deploy arm | `on: workflow_run` (CI completed) | `resolve-target`, `migrate`, `verify-migrations`, `verify-doppler-secrets`, `deploy`, `live-verify`, `notify-gated`, `release-outcome` |
 
-`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` does not exist, the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `--event workflow_run`** (cheap and exact — the deploy chain runs only on that arm), plus a job-presence assertion so a wrong selection fails loudly instead of silently.
+`--limit 1` with no event filter lands on the push arm roughly half the time. There, `deploy` does not exist, the `reason=canary_*` grep below matches nothing, and the phase would classify `GATE-VALIDATED` against an **empty log** — a false green on exactly the question this phase exists to answer. **Chosen predicate in this file: `event=workflow_run` AND `head_sha=<this merge's full SHA>`** — the event picks the arm, the SHA picks the merge — plus a job-presence assertion so a wrong selection fails loudly instead of silently.
+
+**Select by the merge SHA, never by recency.** An event filter alone still returns *whichever* merge's deploy arm fired last, and on a busy `main` that is routinely another PR's: the deploy arm lags its merge by the whole CI run, so for most of this phase's window the newest deploy-arm run belongs to the PREVIOUS merge. `--limit 1` read that way validates someone else's deploy. A `--limit N` window is not the fix either — measured nondeterministic for this lookup (`--limit 10` missed a run sitting at list index 6). Ask the API for the exact SHA. **Why:** #8265 — this query returned `267ff5807`'s run while #8242's merge (`e7e1c6748`) had not yet fired its own; only a by-hand SHA check stopped a false `GATE-VALIDATED`.
 
 ```bash
-# The DEPLOY-arm release run for this merge (#5806, ADR-217). --event is what
-# distinguishes it from the push-arm build-and-publish run for the same SHA.
-RELEASE_RUN_ID=$(gh run list --branch main --workflow web-platform-release.yml \
-  --event workflow_run --limit 1 --json databaseId --jq '.[0].databaseId')
+# The DEPLOY-arm release run for THIS merge (#5806, ADR-217). event=workflow_run
+# picks the arm; head_sha picks the merge. Server-side exact match — no recency
+# window to fall out of. MERGE_SHA is the FULL 40-char merge SHA from Phase 1 (a
+# short SHA matches zero runs, #8135). `gh --jq` does not forward --arg, so the
+# SHA is shape-validated before it is interpolated.
+MERGE_SHA="<full 40-char merge-commit sha from Phase 1>"
+[[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "MERGE_SHA must be the full 40-char sha" >&2; exit 1; }
+RELEASE_RUN_ID=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=${MERGE_SHA}&event=workflow_run&per_page=100" \
+  --jq '[.workflow_runs[] | select(.path == ".github/workflows/web-platform-release.yml") | .id][0] // empty')
 
 # FAIL LOUDLY, NEVER CLASSIFY AGAINST AN EMPTY LOG. If no deploy-arm run exists
 # yet, or the selected run carries no `deploy` job, this phase has no evidence —

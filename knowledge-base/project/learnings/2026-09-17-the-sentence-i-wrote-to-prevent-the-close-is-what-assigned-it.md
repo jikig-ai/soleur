@@ -4,7 +4,7 @@ date: 2026-09-17
 category: workflow-patterns
 issue: 7535
 pr: 8242
-tags: [github-api, closing-keywords, proxy-vs-control-surface, prose-guards, measurement, review-catches]
+tags: [github-api, closing-keywords, proxy-vs-control-surface, prose-guards, measurement, review-catches, squash-merge, auto-merge, ci, deploy]
 synced_to: [ship, review]
 ---
 
@@ -46,15 +46,17 @@ GitHub's closing-keyword parser matches **keyword followed by reference** and **
 negation**. "cannot close #7535" contains "close #7535". The sentence written to *prevent* the
 close is what assigned it.
 
-No commit message carried a keyword *at that moment*, and no manual sidebar link existed — I
-checked both before concluding. The body prose was the cause of **that** close.
+When this file was first written it said: *"No commit message carried a keyword, and no manual
+sidebar link existed — I checked both before concluding. The body prose was the whole cause."*
 
-> **[Corrected post-merge]** The commit-message half of that sentence stopped being true later the
-> same day, and it is the more useful half. See
-> `## The third surface: commit messages reach the squash body` below — by merge time two commits
-> on this branch DID carry keyword-then-ref adjacencies, both written while *documenting the trap*.
-> A clean measurement of a mutable surface is a reading, not a property; this file originally
-> recorded it as a property, which is how it came to assert something false about its own branch.
+> **[Corrected post-merge — that first clause was false the moment it was written.]** Both commits
+> that carried a keyword-then-ref adjacency (`a850ecd51` at 12:12Z and `654da378f` at 12:59Z,
+> pre-rewrite SHAs) were already ancestors of the commit that wrote the sentence (`d8aa6f408`,
+> 13:11Z). Nothing was committed between the check and the claim. So this was not a clean reading
+> that went stale: the check either never covered those commits or used a pattern that missed
+> them — this file's own error 6, *an instrument's verdict is a claim*, committed inside the file
+> that lists it. The body prose did cause the close measured at that point; see
+> `## The third surface` below for what the check missed.
 
 Two things made this hard to see:
 
@@ -151,65 +153,110 @@ BLOCKED: a commit/PR body has a prose-embedded auto-close keyword that will auto
   a commit message: this, the docs PR would clo{}se #7535 ahead of the implementation that actually
 ```
 
-(keywords broken here, as everywhere in this file, so the record cannot re-arm what it describes)
+(keywords broken in this quotation so the record cannot re-arm what it describes; this file's
+older quotations naming `#7535` are left intact, and are inert only because GitHub does not parse
+file content)
 
-A **squash** merge concatenates commit messages into the squash commit's body, so a keyword in any
-commit message is a keyword in the merge commit — and one of these named **#8043, an issue this PR
-had nothing to do with**. It entered while writing the sentence that *reports* the refuted agent
+This repo sets `squash_merge_commit_message: COMMIT_MESSAGES` (and `squash_merge_commit_title:
+COMMIT_OR_PR_TITLE`), so a squash merge concatenates every commit message into the merge commit's
+body, and a keyword in any of them is a keyword in the merge commit — and one of these named
+**#8043, an issue this PR had nothing to do with**. It entered while writing the sentence that *reports* the refuted agent
 finding about #8043/#8052; the other entered while writing the sentence that *explains* this very
 trap. That is the third and fourth time in one session that documenting the trap re-armed it, after
 the two body-edit attempts recorded above.
 
-Measured afterwards: #8043 was already `CLOSED` (2026-09-13, by merged PR #8052), four days before
-this session, so **no collateral close occurred**. The guard was still right to fire — the hazard
+Measured afterwards: #8043 was already `CLOSED` (2026-09-13T14:58:07Z, by PR #8052, merged one
+second earlier), four days before this session, so **no collateral close occurred**. The hazard
 was real and its harmlessness was luck, not design.
 
-Three things worth keeping:
+**Enumerate every surface the matcher reads, not the one you edited.** On this repo those are the
+PR title (the squash subject), the PR body, every commit message on the branch, and the manual
+sidebar link.
 
-1. **Enumerate the surfaces a matcher reads, not the one you edited.** For issue closure on a
-   squash-merge repo those are: the PR body, every commit message on the branch, and the manual
-   sidebar link. This file had already found the body; the commit messages were measured once, early,
-   and then trusted for the rest of the session while I kept writing commits.
-2. **A mutable surface measured clean is not a surface that stays clean.** The generalisation of
-   AC30's rule: re-assert after every edit applies to *commit messages* as much as to the body, and
-   `git rev-list origin/main..HEAD` + one anchored grep is the whole check.
-3. **The hook was the only thing that caught it.** No self-review did, on a branch whose entire
-   subject is this defect class. Mechanical enforcement is not a backstop to careful reading here;
-   careful reading is what demonstrably fails.
+### It was not a new surface, and the hook was not the first thing to catch it
 
-Recovery, for the record: reworded both messages with `filter-branch --msg-filter` (it preserves
-merge commits, and `rebase -i` is unavailable in this environment), then verified zero adjacencies
-with a positive control, and verified the rewritten tree **byte-identical** to a backup branch so
-the rewrite could not have changed content.
+That was my first reading of this incident, and both halves are false:
 
-## When the base moves faster than one CI cycle
+- **The surface was already documented.** `plugins/soleur/skills/ship/SKILL.md` says it outright —
+  *"ALWAYS scan commit messages, not just the PR body"* — citing #5463, closed twice this way. I
+  did not find a third surface; I failed to apply a written rule.
+- **The CI scanner caught it first, by about three and a half hours.** `pr-auto-close-scanner.yml`
+  scans title, body **and** commit messages on every `synchronize`. Its comment on #8242 carried the
+  `#7535` adjacency by 12:25Z and both adjacencies by 13:45Z; the rewrite that answered the hook was
+  force-pushed at 16:06Z. The comment went unread because that check is **fail-soft by design** — it
+  exits 0 so an intentional closing line on its own does not block — and it is not a required
+  check. **Its row was green while its comment carried the finding.** A green check is a verdict on
+  pass/fail, not on whether the check has something to say.
 
-#8242 needed **seven** CI cycles to merge. Not one was caused by a defect in the diff: every check
-that ever settled on every head passed. The cause was base churn — `main` landed a commit roughly
-every 20–40 minutes while a full cycle took ~40, so the branch went `BEHIND` or `CONFLICTING`
-before the last shard finished, and each resolution restarted the cycle that the next commit would
-invalidate.
+So the lesson is narrower than "only the hook catches this": the evidence sat on the PR for hours,
+somewhere a session does not read by default. The hook did not see anything the scanner missed. It
+worked because it **blocks** — it put the same finding in the one path I could not walk past.
 
-Resolving faster does not converge on this; it is a race whose step is shorter than its round trip.
-What converged was **`gh pr merge --auto`**: arm it once and GitHub merges on the first moment
-checks pass, with no need to occupy a quiet window by hand. Two details mattered:
+### The recovery I used was heavier than the one on offer
 
-- **Auto-merge does not update a stale branch.** It survives a sync, and it sat armed across four
-  resyncs here, but `BEHIND` still had to be cleared explicitly (`sync-pr-behind.sh`). Arming it is
-  not walking away.
-- **Every conflict was `knowledge-base/INDEX.md` / `kb-tags.txt`**, which every KB-touching PR
-  regenerates. The repo's `kb-index` merge driver resolved them locally each time with zero unmerged
-  files, while GitHub reported `CONFLICTING` — because its merge ref cannot use a local driver. The
-  conflict did not exist in any tree; committing the local resolution is what cleared it.
+I reworded both messages with `filter-branch --msg-filter` and force-pushed, then verified zero
+adjacencies with a positive control and the rewritten tree **byte-identical** to a backup branch.
+That worked, and it was unnecessary: the hook's own refusal points at the lighter remedy.
+`gh pr merge --squash --body-file <path>` supplies the squash body directly, so the offending
+commit messages never reach `main` — no history rewrite, no force-push. Rewriting published
+history was the heaviest available fix for a problem that only needed the merge body replaced.
+
+## When the base moves about as fast as one CI cycle
+
+The first version of this section got the count, the cause, the cadence and the conflict set wrong,
+in the file about exactly that. Measured instead:
+
+Between #8249's merge (13:47Z) and #8242's (19:26Z), **nine** head SHAs on #8242 received a CI run:
+
+| cause | heads |
+| --- | --- |
+| `main` moved — `BEHIND` sync | `676416b87`, `aaef55bdf`, `c72c756a5` |
+| `main` moved — conflict merge | `711321427`, `cab5a4832`, `1d295b0aa` |
+| my own content commits | `f5812bf78`, `a0856a2ec` |
+| my history rewrite, **caused by a defect in the diff** (the keyword commit messages above) | `1cd85fda9` |
+
+Six of nine were base churn; three were mine, one of them a real defect. Over the same window
+`main` landed a first-parent commit every **43–67 minutes**, and a full cycle under runner contention
+took about as long — 43 minutes for the one that completed uninterrupted. So `main` moved during a
+cycle often enough that resolving by hand kept losing.
+
+What converged was **`gh pr merge --auto`**: arm it once and GitHub merges at the first moment the
+checks pass, with nobody occupying a quiet window. Three details mattered:
+
+- **Auto-merge does not update a stale branch.** Here `BEHIND` blocks the merge because the "CI
+  Required" ruleset sets `strict_required_status_checks_policy: true` (measured; updated
+  2026-09-15). Auto-merge stayed armed across four resyncs, but each one had to be cleared
+  explicitly (`sync-pr-behind.sh`). Arming it is not walking away.
+- **Arming `--auto` ends the hook's coverage.** `pre-merge-auto-close-scan.sh` is a PreToolUse hook,
+  so it scans once, at the `gh pr merge` call, and its own header lists a queued `--auto` merge as a
+  known bypass. The CI scanner re-scans every push but is fail-soft and not required. So every
+  commit pushed after arming — every resync here — reaches the merge checked by nothing that blocks.
+  Re-run the sweep below before each later push, or disarm (`gh pr merge --disable-auto`), push, and
+  re-arm so the hook scans again.
+- **Most conflicts were the knowledge-base index; one was not.** `knowledge-base/INDEX.md` (driver
+  `kb-index`) and `kb-tags.txt` (git's built-in `union`) conflicted on several resyncs because every
+  KB-touching PR regenerates them. Locally those drivers resolved them with zero unmerged files while
+  GitHub reported `CONFLICTING`, since its merge ref cannot run a local driver. But one resync hit a
+  real content conflict in `scripts/markdown-lint.test.sh`, where a parallel session had fixed the
+  same sandbox race from the opposite reading of its cause. That one needed a hand-written union.
 
 ## Prevention
 
 - For any PR that must **not** close an issue, assert `gh pr view <N> --json closingIssuesReferences`
   is `[]`. Do this after every body edit — the field is recomputed from the live body.
-- **Sweep the commit messages too, not just the body.** On a squash-merge repo they land in the
-  merge commit's body: `for sha in $(git rev-list origin/main..HEAD); do git log -1 --format=%B
-  "$sha" | grep -nEi '\b(clos(e|es|ed|ing)|fix(es|ed)?|resolve[sd]?)\s+#[0-9]+'; done`, with a
-  known-positive control. Re-run it before merge, not once at the start — the branch keeps growing
+- **Sweep the commit messages too, not just the body — and read the scanner's output, not its
+  exit code.** Use the repo's canonical scanner so the keyword set lives in one place. It always
+  exits 0, so an empty output means clean:
+
+  ```bash
+  f=$(mktemp) && git log --format=%B origin/main..HEAD > "$f" && bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$f"
+  ```
+
+  Controlled both ways before writing it here: silent on this branch, and it reported the planted
+  line in a scratch repo carrying one keyword commit. It recognises `#N` and `GH-N`; it does not
+  recognise `owner/repo#N` or issue URLs (tracked in #6791), nor a colon between keyword and
+  reference — whether GitHub honours that last form was not measured here, so check those by eye.
+  Re-run it before every push after arming `--auto`, not once at the start: the branch keeps growing
   commits, and the ones written to explain this defect are the ones that re-introduce it.
 - Assert the **counterpart** too. AC30 covered only this PR's field; nothing covered the
   implementation PR's, which is the one that decides whether the issue ever closes.
@@ -302,26 +349,38 @@ checks pass, with no need to occupy a quiet window by hand. Two details mattered
     write to the thing this asserts?* If not, it is a monitor — pair it with a fallback that is in
     your own power, and do not mark it satisfied by having escalated it.
 
-20. **Two commit messages carried close-keyword adjacencies at merge time, one naming an unrelated
-    issue (#8043).** Both were written while documenting this trap; a squash merge would have put
-    them in the merge commit's body. Recovery: `.claude/hooks/pre-merge-auto-close-scan.sh` refused
-    the merge, reworded via `filter-branch`, tree verified byte-identical. #8043 turned out already
-    closed since 2026-09-13, so nothing collateral happened — luck, not design. **Prevention:** the
-    commit-message sweep above; and treat "I measured that surface earlier" as expired the moment
-    you write another commit. Hook fired correctly — no new rule needed.
-21. **I asserted a docs-only merge would clean-skip the deploy arm; it deployed.** The
-    `workflow_run` arm inherits neither path gate, and `resolve-target`/`deploy` both succeeded —
-    production moved to the merge commit (`build_sha` matched, v0.276.9 → 0.276.10).
-    **Prevention:** read the deploy job's conclusion for the merge SHA; do not infer it from the
-    diff's shape.
+20. **I wrote "no commit message carried a keyword" while two already did.** Both adjacencies
+    (`a850ecd51`, `654da378f`) predated the commit that wrote the sentence (`d8aa6f408`), so it was
+    a broken check rather than a stale one, and one named an unrelated issue (#8043). The CI scanner
+    had flagged both for hours in a fail-soft comment I did not read; the pre-merge hook, which
+    blocks, stopped the merge. Recovery: reworded via `filter-branch`, tree verified byte-identical,
+    though `gh pr merge --squash --body-file` was the lighter fix. #8043 was already closed since
+    2026-09-13, so nothing collateral happened — luck, not design. **Prevention:** run the sweep
+    above with a known-positive control so it cannot certify a surface it never read, and read the
+    auto-close scanner's comment rather than its check colour. The rule was already written in
+    `ship/SKILL.md`; the gap was applying it.
+21. **I called #8242 "docs-only" and predicted its deploy arm would clean-skip; it deployed.**
+    `plugins/soleur/**` is in `web-platform-release.yml`'s path filter because the plugin ships inside
+    the web-platform image, and #8242 edited three `SKILL.md` files — so it was never docs-only.
+    `resolve-target` and `deploy` both correctly succeeded, and production moved to the merge commit
+    (`build_sha` matched, v0.276.9 → v0.276.10). `postmerge/SKILL.md` is right that a truly
+    docs-only merge clean-skips; my classification was wrong. **Prevention:** here a `SKILL.md` edit
+    is a production deploy — check the release path filter, not the file extension.
 22. **I predicted `battery-owed` would return `42 SKIPPABLE` after merge.** It cannot on a
     squash-merge repo: it requires `origin/main` to be an ancestor of `HEAD`, and a squashed feature
-    branch never is. **Prevention:** read a gate's stated precondition before predicting its
-    verdict — the script says so in its own output.
-23. **Phase 3.7 nearly read another merge's deploy run as validating this one's gate change.** The
-    only deploy-arm run available was on `267ff5807`; asserting the head SHA, not just the presence
-    of a `deploy` job, is what prevented a false `GATE-VALIDATED`. **Prevention:** filter every run
-    query by the merge SHA, and treat a run found without that filter as evidence about nothing.
+    branch never is. Separately, its rationale comment said the "CI Required" ruleset was
+    `strict: false`; measured `true` since 2026-09-15, corrected in the PR that records this.
+    **Prevention:** read a gate's stated precondition before predicting its verdict — the script
+    says so in its own output.
+23. **Postmerge Phase 3.7 nearly read another merge's deploy run as validating this one.** The only
+    deploy-arm run available was on `267ff5807`. I caught it by checking the head SHA by hand — but
+    the skill's own query selected "the latest" run with `--limit 1` and no SHA filter, so the defect
+    was in the prescribed command, not only in my reading. A `--limit N` window was also measured
+    nondeterministic for this lookup (`--limit 10` missed a run at list index 6). **Prevention:**
+    fixed in the PR that records this — Phase 3.7 now asks `actions/runs?head_sha=` for the exact
+    merge SHA, controlled against a known run, the newest run, and an all-zero SHA. The same
+    recency lookup had a twin in `ship/SKILL.md` ("Two runs per merge is normal"), found only by
+    sweeping for the claim after fixing the first; it is corrected in the same PR.
 
 ## Related
 

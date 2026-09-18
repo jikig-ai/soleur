@@ -128,8 +128,10 @@ HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 # Those two trees are identical exactly when origin/main is already an ancestor of
 # HEAD: the merge is then a fast-forward and its tree IS HEAD's tree. When main
 # has advanced they differ, and "CI verified this exact tree" stops being true —
-# which matters because the CI Required ruleset is `strict: false`, so a branch
-# can merge while behind and this divergence is ordinary rather than exotic.
+# which is ordinary rather than exotic: the CI Required ruleset is `strict: true`
+# (measured 2026-09-18; it read `false` when this was first written), so a branch
+# cannot MERGE while behind — but it is routinely behind while its CI runs and
+# while this gate is consulted, which is exactly when the two trees differ.
 #
 # Refusing here rather than reasoning about whether the merge tree is "close
 # enough" keeps the gate's claim and its evidence the same sentence. The cost is
