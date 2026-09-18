@@ -15,6 +15,43 @@ lane: cross-domain
 
 # fix: give the registry heartbeat a positive Phase-B delivery field so #7960 can close on proof
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-18
+**Sections enhanced:** Property List, Design (leak discriminator), Implementation Phases 2–3 and 5,
+Observability, Guard Contract, Test Scenarios, Acceptance Criteria; new `## Downtime & Cutover`.
+**Agents used:** security-sentinel, test-design-reviewer, deployment-verification-agent,
+git-history-analyzer, a verify-the-negative pass, a post-edit self-audit.
+
+### Key Improvements
+
+1. **Leak discriminator hardened in both directions** (security-sentinel P1). A case-insensitive
+   three-pattern set: a header map with at least one `key:` (including Go `map[…]` rendering); an
+   IPv4-dotted or IPv6 `clientIP`; a bare credential header whose value is not `[REDACTED]` or
+   zot's `[******]` mask. It no longer false-FAILs on `clientIP: default` or a list of header
+   names, and a `suppressed` row whose tail is anything but `none` now counts as a leak (the
+   gate is supposed to have withheld it).
+2. **Public-output canary.** Every non-`suppressed` fixture tail carries `CANARY7960`, and `expect()` fails any
+   case whose combined output contains it. That turns P6 from a promise into a guard.
+3. **Downtime & Cutover section added** (gate 4.55 fires on the `hcloud_server` replace):
+   zero-downtime paths evaluated and rejected with reasons; residual pull-path outage bounded
+   and signed off at the one operator stop.
+4. **Phase 5 commands verified byte-for-byte** against the workflows, including the deterministic
+   apply-run filter and the store-volume log line; rollback stated honestly (none — recovery
+   re-creates from the preserved volume).
+5. **Fixture shapes pinned** for N4 and N5 so each mutation's claimed result holds by
+   construction; forged-token rows in cases 5 and 7 carry inline invariant comments.
+
+### New Considerations Discovered
+
+- The sweeper DOES reopen a closed issue on exit 1 (`mode=closed`), but `closed_precheck` skips
+  an issue the sweeper itself closed with a PASS — so after the PASS nothing re-grades #7960.
+  Wording corrected throughout.
+- Delivery proof is unforgeable by log content, but NOT by a holder of an ingest token for the
+  shared source 2457081; this predates the plan (the `suppressed`-only proof had the same
+  property) and is recorded as a residual rather than widened.
+- All eight git/issue attribution claims were re-verified (commands in the git-history pass).
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -47,7 +84,7 @@ The fix, end to end:
    **deleted**: an unproven boot is one honest state, `exit 3`, whose message names the vehicle.
    Tighten the leak discriminator to structure (a header map, an IP-valued `clientIP`), because
    field-keyed proof makes `exit 1` reachable on ordinary prose for the first time.
-3. **Tests.** Extend `scripts/followthroughs/zot-last-err-redact-7500.test.sh` from 19 to 27 cases
+3. **Tests.** Extend `scripts/followthroughs/zot-last-err-redact-7500.test.sh` from 19 to 35 cases
    and mutation-prove each new guard, including removal of the field requirement.
 4. **Records.** Amend ADR-211 (the delivery-proof key and its Adopting→Accepted trigger); update
    #7960's body so its falsification condition names `err_redact_rev`; file three tracked
@@ -67,7 +104,7 @@ The fix, end to end:
 |---|---|---|
 | Budget script at `scripts/registry-userdata-budget.sh` | It is `apps/web-platform/infra/registry-userdata-budget.sh` (+ `.test.sh`) | Use the real path everywhere |
 | `LINE=` emitter at `cloud-init-registry.yml` ~:577 | Confirmed: exactly one `LINE="SOLEUR_ZOT_DISK …"` assignment, `zot_last_err=$ZOT_LAST_ERR` last | Insert after `zot_last_err_src=$ZOT_ERR_SRC` |
-| Probe harness has 19 cases, `MIN_CASES=19` literal | Confirmed; baseline run `19 passed, 0 failed` | Grow to 27, rebind literal |
+| Probe harness has 19 cases, `MIN_CASES=19` literal | Confirmed; baseline run `19 passed, 0 failed` | Grow to 35, rebind literal |
 | Issue body: heartbeat redaction suite has "26 assertions" | Suite reports `cases=33`, `EXPECTED_MIN=33` | Grow to 36 |
 | Last sweep: 113 tier-4 rows on the new boot, 0 leaking | Live re-run: 265 tier-4 rows on `78111e0e…`, 0 leaking, exit 3 | Same state, larger sample |
 | "Check whether BASELINE_AT_MERGE and boot-drift branches become dead code" | With proof keyed on the field, drift decides no verdict. BASELINE's only remaining job would be a 2-vs-3 heading between merge and replace — a window that historically lasted 8 days (P3 refusal 2026-09-09 → manual re-fire 2026-09-17), during which a convergence reboot flips it anyway, and whose "not yet" wording would be FALSE because the current host already runs Phase B | Delete BASELINE, its override, and every drift branch (the `zot-log-channel-7440.sh` precedent, #7444 R20/F-7) |
@@ -183,17 +220,20 @@ applies the same mechanism. The sweeper renders exit 2 and exit 3 under differen
 - **P1.** The probe exits 0 (closes #7960) only when the graded boot provably runs a Phase-B
   producer AND ≥1 tier-4 row exists on that boot AND no `fallback` row on it carries header content.
 - **P2.** The probe exits 1 only when the graded boot provably runs a Phase-B producer AND a
-  `fallback` row on that boot carries header *structure* (a header map or an IP-valued `clientIP`) —
-  never on prose that merely names the words.
+  `fallback` row on that boot carries header *structure* (a header map, an address-valued
+  `clientIP`, or an unmasked bare credential header) or a `suppressed` row carries any tail other
+  than `none` — never on prose that merely names the words.
 - **P3.** Delivery proof is read only from envelope-anchored rows, from the trusted region, on the
-  newest real boot — unforgeable from the free-text tail, a marker-quoting foreign row, the
-  producer's own journald echo, or the `unknown` boot sentinel.
+  newest real boot — unforgeable by log content: not from the free-text tail, a marker-quoting
+  foreign row, the producer's own journald echo, or the `unknown` boot sentinel. (Forgeable by a
+  holder of an ingest token for the shared source 2457081, as the existing `suppressed` proof
+  already is; recorded as a residual, not widened.)
 - **P4.** Absent proof, the probe says so under a heading that is true in every state it covers,
   and names the vehicle whose completion turns that reading into "investigate".
 - **P5.** Every emitted `SOLEUR_ZOT_DISK` row carries the proof field in the trusted region, and
   user_data stays within budget.
 - **P6.** Nothing the probe prints on the public issue echoes row content (counts, boot ids and
-  proof-source names only).
+  proof-source names only), enforced by a canary guard in the harness.
 - **P7.** The delivering replace is verified from the apply run itself (conclusion + store-volume
   assert) and the pull path is healthy afterwards — not inferred from a green dispatcher run.
 
@@ -234,8 +274,7 @@ applies the same mechanism. The sweeper renders exit 2 and exit 3 under differen
 
 Inputs, all on the newest real boot `B`, all from the trusted region (text before the FIRST
 ` zot_last_err=`): `F` = any row carries `(^| )err_redact_rev=[1-9][0-9]*( |$)`; `S` = any tier-4
-row carries `zot_last_err_src=suppressed`; `T` = tier-4 rows (`fallback|suppressed`); `L` =
-`fallback` rows whose tail matches the tightened leak structure.
+row carries `zot_last_err_src=suppressed`; `T` = tier-4 rows (`fallback|suppressed`); `L` = rows graded as leaking by the tightened leak structure below.
 
 | Row | Proof (`F` or `S`) | `T` | `L` | Exit | Heading / unique marker |
 |---|---|---|---|---|---|
@@ -249,11 +288,26 @@ sweeper's "NOT YET" heading; accepted in writing because its first line says DEL
 all-`suppressed` boot (T > 0, zero `fallback` rows) passes via R3: the gate withheld every sample,
 so there is nothing that could leak — accepted in writing.
 
-**Tightened leak structure (`L`).** Replace `(headers|clientIP)[[:space:]]*[]=:{"]` with
-`headers[[:space:]]*[:=][[:space:]]*[[{]` OR `clientIP[[:space:]]*[:=][[:space:]]*[0-9A-Fa-f]`
-(header map, or `clientIP` carrying an address). The producer strips quotes (`tr -d '"\\'`), so a
-real leak reads `headers:{Cookie:[…]}` / `clientIP:10.0.1.9`. Verified against real data in
-Phase 3.4, not assumed.
+**Tightened leak structure (`L`).** Replace `(headers|clientIP)[[:space:]]*[]=:{"]` with three
+patterns, matched case-insensitively (`grep -ciE`) against the tail after the first ` zot_last_err=`:
+
+1. **Header map** — `headers[[:space:]]*[:=][[:space:]]*(map)?[[{][[:space:]]*[a-z0-9-]+[[:space:]]*:`
+   (a map with at least one `key:`; covers Go `map[…]` rendering; an empty map or a list of header
+   names does not match).
+2. **Client address** — `clientip[[:space:]]*[:=][[:space:]]*\[?([0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9a-f]{0,4}:[0-9a-f]{0,4}:)`
+   (dotted IPv4, or at least two colons for IPv6; `default`, `empty`, `bad:` do not match).
+3. **Bare credential header** — `(^|[^a-z0-9-])(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)[[:space:]]*[:=][[:space:]]*\[`
+   whose value is not `[REDACTED` or zot's `[******` mask (the same `CRED_HDRS` list as the
+   producer; a wrapper-less credential header survives a truncated or renamed `headers` wrapper).
+
+`L` counts `fallback` rows matching any pattern, **plus every `suppressed` row whose tail is not
+exactly `none`** (the gate must have withheld the sample; anything else shipped under
+`suppressed` is a gate regression). The producer strips quotes (`tr -d '"\\'`), so a real leak
+reads `headers:{Cookie:[…]}` / `clientIP:10.0.1.9`. A fully-masked map
+(`headers:{Cookie:[REDACTED]}`) still counts: after the tier gate a tier-4 tail should only ever be
+zot's `.message`, so the R2 message says "header structure", not "a credential leaked".
+Truncation between `headers:` and `{` is not a leak (the values were never shipped). Verified
+against real data in Phase 3.4, not assumed.
 
 Implementation notes (for /work):
 
@@ -315,7 +369,7 @@ Contract before consumer: the producer field is the contract; the probe and its 
    redden N1, not die at extraction. `FATAL` via printf + `exit 1` if empty.
 2. `rowf <dt> <boot> <src> <tail>` inserts the token after `zot_last_err_src=`, mirroring the
    producer's field order. Delete the `BASELINE` extraction; use a fabricated `OLDBOOT` uuid.
-3. Update changed cases and add new ones (Test Scenarios). Rebind `MIN_CASES=27` (literal; keep
+3. Update changed cases and add new ones (Test Scenarios). Rebind `MIN_CASES=35` (literal; keep
    the `only %s cases ran` FATAL wording).
 4. Run: every new/changed case must FAIL against the current probe for the reason it names.
 
@@ -324,7 +378,7 @@ Contract before consumer: the producer field is the contract; the probe and its 
 1. Implement the decision table, the `F` counter in the existing awk pass, the tightened `L`;
    delete everything in §Deleted; rewrite drift-as-proof prose; add the row comments and the
    PROOF KEY header line.
-2. Harness 27/27 green; `shellcheck` probe + harness; `bash scripts/guard-vacuity-floor.test.sh`
+2. Harness 35/35 green; `shellcheck` probe + harness; `bash scripts/guard-vacuity-floor.test.sh`
    green (the rebound floor classifies as FIRES).
 3. Mutation-prove every Guard Contract row against scratch copies of the real files; record
    `mutation → case/assertion → got` in the GREEN commit's message (ship folds commit bodies into
@@ -332,10 +386,12 @@ Contract before consumer: the producer field is the contract; the probe and its 
 4. **Leak-regex check against real data (P2 invariant, not proxy).** Read-only:
    `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 10d --grep SOLEUR_ZOT_DISK --limit 5000`,
    anchor + decode as the probe does, restrict to boot `d0107f1f-834b-4acc-bd5a-00e53b61d835`
-   (the pre-Phase-B host) `fallback` rows, and count with the OLD and NEW `L` patterns. Required:
-   NEW ≥ 1 and NEW == OLD (the tightening loses no real leak). Then the same two counts on boot
-   `78111e0e-…` (Phase B): both 0. If the pre-Phase-B rows have aged out, record that and fall back
-   to the synthetic fixtures only — never assert the equality without the data.
+   (the pre-Phase-B host) `fallback` rows, and count OLD, NEW, and OLD∧¬NEW. Required: NEW ≥ 1,
+   and every OLD∧¬NEW row classified by shape category (e.g. "header-name list", "prose") with a
+   count per category — categories and counts only, never row text. Any OLD∧¬NEW row that is a
+   real header map or address is a pattern defect: fix the pattern before GREEN. Then the same
+   counts on boot `78111e0e-…` (Phase B): NEW = 0. If the pre-Phase-B rows have aged out, record
+   that and rely on the synthetic fixtures — never assert the comparison without the data.
 5. Live read-only probe run: expected `exit 3` with the new R4 message naming `78111e0e-…` and
    "lacks err_redact_rev" (the current host is Phase B without the field).
 
@@ -396,8 +452,10 @@ Contract before consumer: the producer field is the contract; the probe and its 
    - If the dispatcher refuses on P3 (expected): post a pointer comment on #7960 (the dispatcher
      posts to #7556), wait for the three writers to conclude, re-fire with
      `gh workflow run registry-host-replace-dispatch.yml -f reason="P3 refusal resolved: delivering PR #8272 (err_redact_rev) for #7960"`.
-   - Identify the dispatched apply run (`apply-web-platform-infra.yml`, `workflow_dispatch`, created
-     after the dispatch) and watch IT: `conclusion == success`, and its log contains
+   - Identify the dispatched apply run with the dispatcher's own filter —
+     `gh run list --workflow=apply-web-platform-infra.yml --json databaseId,status,createdAt,event --jq 'map(select(.event=="workflow_dispatch" and .createdAt>="<DISPATCHED_AT>"))|sort_by(.createdAt)|first'`
+     (`DISPATCHED_AT` is printed in the dispatch run's step summary/env) — and watch IT
+     (`gh run watch <id>`, then `gh run view <id> --log | grep -F 'zot store volume preserved (0 delete/forget)'`): `conclusion == success`, and its log contains
      `zot store volume preserved (0 delete/forget)`. A dispatcher "UNVERIFIED" warning, a
      `cancelled` apply, or no apply run is NOT delivered — re-fire. Do not treat a green dispatcher
      run as proof (P7).
@@ -426,7 +484,7 @@ Contract before consumer: the producer field is the contract; the probe and its 
 - `scripts/followthroughs/zot-last-err-redact-7500.sh` — decision table, `F` in the existing awk
   pass, tightened `L`, §Deleted, prose rewrite, row comments, PROOF KEY header line.
 - `scripts/followthroughs/zot-last-err-redact-7500.test.sh` — producer-extracted token, `rowf`,
-  BASELINE removal, changed + new cases, `MIN_CASES=27`.
+  BASELINE removal, changed + new cases, canary guard, `MIN_CASES=35`.
 - `knowledge-base/engineering/architecture/decisions/ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md` — amendment.
 - `knowledge-base/INDEX.md` — regenerated.
 
@@ -460,6 +518,42 @@ None. (`gh issue list --label code-review --state open` bodies checked for every
   degradation (a lost watch, a false public alarm, a pull-path outage), not one user's data breach.
   The redaction logic itself is unchanged; this plan changes only what proves it is running.
 
+## Downtime & Cutover
+
+**Offline-inducing operation.** `-/+ hcloud_server.registry` (user_data is ForceNew), run by
+`apply-web-platform-infra.yml`'s `registry_host_replace` job. **Affected surface:** the registry
+pull path only — new image pulls, deploys and container restarts fail for the window.
+**Not affected:** already-running web containers keep serving (the apply job's own error text:
+"already-running containers keep serving and any restart cannot pull"); the web app, Concierge
+and the zot store volume (preserved, asserted in the apply log).
+
+**Zero-downtime paths evaluated (and why none applies):**
+
+| Path | Verdict |
+|---|---|
+| Blue-green (new host up, cut over, retire old) | Not available: the store volume attaches to one server at a time, the private IP `10.0.1.30` and hostname are fixed, and the host→GHCR fallback was retracted (#7071), so there is no second serving tier to cut over to. |
+| In-place / state-only (`terraform state mv`, SSH edit) | Not available: the host is cloud-init-only with no SSH ingress (ADR-096); a state-only change delivers no bytes to the host, which is the whole point. |
+| Rolling | Single registry host; nothing to roll across. |
+| Defer until some other replace | Rejected: the point of this change is the proof, and the brief's DONE requires the delivering replace. |
+
+**Residual downtime accepted — bounded.**
+
+- **Measured:** the last replace applied in 1 min 51 s (job `registry_host_replace` 11:19:18Z →
+  11:21:09Z, run 35215052952).
+- **Boot-to-serving:** cloud-init's bounded waits (LUKS device ≤60 s, docker ≤60 s, zot `/v2/`
+  readiness ≤60 s) add at most ~3 min after OS boot.
+- **Hard ceiling:** the apply job's `timeout-minutes: 20`.
+
+**Window:** fired only when P3 finds no zot writer in flight (so no deploy is mid-pull).
+
+**Sign-off:** the one operator stop (Phase 5.3), which states the outage consequence plainly.
+
+**Per-stage verification:** apply conclusion plus the store-volume log line; pull-path health
+(Phase 5.6).
+
+**Rollback:** none to the old host (ForceNew destroys it). Recovery is a direct
+`registry-host-replace` re-dispatch, which recreates a new host from the preserved volume (5b).
+
 ## Observability
 
 ```yaml
@@ -470,7 +564,7 @@ liveness_signal:
   configured_in: apps/web-platform/infra/cloud-init-registry.yml (/etc/cron.d/zot-disk-heartbeat) and .github/workflows/scheduled-followthrough-sweeper.yml
 error_reporting:
   destination: sweeper comment on #7960 carrying the probe's stderr (last 4 KB), counts only
-  fail_loud: exit 1 posts a FAIL comment and keeps #7960 open (it never closes on 1); exit 3 renders under its own CANNOT ESTABLISH heading
+  fail_loud: on the OPEN #7960, exit 1 posts a FAIL comment and never closes it; exit 3 renders under its own CANNOT ESTABLISH heading
 failure_modes:
   - mode: field did not reach the host after a verified replace
     detection: probe reads a newest boot whose trusted region lacks err_redact_rev
@@ -488,7 +582,7 @@ failure_modes:
     detection: new-boot rows without state_status=running / ping_rc=0 / growing zot_uptime_s; the existing registry liveness heartbeat monitor
     alert_route: Better Stack heartbeat alert (existing) and a halted Phase 5.6
   - mode: regression after PASS
-    detection: none in the warehouse stream (the sweeper skips a PASS-closed issue); the producer suite on any future edit and the Layer 2 sink scrub on the public egress
+    detection: none in the warehouse stream — the sweeper's closed-issue reopen path (mode=closed, exit 1 -> gh issue reopen) is skipped by closed_precheck for an issue the sweeper itself closed with a PASS; the producer suite on any future edit and the Layer 2 sink scrub on the public egress remain
     alert_route: CI red on the edit; recorded as a known residual in ADR-211
 logs:
   where: Better Stack Logs source 2457081 (SOLEUR_ZOT_DISK rows); sweeper output in #7960 comments
@@ -576,8 +670,8 @@ the status flip is gated on the PASS.
 
 **Property.** The probe exits 0 or 1 only when an envelope-anchored row on the newest real boot
 carries `err_redact_rev` ≥ 1 (or a tier-4 `suppressed` row) in the text before its first
-` zot_last_err=`; and exits 1 only when a `fallback` row on that boot carries a header map or an
-IP-valued `clientIP` in its tail.
+` zot_last_err=`; and exits 1 only when a row on that boot is graded leaking by the three-pattern
+`L` set (or is a `suppressed` row with a tail other than `none`).
 
 **Assembly.** Four chokepoints in `scripts/followthroughs/zot-last-err-redact-7500.sh`: (1) the
 `ENVELOPE` anchor filter — the only admission path for rows; (2) `NEWEST_BOOT` — the only boot
@@ -600,7 +694,12 @@ compute a boot filter.
 | M8 | Drop the `ENVELOPE` anchor | case 7 (foreign row carrying the token) → 0 |
 | M9 | Accept `boot_id=unknown` as a boot | case 5 (`unknown` row carrying the token) → 0 |
 | M10 | Derive `F` from `TIER4_ROWS` instead of all newest-boot rows | 3b → 3 |
-| M11 | Revert `L` to `(headers|clientIP)[[:space:]]*[]=:{"]` | N11 (prose `invalid headers: …`) → 1 |
+| M11 | Revert `L` to `(headers|clientIP)[[:space:]]*[]=:{"]` | N11 (prose `invalid headers: …`) and N17 (`clientIP: default`) → 1 |
+| M12 | Grade `fallback` rows only (ignore a non-`none` `suppressed` tail) | N12 → 0 |
+| M13 | Echo the offending tail in the R2 message | canary guard fails on case 2 / N2 |
+| M14 | Drop `-i` (case-sensitive match) | N15 (`Headers:{…}`) → 0 |
+| M15 | Drop pattern 3 (bare credential header) | N16 (`Cookie:[abc]`, no wrapper) → 0 |
+| M16 | Drop the `[REDACTED` / `[******` exclusion from pattern 3 | N19 (`Authorization:[******]`) → 1 |
 
 **Harness rows.**
 
@@ -626,7 +725,7 @@ chokepoint every producer path flows through; the redaction suite captures at th
 
 | # | Mutation | Assertion that reddens |
 |---|---|---|
-| PM1 | Delete the token from `LINE=` | structural + emit-level + panic must-PASS + boot-guard field list |
+| PM1 | Delete the token from `LINE=` | structural + emit-level + panic must-PASS + boot-guard field list; also the probe harness's producer-token extraction FATALs before any case runs |
 | PM2 | Move it after `zot_last_err=$ZOT_LAST_ERR` | structural order + emit-level `${out%% zot_last_err=*}` + boot-guard "LAST field" |
 | PM3 | Add a second `LINE="SOLEUR_ZOT_DISK …"` assignment without the token | structural "exactly one assignment" |
 | PM4 | Change the value to `0` | structural value class; probe harness N1 |
@@ -657,17 +756,39 @@ cannot be weakened in one file while the other stays green.
 - All markers are unique to their branch (the no-usable-boot exit 3 and R4 both begin
   `CANNOT ESTABLISH:` — pin `lacks err_redact_rev` vs `no usable boot_id`).
 
-### Probe harness — new cases (8 → 27 total)
+### Probe harness — new cases (16 → 35 total)
 
 - 3b: old-boot leaky + new-boot `regex` row carrying the field → 2, `DELIVERY PROVEN`.
 - N1 field + clean `fallback`, no `suppressed` → 0 PASS, marker `proof: err_redact_rev`.
 - N2 field + a clean `fallback` row followed by a leaking one, no `suppressed` → 1 FAIL.
-- N4 field forged only in the untrusted tail → 3.
-- N5 field on an older boot only; newest boot lacks it → 3.
+- N4 field forged only in the untrusted tail: one `fallback` row on the newest boot with a clean
+  tail and the token placed AFTER the row's own ` zot_last_err=` (no token in the head) → 3.
+  (M2 reads the whole row → T=1, L=0 → 0.)
+- N5 field on an older boot only: `rowf(OLDBOOT, fallback, CLEAN_TAIL)` then
+  `row(NEWBOOT, fallback, CLEAN_TAIL)` without the token → 3. (M3 reads F across the window →
+  newest boot T=1, L=0 → 0.)
 - N7 `err_redact_rev=0` on the newest boot → 3.
 - N9 field only on the LAST newest-boot row, earlier newest-boot rows lack it, clean → 0 PASS.
 - N11 proven boot, `fallback` tail `level:error invalid headers: malformed request` → 0 PASS (prose
   is not structure); existing cases 10–12 keep proving that `headers:{…}` and `clientIP:10.…` are.
+- N12 proven boot, `suppressed` row whose tail is `{level:info,headers:{Cookie:[x]}}` (not `none`) → 1.
+- Leak side, each pattern branch pinned independently (proven boot, one `fallback` row) → 1:
+  N13 `headers=map[Cookie:[x]]`; N14 `clientIP:[fe80::1]:443`; N15 `Headers:{Accept:[x]}`
+  (case); N16 `Cookie:[abc]` with no `headers` wrapper.
+- Clean side (proven boot) → 0: N17 `clientIP: default`; N18 `invalid headers: [Content-Type]`;
+  N19 `Authorization:[******]` alone.
+- **Canary guard (every case):** every non-`suppressed` fixture tail (foreign rows included)
+  carries `CANARY7960`; `expect()` fails the case if `$WORK/out` contains it. Not a separate case
+  (no count change).
+- **`proof()` fixture changes its tail from empty to `none`**, mirroring the producer (an empty
+  sample becomes `ZOT_LAST_ERR=none` with the `suppressed` tag kept). Required by the new
+  "`suppressed` tail must be exactly `none`" rule; without it cases 1, 10–14 and 16 would grade
+  their proof row as a leak. `suppressed` tails never carry the canary for the same reason.
+  Case 13 builds its `suppressed` row with `row … suppressed ""` directly — change that tail to
+  `none` as well.
+- Cases 5 and 7 get an inline comment: the forged token must sit in the row's HEAD in the
+  producer's field order, and the forged row's `dt` must sort newest — both are what make M8/M9
+  yield a real false close rather than an accidental one.
 
 ### Producer — heartbeat redaction suite (+3 → 36) and boot guard (+1 → 105 run)
 
@@ -684,9 +805,10 @@ cannot be weakened in one file while the other stays green.
 
 - [ ] `grep -cE 'zot_last_err_src=\$ZOT_ERR_SRC err_redact_rev=1 ' apps/web-platform/infra/cloud-init-registry.yml` = 1, and `grep -cF 'LINE="SOLEUR_ZOT_DISK' apps/web-platform/infra/cloud-init-registry.yml` = 1.
 - [ ] `bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh` → `RESULT: PASS (36/36 assertions)`; `bash apps/web-platform/infra/registry-boot-guard.test.sh` → `105 passed, 0 failed`.
-- [ ] `bash scripts/followthroughs/zot-last-err-redact-7500.test.sh` → `27 passed, 0 failed, 27 cases`, `MIN_CASES=27` bound to a literal, FATAL wording contains `only %s cases ran`.
-- [ ] The GREEN commit message records M1–M11, H1–H2 and PM1–PM5, each with the case/assertion and the observed result, measured against scratch copies of the real files (H2 records GREEN).
+- [ ] `bash scripts/followthroughs/zot-last-err-redact-7500.test.sh` → `35 passed, 0 failed, 35 cases`, `MIN_CASES=35` bound to a literal, FATAL wording contains `only %s cases ran`.
+- [ ] The GREEN commit message records M1–M16, H1–H2 and PM1–PM5, each with the case/assertion and the observed result, measured against scratch copies of the real files (H2 records GREEN).
 - [ ] `bash scripts/guard-vacuity-floor.test.sh` passes.
+- [ ] `grep -c 'CANARY7960' scripts/followthroughs/zot-last-err-redact-7500.test.sh` ≥ 2 (fixture builders + the `expect()` absence check), and M13 is recorded RED.
 - [ ] `grep -nE 'BASELINE|DELIVERY HAS LANDED|unreachable by construction|delivery state UNKNOWN|Phase B cannot be in force|Phase B is inert|boot_id moved past|established independently \(boot_id\)|a replace necessarily produces a new one|!= baseline' scripts/followthroughs/zot-last-err-redact-7500.sh` returns nothing.
 - [ ] `grep -nE 'echo .*\$\{?(DECODED|RAWOUT|ENVELOPE|TIER4_ROWS)' scripts/followthroughs/zot-last-err-redact-7500.sh` returns nothing (no row text on the public issue).
 - [ ] Every `exit` after the no-usable-boot guard carries an `# R1`–`# R4` comment; `grep -c '^# PROOF KEY: err_redact_rev' scripts/followthroughs/zot-last-err-redact-7500.sh` = 1.

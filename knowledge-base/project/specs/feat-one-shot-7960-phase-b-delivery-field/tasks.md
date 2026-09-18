@@ -23,19 +23,19 @@ lane: cross-domain
 ## 2. Probe harness (RED)
 
 - [ ] 2.1 Extract the token from `$HERE/../../apps/web-platform/infra/cloud-init-registry.yml` (`grep -F 'LINE="SOLEUR_ZOT_DISK' | head -1 | grep -oE 'err_redact_rev=[^ "]+'`); FATAL if empty.
-- [ ] 2.2 `rowf` builder; remove the `BASELINE` extraction and `-u SOLEUR_FT_BASELINE_BOOT`; fabricated `OLDBOOT`.
-- [ ] 2.3 Changed cases: 3, 4, 18, 19 → 3 (`lacks err_redact_rev`); 5 and 7 rows carry the token → 3; 9 new-boot row carries the field → 2 `DELIVERY PROVEN`.
-- [ ] 2.4 New cases: 3b, N1, N2, N4, N5, N7, N9, N11. `MIN_CASES=27` (literal; `only %s cases ran`).
+- [ ] 2.2 `rowf` builder; remove the `BASELINE` extraction and `-u SOLEUR_FT_BASELINE_BOOT`; fabricated `OLDBOOT`; `proof()` and case 13's `suppressed` row tail `""` → `none`; `CANARY7960` in every non-`suppressed` fixture tail and an absence check in `expect()`.
+- [ ] 2.3 Changed cases: 3, 4, 18, 19 → 3 (`lacks err_redact_rev`); 5 and 7 rows carry the token in the head, newest `dt`, with an inline invariant comment → 3; 9 new-boot row carries the field → 2 `DELIVERY PROVEN`.
+- [ ] 2.4 New cases: 3b, N1, N2, N4 (token after the row's own ` zot_last_err=`), N5 (`rowf(OLDBOOT)` + `row(NEWBOOT)` clean), N7, N9, N11, N12 (`suppressed` tail not `none` → 1), N13–N16 (leak shapes: `map[`, IPv6, `Headers:` case, bare `Cookie:[`) → 1, N17–N19 (`clientIP: default`, `headers: [Content-Type]`, `Authorization:[******]`) → 0. `MIN_CASES=35` (literal; `only %s cases ran`).
 - [ ] 2.5 Confirm every new/changed case fails against the current probe for its named reason.
 
 ## 3. Probe change (GREEN)
 
-- [ ] 3.1 Decision table R1–R4; `F` counted in the existing awk pass over all newest-boot rows (not `TIER4_ROWS`); `suppressed` secondary proof; tightened `L` (header map / IP-valued clientIP).
+- [ ] 3.1 Decision table R1–R4; `F` counted in the existing awk pass over all newest-boot rows (not `TIER4_ROWS`); `suppressed` secondary proof; tightened `L`: case-insensitive three-pattern set (header map incl. `map[`; IPv4/IPv6 `clientIP`; unmasked bare credential header) plus any `suppressed` row whose tail is not exactly `none`; R2 message says "header structure".
 - [ ] 3.2 Delete `BASELINE_AT_MERGE`, `BASELINE`, the override, all drift branches, the empty-baseline and terminal-unreachable blocks.
 - [ ] 3.3 Rewrite drift-as-proof prose; `# R1`–`# R4` comments on every verdict exit; `# PROOF KEY: err_redact_rev …` header line; comment why ≥1 newest-boot row suffices.
-- [ ] 3.4 Harness 27/27; shellcheck; `bash scripts/guard-vacuity-floor.test.sh` green.
-- [ ] 3.5 Mutation-prove M1–M11, H1–H2, PM1–PM5 on scratch copies; record results in the GREEN commit message.
-- [ ] 3.6 Leak-regex check on real data (old vs new `L` on the pre-Phase-B boot `d0107f1f…`, and on `78111e0e…`), read-only via `doppler run -p soleur -c prd_terraform`.
+- [ ] 3.4 Harness 35/35; shellcheck; `bash scripts/guard-vacuity-floor.test.sh` green.
+- [ ] 3.5 Mutation-prove M1–M16, H1–H2, PM1–PM5 on scratch copies; record results in the GREEN commit message.
+- [ ] 3.6 Leak-regex check on real data, read-only via `doppler run -p soleur -c prd_terraform`: on the pre-Phase-B boot `d0107f1f…` count OLD, NEW, OLD∧¬NEW (NEW ≥ 1; every OLD∧¬NEW row classified by shape category, counts only); on `78111e0e…` NEW = 0.
 - [ ] 3.7 Live read-only probe → exit 3 with `lacks err_redact_rev` and `78111e0e`.
 
 ## 4. Records and follow-ups
@@ -52,7 +52,7 @@ lane: cross-domain
 - [ ] 5.2 File follow-up (c): post-PASS docs PR tracker.
 - [ ] 5.3 THE ONE OPERATOR STOP: explicit authorization covering merge + dispatcher re-fire + one direct recovery dispatch; merge immediately (no `--auto`).
 - [ ] 5.4 Apply the #7960 body edit after MERGED.
-- [ ] 5.5 Watch dispatch + release/deploy; on P3 refusal post a pointer on #7960 and re-fire once writers conclude; verify the apply run itself (success + `zot store volume preserved (0 delete/forget)`); 5b direct recovery on apply failure.
+- [ ] 5.5 Watch dispatch + release/deploy (apply run id via the dispatcher's own `DISPATCHED_AT` filter); on P3 refusal post a pointer on #7960 and re-fire once writers conclude; verify the apply run itself (success + `zot store volume preserved (0 delete/forget)`); 5b direct recovery on apply failure.
 - [ ] 5.6 Pull-path health on two new-boot rows.
 - [ ] 5.7 Local probe loop to exit 0 (bounded 90 min); investigate R4 immediately.
 - [ ] 5.8 `gh workflow run scheduled-followthrough-sweeper.yml`; verify #7960 CLOSED with PASS.
