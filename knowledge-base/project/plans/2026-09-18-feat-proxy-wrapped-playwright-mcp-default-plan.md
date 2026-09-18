@@ -111,7 +111,7 @@ Bash matchers, which this plan does not touch).
 |---|---|---|
 | Auto-wrap the user's existing `playwright` entry by rewriting their config | P1 on the user's own server | **Cut** — no plugin-manifest mechanism wraps an existing registration. The only implementable form is a SessionStart hook that edits customer-owned `.mcp.json`/`.claude.json` files, an unconsented mutation that additionally loads only after a full restart. Rejected outright. |
 | Auto-wrap via plugin-shipped PostToolUse hook on `mcp__playwright__.*` (`updatedMCPToolOutput`) | P7-transcript on ANY customer registration named `playwright` | **Deferred, not cut** — buys transcript-only coverage (fails P4: the tool's own disk writes happen before the hook sees output, and a hook cannot append `--snapshot-mode none` to a launch it does not own). Kept as a complementary control with re-evaluation criteria (see Alternative Approaches); a deferral issue is a plan deliverable. |
-| Pre-register `playwright` inline in `plugin.json` `mcpServers` | P1–P4 | **Reshaped** — inline forces the `.codex-plugin` deep-equality test (`codex.mcpServers` must equal canonical) and the `.devin-plugin` parity loop (reads `.url` on every canonical entry) to carry a stdio entry those harnesses cannot run. The dedicated `plugins/soleur/.mcp.json` at plugin root is the docs-recommended shape and scopes delivery to Claude Code, which is the only harness this control exists for. |
+| Pre-register `playwright` inline in `plugin.json` `mcpServers` | P1–P4 | **Reshaped** — inline forces the `.codex-plugin` deep-equality test (`codex.mcpServers` must equal canonical) and the `.devin-plugin` parity loop (reads `.url` on every canonical entry) to carry a stdio entry those harnesses cannot run. The dedicated `plugins/soleur/.mcp.json` at plugin root is the docs-recommended shape; it is discovered by Claude Code and by Devin's local CLI (per its documentation — the discovered server is still the wrapped proxy, so the wider reach is benign), with Codex discovery unverified. |
 
 ### Repo research (inline — Reviewed-Coverage: sequential-fallback)
 
@@ -295,9 +295,12 @@ against it and `plugins/soleur/test/devin-plugin.test.ts` iterates every
 canonical server asserting `.url`/`transport: "http"`. An inline stdio entry
 would either force a broken registration onto harnesses that cannot run it or
 force a parity-test restructure that hides real drift. The plugin-root
-`.mcp.json` is read by Claude Code only, which is the one harness this control
-exists for (ADR-213's whole threat model is the Claude Code stdio/transcript
-path).
+`.mcp.json` is read by Claude Code (measured at the declared floor, 2.1.139)
+and by Devin's local CLI per its own documentation — the discovered
+registration is still the wrapped proxy, so that reach is benign; Codex's
+handling of the file is unverified and claimed in neither direction. The
+control's threat model stays the local stdio/transcript path it was designed
+for (ADR-213).
 
 **Why a proxy-side `--user-data-dir-name` flag and not `bash -c`:** the
 registration needs a soleur-namespaced persistent profile (property 5 — the
@@ -329,10 +332,20 @@ directory under CWD. Both edges get suite rows.
 **Deliberately absent from the plugin entry** (each is dogfood-specific):
 
 - `--config=.claude/playwright-mcp.config.json` — repo-relative, headed-Chrome
-  credential-handoff settings; absent means `@playwright/mcp` defaults
-  (headless, bundled Chromium) which is what the skills need on customer
-  machines. The proxy refuses a `--config` that does not exist, so it must not
-  be named.
+  credential-handoff settings; absent means `@playwright/mcp` upstream
+  defaults. **[2026-09-18 measurement correction: this cell previously read
+  "(headless, bundled Chromium)" — both halves were wrong for the pinned
+  0.0.78.]** Measured on the npm-cached package: the default is **headed**
+  (`headless: false`; `PLAYWRIGHT_MCP_HEADLESS` exists as the customer
+  opt-out) and the default channel is `"chrome"` — real Google Chrome, not
+  bundled Chromium. Headed is what the credential-handoff flows need anyway
+  (an operator cannot complete MFA against an invisible browser), so no
+  `--headless` is added; a headed launch on this Wayland host with system
+  Chromium succeeded 4/5 calls with no Vulkan/ozone/crash lines, so the
+  2026-06 dogfood crash class does not reproduce there. The documented
+  degradation modes — display-less host, Chrome-absent host, Wayland
+  variance — live in the SKILL.md connect-failure playbook. The proxy
+  refuses a `--config` that does not exist, so it must not be named.
 - The `pkill` reaper and `env -u WAYLAND_DISPLAY`/X11 prelude — Linux-only
   (the proxy itself is POSIX). With a soleur-namespaced profile there is no
   shared-profile population to reap; orphan accumulation on customer machines
@@ -369,12 +382,16 @@ directory under CWD. Both edges get suite rows.
   uninstalling — then the skills' fallback (file-form on their own
   registration, or `agent-browser`) is the path; the prose must not assume the
   plugin server exists.
-- **Non-Claude-Code harnesses.** `.codex-plugin` and `.devin-plugin` do not
-  read a plugin-root `.mcp.json`, so on Codex/Devin sessions
+- **Sibling-harness reach.** The `.codex-plugin` and `.devin-plugin`
+  manifests are untouched and parity-green; the plugin-root `.mcp.json` is a
+  separate, conventional file. Devin's local CLI **does** honor it (per the
+  Devin CLI docs — the registration there is still the wrapped proxy, so the
+  reach is benign and needs no suppression); Codex's handling is unverified
+  and claimed in neither direction. Where the file is not discovered,
   `mcp__plugin_soleur_playwright__*` simply does not exist — the same
   degradation shape as a missing precondition, routed by the same fallback
   prose (separate registration → file-form). Harness parity is deliberately
-  NOT claimed; the control is Claude-Code-shaped end to end.
+  NOT claimed.
 - **`npx` on every session start** — accepted cost, named in the issue.
   Bounded: the pin hits the npx cache after first install; no `@latest` float
   (the 0.0.78 pin is load-bearing — the float already regressed once, see the
@@ -725,8 +742,9 @@ reach-boundary change a future engineer must find recorded.
 - **C4 views** — `model.c4` component descriptions: `snapshotGuard` (SHIPS vs
   WIRES — now wired by `plugins/soleur/.mcp.json` for every enabled customer)
   and `playwrightMcp` (remove/quote the "until #8156" clause; note the plugin
-  registration uses a separate soleur-namespaced profile and headless
-  defaults). Enumerated per the completeness mandate: no new external actor
+  registration uses a separate soleur-namespaced profile and upstream
+  defaults — headed, `channel: chrome`, per the measurement correction in
+  "Deliberately absent"). Enumerated per the completeness mandate: no new external actor
   (the customer operator is already modeled), no new external system
   (`playwrightMcp` already exists), no new container — the change is a
   reach/reach-description delta on existing elements; `views.c4` membership

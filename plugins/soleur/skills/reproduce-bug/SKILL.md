@@ -57,6 +57,12 @@ mcp__plugin_soleur_playwright__browser_snapshot({})
 
 If server not running, inform user to start `bin/dev`.
 
+If `mcp__plugin_soleur_playwright__*` tools are absent (the plugin server did
+not register or is toggled off), take the file-form path: use whatever
+`mcp__<server>__*` Playwright registration answers, treated as a separate —
+possibly unwrapped — registration under the §Wrapping rules below, or
+`agent-browser` when no Playwright registration exists at all.
+
 ### Step 2: Navigate to Affected Area
 
 Based on the issue description, navigate to the relevant page:

@@ -366,14 +366,23 @@ through `redact-a11y-snapshot.py` at the stdio boundary — between the server's
 stdout and the client's stdin, before the model reads it — which is what
 "redacted in flight" means: a content rewrite, not encryption and not
 transport security. A registration not routed through it is not covered by
-anything at runtime (#7980).
+anything at runtime (#7980). **The registration ships no config and no env
+block, so the server runs upstream defaults: headed — a visible Chrome window
+opens when a tool drives the browser — on channel `chrome` (real Google
+Chrome).** Headed is deliberate: the credential-handoff flows need an
+operator-visible window. On a display-less host or where Chrome is absent the
+server still connects but browser tools fail to launch — see the playbook at
+the end of this section.
 
 **Preconditions.** The plugin server exists only where all of these hold: the
 session is Claude Code ≥2.1.139 with the soleur plugin installed; `python3`
 and `npx` are on `PATH` and both scripts sit under `${CLAUDE_PLUGIN_ROOT}` (the
 proxy refuses to start beside a missing redactor); and the server is not
-toggled off in `/mcp`. On any other harness (Codex, Devin), a disabled toggle,
-or a failed precondition, `mcp__plugin_soleur_playwright__*` simply does not
+toggled off in `/mcp`. Devin's local CLI also discovers a plugin-root
+`.mcp.json` (its own documentation), so the tools may appear there too —
+still wrapped; on Codex discovery is unverified. On any harness that does
+not discover it, a disabled toggle, or a failed precondition,
+`mcp__plugin_soleur_playwright__*` simply does not
 exist — treat it as a missing registration and take the file-form path the
 calling skill prescribes (the `filename:` + redactor + shred form on the
 registration that does answer, or `agent-browser`), never a bare
@@ -425,10 +434,26 @@ WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
 1. **At startup** — the proxy writes `playwright-mcp-redact-proxy: refusing to
    start: <reason>` to stderr and exits 2, spawning no server, when it cannot
    load and self-test the redactor, or when the launch opens a raw sink around
-   it: `--save-session`; a config file (from `--config` or
-   `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets `saveSession`,
-   `saveVideo`, `server.port` / `server.host` or a capability other than
-   `vision`; `--port`, `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
+   it: a disk/session sink or foreign browser — `--save-session`,
+   `--save-trace`, `--save-video`, `--storage-state`, `--secrets`,
+   `--output-dir`, `--init-script`, `--init-page`, `--cdp-endpoint`,
+   `--endpoint`, `--extension`, `--executable-path`, `--daemon`,
+   `--allow-unrestricted-file-access`, `--grant-permissions`,
+   `--ignore-https-errors`, `--no-sandbox`, and each setting's
+   `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
+   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR` and
+   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`; a trailing valued flag, which would swallow
+   the appended `--snapshot-mode none` as its value; a config file (from
+   `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
+   `saveSession`, `saveTrace`, `saveVideo`, `secrets`, `outputDir`,
+   `allowUnrestrictedFileAccess`, `extension`, `server.port` / `server.host`, a
+   capability other than `vision`, `browser.cdpEndpoint` /
+   `browser.remoteEndpoint`, `browser.initPage` / `browser.initScript`,
+   `browser.contextOptions.storageState` / `.permissions` /
+   `.ignoreHTTPSErrors`, `browser.launchOptions.executablePath` /
+   `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
+   `browser.userDataDir` conflicting with `--user-data-dir-name`; `--port`,
+   `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
    (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other
    than `vision` (devtools, pdf and storage write raw page state);
    `--output-mode file`; a `DEBUG` value that can enable any `pw:` logger (the
@@ -508,3 +533,23 @@ a LIVE lock-holder is the contention case), then report the last `Server
 stderr:` and `child exited rc=` lines — the failure is in the server or the
 launch command, not the redactor. Any fix needs a full Claude Code restart,
 which only the user can do.
+
+**If the plugin server connects but the browser never launches** (tools answer
+with launch/navigation errors while the registration itself is healthy), the
+registration's upstream defaults are the suspect surface: headed, channel
+`chrome`. Three measured modes, each remediated by the customer exporting the
+named variable in the shell that launches their harness (the plugin entry has
+no `env` block, so process env is the only override path — `executable-path`
+is refused by the proxy as a foreign-browser sink, so do not suggest it):
+
+- **No display** (headless host, SSH, container): a headed browser cannot
+  open. `PLAYWRIGHT_MCP_HEADLESS=1` is the supported opt-out.
+- **No real Chrome** (channel `chrome` resolves to Google Chrome, not bundled
+  Chromium): install Chrome, or `npx playwright install chromium` plus
+  `PLAYWRIGHT_MCP_CHANNEL=chromium`.
+- **Wayland/GPU variance**: a headed launch on a Wayland host was measured
+  working with system Chromium (no Vulkan/ozone/crash lines), but the
+  2026-06 dogfood crash class existed — on a crash-looping host,
+  `PLAYWRIGHT_MCP_HEADLESS=1` sidesteps the compositor path entirely, or the
+  customer keeps their own registration with an env-forcing prelude as this
+  repository's `.mcp.json` does.

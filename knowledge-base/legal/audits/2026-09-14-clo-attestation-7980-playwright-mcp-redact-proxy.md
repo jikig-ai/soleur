@@ -866,7 +866,14 @@ What this does NOT change, stated rather than implied:
   or trigger above is re-run or re-opened; row 18's cell stays as written.
 - Preconditions are unchanged in kind: the new reach holds only where the plugin's
   `.mcp.json` loads (Claude Code ≥2.1.139 with the Soleur plugin installed, `python3`
-  and `npx` on `PATH`, server not disabled in `/mcp`). The PA-31 fleet overlay remains
+  and `npx` on `PATH`, server not disabled in `/mcp`). The Devin CLI's own
+  documentation states that plugin-root `.mcp.json` files and `${CLAUDE_PLUGIN_ROOT}`
+  are honored, so Devin's local substrate may also register the server — still the
+  wrapped proxy, a benign reach; Codex's handling of the file is unverified and
+  claimed in neither direction. Under `claude --strict-mcp-config` the plugin-root
+  file is suppressed (measured: `TOOL-ABSENT` under the flag vs `TOOL-PRESENT`
+  without it, claude 2.1.273), which keeps strict-mode clone paths free of the
+  registration. The PA-31 fleet overlay remains
   unwrapped and untouched — its per-fire `.mcp.json` is what PA-31 §(g) records and the
   plugin manifest does not bind it (PA-31 §(g) 2026-09-18 assessment).
 - Reach (c) — "the hosted agent-runner registers no Playwright server" — stays

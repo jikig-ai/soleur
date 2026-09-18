@@ -555,9 +555,15 @@ own `mcp__playwright__*`; both registrations coexist when the customer has one.
 **Dedicated `.mcp.json`, not inline `plugin.json` `mcpServers`.** A manifest
 entry in `plugin.json` is loaded by every harness that reads the manifest, and
 the codex deep-equality and devin `.url`-parity tests would then carry a stdio
-entry on harnesses that cannot run it. A plugin-root `.mcp.json` is read only
-by Claude Code, so the registration reaches exactly the harness that can
-execute it — the same property with a smaller blast radius.
+entry on harnesses that cannot run it. A plugin-root `.mcp.json` is read by
+Claude Code and — per the Devin CLI's own documentation, which states that a
+plugin's root `.mcp.json` and `${CLAUDE_PLUGIN_ROOT}` are honored — by Devin's
+local substrate as well; Codex's handling of a plugin-root `.mcp.json` was not
+verified and is claimed in neither direction. Where a harness does discover
+it, the discovered registration is still the wrapped proxy, so the wider
+reach is benign; the blast-radius argument is against `plugin.json`
+`mcpServers`, whose parity tests would force the entry onto harnesses that
+cannot execute it at all.
 
 **Profile isolation.** The registration passes
 `--user-data-dir-name soleur-playwright-mcp-profile`, a new proxy flag that
@@ -591,12 +597,17 @@ an upstream manifest-layer mechanism to wrap a user registration. ADR-162's
 one-rewriter rule does not constrain Option C — it constrains `updatedInput`
 rewrites on PreToolUse, not `updatedToolOutput` on PostToolUse.
 
-**Caveats, stated.** The plugin server exists only where the session is Claude
-Code ≥2.1.139 with the plugin installed, `python3` and `npx` on `PATH`, and the
-server not disabled in `/mcp` — the toggle can switch it off without
-uninstalling, and on other harnesses (Codex, Devin) the tools simply do not
-exist. Every one of those degrades to the same shape: `mcp__plugin_soleur_playwright__*`
-absent, the file-form path the skills prescribe as the fallback. Degradation
+**Caveats, stated.** The plugin server exists only where the plugin's
+`.mcp.json` is discovered and can execute — measured on Claude Code ≥2.1.139
+with the plugin installed, `python3` and `npx` on `PATH`, and the server not
+disabled in `/mcp` (the toggle can switch it off without uninstalling).
+Devin's local substrate also discovers the file per its own documentation;
+on Codex discovery is unverified; under `claude --strict-mcp-config` the
+plugin-root `.mcp.json` is suppressed (measured: `TOOL-ABSENT` under the
+flag vs `TOOL-PRESENT` without it on 2.1.273), which is what keeps the
+fleet's strict-mode clone path free of the registration. Every absence
+degrades to the same shape: `mcp__plugin_soleur_playwright__*`
+not present, the file-form path the skills prescribe as the fallback. Degradation
 prose in `agent-browser/SKILL.md` §"Wrapping the server" does not assume the
 plugin server exists. `npx` runs on every session start; the 0.0.78 pin bounds
 that to a cache hit after first install. The orphan-on-own-profile failure

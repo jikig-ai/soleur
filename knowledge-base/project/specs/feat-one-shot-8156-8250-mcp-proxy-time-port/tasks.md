@@ -90,6 +90,22 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
       P1-2 stored-profile prose scoped (cf-token-scope, work, plan); compound
       stale literal fixed; simplicity P2s fixed (dup/dash refusals, dead
       assert, README table, alternatives row) — `dd085a96a`
+- [x] Review round-2 dispositions (2026-09-18, fix-inline each): headed
+      premise corrected (0.0.78 defaults headed, `channel: chrome` — plan/
+      SKILL/model.c4/audit); Devin `.mcp.json` reach corrected (docs-honored,
+      benign-wrapped; Codex unverified); `--strict-mcp-config` suppression
+      measured (TOOL-ABSENT/TOOL-PRESENT, 2.1.273); sink surface widened
+      (SINK_FLAGS +5 incl. `--save-trace`/`--save-video`/`--no-sandbox`/
+      `--ignore-https-errors`/`--daemon`; config contextOptions +
+      chromiumSandbox arms; VALUE_FLAGS +2); log control-char scrub; vet_error
+      rebuild; vet_other_result; realpath profile root; mutation suite
+      retargeted (31/48) + 2 new mutants — **419/419 cases, 77/77 mutants**
+- [x] Prose follow-through (2026-09-18): session-rules-loader roster reads
+      all three committed sources; help.md playwright row (Claude+Devin);
+      guard.sh residual re-pointed at #8286; review-e2e prefer bullet;
+      reproduce-bug absent-server fallback; SKILL.md arm-1 full refusal
+      enumeration + launch-degradation playbook (display-less/Chrome-absent/
+      Wayland)
 
 ## Out of scope
 
