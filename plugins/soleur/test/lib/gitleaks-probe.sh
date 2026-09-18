@@ -31,15 +31,17 @@ gl_probe() {
     return 0
   fi
   local _probe_err _probe_rc=0 TO=()
-  _probe_err=$(mktemp)
   if command -v timeout >/dev/null 2>&1; then TO=(timeout 10)
   elif command -v gtimeout >/dev/null 2>&1; then TO=(gtimeout 10); fi
-  ${TO[@]+"${TO[@]}"} gitleaks version >/dev/null 2>"$_probe_err" || _probe_rc=$?
+  # stderr captured inline, not via mktemp: a tempfile here would need an owning
+  # trap (ADR-129, lint-trap-tempfile-ownership rule c) that a sourced library
+  # cannot register without stealing the caller's EXIT trap. Same shape as the
+  # production hook's probe.
+  _probe_err="$( { ${TO[@]+"${TO[@]}"} gitleaks version >/dev/null; } 2>&1 )" || _probe_rc=$?
   if [[ "$_probe_rc" != "0" ]]; then
     HAVE_GITLEAKS=0
-    GITLEAKS_REASON="gitleaks is not runnable here (rc=$(printf '%q' "$_probe_rc"), $(printf '%q' "$(head -n1 "$_probe_err")"))"
+    GITLEAKS_REASON="gitleaks is not runnable here (rc=$(printf '%q' "$_probe_rc"), $(printf '%q' "${_probe_err%%$'\n'*}"))"
   fi
-  rm -f "$_probe_err"
 }
 
 # Per-ARM skip, never per-suite. A skipped arm is not a pass: under CI=true the
