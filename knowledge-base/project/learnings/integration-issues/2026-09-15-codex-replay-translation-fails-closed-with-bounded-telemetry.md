@@ -176,6 +176,8 @@ path alone cannot show that replay drift is visible.
 
 76. Bounded reruns isolated the aggregate failures further: the legal-scope unit returned 16 failures, the scratch-root test exposed two `env` option-ordering defects that let ambient `XDG_CACHE_HOME` override its HOME fixtures, and the representative web-platform component test failed before exercising the hook because the component project exposes no `localStorage` (`localStorage.clear` is undefined). The notice-frontmatter scripts reached their final timing case without a terminating status in the bounded shell probe, and an aggregate Vitest child outlived its wait window until explicitly terminated. **Prevention:** run failing suites one at a time with explicit exit capture, place `env --unset` options before assignments, classify environment/setup failures separately from product regressions, and terminate orphaned test processes before editing or committing the worktree.
 
+77. The legal-scope parser hardening initially introduced a shell parse error because an apostrophe in a comment inside a single-quoted inline `awk` program terminated the surrounding shell string. **Prevention:** keep comments inside single-quoted shell-embedded programs apostrophe-free, and run the focused script immediately after editing before staging it.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
