@@ -209,7 +209,7 @@ soleur_op_require_bins() {
 SOLEUR_OP_RUN_ID="$$"
 SOLEUR_OP_TOTAL_STAGES=0
 # Resolved ONCE (first use or soleur_op_ledger_init) and cached: the default is
-# derived from BASH_SOURCE[-1], which may be relative, and a `cd` inside a stage
+# derived from the bottom of BASH_SOURCE, which may be relative, and a `cd` inside a stage
 # would otherwise split one run's lines across two files.
 SOLEUR_OP_LEDGER_FILE=""
 
@@ -224,7 +224,10 @@ soleur_op_ledger_path() {
   if [[ -n "${SOLEUR_BOOTSTRAP_LEDGER:-}" ]]; then
     SOLEUR_OP_LEDGER_FILE="$SOLEUR_BOOTSTRAP_LEDGER"
   else
-    main_script="${BASH_SOURCE[-1]:-}"
+    # `${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}`, not `[-1]`: negative subscripts
+    # are bash 4.3+ and the 3.2 that macOS ships dies here with "bad array
+    # subscript" — fatal under set -e, stderr only, no marker.
+    main_script="${BASH_SOURCE[${#BASH_SOURCE[@]}-1]:-}"
     # Sourced with no main script (an interactive shell, `bash -c`): the bottom of
     # the stack is this file, and "beside the library" is not a ledger home.
     if [[ -z "$main_script" || "$main_script" == "${BASH_SOURCE[0]}" ]]; then
@@ -568,9 +571,15 @@ soleur_op_gh_secret_set() {
 #
 #   The refusal below is NOVEL — no in-repo precedent has it. It is what stops
 #   this helper from quietly becoming a secret path.
+#   Case-insensitive and CONTAINS-form (review P2-10): the old suffix-only,
+#   case-sensitive `^(.*_)?(TOKEN|KEY|SECRET|PASSWORD|PAT)$` admitted
+#   HCLOUD_TOKEN_PRD, hcloud_token, SECRET_KEY_BASE, API_KEYS, PRIVATE_KEY_PEM,
+#   CREDENTIALS, DB_PASSWD and SENTRY_DSN onto argv. `tr`, not `${var^^}`: the
+#   latter is bash 4.0+ and this file's floor is 3.2.
 soleur_op_gh_variable_set() {
-  local repo="$1" var_name="$2" value="$3"
-  if [[ "$var_name" =~ ^(.*_)?(TOKEN|KEY|SECRET|PASSWORD|PAT)$ ]]; then
+  local repo="$1" var_name="$2" value="$3" upper
+  upper="$(printf '%s' "$var_name" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$upper" =~ (^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|PASSPHRASE|PAT|CREDENTIALS?|DSN|PRIVATE)(S?$|_) ]]; then
     printf 'SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE name=%s reason=secret-shaped-name-on-argv\n' "$var_name"
     return 1
   fi

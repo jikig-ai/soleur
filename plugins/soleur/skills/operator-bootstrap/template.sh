@@ -32,11 +32,13 @@ case "$-" in
     ;;
 esac
 
-# `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars, but
-# neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys and the CA vars substitute the trust store.
-unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
-      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+# SSLKEYLOGFILE writes TLS session keys to disk; nothing a stage runs should
+# inherit it. The CA-pool variables (SSL_CERT_FILE, SSL_CERT_DIR,
+# CURL_CA_BUNDLE) are deliberately NOT stripped: `gh` and `hcloud` are Go
+# clients that read them for their root pool, and a founder behind a
+# TLS-inspecting proxy needs them (the credential linter requires only the
+# xtrace refusal above — measured).
+unset SSLKEYLOGFILE
 
 # --- library resolution ------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,35 +57,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOLEUR_OP_LIB_BAKED="__SOLEUR_OP_LIB_BAKED__"
 
 # Resolution order, most explicit first:
-#   1. SOLEUR_OP_LIB      — explicit env override (a moved plugin, a test).
-#   2. the baked path     — what a generated script normally runs on.
-#   3. CLAUDE_PLUGIN_ROOT — a script run from inside a Claude Code session.
-#   4. hard exit 64.
+#   1. SOLEUR_OP_LIB      — explicit env override (a moved plugin, a test). Must
+#                           be ABSOLUTE: `-r` tests a relative name against cwd
+#                           while `source` searches PATH for it, two different
+#                           files.
+#   2. CLAUDE_PLUGIN_ROOT — a script run from inside a Claude Code session: the
+#                           LIVE plugin, which beats a bake that may point at a
+#                           stale marketplace cache hash.
+#   3. the baked path     — what a generated script runs on in a founder's
+#                           terminal, where 2 is unset.
+#   4. hard exit 64, naming the LAST candidate that was rejected.
 SOLEUR_OP_LIB="${SOLEUR_OP_LIB:-}"
+last_rejected="<no candidate was absolute>"
+if [[ -n "$SOLEUR_OP_LIB" && "$SOLEUR_OP_LIB" != /* ]]; then
+  last_rejected="$SOLEUR_OP_LIB (SOLEUR_OP_LIB must be an absolute path)"
+  SOLEUR_OP_LIB=""
+fi
 if [[ -z "$SOLEUR_OP_LIB" ]]; then
   for candidate in \
-    "$SOLEUR_OP_LIB_BAKED" \
-    "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/scripts/lib/operator-script.sh"
+    "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/scripts/lib/operator-script.sh" \
+    "$SOLEUR_OP_LIB_BAKED"
   do
     [[ "$candidate" == /* ]] || continue
-    [[ -r "$candidate" ]] && { SOLEUR_OP_LIB="$candidate"; break; }
+    if [[ -r "$candidate" ]]; then SOLEUR_OP_LIB="$candidate"; break; fi
+    last_rejected="$candidate"
   done
 fi
 
 # HARD EXIT, never a stub. ADR-178 Context §1 records what fail-closed stubs did
 # to `cleanup-merged`: it refused to reap forever while reporting success.
 if [[ -z "$SOLEUR_OP_LIB" || ! -r "$SOLEUR_OP_LIB" ]]; then
-  printf 'SOLEUR_BOOTSTRAP_LIB_MISSING path=%s\n' "${SOLEUR_OP_LIB:-<unresolved>}"
-  printf 'Install or update the Soleur plugin, or set SOLEUR_OP_LIB to the library path.\n'
+  printf 'SOLEUR_BOOTSTRAP_LIB_MISSING path=%s\n' "${SOLEUR_OP_LIB:-$last_rejected}"
+  printf 'Install or update the Soleur plugin, or set SOLEUR_OP_LIB to the absolute path of the library.\n'
   exit 64
 fi
+unset last_rejected
 
 # shellcheck source=../../scripts/lib/operator-script.sh disable=SC1091
 source "$SOLEUR_OP_LIB"
 
-# API contract (library header §API). A library that loads but predates a helper
-# this script calls would fail mid-stage, after side effects; refuse up front.
-[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]] || {
+# API contract (library header §API). EQUALITY: the library auto-updates with
+# the plugin while this script is frozen in the founder's repository, so
+# "library newer than script" is the only incompatibility that can occur, and
+# `-ge` admitted exactly that (measured: a v2 library that had renamed a helper
+# passed the gate, wrote run_begin and stage 1, then died at the call — the
+# mid-stage death this check exists to prevent). Refused BEFORE any ledger
+# write.
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
   printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
   exit 64
 }
@@ -107,9 +127,13 @@ Usage: bootstrap.sh [--reset <KEY>] [--help]
 
 Environment:
   SOLEUR_BOOTSTRAP_LEDGER=<path>     Run ledger (default: beside this script).
-  SOLEUR_OP_LIB=<path>               Override the library path baked at generation.
-  <SKIP VARIABLES>                   One per class-1/class-3 prompt; see below.
-                                     The destructive-write ack has NONE, by rule.
+  SOLEUR_OP_LIB=<abs-path>           Override the library path baked at generation.
+
+Skip variables — one per class-1/class-3 prompt in THIS script, derived from
+its source so the list cannot drift (naming convention: SOLEUR_BOOTSTRAP_<WHAT>
+for a value, SOLEUR_BOOTSTRAP_SKIP_<WHAT>_BARRIER for a barrier). The
+destructive-write acknowledgement has NONE, by rule:
+$(grep -oE '^[[:space:]]*soleur_op_(barrier|value) SOLEUR_BOOTSTRAP_[A-Z0-9_]+' "${BASH_SOURCE[0]}" | awk '{print "  " $2}' | sort -u)
 USAGE
 }
 

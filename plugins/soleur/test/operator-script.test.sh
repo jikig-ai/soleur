@@ -392,7 +392,46 @@ g3_check() {
     v=1
   fi
 
-  # row 5 (behavioural half): a secret-shaped name must never reach `gh` argv.
+  # row 5 (behavioural half): every secret-shaped name must be refused and must
+  # never reach `gh` argv — the 13 spellings the old suffix-only, case-sensitive
+  # pattern admitted (review P2-10 §F2), each driven, and two legitimate names
+  # that must still be ALLOWED so the rule stays a secret-shape rule and not a
+  # blanket refusal.
+  local name
+  for name in HCLOUD_TOKEN_PRD hcloud_token SECRET_KEY_BASE API_KEYS PRIVATE_KEY_PEM \
+              CREDENTIALS DB_PASSWD SENTRY_DSN Deploy_Token TOKEN_FOR_CI \
+              PASSPHRASE_FILE CREDENTIAL_PATH GH_PAT_FINE_GRAINED; do
+    : > "$ghlog"
+    out="$(GH_ARGV_LOG="$ghlog" SOLEUR_BOOTSTRAP_LEDGER="$ledger" \
+            bash "$SB/drive.sh" "$lib" soleur_op_gh_variable_set owner/repo "$name" "$SENTINEL" </dev/null 2>&1)"; rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+      echo "g3: the variable helper ACCEPTED the secret-shaped name ${name}"
+      v=1
+    fi
+    if grep -qF "$SENTINEL" "$ghlog"; then
+      echo "g3: a secret-shaped value reached \`gh\` argv via ${name} (observed in the argv log)"
+      v=1
+    fi
+    if ! grep -qF "SOLEUR_BOOTSTRAP_UNSAFE_VARIABLE name=${name}" <<<"$out"; then
+      echo "g3: the refusal of ${name} did not name it in the marker: ${out}"
+      v=1
+    fi
+  done
+  for name in DEPLOY_REGION LOG_LEVEL; do
+    : > "$ghlog"
+    out="$(GH_ARGV_LOG="$ghlog" SOLEUR_BOOTSTRAP_LEDGER="$ledger" \
+            bash "$SB/drive.sh" "$lib" soleur_op_gh_variable_set owner/repo "$name" eu-central </dev/null 2>&1)"; rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      echo "g3: the variable helper REFUSED the non-secret name ${name} (rc=${rc}): ${out}"
+      v=1
+    fi
+    if ! grep -qF "variable set ${name}" "$ghlog"; then
+      echo "g3: the non-secret ${name} never reached \`gh variable set\`"
+      v=1
+    fi
+  done
+
+  # row 5 (legacy behavioural half): a secret-shaped name must never reach argv.
   out="$(GH_ARGV_LOG="$ghlog" SOLEUR_BOOTSTRAP_LEDGER="$ledger" \
           bash "$SB/drive.sh" "$lib" soleur_op_gh_variable_set owner/repo DEPLOY_TOKEN "$SENTINEL" </dev/null 2>&1)"; rc=$?
   if [[ "$rc" -eq 0 ]]; then
@@ -1333,6 +1372,29 @@ for api_fn in soleur_op_value soleur_op_barrier soleur_op_ack_or_die soleur_op_e
   fi
 done
 
+# The API number is hand-replicated in every consumer's gate and marker. All of
+# them must agree with the value the library exports, or a correct library is
+# refused (or an incompatible one admitted) on a spelling mismatch.
+api_exported="$(bash -c 'set -uo pipefail; source "$1"; printf "%s" "${SOLEUR_OP_LIB_API:-0}"' _ "$LIB" 2>/dev/null)"
+api_consumers=0
+api_bad=""
+while IFS= read -r consumer; do
+  [[ -n "$consumer" ]] || continue
+  grep -q 'SOLEUR_OP_LIB_API' "$consumer" || continue
+  api_consumers=$((api_consumers + 1))
+  grep -qE "\[\[ \\\$\{SOLEUR_OP_LIB_API:-0\} -eq ${api_exported} \]\]" "$consumer" \
+    || api_bad="${api_bad} ${consumer}:gate"
+  grep -qF "SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=${api_exported} got=" "$consumer" \
+    || api_bad="${api_bad} ${consumer}:marker"
+done < <(printf '%s\n%s\n' "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh" "$(g3_sourcing_scripts "$PLUGIN_ROOT")" | awk 'NF && !seen[$0]++')
+if [[ "$api_consumers" -lt 2 ]]; then
+  fail "API: only ${api_consumers} consumer(s) assert SOLEUR_OP_LIB_API — the census is broken"
+elif [[ -n "$api_bad" ]]; then
+  fail "API: consumers disagree with the exported SOLEUR_OP_LIB_API=${api_exported}:${api_bad}"
+else
+  pass "API: all ${api_consumers} consumers gate on -eq ${api_exported} and spell need=${api_exported} in the marker"
+fi
+
 # open_url must be ADDITIVE-ONLY: the URL is printed first and the opener's exit
 # code is never branched on. Plus the new WSL arm.
 openurl_body="$(awk '/^soleur_op_open_url\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$LIB")"
@@ -1453,6 +1515,29 @@ if [[ -r "$TEMPLATE" ]]; then
     pass "F1 negative control: the UNBAKED template in the same location exits 64 with LIB_MISSING (the bake is load-bearing)"
   else
     fail "F1 negative control: unbaked template exited ${raw_rc} (expected 64 + LIB_MISSING): ${raw_out}"
+  fi
+
+  # F6b — the consumer-side contract refuses a library whose API number moved
+  # PAST the one it was generated against, BEFORE any ledger write. The library
+  # ships with the plugin and updates under a frozen script, so "newer" is the
+  # only incompatibility that can happen; `-ge` admitted it and the script died
+  # mid-stage on the renamed helper instead (review, lead's coverage consult).
+  newer_lib="$SB/newer-lib.sh"
+  { cat "$LIB"; printf '\nexport SOLEUR_OP_LIB_API=2\nunset -f soleur_op_barrier\n'; } > "$newer_lib"
+  newer_ledger="$SB/newer-api-ledger.jsonl"
+  rm -f "$newer_ledger"
+  newer_out="$(cd "$SB/founder-repo" && env -u CLAUDE_PLUGIN_ROOT SOLEUR_OP_LIB="$newer_lib" \
+    SOLEUR_BOOTSTRAP_LEDGER="$newer_ledger" SOLEUR_BOOTSTRAP_SKIP_ACCOUNT_BARRIER=1 \
+    SOLEUR_BOOTSTRAP_ACCOUNT_ID=a timeout 10 bash knowledge-base/project/specs/feat-x/bootstrap.sh </dev/null 2>&1)"; newer_rc=$?
+  if [[ "$newer_rc" -eq 64 ]] && grep -qF 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=2' <<<"$newer_out"; then
+    pass "F6b: a library whose API moved to 2 is refused with LIB_INCOMPATIBLE need=1 got=2, exit 64"
+  else
+    fail "F6b: a newer-API library was not refused (rc=${newer_rc}): ${newer_out}"
+  fi
+  if [[ ! -e "$newer_ledger" ]]; then
+    pass "F6b: the refusal happens BEFORE any ledger write (no ledger file exists)"
+  else
+    fail "F6b: the refused run still wrote a ledger: $(cat "$newer_ledger")"
   fi
 
   # F6 — the consumer-side contract refuses a library that predates the API.
@@ -1669,7 +1754,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=123
+FLOOR=128
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))

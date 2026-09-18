@@ -100,6 +100,11 @@ replace the example stages. Rules:
   cannot see, and it creates a second one. Keep the template's two controls: the vendor-side read
   and the `*_ATTEMPTED` marker written *before* the create, which stops a re-run and sends the
   founder to the console (`--reset <KEY>_ATTEMPTED` clears it once they have looked).
+- **Name skip variables by convention, and let `usage()` derive the list.** A class-1 value is
+  `SOLEUR_BOOTSTRAP_<WHAT>` (`SOLEUR_BOOTSTRAP_ACCOUNT_ID`); a class-3 barrier is
+  `SOLEUR_BOOTSTRAP_SKIP_<WHAT>_BARRIER`. The template's `--help` greps its own `soleur_op_value` /
+  `soleur_op_barrier` call sites for the list, so a prompt added on a line of its own is
+  documented without editing `usage()`. Keep each call on one line for that reason.
 - **Open a URL with `soleur_op_open_url`.** It prints the URL first and never branches on the
   opener's exit code, so a headless box degrades to "here is the URL" instead of to a failed stage.
   `SOLEUR_OP_NO_OPEN=1` prints the URL and launches nothing (CI, test harnesses, a founder who
@@ -123,7 +128,7 @@ founder the script path and `bash <path>` — not a checklist.
 
 ## The interactive surface: two carve-outs
 
-Generated scripts are **non-interactive by default** (ADR-227). The closed set of interactive
+Generated scripts are **non-interactive by default** (ADR-228). The closed set of interactive
 carve-outs is **two** (a third requires an ADR amendment): credential **entry**
 (`hr-never-label-any-step-as-manual-without`) and per-command **destructive-write acknowledgement**
 (`hr-menu-option-ack-not-prod-write-auth`).
@@ -183,6 +188,20 @@ The ledger is written on the founder's machine and is committable in the founder
 which is where observability layer 7's "committed to the customer's own repository" condition is
 satisfied. Nothing is transmitted to Soleur infrastructure: the surface is the founder's own
 machine, and routing it anywhere else is a data-controller event, not an observability improvement.
+
+## Lifecycle
+
+- **Create:** this skill, from ship's operator-step gate (option 4).
+- **Read / run:** `bash knowledge-base/project/specs/feat-<name>/bootstrap.sh`; `--help` lists the
+  skip variables; the ledger beside it is the run history.
+- **Regenerate** (the procedure changed, the library's API number moved): re-run this skill. It
+  rewrites the script from the template; the `.env` and the ledger are left in place, and every
+  stage's precondition makes the next run skip what is already done.
+- **Delete:** when the follow-through issue that points at the script closes, remove the script,
+  the ledger (`bootstrap-runs.jsonl`) and the `.env` together — the `.env` holds live credentials
+  and has no reason to outlive the procedure that needed them. Nothing reads the
+  `SOLEUR-GENERATED-OPERATOR-SCRIPT v1` header line today; it exists so a future sweep can find
+  every generated script by one grep.
 
 ## What protects the founder's credentials
 

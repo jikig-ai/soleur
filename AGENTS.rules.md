@@ -107,7 +107,7 @@ owner: founder
 
 - Challenge reasoning, not validating [id: cm-challenge-reasoning-instead-of]. No flattery.
 - Delegate verbose exploration (3+ file reads) to subagents [id: cm-delegate-verbose-exploration-3-file]. Keep main context for edits.
-- When proposing to clear context or resume from a fresh session, provide a copy-pasteable resume prompt: skill/command, plan path, branch, worktree path, PR #, issue #, one-line summary [id: cm-when-proposing-to-clear-context-or]. User should paste and go. Pick the option first via the ordered tree (Continue → /clear → handoff → subagent → /compact, first yes wins) in `plugins/soleur/skills/brainstorm-techniques/references/phase-boundaries.md`.
+- When proposing to clear context or resume from a fresh session, provide a copy-pasteable resume prompt: skill/command, plan path, branch, worktree path, PR #, issue #, one-line summary [id: cm-when-proposing-to-clear-context-or]. User should paste and go. Pick the option first via the ordered first-yes-wins tree in `plugins/soleur/skills/brainstorm-techniques/references/phase-boundaries.md`.
 
 ## Code Quality
 

@@ -39,7 +39,10 @@ to, and no gate that could check the claim. What is adopted is the checkable par
 3. Use each word in one sense. Pick the everyday sense and keep it for the whole message.
 4. Write in the active voice. Name who does the thing.
 5. Remove jargon, file paths, issue numbers, PR numbers, and command names. Name the effect instead
-   of the artifact that produces it.
+   of the artifact that produces it. **Exception: keep any literal the operator must type, click or
+   paste** — a command to run, a button label, a value to enter. Put it alone on its own line,
+   unchanged; the sentences around it say what it does. A restatement that deletes the one string
+   the operator needs has removed the action along with the jargon.
 6. Open with the outcome. Put the reason after it, if the reason is still needed.
 
 ## Vocabulary
@@ -50,6 +53,20 @@ not by looking a term up. A repository glossary is a separate piece of work trac
 one lands later, this skill can cite it then. Do not invent one here, and do not point at
 `plugins/soleur/docs/pages/glossary.njk` — that is marketing surface, its entries are category terms
 rather than operational ones, and it is a Nunjucks template rather than readable plain text.
+
+## When to self-invoke
+
+Invoke this skill in the same turn, without being asked by name, when the operator's reply is one
+of these shapes — each is "that did not land", not a new question:
+
+- "what?", "huh?", "sorry?"
+- "in plain English", "in normal words", "without the jargon"
+- "I don't follow", "I don't understand", "lost me"
+- "say that again", "come again", "one more time"
+- "what does that mean for me?", "so what do I do?"
+
+Do **not** invoke it when the operator asks for *more* detail, disputes a fact, or asks a follow-up
+question — those are new answers, not restatements.
 
 ## Stop conditions
 

@@ -330,34 +330,73 @@ describe("Decision-principles taxonomy wiring", () => {
 });
 
 describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
+  const stripHtmlComments = (raw: string) => raw.replace(/<!--[\s\S]*?-->/g, "");
+
   // The skill is only ever reached from ship's operator-step gate; an orphaned
-  // skill is the failure R14 folded this assertion in to catch. Anchored on the
-  // INVOCATION form so a prose mention or a comment cannot satisfy it.
-  test("ship invokes soleur:operator-bootstrap via the Skill tool form", () => {
-    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+  // skill is the failure R14 folded this assertion in to catch. HTML comments
+  // are stripped BEFORE matching (a comment can carry the literal and would
+  // otherwise satisfy a bare regex), and the match is anchored to the option-4
+  // list item of the gate, not to any mention anywhere in the file.
+  test("ship's operator-step gate offers option 4 as the Skill-tool invocation of soleur:operator-bootstrap", () => {
+    const raw = stripHtmlComments(
+      readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8"),
+    );
+    const option4 = raw
+      .split("\n")
+      .find((line) => /^4\.\s+\*\*Generate a runnable script instead/.test(line));
     expect(
-      /skill:\s*soleur:operator-bootstrap/.test(raw),
-      "ship/SKILL.md no longer carries `skill: soleur:operator-bootstrap` — the " +
+      option4,
+      "ship/SKILL.md lost the gate's option-4 line (`4. **Generate a runnable script instead …`).",
+    ).toBeDefined();
+    expect(
+      /skill:\s*soleur:operator-bootstrap(?![\w-])/.test(option4 ?? ""),
+      "the option-4 line no longer carries `skill: soleur:operator-bootstrap` — the " +
         "hr-multi-step-post-merge-bootstrap-script artifact has no producer in the pipeline.",
     ).toBe(true);
   });
 
   // help.md renders skills by prefix family (R23), so the two skills reach the
-  // menu through the `operator-*` family rule in every harness block — never a
-  // hand-written per-skill list, which is the triplicated shape R23 rejected.
-  test("help.md carries the operator-* family in all three harness blocks", () => {
+  // menu through the `operator-*` family rule in EVERY harness block — checked
+  // per block (split on the `### ` headings), because a total count of 3 is
+  // satisfied by one block mentioning the family three times while another
+  // dropped it.
+  test("help.md carries the operator-* family in each harness block", () => {
     const raw = readFileSync(resolve(PLUGIN_ROOT, "commands", "help.md"), "utf-8");
-    const familyMentions = raw.match(/operator-\*/g) ?? [];
-    expect(
-      familyMentions.length,
-      "help.md must name the `operator-*` family in each of the Claude, Devin and Grok " +
-        "blocks (rendering rule + non-routing line) — fewer means a block dropped it.",
-    ).toBeGreaterThanOrEqual(3);
+    const blocks = raw.split(/^### /m).slice(1);
+    const wanted = ["Claude Code", "Devin CLI", "Grok Build"];
+    for (const name of wanted) {
+      const block = blocks.find((b) => b.startsWith(name));
+      expect(block, `help.md has no \`### ${name}\` harness block`).toBeDefined();
+      expect(
+        /operator-\*/.test(block ?? ""),
+        `the \`### ${name}\` block of help.md does not name the operator-* family`,
+      ).toBe(true);
+    }
     for (const skillName of ["operator-bootstrap", "operator-rephrase"]) {
       expect(
         existsSync(resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md")),
         `${skillName} is missing — the operator-* family rule in help.md would render nothing for it.`,
       ).toBe(true);
+    }
+  });
+
+  // Two Phase-6 body templates carry the Merge Danger block (gh pr edit and gh
+  // pr create); which one runs depends only on whether a draft PR exists, so
+  // an edit to one and not the other is a silent partial. Byte-identical after
+  // the indentation the fenced block adds is removed.
+  test("ship's two Merge Danger template blocks are byte-identical", () => {
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    const blocks: string[] = [];
+    const re = /^[ \t]*## Merge Danger\n([\s\S]*?)\n[ \t]*## Changelog/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw)) !== null) {
+      blocks.push(m[1].split("\n").map((l) => l.replace(/^[ \t]+/, "")).join("\n"));
+    }
+    expect(blocks.length, "expected exactly two `## Merge Danger` template blocks").toBe(2);
+    expect(blocks[0]).toBe(blocks[1]);
+    for (const b of blocks) {
+      expect(/^\*\*Undo:\*\*/m.test(b)).toBe(true);
+      expect(/^\*\*Blast Radius:\*\*/m.test(b)).toBe(true);
     }
   });
 });

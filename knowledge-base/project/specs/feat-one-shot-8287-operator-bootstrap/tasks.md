@@ -42,7 +42,7 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 - [ ] 0.3 Re-derive the free ADR ordinal across every `origin/*` ref, not just `main`. Provisional is ADR-226 (D14).
 - [ ] 0.4 Read `scripts/lint-shell-trace-credential-refusal.py` `:74-76`, `:125-128`, `:142-150` in full before touching any prologue (Guard 5).
 - [ ] 0.5 Confirm `shellcheck` availability. Measured absent on this host — if still absent, `bash -n` is the syntax gate and no suite may prescribe `shellcheck`.
-- [ ] 0.6 Capture the current `--dry-run` stdout of all four `provision-*` scripts as the pre-refactor reference, running from a directory outside the repository.
+- [ ] 0.6 Capture the current `--dry-run` stdout of `provision-hetzner.sh` (hetzner only after R11) as the pre-refactor reference, running from a directory outside the repository.
 
 ## Phase 1 — Characterization first (green against today's scripts)
 
@@ -52,15 +52,15 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 - [ ] ~~1.4 Hoist the `if $DRY_RUN` branch in `provision-github.sh` above the four network calls at `:73`, `:85`, `:93-94`, `:100-101`, or emit unresolved placeholders on that path.~~ (cut, R12)
 - [ ] ~~1.5 `provision-github/test/provision-github-characterization.test.sh` — golden `--dry-run` stdout, now offline.~~ (cut, R11)
 - [ ] 1.6 `provision-hetzner/test/provision-hetzner-characterization.test.sh` — golden `--dry-run` stdout with an `hcloud` stub on `PATH`.
-- [ ] 1.7 Pin in every suite: the duplicate teardown a successful `--dry-run` emits; that `--help` and bad-argument exits print **no** teardown; that DPA-gate exits (rc 3) **do**.
+- [ ] 1.7 Pin in the hetzner suite (the only one after R11): the duplicate teardown a successful `--dry-run` emits; that `--help` and bad-argument exits print **no** teardown; that DPA-gate exits (rc 3) **do**.
 - [ ] 1.8 Every suite runs with `cwd` outside the repository. Confirm `bash scripts/test-all.sh` reports no live-repo write.
-- [ ] 1.9 All four suites green against unmodified scripts. This is the safety net — do not proceed without it.
+- [ ] 1.9 The hetzner suite (hetzner only after R11) green against the unmodified script. This is the safety net — do not proceed without it.
 
 ## Phase 2 — The library, test-first
 
 - [ ] 2.1 Write `plugins/soleur/test/operator-script.test.sh` **before** the library, driving Guards 3 and 4 red first.
-- [ ] 2.2 Encode Guard 3's six mutation rows and both harness rows.
-- [ ] 2.3 Encode Guard 4's five mutation rows and both harness rows, including the reorder row (TTY check moved after the read) and the no-TTY case under `timeout`.
+- [ ] 2.2 Encode Guard 3's mutation rows (five library mutations plus the own-dispatch row) and its harness row.
+- [ ] 2.3 Encode Guard 4's mutation rows (as landed: eleven, including the consumer-side sweep and the class-by-body rows) and both harness rows, including the reorder row (TTY check moved after the read) and the no-TTY case under `timeout`.
 - [ ] 2.4 Create `plugins/soleur/scripts/lib/operator-script.sh`. ~~Line 1 is `# shellcheck shell=bash`~~ Line 1 is `#!/usr/bin/env bash`, the convention of the three sibling libraries (review P3); header states sourcing preconditions and names every call site (D3).
 - [ ] 2.5 Extract stage progress, preflight and closing summary from `apps/cla-evidence/infra/bootstrap.sh:57-61,76-88,98-103,110,307-315`.
 - [ ] 2.6 Extract the `.env` upsert from `linkedin-setup.sh:443-452`, **corrected to exact-key matching** (the source's `grep -v '^PREFIX_'` is a prefix match and is correct only for a fixed key block).
@@ -85,8 +85,8 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 ## Phase 4 — The proving consumer
 
 - [ ] 4.1 Refactor `provision-hetzner.sh` onto the library.
-- [ ] 4.2 Keep `read -rs` at `:123` **in this file** — `incident/test/redact-sentinel.test.sh` pins it as a required member (D12).
-- [ ] 4.3 Duplicate the xtrace-refusal and TLS-strip prologue **above** the `source` line — a `source` line is a counted command under `PROLOGUE_MAX_CMDS = 0` (Guard 5).
+- [ ] 4.2 Keep the `read -rs -p "Hetzner project-scoped API token: "` line **in this file** — `incident/test/redact-sentinel.test.sh` pins it as a required member (D12).
+- [ ] 4.3 Duplicate the xtrace-refusal prologue **above** the `source` line (the CA-pool strip is deliberately NOT duplicated: hcloud/gh are Go clients that read SSL_CERT_FILE/SSL_CERT_DIR/CURL_CA_BUNDLE for their root pool, and the linter requires only the refusal — measured) — a `source` line is a counted command under `PROLOGUE_MAX_CMDS = 0` (Guard 5).
 - [ ] 4.4 Keep the trap installed below argument validation so usage errors still print no teardown.
 - [ ] 4.5 Assert the Phase 1 golden is byte-identical after the refactor.
 - [ ] 4.6 Run `bash plugins/soleur/skills/incident/test/redact-sentinel.test.sh` and confirm Test 24 still sees `provision-hetzner.sh`.
@@ -98,7 +98,7 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 - [ ] 5.3 Add a "start here" line naming `/soleur:go`, and name both new skills.
 - [ ] 5.4 Add the `operator-rephrase` back-reference line to `operator-digest/SKILL.md`.
 
-## Phase 6 — Rules, routing parity, naming correction
+## Phase 6 — Rules, routing parity, naming correction (dissolved into Phase 5 by Deepen-Plan Ruling 4; the tasks are kept here under their original numbers)
 
 - [ ] 6.1 `plugins/soleur/skills/brainstorm-techniques/references/phase-boundaries.md` — the ordered five-option tree body, with attribution comment.
 - [x] 6.2 ~~One new Communication rule in `AGENTS.rules.md`~~ (R15 cut the new rule) — instead the BODY of `cm-when-proposing-to-clear-context-or` now points at the reference file and names the ordered five-option tree. Done.
@@ -111,7 +111,7 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 
 ## Phase 7 — Ship-side changes
 
-- [ ] 7.1 Add the `## Merge Danger` section to the Phase 6 body template at `ship/SKILL.md:1773` and `:1876`, with ~~the three~~ TWO undo-first fields (D8; `Door:` cut by R7).
+- [ ] 7.1 Add the `## Merge Danger` section to BOTH Phase 6 body templates in `ship/SKILL.md` (the `gh pr edit --body` template and the `gh pr create --body` template, each directly above `## Changelog`), with ~~the three~~ TWO undo-first fields (D8; `Door:` cut by R7).
 - [ ] ~~7.2 Quote `deployment-verification-agent`'s rollback line for `**Undo:**`; write `none produced` when review ran degraded.~~ (superseded by the design-validity review F8: `Undo:` is author-written by ship from the blast radius; the agent's line is quoted only for `user-data`/`money` when a review artifact carries one; `none known — <lost>` otherwise. There is no `none produced` value.)
 - [ ] 7.3 Add the evidence-tier text, cross-referencing `ship/SKILL.md:138-175`, `review/SKILL.md:438-450` and `qa/SKILL.md:191,208` rather than competing with them.
 - [ ] ~~7.4 Add the Phase 5.5 hold for `one-way` or blast radius ∈ {`prod-data`, `money`}, reusing the existing gate machinery (D9).~~ (cut, R7)
@@ -120,7 +120,7 @@ Phase numbering matches the plan's `## Implementation Phases`. Decision ids (D1-
 
 ## Phase 8 — Manifest, docs, ADR, evidence
 
-- [ ] 8.1 Author ~~`ADR-226`~~ `ADR-227-generated-operator-scripts-are-non-interactive-by-default.md` with the seven Decision points and Alternatives A-E (D14). Ordinal re-derived (ADR-225 claimed twice); point 2 reworded by the design-validity review F3 so it no longer contradicts point 3.
+- [ ] 8.1 Author ~~`ADR-226`~~ `ADR-228-generated-operator-scripts-are-non-interactive-by-default.md` with the seven Decision points and Alternatives A-E (D14). Ordinal re-derived three times (ADR-225 claimed by three branches, so 225/226/227 are spoken for and the ADR is **228**); point 2 reworded by the design-validity review F3 so it no longer contradicts point 3.
 - [ ] 8.2 Add the `mattpocock/skills` entry to `plugins/soleur/NOTICE` with upstream URL, "Used in:", "Portions adopted:" and full MIT text.
 - [ ] 8.3 Run the `hr-third-party-content-grep-on-undertaking` diff grep before PR-ready.
 - [ ] 8.4 Add two `SKILL_CATEGORIES` entries to `plugins/soleur/docs/_data/skills.js`.

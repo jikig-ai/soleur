@@ -1778,7 +1778,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    Filed: #A #B #C
 
    ## Merge Danger
-   **Undo:** <the exact command or action that reverses this merge> | none known
+   **Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
    **Blast Radius:** docs | plugin | web-platform | user-data | money
 
    ## Changelog
@@ -1816,6 +1816,8 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    Do not quote flag names -- write `--title` not `"--title"`.
 
+   <!-- Inspired by mattpocock/skills/skills/in-progress/pr/SKILL.md (MIT, Copyright (c) 2026 Matt Pocock). -->
+
    **The `## Merge Danger` block — TWO fields, both mandatory, placed ABOVE `## Changelog`.**
    It sits above the changelog so the founder reads the undo before the list of changes — nothing
    more. `.github/workflows/reusable-release.yml` extracts ONLY the lines between `## Changelog`
@@ -1828,9 +1830,12 @@ Replace `BRANCH_NAME` with the actual branch name.
    **`Undo:` is AUTHOR-WRITTEN by `/ship`, from what `/ship` actually knows at Phase 6**, keyed on
    the blast radius it is about to write:
 
-   - `docs` or `plugin`: `git revert <squash-merge-sha>` — the literal form; the SHA is known once
-     the merge lands and the follow-through can quote it. Nothing else is needed: the plugin is
-     delivered by the source commit advancing, so the revert IS the redeploy.
+   - `docs` or `plugin`: `ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged)` —
+     the FOUNDER ACTION first, the mechanism in parentheses. The founder reads this before the
+     merge exists, so the SHA placeholder cannot be filled in here; `#N` is the PR number, which
+     IS known, and "undo PR #N" is the request Soleur turns into the revert once the squash-merge
+     SHA exists. Nothing else is needed: the plugin is delivered by the source commit advancing,
+     so the revert IS the redeploy.
    - `web-platform`: the same revert **plus** the redeploy step that ships it (name the workflow or
      the `soleur:deploy` invocation), because a reverted commit that never deploys undoes nothing.
    - `user-data` or `money`: quote a rollback procedure ONLY if one exists in this PR's review
@@ -1965,7 +1970,7 @@ gh pr create --title "the pr title" --body "## Summary
 Closes #ISSUE_NUMBER
 
 ## Merge Danger
-**Undo:** <the exact command or action that reverses this merge> | none known
+**Undo:** ask Soleur "undo PR #N" (git revert <squash-merge-sha> once merged) | none known — <what is permanently lost>
 **Blast Radius:** docs | plugin | web-platform | user-data | money
 
 ## Changelog

@@ -233,7 +233,7 @@
 - [ADR-222: Better Stack is the database-readiness pager, reading the /health body; every live Better Stack uptime object is Terraform-declared or reported](engineering/architecture/decisions/ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)
 - [ADR-223: Per-harness hook registries with a disposition ledger](engineering/architecture/decisions/ADR-223-per-harness-hook-registries-with-a-disposition-ledger.md)
 - [ADR-224: Slash-name uniqueness across harness component namespaces](engineering/architecture/decisions/ADR-224-slash-name-uniqueness-across-harness-component-namespaces.md)
-- [ADR-227: Generated operator scripts are non-interactive by default](engineering/architecture/decisions/ADR-227-generated-operator-scripts-are-non-interactive-by-default.md)
+- [ADR-228: Generated operator scripts are non-interactive by default](engineering/architecture/decisions/ADR-228-generated-operator-scripts-are-non-interactive-by-default.md)
 - [Architecture Diagrams — LikeC4 C4 Model](engineering/architecture/diagrams/README.md)
 - [Soleur Platform — C4 Model](engineering/architecture/diagrams/c4-model.md)
 - [Domain Model & Business Rules Register](engineering/architecture/domain-model.md)

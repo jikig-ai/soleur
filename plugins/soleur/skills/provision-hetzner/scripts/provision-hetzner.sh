@@ -23,11 +23,14 @@ case "$-" in
     ;;
 esac
 
-# `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars, but
-# neither touches the env that subverts TLS itself: SSLKEYLOGFILE writes the
-# session keys and the CA vars substitute the trust store.
-unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
-      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+# SSLKEYLOGFILE writes TLS session keys to disk; the smoke test must not
+# inherit it. The CA-pool variables (SSL_CERT_FILE, SSL_CERT_DIR,
+# CURL_CA_BUNDLE) are deliberately NOT stripped: `hcloud` is a Go client that
+# reads them for its root pool, and a founder behind a TLS-inspecting proxy
+# would otherwise see an x509 failure on the billable smoke test reported as
+# "token lacks write scope" (the credential linter requires only the xtrace
+# refusal above — measured).
+unset SSLKEYLOGFILE
 
 # --- shared operator-script library ------------------------------------------
 # Sourced, never inlined: there is one distribution mode and therefore no copy to
@@ -43,8 +46,9 @@ if [[ ! -r "$SOLEUR_OP_LIB" ]]; then
 fi
 # shellcheck source=../../../scripts/lib/operator-script.sh disable=SC1091
 source "$SOLEUR_OP_LIB"
-# API contract (library header §API): prints nothing on success.
-[[ ${SOLEUR_OP_LIB_API:-0} -ge 1 ]] || {
+# API contract (library header §API): prints nothing on success. EQUALITY, not
+# -ge — the library auto-updates with the plugin; see the template's comment.
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
   printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
   exit 64
 }
@@ -110,7 +114,7 @@ command -v hcloud >/dev/null 2>&1 || { echo "Error: 'hcloud' CLI not found. Inst
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug) found = ($8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Dry-run output ---

@@ -1,4 +1,4 @@
-# ADR-227: Generated operator scripts are non-interactive by default
+# ADR-228: Generated operator scripts are non-interactive by default
 
 - **Date:** 2026-09-18
 
@@ -38,15 +38,17 @@ would be redundant. The ADR-worthy decision is the **generated-artifact
 contract** — a cross-cutting invariant with no single-file trigger, which is
 what `cq-agents-md-tier-gate` calls ADR-eligible.
 
-**Ordinal.** The plan proposed ADR-226. Measured across all 89 `origin/*` refs,
-`origin/main` tops out at ADR-224 and **ADR-225 is claimed twice** — by
-`feat-one-shot-adr142-inngest-aof-luks-bluegreen` and
-`feat-pluggable-web-agent-engines`, with different titles. Whichever merges
-second must renumber to 226, which would consume the plan's provisional ordinal.
-This ADR therefore takes **227**, which is free under either resolution. That is
-a measurement, not a reservation: re-derive immediately before merge, and when
-renumbering, sweep the whole feature's artifact set for the old ordinal in the
-same edit.
+**Ordinal.** The plan proposed ADR-226. Measured across every `origin/*` ref,
+`origin/main` tops out at ADR-224 and **ADR-225 is claimed three times** — by
+`feat-one-shot-adr142-inngest-aof-luks-bluegreen`,
+`feat-pluggable-web-agent-engines` and `feat-workflow-fsm-remediation`, with
+three different titles. Whichever merge second and third must renumber to 226
+and 227, so 225, 226 and 227 are all spoken for. This ADR therefore takes
+**228**, the first ordinal free under every resolution (an earlier draft took
+227 against a two-claimant count; the third claimant appeared before merge).
+That is a measurement, not a reservation: re-derive immediately before merge,
+and when renumbering, sweep the whole feature's artifact set for the old
+ordinal in the same edit.
 
 ## Decision
 
@@ -67,7 +69,11 @@ Seven points, each of which a generated operator script must satisfy.
 
 4. **No TTY plus an unset skip variable is a refusal, not a hang.** The script
    emits `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` and exits **64** *before* reading,
-   naming the variable that would have satisfied it.
+   naming the variable that would have satisfied it. Every refusal is the
+   stdout marker **plus one plain sentence** for the founder, and on a hosted
+   agent surface (a cloud session, a CI step) those markers are the only
+   durable signal besides the ledger — stdout, never stderr, which agent
+   runtimes swallow.
 
 5. **A missing library is a hard exit** (`SOLEUR_BOOTSTRAP_LIB_MISSING`), never a
    degrade-to-stubs. A sourced library that silently no-ops turns every

@@ -68,6 +68,19 @@ run_script() {
 
 echo "== provision-hetzner characterization =="
 
+# --- 5 (arm 1). Snapshot the LIVE skill tree before any run --------------------
+# §5 below asserts the runs wrote nothing into plugins/soleur/skills/provision-
+# hetzner/. A snapshot of `git status` over that tree, taken before the first
+# run and compared after the last, is what makes that a real observation
+# (review P2-24: the old §5 checked a file the harness itself had copied). The
+# snapshot names untracked files individually so a new ledger beside the script
+# shows up as its own row.
+SKILL_TREE="$(cd "${SUITE_DIR}/.." && pwd)"
+live_tree_status() {
+  git -C "$SKILL_TREE" status --porcelain --untracked-files=all -- . 2>/dev/null || echo "NOT-A-GIT-TREE"
+}
+status_before="$(live_tree_status)"
+
 # --- 1. Golden --dry-run stdout, byte-for-byte -------------------------------
 GOLDEN="${SUITE_DIR}/fixture/provision-hetzner-dry-run.golden"
 actual="$(run_script fixture-tenant --dry-run)"; rc=$?
@@ -143,7 +156,11 @@ fi
 # Bidirectional by construction: the fixture carries a `terminated` row that
 # must NOT pass the gate, and an absent slug that also must not. Asserting only
 # the passing direction would not detect a gate that accepts everything.
-for blocked in fixture-revoked absent-slug; do
+# `fixture-offboarded` carries a historical `dpa-signed` row FOLLOWED by a
+# `terminated` row: the register is append-only, so the LAST row for a slug is
+# the tenant's state, and a gate that latched on the first match admitted every
+# offboarded tenant (review P2-9).
+for blocked in fixture-revoked fixture-offboarded absent-slug; do
   gate_out="$(run_script "$blocked" --dry-run)"; gate_rc=$?
   if [[ "$gate_rc" -eq 3 ]]; then
     pass "DPA gate blocks '$blocked' with rc 3"
@@ -177,11 +194,20 @@ if [[ -e "$SB/run/knowledge-base/legal/tenant-dpa-register.md" ]]; then
 else
   fail "fixture register missing from the sandbox"
 fi
+status_after="$(live_tree_status)"
+if [[ "$status_before" == "NOT-A-GIT-TREE" ]]; then
+  fail "no live-repo write: the skill tree is not inside a git work tree, so the snapshot cannot observe a write"
+elif [[ "$status_before" == "$status_after" ]]; then
+  pass "no live-repo write: git status over the live skill tree is identical before and after every run"
+else
+  fail "no live-repo write: the runs changed the live skill tree:
+$(diff <(printf '%s\n' "$status_before") <(printf '%s\n' "$status_after") | sed 's/^/    /')"
+fi
 
 # --- Anti-vacuity floor -----------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=16
+FLOOR=21
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))
