@@ -134,6 +134,50 @@ open(path, "w").write(s.replace(old, new, 1))
 PY
 }
 
+# A `git` that reports an EMPTY diff, and delegates everything else to the real one.
+#
+# WHY THIS EXISTS, and why `env -u CI` alone was not enough. `skip_suite` is reached only when the
+# relevance gate DECLINES a suite, and `_diff_touches` declines only when the ambient
+# `origin/main...HEAD` diff misses that suite's paths. So the row's reachability depends on the
+# BRANCH THE BATTERY HAPPENS TO RUN ON: on a branch whose diff touches `apps/web-platform/infra/`
+# every relevance-gated suite is RELEVANT, no decline occurs, `skip_suite` is never invoked, and
+# ROW7 edits a function nobody calls — SURVIVOR. Measured on #6894: 13/13 on a detached origin/main
+# worktree, 12/13 on the feature branch, failing on ROW7 alone. That is the same signature the
+# `env -u CI` note below records, one cause further out: there the unreachability came from the
+# environment, here from the diff.
+#
+# Neutralising the diff (rather than adding a force-decline seam to the production runner) keeps
+# the fix inside the harness and makes every row score against the same population on every branch.
+# Only `diff` is intercepted; `rev-parse`, `ls-files` and the rest reach the real git, so the
+# guard's own enumeration is untouched.
+GIT_STUB_DIR="$WORK/bin"
+mkdir -p "$GIT_STUB_DIR" || { echo "FATAL: could not create the git-stub dir" >&2; exit 2; }
+REAL_GIT="$(command -v git)" || { echo "FATAL: git not found" >&2; exit 2; }
+cat > "$GIT_STUB_DIR/git" <<EOF
+#!/usr/bin/env bash
+# Find the SUBCOMMAND: skip global options, and note that \`-c\` and \`-C\` each consume the NEXT
+# argument. A first version treated every option as valueless, so \`git -c core.quotePath=false diff\`
+# stopped at the config VALUE and never saw \`diff\` — the stub's own precondition caught it.
+args=("\$@")
+i=0
+while (( i < \${#args[@]} )); do
+  case "\${args[i]}" in
+    -c|-C|--git-dir|--work-tree|--namespace|--exec-path) i=\$(( i + 2 )) ;;
+    -*) i=\$(( i + 1 )) ;;
+    diff) exit 0 ;;
+    *) break ;;
+  esac
+done
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$GIT_STUB_DIR/git" || { echo "FATAL: chmod on the git stub failed" >&2; exit 2; }
+# The stub must be BOTH inert for non-diff verbs and silent for diff, or the guard it wraps is
+# measuring the stub rather than the runner. Checked here, before any row runs.
+"$GIT_STUB_DIR/git" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || { echo "FATAL: git stub broke a non-diff verb (rev-parse)" >&2; exit 2; }
+[[ -z "$("$GIT_STUB_DIR/git" -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)" ]] \
+  || { echo "FATAL: git stub did not blank the diff it exists to blank" >&2; exit 2; }
+
 # Run the guard and report its exit code. The guard is the SUT here.
 guard_rc() {
   # `env -u CI` IS LOAD-BEARING (#7902 review round 2, found by CI itself).
@@ -148,7 +192,7 @@ guard_rc() {
   # Clearing CI here makes declines reachable, so both registration arms are exercised and every
   # row scores against the richer population. It does not weaken the other rows: they mutate the
   # partition itself, which is arm-independent.
-  env -u CI bash "$GUARD" > "$WORK/guard_out" 2>&1
+  env -u CI PATH="$GIT_STUB_DIR:$PATH" bash "$GUARD" > "$WORK/guard_out" 2>&1
   echo $?
 }
 

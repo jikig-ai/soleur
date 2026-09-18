@@ -2383,7 +2383,9 @@ echo "--- #7286: unconditional-doppler unit -> credential drop-in FULL lockstep 
 #     apply. push-infra-config.sh targets deploy.${APP_DOMAIN_BASE} (web-1) only, so the
 #     web-host credential never reaches that host and a drop-in there would be inert at best
 #     and wrong-project at worst.
-DROPIN_ACK_UNITS=("inngest-cutover-flip.service")
+#   inngest-luks-cutover.service (#6894) — the same dedicated-host delivery and the same primary
+#     credential as the flip unit above, for the same reasons; a drop-in would be inert there.
+DROPIN_ACK_UNITS=("inngest-cutover-flip.service" "inngest-luks-cutover.service")
 
 lockstep_examined=0
 LOCKSTEP_EXAMINED_UNITS=""
@@ -2495,8 +2497,12 @@ assert "lockstep invariant examined inngest-redis.service specifically" \
   "printf '%s' '$LOCKSTEP_EXAMINED_UNITS' | grep -qF 'inngest-redis.service'"
 # The ack list is the guard's only escape hatch, and prose ("an unexplained skip is how a ratchet
 # stops ratcheting") does not enforce itself. Growing it must be a deliberate, visible edit.
-assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)" \
-  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 1 ]]"
+# Grown 1 -> 2 by #6894 (inngest-luks-cutover.service, reason recorded at the list). The members
+# are pinned by NAME too: a count alone would let a swap of one acked unit for a web-host unit pass.
+assert "ack list holds exactly 2 entries (a silent third ack cannot open a hole)" \
+  "[[ \${#DROPIN_ACK_UNITS[@]} -eq 2 ]]"
+assert "ack list members are exactly the two dedicated-host units" \
+  "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
@@ -2512,7 +2518,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=413
+INNGEST_MIN_ASSERTIONS=414
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
