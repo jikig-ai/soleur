@@ -1,10 +1,10 @@
 ---
 title: "ADR-211 — zot_last_err is redacted at the producer AND scrubbed at the sink, and the tier decides whether it is a cause at all"
-status: adopting
+status: accepted
 date: 2026-09-08
 tags: [registry, zot, redaction, observability, gdpr, public-egress, cloud-init, adr-166]
 related_adrs: [ADR-096, ADR-166, ADR-172, ADR-184, ADR-185]
-related_issues: [7500, 7444, 7440, 7272, 7530, 7055, 7960]
+related_issues: [7500, 7444, 7440, 7272, 7530, 7055, 7960, 8309, 8272]
 ---
 
 # ADR-211: `zot_last_err` is redacted at the producer AND scrubbed at the sink
@@ -24,6 +24,8 @@ related_issues: [7500, 7444, 7440, 7272, 7530, 7055, 7960]
   **[Amended 2026-09-18 (#7960): the trigger is now precise — it flips to Accepted when the #7960
   probe PASSes on a boot PROVEN by `err_redact_rev` (or `zot_last_err_src=suppressed`) to run the
   Phase B producer. See "Delivery proof" under Decision.]**
+  **[Accepted 2026-09-18 (#8309): the amended trigger fired — see "Amendment 2026-09-18" at the
+  end of this ADR.]**
 - **Date:** 2026-09-08
 - **Issue:** [#7500](https://github.com/jikig-ai/soleur/issues/7500)
 - **Referred from:** the CLO counsel-review gate on PR #7444
@@ -250,6 +252,11 @@ Art. 30 register cites it:
   > #7960 probe now requires before it will grade either way. Recorded rather than rewritten,
   > because "an overclaim is the failure this ADR exists to prevent" cuts both ways: asserting
   > inert after delivery is as wrong as asserting delivered without proof.
+  >
+  > **Superseded 2026-09-18 (#8309 trigger — Phase B follow-through PASS):** a SECOND replace
+  > (2026-09-18, PR #8272, run 35353167115, boot `3b70b6ae…`) delivered the proof key and the
+  > probe PASSed — see *Amendment 2026-09-18* at the end of this ADR. The 09-17 boot's 272 rows
+  > remain corroboration, not proof.
 
 ## Consequences
 
@@ -289,7 +296,11 @@ Art. 30 register cites it:
   flips Layer 1 from inert to live, the event every legal record in this change is dated
   against, and — unlike the firewall change below — the one that is going to happen. Tracked at
   #7960. **[An earlier draft named the firewall as "the strongest trigger", which ranked a
-  hypothetical above a scheduled certainty.]**
+  hypothetical above a scheduled certainty.]** **[Fired: 2026-09-17 (boot `78111e0e…`,
+  corroboration) and 2026-09-18 (run 35353167115, boot `3b70b6ae…`, proof key); #7960 closed on
+  the PASS — see *Amendment 2026-09-18*. The standing re-evaluation triggers are now the
+  severity-escalation (firewall) trigger below and the zot-image-bump residual under "nothing
+  re-grades the warehouse stream".]**
 - **Severity-escalation trigger:** `hcloud_firewall.registry` currently carries zero inbound
   rules; ingress is intra-`10.0.1.0/24` plus a Cloudflare tunnel. Any change admitting public
   ingress raises the severity of this decision **and** converts `clientIP` into Art. 4(1)
@@ -311,3 +322,32 @@ Art. 30 register cites it:
   runtime publication of third-party output to a public artifact by agent-authored automation.
   Tracked separately; markdown/`@mention` injection from an attacker-chosen `User-Agent` is a
   different threat model that redaction does not address and that no guard here covers.
+
+## Amendment 2026-09-18 — first PASS observed (status ACCEPTED)
+
+**Status flip:** `adopting → accepted`. The amended trigger recorded under *Status* — the
+#7960 probe PASSing on a boot PROVEN by `err_redact_rev` — was met at
+**2026-09-18T14:10:58Z** (sweeper run 35354131746, closing #7960 at 14:10:59Z):
+
+```text
+zot-redact[#7960]: verdict=r3_pass proof=err_redact_rev boot=3b70b6ae-e7d5-4218-993f-6d39c563a422 tier4=3 leaking=0
+PASS: producer delivered (proof: err_redact_rev) — 3 tier-4 row(s) on boot 3b70b6ae-e7d5-4218-993f-6d39c563a422
+      in 24h, none carrying header content.
+      SCOPE: this grades the TIER-4 GATE half of ADR-211 Layer 1 -- the tier the gate changes.
+      Per-line redact() at tiers 1-3 is covered pre-merge by the producer suite, not here.
+```
+
+Layer 1 is delivered on boot `3b70b6ae…` per this ADR's own proof key (`err_redact_rev` in
+the trusted region, bound to the gate by the producer suite in CI — "evidence for, not proof
+of" is the contract under *Delivery proof*, and the CI pairing is what makes it a guarantee)
+and the tier-4 gate graded clean — 3 rows in 24h, 0 leaking. Per-line `redact()` at tiers
+1-3 is asserted by the producer suite pre-merge, not by this readback; nothing re-grades
+after the PASS. Vehicle: PR #8272 (`f5ad46390`, merged 13:46:53Z with #7960 still open);
+replace run 35353167115 job `registry_host_replace` complete 14:03:52Z; first row on the
+new boot 14:04:35Z. This is the second replace since adoption — the first (2026-09-17, boot
+`78111e0e…`) is recorded under *Delivery state* and stays corroboration.
+
+Evidence is posted on #7960 (comment `5731215695`, 2026-09-18T14:10:58Z) rather than living only
+in this file. Sites this amendment retracts, each carrying its own dated marker: the Status
+bullet, the Delivery-state note, the Primary re-evaluation trigger bullet, and the C4
+`github -> publicReader` edge.
