@@ -66,7 +66,7 @@ Four options were weighed with the operator:
 | Existing plan | Not re-planned. Resumes at Phase 0.5 after the green baseline is measured |
 | Toolchain pinning | Open — see below. The repo pins only `.bun-version`; there is no `mise.toml` / `.tool-versions` |
 | Domain review | Carried forward from the existing plan (operator choice): internal verification machinery, threshold `none` |
-| Premise correction | The blocker is not #8112. #8112 is the main-branch health monitor. The residual reds are host divergence, and CI is green |
+| Premise correction | The blocker is not #8112, but NOT because `ci.yml` is green — that is a fact about `ci.yml`, while #8112 was filed by the main-health-monitor running `TEST_GROUP=all`, a superset no `ci.yml` job runs in one place. The actual ground: each of the nine residual reds reproduces ONLY on a developer host and every one already has an open owning issue (#8238 #8250 #8261 #8263 #8266), so they are host-vs-CI divergence with named owners. #8112 remains OPEN and is neither measured nor closed by this work. Note also that `gh run list --workflow main-health-monitor.yml` reports `success` even for the run that FILED #8112 — the monitor files the issue then exits 0 — so a run list cannot be read as that monitor's verdict; only the step outcome can. |
 
 ## Open Questions
 

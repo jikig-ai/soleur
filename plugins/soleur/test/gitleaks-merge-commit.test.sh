@@ -172,6 +172,16 @@ report_rules() {
   jq -r '.[].RuleID' "$1" 2>/dev/null | sort -u
 }
 
+# ...but that is only honest about gitleaks if jq can actually parse. Without this
+# probe a missing or broken jq returns empty and T3/T4/T7 report "gitleaks dir
+# missed on-tree content" — a verdict about the SUBJECT sourced from a broken
+# INSTRUMENT, which is verbatim the #8266 class this suite exists to close, one
+# layer down. jq is not optional here; it IS the oracle, so it fails loud.
+if ! printf '%s' '[{"RuleID":"probe"}]' | jq -e -r '.[].RuleID' >/dev/null 2>&1; then
+  echo "FATAL: gitleaks-merge-commit.test: jq cannot parse a findings report, so every RuleID oracle below would read as 'gitleaks found nothing'. This is a broken instrument, not a gitleaks verdict — install jq." >&2
+  exit 2
+fi
+
 # scan_git_rules <repo-dir> <log-opts> -> RuleIDs `gitleaks git` reported.
 scan_git_rules() {
   (
