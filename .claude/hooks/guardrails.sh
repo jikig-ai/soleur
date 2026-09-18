@@ -368,7 +368,12 @@ fi
 # `<`/`>` require space-or-EOL after the seventh character, which is git's own
 # shape. `--no-color --no-ext-diff` is load-bearing: with `color.diff=always` or a
 # `diff.external` configured, the diff arrives ANSI-wrapped, `^\+` never matches,
-# and the guard silently allows a full triple.
+# and the guard silently allows a full triple. `--src-prefix=a/ --dst-prefix=b/`
+# and `--no-relative` are load-bearing the same way (#8263): the awk keys on the
+# `+++ b/` header, and a user's `diff.mnemonicprefix`/`diff.noprefix` rewrites it
+# (`+++ i/…`, `+++ …`) while `diff.relative` from a subdirectory drops INDEX.md
+# from the diff. Each disarmed the kb-index sentinel arm, and the missed header
+# also skipped the per-file reset, so counting went global and over-fired.
 if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   # FAIL LOUD, not open. `2>/dev/null || true` made an errored `git diff` (an
@@ -394,7 +399,8 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   STAGED_DIFF=""
   DIFF_RC=0
   if [ "$IN_REPO" -eq 1 ]; then
-    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff 2>/dev/null); DIFF_RC=$?
+    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff \
+      --src-prefix=a/ --dst-prefix=b/ --no-relative 2>/dev/null); DIFF_RC=$?
   fi
   if [ "$IN_REPO" -eq 1 ] && [ "$DIFF_RC" -ne 0 ]; then
     emit_incident "guardrails-block-conflict-markers" "warn" "git diff --cached failed; cannot verify" "$COMMAND"
