@@ -22,22 +22,22 @@ Full results: the plan's `## Addendum — 2026-09-18 (Phase 0 payload probe: mea
 - [x] 0.4 Count excludes the current compaction ⇒ the pre-authorized `TMPDIR` fallback ships, **corrected to pending-then-commit**: a plain append-per-`PreCompact` over-counts, because `PreCompact` fires on no-op compactions (measured 3:2). `PreCompact` overwrites one `pending` slot; `SessionStart:compact` commits it as one line and counts; `SessionStart:startup|resume|clear` truncates the ledger (this is TR2's window scoping, exactly rather than approximately).
 - [x] 0.5 Probe and its scratch project deleted; no `.claude/settings.local.json` entry was ever created.
 
-## Phase 1 — `compaction-state.sh` read path (FR1, FR2)
+## Phase 1 — `compaction-state.sh` read path (FR1, FR2) — **DONE**
 
-- [ ] 1.1 **RED:** write `plugins/soleur/test/compaction-state-hook.test.sh` with the 3 synthesized fixtures (`no-boundary`, `one-auto`, `two-auto`) and scenarios 1–6; confirm it fails against the absent script.
-- [ ] 1.2 Create `plugins/soleur/hooks/compaction-state.sh`: dispatch on `hook_event_name`; `SOLEUR_DISABLE_COMPACTION_HOOKS=1` short-circuit; `set -uo pipefail`; `trap 'exit 0' ERR EXIT` (the `EXIT` arm is load-bearing — `set -u` terminates without firing `ERR`).
-- [ ] 1.3 **TR1 scope guard:** the `welcome-hook.sh` sentinel (a `plugins/soleur` directory check under the project root) **plus** a Soleur plan/spec artifact. Never "is a git repo".
-- [ ] 1.4 Read `transcript_path`; derive `count_auto` **scoped to this session's window** (TR2) and the last boundary's `trigger`.
-- [ ] 1.5 Recommendation rule: `trigger == "auto" AND count_auto >= ${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}`.
-- [ ] 1.6 Build the envelope with `jq -n --arg`; markers and the `claude --version` string go **inside `additionalContext`**; stdout carries JSON only; diagnostics to stderr; truncate at 8,000 chars.
-- [ ] 1.7 Static `printf`'d JSON fallback for the `jq`-unavailable path.
-- [ ] 1.8 **GREEN:** scenarios 1–10 pass.
+- [x] 1.1 **RED:** `plugins/soleur/test/compaction-state-hook.test.sh` written first — 70 failing cases, subject-invocation floor at 0, against the absent script.
+- [x] 1.2 `plugins/soleur/hooks/compaction-state.sh`: dispatch on `hook_event_name`; `SOLEUR_DISABLE_COMPACTION_HOOKS=1` short-circuit; `set -uo pipefail`; `trap 'exit 0' ERR EXIT`. The EXIT arm is load-bearing and now **measured**, not asserted: on bash 5.3.15 an ERR-only trap lets a `set -u` fault exit **127**, the EXIT arm returns 0.
+- [x] 1.3 **TR1 scope guard:** walks up from the envelope's `cwd` for a directory carrying `plugins/soleur` **and** a `knowledge-base/project/{plans,specs}` artifact. Both conjuncts mutation-proven (M9, M10).
+- [x] 1.4 `count_auto` derived from the per-session ledger, not the transcript — Phase 0 measured that the transcript cannot answer at this point. Window scoping is the reset arm, so it is exact rather than approximated.
+- [x] 1.5 Rule: `trigger == "auto" AND count_auto >= ${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}`. Both operands mutation-proven (M3, M4, M5); a non-numeric threshold falls back to 2 rather than making `(( ))` silently evaluate false.
+- [x] 1.6 Envelope built with `jq -n --arg`; markers and the CLI version live **inside `additionalContext`**; stdout carries JSON only (M12); truncated at 8,000 chars.
+- [x] 1.7 Static `printf`'d JSON literal for the `jq`-unavailable path (M17), with no interpolation and therefore nothing to escape.
+- [x] 1.8 **GREEN:** 95/95 cases, 99 subject invocations.
 
-## Phase 2 — `PreCompact` summary shaping (FR3)
+## Phase 2 — `PreCompact` summary shaping (FR3) — **DONE**
 
-- [ ] 2.1 ~5 lines of static plain-text stdout naming the identifiers to preserve (branch, worktree, PR #, issue #, plan path, unchecked ACs, operator holds, file paths). Not JSON. Exit 0 always; never exit 2.
-- [ ] 2.2 Same TR1 scope guard — this is the path that would otherwise degrade a stranger's summary.
-- [ ] 2.3 Scenario 11 passes.
+- [x] 2.1 Static plain-text stdout naming branch, worktree, PR #, issue #, plan path, active skill/phase, unchecked acceptance criteria, Operator Holds and every file path. Not JSON (M18). Exit 0 always; never exit 2.
+- [x] 2.2 Same TR1 scope guard, asserted for `PreCompact` specifically — this is the path that would otherwise reach a stranger's summarizer.
+- [x] 2.3 Scenario 12 passes, including the negative: it never asks the summarizer to reproduce file contents.
 
 ## Phase 3 — Prose retirement + docs (FR5, FR6)
 
