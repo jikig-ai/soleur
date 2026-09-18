@@ -271,6 +271,14 @@ Installation does not grant hook trust. Measured hook semantics under Devin
   never driven; a hook emitting either may be ignored or misrouted. The
   `PermissionRequest` hook event itself is UNVERIFIED.
 
+Compaction hooks do not fire here, and that is not one of the measurements
+above. `compaction-state.sh` (`PreCompact` / `SessionStart:compact`, #8323) is
+a Claude Code API with no Devin equivalent, and under Cloud Mode plugin hooks
+do not execute at all. No post-compaction re-read directive and no
+evidence-based fresh-session recommendation are delivered; the skill-prose
+fallback applies, so the end-of-work resume prompt still fires and carries no
+`/clear` nudge. Do not report the behaviour as present.
+
 Keep long-running workflows bounded by their iteration and cost gates.
 Soleur's subscription and model usage are separate charges; substitute
 Devin's model pricing in harness-specific billing disclosures. Soleur disclaims

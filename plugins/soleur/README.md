@@ -455,6 +455,59 @@ check regardless of how you installed.
 
 </details>
 
+## Compaction-Aware Session Hooks
+
+When a session's context is compacted, Soleur injects a short directive telling
+the model to re-read the plan and spec rather than trust the paraphrased
+summary, and — on the **second automatic compaction of the same session
+window** — recommends continuing in a fresh session at the next phase boundary.
+Before a compaction it tells the summarizer which resume identifiers to keep
+verbatim.
+
+This replaces the old unconditional "run `/clear` and resume" advice, which
+fired at fixed points regardless of whether any context had been lost.
+
+`plugins/soleur/hooks/compaction-state.sh` is bound twice in `hooks.json`:
+`PreCompact` (matcher `manual|auto`) and `SessionStart` (matcher
+`startup|resume|clear|compact`). It is fully local — nothing leaves the machine, and nothing is written to your
+repository. It is not read-only: it keeps a small per-session counter under
+`TMPDIR` (mode 0700, two files of one word each, reaped after 7 days). Its per-session
+counter lives under `TMPDIR` and is disposable.
+
+**It does nothing in a repository Soleur does not manage.** A plugin hook is
+global, so the hook stays silent unless the enclosing repository carries a
+`knowledge-base/project/plans` or `specs` directory — the artifacts
+`/soleur:plan` writes. Without that check, compacting work on an unrelated
+application would get a summary shaped around PR numbers and operator holds it
+does not have.
+
+This is a *relevance* check, not a security boundary, and the distinction is
+worth stating: any repository can contain a directory of that name, so a
+repository you clone can satisfy it. That is bounded by what the hook emits —
+pointers and integers it derives itself, with every free-text value reduced to a
+conservative character set — and by the fact that a cloned repository already
+reaches the model more directly through `CLAUDE.md`, which Claude Code loads
+unconditionally.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `SOLEUR_DISABLE_COMPACTION_HOOKS` | unset | `1` disables both events entirely — no directive, no summary shaping, nothing written |
+| `jq` (not a setting) | required | Without `jq` on `PATH` the hook emits a static `reason=jq-unavailable` envelope and can produce no recommendation. The Claude Code row below assumes it is present. |
+| `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
+| `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
+
+### Harness support
+
+The compaction lifecycle is a Claude Code API. The other three harnesses
+degrade to **silence**, never to a false claim that the behaviour is present.
+
+| Harness | Compaction hooks | What you get instead |
+|---|---|---|
+| Claude Code | Yes (2.1.76+; measured on 2.1.273) | Evidence-based directive and fresh-session recommendation |
+| Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
+| Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
+| Grok Build | No | Same as Codex |
+
 ## Known Issues
 
 ### Updating the Marketplace Does Not Update the Installed Plugin
