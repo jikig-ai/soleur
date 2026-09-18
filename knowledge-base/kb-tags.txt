@@ -1203,6 +1203,7 @@ diagnostics
 diff-predicate
 diff-range
 diff-scoping
+diff-shapes
 differential-gate
 digest-pin
 directive-without-delivery
@@ -1664,6 +1665,7 @@ gh-search
 gh-secret-set
 ghcr
 git
+git-apply
 git-archaeology
 git-argv
 git-author
