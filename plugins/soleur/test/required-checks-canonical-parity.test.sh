@@ -61,7 +61,8 @@ ACTION_YML="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
 SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
 # 4th gitleaks install site (#7307). main-health-monitor.yml runs TEST_GROUP=all,
-# so it needs the same gitleaks three suites hard-ABORT without; an unregistered
+# so it needs the same gitleaks the gitleaks suites FAIL without under CI=true (#8266:
+# they skip per arm and any skip fails under CI); an unregistered
 # copy drifts silently and makes the monitor scan with a different gitleaks than CI.
 MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
 CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
@@ -283,6 +284,30 @@ assert_eq "$ss_s" "$ci_s" "(5d) secret-scan.yml SHA256 == ci.yml SHA256"
 assert_eq "$ss_s" "$ac_s" "(5e) secret-scan.yml SHA256 == action SHA256"
 assert_eq "$ss_v" "$mhm_v" "(5f) secret-scan.yml version == main-health-monitor version"
 assert_eq "$ss_s" "$mhm_s" "(5g) secret-scan.yml SHA256 == main-health-monitor SHA256"
+
+# (5h/5i) The OPERATOR-FACING remediation strings carry the same version. These are
+# a 5th and 6th declaration site the four-workflow comparison above cannot see: both
+# GL_REMEDIATION literals tell a developer which gitleaks to install, and on a bump
+# they go stale silently while 5a-5g stay green. The suites that assert "8.24.2" are
+# no backstop — they would red, and the cheapest fix is to bump the TEST literal,
+# leaving the remediation pointing at a version CI no longer uses.
+extract_remediation_version() {
+  grep -oE 'GL_REMEDIATION="[^"]*gitleaks [0-9]+\.[0-9]+\.[0-9]+' "$1" \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+HOOK_SCAN="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
+PRD_SCAN="$REPO_ROOT/plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh"
+hook_rv=$(extract_remediation_version "$HOOK_SCAN")
+prd_rv=$(extract_remediation_version "$PRD_SCAN")
+if [[ -n "$hook_rv" && -n "$prd_rv" ]]; then
+  echo "  PASS: (5h) both GL_REMEDIATION strings declare a gitleaks version"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (5h) a GL_REMEDIATION version is missing or unparseable — hook=[$hook_rv] prd=[$prd_rv]"
+  FAIL=$((FAIL + 1))
+fi
+assert_eq "$ss_v" "$hook_rv" "(5i) secret-scan.yml version == git-commit-secret-scan.sh remediation"
+assert_eq "$ss_v" "$prd_rv"  "(5j) secret-scan.yml version == code-to-prd.sh remediation"
 echo ""
 
 # --- Test 6: parser logic-parity across all three copies --------------------

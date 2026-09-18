@@ -71,6 +71,11 @@ for raw in sys.stdin.buffer:
         respond(rid, fixture("initialize")["result"])
     elif method == "tools/list":
         respond(rid, fixture("tools-list")["result"])
+    elif method == "ping":
+        if E.get("FAKE_PW_PING_RESULT_FILE"):
+            respond(rid, json.load(open(E["FAKE_PW_PING_RESULT_FILE"]))["result"])
+        else:
+            respond(rid, {})
     elif method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
         if E.get("FAKE_PW_ROOTS_COLLIDE"):

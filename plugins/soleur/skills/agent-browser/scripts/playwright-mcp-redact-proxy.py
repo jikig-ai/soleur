@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """Redacting stdio JSON-RPC proxy in front of the Playwright MCP server (#7980).
 
-    python3 playwright-mcp-redact-proxy.py -- npx @playwright/mcp@0.0.78 [server args...]
+    python3 playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
+
+`--user-data-dir-name` resolves its basename under $XDG_CACHE_HOME (else
+`$HOME/.cache`, both read from os.environ) and injects
+`--user-data-dir=<absolute path>` into the server argv, giving the wrapped
+browser its own profile directory without a literal path in the registration.
+The flag refuses to start on a basename given twice, empty, `.`, containing
+`..` or a path separator, or starting with `-`; on a basename combined with an
+explicit `--user-data-dir` in the server argv; on a relative
+$XDG_CACHE_HOME/$HOME; and when neither variable is set. The resolved root is
+normalized with os.path.realpath, mirroring the XDG semantics of
+scripts/lib/scratch-root.sh. With the flag absent the child argv is exactly
+what it was before.
 
 Sits on the transport between Claude Code and the server and rewrites the text of
 every `tools/call` result through the SAME `redact_text` the agent-browser Bash
@@ -81,8 +93,15 @@ PASSTHROUGH_NOTIFICATIONS = {"notifications/tools/list_changed", "notifications/
 SAFE_CAPS = {"vision"}
 
 
+# Control characters (including U+2028/U+2029, which split a JSONL line) are
+# scrubbed from everything log() writes: a client-supplied tool name or a
+# serverInfo field must not forge a `refusing to start:` line in the persisted
+# MCP logs Claude Code keeps for this process's stderr.
+_LOG_SCRUB = {c: " " for c in list(range(0x20)) + [0x7F, 0x2028, 0x2029]}
+
+
 def log(msg: str) -> None:
-    sys.stderr.write(f"{PREFIX} {msg}\n")
+    sys.stderr.write(f"{PREFIX} {msg.translate(_LOG_SCRUB)}\n")
     sys.stderr.flush()
 
 
@@ -94,13 +113,64 @@ def refuse_start(reason: str) -> NoReturn:
 # ---------------------------------------------------------------------------
 # B1 -- argv
 # ---------------------------------------------------------------------------
-def parse_argv(argv: List[str]) -> List[str]:
+def usage(msg: str) -> NoReturn:
+    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
+
+
+def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]:
+    """Resolve `--user-data-dir-name <basename>` to an absolute dir under the cache root.
+
+    XDG semantics mirror scripts/lib/scratch-root.sh: $XDG_CACHE_HOME wins when
+    set, otherwise `$HOME/.cache`; a relative root or an
+    unresolvable `~` refuses rather than resolving against the caller's CWD.
+    Returns None when the flag is absent (the child argv stays untouched).
+    """
+    name: Optional[str] = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--user-data-dir-name" or a.startswith("--user-data-dir-name="):
+            if name is not None:
+                refuse_start("--user-data-dir-name given twice")
+            if a == "--user-data-dir-name":
+                if i + 1 >= len(args):
+                    refuse_start("--user-data-dir-name needs a basename argument")
+                name = args[i + 1]
+                i += 2
+            else:
+                name = a.split("=", 1)[1]
+                i += 1
+        else:
+            refuse_start(f"unrecognised proxy flag before `--`: {a}")
+    if name is None:
+        return None
+    if not name or name == "." or ".." in name:
+        refuse_start("--user-data-dir-name must be a basename (empty, '.' or '..' refuses)")
+    if "/" in name or "\\" in name:
+        refuse_start("--user-data-dir-name must be a basename (a path separator refuses)")
+    if name.startswith("-"):
+        refuse_start("--user-data-dir-name must be a basename (a leading '-' refuses)")
+    xdg = env.get("XDG_CACHE_HOME")
+    if xdg:
+        root = xdg
+    else:
+        home = env.get("HOME")
+        if not home:
+            refuse_start("cannot resolve the profile root: neither XDG_CACHE_HOME nor HOME is set")
+        root = os.path.join(home, ".cache")
+    if not os.path.isabs(root):
+        refuse_start("the profile root is not absolute (a relative XDG_CACHE_HOME or HOME refuses)")
+    return os.path.join(os.path.realpath(root), name)
+
+
+def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str]]:
     if "--" not in argv:
-        refuse_start("usage: playwright-mcp-redact-proxy.py -- <server argv...> (no `--` separator)")
-    server = argv[argv.index("--") + 1 :]
+        usage("no `--` separator")
+    sep = argv.index("--")
+    server = argv[sep + 1 :]
     if not server:
-        refuse_start("usage: playwright-mcp-redact-proxy.py -- <server argv...> (empty server argv)")
-    return server
+        usage("empty server argv")
+    return server, profile_dir_from_args(argv[:sep], dict(os.environ))
 
 
 # ---------------------------------------------------------------------------
@@ -185,16 +255,79 @@ def caps_open_sinks(values: List[str]) -> bool:
     return False
 
 
-def refuse_argv_and_env(server: List[str], env: Dict[str, str]) -> None:
-    if "--save-session" in server:
-        refuse_start("--save-session writes every response to a session.md on disk")
-    if argv_values(server, "--port") or "--port" in server or env.get("PLAYWRIGHT_MCP_PORT"):
+def flag_present(server: List[str], flag: str) -> bool:
+    """`flag` given as `--flag` or `--flag=value` anywhere in the server argv."""
+    return any(a == flag or a.startswith(flag + "=") for a in server)
+
+
+# Server argv flags that open a raw sink around this relay, substitute the
+# browser or transport the proxy owns, or inject code/credential material into
+# pages. Each is refused in either `--flag` or `--flag=value` form; the
+# PLAYWRIGHT_MCP_* env equivalent is refused alongside (the child inherits the
+# session env wholesale, so an ambient export is the same setting with no
+# registration-level audit trail).
+SINK_FLAGS = [
+    ("--save-session", "PLAYWRIGHT_MCP_SAVE_SESSION", "writes every response to a session.md on disk"),
+    ("--storage-state", "PLAYWRIGHT_MCP_STORAGE_STATE", "persists cookies and storage state to a file"),
+    ("--secrets", "PLAYWRIGHT_MCP_SECRETS_FILE", "loads secrets from a file the model can be steered to fill into pages"),
+    ("--output-dir", "PLAYWRIGHT_MCP_OUTPUT_DIR", "names a directory for raw output files"),
+    ("--init-script", "PLAYWRIGHT_MCP_INIT_SCRIPT", "runs a script in every page, around this relay"),
+    ("--init-page", "PLAYWRIGHT_MCP_INIT_PAGE", "evaluates a file in every page, around this relay"),
+    ("--cdp-endpoint", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "connects to a browser this proxy did not launch"),
+    ("--endpoint", "PLAYWRIGHT_MCP_ENDPOINT", "connects to a remote Playwright server this proxy did not launch"),
+    ("--extension", "PLAYWRIGHT_MCP_EXTENSION", "connects to a running browser this proxy did not launch"),
+    ("--executable-path", "PLAYWRIGHT_MCP_EXECUTABLE_PATH", "substitutes the browser binary this proxy launches"),
+    ("--allow-unrestricted-file-access", "PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS", "lets pages reach arbitrary local files"),
+    ("--grant-permissions", "PLAYWRIGHT_MCP_GRANT_PERMISSIONS", "grants pages permissions (clipboard, geolocation) the model did not audit"),
+    ("--save-trace", "PLAYWRIGHT_MCP_SAVE_TRACE", "writes a Playwright Trace of the session to disk"),
+    ("--save-video", "PLAYWRIGHT_MCP_SAVE_VIDEO", "writes session video to the output directory"),
+    ("--ignore-https-errors", "PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS", "drops TLS validation on page requests"),
+    ("--no-sandbox", "PLAYWRIGHT_MCP_SANDBOX", "controls the browser sandbox"),
+    ("--daemon", "PLAYWRIGHT_MCP_DAEMON", "serves the tools over a socket, around this stdio relay"),
+]
+# Env-only refusals: the argv/config form stays allowed because it is explicit
+# and audited in the registration; the ambient env form is not.
+SINK_ENV_ONLY = [
+    ("PLAYWRIGHT_MCP_USER_DATA_DIR", "sets a profile outside the audited registration argv"),
+    ("PLAYWRIGHT_MCP_SNAPSHOT_MODE", "the proxy owns --snapshot-mode"),
+]
+# Valued flags: a bare one as the LAST server arg would bind the appended
+# `--user-data-dir=<dir>` (or `--snapshot-mode`) as its value instead of
+# refusing cleanly. Boolean flags are deliberately absent — a trailing
+# `--headless` does not consume the next token.
+VALUE_FLAGS = {
+    "--allowed-hosts", "--allowed-origins", "--blocked-origins", "--browser",
+    "--caps", "--cdp-endpoint", "--cdp-header", "--cdp-timeout", "--codegen",
+    "--config", "--console-level", "--daemon", "--device", "--endpoint",
+    "--executable-path", "--grant-permissions", "--host", "--image-responses",
+    "--init-page", "--init-script", "--output-dir", "--output-max-size",
+    "--output-mode", "--port", "--proxy-bypass", "--proxy-server", "--save-video",
+    "--secrets", "--snapshot-mode", "--storage-state", "--test-id-attribute",
+    "--timeout-action", "--timeout-navigation", "--user-agent", "--user-data-dir",
+    "--viewport-size",
+}
+
+
+def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict[str, str]) -> None:
+    if profile_dir is not None and (argv_values(server, "--user-data-dir") or flag_present(server, "--user-data-dir")):
+        refuse_start("--user-data-dir-name cannot be combined with an explicit --user-data-dir in the server argv")
+    if server and server[-1] in VALUE_FLAGS:
+        refuse_start(f"{server[-1]} expects a value that would bind an appended flag")
+    for flag, envvar, why in SINK_FLAGS:
+        if flag_present(server, flag):
+            refuse_start(f"{flag} {why}")
+        if env.get(envvar):
+            refuse_start(f"{envvar} is set ({why})")
+    for envvar, why in SINK_ENV_ONLY:
+        if env.get(envvar):
+            refuse_start(f"{envvar} is set ({why})")
+    if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):
         refuse_start("--port serves the tools over HTTP, around this stdio relay")
-    if argv_values(server, "--host") or "--host" in server or env.get("PLAYWRIGHT_MCP_HOST"):
+    if argv_values(server, "--host") or flag_present(server, "--host") or env.get("PLAYWRIGHT_MCP_HOST"):
         refuse_start("--host binds an HTTP transport around this stdio relay")
     if caps_open_sinks(argv_values(server, "--caps")) or caps_open_sinks([env.get("PLAYWRIGHT_MCP_CAPS", "")]):
         refuse_start("--caps enables a capability other than vision (devtools, pdf and storage write raw page state)")
-    if any(v != "stdout" for v in argv_values(server, "--output-mode")):
+    if any(v != "stdout" for v in argv_values(server, "--output-mode") + [env.get("PLAYWRIGHT_MCP_OUTPUT_MODE", "stdout")]):
         refuse_start("--output-mode file writes snapshots and logs to disk")
     config_path: Optional[str] = None
     named = argv_values(server, "--config")
@@ -218,12 +351,47 @@ def refuse_argv_and_env(server: List[str], env: Dict[str, str]) -> None:
             refuse_start("config saveSession is set (a raw session.md sink)")
         if cfg.get("saveVideo"):
             refuse_start("config saveVideo is set (video frames of every page are written to disk)")
+        if cfg.get("saveTrace"):
+            refuse_start("config saveTrace is set (a raw trace written to disk)")
+        if cfg.get("secrets"):
+            refuse_start("config secrets injects credential material into pages")
+        if cfg.get("outputDir"):
+            refuse_start("config outputDir names a directory for raw output files")
+        if cfg.get("allowUnrestrictedFileAccess"):
+            refuse_start("config allowUnrestrictedFileAccess lets pages reach arbitrary local files")
+        if cfg.get("extension"):
+            refuse_start("config extension connects to a running browser this proxy did not launch")
         caps = cfg.get("capabilities")
         if caps is not None and (not isinstance(caps, list) or caps_open_sinks([str(c) for c in caps])):
             refuse_start("config capabilities enables a capability other than vision")
         srv = cfg.get("server")
         if isinstance(srv, dict) and (srv.get("port") is not None or srv.get("host") is not None):
             refuse_start("config server.port/server.host serves the tools over HTTP, around this stdio relay")
+        browser = cfg.get("browser")
+        if isinstance(browser, dict):
+            if browser.get("cdpEndpoint") or browser.get("remoteEndpoint"):
+                refuse_start("config browser.cdpEndpoint/browser.remoteEndpoint connects to a browser this proxy did not launch")
+            if browser.get("initPage") or browser.get("initScript"):
+                refuse_start("config browser.initPage/browser.initScript injects code into every page")
+            if profile_dir is not None and browser.get("userDataDir"):
+                refuse_start("config browser.userDataDir conflicts with --user-data-dir-name")
+            ctx = browser.get("contextOptions")
+            if isinstance(ctx, dict):
+                if ctx.get("storageState"):
+                    refuse_start("config browser.contextOptions.storageState persists cookies and storage state to a file")
+                if ctx.get("permissions"):
+                    refuse_start("config browser.contextOptions.permissions grants page permissions the model did not audit")
+                if ctx.get("ignoreHTTPSErrors"):
+                    refuse_start("config browser.contextOptions.ignoreHTTPSErrors drops TLS validation on page requests")
+            lo = browser.get("launchOptions")
+            if isinstance(lo, dict):
+                if lo.get("executablePath"):
+                    refuse_start("config browser.launchOptions.executablePath substitutes the browser binary")
+                if lo.get("chromiumSandbox") is False:
+                    refuse_start("config browser.launchOptions.chromiumSandbox disables the browser sandbox")
+                args = lo.get("args")
+                if isinstance(args, list) and any(str(a).startswith("--remote-debugging") for a in args):
+                    refuse_start("config launchOptions.args opens a remote debugging channel around this relay")
     patterns = env.get("DEBUG", "").replace(",", " ").split()
     if any(debug_pattern_enables_pw(p) for p in patterns if not p.startswith("-")):
         refuse_start("DEBUG enables a pw:* logger, which prints unredacted results to stderr")
@@ -290,7 +458,7 @@ def json_strings(node: Any) -> List[str]:
 
 
 class Proxy:
-    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str]) -> None:
+    def __init__(self, server: List[str], redactor: Tuple[Any, Any, int, str], profile_dir: Optional[str] = None) -> None:
         self.redact_text, self.looks_like_a11y_tree, self.max_input_bytes, self.redacted = redactor
         self.pending: Dict[str, Tuple[Any, str, str]] = {}  # id_key -> (raw id, method, tool name)
         self.out = sys.stdout.buffer
@@ -305,7 +473,10 @@ class Proxy:
         # Installed BEFORE the spawn, so a signal in between still ends the group.
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
-        argv = list(server) + ["--snapshot-mode", "none"]
+        argv = list(server)
+        if profile_dir is not None:
+            argv.append("--user-data-dir=" + profile_dir)
+        argv += ["--snapshot-mode", "none"]
         self.child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, bufsize=0, start_new_session=True)
         self.pgid = os.getpgid(self.child.pid)
         log(f"child pgid {self.pgid}")
@@ -389,9 +560,9 @@ class Proxy:
             info = result if isinstance(result, dict) else {}
             si = info.get("serverInfo", {}) if isinstance(info.get("serverInfo"), dict) else {}
             log(f"wrapping {si.get('name', '?')} {si.get('version', '?')} protocol {info.get('protocolVersion', '?')}")
-            write_line(self.out, line)
+            write_line(self.out, self.vet_other_result(msg, line, rid, tool))
         else:
-            write_line(self.out, line)
+            write_line(self.out, self.vet_other_result(msg, line, rid, tool))
 
     def safe_key(self, rid: Any) -> str:
         try:
@@ -439,9 +610,21 @@ class Proxy:
         err = msg.get("error")
         if "result" in msg or not isinstance(err, dict) or not set(err.keys()) <= ERROR_KEYS:
             return error_result(msg.get("id"), tool, "error response had an unrecognised shape")
+        if not isinstance(err.get("code"), int) or isinstance(err.get("code"), bool):
+            return error_result(msg.get("id"), tool, "error response had an unrecognised shape")
         message = err.get("message", "")
         if not isinstance(message, str) or self.looks_like_a11y_tree(message) or self.redact_text(message) != message:
             return error_result(msg.get("id"), tool, "error message carried tree-shaped text")
+        # Rebuilt, not relayed: no other top-level key of `msg` reaches the client.
+        return json.dumps({"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": err["code"], "message": message}}, separators=(",", ":"), ensure_ascii=True).encode()
+
+    def vet_other_result(self, msg: Dict[str, Any], line: bytes, rid: Any, tool: str) -> bytes:
+        """A matched non-tools/call result (initialize, ping, a future method):
+        forwarded only when no string anywhere in the frame is tree-shaped or
+        redactable — a future server's `resources/read`-style payload must not
+        carry page text around the result-shape whitelist."""
+        if any(self.looks_like_a11y_tree(s) or self.redact_text(s) != s for s in json_strings(msg)):
+            return error_result(rid, tool, UNRECOGNISED + " (non-tools/call result carried redactable text)")
         return line
 
     def escaped_tree_in(self, text: str) -> bool:
@@ -672,11 +855,11 @@ class Proxy:
 
 
 def main(argv: List[str]) -> int:
-    server = parse_argv(argv)
+    server, profile_dir = parse_argv(argv)
     redactor = load_redactor()
     self_test(redactor[0], redactor[1], redactor[3])
-    refuse_argv_and_env(server, dict(os.environ))
-    Proxy(server, redactor).run()
+    refuse_argv_and_env(server, profile_dir, dict(os.environ))
+    Proxy(server, redactor, profile_dir).run()
 
 
 if __name__ == "__main__":

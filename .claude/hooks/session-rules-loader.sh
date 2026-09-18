@@ -303,7 +303,9 @@ WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 
 WS_DIRTY=$( { git -C "$REPO_ROOT" status --porcelain --ignore-submodules=all 2>/dev/null || true; } | wc -l | tr -d ' ')
 
 # Committed-config MCP roster = .mcp.json ∪ plugins/soleur/.claude-plugin/plugin.json
-# mcpServers. Label is MCP(committed-config) — NOT MCP(static) — because servers
+# mcpServers ∪ plugins/soleur/.mcp.json mcpServers (the plugin-root
+# registration added at #8156 — its `playwright` key IS a committed-config
+# server on any harness that discovers the file). Label is MCP(committed-config) — NOT MCP(static) — because servers
 # declared in .claude/settings.json or registered dynamically (pencil via
 # pencil-setup, supabase via plugin) are also "static" but out of this read's
 # scope. The label names the SOURCE honestly rather than over-claiming the live set.
@@ -317,6 +319,7 @@ MCP_SERVERS=$(
   {
     jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
     jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+    jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
   } | sort -u | paste -sd, - || true
 )
 [[ -z "$MCP_SERVERS" ]] && MCP_SERVERS="(none)"
