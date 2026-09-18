@@ -119,7 +119,7 @@ robots.txt = `Allow: /` + sitemap ref. Sitemap is clean.
    meta-refresh machinery: `docs/page-redirects.njk`, `docs/_data/pageRedirects.js`
    (all 19 entries verified covered by live edge 301s),
    `docs/blog/redirects.njk`, `docs/_data/blogRedirects.js`; update
-   `docs/scripts/validate-blog-links.sh` and the meta-refresh-skip block in
+   `scripts/validate-blog-links.sh` and the meta-refresh-skip block in
    `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh`.
    #3328 re-evaluation pre-conditions verified met: PR #3296 merged,
    edge 301s live ≥7 days (since ~June), curl suite green on 5+ legacy URLs.

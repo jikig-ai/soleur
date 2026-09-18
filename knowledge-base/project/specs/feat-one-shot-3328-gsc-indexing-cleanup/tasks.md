@@ -4,27 +4,27 @@ Plan: `knowledge-base/project/plans/2026-09-18-feat-blog-redirects-edge-migratio
 Ground truth: `knowledge-base/project/specs/feat-one-shot-3328-gsc-indexing-cleanup/gsc-evidence.md`
 
 Two merges (verify-then-delete). PR-B must not merge until Phase-1 apply is
-verified live (46/46 curls).
+verified live (69/69 curls).
 
 ## Phase 1 — PR-A: edge 301s (infra, additive-only)
 
 - [x] 1.1 Edit `apps/web-platform/infra/seo-bulk-redirects.tf`
-  - [x] 1.1.1 Add `locals { blog_redirect_pairs = { …23 pairs… } }` + `blog_redirect_items` flatten (2 URL shapes per slug) before `resource "cloudflare_list" "legal_redirects"`
+  - [x] 1.1.1 Add `locals { blog_redirect_pairs = { …23 pairs… } }` + `blog_redirect_items` flatten (3 URL shapes per slug: `/`, `/index.html`, bare) before `resource "cloudflare_list" "legal_redirects"`
   - [x] 1.1.2 Append `dynamic "item"` block inside `cloudflare_list.legal_redirects` AFTER all explicit items (v4 block syntax; `status_code=301`, `include_subdomains="enabled"`, `preserve_query_string="enabled"`)
   - [x] 1.1.3 Update list `description` + header comment (legal + blog reslug + blog date-slugs; name retained by precedent)
 - [x] 1.2 Validate locally
-  - [x] 1.2.1 `cd apps/web-platform/infra && terraform validate` — PASS; console expansion = 46 items
+  - [x] 1.2.1 `cd apps/web-platform/infra && terraform validate` — PASS; console expansion = 69 items
   - [x] 1.2.2 `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` green (still 2 rules, bind order unchanged) — 41/41
   - [x] 1.2.3 `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` green — 28/28 mutations killed; ssl-full-mitigation.test.sh 10/10 also green
 - [ ] 1.3 Merge PR-A → confirm `apply-web-platform-infra.yml` ran and applied `cloudflare_list.legal_redirects`
 - [ ] 1.4 Post-merge verification (record output in PR/issue evidence)
-  - [ ] 1.4.1 Loop all 46 source URLs: `curl -sI -A Googlebot` → `HTTP/2 301` + correct `location:` per the pairs table
+  - [ ] 1.4.1 Loop all 69 source URLs: `curl -sI -A Googlebot` → `HTTP/2 301` + correct `location:` per the pairs table
   - [ ] 1.4.2 Single-hop check: `https://www.soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/` → 301 → `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` in one hop
   - [ ] 1.4.3 Canonical check: `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` → `200`
 
 ## Phase 2 — PR-B: deletion + guard repurposing + internal links
 
-Precondition: 1.4 complete (46/46 verified).
+Precondition: 1.4 complete (69/69 verified).
 
 - [ ] 2.1 Per-item live re-verification before deletion (`hr-bulk-delete-per-item-live-infra-role-check`): curl all 19 `pageRedirects.js` `from` paths → 301 (record in PR)
 - [ ] 2.2 Delete meta-refresh machinery

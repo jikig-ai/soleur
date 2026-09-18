@@ -56,7 +56,7 @@ Run 2026-09-18 (sequential inline passes — no Task tool available).
 
 | Gate | Result |
 |---|---|
-| 4.4 Precedent-diff | PASS — bulk-redirect item precedent lives in the same file; deviation (`dynamic "item"` vs 46 explicit `item {}` blocks) diffed in Dependencies & Risks |
+| 4.4 Precedent-diff | PASS — bulk-redirect item precedent lives in the same file; deviation (`dynamic "item"` vs 69 explicit `item {}` blocks) diffed in Dependencies & Risks |
 | 4.45 verify-the-negative | PASS-with-fix — `include_subdomains` claim corrected (enumerated proxied records: app/deploy/ssh/registry/www/apex; no `preview` record) |
 | 4.45 post-edit self-audit | PASS — residual-reference grep enumerated 10 files naming the deleted machinery; all covered (4 deletions, 6 edits including `seo-bulk-redirects.tf` comment) |
 | 4.5 Network-outage | SKIP — no trigger patterns; `cloudflare_list` has no file/remote-exec provisioner or SSH connection block |
@@ -123,11 +123,11 @@ Two merges, matching the established verify-then-delete pattern
   `cloudflare_list.legal_redirects` in
   `apps/web-platform/infra/seo-bulk-redirects.tf` with a
   `local.blog_redirect_pairs` map (23 date-slug → canonical-slug entries) and a
-  `dynamic "item"` block emitting 46 redirect items (both URL shapes per slug).
+  `dynamic "item"` block emitting 69 redirect items (all three URL shapes per slug).
   No new Terraform resources, no new ruleset rules, no workflow edits — the
   list is already in the apply workflow's `-target` allow-list and the account
   ruleset already binds it. Merge fires `apply-web-platform-infra.yml`, then a
-  curl suite verifies all 46 source URLs return `301` to the correct canonical.
+  curl suite verifies all 69 source URLs return `301` to the correct canonical.
 - **PR-B (Phase 2 — deletion + guards + links):** after the Phase-1 apply is
   verified live, delete the four meta-refresh files, repurpose the affected CI
   guards (they currently *assert stub existence* and will go red on deletion),
@@ -139,7 +139,7 @@ Two merges, matching the established verify-then-delete pattern
 
 Single-PR delivery was rejected: a merge races `deploy-docs.yml` (stub
 deletion) against `apply-web-platform-infra.yml` (edge 301 creation); a docs
-deploy landing first — or a failed apply — leaves 46 URL shapes serving 404
+deploy landing first — or a failed apply — leaves 69 URL shapes serving 404
 with no stub and no edge rule. Additive-first sequencing means a failed apply
 costs nothing (stubs still serve) and satisfies verify-then-delete literally.
 
@@ -160,7 +160,7 @@ items in the same list):
 
 ```text
 local.blog_redirect_pairs (static map in seo-bulk-redirects.tf)
-  ──► dynamic "item" × 2 URL shapes ──► cloudflare_list.legal_redirects
+  ──► dynamic "item" × 3 URL shapes ──► cloudflare_list.legal_redirects
   ──► cloudflare_ruleset.bulk_redirects (account, http_request_redirect,
       rule 1 already binds $legal_redirects) ──► edge 301
 ```
@@ -187,11 +187,15 @@ Design constraints honored:
   `preview` record exists. None serves `/blog/*` content, so a stray
   `app.soleur.ai/blog/<date-slug>/` request that 404s today would instead 301
   to the apex canonical — a strict improvement, consistent with the accepted
-  caveat on the 12 existing items),
+  caveat on the 13 existing items),
   `preserve_query_string = "enabled"` (the flagged GSC URL was a `?utm_`
-  variant; dropping params loses attribution). Both URL shapes
-  (`<slug>/` and `<slug>/index.html`) are separate exact-match keys, per the
-  `what-is-company-as-a-service` precedent in the same file.
+  variant; dropping params loses attribution). All three URL shapes
+  (`<slug>/`, `<slug>/index.html`, and the bare no-slash `<slug>`) are
+  separate exact-match keys, per the `what-is-company-as-a-service` precedent
+  in the same file. The bare shape matters: Bulk Redirects match
+  `http.request.full_uri` exactly, so without it a bare URL relies on the
+  origin's trailing-slash redirect today and would 404 after PR-B deletes the
+  meta-refresh stubs.
 - **Single Redirects evaluate before Bulk Redirects** — the zone ruleset is
   disjoint (no `/blog/YYYY-MM-DD-*` rules), so no interaction.
 
@@ -243,6 +247,7 @@ The 23 pairs (derived from `plugins/soleur/docs/blog/*.md` filenames —
       for date_slug, canonical in local.blog_redirect_pairs : [
         { source = "soleur.ai/blog/${date_slug}/",           target = "https://soleur.ai/blog/${canonical}/" },
         { source = "soleur.ai/blog/${date_slug}/index.html", target = "https://soleur.ai/blog/${canonical}/" },
+        { source = "soleur.ai/blog/${date_slug}",            target = "https://soleur.ai/blog/${canonical}/" },
       ]
     ])
   }
@@ -279,16 +284,17 @@ The 23 pairs (derived from `plugins/soleur/docs/blog/*.md` filenames —
 - Merge → `apply-web-platform-infra.yml` auto-applies (the merge is the
   authorization; `[skip-web-platform-apply]` must NOT be in the message).
 - Post-merge verification (all as `curl -sI -A Googlebot`): every one of the
-  46 source URLs returns `301` with `location:` equal to the mapped canonical;
+  69 source URLs returns `301` with `location:` equal to the mapped canonical;
   spot-check `https://www.soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/`
   is a **single** hop to the apex canonical (include_subdomains), and
   `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/` returns `200`.
 
 #### Phase 2 — Deletion + guard repurposing + internal links (PR-B)
 
-Precondition: Phase-1 apply verified live (46/46). Before deleting
-`pageRedirects.js`, re-curl all 19 `from` paths (8 zone rules + 10 bulk legal +
-ToS + blog reslug — the evidence file verified them once; this is the
+Precondition: Phase-1 apply verified live (69/69). Before deleting
+`pageRedirects.js`, re-curl all 19 `from` paths (8 zone `pages/*.html` + 10
+`pages/legal/*.html` bulk items — `terms-of-service.html` included — + 1 blog
+reslug = 19; the evidence file verified them once; this is the
 `hr-bulk-delete-per-item-live-infra-role-check` per-item re-verification at
 implementation time).
 
@@ -374,7 +380,7 @@ implementation time).
 #### Phase 3 — Post-merge
 
 - `deploy-docs.yml` publishes the stub-free site; edge 301s already serve the
-  date-slugs (Phase 1). Re-run the 46-URL curl spot-check live.
+  date-slugs (Phase 1). Re-run the 69-URL curl spot-check live.
 - File a GSC re-verification follow-up issue (deferral tracking): re-pull the
   "Why pages aren't indexed" report ~2–4 weeks post-merge to confirm the
   noindex-bucket entry and crawled-not-indexed rows drain. Index state is
@@ -420,9 +426,9 @@ None — all changes are edits or deletions of existing files.
 | Build-time JSON export (`blog-redirects.json` + `jsondecode` + `dynamic`) | Rejected | #3328 calls it "more maintainable," but it adds a generator script, a committed artifact, and a CI freshness guard to ferry data Terraform can hold directly — and creates a drift window between the docs build and the infra apply pipelines. Most machinery for the same property. |
 | `fileset()` derivation in HCL (`${path.module}/../../../plugins/soleur/docs/blog`) | Rejected | Auto-syncs (identical semantics to the deleted code) but makes an infra plan depend on docs content: a docs-side rename silently changes the *next* unrelated apply, and it makes the parity guard tautological (guard and source share one derivation). Infra diffs should be explicit and reviewable. |
 | **Static `local.blog_redirect_pairs` map + `dynamic "item"`** | **Chosen** | Explicit, reviewable 23-line map; the bidirectional parity guard in `validate-blog-links.sh` preserves the "every date-prefixed file has a redirect" property the build-time code gave for free — enforced at CI time instead of build time. |
-| 46 explicit `item {}` blocks | Rejected | Matches file style but ~460 near-identical lines vs ~40 with a map+dynamic; same compiled result. |
+| 69 explicit `item {}` blocks | Rejected | Matches file style but ~690 near-identical lines vs ~40 with a map+dynamic; same compiled result. |
 | New `cloudflare_list.blog_redirects` + third ruleset rule | Rejected | `www-apex-canonicalizer.test.sh` asserts `bulk_redirects` binds **exactly two** rules ("a third is an unreviewed redirect surface"); a new list also needs a `-target` allow-list edit in `apply-web-platform-infra.yml` and re-opens the cross-list precedence question the `www_canonical` comment flags as undocumented. More machinery, same property, trips a committed guard. |
-| Single PR (infra + deletions together) | Rejected | Merge-time race between `deploy-docs.yml` (stub removal) and `apply-web-platform-infra.yml` (edge 301 creation); a docs deploy landing first — or a failed apply — 404s 46 URL shapes. Violates verify-then-delete (`hr-bulk-delete-per-item-live-infra-role-check`) for the 23 new redirects. |
+| Single PR (infra + deletions together) | Rejected | Merge-time race between `deploy-docs.yml` (stub removal) and `apply-web-platform-infra.yml` (edge 301 creation); a docs deploy landing first — or a failed apply — 404s 69 URL shapes. Violates verify-then-delete (`hr-bulk-delete-per-item-live-infra-role-check`) for the 23 new redirects. |
 | New X-Robots-Tag transform rule for `api.soleur.ai` | Rejected | Rule already exists (`seo-rulesets.tf` `seo_response_headers`, api rule); verified no-op because the host is a DNS-only CNAME — the blocker is DNS topology owned by #3379, not a missing rule. |
 
 ## Research Reconciliation — Spec vs. Codebase
@@ -470,7 +476,7 @@ health→Better Stack) are compatible context. #8143/#8144 OPEN — same
 internal-linking root-cause class on pillar pages; disjoint URL sets.
 
 **Property List (Phase 0.6b):**
-P1 — all 46 date-slug URL shapes return edge 301s to canonicals.
+P1 — all 69 date-slug URL shapes return edge 301s to canonicals.
 P2 — all 19 `pageRedirects` `from` paths keep resolving after deletion.
 P3 — meta-refresh machinery deleted with zero residual consumers and green CI.
 P4 — a new date-prefixed blog file cannot silently lack an edge redirect.
@@ -513,14 +519,14 @@ non-determinism), `2026-06-15-gsc-crawled-not-indexed-remediation-is-internal-li
 
 ```yaml
 liveness_signal:
-  what:            scheduled-terraform-drift.yml reconciles declared vs live infra (catches a list item that fails to apply or drifts); post-merge curl suite verifies all 46 source URLs return 301; betteruptime_monitor.soleur_www_redirect (existing) covers the www-redirect class
+  what:            scheduled-terraform-drift.yml reconciles declared vs live infra (catches a list item that fails to apply or drifts); post-merge curl suite verifies all 69 source URLs return 301; betteruptime_monitor.soleur_www_redirect (existing) covers the www-redirect class
   cadence:         drift workflow on schedule; curl suite once post-merge per phase
   alert_target:    drift detector files an infra-drift labeled issue; apply failure = red workflow run on main
   configured_in:   .github/workflows/scheduled-terraform-drift.yml; .github/workflows/apply-web-platform-infra.yml; apps/web-platform/infra/uptime-alerts.tf (betteruptime_monitor.soleur_www_redirect)
 
 error_reporting:
   destination:     GitHub Actions run status on main (apply-web-platform-infra.yml, deploy-docs.yml); drift issues labeled infra-drift
-  fail_loud:       apply job red on main; any of the 46 curls returning non-301 or wrong location
+  fail_loud:       apply job red on main; any of the 69 curls returning non-301 or wrong location
 
 failure_modes:
   - mode:          Phase-1 apply fails (token/quota/schema)
@@ -530,10 +536,10 @@ failure_modes:
     detection:     post-merge curl loop compares location header to the pairs table
     alert_route:   fix-forward infra PR (list edit re-applies on merge)
   - mode:          stub deleted while edge rule absent
-    detection:     prevented by construction — PR-B precondition requires 46/46 verified 301s
+    detection:     prevented by construction — PR-B precondition requires 69/69 verified 301s
     alert_route:   n/a (ordering gate)
 logs:
-  where:           GitHub Actions logs (apply + deploy runs); terraform plan output in the apply run shows the +46 item diff
+  where:           GitHub Actions logs (apply + deploy runs); terraform plan output in the apply run shows the +69 item diff
   retention:       Actions retention (90 days default)
 
 discoverability_test:
@@ -567,7 +573,7 @@ at_rest:
                      repo's boundary, unchanged by this plan.
     disclosed_as: no disclosure change — the rows contain only public URL
                   strings; no new data category.
-    live_verification: `terraform plan` post-change shows `+46` item additions
+    live_verification: `terraform plan` post-change shows `+69` item additions
                        inside cloudflare_list.legal_redirects and zero new
                        resources (`Plan: 0 to add, 1 to change, 0 to destroy`
                        shape at the list level).
@@ -600,7 +606,7 @@ exception: none — no plaintext store and no disabled certificate
 ### Terraform changes
 
 - `apps/web-platform/infra/seo-bulk-redirects.tf` — extend
-  `cloudflare_list.legal_redirects` (+46 items via `local.blog_redirect_pairs`
+  `cloudflare_list.legal_redirects` (+69 items via `local.blog_redirect_pairs`
   map + `dynamic "item"`); comment/description updates. No new resources.
 - Providers: existing `cloudflare.rulesets` alias (`cloudflare/cloudflare`
   4.52.7 `~> 4.0`), account-scoped (`var.cf_account_id`). No new variables —
@@ -627,7 +633,7 @@ this change adds list *items* inside an existing list, not a new
 
 Cloudflare Free tier: zone `http_request_dynamic_redirect` is FULL (10/10) —
 bypassed by design. Bulk Redirects quota is 10,000 URLs across lists
-(measured 2026-06-09); +46 on the existing list is trivially within quota.
+(measured 2026-06-09); +69 on the existing list is trivially within quota.
 `regex_replace()` consolidation remains Business-tier — not used.
 
 ## Downtime & Cutover
@@ -644,7 +650,7 @@ exist) — which is exactly what the two-merge structure eliminates:
   existing account ruleset — Cloudflare evaluates the updated list atomically;
   no in-flight request is dropped and no stub is touched. Failure mode: apply
   errors → zero blast radius, stubs still serve.
-- **Cutover proof:** the 46/46 curl suite IS the per-stage verification — edge
+- **Cutover proof:** the 69/69 curl suite IS the per-stage verification — edge
   301s must be observed live before PR-B may merge (hard precondition, not a
   checklist nicety).
 - **Phase 2 (removal):** `deploy-docs.yml` publishes `_site` to Cloudflare
@@ -767,9 +773,9 @@ file path.
 
 **Phase 1 (PR-A):**
 
-- [ ] `cloudflare_list.legal_redirects` contains 46 new redirect items derived
+- [ ] `cloudflare_list.legal_redirects` contains 69 new redirect items derived
   from `local.blog_redirect_pairs` (23 date-slugs × `/<slug>/` +
-  `/<slug>/index.html` shapes), each `status_code = 301`,
+  `/<slug>/index.html` + bare `/<slug>` shapes), each `status_code = 301`,
   `include_subdomains = "enabled"`, `preserve_query_string = "enabled"`,
   targeting `https://soleur.ai/blog/<canonical-slug>/`
 - [ ] `cloudflare_ruleset.bulk_redirects` is unchanged — still exactly 2 rules
@@ -778,13 +784,13 @@ file path.
 - [ ] `terraform validate` passes in `apps/web-platform/infra/`
 - [ ] No workflow edits — the merge-triggered apply covers the list via the
   existing `-target` allow-list
-- [ ] Post-apply, all 46 source URLs return `301` to the mapped canonical via
+- [ ] Post-apply, all 69 source URLs return `301` to the mapped canonical via
   `curl -sI -A Googlebot` (loop over the pairs table), including a single-hop
   `www.` variant check
 
 **Phase 2 (PR-B):**
 
-- [ ] PR-B merges only after Phase-1 apply verification (46/46) is recorded
+- [ ] PR-B merges only after Phase-1 apply verification (69/69) is recorded
 - [ ] All 19 `pageRedirects` `from` paths re-verified live `301` before
   `pageRedirects.js` deletion (per-item, curl output in PR evidence)
 - [ ] `plugins/soleur/docs/page-redirects.njk`,
@@ -827,7 +833,7 @@ file path.
 - Given the validate-seo skip block restored, when `validate-seo.test.ts`
   runs, then the flipped test is RED (Guard 2, row 2).
 - Given the Phase-1 apply completed, when
-  `for s in <46 sources>; do curl -sI -A Googlebot "https://$s" | head -1; done`
+  `for s in <69 sources>; do curl -sI -A Googlebot "https://$s" | head -1; done`
   runs, then every line is `HTTP/2 301` and each `location:` matches the pairs
   table.
 - Given `https://www.soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/`,
@@ -840,7 +846,7 @@ file path.
 
 ## Success Metrics
 
-- All 46 date-slug URL shapes serve deterministic edge 301s (GSC
+- All 69 date-slug URL shapes serve deterministic edge 301s (GSC
   "Page with redirect" + "Excluded by noindex" buckets drain on re-crawl —
   observational lag, tracked by the Phase-3 follow-up issue).
 - Zero meta-refresh stub machinery in the repo; CI suite green.
@@ -860,17 +866,17 @@ file path.
 - **`include_subdomains` caveat (inherited):** new items match every proxied
   subdomain (`app`/`deploy`/`ssh`/`registry`/`www`) — none serves `/blog/*`
   content; a stray request 404s today and would 301 to the apex canonical
-  post-change. Same accepted caveat as the 12 existing items.
-- **Precedent diff (4.4 gate):** sibling precedent = the 12 explicit
+  post-change. Same accepted caveat as the 13 existing items.
+- **Precedent diff (4.4 gate):** sibling precedent = the 13 explicit
   `item { value { redirect { … } } }` blocks in the same file. This plan's
   `dynamic "item"` emits byte-identical compiled config (same five fields,
   same types) — the deviation is authoring form only: a 23-pair map + ~10-line
-  stanza instead of ~460 near-identical lines. Verified the deviation is
+  stanza instead of ~690 near-identical lines. Verified the deviation is
   invisible to the committed guards: the canonicalizer test's span regex
   (`^\s*item\s*\{`) counts only literal blocks in `www_canonical` (still 1)
   and the mutation harness's reorder row operates on the explicit-item span
   region in `legal_redirects`, which the appended dynamic block sits outside.
-  If a reviewer prefers precedent-exact form, 46 explicit items is the
+  If a reviewer prefers precedent-exact form, 69 explicit items is the
   one-line fallback — rejected in Alternatives on reviewability, not
   correctness.
 - **Cross-list precedence:** a `www.soleur.ai/blog/<date>/` request matches

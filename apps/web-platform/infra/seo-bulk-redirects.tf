@@ -1,6 +1,6 @@
 # Cloudflare Bulk Redirects — legacy /pages/legal/<slug>.html → clean /legal/<slug>/ 301s
-# (plus the orphaned blog reslug and the blog date-slug renames; 58 items
-# total = 12 explicit pairs + 46 generated from local.blog_redirect_pairs,
+# (plus the orphaned blog reslug and the blog date-slug renames; 82 items
+# total = 13 explicit + 69 generated from local.blog_redirect_pairs,
 # see the list below).
 #
 # Why a separate file / separate product (not more rules in seo-rulesets.tf):
@@ -24,7 +24,8 @@
 #   apex or any subdomain — are a single hop.
 #
 # Root cause being fixed: without an edge 301 these URLs are served the HTTP-200
-# meta-refresh fallback (plugins/soleur/docs/page-redirects.njk), which Google
+# meta-refresh fallback (plugins/soleur/docs/page-redirects.njk for the /pages/
+# URLs, plugins/soleur/docs/blog/redirects.njk for the blog date-slugs), which Google
 # Search Console classifies as "Crawled - currently not indexed" (GSC drilldown
 # 2026-06-09). A deterministic 301 moves them out of that bucket. The same stubs
 # also carry `<meta name="robots" content="noindex">` now as a defensive interim.
@@ -59,9 +60,9 @@
 # the PR-B half of #3328, gated on this list applying live). Static map, not
 # fileset() derivation — see the 2026-09-18 plan Alternatives: a JSON export
 # adds a generator + committed artifact + freshness guard to ferry data
-# Terraform can hold directly, and the bidirectional parity guard in
-# scripts/validate-blog-links.sh keeps the "every date-prefixed post has a
-# redirect" property the build-time code gave for free.
+# Terraform can hold directly; the bidirectional parity guard that keeps the
+# "every date-prefixed post has a redirect" property the build-time code gave
+# for free lands in PR-B (the scripts/validate-blog-links.sh repurpose).
 locals {
   blog_redirect_pairs = {
     "2026-03-16-soleur-vs-anthropic-cowork"                         = "soleur-vs-anthropic-cowork"
@@ -89,13 +90,16 @@ locals {
     "2026-06-15-best-ai-tools-for-solo-founders-2026"               = "best-ai-tools-for-solo-founders-2026"
   }
 
-  # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs two
-  # source shapes: the directory URL and the explicit index.html (same
-  # doubling as the blog reslug items below).
+  # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs
+  # three source shapes: the directory URL, the explicit index.html, and the
+  # bare no-slash form — covered today only by the origin's dir-slash 301 into
+  # the stub, which would 404 post-PR-B without an edge entry (same tripling
+  # as the blog reslug items below).
   blog_redirect_items = flatten([
     for date_slug, canonical in local.blog_redirect_pairs : [
       { source = "soleur.ai/blog/${date_slug}/", target = "https://soleur.ai/blog/${canonical}/" },
       { source = "soleur.ai/blog/${date_slug}/index.html", target = "https://soleur.ai/blog/${canonical}/" },
+      { source = "soleur.ai/blog/${date_slug}", target = "https://soleur.ai/blog/${canonical}/" },
     ]
   ])
 }
@@ -118,8 +122,9 @@ resource "cloudflare_list" "legal_redirects" {
   # diverges from the zone redirects' `false`: these are SEO 301s where
   # dropping campaign params (?utm_*) on the hop loses attribution; targets
   # are static pages with no query-reflection surface.
-  # 12 pairs: 9 legal slugs (clean-slug == source-slug) + the terms-of-service
-  # -> terms-and-conditions rename alias + 2 shapes of the blog reslug.
+  # 13 explicit items: 9 legal slugs (clean-slug == source-slug) + the
+  # terms-of-service -> terms-and-conditions rename alias + 3 shapes of the
+  # blog reslug (/, /index.html, bare).
 
   item {
     value {
@@ -240,9 +245,9 @@ resource "cloudflare_list" "legal_redirects" {
   }
   # Blog reslug: its zone rule was evicted 2026-05-18 to make room for the
   # HTTPS catch-all (seo-rulesets.tf "2026-05-18" note) and it has had NO edge
-  # 301 since — the same GSC crawled-not-indexed class this file fixes. Two
-  # shapes because Bulk Redirects match full_uri EXACTLY: the directory URL
-  # and the explicit index.html are distinct keys.
+  # 301 since — the same GSC crawled-not-indexed class this file fixes. Three
+  # shapes because Bulk Redirects match full_uri EXACTLY: the directory URL,
+  # the explicit index.html, and the bare no-slash form are distinct keys.
   item {
     value {
       redirect {
@@ -258,6 +263,17 @@ resource "cloudflare_list" "legal_redirects" {
     value {
       redirect {
         source_url            = "soleur.ai/blog/what-is-company-as-a-service/index.html"
+        target_url            = "https://soleur.ai/company-as-a-service/"
+        status_code           = 301
+        include_subdomains    = "enabled"
+        preserve_query_string = "enabled"
+      }
+    }
+  }
+  item {
+    value {
+      redirect {
+        source_url            = "soleur.ai/blog/what-is-company-as-a-service"
         target_url            = "https://soleur.ai/company-as-a-service/"
         status_code           = 301
         include_subdomains    = "enabled"
@@ -354,20 +370,21 @@ resource "cloudflare_list" "www_canonical" {
 # seo_response_headers) because this is THE single account-level
 # http_request_redirect phase owner — future non-SEO bulk lists would attach
 # additional rules here rather than new rulesets. The list keeps its original
-# `legal_redirects` name even though it now also carries the blog reslug:
-# renaming a list ripples through the rule expression, the workflow -target
-# allow-list, and the live CF object for zero behavioral gain.
+# `legal_redirects` name even though it now also carries the blog reslug and
+# the blog date-slug redirects: renaming a list ripples through the rule
+# expression, the workflow -target allow-list, and the live CF object for
+# zero behavioral gain.
 resource "cloudflare_ruleset" "bulk_redirects" {
   provider    = cloudflare.rulesets
   account_id  = var.cf_account_id # ACCOUNT-level (not zone_id) — the novel axis vs every other ruleset in the repo
   name        = "Legacy URL bulk redirects"
-  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09, #3367, #3297."
+  description = "Account http_request_redirect ruleset bound to the legal_redirects list. See plan 2026-06-09 + 2026-09-18, #3367, #3297, #3328."
   kind        = "root"
   phase       = "http_request_redirect"
 
   rules {
     action      = "redirect"
-    description = "301 legacy URLs (/pages/legal/*.html + blog reslug) via the legal_redirects bulk list"
+    description = "301 legacy URLs (/pages/legal/*.html + blog reslug + blog date-slugs) via the legal_redirects bulk list"
     enabled     = true
     expression  = "http.request.full_uri in $legal_redirects"
 
