@@ -547,6 +547,7 @@ build-context
 build-errors
 build-time-inlining
 build-time-interpolation
+bulk-redirects
 bump
 bun
 bun-glob
@@ -964,6 +965,7 @@ cost-of-filing-gate
 cost-slo
 could-not-measure
 count-mismatch
+count-ripple
 counting
 counts
 coupling-test
@@ -1412,6 +1414,7 @@ evidence-integration
 evidentiary-records
 exacerbation-rule
 exact-equality
+exact-match
 exec
 exfil
 exhaustive-switch
@@ -1783,6 +1786,7 @@ guard-test
 guard-testing
 guard-vacuity
 guard-window
+guarda
 guardrail
 guardrails
 guards
@@ -1851,6 +1855,7 @@ hook_enforcement
 hooks
 host
 host-independence
+host-parity
 host-verification
 hot-path
 how
@@ -1894,6 +1899,7 @@ image-bake
 image-context
 image-export
 image-generation
+image-pin
 immutability
 immutable-infra
 implementation-patterns
@@ -2125,6 +2131,7 @@ lint-rule-ids
 lint-symmetry
 linter
 linting
+lints
 liquid
 list
 live
@@ -2670,6 +2677,7 @@ plan-premise
 plan-premise-falsification
 plan-premises
 plan-probe
+plan-prose
 plan-quality
 plan-quality-gate
 plan-review
@@ -3528,6 +3536,7 @@ sign-out
 signal-choice
 signal-drift
 signal-to-noise
+signals
 signed
 signed-url
 signup-outage
@@ -3980,6 +3989,7 @@ tr9
 trace-tests
 trace/breakpoint trap
 trailers
+trailing-slash
 transaction-safety
 transcript-judging
 transition
