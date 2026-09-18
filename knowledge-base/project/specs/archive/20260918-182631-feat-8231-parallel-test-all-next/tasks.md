@@ -1,5 +1,5 @@
 ---
-plan: knowledge-base/project/plans/2026-09-18-fix-local-test-battery-host-portability-plan.md
+plan: knowledge-base/project/plans/archive/20260918-162640-2026-09-18-fix-local-test-battery-host-portability-plan.md
 branch: feat-8231-parallel-test-all-next
 issue: 8231
 lane: cross-domain

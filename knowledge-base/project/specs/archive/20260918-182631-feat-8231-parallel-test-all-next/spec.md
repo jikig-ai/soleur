@@ -5,7 +5,7 @@ bundles: [8238, 8250, 8261, 8263, 8266]
 branch: feat-8231-parallel-test-all-next
 lane: cross-domain
 brand_survival_threshold: none
-brainstorm: knowledge-base/project/brainstorms/2026-09-18-parallel-test-all-green-baseline-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20260918-162640-2026-09-18-parallel-test-all-green-baseline-brainstorm.md
 ---
 
 # Spec: local green baseline for `scripts/test-all.sh`
