@@ -80,7 +80,7 @@ All measurements taken this session via `doppler run -p soleur -c prd_terraform 
 | Cutover completed 2026-09-15; scheduling runs on `soleur-inngest` 10.0.1.40:8288, FSM `done` | ADR-100 addendum 2026-09-15 (`op=arm` run 34948112813 → FSM `done`; `op=registry-probe` 70 functions). Doppler `soleur-inngest/prd`: `INNGEST_CUTOVER_FLIP=done`, `INNGEST_DIAGNOSTIC_BOOT=0`. Newest dedicated probe row: `http_code=200 server_active=active cutover_flag=done registry_fns=70` | **HOLDS** |
 | Same plaintext volume `106261946` | Hetzner `GET /volumes/106261946`: `name=soleur-inngest-redis-store size=10 format=ext4 created=2026-07-07T23:51:07Z server=166317708 linux_device=/dev/disk/by-id/scsi-0HC_Volume_106261946`. Probe row `data_mount_devid=scsi-0HC_Volume_106261946` | **HOLDS** |
 | Store populated ("hundreds of Redis keys") | Probe row `redis_keys=1081 redis_expires=1070 data_bytes=38671222`, key histogram `?queue?:queue:*=153,?estate?:key:*=767,…` | **HOLDS** (thousand, not hundreds) |
-| Host is the 2026-09-15 cutover host | Hetzner server `166317708` **created 2026-09-17T12:47:37Z** — this is the host born of the inherited-`done` replace incident (runbook § Inherited `done` after a host replace, "Measured 2026-09-17: two replaces and 76 minutes with no live scheduler"), recovered with `op=resume`. `uptime_s=90359` on the row agrees. | **HOLDS with correction** — same volume, third host since 2026-09-04 |
+| Host is the 2026-09-15 cutover host | Hetzner server `166317708` **created 2026-09-17T12:47:37Z** — this is the host born of the inherited-`done` replace incident (runbook § Inherited `done` after a host replace, "Measured 2026-09-17: two replaces and 76 minutes with no live scheduler"), recovered with `op=resume`. `uptime_s=90359` on the row agrees. | **HOLDS with correction** — same volume, third host since 2026-09-04 *(amended 2026-09-18 at /work: measured NINTH host / EIGHT replaces since Merge B — `measurements.md` §5)* |
 | `flush_latched` | Row: `flush_latched=true`. The 2026-09-15 `op=arm` performed the one authorized `FLUSHALL` and `record_flush_latch` wrote the durable latch on `/mnt/data`; it survived the 09-17 replace, exactly as designed (`inngest-cutover-flip.sh` "the volume that SURVIVES a host replace") | **The latch now STANDS** — the pre-cutover plan's "the latch is NOT standing" (#7695 comment 2026-09-09) is superseded |
 | `#7695` open, no closing PR | `gh issue view 7695`: OPEN, `closedByPullRequestsReferences=[]`, milestone "Phase 4: Validate + Scale" | HOLDS |
 | Merge B merged as PR #7778 squash `000fa4715` | `git log` on main carries `000fa4715 feat(inngest): the gated inngest-volume-recut target…` (2026-09-04) | HOLDS |
@@ -233,7 +233,7 @@ no overlap (closest hits are ADR/runbook *authoring* templates, not evidence-bas
 | "the store is populated (hundreds of Redis keys)" | `redis_keys=1081` | Quote the measured figure |
 | "the dedicated-host cutover completed on 2026-09-15" | Completed 09-15; the HOST was then replaced 09-17 (inherited-`done` incident) and recovered via `op=resume`; volume unchanged | Runbook prose must not say "the cutover host" — say "the volume the cutover landed on" |
 | "guards that assume a pre-cutover dark host must be re-graded" | Only G8 encodes a pre-cutover shape; G9/G13/G19 are correct refusals | Re-grade = record the verdict table + re-prioritise #8078; no gate edit |
-| "the four operator-gated dispatches were never run" | True; and two of the four (host-replace) have since happened for other reasons (09-09 user_data cap, 09-17 inherited done) — neither was the recut sequence | Say so in the plan addendum so the record does not read "no replace ever happened" |
+| "the four operator-gated dispatches were never run" | True; and two of the four (host-replace) have since happened for other reasons (09-09 user_data cap, 09-17 inherited done) — neither was the recut sequence *(amended 2026-09-18 at /work: measured NINTH host / EIGHT replaces since Merge B — `measurements.md` §5)* | Say so in the plan addendum so the record does not read "no replace ever happened" |
 | #7695 comment 2026-09-09: "The flush latch is NOT standing" | `flush_latched=true` since the 09-15 arm | Supersede explicitly in the issue-closing comment |
 | "#8017 … #8018 are now moot post-cutover" (hypothesis) | #8017/#8015 not moot — RESOLVED (conditions met). #8078/#7777 not moot — dormant-consumer. #8018 not moot — process rule | Per-issue dispositions below |
 
@@ -241,7 +241,7 @@ no overlap (closest hits are ADR/runbook *authoring* templates, not evidence-bas
 
 | Issue | Disposition | Evidence | Vehicle |
 |---|---|---|---|
-| **#7695** | **CLOSE** | Two evidence lines, neither a promise: (1) **build delivered** — Merge B `000fa4715` (2026-09-04, post-merge verification comment: `inngest-volume-recut-gate` 53/0, `inngest-host-dark-gate` 115/0, `inngest_volume_recut` job dispatch-only), plus the two later gate fixes #7761/#8019 now live on the host (`probe_schema=8`); (2) **dispatch refused by design against the measured row** — on `cutover_flag=done` G19 alone makes the target unreachable, and G8/G9/G13 refuse independently (`active`/`200`/`1081`). The cutover landed by the standard `op=arm` path (ADR-100 addendum 2026-09-15). The title's second clause — "nothing clears a standing /mnt/data flush latch" — is still TRUE and is #7777's, which stays open; the plaintext posture is #6894's (ADR-142). Closing is NOT "superseded by PR 8248" — 8248 is unmerged and closes nothing. | `Closes #7695` in PR body + closing comment with the verdict table and the quoted row fields |
+| **#7695** | **CLOSE** | Two evidence lines, neither a promise: (1) **build delivered** — Merge B `000fa4715` (2026-09-04, post-merge verification comment: `inngest-volume-recut-gate` 53/0, `inngest-host-dark-gate` 115/0, `inngest_volume_recut` job dispatch-only), plus the later `probe_schema` gate fixes through #8019 now live on the host *(amended at /work: #7761 is the Doppler-name root-exec fix, PR #7768, not a gate fix)* (`probe_schema=8`); (2) **dispatch refused by design against the measured row** — on `cutover_flag=done` G19 alone makes the target unreachable, and G8/G9/G13 refuse independently (`active`/`200`/`1081`). The cutover landed by the standard `op=arm` path (ADR-100 addendum 2026-09-15). The title's second clause — "nothing clears a standing /mnt/data flush latch" — is still TRUE and is #7777's, which stays open; the plaintext posture is #6894's (ADR-142). Closing is NOT "superseded by PR 8248" — 8248 is unmerged and closes nothing. | `Closes #7695` in PR body + closing comment with the verdict table and the quoted row fields |
 | **#8017** | **CLOSE** | Its own close condition: live row with `probe_schema=8` carrying `data_mount_devid`. Measured: `probe_schema=8 data_mount_devid=scsi-0HC_Volume_106261946` on boot `ef763c72`, instance `hetzner-166317708`. G14 on main compares `data_mount_devid` (2026-09-10 amendment). The closing comment quotes the row fields verbatim. | `Closes #8017` |
 | **#8015** | **CLOSE** | Its own close condition: live row with `probe_schema=8` carrying `registry_fns`. Measured `registry_fns=70`; `inngest-host-not-serving-7674.sh` rc=0 with the three-conjunct PASS message. G18 on main requires the third conjunct. The closing comment quotes `registry_fns=70` and the PASS line verbatim. | `Closes #8015` |
 | **#8078** | **STAY OPEN, re-grade `priority/p1-high` → `priority/p3-low`** | Defect confirmed on main (G8 `== inactive`). Its consumer is dormant on this volume (G13 refuses before G8 matters for any real dispatch; latch forbids emptying the store). Fixing it is only worth doing if the target survives the retire-or-keep decision. | `Ref #8078`; comment linking #8316; `gh issue edit 8078 --remove-label priority/p1-high --add-label priority/p3-low` |
@@ -425,7 +425,7 @@ exists" is NOT a route from a `done` host; then, for the record, that G8/G9/G13 
 with the measured values (`active`/`200`/`1081`) — all four are ADR-199 doing its job, a populated
 store on a serving host is never recut; (c) refreshes the measurement the 2026-08-25 callout carries
 (it cites a host created 2026-08-20): as of 2026-09-18 the same volume `106261946` is attached to host
-`166317708` created 2026-09-17 — a third host across two further replaces, latch intact; the durable
+`166317708` created 2026-09-17 — a third host across two further replaces, latch intact *(amended 2026-09-18 at /work: measured NINTH host / EIGHT replaces since Merge B — `measurements.md` §5)*; the durable
 latch STANDS since `op=arm` run 34948112813 (2026-09-15) and `flush_latched=true` + `cutover_flag=done`
 is the steady state of a healthy `done` host, not a fault to clear; (d) keeps the existing sentence
 that `op=resume` is NOT a latch remediation (its G1 is `done`-only) and does not invert it: `op=resume`
@@ -455,10 +455,10 @@ bullet's blockquote depth, `>`-prefix every line, keep the file's ~100-col wrap)
 > environment. It is NOT a route from this host. On `INNGEST_CUTOVER_FLIP=done` (Doppler
 > `soleur-inngest/prd`, the authority G19 reads; the row's `cutover_flag` mirrors it) its Guard 2 is
 > unreachable on G19 alone (the flag set is `{rolled-back, aborted}`), and G8/G9/G13 refuse
-> independently on the live row — `server_active=active`, `http_code=200`, `redis_keys=1081`
+> independently on the live row — `server_active=active`, `http_code=200`, `redis_keys=1081` *(1261 at /work)*
 > (ADR-199: a populated store on a serving host is never recut; G8's `== inactive` form is #8078).
 > As of 2026-09-18 the same volume `106261946` is attached to host `166317708` (created 2026-09-17,
-> the third host since 2026-09-04, across two more replaces; Hetzner API
+> the third host since 2026-09-04, across two more replaces *(amended at /work: ninth / eight)*; Hetzner API
 > `GET /v1/volumes/106261946` → `.volume.server`) with the latch intact. The durable latch STANDS
 > since `op=arm` run 34948112813 (`gh run view 34948112813`, 2026-09-15): `flush_latched=true` +
 > `cutover_flag=done` is the steady state of a healthy `done` host, not a fault to clear. Re-measure
@@ -468,7 +468,7 @@ bullet's blockquote depth, `>`-prefix every line, keep the file's ~100-col wrap)
 > The routes from here are `op=resume` for a stalled or inherited `done` (§ Inherited `done`; it
 > is still not a latch remediation) and the P1-13 rollback — and on this volume a rollback is
 > one-way: after `rolled-back`, `op=arm` G1 admits the flag but G3.7 and the on-host latch refuse
-> into terminal `aborted` (#7777). The `FLUSH_LATCH_SINCE` narrowing above has no application
+> into terminal `aborted` (#7777). *(amended at /work: G3.7 refuses BEFORE any write, flag stays `rolled-back`; only the on-host latch drives `aborted` — `cutover-inngest.sh` G3.7 `exit 1` before G4/G5)* The `FLUSH_LATCH_SINCE` narrowing above has no application
 > here — no recut has happened and the latch rows are genuine. The latch's real precondition is a
 > measured-empty store, which this volume cannot reach without #7777; the plaintext posture is
 > #6894's (ADR-142, additive), and the target's fate — dormant on this volume, not retired — is
@@ -493,9 +493,9 @@ rejects a human-actor token and an infra-imperative token co-occurring on one li
 
 3.1 Append to `knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md`:
 `## Addendum — 2026-09-18 (#7695) — reconciled against the completed cutover; P1–P10 superseded`
-stating: Merge A/B delivered (with the two later probe_schema fixes #7761/#8019); the post-merge
+stating: Merge A/B delivered (with the later probe_schema fixes through #8019 — not #7761, amended at /work); the post-merge
 dispatch sequence never ran; two host replaces happened since for other reasons (09-09 user_data cap,
-09-17 inherited done) and neither was Dispatch A/C; the cutover completed 09-15 via the standard path;
+09-17 inherited done) and neither was Dispatch A/C *(amended 2026-09-18 at /work: measured NINTH host / EIGHT replaces since Merge B — `measurements.md` §5)*; the cutover completed 09-15 via the standard path;
 P1–P10 are superseded (P2 is in fact MET — the #7674 probe PASSes — but its consumer is not
 dispatched); the encryption-posture flip (P9) and the destruction record (P10) belong to the ADR-142
 path and stay unflipped/template.

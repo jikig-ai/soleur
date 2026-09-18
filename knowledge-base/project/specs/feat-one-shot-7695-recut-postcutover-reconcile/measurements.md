@@ -24,7 +24,7 @@ RC=0
 ## 1b. Raw row — `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE` (newest dedicated row, fields only)
 
 ```
-SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active vector_active=active redis_active=active uptime_s=93969 boot_id=ef763c72-74bb-44ff-aa74-c19dc25ca13c image_ref=10.0.1.30:5000\/jikig-ai\/soleur-inngest-bootstrap:v1.1.35@sha256:c8e27c71bb3f4b79379bb0929e89acef1b4bf18b80b41e14496dd96c726ed0cd instance_id=hetzner-166317708 cli_version=1.19.4-2c8385ba8 cutover_flag=done probe_schema=8 host_role=dedicated flush_latched=true redis_keys=1261 redis_expires=1250 redis_key_patterns=?estate?:key:*=719,?queue?:queue:*=253,?cs?:a:*=20,?queue?:partition:*=2,?queue?:accounts:*=2,?connect?:gateways:*=1 data_mount_src=\/dev\/sdb data_bytes=46548668 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_106261946 registry_fns=70\",\"pii_scrub_applied\":\"+string\",\"shipper\":\"vector\",\"source_kind\":\"journald\",\"source_type\":\"journald\",\"timestamp\":\"2026-09-18T14:53:59.974705Z\"}"}
+SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active vector_active=active redis_active=active uptime_s=93969 boot_id=ef763c72-74bb-44ff-aa74-c19dc25ca13c image_ref=10.0.1.30:5000\/jikig-ai\/soleur-inngest-bootstrap:v1.1.35@sha256:c8e27c71bb3f4b79379bb0929e89acef1b4bf18b80b41e14496dd96c726ed0cd instance_id=hetzner-166317708 cli_version=1.19.4-2c8385ba8 cutover_flag=done probe_schema=8 host_role=dedicated flush_latched=true redis_keys=1261 redis_expires=1250 redis_key_patterns=?estate?:key:*=719,?queue?:queue:*=253,?cs?:a:*=20,?queue?:partition:*=2,?queue?:accounts:*=2,?connect?:gateways:*=1 data_mount_src=\/dev\/sdb data_bytes=46548668 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_106261946 registry_fns=70
 ```
 
 ## 2. Doppler flags — `doppler secrets get INNGEST_CUTOVER_FLIP INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd --plain`
@@ -34,7 +34,7 @@ INNGEST_CUTOVER_FLIP=done
 INNGEST_DIAGNOSTIC_BOOT=0
 ```
 
-## 3. Hetzner — `GET /v1/volumes/106261946` and `GET /v1/servers?name=soleur-inngest` (token: Doppler `prd_terraform` `HCLOUD_TOKEN`)
+## 3. Hetzner — `GET /v1/volumes/106261946` and `GET /v1/servers?name=soleur-inngest` (token: Doppler `prd_terraform` `HCLOUD_TOKEN`; jq projection, fields only)
 
 ```json
 {

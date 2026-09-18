@@ -11,7 +11,7 @@
 - Playwright MCP failed to connect (unused in this phase).
 
 ### Decisions
-- Live state measured: newest dedicated probe row `cutover_flag=done flush_latched=true redis_keys=1081 probe_schema=8 data_mount_devid=scsi-0HC_Volume_106261946 registry_fns=70`; Doppler `INNGEST_CUTOVER_FLIP=done`, `INNGEST_DIAGNOSTIC_BOOT=0`; volume 106261946 attached to host 166317708 (created 2026-09-17).
+- Live state measured (plan time; /work re-read 1261 — see measurements.md): newest dedicated probe row `cutover_flag=done flush_latched=true redis_keys=1081 probe_schema=8 data_mount_devid=scsi-0HC_Volume_106261946 registry_fns=70`; Doppler `INNGEST_CUTOVER_FLIP=done`, `INNGEST_DIAGNOSTIC_BOOT=0`; volume 106261946 attached to host 166317708 (created 2026-09-17).
 - Recut target documented as DORMANT on this volume (G19 alone unreachable on `done`; G8/G9/G13 refuse independently; standing latch defers store-emptying to #7777). Retirement deferred to #8316, gated on PR 8248.
 - Closes #7695, #8017, #8015. #8078 stays open re-graded p1→p3; #7777 re-scoped; #8018 unchanged.
 - Edits kept disjoint from PR 8248: runbook G3.7 post-cutover callout, ADR-100 addendum, addendum on the 2026-09-02 plan, archive both `issue: 7695` plan/spec pairs. No code, no cloud-init, no gate edits, no dispatch.

@@ -53,8 +53,8 @@ Tick a box only after running its check in this session.
 
 ## Phase 3: Reconcile and archive the `issue: 7695` plan/spec pairs
 
-- [x] 3.1 Append the reconciliation addendum to the 2026-09-02 plan (P1–P10 superseded; two replaces
-      since for other reasons; P2 met but unconsumed; P9/P10 belong to the ADR-142 path).
+- [x] 3.1 Append the reconciliation addendum to the 2026-09-02 plan (P1–P10 superseded; eight replaces
+      since Merge B, none the recut sequence; P2 met but unconsumed; P9/P10 belong to the ADR-142 path).
 - [x] 3.2 Archive the four artifacts with `archive-kb.sh <slug>` (spec dirs and the 09-07 plan
       unchanged — no notes, no ticking).
 - [x] 3.3 AC5–AC8 checks (history preserved, byte-identical archived specs, 09-10 pair untouched).

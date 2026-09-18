@@ -1628,9 +1628,9 @@ top-level-anchor assertion still reads, and pinned behaviourally rather than by 
 
 ## Addendum — 2026-09-18 (#7695) — reconciled against the completed cutover; P1–P10 superseded
 
-Merge A (2026-09-02) and Merge B (2026-09-04, PR #7778) delivered as recorded above, and the two
-later probe fixes landed after them (#7761; #8019 → `probe_schema=8`, the schema the live host
-emits). The post-merge dispatch sequence P1–P10 — Dispatch A (host replace) → Dispatch B
+Merge A (2026-09-02) and Merge B (2026-09-04, PR #7778) delivered as recorded above, and the later
+`probe_schema` fixes landed after them (through #8019 → `probe_schema=8`, the schema the live
+host emits). The post-merge dispatch sequence P1–P10 — Dispatch A (host replace) → Dispatch B
 (`inngest-volume-recut`) → Dispatch C (host replace) — **never ran**. What happened instead, measured
 from the probe rows' `instance_id` (`measurements.md` §5 on the 2026-09-18 spec):
 
@@ -1655,7 +1655,7 @@ Consequences for the sequence:
   ADR-142 path: the ledger keeps its plaintext exception and the destruction record stays
   `status: template`, because nothing has been destroyed and nothing is scheduled to be.
 
-The target this plan built is **dormant on volume `106261946`** — not retired. Retire-or-keep is
+The target this plan built is **dormant on volume `106261946`**; retire-or-keep is undecided and
 decided on #8316 after PR 8248 lands; the append-only latch clear that would make an empty store
 reachable is #7777's. This plan and its spec are archived with #7695 (ADR-100 addendum 2026-09-18;
 runbook `inngest-server.md` G3.7 "Post-cutover status").
