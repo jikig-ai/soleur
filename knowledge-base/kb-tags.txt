@@ -1362,6 +1362,7 @@ engineering
 enoent
 entrypoint-coverage
 enum-gate
+enumerating-probe
 enumeration
 enumerations
 env
@@ -3388,6 +3389,7 @@ self-healing
 self-healing-tests
 self-hosted-users
 self-hosting
+self-improvement-loop
 self-leak
 self-match
 self-matching-probe
@@ -3540,6 +3542,7 @@ silent-failure-adjacency
 silent-fallback
 silent-output-drop
 silent-staleness
+silent-success
 simplicity
 simplification
 single-client-id-many-flows
