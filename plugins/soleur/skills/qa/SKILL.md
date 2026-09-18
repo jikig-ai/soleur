@@ -12,14 +12,14 @@ description: "This skill should be used when running functional QA before merge.
 <!-- grok-harness-invoke:end -->
 
 <!-- lifecycle-handoff-protocol:start -->
-**Lifecycle handoff (standalone `/qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `/compound` then `/ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
+**Lifecycle handoff (standalone `soleur:qa`):** When no parent orchestrator (`one-shot`, `work`) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after the QA report — do not end at the report. A PASS is a checkpoint, not completion. If a recorded operator ruling already authorizes shipping (a scope ruling in `session-state.md`, an explicit instruction), proceed under `wg-verified-work-ships-without-asking` rather than pausing to re-confirm — held scope that was never implemented has no files to carry along and is not a reason to halt.
 <!-- lifecycle-handoff-protocol:end -->
 
 # Functional QA
 
 Verify that features actually work before merge -- not just that pages render, but that forms submit correctly, external services receive the right data, and data integrity holds across system boundaries.
 
-**Scope boundary with `/test-browser`:** This skill verifies functional correctness (user flows + external service state). `/test-browser` verifies visual rendering, layout regressions, and console errors. They coexist in the pipeline.
+**Scope boundary with `soleur:test-browser`:** This skill verifies functional correctness (user flows + external service state). `soleur:test-browser` verifies visual rendering, layout regressions, and console errors. They coexist in the pipeline.
 
 ## Prerequisites
 
@@ -29,11 +29,11 @@ Verify that features actually work before merge -- not just that pages render, b
 
 ## Usage
 
-**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/qa`); slash names the skill.
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`soleur:qa`); slash names the skill.
 
 ```bash
 skill: soleur:qa, args: "<plan_file_path>"   # Claude Skill tool
-/qa <plan_file_path>                         # Grok slash (then Read this SKILL.md)
+soleur:qa <plan_file_path>                         # Grok slash (then Read this SKILL.md)
 ```
 
 The skill reads the plan file's `## Test Scenarios` section and executes each scenario.
@@ -128,7 +128,7 @@ A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: 
 
 **Discriminate a real fail from an env flake.** If the run exits non-zero, apply the #5009 discriminator (see Notes): untouched-test + failure at `page.goto`/browser-close (before any assertion) + the surface the diff actually changed still passes = pre-existing local env flake → record and defer to CI, do not "fix" unrelated tests. A launch-time `Executable doesn't exist` failure means the preflight above was skipped or its override install also failed — treat as INFRA-BLOCKED, not a regression.
 
-**Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `/work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
+**Advisory vision layer (NON-BLOCKING).** Optionally drive Playwright MCP over the same routes and screenshot each, then run a vision pass for anything the deterministic assertions miss (spacing, color, truncation). This is informational only — headed MCP cannot run in autonomous `soleur:work`/CI, so it never blocks the merge. Surface findings as notes in the QA report.
 
 ### Step 3: Execute Test Scenarios
 

@@ -128,7 +128,7 @@ Choose (1-4):
 Only after approval (option 1 or 2):
 
 **6.0 — Validation gate for gated classifier-skill edits (primary in-session hook).**
-Before applying ANY correction, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>` for each file being edited. If `gated` is `false`, apply normally (step 1 below). If `gated` is `true`, the edit may change a verifiable classifier block (the `/go` routing table, the ticket-triage rubric) — gate it:
+Before applying ANY correction, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>` for each file being edited. If `gated` is `false`, apply normally (step 1 below). If `gated` is `true`, the edit may change a verifiable classifier block (the `soleur:go` routing table, the ticket-triage rubric) — gate it:
 
   a. **Buffer pre-check (the rejected-edit reader).** Read `.claude/.skill-edit-rejections.jsonl` (if present); if a prior entry matches this `source_file` + the same targeted miss (`target_task` id), surface it and do NOT re-propose the same dead-end edit — a previously-rejected edit is recognized, not re-run (avoids re-spending ~230 API calls on a known failure).
   b. **Run the gate.** Write the proposed-edited file to a temp path, then run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row encoding the miss being fixed>` (synthesized fixtures only, per `cq-test-fixtures-synthesized-only`). The verdict is computed deterministically in `verdict.cjs` (the LLM is out of the assertion path).

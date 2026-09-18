@@ -28,7 +28,7 @@ Present the discovered documents and use the **AskUserQuestion tool** to confirm
 
 "Found N legal documents. Audit all of them, or select specific files?"
 
-If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them.
+If no legal documents are found, report: "No legal documents found in this project. Use `soleur:legal-generate` to create them.
 
 > **Or:** If you're handling an inbound MSA, DSAR, AI-vendor terms review, OSS-license question, or breach notice, see `knowledge-base/legal/recommended-tools.md` for downstream specialist tools."
 

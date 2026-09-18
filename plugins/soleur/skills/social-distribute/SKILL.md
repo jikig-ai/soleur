@@ -34,11 +34,11 @@ Stop execution.
 
 ### 2. Blog Post Path (hard)
 
-The skill expects a blog post path as an argument (e.g., `/soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
+The skill expects a blog post path as an argument (e.g., `soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
 
 **If no path provided or file does not exist:**
 > Provide a path to a blog post markdown file:
-> `/soleur:social-distribute <path-to-blog-post.md>`
+> `soleur:social-distribute <path-to-blog-post.md>`
 
 Stop execution.
 

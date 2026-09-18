@@ -43,7 +43,7 @@ Use the **AskUserQuestion tool** to gather company context. Ask for:
 4. **Jurisdiction** -- which legal frameworks apply (US, EU/GDPR, UK, or multiple)
 5. **Contact information** -- email and/or physical address for legal notices
 
-If the user provides arguments after the skill name (e.g., `/legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
+If the user provides arguments after the skill name (e.g., `soleur:legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
 
 ## Phase 1: Document Selection
 

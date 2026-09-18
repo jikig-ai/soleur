@@ -12,7 +12,7 @@ description: "This skill should be used when triaging legacy local todo files in
 
 Present all findings, decisions, or issues here one by one for triage. The goal is to go through each item and decide whether to add it to the CLI todo system.
 
-> **Note:** The `/soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
+> **Note:** The `soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
 
 **IMPORTANT: DO NOT CODE ANYTHING DURING TRIAGE!**
 
@@ -224,7 +224,7 @@ During triage, the following status updates occurred:
 2. Start work on approved items:
 
    ```bash
-   /resolve-todo-parallel  # Work on multiple approved items efficiently
+   soleur:resolve-todo-parallel  # Work on multiple approved items efficiently
    ```
 
 3. Or pick individual items to work on
@@ -317,7 +317,7 @@ Progress: 3/10 completed | Estimated time: ~2 minutes remaining
 - Update todo files (rename, frontmatter, work log)
 - Do NOT implement fixes or write code
 - Do NOT add detailed implementation details
-- That's for /resolve-todo-parallel phase
+- That's for soleur:resolve-todo-parallel phase
 ```
 
 When done give these options
@@ -325,7 +325,7 @@ When done give these options
 ```markdown
 What would you like to do next?
 
-1. run /resolve-todo-parallel to resolve the todos
+1. run soleur:resolve-todo-parallel to resolve the todos
 2. commit the todos
 3. nothing, go chill
 ```

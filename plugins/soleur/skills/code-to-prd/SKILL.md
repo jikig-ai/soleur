@@ -29,7 +29,7 @@ The PRD contains:
 4. **State Shapes** — top-level `useState`/`useReducer`/server-component props (best-effort regex).
 5. **API & External Dependencies** — `fetch()` literal URLs + `@/lib/api*`/`@/server/*` imports + `process.env.*` names (values never read) + third-party SDK packages from `package.json`.
 6. **Coverage Caveats** — frameworks not scanned + extraction techniques + path-filter exclusion counts + Art. 9 special-category disclaimer.
-7. **Gap Analysis** — produced by `@agent-soleur:product:spec-flow-analyzer` Task spawn after the PRD is written and verified.
+7. **Gap Analysis** — produced by `soleur:product:spec-flow-analyzer` Task spawn after the PRD is written and verified.
 8. **MIT Attribution** — footer pointing at `plugins/soleur/NOTICE`.
 
 ## Redaction (3-layer, fail-closed)

@@ -1,6 +1,6 @@
 ---
 name: drain-labeled-backlog
-description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
+description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to soleur:one-shot."
 ---
 
 <!-- soleur-cloud-mode:start -->
@@ -23,10 +23,10 @@ Drain a labeled-issue backlog by batching issues that touch the same code area i
 - Multiple open issues carrying the target label reference the same top-level directory (e.g., `apps/web-platform`) and are safe to batch.
 - You want one PR to close 3+ issues instead of N separate PRs.
 
-Use `/soleur:review` to file new scope-outs. Use this skill to close existing labeled issues.
+Use `soleur:review` to file new scope-outs. Use this skill to close existing labeled issues.
 
 <decision_gate>
-**API budget.** This skill delegates each selected cluster to `/soleur:one-shot`, which runs a full plan→work→review→ship pipeline (30–90 min wall-clock per cluster; non-trivial Anthropic credit per run scaling with plan complexity and review-cycle count). With `--top-n N`, the cost multiplies by N. The `--dry-run` flag previews scope without delegating. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
+**API budget.** This skill delegates each selected cluster to `soleur:one-shot`, which runs a full plan→work→review→ship pipeline (30–90 min wall-clock per cluster; non-trivial Anthropic credit per run scaling with plan complexity and review-cycle count). With `--top-n N`, the cost multiplies by N. The `--dry-run` flag previews scope without delegating. Soleur does not bill or proxy these calls — Anthropic does, against the key in your session. The Soleur LICENSE (BSL 1.1) disclaims warranty for runtime cost; you operate this loop against your own budget.
 
 Confirm cluster scope (size, `--top-n`, milestone) before allowing the skill to fan out.
 </decision_gate>
@@ -115,9 +115,9 @@ Pull `## Problem`, `## Proposed Fix`, and `Location:` / file paths from each iss
 
 ### 6. Delegate to one-shot
 
-**Claude:** Skill tool `skill: soleur:one-shot`, args: `<scope argument built above>`. **Grok:** Read `plugins/soleur/skills/one-shot/SKILL.md` in this process (`/one-shot` with that scope) — slash names the skill; it is not a nested tool_use.
+**Claude:** Skill tool `skill: soleur:one-shot`, args: `<scope argument built above>`. **Grok:** Read `plugins/soleur/skills/one-shot/SKILL.md` in this process (`soleur:one-shot` with that scope) — slash names the skill; it is not a nested tool_use.
 
-`/soleur:one-shot` handles worktree creation, plan, deepen, work, review, QA, compound, and ship. This skill does NOT run any lifecycle phases itself — it only assembles scope.
+`soleur:one-shot` handles worktree creation, plan, deepen, work, review, QA, compound, and ship. This skill does NOT run any lifecycle phases itself — it only assembles scope.
 
 ### 7. Report backlog delta
 
@@ -159,10 +159,10 @@ single named constant, so the two cannot drift apart.
 
 ## Post-merge follow-up — Scheduling
 
-The `/soleur:schedule` skill accepts any soleur skill as `--skill <name>` and generates a standalone `.github/workflows/scheduled-<name>.yml`. After merging the PR that ships this skill, schedule a weekly cleanup:
+The `soleur:schedule` skill accepts any soleur skill as `--skill <name>` and generates a standalone `.github/workflows/scheduled-<name>.yml`. After merging the PR that ships this skill, schedule a weekly cleanup:
 
 ```text
-/soleur:schedule create --name weekly-deferred-scope-out-drain \
+soleur:schedule create --name weekly-deferred-scope-out-drain \
   --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-5
 ```
 

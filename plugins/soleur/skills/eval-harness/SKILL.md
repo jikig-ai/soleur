@@ -20,7 +20,7 @@ own surfaces.
 1. **`soleur:go` routing accuracy** — does the routing table produce the correct route token?
 2. **ticket-triage P-level accuracy** — does the priority rubric produce the correct P1/P2/P3?
 
-**Grok Build arm (Phase C #6323):** The harness now covers Grok slash-command + `spawn_subagent` semantics for `/go` routes (in addition to Claude Skill/Task). Golden assertions and regression tests exercise the adapter contract from `lib/harness.ts` (detect via GROK_* markers or argv). The go-routing target in `gated-skills.json` + eval-gate block in `go.md` are the source; projections feed the skill arm for both harnesses. See plan 2026-07-11-feat-grok-phase-c-go-md-eval-harness-plan.md and self-ref in `go.md`.
+**Grok Build arm (Phase C #6323):** The harness now covers Grok slash-command + `spawn_subagent` semantics for `soleur:go` routes (in addition to Claude Skill/Task). Golden assertions and regression tests exercise the adapter contract from `lib/harness.ts` (detect via GROK_* markers or argv). The go-routing target in `gated-skills.json` + eval-gate block in `go.md` are the source; projections feed the skill arm for both harnesses. See plan 2026-07-11-feat-grok-phase-c-go-md-eval-harness-plan.md and self-ref in `go.md`.
 
 <decision_gate>
 **API budget.** Each `npx promptfoo eval --repeat 3` run calls the Anthropic API against the key in
@@ -63,7 +63,7 @@ synthesized fixtures only (no real user data): [go-routing.jsonl](./tasks/go-rou
 **Skill-arm prompts are generated projections (no hand-copy).** The skill-arm prompts
 (`prompts/go-skill.txt`, `prompts/triage-skill.txt`) are a **mechanical projection** of the
 production classifier block, not a hand-distilled paraphrase. Each gated source wraps its rules in
-HTML-comment sentinels — the `/go` routing table in `plugins/soleur/commands/go.md`
+HTML-comment sentinels — the `soleur:go` routing table in `plugins/soleur/commands/go.md`
 (`<!-- eval-gate:block:go-routing:start -->` … `:end`) and the ticket-triage priority rubric in
 `plugins/soleur/agents/support/ticket-triage.md` (`eval-gate:block:ticket-triage`). The block is the
 single source of truth; [scripts/extract-block.cjs](./scripts/extract-block.cjs) projects it and

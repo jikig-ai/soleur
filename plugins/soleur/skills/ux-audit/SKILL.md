@@ -26,9 +26,9 @@ doppler run -c prd_scheduled -- \
   claude
 
 # Then inside Claude Code, invoke the skill via its slash form:
-/soleur:ux-audit
+soleur:ux-audit
 # Or with a single-route override:
-/soleur:ux-audit --route /dashboard
+soleur:ux-audit --route /dashboard
 ```
 
 **From another agent:** use the Skill tool:

@@ -9,9 +9,9 @@ description: "This skill should be used when merging a feature branch to main wi
 
 # merge-pr Skill
 
-**Purpose:** Automate the merge pipeline for a single PR -- replacing the manual execution of `/ship` Phases 3.5-8. Runs lights-out: merge main, resolve conflicts, push, create PR, wait for CI, merge, and cleanup.
+**Purpose:** Automate the merge pipeline for a single PR -- replacing the manual execution of `soleur:ship` Phases 3.5-8. Runs lights-out: merge main, resolve conflicts, push, create PR, wait for CI, merge, and cleanup.
 
-**Relationship to /ship:** Both skills are independent user-invoked entry points. `/ship` handles artifact validation, compound, and documentation (Phases 0-3). This skill handles the merge-through-cleanup pipeline. They do NOT invoke each other.
+**Relationship to soleur:ship:** Both skills are independent user-invoked entry points. `soleur:ship` handles artifact validation, compound, and documentation (Phases 0-3). This skill handles the merge-through-cleanup pipeline. They do NOT invoke each other.
 
 **Arguments:** Optional branch name. If omitted, auto-detects from current branch.
 
@@ -275,7 +275,7 @@ The merge has been aborted. Working tree is clean at the starting SHA.
 Conflicted files:
 <list>
 
-Resolve manually, then re-run /soleur:merge-pr.
+Resolve manually, then re-run soleur:merge-pr.
 
 ```
 
@@ -369,7 +369,7 @@ This queues the merge. GitHub waits for all branch protection requirements (CI c
 
 ### 5.2 Poll for Merge
 
-Use the **Monitor tool** with the same state-machine loop as `/soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max 15 iterations × 60s sleep = 15-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+Use the **Monitor tool** with the same state-machine loop as `soleur:ship` Phase 7. The loop covers three structurally-unmergeable states in addition to the terminal MERGED/CLOSED exits: **required-check failure** (exit at first failing required check, name it in stderr), **BEHIND** (auto-sync main into the branch up to 6 attempts, then emit a structured warning at the inflection point), and **DIRTY** (server-side merge conflict — exit and surface). Max 15 iterations × 60s sleep = 15-minute wall-clock cap. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
 **Mirror invariant:** the block below is a derived mirror of `plugins/soleur/skills/ship/SKILL.md` Phase 7 (the canonical site). If you edit one, edit both — the canonical site carries the full prose rationale for fail-open required-check fetch, BEHIND budget, and DIRTY semantics. The `ship-phase-7-poll-fixtures.test.sh` fixture exercises ship's block; this mirror is not directly tested, so cross-grep both blocks before pushing.
 

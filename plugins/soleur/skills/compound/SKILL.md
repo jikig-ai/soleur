@@ -12,10 +12,10 @@ description: "This skill should be used when documenting a recently solved probl
 <!-- grok-harness-invoke:end -->
 
 <!-- lifecycle-handoff-protocol:start -->
-**Lifecycle handoff (standalone `/compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `/ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
+**Lifecycle handoff (standalone `soleur:compound` before ship):** When compound runs as the pre-ship step in the implementation tail, invoke `soleur:ship` next — artifacts archived here are a checkpoint, not completion. Parent orchestrators (`work`, `one-shot`) own progression when active.
 <!-- lifecycle-handoff-protocol:end -->
 
-# /compound
+# soleur:compound
 
 Coordinate multiple subagents working in parallel to document a recently solved problem.
 
@@ -27,14 +27,14 @@ Captures problem solutions while context is fresh, creating structured documenta
 
 ## Usage
 
-**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`/compound`); slash names the skill.
+**Claude:** Skill tool. **Grok:** Read this SKILL.md in this process (`soleur:compound`); slash names the skill.
 
 ```bash
 skill: soleur:compound               # Claude — document the most recent fix
 skill: soleur:compound [brief context]
 skill: soleur:compound --headless
-/compound                            # Grok slash (then Read this SKILL.md)
-/compound --headless
+soleur:compound                            # Grok slash (then Read this SKILL.md)
+soleur:compound --headless
 ```
 
 ## Headless Mode Detection
@@ -509,7 +509,7 @@ If no artifacts are found for the feature slug, consolidation is skipped silentl
 
 **Archival renames need no `secret-scan-allow-rename` label.** `archive-kb.sh` `git mv`s plans/specs into their own `archive/` subdirectory, so BOTH sides of the rename match the gitleaks path allowlist. `rename-guard` exempts allowlist -> allowlist renames by construction (laundering requires the source to be OUTSIDE the allowlist), and the exemption is per rename pair, so a genuine laundering rename in the same PR is still caught. Do not pre-apply the label to silence it — that would disarm the guard for the whole PR. Rationale: [secret-scanning.md](../../../../knowledge-base/engineering/operations/secret-scanning.md).
 
-**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `/ship`.
+**Do not skip this consolidation when driving compound's phases by hand.** The mechanism that durably archives is `archive-kb.sh` (`git mv` + a commit); this consolidation is its *automatic, unprompted* invoker, and `soleur:archive-kb` is a first-class manual one. `cleanup-merged` is NOT one — ship/SKILL.md Phase 7 Step 4 explains why — so an artifact left at a live path here stays there and costs a follow-up PR. The failure mode is specific: an agent invoking `soleur:compound` and then executing the phases itself gets everything except Auto-Consolidation **Step E**. In headless mode that step has no prompt to surface it (interactively it does ask). If you ran the phases manually, run archival explicitly (`bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh`) before handing off to `soleur:ship`.
 
 **Two known gaps in that script, so verify rather than assume:** it discovers plans by a `*<slug>*` glob (a topic-named plan whose name does not carry the branch slug is missed — #7373's plan was), and it probes specs only at `specs/feat-<slug>` (a `fix-*` branch's spec dir is missed; there are 27 live ones). When it reports "No artifacts found" but artifacts are visibly live, archive by hand with `git mv`.
 

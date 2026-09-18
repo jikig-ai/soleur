@@ -40,7 +40,7 @@ Verify the knowledge-base directory exists:
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  echo "No knowledge-base/ directory found. Create one first or run /soleur:sync."
+  echo "No knowledge-base/ directory found. Create one first or run soleur:sync."
   # Stop execution
 fi
 ```
@@ -84,7 +84,7 @@ Create a new ADR with the next sequential number.
 
    If the contributor picks "Unsure," ask each of the 5 triggers as its own yes/no AskUserQuestion. Compute: any yes → rich, all no → terse.
 
-   **Pipeline mode default.** If running inside `/soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
+   **Pipeline mode default.** If running inside `soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
 
 6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. Fill in frontmatter:
    - `adr: ADR-<NNN>`
@@ -131,7 +131,7 @@ Display all ADRs with their status, number, title, and date.
    ls knowledge-base/engineering/architecture/decisions/ADR-*.md 2>/dev/null
    ```
 
-2. **If no ADRs exist:** Display "No ADRs found. Run `/soleur:architecture create` to create one."
+2. **If no ADRs exist:** Display "No ADRs found. Run `soleur:architecture create` to create one."
 
 3. **For each ADR file:** Read the YAML frontmatter and extract `adr`, `title`, `status`, `date`.
 

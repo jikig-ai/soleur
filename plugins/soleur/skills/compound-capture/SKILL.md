@@ -122,8 +122,8 @@ Search knowledge-base/project/learnings/ for similar issues. **Prefer faceted se
 
 ```bash
 # Faceted (preferred when the learning has a tag or category)
-/kb-search --tag eager-loading
-/kb-search --category performance-issues n+1
+soleur:kb-search --tag eager-loading
+soleur:kb-search --category performance-issues n+1
 ```
 
 Fall back to raw grep when no facet fits or the facet artifact is missing:
@@ -343,7 +343,7 @@ This dual-routing ensures session errors feed back into the definitions that cau
 
 #### 8.4 Apply
 
-**Gated-block guard (proposer-agnostic eval gate).** Before applying, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>`. If `gated:false`, apply normally. If `gated:true`, you MUST run the gate for the proposed edit — do NOT eyeball whether the classifier block changed and assume `accept`. Write the proposed-edited file to a temp path and run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row>`: the SCRIPT (not the agent) decides the identical-block short-circuit (when Step 8.3's bullet lands *outside* the `/go` routing table / triage rubric block — the common case — the script extracts an identical block and returns `accept` with no API spend; when the block did change, the script runs promptfoo and computes the verdict in `verdict.cjs`). Then follow heal-skill step 6.0 (buffer pre-check → accept-applies / reject-logs-to-`.claude/.skill-edit-rejections.jsonl`-and-does-NOT-stamp-`synced_to`). **Headless (`HEADLESS_MODE=true`) — fail CLOSED:** if the gate did not run to an `accept:true` (e.g. unattended, to avoid spending the gate's API budget), DO NOT apply the gated-block edit — DEFER it (record a one-line deferred note; the edit is preserved in the learning context and re-attempted interactively; the #5703 CI backstop re-asserts at PR time). Fail-closed on any gate error. The gate validates a prose-rule change to a classifier surface only; it never displaces a deterministic hook fix.
+**Gated-block guard (proposer-agnostic eval gate).** Before applying, run `node plugins/soleur/skills/eval-harness/scripts/eval-gate.cjs --check <target-file>`. If `gated:false`, apply normally. If `gated:true`, you MUST run the gate for the proposed edit — do NOT eyeball whether the classifier block changed and assume `accept`. Write the proposed-edited file to a temp path and run `eval-gate.cjs --candidate-file <tmp> --target <target> --target-task <synthesized row>`: the SCRIPT (not the agent) decides the identical-block short-circuit (when Step 8.3's bullet lands *outside* the `soleur:go` routing table / triage rubric block — the common case — the script extracts an identical block and returns `accept` with no API spend; when the block did change, the script runs promptfoo and computes the verdict in `verdict.cjs`). Then follow heal-skill step 6.0 (buffer pre-check → accept-applies / reject-logs-to-`.claude/.skill-edit-rejections.jsonl`-and-does-NOT-stamp-`synced_to`). **Headless (`HEADLESS_MODE=true`) — fail CLOSED:** if the gate did not run to an `accept:true` (e.g. unattended, to avoid spending the gate's API budget), DO NOT apply the gated-block edit — DEFER it (record a one-line deferred note; the edit is preserved in the learning context and re-attempted interactively; the #5703 CI backstop re-asserts at PR time). Fail-closed on any gate error. The gate validates a prose-rule change to a classifier surface only; it never displaces a deterministic hook fix.
 
 Apply the proposed edit to the definition file. Filing a GitHub issue is NOT an option in either mode -- the backlog-growth pressure that produced 22 stale `compound: route-to-definition proposal` issues by 2026-05 is the original problem this step exists to avoid. If Step 8.3 produced a draft, it has already cleared the "skip if no suitable section / insight is general knowledge" gate; that gate is the only safety hatch.
 
@@ -355,7 +355,7 @@ Apply the proposed edit to the definition file. Filing a GitHub issue is NOT an 
 - **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/project/learnings/
 - **Edit** -- Modify the bullet text, then re-display for confirmation
 
-In both modes, after writing the edit, update the learning file's `synced_to` frontmatter to prevent `/soleur:sync` from re-proposing this pair:
+In both modes, after writing the edit, update the learning file's `synced_to` frontmatter to prevent `soleur:sync` from re-proposing this pair:
 
 - If `synced_to` array exists in frontmatter: append the definition name
 - If frontmatter exists but `synced_to` is absent: add `synced_to: [definition-name]`
@@ -616,7 +616,7 @@ Action:
 
 **Invoked by:**
 
-- /compound command (primary interface)
+- soleur:compound command (primary interface)
 - Manual invocation in conversation after solution confirmed
 - Can be triggered by detecting confirmation phrases like "that worked", "it's fixed", etc.
 

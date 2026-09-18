@@ -159,7 +159,7 @@ unapplied-migration FAIL path is the correct response).
 **Why:** PR #4225 (feat-team-workspace-multi-user) — preflight FAIL
 on Check 1 because prd migrations were deferred per
 migration-checklist.md (legal-PR lockstep gate); the headless
-`/ship` halted the pipeline on a known-deferred state. This SKIP
+`soleur:ship` halted the pipeline on a known-deferred state. This SKIP
 path honors documented deferrals while keeping the gate active for
 undocumented cases.
 
@@ -499,7 +499,7 @@ If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive pa
 
 Call **Shared Plan-File Resolution** (above Check 1). It sets `$PR_BODY_FILE`, `$SCRUBBED_BODY`, `$PLAN_PATH`, and `$COMBINED` for this check to consume. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Shared Plan-File Resolution produces a `$COMBINED` input that contains both — scrubbed of HTML comments and fenced code blocks so a markdown example inside ` ``` ` cannot fool a substring match.
 
 **Step 6.4: Check for the section heading.**
 
@@ -975,7 +975,7 @@ cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — tho
 not the cheapest overall: a tautological probe (`printf 200` against
 `expected_output: "200"`) reaches PASS and is counted by none of the three
 counterweights below. That gap is pre-existing, not introduced here, but the
-superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
+superlative was wrong as written. For the declared path specifically, this is and in `soleur:one-shot` the
 same agent authors the declaration and runs the gate. Left invisible it would convert
 Check 10 from a verification gate into self-certification. The three mechanical
 counterweights are the distinct terminal, the committed corpus baseline count in
@@ -1094,7 +1094,7 @@ under `HOME=$(mktemp -d)`. The sandbox removes the credential stores as files:
 | `grep -c . AGENTS.md` | matches the host value |
 
 The read-only repo bind is what closes the **write-back escalation**: without it a probe
-can install `.git/hooks/pre-commit`, which `/soleur:ship` then executes seconds later with
+can install `.git/hooks/pre-commit`, which `soleur:ship` then executes seconds later with
 the operator's real `$HOME` — turning a few-second credential window into a full
 compromise.
 
@@ -1391,7 +1391,7 @@ breaks the numeric test).
 - **PASS** — `rc == 0` (register clean). The "Undocumented source facts (M)" count is surfaced by the
   advisory review note, never here.
 - **FAIL** — `stale > 0`: "domain-model register has $stale stale citation(s) — the register cites a
-  file/symbol that no longer resolves. Fix the cited row(s), or run `/soleur:sync domain-model`. If a
+  file/symbol that no longer resolves. Fix the cited row(s), or run `soleur:sync domain-model`. If a
   citation backticks a *filename*, unbacktick it (known citation-parser false-positive — see
   `knowledge-base/project/learnings/best-practices/2026-07-01-domain-model-register-curation-citation-parser-and-grep-validation.md`)."
 - **FAIL** — `rc == 2` (analyzer error / unanalyzable source): "register-drift check could not run
@@ -1468,7 +1468,7 @@ After all checks complete, aggregate results into a structured report:
 
 ### If any FAIL
 
-**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `/ship`."
+**Headless mode:** Abort with: "Preflight FAILED. See results above. Fix the issues and re-run `soleur:ship`."
 
 **Interactive mode:** Present findings table, then use **AskUserQuestion tool**:
 

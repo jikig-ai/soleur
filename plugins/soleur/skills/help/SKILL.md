@@ -2,19 +2,19 @@
 name: help
 description: This skill lists all available Soleur commands, agents, and skills
 argument-hint: ""
-# `/soleur:help` also ships as plugins/soleur/commands/help.md. Claude Code loads
+# `soleur:help` also ships as plugins/soleur/commands/help.md. Claude Code loads
 # plugin commands AND plugin skills into one slash menu, so without this the name
 # renders twice. `user-invocable: false` leaves the menu row to the command while
 # keeping this skill model-invocable — Skill(soleur:help) must keep working.
 user-invocable: false
 ---
 
-# /soleur:help (Devin CLI entry point)
+# soleur:help (Devin CLI entry point)
 
-You are the `/soleur:help` slash command for the Soleur plugin on Devin CLI.
+You are the `soleur:help` slash command for the Soleur plugin on Devin CLI.
 
 1. Read `${CLAUDE_PLUGIN_ROOT}/commands/help.md`.
-2. Follow every instruction in that file as if you were the `/soleur:help` handler.
+2. Follow every instruction in that file as if you were the `soleur:help` handler.
 3. When reading the manifest, use `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`.
 4. When counting components with Glob, use paths under `${CLAUDE_PLUGIN_ROOT}` (`${CLAUDE_PLUGIN_ROOT}/agents`, `${CLAUDE_PLUGIN_ROOT}/commands`, `${CLAUDE_PLUGIN_ROOT}/skills`).
 5. Detect the active harness as Devin CLI and output the **Devin CLI** help block from `commands/help.md`.
