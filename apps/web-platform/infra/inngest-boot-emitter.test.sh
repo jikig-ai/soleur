@@ -219,7 +219,7 @@ else
   # Keys come from the templatefile() call site in inngest-host.tf — the authoritative statement
   # of what this template receives. A missing key is a render error, not a silent empty string,
   # so a future var addition trips this loudly rather than degrading the assertions to vacuity.
-  printf 'templatefile("%s", { inngest_volume_id="v", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
+  printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
     "$CLOUD_INIT" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -259,13 +259,15 @@ else
   # key count, not a round number safely below it — a `-ge 10` passed at 13 while three keys were
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 16 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 17 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
-  # key and should not be reported as one. 16 is the call site's actual key count, so this is
-  # exact in both directions when paired with the floor.
+  # key and should not be reported as one. 17 is the call site's actual key count, so this is
+  # exact in both directions when paired with the floor. (16 -> 17: #6894 added
+  # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
+  # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 16 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 17 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
