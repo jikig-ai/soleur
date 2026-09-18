@@ -21,6 +21,7 @@ import { describe, test, expect } from "bun:test";
 import { execFileSync } from "child_process";
 import { EXPECTED_SOLEUR_AGENT_COUNT } from "../lib/agent-registry";
 import {
+  EXCLUDED_BY_PATH,
   REPO_ROOT,
   census,
   readIndex,
@@ -32,6 +33,9 @@ import {
 /** Literal pathspecs — deliberately NOT `INDEX_GLOBS`, so this invariant is independent of it. */
 const OWN_SKILL_DIRS = ":(glob)plugins/soleur/skills/*/SKILL.md";
 const OWN_COMMAND_FILES = ":(glob)plugins/soleur/commands/*.md";
+/** Same, for the population half — NOT `POPULATION_GLOBS`, for the same reason. */
+const OWN_CODEX_SKILLS = ":(glob)plugins/soleur/codex/skills/*/SKILL.md";
+const OWN_DEVIN_SKILLS = ":(glob)plugins/soleur/devin/skills/*/SKILL.md";
 
 function lsFiles(pathspec: string): string[] {
   return execFileSync("git", ["ls-files", "--full-name", "--", pathspec], { cwd: REPO_ROOT, encoding: "utf-8" })
@@ -76,6 +80,46 @@ describe("harness-parity tree census (Guard 3)", () => {
   const docs = readPopulation();
   const result: CensusResult = census(docs, index);
 
+  // The population half of the index invariant. Without this the ONLY floors are census()'s
+  // `0 docs examined` throw and `docsExamined > 0` — so the population can be narrowed (a `*` to
+  // `p*`, a dropped glob, a new EXCLUDED_BY_PATH entry) and the gate still reports a clean
+  // `0 non-canonical` over whatever survived. The index half already carries
+  // EXPECTED_SOLEUR_AGENT_COUNT; this is its counterpart, counted from THIS file's own literal
+  // pathspecs rather than from POPULATION_GLOBS.
+  test("the population is exactly the tracked doc set the globs name, minus the path exclusions", () => {
+    const expected =
+      lsFiles(OWN_SKILL_DIRS).length +
+      lsFiles(OWN_COMMAND_FILES).length +
+      lsFiles(OWN_CODEX_SKILLS).length +
+      lsFiles(OWN_DEVIN_SKILLS).length -
+      EXCLUDED_BY_PATH.size;
+    expect(expected).toBeGreaterThan(100);
+    expect(docs.length).toBe(expected);
+    // Every excluded path must be one the globs would otherwise have admitted — an exclusion
+    // naming a path outside the population is dead weight that reads as a deliberate carve-out.
+    const admitted = new Set([
+      ...lsFiles(OWN_SKILL_DIRS),
+      ...lsFiles(OWN_COMMAND_FILES),
+      ...lsFiles(OWN_CODEX_SKILLS),
+      ...lsFiles(OWN_DEVIN_SKILLS),
+    ]);
+    expect([...EXCLUDED_BY_PATH.keys()].filter((p) => !admitted.has(p))).toEqual([]);
+  });
+
+  // The exempt surface is the compensation channel this design rejected a baseline to avoid, so
+  // it is pinned by size, not merely by policy. Growing a region (or adding a new one) changes
+  // this count and must be a reviewed diff rather than a silent widening.
+  test("the exempt surface is bounded: one file, three regions, a fixed site count", () => {
+    const exemptDocs = result.docs.filter((d) => d.counts.EXEMPT > 0).map((d) => d.path);
+    expect(exemptDocs).toEqual(["plugins/soleur/commands/go.md"]);
+    expect(result.totals.EXEMPT).toBe(21);
+    const goMd = docs.find((d) => d.path === "plugins/soleur/commands/go.md");
+    expect(goMd).toBeDefined();
+    const starts = (goMd as { text: string }).text.match(/^<!-- harness-forms:start -->$/gm) ?? [];
+    expect(starts.length).toBe(3);
+    expect(EXCLUDED_BY_PATH.size).toBe(1);
+  });
+
   test("the population is non-empty and carries no nested SKILL.md (N4, N12)", () => {
     expect(result.docsExamined).toBeGreaterThan(0);
     expect(docs.map((d) => d.path).filter((p) => p.includes("/references/"))).toEqual([]);
@@ -86,15 +130,33 @@ describe("harness-parity tree census (Guard 3)", () => {
     expect(result.errors).toEqual([]);
   });
 
-  // One test per doc so a RED names the doc in the runner's own summary.
+  // One test per doc so a RED names the doc in the runner's own summary. `gated` records which
+  // docs the loop actually reached, so the sibling test below can compare that against the
+  // census — a per-doc loop truncated to `.slice(0, 1)` otherwise drops 100+ assertions while
+  // every surviving test still passes and the runner still exits 0.
+  const gated: string[] = [];
   for (const doc of result.docs) {
     test(`${doc.path} names every known component canonically`, () => {
+      gated.push(doc.path);
       const noncanonical = doc.sites.filter((s) => s.verdict === "NONCANONICAL").map((s) => s.message);
       expect(noncanonical).toEqual([]);
     });
   }
 
-  test("summary", () => {
+  // Dispatch: every doc the census examined must have been reached by a per-doc test above.
+  // Bun runs the `for` body's tests before this one because they are registered first.
+  test("every examined doc was dispatched to a per-doc assertion", () => {
+    expect(gated.slice().sort()).toEqual(result.docs.map((d) => d.path).sort());
+  });
+
+  // The same property asserted WITHOUT going through the per-doc filter, so an edit that
+  // neuters that filter (binding `noncanonical` to a constant, excluding an attribution) is
+  // caught here rather than being byte-identical green.
+  test("the whole census carries no non-canonical site", () => {
+    expect(result.noncanonical.map((s) => s.message)).toEqual([]);
+  });
+
+  test("summary (docsExamined is derived from docs — see the population pin above for coverage)", () => {
     console.log(
       `harness-parity: ${result.docsExamined} docs examined, ${result.noncanonical.length} non-canonical, ` +
         `${result.totals.CANONICAL} canonical, ${result.unknownNs.length} unknown-ns` +

@@ -69,6 +69,13 @@ describe("harness-parity cross-file sentinel (N11, H1)", () => {
     // this literal, and a substring match was satisfied by the comment with the assertion
     // deleted (measured — Guard 3 rows N11 and H1 survived the first battery).
     expect(tree).toMatch(/^\s+expect\(noncanonical\)\.toEqual\(\[\]\);$/m);
+    // Pin what `noncanonical` is BOUND to, and that the loop feeding it is not truncated.
+    // Pinning the assertion line alone leaves both edits byte-identical green (measured).
+    expect(tree).toMatch(/const noncanonical = doc\.sites\.filter\(\(s\) => s\.verdict === "NONCANONICAL"\)/);
+    expect(tree).toMatch(/^\s+for \(const doc of result\.docs\) \{$/m);
+    // And the two dispatch-independent assertions, so neutering the per-doc filter still reds.
+    expect(tree).toContain("expect(result.noncanonical.map((s) => s.message)).toEqual([])");
+    expect(tree).toContain("every examined doc was dispatched to a per-doc assertion");
     expect(tree).toContain("readPopulation()");
     expect(tree).toContain("EXPECTED_SOLEUR_AGENT_COUNT");
   });
@@ -91,6 +98,12 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
     // N12: a nested SKILL.md is NOT a population member under `:(glob)`.
     expect(regionPolicyForPath("plugins/soleur/skills/plan/references/SKILL.md")).toBeUndefined();
     expect(regionPolicyForPath("plugins/soleur/agents/product/cpo.md")).toBeUndefined();
+    // The glob→regex must be ANCHORED at both ends. Without the anchors the two cases above
+    // still resolve to undefined for an unrelated reason (`[^/]+` cannot cross `/`), so they
+    // do not cover it: a prefix or a suffix is what proves it (measured — dropping both
+    // anchors left the suite byte-identical green).
+    expect(regionPolicyForPath("vendor/plugins/soleur/commands/go.md")).toBeUndefined();
+    expect(regionPolicyForPath("plugins/soleur/commands/go.md.bak")).toBeUndefined();
   });
 
   test("every population and index pathspec carries :(glob) magic (N12)", () => {

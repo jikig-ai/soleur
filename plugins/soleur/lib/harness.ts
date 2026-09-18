@@ -135,8 +135,13 @@ export function formatSkillInvocation(skill: string, args?: string): string {
     return command;
   }
 
-  const skillId = `soleur:${name}`;
-  return trimmedArgs ? `${skillId} (args: ${trimmedArgs})` : skillId;
+  // Claude's operator-typed form is the slash command, exactly as the codex/grok/devin arms
+  // above give theirs. This used to return `soleur:<name> (args: <x>)` — a DISPLAY string no
+  // operator can type — while ADR-226 §4 and the `operator-typed-render` blocks in ten skills
+  // cite this function as the thing that produces a typeable form. The blocks were right about
+  // the contract and the claude arm was the outlier (#8299).
+  const command = `/soleur:${name}`;
+  return trimmedArgs ? `${command} ${trimmedArgs}` : command;
 }
 
 /**
