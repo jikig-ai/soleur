@@ -450,4 +450,74 @@ this document, the learning, and the PR body.
 | 0.4.1 / 0.4.2 | Done — 46m28s serial baseline, timing log committed |
 | **0.4a GATE** | **PASS at 6.22×** over the reconciled registered population (floor 2.0×) |
 | 0.5.1 / 0.5.2 GATE | Not started — needs a `tc_acquire` caller log, not instrumented by the timing-only baseline |
-| Phase 1 onward | **Blocked on the green-baseline precondition recorded above** |
+| Phase 1 onward | **Precondition met 2026-09-18 (PR #8270) on 5.1 evidence.** All nine suites green alone, 0 skipped arms. AC12(b) NOT claimed — the 5.2 battery was refused (rc 4) twice for sibling contention; see the 2026-09-18 section. |
+
+## Green-baseline precondition — measured 2026-09-18 (PR #8270, post-review)
+
+### Host facts
+
+| Fact | Value |
+|---|---|
+| OS / kernel | Linux 7.2.5-3-omarchy, 16 cores |
+| Node | 26 (`vitest` 4.1.0) |
+| bash | 5.3 (the `${a[@]+…}` guard targets bash 3.2, verified separately from source) |
+| gitleaks | **8.24.2, runnable** — via a mise shim that now resolves |
+| lefthook | not on PATH; `.git/hooks/pre-commit` reaches it via a hardcoded `/tmp` fallback |
+| absent | `shellcheck`, `/usr/bin/time`, `bc` |
+
+### 5.1 — each suite alone, re-derived AFTER the rebase and AFTER the review fixes
+
+All nine exit 0, **with zero skipped arms**. Both facts matter: the skip contract
+is exercised and the arms it protects actually ran.
+
+| Suite | rc | Result |
+|---|---|---|
+| `.claude/hooks/guardrails.test.sh` | 0 | 127 pass / 0 fail |
+| `.claude/hooks/git-commit-secret-scan.test.sh` | 0 | 18 pass / 0 fail / 0 skipped |
+| `scripts/lint-legal-scope-block-placement.test.sh` | 0 | 71 pass / 0 fail |
+| `scripts/lib/scratch-root.test.sh` | 0 | all pass |
+| `plugins/soleur/test/gitleaks-rules.test.sh` | 0 | 44/44, 0 skipped |
+| `plugins/soleur/test/gitleaks-merge-commit.test.sh` | 0 | 27/27, 0 skipped |
+| `plugins/soleur/test/notice-frontmatter.test.sh` | 0 | all executed pass (2 skipped, unrelated to gitleaks) |
+| `plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh` | 0 | 43 pass / 0 fail / 0 skipped |
+| `apps/web-platform/infra/registry-userdata-budget.test.sh` | 0 | 16 checks / 0 failed |
+
+Plus `apps/web-platform` `kb-share-preview.test.ts` on Node 26: 25/25 (FR3/#8261).
+
+**Supersedes an earlier record of "20 declared skipped arms."** That measurement
+was taken when gitleaks was not runnable on this host. It is now pinned at 8.24.2,
+so every arm executes and the skip list is empty. Recording the stale figure would
+have asserted coverage this run did not have — in the direction that reads as
+*less* coverage, which is why it was worth re-deriving rather than transcribing.
+
+The ADR-188 contract was verified in BOTH directions for all three skip-arm suites:
+with a PATH lacking gitleaks they skip and exit 0 locally, and under `CI=true` the
+same absence exits 1 naming the arms.
+
+### 5.2 — full serial battery: REFUSED (rc 4), twice
+
+| Attempt | Outcome |
+|---|---|
+| 1 (12:20Z) | `rc=4` — `CAPACITY_CONTENDED reason=sibling_runs measured_runs=1`; sibling worktree `feat-one-shot-7960-phase-b-delivery-field` running 870s |
+| 2 (10:54Z, queued behind attempt 1's sibling) | `rc=4` — the sibling started a NEW full-gate run 6s earlier; this session's own suite sweep was also in flight |
+
+A third attempt is queued behind a 60-second all-quiet requirement (90m cap). The
+refusal is the runner working as designed (#7553), not a failure of this change.
+
+Per plan §5.2 this is the sanctioned outcome: *"If the run is refused (rc 4), wait
+at most 2 h, then record the refusal and ship on 5.1 alone."* **AC12(b) is
+therefore NOT claimed.** AC12(a) is claimed, on the table above.
+
+The host was never quiet during this session because a sibling worktree ran
+back-to-back full gates throughout — which is itself evidence for #8231's premise
+that serial full-gate runs are the contended resource.
+
+### Repo-global ratchets (the blind spot a file-selected run cannot see)
+
+Re-run after the review fixes, all clean: `guard-vacuity-floor` 23/0,
+`lint-orphan-test-suites` 465 covered / 0 orphaned, `lint-guard-contract` rc 0,
+`lint-window-closure-assertion` rc 0, `lint-shell-capture-exit` 0 new findings
+(one NEW finding introduced by a review fix was fixed at source, not re-baselined).
+
+`shellcheck` is **not installed on this host** — that instrument did not pass, it
+did not run.
