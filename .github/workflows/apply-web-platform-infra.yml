@@ -2142,6 +2142,7 @@ jobs:
               -target='hcloud_server.inngest' \
               -target='hcloud_server_network.inngest' \
               -target='hcloud_volume_attachment.inngest_redis' \
+              -target='hcloud_volume_attachment.inngest_redis_luks' \
               -var="ssh_key_path=${CI_SSH_PUB}"
           rc=$?
           if [[ $rc -ne 0 ]]; then

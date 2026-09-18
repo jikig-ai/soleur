@@ -2921,6 +2921,24 @@ describe("inngest-volume-recut dispatch: registration, binding, and the shared m
     expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
+  test("B6: inngest_host_replace carries the ADDITIVE attachment, and neither durable volume (#6894)", () => {
+    // A replace re-creates the server, so every attachment that interpolates the server id is
+    // ForceNew. An attachment NOT -targeted here is simply left behind: the new host boots with that
+    // volume DETACHED. For the additive LUKS volume that is harmless before the cutover and fatal
+    // after it — the pointer then names a volume that is not attached, the resolver refuses, and
+    // Redis stays down. The job's own comment claimed the target for a whole phase while the -target
+    // list carried only three lines; this is the pin that comment never had.
+    const replaceJob = extractJobBlock(wf, "inngest_host_replace");
+    const targets = extractAllTargets(replaceJob);
+    expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
+    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(true);
+    expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
+    // Both VOLUMES are preserved by OMISSION — targeting either would put a sole-copy store one
+    // replace away from a destroy.
+    expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
+    expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
+  });
+
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
     // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
     // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
