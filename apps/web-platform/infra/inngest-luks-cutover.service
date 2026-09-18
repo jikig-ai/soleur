@@ -50,5 +50,14 @@ ExecStart=/usr/bin/doppler run --config prd \
   --no-exit-on-missing-only-secrets \
   -- /usr/local/bin/inngest-luks-cutover.sh
 
+# THE ONE PATH THE SCRIPT CANNOT REPORT ON. TimeoutStartSec above exists because a copy can hang;
+# on that path systemd sends SIGTERM (the script traps it) and then SIGKILL, and a SIGKILLed bash
+# emits nothing. Same for a power loss mid-copy, and for any failure before the script installs its
+# ERR trap. systemd's own "Failed with result 'timeout'" line is tagged SYSLOG_IDENTIFIER=systemd,
+# which no Vector source here admits — so without this line the single path that leaves the store
+# half-moved and the writers frozen is the one path with no off-box evidence at all.
+# ExecStopPost runs after a killed or failed ExecStart with $SERVICE_RESULT set.
+ExecStopPost=/usr/bin/logger -t inngest-luks-cutover "{\"marker\":\"SOLEUR_INNGEST_LUKS_CUTOVER\",\"reason\":\"unit-exit\",\"service_result\":\"${SERVICE_RESULT}\",\"exit_status\":\"${EXIT_STATUS}\",\"exit_code\":0,\"flag\":\"unit-exit\",\"guard\":\"6894\"}"
+
 [Install]
 WantedBy=multi-user.target

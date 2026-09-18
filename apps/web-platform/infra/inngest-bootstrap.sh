@@ -1433,6 +1433,11 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   else
     log "ERROR: LUKS cutover assets not staged at /tmp/inngest-luks-cutover.{sh,service,timer}; the cutover timer will NOT be enabled (install_missing, #6894)"
     logger -t inngest-luks-cutover '{"marker":"SOLEUR_INNGEST_LUKS_CUTOVER","exit_code":1,"reason":"install_missing","flag":"unknown","detail":"the cutover trio was not staged to /tmp by cloud-init; the timer is not enabled","guard":"6894"}' 2>/dev/null || true
+    # AND the Vector-independent path. This is a BOOT-time failure, which is exactly the case where
+    # the journald->Vector leg may not exist yet: Vector is installed later in this same script, and
+    # its own install is non-fatal. A marker that depends on the shipper to report that delivery
+    # failed is the shape that hid #6178 for a whole cutover attempt.
+    /usr/local/bin/inngest-boot-phone-home.sh luks-cutover-install-MISSING "the cutover trio was not staged to /tmp; inngest-luks-cutover.timer is NOT enabled (#6894)" 2>/dev/null || true
   fi
 fi
 

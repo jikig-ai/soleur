@@ -239,7 +239,9 @@ on:
           RECREATES an existing web host (both volumes preserved by omission); it needs
           `web_host_key` + `confirm=REPLACE-<key>`, and it REFUSES web-1.
           inngest-volume-recut DESTROYS the inngest Redis AOF volume and recreates it raw, so the
-          next boot cuts it to LUKS. Needs `confirm=RECUT-INNGEST-VOLUME` +
+          next boot cuts it to LUKS. It is the EMPTY-STORE route only (ADR-199): with a populated
+          store the route is the additive cutover, `op=luks-cutover` on cutover-inngest.yml, which
+          copies onto a second volume and swaps the mount (ADR-142). Needs `confirm=RECUT-INNGEST-VOLUME` +
           `expected_inngest_volume_id`, and it REFUSES unless the host is measured dark and the
           store measured empty — the expected verdict until the host is replaced is
           `stale_schema`, which means "replace the host first WITH A PIN THAT CARRIES THE

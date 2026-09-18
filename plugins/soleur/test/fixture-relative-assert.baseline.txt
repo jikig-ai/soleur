@@ -85,6 +85,34 @@
 #                  count rose -- a rise in an existing row would be a regression, a new
 #                  file is churn.
 #
+#   1427 -> 1439   #6894 added three NEW files (the additive blue-green LUKS cutover). Verified
+#                  against the rule the two rows above set: none of the three existed on
+#                  origin/main, and NO pre-existing row moved -- the diff is three added lines.
+#                  Five further sites were guarded rather than baselined, so the rise is 12 and
+#                  not 17: `assert_fixture_dir "$d"` on the caller parameter of
+#                  inngest-luks-cutover.test.sh's `_helper_self_test`, and -- in
+#                  inngest-luks-wrong-volume-alert.test.sh, which writes to a TRACKED .tf on every
+#                  mutation row -- a canonicalised `REPO="$(cd … && pwd)"` plus
+#                  `assert_fixture_dir "$TF"` inside `mutate_red()`, which is where the write is
+#                  (a top-level guard clears nothing, by `_rel_guarded`'s own rule).
+#
+#                  WHAT THE 12 ARE, so a later reader need not re-derive it:
+#                    10  inngest-luks-cutover.sh -- an on-host script whose write roots are
+#                        `${LUKS_FSTAB:-/etc/fstab}`, `${LUKS_ENVFILE:-/etc/default/inngest-luks}`,
+#                        `${LUKS_STATE_DIR:-/var/lib/inngest-luks-cutover}` and four `$tmp`s from
+#                        `mktemp`. Every default is absolute and the LUKS_* names are UNSET unless
+#                        argv[1] is `--fixture-seams` (the seam gate at the top of the file, tested),
+#                        so the relative case is reachable only from the suite, which passes
+#                        absolute paths. `assert_fixture_dir` is a test helper and does not belong
+#                        in a script that runs as root on a production host.
+#                     1  inngest-luks-cutover.test.sh:743 -- a FALSE POSITIVE. The operand is the
+#                        literal `cp -a ` inside a `grep -cE` pattern that COUNTS copy sites in the
+#                        SUT; nothing is written. Left as a row rather than reworded, because
+#                        respelling a regex to dodge a detector is not a fix.
+#                     1  scripts/followthroughs/inngest-luks-cutover-6894.sh:120 -- also a FALSE
+#                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
+#                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
+#
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
 # three review rounds every defect found in this rule has been in the shrinking direction.
@@ -137,6 +165,8 @@
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
+10	apps/web-platform/infra/inngest-luks-cutover.sh
+1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
 1	apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
@@ -292,6 +322,7 @@
 1	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
+1	scripts/followthroughs/inngest-luks-cutover-6894.sh
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh

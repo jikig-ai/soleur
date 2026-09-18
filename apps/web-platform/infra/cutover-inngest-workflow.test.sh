@@ -2796,9 +2796,12 @@ LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_F
 LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
 LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -q '>/dev/null' && LK_SILENT=1
 LK_FLIPW=0;  grep -qE 'secrets set INNGEST_CUTOVER_FLIP' "$LUKS_FILE" && LK_FLIPW=1
-LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | head -1 | cut -d: -f1)
-LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1)
-LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | head -1 | cut -d: -f1)
+# `|| true` because "no match" is a possible answer here, not a crash: an EMPTY line number means
+# the anchor moved, and the two assertions below require `-n` on each before comparing — so the
+# miss reds THERE, with the value printed, instead of killing the suite here with nothing said.
+LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
+LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1) || true
+LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | head -1 | cut -d: -f1) || true
 LK_G1READ=0; grep -qE 'doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain' "$LUKS_FILE" && LK_G1READ=1
 # BOTH fail-closed arms, by their DISTINCT sentences: one for "the config could not be read at
 # all", one for "the name exists but its value could not be read". A count alone (or the shared

@@ -44,6 +44,17 @@ for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PAS
   if [[ -z "${!v:-}" ]]; then echo "TRANSIENT: $v is not set in the probe environment"; exit 2; fi
 done
 
+# TWO READS, because the two questions have different starvation profiles. The terminal heartbeat
+# shares this tag, so "is there a cutover-complete row in 48h" cannot be asked of the newest N rows
+# of the tag — the one transition row scrolls out behind the no-ops. It CAN be asked of a grep on
+# the transition reason itself, which no heartbeat carries. The second question ("is there a
+# rolled-back/aborted row NEWER than it") is newest-first by nature, so the tag read answers it.
+DONE_ROWS=$(bash "$QUERY" --since 48h --grep cutover-complete --limit 50 2>&1)
+RC=$?
+if (( RC != 0 )); then
+  echo "TRANSIENT: betterstack-query.sh exited $RC on the completion read (output withheld)"
+  exit 2
+fi
 FSM=$(bash "$QUERY" --since 48h --grep inngest-luks-cutover --limit 300 2>&1)
 RC=$?
 if (( RC != 0 )); then
@@ -57,7 +68,7 @@ fi
 # The FSM's message is JSON, so the flag is read as a FIELD rather than matched as a substring —
 # `"flag":"done"` and `"flag":"rolled-back"` are otherwise both "contains done" under a careless
 # grep, and the second is the state this probe must never accept.
-DONE_N=$(printf '%s\n' "$FSM" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
+DONE_N=$(printf '%s\n' "$DONE_ROWS" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
   fromjson? | .raw? | fromjson?
   | select(.host == $h and .host_name == $hn)
   | (.message | if type == "string" then (fromjson? // {}) else . end)
@@ -68,7 +79,7 @@ DONE_N=$(printf '%s\n' "$FSM" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
 # A rolled-back or aborted row NEWER than the newest `done` means the store is not where a `done`
 # would say it is. Compared by timestamp, not by presence: an OLD rollback followed by a successful
 # cutover is the expected history of a retried migration.
-NEWEST_DONE=$(printf '%s\n' "$FSM" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
+NEWEST_DONE=$(printf '%s\n' "$DONE_ROWS" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" '
   fromjson? | select(.dt != null) | . as $r | ($r.raw | fromjson?)
   | select(.host == $h and .host_name == $hn)
   | (.message | if type == "string" then (fromjson? // {}) else . end)
@@ -80,6 +91,7 @@ NEWEST_BAD=$(printf '%s\n' "$FSM" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAM
   | (.message | if type == "string" then (fromjson? // {}) else . end)
   | select(.marker == "SOLEUR_INNGEST_LUKS_CUTOVER")
   | select(.flag == "rolled-back" or .flag == "aborted")
+  | select((.reason // "") | startswith("noop-") | not)
   | $r.dt' 2>/dev/null | sort | tail -1)
 
 PROBE=$(bash "$QUERY" --since 48h --grep SOLEUR_INNGEST_SERVER_PROBE --limit 200 2>&1)

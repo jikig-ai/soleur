@@ -322,7 +322,7 @@ exists.
 | --- | --- |
 | On-host FSM | `apps/web-platform/infra/inngest-luks-cutover.sh` (+ `.service`, `.timer`) |
 | Its suite | `apps/web-platform/infra/inngest-luks-cutover.test.sh` |
-| Boot resolver (pointer-authoritative) | `apps/web-platform/infra/cloud-init-inngest.yml`, `inngest-luks-open.sh` |
+| Boot resolver (pointer-authoritative) | `apps/web-platform/infra/cloud-init-inngest.yml` — both the first-boot runcmd stage and `/usr/local/bin/inngest-luks-open.sh`, which is a `write_files` payload embedded in that same file rather than a file in this repo |
 | Operator verbs | `op=luks-cutover` / `op=luks-rollback` in `.github/workflows/cutover-inngest.yml` + `scripts/cutover-inngest.sh` |
 | Wrong-volume alert | `apps/web-platform/infra/betterstack-logs-alerts.tf` (ships paused; armed post-cutover) |
 | Runbook | `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` |

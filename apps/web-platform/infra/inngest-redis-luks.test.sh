@@ -381,7 +381,7 @@ if printf '%s\n' "$_stg_region" | grep -qE 'cryptsetup luksOpen .* inngest-redis
 # stale — a draft that named two sites was written before the cutover became the pointer's writer.
 _REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 _g4_bad=""; _g4_reads_stage=0; _g4_reads_reopen=0; _g4_total=0
-_g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0
+_g4_stager_count=0; _g4_unit_inject=0; _g4_write_set=0; _g4_write_clear=0; _g4_fsm_read=0; _g4_dispatch_read=0
 while IFS= read -r _hit; do
   _f="${_hit%%:*}"; _rest="${_hit#*:}"; _ln="${_rest%%:*}"; _txt="${_rest#*:}"
   [[ "$_txt" =~ ^[[:space:]]*# ]] && continue
@@ -406,6 +406,7 @@ while IFS= read -r _hit; do
     *"grep -v '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                                 # FSM stager: strip before rewrite
     *"printf 'INNGEST_LUKS_ACTIVE_VOLUME_ID=%s\\n' \"\$1\" >> \"\$tmp\""*) : ;;                       # FSM stager: write
     *'grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$1" "$ENVFILE"'*) : ;;                              # FSM stager: landed check
+    *"n=\"\$(grep -c '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) _g4_stager_count=$((_g4_stager_count + 1)) ;;  # FSM stager: CARDINALITY
     *"! grep -q '^INNGEST_LUKS_ACTIVE_VOLUME_ID=' \"\$ENVFILE\""*) : ;;                              # FSM stager: removed check
     *'jq -e '"'"'has("INNGEST_LUKS_ACTIVE_VOLUME_ID")'"'"''*) _g4_dispatch_read=$((_g4_dispatch_read + 1)) ;; # dispatch pre-write READ
     *'::error::op='*'INNGEST_LUKS_ACTIVE_VOLUME_ID'*) : ;;                                        # operator-facing refusal text
@@ -433,6 +434,9 @@ if [ -z "$_g4_bare" ] && [ "$_g4_inside" -eq 2 ]; then ok "G4.g3 both FSM pointe
 # G4.h the pointer is INJECTED into the unit, and the FSM reads the injected value rather than
 # shelling out — a read that needed its own credential would be a second failure mode mid-swap.
 if [ "$_g4_unit_inject" -ge 1 ] && [ "$_g4_fsm_read" -eq 1 ]; then ok "G4.h the unit injects the pointer and the FSM reads it exactly once, from the environment"; else no "G4.h unit injection=${_g4_unit_inject} FSM reads=${_g4_fsm_read} — the FSM must read the injected value once"; fi
+# The stager COUNTS rather than merely checking presence: systemd's EnvironmentFile is last-wins, so
+# a second pointer line would silently decide which volume the boot-reopen unit opens.
+if [ "$_g4_stager_count" -eq 1 ]; then ok "G4.j the envfile stager asserts pointer CARDINALITY, not presence (EnvironmentFile is last-wins)"; else no "G4.j the envfile stager no longer counts its pointer lines (sites=${_g4_stager_count})"; fi
 if [ "$_g4_dispatch_read" -eq 1 ]; then ok "G4.i the dispatch's pointer gate reads presence from the NAME LIST (an absent name and a dead token are not the same answer)"; else no "G4.i dispatch pointer reads=${_g4_dispatch_read} — expected exactly one, via the name list"; fi
 
 # G4.d the pointer arm REFUSES; it never formats and never falls back to the other volume.
@@ -454,11 +458,11 @@ if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/d
 # the measured count after the arms were final, not written ahead of them.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 56 ]; then
+if [ "$executed" -lt 57 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 56)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 57)\n' "$executed"
 fi
 
 echo ""

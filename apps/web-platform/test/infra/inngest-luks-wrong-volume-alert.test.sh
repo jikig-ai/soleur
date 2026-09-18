@@ -25,7 +25,7 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$DIR/../../../.."
+REPO="$(cd "$DIR/../../../.." && pwd)"
 TF="$REPO/apps/web-platform/infra/betterstack-logs-alerts.tf"
 VARS="$REPO/apps/web-platform/infra/variables.tf"
 WF="$REPO/.github/workflows/apply-web-platform-infra.yml"
@@ -33,6 +33,20 @@ WF="$REPO/.github/workflows/apply-web-platform-infra.yml"
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
 no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
+
+# P1b (#7708) — byte-identical to every other tracked copy; the P1a suite pins that.
+# `$(cd X && pwd)` prints an absolute path but yields EMPTY when the cd fails, which would root
+# $TF at `/` — and mutate_red() below writes to $TF on every row.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 
 # INSTRUMENT SELF-TEST — both helpers must move their own counter before any verdict is trusted.
 _p0=$pass; _f0=$fail
@@ -116,6 +130,7 @@ cp "$TF" "$MUT_DIR/pristine.tf"
 SELF="${BASH_SOURCE[0]}"
 mutate_red() {  # mutate_red <label> <python-expr-on-s>
   local label="$1" prog="$2" rc=0
+  assert_fixture_dir "$TF"   # P1b: every arm below writes to $TF, whose root is a $(cd … && pwd)
   python3 - "$MUT_DIR/pristine.tf" "$TF" <<PY || { no "mutation '$label' did not land (anchor drifted)"; cp "$MUT_DIR/pristine.tf" "$TF"; return 0; }
 import sys
 s = open(sys.argv[1]).read()

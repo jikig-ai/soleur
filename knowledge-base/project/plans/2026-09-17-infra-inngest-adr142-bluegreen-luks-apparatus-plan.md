@@ -1187,10 +1187,10 @@ failure_modes:
     detection: a probe-row alert where the resolved device alias is not the encrypted volume's, plus the tracked issue's expiry
     alert_route: Better Stack alert plus the follow-through sweeper
 logs:
-  where: /run/inngest-luks-stage.log and /run/inngest-luks-cutover.log on the host; journald under the two SyslogIdentifiers; Better Stack for off-host reads
+  where: /run/inngest-luks-stage.log on the host and $STATE_DIR/state.json for the cutover FSM; journald under the two SyslogIdentifiers; Better Stack for off-host reads
   retention: Better Stack Logs retention for source 2457081
 discoverability_test:
-  command: bash apps/web-platform/infra/inngest-redis-luks.test.sh
+  command: bash apps/web-platform/infra/journald-config.test.sh
   expected_output: a final line reporting zero failures and a non-zero pass count
 ```
 
@@ -1891,8 +1891,11 @@ pinned tag and reds on any drift — so the moment this PR changes `vector.toml`
 The repo's own precedent agrees: `vinngest-v1.1.34` and `v1.1.35` are both tagged at **feature-branch
 commits**, built, and re-pinned inside the PR that changed the carriers.
 
-Executed as: finalise the carriers, push `vinngest-v1.1.36` at that commit, let the build publish,
-then re-pin `<tag>@sha256:<digest>` at all four sites in the same PR. **Consequence for review:** any
+**To execute (NOT yet done — GuardA is red until it is):** finalise the carriers, push the next
+`vinngest-v1.1.<n>` tag at that commit, let the build publish, then re-pin `<tag>@sha256:<digest>`
+at all four sites in the same PR. Written in the future tense deliberately: this section is headed
+"what the build changed", and a past-tense sentence here reads as done to anyone skimming for the
+outstanding work — which is exactly what the tag cycle is. **Consequence for review:** any
 later change to a baked carrier needs another tag, so the tag cycle is the LAST step before ship,
 after review has frozen those files.
 

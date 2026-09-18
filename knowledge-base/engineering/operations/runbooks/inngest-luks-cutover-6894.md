@@ -50,7 +50,7 @@ is the prod-write ack; the token that can write the flag is injected only for th
    ```
 
    On the newest `host_role=dedicated` row: `data_mount_devid` is the PLAINTEXT volume's
-   `scsi-0HC_Volume_<id>` alias, `redis_active=true`, and `redis_keys` is a number (not
+   `scsi-0HC_Volume_<id>` alias, `redis_active=active`, and `redis_keys` is a number (not
    `__UNREADABLE__`). An unreadable count is not a zero — the FSM refuses on it (`t1-unreadable`).
 
 3. **Note the key count.** The FSM records it (`k_freeze`) and T3 checks the store after the swap
@@ -78,8 +78,9 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
   --since 20m --grep inngest-luks-cutover --limit 50
 ```
 
-The flag walks `copying → copied → swapped → done`. Each row carries `reason`, `phase`, `k_freeze`
-and `e_freeze`.
+The flag walks `copying → copied → swapped → done`, and the FSM emits a row at each transition
+(`reason=phase-frozen`, `phase-copy-start`, `phase-copy-verified`, `phase-swapped`, then
+`cutover-complete`). Each row carries `reason`, `phase`, `k_freeze` and `e_freeze`.
 
 **The dispatch is green only on `done`.** `rolled-back` and `aborted` both exit non-zero and both
 name the reason field to read.
@@ -98,7 +99,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `not-root` / `luks-key-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
 | `pointer-already-set` | This host is already past the cutover. Use `op=luks-rollback` if you meant to go back. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -108,6 +109,9 @@ Refusal reasons, and what each one is telling you:
 | `copy-dst-*` | The copy refused its own destination (not a mount, same as the source, empty or relative). A bug, not an operational condition — file it. |
 | `swap-mount-source` / `swap-wrong-backing` | The swap did not produce the mount it intended; the plaintext store was put back and the writers resumed. |
 | `unexpected-exit(...)` / `terminated` | The script died or was killed (a `TimeoutStartSec` kill emits `terminated`). Writers were resumed on the way out. |
+| `flip-in-flight` | The flip FSM (`inngest-cutover-flip.service`) is mid-run. It owns the one authorized `FLUSHALL` and restarts the server, so the two must not overlap. Wait for its terminal row, then re-dispatch. |
+| `unit-exit` with `service_result=timeout` | systemd killed the unit outright — the script never got to report. The store is wherever the last `phase-*` row says; read those before re-dispatching. |
+| `not-root` | Emitted, but NOT through the abort path: the flag is left untouched, so the timer keeps polling. Unreachable under systemd (the unit runs as root). |
 
 ---
 
@@ -117,16 +121,23 @@ Refusal reasons, and what each one is telling you:
 window are **not backfilled** when it comes back. The window is short, but "short" is not "none", and
 a cron that did not fire is invisible unless someone enumerates it.
 
-After a `done` (or after a `rolled-back`, which also froze the writers), enumerate what was due in the
-freeze window and re-arm what matters:
+**The two obvious verbs do not answer this on this host, and it is worth knowing why before you
+reach for them.** `op=enumerate` posts to `/hooks/inngest-enumerate-reminders`, and that hook's
+handler queries `127.0.0.1:8288` on **whichever host serves the webhook** — which is web-1, because
+the dedicated host runs no listener (the measurement ADR-225 and `inngest-server.md` both record).
+It would read the wrong machine. `op=verify` anchors its window on the **flip** FSM's transition row
+and detects double-fires, which is not what a freeze produces.
+
+So take the window from the LUKS FSM's own rows and re-arm directly:
 
 ```
-gh workflow run cutover-inngest.yml -f op=enumerate      # what is still armed
-gh workflow run cutover-inngest.yml -f op=verify         # exactly-once over the window
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \\
+  --since 6h --grep inngest-luks-cutover --limit 200
 ```
 
-Take the window bounds from the FSM rows themselves — the `copying` row is the freeze start and the
-`done` row is the resume — not from when you dispatched.
+The `phase-frozen` row is the freeze start and the `phase-swapped` row is the resume (the `done` row
+is up to 120s later, after T3). Anything due inside that window is re-armed the way it was armed —
+there is no backfill, and no dispatch that can synthesise one.
 
 ---
 
@@ -140,20 +151,25 @@ Take the window bounds from the FSM rows themselves — the `copying` row is the
    ```
 
    On the newest `host_role=dedicated` row, `data_mount_devid` must now be the **encrypted** volume's
-   alias, `redis_active=true`, and `redis_keys` at least `k_freeze − e_freeze` (volatile keys may have
+   alias, `redis_active=active`, and `redis_keys` at least `k_freeze − e_freeze` (volatile keys may have
    expired; nothing else should have gone).
 
 2. **Arm the wrong-volume alert.** It ships paused, because before the cutover the plaintext alias is
-   the correct value and an armed rule would page continuously. Set
-   `inngest_luks_cutover_complete = true` and apply the two targets:
+   the correct value and an armed rule would page continuously.
+
+   **There is no tfvars file in this root and no `-var-file` in any workflow** — every variable
+   reaches terraform through `doppler run --name-transformer tf-var`, which turns a Doppler name
+   into `TF_VAR_<lowercased>`. So arming is a Doppler write, then an ordinary apply:
 
    ```
+   printf 'true' | doppler secrets set INNGEST_LUKS_CUTOVER_COMPLETE      -p soleur -c prd_terraform --no-interactive >/dev/null
    gh workflow run apply-web-platform-infra.yml -f apply_target=main
    ```
 
-   (with the variable set in the root's tfvars — the alert resources are already in that plan's
-   `-target=` allowlist). From then on, any probe row reporting `/mnt/data` on a volume that is not
-   the encrypted one pages: that is the detector for "the store quietly went back to plaintext".
+   (`>/dev/null` is not optional: `doppler secrets set` prints every remaining secret of the config.)
+   The two alert resources are already in that plan's `-target=` allowlist. From then on, any probe
+   row reporting `/mnt/data` on a volume that is not the encrypted one pages — that is the detector
+   for "the store quietly went back to plaintext".
 
 3. **Do the §4 close-out** if you have not already.
 
