@@ -290,11 +290,10 @@ discoverability_test:
     --since 200h --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 20
   expected_output: >
     at least one row whose decoded message carries status=<one of the 7 known values>
-  credentials_required: >
-    Better Stack ClickHouse read (Doppler prd_terraform, BETTERSTACK_QUERY_*) — the property is
-    "the marker reached the log sink", and no unauthenticated probe can verify ingestion of a
-    container-emitted WARN line. A local grep would verify code shape only, which is precisely the
-    substitution that produced the unobservable loop.
+  # Single-line scalar on purpose: preflight Check 10 reads this field flat (same line only)
+  # and treats a bare `>`/`|` indicator as "declares nothing", which would send the `doppler`
+  # command to the verb gate and FAIL a probe whose whole point is that it needs credentials.
+  credentials_required: "Better Stack ClickHouse read (Doppler prd_terraform, BETTERSTACK_QUERY_*) — the property is 'the marker reached the log sink', and no unauthenticated probe can verify ingestion of a container-emitted WARN line; a local grep would verify code shape only, which is precisely the substitution that produced the unobservable loop.
 ```
 
 ### Soak Follow-Through Enrollment
