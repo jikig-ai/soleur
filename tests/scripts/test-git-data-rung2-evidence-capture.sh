@@ -357,6 +357,23 @@ out="$(run_sut --out "$TMP/evidence-no.env")"; rc=$?
 if [[ "$rc" -eq 1 ]]; then pass "boot_complete with a FALSE assertion => FAIL"; else
   fail "boot_complete with a FALSE assertion => FAIL" "$rc" "$out"; fi
 
+# (#8210) THE SAME ARM FOR THE FIFTH TERMINAL BOOLEAN, and it is not a copy for symmetry: the
+# FAIL alternation gained `luks_reopen_unit` in this change, and a name added to a regex with no
+# fixture driving it is a guard nobody has seen fire. Unlike its four siblings this one is
+# MEASURED on the host (systemctl is-enabled + Result=success), so `no` is a value real telemetry
+# can actually carry — which is precisely why it must FAIL rather than warn: a replace is the
+# only route by which the boot-time reopen reaches the live host.
+HOSTROWS_REOPEN_NO="$TMP/rows-reopen-no.jsonl"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes luks_reopen_unit=no \
+  > "$HOSTROWS_REOPEN_NO"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_REOPEN_NO"
+out="$(run_sut --out "$TMP/evidence-reopen-no.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "boot_complete with luks_reopen_unit=no => FAIL (#8210)"; else
+  fail "boot_complete with luks_reopen_unit=no => FAIL (#8210)" "$rc" "$out"; fi
+if [[ ! -f "$TMP/evidence-reopen-no.env" ]]; then
+  pass "an unarmed reopen unit writes NO evidence file"; else
+  fail "an unarmed reopen unit writes NO evidence file" "$rc" "evidence was written on a FAIL"; fi
+
 # ── ARM 3: TRANSIENT — the host said nothing, but the channel is demonstrably live ──
 HOSTROWS_EMPTY="$TMP/rows-empty.jsonl"
 : > "$HOSTROWS_EMPTY"
@@ -1562,7 +1579,7 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=105  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
+_FLOOR=107  # measured 80 on origin/main (the 76 it carried was 4 of slack — a deleted arm was invisible) + the #8010 `# TABLE:` value pin + its 2 override arms + the default-arm shape guard + the non-identifier refusal (rc + no file)
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
   # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
