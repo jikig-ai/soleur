@@ -149,8 +149,8 @@ describe("Guard 1 — outcome-marker census", () => {
     // made a full-argument-list anchor stale, and the `not.toBe(src)` landing
     // assertion below is what caught that rather than reporting a false pass.
     const mutated = src.replace(
-      /emitOutcomeMarker\(logger, \{([^}]*status: "disabled")/,
-      "noopMarker(logger, {$1",
+      /emitOutcomeMarker\(\{([^}]*status: "disabled")/,
+      "noopMarker({$1",
     );
     expect(mutated).not.toBe(src);
     const c2 = censusTerminalReturns(mutated);

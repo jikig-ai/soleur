@@ -28,6 +28,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import pino from "pino";
 import { dirname, join, relative } from "node:path";
 import { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
@@ -325,12 +326,49 @@ type ClusterOutcome =
 /** Cap on `refusal_detail` entries so one pathological run cannot flood the sink. */
 export const REFUSAL_DETAIL_CAP = 20;
 
+export const OUTCOME_MARKER_COMPONENT = "compound-promote";
+
+export type OutcomeMarkerSink = { warn: (obj: object, msg: string) => void };
+
+/**
+ * Dedicated pino instance for the outcome marker — NOT `ctx.logger`.
+ *
+ * Inngest's `ctx.logger` is a console-backed ProxyLogger (the client
+ * deliberately passes no `logger:` — see server/inngest/client.ts), so
+ * `warn(obj, msg)` through it renders via util.inspect as MULTI-LINE text:
+ * `  SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,` on one journald row and
+ * `} compound promote outcome` on another. Measured on the 2026-09-18
+ * 23:10:59Z manual fire: the marker landed 55 s after the fire and every
+ * field-isolated reader (runbook decode, the #8281 probe's `.fn` select, the
+ * session's own poll) reported it absent — the #8281 defect inside the #8281
+ * fix, a second time. The cost marker that decodes (claude-cost-marker.ts)
+ * writes through pino; this does the same. Same boundary as that module: no
+ * ADR-029 formatter and no `redact` paths, so the marker must stay free of
+ * user ids, emails and secrets (it carries enums, counts, a run id and a
+ * scrubbed error message only).
+ *
+ * `sync: true` so a row is on the destination before `warn()` returns — the
+ * marker is the LAST thing a terminal path does, and the process may be torn
+ * down right after.
+ */
+export function createOutcomeMarkerLogger(
+  destination?: NodeJS.WritableStream,
+): pino.Logger {
+  // A caller-supplied Writable (tests) is handed to pino as-is; the default is
+  // a SonicBoom on fd 1 with `sync: true` (SonicBoom takes descriptors, not
+  // streams — the reason the two arms differ).
+  const dest = destination ?? pino.destination({ dest: 1, sync: true });
+  return pino({ base: { component: OUTCOME_MARKER_COMPONENT } }, dest);
+}
+
+export const outcomeMarkerLogger = createOutcomeMarkerLogger();
+
 export function emitOutcomeMarker(
-  logger: { warn: (obj: object, msg: string) => void },
   outcome: CompoundPromoteOutcome,
+  sink: OutcomeMarkerSink = outcomeMarkerLogger,
 ): void {
   try {
-    logger.warn(
+    sink.warn(
       {
         SOLEUR_COMPOUND_PROMOTE_OUTCOME: true,
         fn: "cron-compound-promote",
@@ -857,7 +895,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-disabled", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "disabled" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "disabled" });
       return { ok: true, status: "disabled" };
     }
 
@@ -884,7 +922,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-dedup", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "deduped" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "deduped" });
       return { ok: true, status: "deduped" };
     }
 
@@ -903,7 +941,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-week-cap", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "week-cap-reached" });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "week-cap-reached" });
       return { ok: true, status: "week-cap-reached" };
     }
 
@@ -964,7 +1002,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-empty", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId, status: "empty-corpus", corpus_count: 0 });
+      emitOutcomeMarker({ trigger, run_id: runId, status: "empty-corpus", corpus_count: 0 });
       return { ok: true, status: "empty-corpus" };
     }
 
@@ -1038,7 +1076,7 @@ export async function cronCompoundPromoteHandler({
       await step.run("sentry-heartbeat-ok-no-clusters", () =>
         postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }),
       );
-      emitOutcomeMarker(logger, { trigger, run_id: runId,
+      emitOutcomeMarker({ trigger, run_id: runId,
         status: clusterResult.truncated ? "anthropic-truncated" : "no-qualifying-clusters",
         corpus_count: corpus.entries.length,
         clusters_proposed: clusterResult.clusters.length,
@@ -1348,7 +1386,7 @@ export async function cronCompoundPromoteHandler({
     }
 
     await step.run("sentry-heartbeat", () => postSentryHeartbeat({ ok: true, sentryMonitorSlug: SENTRY_MONITOR_SLUG, cronName: "cron-compound-promote", logger }));
-    emitOutcomeMarker(logger, { trigger, run_id: runId,
+    emitOutcomeMarker({ trigger, run_id: runId,
       status: "completed",
       corpus_count: corpus.entries.length,
       clusters_proposed: clusterResult.clusters.length,
@@ -1373,7 +1411,7 @@ export async function cronCompoundPromoteHandler({
     } catch {
       // best-effort
     }
-    emitOutcomeMarker(logger, {
+    emitOutcomeMarker({
       trigger,
       run_id: runId,
       status: "error",
