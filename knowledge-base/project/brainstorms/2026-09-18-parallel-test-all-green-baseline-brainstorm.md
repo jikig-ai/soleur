@@ -77,9 +77,15 @@ Four options were weighed with the operator:
 2. **Is SKIPPED green enough for Phase 1?** A suite that declares an unmet host dependency and
    skips is a stable signal for differential testing. A suite that is red is not. The plan should
    state that a declared skip satisfies the precondition.
-3. **scratch-root:** #8263 says host-shape or HEAD-state dependent. The HOME-fallback arm returns
-   the live `$HOME/.cache` while the test passes an overridden `HOME`, which points to an
-   environment leak into `bash -c` rather than resolver logic. Verify before fixing.
+3. **scratch-root:** #8263 says host-shape or HEAD-state dependent. Points to an environment leak
+   into `bash -c` rather than resolver logic. Verify before fixing.
+   *(Verified during implementation, and the mechanism named here was wrong — recorded rather
+   than silently corrected. The resolver is `base="${XDG_CACHE_HOME:-${HOME:-}/.cache}"`, so
+   `XDG_CACHE_HOME` WINS and the HOME-fallback arm never runs when it is set. A misordered
+   `--unset=XDG_CACHE_HOME` after a `HOME=` assignment therefore returns
+   `$XDG_CACHE_HOME/soleur/tmp` — the leaked ambient value — not `$HOME/.cache`. Measured:
+   `env XDG_CACHE_HOME=/tmp/AMBIENT-LEAK HOME=/tmp/fakehome` resolves to
+   `/tmp/AMBIENT-LEAK/soleur/tmp`. The conclusion held; the arm did not.)*
 4. **Node 26 (#8261):** narrow `engines`, or fix the suite. The first is a one-line change that
    leaves a developer on Node 26 with a refused install instead of a red battery.
 
