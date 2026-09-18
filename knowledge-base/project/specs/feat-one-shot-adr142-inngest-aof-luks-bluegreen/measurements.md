@@ -87,3 +87,23 @@ so it was not re-measured. Recorded so the gap is visible rather than implied cl
 0.4 (`INNGEST_CUTOVER_FLIP`) is not recorded in the brief and is not re-read here: reading it is a
 credentialed production read, and the value that matters is the one at dispatch time, which the
 `inngest_host_replace` preflight added in #8252 now reads and warns on.
+
+## Phase 5.6 — the wrong-volume alert predicate, live-probed 2026-09-18
+
+Read via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "<SQL>"`, 24h
+window, counts only (no row echoed):
+
+| measurement | value |
+| --- | --- |
+| rows in window (all sources) | 37248 |
+| `SOLEUR_INNGEST_SERVER_PROBE` rows | 22 |
+| …of which `host_role=dedicated ` | 11 |
+| predicate with the watched alias = live PLAINTEXT alias | **0** (quiet — the field matches) |
+| predicate with the watched alias = a wrong id | **11** (positive control: the rule is live) |
+| predicate with the watched alias = the plaintext id truncated one digit | **11** |
+
+The third row is the one that justifies the trailing space in
+`data_mount_devid=<alias> `: without it, `scsi-0HC_Volume_10626194` would match
+`scsi-0HC_Volume_106261946` and the rule would go quiet on a volume that is not the watched one.
+The 11 non-dedicated probe rows are web-1's, which is what the `host_role=dedicated` scope excludes
+— measured here rather than assumed.

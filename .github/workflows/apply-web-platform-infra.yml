@@ -736,6 +736,8 @@ jobs:
               -target=betteruptime_team_member.ops \
               -target=logtail_exploration.monitor_send_failed \
               -target=logtail_exploration_alert.monitor_send_failed \
+              -target=logtail_exploration.inngest_luks_wrong_volume \
+              -target=logtail_exploration_alert.inngest_luks_wrong_volume \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key
           rc=$?

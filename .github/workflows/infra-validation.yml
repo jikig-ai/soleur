@@ -815,6 +815,11 @@ jobs:
       - name: Run Better Stack SEND_FAILED alert MUTATION battery (#8097 the guard can actually fail)
         run: bash apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh
 
+      # (#6894) The wrong-volume Logs alert: its predicate, its arming variable, its -target lines,
+      # and six mutation rows that each require this guard to red.
+      - name: Run inngest LUKS wrong-volume alert drift guard (#6894)
+        run: bash apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh
+
       # (#7000) Two ORPHAN suites adopted. run-registered-suites.sh reports both as referenced by
       # no workflow or script, i.e. silent ZERO coverage — and both cover resources the parity
       # guard above sweeps: orphan-reaper.test.sh backs terraform_data.orphan_reaper_install (its
