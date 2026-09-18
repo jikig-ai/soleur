@@ -205,6 +205,10 @@ AFFECTED_CONSUMED_EDGES=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
+  # in THIS lib — the consumed mapping mechanism does not care which file owns
+  # the array). Its edges are the same two predicates _infra_in_diff checks.
+  "apps/web-platform/infra/run-registered-suites.sh|AFFECTED_INFRA_RUNNER_PATHS"
 )
 
 # The infra runner's edges — the same two predicates _infra_in_diff checks
