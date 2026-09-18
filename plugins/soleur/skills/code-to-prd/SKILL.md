@@ -38,11 +38,11 @@ The skill is user-brand-critical (`single-user incident` threshold). Redaction i
 
 - **Layer 1 — path exclusion.** Walker uses `git -C <target> ls-files -c -o --exclude-standard` (honors `.gitignore`) and an explicit deny-list: `.env*`, `secrets.*`, `*.pem`, `*.key`, `credentials.*`, `master.key`, `.git/**`. Symlinks resolving outside `<target>` are rejected via `realpath`.
 - **Layer 2 — pre-write sentinel.** Rendered PRD passes through [redact-sentinel.sh](../incident/scripts/redact-sentinel.sh) immediately before disk write. Exit code 1 (matches found) MUST abort the write. No partial PRD ever lands on disk.
-- **Layer 3 — post-write verifier.** `gitleaks detect --source <prd-file> --no-git --report-format json` is the independent verifier. Any finding deletes the PRD and verifies the deletion succeeded. `gitleaks` is a Phase 0 preflight precondition — the skill refuses to start without it.
+- **Layer 3 — pre-write verifier.** `gitleaks detect --source <rendered-file> --no-git --report-format json` is the independent verifier, run over the exact bytes about to be written. A finding (exit 1) or a scan that does not complete (exit 2) means the PRD is not written, and any previous PRD at the output path is left untouched. A runnable `gitleaks` is a Phase 0 preflight precondition — the skill refuses to start when it is missing or cannot run.
 
 ## Preconditions
 
-- `gitleaks` binary on PATH (Layer 3 verifier).
+- A runnable `gitleaks` on PATH (Layer 3 verifier). CI pins 8.24.2; a version-manager shim with no version set is refused at preflight.
 - `<target>` contains a `package.json` at the root.
 - `<target>` is under git OR contains tracked files (`git ls-files` returns ≥1 entry).
 - Framework detected as Next.js (presence of `next.config.{js,ts,mjs}` alongside `package.json`).

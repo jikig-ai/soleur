@@ -14,10 +14,12 @@
 #
 # Exit codes:
 #   0 — PRD written successfully (or degraded-success path per FR8.1)
-#   1 — redaction sentinel halted the write (Layer 2 or Layer 3)
-#   2 — preflight failed (gitleaks missing, no package.json, empty walker,
-#       not Next.js, target unreadable, etc.)
-#   3 — IO error or write-deletion failure (loud operator message)
+#   1 — a redaction layer found secret-shaped content; the PRD was NOT
+#       written (Layer 2 sentinel, or a Layer 3 gitleaks finding)
+#   2 — preflight failed (gitleaks missing or not runnable, no package.json,
+#       empty walker, not Next.js, target unreadable, etc.), OR the Layer 3
+#       scan did not complete — the PRD was not written, never "found secrets"
+#   3 — IO error writing the PRD (loud operator message)
 #
 # Env knobs (test-only — never used in normal operation):
 #   CODE_TO_PRD_SKIP_LAYER_2=1 — bypass Layer 2 sentinel (AC5 RED test).
@@ -53,8 +55,26 @@ OUTPUT_OVERRIDE="${2:-}"
 # ---------------------------------------------------------------------------
 # Phase 0 preflight (FR6.2 + FR1.1)
 # ---------------------------------------------------------------------------
+GL_REMEDIATION="CI pins gitleaks 8.24.2 — install that version or pin it in your version manager (e.g. 'mise use gitleaks@8.24.2')."
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "code-to-prd: gitleaks not found on PATH; install via 'brew install gitleaks' or equivalent." >&2
+  echo "code-to-prd: gitleaks not found on PATH. ${GL_REMEDIATION}" >&2
+  echo "  Layer 3 verifier is mandatory (single-user incident threshold)." >&2
+  exit 2
+fi
+# RESOLVABLE IS NOT RUNNABLE (#8266): an unpinned version-manager shim satisfies
+# `command -v` and exits non-zero on every call. Probe by running it. The bound
+# uses timeout, then gtimeout, then none — stock macOS ships neither, and a
+# missing bound must not be misread as a broken gitleaks.
+GL_TIMEOUT=()
+if command -v timeout >/dev/null 2>&1; then GL_TIMEOUT=(timeout 10)
+elif command -v gtimeout >/dev/null 2>&1; then GL_TIMEOUT=(gtimeout 10); fi
+# `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: bash 3.2 (stock macOS /bin/bash) treats an
+# EMPTY array as unbound under `set -u`, which is exactly the no-timeout host.
+gl_probe_rc=0
+gl_probe_err="$( { ${GL_TIMEOUT[@]+"${GL_TIMEOUT[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
+if (( gl_probe_rc != 0 )); then
+  printf 'code-to-prd: gitleaks is on PATH but not runnable (rc=%s, %q). %s\n' \
+    "${gl_probe_rc}" "${gl_probe_err%%$'\n'*}" "${GL_REMEDIATION}" >&2
   echo "  Layer 3 verifier is mandatory (single-user incident threshold)." >&2
   exit 2
 fi
@@ -481,7 +501,7 @@ render_gap_analysis_placeholder() {
 }
 
 # ---------------------------------------------------------------------------
-# Orchestrator — render to a temp file, run Layer 2, write to disk, run Layer 3
+# Orchestrator — render to a temp file, run Layer 2, run Layer 3, write to disk
 # ---------------------------------------------------------------------------
 STAGING="$(mktemp -t code-to-prd.XXXXXX.md)"
 cleanup() {
@@ -538,14 +558,58 @@ if [[ "${CODE_TO_PRD_SKIP_LAYER_2:-0}" != "1" ]]; then
     echo "  Run \`bash ${REDACT_SENTINEL} <staging>\` against a debug copy to see the matched classes." >&2
     exit 1
   elif (( sentinel_rc == 2 )); then
-    echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2). Investigate before retrying." >&2
-    exit 1
+    # exit 2, NOT 1. The header reserves 1 for "a redaction layer FOUND secret-shaped
+    # content" and 2 for "the scan did not complete — never 'found secrets'". A failed
+    # sentinel INVOCATION is the second. Exiting 1 here told the operator their codebase
+    # contains secrets when the real fault was that Layer 2 never ran — the same
+    # could-not-measure-read-as-measured-bad conflation #8266 exists to remove, and the
+    # one Layer 3 below was just fixed for.
+    echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2) — the redaction scan did NOT complete, so this is not a finding about your content. Investigate the sentinel before retrying." >&2
+    exit 2
   elif (( sentinel_rc != 0 )); then
-    echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc}." >&2
-    exit 1
+    echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc} — the redaction scan did NOT complete; this is not a finding about your content." >&2
+    exit 2
   fi
 else
   echo "code-to-prd: WARNING — CODE_TO_PRD_SKIP_LAYER_2=1 is set; bypassing Layer 2 (test-only path)." >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Layer 3 — independent gitleaks verifier over the EXACT bytes about to be
+# written (fail-closed). It scans the staged file BEFORE the copy (#8266):
+# scanning after the copy meant a failed or positive scan had already
+# overwritten the operator's previous PRD by the time it deleted the new one.
+# The copy below is byte-for-byte, so the verified bytes are the written bytes.
+# ---------------------------------------------------------------------------
+GITLEAKS_OUT="$(mktemp -t code-to-prd-gl.XXXXXX.json)"
+GITLEAKS_ERR="$(mktemp -t code-to-prd-gl.XXXXXX.err)"
+trap 'cleanup; rm -f "${GITLEAKS_OUT}" "${GITLEAKS_ERR}"' EXIT INT TERM HUP
+
+gl_rc=0
+gitleaks detect \
+    --source "${STAGING}" \
+    --no-git \
+    --report-format json \
+    --report-path "${GITLEAKS_OUT}" \
+    --redact \
+    --exit-code 1 \
+    >/dev/null 2>"${GITLEAKS_ERR}" || gl_rc=$?
+
+if (( gl_rc != 0 )); then
+  # `--exit-code 1` sets the code gitleaks uses for FINDINGS; it does not make
+  # every non-zero exit a finding. A finding is rc 1 AND a report that names at
+  # least one rule — mktemp creates the report before gitleaks runs, so an empty
+  # body means the scan did not complete, never "found secrets".
+  if (( gl_rc == 1 )) && [[ -s "${GITLEAKS_OUT}" ]] && grep -q '"RuleID"' "${GITLEAKS_OUT}"; then
+    n_findings="$(grep -o '"RuleID"' "${GITLEAKS_OUT}" | wc -l | tr -d ' ')"
+    echo "code-to-prd: Layer 3 (gitleaks) reported ${n_findings} finding(s) in the rendered PRD; the PRD was not written." >&2
+    echo "  Remove the secret-shaped strings from the codebase, then re-run. The redacted report is not kept on disk." >&2
+    exit 1
+  fi
+  printf 'code-to-prd: Layer 3 secret scan did not complete (gitleaks rc=%s, %q); the PRD was not written.\n' \
+    "${gl_rc}" "$(head -1 "${GITLEAKS_ERR}" 2>/dev/null)" >&2
+  echo "  An unscanned PRD is never written (single-user incident threshold). ${GL_REMEDIATION}" >&2
+  exit 2
 fi
 
 # Loud-overwrite warning — Finding 6 (user-impact-reviewer): two distinct
@@ -562,32 +626,6 @@ fi
 if ! cp "${STAGING}" "${OUTPUT_PATH}"; then
   echo "code-to-prd: failed to write PRD to ${OUTPUT_PATH}" >&2
   exit 3
-fi
-
-# ---------------------------------------------------------------------------
-# Layer 3 — post-write gitleaks verifier (fail-closed)
-# ---------------------------------------------------------------------------
-GITLEAKS_OUT="$(mktemp -t code-to-prd-gl.XXXXXX.json)"
-trap 'cleanup; [[ -e "${GITLEAKS_OUT}" ]] && rm -f "${GITLEAKS_OUT}"' EXIT INT TERM HUP
-
-if ! gitleaks detect \
-    --source "${OUTPUT_PATH}" \
-    --no-git \
-    --report-format json \
-    --report-path "${GITLEAKS_OUT}" \
-    --redact \
-    --exit-code 1 \
-    >/dev/null 2>&1; then
-  # Non-zero exit from gitleaks = findings (per --exit-code 1). Delete + verify.
-  rm -f "${OUTPUT_PATH}"
-  if [[ -e "${OUTPUT_PATH}" ]]; then
-    echo "code-to-prd: CRITICAL — Layer 3 found secrets but delete failed at ${OUTPUT_PATH}" >&2
-    echo "  Manually remove this file BEFORE committing or sharing." >&2
-    exit 3
-  fi
-  echo "code-to-prd: Layer 3 (gitleaks) found secrets in the written PRD; file deleted." >&2
-  echo "  Report at: ${GITLEAKS_OUT}" >&2
-  exit 1
 fi
 
 echo "code-to-prd: wrote ${OUTPUT_PATH}"

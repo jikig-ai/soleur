@@ -205,6 +205,36 @@ assert_run() {
   fi
 }
 
+# run_decision with git config injected into the HOOK's environment only, as
+# GIT_CONFIG_COUNT/KEY_n/VALUE_n. Never exported suite-wide: the fixture repo is
+# built with plain git, and a suite-wide GIT_CONFIG_COUNT would also collide with
+# any helper that sets its own. Trailing args are KEY VALUE pairs.
+run_decision_cfg() {
+  local payload="$1" cwd="$2" root="$3"; shift 3
+  local -a cfg=()
+  local i=0
+  while (( $# >= 2 )); do
+    cfg+=("GIT_CONFIG_KEY_$i=$1" "GIT_CONFIG_VALUE_$i=$2"); i=$((i + 1)); shift 2
+  done
+  local out
+  out="$(cd "$cwd" 2>/dev/null && printf '%s' "$payload" \
+    | env "GIT_CONFIG_COUNT=$i" "${cfg[@]}" \
+        INCIDENTS_REPO_ROOT="$root" FREEZE_LOCK_REPO_ROOT="$root" bash "$HOOK" 2>/dev/null)"
+  if [[ -z "${out//[[:space:]]/}" ]]; then echo "<none>"; return; fi
+  echo "$out" | jq -r '.hookSpecificOutput.permissionDecision // "<none>"' 2>/dev/null || echo "<jq-fail>"
+}
+
+assert_run_cfg() {  # label want payload cwd root KEY VALUE [KEY VALUE...]
+  local label="$1" want="$2" payload="$3" cwd="$4" root="$5"; shift 5
+  TOTAL=$((TOTAL + 1))
+  local got; got="$(run_decision_cfg "$payload" "$cwd" "$root" "$@")"
+  if [[ "$got" == "$want" ]]; then
+    PASS=$((PASS + 1)); echo "PASS: $label → $got"
+  else
+    FAIL=$((FAIL + 1)); echo "FAIL: $label"; echo "  want: $want"; echo "  got:  $got"
+  fi
+}
+
 # --- Delete guard: protected targets deny; non-protected allow -------------
 DG="$(mktemp -d)"; git init -q "$DG/repo"
 mkdir -p "$DG/other/.git" "$DG/scratch-abc123"
@@ -461,6 +491,58 @@ cm_stage "$MK_LT kb-index: merge driver could not resolve (driver exited 3)
 - [Some Entry](project/x.md)" "knowledge-base/INDEX.md"
 assert_run "conflict: lone kb-index sentinel in INDEX.md denies" "deny" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# USER GIT CONFIG must not change the verdict (#8263). The awk keys on the
+# `+++ b/` header, and a developer's global config can rewrite it:
+# diff.mnemonicprefix=true prints `+++ i/…`, diff.noprefix=true prints `+++ …`,
+# and diff.relative=true from a subdirectory drops INDEX.md from the diff
+# entirely. Each silently disarmed the sentinel arm on a developer host while CI
+# (default config) stayed green. One config per row, so a pin that covers one
+# config and not another is visible.
+#
+# HARNESS CHECK first: prove the injected config actually reaches git in this
+# fixture, or every row below would silently test default config.
+# Captured, then matched from a herestring: `git diff | grep -q` under pipefail can
+# SIGPIPE git on an early match and read as NO match.
+_cm_hdr=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
+  git -C "$CM/repo" diff --cached --no-color --no-ext-diff)
+if ! grep -q '^+++ i/' <<<"$_cm_hdr"; then
+  echo "GUARD FAIL: injected GIT_CONFIG_* did not change the fixture's diff header — the config rows below would test nothing." >&2
+  exit 2
+fi
+# SECOND HARNESS CHECK — the one above proves git honours the config, NOT that
+# the config reaches the HOOK. It injects into a direct `git -C … diff`, which is
+# a sibling command, not the command under test: deleting the `env … "${cfg[@]}"`
+# from run_decision_cfg leaves it green and every row below silently reverts to
+# default config (measured: suite stayed 127/127 with the injection removed).
+# The rows below assert the default-config verdict, so they cannot notice either.
+# This check drives the REAL invocation path and requires the verdict to MOVE.
+# A deliberately malformed count (declared 1, no keys) makes git fail inside the
+# hook; what matters is only that the answer differs from the uninjected one.
+_cm_stub="$CM/echo-cfg-hook.sh"
+cat > "$_cm_stub" <<'STUB'
+#!/usr/bin/env bash
+# Reports what GIT_CONFIG_* the CALLER actually put in this process's env.
+cat >/dev/null
+printf '{"hookSpecificOutput":{"permissionDecision":"count=%s key0=%s"}}\n' \
+  "${GIT_CONFIG_COUNT:-unset}" "${GIT_CONFIG_KEY_0:-unset}"
+STUB
+chmod +x "$_cm_stub"
+_cm_saved_hook="$HOOK"
+HOOK="$_cm_stub"
+_cm_seen=$(run_decision_cfg "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.noprefix true)
+HOOK="$_cm_saved_hook"
+if [[ "$_cm_seen" != "count=1 key0=diff.noprefix" ]]; then
+  echo "GUARD FAIL: run_decision_cfg did not deliver the injected config to the process it runs (saw '$_cm_seen', want 'count=1 key0=diff.noprefix'); every config row below is a duplicate of its default-config sibling." >&2
+  exit 2
+fi
+assert_run_cfg "conflict: lone kb-index sentinel denies under diff.mnemonicprefix=true" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.mnemonicprefix true
+assert_run_cfg "conflict: lone kb-index sentinel denies under diff.noprefix=true" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.noprefix true
+mkdir -p "$CM/repo/sub"
+assert_run_cfg "conflict: lone kb-index sentinel denies under diff.relative=true from a subdirectory" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo/sub" "$CM/repo" diff.relative true
 git -C "$CM/repo" rm -q --cached knowledge-base/INDEX.md
 rm -f "$CM/repo/knowledge-base/INDEX.md"
 
@@ -481,13 +563,20 @@ assert_run "conflict: lone seven-equals line allows" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
 
 # PER-FILE counting: two types split across two files is NOT a conflict.
-# A global counter would deny this pair.
-cm_stage "Doc A quotes $MK_LT once." "a.md"
+# A global counter would deny this pair. The opener sits at COLUMN 0: an earlier
+# revision put it mid-line ("Doc A quotes <marker> once."), which the `^\+<{7}`
+# anchor never matches, so the per-file reset was never exercised at all.
+cm_stage "$MK_LT ours
+Doc A quotes an opener." "a.md"
 cm_stage "Doc B has a rule:
 $MK_EQ
 end" "b.md"
 assert_run "conflict: two types split across two files allows" "<none>" \
   "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+# Under diff.noprefix the `+++ b/` header never matches, the per-file reset never
+# runs, and counting goes global — an over-fire that denies a clean pair (#8263).
+assert_run_cfg "conflict: two types split across two files allows under diff.noprefix=true" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo" diff.noprefix true
 git -C "$CM/repo" rm -q --cached a.md b.md; rm -f "$CM/repo/a.md" "$CM/repo/b.md"
 
 # The gate must also cover `git merge --continue`, the command in the real bug.
@@ -982,7 +1071,11 @@ fi
 # strip_heredocs/strip_command_bodies rows) = 119. Stated as the sum so a
 # sibling PR that adds a row makes this stale LOUDLY (the floor trips) rather
 # than silently.
-MIN_ASSERTIONS=$((106 + 17))
+# Floor tracks the CURRENT count (127), not the pre-PR one. It sat at 106+17=123
+# while the suite ran 127, so the four config rows this PR adds had zero cover:
+# deleting all four left 123/123 green, exactly at the floor. Slack in a floor is
+# attack budget, not padding — bump it in the same commit that adds rows.
+MIN_ASSERTIONS=127
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2
