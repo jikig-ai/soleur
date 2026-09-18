@@ -160,9 +160,19 @@ Declared gaps, each with an issue:
   `subagent_type`) that carry no name through a sigil — 82 lines in 29 docs. No
   canonical word exists to allowlist against; the adapters translate the noun
   themselves.
-- **NG-P** (#8317, P1): other agent-read docs — agent bodies (35 sites / 15
-  docs) and `skills/*/references/**` (44 / 19) — are one glob line each.
-  Human-read surfaces stay out by design (§4).
+- **NG-P** (#8317, P1): other agent-read docs — agent bodies and
+  `skills/*/references/**`. Human-read surfaces stay out by design (§4). An
+  earlier draft of this ADR called each surface "one glob line"; that is wrong
+  and is corrected here, because #8317 will be picked up on the strength of it.
+  `globToRegex` has no `**` support, two `regionPolicyForPath` fixtures and the
+  tree test's "no nested SKILL.md" assertion currently PIN those paths out of
+  the population, and — the blocker — every agent body opens with its own leaf
+  as a `name:` frontmatter value (69 lines across the 67 registry agents). R6b
+  classifies a bare leaf at a prose boundary NONCANONICAL, `frontmatter.md`
+  pins "frontmatter is not exempt", and `discoverAgentEntries` reads that value
+  into the committed manifest, so it cannot be rewritten to the registry id.
+  NG-P needs a frontmatter-value carve-out whose absence is, today, an asserted
+  property.
 - The dual-voice `**Grok:** Read plugins/soleur/skills/<x>/SKILL.md in this
   process` lines (20 in 7 docs) are PATH by design — a file path resolves on
   every harness, and `workflow-fidelity.test.ts` requires them.
@@ -171,6 +181,14 @@ Declared gaps, each with an issue:
 - "Canonical resolves on every harness" is verified on Grok (`grok-fidelity`)
   and Claude; Codex and Devin are declared uncovered (#8306). The gate's promise
   is "no harness-specific form in agent-read prose", not "resolves everywhere".
+
+**One live agent is outside the index by construction.** `discoverAgentPaths()`
+excludes `references/`, so `soleur:operations:references:service-deep-links` —
+a spawnable agent type — is one of 68 agent files and not one of the 67 registry
+ids. A doc naming that leaf is invisible to the classifier. This is the right
+boundary rather than a hole: the same exclusion governs `.grok/agents/` stub
+generation, so that agent has no Grok spawn key and naming it in any form is
+dead on Grok regardless of what this gate says.
 
 Honest limit: moving go.md's region markers to enclose a dispatch line is
 visible only in diff review — one file, one region kind, markers in the diff.

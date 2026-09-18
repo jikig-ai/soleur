@@ -135,15 +135,21 @@ refuted record in the plan). ADR-226 records the decision.
 
 Plan v3 AC1–AC17 are the contract; the load-bearing ones restated:
 
-- [ ] AC1 `--report` on the pre-remediation tree prints `1029 non-canonical sites in 62 docs`
-      with the attribution split (bare-leaf 488 / grok 339 / claude-devin 187 / claude-agent 8 /
-      claude-leaf 3 / codex 2 / grok-stem 1 / unrecognised 1) and 20 UNKNOWN-NS.
+- [x] AC1 The pre-remediation census is the RECORD in `census-baseline.md`, not a figure to
+      re-derive: `1029 non-canonical sites in 62 docs` (bare-leaf 488 / grok 339 / claude-devin
+      187 / claude-agent 8 / claude-leaf 3 / codex 2 / grok-stem 1 / unrecognised 1), 20
+      UNKNOWN-NS, measured against base `f5ad46390`. Re-running it against a LATER `origin/main`
+      does not reproduce that number and is not expected to — main advances under it (measured
+      2026-09-18: 1028 / 62 / claude-devin 186, one site of drift). An earlier revision of this
+      AC asked for re-derivation, which made it unsatisfiable by construction the moment a
+      sibling PR merged.
 - [ ] AC2 Post-remediation `--report` prints 0 sites; UNKNOWN-NS multiset (path, token) diffs
       empty against AC1 apart from the plan-prescribed `soleur:<name>` metavariables; `--fix`
       changes nothing.
 - [ ] AC3 The `--fix` commit is reproducible from its parent.
 - [ ] AC4 Fixture suite ≥ 30 tests, every fixture asserts verdict and message; both suites GREEN.
-- [ ] AC5 N1–N13 and H1–H5 observed as stated; recorded in the PR body.
+- [ ] AC5 N1–N13 and H1–H5 observed as stated; recorded in the PR body and in
+      `guard3-mutation-matrix.txt`.
 - [x] AC6 Independent spot-check greps: go.md's 8 hits all sit inside the three `harness-forms`
       regions (lines 130-157, 191-195, 211-213); `help.md` is excluded by path; the 5 skill hits are
       the prose compounds `/work-time` and `/work-start`, which the classifier reports as no

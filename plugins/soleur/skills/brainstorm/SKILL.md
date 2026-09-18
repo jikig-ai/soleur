@@ -24,6 +24,10 @@ You are the **exploration orchestrator**. Whether entered via `soleur:go` (defau
 See `plugins/soleur/lib/workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`) and `go.md` Step 2.1 (`go-post-route` block).
 <!-- brainstorm-anti-bypass-protocol:end -->
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 # Brainstorm a Feature or Improvement
 
 **Note: The current year is 2026.** Use this when dating brainstorm documents.

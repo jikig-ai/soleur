@@ -102,7 +102,11 @@ describe("harness-parity fixtures — index and policy plumbing", () => {
   });
 
   test("help.md is excluded by path with a stated reason", () => {
-    expect(EXCLUDED_BY_PATH.get("plugins/soleur/commands/help.md")).toMatch(/whole-file exemption/);
+    const reason = EXCLUDED_BY_PATH.get("plugins/soleur/commands/help.md");
+    expect(reason).toMatch(/whole-file exemption/);
+    // The reason carries a measurement, so it is pinned as one: 11 marker pairs / 19 lines / 34
+    // sites, re-derivable by running classifyDoc over help.md under the command policy.
+    expect(reason).toMatch(/11 marker pairs \(22 lines\) around 19 content lines carrying 34 sites/);
   });
 
   test("BOUNDARY admits no invocation sigil", () => {
@@ -150,6 +154,12 @@ describe("harness-parity fixtures — must-PASS (permitted contexts)", () => {
     expect(verdicts(doc, "PATH").map((s) => s.raw).sort()).toEqual(
       ["cpo", "plan", "plan", "plan", "soleur-product-cpo"].sort(),
     );
+  });
+
+  test("path-home-relative.md: `~/` is a path component, not a sigil (PATH_PREV)", () => {
+    const doc = fixture("skills", "path-home-relative.md");
+    expect(nonc(doc)).toEqual([]);
+    expect(verdicts(doc, "PATH").map((s) => s.raw).sort()).toEqual(["plan", "work"]);
   });
 
   test("path-compound.md: not a reference at all (R9 path exclusion — N5f)", () => {
@@ -366,6 +376,18 @@ describe("harness-parity fixtures — fixDoc and census", () => {
     expect(once).toContain("Then soleur:plan and `soleur:review` and (soleur:ship: done).");
   });
 
+  test("fix-refuses-unsound.md: fixDoc never emits a rewrite that classifies non-canonical", () => {
+    const before = readFileSync(resolve(FIXTURE_ROOT, "skills/fix-refuses-unsound.md"), "utf-8");
+    const once = fixDoc(before, index);
+    // `~/ship` is a PATH and needs no rewrite; `!/plan` and `%/plan` are sigils the splice
+    // cannot repair (it consumes the preceding character), so fixDoc leaves them for the hand
+    // edit rather than emitting `!soleur:plan`, which no further --fix pass can undo.
+    expect(once).toBe(before);
+    const after = classifyDoc(once, index, "skill", "skills/fix-refuses-unsound.md");
+    expect(nonc(after).map((h) => `${h.before}${h.raw}`)).toEqual(["/plan", "/plan"]);
+    expect(verdicts(after, "PATH").map((s) => s.raw)).toEqual(["ship"]);
+  });
+
   test("census over an empty population throws (N4)", () => {
     expect(() => census([], index)).toThrow("harness-parity: 0 docs examined");
   });
@@ -411,6 +433,7 @@ describe("harness-parity fixtures — fixDoc and census", () => {
         "skills/claude-devin-slash.md",
         "skills/codex-dollar.md",
         "skills/fenced.md",
+        "skills/fix-refuses-unsound.md",
         "skills/fix-roundtrip.md",
         "skills/frontmatter.md",
         "skills/grok-slash.md",

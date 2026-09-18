@@ -11,6 +11,10 @@ description: "This skill should be used when managing community presence across 
 
 Manage community presence across Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News. Detects enabled platforms from environment variables (or always-on for GitHub and HN) and delegates data collection to platform-specific scripts.
 
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 ## Arguments
 
 `$ARGUMENTS` is parsed for a sub-command and optional flags:

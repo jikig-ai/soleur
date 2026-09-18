@@ -83,7 +83,17 @@ export const INDEX_GLOBS = {
 
 /**
  * The docs examined. `regionPolicy` is derived from WHICH glob matched, so one constant carries
- * both membership and policy; widening the population is one line (NG-P, #8317).
+ * both membership and policy.
+ *
+ * Widening to the NG-P surface (#8317 — agent bodies, `skills/*\/references/**`) is NOT one line,
+ * despite an earlier revision of this comment and of ADR-226 saying so. It needs four things:
+ * `**` support in `globToRegex` (which maps `*` to `[^/]+` and never crosses `/`, so a nested
+ * path resolves to no policy while `git ls-files` would still enumerate it); the two
+ * `regionPolicyForPath` fixtures that currently PIN those paths to `undefined`; the tree test's
+ * "no nested SKILL.md" assertion; and — the real blocker — a frontmatter carve-out, because
+ * every agent body opens with its own leaf as a `name:` value (69 lines across the 67 registry
+ * agents), which R6b classifies NONCANONICAL and which `discoverAgentEntries` reads into the
+ * committed manifest, so it cannot be rewritten to the registry id.
  */
 export const POPULATION_GLOBS: readonly PopulationGlob[] = [
   { pathspec: ":(glob)plugins/soleur/skills/*/SKILL.md", regionPolicy: "skill" },
@@ -97,17 +107,24 @@ export const POPULATION_GLOBS: readonly PopulationGlob[] = [
 export const EXCLUDED_BY_PATH: ReadonlyMap<string, string> = new Map([
   [
     "plugins/soleur/commands/help.md",
-    "its subject is the per-harness typed forms; 117 of 155 lines would be region-exempt, which is a whole-file exemption wearing markers (DHH #5)",
+    "its subject is the per-harness typed forms an operator types; measured, exempting it by region instead needs 11 marker pairs (22 lines) around 19 content lines carrying 34 sites, which is a whole-file exemption wearing markers (DHH #5)",
   ],
 ]);
 
 /**
- * BOUNDARY — the allowlist of characters permitted immediately before a reference. Each member
- * has a measured prose reason; no harness uses any of them as an invocation sigil (every
+ * BOUNDARY — the allowlist of characters permitted immediately before a reference. No harness
+ * uses any of them as an invocation sigil (every
  * `formatSkillInvocation` branch and `formatAgentSpawn` read). Anything NOT in the set — `/`,
  * `$`, `@`, `!`, `%`, `~`, `\`, and any character nobody has thought of — is a sigil. Authors
  * who collide with the set (a shell `$work`, a glob `"$d"/rclone-*`) brace or rename the
  * identifier; BOUNDARY is never widened to admit a sigil.
+ *
+ * Eighteen members are load-bearing on the tree today — deleting one produces false positives,
+ * from 3778 for a space down to 1 for `#`. Five (`\t`, `;`, `&`, em dash, en dash) currently
+ * prevent zero, and are kept as ANTICIPATED rather than measured: each is ordinary prose
+ * punctuation, and a missing member costs a false RED on an unrelated PR while a spurious one
+ * costs nothing unless a harness adopts it as a sigil (§Consequences of ADR-226 makes re-reading
+ * this set an obligation when a fifth harness lands). Do not read the whole set as measured.
  */
 export const BOUNDARY: ReadonlySet<string> = new Set([
   " ", // whitespace — prose
@@ -138,11 +155,16 @@ export const BOUNDARY: ReadonlySet<string> = new Set([
 /**
  * The path class — the SECOND verdict-deciding allowlist. `pathctx` holds when the character
  * before the token is `/` and the character before THAT is a path character, so `skills/plan`,
- * `./plan`, `https://a/plan` and `../plan` are path components while `` `/plan` `` and `(/plan)`
- * are grok slashes. Its own fixture (path.md) and mutation row (N5b — add a backtick here and
- * grok-slash.md goes PATH).
+ * `./plan`, `https://a/plan`, `../plan` and `~/plan` are path components while `` `/plan` `` and
+ * `(/plan)` are grok slashes. Its own fixture (path.md) and mutation row (N5b — add a backtick
+ * here and grok-slash.md goes PATH).
+ *
+ * `~` is in the class because a home-relative path is an ordinary doc idiom and excluding it was
+ * not merely a false positive: `fixDoc` rewrote `~/plan` to `~soleur:plan`, destroying the path
+ * AND converging on a state the classifier calls NONCANONICAL forever (the `~` is not a boundary,
+ * so the result is R1). `fixDoc`'s post-condition below is the general guard for that class.
  */
-export const PATH_PREV = /[A-Za-z0-9_./]/;
+export const PATH_PREV = /[A-Za-z0-9_./~]/;
 
 /**
  * The token class: a maximal run of `[A-Za-z0-9_:-]`. `:` so `soleur:product:cpo` is one token;
@@ -304,7 +326,11 @@ export function readPopulation(globs: readonly PopulationGlob[] = POPULATION_GLO
     for (const path of gitLsFiles([g.pathspec])) {
       if (seen.has(path) || EXCLUDED_BY_PATH.has(path)) continue;
       seen.add(path);
-      docs.push({ path, text: readFileSync(resolve(REPO_ROOT, path), "utf-8"), regionPolicy: g.regionPolicy });
+      // Resolve the policy through the same exported function the fixtures use, rather than
+      // reading `g.regionPolicy` directly: otherwise the fixture suite exercises a parallel
+      // implementation and production never runs the one under test.
+      const regionPolicy = regionPolicyForPath(path, globs) ?? g.regionPolicy;
+      docs.push({ path, text: readFileSync(resolve(REPO_ROOT, path), "utf-8"), regionPolicy });
     }
   }
   return docs;
@@ -524,6 +550,19 @@ export function fixDoc(text: string, index: Index, regionPolicy: RegionPolicy = 
         else if (c.shape === "agent-mention" && before === "@" && raw.startsWith("agent-soleur:")) replacement = raw.slice("agent-".length);
         else if (c.shape === "sigil-skill" && before === "/") replacement = `soleur:${raw}`;
         if (replacement === undefined) continue;
+        // Post-condition: never emit a rewrite that does not itself classify clean. `fixDoc`
+        // splices at `s - 1`, i.e. it CONSUMES the character before the token, so a rewrite is
+        // only sound when that character was the sigil. Where it was not (a path character the
+        // path class does not cover, a novel prefix), the splice destroys a real byte and the
+        // result is non-canonical in a shape `--fix` cannot repair — so leave the site for the
+        // hand edit the census message already prescribes.
+        // The splice consumes the character at `s - 1`, so after it the token's predecessor is
+        // `prev2` and ITS predecessor is `line[s - 3]` — classify against those, not against the
+        // sigil that is about to disappear.
+        const newBefore = s > 1 ? prev2 : "\n";
+        const newPrev2 = s > 2 ? line[s - 3] : "";
+        const after = classifyToken(replacement, newBefore, newPrev2, index);
+        if (after !== undefined && after.verdict !== "CANONICAL") continue;
         out += line.slice(last, s - 1) + replacement;
         last = s + raw.length;
       }

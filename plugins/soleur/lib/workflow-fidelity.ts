@@ -203,10 +203,13 @@ export function workflowFidelityInstructions(harness: Harness): string {
 
 /**
  * Strengthen skill invocation text for pipeline and handoff skills. Every skill named in the
- * suffix is rendered in the ACTIVE harness's form — the grok arm reads exactly as before, and
+ * suffix is rendered in the ACTIVE harness's form. `harness` is REQUIRED, not defaulted: a
+ * default of "grok" would reproduce the pre-ADR-226 strings (`/postmerge`, `/ship`) for any
+ * caller that forgot it — the exact defect this function was changed to remove — and would do
+ * so silently on three of four harnesses. A required parameter makes forgetting a type error — the grok arm reads exactly as before, and
  * `invokeSkill("ship")` on Codex names `$soleur:postmerge`, never `/postmerge` (arch F3).
  */
-export function pipelineInvocationSuffix(skill: string, harness: Harness = "grok"): string {
+export function pipelineInvocationSuffix(skill: string, harness: Harness): string {
   const ref = (s: string): string => formatSkillRef(s, harness);
   if (skill === "one-shot") {
     return (

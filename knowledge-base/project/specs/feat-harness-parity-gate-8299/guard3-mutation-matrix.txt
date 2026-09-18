@@ -20,3 +20,8 @@ N13: KILLED rc=1 — postmerge
 H1: KILLED rc=1 — toEqual
 ROWS=19 KILLED=19
 PRISTINE: all restored
+N3: KILLED rc=1 — zz-fixture/SKILL.md:3: /plan — grok; write soleur:plan
+H2: PASS — 5 permitted-input fixtures, 0 non-canonical
+H3: PASS — 2 exempt-region fixtures, 0 red
+H4: PASS — second --fix changes nothing on 30/30 fixtures
+H5: PASS — 30 fixtures examined, 22 red, matches the suite's own expected set (22); 40 sites
