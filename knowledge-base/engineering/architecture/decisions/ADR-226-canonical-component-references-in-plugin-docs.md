@@ -41,7 +41,7 @@ following that prose names a form their harness does not have, hits nothing,
 and has no signal that anything was wrong (#8299).
 
 Two designs were built and refuted before this one (plan v1, v2 in
-`knowledge-base/project/plans/2026-09-18-feat-harness-parity-census-plan.md`).
+`knowledge-base/project/plans/archive/20260918-185350-2026-09-18-feat-harness-parity-census-plan.md`).
 v1 asserted a marker was *present* — it certified how an agent arrived, not what
 the doc told it to invoke next. v2 asserted a *blocklist* of harness tokens was
 absent — and omitted the Grok branch of `formatSkillInvocation`, defined eight
@@ -250,6 +250,6 @@ application to doc prose.
 - `bun plugins/soleur/scripts/harness-parity-census.ts --report` — `0 sites`
   on the remediated tree; on the pre-remediation tree it printed the 1029 / 62
   figure above (recorded in
-  `knowledge-base/project/specs/feat-harness-parity-gate-8299/census-baseline.md`).
+  `knowledge-base/project/specs/archive/20260918-185350-feat-harness-parity-gate-8299/census-baseline.md`).
 - Guard 3 mutation matrix N1–N13 and harness rows H1–H5 (plan v3 §Guard
   Contract), each run against a pristine copy and recorded in PR #8300.

@@ -172,7 +172,7 @@ guard is measuring its own bookkeeping.
 
 ## Related
 
-- `knowledge-base/project/plans/2026-09-18-feat-harness-parity-census-plan.md` — v1 retained as the
+- `knowledge-base/project/plans/archive/20260918-185350-2026-09-18-feat-harness-parity-census-plan.md` — v1 retained as the
   review record with all 30 findings; v2 is the plan of record
 - `knowledge-base/project/learnings/2026-09-18-a-census-cell-naming-two-markers-reports-the-union-as-each-member.md`
   — the brainstorm-phase sibling
