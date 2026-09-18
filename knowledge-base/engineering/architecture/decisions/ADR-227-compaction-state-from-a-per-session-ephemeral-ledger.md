@@ -369,3 +369,53 @@ higher authority through `CLAUDE.md` / `AGENTS.md`, loaded unconditionally with 
 guard of any kind. Independently of the guard, every free-text value interpolated
 into the directive is now shape-checked — a git filename may contain newlines and
 `jq --arg` preserves them faithfully inside the string the model reads.
+
+## Amendment — 2026-09-18 (ship): the measured per-invocation cost, and why it is not optimized here
+
+This hook is bound to `SessionStart`, so it runs once in every session in every
+repository the operator opens — including every repository where the scope guard
+declines. That makes its cost a property worth a number rather than an intuition.
+
+Measured on this worktree, 40 invocations per row, against a `bash -c ':'` floor
+of 1.7 ms:
+
+| Hook | Path | ms/invocation |
+|---|---|---|
+| `compaction-state.sh` | `SessionStart`, out of scope (guard declines) | 10.7 |
+| `compaction-state.sh` | `SessionStart:startup`, in scope | 24.6 |
+| `compaction-state.sh` | `SessionStart:compact`, in scope | 27.3 |
+| `welcome-hook.sh` | `SessionStart`, in scope | 11.0 |
+| `codex-session-start.sh` | `SessionStart` | 2.3 |
+| `devin-session-start.sh` | `SessionStart` | 2.1 |
+
+**Where the out-of-scope 9 ms goes.** `jget()` spawns a separate `jq` per field,
+and two fields are read before the guard can decline — `hook_event_name` and
+`cwd`. Two process spawns plus two pipes is the whole of it; the scope walk itself
+is builtin `[[ -d ]]` tests with a 40-iteration ceiling and costs almost nothing.
+The in-scope path adds a third `jq` (`session_id`), two `mkdir`, the reaper
+`find`, and the `git` calls behind the directive's branch field.
+
+**The optimization exists and is deliberately not taken.** Collapsing the three
+`jq` spawns into one call emitting every field at once would recover roughly 7 ms.
+It was declined at the merge boundary on three grounds, in order of weight:
+
+1. `jget()` is the function 150 assertions are written against, including the
+   no-`jq` `grep`/`sed` fallback arm. Restructuring it is a real change to the
+   most-pinned code path in the diff, and every row would need re-proving by
+   mutation — work that belongs in its own change, not in the last commit before
+   a merge.
+2. The absolute figure does not earn it. 10.7 ms once per session start sits
+   inside the noise of a session that also injects a ~42 kB rule corpus, and it is
+   the same order of magnitude as `welcome-hook.sh`, which has shipped at 11.0 ms
+   without complaint. The hook is the most expensive of the four only because
+   three of the four are near-trivial.
+3. Nothing here scales. The walk is ceiling-bounded, the reaper is `-maxdepth 1`
+   and name-scoped, and the ledger holds one line per compaction — so the cost is
+   flat in repository size, session length and compaction count. There is no
+   growth curve to get ahead of.
+
+Recorded rather than filed: this is a cost characteristic with a known remedy, not
+a defect, and filing it would net-grow the backlog for a fixed 7 ms. Re-measure and
+revisit if `SessionStart` ever gains a latency budget, or if a future edit adds a
+field read ahead of the scope guard — that is the change that would make the spawn
+count matter, because it would pay for itself in every repository that declines.
