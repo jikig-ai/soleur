@@ -17,7 +17,14 @@
 // there was no row 10 at the time; and rows 1, 2, 4, 5 and 9 are bypasses that
 // went unlisted. Re-derived by replaying the old filter over each fixture.
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -341,5 +348,78 @@ describe("Guard 2 — diff path derivation (#8274)", () => {
     expect((diff.match(/^@@ /gm) ?? []).length).toBe(2);
     const verdict = await checkDiffPaths(diff, repoRoot);
     expect(verdict.ok).toBe(true);
+  });
+});
+
+/**
+ * Guard 2b — the CHOKEPOINT census the plan specified and the suite never had.
+ *
+ * Every row above drives `checkDiffPaths` in isolation. That pins the
+ * FUNCTION and says nothing about whether anything CALLS it: deleting the
+ * `if (!pathVerdict.ok)` block from the handler left all of Guard 2 green.
+ * Two covered endpoints, one uncovered wire.
+ */
+describe("Guard 2b — every apply site is behind the derivation", () => {
+  const SRC = join(
+    __dirname, "..", "..", "..", "server", "inngest", "functions", "cron-compound-promote.ts",
+  );
+  /** Comment-strip: this file documents the constructs it forbids. */
+  function code(): string {
+    return readFileSync(SRC, "utf-8")
+      .split("\n")
+      .map((l: string) => l.replace(/^\s*\/\/.*$/, "").replace(/^\s*\*.*$/, ""))
+      .join("\n");
+  }
+
+  it("census: every git `apply` argv sits inside the derivation or the applier", () => {
+    const lines = code().split("\n");
+    const applySites = lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => /spawnGit(Capture)?\(\[\s*"apply"/.test(l));
+    // Anti-vacuity: a census that finds nothing must FAIL, not read clean.
+    expect(applySites.length).toBeGreaterThanOrEqual(3);
+
+    const src = code();
+    const derivStart = src.indexOf("export async function checkDiffPaths");
+    const applierStart = src.indexOf("async function applyDiffToWorkspace");
+    expect(derivStart).toBeGreaterThan(-1);
+    expect(applierStart).toBeGreaterThan(-1);
+    const lineOf = (idx: number) => src.slice(0, idx).split("\n").length - 1;
+    const derivL = lineOf(derivStart);
+    const applierL = lineOf(applierStart);
+    // Each function's body ends at the next top-level `}` — sufficient here
+    // because both are top-level declarations with no sibling between them.
+    const endOf = (from: number) => {
+      for (let i = from + 1; i < lines.length; i++) if (lines[i] === "}") return i;
+      return lines.length;
+    };
+    const inDeriv = (n: number) => n > derivL && n < endOf(derivL);
+    const inApplier = (n: number) => n > applierL && n < endOf(applierL);
+
+    const unclassified = applySites
+      .filter(({ i }) => !inDeriv(i) && !inApplier(i))
+      .map(({ l, i }) => `L${i + 1}: ${l.trim()}`);
+    // An UNCLASSIFIED bucket, not a count: a new apply site added anywhere
+    // else is the thing this census exists to catch.
+    expect(unclassified).toEqual([]);
+  });
+
+  it("the handler calls checkDiffPaths BEFORE applyDiffToWorkspace, and refuses on !ok", () => {
+    const src = code();
+    const check = src.indexOf("await checkDiffPaths(cluster.proposed_diff_unified");
+    const apply = src.indexOf("await applyDiffToWorkspace(cluster.proposed_diff_unified");
+    expect(check).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(apply);
+    // Ordering alone is spelling: the refusal must also be WIRED. Anchor on
+    // the early-return a comment cannot produce.
+    const between = src.slice(check, apply);
+    expect(between).toMatch(/if \(!pathVerdict\.ok\)/);
+    // The reason is bound to a local (`const reason = \`diff-${…}\``), so anchor
+    // on the refusal RETURN inside the !ok block rather than on an inline
+    // template literal the code does not have. Verified against the source.
+    const block = between.slice(between.indexOf("if (!pathVerdict.ok)"));
+    expect(block).toMatch(/return \{ kind: "refused", reason/);
+    expect(block.indexOf("return { kind:")).toBeGreaterThan(-1);
   });
 });

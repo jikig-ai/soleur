@@ -715,8 +715,15 @@ async function applyDiffToWorkspace(
       cwd: repoRoot,
     });
     if (check.exitCode !== 0) return false;
-    await spawnGit(["apply", diffFile], { cwd: repoRoot });
-    return true;
+    // Read the REAL apply's exit code. It used to be discarded and `true`
+    // returned unconditionally, so an apply that failed after a passing
+    // `--check` (ENOSPC, EACCES, a signal) left `applied` true: the run went
+    // on to append a promotion-log row asserting a promotion whose diff never
+    // landed, committed that row alone, and counted the cluster as opened.
+    // A success path that reports ok while doing nothing is the defect class
+    // this whole branch exists to close.
+    const applied = await spawnGit(["apply", diffFile], { cwd: repoRoot });
+    return applied.exitCode === 0;
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
