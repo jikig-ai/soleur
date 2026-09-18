@@ -32,7 +32,7 @@ enumerated shapes only; the body also had a human read for a hostname or usernam
 
 | # | Section | Destination | Status |
 |---|---|---|---|
-| 1 | What the thread lacks: the two identity fields side by side, the controlled two-arm reading, and the projection property of `plugin list --json` | comment on **93108** | _pending_ — operator-gated |
+| 1 | What the thread lacks: the two identity fields side by side, the controlled two-arm reading, and the projection property of `plugin list --json` | comment on **93108** | **posted** 2026-09-18, operator-approved in session |
 
 ---
 
@@ -57,9 +57,27 @@ those reports rather than asserted as this session's own reading.
 
 | Section | Destination | URL | Scrub re-check |
 |---|---|---|---|
-| §1 (`upstream-reports/93108-comment.md`) | 93108 | _pending_ | _pending_ |
+| §1 (`upstream-reports/93108-comment.md`) | 93108 | [comment 5733400814](https://github.com/anthropics/claude-code/issues/93108#issuecomment-5733400814) | PASS — 0 exposures, 2981 bytes as stored |
 
-The posting is operator-gated: composing the body is in scope for this change; sending it to a third
-party's public repository is not, until the operator has read the body above and said so. When it is
-sent, replace both `_pending_` cells (URL, then `PASS — 0 exposures, <N> bytes as stored` from the
-re-scrub) in the same edit.
+**Posted 2026-09-18**, with the operator's explicit approval, from the operator's GitHub account.
+The body was fetched back with `gh api` and re-scrubbed **as upstream stores it** — the posted body
+is the artefact that leaks and the local copy is not proof about it. 2981 bytes as stored against
+2980 on disk; GitHub appends a trailing newline.
+
+Every cross-reference in the body was verified against the live thread before it was sent: the
+`langsmith-skills` case is in the issue body, the `cloudflare` case is in wormeyman's comment of
+2026-09-10, and the `--force` fallback is option 2 of the report's own "What Should Happen". The
+report's own caveat that `gitCommitSha` is unreliable (#86194) is scoped to `url`-source entries and
+that issue is CLOSED, so the comment scopes it explicitly rather than proposing a fix resting on a
+field the thread had already questioned.
+
+**The empty-slot marker is deliberately not written out in this prose.** An unsent route is recorded
+by leaving the URL and re-check cells carrying the placeholder literal, and
+`scripts/followthroughs/plugin-delivery-canary-7490.sh` step 4 counts occurrences of that literal
+ANYWHERE in this file. A sentence explaining the convention while containing the literal would keep
+that probe red forever — the same self-matching class the sweeper's fenced-directive verdict exists
+to catch, one layer down.
+
+Convention, for the next author: leave both cells carrying the placeholder until a real post
+happens, then replace them in one edit with the comment URL and a `PASS — 0 exposures, <N> bytes as
+stored` line taken from a re-scrub of the body fetched back from the API.

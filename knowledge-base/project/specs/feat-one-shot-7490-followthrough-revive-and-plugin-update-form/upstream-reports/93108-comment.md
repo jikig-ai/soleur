@@ -29,6 +29,11 @@ advances.
 read of installed content to compare against, so a consumer cannot script around the comparator from
 the CLI surface.
 
+**On the `gitCommitSha`-is-unreliable caveat in the report above:** #86194 is scoped to `url`-source
+marketplace entries and is now closed. The reading here is on a `github` source, where the field
+tracked the delivered commit correctly in every arm measured — so it is usable as a freshness
+signal for exactly the source class option 1 names, which is the narrower claim.
+
 **Smallest fix consistent with the record:** when a `gitCommitSha` is present for a `github`/`git`
 source, compare it against the resolved source commit and update on difference regardless of
 `version`. That uses a field the CLI already writes, and it makes `autoUpdate: true` mean what it
