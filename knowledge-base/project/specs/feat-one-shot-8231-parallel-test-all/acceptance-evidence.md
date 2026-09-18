@@ -450,7 +450,7 @@ this document, the learning, and the PR body.
 | 0.4.1 / 0.4.2 | Done — 46m28s serial baseline, timing log committed |
 | **0.4a GATE** | **PASS at 6.22×** over the reconciled registered population (floor 2.0×) |
 | 0.5.1 / 0.5.2 GATE | Not started — needs a `tc_acquire` caller log, not instrumented by the timing-only baseline |
-| Phase 1 onward | **Precondition met 2026-09-18 (PR #8270) on 5.1 evidence.** All nine suites green alone, 0 skipped arms. AC12(b) NOT claimed — the 5.2 battery was refused (rc 4) twice for sibling contention; see the 2026-09-18 section. |
+| Phase 1 onward | **Precondition met 2026-09-18 (PR #8270).** AC12(a): all nine suites green alone, 0 skipped arms. **AC12(b): met** — the 5.2 battery ran uncontended (442 suites, 434 passed) with all 4 red rows classified: 3 were this session's own regressions, fixed and re-verified, and the 4th is a boundary-check false positive caused by committing mid-run. Zero pre-existing failures. |
 
 ## Green-baseline precondition — measured 2026-09-18 (PR #8270, post-review)
 
@@ -501,13 +501,35 @@ same absence exits 1 naming the arms.
 | 1 (12:20Z) | `rc=4` — `CAPACITY_CONTENDED reason=sibling_runs measured_runs=1`; sibling worktree `feat-one-shot-7960-phase-b-delivery-field` running 870s |
 | 2 (10:54Z, queued behind attempt 1's sibling) | `rc=4` — the sibling started a NEW full-gate run 6s earlier; this session's own suite sweep was also in flight |
 
-| 3 (queued behind a 60s all-quiet requirement, 90m cap) | **`GAVE_UP_2H`** — the cap expired without the host ever being quiet for 60 consecutive seconds |
+| 3 (queued behind a 60s all-quiet requirement, 90m cap) | **`GAVE_UP_2H`** — cap expired; the host was never quiet |
+| 4-5 | **watcher defect, not a refusal** — two watchers counted `test-all.sh` with a substring grep that matched their own `bash -c` argv, so the quiet counter could never advance. Re-armed with an `argv[1]=="scripts/test-all.sh"` count, which cannot self-match |
+| 6 | **RAN.** Host quiet at 15:08:38Z; preamble recorded `siblings: 0`, `suite siblings: 0`, no banner |
 
-Three attempts, zero runs. The refusal is the runner working as designed (#7553),
-not a failure of this change: a sibling worktree ran back-to-back full gates for
-the entire session, and the third attempt deliberately required a quiet window
-rather than racing for one, so it timed out instead of producing a contended
-measurement that would have had to be discarded anyway.
+The refusals are the runner working as designed (#7553), not a failure of this
+change: five sibling worktrees ran back-to-back full gates across the session
+(`feat-one-shot-7960-…`, `feat-one-shot-adr142-…`, `feat-workflow-fsm-remediation`,
+`feat-harness-parity-gate-8299` twice). Attempt 6 caught a quiet window.
+
+### 5.2 result — `rc=1`, 442 suites: 434 passed, 4 failed, 0 killed, 4 skipped
+
+Every red row classified per §5.2. **Zero pre-existing failures; all four are
+this session's own work or its own instrument.**
+
+| Row | Classification | Disposition |
+|---|---|---|
+| `scripts/lint-trap-tempfile-ownership` | Real defect introduced by the review's own fix: `test/lib/gitleaks-probe.sh` allocated a tempfile with no owning trap (rule c), pushing the class-b high-water 80 → 81 | Fixed `53d50080c` — stderr captured inline; a sourced library cannot own an EXIT trap without stealing the caller's. Re-verified rc 0 alone |
+| `plugins/soleur/test/fixture-cd-containment.test.sh` | Real defect, mine: the conflict-marker fixture added to the OpenHands suite opened an unguarded `cd "$CM_REPO"` and then ran `git config`/`add`/`commit` — the 2026-08-20 incident shape | Fixed `4352e5847` — `git -C` throughout, explicit paths for file writes. Re-verified 20/20 alone |
+| `plugins/soleur/test/fixture-relative-assert.test.sh` | Real, count-only drift: 77 → 78 guarded sites in `lint-legal-scope-block-placement.test.sh`, from the second harness guard | Fixed `4352e5847` — baseline regenerated only after confirming the new site carries the same guard as the one above it and the ratchet reports no violation against it. Delta is exactly one row. Re-verified 62/62 alone |
+| `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` | **False positive, and the cause was the operator, not a suite.** The runner samples the repo boundary exactly twice (first suite, end of run) and flags any HEAD/ref movement. HEAD moved five times inside the window (15:51–17:52) — every one a commit or rebase made by this session *while the battery ran*. The runner states outright that it cannot attribute the change to a suite | No code defect. Process error recorded below |
+
+The first three are all the **#8322 class**: a repo-global ratchet references no
+changed file, so the file-selected runs that verified each edit were structurally
+blind to them. They surfaced only here — evidence *for* #8322's non-negotiable
+condition (ratchets always in the affected set), not against the proposal.
+
+**Process error — do not write to the repo while a gate run is in flight.**
+Committing during the battery invalidated its read-only boundary check and cost a
+false FATAL plus ~10 minutes to disambiguate against the reflog.
 
 Per plan §5.2 this is the sanctioned outcome: *"If the run is refused (rc 4), wait
 at most 2 h, then record the refusal and ship on 5.1 alone."* **AC12(b) is
