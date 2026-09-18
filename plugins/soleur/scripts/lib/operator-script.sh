@@ -591,19 +591,33 @@ soleur_op_gh_variable_set() {
 # (community/scripts/linkedin-setup.sh) is `xdg-open`/`open` only; the WSL arm is
 # new — `wslview`, `explorer.exe` and `$WSL_DISTRO_NAME` detection appear nowhere
 # else in this repository.
+#
+# Each opener runs in the BACKGROUND with stdin detached (review P2-11):
+# `xdg-open` on a box with no DISPLAY hands the URL to a terminal browser
+# (w3m, lynx) that seizes the tty and stdin, and the script looks hung one line
+# before its next prompt. The URL is already printed, so nothing is lost if the
+# opener never returns. It may carry a query string — a `?token=` would be
+# printed and passed on argv; do not put a secret in a URL you open this way.
+#
+# SOLEUR_OP_NO_OPEN=1 prints the URL and skips every opener — for a test
+# harness, a CI runner or a founder who does not want a tab stolen. It is the
+# only environment variable this primitive reads.
 soleur_op_open_url() {
   local url="$1"
   printf '  %s\n' "$url"
+  if [[ "${SOLEUR_OP_NO_OPEN:-}" == "1" ]]; then
+    return 0
+  fi
   if [[ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ]]; then
     if command -v wslview >/dev/null 2>&1; then
-      wslview "$url" >/dev/null 2>&1 || true
+      (wslview "$url" || true) </dev/null >/dev/null 2>&1 &
     elif command -v explorer.exe >/dev/null 2>&1; then
-      explorer.exe "$url" >/dev/null 2>&1 || true
+      (explorer.exe "$url" || true) </dev/null >/dev/null 2>&1 &
     fi
   elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url" >/dev/null 2>&1 || true
+    (xdg-open "$url" || true) </dev/null >/dev/null 2>&1 &
   elif command -v open >/dev/null 2>&1; then
-    open "$url" >/dev/null 2>&1 || true
+    (open "$url" || true) </dev/null >/dev/null 2>&1 &
   fi
   return 0
 }

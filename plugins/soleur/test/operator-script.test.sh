@@ -131,6 +131,8 @@ echo "  [ok] instrument self-test: pass/fail dispatch; assert_red/assert_green e
 command -v timeout >/dev/null 2>&1 || { printf 'HARNESS: `timeout` is required for the no-TTY probes\n' >&2; exit 2; }
 command -v md5sum  >/dev/null 2>&1 || { printf 'HARNESS: `md5sum` is required for mutation-landing proof\n' >&2; exit 2; }
 command -v perl    >/dev/null 2>&1 || { printf 'HARNESS: `perl` is required to apply the mutations\n' >&2; exit 2; }
+command -v script  >/dev/null 2>&1 || { printf 'HARNESS: `script` (util-linux) is required to drive the prompt helpers through a pty\n' >&2; exit 2; }
+script -qec true /dev/null </dev/null >/dev/null 2>&1 || { printf 'HARNESS: `script -qec` did not run (a non-util-linux script?)\n' >&2; exit 2; }
 
 SB="$(mktemp -d -t operator-script.XXXXXXXX)" || { printf 'HARNESS: mktemp failed\n' >&2; exit 2; }
 trap 'chmod -R u+rwx "$SB" 2>/dev/null; rm -rf "$SB"' EXIT
@@ -146,15 +148,23 @@ cat > "$SB/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${GH_ARGV_LOG:-/dev/null}"
 case "$1 $2" in
-  # Consume stdin ONLY for the secret write, the one call that has a writer.
-  # An unconditional `cat` blocks forever on whatever stdin the runner inherited.
-  "secret set")    cat >/dev/null 2>&1 || true; exit 0 ;;
+  # Consume stdin ONLY for the secret write, the one call that has a writer —
+  # into a SECOND log, so the suite can assert the value arrived THERE and not
+  # on argv. An unconditional `cat` blocks forever on whatever stdin the runner
+  # inherited.
+  "secret set")    cat >> "${GH_STDIN_LOG:-/dev/null}" 2>&1 || true; exit 0 ;;
   "secret list")   printf 'STUBBED_SECRET\tupdated\n'; exit 0 ;;
   "variable list") printf 'STUBBED_VAR\tvalue\n'; exit 0 ;;
 esac
 exit 0
 STUB
 chmod +x "$SB/bin/gh"
+# URL openers: stubbed so no row ever launches a real browser on the host, and
+# so a hang in an opener is a library defect the suite sees, not host weather.
+for opener in xdg-open open wslview explorer.exe; do
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "${OPENER_LOG:-/dev/null}"\nexit 0\n' > "$SB/bin/$opener"
+  chmod +x "$SB/bin/$opener"
+done
 export PATH="$SB/bin:$PATH"
 
 # --- driver ------------------------------------------------------------------
@@ -186,7 +196,7 @@ exec 9<>"$BLOCK_FIFO"
 
 drive_blocked() {
   local lib="$1"; shift
-  timeout 5 bash "$SB/drive.sh" "$lib" "$@" <"$BLOCK_FIFO" 2>&1
+  timeout 1 bash "$SB/drive.sh" "$lib" "$@" <"$BLOCK_FIFO" 2>&1
 }
 
 md5_of() { md5sum "$1" | cut -d' ' -f1; }
@@ -353,6 +363,35 @@ g3_check() {
     v=1
   fi
 
+  # row 1 (behavioural half): the SECRET helper is DRIVEN against the argv-
+  # logging stub. The value must be absent from argv and present on the stub's
+  # stdin capture — observed the way `ps` and the receiving process would see it,
+  # not inferred from the spelling of the call (review P2-22).
+  local ghin="$run/gh.stdin"
+  : > "$ghin"
+  out="$(GH_ARGV_LOG="$ghlog" GH_STDIN_LOG="$ghin" SOLEUR_BOOTSTRAP_LEDGER="$ledger" \
+          bash "$SB/drive.sh" "$lib" soleur_op_gh_secret_set owner/repo STUBBED_SECRET "$SENTINEL" </dev/null 2>&1)"; rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "g3: soleur_op_gh_secret_set exited ${rc} against the stub: ${out}"
+    v=1
+  fi
+  if grep -qF "$SENTINEL" "$ghlog"; then
+    echo "g3: the secret VALUE reached \`gh\` argv (observed in the argv log)"
+    v=1
+  fi
+  if ! grep -qF "$SENTINEL" "$ghin"; then
+    echo "g3: the secret VALUE did not arrive on \`gh secret set\`'s stdin (the write sent nothing)"
+    v=1
+  fi
+  if grep -qF "$SENTINEL" <<<"$out"; then
+    echo "g3: the secret helper printed the VALUE"
+    v=1
+  fi
+  if [[ -f "$ledger" ]] && grep -qF "$SENTINEL" "$ledger"; then
+    echo "g3: the run ledger recorded the secret VALUE after a gh write"
+    v=1
+  fi
+
   # row 5 (behavioural half): a secret-shaped name must never reach `gh` argv.
   out="$(GH_ARGV_LOG="$ghlog" SOLEUR_BOOTSTRAP_LEDGER="$ledger" \
           bash "$SB/drive.sh" "$lib" soleur_op_gh_variable_set owner/repo DEPLOY_TOKEN "$SENTINEL" </dev/null 2>&1)"; rc=$?
@@ -373,11 +412,12 @@ echo "== Guard 3 — secret-write paths =="
 
 assert_green g3_check "pristine library" "$PRISTINE" "$PLUGIN_ROOT"
 
-# row 1 — the secret helper moved onto argv
-if mutate "g3-r1 secret value onto argv (--body)" "$SB/mut/g3r1.sh" <<'PROG'
-s{printf '%s' "\$value" \| gh secret set "\$sec_name" -R "\$repo"}{gh secret set "\$sec_name" -R "\$repo" --body "\$value"}
+# row 1 — the secret helper moved onto argv, via the SHORT flag `-b` that the
+# static `--body` grep cannot see: the behavioural row is the guard here.
+if mutate "g3-r1 secret value onto argv (-b)" "$SB/mut/g3r1.sh" <<'PROG'
+s{printf '%s' "\$value" \| gh secret set "\$sec_name" -R "\$repo"}{gh secret set "\$sec_name" -R "\$repo" -b "\$value"}
 PROG
-then assert_red g3_check "g3-r1 secret value onto argv" "$SB/mut/g3r1.sh" "$PLUGIN_ROOT"; fi
+then assert_red g3_check "g3-r1 secret value onto argv (-b, invisible to the static grep)" "$SB/mut/g3r1.sh" "$PLUGIN_ROOT"; fi
 
 # row 2 — chmod reordered ABOVE the mv (a REORDER, not a delete: the property is
 # about the window between the two)
@@ -679,18 +719,60 @@ fi
 # ANCHOR (R24): the exit=64 no-TTY probe — an exit status and a stdout marker
 # observed from a CHILD PROCESS, independent of the source text claiming them.
 
+# strip_comments <file> — the file without its comment lines. Every window and
+# every census below runs over THIS, so a comment naming a helper can never
+# satisfy a guard (review P2-26).
+strip_comments() { grep -vE '^[[:space:]]*#' "$1"; }
+
+# The census regex: a `read` that STARTS a command — line-initial, after a
+# command separator, or after an `IFS=` prefix. `read -` alone missed `IFS= read`
+# and `read reply`.
+READ_SITE_RE='(^[[:space:]]*|[;&|][[:space:]]*|IFS=[[:space:]]*)read([[:space:]]|$)'
+
+# A raw `read` in a CONSUMER is gated only by an explicit TTY-check LINE right
+# above it. A prompt-helper call (`soleur_op_barrier …`) in the same window is a
+# different prompt with its own read inside the library and gates nothing here;
+# a comment naming the helper gates nothing either (both measured to have
+# satisfied the old substring match).
+TTY_GATE_LINE_RE='^[[:space:]]*\[\[ -t 0 \]\] \|\| soleur_op_input_required([[:space:]]|$)'
+
 g4_prompt_functions() {
-  # Census of every `read` call site, keyed to its enclosing function.
-  # Discovery, never a name list. `<UNCLASSIFIED>` is a RED bucket, not a skip.
-  awk '
-    /^[a-z_]+\(\) \{/                { fn = $1; sub(/\(\)$/, "", fn); next }
-    /^\}/                            { fn = "" }
-    /^[[:space:]]*read[[:space:]]+-/ { if (fn != "") print fn; else print "<UNCLASSIFIED>" }
-  ' "$1" | sort -u
+  # Census of every read call site, keyed to its enclosing function, over the
+  # comment-stripped source. Discovery, never a name list. `<UNCLASSIFIED>` is a
+  # RED bucket, not a skip.
+  strip_comments "$1" | awk '
+    /^[a-z_]+\(\) \{/ { fn = $1; sub(/\(\)$/, "", fn); next }
+    /^\}/             { fn = "" }
+    /^[ \t]*read([ \t]|$)|[;&|][ \t]*read([ \t]|$)|IFS=[ \t]*read([ \t]|$)/ {
+      if (fn != "") print fn; else print "<UNCLASSIFIED>"
+    }
+  ' | sort -u
+}
+
+# g4_class2_body_ok <fn> <comment-stripped body> — the class-2 constraints
+# (review P2-23). A destructive-write ack may consult NOTHING but its prompt and
+# the reply: no `printenv`, no expansion of any other name, no `-n`/`-z` test on
+# anything but `$reply`. Each is a way an environment variable could buy its way
+# past the gate without spelling `soleur_op_skip_value`.
+g4_class2_body_ok() {
+  local fn="$1" body="$2" ok=0 names bad tests
+  if grep -q 'printenv' <<<"$body"; then
+    echo "g4: ${fn} is a class-2 ack but calls printenv"; ok=1
+  fi
+  names="$(grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' <<<"$body" | sed -E 's/^\$\{?//' | sort -u)"
+  bad="$(grep -vxE 'prompt_text|reply' <<<"$names" || true)"
+  if [[ -n "$bad" ]]; then
+    echo "g4: ${fn} is a class-2 ack but expands a name other than prompt_text/reply: $(tr '\n' ' ' <<<"$bad")"; ok=1
+  fi
+  tests="$(grep -E '\[\[ -[nz] ' <<<"$body" | grep -vE '\[\[ -[nz] "\$reply" \]\]' || true)"
+  if [[ -n "$tests" ]]; then
+    echo "g4: ${fn} is a class-2 ack but tests -n/-z on something other than \$reply:${tests}"; ok=1
+  fi
+  return "$ok"
 }
 
 g4_check() {
-  local lib="$1" root="${2:-$PLUGIN_ROOT}" v=0 fn body idx_tty idx_read fns out rc
+  local lib="$1" root="${2:-$PLUGIN_ROOT}" v=0 fn body idx_tty idx_read fns out rc klass ack_fns=""
 
   fns="$(g4_prompt_functions "$lib")"
 
@@ -706,11 +788,11 @@ g4_check() {
 
   while IFS= read -r fn; do
     [[ -n "$fn" && "$fn" != "<UNCLASSIFIED>" ]] || continue
-    body="$(awk -v f="^${fn}\\\\(\\\\) \\\\{" '$0 ~ f {p=1} p {print} p&&/^\}/{exit}' "$lib")"
-    idx_read="$(grep -n '^[[:space:]]*read -' <<<"$body" | head -1 | cut -d: -f1)"
-    idx_tty="$(grep -n 'soleur_op_input_required' <<<"$body" | head -1 | cut -d: -f1)"
+    body="$(g3_fn_body "$lib" "$fn" | grep -vE '^[[:space:]]*#')"
+    idx_read="$(grep -nE "$READ_SITE_RE" <<<"$body" | head -1 | cut -d: -f1)"
+    idx_tty="$(grep -nE '^[[:space:]]*\[\[ -t 0 \]\] \|\| soleur_op_input_required' <<<"$body" | head -1 | cut -d: -f1)"
     if [[ -z "$idx_tty" ]]; then
-      echo "g4: ${fn} reads without a no-TTY refusal"
+      echo "g4: ${fn} reads without a no-TTY refusal (a line beginning '[[ -t 0 ]] || soleur_op_input_required')"
       v=1
     elif [[ -z "$idx_read" ]]; then
       echo "g4: ${fn} was censused as a prompt but has no read line"
@@ -719,20 +801,39 @@ g4_check() {
       echo "g4: ${fn} checks the TTY at line ${idx_tty}, AFTER its read at line ${idx_read}"
       v=1
     fi
-    if [[ "$fn" == *_ack_or_die ]]; then
-      # CLASS 2 — NO skip variable. An environment variable set once is exactly
-      # the "prior approval extending to a new command" that
-      # hr-menu-option-ack-not-prod-write-auth forbids.
-      if grep -q 'soleur_op_skip_value' <<<"$body"; then
-        echo "g4: ${fn} is a class-2 destructive-write ack but consults a skip variable"
-        v=1
-      fi
-    else
-      # CLASS 1 / CLASS 3 — named skip variable required.
-      if ! grep -q 'soleur_op_skip_value' <<<"$body"; then
-        echo "g4: ${fn} has no named skip variable"
-        v=1
-      fi
+
+    # Classification (review P2-27). The three library helpers are PINNED to
+    # their classes by name. Anything else is classified by what its body DOES:
+    # a skip-variable lookup makes it class 1/3; without one it must have the
+    # class-2 shape (compare the reply to "yes", abort otherwise) — a prompt with
+    # neither is a class-1 prompt missing its skip variable, whatever it is
+    # called. So renaming the ack with its property intact stays green, and a
+    # value prompt named *_ack_or_die does not get the class-2 exemption.
+    case "$fn" in
+      soleur_op_value|soleur_op_barrier)
+        klass=skip
+        if ! grep -q 'soleur_op_skip_value' <<<"$body"; then
+          echo "g4: ${fn} is pinned class 1/3 but has no named skip variable"; v=1
+        fi ;;
+      soleur_op_ack_or_die)
+        klass=ack
+        if grep -q 'soleur_op_skip_value' <<<"$body"; then
+          echo "g4: ${fn} is the class-2 destructive-write ack but consults a skip variable"; v=1
+        fi ;;
+      *)
+        if grep -q 'soleur_op_skip_value' <<<"$body"; then
+          klass=skip
+        elif grep -q 'soleur_op_aborted' <<<"$body" && grep -qF '== "yes"' <<<"$body"; then
+          klass=ack
+        else
+          klass=none
+          echo "g4: ${fn} has no named skip variable and is not a destructive-write ack (no yes-check + abort) — a class-1 prompt with no non-interactive path"
+          v=1
+        fi ;;
+    esac
+    if [[ "$klass" == ack ]]; then
+      g4_class2_body_ok "$fn" "$body" || v=1
+      ack_fns="${ack_fns} ${fn}"
     fi
   done <<<"$fns"
 
@@ -740,20 +841,23 @@ g4_check() {
   # D12 keeps the credential prompt in the CALLER, so the caller is where the
   # census must also look — a guard scoped to the library would certify a
   # consumer that hangs. Population is DISCOVERED, and a zero population reddens.
-  local consumer rl ln from window scanned=0
+  # Every window is cut from the COMMENT-STRIPPED file and must contain a gate
+  # LINE, not a substring.
+  local consumer rl ln from window scanned=0 stripped
   while IFS= read -r consumer; do
     [[ -n "$consumer" ]] || continue
     scanned=$((scanned + 1))
+    stripped="$(strip_comments "$consumer")"
     while IFS= read -r rl; do
       [[ -n "$rl" ]] || continue
       ln="${rl%%:*}"
       from=$(( ln > 12 ? ln - 12 : 1 ))
-      window="$(sed -n "${from},${ln}p" "$consumer")"
-      if ! grep -q 'soleur_op_input_required\|soleur_op_barrier\|soleur_op_ack_or_die\|soleur_op_value' <<<"$window"; then
-        echo "g4: ${consumer}:${ln} reads with no no-TTY refusal in the 12 lines above it"
+      window="$(sed -n "${from},${ln}p" <<<"$stripped")"
+      if ! grep -qE "$TTY_GATE_LINE_RE" <<<"$window"; then
+        echo "g4: ${consumer}: read site '${rl#*:}' has no TTY-gate LINE in the 12 comment-stripped lines above it"
         v=1
       fi
-    done < <(grep -nE '^[[:space:]]*read([[:space:]]|$)' "$consumer")
+    done < <(grep -nE "$READ_SITE_RE" <<<"$stripped")
   done < <(g3_sourcing_scripts "$root")
   if [[ "$scanned" -eq 0 ]]; then
     echo "g4: the consumer scan returned ZERO sourcing scripts — the caller-side census checked nothing"
@@ -782,18 +886,26 @@ g4_check() {
   fi
 
   # CLASS 2: no TTY ⇒ 64 UNCONDITIONALLY. Both plausible skip names are set here
-  # on purpose — no environment variable may buy its way past this gate.
-  out="$(SOLEUR_BOOTSTRAP_ACK=yes SOLEUR_TEST_SKIP_ACK=yes \
-          timeout 5 bash "$SB/drive.sh" "$lib" soleur_op_ack_or_die 'Create billable server? Type yes: ' \
-          <"$BLOCK_FIFO" 2>&1)"; rc=$?
-  if [[ "$rc" -ne 64 ]]; then
-    echo "g4: class-2 ack exited ${rc} with skip-shaped variables set, expected 64 unconditionally"
+  # on purpose — no environment variable may buy its way past this gate. Driven
+  # for EVERY function the census classified as a destructive-write ack (by body
+  # shape, so a renamed ack is still probed), and RED if there is none.
+  if [[ -z "$ack_fns" ]]; then
+    echo "g4: the census found NO destructive-write ack (class 2) in the library"
     v=1
   fi
-  if ! grep -qF 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED' <<<"$out"; then
-    echo "g4: class-2 ack did not emit SOLEUR_BOOTSTRAP_INPUT_REQUIRED"
-    v=1
-  fi
+  for fn in $ack_fns; do
+    out="$(SOLEUR_BOOTSTRAP_ACK=yes SOLEUR_TEST_SKIP_ACK=yes SOLEUR_BOOTSTRAP_ASSUME_YES=1 \
+            timeout 1 bash "$SB/drive.sh" "$lib" "$fn" 'Create billable server? Type yes: ' \
+            <"$BLOCK_FIFO" 2>&1)"; rc=$?
+    if [[ "$rc" -ne 64 ]]; then
+      echo "g4: class-2 ack ${fn} exited ${rc} with skip-shaped variables set, expected 64 unconditionally"
+      v=1
+    fi
+    if ! grep -qF 'SOLEUR_BOOTSTRAP_INPUT_REQUIRED' <<<"$out"; then
+      echo "g4: class-2 ack ${fn} did not emit SOLEUR_BOOTSTRAP_INPUT_REQUIRED"
+      v=1
+    fi
+  done
 
   return "$v"
 }
@@ -868,16 +980,60 @@ else
   fail "g4-r7b: the proving consumer is missing at ${HETZNER_SRC}"
 fi
 
+# row 7c — the census must see `IFS= read`, and a COMMENT naming the gate must
+# not satisfy the window: gate line deleted, `IFS=` prefixed, comment added.
+if [[ -r "$HETZNER_SRC" ]]; then
+  mkdir -p "$SB/run/consumer-mut2"
+  cp "$HETZNER_SRC" "$SB/run/consumer-mut2/provision-hetzner.sh"
+  perl -0777 -pi -e 's{^  \[\[ -t 0 \]\] \|\| soleur_op_input_required SOLEUR_BOOTSTRAP_HCLOUD_TOKEN\n  read -rs -p }{  # gated: [[ -t 0 ]] || soleur_op_input_required SOLEUR_BOOTSTRAP_HCLOUD_TOKEN\n  IFS= read -rs -p }m' \
+    "$SB/run/consumer-mut2/provision-hetzner.sh"
+  if [[ "$(md5_of "$SB/run/consumer-mut2/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+    fail "mutation 'g4-r7c IFS= read behind a comment-only gate' did NOT land"
+  else
+    pass "mutation 'g4-r7c IFS= read behind a comment-only gate' landed (md5 differs from the live script)"
+    assert_red g4_check "g4-r7c IFS= read with the gate only in a comment" "$PRISTINE" "$SB/run/consumer-mut2"
+  fi
+fi
+
+# row 8 — the ack RENAMED with its property intact must stay GREEN: the class is
+# a property of the body, not of the name suffix (review P2-27).
+if mutate "g4-r8 ack renamed, property intact" "$SB/mut/g4r8.sh" <<'PROG'
+s{soleur_op_ack_or_die}{soleur_op_confirm_write}g
+PROG
+then assert_green g4_check "g4-r8 renamed ack keeps its class by body shape" "$SB/mut/g4r8.sh"; fi
+
+# row 9 — a class-1 VALUE prompt that happens to be named *_ack_or_die, with no
+# skip variable: the old suffix rule exempted it; the body rule must RED it.
+if mutate "g4-r9 class-1 prompt misnamed *_ack_or_die" "$SB/mut/g4r9.sh" <<'PROG'
+s{\n# --- MUTATION ANCHOR: end of prompt helpers ---}{\nsoleur_op_region_ack_or_die() {\n  local prompt_text="\$1" out_name="\$2" reply\n  [[ -t 0 ]] || soleur_op_input_required "region"\n  read -r -p "\$prompt_text" reply\n  printf -v "\$out_name" '%s' "\$reply"\n}\n\n# --- MUTATION ANCHOR: end of prompt helpers ---}
+PROG
+then assert_red g4_check "g4-r9 misnamed class-1 prompt without a skip variable" "$SB/mut/g4r9.sh"; fi
+
+# row 10 — the ack bypassed by a plain environment test, never spelling
+# `soleur_op_skip_value` (review P2-23).
+if mutate "g4-r10 ack bypass via a bare environment test" "$SB/mut/g4r10.sh" <<'PROG'
+s{(soleur_op_ack_or_die\(\) \{\n  local prompt_text="\$1" reply\n)}{$1  [[ -z "\$\{SOLEUR_BOOTSTRAP_ASSUME_YES:-\}" ]] || return 0\n}
+PROG
+then assert_red g4_check "g4-r10 ASSUME_YES bypass without soleur_op_skip_value" "$SB/mut/g4r10.sh"; fi
+
+# row 11 — the same bypass through printenv
+if mutate "g4-r11 ack bypass via printenv" "$SB/mut/g4r11.sh" <<'PROG'
+s{(soleur_op_ack_or_die\(\) \{\n  local prompt_text="\$1" reply\n)}{$1  [[ -z "\$(printenv SOLEUR_BOOTSTRAP_ASSUME_YES)" ]] || return 0\n}
+PROG
+then assert_red g4_check "g4-r11 printenv bypass" "$SB/mut/g4r11.sh"; fi
+
 # harness (a) — the no-TTY case runs under `timeout`. Asserted two ways, because
 # the literal "remove the timeout wrapper" would hang this runner:
 #   (i)  the probe helper's own definition names `timeout`;
 #   (ii) the COMPLIANT library exits **64**, not 124, against the SAME blocked
 #        stdin — so row 3's RED is the reorder being caught, not the wrapper
-#        killing every run alike. A generous 30s bound stays on this probe rather
+#        killing every run alike (the compliant path exits in ~10ms, so 1s is
+#        generous; two expiries under the old 5s were 10 of the suite's 11s). A
+#        30s bound stays on THIS probe rather
 #        than removing it literally: an unwrapped probe against a regressed
 #        library would hang the runner, which is the failure the wrapper exists
 #        to prevent.
-if grep -q 'timeout 5 bash' <<<"$(declare -f drive_blocked)"; then
+if grep -q 'timeout 1 bash' <<<"$(declare -f drive_blocked)"; then
   pass "g4 harness (a.i): the no-TTY probe is wrapped in \`timeout\`"
 else
   fail "g4 harness (a.i): the no-TTY probe lost its \`timeout\` wrapper — a reorder mutation would hang the runner"
@@ -908,6 +1064,146 @@ else
 fi
 
 # =============================================================================
+# Guard 8 — the decline path, driven through a real pty (review P1-4)
+# =============================================================================
+#
+# Property. Answered `no` or nothing, the barrier and the ack exit 1 with
+# SOLEUR_BOOTSTRAP_ABORTED stage=<kind>, the founder sentence, and a run_halt
+# ledger line; answered `yes`, they exit 0. Observed by typing into a pty with
+# script(1), because `[[ -t 0 ]]` is true there and the read actually runs — the
+# blocked-FIFO probes above can only ever see the no-TTY branch.
+
+pty_drive() {
+  # pty_drive <answer> <ledger> <lib> <fn> <args...>  — stdout+stderr (CRLF
+  # stripped), rc in $?. The answer is fed through script's stdin.
+  local answer="$1" ledger="$2"; shift 2
+  local cmd
+  printf -v cmd '%q ' bash "$SB/drive.sh" "$@"
+  printf '%s' "$answer" | SOLEUR_BOOTSTRAP_LEDGER="$ledger" timeout 5 script -qec "$cmd" /dev/null 2>&1 | tr -d '\r'
+  return "${PIPESTATUS[1]}"
+}
+
+gdecline_check() {
+  local lib="$1" v=0 out rc fn kind ledger="$SB/decline.jsonl"
+  for fn in soleur_op_ack_or_die soleur_op_barrier; do
+    kind="ack"; [[ "$fn" == soleur_op_barrier ]] && kind="barrier"
+    local -a args=("$fn")
+    [[ "$fn" == soleur_op_barrier ]] && args=("$fn" SOLEUR_TEST_SKIP_DECLINE)
+    args+=("Type yes: ")
+
+    : > "$ledger"
+    out="$(pty_drive $'no\n' "$ledger" "$lib" "${args[@]}")"; rc=$?
+    if [[ "$rc" -ne 1 ]]; then echo "gdecline: ${fn} answered 'no' exited ${rc}, expected 1: ${out}"; v=1; fi
+    if ! grep -qF "SOLEUR_BOOTSTRAP_ABORTED stage=${kind}" <<<"$out"; then
+      echo "gdecline: ${fn} answered 'no' did not emit ABORTED stage=${kind}: ${out}"; v=1
+    fi
+    if ! grep -qF 'Stopped. Nothing was created.' <<<"$out"; then
+      echo "gdecline: ${fn} answered 'no' printed no founder sentence"; v=1
+    fi
+    if ! grep -qE "\"event\":\"run_halt\",\"reason\":\"aborted\",\"var\":\"${kind}\"" "$ledger"; then
+      echo "gdecline: ${fn} answered 'no' wrote no run_halt line: $(cat "$ledger")"; v=1
+    fi
+
+    out="$(pty_drive $'\n' "$ledger" "$lib" "${args[@]}")"; rc=$?
+    if [[ "$rc" -ne 1 ]] || ! grep -qF 'SOLEUR_BOOTSTRAP_ABORTED' <<<"$out"; then
+      echo "gdecline: ${fn} answered EMPTY exited ${rc}, expected 1 + ABORTED: ${out}"; v=1
+    fi
+
+    out="$(pty_drive $'yes\n' "$ledger" "$lib" "${args[@]}")"; rc=$?
+    if [[ "$rc" -ne 0 ]]; then echo "gdecline: ${fn} answered 'yes' exited ${rc}, expected 0: ${out}"; v=1; fi
+    if grep -qF 'SOLEUR_BOOTSTRAP_ABORTED' <<<"$out"; then
+      echo "gdecline: ${fn} answered 'yes' still emitted ABORTED"; v=1
+    fi
+  done
+  return "$v"
+}
+
+echo "== Guard 8 — decline path through a pty =="
+
+assert_green gdecline_check "pristine library" "$PRISTINE"
+
+# row 1 — the ack's yes-check replaced by `:` (every answer accepted)
+if mutate "gdecline-r1 ack yes-check replaced by ':'" "$SB/mut/gd1.sh" <<'PROG'
+s{  \[\[ "\$reply" == "yes" \]\] \|\| soleur_op_aborted ack\n}{  :\n}
+PROG
+then assert_red gdecline_check "gdecline-r1 ack accepts any answer" "$SB/mut/gd1.sh"; fi
+
+# row 2 — the barrier's yes-check replaced by `:`
+if mutate "gdecline-r2 barrier yes-check replaced by ':'" "$SB/mut/gd2.sh" <<'PROG'
+s{  \[\[ "\$reply" == "yes" \]\] \|\| soleur_op_aborted barrier\n}{  :\n}
+PROG
+then assert_red gdecline_check "gdecline-r2 barrier accepts any answer" "$SB/mut/gd2.sh"; fi
+
+# row 3 — the decline no longer reaches the ledger
+if mutate "gdecline-r3 aborted writes no run_halt" "$SB/mut/gd3.sh" <<'PROG'
+s{  soleur_op_run_halt aborted "\$1"\n}{}
+PROG
+then assert_red gdecline_check "gdecline-r3 decline invisible in the ledger" "$SB/mut/gd3.sh"; fi
+
+# =============================================================================
+# Guard 9 — every destructive write in a consumer sits under an ack (P1-3)
+# =============================================================================
+#
+# Property. In every DISCOVERED consumer, each `hcloud server create`,
+# `gh secret set`, `gh variable set`, Doppler secret write, `terraform apply`
+# and each `soleur_op_gh_*_set` call has `soleur_op_ack_or_die` within the 15
+# comment-stripped lines above it. Quoted output (`echo "… hcloud server create
+# …"`) is not a call. Zero destructive sites across the population is RED: the
+# proving consumer has one, so a census that sees none is broken.
+
+DESTRUCTIVE_RE='(^|[^A-Za-z0-9_"'"'"'])(hcloud server create|gh secret set|gh variable set|doppler secrets (set|upload)|terraform apply|soleur_op_gh_(secret|variable)_set)([[:space:]]|$)'
+
+gack_check() {
+  local root="$1" v=0 consumer stripped rl ln from window sites=0
+  while IFS= read -r consumer; do
+    [[ -n "$consumer" ]] || continue
+    stripped="$(strip_comments "$consumer" | grep -vE '^[[:space:]]*(echo|printf)[[:space:]]')"
+    while IFS= read -r rl; do
+      [[ -n "$rl" ]] || continue
+      sites=$((sites + 1))
+      ln="${rl%%:*}"
+      from=$(( ln > 15 ? ln - 15 : 1 ))
+      window="$(sed -n "${from},$((ln - 1))p" <<<"$stripped")"
+      if ! grep -qE '^[[:space:]]*soleur_op_ack_or_die([[:space:]]|$)' <<<"$window"; then
+        echo "gack: ${consumer}: destructive write '${rl#*:}' has no soleur_op_ack_or_die in the 15 comment-stripped lines above it"
+        v=1
+      fi
+    done < <(grep -nE "$DESTRUCTIVE_RE" <<<"$stripped")
+  done < <(g3_sourcing_scripts "$root")
+  if [[ "$sites" -eq 0 ]]; then
+    echo "gack: the census found ZERO destructive-write sites across the sourcing scripts — nothing was checked"
+    v=1
+  fi
+  return "$v"
+}
+
+echo "== Guard 9 — destructive writes sit under an ack =="
+
+assert_green gack_check "live consumers" "$PLUGIN_ROOT"
+assert_red gack_check "gack own-dispatch: zero consumers" "$SB/empty"
+
+if [[ -r "$HETZNER_SRC" ]]; then
+  mkdir -p "$SB/run/ack-mut"
+  cp "$HETZNER_SRC" "$SB/run/ack-mut/provision-hetzner.sh"
+  perl -0777 -pi -e 's{^soleur_op_ack_or_die "Create the billable probe server[^\n]*\n}{}m' "$SB/run/ack-mut/provision-hetzner.sh"
+  if [[ "$(md5_of "$SB/run/ack-mut/provision-hetzner.sh")" == "$(md5_of "$HETZNER_SRC")" ]]; then
+    fail "mutation 'gack-r1 hetzner ack line deleted' did NOT land"
+  else
+    pass "mutation 'gack-r1 hetzner ack line deleted' landed (md5 differs from the live script)"
+    assert_red gack_check "gack-r1 billable create with no ack above it" "$SB/run/ack-mut"
+  fi
+  # A comment naming the ack must not satisfy the window.
+  mkdir -p "$SB/run/ack-mut2"
+  cp "$HETZNER_SRC" "$SB/run/ack-mut2/provision-hetzner.sh"
+  perl -0777 -pi -e 's{^soleur_op_ack_or_die "Create the billable probe server[^\n]*\n}{# soleur_op_ack_or_die "Create the billable probe server" (commented out)\n}m' "$SB/run/ack-mut2/provision-hetzner.sh"
+  if [[ "$(md5_of "$SB/run/ack-mut2/provision-hetzner.sh")" != "$(md5_of "$HETZNER_SRC")" ]]; then
+    assert_red gack_check "gack-r2 ack present only as a comment" "$SB/run/ack-mut2"
+  else
+    fail "mutation 'gack-r2 ack commented out' did NOT land"
+  fi
+fi
+
+# =============================================================================
 # Guard 5' — prologue placement and library scope (Deepen-Plan Ruling 1)
 # =============================================================================
 #
@@ -924,39 +1220,77 @@ fi
 #       plugins/soleur/scripts/lib/ IS scanned — and if it came into scope it
 #       would need its own `exit 78`, which on a `source` kills the CALLER.
 
+# The acquire set is what the linter knows PLUS `read -s` (the shape both the
+# template's stages and provision-hetzner.sh use): `read -rs`, `read -s`, `curl
+# -u`, `doppler secrets get`, `gh auth token`, `Authorization: Bearer`. The
+# source anchor accepts `source ` and `. `.
+ACQUIRES_RE='read -[a-z]*s( |$)|read -s( |$)|curl -u|doppler secrets get|gh auth token|Authorization: *Bearer'
+
+g5_check() {
+  # g5_check <lib> <root> <template>  — the template is FORCE-INCLUDED (review
+  # P2-25): it acquires nothing itself, so the population walk skipped the one
+  # prologue every generated script inherits.
+  local lib="$1" root="$2" template="$3" v=0 lib_body consumer acquires src_ln ref_ln
+  lib_body="$(grep -vE '^[[:space:]]*#' "$lib")"
+  if grep -qE '\$\{?[A-Za-z_][A-Za-z0-9_]*_(TOKEN|KEY|SECRET|PASSWORD|PAT)\}?([^A-Za-z0-9_]|$)' <<<"$lib_body"; then
+    echo "g5: library-expands-secret-shaped-name"; v=1
+  fi
+  if grep -qE '\$\{!' <<<"$lib_body"; then
+    echo "g5: library-uses-indirect-expansion"; v=1
+  fi
+  if grep -qE 'doppler secrets get|gh auth token' <<<"$lib_body"; then
+    echo "g5: library-acquires-a-credential"; v=1
+  fi
+  while IFS= read -r consumer; do
+    [[ -n "$consumer" ]] || continue
+    if [[ "$consumer" != "$template" ]]; then
+      acquires="$(grep -vE '^[[:space:]]*#' "$consumer" | grep -cE "$ACQUIRES_RE" || true)"
+      [[ "$acquires" -gt 0 ]] || continue
+    fi
+    src_ln="$(grep -nE '^[[:space:]]*(source|\.)[[:space:]]' "$consumer" | head -1 | cut -d: -f1)"
+    ref_ln="$(grep -n '^[[:space:]]*case "\$-" in' "$consumer" | head -1 | cut -d: -f1)"
+    if [[ -z "$ref_ln" ]]; then
+      echo "g5: ${consumer}: no-xtrace-refusal"; v=1
+    elif [[ -n "$src_ln" && "$ref_ln" -gt "$src_ln" ]]; then
+      echo "g5: ${consumer}: refusal-below-source"; v=1
+    fi
+  done < <(printf '%s\n%s\n' "$template" "$(g3_sourcing_scripts "$root")" | awk 'NF && !seen[$0]++')
+  return "$v"
+}
+
 echo "== Guard 5' — prologue above source, library out of credential scope =="
 
-g5_violations=""
+assert_green g5_check "pristine library + live consumers + template" "$PRISTINE" "$PLUGIN_ROOT" "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh"
 
-lib_body="$(grep -vE '^[[:space:]]*#' "$LIB")"
-if grep -qE '\$\{?[A-Za-z_][A-Za-z0-9_]*_(TOKEN|KEY|SECRET|PASSWORD|PAT)\}?' <<<"$lib_body"; then
-  g5_violations="${g5_violations} library-expands-secret-shaped-name"
-fi
-if grep -qE '\$\{!' <<<"$lib_body"; then
-  g5_violations="${g5_violations} library-uses-indirect-expansion"
-fi
-if grep -qE 'doppler secrets get|gh auth token' <<<"$lib_body"; then
-  g5_violations="${g5_violations} library-acquires-a-credential"
-fi
-
-while IFS= read -r consumer; do
-  [[ -n "$consumer" ]] || continue
-  acquires="$(grep -cE 'read -[a-z]*s |doppler secrets get|gh auth token|Authorization: *Bearer' "$consumer")"
-  [[ "$acquires" -gt 0 ]] || continue
-  src_ln="$(grep -n '^[[:space:]]*source ' "$consumer" | head -1 | cut -d: -f1)"
-  ref_ln="$(grep -n '^[[:space:]]*case "\$-" in' "$consumer" | head -1 | cut -d: -f1)"
-  if [[ -z "$ref_ln" ]]; then
-    g5_violations="${g5_violations} ${consumer}:no-xtrace-refusal"
-  elif [[ -n "$src_ln" && "$ref_ln" -gt "$src_ln" ]]; then
-    g5_violations="${g5_violations} ${consumer}:refusal-below-source"
-  fi
-done < <(g3_sourcing_scripts "$PLUGIN_ROOT")
-
-if [[ -z "$g5_violations" ]]; then
-  pass "Guard 5': prologue sits above every credential-acquiring consumer's source line, and the library expands no secret-shaped name"
+# row 1 — the template's prologue deleted: the one every generated script inherits
+cp "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh" "$SB/mut/tpl-noprologue.sh"
+perl -0777 -pi -e 's{case "\$-" in\n  \*x\*\)\n.*?\nesac\n}{}s' "$SB/mut/tpl-noprologue.sh"
+if [[ "$(md5_of "$SB/mut/tpl-noprologue.sh")" == "$(md5_of "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh")" ]]; then
+  fail "mutation 'g5-r1 template prologue deleted' did NOT land"
 else
-  fail "Guard 5' violations:${g5_violations}"
+  pass "mutation 'g5-r1 template prologue deleted' landed (md5 differs from the live template)"
+  assert_red g5_check "g5-r1 template without its xtrace refusal" "$PRISTINE" "$PLUGIN_ROOT" "$SB/mut/tpl-noprologue.sh"
 fi
+
+# row 2 — the template's prologue moved BELOW its source line
+cp "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh" "$SB/mut/tpl-below.sh"
+perl -0777 -pi -e 's{(case "\$-" in\n  \*x\*\)\n.*?\nesac\n)(.*?)(source "\$SOLEUR_OP_LIB"\n)}{$2$3$1}s' "$SB/mut/tpl-below.sh"
+if [[ "$(md5_of "$SB/mut/tpl-below.sh")" == "$(md5_of "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh")" ]]; then
+  fail "mutation 'g5-r2 template prologue below source' did NOT land"
+else
+  pass "mutation 'g5-r2 template prologue below source' landed"
+  assert_red g5_check "g5-r2 template refusal below its source line" "$PRISTINE" "$PLUGIN_ROOT" "$SB/mut/tpl-below.sh"
+fi
+
+# row 3 — a consumer acquiring via `curl -u` with no prologue (the widened set)
+mkdir -p "$SB/run/curlu"
+cat > "$SB/run/curlu/consumer.sh" <<'CONSUMER'
+#!/usr/bin/env bash
+set -euo pipefail
+. "$(dirname "$0")/../../pristine-operator-script.sh"   # lib/operator-script.sh
+curl -u "user:$1" https://example.invalid/
+CONSUMER
+assert_red g5_check "g5-r3 consumer acquiring via curl -u, no refusal, sourced with '.'" "$PRISTINE" "$SB/run/curlu" "${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh"
 
 # =============================================================================
 # Library contract assertions the guards do not cover
@@ -987,6 +1321,18 @@ else
   fail "library does not export a numeric SOLEUR_OP_LIB_API >= 1 (got '${api_got}')"
 fi
 
+# The API surface: the three prompt helpers exist under their pinned names (Guard
+# 4 classifies by body so a rename stays green THERE; the consumers call these
+# names, so a rename is an API break caught HERE).
+for api_fn in soleur_op_value soleur_op_barrier soleur_op_ack_or_die soleur_op_env_upsert soleur_op_env_reset \
+              soleur_op_gh_secret_set soleur_op_gh_variable_set soleur_op_ledger_init soleur_op_stage_begin soleur_op_stage_end; do
+  if bash -c 'set -uo pipefail; source "$1"; declare -F "$2" >/dev/null' _ "$LIB" "$api_fn" 2>/dev/null; then
+    pass "API: ${api_fn} is defined after source"
+  else
+    fail "API: ${api_fn} is not defined after source — a consumer calling it dies mid-stage"
+  fi
+done
+
 # open_url must be ADDITIVE-ONLY: the URL is printed first and the opener's exit
 # code is never branched on. Plus the new WSL arm.
 openurl_body="$(awk '/^soleur_op_open_url\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$LIB")"
@@ -1008,6 +1354,56 @@ if [[ "$openurl_true" -ge 4 ]]; then
   pass "open_url never branches on an opener's exit code (${openurl_true} '|| true' arms)"
 else
   fail "open_url branches on an opener's exit code (only ${openurl_true} '|| true' arms)"
+fi
+
+# P2-11 — an opener that never returns (xdg-open handing the URL to a terminal
+# browser on a box with no DISPLAY) must not stall the caller or eat its stdin.
+# Observed: a blocking xdg-open stub, and the caller must reach its next line.
+cat > "$SB/bin/xdg-open" <<'STUB'
+#!/usr/bin/env bash
+cat >/dev/null   # seize stdin like w3m would
+sleep 20
+STUB
+chmod +x "$SB/bin/xdg-open"
+ou_out="$(printf 'the-next-answer\n' | env -u WSL_DISTRO_NAME -u WSL_INTEROP timeout 5 bash -c '
+  set -uo pipefail
+  source "$1"
+  soleur_op_open_url "https://example.invalid/x"
+  read -r nxt
+  printf "RETURNED next=%s\n" "$nxt"
+' _ "$LIB" 2>&1)"; ou_rc=$?
+if [[ "$ou_rc" -eq 0 ]] && grep -qF 'RETURNED next=the-next-answer' <<<"$ou_out"; then
+  pass "open_url: a blocking opener neither stalls the caller nor consumes the caller's stdin (background, stdin detached)"
+else
+  fail "open_url: caller stalled or lost its stdin behind a blocking opener (rc=${ou_rc}): ${ou_out}"
+fi
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SB/bin/xdg-open"
+
+# SOLEUR_OP_NO_OPEN=1 — the URL is still printed, no opener runs. Observed
+# through a logging stub on every arm; the log must stay empty. Negative
+# control: the same call without the variable does reach the stub. The stubs
+# live in their OWN directory: the P2-11 arm above leaves a backgrounded
+# `sleep 20` reading $SB/bin/xdg-open, and bash re-reads a script file it is
+# still executing, so rewriting that file mid-run is a race.
+no_open_log="$SB/no-open.log"
+mkdir -p "$SB/bin-noopen"
+for opener in xdg-open open wslview explorer.exe; do
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$no_open_log" > "$SB/bin-noopen/$opener"
+  chmod +x "$SB/bin-noopen/$opener"
+done
+no_out="$(PATH="$SB/bin-noopen:$PATH" SOLEUR_OP_NO_OPEN=1 env -u WSL_DISTRO_NAME -u WSL_INTEROP bash "$SB/drive.sh" "$LIB" soleur_op_open_url "https://example.invalid/no-open" 2>&1)"
+sleep 1
+if grep -qF 'https://example.invalid/no-open' <<<"$no_out" && [[ ! -s "$no_open_log" ]]; then
+  pass "open_url: SOLEUR_OP_NO_OPEN=1 prints the URL and launches no opener"
+else
+  fail "open_url: SOLEUR_OP_NO_OPEN=1 leaked to an opener or dropped the URL: out=${no_out} log=$(cat "$no_open_log" 2>/dev/null)"
+fi
+PATH="$SB/bin-noopen:$PATH" env -u SOLEUR_OP_NO_OPEN -u WSL_DISTRO_NAME -u WSL_INTEROP bash "$SB/drive.sh" "$LIB" soleur_op_open_url "https://example.invalid/do-open" >/dev/null 2>&1
+sleep 1
+if grep -qF 'https://example.invalid/do-open' "$no_open_log" 2>/dev/null; then
+  pass "open_url: without SOLEUR_OP_NO_OPEN the opener is reached (negative control for the escape hatch)"
+else
+  fail "open_url: negative control — the opener stub was never reached: log=$(cat "$no_open_log" 2>/dev/null)"
 fi
 
 # R21a — the founder-facing dead end the library closes: a wrong credential is
@@ -1273,7 +1669,7 @@ fi
 # --- Anti-vacuity floor ------------------------------------------------------
 # Reads and appends to the SAME two counters the verdict below reads.
 ASSERT_TOTAL=$((PASS_COUNT + FAIL_COUNT))
-FLOOR=85
+FLOOR=123
 if [[ "$ASSERT_TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran, expected at least %s\n' "$ASSERT_TOTAL" "$FLOOR" >&2
   FAIL_COUNT=$((FAIL_COUNT + 1))

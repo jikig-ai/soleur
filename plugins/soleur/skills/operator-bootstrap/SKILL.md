@@ -102,6 +102,8 @@ replace the example stages. Rules:
   founder to the console (`--reset <KEY>_ATTEMPTED` clears it once they have looked).
 - **Open a URL with `soleur_op_open_url`.** It prints the URL first and never branches on the
   opener's exit code, so a headless box degrades to "here is the URL" instead of to a failed stage.
+  `SOLEUR_OP_NO_OPEN=1` prints the URL and launches nothing (CI, test harnesses, a founder who
+  does not want a tab stolen).
 
 ### 4. Verify and hand off
 
