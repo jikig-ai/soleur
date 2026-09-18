@@ -133,8 +133,10 @@ fi
 gl_to=()
 if command -v timeout >/dev/null 2>&1; then gl_to=(timeout 10)
 elif command -v gtimeout >/dev/null 2>&1; then gl_to=(gtimeout 10); fi
+# `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: bash 3.2 (stock macOS /bin/bash) treats an
+# EMPTY array as unbound under `set -u`, which is exactly the no-timeout host.
 gl_probe_rc=0
-gl_probe_err="$( { "${gl_to[@]}" gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
+gl_probe_err="$( { ${gl_to[@]+"${gl_to[@]}"} gitleaks version >/dev/null; } 2>&1 )" || gl_probe_rc=$?
 if [ "$gl_probe_rc" -ne 0 ]; then
   printf '[git-commit-secret-scan] WARN: gitleaks is on PATH but cannot run (rc=%s, %q) — skipping scan. %s\n' \
     "$gl_probe_rc" "${gl_probe_err%%$'\n'*}" "$GL_REMEDIATION" >&2

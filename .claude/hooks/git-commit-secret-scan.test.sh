@@ -86,7 +86,7 @@ _gl_probe() {
   if command -v timeout >/dev/null 2>&1; then to=(timeout 10)
   elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout 10); fi
   errf=$(mktemp); _TMP_DIRS+=("$errf")
-  "${to[@]}" gitleaks version >/dev/null 2>"$errf" || rc=$?
+  ${to[@]+"${to[@]}"} gitleaks version >/dev/null 2>"$errf" || rc=$?
   if (( rc == 0 )); then GL_OK=1; return; fi
   GL_REASON="gitleaks not runnable (rc=$rc, $(printf '%q' "$(head -1 "$errf")"))"
 }
