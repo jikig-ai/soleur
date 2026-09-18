@@ -346,6 +346,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    ---
 
+   **Fanning out agents that run suites while the lead commits `.ts`/`.js` is self-contending by construction.** `lefthook`'s `bun-test` hook fires the full battery on any staged `.ts`/`.js`, and that battery serializes on a repo-global `flock` — so the lead's commit QUEUES behind the fan-out's own suite runs and produces no output for as long as they take. Measured 2026-09-18: 13 minutes with an empty log, indistinguishable from a hang; the `flock -w 3600` waiter SURVIVES killing the runner and holds `lefthook` open until it is killed by name. Commit `.md`-only batches during fan-out and hold `.ts` changes until the agents are done, or the queued battery measures a tree the agents are still mutating — a result that describes neither the before nor the after state. **Also put "your final assistant message IS the deliverable; nothing you print to a tool log reaches me" in the SPAWN prompt, not only on resume** — two agents in that session ended on a status line and each cost a `SendMessage` round-trip to recover work already done.
+
    **Standing constraint for EVERY tier — a spawned agent never runs the gate.**
    Spawned agents run only the suites targeting the files they were given. **`SOLEUR_SUBAGENT=1` is
    a convention a lead MAY export before spawning — the harness does not set it** (measured
