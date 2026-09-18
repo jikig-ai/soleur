@@ -3,24 +3,39 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { configure } from "@testing-library/react";
 import { installViWaitForFloor } from "./helpers/install-vi-waitfor-floor";
 
+const fallbackStorageValues = new WeakMap<object, Map<string, string>>();
+let fallbackStoragePrototypeInstalled = false;
+
 function installStorageFallback(name: "localStorage" | "sessionStorage"): void {
   let available = false;
   try {
-    available = typeof globalThis[name] !== "undefined";
+    const candidate = globalThis[name];
+    available = typeof candidate !== "undefined" &&
+      (typeof Storage === "undefined" || Object.getPrototypeOf(candidate) === Storage.prototype);
   } catch {
     available = false;
   }
   if (available) return;
 
-  const values = new Map<string, string>();
-  const storage: Storage = {
-    get length() { return values.size; },
-    clear() { values.clear(); },
-    getItem(key) { return values.get(String(key)) ?? null; },
-    key(index) { return [...values.keys()][index] ?? null; },
-    removeItem(key) { values.delete(String(key)); },
-    setItem(key, value) { values.set(String(key), String(value)); },
-  };
+  const storagePrototype = typeof window !== "undefined" && typeof window.Storage !== "undefined"
+    ? window.Storage.prototype
+    : typeof Storage !== "undefined" ? Storage.prototype : Object.prototype;
+  if (typeof window !== "undefined" && typeof window.Storage !== "undefined") {
+    Object.defineProperty(globalThis, "Storage", { configurable: true, value: window.Storage });
+  }
+  if (!fallbackStoragePrototypeInstalled) {
+    Object.defineProperties(storagePrototype, {
+      length: { configurable: true, get() { return fallbackStorageValues.get(this)?.size ?? 0; } },
+      clear: { configurable: true, value(this: object) { fallbackStorageValues.get(this)?.clear(); } },
+      getItem: { configurable: true, value(this: object, key: string) { return fallbackStorageValues.get(this)?.get(String(key)) ?? null; } },
+      key: { configurable: true, value(this: object, index: number) { return [...(fallbackStorageValues.get(this)?.keys() ?? [])][index] ?? null; } },
+      removeItem: { configurable: true, value(this: object, key: string) { fallbackStorageValues.get(this)?.delete(String(key)); } },
+      setItem: { configurable: true, value(this: object, key: string, value: string) { fallbackStorageValues.get(this)?.set(String(key), String(value)); } },
+    });
+    fallbackStoragePrototypeInstalled = true;
+  }
+  const storage = Object.create(storagePrototype) as Storage;
+  fallbackStorageValues.set(storage, new Map());
   Object.defineProperty(globalThis, name, { configurable: true, value: storage });
   if (typeof window !== "undefined") {
     Object.defineProperty(window, name, { configurable: true, value: storage });

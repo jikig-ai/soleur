@@ -184,6 +184,8 @@ path alone cannot show that replay drift is visible.
 
 80. The component-project probe confirmed Node 22 exposes an undefined experimental `localStorage` unless `--localstorage-file` is supplied; the shared happy-dom setup therefore needed an in-memory fallback. The full component run exceeded the bounded 120-second window and left a Vitest child alive until it was terminated, while focused storage suites passed after the fallback. **Prevention:** keep browser-storage setup defensive and run broad component gates with explicit process cleanup and focused pass evidence.
 
+81. After the initial storage fallback, `sessionStorage` still retained happy-dom's separate prototype, so `Storage.prototype.setItem` spies missed debounced ChatInput writes even though persistence worked. Normalizing both storage globals to the same prototype made the final component shard pass. **Prevention:** when providing browser API fallbacks, align the object prototype with the constructor tests and application code use for every related global.
+
 ## Related
 
 - `knowledge-base/engineering/architecture/decisions/ADR-225-pluggable-web-agent-engine-boundary.md`
