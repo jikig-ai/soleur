@@ -2862,8 +2862,17 @@ case "$OP" in
           echo "::notice::op=luks-rollback: G1 — flag is 'done', which evidences a COMPLETED cutover; the reverse is permitted." ;;
         rolled-back)
           echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is already 'rolled-back'; this host is on the plaintext volume. Nothing to roll back."; exit 1 ;;
+        aborted)
+          # An abort BEFORE the swap leaves the host on plaintext with the pointer ABSENT, and G2
+          # refuses that below. An abort DURING A ROLLBACK (the reverse copy refused — a detached
+          # backstop, a T2 mismatch, a mapper that survived luksClose) leaves the host on the
+          # ENCRYPTED store with the pointer PRESENT and no other verb able to reach it: the FSM does
+          # not re-drive a rollback on its own, because the condition that refused it may need the
+          # operator (re-attach the backstop). The pointer is the declared authority for where the
+          # store is, so G2 decides — the flag alone says only that something stopped.
+          echo "::notice::op=luks-rollback: G1 — flag is 'aborted'. Permitted PROVISIONALLY: if the pointer is PRESENT (G2) the encrypted store is live and a rollback was interrupted, so the reverse is the way back; if it is absent, G2 refuses." ;;
         *)
-          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is '${LK_CUR:-unset}', not 'done'. Only a completed cutover can be reversed: from an in-flight or aborted state the on-host FSM has already restored the plaintext store itself (every refusal resumes the writers before it lands). Read the reason field on the inngest-luks-cutover rows. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::op=luks-rollback: G1 REFUSING — INNGEST_LUKS_CUTOVER is '${LK_CUR:-unset}', not 'done' (nor 'aborted'). An IN-FLIGHT flag means the on-host FSM is still driving — 'copied' re-drives the swap's bookkeeping forward every 30s, 'rollback' is a rollback already in progress — and writing over it would race it. Wait for a terminal flag on the inngest-luks-cutover Better Stack rows and read the reason field. Do NOT SSH the host."; exit 1 ;;
       esac
     fi
     # G2 — the DURABLE pointer. It outlives the host (Doppler), unlike the root-disk marker whose

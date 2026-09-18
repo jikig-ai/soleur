@@ -2825,6 +2825,12 @@ LK_G1FC=0;   grep -qF 'could not be read at all' "$LUKS_FILE" \
              && [[ "$(grep -c 'G1 REFUSING FAIL-CLOSED' "$LUKS_FILE")" -eq 2 ]] && LK_G1FC=1
 # ANCHORED as case ARMS, not as substrings: `present:luks-cutover-DISABLED)` contains
 # `present:luks-cutover`, so a substring grep passed a mutant that had disabled the arm (measured).
+# G1 for luks-rollback ADMITS `aborted` as its own case arm (the pointer decides at G2), and the
+# refusal text no longer asserts the FSM "has already restored the plaintext store itself" — false
+# for a rollback that refused mid-way (advisor consult at ship). Anchored as an arm, like G2's.
+LK_G1RB_ABORTED=0; grep -qE '^[[:space:]]*aborted\)' "$LUKS_FILE" \
+             && grep -qF "flag is 'aborted'. Permitted PROVISIONALLY" "$LUKS_FILE" \
+             && ! grep -qF 'has already restored the plaintext store itself' "$LUKS_FILE" && LK_G1RB_ABORTED=1
 LK_G2=0;     grep -qE '^[[:space:]]*present:luks-cutover\)' "$LUKS_FILE" \
              && grep -qE '^[[:space:]]*absent:luks-rollback\)' "$LUKS_FILE" \
              && grep -qE '^[[:space:]]*unreadable:\*\)' "$LUKS_FILE" \
@@ -2855,6 +2861,8 @@ assert "#6894 the confirm window is anchored at the WRITE, so a stale terminal r
   "[[ -n '$LK_TS_LN' && -n '$LK_WRITE_LN' && '$LK_TS_LN' -lt '$LK_WRITE_LN' && '$LK_ISO' -eq 1 ]]"
 assert "#6894 a rolled-back or aborted FSM is reported as a FAILED dispatch, never a green one (got $LK_ERRS ::error:: arms)" \
   "[[ '$LK_TERM' -eq 1 && '$LK_ERRS' -ge 8 ]]"
+assert "#6894 op=luks-rollback G1 admits 'aborted' as a case arm (G2's pointer decides), and no longer claims the FSM restored plaintext on every abort" \
+  "[[ '$LK_G1RB_ABORTED' -eq 1 ]]"
 assert "#6894 no raw Better Stack row is echoed by either verb (the standing purity contract)" \
   "! grep -qE 'jq \\.(\$|[^a-zA-Z_])' '$LUKS_FILE'"
 
@@ -2871,7 +2879,7 @@ _DISPATCHED=$((PASS + FAIL))
 #   stdout discarded, guards-before-write ordering, the pointer gate in both directions, the
 #   own-tag liveness + confirm, the write-anchored confirm window, and the terminal-flag reporting).
 #   Re-derived at the merge with main's #8178 row: 649 + 15, measured, not summed from memory.
-_EXACT_FLOOR=664
+_EXACT_FLOOR=665
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

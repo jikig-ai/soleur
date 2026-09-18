@@ -85,6 +85,9 @@
 #                  count rose -- a rise in an existing row would be a regression, a new
 #                  file is churn.
 #
+#   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
+#                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
+#                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
 #   1427 -> 1439   #6894 added three NEW files (the additive blue-green LUKS cutover). Verified
 #                  against the rule the two rows above set: none of the three existed on
 #                  origin/main, and NO pre-existing row moved -- the diff is three added lines.
@@ -165,7 +168,7 @@
 2	apps/web-platform/infra/inngest-doublefire-probe.sh
 5	apps/web-platform/infra/inngest-inventory.sh
 1	apps/web-platform/infra/inngest-inventory.test.sh
-10	apps/web-platform/infra/inngest-luks-cutover.sh
+11	apps/web-platform/infra/inngest-luks-cutover.sh
 1	apps/web-platform/infra/inngest-luks-cutover.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh

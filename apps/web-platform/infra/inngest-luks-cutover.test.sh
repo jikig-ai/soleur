@@ -387,12 +387,21 @@ if [ "$RC" -ne 0 ] && reason_seen 'unexpected-exit' && ! grep -q '^stop ' "$W/sy
 world dw-pointer
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %s/pointer.log\nexit 1\n' "$W" > "$W/bin/pointer"
 run armed
-if [ "$RC" -ne 0 ] && reason_seen 'unexpected-exit' && [ "$(tail -1 "$W/flag.log")" = "aborted" ]; then ok "Doppler write: a failed POINTER write mid-swap aborts (ERR trap), flag terminal"; else no "Doppler pointer write: rc=$RC last flag [$(tail -1 "$W/flag.log")]"; fi
+# NOT terminal. The swap has LANDED when the pointer write runs (PHASE=swapped), so an abort here
+# must leave the flag where the next tick can finish the bookkeeping: `copied`, which the copied)
+# arm hands to repair_forward_if_swapped. An earlier version of this row asserted `aborted` — the
+# host serving encrypted with the pointer absent and no verb able to reach it (advisor consult).
+if [ "$RC" -ne 0 ] && reason_seen 'unexpected-exit' && [ "$(tail -1 "$W/flag.log")" = "copied" ]; then ok "Doppler write: a failed POINTER write mid-swap aborts (ERR trap) to `copied`, NOT terminal — the swap landed and only bookkeeping remains"; else no "Doppler pointer write: rc=$RC last flag [$(tail -1 "$W/flag.log")]"; fi
 # The durable pointer is the LAST write of the swap, so a failed pointer write leaves the host
 # CORRECTLY SERVING THE ENCRYPTED STORE with only Doppler stale — which is the safe direction and
 # the reason for that ordering. What must hold is that the on-host world is self-consistent (mapper
 # mounted, env and fstab naming it) and that the writers came back.
 if [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$LUKS_ID" "$W/etc/inngest-luks" && grep -qF "$W/mapper/inngest-redis $W/mnt/data " "$W/etc/fstab" && [ -e "$W/units/inngest-redis.service" ]; then ok "Doppler pointer write failed LAST: the host serves the encrypted store, env and fstab agree with it, writers resumed — only Doppler lags"; else no "Doppler pointer restore: /mnt/data=[$(src_of "$W/mnt/data")] env=[$(tr '\n' '|' < "$W/etc/inngest-luks")] fstab=[$(tr '\n' '|' < "$W/etc/fstab")]"; fi
+# THE NEXT TICK FINISHES IT. Doppler is back (the stub records again); the flag reads `copied`, the
+# mount says the swap happened, and the repair writes the pointer the previous tick could not.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %s/pointer.log\nexit 0\n' "$W" > "$W/bin/pointer"
+run copied
+if [ "$RC" -eq 0 ] && [ "$(tail -1 "$W/flag.log")" = "done" ] && [ "$(tail -1 "$W/pointer.log")" = "set $LUKS_ID" ] && reason_seen repair-forward; then ok "Doppler pointer write failed LAST, next tick: the copied) arm repairs forward, writes the pointer, and reaches done"; else no "Doppler pointer next tick: rc=$RC flag=[$(tail -1 "$W/flag.log")] pointer=[$(tail -1 "$W/pointer.log")]"; fi
 
 # ═══ Rollback is DATA-SAFE: writes made on the encrypted store come back ════════════════════
 world rbdata
@@ -674,6 +683,68 @@ run armed >/dev/null 2>&1 || true
 : > "$W/flag.log"; printf '1' > "$W/aof.rc"    # the reverse copy's T2 fails
 run rollback "$LUKS_ID"
 if [ "$RC" -ne 0 ] && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ -e "$W/units/inngest-redis.service" ]; then ok "rollback abort: the ENCRYPTED store stays mounted (the frozen branch's 'plaintext is canonical' is false here) and writers resume"; else no "rb-abort: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] redis=$([ -e "$W/units/inngest-redis.service" ] && echo up || echo DOWN)"; fi
+world unmounted-window-no-mapper
+# SIGKILL between swap_forward's `umount "$MNT"` and its luksOpen: nothing mounted at /mnt/data,
+# no canonical mapper, staging torn down, the copy latch present, flag still `copied`. The next
+# tick used to refuse `not-a-mount` — terminal — and resume Redis onto a bare directory.
+run armed >/dev/null 2>&1 || true
+"$W/bin/umount" "$W/mnt/data"; "$W/bin/cryptsetup" luksClose inngest-redis
+"$W/bin/systemctl" stop inngest-redis.service; "$W/bin/systemctl" stop inngest-server.service
+printf ' inngest-redis.service inngest-server.service\n' > "$W/state/frozen-active"
+python3 - "$W" <<'PY2'
+import sys,re,os
+w=sys.argv[1]; p=os.path.join(w,'etc','inngest-luks'); s=open(p).read()
+open(p,'w').write(re.sub(r'^INNGEST_LUKS_ACTIVE_VOLUME_ID=.*\n?','',s,flags=re.M))
+PY2
+: > "$W/flag.log"; : > "$W/pointer.log"
+run copied
+if [ "$RC" -eq 0 ] && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ "$(tail -1 "$W/flag.log")" = "done" ] && [ -e "$W/units/inngest-redis.service" ] && reason_seen repair-remount; then ok "unmounted window (no mapper): the next tick re-opens the canonical mapper, re-mounts it, finishes the bookkeeping and reaches done with the scheduler up"; else no "unmounted-window-no-mapper: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] flag=[$(tail -1 "$W/flag.log")] redis=$([ -e "$W/units/inngest-redis.service" ] && echo up || echo DOWN) reasons=$(grep -o '"reason":"[^"]*' "$W/log" | tr '\n' ' ')"; fi
+world unmounted-window-mapper-open
+# The same kill one step later: the canonical mapper is open but nothing is mounted.
+run armed >/dev/null 2>&1 || true
+"$W/bin/umount" "$W/mnt/data"
+"$W/bin/systemctl" stop inngest-redis.service; "$W/bin/systemctl" stop inngest-server.service
+printf ' inngest-redis.service inngest-server.service\n' > "$W/state/frozen-active"
+: > "$W/flag.log"
+run copied
+if [ "$RC" -eq 0 ] && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ "$(tail -1 "$W/flag.log")" = "done" ] && [ -e "$W/units/inngest-redis.service" ]; then ok "unmounted window (mapper open): the next tick re-mounts the open mapper rather than opening a second one, and reaches done"; else no "unmounted-window-mapper-open: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] flag=[$(tail -1 "$W/flag.log")]"; fi
+world torn-down-staging
+# SIGKILL between `umount "$STAGING_MNT"` + `luksClose staging` and `umount "$MNT"`: plaintext is
+# still the store, the staging mapper is gone, the copy latch is present, flag `copied`. Every
+# re-arm used to refuse `staging-not-a-mount` until a reboot re-staged the volume.
+printf 'copy_verified_at=x k_freeze=15 e_freeze=2\n' > "$W/state/copy-verified.latch"
+"$W/bin/umount" "$W/mnt/data-luks"; "$W/bin/cryptsetup" luksClose inngest-redis-staging
+"$W/bin/systemctl" stop inngest-redis.service; "$W/bin/systemctl" stop inngest-server.service
+printf ' inngest-redis.service inngest-server.service\n' > "$W/state/frozen-active"
+run copied
+if [ "$RC" -eq 0 ] && reason_seen repair-restage && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ "$(tail -1 "$W/flag.log")" = "done" ] && same_tree "$W/fs/plain" "$W/fs/luks-inner"; then ok "torn-down staging: the next tick re-stages the additive volume, re-verifies the copy against the plaintext store, and completes the swap"; else no "torn-down-staging: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] flag=[$(tail -1 "$W/flag.log")] reasons=$(grep -o '"reason":"[^"]*' "$W/log" | tr '\n' ' ')"; fi
+world rb-unmounted-window
+# A rollback killed after `luksClose` and before the final `mount "$plain_dev" "$MNT"`: the reverse
+# copy was PROVEN (latch), the mapper is gone, nothing is mounted. Copying again would refuse
+# `copy-src-not-a-mount`; the re-entry mounts the plaintext volume and finishes the bookkeeping.
+run armed >/dev/null 2>&1 || true
+: > "$W/flag.log"; : > "$W/pointer.log"
+cp -a "$W/fs/luks-inner/." "$W/fs/plain/"    # the reverse copy already landed (proven by the latch)
+printf 'rollback_verified_at=x\n' > "$W/state/rollback-verified.latch"
+"$W/bin/umount" "$W/mnt/data"; "$W/bin/cryptsetup" luksClose inngest-redis
+"$W/bin/systemctl" stop inngest-redis.service; "$W/bin/systemctl" stop inngest-server.service
+printf ' inngest-redis.service inngest-server.service\n' > "$W/state/frozen-active"
+run rollback "$LUKS_ID"
+if [ "$RC" -eq 0 ] && reason_seen rollback-remount && [ "$(src_of "$W/mnt/data")" = "$W/byid/scsi-0HC_Volume_${PLAIN_ID}" ] && [ "$(src_of "$W/mnt/data-luks")" = "$W/mapper/inngest-redis-staging" ] && [ "$(tail -1 "$W/pointer.log")" = "clear" ] && [ "$(tail -1 "$W/flag.log")" = "rolled-back" ] && [ ! -e "$W/state/rollback-verified.latch" ] && [ -e "$W/units/inngest-redis.service" ]; then ok "rollback unmounted window: the re-entry mounts the plaintext volume, re-stages the additive one, clears the pointer, consumes its latch and reaches rolled-back with the scheduler up"; else no "rb-unmounted-window: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] staging=[$(src_of "$W/mnt/data-luks")] pointer=[$(tail -1 "$W/pointer.log")] flag=[$(tail -1 "$W/flag.log")] latch=$([ -e "$W/state/rollback-verified.latch" ] && echo present || echo gone) reasons=$(grep -o '"reason":"[^"]*' "$W/log" | tr '\n' ' ')"; fi
+world rb-mapper-survives-close
+# luksClose returns 0 but the mapper survives (a holder the kernel would not report): rollback
+# refuses `rollback-mapper-still-open` with /mnt/data UNMOUNTED. The restore used to resume Redis
+# onto the bare directory; now it puts the still-open mapper back first.
+run armed >/dev/null 2>&1 || true
+: > "$W/flag.log"
+python3 - "$W/bin/cryptsetup" <<'PY2'
+import sys; p=sys.argv[1]; s=open(p).read()
+s=s.replace('luksClose) rm -f "$W/mapper/${a[0]}"; rm -rf "$W/sys/${a[0]}" ;;', 'luksClose) [ "${a[0]}" = inngest-redis ] || { rm -f "$W/mapper/${a[0]}"; rm -rf "$W/sys/${a[0]}"; } ;;')
+open(p,'w').write(s)
+PY2
+grep -q 'inngest-redis \]' "$W/bin/cryptsetup" || { printf '[FATAL] rb-mapper-survives-close fixture: the luksClose override did not land\n' >&2; exit 2; }
+run rollback "$LUKS_ID"
+if [ "$RC" -ne 0 ] && reason_seen rollback-mapper-still-open && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ -e "$W/units/inngest-redis.service" ] && [ "$(tail -1 "$W/flag.log")" = "aborted" ]; then ok "rollback refused with /mnt/data unmounted: the restore re-mounts the still-open mapper before resuming, so Redis starts on a store (flag aborted, pointer present — the dispatcher admits a re-dispatch)"; else no "rb-mapper-survives-close: rc=$RC /mnt/data=[$(src_of "$W/mnt/data")] redis=$([ -e "$W/units/inngest-redis.service" ] && echo up || echo DOWN) flag=[$(tail -1 "$W/flag.log")] reasons=$(grep -o '"reason":"[^"]*' "$W/log" | tr '\n' ' ')"; fi
 world refuse-resumes
 # A refusal in a process that did NOT perform the freeze: PHASE is init, the record is on disk.
 run armed >/dev/null 2>&1 || true
@@ -764,7 +835,7 @@ _unverified="$(awk '/^ *copy_store "/{c=NR; getline nxt; if (nxt !~ /t2_verify/)
 if [ "$_copies" -ge 3 ] && [ "$_unverified" -eq 0 ] && [ "$(grep -cE '^[^#]*cp -a ' "$SUT")" -eq 1 ]; then ok "structural: ${_copies} copy sites, each immediately T2-verified, through one cp -a"; else no "structural: copy sites=${_copies} unverified=${_unverified} cp-a=$(grep -cE '^[^#]*cp -a ' "$SUT")"; fi
 
 # ═══ FLOOR — reported directly, never through ok()/no() ═══════════════════════════════════════
-_floor=90
+_floor=96
 if [ "$executed" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$executed" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
 printf '\n=== inngest-luks-cutover.test.sh: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$executed" "$_floor"

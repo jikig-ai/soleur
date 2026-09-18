@@ -252,6 +252,21 @@ restore_service_best_effort() {
     if [[ -e "$MAPPER_DIR/$CANON_NAME" ]]; then cryptsetup_cmd luksClose "$CANON_NAME" 2>/dev/null || true; fi
     mount "$(dev_for "$PLAIN_ID")" "$MNT" 2>/dev/null || true
   fi
+  # THE ROLLBACK-PHASE REPAIR, the mirror image: during rollback() the canonical mapper IS the
+  # store, and the only window in which /mnt/data is not a mount is between its `umount "$MNT"` and
+  # the final `mount "$plain_dev" "$MNT"`. A refusal or kill inside that window (rollback-mapper-
+  # still-open is the named one) used to fall through to resume_writers, which started Redis onto a
+  # bare root-disk directory; the Redis mount guard refused, and the scheduler was dark until a
+  # reboot. Put a store back first: the mapper if it is still open (the reverse copy is not known
+  # complete until luksClose succeeded), else the plaintext volume if this rollback's own latch says
+  # the reverse copy was verified.
+  if [[ "$PHASE" == rollback ]] && ! is_real_mount "$MNT"; then
+    if [[ -e "$MAPPER_DIR/$CANON_NAME" ]]; then
+      mount "$MAPPER_DIR/$CANON_NAME" "$MNT" 2>/dev/null || true
+    elif [[ -s "$STATE_DIR/rollback-verified.latch" ]]; then
+      mount "$(dev_for "$PLAIN_ID")" "$MNT" 2>/dev/null || true
+    fi
+  fi
   # RESUME ON THE RECORD, not on the phase. A process that did not perform the freeze (the tick
   # AFTER a kill) has PHASE=init and would resume nothing — which is how a crash mid-swap left the
   # sole scheduler stopped with the flag driven terminal, permanently, on a host with no way in.
@@ -262,10 +277,33 @@ restore_service_best_effort() {
 }
 
 # refuse <reason> <detail> — a guard said no. Restore service, go terminal, exit 1.
+# THE FLAG AN ABORT WRITES. `aborted` is TERMINAL — the next tick no-ops on it — so it is only
+# correct when the host is back in a world a re-dispatch can act on. A swap that has LANDED is not
+# that world: PHASE=swapped means /mnt/data is already the canonical mapper on the additive volume
+# and only the bookkeeping (envfile, fstab, the durable pointer) is incomplete. swap_forward's own
+# comment says "the next 30s tick can finish" that bookkeeping, and that was true only for a
+# SIGKILL, which skips every trap and leaves the flag at `copied`. A SIGTERM (TimeoutStartSec), an
+# ERR-trapped Doppler failure on the pointer write, or a refusal inside envfile_pointer/fstab_set
+# all ran through here and wrote `aborted` — a host serving the encrypted store with the pointer
+# ABSENT, no verb able to reach it (luks-cutover refuses on-host as canonical-not-plaintext,
+# luks-rollback refuses at G2 on the absent pointer), and a reboot before fstab was rewritten
+# serving the STALE plaintext store. Found at the ship-time advisor consult. Writing `copied`
+# instead hands the next tick to repair_forward_if_swapped, which re-drives the bookkeeping; a
+# refusal that persists there loops every 30s under this unit's own tag, which is LOUD, where
+# `aborted` was silent.
+#
+# A rollback-phase abort still writes `aborted`: re-driving a rollback automatically is not safe
+# (the backstop may be detached — rollback-no-backstop), so it is left to the operator, and the
+# dispatcher's G1 admits `aborted` for op=luks-rollback when the pointer is PRESENT, because the
+# pointer — not the flag — is the declared authority for where the store is.
+abort_flag() {
+  if [[ "${PHASE:-init}" == swapped ]]; then printf 'copied'; else printf 'aborted'; fi
+}
 refuse() {
-  emit_state 1 "$1" aborted "$2"
+  local f; f="$(abort_flag)"
+  emit_state 1 "$1" "$f" "$2"
   restore_service_best_effort
-  flag_set aborted
+  flag_set "$f"
   exit 1
 }
 
@@ -336,6 +374,17 @@ freeze_writers() {
   PHASE=frozen
   for u in $FREEZE_TIMERS $FREEZE_SERVICES; do
     if systemctl_cmd is-active --quiet "$u"; then active="$active $u"; fi
+  done
+  # UNION with the record a previous process left, never overwrite it. A re-entry after a kill
+  # (the copied) and rollback) arms both freeze again) finds the units that earlier freeze stopped
+  # already INACTIVE — so they are not in this pass's `active`, and an overwrite would drop them
+  # from the record for good: the resume then restarts only what THIS pass stopped (the timers) and
+  # Redis stays down with the flag reading rolled-back. Measured in the rb-unmounted-window world.
+  # resume_writers consumes the record, so a union never resumes a unit twice across ticks.
+  local prev u2
+  prev="$(cat "$(FROZEN_RECORD)" 2>/dev/null || true)"
+  for u2 in $prev; do
+    case " $active " in *" $u2 "*) : ;; *) active="$active $u2" ;; esac
   done
   mkdir -p "$STATE_DIR" 2>/dev/null || true
   printf '%s\n' "$active" > "$(FROZEN_RECORD)" 2>/dev/null || true
@@ -600,6 +649,22 @@ swap_forward() {
 # canonical mapper backed by the additive volume, the swap succeeded and only the bookkeeping is
 # missing — so finish the bookkeeping in the same order swap_forward writes it.
 repair_forward_if_swapped() {
+  # THE UNMOUNTED WINDOW. A kill without a trap (SIGKILL, OOM) between swap_forward's `umount "$MNT"`
+  # and its `mount "$MAPPER_DIR/$CANON_NAME" "$MNT"` leaves nothing mounted at /mnt/data: the next
+  # tick has PHASE=init, the frozen-only mount repair does not fire, the check below sees no mapper
+  # mount, and assert_precutover_topology refuses `not-a-mount` — terminal, with the writers
+  # resumed onto a bare directory the Redis guard refuses. Dark until a reboot. The world is
+  # identifiable: the copy latch is present (T2 passed), staging is torn down (swap_forward's first
+  # two steps), and /mnt/data is not a mount. Every step of swap_forward past that point is
+  # idempotent, so re-drive it: open the canonical mapper if the kill landed before luksOpen, mount
+  # it, and fall into the bookkeeping below.
+  if ! is_real_mount "$MNT" && ! is_real_mount "$STAGING_MNT" && [[ -s "$STATE_DIR/copy-verified.latch" ]]; then
+    if [[ ! -e "$MAPPER_DIR/$CANON_NAME" ]]; then
+      printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup_cmd luksOpen --key-file - "$(dev_for "$LUKS_ID")" "$CANON_NAME"
+    fi
+    mount "$MAPPER_DIR/$CANON_NAME" "$MNT"
+    emit_state 0 repair-remount swapped "a kill landed between the two mounts of the swap; the canonical mapper is re-mounted"
+  fi
   mounted_from "$MNT" "$MAPPER_DIR/$CANON_NAME" || return 1
   backing_is "$CANON_NAME" "$(dev_for "$LUKS_ID")" \
     || refuse repair-wrong-backing "$MNT is the canonical mapper but it is not backed by the additive volume"
@@ -611,6 +676,24 @@ repair_forward_if_swapped() {
   systemctl_cmd daemon-reload || true
   [[ -n "$(current_pointer)" ]] || pointer_cmd set "$LUKS_ID"
   return 0
+}
+# THE TORN-DOWN STAGING WINDOW, the other half of the same kill. Between swap_forward's
+# `umount "$STAGING_MNT"` and its `umount "$MNT"`, plaintext is still the store but the staging
+# mapper is unmounted (and, one step later, closed). The next tick's assert_precutover_topology
+# then refuses `staging-not-a-mount` on every re-arm until a reboot re-stages the volume. The
+# pre-cutover topology is cheap to restore and every step is idempotent, and the `copied)` arm
+# re-verifies the copy against the plaintext store (t2_check) before it swaps, so nothing here
+# trusts the latch. Only fires when /mnt/data IS the plaintext volume — the forward repair above
+# owns the other world.
+restage_if_torn_down() {
+  mounted_from "$MNT" "$(dev_for "$PLAIN_ID")" || return 0
+  is_real_mount "$STAGING_MNT" && return 0
+  if [[ ! -e "$MAPPER_DIR/$STAGING_NAME" ]]; then
+    printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup_cmd luksOpen --key-file - "$(dev_for "$LUKS_ID")" "$STAGING_NAME"
+  fi
+  mkdir -p "$STAGING_MNT"
+  mount "$MAPPER_DIR/$STAGING_NAME" "$STAGING_MNT"
+  emit_state 0 repair-restage copied "a kill landed after the staging teardown; the staging mapper is re-mounted so the swap can re-drive"
 }
 
 # ── T3: after the restart, on the canonical mapper ─────────────────────────────────────────────
@@ -655,6 +738,17 @@ rollback() {
   PHASE=rollback
   assert_quiesced "$MNT"
   mkdir -p "$PLAIN_MNT"
+  # RE-ENTRY ACROSS THE UNMOUNTED WINDOW: a rollback killed after `luksClose` but before the final
+  # `mount "$plain_dev" "$MNT"` left nothing at /mnt/data and the reverse copy already PROVEN (the
+  # latch written after t2_verify below). Copying again would refuse `copy-src-not-a-mount` —
+  # terminal, and dark. Put the plaintext volume back and take the finished path below. The mapper
+  # must be gone: with it open the reverse copy is not known complete, and the plain volume would
+  # be mounted under an open canonical mapper — the pair the Redis guard refuses.
+  if ! is_real_mount "$MNT" && [[ ! -e "$MAPPER_DIR/$CANON_NAME" ]] && [[ -s "$STATE_DIR/rollback-verified.latch" ]]; then
+    if mountpoint -q "$PLAIN_MNT" 2>/dev/null; then umount "$PLAIN_MNT"; fi
+    mount "$plain_dev" "$MNT"
+    emit_state 0 rollback-remount rollback "a kill landed after the reverse copy was proven; the plaintext volume is re-mounted"
+  fi
   # RE-ENTRY: a rollback killed after its final `mount "$plain_dev" "$MNT"` already put the store
   # back. Mounting the same device at the staging path too would give copy_store two views of one
   # filesystem — the wipe above. If /mnt/data is already the plaintext volume, the move is done.
@@ -662,8 +756,19 @@ rollback() {
     emit_state 0 rollback-already-restored rollback "/mnt/data is already the plaintext volume; finishing the bookkeeping"
     envfile_pointer ""
     fstab_set "$MNT" "$plain_dev $MNT ext4 defaults,nofail 0 2"
+    # The pre-cutover world has the additive volume STAGED; a re-entry that skipped the teardown
+    # below also skipped the re-stage, so do it here when it is missing (idempotent).
+    if ! is_real_mount "$STAGING_MNT"; then
+      if [[ ! -e "$MAPPER_DIR/$STAGING_NAME" ]]; then
+        printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup_cmd luksOpen --key-file - "$luks_dev" "$STAGING_NAME"
+      fi
+      mkdir -p "$STAGING_MNT"
+      mount "$MAPPER_DIR/$STAGING_NAME" "$STAGING_MNT"
+      fstab_set "$STAGING_MNT" "$MAPPER_DIR/$STAGING_NAME $STAGING_MNT ext4 defaults,nofail 0 2"
+    fi
     systemctl_cmd daemon-reload || true
     pointer_cmd clear
+    rm -f "$STATE_DIR/rollback-verified.latch"
     PHASE=init
     resume_writers
     return 0
@@ -677,6 +782,11 @@ rollback() {
   # before anything points at the plaintext volume again.
   copy_store "$MNT" "$PLAIN_MNT"
   t2_verify "$MNT" "$PLAIN_MNT"
+  # Proven-equal is recorded BEFORE the teardown that follows, in this FSM's own state dir: it is
+  # what lets a re-entry (and restore_service_best_effort) put the plaintext volume back at
+  # /mnt/data after a kill in the unmounted window without copying again from a source that is no
+  # longer mounted.
+  mkdir -p "$STATE_DIR" && printf 'rollback_verified_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/rollback-verified.latch"
   umount "$PLAIN_MNT"
   umount "$MNT"
   cryptsetup_cmd luksClose "$CANON_NAME"
@@ -698,6 +808,7 @@ rollback() {
   fstab_set "$STAGING_MNT" "$MAPPER_DIR/$STAGING_NAME $STAGING_MNT ext4 defaults,nofail 0 2"
   systemctl_cmd daemon-reload || true
   pointer_cmd clear
+  rm -f "$STATE_DIR/rollback-verified.latch"
   PHASE=init
   resume_writers
 }
@@ -745,9 +856,10 @@ finish_after_swap() {
 # kill between the freeze and the resume would otherwise leave every writer stopped.
 on_term() {
   trap - ERR TERM
+  local f; f="$(abort_flag)"
   restore_service_best_effort
-  flag_set aborted 2>/dev/null || true
-  emit_state 143 terminated aborted "SIGTERM in phase $PHASE"
+  flag_set "$f" 2>/dev/null || true
+  emit_state 143 terminated "$f" "SIGTERM in phase $PHASE"
   exit 143
 }
 
@@ -757,9 +869,10 @@ on_unexpected_exit() {
   # Resume first: an unhandled failure must not leave the sole scheduler dark. The Redis mount guard
   # is the safety net that makes this safe in every phase — it refuses to start Redis onto a
   # /mnt/data that does not match the mapper state.
+  local f; f="$(abort_flag)"
   restore_service_best_effort
-  flag_set aborted 2>/dev/null || true
-  emit_state "$rc" "unexpected-exit(from=$(read_flag 2>/dev/null || echo unknown))" aborted
+  flag_set "$f" 2>/dev/null || true
+  emit_state "$rc" "unexpected-exit(from=$(read_flag 2>/dev/null || echo unknown))" "$f"
   exit "$rc"
 }
 
@@ -803,6 +916,7 @@ main() {
         finish_after_swap
         return
       fi
+      restage_if_torn_down
       assert_precutover_topology
       read -r K_FREEZE E_FREEZE <<< "$(keyspace_sum)" || true
       is_uint "$K_FREEZE" && is_uint "$E_FREEZE" || { K_FREEZE=0; E_FREEZE=0; }
