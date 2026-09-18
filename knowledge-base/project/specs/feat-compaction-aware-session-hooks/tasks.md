@@ -63,7 +63,7 @@ Full results: the plan's `## Addendum — 2026-09-18 (Phase 0 payload probe: mea
 
 ## Phase 6 — Verification
 
-- [ ] 6.1 All 21 acceptance criteria checked against real command output.
-- [ ] 6.2 `TEST_GROUP=all bash scripts/test-all.sh` green; verdict read from the rc file, never a completion notification.
-- [ ] 6.3 `c4-count-parity.test.sh` + `c4-*.test.ts` green.
+- [x] 6.1 All acceptance criteria checked against real command output, **one at a time** — never a bulk checkbox toggle. 21 of 22 pass (AC1–AC19, AC21, AC22); each AC in the suite's scope is mapped to the named case that asserts it, and the mapping printed `ok` for all 13. AC17's text is amended in place rather than ticked against a criterion that no longer describes what shipped.
+- [ ] 6.2 `TEST_GROUP=all bash scripts/test-all.sh` — **rc=4, REFUSED, nothing ran.** A sibling worktree held a full-gate run (measured, #7553). Not a pass and not a fail; overriding with `SOLEUR_ALLOW_FULL_GATE=1` would put two full gates on one box, which is what the refusal prevents. Substitute set derived from the diff's new `SOLEUR_COMPACTION_*` vocabulary and from consumers of the changed artifacts (20 suites + 4 vitest c4 files) all green — see the plan's AC20 note for the roster. The battery runs at the `/ship` Phase 4 checkpoint, its sanctioned position (ADR-183).
+- [x] 6.3 `c4-count-parity.test.sh` green; `c4-model-freshness.test.sh` green after regenerating `model.likec4.json`; 4 vitest `c4-*` suites, 36 tests, green run CI-equivalent (no Doppler).
 - [ ] 6.4 `/soleur:review`, then `/soleur:compound`, then `/soleur:ship`.
