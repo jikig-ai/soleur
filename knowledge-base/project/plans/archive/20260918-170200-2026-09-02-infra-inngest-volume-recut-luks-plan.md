@@ -1625,3 +1625,37 @@ know `INNGEST_REDIS_LUKS_KEY`. Since this merge puts the passphrase pair in the 
 allowlist (AC B5), the secret lands at merge — from which point `n_total != n_inngest` FATALs every
 re-provision, with no Vector to report it. Admitted, placed before `HEARTBEAT_URL` so the existing
 top-level-anchor assertion still reads, and pinned behaviourally rather than by source fragment.
+
+## Addendum — 2026-09-18 (#7695) — reconciled against the completed cutover; P1–P10 superseded
+
+Merge A (2026-09-02) and Merge B (2026-09-04, PR #7778) delivered as recorded above, and the later
+`probe_schema` fixes landed after them (through #8019 → `probe_schema=8`, the schema the live
+host emits). The post-merge dispatch sequence P1–P10 — Dispatch A (host replace) → Dispatch B
+(`inngest-volume-recut`) → Dispatch C (host replace) — **never ran**. What happened instead, measured
+from the probe rows' `instance_id` (`measurements.md` §5 on the 2026-09-18 spec):
+
+- Eight host replaces since Merge B, none of them Dispatch A/C: five on 2026-09-09 (the
+  `probe_schema` 4→7 iterations and the `user_data`-over-cap recreate, #7965), one on 2026-09-10
+  (`probe_schema=8`, #8019), two on 2026-09-17 (the inherited-`done` incident, recovered with
+  `op=resume`). The volume `106261946` was re-attached each time; it was never recut.
+- The dedicated-host cutover completed on 2026-09-15 through the **standard** `op=arm` path (run
+  34948112813, ADR-100 addendum 2026-09-15) on that same plaintext volume. The one authorized
+  `FLUSHALL` was spent there, and `record_flush_latch` wrote the durable latch it was designed to.
+
+Consequences for the sequence:
+
+- **P1** superseded — `probe_schema=8` rows land on every boot already; no Dispatch A is pending.
+- **P2 is MET but unconsumed** — `inngest-host-not-serving-7674.sh` reads PASS (rc=0,
+  `registry_fns=70`), which is what G18 of the recut gate requires; nothing dispatches on it.
+- **P3–P8** superseded — Guard 2 is unreachable on `INNGEST_CUTOVER_FLIP=done` (G19), and G9/G13
+  refuse the serving host and the populated store (`redis_keys=1261` on 2026-09-18). The
+  `redis_keys > 0` branch of P5's verdict table routes to ADR-142, whose additive blue-green path
+  (PR #8248, #6894) copies the store and never flushes it.
+- **P9** (ledger flip to `luks`) and **P10** (the Art. 5(2) destruction record) belong to the
+  ADR-142 path: the ledger keeps its plaintext exception and the destruction record stays
+  `status: template`, because nothing has been destroyed and nothing is scheduled to be.
+
+The target this plan built is **dormant on volume `106261946`**; retire-or-keep is undecided and
+decided on #8316 after PR 8248 lands; the append-only latch clear that would make an empty store
+reachable is #7777's. This plan and its spec are archived with #7695 (ADR-100 addendum 2026-09-18;
+runbook `inngest-server.md` G3.7 "Post-cutover status").

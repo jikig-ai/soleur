@@ -61,7 +61,8 @@ fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and
 
 This is the **other** browser-automation symptom #6605 reported (the "MCP tools
 de-register" half) — distinct from the agent-browser CLI hang above, and covering the
-Playwright **MCP** stack. If a `mcp__playwright__browser_*` call returns
+Playwright **MCP** stack. If a `mcp__plugin_soleur_playwright__browser_*` call
+(or the same call on a host's own `mcp__playwright__*` registration) returns
 `browserBackend.callTool: Target page, context or browser has been closed`, the browser
 backend dropped while the MCP server itself stayed registered (a lifecycle event, not a
 dead tool).
@@ -351,18 +352,48 @@ Use Playwright MCP when:
 
 ### Wrapping the server
 
-**Manual until #8156.** The plugin ships `playwright-mcp-redact-proxy.py` next
-to the redactor but registers NO Playwright server, so a customer registration
-is wrapped only by the customer's own configuration; this repository's own
-`.mcp.json` is wrapped. On a registration routed through the proxy, every
-`tools/call` result is rewritten through `redact-a11y-snapshot.py` at the stdio
-boundary — between the server's stdout and the client's stdin, before the model
-reads it — which is what "redacted in flight" means: a content rewrite, not
-encryption and not transport security. A registration not routed through it is
-not covered by anything at runtime (#7980).
+**The plugin registers the wrapped server.** `plugins/soleur/.mcp.json`
+registers `playwright` with `python3` running
+`"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py"`
+in front of `npx @playwright/mcp@0.0.78`, so on Claude Code its tools arrive as
+`mcp__plugin_soleur_playwright__*` — already wrapped, no customer
+configuration. The registration passes
+`--user-data-dir-name soleur-playwright-mcp-profile`, so the wrapped browser
+runs on its own profile under `$XDG_CACHE_HOME` (default `~/.cache`), separate
+from any `playwright` registration the customer configured themselves. On a
+registration routed through the proxy, every `tools/call` result is rewritten
+through `redact-a11y-snapshot.py` at the stdio boundary — between the server's
+stdout and the client's stdin, before the model reads it — which is what
+"redacted in flight" means: a content rewrite, not encryption and not
+transport security. A registration not routed through it is not covered by
+anything at runtime (#7980). **The registration ships no config and no env
+block, so the server runs upstream defaults: headed — a visible Chrome window
+opens when a tool drives the browser — on channel `chrome` (real Google
+Chrome).** Headed is deliberate: the credential-handoff flows need an
+operator-visible window. On a display-less host or where Chrome is absent the
+server still connects but browser tools fail to launch — see the playbook at
+the end of this section.
 
-The registration shape (`.mcp.json`), with the proxy referenced through the bare
-plugin-root anchor per ADR-179:
+**Preconditions.** The plugin server exists only where all of these hold: the
+session is Claude Code ≥2.1.139 with the soleur plugin installed; `python3`
+and `npx` are on `PATH` and both scripts sit under `${CLAUDE_PLUGIN_ROOT}` (the
+proxy refuses to start beside a missing redactor); and the server is not
+toggled off in `/mcp`. Devin's local CLI also discovers a plugin-root
+`.mcp.json` (its own documentation), so the tools may appear there too —
+still wrapped; on Codex discovery is unverified. On any harness that does
+not discover it, a disabled toggle, or a failed precondition,
+`mcp__plugin_soleur_playwright__*` simply does not
+exist — treat it as a missing registration and take the file-form path the
+calling skill prescribes (the `filename:` + redactor + shred form on the
+registration that does answer, or `agent-browser`), never a bare
+`browser_snapshot` on an unwrapped server. **The `/mcp` toggle** can disable
+the plugin's `playwright` server without uninstalling the plugin; while it is
+off the tools are absent for the whole session and the same fallback applies.
+
+**Wrap your own registration (advanced).** A customer's own `playwright`
+registration is not covered by the plugin server — it stays unwrapped unless
+the customer routes it through the proxy, with the proxy referenced through the
+bare plugin-root anchor per ADR-179:
 
 ```json
 {
@@ -383,11 +414,14 @@ plugin-root anchor per ADR-179:
 Claude Code does not expand `${CLAUDE_PLUGIN_ROOT}` inside a project `.mcp.json`
 (the variable exists for plugin-provided servers). Replace it with the
 `installPath` that `claude plugin list --json` prints for `soleur`; that path
-carries the plugin version, so re-check it after every plugin update. Add
-`--config=<file>` only when the project has that file: the proxy refuses to
-start on a named config that does not exist. An `.mcp.json` edit loads only on a
-full Claude Code restart, never on a `/mcp` reconnect, and only the user can
-restart; afterwards verify with `ToolSearch
+carries the plugin version, so re-check it after every plugin update.
+`--user-data-dir=<profile-dir>` may instead be
+`--user-data-dir-name <basename>` placed before the `--`: the proxy resolves it
+under `$XDG_CACHE_HOME` (default `~/.cache`) and refuses a basename carrying a
+separator or `..`. Add `--config=<file>` only when the project has that file:
+the proxy refuses to start on a named config that does not exist. An
+`.mcp.json` edit loads only on a full Claude Code restart, never on a `/mcp`
+reconnect, and only the user can restart; afterwards verify with `ToolSearch
 select:mcp__playwright__browser_snapshot` — a description ending with the marker
 below means wrapped, no match means the server did not connect (see the end of
 this section). This repository wraps the command in a `bash -c` prelude (`pkill`
@@ -400,15 +434,34 @@ WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
 1. **At startup** — the proxy writes `playwright-mcp-redact-proxy: refusing to
    start: <reason>` to stderr and exits 2, spawning no server, when it cannot
    load and self-test the redactor, or when the launch opens a raw sink around
-   it: `--save-session`; a config file (from `--config` or
-   `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets `saveSession`,
-   `saveVideo`, `server.port` / `server.host` or a capability other than
-   `vision`; `--port`, `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
+   it: a disk/session sink or foreign browser — `--save-session`,
+   `--save-trace`, `--save-video`, `--storage-state`, `--secrets`,
+   `--output-dir`, `--init-script`, `--init-page`, `--cdp-endpoint`,
+   `--endpoint`, `--extension`, `--executable-path`, `--daemon`,
+   `--allow-unrestricted-file-access`, `--grant-permissions`,
+   `--ignore-https-errors`, `--no-sandbox`, and each setting's
+   `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
+   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR` and
+   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`; a trailing valued flag, which would swallow
+   the appended `--snapshot-mode none` as its value; a config file (from
+   `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
+   `saveSession`, `saveTrace`, `saveVideo`, `secrets`, `outputDir`,
+   `allowUnrestrictedFileAccess`, `extension`, `server.port` / `server.host`, a
+   capability other than `vision`, `browser.cdpEndpoint` /
+   `browser.remoteEndpoint`, `browser.initPage` / `browser.initScript`,
+   `browser.contextOptions.storageState` / `.permissions` /
+   `.ignoreHTTPSErrors`, `browser.launchOptions.executablePath` /
+   `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
+   `browser.userDataDir` conflicting with `--user-data-dir-name`; `--port`,
+   `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
    (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other
    than `vision` (devtools, pdf and storage write raw page state);
    `--output-mode file`; a `DEBUG` value that can enable any `pw:` logger (the
    `debug` package splits on whitespace and commas and treats `*` as a wildcard,
-   so `pw:*` counts); or `DEBUG_FILE`. The reason names the setting, never its
+   so `pw:*` counts); `DEBUG_FILE`; or a `--user-data-dir-name` that is not a
+   bare basename (a separator or `..`), is combined with an explicit
+   `--user-data-dir` in the server argv, or resolves under a relative
+   `XDG_CACHE_HOME` / an unset `HOME`. The reason names the setting, never its
    value.
 
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
@@ -461,13 +514,42 @@ credential, capture neither; a screenshot is image content no redactor reads.
 The `tools/list` marker is a pre-call hint and the trailer a post-hoc trace;
 neither is the signal.
 
-**If the `playwright` server fails to connect** (the session reports it failed,
-or `mcp__playwright__*` tools are absent): on Claude Code, run `ls -t
-~/.cache/claude-cli-nodejs/*/mcp-logs-playwright/*.jsonl | head -3` and take the
-newest whose `"cwd"` is this project. In it, find `playwright-mcp-redact-proxy:
-refusing to start:` and tell the user the reason in plain language — a missing
-redactor: reinstall the plugin; `DEBUG` or `DEBUG_FILE`: unset it in the shell
-that launches Claude Code; any other named setting: remove it from the launch.
-If there is no such line, report the last `Server stderr:` and `child exited
-rc=` lines instead — the failure is in the server or the launch command, not the
-redactor. Any fix needs a full Claude Code restart, which only the user can do.
+**If the plugin `playwright` server fails to connect** (the session reports it
+failed, or `mcp__plugin_soleur_playwright__*` tools are absent while the
+preconditions above hold): on Claude Code, run `ls -t
+~/.cache/claude-cli-nodejs/*/mcp-logs-*playwright*/*.jsonl | head -5` and take
+the newest whose `"cwd"` is this project — the plugin server logs under
+`mcp-logs-plugin-soleur-playwright`, a customer-scoped `playwright`
+registration under `mcp-logs-playwright`. In it, find
+`playwright-mcp-redact-proxy: refusing to start:` and tell the user the reason
+in plain language — a missing redactor: reinstall the plugin; `DEBUG` or
+`DEBUG_FILE`: unset it in the shell that launches Claude Code; a
+`--user-data-dir-name` refusal: report the basename or `XDG_CACHE_HOME` problem
+it names; any other named setting: remove it from the launch. If there is no
+such line, check whether a stale process holds the plugin profile (`pgrep -f
+soleur-playwright-mcp-profile` — a SIGKILLed session can leave a
+`SingletonLock`; a dead-pid lock is stolen cleanly on the next launch, so only
+a LIVE lock-holder is the contention case), then report the last `Server
+stderr:` and `child exited rc=` lines — the failure is in the server or the
+launch command, not the redactor. Any fix needs a full Claude Code restart,
+which only the user can do.
+
+**If the plugin server connects but the browser never launches** (tools answer
+with launch/navigation errors while the registration itself is healthy), the
+registration's upstream defaults are the suspect surface: headed, channel
+`chrome`. Three measured modes, each remediated by the customer exporting the
+named variable in the shell that launches their harness (the plugin entry has
+no `env` block, so process env is the only override path — `executable-path`
+is refused by the proxy as a foreign-browser sink, so do not suggest it):
+
+- **No display** (headless host, SSH, container): a headed browser cannot
+  open. `PLAYWRIGHT_MCP_HEADLESS=1` is the supported opt-out.
+- **No real Chrome** (channel `chrome` resolves to Google Chrome, not bundled
+  Chromium): install Chrome, or `npx playwright install chromium` plus
+  `PLAYWRIGHT_MCP_CHANNEL=chromium`.
+- **Wayland/GPU variance**: a headed launch on a Wayland host was measured
+  working with system Chromium (no Vulkan/ozone/crash lines), but the
+  2026-06 dogfood crash class existed — on a crash-looping host,
+  `PLAYWRIGHT_MCP_HEADLESS=1` sidesteps the compositor path entirely, or the
+  customer keeps their own registration with an env-forcing prelude as this
+  repository's `.mcp.json` does.
