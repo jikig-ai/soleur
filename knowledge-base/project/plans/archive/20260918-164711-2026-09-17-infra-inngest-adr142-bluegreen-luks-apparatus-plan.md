@@ -1191,7 +1191,12 @@ logs:
   retention: Better Stack Logs retention for source 2457081
 discoverability_test:
   command: bash apps/web-platform/infra/journald-config.test.sh
-  expected_output: a final line reporting zero failures and a non-zero pass count
+  # LITERAL, not prose (corrected at ship 2026-09-18): preflight Check 10 substring-matches this
+  # field against the probe's stdout, and the earlier value ("a final line reporting zero failures
+  # and a non-zero pass count") described the output without ever appearing in it. The suite
+  # prints `OK` as its last line only when FAIL == 0 (it prints `FAIL: N test(s) failed` and exits
+  # 1 otherwise). Measured in the Check 10 sandbox: `=== Results: 88/88 passed ===` then `OK`, rc 0.
+  expected_output: "OK"
 ```
 
 This satisfies the affected-surface extension: the dedicated Inngest host is a surface nothing can
