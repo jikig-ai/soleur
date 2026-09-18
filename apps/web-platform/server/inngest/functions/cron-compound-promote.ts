@@ -786,9 +786,15 @@ export async function cronCompoundPromoteHandler({
   event,
   runId,
 }: HandlerArgs): Promise<HandlerResult> {
-  // The manual-trigger route stamps `trigger` into the event data
-  // (server/routines/run-routine.ts); a scheduled cron fire carries none.
-  const trigger: "cron" | "manual" = event?.data?.trigger === undefined ? "cron" : "manual";
+  // POSITIVE detection on the event NAME (the run-log middleware's rule:
+  // "derive from the event NAME, never trust data"). Inngest delivers a cron
+  // fire as `inngest/scheduled.timer`; ONLY that name is `cron`. The first
+  // revision derived `cron` from the ABSENCE of a data field, so a dashboard
+  // invoke, a raw `inngest.send`, or the trigger endpoint fired with empty
+  // data all read as scheduled -- and the #8281 soak probe requires
+  // `trigger == "cron"`, so any of them would have closed the tracker.
+  // Unknown ⇒ `manual` is the fail-safe direction for that probe.
+  const trigger: "cron" | "manual" = event?.name === "inngest/scheduled.timer" ? "cron" : "manual";
   let ephemeralRoot: string | null = null;
   let installationToken = "";
   // Hoisted ABOVE the try so the error marker can carry them. They used to be
@@ -1132,8 +1138,34 @@ export async function cronCompoundPromoteHandler({
         // path, no structural op, under the ceiling). diffRemovesHardRule saw
         // only `hr-` removals, so deleting every cq-/wg-/rf-/pdr-/cm- rule was
         // refused by nothing, and a SKILL.md target had no content guard at all.
+        // The derived path set must be exactly the declared target.
+        // `target_path` is MODEL-SUPPLIED and every downstream content guard
+        // (diffRemovesHardRule, the shrink floor) is keyed on it -- so a diff
+        // that DECLARES a SKILL.md target but EDITS AGENTS.rules.md skipped
+        // both while the allowlist passed each path individually. Explicit
+        // now; it was only implicitly bounded by safeCommitAndPr staging the
+        // declared target alone.
+        const offTarget = pathVerdict.paths.find((p) => p !== cluster.target_path);
+        if (offTarget !== undefined) {
+          logger.warn(
+            { fn: "cron-compound-promote", hash: clusterHash, target: cluster.target_path, path: safeDetail(offTarget) },
+            "diff-path-off-target",
+          );
+          return { kind: "refused", reason: "diff-path-off-target" };
+        }
         const targetPathAbs = join(repoRoot, cluster.target_path);
-        const preTargetBytes = Buffer.byteLength(await readFile(targetPathAbs, "utf8"), "utf8");
+        // Refuse rather than throw: a model-supplied `target_path` naming a
+        // SKILL.md that does not exist passes TARGET_ALLOW_RE, and an ENOENT
+        // escaping this step would retry a deterministic failure and land
+        // the whole run as `error` with the remaining clusters abandoned.
+        let preTargetText: string;
+        try {
+          preTargetText = await readFile(targetPathAbs, "utf8");
+        } catch {
+          logger.warn({ fn: "cron-compound-promote", hash: clusterHash, target: cluster.target_path }, "target-missing");
+          return { kind: "refused", reason: "target-missing" };
+        }
+        const preTargetBytes = Buffer.byteLength(preTargetText, "utf8");
         const preCorpus = await readAlwaysLoaded(repoRoot);
         const preRuleCount = ruleLineCount(preCorpus.corpusText);
 
@@ -1354,8 +1386,12 @@ export async function cronCompoundPromoteHandler({
       // Which stage died, so four `error` weeks are a named cause rather than
       // an undecidable one for the #8293 gate. Bounded and scrubbed: the
       // message can carry a model-rendered path.
-      error_class: e.constructor?.name ?? "Error",
-      error_message: safeDetail(e.message),
+      // A thrown non-Error (a string, null, a rejected promise value) has no
+      // `.message`/`.constructor`; `safeDetail(undefined)` would TypeError
+      // OUT of this catch, and the one path that most needs a marker would
+      // emit none and throw instead of returning `{ status: "error" }`.
+      error_class: (e as { constructor?: { name?: string } } | null)?.constructor?.name ?? typeof err,
+      error_message: safeDetail(String((e as { message?: unknown } | null)?.message ?? err)),
     });
     return { ok: false, status: "error" };
   } finally {
