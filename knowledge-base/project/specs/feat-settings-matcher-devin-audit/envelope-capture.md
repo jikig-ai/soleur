@@ -159,3 +159,14 @@ Field names are Claude-compatible (`file_path`, `old_string`, `new_string`, `com
 | `.claude` permissions imported? | **No** — Devin analog lives in `.devin/config.json` only; `reason=no-analog` applies only where no `Exec/Read/Write/Fetch` mapping exists |
 | `apply_patch`/`multi_edit` tools? | **Absent** — matchers referencing them are dead tokens under Devin |
 | PermissionRequest event? | **UNVERIFIED** |
+
+## 9. Post-merge runtime trace — credential guard (AC12/AC13)
+
+Measured 2026-09-17 on a live Devin local-CLI session (`cloud-detect.sh` verdict `local`), against the plugin `hooks.json` `^(Bash|exec)$` binding as shipped by #8155 and normalized by #8214. The trace exercises the only live Devin path the ledger claims for `browser-snapshot-credential-guard.sh` — `.claude/settings.json` `Bash` is dead under Devin by design (single-fire, `covered-by-plugin`), and `.devin/config.json` deliberately does not bind it.
+
+| Arm | `exec` call | Observed |
+|---|---|---|
+| **Deny (AC12)** | `agent-browser snapshot -i` | **BLOCKED.** Tool rejected pre-execution with the guard's `permissionDecision:"deny"` and its full deny reason ("the redactor is not downstream of a pipe"). The `exec` envelope dispatched to the plugin binding, `hook_tool_kind` normalized `exec`→`Bash`, and the deny propagated back as a tool rejection — the command never ran. |
+| **Allow (AC13)** | `agent-browser snapshot -i 2>&1 \| python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"` | **ALLOWED.** The gate found the `redact-a11y-snapshot` anchor downstream of a pipe and passed; the command then failed on `agent-browser: command not found` — an execution failure, distinguishable from a hook deny and itself proof the call reached the shell. |
+
+Verdict: the plugin-manifest binding is the live Devin dispatch path for the PA-8 §(g) credential guard on local CLI; Devin coverage is claimed for the control, not merely the mechanism. Cloud sessions remain out of scope (zero hook dispatch measured on both cloud arms — §SessionStart/non-local classification above; #8172).

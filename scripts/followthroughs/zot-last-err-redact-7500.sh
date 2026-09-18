@@ -14,7 +14,10 @@
 #
 # EXIT CONTRACT (the sweeper lists `--state open`; its reopen path fires only on exit 1)
 #   0 = PASS       tier-4 rows were observed in the window AND none carries header content
-#   2 = TRANSIENT  not yet delivered, no tier-4 row in the window, or ANY auth/query/decode
+#   3 = CANNOT ESTABLISH  delivery is UNMEASURABLE (no usable boot_id on any row; or the
+#                           terminal branch was reached, which is a probe defect). Renders as
+#                           its own sweeper heading, so it is never read as "not yet".
+#   2 = TRANSIENT  not yet delivered, no tier-4 row on the current boot, or ANY auth/query/decode
 #                  failure
 #   1 = FAIL       the producer IS delivered (boot_id moved past the recorded baseline) and
 #                  tier-4 rows STILL carry header content -- the redaction shipped and does not
@@ -80,6 +83,7 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="$REPO_ROOT/scripts/betterstack-query.sh"
+PARSE_LIB="$REPO_ROOT/scripts/lib/zot-telemetry-parse.sh"
 WINDOW="${SOLEUR_FT_WINDOW:-24h}"
 
 # An unprovisioned secret must be TRANSIENT, never FAIL: `set -u` on a missing variable would
@@ -97,7 +101,14 @@ if [[ ! -x "$QUERY" ]]; then
   exit 2
 fi
 
-RAWOUT="$("$QUERY" --since "$WINDOW" --grep 'SOLEUR_ZOT_DISK' 2>/dev/null)" || {
+# --limit IS NOT OPTIONAL. betterstack-query.sh defaults to LIMIT=100 (its :368), applied as an
+# inner `ORDER BY dt DESC LIMIT n`. The registry heartbeat is */5, i.e. 288 rows/24h, so the
+# default silently reads the newest ~8h20m while every message below says "$WINDOW". Every
+# sibling on this stream passes it explicitly (zot-fill-rate-7341.sh, zot-restart-loop-alarm.sh
+# both use 5000). An unreported truncation on a probe that CLOSES a leak tracker is a window
+# that excludes the rows it claims to have graded.
+LIMIT="${SOLEUR_FT_LIMIT:-5000}"
+RAWOUT="$("$QUERY" --since "$WINDOW" --grep 'SOLEUR_ZOT_DISK' --limit "$LIMIT" 2>/dev/null)" || {
   echo "TRANSIENT: betterstack-query.sh exited non-zero — channel_dark or auth failure." >&2
   exit 2
 }
@@ -108,35 +119,222 @@ if [[ -z "$RAWOUT" ]]; then
   exit 2
 fi
 
-# DECODE the escaped `raw` envelope before matching anything (guard 3). A jq failure here is a
-# decode failure, not a clean result.
-DECODED="$(printf '%s\n' "$RAWOUT" | jq -r '.raw // empty' 2>/dev/null)" || DECODED=""
+# MIRRORS zot_envelope_anchor (scripts/lib/zot-telemetry-parse.sh). NOT sourced, for the same
+# mechanical reason zot-fill-rate-7341.sh records: the library's `zot_trusted_region` cuts to
+# END OF LINE, which on a JSONEachRow row also removes the closing `"}` so the row no longer
+# decodes. The three invariants are therefore mirrored post-decode below, each labelled with the
+# library function it mirrors, and the divergence is filed for reconciliation — a JSON-aware
+# variant belongs in the library.
+#
+# WHY THE ANCHOR IS LOAD-BEARING HERE. `--grep SOLEUR_ZOT_DISK` compiles to an UNANCHORED
+# `raw LIKE '%…%'` over a source every host multiplexes into, and the library's own header
+# records this as measured, not hypothetical: on 2026-07-15 three GitHub-webhook rows quoting a
+# marker were returned to the sibling NIC leg. Before boot-scoping, a contaminating row could
+# only flip the delivered BRANCH. Once the row set is scoped to the newest boot, one such row
+# SELECTS the evidence base — so it excludes every genuine row and the probe exits 0, closing a
+# live leak tracker. `User-Agent` is on the producer's HDR_KEEP allowlist and ships verbatim,
+# which makes the injection vector an unauthenticated request header. The anchor closes it.
+[[ -r "$PARSE_LIB" ]] || {
+  echo "TRANSIENT: $PARSE_LIB is not readable — refusing to hand-roll the trusted-region parse." >&2
+  exit 2
+}
+ENVELOPE="$(printf '%s\n' "$RAWOUT" | { grep -F '"raw":"{\"message\":\"SOLEUR_ZOT_DISK ' || true; })"
+if [[ -z "$ENVELOPE" ]]; then
+  echo "TRANSIENT: $(printf '%s\n' "$RAWOUT" | grep -c . || true) row(s) matched the marker but NONE carries the" >&2
+  echo "           direct-POST producer envelope. Rows merely QUOTING the marker are not evidence" >&2
+  echo "           about the producer, in either direction." >&2
+  exit 2
+fi
+
+# DECODE BOTH HOPS. betterstack-query.sh's own header states `raw` is DOUBLE-encoded (a JSON
+# string containing a JSON document); the sibling zot-log-channel-7440.sh decodes both. Stopping
+# after hop 1 leaves every envelope key in the region LEAKY greps, so any envelope field named
+# `headers`/`clientIP` makes LEAKY == TIER4_N on every row — a permanent false FAIL posted daily
+# on a PUBLIC issue. `fromjson?` skips a noise line instead of aborting the stream.
+#
+# `dt` IS CARRIED THROUGH AND SORTED ON. MIRRORS zot_trusted_region's `sort`: the library warns
+# against hard-coupling to the shared tool's dt-ASC default (#6251-spirit). Decoding `.raw`
+# alone discards the sort key and makes "newest" whatever the query happened to return.
+DECODED="$(printf '%s\n' "$ENVELOPE" \
+  | jq -r 'select(.raw != null) | [(.dt // ""), (((.raw | fromjson?) // {}) | (.message // ""))] | @tsv' 2>/dev/null \
+  | sort \
+  | cut -f2-)" || DECODED=""
+DECODED="$(printf '%s\n' "$DECODED" | grep -F 'SOLEUR_ZOT_DISK' || true)"
 if [[ -z "$DECODED" ]]; then
   echo "TRANSIENT: could not decode the JSONEachRow envelope — matching the undecoded form" >&2
   echo "           would silently match nothing, which reads exactly like a clean result." >&2
   exit 2
 fi
 
+# TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
+# would otherwise win the greedy match, select the delivered branch, and close this tracker
+# while Phase B had never been applied -- asserting a control is live on a host never replaced.
+# The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
+# which is correct: that is the untrusted content it exists to measure.
+#
+# DERIVED BEFORE THE TIER-4 SELECTION, and that ordering is the whole point of #7960's first
+# real post-replace run. Previously this sat BELOW the LEAKY computation, so `LEAKY` counted
+# header-bearing rows across the entire $WINDOW while `NEWEST_BOOT` described only the newest
+# row. The instant a replace lands mid-window those two describe DIFFERENT HOSTS: the newest
+# row selects the delivered branch, and the leak check then grades PRE-replace output that the
+# redaction was never in force for -- a guaranteed false FAIL ("the redaction shipped and is not
+# working") on the one run that matters. Measured 2026-09-17: the replace applied at 11:21Z, so
+# the 18:00Z sweep's returned set would have been roughly 20% pre-replace rows -- ~100 rows back
+# from 18:00Z reaches 09:40Z under the LIMIT that was in force before this revision made it
+# explicit. (An earlier draft of this comment said "~93%", computed against a literal 24h window
+# the probe never received. The defect is unchanged; the magnitude was wrong and is corrected
+# here rather than left as a recorded measurement nobody can reproduce.)
+#
+# It cuts the other way too, which is why scoping BOTH operands matters rather than just the
+# leak check: an unscoped TIER4_ROWS could satisfy Guard 1 ("the subject must have run")
+# entirely from rows emitted by a host that no longer exists, and report PASS on evidence the
+# delivered producer never produced.
+# MIRRORS zot_newest_boot. Two invariants the previous hand-rolled form dropped, both of which
+# were false-CLOSE paths:
+#   * `[0-9a-fA-F-]+` rather than `[^ ]*` — a bare `[^ ]*` accepts any token.
+#   * `grep -v 'boot_id=unknown'` — `unknown` is the producer's /proc-unreadable DEFAULT
+#     (cloud-init-registry.yml: `[ -n "$BOOT_ID" ] || BOOT_ID=unknown`), not an identity.
+#     Accepting it means `unknown != BASELINE` selects the delivered branch and scopes the grade
+#     to a pseudo-boot, so a /proc read failure alone closes the tracker. No attacker required.
+NEWEST_BOOT="$(printf '%s\n' "$DECODED" \
+  | sed 's/ zot_last_err=.*//' \
+  | grep -oE 'boot_id=[0-9a-fA-F-]+' \
+  | grep -v 'boot_id=unknown' \
+  | tail -1 | cut -d= -f2)"
+
+# No boot_id anywhere in the decoded rows means delivery is UNMEASURABLE, and an unmeasurable
+# delivery state must not be graded. Without this the scoping below would select zero rows and
+# fall into Guard 1, which reports "no tier-4 row in the window" -- a true statement about the
+# wrong question.
+if [[ -z "$NEWEST_BOOT" ]]; then
+  echo "CANNOT ESTABLISH: no usable boot_id on any decoded SOLEUR_ZOT_DISK row (rows exist, but" >&2
+  echo "           every boot_id is absent or the 'unknown' /proc-fallback sentinel), so delivery" >&2
+  echo "           cannot be established and the leak check cannot be scoped to a host." >&2
+  echo "           ACTION: rows present with no real boot_id is a PRODUCER regression — the" >&2
+  echo "           heartbeat emitter dropped a field this verdict depends on. Check the" >&2
+  echo "           \`boot_id=\` field in cloud-init-registry.yml's LINE= emitter." >&2
+  # exit 3, NOT 2. sweep-followthroughs.sh renders 2 as "NOT YET" and 3 as "CANNOT ESTABLISH",
+  # and the heading is the only text an operator sees without expanding the <details> fold. A
+  # branch whose whole purpose is refusing to assert a delivery state must not ship under a
+  # heading that asserts one. Same disposition either way (issue stays open).
+  exit 3
+fi
+
 # Bound the trusted region the way scripts/lib/zot-telemetry-parse.sh does: `zot_last_err` is
 # emitted LAST and is free text, so a crafted log line could otherwise spoof a field a verdict
 # keys on. Here we WANT the tail, so cut the other direction and keep it explicit.
-TIER4_ROWS="$(printf '%s\n' "$DECODED" | grep -E 'zot_last_err_src=fallback( |$)' || true)"
+# SCOPED TO THE DELIVERED BOOT. The boot_id is read from each row's trusted region (the tail is
+# cut first, exactly as NEWEST_BOOT does above) but the FULL row is what gets printed, because
+# LEAKY below must still read the untrusted tail it exists to measure.
+# ONE PASS, ONE TRUSTED REGION, applied to EVERY field a verdict keys on. The previous revision
+# bounded only the boot_id read; the tier selector ran `grep` against the FULL row, so a crafted
+# `zot_last_err` tail containing the literal `zot_last_err_src=fallback` promoted a non-tier-4
+# row into the graded set and satisfied Guard 1 with rows the gate never touched. The producer's
+# own template names this class one layer down: "a whole-line substring test instead lets any
+# private-net client send `User-Agent: executing gc` and make EVERY one of its request lines
+# cap-exempt … field-anchoring closes the bypass by construction."
+#
+# Rows are emitted as `head TAB tail` so the leak check reads the tail bounded at the SAME
+# (first) delimiter the head cut uses. The two must not disagree — see the LEAKY note below.
+#
+# The tier test accepts `fallback` OR `suppressed`, and that is a correctness fix, not a
+# widening. Phase B's gate RE-TAGS a tier-4 sample it fully suppressed
+# (cloud-init-registry.yml: `if [ -z "$_msgs" ] && [ -n "$ZOT_ERR_RAW" ]; then
+# ZOT_ERR_SRC=suppressed; fi`). A `fallback`-only selector therefore makes Guard 1 permanently
+# unsatisfiable on a delivered host whose gate is working at its strongest — the tracker could
+# never close, and #7960's falsification condition would fire on a CORRECT outcome. `suppressed`
+# carries no sample, so it counts toward "the subject ran" and is excluded from the leak grade.
+# Left-anchored (`(^| )`), so the token cannot be matched mid-word.
+TIER4_ROWS="$(printf '%s\n' "$DECODED" \
+  | awk -v want="$NEWEST_BOOT" '
+      {
+        i = index($0, " zot_last_err=")
+        head = (i > 0) ? substr($0, 1, i - 1) : $0
+        tail = (i > 0) ? substr($0, i + 14) : ""
+        if (head !~ /(^| )zot_last_err_src=(fallback|suppressed)( |$)/) next
+        if (!match(head, / boot_id=[0-9a-fA-F-]+/)) next
+        b = substr(head, RSTART + 9, RLENGTH - 9)
+        if (b != want) next
+        print head "\t" tail
+      }' || true)"
 TOTAL_ROWS="$(printf '%s\n' "$DECODED" | grep -cF 'SOLEUR_ZOT_DISK' || true)"
 [[ -n "$TOTAL_ROWS" ]] || TOTAL_ROWS=0
 
+# DELIVERY IS INFERRED, SO AN AUTHORITATIVE VERDICT REQUIRES POSITIVE PROOF.
+#
+# `boot_id != BASELINE` establishes a new BOOT, not a new HOST. cloud-init's runcmd is
+# per-instance and does not re-run on reboot, and THIS host reboots as a convergence primitive
+# (the private-NIC guard calls `reboot`; the heartbeat carries `reboot_count=`). So a plain
+# reboot of the UN-REPLACED host flips boot_id with the OLD user_data still in place. The
+# sibling zot-log-channel-7440.sh hit exactly this, reproduced it, and replaced its own drift
+# heuristic under #7444 F-7.
+#
+# WHY THIS PROBE CANNOT SIMPLY COPY THAT FIX. The sibling's primary key is `SOLEUR_ZOT_LOG_BOOT`,
+# and `git log -S` puts that marker in 07cf8ebcb (#7444, the log-shipper) — NOT in 96f5b6eb5
+# (#7954, Phase B). Its presence proves a post-#7444 cloud-init, which is a strictly weaker claim
+# than the one this probe makes. Measured, not assumed.
+#
+# The only Phase-B-exclusive token in the emission is `zot_last_err_src=suppressed` (96f5b6eb5),
+# and it is SUFFICIENT but not NECESSARY: the gate only re-tags when it withheld a sample zot did
+# produce, so a healthy host on the dominant JSON path emits `fallback` forever. Phase B added no
+# always-present field, so no necessary-and-sufficient key exists in the current emission.
+#
+# Given that, the conservative rule: an AUTHORITATIVE verdict — exit 0 (which CLOSES a live
+# PII-leak tracker) or exit 1 (which asserts on a public issue that the redaction shipped and is
+# broken) — requires PROOF, and boot drift alone is not proof. Drift WITHOUT proof reports
+# CANNOT ESTABLISH rather than guessing in either direction. This is the direction #7960's own
+# design already argues for: "FAIL is never emitted merely for non-delivery."
+#
+# The cost is explicit: on a host that never emits a `suppressed` row, this tracker will not
+# auto-close. That is the correct failure direction for a leak tracker, and it is the argument
+# for the producer-side fix — a Phase-B revision field in the heartbeat — rather than a reason to
+# infer harder here.
+BASELINE_AT_MERGE=d0107f1f-834b-4acc-bd5a-00e53b61d835
+BASELINE="${SOLEUR_FT_BASELINE_BOOT:-$BASELINE_AT_MERGE}"
+
+# ASSIGNED ABOVE GUARD 1, deliberately. Guard 1 used to fire before BASELINE existed, so its
+# message could not name the delivery state and collapsed two opposite situations into one
+# comment: "the replace has not happened" and "the replace LANDED and we are waiting only on a
+# tier-4 occurrence". The second is the run that first proves delivery succeeded, and the
+# operator was shown a NOT-YET heading for it. Nothing between here and the old position
+# computed either value, so the move is free.
 # Guard 1: the subject must have run. EXACT match on the field value, not a substring --
 # `zot_last_err_src=fallback` would also match a future qualified form by prefix.
 if [[ -z "$TIER4_ROWS" ]]; then
   echo "TRANSIENT: $TOTAL_ROWS SOLEUR_ZOT_DISK row(s) in $WINDOW, but NONE at tier 4" >&2
-  echo "           (zot_last_err_src=fallback). Tier 4 is the only tier the gate changes, so" >&2
-  echo "           this window cannot grade it. Not a pass." >&2
+  echo "           (zot_last_err_src=fallback|suppressed) on the current boot ($NEWEST_BOOT)." >&2
+  if [[ -n "$BASELINE" && "$NEWEST_BOOT" != "$BASELINE" ]]; then
+    echo "           DELIVERY HAS LANDED — boot_id != the merge-time baseline ($BASELINE). This is" >&2
+    echo "           NOT 'not yet': the replace fired and the probe is waiting only on a tier-4" >&2
+    echo "           occurrence on this boot. Nothing to do unless this persists for days." >&2
+  else
+    echo "           The host still carries the merge-time baseline boot_id, so Phase B is not in" >&2
+    echo "           force yet. This is the expected reading until a registry-host-replace fires." >&2
+  fi
+  echo "           Tier 4 is the only tier the gate changes, so this window cannot grade it." >&2
+  echo "           NOTE: rows from an EARLIER boot are deliberately excluded — grading them" >&2
+  echo "           would describe a host this verdict is not about." >&2
   exit 2
 fi
 
 TIER4_N="$(printf '%s\n' "$TIER4_ROWS" | grep -c . || true)"
 [[ -n "$TIER4_N" ]] || TIER4_N=0
 
-LEAKY="$(printf '%s\n' "$TIER4_ROWS" | sed -n 's/.* zot_last_err=//p' | grep -cE 'headers|clientIP' || true)"
+# LEAKY reads the tail the awk pass already cut at the FIRST ` zot_last_err=`. The previous form
+# was `sed -n 's/.* zot_last_err=//p'` — a GREEDY prefix, i.e. the LAST occurrence — while every
+# other cut in this file and in the library is leftmost. On a tier-4 sample (three `docker logs`
+# lines flattened into one field) a later line's text lands after an earlier line's header
+# content, so the greedy read truncated the leak out of the measurement: measured, a row
+# carrying `{headers:{Cookie:…}} clientIP:…` followed by a second ` zot_last_err=` graded CLEAN.
+# That is exit 1's reserved case scored as exit 0.
+#
+# Only `fallback` rows are graded: a `suppressed` row carries no sample and cannot leak.
+# The discriminator is STRUCTURAL rather than the bare words — the gate emits zot's `.message`
+# verbatim, and a legitimate message such as `cannot parse headers` would otherwise force a
+# post-delivery FAIL on a row that leaks nothing.
+LEAKY="$(printf '%s\n' "$TIER4_ROWS" \
+  | awk -F'\t' '$1 ~ /(^| )zot_last_err_src=fallback( |$)/ { print $2 }' \
+  | grep -cE '(headers|clientIP)[[:space:]]*[]=:{"]' || true)"
 [[ -n "$LEAKY" ]] || LEAKY=0
 
 # DELIVERY IS ITS OWN QUESTION, and conflating it with the leak check is the #7455 defect with
@@ -156,12 +354,6 @@ LEAKY="$(printf '%s\n' "$TIER4_ROWS" | sed -n 's/.* zot_last_err=//p' | grep -cE
 # environment; with neither it nor an override present the probe reports an UNKNOWN delivery state
 # rather than asserting "NOT YET DELIVERED", because asserting a delivery state it cannot measure
 # is exactly the unmeasured claim this whole change removes.
-# TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
-# would otherwise win the greedy match, select the delivered branch, and close this tracker
-# while Phase B had never been applied -- asserting a control is live on a host never replaced.
-# The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
-# which is correct: that is the untrusted content it exists to measure.
-NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
 # BAKED IN, not passed. sweep-followthroughs.sh runs every probe under `env -i` with only the
 # names declared in the directive's `secrets=`, so an exported SOLEUR_FT_BASELINE_BOOT is stripped
 # before this script starts. Reading it from the environment alone therefore left BASELINE empty on
@@ -170,21 +362,39 @@ NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's
 # before merge (2026-09-08: 100 of 100 SOLEUR_ZOT_DISK rows in a 24h window carried this single
 # value, read from the trusted region). The env var is still honoured first so an operator can
 # override it without editing this file.
-BASELINE_AT_MERGE=d0107f1f-834b-4acc-bd5a-00e53b61d835
-BASELINE="${SOLEUR_FT_BASELINE_BOOT:-$BASELINE_AT_MERGE}"
+
+# PROOF: a Phase-B-exclusive token observed on the boot being graded. `suppressed` is emitted
+# only by the Phase B gate (96f5b6eb5); no pre-Phase-B cloud-init can produce it.
+DELIVERY_PROVEN=0
+if printf '%s\n' "$TIER4_ROWS" | awk -F'\t' '$1 ~ /(^| )zot_last_err_src=suppressed( |$)/ { found = 1 } END { exit !found }'; then
+  DELIVERY_PROVEN=1
+fi
 
 if [[ -n "$BASELINE" && -n "$NEWEST_BOOT" && "$NEWEST_BOOT" != "$BASELINE" ]]; then
   # DELIVERED: the host has been replaced since merge. Now the leak check is a real verdict,
   # and a leak here is a genuine FAIL -- the redaction shipped and did not work. This is the
   # branch the previous revision could not express at all.
+  if [[ "$DELIVERY_PROVEN" -eq 0 ]]; then
+    echo "CANNOT ESTABLISH: boot_id ($NEWEST_BOOT) has moved past the merge-time baseline" >&2
+    echo "           ($BASELINE), but boot drift is a REBOOT, not a REPLACE — this host reboots as" >&2
+    echo "           a convergence primitive, and cloud-init's runcmd does not re-run on reboot." >&2
+    echo "           No Phase-B-exclusive token (zot_last_err_src=suppressed) was observed on this" >&2
+    echo "           boot, so delivery is inferred, not proven. Refusing to close the tracker or to" >&2
+    echo "           assert the redaction is broken on evidence that cannot tell those apart." >&2
+    echo "           ($TIER4_N tier-4 row(s) on this boot; $LEAKY carrying header content.)" >&2
+    echo "           ACTION: confirm whether a registry-host-replace actually ran. If it did and" >&2
+    echo "           this persists, the producer needs a positive delivery field — see the header." >&2
+    exit 3
+  fi
   if [[ "$LEAKY" -gt 0 ]]; then
-    echo "FAIL: the producer IS delivered (boot_id $NEWEST_BOOT != baseline $BASELINE) and" >&2
+    echo "FAIL: the producer IS delivered (proven: zot_last_err_src=suppressed on boot" >&2
+    echo "      $NEWEST_BOOT, which only the Phase B gate emits) and" >&2
     echo "      $LEAKY of $TIER4_N tier-4 row(s) STILL carry header content. The redaction" >&2
     echo "      shipped and is not working. This must not close." >&2
     exit 1
   fi
   echo "PASS: producer delivered (boot_id $NEWEST_BOOT != baseline $BASELINE);"
-  echo "      $TIER4_N tier-4 row(s) in $WINDOW, none carrying header content."
+  echo "      $TIER4_N tier-4 row(s) on this boot in $WINDOW, none carrying header content."
   exit 0
 fi
 
@@ -223,8 +433,14 @@ if [[ -n "$BASELINE" && "$NEWEST_BOOT" == "$BASELINE" ]]; then
   exit 2
 fi
 
-echo "PASS: $TIER4_N tier-4 row(s) in $WINDOW, none carrying header content."
-echo "      Phase B is delivered on this host and the tier gate is in force."
-echo "      Scope: this grades DELIVERY. Correctness is graded pre-merge by"
-echo "      apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh."
-exit 0
+# UNREACHABLE, and it must stay that way. Every route to this line now exits above: the
+# no-usable-boot_id guard makes NEWEST_BOOT non-empty, the delivered branch consumes
+# `!= BASELINE`, the empty-BASELINE branch consumes the third, and `== BASELINE` consumes the
+# last. This block used to be a live `exit 0` reachable exactly in the no-boot_id case — i.e. it
+# WAS the false close that the harness found. Leaving an `exit 0` at the bottom of a file whose
+# reachability depends on a guard 130 lines above is one refactor away from resurrection, so the
+# terminal state is now a refusal rather than a pass.
+echo "CANNOT ESTABLISH: reached the terminal branch, which is unreachable by construction." >&2
+echo "           Some guard above stopped exiting. Do NOT read this as a pass — no verdict was" >&2
+echo "           computed. This is a probe defect; fix the guard chain before trusting a run." >&2
+exit 3

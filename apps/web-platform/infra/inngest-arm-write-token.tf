@@ -114,9 +114,33 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 # op=rollback JOB declares `environment: inngest-cutover` (the github_repository_environment above),
 # which holds the run in "Waiting" for reviewer approval BEFORE any step executes — independent of
 # where the secret lives. Residual exposure: the token is readable by every workflow (the same
-# exposure class as doppler_token_write, an equally read/write Doppler token), bounded by the
-# conditional injection (`inputs.op == 'arm' && secrets.DOPPLER_TOKEN_INNGEST_ARM || ''`) and the
-# post-cutover revoke. Upgrade back to an environment secret if the App is later granted
+# exposure class as doppler_token_write, an equally read/write Doppler token).
+#
+# CONSUMERS — keep this list current; the bound stated here is only as true as the list.
+#   1. cutover-inngest.yml:123 — conditional injection
+#      (`(op == 'arm' || 'rollback' || 'resume') && secrets.… || ''`), and those jobs declare
+#      `environment: inngest-cutover` (cutover-inngest.yml:78), so they hold for the reviewer.
+#   2. apply-web-platform-infra.yml, job `inngest_volume_recut` — unconditional injection, but
+#      that job declares `environment: inngest-cutover`, so the human ack still gates it.
+#   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
+#      preflight (added 2026-09-17) — UNCONDITIONAL injection into a job with NO `environment:`
+#      key. This is the FIRST resolution site with neither of the two bounds above.
+#
+# An earlier revision of this comment asserted the residual was "bounded by the conditional
+# injection … and the post-cutover revoke". Consumer 3 falsifies the first half, and this file
+# is not in that PR's diff, which is exactly why the claim went unre-read. Corrected rather than
+# left standing: a comment that overstates a control teaches the next reader the wrong bound.
+#
+# What consumer 3 actually needs is ONE read of ONE key. What it carries is read/WRITE on the
+# whole soleur-inngest/prd config. The proportionate fix is a second, `access = "read"` service
+# token (`doppler_service_token` supports it) published as DOPPLER_TOKEN_INNGEST_FLIP_READ and
+# consumed there instead — which also survives the post-cutover revoke below, where consumer 3
+# otherwise degrades silently and permanently into its "read failed" branch. Tracked as a
+# follow-up because minting and publishing a new service token is a provisioning change with its
+# own apply, not a review edit. RE-EVAL TRIGGER: whichever comes first — the post-cutover revoke
+# of this token, or a FOURTH consumer being added.
+#
+# Upgrade back to an environment secret if the App is later granted
 # environment-secret write. NO lifecycle.ignore_changes → a `-replace` rotation of the token
 # propagates the new key here in the same apply (do NOT add ignore_changes = [plaintext_value]).
 resource "github_actions_secret" "doppler_token_inngest_arm" {

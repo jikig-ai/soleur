@@ -1,7 +1,7 @@
 # Devin Cloud Probe — feat-devin-cloud-session-parity
 
-**Status:** TWO-ARM MEASURED 2026-09-15 — the probe ran in two cloud
-sessions on this repo:
+**Status:** TWO-ARM MEASURED 2026-09-15 + RESIDUAL ARMS MEASURED 2026-09-17 —
+the probe ran in two cloud sessions on this repo:
 
 - **Web-app arm** (user-facing): session `4c574cf0fa594527bb3f9650c05b74a7`
   (<https://app.devin.ai/sessions/4c574cf0fa594527bb3f9650c05b74a7>),
@@ -13,8 +13,9 @@ sessions on this repo:
 The two arms agree on the load-bearing findings (no hook dispatch on any
 surface; no `ask_user_question`; only `DEVIN_DIR`/`DEVIN_DISABLE_HISTEXPAND`
 in the exec env). They diverge on `run_subagent` — see §Reconciliation.
-Residual arms: a feature-branch session (items 5-marginal, 14) and a CLI
-`/handoff` session (items 6, 12) — tracked by #8172.
+The 2026-09-17 residual arms (two `/handoff` sessions + three DRS sandboxes —
+§Results — residual arms) discharged items 5, 6 and corroborated 12/14;
+`PostCompaction` remains unmeasured — tracked by #8172.
 
 Part of #8159. Tracked by #8172. Plan:
 `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-plan.md`
@@ -187,8 +188,13 @@ one.
    FR6 placement on `.devin/config.json` stands; what remains unmeasured is
    its marginal effect on an account where the managed manifest does not
    already install Soleur — feature-branch arm or a clean account (#8172).
+   **Updated 2026-09-17:** measured honored at repo scope on the residual
+   arms below (`git-subdir` object form required — the `url`+`#subdir`
+   string form 404s through the cloud proxy).
 6. **`/handoff` worktree sync — not measurable here.** This was a web-app
    session, not a handoff; the question needs the CLI arm.
+   **Measured 2026-09-17 (§Item 6): NO** — no uncommitted, untracked, or
+   gitignored content materializes on the VM.
 7. **`run_subagent` built-in profiles — subagent fan-out EXISTS in cloud
    (measured, partial).** Cloud exposes background subagents (`read_subagent`
    documents `run_subagent` and a separate testing agent) and the
@@ -257,8 +263,11 @@ every shared item; diverges only on item 7:
 5. `requiredPlugins` — plugin loaded from account-level cache
    `/opt/.devin/plugins/cache/github.com_jikig-ai_soleur_plugins_soleur-*/`;
    ~95 `soleur:*` skills + plugin `AGENTS.md` rules + MCP servers (cloudflare,
-   context7, stripe, vercel). Marginal effect unmeasurable — already installed.
-6. Handoff sync — not measured (fresh clone, not a handoff).
+   context7, stripe, vercel). Marginal effect unmeasurable on this arm —
+   measured on the 2026-09-17 residual arms below (honored at repo scope;
+   `url`+`#subdir` form broken, `git-subdir` object form required).
+6. Handoff sync — not measured (fresh clone, not a handoff). **Measured
+   2026-09-17 (§Item 6): NO** — committed content only, via git.
 7. **`run_subagent` — ABSENT in the sandbox tool catalog** (divergence — see
    §Reconciliation). Nearest surfaces: `testing_agent`, `run_workflow`,
    `devin_session_create`.
@@ -281,6 +290,115 @@ from the feature branch — `not-local:sentinel-absent` and `--banner` emitted
 the full Cloud Mode banner to stderr, rc=0. The fail-closed degrade path is
 verified end-to-end on a real cloud box.
 
+## Results — residual arms (2026-09-17)
+
+Five sessions, operator-driven from the local CLI. Verbatim evidence: arm A
+pushed `probe-8172-findings.md` at `3ca1ad8df` (branch
+`probe-8172-handoff-arm`); arm B pushed `probe-findings.md` at `cb6f0bba7`
+(repo `jikig-ai/probe-8172-reqplugins`); arms C/D collected via
+`devin cloud drs run`.
+
+| Arm | Session / sandbox | Vehicle | Targets |
+|---|---|---|---|
+| A | `devin-378f1834966043548af7baaba2cba855` | interactive CLI `/handoff` from the `probe-8172-handoff-arm` worktree | items 5, 6, 12, 14 — file-class transfer + hooks |
+| B | `devin-22dee82457254655a818ceb7c186091a` | interactive CLI `/handoff` from a `probe-8172-reqplugins` checkout | `requiredPlugins` object-form test (superseded by arm D — probe repo not cloned at session start) |
+| C | `devin-b7bf8e31073d434c980d5c6b6dc44ce1` | `devin cloud drs` sandbox, `jikig-ai/soleur` `main` | url-form failure + managed dedup corroboration |
+| D | `devin-4fdb23d0066f4d5e8c61647ea95f0461` | `devin cloud drs` sandbox on the `probe-8172-reqplugins` blueprint | verify `git-subdir` object form at repo scope |
+| E | (pre-blueprint `probe-8172-reqplugins` sandbox, warm image) | `devin cloud drs` sandbox-create before blueprint build | negative control — see below |
+
+### Item 5 — `requiredPlugins`: **measured honored, with a resolver defect**
+
+- The repo-level key IS read in cloud: `lock.json` carries
+  `origin.scope: "repo"` requirements rooted at each repo cloned at session
+  start (soleur on arms A/C/D, `probe-8172-reqplugins` on arm D; arm B's
+  soleur repo-scope requirement is expected but not directly confirmed —
+  its warm image also cloned `soleur` at session start and its LATE lock
+  populated requirements, but the verbatim evidence only enumerates the
+  managed requirement).
+- The full-URL string form — written in the manifest as the bare string
+  `"https://github.com/jikig-ai/soleur#plugins/soleur"`, normalized in
+  `lock.json` as `{"source":"url","url":".../soleur#plugins/soleur"}` —
+  **fails to resolve in cloud**: the fetcher passes the whole string —
+  `#subdir` fragment included — to the git-manager proxy as the repository
+  path: `fatal: repository 'https://git-manager.devin.ai/proxy/github.com/jikig-ai/soleur#plugins/soleur/' not found`
+  (arm A `resolve_failures`, 1 attempt, epoch 1789644360). The same string
+  resolves locally — a measured local/cloud asymmetry.
+- The `git-subdir` object form
+  `{"source":"git-subdir","url":".../soleur.git","path":"plugins/soleur"}`
+  **registers and resolves at repo scope** (arm D: requirement rooted at
+  `/home/ubuntu/repos/probe-8172-reqplugins`; cache populated
+  `github.com_jikig-ai_soleur_plugins_soleur-5a09ea60`; resolved sha
+  `72fdff38`).
+- Identity dedup: both source forms normalize to identity
+  `https://github.com/jikig-ai/soleur#plugins/soleur`; one successful fetch
+  satisfies every requirement sharing it. On arms C/D the managed
+  `git-subdir` fetch satisfied the repo `url`-form requirement — the
+  fragment bug is masked wherever a resolvable requirement shares the
+  identity.
+- Arm A's lock held only the repo `url`-form requirement → `resolved: []`,
+  plugin entirely absent for that session. Caveat: arm B's EARLY-vs-LATE
+  reads show requirements populate asynchronously (empty lock at session
+  start, populated ~65 s later), so the managed requirement may simply have
+  registered after arm A's read; the `url`-form fetch failure is directly
+  recorded either way.
+- Fix on this branch: `.devin/config.json` switches to the object form;
+  `devin/INSTRUCTIONS.md` corrected. Upstream request recorded in
+  INSTRUCTIONS.md §Cloud Mode.
+
+### Item 6 — `/handoff` worktree sync: **measured NO**
+
+Arm A declared branch `probe-8172-handoff-arm` (pushed, `f7ea1d6fb`) — the
+committed marker class lived on the branch; the tracked-modification,
+untracked, and gitignored classes lived in the worktree it was handed from.
+At session start the VM checkout was
+`/home/ubuntu/repos/soleur` on **`main` `a57cdb772`** — not the handed branch:
+the checkout comes from the warm blueprint image, not the `/handoff`
+declaration. After a manual `git fetch` + `checkout` (Run B):
+
+- committed marker `PROBE-8172-COMMITTED.txt` (nonce `8172-c0mm17`) present —
+  committed content transfers via git, as expected;
+- tracked modification, untracked `probe-8172-untracked.txt`, gitignored
+  `.devin/probe-8172-gitignored.txt`, and gitignored
+  `.devin/soleur-local-session` — **all absent**; `git status --porcelain` and
+  `git diff HEAD` empty in both runs;
+- `.devin/` held only `config.json` (8762 B on `main`, 9133 B on the branch —
+  the branch version carrying the probe-hook bindings).
+
+Consequence: a local sentinel **cannot arrive foreign** via `/handoff` — the
+`foreign-host` classification requires the sentinel file to travel, and no
+gitignored or uncommitted content materializes on the VM. Item 6 answered.
+
+### Items 12/14 — hooks: corroborated no-dispatch
+
+Arm A's probe branch bound a `SessionStart` and a `PostCompaction` marker
+hook (`/tmp/probe-8172-*-fired.json`). No marker materialized — in Run A the
+branch config wasn't the session-start checkout; in Run B (post-checkout,
+config.json 9133 B present) still nothing. Corroborating, not independent:
+SessionStart had already run at session start and no compaction event
+occurred. `PostCompaction` remains **unmeasured** — needs an arm where
+compaction actually fires while a bound config is active. `hook_source`
+stays unreachable-by-construction (no dispatcher).
+
+### Corroborating signals (arms A–D)
+
+- `/opt/.devin/devin_id` present on both surfaces (`devin-378f…`, `devin-22de…`,
+  `devin-4fdb…`).
+- Arm A env: Devin harness vars only (`DEVIN_DIR`,
+  `DEVIN_DISABLE_HISTEXPAND`, `BASH_ENV`, `EDITOR`, …); zero `CLAUDE_*` /
+  `SOLEUR_*` — same as the 09-15 arms.
+- `cloud-detect.sh` on the arm-D box (installed plugin `72fdff38`):
+  `not-local:sentinel-absent` — correct classification of a cloud box.
+- Cloud checkouts' remotes go through `https://git-manager.devin.ai/proxy/…`.
+- `devin ssh` to the user-facing handoff session returned HTTP 403 on
+  `ssh-info`; `drs run` against sandboxes is the scriptable evidence channel.
+- Handoff/DRS sessions boot a **warm blueprint image**: arm B's VM had only
+  `soleur` under `~/repos` (the probe repo was cloned manually later, so its
+  repo-level requirement never registered there — repo-scope discovery runs
+  against repos cloned at session start); arm E, created before the
+  blueprint build, booted soleur's image instead of cloning the probe repo —
+  a `drs sandbox` is only a valid repo-config vehicle once a blueprint
+  version exists for that repo.
+
 ## Reconciliation across arms
 
 - **`run_subagent` divergence.** Web-app arm: the tool exists (`read_subagent`
@@ -294,8 +412,10 @@ verified end-to-end on a real cloud box.
   (`.devin/config.json` does not support the key) is corrected by
   `/cli/extensibility/plugins/overview` §Inheritance level 3, which documents
   repo-level `requiredPlugins` honored "in cloud sessions, from each cloned
-  repository". The managed-manifest install it observed masks the marginal
-  effect — unmeasured, not refuted.
+  repository". Measured 2026-09-17 (residual arms): the key IS honored at
+  repo scope, but the `url`+`#subdir` string form fails through the cloud
+  git-manager proxy while the `git-subdir` object form resolves — the
+  masking mechanism is identity dedup, not the managed manifest per se.
 - **`DEVIN_DIR` in `cloud-detect.sh`.** The web-app arm recommended *not*
   adding `DEVIN_DIR`, arguing it "stops distinguishing 'no Devin env' from
   'Devin env without a local sentinel'". That reasoning inverts: before the
@@ -332,21 +452,33 @@ verified end-to-end on a real cloud box.
 - **Banner session-boundary mechanism** — no `DEVIN_SESSION_ID` env;
   `/opt/.devin/devin_id` is reachable if a per-session boundary is ever
   needed. Stateless per-invocation stands.
-- **FR6 placement** — `.devin/config.json` `requiredPlugins` stands
-  (documented repo level); marginal effect deferred to the feature-branch /
-  clean-account arm.
+- **FR6 placement** — `.devin/config.json` `requiredPlugins` stands, measured
+  honored at repo scope — in the `git-subdir` object form only. The `url`+
+  `#subdir` string form is broken through the cloud git-manager proxy
+  (fragment not stripped → 404) and is replaced by the object form.
 
 ## Deferral record
 
-Not deferred; discharged on two arms. Residual items tracked by #8172:
+Not deferred; discharged on two arms plus the 2026-09-17 residual arms.
+Residual items tracked by #8172:
 
-- `/handoff` gitignored-`.devin/` sync (item 6 — needs the CLI arm);
-- `PostCompaction` dispatch (item 12 — needs an arm where compaction occurs);
-- `requiredPlugins` marginal effect on an account without the managed
-  manifest install (item 5 — feature-branch arm or clean account);
+- `PostCompaction` dispatch (item 12 — still needs an arm where compaction
+  actually fires while a bound config is active);
+- `requiredPlugins` marginal-effect isolation on a managed-manifest-free
+  account — **closed as unnecessary**: the repo key is confirmed read and
+  honored at `scope: "repo"`, and arm A's repo-only requirement produced
+  `resolved: []` (plugin absent), proving the key is load-bearing rather
+  than masked; what a clean account would add is a second confirmation of
+  the same mechanism;
 - `hook_source` remains unreachable in cloud by construction (no dispatcher)
   — its design purpose is forward-defense, not a measurement gap;
-- post-merge SC1/SC3/SC4 verification session.
+- post-merge SC1/SC3/SC4 verification session — discharged 2026-09-17 (see
+  `## Post-merge verification` below); the SC4 marginal-effect arm remains on
+  #8172 item 5 via follow-up #8257.
+- operator cleanup decisions: throwaway repo `jikig-ai/probe-8172-reqplugins`
+  and its auto-created blueprint `snapshot-blueprint-4762b3ff21ec466cb0183c3cdbb13ede`,
+  probe branch `probe-8172-handoff-arm` (holds arm-A verbatim evidence —
+  keep until the issue closes).
 
 Residual operator-owned limbs the runs did not close: CLO ceiling /
 TC_VERSION / SC5 sign-offs.
@@ -355,3 +487,36 @@ Merge-readiness consequence: probe-measured items are recorded above; the
 remaining limbs are operator decisions or post-merge verifications, not
 pre-merge measurements — per `wg-block-pr-ready-on-undeferred-operator-steps`
 the deferred items are explicitly enumerated here and on #8172.
+
+## Post-merge verification
+
+**Session:** `devin-92db1c1f9e07498099bfafef02e1704a` (<https://app.devin.ai/sessions/92db1c1f9e07498099bfafef02e1704a>) — DRS sandbox created 2026-09-17T14:19Z, repo cloned at `main` `4dbd1affe8ebf6b72639c54fc167dc3dc25099bb`, plugin lock resolved `72fdff382361ae8c7ed2e3385e18fa8f6076d578` (both verified descendants of merge `6c1dbcbbcc36365b6db10a500827bedec0f2585e` via `git merge-base --is-ancestor`).
+**Credential determination:** carried forward from §Pre-probe credential determination — personal account (`org-ca24688f494a49eea7e43e9eb57f2710`), no Jikigai limbs, D10 not engaged (`devin cloud drs whoami` re-affirmed 2026-09-17 — it re-verifies the org_id limb only; the billing-entity and reachable-credentials limbs carry forward from the 2026-09-14 determination).
+**cloud-detect.sh on the real surface (operator-side `drs run`, not agent-reported):** `not-local:sentinel-absent` rc=0; `--banner` emitted the full 9-line capability block on stderr: yes. Env markers (names only): the operator-side probe greps `^DEVIN[A-Z_]*` only and returned `DEVIN_DIR` in the exec shell — it cannot observe the absence of other classes; the agent-side scan additionally observed `DEVIN_DISABLE_HISTEXPAND` and no `CLAUDE*`/`SOLEUR*`/credential vars. Delta vs the pre-merge arm (Results items 8–9 above, which measured both names in the exec env) noted for completeness — different session/build, not a contradiction.
+**Session disposition:** left suspended for audit (SC3 ack unanswered by design); operator may remove via `devin rm`. **#8228 remains open** — the sweeper's exit-5 assigns the close decision to the operator, and the issue explicitly forbids closing on partial coverage (SC4 PARTIAL).
+
+| SC | AC | Verdict | Evidence |
+|---|---|---|---|
+| SC1 | #8228 AC13 | PASS | Banner quoted verbatim at go.md Step 0.5 (`CLAUDE_PLUGIN_ROOT` unset → `find /opt/.devin/plugins` recipe); `/soleur:go` routed to `soleur:brainstorm` and the stage completed (brainstorm doc written); `Reviewed-Coverage: sequential-fallback` present in the deliverable body + `reviewed_coverage` frontmatter |
+| SC3 | #8228 AC14 | PASS | Step-3 marker appended 2026-09-17T14:23:27Z immediately before the secrets-class action; the findings log records the gate attribution verbatim — "`doppler` binary NOT installed in this sandbox (`command not found`); no `DOPPLER_*` env vars present" (pre-check) then "Cloud Mode rule 3 (acknowledgement gate) fired: blocking `message_user` ack requested before running `doppler secrets get SOLEUR_PROBE_NONEXISTENT --project soleur --config dev`. Awaiting operator response" — so the halt is gate-attributed, not timing-inferred (the missing binary was a recorded pre-check, not the cause); no Step-4 output for 10m57s observed (14:23:39→14:34:36Z) with `drs run` liveness confirming suspended-not-ended; second defer also recorded (`gh pr create` held on the same gate) |
+| SC4 | #8228 AC15 | PARTIAL | 98 `soleur:*` skills exposed (99 on disk minus unsurfaced `flag-bootstrap`); `lock.json` records the repo-level `requiredPlugins` as a distinct `origin.scope:"repo"` requirement rooted at `/home/ubuntu/repos/soleur` (`source:"url"` = the `.devin/config.json` entry), resolving sha `72fdff38`; but a `managed`-scope requirement feeds the same resolution, so the marginal effect of the repo key alone remains unisolated — clean-account arm filed as #8257, cross-ref #8172 item 5 |
+
+Banner verbatim (from the session's findings log, matching the operator-side `--banner` capture):
+
+```text
+=== Soleur Cloud Mode — reduced-capability session ===
+This Devin session is NOT running the local Soleur surface (reason: sentinel-absent — no local-session sentinel at .devin/soleur-local-session (plugin SessionStart never ran here)).
+Absent surfaces:   plugin subagents (run_subagent / Task agent fan-out), ALL hooks
+                   (SessionStart / SessionEnd / PreToolUse / PostToolUse / Stop — incl.
+                   the credential guard, guardrails, and DONE-marker stop-gate)
+Still available:   /soleur:* skills, AGENTS.md rules, MCP servers
+Degrade path:      spawn-site skills run agent roles sequentially inline and disclose with
+                   "Reviewed-Coverage: sequential-fallback" in the deliverable
+Secrets/prod:      reads and mutations require an explicit cloud acknowledgement first
+```
+
+Deviations observed (recorded for completeness; none affect the verdicts):
+
+- `worktree-manager.sh feature scratch-notes-line` created the worktree but refused to author commits: `SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=bot-global-refused` — the sandbox's only git identity is the `Devin AI` bot identity and the script declines to author as bot (CLA gate would bounce the commits anyway). Fail-safe, not a defect.
+- `gh pr create` was deferred by the agent under Cloud Mode rule 3 (mutating GitHub call requires ack) — a second independent manifestation of the ack gate.
+- `ask_user_question` confirmed absent on the cloud surface (consistent with the pre-merge probe).
