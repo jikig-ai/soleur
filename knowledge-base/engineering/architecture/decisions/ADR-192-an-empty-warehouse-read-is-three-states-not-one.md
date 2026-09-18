@@ -365,6 +365,31 @@ for now. Second, and more usefully: an instrument that reports `INGEST_ACKNOWLED
 is reporting a 2xx from an endpoint that demonstrably discards the row. That is exactly the reading
 this amendment narrows the token to, and it is no longer hypothetical.
 
+## Addendum — 2026-09-18 (#8178): the git-data table now exists
+
+The two present-tense clauses above — the git-data source *"has never stored one"*
+(`### Consequence: the round trip creates a permanent table`) and the create-the-table
+consequence *"has not yet occurred"* (`### Measured 2026-09-06`) — are **retired**. Both were
+true when written and are left in place as dated readings.
+
+**Measured 2026-09-18** under `doppler run -p soleur -c prd_terraform`, the UNION of both arms
+(`remote(t520508_soleur_git_data_prd_logs)` + `s3Cluster(primary, t520508_soleur_git_data_prd_s3)`):
+the query answers `rc=0`, and **31 rows carry a `dt` before 2026-09-15**, oldest
+`2026-09-04 15:15:56.073385`, newest `2026-09-14 21:10:33.330216`. So the table exists, and a
+read against it answers with rows or with an empty result, never `CLUSTER_DOESNT_EXIST`.
+
+`dt` is emitter-assigned, so the oldest `dt` dates the EVENT, not its storage. It does not
+contradict the 2026-09-06 reading that the table did not exist yet: a row can be delivered and
+stored after the moment it describes. What this addendum establishes is only the present
+state, not when the table was created.
+
+**Consequences.** The rung-2 capture's `CLUSTER_DOESNT_EXIST` → zero-rows transition that
+`### Consequence` predicted **has now happened** for this source. The state stays in the read
+classifiers (`scripts/lib/betterstack-read-classify.sh` → `table-missing`) because any NEW
+source starts there. #8178 had to rule out that state as the cause of the git-data boot poll's
+`rc=22`, and this measurement is what refuted it. The rest of that story is in ADR-149's
+`## Amendment — 2026-09-17 (#8178)` and is not repeated here.
+
 ## Related
 
 - `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md`

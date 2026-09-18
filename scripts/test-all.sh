@@ -2175,6 +2175,10 @@ if want_scripts; then
   # also pins the fenced-template guard: cloud-probe.md's checklist carries a fenced markdown
   # TEMPLATE naming SC1/SC3/SC4, and a fence-blind parse reads documentation as a verdict.
   run_suite "scripts/cloud-mode-postmerge-evidence-8159" bash scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh
+  # #8178's close criterion (git-data-boot-poll-8178.sh): PASS only on a post-merge git-data
+  # dispatch whose boot poll ANSWERED — never on a boot_complete row, which was already true
+  # before the fix. Pins the run anchor, the log-marker anchoring and the 2-vs-3 split.
+  run_suite "scripts/git-data-boot-poll-8178" bash scripts/followthroughs/git-data-boot-poll-8178.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

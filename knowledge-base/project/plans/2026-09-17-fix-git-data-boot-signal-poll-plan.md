@@ -5,7 +5,9 @@ date: 2026-09-17
 slug: fix-git-data-boot-signal-poll
 branch: feat-one-shot-8178-boot-signal-poll
 issue: 8178
-closes: 8178
+# NOT `closes:` — the close criterion is event-gated (QG11); the PR body carries `Ref #8178`
+# and scripts/followthroughs/git-data-boot-poll-8178.sh closes it on real evidence.
+ref: 8178
 priority: p1
 domain: engineering
 brand_survival_threshold: single-user incident
@@ -827,6 +829,18 @@ learning names.
   credential is what makes a rule hold by capability rather than by string comparison;
   reusing its Better Stack secrets would bind the close criterion to the credential
   store this change is moving off. The run-anchored predicate dissolves the fork.
+
+> **Corrected at /work (2026-09-18).** Two statements above did not survive implementation.
+> (1) "No `secrets=` wiring is required" is wrong as written: the sweeper runs every probe
+> under `env -i` and forwards only the names its directive declares, so the workflow token
+> reaches the probe only as `secrets=GH_TOKEN`. The credential is still the workflow token
+> alone, and the DOPPLER_TOKEN / BETTERSTACK_QUERY_* fork stays dissolved. Precedent: the
+> #7574 probe declared `secrets=GH_TOKEN` and reached its PASS by reading run logs.
+> (2) "Exit 2 while … the run log cannot be read" became **exit 3**: the sweeper prints
+> exit 2 as `NOT YET` for every probe, and "could not look" reported as "nothing yet" is
+> exactly #8178's own defect. Both codes are TRANSIENT (neither closes nor FAILs).
+> Also measured: `gh api …/jobs/<id>/logs` refuses this log (terminal escape sequences, gh
+> 2.101.0), so the probe reads via `gh run view --job <id> --log`.
 
 ### Observability layer citation
 

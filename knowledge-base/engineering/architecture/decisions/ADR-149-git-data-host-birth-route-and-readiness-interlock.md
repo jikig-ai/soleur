@@ -805,4 +805,14 @@ match buffer. The failure log carries rc, a classification, the body's byte LENG
 scrubbed stderr line — never the body, because this repository is public and a ClickHouse
 auth body carries half a Basic-auth pair.
 
+**The read is anchored to the run.** Both jobs stamp `BOOT_TRAIL_SINCE` before their apply,
+and the poll refuses to run without it (`VERDICT=refused-no-anchor`), because `host_name`
+pins the host and not the host generation. The rule is general, so it lives in the
+principles register as **AP-027** rather than here.
+
+**Closure is event-gated.** No suite can show the read working from a real runner. #8178
+closes on the first post-merge git-data dispatch whose poll answers, which is judged by
+`scripts/followthroughs/git-data-boot-poll-8178.sh` and not on a `boot_complete` row
+(one already existed before the fix).
+
 A producer with no reader is not a signal; a reader that has never read is not a reader.
