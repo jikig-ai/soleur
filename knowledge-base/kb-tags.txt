@@ -1777,6 +1777,7 @@ guard-design
 guard-equals-claim
 guard-erosion
 guard-itself-dark
+guard-placement
 guard-residue
 guard-test
 guard-testing
@@ -2523,6 +2524,7 @@ ownership-transfer
 p1s
 pa8-disclosure
 package-install
+packaging-boundary
 page
 paginate
 pagination
@@ -2905,6 +2907,7 @@ prompt-injection-mitigation
 prompt-injection-of-context
 prompt-injection-substitution
 prompt-structure
+prompt-text-vs-state
 promptfoo
 prop-vs-state
 prop-wiring
