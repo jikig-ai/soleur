@@ -2240,21 +2240,11 @@ if want_scripts; then
   run_suite "scripts/lint-workflow-local-action-checkout-live" python3 scripts/lint-workflow-local-action-checkout.py
   # A DANGLING committed symlink breaks the GitHub Actions runner's repository-archive
   # extraction, so it fails `Set up job` for EVERY `$/…` and `owner/repo/path@ref` reference to
-  # this repo — measured on run 35360150848, where `test/fixtures/orphan-proc-dangling/4242/cwd`
-  # (a link to a deliberately non-existent path) aborted the job before any step ran. The links
-  # that class of fixture needs are synthesized under mktemp by the suites that use them; a
-  # committed one is never required, so the rule is simply: no tracked symlink may dangle.
-  run_suite "scripts/no-dangling-committed-symlinks" bash -c '
-    miss=0
-    while IFS= read -r f; do
-      [ -e "$f" ] || { printf "dangling committed symlink: %s -> %s\n" "$f" "$(readlink "$f")" >&2; miss=$((miss + 1)); }
-    done < <(git ls-files -s | awk '"'"'$1=="120000"{sub(/^[^\t]*\t/, ""); print}'"'"')
-    if [ "$miss" -gt 0 ]; then
-      printf "%s dangling committed symlink(s) — they break Actions archive extraction for every \$/ and owner/repo@ref self-reference (see test/fixtures/orphan-proc-dangling/README.md)\n" "$miss" >&2
-      exit 1
-    fi
-    printf "no-dangling-committed-symlinks: OK — every tracked symlink resolves\n"
-  '
+  # this repo — measured on run 35360150848. The check lives in its own file rather than inline:
+  # `--enumerate-commands` encodes argv with TAB/NEWLINE delimiters and rejects a multi-line
+  # `bash -c` body, which is how the first revision of this registration broke
+  # `battery-tag-authorship` (an empty root set, refusing to classify).
+  run_suite "scripts/no-dangling-committed-symlinks" bash scripts/no-dangling-committed-symlinks.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already
