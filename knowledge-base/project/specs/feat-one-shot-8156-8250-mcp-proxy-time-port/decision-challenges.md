@@ -28,8 +28,9 @@ user-challenge per `cm-challenge-reasoning-instead-of`.
    gracefully on non-Claude-Code harnesses.
 3. **Option C deferred rather than decided.** The hook-net alternative was
    deferred (not rejected) with re-evaluation criteria — transcript-only
-   coverage, cannot close disk sinks, upstream transcript-persistence
-   unknown. Filing its deferral issue is AC9.
+   coverage, cannot close disk sinks. Deepen-pass verified upstream #47859 /
+   #24788 / #54161 CLOSED, so the deferral is coverage economics, not
+   mechanism viability; the deferral issue (AC9) records that.
 4. **`engines` floor contingency.** If Phase-0 probe fails `>=2.1.139`, the
    floor bumps in `plugin.json` — an install-bar change the plan flags for
    CPO rather than taking silently.

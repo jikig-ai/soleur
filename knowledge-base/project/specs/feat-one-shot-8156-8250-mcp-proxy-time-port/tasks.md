@@ -23,7 +23,9 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
       <basename>` — resolve under `$XDG_CACHE_HOME` (default `~/.cache`) via
       `os.path.expanduser`; inject `--user-data-dir=<abs>` into child argv only
       when child argv lacks `--user-data-dir`; refuse-to-start on
-      `..`/separator basename and on flag+explicit-dir ambiguity; update the
+      `..`/separator basename, on flag+explicit-dir ambiguity, on a RELATIVE
+      `XDG_CACHE_HOME` value, and when `~` cannot resolve (HOME unset) —
+      mirroring `scripts/lib/scratch-root.sh`'s XDG semantics; update the
       module header. No behavior change when the flag is absent.
 - [ ] T1.2 Create `plugins/soleur/.mcp.json`: `playwright` → `command:
       "python3"`, args `[${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py,
@@ -31,10 +33,11 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
       @playwright/mcp@0.0.78]` — no `bash`, no `--config`, no literal
       `--user-data-dir`.
 - [ ] T1.3 Proxy suite rows: flag injection + `$XDG_CACHE_HOME` + `~/.cache`
-      fallback; `..`/separator refusal; flag+explicit refusal; flag-absent
-      argv-identical regression row; plugin-registration Guard-3 row (parse
-      `plugins/soleur/.mcp.json`, derive pin from repo `.mcp.json`); one mutant
-      per clause.
+      fallback; `..`/separator refusal; flag+explicit refusal; RELATIVE
+      `XDG_CACHE_HOME` refusal; HOME-unset (`~` unresolvable) refusal;
+      flag-absent argv-identical regression row; plugin-registration Guard-3
+      row (parse `plugins/soleur/.mcp.json`, derive pin from repo `.mcp.json`);
+      one mutant per clause.
 - [ ] T1.4 `agent-browser/SKILL.md` §"Wrapping the server" rewrite:
       plugin-registered default (prefix, preconditions, `/mcp` toggle,
       separate-profile note); manual `.mcp.json` shape demoted to "advanced";

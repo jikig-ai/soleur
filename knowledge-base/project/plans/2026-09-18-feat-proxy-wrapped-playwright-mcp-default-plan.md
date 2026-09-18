@@ -25,6 +25,44 @@ customer session without any `.mcp.json` edit, and reconciles the tool-prefix,
 profile-lock, per-session `npx` cost, and cross-harness-manifest consequences
 that motivated the deferral.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-18
+**Sections enhanced:** Proposed Solution (flag semantics), Research Insights
+(loader/roster + upstream-issue corrections), Alternative Approaches (Option C),
+Acceptance Criteria (AC3, AC7), Deferrals.
+**Coverage:** `Reviewed-Coverage: sequential-fallback` — deepen-plan's
+agent fan-out ran inline/sequential (no Task agents in this subagent context);
+mechanical halts 4.6/4.7/4.8/4.10/4.11 all passed
+(`lint-guard-contract.py`: 3 guard entries, green).
+
+### Key Improvements
+1. `--user-data-dir-name` resolution now mirrors `scripts/lib/scratch-root.sh`'s
+   XDG semantics (the in-repo precedent): refuse on RELATIVE `XDG_CACHE_HOME`
+   and on unresolvable `~` (HOME unset) — two edge cases the original spec
+   silently misresolved.
+2. Upstream verification (`gh api`, 2026-09-18): #36914 (stdio deferred-tools),
+   #47859 (hook output discarded), #54161, #24788 are all CLOSED — the
+   engines-floor probe now confirms rather than gambles, and Option C's
+   deferral is scoped-coverage economics, not mechanism viability.
+3. Corrected `session-rules-loader.sh` read-set claim (it reads repo
+   `.mcp.json` ∪ `.claude-plugin/plugin.json` — `plugins/soleur/.mcp.json` is
+   outside; harmless since `playwright` is already rostered and the field is
+   display-only) and the `components.test.ts` clause-(c) key set
+   (`commands`/`agents`/`workflows`).
+
+### New Considerations Discovered
+- `plugin-root-anchoring.test.ts` G2/G2b reject bare-basename gate-script
+  invocations in SKILL.md fences → preference prose must name the SERVER, not
+  the script path (folded into AC7).
+- `codex-plugin.test.ts` deep-equality and `devin-plugin.test.ts`
+  `.url`/`transport:"http"` loop verified by reading both files — the
+  dedicated-`.mcp.json` decision rests on measured blast radius.
+- Proxy refusal surface re-verified at source (`--port`, `--host`, `--caps`,
+  `--output-mode`, `--config` existence + `server.*`/`saveSession`/`saveVideo`
+  keys, `DEBUG`/`DEBUG_FILE`) — every "the proxy already refuses" claim in the
+  plan resolves to a code line.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -107,12 +145,16 @@ Bash matchers, which this plan does not touch).
   `plugins/soleur/test/devin-plugin.test.ts` (`.url`/`transport:"http"` parity
   loop) both read `.claude-plugin/plugin.json` — both are why inline
   `plugin.json` registration was reshaped into the dedicated `.mcp.json`.
-  `plugins/soleur/test/components.test.ts` clause (c) forbids `skills`/
-  `commands`/`agents`/`workflows` keys but NOT `mcpServers` and does not scan
-  plugin-root files. `.claude/hooks/session-rules-loader.sh` builds the
-  committed-config MCP roster from `.mcp.json` + `plugin.json` — a
-  `plugins/soleur/.mcp.json` entry named `playwright` dedupes under `sort -u`
-  against the repo's existing entry; no edit needed.
+  `plugins/soleur/test/components.test.ts` clause (c) forbids
+  `commands`/`agents`/`workflows` keys in the manifest (each REPLACES its
+  default directory) but NOT `mcpServers`, and does not scan plugin-root
+  files. `.claude/hooks/session-rules-loader.sh` builds the display-only
+  committed-config MCP roster from repo `.mcp.json` ∪
+  `plugins/soleur/.claude-plugin/plugin.json` — `plugins/soleur/.mcp.json`
+  is outside its read set (deepen-pass correction), which is harmless: the
+  server name `playwright` is already in the roster via the repo entry and
+  the field feeds a `[session-context]` display line, not a vetting gate;
+  no edit needed.
   `apps/web-platform/test/plugin-root-anchoring.test.ts` `EXPECTED_GATE_REFS`
   is an identity set over SKILL.md `${CLAUDE_PLUGIN_ROOT}` references — any NEW
   anchored `playwright-mcp-redact-proxy.py` mention in a SKILL.md must update
@@ -139,9 +181,11 @@ Bash matchers, which this plan does not touch).
 - **Engines floor is a probe, not an assumption.** `engines.claude-code:
   >=2.1.139`. Plugin stdio MCP registration and the `mcp__plugin_*` tool
   prefix must be verified on that floor (upstream bug class: local stdio
-  server tools failing to register as deferred tools, anthropics/claude-code
-  issue #36914, reported on 2.1.81). If the floor cannot register the server,
-  the `engines` floor moves — a one-line manifest edit, flagged for CPO since
+  server tools failing to register as deferred tools,
+  anthropics/claude-code#36914, reported on 2.1.81 — CLOSED 2026-03-30, so
+  the declared floor very likely postdates the fix; the probe confirms
+  rather than gambles). If the floor cannot register the server, the
+  `engines` floor moves — a one-line manifest edit, flagged for CPO since
   it raises the install bar.
 
 ### Learnings that apply
@@ -170,14 +214,18 @@ Bash matchers, which this plan does not touch).
   `${CLAUDE_PROJECT_DIR}` substitution in plugin server configs, plugin tools
   offered alongside user-configured tools, `/mcp` toggle can disable a plugin
   server without uninstalling.
-- Hooks docs / anthropics/claude-code#54161, #47859, #24788:
-  `updatedMCPToolOutput` (MCP-only) and `updatedToolOutput` (all tools,
-  ~2.1.121+) replace what the model sees on PostToolUse; caveats —
-  `additionalContext` from `command` hooks is dropped for MCP tool events,
-  and the transcript-persistence of the pre-rewrite output is an open
-  question flagged in #47859. Both feed the Option-C evaluation.
-- anthropics/claude-code#36914: local stdio plugin `.mcp.json` servers failing
-  to register deferred tools on 2.1.81 — the engines-floor probe target.
+- Hooks docs / anthropics/claude-code#54161, #47859, #24788 — all three
+  CLOSED upstream (verified 2026-09-18 via `gh api`): `updatedMCPToolOutput`
+  (MCP-only) / `updatedToolOutput` (all tools, ~2.1.121+) replace what the
+  model sees on PostToolUse; #47859 (hook return value silently discarded on
+  the JS-callback fast path — i.e. rewrite never persisted) was the
+  transcript-persistence defect and is resolved; #24788
+  (`additionalContext` dropped for MCP events) likewise closed. Option C's
+  mechanism is therefore MORE viable than the #7980-era premise — its
+  deferral stands on the disk-sink limitation, not on hook mechanics.
+- anthropics/claude-code#36914: local stdio plugin `.mcp.json` servers
+  failing to register deferred tools on 2.1.81 — CLOSED 2026-03-30; the
+  engines-floor probe confirms on the declared floor rather than assuming.
 
 ### Community discovery / functional overlap
 
@@ -266,6 +314,18 @@ already carry `--user-data-dir`**; carrying both is a refuse-to-start
 ambiguity, and a `<basename>` containing a path separator or `..` is refused.
 Absent the flag, behaviour is unchanged (the repo `.mcp.json` is untouched).
 
+**Resolution precedents and edge cases** (deepen-pass: `scripts/lib/scratch-root.sh`
+is the in-repo precedent for this exact resolution — it resolves
+`${XDG_CACHE_HOME:-${HOME:-}/.cache}` and refuses when (a) neither
+`HOME` nor `XDG_CACHE_HOME` is set and (b) `XDG_CACHE_HOME` is set but
+RELATIVE — only an absolute path is meaningful per the XDG spec). The flag
+mirrors it: a relative `XDG_CACHE_HOME` value is a refuse-to-start (do not
+silently fall through to `~/.cache` — the operator set the var; a wrong dir
+under it is worse than a clear refusal); when `XDG_CACHE_HOME` is unset and
+`HOME` is unset, `os.path.expanduser("~")` returns `"~"` unexpanded — detect
+the non-absolute result and refuse to start rather than create a literal `~/`
+directory under CWD. Both edges get suite rows.
+
 **Deliberately absent from the plugin entry** (each is dogfood-specific):
 
 - `--config=.claude/playwright-mcp.config.json` — repo-relative, headed-Chrome
@@ -316,9 +376,11 @@ Absent the flag, behaviour is unchanged (the repo `.mcp.json` is untouched).
   (the 0.0.78 pin is load-bearing — the float already regressed once, see the
   config file's `_regression_2026_07_18` note).
 - **Engines floor probe.** `engines.claude-code: >=2.1.139` predates neither
-  plugin-MCP support nor the `mcp__plugin_*` namespace, but local stdio plugin
-  servers have a recorded registration bug class (upstream #36914, 2.1.81).
-  Phase 0 measures the floor before the prose ships.
+  plugin-MCP support nor the `mcp__plugin_*` namespace; the recorded local
+  stdio plugin-server registration bug class (upstream #36914, reported on
+  2.1.81) was CLOSED upstream 2026-03-30. Phase 0 still measures the floor —
+  a closed issue is not a shipped fix on every install — before the prose
+  ships.
 
 ### Attack surface enumeration
 
@@ -459,7 +521,7 @@ entry and its own profile dir); `.codex-plugin/plugin.json` /
 | Alternative | Properties it buys | Why not chosen |
 |---|---|---|
 | **B — auto-wrap the user's `playwright` entry** (the issue's second option) | P1 on the user's own server | No plugin-manifest mechanism wraps an existing registration. The only implementable form — a SessionStart hook rewriting customer `.mcp.json`/`.claude.json` — is an unconsented mutation of customer-owned config AND loads only after a full restart, so it satisfies neither "never edits" in spirit nor P7 in the session it lands. Cut. |
-| **C — plugin PostToolUse hook on `mcp__playwright__.*` emitting `updatedMCPToolOutput`** (+ PreToolUse denying `filename`/`_meta`) | P7-transcript on ANY registration named `playwright`, incl. the customer's own | Reaches the sink the proxy already covers but NOT the disk sinks (the tool's `filename:`/`page-*.yml` writes complete before the hook sees output; a hook cannot append `--snapshot-mode none` to a launch it does not own) — fails property 4. Its remaining unique value is covering the customer's own unwrapped registration; bounded residual, deferred with re-evaluation criteria (below). Also unmeasured: whether the session transcript JSONL persists pre-rewrite output (upstream #47859). |
+| **C — plugin PostToolUse hook on `mcp__playwright__.*` emitting `updatedToolOutput`/`updatedMCPToolOutput`** (+ PreToolUse denying `filename`/`_meta`) | P7-transcript on ANY registration named `playwright`, incl. the customer's own | Reaches the sink the proxy already covers but NOT the disk sinks (the tool's `filename:`/`page-*.yml` writes complete before the hook sees output; a hook cannot append `--snapshot-mode none` to a launch it does not own) — fails property 4. Its remaining unique value is covering the customer's own unwrapped registration; bounded residual, deferred with re-evaluation criteria (below). Deepen-pass correction: the transcript-persistence defect (upstream #47859) is CLOSED — the mechanism is viable; the deferral is scoped-coverage economics, not feasibility. |
 | **A-inline — register inside `plugin.json` `mcpServers`** | P1–P4 | Forces the codex deep-equality and devin `.url`-parity tests to carry a stdio entry on harnesses that cannot run it. Reshaped into the dedicated `.mcp.json` — same property, smaller blast radius. |
 | **Do nothing — keep documenting the manual shape** | None | The issue exists because documentation is not P7. Rejected by the CPO ruling on #7980. |
 | **`bash -c` launch inside the plugin entry** (mirrors repo `.mcp.json`) | P5 without a proxy code change | Trades a testable argv-management flag for an unauditable shell string inside a JSON manifest; the flag is ~15 lines in the file that already owns child argv. The flag also fixes the same problem for any future wrapped registration. |
@@ -659,11 +721,11 @@ reach-boundary change a future engineer must find recorded.
 
 - [ ] AC1 — `plugins/soleur/.mcp.json` exists, parses, and registers `playwright` with `command: "python3"`, an argv carrying `${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`, `--user-data-dir-name soleur-playwright-mcp-profile`, `--`, `npx`, `@playwright/mcp@0.0.78` — and no `bash`, no `--config`, no `--user-data-dir` literal.
 - [ ] AC2 — Phase-0 probe record exists at `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-proxy-time-port/plan-time-probe-record.md` evidencing (a) `mcp__plugin_soleur_playwright__*` tools registered on the engines floor (or the floor bump taken, with the minimum version named), (b) `${CLAUDE_PLUGIN_ROOT}` expansion inside the plugin `.mcp.json`, (c) coexistence with a user-scoped `playwright`.
-- [ ] AC3 — Proxy `--user-data-dir-name`: child argv gains `--user-data-dir=<resolved>` under `$XDG_CACHE_HOME`/`~/.cache`; `..`/separator basenames and flag+explicit-`--user-data-dir` both refuse to start (exit 2, reason names the setting, never the value); absent the flag, argv is byte-identical to today.
+- [ ] AC3 — Proxy `--user-data-dir-name`: child argv gains `--user-data-dir=<resolved>` under `$XDG_CACHE_HOME`/`~/.cache`; `..`/separator basenames, flag+explicit-`--user-data-dir`, a RELATIVE `XDG_CACHE_HOME` value, and unresolvable `~` (HOME unset) all refuse to start (exit 2, reason names the setting, never the value); absent the flag, argv is byte-identical to today.
 - [ ] AC4 — `git grep -n 'mcp__playwright__\|mcp__plugin_soleur_pw__' -- plugins/soleur/skills plugins/soleur/agents` returns zero lines that instruct a call on that prefix. Permitted survivors are literals inside prose explicitly scoped to a customer's OWN `playwright` registration (e.g. agent-browser's "verify your manual wrap" `ToolSearch select:mcp__playwright__browser_snapshot` line and the separate-registration rule itself); every call site the skills prescribe resolves to `mcp__plugin_soleur_playwright__*`. The survivor set is pinned by file:line in the PR body.
 - [ ] AC5 — `qa`, `ux-audit`, `reproduce-bug`, `cf-token-scope` each instruct preference for `mcp__plugin_soleur_playwright__*` beside (not inside) the verbatim S2 paragraph; `MCP_GAP_MARKER_RE` still matches each carrier (`scripts/lint-credential-path-literals.test.sh` green).
 - [ ] AC6 — Proxy suite green including: all new flag rows, the Guard-3 plugin-registration row, and pin parity derived from the repo `.mcp.json` (mutating either manifest's pin independently reddens).
-- [ ] AC7 — `EXPECTED_GATE_REFS` still matches the tree (`plugin-root-anchoring.test.ts` green) — updated iff a SKILL.md gained a new anchored proxy reference.
+- [ ] AC7 — `EXPECTED_GATE_REFS` still matches the tree (`plugin-root-anchoring.test.ts` green) — updated iff a SKILL.md gained a new anchored `(file, playwright-mcp-redact-proxy.py)` pair (G3 is a deduped identity set; the existing `agent-browser` pair is already pinned). New proxy mentions in SKILL.md must be `${CLAUDE_PLUGIN_ROOT}`-anchored — G2/G2b reject bare-basename invocations — so preference prose should name the SERVER (`mcp__plugin_soleur_playwright__*`), not the script path.
 - [ ] AC8 — ADR-213 carries the dated `#8156` addendum; `model.c4`/`model.likec4.json` updated and all four C4 gates green; PA-8 §(g) re-appended (append-only); the 2026-09-14 CLO audit carries a dated addendum on row-18 evidence.
 - [ ] AC9 — Option-C deferral issue filed (`deferred-scope-out`, `domain/engineering`, `type/security`), referenced from the ADR addendum and this plan's Alternatives table.
 - [ ] AC10 — `plugin.json` unchanged unless the Phase-0 probe forced the `engines` bump (then exactly that one key, with the probe record cited in the PR body). `codex-plugin.test.ts` and `devin-plugin.test.ts` green unmodified.
@@ -757,11 +819,14 @@ Two open code-review issues touch planned files:
 - **Option C — plugin PostToolUse/PreToolUse hook net on `mcp__playwright__.*`**
   (transcript-only coverage of a customer's own unwrapped registration).
   Deferred per the Alternatives table; a `deferred-scope-out` issue is a plan
-  deliverable (AC9), carrying the re-evaluation criteria, the
-  transcript-persistence unknown (upstream #47859), and the note that
+  deliverable (AC9), carrying the re-evaluation criteria and the note that
   ADR-162's one-rewriter rule does not constrain it (it constrains
-  `updatedInput` rewrites on PreToolUse, not `updatedMCPToolOutput` on
-  PostToolUse).
+  `updatedInput` rewrites on PreToolUse, not `updatedToolOutput` on
+  PostToolUse). Deepen-pass: upstream #47859 (hook output silently
+  discarded) and #24788 (`additionalContext` dropped for MCP events) are
+  both CLOSED — the deferral stands on coverage scope (transcript only,
+  never disk sinks), not mechanism viability; the deferral issue should say
+  so explicitly so a future evaluator does not re-derive it.
 
 ## References & Research
 
