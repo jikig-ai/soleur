@@ -30,6 +30,13 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Redirect incident telemetry into a per-suite sandbox BEFORE any reader runs. The create-time
+# gate this oracle drives end to end calls emit_incident on every DENY, and roughly ten of the
+# eighteen shapes deny -- so without this, each run of the oracle writes ~10 fixture rows into
+# the operator's live `.claude/.rule-incidents.jsonl`, the file compound Phase 1.5 reads as
+# deviation evidence. `incident-sandbox-coverage.test.sh` caught this as the fifth member of its
+# outside set (ceiling 4) on CI shard test-scripts (2/3); a true positive, not an over-count.
+. "$REPO_ROOT/.claude/hooks/lib/test-incident-sandbox.sh"
 SWEEPER="$REPO_ROOT/scripts/sweep-followthroughs.sh"
 SOAK_HOOK="$REPO_ROOT/.claude/hooks/ship-soak-followthrough-gate.sh"
 SHIP_SKILL="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md"
