@@ -3,6 +3,10 @@ name: work
 description: "This skill should be used when executing work plans efficiently while maintaining quality and finishing features."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/work` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:work`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -717,6 +721,15 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    # 2. Stage only files related to this logical unit (not `git add .`)
    git add <files related to this logical unit>
+
+   # 2b. Commit-on-main backstop (Soleur Cloud Mode, FR5): PreToolUse hooks do
+   # not fire in cloud sessions, so the hook's block-commit-on-main arm is
+   # absent there. Run the canonical check directly — a no-op locally where the
+   # hook already guards, load-bearing in cloud. If CLAUDE_PLUGIN_ROOT is unset
+   # (cloud exec shells), locate the script in the plugin cache instead.
+   GUARD="${CLAUDE_PLUGIN_ROOT}/scripts/precommit-guard.sh"
+   [ -f "$GUARD" ] || GUARD="$(find /opt/.devin/plugins -name precommit-guard.sh 2>/dev/null | head -1)"
+   [ -n "$GUARD" ] && bash "$GUARD" "git commit -m \"feat(scope): description of this unit\""
 
    # 3. Commit with conventional message
    git commit -m "feat(scope): description of this unit"

@@ -15,6 +15,10 @@ views {
       // soleurMarketplace have a rendered target — without it the marketplace
       // renders as a disconnected box (ADR-182, #7471).
       platform.plugin, soleurMarketplace,
+      // #8205: devin is an L1 harness external like codex/grokBuild; both edge
+      // endpoints (founder, platform.plugin) are already in this view so the
+      // edges render rather than leaving a disconnected box.
+      devin,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser,
       // #7980: the browser the agent drives is an L1 external system like every other
       // third party here; its edges derive to `platform` (via plugin.snapshotGuard), so
@@ -43,6 +47,9 @@ views {
       platform.infra.gitDataStore, platform.infra.sessionStore, platform.infra.workspacesVolume,
       anthropic, github, cloudflare, doppler, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, systemdUser,
       connectedRepoPlugin, connectedRepoKb,
+      // #8205: devin -> platform.plugin delivery edge needs both endpoints in
+      // the view (#7332 rule — same mechanism as playwrightMcp below).
+      devin,
       // #7980: playwrightMcp is an L1 external and belongs here like every other one. BUT
       // `platform.plugin` is a COMPOUND node in this view (skills/agents/kb are included),
       // and LikeC4 does not lift an edge from a non-included descendant onto a compound

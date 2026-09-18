@@ -3,6 +3,10 @@ name: brainstorm
 description: "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` — if `CLAUDE_PLUGIN_ROOT` is unset (measured: cloud exec shells do not export it), resolve the script via `find /opt/.devin/plugins -name cloud-detect.sh | head -1`. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies the cloud contract in `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, execute agent fan-out sequentially inline with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), require an explicit session-scoped acknowledgement (`message_user`) before any secrets read or production mutation, and run `precommit-guard.sh` (same plugin `scripts/` dir, same `find` recipe) before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
 <!-- grok-harness-invoke:start -->
 **Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/brainstorm` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:brainstorm`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
@@ -515,6 +519,8 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    - Acceptance criteria (from brainstorm decisions)
    - If replacing closed issue: "Replaces closed #$existing_issue"
 
+   **Filing-gate exit selection:** when the feature's deliverable is itself plugin verification machinery (gates, banners, ledgers, parity work), the issue-filing gate classifies it as machinery — the `User-Impact:`/`Fix-Size:` exit is refused even when correctly formatted; file with `--label meta/machinery` directly. Reserve the `User-Impact:` exit for features whose surface a user actually receives. See `knowledge-base/project/learnings/documentation-gaps/devin-cloud-plugin-surface-matrix-SoleurPlugin-20260914.md`.
+
 3. **Update existing issue with artifact links** (if using existing issue):
 
    Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts (or "Bundled scoping") section with links to the brainstorm document, spec file, branch name, and draft PR. Then update with `gh issue edit <number> --body-file -` reading stdin. For bundles, loop over every referenced issue and append the same note to each.
@@ -548,6 +554,8 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    ```bash
    gh issue create --title "feat: <deferred item>" --milestone "Post-MVP / Later" --body "Deferred from #<parent-issue> during brainstorm on <date>.\n\n## What was deferred\n<description>\n\n## Why deferred\n<rationale from brainstorm>\n\n## Re-evaluation criteria\n<when to revisit>"
    ```
+
+   The body must satisfy the issue-filing gate: add `Mandated-By: wg-when-deferring-a-capability-create-a` on its own line (or `User-Impact:`/`Fix-Size:` lines, or `--label meta/machinery` for machinery findings). Prefer `--body-file <tracked-relative-or-absolute-repo-path>` over inline `--body` — the gate cannot read `/tmp` and inline quoting can fail tokenization.
 
    After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies. If no items were deferred, skip silently.
 

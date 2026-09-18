@@ -90,6 +90,15 @@ if [[ -z "$PREFIX" ]]; then
 fi
 ok "prefix extracted from the hook's own output (${#PREFIX} bytes)"
 
+# Devin wire name `exec` reaches the rewriter (kind map, #8205): an `exec`
+# envelope carrying the mark must produce the same updatedInput prefix.
+DEVIN_PREFIX="$(cmd_of "$(hook_run "$(jq -nc --arg c "$MARK" '{tool_name:"exec", tool_input:{command:$c}}')")")"
+if [[ "$DEVIN_PREFIX" == *"$PREFIX"* || "$DEVIN_PREFIX" == "$PREFIX$MARK" ]]; then
+  ok "Devin exec envelope rewrites identically"
+else
+  bad "Devin exec envelope produced no updatedInput rewrite" "got: ${DEVIN_PREFIX:-<empty>}"
+fi
+
 # Non-vacuity control for the whole behavioural block: WITHOUT the prefix the
 # shim must win. If this ever passes, the harness is not testing the prefix.
 mkshim() { printf '%s\n' 'function grep { echo SHIM-CALLED-ugrep; }' > "$1"; }

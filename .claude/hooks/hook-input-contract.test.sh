@@ -1573,7 +1573,7 @@ a20_internal_arms() {
 a21_ask_json_parses() {
   local helper="$SCRIPT_DIR/lib/hook-input.sh" r out
   for r in empty baddoc nonobject nonstring separator multidoc jq_missing \
-           internal:rc3 internal:rc2 internal:rc137 internal:count; do
+           internal:rc3 internal:rc2 internal:rc137 internal:count internal:kind-lib; do
     out="$(bash -c '
         source "'"$helper"'"
         HOOK_INPUT_REASON="$1"

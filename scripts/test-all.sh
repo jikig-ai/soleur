@@ -1771,6 +1771,14 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # The DPA Schedule 4 TOM-4 RLS-posture gate (CLO ruling 2026-09-15, #8197).
+  # Schedule 4 becomes Annex II to the Module 2/3 SCCs on execution, so every
+  # table name and predicate in it is a contractual representation. The -live
+  # line runs the 22 assertions over the real migration corpus so a schema
+  # change that falsifies the instrument reds CI; the .test.sh line is the
+  # MB-0..MB-12 mutation battery proving each assertion can actually fail.
+  run_suite "scripts/check-tom4-rls-posture" bash scripts/check-tom4-rls-posture.test.sh
+  run_suite "scripts/check-tom4-rls-posture-live" bash scripts/check-tom4-rls-posture.sh
   # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
   # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
   # the sweep over the real plans/ tree so a non-compliant Guard Contract landing
@@ -2092,6 +2100,16 @@ if want_scripts; then
   # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
   # than telemetry — a green boot marker must not authorize a supply-chain retirement.
   run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
+  # #8159: exit-code harness for the post-merge cloud-parity evidence probe. Registered
+  # explicitly (orphan-suite class above). This probe is notify-only — its verdicts feed a
+  # legal-adjacent tracker whose close is an operator judgement, so the load-bearing pins are
+  # the never-0/never-1 invariant (0 is the sweeper's close verb; 1 its fail/reopen verb) and
+  # the 2-vs-3 split: a measurement that could not run (missing file, missing toolchain,
+  # non-regular file at the probe path) must report CANNOT ESTABLISH, not NOT YET — "nothing
+  # qualifies" for "could not look" is the inversion the contract exists to express. The suite
+  # also pins the fenced-template guard: cloud-probe.md's checklist carries a fenced markdown
+  # TEMPLATE naming SC1/SC3/SC4, and a fence-blind parse reads documentation as a verdict.
+  run_suite "scripts/cloud-mode-postmerge-evidence-8159" bash scripts/followthroughs/cloud-mode-postmerge-evidence-8159.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

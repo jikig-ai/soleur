@@ -78,10 +78,7 @@ variables {
   # and test/seo-config-rules.test.ts pins that the default is `true` — because
   # flipping it to `false` silently restores the whole-list clobber (#6767).
   adopt_seo_config_entrypoint = false
-  # Same opt-out for the betteruptime_monitor.app_health adoption (#7884): its
-  # `import` block would otherwise read Better Stack with the dummy token below.
-  adopt_app_health_monitor = false
-  betterstack_api_token    = "dummy"
+  betterstack_api_token       = "dummy"
   # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
   # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
   # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).

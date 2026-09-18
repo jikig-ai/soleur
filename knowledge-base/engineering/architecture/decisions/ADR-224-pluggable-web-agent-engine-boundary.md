@@ -6,7 +6,12 @@ issue: none
 supersedes: null
 ---
 
-# ADR-223: Pluggable web agent engines bind execution before dispatch
+# ADR-224: Pluggable web agent engines bind execution before dispatch
+
+**Number corrected 2026-09-17:** This feature initially used ADR-223. Merging
+main revealed that ADR-223 belongs to the per-harness hook-registry decision;
+this decision is now ADR-224. Earlier dated references retain their historical
+number and refer to this decision.
 
 ## Context
 
@@ -155,3 +160,22 @@ binding. Registry injection keeps future engine wiring additive but does not
 bypass enablement, binding identity, event validation, or egress policy. System-
 triggered routines still require a dedicated service identity before they can
 participate in the same binding path.
+
+## Implementation decision — 2026-09-17 (pending implementation)
+
+The recovery requirements in the accepted plan need a separate protected storage
+boundary. Keep the member-readable lifecycle event ledger content-free. Store
+native session handles, recovery cursors, provider idempotency state, and usage
+provenance in protected recovery checkpoints with authorization appropriate to
+the bound conversation or routine execution. These checkpoints must not widen
+access through the workspace-member event ledger.
+
+Separate the immutable conversation engine binding from each turn's execution
+attempt. A terminal turn does not terminalize the conversation or prevent a later
+authorized turn from continuing with the same engine. Allocate event sequences
+durably across retries and restarts; process-local counters cannot be the
+recovery authority. Persist lifecycle transitions rather than every text delta.
+
+This dated decision refines the planned storage and lifecycle boundaries. It
+records pending implementation requirements, not completed behavior or passing
+qualification evidence.

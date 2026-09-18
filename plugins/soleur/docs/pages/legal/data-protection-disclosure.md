@@ -36,6 +36,8 @@ permalink: legal/data-protection-disclosure/
 
 **Amended:** September 13, 2026 — Plugin definition is harness-neutral: a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI). xAI is not a Jikigai processor. Cookie Policy and Disclaimer remain Claude Code-specific.
 
+**Corrected September 14, 2026 (#8159).** Sections 2.1, 2.1(c) and 3.1(a) previously read as universal statements about the Plugin; they are now scoped to the plugin-local configuration, and Section 2.1c names a third configuration — the **provider-operated session** (a third-party machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes), in which no limb is Jikigai's — and its classification table gains a fifth row recording that configuration. No new processing activity, no new sub-processor, no change to lawful bases, retention, or data-subject rights. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)* Output marked draft-requiring-professional-review.
+
 **Amended:** September 16, 2026 — Migration 138 event persistence stores only content-free lifecycle metadata (event category and allowlisted status where applicable), sequence, timestamps, and sequence-derived event identifiers. Provider event IDs, generated text, prompts, descriptions, artifact details, usage payloads, credentials, and repository content are excluded from event payloads. Account export and erasure cover attributable agent-engine settings and run records; Codex customer-content execution remains disabled pending auth-mode-specific vendor, transfer, retention, deletion, and CLO qualification. Classified Tier 1 for the data-protection notice; the Terms of Service were not changed, so `TC_VERSION` remains unchanged.
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
@@ -46,7 +48,7 @@ This Data Protection Disclosure ("DPD") describes the data processing relationsh
 
 This DPD supplements our [Terms and Conditions](/legal/terms-and-conditions/) and [Privacy Policy](/legal/privacy-policy/) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
@@ -78,18 +80,18 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 **This section is critical to understanding the data processing relationship for the Plugin.**
 
-The Soleur Plugin operates entirely on the User's local machine. It is installed via CLI and runs as a local extension within the User's development environment.
+In the plugin-local configuration, the Soleur Plugin operates entirely on the User's local machine. It is installed via CLI and runs as a local extension within the User's development environment.
 
 As a result:
 
 - **(a)** The Plugin does **not** process Personal Data on behalf of the User within the meaning of Article 28 of the GDPR.
 - **(b)** The Plugin does **not** have access to, collect, store, transmit, or otherwise process any Local Data created or managed through the Plugin.
-- **(c)** All knowledge-base files, plans, brainstorms, specs, generated code, and other artifacts remain exclusively on the User's local filesystem under the User's sole control.
+- **(c)** In the plugin-local configuration, all knowledge-base files, plans, brainstorms, specs, generated code, and other artifacts remain exclusively on the User's local filesystem under the User's sole control.
 - **(d)** The Plugin does **not** act as an intermediary for any API calls made by the User to third-party services (including, but not limited to, the Anthropic Claude API). Users authenticate directly with third-party services using their own API keys and credentials.
 
 **Therefore, Soleur is neither a Controller nor a Processor with respect to the data processed locally through the Plugin.**
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 2.1b Web Platform Data Processing
 
@@ -110,11 +112,14 @@ Sections 2.1 and 2.2 describe the Plugin as the User runs it: on the User's own 
 User's own credentials, for the User's own purposes. In that configuration Jikigai is neither a
 Controller nor a Processor of the User's content, and those sections remain accurate.
 
-This section describes two things that fall outside that configuration. An **operator-assisted
+This section describes three things that fall outside that configuration. An **operator-assisted
 session** is a session in which Jikigai, at the User's request, participates directly in running
 Soleur against the User's own material — using a Jikigai machine, a Jikigai-held credential, or both.
 **Jikigai-purpose access** is any reading of a User's content by Jikigai for a purpose Jikigai has
-chosen, which can occur with no session at all.
+chosen, which can occur with no session at all. A **provider-operated session** is a session in which
+the Plugin runs on a third party's machine — for example a Devin Cloud session on a Cognition-managed
+virtual machine — under the User's own credentials, for the User's own purposes: no limb is
+Jikigai's, and the machine is governed by the provider's own terms, not this Disclosure.
 
 The determining question is therefore not whose machine executes the work. It is whether **any one**
 of three things is Jikigai's: the **machine**, the **credential**, or the **purpose**. Any one of the
@@ -126,6 +131,7 @@ three is enough on its own, and more than one may be true at the same time.
 | A Jikigai machine or a Jikigai-held credential, used on the User's instructions | **Processor** |
 | A Jikigai machine or a Jikigai-held credential, used for a purpose Jikigai has chosen | **Controller** |
 | Neither a Jikigai-run session nor a Jikigai-held AI-provider credential, but a purpose Jikigai has chosen — for example Jikigai reading a repository the User has given it access to, in order to measure how a programme is progressing | **Controller** |
+| Provider-operated session — a third-party machine (for example a Devin Cloud session on a Cognition-managed VM), the User's credentials, the User's purposes | **Neither** Controller nor Processor — no limb is Jikigai's; the provider's own terms govern the machine |
 
 These rows are not mutually exclusive. More than one may describe the same activity at the same
 time, and where they do, each role applies to the limb it describes.
@@ -170,7 +176,7 @@ The User is solely responsible for:
 - **(e)** Managing API keys and credentials used to interact with third-party services; and
 - **(f)** Any data shared with third-party services (e.g., Anthropic Claude API) through the Plugin's functionality, including compliance with those services' own data processing terms.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 2.3 Limited Processing by Soleur
 
@@ -239,13 +245,13 @@ For these activities, Jikigai acts as a Controller with respect to data it direc
 
 Soleur's architecture is designed to minimize data processing concerns:
 
-- **(a)** The Plugin executes entirely within the User's local CLI environment.
+- **(a)** In the plugin-local configuration, the Plugin executes entirely within the User's local CLI environment.
 
 - **(b)** No data is transmitted to Soleur-operated servers.
 - **(c)** No telemetry, analytics, or usage tracking is embedded in the Plugin itself.
 - **(d)** The Plugin does not establish network connections to Soleur-controlled endpoints.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 ### 3.2 User-Side Security Recommendations
 
@@ -309,7 +315,7 @@ This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(d), 2.3(e), 2.3(f)
 
 Users may interact with the following third-party services through the Plugin's functionality. These interactions are initiated and controlled by the User, not by Soleur:
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 | Service | Purpose | User's Relationship |
 |---------|---------|-------------------|
@@ -327,7 +333,7 @@ Users are responsible for reviewing and complying with the data processing terms
 
 Because Soleur does not have access to Local Data, data subject requests (access, rectification, erasure, portability, restriction, objection) related to data processed locally must be addressed by the User directly. Soleur cannot fulfill such requests as it has no access to the data.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses how Jikigai assists the User in responding to requests from data subjects in respect of that processing.
 
@@ -352,7 +358,7 @@ For data processed through the Web Platform (app.soleur.ai) where Jikigai acts a
   - BYOK usage audit log (`audit_byok_use`).
   - Beta-tester / prospect CRM records you curated (`beta_contacts` + `interview_notes` = Article 15 + 20; `beta_contact_stage_transitions` = Article 15 controller-generated velocity audit; `beta_contact_access_log` = Article 15 controller-generated read-accountability metadata, no note content), per Section 2.3(ad).
   - Workspace files (the `/workspaces/<your-id>/` tree on Jikigai infrastructure).
-  Excluded from the export, with reason: DSAR-itself audit metadata (handled separately under Article 17 cascade), operational concurrency / rate-limit / revocation / mint-rate tables (security telemetry, not personal data), push notification subscriptions (transient device tokens; revoke via your browser), your current-organisation interface preference (`user_session_state` — a single pointer to one of the organisations already listed in your exported membership records, holding no content you supplied; scheduled to move into the bundle, tracked at #7487), workspace activity events and knowledge-base upload attribution (`workspace_activity`, `kb_files` — the processing itself is disclosed at §2.3(x) and §2.3(y); on erasure `workspace_activity` is anonymised and `kb_files` is de-attributed (the uploader reference is cleared; a filename you chose is retained for the lifetime of the workspace, as stated at §2.3(y)); both are scheduled to move into the bundle, tracked at #7487, and until they do you may ask us by email and we will supply them manually using the queries documented in the operations runbook `dsar-manual-supply-excluded-tables`), routine execution run-logs (`routine_runs` — records of routine executions rather than profile data, anonymised on erasure), deploy-substrate orchestration audit rows (`tenant_deploy_audit` — single-tenant scope today, so no data subject outside Jikigai has a non-empty row), worktree write-lease coordination state (`worktree_write_lease` — infrastructure coordination only, no personal data, erased by cascade), and statutory-deadline dispatch markers (`statutory_repin_send`, migration 135, *effective on deployment of that migration* — a foreign key to an `email_triage_items` row that is itself exported in full, plus a synthetic tick label and a timestamp; the table has no `user_id` column and holds no personal data, and is swept on a 90-day rolling schedule).
+  Excluded from the export, with reason: DSAR-itself audit metadata (handled separately under Article 17 cascade), operational concurrency tables (transient runtime state, not personal data); rate-limit, revocation and mint-rate tables (`mint_rate_window`, `runtime_mint_intent`, `denied_jti`) — security telemetry that **is** keyed to your account and so is personal data, excluded from the bundle not because it is impersonal but because the route to it is dedicated rather than bulk: the reason for your most recent session revocation is shown to you in-product and returned by the revocation-status endpoint, and Article 15 requests for your full revocation history route to <legal@jikigai.com>, push notification subscriptions (transient device tokens; revoke via your browser), your current-organisation interface preference (`user_session_state` — a single pointer to one of the organisations already listed in your exported membership records, holding no content you supplied; scheduled to move into the bundle, tracked at #7487), workspace activity events and knowledge-base upload attribution (`workspace_activity`, `kb_files` — the processing itself is disclosed at §2.3(x) and §2.3(y); on erasure `workspace_activity` is anonymised and `kb_files` is de-attributed (the uploader reference is cleared; a filename you chose is retained for the lifetime of the workspace, as stated at §2.3(y)); both are scheduled to move into the bundle, tracked at #7487, and until they do you may ask us by email and we will supply them manually using the queries documented in the operations runbook `dsar-manual-supply-excluded-tables`), routine execution run-logs (`routine_runs` — records of routine executions rather than profile data, anonymised on erasure), deploy-substrate orchestration audit rows (`tenant_deploy_audit` — single-tenant scope today, so no data subject outside Jikigai has a non-empty row), worktree write-lease coordination state (`worktree_write_lease` — infrastructure coordination only, no personal data, erased by cascade), and statutory-deadline dispatch markers (`statutory_repin_send`, migration 135, *effective on deployment of that migration* — a foreign key to an `email_triage_items` row that is itself exported in full, plus a synthetic tick label and a timestamp; the table has no `user_id` column and holds no personal data, and is swept on a 90-day rolling schedule).
 - **(b)** **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai. Email channel.
 - **(c)** **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Self-serve via the Delete Account dialog in `/dashboard/settings` or by email. The cascade aborts any in-flight DSAR export, purges chat-attachment and DSAR-export Storage objects, anonymises the DSAR audit log, then deletes the auth record (which cascades to all owned rows, **including the whole beta-CRM store** — `beta_contacts` and its notes/transitions/read-accountability-log rows via `ON DELETE CASCADE`, Section 2.3(ad)). **Third-party erasure:** where a beta tester / prospect recorded in your CRM exercises their own Article 17 right, their individual contact and all related notes/transitions/access-log rows are deleted via the auditable service-role-only `crm_erase_contact` function (contact @ `legal@jikigai.com`). Note: subscription records subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 2.3(g)).
 - **(d)** **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data. Email channel.
@@ -369,7 +375,7 @@ Jikigai will acknowledge requests within 5 business days and respond substantive
 
 No international data transfers are performed by Soleur with respect to Local Data.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer.
 
@@ -411,7 +417,7 @@ Plausible Analytics, used for privacy-respecting website analytics on the Docs S
 
 Soleur has no visibility into the User's local environment and therefore cannot detect or report data breaches affecting Local Data. Users are solely responsible for breach detection and notification obligations under Article 33 and Article 34 of the GDPR with respect to locally processed data.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses notification of personal-data breaches affecting that processing.
 
@@ -459,7 +465,7 @@ Given the local-only nature of the Plugin, traditional audit rights under Articl
 - **(b)** Users may verify that the Plugin does not transmit data by inspecting network activity during use.
 - **(c)** Soleur welcomes security audits and responsible disclosure through the GitHub repository.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Where an operator-assisted session has taken place, the written instrument agreed before that session addresses the User's audit rights in respect of that processing.
 
@@ -480,7 +486,7 @@ Users may uninstall the Plugin at any time. Upon removal:
 
 - **(c)** Users are responsible for deleting or retaining Local Data according to their own data retention policies.
 
-**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c. Nor does it describe a **provider-operated session** — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under the User's own credentials for the User's own purposes — which Section 2.1c names separately; in that configuration no limb is Jikigai's.
 
 Limb (b) above describes Local Data, which is never transmitted to Jikigai. It does not describe content sent to an AI provider under a **Jikigai-held** credential during an operator-assisted session: that provider holds a copy under the terms applying to Jikigai's own account, for a period Jikigai does not set and cannot shorten once the content has been sent, and removing the Plugin does not reach it. Retention for such a session is addressed in the written instrument agreed with the User before it takes place.
 

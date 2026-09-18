@@ -154,9 +154,23 @@ path alone cannot show that replay drift is visible.
 
 65. A process diagnostic probe was rejected because its search pattern embedded a commit-command literal that the shell guard treats as a write attempt. **Prevention:** use neutral process markers such as the script path or executable name when checking for live jobs; do not include commit command text in probe literals.
 
+66. Resume probes hit sandbox restrictions on GitHub DNS, Git metadata locks, and npm's registry/cache. Cleanup initially described its read-only lock failure as contention. Approved retries reached the real operations; an unrelated orphan directory still reported EACCES. **Prevention:** distinguish sandbox denials from contention or application failures, and use the harness escalation path rather than changing permissions or treating a skipped cleanup as completed.
+
+67. Several combined reads exceeded the output budget; reading the first lines of the conflicted minified C4 JSON emitted an entire large artifact. **Prevention:** bound diagnostic output by bytes as well as lines, inspect generated JSON with structured projections, and read large instruction files in separate bounded sections.
+
+68. The checkpoint push succeeded while its installed hook printed `Can't find lefthook in PATH`. The configured pre-push client PII check then passed when invoked directly over its complete client roots. **Prevention:** verify hook executable availability and retain each configured gate's explicit verdict; a successful push does not establish that the hook ran.
+
+69. Planned filename probes and an unmatched shell glob failed during resume research; discovery found `agent-engine-adapter-composition.ts` and `138_agent_engine_runs.sql`. **Prevention:** resolve plan-relative paths through `rg --files` before reading, and pass file filters to the search tool instead of expanding unverified globs in the shell.
+
+70. The main resync conflicted in legal amendment paragraphs, their hashes, and the generated C4 artifact; upstream also allocated the feature's provisional ADR number. **Prevention:** retain both independent dated legal notices, recompute hashes from resolved bytes, regenerate derived diagrams, and verify ADR ordinal uniqueness after every resync.
+
+71. Historical aggregate diagnostics could not recover the 6,242-second run's failure identity. The earlier repository-write failure (error 62) is a separate run, and `422/427` includes non-failure deductions. **Prevention:** retain the complete log, timing records, and immediate command exit status outside printed tool output; never infer a failed-suite count or identity from that summary alone. Infra relevance must be derived from the feature diff after a main merge is committed, not from upstream files temporarily staged during the merge.
+
+72. Merge takeover repeated the sandbox network/cache and Git-index denials from error 66, and a guessed `scripts/lint-kb-structure.sh` invocation failed because that file does not exist. Broad instruction and diff reads also exceeded the output budget. **Prevention:** discover validator paths from the hook configuration before invoking them, use bounded sections and semantic comparisons, and retry actual sandbox failures through the approval path. The existing `generate-kb-index.sh --check` passed; the nonexistent invocation provides no validation evidence.
+
 ## Related
 
-- `knowledge-base/engineering/architecture/decisions/ADR-223-pluggable-web-agent-engine-boundary.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-224-pluggable-web-agent-engine-boundary.md`
 - `knowledge-base/project/specs/feat-pluggable-web-agent-engines/codex-qualification-record.md`
 
 ## Tags

@@ -99,10 +99,11 @@ TARGET="${HOOK_FILE_PATH:-$HOOK_CMD}"
 # gets the read-vs-write gate (command present), and on a file write still reaches
 # the existing `ask` logic (file_path present, so IS_BASH stays unset).
 TOOL_NAME="$HOOK_TOOL_NAME"
+TOOL_KIND="$HOOK_TOOL_KIND"
 HAS_COMMAND=""; [[ -n "$HOOK_CMD" ]] && HAS_COMMAND="1"
 HAS_FILE_PATH=""; [[ -n "$HOOK_FILE_PATH" ]] && HAS_FILE_PATH="1"
 IS_BASH=""
-if [[ "$TOOL_NAME" == "Bash" ]] || { [[ -z "$TOOL_NAME" ]] && [[ -n "$HAS_COMMAND" ]] && [[ -z "$HAS_FILE_PATH" ]]; }; then
+if [[ "$TOOL_KIND" == "Bash" ]] || { [[ -z "$TOOL_NAME" ]] && [[ -n "$HAS_COMMAND" ]] && [[ -z "$HAS_FILE_PATH" ]]; }; then
   IS_BASH=1
 fi
 

@@ -390,7 +390,8 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "(account-delete.ts), not Art. 15 export. The user-readable jobs " +
     "row in dsar_export_jobs already covers their own request history.",
 
-  // Operational state (no personal data).
+  // Operational state (no personal data) — covers the two entries immediately
+  // below; denied_jti after them IS personal data, on a different ground.
   user_concurrency_slots:
     "Operational concurrency-slot bookkeeping. Transient runtime state, " +
     "not personal data. Cleared on session end.",
@@ -399,14 +400,24 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "auto-deleted on 410 Gone. Per spec FR8 not enumerated as Art. 15 " +
     "personal data. The user can revoke via browser permissions.",
   denied_jti:
-    "Runtime-JWT revocation list (security telemetry). The jti is a " +
-    "random-ID per token, not user-provided content; rows index a " +
-    "user only as a side-effect of the mint event. Per spec FR8 not " +
-    "enumerated as Art. 15 personal data.",
+    "Runtime-JWT revocation list (security telemetry). Excluded from the " +
+    "bulk export — but NOT on the ground that the table holds no personal " +
+    "data. The `reason` column is an operator-authored statement about an " +
+    "identified account holder, recorded as a category at Article 30 " +
+    "register PA-1 (c). The subject-facing read path is a dedicated RPC " +
+    "rather than this export: my_revocation_status() returns denied_at " +
+    "and reason for the caller's most recent revocation, withholding jti " +
+    "as an enumeration-oracle mitigation. The jti itself is a random " +
+    "per-token ID, not user-provided content, and is deliberately not " +
+    "exported. KNOWN GAP: that RPC returns the latest revocation only, so " +
+    "earlier reason values are not self-serve reachable; Article 15 " +
+    "requests for full revocation history route manually to " +
+    "legal@jikigai.com.",
   mint_rate_window:
     "Per-founder JWT-mint rate-limit counter (security telemetry). " +
-    "Rolling 60/hour bucket; no user-provided content. Per spec FR8 " +
-    "not enumerated as Art. 15 personal data.",
+    "Rolling 60/hour bucket; no user-provided content. Excluded on that " +
+    "ground, not on an impersonality ground — the counter is keyed to the " +
+    "account, and docs/legal/data-protection-disclosure.md says so.",
   runtime_mint_intent:
     "Runtime-JWT mint marker (Phase-4 hook discriminator, ADR-033 §0.7). " +
     "≤10-second lifetime row written by tenant.ts before generateLink " +
@@ -417,7 +428,8 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "this reason previously said that column is 'already in the DSAR's " +
     "auth.users export' -- there is no auth.users export in the bundle. " +
     "The ground is ephemerality (no row survives the mint flow), not " +
-    "duplication. Per spec FR8 not enumerated as Art. 15 personal data.",
+    "duplication, and not impersonality — the row is keyed to the account " +
+    "while it exists; see docs/legal/data-protection-disclosure.md.",
   // feat-team-workspace-multi-user — `user_session_state` remains
   // excluded after Phase 7 promotion of organizations + workspaces +
   // workspace_members + workspace_member_attestations. The single row's

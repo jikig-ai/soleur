@@ -68,6 +68,21 @@ fi
 CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FILE_PATH
 ```
 
+`HOOK_CWD` falls back to `DEVIN_PROJECT_DIR` → `CLAUDE_PROJECT_DIR` → `$PWD`
+when the envelope carries no `.cwd` — Devin's PreToolUse envelope omits it
+(envelope-capture §5), and hook processes run with PWD at the project root.
+
+`hook_parse_input` also exports **`HOOK_TOOL_KIND`** — the wire name normalized
+to its Claude kind via `lib/hook-tool-kind.sh` (`exec`→`Bash`, `write`→`Write`,
+`edit`→`Edit`, `ask_user_question`→`AskUserQuestion`, `run_subagent`→`Agent`,
+`skill`→`Skill`; unmapped names pass through). `HOOK_TOOL_NAME` stays byte-exact
+for telemetry. **New hooks that gate on tool identity must test
+`HOOK_TOOL_KIND`, never `HOOK_TOOL_NAME`** — under Devin the wire names are
+lowercase, so a `HOOK_TOOL_NAME == "Bash"` gate is a dead gate (measured;
+issue #8205, ADR-223). Devin dispatch lives in `.devin/config.json`, and every
+registry registration must carry a row in `.claude/hooks/devin-dispositions.tsv`
+— `devin-matcher-parity.test.sh` enforces both.
+
 `hook_parse_input` returns 0 only when the document parses **and** every
 contracted field is a string; the values are then byte-exact. Any other outcome
 returns 1 and classifies via `HOOK_INPUT_REASON`. **The return code is
@@ -84,6 +99,7 @@ normative; the reason is diagnostic.** The enum:
 | `jq_missing` | `jq` is not on PATH | the environment |
 | `internal:rc<N>` | jq exited non-zero with any code **other than 5** — 3 (our program did not compile), 2 (usage/system error, e.g. a write failure), 128+n (killed by a signal: OOM, SIGSEGV). `N` is the literal code | ours |
 | `internal:count` | our program emitted a partial record with a clean rc | ours |
+| `internal:kind-lib` | `hook_tool_kind` was not defined at call time — `lib/hook-tool-kind.sh` missing or unsourced; every kind-normalized gate would silently disarm without this hard stop (#8205) | ours |
 
 `empty` and `baddoc` were a single `unparseable` until #7275, and `internal:*`
 was a single `internal` whose rc-3 arm was unreachable. Both splits exist so a

@@ -93,6 +93,7 @@ abort-controller
 abort-feature
 abort-signal
 abortcontroller
+absence-query
 absence-wait
 absolute-positioning
 ac-design
@@ -603,6 +604,7 @@ canusetool
 cap
 cap-coupling
 cap-rpc
+capability-matrix
 capability-precedent
 capacity
 capture
@@ -1024,6 +1026,7 @@ cross-reviewer-convergence
 cross-root-import
 cross-runner
 cross-runtime
+cross-source
 cross-tenant
 crypto
 cryptography
@@ -1182,6 +1185,8 @@ dev-prod-divergence
 dev-server
 devdependencies
 developer-experience
+devin
+devin-cloud
 dhh-rails-reviewer
 di-seam
 diagnosability
@@ -1786,6 +1791,7 @@ hardcoded-map-drift
 harness
 harness-adapter
 harness-fidelity
+harness-parity
 harness-reliability
 harvest-debt
 has_function_privilege
@@ -2206,6 +2212,7 @@ merge-base
 merge-conflict
 merge-conflicts
 merge-direction
+merge-driver
 merge-livelock
 merge-pr
 merge-queue
@@ -2703,6 +2710,7 @@ plugin-marketplace
 plugin-path
 plugin-root
 plugin-structure
+plugin-surfaces
 plugin-system
 plugin-versioning
 plugins/soleur
@@ -3653,6 +3661,7 @@ stale-filter
 stale-inherited-number
 stale-issue
 stale-lock
+stale-measurement
 stale-premise
 stale-ref
 stale-references
@@ -3933,6 +3942,7 @@ tool-selection
 tool-status-chip
 tool-tier
 tool_input
+tool_name
 tool_progress
 toolchain-pinning
 tooling
@@ -3976,6 +3986,7 @@ tsx
 ttl
 turbopack
 tweets
+two-layer-gate
 two-phase-commit
 two-tier-guard
 type-filter

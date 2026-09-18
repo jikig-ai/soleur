@@ -127,30 +127,52 @@ if [[ -n "$_bypass_rid" ]]; then
 fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
-# Match git commit at start of string OR after chain operators (&&, ||, ;)
-# so chained commands like "git add && git commit" are caught.
+# Match git commit at start of string OR after chain operators (&&, ||, ;, |)
+# so chained commands like "git add && git commit" are caught. Tolerates
+# env-assignment prefixes (LEFTHOOK=0 git commit), a launcher (sudo/env/…),
+# and git options between `git` and `commit` (-C dir, -c k=v, --git-dir=d) —
+# the same width precommit-guard.sh detects; a narrower gate here would make
+# those arms unreachable on the hook path.
 # Scans $COMMAND (NOT $SCAN): this gates the REAL commit, so a message body
 # mentioning "git commit" still IS a commit — no false-positive class here.
-if grep -qE '(^|&&|\|\||;)\s*git\s+commit' <<<"$COMMAND"; then
-  # Resolve the branch from the command's working directory, not the hook's CWD.
-  # resolve_command_cwd (lib/incidents.sh) covers: "cd /worktree && ...",
-  # "git -C /worktree commit", and hook-input .cwd. Falls through to the
-  # hook's own CWD if none resolve.
-  GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
-  if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
-    BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+# The canonical check lives in plugins/soleur/scripts/precommit-guard.sh —
+# plugin is the source of truth so work/ship/one-shot can invoke the identical
+# check in sessions where hooks do not fire (Soleur Cloud Mode, FR5). This
+# wrapper translates the script's refusal into the hook deny envelope.
+if grep -qE '(^|[|;&])[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit' <<<"$COMMAND"; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  GUARD="$REPO_ROOT/plugins/soleur/scripts/precommit-guard.sh"
+  if [ -n "$REPO_ROOT" ] && [ -x "$GUARD" ]; then
+    HOOK_CWD=$(jq -r '.cwd // empty' <<<"$INPUT" 2>/dev/null || echo "")
+    if ! bash "$GUARD" --cwd "$HOOK_CWD" "$COMMAND" >/dev/null 2>&1; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   else
-    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  fi
-  if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
-    emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
-    jq -n '{
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
-      }
-    }'
-    exit 0
+    # Plugin script unreachable — fall back to the inline check so the hook
+    # never silently loses the guard when the plugin tree moves.
+    GIT_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
+    if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
+      BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    else
+      BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    fi
+    if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+      emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
+      jq -n '{
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",        permissionDecision: "deny",
+          permissionDecisionReason: "BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."
+        }
+      }'
+      exit 0
+    fi
   fi
 fi
 

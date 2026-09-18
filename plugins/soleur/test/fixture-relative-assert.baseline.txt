@@ -186,6 +186,7 @@
 21	.claude/hooks/agent-token-tee.test.sh
 1	.claude/hooks/brand-hex-commit-gate.test.sh
 1	.claude/hooks/cla-signed-author-gate.sh
+1	.claude/hooks/devin-matcher-parity.test.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 2	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
