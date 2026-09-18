@@ -84,7 +84,13 @@ s = open(path).read()
 
 m = re.search(r'^run_suite\(\) \{.*?^\}', s, re.S | re.M)
 assert m, "could not locate run_suite() definition"
-s = s[:m.start()] + 'run_suite() { echo "RECORDED_SUITE:$1" >> "$SANDBOX_RECORD"; }' + s[m.end():]
+# The recorder still emits the SUITE_COMMAND record under _EMIT_COMMANDS: the
+# affected pre-pass (#8322) derives its registration stream from a nested
+# `--enumerate-commands` self-call, and a recorder that swallowed the record
+# would leave every --affected arm measuring a zero-selected refusal instead
+# of the arm under test.
+s = s[:m.start()] + ('run_suite() { echo "RECORDED_SUITE:$1" >> "$SANDBOX_RECORD"; '
+                     'if (( _EMIT_COMMANDS )); then printf "SUITE_COMMAND\\t%s\\n" "$1"; fi; }') + s[m.end():]
 
 # Neuter tc_acquire only. tc_preamble USED to be neutered here too, and that made the sibling
 # refusal (#7553) structurally untestable: tc_preamble is what resolves the sibling count and
@@ -144,9 +150,10 @@ run_arm() {
   ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="$TMP/arm-timing-$label.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" \
-            "$@" timeout 120 bash "$SANDBOX" 2>&1)
+            "$@" timeout 120 bash "${ARM_SANDBOX:-$SANDBOX}" ${ARM_ARGV:-} 2>&1)
   ARM_RC=$?
   ARM_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
+  ARM_SANDBOX=; ARM_ARGV=
 }
 
 echo "=== fan-out suite-scope suite ==="
@@ -488,13 +495,18 @@ else
   fi
 fi
 
-# --- Arm 9: the sanctioned hooks actually CARRY the hatch ------------------------------------
+# --- Arm 9: the sanctioned hooks carry the hatch on FULL-shaped invocations ------------------
 #
-# Arm 5 proves the hatch WORKS. Nothing proved the two invocations that depend on it still SET
-# it, and ADR-196 Decision 6 ("the two GIT-HOOK invocations carry the hatch") asserted it in
-# prose only. Blast radius if it drifts: no agent or developer can commit a `.ts` file, or push, while
-# any sibling worktree runs the battery — the exact outcome that disqualified the
-# harness-identity design.
+# Arm 5 proves the hatch WORKS. Nothing proved the invocations that depend on it still SET it,
+# and ADR-196 Decision 6 ("the two GIT-HOOK invocations carry the hatch") asserted it in prose
+# only. Blast radius if it drifts: a --full gate run from a hook exits 4 whenever any sibling
+# worktree runs the battery — the exact outcome that disqualified the harness-identity design.
+#
+# Since #8322 the property is narrower and sharper: only a FULL-shaped run is refused —
+# `--affected` is exempt from both arms by construction (a degraded-full refusal under it is the
+# intended signal, not collateral). So a segment carrying `--affected` needs no hatch; every
+# other gate-running segment must carry it — which pins `--full` invocations AND flags the
+# mode-less spelling the merge gate bans.
 #
 # Asserted over EVERY uncommented full-gate invocation in each file, not just the line that
 # carries it today: a second, unhatched invocation added later is the same outage. Comments are
@@ -533,8 +545,16 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
   # of exactly the kind this arm exists to avoid producing: the property is "an unhatched GATE
   # RUN", and matching every invocation of the script is broader than that. Derived from the
   # runner rather than hardcoded, so a mode added later cannot silently start false-flagging.
-  _modes="$(grep -oE '^if \[\[ "\$\{1:-\}" == "--[a-z-]+"' "$REPO_ROOT/scripts/test-all.sh" \
-            | grep -oE -- '--[a-z-]+' || true)"
+  _modes="$({ grep -oE '^if \[\[ "\$\{1:-\}" == "--[a-z-]+"' "$REPO_ROOT/scripts/test-all.sh" \
+              | grep -oE -- '--[a-z-]+'
+            # The #8322 while/case parser holds the rest of the non-running flags. A case arm
+            # is non-running iff its body raises _ENUMERATE or exits before dispatch — derived
+            # from the body, not the name, so a new query flag cannot silently join the set
+            # without being seen.
+            awk '/^while \[\[ "\$\{1:-\}" == --\*\]/{f=1} f&&/^done$/{exit} \
+                 f&&/^[[:space:]]+--[a-z-]+\)/{flag=$1; sub(/\)/,"",flag)} \
+                 f&&flag!=""&&/(_ENUMERATE=1|exit 0)/{print flag; flag=""}' \
+              "$REPO_ROOT/scripts/test-all.sh"; } | sort -u)"
   HOOK_INV="$(grep -E '(^|[[:space:]])((bash|sh|zsh|exec|source)[[:space:]]+[^[:space:]|;&]*test-all\.sh|\.{0,2}/[^[:space:]|;&]*test-all\.sh)|^[[:space:]]*[^[:space:]|;&]*test-all\.sh([[:space:]]|$)' <<<"$HOOK_SRC" || true)"
   while IFS= read -r _m; do
     [[ -n "$_m" ]] || continue
@@ -546,12 +566,15 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
     continue
   fi
   pass "$hookrel carries $(grep -c . <<<"$HOOK_INV") uncommented full-gate invocation segment(s)"
-  HOOK_BARE="$(grep -vF 'SOLEUR_ALLOW_FULL_GATE=1' <<<"$HOOK_INV" || true)"
+  # `--affected` segments are exempt by construction (#8322): the mode refuses
+  # nothing, and a degraded-full refusal under it is the intended signal. What
+  # remains — `--full` and the mode-less spelling — must carry the hatch.
+  HOOK_BARE="$(grep -vF -- '--affected' <<<"$HOOK_INV" | grep -vF 'SOLEUR_ALLOW_FULL_GATE=1' || true)"
   CASES=$((CASES + 1))
   if [[ -z "$HOOK_BARE" ]]; then
-    pass "$hookrel: every full-gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-196 section 6)"
+    pass "$hookrel: every non-exempt gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-196 section 6, re-spec'd #8322)"
   else
-    fail "$hookrel has a full-gate invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
+    fail "$hookrel has a full-shaped invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
   fi
 done
 
@@ -574,6 +597,117 @@ if [[ "$STAMP_EXPORTED" == "0" ]]; then
   pass "the provenance stamp is not exported — a child cannot inherit a claim of self-measurement"
 else
   fail "TC_SIBLING_RUN_COUNT_PID reached the child environment ($STAMP_EXPORTED hit(s)); bash keeps the export attribute on reassignment, so the explicit 'export -n' is what removes it"
+fi
+
+# --- Arm 11: the #8322 mode matrix — affected exempt, --full refused, degraded-full refused ---
+#
+# Arms 1-8 all run the sandbox with NO mode flag. Under the new default that is an
+# --affected invocation in a sandbox that lacks the declarations lib, so they measured
+# the DEGRADED-full refusal — right verdict, wrong antecedent for some rows. This arm
+# separates the three cases explicitly:
+#
+#   SANDBOX_AFF  — sandbox WITH scripts/lib/test-affected-paths.sh: pure affected mode.
+#                  The recorder now emits SUITE_COMMAND records under _EMIT_COMMANDS, so
+#                  the nested --enumerate-commands pre-pass sees a real stream and the
+#                  selection is non-empty.
+#   --affected   — exempt from BOTH refusal arms by construction: a spawned agent's
+#                  affected run must be able to run.
+#   --full       — refused under either antecedent, hatch or nothing.
+#   degraded     — --affected WITHOUT the lib degrades to full and re-checks both arms
+#                  post-derivation (the refusal text names the degradation).
+SANDBOX_AFF="$TMP/aff/test-all-sandbox.sh"
+mkdir -p "$TMP/aff"
+if ! build_sandbox "$SANDBOX_AFF"; then
+  CASES=$((CASES + 1))
+  fail "affected-lib sandbox build failed — the Arm 11 matrix cannot run"
+else
+  cp "$REPO_ROOT/scripts/lib/test-affected-paths.sh" "$TMP/aff/lib/" \
+    || { CASES=$((CASES + 1)); fail "could not copy test-affected-paths.sh into the aff sandbox"; }
+
+  # The runner-changed self-edge is legitimately LIVE on any branch editing
+  # test-all.sh or the index — including this suite's own. Leaving it armed
+  # would degrade every --affected arm here to full and the exemption rows
+  # would measure the refusal they are trying to prove absent. Disabled so the
+  # arms isolate the _AFFECTED conjunct, not the fallback ladder.
+  python3 - "$SANDBOX_AFF" <<'PY' || { CASES=$((CASES + 1)); fail "could not neuter runner-changed in the aff sandbox"; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = ('elif grep -qF \'scripts/test-all.sh\' <<<"$_diff_names" \\\n'
+       '    || grep -qF \'scripts/lib/test-affected-paths.sh\' <<<"$_diff_names"; then')
+assert s.count(old) == 1, "runner-changed arm anchor drifted"
+s = s.replace(old, 'elif false; then  # sandbox: self-edge disabled to isolate the exemption')
+open(p, 'w').write(s)
+PY
+
+  # 11a: --affected is exempt from the SOLEUR_SUBAGENT arm — the run dispatches.
+  ARM_SANDBOX=$SANDBOX_AFF ARM_ARGV=--affected
+  run_arm aff-subagent SOLEUR_SUBAGENT=1
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 0 ]]; then
+    pass "--affected is exempt from the SOLEUR_SUBAGENT refusal (rc=0, dispatched)"
+  else
+    fail "--affected refused under SOLEUR_SUBAGENT=1 (rc=$ARM_RC) — the cheap delegated path is closed"
+  fi
+  CASES=$((CASES + 1))
+  if [[ "$ARM_SUITES" -ge 1 ]]; then
+    pass "the exempt affected run reached registration ($ARM_SUITES recorded)"
+  else
+    fail "the exempt affected run recorded 0 suites — it was refused silently"
+  fi
+
+  # 11b: --affected is exempt from the SIBLING arm — no refusal text, run dispatches.
+  ARM_SANDBOX=$SANDBOX_AFF ARM_ARGV=--affected
+  run_arm aff-sibling TC_PROC_ROOT="$SIB_PROC_F"
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 0 ]] && ! grep -qF 'sibling full-gate run(s) already in flight' <<<"$ARM_OUT"; then
+    pass "--affected is exempt from the sibling refusal (rc=0, no refusal text)"
+  else
+    fail "--affected refused under a measured sibling (rc=$ARM_RC) — sibling exemption broken"
+  fi
+
+  # 11c: --full under SOLEUR_SUBAGENT refuses, before any work.
+  ARM_ARGV=--full
+  run_arm full-subagent SOLEUR_SUBAGENT=1
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 4 && "$ARM_SUITES" -eq 0 ]] \
+     && grep -qF 'SOLEUR_SUBAGENT' <<<"$ARM_OUT"; then
+    pass "--full refuses under SOLEUR_SUBAGENT=1 (rc=4, 0 suites, names the cause)"
+  else
+    fail "--full did not refuse under SOLEUR_SUBAGENT=1 (rc=$ARM_RC, $ARM_SUITES suites)"
+  fi
+
+  # 11d: --full under a measured sibling refuses, before any work.
+  ARM_ARGV=--full
+  run_arm full-sibling TC_PROC_ROOT="$SIB_PROC_F"
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 4 && "$ARM_SUITES" -eq 0 ]] \
+     && grep -qF 'sibling full-gate run(s) already in flight' <<<"$ARM_OUT"; then
+    pass "--full refuses under a measured sibling (rc=4, 0 suites, names the cause)"
+  else
+    fail "--full did not refuse under a measured sibling (rc=$ARM_RC, $ARM_SUITES suites)"
+  fi
+
+  # 11e: --affected WITHOUT the index lib degrades to full and the subagent refusal
+  # re-fires POST-derivation — the degraded message must name the fallback.
+  run_arm degraded-subagent SOLEUR_SUBAGENT=1
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 4 && "$ARM_SUITES" -eq 0 ]] \
+     && grep -qF 'affected selection' <<<"$ARM_OUT"; then
+    pass "degraded-full re-fires the subagent refusal post-derivation, naming the fallback"
+  else
+    fail "degraded-full did not refuse under SOLEUR_SUBAGENT=1 (rc=$ARM_RC, $ARM_SUITES suites) or the message lost the fallback marker"
+  fi
+
+  # 11f: same degradation under a measured sibling — the sibling arm re-fires.
+  run_arm degraded-sibling TC_PROC_ROOT="$SIB_PROC_F"
+  CASES=$((CASES + 1))
+  if [[ "$ARM_RC" -eq 4 && "$ARM_SUITES" -eq 0 ]] \
+     && grep -qF 'sibling full-gate run(s) already in flight' <<<"$ARM_OUT"; then
+    pass "degraded-full re-fires the sibling refusal post-derivation (rc=4)"
+  else
+    fail "degraded-full did not refuse under a measured sibling (rc=$ARM_RC, $ARM_SUITES suites)"
+  fi
 fi
 
 # --- Verdict-machinery controls (ADR-193 #2/#3), BEFORE the floor -----------------------------
@@ -627,7 +761,7 @@ fi
 # measured 31 — 18 fungible slots, enough that deleting every assertion #7553 and this PR added
 # left the suite green (measured: 15 passed, 0 failed, rc=0). Ratchet this in the same commit as
 # any added arm; a floor failure on an otherwise-green run means "you added assertions".
-MIN_ASSERTIONS=36
+MIN_ASSERTIONS=43
 if [[ "$CASES" -lt "$MIN_ASSERTIONS" ]]; then
   echo "" >&2
   echo "[FATAL] anti-vacuity floor: only $CASES assertion(s) ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
