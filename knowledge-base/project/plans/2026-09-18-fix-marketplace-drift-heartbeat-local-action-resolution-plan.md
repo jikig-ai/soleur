@@ -623,14 +623,26 @@ Pipeline-written files that also land in the diff (diff-scope AC lists them):
 liveness_signal:
   what:            "Sentry Crons monitor `scheduled-marketplace-drift` — one ok|error check-in per drift-check run"
   cadence:         "daily (cron 37 6 * * *, scheduled-run delay observed up to ~6 h) plus every workflow_dispatch"
-  alert_target:    "Sentry issue on missed check-in (checkin_margin 360 min, failure_issue_threshold 1) → the web-platform project's alert routing"
+  alert_target:    "Sentry issue on missed check-in (checkin_margin 360 min, failure_issue_threshold 1) → the web-platform project's alert routing. PRECONDITION, measured 2026-09-18: a cron monitor tracks misses PER ENVIRONMENT, so with `environments: []` it fires nothing — which is why 37 missed daily ticks produced zero issues. Armed by the first check-in (now `production`, nextCheckIn 2026-09-19T06:37:00Z); returns to inert if the monitor is recreated."
   configured_in:   "apps/web-platform/infra/sentry/cron-monitors.tf (sentry_cron_monitor.scheduled_marketplace_drift); .github/workflows/scheduled-marketplace-drift.yml step `Sentry check-in (final)`"
 
 error_reporting:
   destination:     "the same monitor — status=error is a check-in, not a silence; curl failures print `curl: (22) …` plus `sentry-heartbeat: http_code=<code>` in the public Actions step log"
-  fail_loud:       "`sentry-heartbeat: http_code=` absent or non-2xx in the step log; `Can't find 'action.yml'` in the job log; an empty array from /monitors/scheduled-marketplace-drift/checkins/"
+  fail_loud:       "THE GATE is an empty array from /monitors/scheduled-marketplace-drift/checkins/ — nothing machine-reads the log line (measured: zero consumers repo-wide). Diagnostics, in the step log: `sentry-heartbeat: http_code=` absent or non-2xx; `Can't find 'action.yml'` in the job log."
 
 failure_modes:
+  - mode:          "the monitor does not exist in Sentry while ingest still answers 202 (the #8282 class)"
+    detection:     "NONE in this repo today — the ingest endpoint accepts an unknown slug, so every layer reads healthy. Only a live read of GET /organizations/{org}/monitors/{slug}/ distinguishes it, and no scheduled job performs one (scheduled-terraform-drift.yml's matrix covers apps/web-platform/infra and infra/github, not .../infra/sentry)."
+    alert_route:   "none — stated as a known dark mode rather than claimed covered; tracked in #8282"
+  - mode:          "a workflow_dispatch satisfies the 360-minute margin while the scheduled trigger is broken"
+    detection:     "the heartbeat is ungated by event, so a dispatched check-in is indistinguishable from a scheduled one; masking is bounded by the margin (one ~6h window per dispatch) and does not cover the weeks-long schedule-disabled mode"
+    alert_route:   "Sentry cron monitor missed-check-in issue, delayed by at most one margin"
+  - mode:          "the composite's three ingest secrets are unset or rotated"
+    detection:     "layer 6 (Actions step log): the composite's own `::warning::Sentry Crons secrets not configured` annotation AND the ABSENCE of a `sentry-heartbeat: http_code=` line — the step exits 0 green by design"
+    alert_route:   "Sentry cron monitor `scheduled-marketplace-drift` missed-check-in issue"
+  - mode:          "the repository archive fails to extract (a committed dangling symlink anywhere in the tree)"
+    detection:     "layer 6 (Actions run log): `Set up job` fails before any step, naming the offending path — measured on run 35360150848. Guarded pre-merge by the `no-dangling-committed-symlinks` suite in scripts/test-all.sh."
+    alert_route:   "red scheduled run on main + Sentry missed-check-in issue after the 360-min margin"
   - mode:          "local action fails to resolve again (a future edit reverts to `./` without a checkout)"
     detection:     "layer 6 (CI workflow run log): the live scan in the `test-scripts` shard prints `::error file=<wf>::<wf>: job '<job>', step '<step>' …` and exits 1, which reddens the required `test` aggregator (`ci.yml` `needs:`)"
     alert_route:   "red CI on the PR; nothing can merge (ruleset context `test`)"

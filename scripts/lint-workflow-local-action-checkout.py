@@ -14,14 +14,16 @@ tick the runner printed
 and `continue-on-error` turned that into a green step. All 36 scheduled runs after the
 2026-08-13 "repair" (which forwarded the composite's inputs and verified a green step) carry that
 line; 33 of them concluded `success`; the Sentry monitor recorded zero check-ins from the day it
-was created. The same class was repaired in `scheduled-devin-docs-drift.yml` on 2026-09-17 by
-adding a checkout. Nothing in the repo asserted the property, so it recurred.
+was created. The same class was repaired in `scheduled-devin-docs-drift.yml` on 2026-09-18 by
+adding a checkout (#8280, merged 11:34:15Z — that workflow was created the same day). Nothing in the repo asserted the property, so it recurred.
 
 THE RULE. For every job in every workflow, every step whose `uses:` starts with `./` must be
 preceded — earlier in the SAME job's `steps` list — by a step whose `uses:` matches
-`^actions/checkout(@|$)` that is USABLE for it: the checkout carries no `if:`, or its `if:`
-string is byte-identical to the local step's `if:`. A checkout skipped by its own condition is
-no checkout (a `./` step under `if: always()` after a checkout under `if: ${{ inputs.x }}` is a
+`^actions/checkout(@|$)` that is USABLE for it. `checkout_usable()` is the authority on that
+word and enforces five conditions, not one: no `continue-on-error: true`; no `with: repository:`;
+no `with: path:`; no `with: sparse-checkout:` cone that excludes `.github`; and either no `if:`
+or an `if:` byte-identical to the local step's. A checkout skipped by its own condition is no
+checkout (a `./` step under `if: always()` after a checkout under `if: ${{ inputs.x }}` is a
 finding); with several earlier checkouts, any qualifying one satisfies the step.
 
 Every other `uses:` value needs no checkout and is IGNORED — `$/path` (GitHub's self-repository
@@ -52,7 +54,7 @@ THE FLOOR. `MIN_SAME_REPO_STEPS` counts `./` and `$/` steps TOGETHER, so a futur
 migration cannot drive this guard to "scanning nothing": 54 today, floor 30. Below it is rc 2.
 
 DIRECTION OF ERROR. A false positive blocks a PR loudly, and the fix is to add
-`actions/checkout` or switch to `$/`. A false negative is the 36-day dark window above. Every
+`actions/checkout` or switch to `$/`. A false negative is the 37-day dark window above (36 of those days followed a post-mortem that recorded the incident as resolved). Every
 non-scan outcome — usage, an unreadable or unparseable file, a file with no `jobs` mapping, a
 non-mapping job or step, a non-string `uses:`, zero files, the floor — is rc 2 NAMING the cause,
 never a silent skip.
@@ -76,6 +78,12 @@ import yaml
 NAME = "lint-workflow-local-action-checkout"
 CHECKOUT = re.compile(r"^actions/checkout(@|$)")
 MIN_SAME_REPO_STEPS = 30
+# The second surface needs its own floor: `actions_scanned` was printed and compared to nothing,
+# so an actions tree that moved out of `<dir>/../actions` reach walked zero files and reported OK.
+# 7 composites today; the floor only binds when the directory exists, so fixture trees with a
+# deliberately empty actions dir (and the absent-dir case, which `references_actions_dir` owns)
+# are unaffected.
+MIN_ACTION_FILES = 1
 
 
 def usage_error(msg: str) -> int:
@@ -94,12 +102,14 @@ def load(path: Path):
 def checkout_usable(checkout: dict, step: dict) -> bool:
     """A checkout serves a later step only if it is guaranteed to have RUN and SUCCEEDED.
 
-    Four ways a checkout fails to populate the path the action lives at, each measured as a
-    live escape before this guard closed it: `continue-on-error: true` (the job stays green with
-    an empty workspace — the original defect one step earlier); `with: repository:` (a different
-    repo's tree); `with: path:` (a workspace subdirectory, so `./…` still resolves to nothing);
-    and `with: sparse-checkout:` whose cone excludes `.github`. Zero checkouts in the tree carry
-    any of them today, so this is fail-closed against a future edit, not a live reclassification.
+    Four ways a checkout fails to populate the path the action lives at: `continue-on-error:
+    true` (the job stays green with an empty workspace — the original defect one step earlier);
+    `with: repository:` (a different repo's tree); `with: path:` (a workspace subdirectory, so
+    `./…` still resolves to nothing); and `with: sparse-checkout:` whose cone excludes `.github`.
+    Measured 2026-09-18: 0 of 144 checkouts in the tree carry any of them, so none was observed
+    as a live escape — each was reasoned from the runner's behaviour and is covered by a
+    synthesized suite row. This is fail-closed against a future edit, not a reclassification of
+    anything shipping today.
     A checkout with no `if:` serves every later step; a conditional one only its twin.
     """
     if checkout.get("continue-on-error") is True:
@@ -188,9 +198,15 @@ def main(argv: list[str]) -> int:
             for action in sorted(actions_root.rglob("action.yml")) + sorted(actions_root.rglob("action.yaml")):
                 actions_scanned += 1
                 doc = load(action)
-                runs = doc.get("runs") if isinstance(doc, dict) else None
-                steps = (runs or {}).get("steps") or [] if isinstance(runs, dict) else []
-                if not isinstance(steps, list):
+                if not isinstance(doc, dict):
+                    return usage_error(f"{action} does not parse to a mapping — not an action?")
+                runs = doc.get("runs")
+                if not isinstance(runs, dict):
+                    return usage_error(f"{action} has no `runs` mapping — not an action?")
+                steps = runs.get("steps")
+                if steps is None:
+                    steps = []  # a docker/node action declares no steps; nothing to check
+                elif not isinstance(steps, list):
                     return usage_error(f"{action}: `runs.steps` is not a list")
                 for idx, step in enumerate(steps):
                     if not isinstance(step, dict):
@@ -219,6 +235,12 @@ def main(argv: list[str]) -> int:
         return usage_error(
             f"{scanned} workflows reference ./.github/actions/… but {actions_root} is not a "
             f"directory — the composite surface would be scanned with zero files; wrong tree?"
+        )
+    if actions_root.is_dir() and actions_scanned < MIN_ACTION_FILES:
+        return usage_error(
+            f"only {actions_scanned} composite action file(s) under {actions_root}, below "
+            f"MIN_ACTION_FILES={MIN_ACTION_FILES} — the second surface is scanning nothing; "
+            f"has the actions tree moved?"
         )
     same_repo = local_steps + self_steps
     if same_repo < MIN_SAME_REPO_STEPS:

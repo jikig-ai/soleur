@@ -23,12 +23,21 @@ PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-[[ -r "$SUT" ]] || { echo "  FAIL: SUT not readable at $SUT"; echo "=== Results: 0/1 passed, 1 failed ==="; exit 1; }
+[[ -r "$SUT" ]] || { echo "  FAIL: SUT not readable at $SUT"; echo "=== Results: 0/1 passed, 1 failed ==="; exit 1; }  # before the trap is installed
 command -v python3 >/dev/null || { echo "  SKIP: python3 unavailable — the lint did NOT run."; echo "=== Results: 0/0 passed, 0 failed (DECLINED: no python3) ==="; exit 0; }
-python3 -c 'import yaml' 2>/dev/null || { echo "  SKIP: PyYAML unavailable — the lint did NOT run."; echo "=== Results: 0/0 passed, 0 failed (DECLINED: no PyYAML) ==="; exit 0; }
+# PyYAML is a hard requirement, not a decline: the paired `-live` arm imports it unguarded, so
+# a green SKIP here would sit beside an ImportError there reported as a FINDING (rc 1). The
+# `test-scripts` shard is documented as bash + python3; mirror digest-oracle-guard.test.sh.
+python3 -c 'import yaml' 2>/dev/null || { echo "  FATAL: PyYAML unavailable — the lint cannot run and the -live arm would report a finding." >&2; exit 2; }
 
 TMP="$(mktemp -d)" || exit 2
-trap 'rm -rf "$TMP"' EXIT
+# The verdict rides an EXIT trap, not a trailing command. Routing it through `verdict_ok`
+# guards that function's BODY; the CALL was still a trailing command, and replacing it with
+# `true` (or deleting it) left the suite printing its own FAIL lines and exiting 0 — the exact
+# defect the verdict indirection was added to close, one line up. A trap fires however the
+# script ends, so silencing it means deleting the trap, which is not a subtle edit.
+_verdict_rc=2   # until the suite reaches its end, any exit is a crash, not a pass
+trap 'rm -rf "$TMP"; exit "$_verdict_rc"' EXIT
 
 SHA=0123456789abcdef0123456789abcdef01234567
 
@@ -38,6 +47,10 @@ mkdir -p "$TMP/filler"
 for i in $(seq -w 1 32); do
   printf 'name: filler-%s\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@%s\n      - uses: ./.github/actions/filler\n' "$i" "$SHA" > "$TMP/filler/filler-$i.yml"
 done
+# ...and one clean composite, so MIN_ACTION_FILES is cleared by design too. Without it every
+# case would trip the second-surface floor and measure that instead of the rule under test.
+mkdir -p "$TMP/filler-actions/filler"
+printf 'name: filler\nruns:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n' > "$TMP/filler-actions/filler/action.yml"
 
 mkwf() { # <name> <body>  (into the workflows dir under test)
   mkdir -p "$TMP/wf"
@@ -50,7 +63,7 @@ mkaction() { # <path> <body>  (into the sibling actions dir the lint derives fro
 run_lint() { python3 "$SUT" "$TMP/wf" >"$TMP/out" 2>"$TMP/err"; RC=$?; }
 # reset() restores the filler, never a bare directory — a bare `rm -rf` would drop every case
 # below the floor and every RED below would then be measuring the floor, not the rule.
-reset() { rm -rf "$TMP/wf" "$TMP/actions"; cp -r "$TMP/filler" "$TMP/wf"; mkdir -p "$TMP/actions"; }
+reset() { rm -rf "$TMP/wf" "$TMP/actions"; cp -r "$TMP/filler" "$TMP/wf"; cp -r "$TMP/filler-actions" "$TMP/actions"; }
 n_findings() { grep -c '^::error file=' "$TMP/err"; }
 
 # --- must-PASS (i): the filler alone is clean, asserted BEFORE any case runs -----------------
@@ -237,21 +250,40 @@ else
   fail "8c a broken file was skipped or read as a finding: rc=$RC: $(head -1 "$TMP/err")"
 fi
 
+python3 "$SUT" "$TMP/does-not-exist" >/dev/null 2>"$TMP/err"; rc=$?
+if [[ "$rc" -eq 2 ]] && grep -q 'not a directory' "$TMP/err"; then
+  pass "8d a MISSING workflows directory exits 2 (usage), never a clean scan of nothing"
+else
+  fail "8d a missing directory did not error — the lint could pass by scanning nothing: rc=$rc"
+fi
+
+# Precedent arm #3: a non-UTF8 file is a PARSE error (2), not a violation (1), and must not
+# swallow the findings accumulated before it.
+reset
+printf 'name: ok\njobs:\n  j:\n    steps:\n      - run: echo hi\n' > "$TMP/wf/aaa.yml"
+printf '\xff\xfe\x00\x01binary' > "$TMP/wf/zzz.yml"
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'zzz.yml' "$TMP/err"; then
+  pass "8e a non-UTF8 workflow exits 2 (parse error), not 1 (which reads as a violation)"
+else
+  fail "8e a binary file did not produce the documented parse-error code: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
 reset
 printf 'name: nojobs\non: push\n' > "$TMP/wf/nojobs.yml"
 run_lint
 if [[ "$RC" -eq 2 ]] && grep -q 'nojobs.yml' "$TMP/err"; then
-  pass "8d a file with no jobs mapping exits 2 naming the file"
+  pass "8f a file with no jobs mapping exits 2 naming the file"
 else
-  fail "8d a jobs-less file was silently skipped: rc=$RC: $(head -1 "$TMP/err")"
+  fail "8f a jobs-less file was silently skipped: rc=$RC: $(head -1 "$TMP/err")"
 fi
 
 reset
 python3 "$SUT" "$TMP/wf" "$TMP/wf" >/dev/null 2>"$TMP/err"; rc=$?
 if [[ "$rc" -eq 2 ]] && grep -qi 'expected at most one path' "$TMP/err"; then
-  pass "8e extra argv is rejected (rc 2) rather than silently ignored"
+  pass "8g extra argv is rejected (rc 2) rather than silently ignored"
 else
-  fail "8e a second path argument was ignored — a typo'd path would be invisible: rc=$rc"
+  fail "8g a second path argument was ignored — a typo'd path would be invisible: rc=$rc"
 fi
 
 # --- RED 9: VERIFY THE VERIFIER on the live tree — delete a real sibling's checkout ----------
@@ -266,12 +298,22 @@ if [[ -f "$LIVE/$TARGET" ]]; then
   cp -r "$ROOT/.github/actions" "$TMP/live9/actions" || { echo "  FATAL: could not copy the live actions tree"; exit 2; }
   python3 "$SUT" "$TMP/live9/workflows" >"$TMP/out" 2>"$TMP/err"; crc=$?
   control_n="$(n_findings)"
+  cp "$TMP/err" "$TMP/control-findings"
+  # The control's own rc is an assertion, not decoration: an rc 2 control prints no findings, so
+  # control_n reads 0 and the delta below would compare two zeros.
+  if [[ "$crc" -eq 0 && "$control_n" -eq 0 ]]; then
+    pass "9 the UNMUTATED live-tree copy is clean (rc 0, 0 findings) — the delta has a baseline"
+  else
+    fail "9 the unmutated live copy is not clean (rc=$crc findings=$control_n) — every verdict below is void"
+  fi
   python3 - "$TMP/live9/workflows/$TARGET" <<'PY' || { echo "  FATAL: row 9 mutator failed"; exit 2; }
 import sys, yaml
 p = sys.argv[1]
 lines = open(p).read().split("\n")
-# Drop the `- uses: actions/checkout@…` line AND its indented `with:` block (the live shape
-# carries `with:`), inside the drift-check job only, by textual span.
+# Drop the FIRST `- uses: actions/checkout@…` line in the file AND its indented `with:` block
+# (the live shape carries `with:`), by textual span. NOT job-scoped — it lands in drift-check
+# only because this workflow has exactly one job and one checkout. The post-assert below
+# re-parses and fails loudly if that ever stops holding, which is what makes the row safe.
 out, n, i = [], 0, 0
 while i < len(lines):
     l = lines[i]
@@ -293,10 +335,14 @@ assert any(str(s.get("uses", "")).startswith("./") for s in steps), "row 9: the 
 PY
   python3 "$SUT" "$TMP/live9/workflows" >"$TMP/out" 2>"$TMP/err"; mrc=$?
   mutant_n="$(n_findings)"
-  if [[ "$mrc" -eq 1 ]] && grep -q "$TARGET: job 'drift-check'" "$TMP/err"; then
-    pass "9 deleting a live sibling's checkout is CAUGHT by name ($TARGET: job 'drift-check')"
+  # PLACEMENT, not just presence: the new finding must be ABSENT from the control. A
+  # `grep -q "job 'drift-check'"` alone passes vacuously whenever that finding pre-existed.
+  if [[ "$mrc" -eq 1 ]] \
+     && grep -q "$TARGET: job 'drift-check'" "$TMP/err" \
+     && ! grep -q "$TARGET: job 'drift-check'" "$TMP/control-findings"; then
+    pass "9 deleting a live sibling's checkout is CAUGHT by name, and that finding is NEW vs the control"
   else
-    fail "9 the real defect re-introduced into a live tree copy was NOT caught: rc=$mrc: $(tr '\n' ' ' < "$TMP/err" | cut -c1-300)"
+    fail "9 the mutation's finding was absent, or was already in the control (so the row measured nothing): rc=$mrc: $(tr '\n' ' ' < "$TMP/err" | cut -c1-300)"
   fi
   if [[ "$mutant_n" -eq $((control_n + 1)) ]]; then
     pass "9 the mutated copy reports exactly control+1 findings ($control_n -> $mutant_n; control rc=$crc)"
@@ -560,7 +606,7 @@ runs:
     - run: echo hi
       shell: bash'
 run_lint
-if [[ "$RC" -eq 0 ]] && grep -qE ' 1 composite action file\(s\)' "$TMP/out"; then
+if [[ "$RC" -eq 0 ]] && grep -qE ' 2 composite action file\(s\)' "$TMP/out"; then
   pass "(j) a clean composite is accepted and the composite-file count appears in the OK line"
 else
   fail "(j) the composite count is absent from the OK line, or a clean composite was flagged: rc=$RC: $(head -1 "$TMP/out")"
@@ -639,6 +685,106 @@ else
   fail "18 with: repository: was accepted — the workspace holds another repo's tree: rc=$RC"
 fi
 
+# --- RED 19: the second surface has its own floor — an actions tree that moved walks nothing --
+reset
+rm -rf "$TMP/actions"; mkdir -p "$TMP/actions"   # present but empty: the "it moved" shape
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'MIN_ACTION_FILES' "$TMP/err"; then
+  pass "19 an empty actions tree exits 2 naming MIN_ACTION_FILES (the second surface is floored too)"
+else
+  fail "19 the composite surface walked zero files and still reported OK: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- RED 20: a composite that does not parse to an action is rc 2, never counted-and-clean ----
+reset
+mkdir -p "$TMP/actions/notanaction"
+printf -- '- just\n- a\n- list\n' > "$TMP/actions/notanaction/action.yml"
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'notanaction' "$TMP/err"; then
+  pass "20 an action.yml that is not a mapping exits 2 naming it (counted-as-scanned is not clean)"
+else
+  fail "20 a non-mapping action.yml was counted as scanned and walked as clean: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- RED 21-24: the four rc-2 guards the docstring promises but nothing fixtured. Neutering
+# `steps`-not-a-list and `job`-not-a-mapping degrades to a CLEAN rc 0 over an unresolvable ./ step.
+reset
+mkwf nonstring.yml 'name: nonstring
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: 42'
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'not a string' "$TMP/err"; then
+  pass "21 a non-string uses: exits 2 naming the cause"
+else
+  fail "21 a non-string uses: did not exit 2: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf stepnonmap.yml 'name: stepnonmap
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - just-a-string'
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'is not a mapping' "$TMP/err"; then
+  pass "22 a step that is not a mapping exits 2 naming the cause"
+else
+  fail "22 a non-mapping step did not exit 2: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf stepsnonlist.yml 'name: stepsnonlist
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps: not-a-list'
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'is not a list' "$TMP/err"; then
+  pass "23 a steps: that is not a list exits 2 (neutered, it degrades to a CLEAN rc 0)"
+else
+  fail "23 a non-list steps: did not exit 2 — the silent-clean class: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+reset
+mkwf jobnonmap.yml 'name: jobnonmap
+jobs:
+  j: not-a-mapping'
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q "job 'j' is not a mapping" "$TMP/err"; then
+  pass "24 a job that is not a mapping exits 2 (neutered, it degrades to a CLEAN rc 0)"
+else
+  fail "24 a non-mapping job did not exit 2 — the silent-clean class: rc=$RC: $(head -1 "$TMP/err")"
+fi
+
+# --- RED 25: bracket MIN_SAME_REPO_STEPS from BELOW. Row 8b (0 steps) discriminates against any
+# floor >= 1, and (i) asserts the reported count, not the constant — so 30 -> 1 stayed green.
+reset
+rm -rf "$TMP/wf"; mkdir -p "$TMP/wf"
+for i in $(seq -w 1 29); do
+  printf 'name: near-%s\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@%s\n      - uses: ./.github/actions/near\n' "$i" "$SHA" > "$TMP/wf/near-$i.yml"
+done
+run_lint
+if [[ "$RC" -eq 2 ]] && grep -q 'MIN_SAME_REPO_STEPS' "$TMP/err"; then
+  pass "25 a tree one step BELOW the floor exits 2 (the constant is bracketed, not just >= 1)"
+else
+  fail "25 29 same-repo steps did not trip the floor — MIN_SAME_REPO_STEPS could be lowered to 1 unnoticed: rc=$RC"
+fi
+
+# --- RED 26: the composite walk's `.yaml` term had zero fixtures (mkaction hard-coded .yml) ----
+reset
+mkdir -p "$TMP/actions/yamlext"
+printf 'name: yamlext\nruns:\n  using: composite\n  steps:\n    - uses: ./.github/actions/y\n' > "$TMP/actions/yamlext/action.yaml"
+run_lint
+if [[ "$RC" -eq 1 ]] && grep -q "actions/yamlext/action.yaml" "$TMP/err"; then
+  pass "26 a composite named action.yaml is walked too (the .yaml term is pinned, mirroring row 11)"
+else
+  fail "26 the composite .yaml glob is unpinned — dropping it is a silent bypass: rc=$RC"
+fi
+
 # --- HARNESS CANARY + a floor that does NOT dispatch through the helper it guards ----------
 _cp=$PASS; _cf=$FAIL
 pass "canary: a true condition registers as PASS"
@@ -647,6 +793,10 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
   echo "  FATAL: the assertion helpers are not counting — every verdict above is void." >&2
   exit 2
 fi
+# BOTH synthetic verdicts are unwound. Decrementing only FAIL leaves the canary's PASS in TOTAL,
+# where it pads FAIL_FLOOR_MIN by one — so a future author could delete a real assertion and
+# hold the floor green with a synthetic one.
+PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
 
 # THE FINAL GATE NEEDS ITS OWN GUARD, and it is the one thing neither check above covers.
@@ -667,7 +817,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=38
+FAIL_FLOOR_MIN=48
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
@@ -675,4 +825,4 @@ if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
 fi
 
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
-verdict_ok "$FAIL"
+if verdict_ok "$FAIL"; then _verdict_rc=0; else _verdict_rc=1; fi

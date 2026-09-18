@@ -33,6 +33,17 @@ art_33_deadline: "n/a"
 > fixed the FIRST cause (inputs not forwarded) and could not see the second: its verification
 > read the step and run conclusion, which `continue-on-error` guarantees green regardless.
 >
+> **And the alarm was itself inert, which this document did not record.** `checkin_margin: 360`
+> with `failure_issue_threshold: 1` on a daily schedule should have opened a Sentry issue on
+> 2026-08-13 and every day after. It opened none: a cron monitor tracks missed check-ins PER
+> ENVIRONMENT, and with no check-in ever received the monitor's `environments` list was empty,
+> so there was no environment to miss. Measured 2026-09-18: `environments: []` and zero issues
+> for this monitor over a 90-day query. So the configured alarm was not a second line of defence
+> that happened to be bypassed — it could not fire until the first check-in armed it (measured
+> after the branch dispatch: `environments: [{name: production, status: ok, nextCheckIn:
+> 2026-09-19T06:37:00Z}]`). A reader who takes the margin as a standing backstop should know it
+> is a backstop only once fed, and returns to inert if the monitor is ever recreated.
+>
 > **Dark window, restated:** 2026-08-12 (monitor created) → 2026-09-18T15:33:26Z — 37 days, of
 > which 36 followed a PIR that recorded the incident as resolved.
 >
@@ -49,8 +60,18 @@ art_33_deadline: "n/a"
 > **What `recovery_at` now records:** the first check-in row, produced by a `workflow_dispatch`
 > of PR #8313's branch (run 35361236920, `drift-check` log: 0 resolution errors,
 > `sentry-heartbeat: http_code=202`), read back from the monitors API — measured, not expected.
-> `main` stayed dark until that PR merged; the `main`-ref check-in is evidenced by AC16's row in
+> `main` remains dark until that PR merges; the `main`-ref check-in is evidenced by AC16's row in
 > the PR body, not here.
+>
+> **What that row does NOT prove.** The heartbeat is ungated by event, so a `workflow_dispatch`
+> delivers a check-in exactly like a scheduled tick and resets the 360-minute window. AC16 is
+> therefore a RESOLUTION proof — the composite resolves and the ingest is reachable — and not a
+> LIVENESS proof of the scheduled path, which is the property the monitor exists for and which
+> only a `schedule`-event row can establish. The first such row is due at the 2026-09-19 06:37
+> UTC tick. (`scheduled-sentry-alert-drift.yml` gates its heartbeat on a dispatch input for this
+> reason; that gate is not adopted here because a manual reconciliation run of this workflow is
+> a real evaluation of the manifest, and a one-off dispatch masks at most one 6-hour window —
+> not the weeks-long schedule-disabled mode the monitor is for.)
 
 ## Why this is filed at all
 
@@ -141,13 +162,22 @@ analysis rather than re-deriving it.
 `actions/checkout` in the same job — the property the AMENDED banner's mechanism violates. That
 gap is now closed, not proposed: `scripts/lint-workflow-local-action-checkout.py` walks every
 job of every workflow and every composite's `runs.steps`, and its `-live` arm runs in the
-`scripts` shard on every PR. A third gap is the one this amendment itself corrects: a PIR
+`scripts` shard on every PR. What that guard closes is the REFERENCE-FORM gap — it cannot
+assert that a check-in row exists, so the delivery property itself remains evidenced only by
+the Sentry monitor, which requires that monitor to exist in Sentry and to have been checked in
+at least once (the #8282 class, tracked there, is the mode with no in-repo detector). A third gap is the one this amendment itself corrects: a PIR
 `recovery_at` written as a future expectation is not a measurement. Recovery is evidenced by
 the affected path's own telemetry — here, a row from the monitors API — or it is not recorded.
 
 ## Action Items & Follow-ups
 
-*No action items — incident fully resolved by PR #8313 (2026-09-18; the source PR #7504 did not recover the monitor — see the AMENDED banner); no residual work.*
+*No action items — incident fully resolved by PR #8313 (2026-09-18; the source PR #7504 did not
+recover the monitor — see the AMENDED banner); no residual work on the resolution-form defect.*
+
+Two adjacent properties are deliberately out of this incident's scope and are tracked where they
+belong, not re-filed here: the all-`$/` sibling migration carries a `SOLEUR-DEBT:` marker in the
+workflow with its trigger and its five-file sweep set (`/soleur:harvest-debt` surfaces it), and
+the "a monitor may not exist in Sentry while ingest still answers 202" class is #8282.
 
 ## Related
 

@@ -931,8 +931,12 @@ jobs:
         # the same commit as this file, exactly like the 13 `./`+checkout sibling call sites.
         #
         # Direction of error is now LOUD: a `$/` download failure fails the whole job at
-        # `Set up job`, before the manifest check runs — a red run plus a Sentry missed
-        # check-in — where the `./` failure was swallowed at step time. That is every checkout
+        # `Set up job`, before the manifest check runs — a red run, plus a Sentry missed
+        # check-in from `sentry_cron_monitor.scheduled_marketplace_drift`
+        # (apps/web-platform/infra/sentry/cron-monitors.tf: `37 6 * * *`,
+        # `checkin_margin_minutes = 360`, `failure_issue_threshold = 1`; measured armed
+        # 2026-09-18, environment `production`, nextCheckIn 2026-09-19T06:37:00Z) — where the
+        # `./` failure was swallowed at step time. That is every checkout
         # sibling's posture. actionlint 1.7.7 (pinned in ci.yml) flags this line as
         # "invalid format because ref is missing" — it predates the syntax (upstream tracker
         # rhysd/actionlint#711); CI accepts actionlint findings (#7042 census), so the finding
@@ -941,17 +945,20 @@ jobs:
         #
         # Reference-form posture: `./` + `actions/checkout` stays canonical for jobs that
         # already check out; `$/` is for checkout-free jobs.
-        # SOLEUR-DEBT: one `$/` site, 53 siblings on `./`+checkout; migrate the siblings to `$/` once a released actionlint parses `$/` (rhysd/actionlint#711) — sweep set on the next lines.
-        # That migration MUST sweep the four `./`-anchored consumer censuses that would go
-        # fail-open on a moved site: scripts/audit-bot-codeql-coverage.sh,
-        # scripts/check-cloudflare-token-drift.test.sh, plugins/soleur/test/terraform-target-parity.test.ts,
-        # scripts/wire-anthropic-preflight.awk.
+        # SOLEUR-DEBT: one `$/` site, 53 siblings on `./`+checkout; migrate the siblings once a released actionlint parses `$/` (rhysd/actionlint#711), sweeping the five `./`-anchored consumer censuses that would otherwise go fail-open on a moved site: scripts/audit-bot-codeql-coverage.sh, scripts/check-cloudflare-token-drift.test.sh, plugins/soleur/test/terraform-target-parity.test.ts, scripts/wire-anthropic-preflight.awk, apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts.
+        # The fifth was NOT in the original list and this PR's own move proved the omission:
+        # `HEARTBEAT_USES_RE` was `./`-anchored, so switching this one site silently dropped it
+        # from the heartbeat-shape cohort while the closure check and the floor both stayed
+        # green. It is widened to `[.$]` here; the other four remain `./`-only by design.
         uses: $/.github/actions/sentry-heartbeat
         if: always()
         # Required by the composite's docstring: its curl carries no `|| true`, so without this
         # a Sentry ingest blip would turn a healthy run red. It is ALSO why a green step proves
-        # nothing about delivery: the evidence is the composite's `sentry-heartbeat: http_code=`
-        # log line and the check-in row Sentry's monitors API returns, never this step's outcome.
+        # nothing about delivery. The evidence is the check-in ROW Sentry's monitors API returns,
+        # never this step's outcome — and in the step log specifically
+        # `sentry-heartbeat: http_code=202`, never the bare prefix: curl writes that line on a
+        # refusal (4xx/5xx) and on a transport failure (`000`) too, so the prefix evidences an
+        # ATTEMPT and only the value evidences delivery.
         continue-on-error: true
         with:
           # These three are `required: true` on the composite, and Actions does not enforce
