@@ -186,15 +186,17 @@ else
   # git_fixture_env sets the discovery ceiling/identity; it does NOT create the
   # repo — `git init` is the caller's job (same shape as the $AD fixture above).
   git init -q -b work "$CM_REPO"   # NOT main: commit-on-main would mask which guard fired
+  # `git -C`, not a bare `cd`: an unguarded `cd` that FAILS leaves these writes
+  # pointed at the real worktree (fixture-cd-containment, the 2026-08-20 incident
+  # shape). The fixture files are written with explicit paths for the same reason.
   (
-    cd "$CM_REPO"
-    git config user.email t@t
-    git config user.name t
-    printf 'seed\n' > seed.txt
-    git add seed.txt
-    git -c core.hooksPath=/dev/null commit -q -m seed
-    printf 'x\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n' > conflicted.md
-    git add conflicted.md
+    git -C "$CM_REPO" config user.email t@t
+    git -C "$CM_REPO" config user.name t
+    printf 'seed\n' > "$CM_REPO/seed.txt"
+    git -C "$CM_REPO" add seed.txt
+    git -C "$CM_REPO" -c core.hooksPath=/dev/null commit -q -m seed
+    printf 'x\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n' > "$CM_REPO/conflicted.md"
+    git -C "$CM_REPO" add conflicted.md
   ) >/dev/null 2>&1
   # FIXTURE CONTROL: if the clean-config row does not deny, the fixture never
   # staged a marker and every row below would be vacuous.
