@@ -10,6 +10,34 @@ closes: 8299
 
 # Tasks
 
+> # ⛔ BLOCKED — do not execute these tasks
+>
+> These tasks derive from **plan v2**, which all three v2 reviewers refuted on
+> 2026-09-18. Executing them would ship a gate that certifies 5 docs clean while
+> they dispatch grok-only, and would reword ~174 correct sites.
+>
+> **Why v2 failed:** its predicate is a *blocklist* of harness-specific forms.
+> AP-025 / ADR-202 — "a state predicate is complete by construction; a list of
+> ways to reach it cannot be proven complete" — and the proof is that the token
+> set omitted `formatSkillInvocation`'s grok branch (`` `/${name}` ``, harness.ts:129),
+> a form defined eight lines from one it captured. 225 occurrences, 26 docs,
+> 5 docs violating only via it.
+>
+> **What v3 must be** (design settled, not yet written):
+> an **allowlist** predicate — every skill reference matches canonical
+> `soleur:<known-name>`, checked against the 98-name index the population already
+> enumerates. Complete by construction. Plus: a per-doc census vector rather than
+> scalar pins (`inFence` is defeated by a compensating swap); anchor-scoped
+> exemptions for adapter-teaching regions, or generate `go.md`'s Step 2.0 table
+> from `routingInstructions()` so the ledger is genuinely empty; an allowlist of
+> sanctioned marker-block names; fences scanned, not stripped (16 are dispatch
+> payloads, including the mandatory resume prompt at `brainstorm/SKILL.md:604`);
+> ADR-**227**, not 226.
+>
+> Full findings: the plan file's `## v2 review complete (3 of 3)` section (H1-H12)
+> and `## v2 review — BLOCKING` (G1-G9).
+
+
 Derived from **plan v2** (the plan of record). v1's design is retained in the plan file as the
 review record only — do not implement it. The v1 census scored `ship/SKILL.md`, `gdpr-gate`,
 `product-roadmap` and `incident` QUALIFIED while they still dispatched Claude-only, and its
