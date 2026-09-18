@@ -1365,3 +1365,31 @@ The app<->host channel is plain HTTP on the Hetzner private network: transport c
 this link is accepted, not provided (encryption-posture ledger row, exception tracked on #6897).
 The Phase-4 soak — the `adopting -> accepted` condition — starts after `op=rearm` and `op=verify`
 pass, and this ADR stays `adopting` until it completes.
+
+## Addendum — 2026-09-18 (#7695) — the recut target exists, and is dormant on the volume the cutover landed on
+
+The 2026-08-25 addendum's "there is still no `apply_target` that recuts `/mnt/data`" is superseded,
+not edited. `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778, Merge B) behind the
+`inngest-cutover` required-reviewer environment, dispatch-only, with the two later probe fixes
+(#7761, #8019 → `probe_schema=8`) live on the host. It has never been dispatched.
+
+Against the live row of 2026-09-18 (`scripts/inngest-host-state.sh`: `cutover_flag=done`,
+`server_active=active`, `http_code=200`, `redis_keys=1261`, `flush_latched=true`,
+`data_mount_devid=scsi-0HC_Volume_106261946`, host `166317708`) its Guard 2 is unreachable on G19
+alone — `INNGEST_CUTOVER_FLIP=done` is outside the gate's `{rolled-back, aborted}` set — and G9 and
+G13 refuse independently (`http_code=200`, `redis_keys=1261`): correct refusals under ADR-199, which
+never recuts a populated store on a serving host. G8 refuses for the right outcome
+(`server_active=active`) through the `== inactive` predicate §7 of the 2026-09-11 addendum already
+records as the #8078 defect class; it is re-graded p3 rather than fixed while its consumer is dormant.
+
+The durable flush latch stands since the 2026-09-15 `op=arm` (run 34948112813, host `165451537`)
+and survived both 2026-09-17 replaces onto host `166317708` — the volume that survives a host
+replace is the design (`inngest-cutover-flip.sh`). The store can therefore be emptied only through
+the append-only latch clear #7777 defers, which makes the target **dormant on volume `106261946`**.
+
+The plaintext posture of that volume is #6894's and is carried by ADR-142's additive blue-green path
+(PR #8248), which copies and never flushes. Retire-or-keep for the dormant target is a separate
+decision, tracked on #8316 together with #8285 (the scheduled retirement of this same volume as the
+plaintext backstop once the ADR-142 cutover lands, expiring 2026-10-22), and gated on that path
+landing. This addendum retires nothing; "dormant on this volume" is its only verb. ADR-199 is cited,
+not edited here.
