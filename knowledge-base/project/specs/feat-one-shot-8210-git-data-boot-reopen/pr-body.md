@@ -167,6 +167,30 @@ under `apps/web-platform` outside `infra/`; the git-history seat found that fals
 string-assertion contract test over the Sentry rules, not a happy-dom component test, so the
 conclusion stands on the reproduction, not on the false proof.)
 
+## The full gate, HEAD-frozen
+
+`bash scripts/test-all.sh` in all three shards (`scripts`, `webplat`, `infra`) against
+`b06dad3dd`, queued inside the ADR-133 advisory lock behind another worktree's run rather than
+polled for a gap. Every red, by cause:
+
+- **scripts 423/430** — the five pre-existing suites named above, and nothing else. The three
+  reds an earlier (moving-tree) run charged to this branch are gone.
+- **webplat 3/4** — the 18 happy-dom component files named above; this diff changes no file
+  they read.
+- **infra 119/123** — one was mine: `ci-deploy.test.sh`'s pinned inventory of every line that
+  can `systemctl start` a variable unit (a #8077 ratchet no file-selected suite can see) found
+  the reopen script's `systemctl start "$_munit"`. Pinned with the reason it can never be
+  `inngest-server` (`--suffix=mount` over a two-name allowlist); 305/305 after. The other
+  three are environment or live drift with the inputs identical to `origin/main`:
+  `cloud-init-inngest-bootstrap` (pinned inngest tag v1.1.35 vs published v1.1.37),
+  `zot-config-deadlines` (docker unavailable, fails closed), `canary-bundle-claim-check`
+  (`python3 -m http.server` not answering on `localhost` within 4 s on this box, where
+  `localhost` resolves to `::1`; reproduced in isolation).
+
+Two commits followed that run: `8fe66160f` (reporter `TimeoutStartSec` 120→150 + a runbook
+sharp edge; Guard 1, strip-parity and doppler-injection-bound re-run green) and the
+`ci-deploy` pin above (ci-deploy 305/305). Neither touches a file another suite reads.
+
 ## Post-merge (all `gh`-driven)
 
 - **PM1** dispatch the rehearsal from `main` (dry-run, then real); the environment approval is the
