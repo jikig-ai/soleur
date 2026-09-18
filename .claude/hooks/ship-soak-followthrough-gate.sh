@@ -350,8 +350,24 @@ for n in $REFS; do
   # markers; they are content anchors, so editing the program below cannot silently unhook the
   # oracle the way a shape-anchored slice does.)
   unfenced_body=$(printf '%s' "$body" | awk '
-    BEGIN { fence = 0; fence_ch = ""; fence_len = 0 }
+    BEGIN { fence = 0; fence_ch = ""; fence_len = 0; in_dir = 0 }
     { sub(/\r$/, "") }
+    # Track the directive`s own extent and suppress fence toggling inside it, mirroring the
+    # authority (scripts/sweep-followthroughs.sh). `<!-- -->` is an HTML comment, so a ``` on
+    # one of its continuation lines is directive content, not a fence opener. Without this, a
+    # stray ``` between `script=` and `earliest=` in the canonical MULTI-LINE body opens a
+    # fence AFTER the directive`s first line: the `^<!-- *soleur:followthrough` grep below
+    # still matches (that line was already printed), but `earliest=` is stripped, so this gate
+    # reports a correctly-enrolled tracker as UNENROLLED and blocks `gh pr ready`. The
+    # authority honours it. That is a producer/consumer divergence in the false-DENIAL
+    # direction, which is the one an author cannot work around.
+    # `!fence` is load-bearing: in the authority the directive rule sits AFTER `fence { next }`,
+    # so a directive inside a real fence can never open a directive scope. Without it here, a
+    # FENCED directive would set in_dir and then suppress its own strip -- the gate would read
+    # a fenced (i.e. un-enrolled) tracker as enrolled, inverting the deny rows this suite pins.
+    !fence && !in_dir && /^<!-- *soleur:followthrough/ { in_dir = 1 }
+    in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { print; next }
+    in_dir && /-->/ { print; in_dir = 0; next }
     /^[ ]?[ ]?[ ]?(```|~~~)/ {
       fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
       while (substr(fl, fn + 1, 1) == fc) fn++

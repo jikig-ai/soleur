@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/sweep-followthroughs.sh"
 
 PASS=0
+declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
 FAIL=0
 TOTAL=0
 
@@ -36,7 +37,15 @@ TOTAL=0
 # a verdict helper therefore drops the verdict WITHOUT dropping its count, and the
 # conservation identity at the bottom catches it.
 pass() { PASS=$((PASS + 1)); echo "PASS: $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
+# TOTAL is deliberately NOT incremented here. A case counter moved inside a verdict helper
+# makes the conservation identity a tautology, and `scripts/guard-vacuity-floor.test.sh`
+# rejects exactly that shape -- measured: it caught this file the moment the increment moved
+# in. The six DIRECT `fail "...mutation did not land..."` call sites therefore carry their own
+# `TOTAL=$((TOTAL + 1));` prefix, at the CALL SITE, the same discipline the assert helpers use.
+# Before that, a fired landing check skewed the identity by +1 and the run died with
+# `accounting: PASS+FAIL (179) != TOTAL (178)` -- handing the operator "a verdict was dropped"
+# instead of the author`s carefully worded "mutation did not land" diagnosis.
+fail() { FAIL=$((FAIL + 1)); FAILURES+=("$1"); echo "FAIL: $1"; }
 
 assert_eq() {
   local name="$1" expected="$2" actual="$3"
@@ -1107,7 +1116,7 @@ t_g4_2_flag_is_the_mechanism() {
   local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
   local mut; mut=$(g4_mutate "$root" nofence-flag 's|^      FENCED_DIRECTIVE=1$|      FENCED_DIRECTIVE_MUTATED=1|' 'FENCED_DIRECTIVE_MUTATED=1' '      FENCED_DIRECTIVE=1')
   if [[ -z "$mut" ]]; then
-    fail "G4-2 mutation did not land in the region under test (no lone FENCED_DIRECTIVE=1 assignment) -- the row would be vacuous"
+    TOTAL=$((TOTAL + 1)); fail "G4-2 mutation did not land in the region under test (no lone FENCED_DIRECTIVE=1 assignment) -- the row would be vacuous"
   else
     g3_run "$root" "$mut"
     assert_eq "G4-2 with FENCED_DIRECTIVE=1 deleted the same body exits 0 -- the flag is the mechanism" "0" "$(cat "$root/rc")"
@@ -1125,7 +1134,7 @@ t_g4_3_increment_on_delimiter_false_positives() {
     'fence_len = fn; fenced_seen++; next' \
     'fence_len = fn; next')
   if [[ -z "$mut" ]]; then
-    fail "G4-3 mutation did not land -- the increment is not on the line this row mutates"
+    TOTAL=$((TOTAL + 1)); fail "G4-3 mutation did not land -- the increment is not on the line this row mutates"
   else
     g3_run "$root" "$mut"
     assert_eq "G4-3 with the increment on the delimiter, a fence-but-no-directive body reds (the 19-tracker false positive)" "1" "$([[ "$(cat "$root/rc")" != "0" ]] && echo 1 || echo 0)"
@@ -1168,7 +1177,7 @@ t_g4_8_example_beside_real_directive() {
     'if (fenced_seen > 0) print' \
     'if (seen == 0 && fenced_seen > 0)')
   if [[ -z "$mut_a" ]]; then
-    fail "G4-4 mutation (a) did not land -- the END block's seen==0 condition is not where this row mutates"
+    TOTAL=$((TOTAL + 1)); fail "G4-4 mutation (a) did not land -- the END block's seen==0 condition is not where this row mutates"
   else
     local root2; root2=$(g3_root "$(g4_open_json 9103 "$body")")
     g3_run "$root2" "$mut_a"
@@ -1179,7 +1188,7 @@ t_g4_8_example_beside_real_directive() {
   sed -e 's@if (seen == 0 && fenced_seen > 0)@if (fenced_seen > 0)@' \
       -e 's@^  if \[\[ -z "\${script:-}" \]\]; then$@  if [[ 1 == 1 ]]; then  # both-guards-dropped@' "$SUT" > "$mut_b"
   if [[ "$(grep -c 'both-guards-dropped' "$mut_b" || true)" != "1" || "$(grep -c 'seen == 0 && fenced_seen' "$mut_b" || true)" != "0" ]]; then
-    fail "G4-4 mutation (b) did not land in both regions -- the paired row would be vacuous"
+    TOTAL=$((TOTAL + 1)); fail "G4-4 mutation (b) did not land in both regions -- the paired row would be vacuous"
   else
     local root3; root3=$(g3_root "$(g4_open_json 9103 "$body")")
     g3_run "$root3" "$mut_b"
@@ -1235,7 +1244,7 @@ t_g4_5_mode_gate_is_load_bearing() {
     '# mode-gate-removed' \
     '&& "$mode" == "open" ]]; then')
   if [[ -z "$mut" ]]; then
-    fail "G4-5 mutation did not land -- the mode gate is not where this row mutates"
+    TOTAL=$((TOTAL + 1)); fail "G4-5 mutation did not land -- the mode gate is not where this row mutates"
   else
     local body; body=$(printf 'Example:\n\n```html\n<!-- soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n```\n')
     local out
@@ -1406,7 +1415,7 @@ t_g4_19_all_annotations_before_one_exit() {
     'exit 1  # truncation-verdict' \
     'run_verdict=1  # truncation-verdict')
   if [[ -z "$mut" ]]; then
-    fail "G4-19 mutation did not land -- the truncation branch does not set run_verdict"
+    TOTAL=$((TOTAL + 1)); fail "G4-19 mutation did not land -- the truncation branch does not set run_verdict"
   else
     local root2; root2=$(g3_root "$json")
     g3_run "$root2" "$mut"
@@ -1546,6 +1555,28 @@ assert_contains     "T19 an unmapped code still falls back to TRANSIENT" \
 assert_contains     "T19 the truncation detector raises the run's VERDICT, not just an annotation" \
                     'FAILING THE RUN because the open follow-through page was full' "$(cat "$SUT")"
 
+# INSTRUMENT SELF-TEST -- drives all three assert helpers through BOTH branches and requires
+# every observable to move. Neither the identity nor the floor below can see this: both are
+# computed from TOTAL, which the assert helpers move BEFORE consulting their condition.
+# Measured 2026-09-18: forcing all three conditions to `[[ 1 == 1 ]]` reported
+# `PASS=181 FAIL=0 TOTAL=181`, exit 0, byte-identical to the honest baseline; so did
+# `fail() { PASS=$((PASS+1)); ... }`. This block catches both.
+_p=$PASS _f=$FAIL _t=$TOTAL _n=${#FAILURES[@]}
+if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
+assert_eq           "self-test: assert_eq pass branch"            "x" "x"
+assert_eq           "self-test: assert_eq fail branch (expected)" "x" "y"
+assert_contains     "self-test: assert_contains pass branch"            "x" "axb"
+assert_contains     "self-test: assert_contains fail branch (expected)" "x" "ab"
+assert_not_contains "self-test: assert_not_contains pass branch"            "x" "ab"
+assert_not_contains "self-test: assert_not_contains fail branch (expected)" "x" "axb"
+if (( PASS != _p + 3 || FAIL != _f + 3 || TOTAL != _t + 6 || ${#FAILURES[@]} != _n + 3 )); then
+  printf '[FATAL] instrument self-test: an assert helper did not move every observable (PASS %d->%d, FAIL %d->%d, TOTAL %d->%d, ledger %d->%d)\n' \
+    "$_p" "$PASS" "$_f" "$FAIL" "$_t" "$TOTAL" "$_n" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+PASS=$_p; FAIL=$_f; TOTAL=$_t
+if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
+
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 
 # --- ADR-193 floor. TOTAL moves inside the assert helpers (the call site of the verdict),
@@ -1563,4 +1594,6 @@ if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-[[ "$FAIL" -eq 0 ]] || exit 1
+# The verdict reads the append-only LEDGER as well as the counter: a fail() whose increment is
+# redirected to PASS still leaves FAILURES populated, and the run still reds.
+[[ "$FAIL" -eq 0 && "${#FAILURES[@]}" -eq 0 ]] || { printf 'FAILED: %d (ledger holds %d)\n' "$FAIL" "${#FAILURES[@]}" >&2; exit 1; }

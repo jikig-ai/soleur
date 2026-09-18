@@ -19,6 +19,8 @@ HOOK="$SCRIPT_DIR/follow-through-directive-gate.sh"
 PASS=0
 FAIL=0
 TOTAL=0
+declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test
+_case=""          # set by run(); names the case a FAIL row belongs to
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 command -v realpath >/dev/null 2>&1 || { echo "SKIP: realpath missing"; exit 0; }
@@ -56,6 +58,7 @@ make_input() {
 run() {
   local label="$1" input="$2"
   TOTAL=$((TOTAL + 1))
+  _case="$1"
   local out rc
   out=$(printf '%s' "$input" | "$HOOK" 2>&1)
   rc=$?
@@ -71,13 +74,13 @@ run() {
 assert_pass() {
   if [[ "$HOOK_RC" -ne 0 ]]; then
     echo "       FAIL: expected exit 0, got $HOOK_RC"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   if [[ -n "$HOOK_OUT" ]]; then
     # Hook fail-open path: silent exit 0
     echo "       FAIL: expected silent fail-open, got output"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   PASS=$((PASS + 1))
@@ -87,24 +90,24 @@ assert_deny() {
   local expected_substring="$1"
   if [[ "$HOOK_RC" -ne 0 ]]; then
     echo "       FAIL: expected exit 0 (deny JSON returned via stdout), got $HOOK_RC"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   if [[ -z "$HOOK_OUT" ]]; then
     echo "       FAIL: expected deny JSON, got empty output"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   local decision
   decision=$(printf '%s' "$HOOK_OUT" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null)
   if [[ "$decision" != "deny" ]]; then
     echo "       FAIL: expected permissionDecision=deny, got '$decision'"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   if ! printf '%s' "$HOOK_OUT" | grep -q "$expected_substring"; then
     echo "       FAIL: deny reason missing substring '$expected_substring'"
-    FAIL=$((FAIL + 1))
+    FAIL=$((FAIL + 1)); FAILURES+=("$_case")
     return
   fi
   PASS=$((PASS + 1))
@@ -414,6 +417,32 @@ assert_pass
 rm -rf "$TMP"
 
 # === Summary ===
+# INSTRUMENT SELF-TEST -- drives BOTH assert helpers through their pass AND fail branches and
+# requires every observable to move. The accounting identity and the floor below are computed
+# from `TOTAL`, which `run()` increments BEFORE the hook's output is examined and independently
+# of any verdict -- so both are satisfied with every deny assertion disarmed. Measured
+# 2026-09-18: `assert_deny() { PASS=$((PASS+1)); return 0; }` -- one function, silencing 14 of
+# 24 cases including EVERY row #7490 added (T17, T17c, T17e, T17f, T17g) -- reported
+# `=== Results: 24/24 passed, 0 failed ===`, exit 0. Note also that `guard-vacuity-floor.test.sh`
+# promotes this file on the stated grounds that its floor reads "an independent count
+# incremented at the assert call sites"; `TOTAL` is incremented at the run() call sites, so that
+# rationale described a suite shape this file did not have until this block existed.
+_p=$PASS _f=$FAIL _t=$TOTAL _n=${#FAILURES[@]} _sc=$_case
+if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
+_case="self-test probe"
+HOOK_RC=0 HOOK_OUT="" ; assert_pass                      # pass branch of assert_pass
+HOOK_RC=1 HOOK_OUT="" ; assert_pass                      # fail branch of assert_pass
+HOOK_RC=0 HOOK_OUT='{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"probe"}}'
+assert_deny "probe"                                      # pass branch of assert_deny
+assert_deny "a-substring-that-is-not-there"              # fail branch of assert_deny
+if (( PASS != _p + 2 || FAIL != _f + 2 || ${#FAILURES[@]} != _n + 2 )); then
+  printf '[FATAL] instrument self-test: an assert helper did not move every observable (PASS %d->%d, FAIL %d->%d, ledger %d->%d)\n' \
+    "$_p" "$PASS" "$_f" "$FAIL" "$_n" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+PASS=$_p; FAIL=$_f; TOTAL=$_t; _case=$_sc
+if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
+
 printf '\n=== Results: %d/%d passed, %d failed ===\n' "$PASS" "$TOTAL" "$FAIL"
 
 # === ADR-193 accounting + floor. This suite had NEITHER: PASS+FAIL was never reconciled
@@ -431,4 +460,6 @@ if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   exit 1
 fi
 
-[[ "$FAIL" -eq 0 ]] || exit 1
+# Verdict reads the append-only LEDGER as well as the counter: a FAIL increment redirected to
+# PASS still leaves FAILURES populated, and the run still reds.
+[[ "$FAIL" -eq 0 && "${#FAILURES[@]}" -eq 0 ]] || { printf 'FAILED: %d (ledger holds %d)\n' "$FAIL" "${#FAILURES[@]}" >&2; exit 1; }

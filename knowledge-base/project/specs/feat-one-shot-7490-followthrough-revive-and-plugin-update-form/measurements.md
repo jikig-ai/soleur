@@ -316,3 +316,113 @@ rules predict for a guard-shaped PR.
    runtime message only: 13/13 still green. The haystack is now the runtime messages alone —
    and the FIRST attempt at that fix was vacuous the same way, because a bare `*"` opener also
    matched inside a bash snippet and swallowed 79 lines of prose.
+
+---
+
+## Addendum — 2026-09-18: the test-design panel found a live defect the PR's own guards could not see
+
+A `test-design-reviewer` pass over the branch returned four HIGH findings. All are fixed inline;
+each fix is mutation-verified in both directions against a green in-sandbox baseline.
+
+### HIGH-1 — a stray fence INSIDE the canonical multi-line directive erased `earliest=`
+
+`plugins/soleur/skills/ship/SKILL.md` emits the directive over four lines, and
+`plugins/soleur/test/fixtures/followthrough-directive/expected-issue-body.md` is that exact
+golden body. **No fixture in any of the five suites instantiated it** — all 181 + 73 + 24 + 24 +
+35 assertions drove the single-line spelling. So the shape this repo actually produces was
+unrepresented in its own oracle.
+
+`parse_directive`'s `fence { next }` runs before the `in_dir` field accumulator, so a fence
+delimiter landing between `script=` and `earliest=` dropped every continuation line after it.
+`script` survived (it is above the fence), `earliest` did not, and `run_one` rendered it through
+`${earliest:-now}` → `iso_to_epoch ""` → **the soak gate was skipped entirely and the tracker
+closed PASS on day 0.** Measured against the shipped sweeper with a matched control:
+
+| body | sweeper behaviour |
+|---|---|
+| multi-line, `earliest=2099-01-01`, one stray ` ``` ` between `script=` and `earliest=` | `directive found (… earliest=now …)` → `would close with verdict=PASS` |
+| same body, stray fence line removed (control) | `earliest=2099-01-01T00:00:00Z not yet reached — skipping` |
+
+`fence_unbalanced` was emitted but only appends a sentence to the fenced-directive comment,
+which never fired here because `script` was honoured. The run stayed green.
+
+**Fix.** A fence cannot OPEN inside an unterminated directive — `<!-- ... -->` is an HTML
+comment, so its continuation lines are directive content, not markdown. Mirrored into all three
+parsers (`scripts/sweep-followthroughs.sh`, `.claude/hooks/follow-through-directive-gate.sh`,
+`.claude/hooks/ship-soak-followthrough-gate.sh`) and the anomaly is counted and reported as a
+new `__sweeper_meta__ directive_fence_interrupted` warning rather than swallowed.
+
+Two details were load-bearing and only surfaced by running the suites:
+
+- The soak gate's copy needed `!fence &&` on its directive-scope rule. Without it a FENCED
+  directive set `in_dir` and then suppressed its own strip, inverting every deny row. Caught by
+  its own suite (24 → 22, floor 24) and by the parity oracle (12 divergences).
+- The create gate diverged in the **false-DENIAL** direction — it would have blocked
+  `gh pr ready` on a body the sweeper honours. That is the direction an author cannot work
+  around.
+
+**Pinned by the FIELD, not by enrolment.** The first absolute assertion written for this was
+vacuous in the same way the assertion it replaced was: `authority_enrolled` answers "is there a
+directive", a bit this defect does not flip. Removing the guard from the authority left the
+oracle at **68/0 green**. Only asserting the extracted `earliest=` value reds it. This is the
+second time in this session that the fix for a vacuous assertion was vacuous the same way, and
+it is why `plugins/soleur/skills/review/SKILL.md` now carries the two-direction rule.
+
+### HIGH-2/3/4 — a conservation identity plus an assertion floor is not dispatch coverage
+
+In three of the four suites both backstops were computed from a counter the disarmed helper
+still moves. Measured, each byte-identical to the honest run at exit 0:
+
+| suite | one-function mutation | reported |
+|---|---|---|
+| `lint-followthrough-varq-ban.test.sh` | `check() { asserted=$((asserted+1)); pass "$2"; }` | `73 passed, 0 failed … PASSED` |
+| `follow-through-directive-gate.test.sh` | `assert_deny() { PASS=$((PASS+1)); return 0; }` | `24/24 passed, 0 failed` |
+| `sweep-followthroughs.test.sh` | all three assert conditions → `[[ 1 == 1 ]]` | `PASS=181 FAIL=0 TOTAL=181` |
+
+`varq`'s header claimed `asserted` "moves at the call site so a neutered verdict helper drops the
+verdict without dropping the count" — true of `pass`/`fail`, **false of `check` itself**. And
+`guard-vacuity-floor.test.sh` promoted the directive gate on the stated grounds that its floor
+reads "an independent count incremented at the assert call sites"; `TOTAL` was incremented at the
+`run()` call sites, so that rationale described a suite shape the file did not have.
+
+**Fix.** The template already existed in this PR — `ship-soak-followthrough-gate.test.sh` and the
+new parity oracle both carry an instrument self-test. Ported into all three, each with an
+append-only `FAILURES` ledger the verdict reads alongside the counter. Every mutation above now
+exits 1 naming which observable failed to move.
+
+### MEDIUM-1 — parity is satisfied when every reader is wrong the same way
+
+The mirrored widening the SUT's own comment instructs (`/^[ ]*(```|~~~)/` in all three places)
+left all four suites green. Closed with a `declare -A absolute` table asserting what the
+**authority** must say on seven rows, including CommonMark's 0–3-space far side. Re-measured:
+the mirrored widening now reds the oracle (2 divergences).
+
+### MEDIUM-2 — the create gate is now the third reader
+
+It agreed with the authority on all 18 shapes but 12 of those agreements were unasserted. Driven
+end to end in the oracle's walk loop. Verified biting: reverting only the create gate's half of
+the HIGH-1 fix reds exactly one row, in the false-denial direction.
+
+### LOW-1 — the conservation identity misattributed its own fail-closed branches
+
+The six direct `fail "…mutation did not land…"` call sites bypass the assert helpers, the only
+other place `TOTAL` moves, so a fired landing check skewed the identity by +1 and the operator
+got `accounting: PASS+FAIL (179) != TOTAL (178)` instead of the author's diagnosis. **The first
+fix moved `TOTAL` into `fail()` and `guard-vacuity-floor.test.sh` correctly rejected it** — a
+case counter inside a verdict helper makes conservation a tautology. Corrected to a call-site
+increment. Verified: stubbing `g4_mutate` now prints the author's "mutation did not land" lines
+with no accounting FATAL.
+
+### Counts after the round
+
+`sweep` 181, `varq` 73, `parity` 35 → **68** (floor raised), `directive-gate` 24, `soak-gate` 24,
+`guard-vacuity-floor` 23/23.
+
+### Not fixed, recorded
+
+- **LOW-2** — adding a novel `__sweeper_meta__` kind logs the fallthrough but no row reads it, so
+  the header's "an additive parser change cannot quietly no-op here" claim is unpinned. Fail-open
+  with no verdict impact; the new `directive_fence_interrupted` kind added here IS read and
+  warned on.
+- **`G4-4b` asserts only `rc != 0`**, which a syntax error in a future mutant would also satisfy.
+  It is the one row built without `g4_mutate`.

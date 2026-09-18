@@ -183,6 +183,13 @@ fi
 PARSED=$(printf '%s' "$PARSED_BODY" | awk '
   BEGIN { in_dir = 0; closing = 0; fence = 0; fence_ch = ""; fence_len = 0 }
   { sub(/\r$/, "") }
+  # A fence cannot OPEN inside an unterminated directive -- `<!-- -->` is an HTML comment, so
+  # its continuation lines are directive content, not markdown. Mirrors the authority
+  # (scripts/sweep-followthroughs.sh). Without it, a stray ``` between `script=` and
+  # `earliest=` in the canonical MULTI-LINE body swallows `earliest=` and the closing `-->`,
+  # and this gate then DENIES a body the sweeper honours -- the divergence the parity oracle
+  # exists to catch, in the direction that blocks a correct author.
+  in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { next }
   /^[ ]?[ ]?[ ]?(```|~~~)/ {
     fl = $0; sub(/^[ ]+/, "", fl); fc = substr(fl, 1, 1); fn = 0
     while (substr(fl, fn + 1, 1) == fc) fn++

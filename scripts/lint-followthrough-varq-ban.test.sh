@@ -51,10 +51,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD="$REPO_ROOT/scripts/lint-followthrough-varq-ban.sh"
 
 passes=0
+declare -a FAILURES=()   # append-only ledger the verdict reads; see the instrument self-test below
 fails=0
 asserted=0
 pass() { passes=$((passes + 1)); printf '  ✓ %s\n' "$1"; }
-fail() { fails=$((fails + 1)); printf '  ✗ %s\n' "$1" >&2; }
+fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf '  ✗ %s\n' "$1" >&2; }
 # check <ok:0|nonzero> <pass-msg> <fail-msg> -- the ONE call site of pass()/fail(); `asserted`
 # moves here so a neutered verdict helper drops the verdict without dropping the count.
 check() { asserted=$((asserted + 1)); if [[ "$1" == "0" ]]; then pass "$2"; else fail "$3"; fi; }
@@ -563,6 +564,27 @@ fi
 # Absolute floor at the MEASURED green count; a lower bound, so adding rows never trips it --
 # re-measure and raise it in the same commit that adds a row. Reported with printf + exit 1,
 # never via fail(), so one edit cannot disarm both.
+# INSTRUMENT SELF-TEST -- drives check() through BOTH branches and requires every observable to
+# move. The accounting identity and the floor below are NOT sufficient on their own, and the
+# header's claim that `asserted` "moves at the call site so a neutered verdict helper drops the
+# verdict without dropping the count" is true of pass()/fail() and FALSE of check() itself:
+# `asserted` is incremented INSIDE check, so both backstops are dispatched through the one
+# helper they exist to police. Measured 2026-09-18: `check() { asserted=$((asserted+1)); pass "$2"; }`
+# -- a one-branch edit on the single call site of all 73 verdicts -- reported
+# `=== 73 passed, 0 failed (73 asserted, floor 73) === PASSED`, exit 0, byte-identical to the
+# honest run. So does `fail() { passes=$((passes+1)); ... }`. This block catches both.
+_p=$passes _f=$fails _a=$asserted _n=${#FAILURES[@]}
+if (( _n > 0 )); then _saved=("${FAILURES[@]}"); else _saved=(); fi
+check 0 "self-test probe (pass branch)" "unreachable"
+check 1 "unreachable" "self-test probe (fail branch; expected, unwound below)"
+if (( passes != _p + 1 || fails != _f + 1 || asserted != _a + 2 || ${#FAILURES[@]} != _n + 1 )); then
+  printf '[FATAL] instrument self-test: check() did not move every observable (passes %d->%d, fails %d->%d, asserted %d->%d, ledger %d->%d)\n' \
+    "$_p" "$passes" "$_f" "$fails" "$_a" "$asserted" "$_n" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+passes=$_p; fails=$_f; asserted=$_a
+if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
+
 MIN_ASSERTIONS=73
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
@@ -570,9 +592,11 @@ if (( asserted < MIN_ASSERTIONS )); then
 fi
 
 printf '\n=== %d passed, %d failed (%d asserted, floor %d) ===\n' "$passes" "$fails" "$asserted" "$MIN_ASSERTIONS"
-if (( fails == 0 )); then
+# The verdict reads the append-only LEDGER, not the counter: a fail() whose increment is
+# redirected to `passes` still leaves FAILURES populated, and the run still reds.
+if (( fails == 0 && ${#FAILURES[@]} == 0 )); then
   echo "PASSED"
   exit 0
 fi
-echo "FAILED: $fails" >&2
+printf 'FAILED: %d (ledger holds %d)\n' "$fails" "${#FAILURES[@]}" >&2
 exit 1

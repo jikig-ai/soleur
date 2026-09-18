@@ -225,3 +225,39 @@ Three guards, plus two the review round added:
     spec for `archival`/`archive` deferral language, and grep the tree for references to the live
     spec path — a script whose whole job is to MOVE an artefact is the one place a reference sweep
     is mandatory, and it is the class this PR exists to close.
+
+22. **My oracle had no row for the shape this repo actually emits.** Every one of the 337
+    assertions across five suites drove the SINGLE-LINE directive; `ship/SKILL.md` and the golden
+    fixture both emit it over FOUR lines. A stray fence between `script=` and `earliest=` in that
+    multi-line body erased `earliest=`, `${earliest:-now}` skipped the soak gate, and the tracker
+    closed PASS on day 0 — a live defect in the sweeper this PR exists to repair, invisible to
+    the PR's own battery. — Recovery: a `test-design-reviewer` pass found it; guard added to all
+    three parsers, pinned by a field-level assertion, mutation-verified both directions. —
+    **Prevention:** when a suite tests a parser, enumerate the shapes the repo's own PRODUCERS
+    emit and require one row per producer — `git grep` the emitters, do not derive the table from
+    the fix you just wrote. A shape table written from the fix tests the fix, not the input.
+
+23. **The absolute assertion I wrote to pin error 22 was vacuous the same way.** I asserted
+    `authority_enrolled == 1` on the fence-interrupted body; that bit is TRUE both before and
+    after the defect, because `script=` sits above the fence and enrolment only asks whether a
+    directive exists. Removing the fix left the oracle **68/0 green**. — Recovery: assert the
+    extracted `earliest=` VALUE. — **Prevention:** name the quantity the defect CHANGES before
+    writing the assertion, then delete the fix and require RED. This is the third occurrence of
+    the vacuous-fix-for-a-vacuous-assertion class in one session, which is why the rule is now in
+    `plugins/soleur/skills/review/SKILL.md` rather than only here.
+
+24. **My fix for the accounting-identity skew made the identity a tautology**, by moving `TOTAL`
+    into `fail()`. `scripts/guard-vacuity-floor.test.sh` caught it immediately —
+    `CASE counter incremented INSIDE a verdict helper`. — Recovery: call-site increment at the
+    six direct `fail` sites instead. — **Prevention:** a repo-global ratchet is the one instrument
+    a file-selected suite set cannot reach; run `guard-vacuity-floor.test.sh` after ANY edit to a
+    suite's counters, not only after adding a suite.
+
+25. **Three of four suites could have every verdict disarmed by one edit** and still report the
+    honest run byte-for-byte, because their conservation identity and their assertion floor were
+    both computed from a counter the disarmed helper still moves. The correct template was
+    already in this PR, in two files, unpropagated. — Recovery: ported the instrument self-test
+    plus an append-only ledger into all three. — **Prevention:** the durable unit for a guard
+    pattern is a copy in every consumer, not a write-up — when a PR introduces a self-test block,
+    the same PR ports it to every sibling suite, because the sibling that goes without it is the
+    one nobody re-reads.

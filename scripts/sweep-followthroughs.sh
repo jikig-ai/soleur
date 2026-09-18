@@ -121,8 +121,21 @@ sanitize_name_for_comment() {
 # run_one honours. Widening it here would make a body the sweeper skips look enrolled.
 parse_directive() {
   awk '
-    BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0; fence_ch = ""; fence_len = 0; fenced_seen = 0 }
+    BEGIN { in_dir = 0; seen = 0; closing = 0; fence = 0; fence_ch = ""; fence_len = 0; fenced_seen = 0; dir_fence = 0 }
     { sub(/\r$/, "") }  # a CRLF body (web-editor paste) must not leave `\r` glued to the last token
+    # A FENCE CANNOT OPEN INSIDE AN UNTERMINATED DIRECTIVE. `<!-- ... -->` is an HTML comment;
+    # its continuation lines are directive content, not markdown. Without this guard a stray
+    # ``` between `script=` and `earliest=` in the canonical MULTI-LINE body -- the shape
+    # `plugins/soleur/skills/ship/SKILL.md` emits and `plugins/soleur/test/fixtures/
+    # followthrough-directive/expected-issue-body.md` pins -- toggles `fence`, and the
+    # `fence { next }` below then swallows `earliest=` AND the closing `-->`. The directive is
+    # still honoured on its surviving `script=`, `earliest` renders through `${earliest:-now}`,
+    # the soak gate is skipped, and the tracker CLOSES PASS ON DAY 0. Measured 2026-09-18
+    # against the shipped sweeper with a matched control: the identical body without the stray
+    # fence line correctly reports `earliest=2099-01-01T00:00:00Z not yet reached -- skipping`.
+    # The anomaly is counted and reported rather than swallowed: the directive now parses
+    # correctly, but the body is still malformed and the author should be told.
+    in_dir && /^[ ]?[ ]?[ ]?(```|~~~)/ { dir_fence++; next }
     /^[ ]?[ ]?[ ]?(```|~~~)/ {
       fl = $0
       sub(/^[ ]+/, "", fl)
@@ -165,6 +178,7 @@ parse_directive() {
       # documented authoring shape and must stay silent.
       if (seen == 0 && fenced_seen > 0) print "__sweeper_meta__ fenced_directive_count " fenced_seen
       if (fence) print "__sweeper_meta__ fence_unbalanced 1"
+      if (dir_fence > 0) print "__sweeper_meta__ directive_fence_interrupted " dir_fence
     }
   '
 }
@@ -311,6 +325,7 @@ run_one() {
   local script earliest secrets
   local fenced_count=0
   local fence_unbalanced=0
+  local dir_fence_interrupted=0
   while read -r key val; do
     # First-wins, not last-wins: a directive line containing multiple
     # `script=`/`earliest=`/`secrets=` tokens (e.g.,
@@ -338,6 +353,9 @@ run_one() {
             ;;
           fence_unbalanced)
             fence_unbalanced=1
+            ;;
+          directive_fence_interrupted)
+            dir_fence_interrupted="$meta_args"
             ;;
           *)
             log "issue #$issue_num: unknown __sweeper_meta__ kind '$meta_kind' (val='$val') — ignoring"
@@ -428,6 +446,15 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # block that was never closed. A warning, never a run-level flag.
   if [[ "${fence_unbalanced:-0}" == "1" ]]; then
     printf '::warning::sweep-followthroughs: issue #%s: its directive was honored, but the body has an unbalanced code fence; a later edit could fall inside the unclosed block and silently un-enrol the tracker.\n' "$issue_num" >&2
+  fi
+
+  # A fence delimiter INSIDE the directive's own lines. The parser now ignores it (a `<!-- -->`
+  # comment is not markdown), so `earliest=` survives and the verdict is correct — but before
+  # that guard existed this shape erased `earliest=`, `${earliest:-now}` skipped the soak gate
+  # entirely, and the tracker closed PASS on day 0. Name it so the body gets cleaned rather
+  # than left one parser change away from that behaviour again. A warning, never a run-level flag.
+  if [[ "${dir_fence_interrupted:-0}" != "0" ]]; then
+    printf '::warning::sweep-followthroughs: issue #%s: %s code-fence delimiter(s) sit INSIDE the soleur:followthrough directive. They are ignored and the directive was parsed in full, but remove them — the directive is an HTML comment, not a fenced block.\n' "$issue_num" "$dir_fence_interrupted" >&2
   fi
 
   # Path safety: script MUST canonicalize to a path under

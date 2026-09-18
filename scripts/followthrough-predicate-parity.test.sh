@@ -87,6 +87,30 @@ soak_enrolled() {  # 1 = the soak gate would call this body enrolled
   grep -qE "$re" <<<"$stripped" && echo 1 || echo 0
 }
 
+# --- READER: the create-time PreToolUse gate, driven END TO END -----------------------------
+# It carries its own inlined copy of the fence + column-0 predicate, previously held in
+# agreement with the authority only by four hand-written rows. Its verdict maps cleanly onto
+# enrolment: the gate ALLOWS (silent, rc 0, no stdout) exactly when it parsed a usable
+# directive, and DENIES otherwise -- so `allow == 1` is the same bit `authority_enrolled`
+# returns. The sandbox provides the executable `p.sh` every shape's `script=` names, so the
+# only thing that can differ between the two readers is the PREDICATE, which is the point.
+_CG_HOOK="$REPO_ROOT/.claude/hooks/follow-through-directive-gate.sh"
+_CG_TMP="$(mktemp -d)"
+trap 'rm -rf "$_CG_TMP"' EXIT
+mkdir -p "$_CG_TMP/scripts/followthroughs"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$_CG_TMP/scripts/followthroughs/p.sh"
+chmod +x "$_CG_TMP/scripts/followthroughs/p.sh"
+creategate_enrolled() {
+  local bf="$_CG_TMP/body.md"
+  printf '%s' "$1" > "$bf"
+  local out
+  out=$(jq -n --arg cmd "gh issue create --title t --label follow-through --body-file $bf" \
+               --arg cwd "$_CG_TMP" \
+               '{tool_name:"Bash", tool_input:{command:$cmd}, cwd:$cwd}' \
+        | bash "$_CG_HOOK" 2>&1)
+  [[ -z "$out" ]] && echo 1 || echo 0
+}
+
 # --- READER: the ship SKILL.md §5.5 enrolment bash (prose an agent pastes) -----------------
 ship_enrol_re() {
   grep -oE "grep -qE '\^<!--[^']*'" "$SHIP_SKILL" | head -1 | sed "s/^grep -qE '//; s/'\$//"
@@ -113,9 +137,35 @@ shapes=(
   "three spaces after <!--|## V\n\n<!--   soleur:followthrough script=scripts/followthroughs/p.sh earliest=2020-01-01T00:00:00Z -->\n"
   "CRLF unfenced|## V\r\n\r\n$D\r\n"
   "CRLF fenced|## V\r\n\r\n\`\`\`html\r\n$D\r\n\`\`\`\r\n"
+  # The CANONICAL emitted shape. `plugins/soleur/skills/ship/SKILL.md` and the golden fixture
+  # `plugins/soleur/test/fixtures/followthrough-directive/expected-issue-body.md` both emit the
+  # directive over FOUR lines; every row above this one is single-line, so the shape this repo
+  # actually produces was unrepresented in its own oracle.
+  "canonical MULTI-LINE directive|## V\n\n<!-- soleur:followthrough\n  script=scripts/followthroughs/p.sh\n  earliest=2020-01-01T00:00:00Z\n-->\n"
+  # ... and the same body with a stray fence delimiter INSIDE it. See the absolute assertions
+  # below: parity alone is not enough here, because all three readers regressing together
+  # would keep this row green.
+  "MULTI-LINE directive interrupted by a stray fence|## V\n\n<!-- soleur:followthrough\n  script=scripts/followthroughs/p.sh\n\`\`\`\n  earliest=2020-01-01T00:00:00Z\n-->\n"
 )
 
-printf 'followthrough-predicate-parity: %d shapes x 2 producers, authority = parse_directive\n\n' "${#shapes[@]}"
+# --- ABSOLUTE expectations, for the rows where parity alone is not a property --------------
+# A differential oracle is satisfied when every reader is wrong in the same way, and the hooks
+# carry copies whose own comments instruct the next author to "mirror BOTH places" -- i.e. the
+# mirrored change is the LIKELY change. Measured 2026-09-18: widening all three predicates to
+# `/^[ ]*(```|~~~)/` (the mirrored widening) left all four suites green, while the 4-space row
+# is exactly the far side of CommonMark`s 0-3-space bound that G4-9 pins only the near side of.
+# So these rows assert what the AUTHORITY must say, not merely that the readers echo it.
+declare -A absolute=(
+  ["column-0 unfenced"]=1
+  ["no directive at all"]=0
+  ["3-backtick fence"]=0
+  ["4-space indent (NOT a fence)"]=1
+  ["fenced example BESIDE a real directive"]=1
+  ["canonical MULTI-LINE directive"]=1
+  ["MULTI-LINE directive interrupted by a stray fence"]=1
+)
+
+printf 'followthrough-predicate-parity: %d shapes x 3 readers, authority = parse_directive\n\n' "${#shapes[@]}"
 
 ship_re="$(ship_enrol_re)"
 check "$([[ -n "$ship_re" ]] && echo 0 || echo 1)" \
@@ -127,10 +177,20 @@ for row in "${shapes[@]}"; do
   # shellcheck disable=SC2059
   body="$(printf "$fmt")"
   a="$(authority_enrolled "$body")"
+  if [[ -n "${absolute[$label]:-}" ]]; then
+    exp="${absolute[$label]}"
+    check "$([[ "$a" == "$exp" ]] && echo 0 || echo 1)" \
+      "authority is ABSOLUTELY correct on: $label (enrolled=$exp)" \
+      "authority is WRONG on: $label -- expected enrolled=$exp, got $a (a mirrored widening would keep every parity row green)"
+  fi
   s="$(soak_enrolled "$body")"
   check "$([[ "$s" == "$a" ]] && echo 0 || echo 1)" \
     "soak gate agrees with the authority on: $label (both $a)" \
     "soak gate DIVERGES on: $label -- authority=$a soak=$s"
+  g="$(creategate_enrolled "$body")"
+  check "$([[ "$g" == "$a" ]] && echo 0 || echo 1)" \
+    "create-time gate agrees with the authority on: $label (both $a)" \
+    "create-time gate DIVERGES on: $label -- authority=$a gate=$g"
   if [[ -n "$ship_re" ]]; then
     prog="$(soak_strip_awk)"
     st="$(printf '%s' "$body" | awk "$prog")"
@@ -139,6 +199,29 @@ for row in "${shapes[@]}"; do
       "ship SKILL.md §5.5 agrees with the authority on: $label (both $a)" \
       "ship SKILL.md §5.5 DIVERGES on: $label -- authority=$a ship=$sh"
   fi
+done
+
+# --- FIELD-LEVEL assertions: enrolment is not the property that broke ----------------------
+# `authority_enrolled` answers "is there a directive", which is a bit the defect below does NOT
+# flip. A stray fence between `script=` and `earliest=` in the canonical MULTI-LINE body leaves
+# `script=` intact -- it is above the fence -- so the body stays "enrolled" while `earliest=` is
+# swallowed. `run_one` then renders it through `${earliest:-now}`, `iso_to_epoch ""` returns 0,
+# the soak gate is skipped ENTIRELY, and the tracker closes PASS on day 0. Measured 2026-09-18
+# against the shipped sweeper with a matched control: the identical body minus the stray fence
+# line correctly reported `earliest=2099-01-01T00:00:00Z not yet reached -- skipping`.
+# So assert the FIELD. Every row above would stay green through that whole failure.
+_ml_clean="$(printf '## V\n\n<!-- soleur:followthrough\n  script=scripts/followthroughs/p.sh\n  earliest=2020-01-01T00:00:00Z\n-->\n')"
+_ml_fenced="$(printf '## V\n\n<!-- soleur:followthrough\n  script=scripts/followthroughs/p.sh\n```\n  earliest=2020-01-01T00:00:00Z\n-->\n')"
+for _row in "canonical MULTI-LINE:$_ml_clean" "MULTI-LINE interrupted by a stray fence:$_ml_fenced"; do
+  _lbl="${_row%%:*}"; _bdy="${_row#*:}"
+  _e="$(printf '%s' "$_bdy" | parse_directive | sed -n 's/^earliest //p' | head -1)"
+  check "$([[ "$_e" == "2020-01-01T00:00:00Z" ]] && echo 0 || echo 1)" \
+    "authority extracts earliest= from the $_lbl body ('$_e')" \
+    "authority LOST earliest= from the $_lbl body (got '$_e') -- run_one would render \${earliest:-now}, skip the soak gate and close the tracker on day 0"
+  _s="$(printf '%s' "$_bdy" | parse_directive | sed -n 's/^script //p' | head -1)"
+  check "$([[ "$_s" == "scripts/followthroughs/p.sh" ]] && echo 0 || echo 1)" \
+    "authority extracts script= from the $_lbl body ('$_s')" \
+    "authority LOST script= from the $_lbl body (got '$_s')"
 done
 
 # --- the two prose copies must remain BYTE-IDENTICAL to the hook's regex -------------------
@@ -175,7 +258,7 @@ if (( PASS + FAIL != ASSERTED )); then
   printf '[FATAL] accounting: PASS+FAIL (%d) != ASSERTED (%d)\n' "$((PASS + FAIL))" "$ASSERTED" >&2
   exit 1
 fi
-MIN_ASSERTIONS=35
+MIN_ASSERTIONS=68
 if (( ASSERTED < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the shape table was gutted\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2
   exit 1
