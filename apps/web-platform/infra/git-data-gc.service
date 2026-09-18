@@ -49,7 +49,13 @@ EnvironmentFile=-/etc/default/git-data-doppler
 # without doppler installed — reddening the unit lint for a file that is perfectly correct on
 # the host it ships to. Keeping /bin/sh as the binary keeps the unit lintable; the inner path
 # is absolute so nothing depends on systemd's default PATH.
-ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config prd_git_data -- /usr/local/bin/git-data-gc.sh'
+# --no-fallback (#8210 review, applied to the CLASS): without it the CLI writes its encrypted
+# fallback cache of the WHOLE resolved config — GIT_DATA_LUKS_KEY included, prd_git_data does
+# not isolate (#6167) — under $DOPPLER_CONFIG_DIR/fallback/ on the root disk, every weekly run;
+# its default passphrase derives from the token that sits on the same disk. TMPDIR on tmpfs for
+# the same reason the reopen unit has it: git-data-emit's _devalue mktemp must not land on disk.
+Environment=TMPDIR=/dev/shm
+ExecStart=/bin/sh -c 'exec /usr/local/bin/doppler run --project soleur --config prd_git_data --no-fallback -- /usr/local/bin/git-data-gc.sh'
 
 # MemoryMax is an OOM boundary for THIS cgroup, so a runaway repack is killed here rather
 # than letting the kernel choose — the other candidates on this host are sshd and the git

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # git-data-luks-reopen.test.sh — Guard 1 for #8210: the git-data LUKS mapper is reopened on
 # EVERY boot from a Doppler-delivered key, backed by the pinned device, mounted by PID 1 at the
-# fstab-named target, never formatted, and every failure is reported exactly once at fatal with
+# fstab-named target, never formatted, and every exhausted ladder is reported exactly once at fatal with
 # the failing phase named.
 #
 # Two arms:
@@ -35,7 +35,8 @@ passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
-ok() { if [ "$1" -eq 0 ]; then pass; else fail "$2" "${3:-}"; fi; }
+cases=0
+ok() { cases=$((cases + 1)); if [ "$1" -eq 0 ]; then pass; else fail "$2" "${3:-}"; fi; }
 
 for f in "$SCRIPT" "$UNIT" "$REPORTER" "$CLOUD_INIT" "$BOOTSTRAP" "$GC_UNIT" "$ALERTS" "$MODULE/variables.tf" "$MODULE/main.tf"; do
   [ -f "$f" ] || { echo "FAIL: missing $f" >&2; exit 1; }
@@ -72,12 +73,14 @@ strip() { grep -vE '^[[:space:]]*#([^!]|$)' "$1"; }
 # =====================================================================================
 SCRIPT_BODY="$SCRATCH/script.body"; strip "$SCRIPT" > "$SCRIPT_BODY"
 
-n=$(grep -cE '^\s*(mkfs|cryptsetup luksFormat)' "$SCRIPT_BODY" || true)
-ok "$((n != 0))" "S1 script never formats (mkfs/luksFormat lines: $n)"
+# Not `^\s*` — an indented, braced or `$(`-wrapped call is still a call (review: `{ mkfs.ext4
+# … ; }` inside the mount branch passed the column-0 form). Any token boundary before the verb.
+n=$(grep -cE '(^|[^[:alnum:]_./-])(mkfs(\.[a-z0-9]+)?|wipefs|blkdiscard|shred|dd)([[:space:]]|$)|cryptsetup[[:space:]]+(luksFormat|luksErase|erase|reencrypt)' "$SCRIPT_BODY" || true)
+ok "$((n != 0))" "S1 script never formats/wipes (mkfs*/wipefs/blkdiscard/shred/dd/luksFormat/luksErase/reencrypt: $n)"
 n=$(grep -cE '^\s*trap ' "$SCRIPT_BODY" || true)
 ok "$((n != 0))" "S2 script sets no trap — the reporter unit is the single emitter (trap lines: $n)"
-n=$(grep -cE '(^|[;&|][[:space:]]*)mount[[:space:]]' "$SCRIPT_BODY" || true)
-ok "$((n != 0))" "S3 script never calls mount(8) — PID 1 mounts via the fstab unit (mount calls: $n)"
+n=$(grep -cE '(^|[;&|({][[:space:]]*|^[[:space:]]+)mount[[:space:]]' "$SCRIPT_BODY" || true)
+ok "$((n != 0))" "S3 script never calls mount(8), indented or not — PID 1 mounts via the fstab unit (mount calls: $n)"
 n=$(grep -c '/usr/local/bin/' "$SCRIPT_BODY" || true)
 ok "$((n != 0))" "S4 script names every external command bare, so a scratch PATH intercepts it (/usr/local/bin/ literals: $n)"
 n=$(grep -cE 'git-data-emit .*(fatal|warning)' "$SCRIPT_BODY" || true)
@@ -116,7 +119,7 @@ ok "$((_bad != 0))" "S16 every GIT_DATA_LUKS_KEY expansion is one of the two aud
 # STATIC — the unit
 # =====================================================================================
 UNIT_BODY="$SCRATCH/unit.body"; strip "$UNIT" > "$UNIT_BODY"
-unit_has() { grep -qF -- "$2" "$1"; echo $?; }
+unit_has() { grep -qxF -- "$2" "$1"; echo $?; }
 u_section_of() { awk -v key="$2" '/^\[/{s=$0} $0==key{print s; exit}' "$1"; }
 
 ok "$(unit_has "$UNIT_BODY" 'OnFailure=git-data-luks-reopen-failure.service')" "U1 unit names the reporter via OnFailure= (M13)"
@@ -125,6 +128,18 @@ ok "$(unit_has "$UNIT_BODY" 'Type=oneshot')" "U2 Type=oneshot"
 ok "$(unit_has "$UNIT_BODY" 'RemainAfterExit=yes')" "U3 RemainAfterExit=yes"
 ok "$(unit_has "$UNIT_BODY" 'Restart=on-failure')" "U4 Restart=on-failure (bounded retry, no in-script loop)"
 ok "$(grep -qE '^StartLimitBurst=[0-9]+$' "$UNIT_BODY"; echo $?)" "U4b StartLimitBurst bounds the retry"
+_slb=$(grep -E '^StartLimitBurst=' "$UNIT_BODY" | head -1); _sli=$(grep -E '^StartLimitIntervalSec=' "$UNIT_BODY" | head -1)
+ok "$([ "$(u_section_of "$UNIT_BODY" "$_slb")" = "[Unit]" ] && [ "$(u_section_of "$UNIT_BODY" "$_sli")" = "[Unit]" ]; echo $?)" "U4c StartLimitBurst/IntervalSec are under [Unit] (ignored under [Service])"
+# THE ONE-EMIT GUARANTEE IS RestartMode=direct. Measured on 261 (review): under the default
+# RestartMode the unit transits `failed` before every auto-restart and OnFailure fires PER
+# ATTEMPT (3 reporter runs for a 2-burst ladder); with direct it fires once, at convergence.
+ok "$(unit_has "$UNIT_BODY" 'RestartMode=direct')" "U4d RestartMode=direct — OnFailure fires once per ladder, not once per attempt"
+ok "$([ "$(u_section_of "$UNIT_BODY" 'RestartMode=direct')" = "[Service]" ]; echo $?)" "U4e RestartMode= is under [Service]"
+# The emit phase's structural refusal exits 3 and MUST NOT be retried: a retry lands in the
+# silent noop branch and erases the fault (review).
+ok "$(unit_has "$UNIT_BODY" 'RestartPreventExitStatus=3')" "U4f RestartPreventExitStatus=3 — the structural-emitter refusal is terminal on attempt 1"
+ok "$(grep -qE '^[[:space:]]*\*\) printf .*>> "\$\{LOG:\?\}"; exit 3 ;;' "$SCRIPT_BODY"; echo $?)" "U4g …and the script's refusal really exits 3 (the two literals agree)"
+ok "$(unit_has "$UNIT_BODY" 'LimitCORE=0')" "U4h LimitCORE=0 — a crash must not write the passphrase to /var/crash on the root disk"
 ok "$(unit_has "$UNIT_BODY" 'Environment=HOME=/root')" "U5 HOME=/root (doppler dies without it) (M3)"
 ok "$(unit_has "$UNIT_BODY" 'EnvironmentFile=-/etc/default/git-data-doppler')" "U6 EnvironmentFile=-/etc/default/git-data-doppler (M2)"
 ok "$(unit_has "$UNIT_BODY" 'Environment=TMPDIR=/run/git-data-luks-reopen')" "U7 TMPDIR on tmpfs (the emitter's _devalue mktemp must not touch the root disk)"
@@ -153,6 +168,8 @@ done
 REP_BODY="$SCRATCH/rep.body"
 ok "$(unit_has "$REP_BODY" 'Type=oneshot')" "R1 reporter Type=oneshot"
 ok "$(unit_has "$REP_BODY" 'Environment=HOME=/root')" "R2 reporter HOME=/root"
+ok "$(unit_has "$REP_BODY" 'PrivateTmp=yes')" "RU-pt reporter PrivateTmp=yes — /etc/default/git-data-doppler points DOPPLER_CONFIG_DIR at /tmp/.doppler, and a planted .doppler.yaml there redirects api-host (review)"
+ok "$(unit_has "$REP_BODY" 'LimitCORE=0')" "RU-core reporter LimitCORE=0"
 ok "$(unit_has "$REP_BODY" 'Environment=TMPDIR=/dev/shm')" "R3 reporter TMPDIR=/dev/shm (not the unit's RuntimeDirectory)"
 ok "$(unit_has "$REP_BODY" 'EnvironmentFile=-/etc/default/git-data-doppler')" "R4 reporter EnvironmentFile=-"
 ok "$(unit_has "$REP_BODY" 'UMask=0077')" "R5 reporter UMask=0077"
@@ -187,18 +204,59 @@ ok "$((n != 0))" "C9 the passphrase is never written to the env file (M6)"
 n=$(printf '%s\n' "$ENV_BLOCK" | grep -c . || true)
 ok "$((n != 6))" "C10 env file has exactly the 4 existing lines + 2 new (got $n)"
 
-# runcmd arm item: exactly one enable --now, after LUKSEOF, before nftables and bootstrap
-n=$(grep -c 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" || true)
-ok "$((n != 1))" "C11 exactly one 'systemctl enable --now git-data-luks-reopen.service' in runcmd (got $n) (M1)"
-# THE TIMER, which had no arm at all: deleting its enable line left this suite green while the
-# host shipped a timer it never armed, silently reverting recovery to the 5-attempts-in-an-hour
-# bound (review). Every claim about it is pinned here: armed, in the SAME runcmd item as the
-# unit, and shaped as the standing retry it is documented to be.
-n=$(grep -c 'systemctl enable --now git-data-luks-reopen.timer' "$CLOUD_INIT" || true)
-ok "$((n != 1))" "C11t exactly one 'systemctl enable --now git-data-luks-reopen.timer' in runcmd (got $n)"
-L_ARM_T=$(grep -n 'systemctl enable --now git-data-luks-reopen.timer' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-L_ARM_S=$(grep -n 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
-ok "$([ -n "$L_ARM_T" ] && [ -n "$L_ARM_S" ] && [ "$L_ARM_T" -gt "$L_ARM_S" ] && [ $((L_ARM_T - L_ARM_S)) -le 8 ]; echo $?)" "C11u the timer is armed right after the unit, in the same item (service@$L_ARM_S timer@$L_ARM_T)"
+# runcmd arm item. THE CENTRAL WIRE OF THIS PR, and its first three revisions were raw-file
+# substring greps that a `#` prefix or an `$(echo …)` wrapper walked straight past (review:
+# commenting out the enable line stayed 448/448). Three layers now: (1) the item's BODY is
+# extracted (STAGE line to the next runcmd item) and comment-stripped; (2) the enable lines are
+# pinned by their whole command-substitution SHAPE, anchored at line start, exactly once each;
+# (3) the body is RUN under sh with a systemctl spy on PATH, so the assertion is that the
+# spy recorded both enables with --no-block — a claim about behaviour, not a token.
+ARM_RAW="$SCRATCH/arm.raw"; ARM_BODY="$SCRATCH/arm.body"
+awk '/^    STAGE=gitdata_luks_reopen_arm$/{f=1} f&&/^  - \|$/{exit} f' "$CLOUD_INIT" > "$ARM_RAW"
+grep -vE '^[[:space:]]*#' "$ARM_RAW" | grep -v '^[[:space:]]*$' > "$ARM_BODY"
+n=$(grep -c . "$ARM_BODY" || true)
+ok "$((n < 8))" "C11a the arm item's body was extracted and comment-stripped (got $n lines; floor 8)"
+n=$(grep -cE '^    _arm_err="\$\(systemctl enable --now --no-block git-data-luks-reopen\.service 2>&1\)" \|\| _arm_rc=\$\?$' "$ARM_BODY" || true)
+ok "$((n != 1))" "C11 exactly one '_arm_err=\$(systemctl enable --now --no-block …service 2>&1)\" || _arm_rc=\$?' as a STATEMENT in the arm item (got $n) (M1)"
+n=$(grep -cE '^    _arm_err="\$\$\{_arm_err\}\$\(systemctl enable --now --no-block git-data-luks-reopen\.timer 2>&1\)" \|\| _arm_rc=\$\?$' "$ARM_BODY" || true)
+ok "$((n != 1))" "C11t exactly one timer enable, --no-block, folded into the SAME _arm_rc (got $n)"
+L_ARM_S=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$ARM_BODY" | head -1 | cut -d: -f1)
+L_ARM_T=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.timer' "$ARM_BODY" | head -1 | cut -d: -f1)
+ok "$([ -n "$L_ARM_T" ] && [ -n "$L_ARM_S" ] && [ "$L_ARM_T" -gt "$L_ARM_S" ]; echo $?)" "C11u the timer is armed after the unit, in the same item (service@$L_ARM_S timer@$L_ARM_T)"
+n=$(grep -c 'enable --now' "$ARM_BODY" || true)
+ok "$((n != 2))" "C11v exactly two enables in the item, and NEITHER blocks (got $n)"
+n=$(grep -cE 'enable --now( |$)' "$ARM_BODY" | grep -v -- '--no-block' || true)
+n=$(grep -E 'enable --now' "$ARM_BODY" | grep -vc -- '--no-block' || true)
+ok "$((n != 0))" "C11w no enable WITHOUT --no-block — under RestartMode=direct a blocking start holds cloud-final for the whole ladder (got $n)"
+# (3) RUNTIME: render the templatefile escapes and run the body with spies. The spy records
+# argv; a second run makes the TIMER enable fail and asserts the warn emit fires with rc folded.
+arm_run() {  # $1 = timer-enable rc for the spy
+  local d="$SCRATCH/armrun"; rm -rf "$d"; mkdir -p "$d/bin" "$d/run"
+  sed 's/\$\${/${/g' "$ARM_BODY" > "$d/body.sh"
+  cat > "$d/bin/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$d/spy.log"
+case "\$*" in *git-data-luks-reopen.timer*) exit $1 ;; esac
+exit 0
+EOF
+  cat > "$d/bin/git-data-emit" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$d/emit.log"
+exit 0
+EOF
+  chmod +x "$d/bin/systemctl" "$d/bin/git-data-emit"
+  # the item's absolute emitter path is rewritten to the spy; nothing else is
+  sed -i "s#/usr/local/bin/git-data-emit#$d/bin/git-data-emit#; s#/run/git-data-luks-reopen-arm.err#$d/run/arm.err#" "$d/body.sh"
+  ( cd "$d" && env -i PATH="$d/bin:/usr/bin:/bin" GIT_DATA_RUNCMD_DETAIL="$d/run/detail" sh "$d/body.sh" > "$d/out" 2>&1 ); echo $?
+}
+rc=$(arm_run 0)
+ok "$((rc != 0))" "C11x the arm item RUNS under sh with the spies (rc=$rc)" "$(cat "$SCRATCH/armrun/out" 2>/dev/null)"
+ok "$(grep -qx 'enable --now --no-block git-data-luks-reopen.service' "$SCRATCH/armrun/spy.log"; echo $?)" "C11y the systemctl spy RECORDED the unit enable, --no-block, exact argv"
+ok "$(grep -qx 'enable --now --no-block git-data-luks-reopen.timer' "$SCRATCH/armrun/spy.log"; echo $?)" "C11z …and the timer enable, --no-block, exact argv"
+ok "$([ ! -s "$SCRATCH/armrun/emit.log" ]; echo $?)" "C11aa healthy arm emits nothing"
+rc=$(arm_run 1)
+ok "$(grep -q 'gitdata_luks_reopen_arm_warn warning' "$SCRATCH/armrun/emit.log"; echo $?)" "C11ab a FAILED timer enable folds into _arm_rc and emits the \${STAGE}_warn WARNING (review: this fold was unpinned)" "$(cat "$SCRATCH/armrun/emit.log" "$SCRATCH/armrun/out" 2>/dev/null)"
+ok "$(grep -q 'luks_reopen_unit=unarmed' "$SCRATCH/armrun/emit.log"; echo $?)" "C11ac …tagged luks_reopen_unit=unarmed"
 TIMER="$DIR/git-data-luks-reopen.timer"
 ok "$([ -s "$TIMER" ]; echo $?)" "T1 the timer unit file exists and is non-empty"
 TIMER_BODY="$SCRATCH/timer.body"; strip "$TIMER" > "$TIMER_BODY"
@@ -211,9 +269,12 @@ n=$(grep -c '^OnCalendar=' "$TIMER_BODY" || true)
 ok "$((n != 0))" "T6 NO OnCalendar= — monotonic so a long outage does not fire a burst (got $n)"
 n=$(grep -c '^Unit=' "$TIMER_BODY" || true)
 ok "$((n != 0))" "T7 no explicit Unit= — the timer triggers its namesake service by default (got $n)"
-n=$(grep -c 'git-data-luks-reopen.timer' "$CLOUD_INIT" || true)
-ok "$((n < 2))" "T8 the timer is both WRITTEN and ARMED by cloud-init (>=2 mentions, got $n)"
-L_ARM=$(grep -n 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+# T8 (was a >=2-mention count — count-as-placement, review): the timer's write_files entry is
+# pinned by path, content binding and mode, like C1-C6 for its siblings.
+ok "$(grep -qE '^  - path: /etc/systemd/system/git-data-luks-reopen\.timer$' "$CLOUD_INIT"; echo $?)" "T8 the timer is WRITTEN at /etc/systemd/system/git-data-luks-reopen.timer"
+ok "$(grep -qF '${indent(6, git_data_luks_reopen_timer)}' "$CLOUD_INIT"; echo $?)" "T8b …bound to the git_data_luks_reopen_timer render variable"
+ok "$([ "$(ci_perm_of "$CLOUD_INIT" /etc/systemd/system/git-data-luks-reopen.timer)" = "0644" ]; echo $?)" "T8c …mode 0644"
+L_ARM=$(grep -n 'systemctl enable --now --no-block git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 L_EOF=$(grep -nE '^    LUKSEOF$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 L_NFT=$(grep -n 'STAGE=gitdata_nftables_metadata$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 L_BOOT=$(grep -n 'STAGE=bootstrap$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
@@ -233,21 +294,53 @@ ok "$(grep -qF '"luks_reopen_unit=${_reopen_unit}"' "$BS_BODY"; echo $?)" "B1 bo
 n=$(grep -c 'luks_reopen_unit=yes' "$BS_BODY" || true)
 ok "$((n != 0))" "B2 the boolean is never a literal yes (Guard 3 M1)"
 ok "$(grep -qE 'systemctl is-enabled --quiet git-data-luks-reopen.service' "$BS_BODY"; echo $?)" "B3 the measurement queries is-enabled"
-ok "$(grep -qE 'systemctl show -p Result --value git-data-luks-reopen.service.*= *success' "$BS_BODY"; echo $?)" "B4 the measurement requires Result=success"
-# B4b/B4c — THE WAIT IS THE MEASUREMENT. `enable --now` returns at the FIRST attempt's failure
-# for a unit with Restart=on-failure (measured on systemd 261: rc=1 after 0s, Result=exit-code,
-# ActiveState=activating, ladder then succeeds with NRestarts=2), so reading Result immediately
-# samples a transient state. This boolean is TERMINAL — a `no` tells the operator to treat the
-# birth or replace as failed, and that remediation is another destroy/recreate of the host
-# holding every user's source. Without the wait, a 30-second Doppler blip orders a destructive
-# remediation of a healthy host. The bound is asserted too: an unbounded wait would hang the
-# boot on a genuinely wedged unit, which is the failure this must not trade for.
-ok "$(grep -qE 'ActiveState --value git-data-luks-reopen.service.*= *activating' "$BS_BODY"; echo $?)" "B4b the measurement waits out ActiveState=activating before reading Result"
-_wait_bound=$(grep -oE '_reopen_wait" -lt [0-9]+' "$BS_BODY" | grep -oE '[0-9]+' | head -1)
-ok "$([ -n "$_wait_bound" ] && [ "$_wait_bound" -gt 0 ] && [ "$_wait_bound" -le 600 ]; echo $?)" "B4c the wait is BOUNDED (got ${_wait_bound:-none}s; >0 and <=600)"
-_l_wait=$(grep -n 'ActiveState --value git-data-luks-reopen.service' "$BS_BODY" | head -1 | cut -d: -f1)
-_l_res=$(grep -n 'systemctl show -p Result --value git-data-luks-reopen.service' "$BS_BODY" | head -1 | cut -d: -f1)
-ok "$([ -n "$_l_wait" ] && [ -n "$_l_res" ] && [ "$_l_wait" -lt "$_l_res" ]; echo $?)" "B4d the wait precedes the Result read (line $_l_wait < $_l_res)"
+ok "$(grep -qE 'systemctl show -p ActiveState --value git-data-luks-reopen.service.*= *active( |]|$)' "$BS_BODY"; echo $?)" "B4 the measurement requires ActiveState=active — the only terminal-success state of a RemainAfterExit oneshot"
+n=$(grep -cE 'show -p Result --value git-data-luks-reopen.service.*success' "$BS_BODY" || true)
+ok "$((n != 0))" "B4a NO Result=success read — measured on 261, Result resets to success the moment a RETRY starts (got $n)"
+# B4b-B4d — THE WAIT IS THE MEASUREMENT, and the wait is DRIVEN, not grepped. The first revision
+# pinned the loop's text (`activating`, a bound, an ordering); a `while` -> `if` rewrite and a
+# `sleep 5` -> `:` busy loop both stayed green (review). Now the `_reopen_unit` block is
+# extracted from the bootstrap and run under sh against a systemctl spy that answers
+# `activating` N times and then a terminal state, with `sleep` spied too, so the assertions are
+# about how many times it ASKED and what it CONCLUDED.
+BS_WAIT="$SCRATCH/bs-wait.sh"
+awk '/^_reopen_unit=no$/{f=1} f{print} f&&/^fi$/{exit}' "$BS_BODY" > "$BS_WAIT"
+n=$(grep -c . "$BS_WAIT" || true)
+ok "$((n < 8))" "B4b the _reopen_unit block was extracted (got $n lines; floor 8)"
+wait_run() {  # $1 = how many `activating` answers before $2 = terminal state; $3 = is-enabled rc
+  local d="$SCRATCH/waitrun"; rm -rf "$d"; mkdir -p "$d/bin"; printf '%s' "$1" > "$d/left"
+  cat > "$d/bin/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$d/spy.log"
+case "\$*" in
+  *is-enabled*) exit $3 ;;
+  *ActiveState*) l=\$(cat "$d/left"); if [ "\$l" -gt 0 ]; then echo activating; printf '%s' \$((l-1)) > "$d/left"; else echo "$2"; fi ;;
+  *) echo unknown ;;
+esac
+EOF
+  printf '#!/bin/sh\nprintf %%s\\n "sleep $*" >> "%s/spy.log"\n' "$d" > "$d/bin/sleep"
+  chmod +x "$d/bin/systemctl" "$d/bin/sleep"
+  ( env -i PATH="$d/bin:/usr/bin:/bin" sh -c ". $BS_WAIT; printf '%s' \"\$_reopen_unit\"" ) 2>"$d/err"
+}
+v=$(wait_run 3 active 0)
+ok "$([ "$v" = yes ]; echo $?)" "B4c activating x3 then active, enabled -> yes (got '$v')" "$(cat "$SCRATCH/waitrun/err")"
+n=$(grep -c '^sleep ' "$SCRATCH/waitrun/spy.log" || true)
+ok "$((n != 3))" "B4d …and it SLEPT exactly 3 times between asks (got $n) — a busy loop or an if would read 0"
+n=$(grep -c 'ActiveState' "$SCRATCH/waitrun/spy.log" || true)
+ok "$((n < 4))" "B4e …asking ActiveState at least 4 times (3 activating + the terminal read; got $n)"
+v=$(wait_run 3 failed 0)
+ok "$([ "$v" = no ]; echo $?)" "B4f activating x3 then failed -> no (got '$v')"
+v=$(wait_run 0 active 1)
+ok "$([ "$v" = no ]; echo $?)" "B4g active but NOT enabled -> no (armed-for-next-boot-only is not armed) (got '$v')"
+v=$(wait_run 0 inactive 0)
+ok "$([ "$v" = no ]; echo $?)" "B4h a never-started unit (inactive) -> no, even though its Result would read success (got '$v')"
+# the bound: more activating answers than the loop tolerates must still terminate, and read no
+_wait_bound=$(grep -oE '_reopen_wait" -lt [0-9]+' "$BS_WAIT" | grep -oE '[0-9]+' | head -1)
+ok "$([ -n "$_wait_bound" ] && [ "$_wait_bound" -gt 0 ] && [ "$_wait_bound" -le 600 ]; echo $?)" "B4i the wait is BOUNDED (got ${_wait_bound:-none}s; >0 and <=600)"
+v=$(wait_run 200 active 0)
+ok "$([ "$v" = no ]; echo $?)" "B4j a unit still activating past the bound reads no (fail-closed with the documented false-negative window) (got '$v')"
+n=$(grep -c '^sleep ' "$SCRATCH/waitrun/spy.log" || true)
+ok "$([ "$n" -ge 10 ] && [ "$n" -le 200 ]; echo $?)" "B4k …after sleeping bound/5 times, not 200 (got $n)"
 L_MEAS=$(grep -n '_reopen_unit=yes' "$BS_BODY" | head -1 | cut -d: -f1)
 L_EMIT=$(grep -n 'luks_reopen_unit=\${_reopen_unit}' "$BS_BODY" | head -1 | cut -d: -f1)
 ok "$([ -n "$L_MEAS" ] && [ -n "$L_EMIT" ] && [ "$L_MEAS" -lt "$L_EMIT" ]; echo $?)" "B5 measurement precedes the emit (Guard 3 M4)"
@@ -308,8 +401,17 @@ for _ci in "$DIR"/cloud-init*.yml; do
   _unit=$(grep -aoE 'path: /etc/systemd/system/[a-z-]*luks[a-z-]*open[a-z-]*\.service' "$_ci" | head -1 | sed 's#.*/##')
   ok "$([ -n "$_unit" ]; echo $?)" "X1 $_b opens a LUKS mapper in runcmd and WRITES a boot-reopen unit (got '${_unit:-none}')" "precedents: git-data-luks-reopen.service, inngest-luks-open.service, registry-luks-open.service"
   if [ -n "$_unit" ]; then
-    ok "$(grep -aqE "systemctl enable( --now)? ${_unit}" "$_ci"; echo $?)" "X2 $_b ENABLES $_unit (a written unit nobody enables is the git-data defect in a new coat)"
-    ok "$(grep -aqE '^[[:space:]]*WantedBy=(multi-user|sysinit|local-fs)\.target' "$_ci"; echo $?)" "X3 $_b's units carry an [Install] target (the unit can be enabled at all)"
+    ok "$(grep -aqE "systemctl enable( --now)?( --no-block)? ${_unit}" "$_ci"; echo $?)" "X2 $_b ENABLES $_unit (a written unit nobody enables is the git-data defect in a new coat)"
+    # Scoped to THAT unit's write_files entry (path line to the next `- path:`), not the whole
+    # template — review: the first revision matched any inline unit's WantedBy=.
+    _ublock="$(awk -v u="$_unit" '$0 ~ "^  - path: /etc/systemd/system/"u"$"{f=1;next} f&&/^  - path: /{exit} f' "$_ci")"
+    if grep -aqE '^[[:space:]]*WantedBy=(multi-user|sysinit|local-fs)\.target' <<<"$_ublock"; then
+      ok 0 "X3 $_b's $_unit carries an [Install] target inside ITS OWN write_files block"
+    elif grep -aqF '${indent(' <<<"$_ublock"; then
+      ok 0 "X3 $_b's $_unit is interpolated from a render variable (its [Install] is pinned by that unit's own suite)"
+    else
+      ok 1 "X3 $_b's $_unit has no [Install] target in its write_files block" "$_ublock"
+    fi
   fi
 done
 ok "$((_ci_luks_hosts < 3))" "X4 the census found the three LUKS hosts this arm exists for (git-data, inngest, registry), got $_ci_luks_hosts — fewer means the grep drifted and X1-X3 ran over a NARROWER set"
@@ -345,6 +447,14 @@ mkstub blockdev <<'EOF'
 [ -f "$FX/device_absent" ] && { echo "blockdev: cannot open $2: No such file or directory" >&2; exit 1; }
 cat "$FX/blockdev_size" 2>/dev/null || echo 1073741824
 EOF
+# FORMAT TRAPS. /usr/bin is on the scratch PATH (the script needs coreutils), so without these
+# a `mkfs.ext4` added to the script would be the REAL one (review). Each records to calls.log
+# under its phase tag and exits 99; the F-loop's "never called" row reads that record.
+for _trap in mkfs mkfs.ext4 mkfs.xfs wipefs blkdiscard shred dd; do
+  mkstub "$_trap" <<'EOF'
+echo "FORMAT TRAP: $0 $*" >&2; exit 99
+EOF
+done
 mkstub cryptsetup <<'EOF'
 case "$1" in
   isLuks) rc=$(cat "$FX/isluks_rc" 2>/dev/null || echo 0); [ "$rc" -ne 0 ] && echo "Device $2 is not a valid LUKS device." >&2; exit "$rc" ;;
@@ -419,7 +529,7 @@ printf 'doppler|%s\n' "$*" >> "$FX/calls.log"
 mode=$(cat "$FX/doppler_mode" 2>/dev/null || echo ok)
 case "$mode" in
   fail) echo "Unable to download secrets" >&2; exit 1 ;;
-  hang) sleep 200; exit 1 ;;
+  hang) exec /usr/bin/sleep 200 ;;
 esac
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done; shift
 exec "$@"
@@ -482,6 +592,14 @@ run_script; rc=$?
 ok "$((rc != 0))" "S1 closed+unmounted exits 0 (rc=$rc)" "$(cat "$FX/stderr")"
 ok "$([ "$(calls_of "|cryptsetup|luksOpen" | grep -c 'luksOpen --key-file - /dev/disk/by-id/scsi-0HC_Volume_100000002 git-data')" -eq 1 ]; echo $?)" "S1 luksOpen called once with --key-file - and the pinned device"
 ok "$([ "$(cat "$FX/key_seen")" = "stub-passphrase-0000" ]; echo $?)" "S1 the passphrase reached luksOpen on stdin, not argv"
+# THE NEGATIVE HALF. The row above is satisfied by a script that ALSO puts the key on argv
+# (review: appending it to the luksOpen argv passed 448/448). Every artifact the fixture
+# produced — argv record, stdout, stderr, the run dir (what the reporter ships as detail) —
+# must be free of it; only the stdin recorder may hold it.
+# `--exclude` BEFORE `--`: after it, grep reads it as a file operand and the exclusion is silently
+# not applied (measured: the row then FAILED on key_seen itself, which is the one file allowed).
+key_absent() { ! grep -arqF --exclude=key_seen -- "stub-passphrase-0000" "$FX" "$RUNDIR" 2>/dev/null; echo $?; }
+ok "$(key_absent)" "S1n the passphrase appears in NO fixture artifact other than key_seen (argv/stdout/stderr/run dir)" "$(grep -arlF --exclude=key_seen -- 'stub-passphrase-0000' "$FX" "$RUNDIR" 2>/dev/null)"
 ok "$(calls_of "|systemctl|" | grep -q 'start mnt-git\\x2ddata\\x2dluks.mount'; echo $?)" "S1 PID-1 mount started via the escaped fstab unit (M10)"
 ok "$(grep -q 'luks_reopen_ok info' "$FX/emit.log"; echo $?)" "S1 success emit at luks_reopen_ok/info"
 ok "$(grep -q 'action=reopened' "$FX/emit.log"; echo $?)" "S1 action=reopened"
@@ -577,7 +695,8 @@ while IFS='|' read -r name setup phase needle; do
   unset DEV_OVERRIDE CFG_OVERRIDE KEY_OVERRIDE
   ok "$((rc == 0))" "F[$name] exits non-zero (rc=$rc)"
   ok "$([ "$(action_file)" = "$phase" ]; echo $?)" "F[$name] action file names phase '$phase'" "got '$(action_file)'; calls: $(tr '\n' ';' < "$FX/calls.log")"
-  ok "$([ "$(grep -c '|luksFormat' "$FX/calls.log")" -eq 0 ]; echo $?)" "F[$name] luksFormat never called"
+  ok "$([ "$(grep -cE '\|(luksFormat|luksErase|mkfs|wipefs|blkdiscard)' "$FX/calls.log")" -eq 0 ]; echo $?)" "F[$name] luksFormat/mkfs/wipefs never called"
+  ok "$(key_absent)" "F[$name] the passphrase is in no artifact the reporter could ship" "$(grep -arlF --exclude=key_seen -- 'stub-passphrase-0000' "$FX" "$RUNDIR" 2>/dev/null)"
   if [ "$phase" = emit ]; then
     # The one phase whose failure IS an emit: the script attempted exactly its info row and the
     # emitter refused it structurally. Anything else in the log (a fatal, a second row) is wrong.
@@ -637,7 +756,10 @@ new_fixture r-doppler-hang; rep_body
 echo exit-code > "$FX/result"; echo hang > "$FX/doppler_mode"; printf 'action=mount\n' > "$RUNDIR/action"; printf 'Job failed\n' > "$RUNDIR/log"
 t0=$(date +%s); rep_run; t1=$(date +%s)
 ok "$([ "$(grep -c 'luks_reopen fatal' "$FX/emit.log")" -eq 1 ]; echo $?)" "R-hang the direct arm fires once when doppler HANGS (timeout arm, M21)"
-ok "$(( (t1 - t0) > 20 ))" "R-hang bounded by the timeout ($((t1 - t0))s)"
+# A RANGE, never a pin (wall-clock), and the lower bound is what proves the hang was REAL: the
+# first revision's `sleep 200` resolved to the suite's own no-op sleep stub, so the timeout arm
+# never ran and the row passed in 0-1 s with `timeout` stripped from the body (review).
+ok "$([ $((t1 - t0)) -ge 2 ] && [ $((t1 - t0)) -le 20 ]; echo $?)" "R-hang bounded by the timeout: elapsed $((t1 - t0))s, want 2..20 (a hang that returned in 0 s was a stub, not a hang)"
 
 # --- M20: ExecStartPre clears a stale phase file ---------------------------------------------
 new_fixture m20; assert_fixture_dir "$RUNDIR"
@@ -664,10 +786,19 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
-MIN_ASSERTIONS=440
+# ADR-193 §2/§3: the floor is checked against the CALL-SITE counter (`cases`, bumped by ok()
+# before either verdict helper runs), and the two counts must agree — a verdict counter alone
+# cannot see a call site that never reached a verdict (review). The two bindings sit DIRECTLY
+# above the `if` with no comment between: guard-vacuity-floor builds its mutant from the floor
+# block plus the contiguous simple assignments above it, and a comment breaks the run.
+MIN_ASSERTIONS=470
 total=$((passes + fails))
-if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
-  printf 'FAIL: ran only %s assertions (floor %s) — suite did not execute fully\n' "$total" "$MIN_ASSERTIONS" >&2
+if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
+  printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+if [ "$cases" -ne "$total" ]; then
+  printf 'FAIL: call sites (%s) and verdicts (%s) disagree — an ok() reached neither pass nor fail\n' "$cases" "$total" >&2
   exit 1
 fi
 echo "git-data-luks-reopen: ${passes} passed, ${fails} failed (${total} assertions)"

@@ -16,8 +16,12 @@
 #   0 = PASS      — main's evidence file carries RUNG2_REBOOT_REOPEN=PASS *and* the rung-2 gate
 #                   RELEASES against main's current template, so the evidence is valid for the
 #                   payload that would actually boot.
-#   1 = FAIL      — the evidence exists and records a reboot verdict that is NOT PASS. That is a
-#                   real finding: a rehearsal ran the reset arm and the mapper did not reopen.
+#   1 = FAIL      — the evidence exists and records a reboot verdict that is NOT PASS. DEFENSIVE:
+#                   no writer produces this today (the capture appends only the literal PASS and
+#                   the workflow uploads the artifact only on reboot_rc==0), so a rehearsal whose
+#                   reset arm FAILED shows up in the RUN, not here — this probe then reads main's
+#                   evidence with no reboot key and stays TRANSIENT. The branch exists so a
+#                   hand-landed non-PASS can never read as "not run yet" (review).
 #   2 = TRANSIENT — no evidence file yet, or the file carries no reboot key at all (the pre-#8210
 #                   shape), or the gate could not be read, or this checkout is not main. The
 #                   rehearsal simply has not run yet, or has not been landed yet. A FAIL here

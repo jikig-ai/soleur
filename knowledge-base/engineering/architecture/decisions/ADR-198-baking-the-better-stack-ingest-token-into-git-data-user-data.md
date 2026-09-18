@@ -479,13 +479,24 @@ that state — it **depends** on it, so the decision is recorded rather than lef
 EVERY boot, under the same baked read-only `prd_git_data` token, to reopen the LUKS mapper that
 `runcmd` opens only once per instance (ADR-115's first normative blocker, cleared in its
 2026-09-18 amendment). The passphrase therefore reaches the host's memory once per boot instead
-of once per instance; it is never written to the root disk.
+of once per instance; the reopen unit pair never writes it to the root disk (`--no-fallback`,
+tmpfs `TMPDIR`, `PrivateTmp`, `LimitCORE=0`). "Never" was originally written for the whole host
+and review found it false: `git-data-gc.service` and `git-data-gc-failure.service` ran
+`doppler run` with no `--no-fallback` and a disk-backed `/tmp`, so every weekly gc run cached the
+resolved config — passphrase included — under `$DOPPLER_CONFIG_DIR/fallback/` on the root disk,
+encrypted with a passphrase derived from the token that sits on the same disk. Both now carry
+the same three controls (the fix was applied to the class).
 
 **Why this is the right trade, stated as a capability argument rather than a preference.** The
 alternative the sibling host uses (inngest, #7695) is a keyfile on the root disk — the
 passphrase baked. That is strictly worse *for this credential*: the token and the passphrase have
 different revocation costs. A leaked token is revoked by `terraform apply
--replace=doppler_service_token.git_data` and is config-scoped to `prd_git_data` and read-only; a
+-replace=doppler_service_token.git_data` and is read-only; it is "config-scoped to
+`prd_git_data`" only in the naming sense — **measured, a read token on a prd branch config
+resolves the whole prd root (~116 secrets, `SUPABASE_SERVICE_ROLE_KEY` included; #6167, open;
+`zot-registry.tf` and `workspaces-luks.tf` record the same finding for their configs).**
+`--only-secrets` bounds what enters the unit's process environment, not what the token can
+read, so the ceiling of a root-disk-snapshot leak is the prd root, not this passphrase. A
 leaked passphrase cannot be revoked at all without re-encrypting the volume, i.e. a full cutover
 of every user's source. Baking the passphrase would convert a revocable capability into an
 irrevocable one, which is the opposite of what a root-disk snapshot threat model wants.
@@ -516,7 +527,9 @@ into a weaker shape:
 
 **Not in scope, tracked.** Two `doppler run` sites on this host still carry neither flag (the
 `STAGE=luks_open` heredoc and the `STAGE=bootstrap` invocation in `cloud-init-git-data.yml`).
-They are pre-existing and are filed as a follow-on rather than widened here.
+They are pre-existing and are filed as a follow-on rather than widened here. (Review counted
+four such sites, not two: the gc unit pair were the other two, and being in this PR's diff they
+were fixed here rather than deferred — see the corrected "never" above.)
 
 **GDPR framing** (for the encryption-posture ledger's #6897 row): this mechanism is the Art.
 32(1)(c) control — "the ability to restore the availability and access to personal data in a
@@ -526,8 +539,10 @@ store is restored unattended and a failure to restore is reported off-host withi
 
 **The unattended limb is bounded, and the bound is part of the control.** The unit retries five
 times in an hour (`Restart=on-failure`, `RestartSec=60`, `StartLimitBurst=5`); past that budget the
-standing retry is `git-data-luks-reopen.timer` at `OnUnitActiveSec=15min`. So "restored unattended"
-means: within ~5 minutes for a transient fault, and within ~15 minutes of the upstream recovering
+standing retry is `git-data-luks-reopen.timer` at `OnUnitActiveSec=15min` — but a tick inside the
+still-open `StartLimitIntervalSec=1h` window is refused and fires nothing (measured), so the
+retry's granularity is that hour. So "restored unattended" means: within ~5 minutes for a
+transient fault, and within ~1h15 of the upstream recovering
 for an outage longer than that. A dedicated timer rather than the weekly `git-data-gc.timer` is what
-makes the second number a quarter-hour instead of up to seven days — review found the earlier
+makes the second number about an hour instead of up to seven days — review found the earlier
 wording true only inside the 5-attempt budget.

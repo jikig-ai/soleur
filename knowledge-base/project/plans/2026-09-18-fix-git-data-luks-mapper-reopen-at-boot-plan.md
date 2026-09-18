@@ -522,6 +522,42 @@ in_transit:
     disclosed_as: existing
 ```
 
+> **Superseded 2026-09-18 (#8210, review — observability, performance and code-quality seats;
+> every item measured on systemd 261 with a counting `OnFailure=` unit).** The block above is kept
+> as written. What it gets wrong:
+>
+> 1. **`fail_loud: "emits exactly one fatal"` was true only with `RestartMode=direct`, which the
+>    unit did not carry.** Under the default `RestartMode=normal` the unit transits `failed`
+>    before every auto-restart and `OnFailure=` fires per attempt plus the terminal
+>    `start-limit-hit` — six per ladder — and the "no page by design" transient row below was
+>    false: a blip that recovered on attempt 2 paged a fatal. The plan's citation of
+>    `SERVICE_FAILED_BEFORE_AUTO_RESTART` as the suppressor had it backwards; that state is what
+>    fires it. Shipped: `RestartMode=direct` (one reporter run per ladder, measured), plus
+>    `--no-block` on the arm item's two starts, because under `direct` a blocking `enable --now`
+>    waits through the whole ladder.
+> 2. **`liveness_signal` (2) still names `git-data-gc.timer … Wants=` as the weekly retry.** Cut at
+>    review; the standing retry is `git-data-luks-reopen.timer`, and its granularity is the
+>    `StartLimitIntervalSec=1h` window (a refused tick fires nothing), not the 15-min tick.
+> 3. **The boolean's "reads Result at the instant after `enable --now` … accepted" row was
+>    superseded twice**: first by the 420 s `activating` wait, then by the predicate itself —
+>    `Result=success` is reset the moment a retry attempt STARTS, so the measurement now requires
+>    `ActiveState=active`, the only terminal-success state of a `RemainAfterExit` oneshot.
+> 4. **`action=emit` is dark by construction** (the reporter uses the same emitter); the unit
+>    exits 3 with `RestartPreventExitStatus=3` so the fault is at least not erased by a retry,
+>    and the observable is `luks_reopen_unit=no` at birth or the absence of a `luks_reopen_ok`
+>    row after a known reboot. The runbook's `emit` row says so.
+> 5. **#8211 contract, clause (j) (data-integrity seat):** the two-name `TARGET` allowlist has one
+>    unpaged split-brain state — mapper line still at `/mnt/git-data-luks` while the plaintext
+>    by-id line for `/mnt/git-data` survives — in which `luks_reopen_ok target=/mnt/git-data-luks`
+>    reads healthy while the wrappers serve plaintext from the OLD volume (never the root disk:
+>    all three wrappers `mountpoint -q /mnt/git-data` fail-closed). The cutover must delete the
+>    plaintext line in the SAME change that repoints the mapper line, and should persist a
+>    cutover marker the reopen can read to narrow its allowlist to one name.
+> 6. **The birth heredoc's `mkfs` guard was fail-open** (`if ! blkid` treated a damaged ext4
+>    superblock as blank). Fixed in this PR, keyed on whether the run itself `luksFormat`'d the
+>    device; pinned by `B18m` in `git-data-luks.test.sh`.
+
+
 No `exception` block.
 
 ## Guard Contract

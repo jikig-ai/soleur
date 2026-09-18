@@ -14,6 +14,13 @@ Environment=HOME=/root
 Environment=TMPDIR=/dev/shm
 EnvironmentFile=-/etc/default/git-data-doppler
 UMask=0077
+# That env file sets DOPPLER_CONFIG_DIR=/tmp/.doppler, and the CLI honours api-host/verify-tls
+# from a .doppler.yaml found there. Measured (review): a planted file redirected `doppler run`
+# to 127.0.0.1:9. The reopen unit is confined by PrivateTmp already; this unit was not, and a
+# tick that fires the reporter would have shipped DOPPLER_TOKEN to whoever owned the host's
+# real /tmp/.doppler. /run reads and TMPDIR=/dev/shm are unaffected.
+PrivateTmp=yes
+LimitCORE=0
 # The body, in order:
 #  1. action from the phase file the script maintains; `action=unit` when it never ran.
 #  2. the unit's own verdict tags (Result / ExecMainStatus / ExecMainCode / NRestarts) —

@@ -1369,6 +1369,51 @@ assert_holds    "B18p bootstrap-stderr-routed" p_bootstrap_stderr_routed "$CLOUD
 assert_mutation "B18p bootstrap-stderr-routed (redirect deleted)" p_bootstrap_stderr_routed "$CLOUD_INIT" \
   's#(git-data-bootstrap\.sh) 2>>"\$GIT_DATA_RUNCMD_DETAIL"#\1#'
 
+# --- B18m (#8210 review): mkfs is KEYED ON THIS RUN HAVING CREATED THE CONTAINER --------------
+# The birth heredoc's mkfs guard was `if ! blkid /dev/mapper/git-data`, which folded blkid's
+# "could not identify" (rc 2 on a damaged ext4 superblock) into "no signature" and formatted a
+# correctly-unlocked store — reachable by every replace the runbook orders. blkid cannot tell a
+# blank plaintext from a damaged one, so the discriminator is provenance: mkfs only in the run
+# that luksFormat'd the device (`_luks_created_now=1`), FATAL when an EXISTING container shows
+# no filesystem. Predicate over the stripped luks_open slice, every arm mutation-driven.
+p_mkfs_keyed_on_creation() {
+  local slice n
+  slice="$(_luks_slice "$1")"
+  # (a) the flag is initialised to 0 and set to 1 ONLY on the luksFormat arm
+  if ! grep -Eq '^[[:space:]]*_luks_created_now=0[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
+  n=$(grep -cE '^[[:space:]]*_luks_created_now=1' <<<"$slice" || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  if ! awk '/cryptsetup[[:space:]]+luksFormat/{f=1;next} f&&/_luks_created_now=1/{print "ok";exit} f&&/;;/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  # (b) blkid's rc is CAPTURED (a substitution, not a bare `if ! blkid`) and rc other than 0/2 refuses
+  if grep -Eq 'if[[:space:]]+![[:space:]]*blkid[[:space:]]+/dev/mapper/git-data' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq '_fs_type="\$\(/usr/sbin/blkid -o value -s TYPE /dev/mapper/git-data[^)]*\)"[[:space:]]*\|\|[[:space:]]*_fs_rc=\$\?' <<<"$slice"; then echo 0; return; fi
+  if ! grep -Eq '\[ "\$_fs_rc" -eq 0 \] \|\| \[ "\$_fs_rc" -eq 2 \]' <<<"$slice"; then echo 0; return; fi
+  # (c) an EXISTING container with no filesystem is a FATAL exit, checked BEFORE the mkfs branch
+  if ! grep -Eq '^[[:space:]]*if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then' <<<"$slice"; then echo 0; return; fi
+  if ! awk '/_luks_created_now" -ne 1/{f=1;next} f&&/exit 1/{print "ok";exit} f&&/^[[:space:]]*fi/{exit}' <<<"$slice" | grep -q ok; then echo 0; return; fi
+  # (d) exactly one mkfs, and it is inside the `-z "$_fs_type"` branch AFTER the refusal
+  n=$(grep -cE 'mkfs\.ext4' <<<"$slice" || true)
+  if [ "${n:-0}" -ne 1 ]; then echo 0; return; fi
+  local l_refuse l_mkfs
+  l_refuse=$(grep -nE '_luks_created_now" -ne 1' <<<"$slice" | head -1 | cut -d: -f1)
+  l_mkfs=$(grep -nE 'mkfs\.ext4' <<<"$slice" | head -1 | cut -d: -f1)
+  if [ -z "$l_refuse" ] || [ -z "$l_mkfs" ] || [ "$l_refuse" -ge "$l_mkfs" ]; then echo 0; return; fi
+  echo 1
+}
+assert_holds    "B18m mkfs keyed on container creation" p_mkfs_keyed_on_creation "$CLOUD_INIT"
+# the guard reverts to the bare truthiness form
+assert_mutation "B18m mkfs keyed on container creation (revert to \`if ! blkid\`)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#^([[:space:]]*)if \[ -z "\$_fs_type" \] && \[ "\$_luks_created_now" -ne 1 \]; then#\1if ! blkid /dev/mapper/git-data >/dev/null 2>\&1; then#'
+# the existing-container refusal stops exiting
+assert_mutation "B18m mkfs keyed on container creation (refusal no longer exits)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#Refusing to mkfs over the only copy; this is the ADR-068 backup/rebuild path, not a replace." \| tee -a "\$GIT_DATA_LUKS_DETAIL"; exit 1#Refusing to mkfs over the only copy" | tee -a "$GIT_DATA_LUKS_DETAIL"#'
+# the flag is set unconditionally (every run "created" the container)
+assert_mutation "B18m mkfs keyed on container creation (flag set unconditionally)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#^([[:space:]]*)_luks_created_now=0[[:space:]]*$#\1_luks_created_now=1#'
+# blkid's rc no longer captured (the `|| _fs_rc=$?` dropped), so an unreadable mapper reads as blank
+assert_mutation "B18m mkfs keyed on container creation (blkid rc not captured)" p_mkfs_keyed_on_creation "$CLOUD_INIT" \
+  's#\|\| _fs_rc=\$\?##'
+
 # --- B19 (#7227): Decision clause B, mechanized -------------------------------------------
 #
 # The parent-shell detail file is safe to ship unredacted because of a TWO-CLAUSE invariant,

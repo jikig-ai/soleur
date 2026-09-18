@@ -136,7 +136,7 @@ bounded false-negative window: the bootstrap waits at most 420 s for the unit to
 Doppler. So a `no` means either a real reopen failure (a `stage:luks_reopen level:fatal` row
 with an `action=`; follow its runbook row) or a ladder that finished AFTER the measurement (a
 `stage:luks_reopen_ok` info row later in the same boot: the host is healthy, the boolean was
-early). `bash scripts/sentry-issue.sh --host-events <host> --stage luks_reopen_ok …` and
+early). `doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage luks_reopen_ok …` and
 `--stage luks_reopen` distinguish them; a replace on the second reading destroys a healthy host. It is **not** in `git-data-rung2-boot-evidence.env` —
 that file records the queries, and the capture projects only the four hardcoded booleans —
 so it has to be read from Better Stack separately. For the rehearsal that cleared the banner

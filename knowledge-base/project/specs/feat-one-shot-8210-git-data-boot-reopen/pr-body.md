@@ -28,9 +28,11 @@ rehearsal reset arm, two ADR amendments, one C4 edge.
   when the script died, including on SIGTERM.
 - **`git-data-luks-reopen.service`** — the `git-data-gc.service` shape under
   `doppler run --only-secrets … --no-fallback` with a templated `--config`, bounded
-  `Restart=on-failure`, and `RuntimeDirectoryPreserve=yes`.
-- **`git-data-luks-reopen-failure.service`** — `OnFailure=` reporter. One fatal per failure,
-  carrying `action=<phase>` plus the unit's own `Result`/`ExecMainStatus`/`ExecMainCode`/
+  `Restart=on-failure` under **`RestartMode=direct`** (so `OnFailure=` fires once per exhausted
+  ladder, not once per attempt — measured), `RestartPreventExitStatus=3` for the structural
+  emitter refusal, `RuntimeDirectoryPreserve=yes`, `LimitCORE=0`.
+- **`git-data-luks-reopen-failure.service`** — `OnFailure=` reporter. One fatal per exhausted
+  ladder, carrying `action=<phase>` plus the unit's own `Result`/`ExecMainStatus`/`ExecMainCode`/
   `NRestarts`, with a `timeout 90` that keeps the direct arm reachable when Doppler *hangs*.
 - **Routing** — `luks_reopen` and `gitdata_luks_reopen_arm` join the fatal rule;
   `gitdata_luks_reopen_arm_warn` joins the warning rule; **`luks_reopen_ok` is in NO rule**,
@@ -54,7 +56,10 @@ rehearsal reset arm, two ADR amendments, one C4 edge.
 | `Restart=on-failure` is legal on a oneshot | Verified on 255 and 261; `Result`/`ExecMainStatus`/`ExecMainCode`/`NRestarts` all survive `start-limit-hit` |
 | Doppler CLI 3.75.3 (pinned, not the host's 3.76.5) | Repeated `--only-secrets`, `--no-fallback`, `--config` all parse; child exit codes forward (measured 7) |
 | `cryptsetup isLuks` rc table | 0 LUKS / 1 not-LUKS / 4 absent. `findmnt --fstab` exits 1 on no match |
-| Budget | 15,444 → 18,432 B of a 32,768 cap |
+| Budget | 15,444 → 19,028 B of a 32,768 cap |
+| `OnFailure=` under default `RestartMode` | Fires on EVERY attempt (3 reporter runs for a 2-burst ladder); with `RestartMode=direct` exactly 1; a refused tick on an already-failed unit fires 0 |
+| `Result=success` is not terminal | Resets to `success` the instant a retry attempt STARTS; `ActiveState=active` is the only terminal-success state of a `RemainAfterExit` oneshot |
+| `enable --now` under `RestartMode=direct` | Blocks through the whole ladder; `--no-block` returns in 0 s |
 
 ## Deviation from the plan
 
@@ -84,6 +89,45 @@ state the plan itself calls the intended safe one. Recorded in `decision-challen
    adding a fourth name to the declared single source left the suite **64/0, rc=0** — a mutation of
    the single source that no assertion could see. Post-fix that mutation REDs 2 arms and dropping
    `inode_pct` REDs 4. Found by `shellcheck SC2034`, run because semgrep cannot match rules on bash.
+
+7. **The replace route was held PERMANENTLY, not until PM2** — the rung-2 interlock was copied
+   onto `git_data_host_replace` without the create job's `fetch-depth: 0`, and the gate's
+   provenance arm HOLDs on a shallow clone. Pinned in `terraform-target-parity.test.ts`.
+8. **`Result=success` is not terminal** — measured on 261, it resets to `success` when retry
+   attempt 2 starts, so the boolean read `yes` on a still-retrying unit. Now
+   `ActiveState=active`, and the wait loop is DRIVEN against a `systemctl` spy (a busy loop, a
+   `while`→`if`, and `|| true` on the predicate each RED).
+9. **`OnFailure=` fired per attempt, not once** — the unit comment claimed
+   `service_enter_dead()` suppresses it during auto-restart; the opposite is true. A transient
+   blip that recovered on attempt 2 paged a fatal and failed the rehearsal's reboot arm.
+   `RestartMode=direct` (systemd ≥254; 24.04 ships 255) fixes it; the arm item's two starts are
+   `--no-block` so cloud-final does not wait through the ladder. The "~96 fatals/day" cost I
+   documented was also false: a refused tick fires nothing; it is one ladder per hour.
+10. **The `emit` refusal was invisible** — a retry landed in the silent `noop` branch and erased
+    it. Exit 3 + `RestartPreventExitStatus=3`; the runbook row now says the phase is dark by
+    construction and names the observable (`luks_reopen_unit=no`; a missing `luks_reopen_ok`).
+11. **The gc unit pair wrote the passphrase to the root disk** — no `--no-fallback`, disk-backed
+    `/tmp`; ADR-198's "never written to the root disk" was false on the incumbent. Fixed on the
+    class (`--no-fallback`, tmpfs `TMPDIR`, `PrivateTmp`, `LimitCORE=0`); ADR-198 corrected and
+    its token-scope claim qualified with #6167's measured ceiling.
+12. **The birth heredoc's `mkfs` guard was fail-open** — `if ! blkid` treated a damaged ext4
+    superblock as blank, on the path every replace this runbook orders re-runs. Keyed on the run
+    having `luksFormat`'d the device itself; `B18m` in `git-data-luks.test.sh`, four mutations.
+13. **The follow-through probe could never PASS** (a lone `mktemp` template; the gate derives
+    the evidence, module and payloads from the template's directory, and reads provenance from
+    the checkout's history). Reads the checkout it stands in; TRANSIENT off-main.
+14. **`sort=-timestamp` silently dropped** from `sentry-issue.sh`; restored and pinned, with
+    four `--stage` callee rows that RED the term-ignored, validator-deleted and pins-dropped
+    mutations.
+15. **Eleven more vacuous test arms** (test-design seat): the central wire (`enable --now`) was
+    a raw-file grep a `#` walked past — now an extracted, comment-stripped body pinned by
+    statement shape AND run under `sh` against a `systemctl` spy; the "never formats" and "never
+    mounts" regexes were column-0 anchored with the real `mkfs.ext4` reachable from the scratch
+    PATH — token-boundary regexes plus recording format traps; the hang row's `sleep 200` hit
+    the suite's own no-op `sleep` stub so the timeout arm never ran — now a real sleep with a
+    2–20 s range; the passphrase's "on stdin" row had no negative half — every fixture now asserts
+    it appears in no artifact but the stdin recorder; `unit_has` was substring — now exact-line
+    with section checks; the floor now counts call sites, not verdicts.
 
 ## Static analysis, with the coverage stated honestly
 
@@ -130,8 +174,9 @@ conclusion stands on the reproduction, not on the false proof.)
 - **PM2** commit the evidence ALONE in an evidence-only PR (Guard 4).
 - **PM3** the follow-through closes #8210 once PM2 lands.
 - **PM4** `git-data-host-replace` — the replace route is HELD until PM2, which is the intended
-  safe state. Record as an #8211 prerequisite with contract clauses (a)–(h).
-- **PM5** file the follow-on for `--only-secrets … --no-fallback` on the two untouched
+  safe state. Record as an #8211 prerequisite with contract clauses (a)–(j).
+- **PM5** file the follow-on for `--only-secrets … --no-fallback` on the two untouched (the gc
+  pair were the other two of four and are fixed here)
   `doppler run` sites and `--retry 2` on the emitter's Better Stack POST.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

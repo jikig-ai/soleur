@@ -86,6 +86,37 @@ else
   fail "host-events sorts NEWEST-FIRST (sort=-timestamp)" "$(argv | head -1)"
 fi
 
+# ── (#8210) --stage: the callee half of the rung-2 reboot probe's read ──────────────
+# The capture suite pins that the CALLER passes `--stage luks_reopen_ok`; nothing pinned what
+# this script DID with it. Review measured three mutations all green: the term left at
+# `level:fatal` (--stage ignored — the reboot probe then never sees the level:info success row
+# and reports TRANSIENT on every rehearsal), the shape validator deleted, and the credential
+# pins (`--disable --noproxy '*'`) dropped. Four rows, on the same curl spy.
+run 200 --host-events "$H" --stats-period 30d --stage luks_reopen_ok >/dev/null
+if argv | grep -qF -- "query=host_name:${H} stage:luks_reopen_ok"; then
+  pass "--stage replaces the level:fatal term with stage:<name> (the info success row is reachable)"
+else
+  fail "--stage replaces the level:fatal term with stage:<name>" "$(argv | head -1)"; fi
+if argv | grep -qF -- 'level:fatal'; then
+  fail "--stage leaves NO level:fatal term in the query (a fatal-pinned read cannot see level:info)" "$(argv | head -1)"
+else
+  pass "--stage leaves NO level:fatal term in the query"; fi
+if argv | grep -qF -- 'field=action'; then pass "--stage projects field=action (the reboot verdict discriminates on it)"; else
+  fail "--stage projects field=action" "$(argv | head -1)"; fi
+# The spy records `$*`, so the shell-quoted '*' arrives as a bare `*`.
+if head -1 "$ARGV" | grep -qE -- "^--disable --noproxy \* "; then
+  pass "the credentialed curl argv BEGINS --disable --noproxy * (Rule D pins survive the --stage path)"
+else
+  fail "the credentialed curl argv BEGINS --disable --noproxy *" "$(head -1 "$ARGV" | cut -c1-120)"; fi
+run 200 --host-events "$H" --stats-period 30d --stage 'x;y' >/dev/null
+if [[ "$(rc)" -eq 64 ]]; then pass "--stage with a non-identifier value is refused (rc 64), never interpolated"; else
+  fail "--stage with a non-identifier value is refused (rc 64)" "rc=$(rc)"; fi
+run 200 --liveness "$H" --stage luks_reopen_ok >/dev/null
+if [[ "$(rc)" -eq 64 ]]; then pass "--stage outside --host-events is refused (rc 64)"; else
+  fail "--stage outside --host-events is refused (rc 64)" "rc=$(rc)"; fi
+# Restore the baseline host-events argv the pin rows below read.
+run 200 --host-events "$H" --stats-period 30d >/dev/null
+
 # ── the pins — defect 2, on all three operands ────────────────────────────────────
 if argv | grep -qF -- 'project=4511404943671376'; then pass "the project id is PINNED into the request"; else
   fail "the project id is PINNED into the request" "$(argv | head -1)"; fi

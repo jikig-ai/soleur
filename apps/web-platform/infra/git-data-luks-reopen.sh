@@ -84,7 +84,9 @@ mkdir -p "${RUNDIR:?run dir unset}"
 # Written BEFORE each phase runs, so the tag names the phase that was executing when the
 # script died — including on SIGTERM, which runs no trap.
 phase() { printf 'action=%s\n' "$1" > "${RUNDIR:?}/action"; }
-die() { printf '%s\n' "$1" >> "${LOG:?}"; exit 1; }
+# To the log (what the reporter ships) AND stderr (the journal — the only trace left when both
+# of the reporter's arms are down).
+die() { printf '%s\n' "$1" >> "${LOG:?}"; printf '%s\n' "$1" >&2; exit 1; }
 ACTION=noop
 
 phase config
@@ -129,7 +131,13 @@ fi
 phase identity
 _backing=$(printf '%s\n' "$_status" | awk '/^[[:space:]]*device:/{print $2; exit}')
 [ -n "$_backing" ] || die "cryptsetup status reports no backing device"
-[ "$(realpath "$_backing")" = "$(realpath "$DEV")" ] \
+# Each realpath captured and REQUIRED non-empty before the comparison: `$(...)` inside `[` is
+# not errexit-checked, so two failing realpaths (a volume detached between the device and
+# identity phases) compared "" to "" and PASSED (review).
+_rb=$(realpath "$_backing" 2>>"$LOG") || die "realpath $_backing failed: the backing device vanished between phases"
+_rd=$(realpath "$DEV" 2>>"$LOG") || die "realpath $DEV failed: the pinned device vanished between phases"
+[ -n "$_rb" ] && [ -n "$_rd" ] || die "realpath returned an empty path for the backing device or the pin"
+[ "$_rb" = "$_rd" ] \
   || die "mapper $MAPPER is backed by $_backing, not the pinned $DEV"
 
 phase target
@@ -180,9 +188,17 @@ if [ "$ACTION" != noop ]; then
   _erc=0
   git-data-emit "git-data LUKS mapper reopened at boot" luks_reopen_ok info "" \
     "action=$ACTION" "target=$TARGET" "restarts=${_restarts:-unknown}" || _erc=$?
+  # The emitter's contract: 0 delivered, 1 transient (a POST failed), 2 structural (no curl /
+  # no DSN); 126/127 are the shell's "not executable" / "not found". Only the first two are
+  # tolerated. The refusal exits 3, NOT 1: the unit's RestartPreventExitStatus=3 makes that
+  # attempt terminal, because a retry would find the store open, take the silent noop branch
+  # and erase the fault (review). It is reported by the reporter, which uses the SAME emitter —
+  # so action=emit is dark by construction off-host; what an agent sees is the unit `failed`
+  # with ExecMainStatus=3, the boolean luks_reopen_unit=no at birth, and the ABSENCE of a
+  # luks_reopen_ok row after a known reboot. The runbook's emit row says so.
   case "$_erc" in
     0|1) : ;;
-    *) die "git-data-emit rc=$_erc after a successful reopen: a structural emitter fault, not a transient POST failure — every later failure on this host would be silent" ;;
+    *) printf '%s\n' "git-data-emit rc=$_erc after a successful reopen: a structural emitter fault, not a transient POST failure — every later failure on this host would be silent" >> "${LOG:?}"; exit 3 ;;
   esac
 fi
 # Both files go on success so a later same-boot failure inside `doppler run` cannot ship a

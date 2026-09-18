@@ -26,9 +26,14 @@ Description=Standing retry for the git-data LUKS mapper reopen (#8210)
 Documentation=https://github.com/jikig-ai/soleur/issues/8210
 
 [Timer]
-# 15 minutes: long enough that a healthy host's ticks are free, short enough that a multi-hour
-# Doppler outage self-heals within a quarter-hour of the vendor recovering rather than at the
-# next weekly maintenance window. OnUnitActiveSec (not OnCalendar) so the clock restarts from
+# 15 minutes is the TICK, not the recovery bound. A tick inside the unit's still-open
+# StartLimitIntervalSec=1h window is refused on an already-failed unit and does nothing
+# (measured on 261 at review: zero reporter runs for refused starts), so a multi-hour Doppler
+# outage self-heals at the first tick after that hour closes — within ~1h15 of the vendor
+# recovering, not a quarter-hour as an earlier revision claimed, and instead of the next weekly
+# maintenance window. The window cannot be shortened below the slow ladder (5x300 + 4x60 s):
+# a shorter one never trips the start limit, so a slow-failing unit would restart forever with
+# no terminal state and no report. OnUnitActiveSec (not OnCalendar) so the clock restarts from
 # the last run rather than firing a thundering burst after a long outage.
 OnUnitActiveSec=15min
 OnBootSec=15min
@@ -38,13 +43,14 @@ RandomizedDelaySec=120
 # timers configured with OnCalendar=", which gc's is and this one is not. It was inert, and
 # its comment was a load-bearing falsehood waiting to be cited. OnBootSec= above is what
 # actually provides the post-boot tick.
-# ACCEPTED COST, recorded here so it is not read later as a defect: on a host that stays broken,
-# a tick inside the unit's still-open StartLimitIntervalSec=1h window is REFUSED with
-# Result=start-limit-hit, which is itself a failed start, so OnFailure= fires and the reporter
-# emits again — roughly four fatals an hour until the fault is fixed. Sentry collapses them into
-# one issue with a rising count, which is the right signal for an unresolved fatal, and the
-# alternative (silence with the store closed) is the defect #8210 exists to remove. The operator
-# reading is in git-data-luks-cutover-5274.md, under "a host that stays broken REPEATS".
+# COST ON A HOST THAT STAYS BROKEN, measured rather than reasoned (an earlier revision of this
+# comment said "four fatals an hour"; it was wrong in both directions). A refused tick fires
+# nothing. The first tick after the 1h window closes re-runs a full ladder, which — because the
+# service carries RestartMode=direct — emits ONE fatal at convergence, not one per attempt. So:
+# about one fatal and ~6 Doppler calls per hour, ~20-24 events a day, collapsed by Sentry into
+# one issue (constant message, no fingerprint). The right signal for an unresolved fatal; the
+# alternative (silence with the store closed) is the defect #8210 exists to remove. The
+# operator reading is in git-data-luks-cutover-5274.md, under "Event counts".
 
 [Install]
 WantedBy=timers.target

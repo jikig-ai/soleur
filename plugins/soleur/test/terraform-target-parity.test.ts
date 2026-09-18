@@ -3663,6 +3663,18 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
       /if ! git_data_rung2_rehearsal_gate[\s\S]*?\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
     );
 
+    // THE CHECKOUT DEPTH IS PART OF THE INTERLOCK. Guard 4 reads the evidence file's commit
+    // provenance and HOLDs on a shallow clone; actions/checkout is depth-1 unless the step
+    // sets fetch-depth: 0. The create job has carried it since #8043; the review of #8210 found
+    // the interlock copied onto this job WITHOUT it, which held the replace route permanently
+    // — "until PM2" in every document, forever in fact. Pinned as the FIRST checkout step of
+    // the job carrying `fetch-depth: 0` under `with:`.
+    const replaceCheckout = /- uses: actions\/checkout@[0-9a-f]+[^\n]*\n((?:\s{8,}[^\n]*\n)*)/.exec(
+      replaceBlock,
+    );
+    expect(replaceCheckout, "checkout step not found in git_data_host_replace").not.toBeNull();
+    expect(replaceCheckout![1]).toMatch(/^\s*fetch-depth:\s*0\s*$/m);
+
     // ORDERING. A gate that runs after the plan lets a held route pay for a plan and read a
     // secret before refusing; after the apply it is not a gate at all.
     const rRung2 = replaceBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);

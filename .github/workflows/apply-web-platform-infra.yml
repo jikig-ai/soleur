@@ -4216,6 +4216,14 @@ jobs:
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # (#8210, review) The rung-2 interlock below reads the evidence file's commit provenance
+          # (Guard 4) and HOLDs on a shallow clone. The create job has carried this since #8043;
+          # the interlock was copied onto this job WITHOUT it, so every replace dispatched from a
+          # ref carrying the interlock HOLD-ed on "SHALLOW CHECKOUT" regardless of evidence — the
+          # route the runbook calls the only remediation lever, held permanently. Pinned by
+          # plugins/soleur/test/terraform-target-parity.test.ts.
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
