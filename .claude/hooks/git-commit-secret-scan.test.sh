@@ -115,20 +115,34 @@ _mk_stub_path() {
     p=$(command -v "$t" 2>/dev/null) || continue
     [[ "$p" == /* ]] && ln -s "$p" "$d/$t"
   done
+  # Stub bodies are quoted heredocs: they are DATA written into the stub, and the
+  # redirect inside the findings stub is the stub's own, not a fixture write.
   case "$mode" in
     absent) ;;
     unrunnable)
-      printf '%s\n' '#!/bin/sh' \
-        'echo "mise ERROR No version is set for shim: gitleaks" >&2' 'exit 1' > "$d/gitleaks" ;;
+      cat > "$d/gitleaks" <<'STUB'
+#!/bin/sh
+echo "mise ERROR No version is set for shim: gitleaks" >&2
+exit 1
+STUB
+      ;;
     emptyreport)
-      printf '%s\n' '#!/bin/sh' '[ "$1" = version ] && { echo 8.24.2; exit 0; }' \
-        'exit 2' > "$d/gitleaks" ;;
+      cat > "$d/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+exit 2
+STUB
+      ;;
     findings)
       # Runnable; the scan writes a one-finding report to --report-path, exit 1.
-      printf '%s\n' '#!/bin/sh' '[ "$1" = version ] && { echo 8.24.2; exit 0; }' \
-        'rp=""; while [ $# -gt 0 ]; do [ "$1" = --report-path ] && rp="$2"; shift; done' \
-        'printf "%s" "[{\"RuleID\":\"private-key\",\"File\":\"leak.json\",\"StartLine\":1}]" > "$rp"' \
-        'exit 1' > "$d/gitleaks" ;;
+      cat > "$d/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+rp=""; while [ $# -gt 0 ]; do [ "$1" = --report-path ] && rp="$2"; shift; done
+printf '%s' '[{"RuleID":"private-key","File":"leak.json","StartLine":1}]' > "$rp"
+exit 1
+STUB
+      ;;
   esac
   [[ -f "$d/gitleaks" ]] && chmod +x "$d/gitleaks"
   printf '%s\n' "$d"

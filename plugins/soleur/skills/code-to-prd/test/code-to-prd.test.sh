@@ -142,21 +142,41 @@ mk_stub_path() {
       [[ -x "${f}" && ! -d "${f}" && ! -e "${d}/${name}" ]] && ln -s "${f}" "${d}/${name}"
     done
   done
-  {
-    echo '#!/bin/sh'
-    case "${mode}" in
-      unrunnable) echo 'echo "mise ERROR No version is set for shim: gitleaks" >&2; exit 1' ;;
-      *) echo '[ "$1" = version ] && { echo 8.24.2; exit 0; }' ;;
-    esac
-    case "${mode}" in
-      scan-error) echo 'echo "gitleaks: fatal: could not read source" >&2; exit 1' ;;
-      findings)
-        echo 'rp=""; while [ $# -gt 0 ]; do [ "$1" = --report-path ] && rp="$2"; shift; done'
-        echo 'printf "%s" "[{\"RuleID\":\"stripe-access-token\",\"File\":\"prd.md\",\"StartLine\":3}]" > "$rp"'
-        echo 'exit 1' ;;
-      clean) echo 'exit 0' ;;
-    esac
-  } > "${d}/gitleaks"
+  # Stub bodies are quoted heredocs: they are DATA written into the stub, and the
+  # redirect inside the findings stub is the stub's own, not a fixture write.
+  case "${mode}" in
+    unrunnable)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+echo "mise ERROR No version is set for shim: gitleaks" >&2
+exit 1
+STUB
+      ;;
+    scan-error)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+echo "gitleaks: fatal: could not read source" >&2
+exit 1
+STUB
+      ;;
+    findings)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+rp=""; while [ $# -gt 0 ]; do [ "$1" = --report-path ] && rp="$2"; shift; done
+printf '%s' '[{"RuleID":"stripe-access-token","File":"prd.md","StartLine":3}]' > "$rp"
+exit 1
+STUB
+      ;;
+    clean)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+exit 0
+STUB
+      ;;
+  esac
   chmod +x "${d}/gitleaks"
   printf '%s\n' "${d}"
 }

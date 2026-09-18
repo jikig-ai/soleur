@@ -502,8 +502,11 @@ assert_run "conflict: lone kb-index sentinel in INDEX.md denies" "deny" \
 #
 # HARNESS CHECK first: prove the injected config actually reaches git in this
 # fixture, or every row below would silently test default config.
-if ! env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
-     git -C "$CM/repo" diff --cached --no-color --no-ext-diff | grep -q '^+++ i/'; then
+# Captured, then matched from a herestring: `git diff | grep -q` under pipefail can
+# SIGPIPE git on an early match and read as NO match.
+_cm_hdr=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
+  git -C "$CM/repo" diff --cached --no-color --no-ext-diff)
+if ! grep -q '^+++ i/' <<<"$_cm_hdr"; then
   echo "GUARD FAIL: injected GIT_CONFIG_* did not change the fixture's diff header — the config rows below would test nothing." >&2
   exit 2
 fi

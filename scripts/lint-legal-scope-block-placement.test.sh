@@ -70,7 +70,7 @@ commit_base() { : "${1:?fixture dir is empty; git -C <empty> would retarget this
 GATE_ENV=()
 run_gate() {
   local d="$1" out rc=0
-  out=$(cd "$d" && env "${GATE_ENV[@]}" bash ./scripts/gate.sh --base main 2>&1) || rc=$?
+  out=$(cd "$d" && env ${GATE_ENV[@]+"${GATE_ENV[@]}"} bash ./scripts/gate.sh --base main 2>&1) || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -120,12 +120,16 @@ case_line "arm (a): fires on a section referent in a marker-bearing section" \
 #
 # HARNESS CHECK first: prove the injected config reaches git in a fixture, or the
 # rows below would silently test default config.
+# Diffs the committed fixture against git's empty tree, so the check writes no
+# file of its own; under mnemonicprefix the worktree side of that diff is `w/`.
 hc=$(new_repo) || { echo "GUARD FAIL: harness-check fixture setup failed" >&2; exit 2; }
-printf '%s' "$CLOUD_SECTION" > "$hc/docs/legal/privacy-policy.md"
 commit_base "$hc" >/dev/null
-printf 'x\n' >> "$hc/docs/legal/privacy-policy.md"
-if ! env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
-     git -C "$hc" diff -U0 --no-color main | grep -q '^+++ w/'; then
+EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+# Captured, then matched from a herestring: `git diff | grep -q` under pipefail
+# SIGPIPEs git on an early match (this diff is large) and reads as NO match.
+hc_diff=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicprefix GIT_CONFIG_VALUE_0=true \
+  git -C "$hc" diff --no-color "$EMPTY_TREE")
+if ! grep -q '^+++ w/' <<<"$hc_diff"; then
   echo "GUARD FAIL: injected GIT_CONFIG_* did not change the fixture's diff header — the config rows below would test nothing." >&2
   exit 2
 fi
