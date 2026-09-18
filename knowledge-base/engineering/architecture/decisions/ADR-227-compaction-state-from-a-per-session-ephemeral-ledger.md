@@ -419,3 +419,57 @@ a defect, and filing it would net-grow the backlog for a fixed 7 ms. Re-measure 
 revisit if `SessionStart` ever gains a latency budget, or if a future edit adds a
 field read ahead of the scope guard — that is the change that would make the spawn
 count matter, because it would pay for itself in every repository that declines.
+
+## Amendment — 2026-09-18 (ship advisor): four guards that were deletable at full green
+
+The ADR-083 completeness consult at `/ship` Phase 5.5 attacked the state machine
+rather than the prose, and found four defects. It cleared the two categories that
+would have been merge blockers — eight concurrent sessions on one shared `TMPDIR`
+produced eight ledgers with exactly `auto,auto` each and no cross-contamination,
+and no value was found that survives `sanitize_display()` and is still hostile to
+a model reading it at elevated authority. What it found instead were four guards
+whose absence the suite could not detect: reverting all four left it **150/150
+green**.
+
+| # | Defect | Fix | Killing row |
+|---|---|---|---|
+| 1 | An unrecognized `SessionStart` `source` exited 0 emitting **nothing** | emit `reason=unknown-source` naming the source | 28b–28d |
+| 2 | The window-reset arm deleted **through** a ledger root it had already classified unusable | add the `LEDGER_DIR_UNUSABLE` conjunct | 28g–28h |
+| 3 | `RAW="$(cat)"` was the only unbounded wait in the file | `timeout 5 cat` | 28j–28k |
+| 4 | `SPEC` discovery was ungated on the `unknown` branch sentinel that already gated `PLAN` | same `if` for both | 28m |
+
+**(1) is the one that mattered most, and it is an observability defect, not a
+logic one.** `compact` is the only source the recommendation gate counts, and this
+ADR's Phase 0 addendum measured `SessionStart` only after **manual** compactions
+(`claude -p --continue "/compact"`); that an **automatic** compaction also arrives
+with the literal source `compact` is inferred there, not observed. If it ever
+arrives as anything else, every install loses the feature permanently — and a bare
+`exit 0` made that byte-identical to "this session has not compacted". The marker
+converts a silent, total, permanent failure into one that reports itself the first
+time it happens.
+
+The channel matters as much as the marker: `stderr` was rejected, because this hook
+exits 0 and stderr on an exit-0 hook is discarded. That is exactly the defect the
+design-validity pass deleted the drift canary over, and putting the new marker
+there would have reproduced it inside the fix for it. The same reasoning upgraded
+the pre-existing `window-reset-failed` marker, which was stderr-only on the same
+exit-0 path.
+
+**(2) falsified a stated invariant of the earlier review.** Scenario 23's thesis is
+"the WRITE fails closed", and `PreCompact`'s write does — the delete did not, so one
+`SessionStart:startup` unlinked `<sid>.{ledger,pending}` inside a symlink target.
+Bounded, not exploitable: the names are session-id-derived and the id is a UUID the
+attacker cannot choose, so this is a broken invariant rather than an arbitrary-file
+delete. Row 28i pins that bound by asserting an unrelated file beside them survives.
+
+**A mutation-round error worth recording, because it is this session's third of the
+same shape.** The first M2 run scored KILLED and the kill came from row 23h — a
+`PreCompact` row — because the mutation script replaced the *first* of two
+byte-identical `if [[ -n "$SID" ]] && (( ! LEDGER_DIR_UNUSABLE )); then` lines, and
+the first is `PreCompact`'s write, which already carried the conjunct before this
+change. The operand under test was never mutated. A kill is only evidence when the
+row that dies is a row about the operand that changed; the mutation script now
+asserts the site count and indexes the second occurrence explicitly. The same class
+produced M11's false SURVIVED (a comment quoting the trap line) and 28j's first
+draft, which timed a shell pipeline and so measured the writer's 30-second sleep
+instead of the hook — a row that reports 30s whether or not the fix is present.

@@ -737,7 +737,104 @@ assert "27b a healthy invocation writes nothing to stderr" '[[ -z "$ERR" ]]'
 # --- coverage floors ----------------------------------------------------
 # Reported with printf + exit, NOT through fail() -- the helper these floors
 # exist to backstop is the one an edit disarms.
-MIN_CASES=150
+
+echo "== scenario 28 (ship advisor): the four guards that were deletable at full green =="
+# Every row below was written AFTER the corresponding fix, because the suite was
+# 150/150 with all four fixes reverted. A guard with no accompanying row is a
+# guard the next edit deletes silently -- this session has already paid for that
+# lesson once (scenarios 26 and 27 exist for the same reason).
+
+# --- F1: an unrecognized SessionStart source must name itself, not exit silent.
+# `auto_compact` is the realistic drift: the matcher admits it (it contains
+# `compact`), SOURCE_CLASS falls to `unknown`, and the pre-fix code returned 0
+# with EMPTY stdout. That is byte-identical to "this session has not compacted",
+# on the one event class the recommendation gate counts -- and the Phase 0
+# addendum only ever measured SessionStart after a MANUAL compaction, so the
+# automatic spelling is inferred, not observed. Permanent, total, invisible.
+sid=s28a
+run_hook "$(ss_env auto_compact "$sid" "$IN_ROOT")"
+assert "28a an unknown source still exits 0" '[[ "$RC" -eq 0 ]]'
+assert "28b and emits a parseable envelope rather than silence" \
+  '[[ -n "$OUT" ]] && printf "%s" "$OUT" | jq -e . >/dev/null 2>&1'
+assert "28c naming reason=unknown-source" 'has_ctx "reason=unknown-source"'
+assert "28d and echoing the source it could not classify" 'has_ctx "source=auto_compact"'
+assert "28e with no directive -- it read no state, so it asserts none" \
+  '! has_ctx "SOLEUR_COMPACTION_DIRECTIVE"'
+# The pre-existing behaviour this must NOT regress: unknown never resets.
+printf 'auto\nauto\n' > "$TMPDIR/soleur-compaction/$sid.ledger" 2>/dev/null || true
+run_hook "$(ss_env auto_compact "$sid" "$IN_ROOT")"
+_led28="$TMPDIR/soleur-compaction/$sid.ledger"
+assert "28f and an unknown source still does not truncate the ledger" \
+  '[[ "$(wc -l < "$_led28" 2>/dev/null || echo 0)" -eq 2 ]]' \
+  "ledger at $_led28 held $(wc -l < "$_led28" 2>/dev/null || echo 0) rows, expected 2"
+
+# --- F2: the reset arm deleted THROUGH a ledger root it had already rejected.
+# Scenario 23 asserts the WRITE fails closed on a symlinked root; the DELETE did
+# not, so one SessionStart:startup unlinked <sid>.{ledger,pending} inside the
+# link target. Same hostile root as 23h, opposite operation.
+RSLINK="$SANDBOX/rslink"; RSTARGET="$SANDBOX/rslink-target"
+mkdir -p "$RSLINK" "$RSTARGET"
+ln -s "$RSTARGET" "$RSLINK/soleur-compaction"
+printf 'auto\n' > "$RSTARGET/s28b.ledger"
+printf 'auto\n' > "$RSTARGET/s28b.pending"
+: > "$RSTARGET/keepme.txt"
+run_hook "$(ss_env startup s28b "$IN_ROOT")" "TMPDIR=$RSLINK" "PATH=$PATH" "HOME=$HOME" \
+  "SOLEUR_COMPACTION_CLI_VERSION=$SOLEUR_COMPACTION_CLI_VERSION"
+assert "28g a reset through a symlinked ledger root deletes nothing (ledger)" \
+  '[[ -f "$RSTARGET/s28b.ledger" ]]'
+assert "28h ... nor the pending slot" '[[ -f "$RSTARGET/s28b.pending" ]]'
+assert "28i ... nor anything beside them" '[[ -f "$RSTARGET/keepme.txt" ]]'
+
+# --- F3: the stdin read was the only unbounded wait in the file.
+# `trap exit 0` bounds FAILURE, never TIME. A hook that hangs at SessionStart
+# never lets the session start and can emit no marker explaining why, because
+# the process is still alive. hooks.json declares no per-binding timeout, so
+# before the fix the only bound was the harness default.
+# Time the HOOK, never the pipeline. A first cut wrote
+#   ( printf ...; sleep 30 ) | timeout 20 bash "$SUT"
+# and asserted on the pipeline's wall clock -- but a shell pipeline does not
+# return until EVERY member exits, so that measured the WRITER's 30s sleep and
+# reported 30s for a hook that had already exited in 5. It fails identically
+# with the fix present and absent, which makes it a row that cannot distinguish
+# them. A FIFO puts the writer out of the measured path.
+_fifo="$SANDBOX/hang.fifo"; rm -f "$_fifo"; mkfifo "$_fifo"
+( printf '%s' "$(ss_env startup s28c "$IN_ROOT")"; sleep 30 ) > "$_fifo" &
+_writer=$!
+_t0=$(date +%s)
+timeout 20 bash "$SUT" < "$_fifo" >/dev/null 2>&1
+_hang_rc=$?
+_t1=$(date +%s)
+kill "$_writer" 2>/dev/null || true
+wait "$_writer" 2>/dev/null || true
+rm -f "$_fifo"
+_hang_elapsed=$(( _t1 - _t0 ))
+assert "28j a writer that never closes stdin does not hang the hook" \
+  '[[ "$_hang_elapsed" -lt 15 ]]' \
+  "hook itself took ${_hang_elapsed}s with stdin held open by a live writer (bound is the 5s read timeout, not the writer's 30s)"
+assert "28k and it exited on its own, not on the outer timeout" \
+  '[[ "$_hang_rc" -ne 124 ]]' \
+  "timeout(1) rc=$_hang_rc; 124 means the hook was still alive at 20s"
+
+# --- F5: SPEC discovery was ungated on the same sentinel PLAN was gated on.
+# On a detached HEAD -- the shape CI checks out for a pull_request run, which
+# this file's own comment calls the common case -- BRANCH becomes the literal
+# `unknown`, and an existing specs/unknown/ was then asserted to the model as
+# this branch's spec directory.
+DROOT="$SANDBOX/detached-root"
+mkdir -p "$DROOT/knowledge-base/project/plans" "$DROOT/knowledge-base/project/specs/unknown"
+: > "$DROOT/knowledge-base/project/specs/unknown/spec.md"
+( cd "$DROOT" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git init -q . \
+  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.email=t@t -c user.name=t add -A \
+  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -c user.email=t@t -c user.name=t commit -qm init \
+  && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git checkout -q --detach ) >/dev/null 2>&1
+sid=s28d
+printf 'auto\n' > "$TMPDIR/soleur-compaction/$sid.pending" 2>/dev/null || true
+run_hook "$(ss_env compact "$sid" "$DROOT")"
+assert "28l a detached HEAD reports branch=unknown" 'has_ctx "branch=unknown"'
+assert "28m and does NOT name specs/unknown/ as this branch's spec dir" \
+  '! has_ctx "specs/unknown/"'
+
+MIN_CASES=163
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
@@ -752,7 +849,7 @@ if (( passes + fails != CASES )); then
   exit 1
 fi
 SUT_RUNS="$(grep -c '^ran$' "$SOLEUR_HOOK_TRACE" 2>/dev/null || true)"
-MIN_SUT_RUNS=141
+MIN_SUT_RUNS=145
 if (( ${SUT_RUNS:-0} < MIN_SUT_RUNS )); then
   printf 'FATAL: the subject ran %s times, floor is %d. The harness asserted without spawning the hook.\n' \
     "${SUT_RUNS:-0}" "$MIN_SUT_RUNS" >&2

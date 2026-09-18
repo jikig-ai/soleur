@@ -120,7 +120,13 @@ if [[ "${SOLEUR_COMPACTION_SELFTEST_UNBOUND:-0}" == "1" ]]; then
   printf '%s' "$__soleur_deliberately_unbound_variable"
 fi
 
-RAW="$(cat 2>/dev/null)" || RAW=""
+# `timeout` is the point, not `cat`. Every other external call here is bounded;
+# the one reading a stream this hook does not own was not, and `trap exit 0`
+# bounds failure, never time. A hook that HANGS at SessionStart is worse than
+# one that crashes: the session never starts, and no marker can explain it
+# because the process is still alive. hooks.json declares no per-binding
+# timeout, so the harness default was the only bound.
+RAW="$(timeout 5 cat 2>/dev/null)" || RAW=""
 
 HAVE_JQ=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
@@ -305,33 +311,6 @@ fi
 
 SOURCE="$(jget source)"
 
-# --- SessionStart, window reset ----------------------------------------------
-# startup / resume / clear all open a new window. Guarding only `resume` would
-# leave two of the three unscoped, which is how a long session pins
-# recommend=true forever (TR2).
-case "$SOURCE" in
-  startup|resume|clear) SOURCE_CLASS=reset ;;
-  compact)              SOURCE_CLASS=compact ;;
-  *)                    SOURCE_CLASS=unknown ;;
-esac
-
-if [[ "$SOURCE_CLASS" != "compact" ]]; then
-  # `unknown` lands here and does NOTHING -- it must not reset, because the
-  # matcher admits any source containing one of the four words and a future
-  # `precompact` would otherwise truncate the ledger at the event it counts.
-  [[ "$SOURCE_CLASS" == "reset" ]] || exit 0
-  if [[ -n "$SID" ]]; then
-    assert_fixture_dir "$LEDGER_DIR"
-    rm -f "$LEDGER" "$PENDING" 2>/dev/null || true
-    if [[ -s "$LEDGER" ]]; then
-      # A surviving ledger carries the PREVIOUS window's rows into this one and
-      # is the only state that over-counts. Never silent.
-      printf 'SOLEUR_COMPACTION_SKIPPED reason=window-reset-failed path=%s\n' "$LEDGER" >&2
-    fi
-  fi
-  exit 0
-fi
-
 # --- envelope emission -------------------------------------------------------
 # stdout carries the JSON envelope and NOTHING else; a stray byte invalidates
 # the whole output. Diagnostics go to stderr.
@@ -346,6 +325,57 @@ emit() { # <additionalContext>
     printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SOLEUR_COMPACTION_SKIPPED reason=jq-unavailable -- compaction state could not be reported. Context was just compacted: re-read the plan and spec before editing (hr-always-read-a-file-before-editing-it)."}}'
   fi
 }
+
+
+# --- SessionStart, window reset ----------------------------------------------
+# startup / resume / clear all open a new window. Guarding only `resume` would
+# leave two of the three unscoped, which is how a long session pins
+# recommend=true forever (TR2).
+case "$SOURCE" in
+  startup|resume|clear) SOURCE_CLASS=reset ;;
+  compact)              SOURCE_CLASS=compact ;;
+  *)                    SOURCE_CLASS=unknown ;;
+esac
+
+if [[ "$SOURCE_CLASS" != "compact" ]]; then
+  # `unknown` must not RESET -- the matcher admits any source containing one of
+  # the four words, and a future `precompact` would otherwise truncate the
+  # ledger at the event it counts. But it must not be SILENT either.
+  #
+  # This is the one arm whose failure is permanent and total. `compact` is the
+  # only source the gate counts, and the Phase 0 addendum measured SessionStart
+  # only after MANUAL compactions (`claude -p --continue "/compact"`); that an
+  # AUTOMATIC one also arrives with the literal source `compact` is marked
+  # Inferential there, not measured. If it ever arrives as anything else
+  # (`auto_compact`, say), every install loses the feature forever -- and a bare
+  # `exit 0` makes that byte-identical to "this session has not compacted".
+  #
+  # stderr is NOT the channel: this hook exits 0, and stderr on an exit-0 hook is
+  # discarded. That is precisely the defect the design-validity pass deleted the
+  # drift canary over; reintroducing it here would repeat it.
+  if [[ "$SOURCE_CLASS" != "reset" ]]; then
+    emit "SOLEUR_COMPACTION_SKIPPED reason=unknown-source source=$(sanitize_display "$SOURCE" empty) -- this SessionStart source is outside the measured set (startup|resume|clear|compact), so no compaction state was read or written. If this appears after an automatic compaction, the recommendation gate is dark on this harness and the matcher needs the observed spelling."
+    exit 0
+  fi
+  # The `LEDGER_DIR_UNUSABLE` conjunct is the half scenario 23 was missing. Its
+  # stated thesis is "the WRITE fails closed", and PreCompact's write does --
+  # but this DELETE did not, so a symlinked ledger root made one SessionStart
+  # unlink `<sid>.ledger` and `<sid>.pending` inside the link target. The names
+  # are session-id-derived so it is not an arbitrary-file delete, but "refuses
+  # to touch a root it has already judged hostile" is the invariant, and it was
+  # false on exactly one of the two paths.
+  if [[ -n "$SID" ]] && (( ! LEDGER_DIR_UNUSABLE )); then
+    assert_fixture_dir "$LEDGER_DIR"
+    rm -f "$LEDGER" "$PENDING" 2>/dev/null || true
+    if [[ -s "$LEDGER" ]]; then
+      # A surviving ledger carries the PREVIOUS window's rows into this one and
+      # is the only state that over-counts. Never silent -- and not via stderr,
+      # which an exit-0 hook discards.
+      emit "SOLEUR_COMPACTION_SKIPPED reason=window-reset-failed path=$(sanitize_display "$LEDGER" unknown) -- the previous window's compaction rows survived this session reset, so any recommendation in this window may over-count."
+    fi
+  fi
+  exit 0
+fi
 
 if (( ! HAVE_JQ )); then
   emit ""
@@ -428,8 +458,15 @@ if [[ "$BRANCH" != "unknown" ]]; then
   done
 fi
 SPEC=""
-[[ -d "$ROOT/knowledge-base/project/specs/$BRANCH" ]] \
-  && SPEC="$(sanitize_display "knowledge-base/project/specs/$BRANCH/" "")"
+# Same `unknown` gate as PLAN above. Without it a detached HEAD -- which this
+# file's own comment calls the common case, since CI checks one out for
+# `pull_request` -- makes the directive assert `specs/unknown/` to the model the
+# moment such a directory exists. PLAN was gated and SPEC was not; one sentinel,
+# two consumers, one of them guarded.
+if [[ "$BRANCH" != "unknown" ]]; then
+  [[ -d "$ROOT/knowledge-base/project/specs/$BRANCH" ]] \
+    && SPEC="$(sanitize_display "knowledge-base/project/specs/$BRANCH/" "")"
+fi
 
 THRESHOLD="${SOLEUR_COMPACTION_COUNT_THRESHOLD:-2}"
 case "$THRESHOLD" in
