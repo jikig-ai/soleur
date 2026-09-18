@@ -558,11 +558,17 @@ if [[ "${CODE_TO_PRD_SKIP_LAYER_2:-0}" != "1" ]]; then
     echo "  Run \`bash ${REDACT_SENTINEL} <staging>\` against a debug copy to see the matched classes." >&2
     exit 1
   elif (( sentinel_rc == 2 )); then
-    echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2). Investigate before retrying." >&2
-    exit 1
+    # exit 2, NOT 1. The header reserves 1 for "a redaction layer FOUND secret-shaped
+    # content" and 2 for "the scan did not complete — never 'found secrets'". A failed
+    # sentinel INVOCATION is the second. Exiting 1 here told the operator their codebase
+    # contains secrets when the real fault was that Layer 2 never ran — the same
+    # could-not-measure-read-as-measured-bad conflation #8266 exists to remove, and the
+    # one Layer 3 below was just fixed for.
+    echo "code-to-prd: Layer 2 sentinel invocation failed (exit 2) — the redaction scan did NOT complete, so this is not a finding about your content. Investigate the sentinel before retrying." >&2
+    exit 2
   elif (( sentinel_rc != 0 )); then
-    echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc}." >&2
-    exit 1
+    echo "code-to-prd: Layer 2 sentinel returned unexpected exit ${sentinel_rc} — the redaction scan did NOT complete; this is not a finding about your content." >&2
+    exit 2
   fi
 else
   echo "code-to-prd: WARNING — CODE_TO_PRD_SKIP_LAYER_2=1 is set; bypassing Layer 2 (test-only path)." >&2

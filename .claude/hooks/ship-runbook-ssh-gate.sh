@@ -89,7 +89,17 @@ VIOLATIONS=()
 for f in $RUNBOOK_FILES; do
   # Get ADDED lines only (lines starting with `+` in unified diff, minus the
   # `+++` file headers).
-  added=$(git diff --unified=0 "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//')
+  # `--no-color --no-ext-diff` are load-bearing (#8263 class): under a user's
+  # `color.diff=always` every added line arrives ANSI-wrapped so `^\+[^+]` matches
+  # nothing, `added` is empty, `continue` fires, and this gate silently passes a
+  # runbook that adds an `ssh prod-host …` step — the hr-no-ssh-fallback-in-runbooks
+  # enforcement point, failing open on ambient local config. A `diff.external`
+  # replaces the patch body wholesale for the same effect.
+  # `|| true`: "no added lines" is a NORMAL answer here (the `[[ -z ]]` below is
+  # what consumes it), but under this file's `set -eo pipefail` a no-match `grep`
+  # makes the pipeline exit 1 and kills the whole gate mid-loop — so a runbook
+  # touched with only deletions would abort the check rather than pass it.
+  added=$(git diff --unified=0 --no-color --no-ext-diff "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//') || true
   [[ -z "$added" ]] && continue
   # Match against the SSH regex.
   hits=$(printf '%s\n' "$added" | grep -niE "$SSH_RE" 2>/dev/null || true)

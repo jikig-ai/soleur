@@ -366,14 +366,20 @@ fi
 # never blocked). Unanchored
 # `={7}` also matched Markdown setext heading underlines and `=======` ASCII rules.
 # `<`/`>` require space-or-EOL after the seventh character, which is git's own
-# shape. `--no-color --no-ext-diff` is load-bearing: with `color.diff=always` or a
-# `diff.external` configured, the diff arrives ANSI-wrapped, `^\+` never matches,
-# and the guard silently allows a full triple. `--src-prefix=a/ --dst-prefix=b/`
+# shape. `--no-color` and `--no-ext-diff` are both load-bearing, for DIFFERENT
+# mechanisms: `color.diff=always` wraps every line in ANSI so `^\+` never matches,
+# while a `diff.external` replaces the patch body wholesale (no `+` lines at all).
+# Either way the guard silently allows a full triple. `--src-prefix=a/ --dst-prefix=b/`
 # and `--no-relative` are load-bearing the same way (#8263): the awk keys on the
 # `+++ b/` header, and a user's `diff.mnemonicprefix`/`diff.noprefix` rewrites it
 # (`+++ i/…`, `+++ …`) while `diff.relative` from a subdirectory drops INDEX.md
 # from the diff. Each disarmed the kb-index sentinel arm, and the missed header
 # also skipped the per-file reset, so counting went global and over-fired.
+# `-c core.quotePath=false` closes the same over-fire on DEFAULT config, with no
+# user setting involved: quotePath defaults to TRUE, so a non-ASCII filename is
+# emitted as `+++ "b/caf\303\251.md"`, which `^\+\+\+ b/` does not match. Measured:
+# a `<<<<<<< HEAD` line in one file plus a `=======` line in an unrelated
+# accented-filename file made the counting go global and DENIED a clean commit.
 if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   # FAIL LOUD, not open. `2>/dev/null || true` made an errored `git diff` (an
@@ -387,9 +393,9 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pi
   # own pre-existing AC4 fixture, whose command chains `gh issue create` after a
   # `git commit` heredoc and expects the require-milestone gate to still run.
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
-    CONFLICT_GIT=(git -C "$CONFLICT_MARKERS_DIR")
+    CONFLICT_GIT=(git -c core.quotePath=false -C "$CONFLICT_MARKERS_DIR")
   else
-    CONFLICT_GIT=(git)
+    CONFLICT_GIT=(git -c core.quotePath=false)
   fi
   if ! "${CONFLICT_GIT[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     IN_REPO=0
