@@ -19,9 +19,10 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No edits
 
 ## Phase 1 — Failing fixture arms first (`cq-write-failing-tests-before`)
 
-- [ ] **1.1** Add `describe("shared strip helpers are structural (#7968)")` with arms A1–A9 (plan
-      §The fixture arms) over synthetic `x_`-host HCL strings; A5–A8 mirror the inngest hoisted-locals
-      chain, A9 the registry `user_data = base64gzip(replace(templatefile(` shape.
+- [ ] **1.1** Add `describe("shared strip helpers are structural (#7968)")` with arms A1–A10 (plan
+      §The fixture arms) over synthetic `x_`-host HCL strings; A5 is the inngest-shaped must-PASS
+      control and A6–A8 are single `.replace` derivations of it; A10 is the registry-shaped control
+      and A9 its single-`.replace` negative.
 - [ ] **1.2** `bun test` is RED: `extractStripRegex` / `stripIsApplied` undefined.
 
 ## Phase 2 — GREEN: two shared functions, six wrappers
@@ -35,24 +36,29 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No edits
 - [ ] **2.3** Replace the six bodies with one-line `const <name> = (tf: string) => …` wrappers (one
       space around `=`); inngest predicate passes its two chain regexes; add the anchor-contract docblock.
 - [ ] **2.4** Move the M3/M4b/M14 rationale docblocks onto the two shared functions once.
-- [ ] **2.5** `bun test` → `56 pass / 0 fail`; `git diff` shows no change inside the
+- [ ] **2.5** `bun test` → `57 pass / 0 fail`; `git diff` shows no change inside the
       `rendered user_data size` describe block.
 
 ## Phase 3 — Mutation battery
 
-- [ ] **3.1** Create `plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh` in the
-      `kb-index-check-guard-mutation.test.sh` shape (header, prelude, `mktemp -d` scratch tree three
-      dirs deep with `apps/web-platform/{infra,Dockerfile,.dockerignore}` symlinked, one comment
-      naming the depth invariant).
-- [ ] **3.2** Implement `run_suite`, `mutate` (function-scoped python substitution, `count == 1`,
-      RETURNS 2 on a missing anchor / zero-byte edit), `expect_red` (rc ≠ 0, named `(fail)` arm,
-      no `error` line, `Ran N` == pristine), `expect_green`.
-- [ ] **3.3** Control precondition (exit 2 on failure): pristine copy green, `Ran 56`, walker arm in
-      the pass list.
-- [ ] **3.4** Rows R1, R2, R3, R4, R6 and H1, H2, H3 exactly as the plan's Guard Contract; `CASES`
-      counter before each assertion; final `rows=8 ok=8`; exit 1 on any mismatch.
+- [ ] **3.1** Create `plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh` with the
+      `kb-index-check-guard-mutation.test.sh` prelude verbatim (`mktemp -d -t cistrip.XXXXXXXX` +
+      case refusal, `set -uo pipefail`, no `-e`), a scratch tree three dirs deep with
+      `apps/web-platform/{infra,Dockerfile,.dockerignore}` symlinked, one comment naming the depth
+      invariant, and the pristine copy at `$WORK/suite.pristine` (no `.test.ts` suffix — bun's
+      positional is a filter over the whole cwd).
+- [ ] **3.2** Implement `run_suite` (rc, pass/fail, summary-anchored `^\s*[0-9]+ error$`, `Ran N
+      tests?`, `N expect() calls`), `mutate` (quoted-heredoc python, function-scoped slice,
+      `count == 1`, RETURNS 2 on a missing/duplicate anchor or zero-byte edit → `LANDING-FAILED`
+      row), `expect_red` (rc ≠ 0, named `(fail)` arm, no summary error line, `Ran N` == pristine;
+      optional output-file arg), `expect_green` (rc 0, `Ran N` == pristine, expect-calls ≥ 130).
+- [ ] **3.3** Control precondition (exit 2 on failure): pristine copy green, `Ran 57`,
+      `expect() calls` ≥ 130, walker arm title in the pass list.
+- [ ] **3.4** Rows R1, R2, R3, R4, R6 and H1, H1b, H2, H3, H4 exactly as the plan's Guard Contract;
+      kb-index accounting (`PASS`/`FAIL`/`RESULTS`, `EXPECTED_ROWS=10`, `FLOOR:` on mismatch,
+      summary `N ok, M problem(s)`); exit 1 on any problem.
 - [ ] **3.5** `bash plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh` → exit 0,
-      `rows=8 ok=8`.
+      summary `10 ok, 0 problem(s)`.
 - [ ] **3.6** `git add` the suite, then `bash scripts/lint-orphan-test-suites.sh` exits 0 and
       `bash scripts/test-all.sh --print-suite-globs` expands over it.
 
