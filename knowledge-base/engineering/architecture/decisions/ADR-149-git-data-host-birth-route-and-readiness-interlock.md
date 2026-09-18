@@ -748,3 +748,86 @@ rather than adopting, so a hand-created config makes the birth apply fail and th
 | Include `doppler_secret.git_data_ssh_host` | **Cut from #6977; SHIPPED in #6982, and the feasibility regression was not structural.** The wedge is real only under the remedy *"give the new secret a per-PR `-target` line"* — which is not what any of its five sibling secrets do; they sit in `OPERATOR_APPLIED_EXCLUSIONS` with no per-PR target. Sourcing the value from a STATIC local rather than the computed NIC attribute leaves no edge that can reach the server, so the address is plannable and appliable with the host absent. **The operator upheld the cut on 2026-07-27 (DC-3)** and attached two mechanical constraints, recorded in release-checklist item 5: single-source from `hcloud_server_network.git_data.ip`, and land the `OPERATOR_APPLIED_EXCLUSIONS` entry in the same change. Both are now met: **DC-5 was REVERSED during #6982's review** (see the reversal note above) and the value reads `hcloud_server_network.git_data.ip` as mandated. The divergence argument — that the computed attribute is unappliable pre-birth — did not survive contact with the actual `-target` lines, which already include the NIC. The #6977 dissent is in `knowledge-base/project/specs/feat-one-shot-6977-git-data-birth-route/decision-challenges.md` (PR #6989); the operator's decision upholding it was added to that same file by #7003. |
 | Ship gate + suite now, enum + job in #6982 | **Considered and declined by the operator.** It would delete the interlock entirely by removing the capability, but #6977 would no longer deliver an executable route and would close on a partial. Recorded as DC-1. |
 <!-- lint-infra-ignore end -->
+
+## Amendment — 2026-09-17 (#8178): item 4's reader had never read
+
+Item 4 is satisfied host-side by *"the `stage:boot_complete` emit plus a poll that reads
+it"*, and the disposition row above records it **DONE**. The producer half held. The
+reader half had never once succeeded.
+
+**Measured.** On both real birth dispatches every one of the 20 polls returned `rc=22`
+(`curl --fail-with-body` on an HTTP >= 400): run
+[34822248580](https://github.com/jikig-ai/soleur/actions/runs/34822248580) (apply skipped
+by the birth gate) and run
+[34836141887](https://github.com/jikig-ai/soleur/actions/runs/34836141887) (apply SUCCESS,
+host born). In the second, the host was genuinely dark: it died at `gitdata_doppler_dl`
+about 20 s into runcmd and never emitted `boot_complete`. The job went RED saying *"the
+birth is UNVERIFIED"*, and the poll could not have told a dark host from a healthy one.
+The step ran `betterstack-query.sh … 2>/dev/null`, so the response body never reached the
+log and the cause was unrecoverable from `gh run view`.
+
+**Cause: a stale SQL API connection.** The step bound the three repository secrets
+`secrets.BETTERSTACK_QUERY_*`, last written 2026-07-03. They hold the SQL API connection
+created 2026-06-01, and git-data's Logs source (2734275) was created 2026-09-03. A Better
+Stack connection does not cover sources created after it (#7867, resolved 2026-09-09), so
+every read against the git-data table answered HTTP 500 `CLUSTER_DOESNT_EXIST`, which
+`--fail-with-body` reports as the same `rc=22` as a 401. The fix for #7867 created a new
+connection and wrote it only to Doppler `prd_terraform`, which the step's own error text
+had always named. The identical query succeeds under `doppler run -p soleur -c
+prd_terraform` (measured 2026-09-17 and 2026-09-18, `rc=0` on the UNION and on each arm).
+ADR-192's `## Addendum — 2026-09-18 (#8178)` retires its "never stored a row" reading of
+that error.
+
+**A correction to this PR's own first draft.** An earlier revision of this amendment said
+the 20 x 30 s budget was too short because run 34836141887's `boot_complete` landed
+`15:27:24`, 2 m 37 s after the poll gave up. That row came from the NEXT host: replace run
+[34861860722](https://github.com/jikig-ai/soleur/actions/runs/34861860722) finished its
+apply at `15:27:06`, 18 s before the row. With working credentials the birth would have read
+`silent`, which was correct. Measured healthy boots report `boot_complete` 8-13 s after runcmd
+starts, and runcmd starts 3-10 s after apply ends. So the budget stays at 20 x 30 s, about
+30x the measured latency. The job `timeout-minutes` is raised instead, and each read is
+capped at 45 s, so a slow read path ends in a verdict rather than a cancelled job with none.
+
+**A premise nobody had asserted: `git_data_host_replace` had no poll at all**, and it is
+the path that actually runs. Birth is once-ever, so with a live host present every later
+boot comes through replace, and one completed green on 2026-09-16 having verified
+nothing. Its apply step also carried no `id:`, so a copied poll's `steps.apply.outcome`
+would have resolved to `''` and the poll would have been skipped. Both jobs are now wired,
+and both `Dispatch summary` steps turn an apply/poll outcome pair that did not produce a
+verdict (including an empty outcome) red.
+
+**What item 4 now means.** The reader is
+`scripts/lib/git-data-boot-signal-poll.sh`, driven hermetically by
+`tests/scripts/test-git-data-boot-signal-poll.sh`. It reports three outcomes: `received`
+/ `silent` / `unreadable`. The verdict rests on the FINAL read, and the summary line
+`answered=N/M` says how many reads answered. `silent` is a statement about the host;
+`unreadable` measures nothing about it. stdout and stderr go to separate files, so a
+reader's error echo can never reach the match buffer. The failure log carries rc, a
+classification, the body's byte LENGTH and a scrubbed stderr line, never the body, because
+this repository is public and a ClickHouse auth body carries half a Basic-auth pair.
+
+**The read is anchored to the run.** Both jobs stamp `BOOT_TRAIL_SINCE` immediately before
+their apply, and the poll refuses to run without a well-formed anchor
+(`VERDICT=refused-no-anchor`). The rule: *a readiness verdict filtered by `host_name` is
+scoped to the host, not the host generation, so its read must be bounded by an anchor
+stamped before the action that creates the generation.* No back-skew is subtracted. `dt` is
+assigned by Better Stack at ingest (the emitter's POST body carries none), so the only clock
+comparison is Better Stack's against the runner's, and both are NTP-synced. An earlier
+revision subtracted 120 s, which let a replace queued behind another replace accept the
+previous generation's row. The rule is recorded as principle **AP-027**.
+
+**Accepted residual, stated rather than hidden.** Time is the only thing separating two host
+generations: the `boot_complete` row carries no per-host identity. If a previous host is still
+booting when the next replace starts (its own poll ended `silent`, and a replace was queued or
+re-dispatched), its late `boot_complete` can be ingested after the new anchor and before the
+destroy, and the new poll would then accept it. That needs a previous boot slower than the
+10-minute budget plus a dispatch inside that window; measured healthy boots report in 8-13 s.
+Closing it needs a generation id (the Hetzner server id) in the emit and in the `WHERE`
+clause, which changes `user_data` (ForceNew) and so rides the next change to the emitter.
+
+**Closure is event-gated.** No suite can show the read working from a real runner. #8178
+closes on the first post-merge git-data dispatch whose poll answers, judged by
+`scripts/followthroughs/git-data-boot-poll-8178.sh`, and not on a `boot_complete` row (one
+already existed before the fix).
+
+A producer with no reader is not a signal; a reader that has never read is not a reader.
