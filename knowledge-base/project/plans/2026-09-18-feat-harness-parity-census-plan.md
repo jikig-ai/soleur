@@ -954,17 +954,18 @@ re-implements it in TypeScript and must reproduce these numbers before any remed
 | Population | **101** | `git ls-files 'plugins/soleur/skills/*/SKILL.md' 'plugins/soleur/commands/*.md' \| wc -l` |
 | Index: canonical ids | **166** distinct | 98 skills + 3 commands + 68 agents = 169 before dedup; `go`/`help`/`sync` are both a skill and a command |
 | CANONICAL references today | **238** across 45 docs | classifier |
-| **NONCANONICAL** references today | **557 across 51 docs** | classifier — the RED baseline |
+| **NONCANONICAL** references today | **561 across 52 docs** | classifier — the RED baseline (557 under R1–R8; +4 from R9, advisor consult) |
 | — grok `/<name>` | 334 | attribution |
 | — claude/devin `/soleur:<name>` | 208 | attribution (includes 13 `/soleur:<metavariable>` — H3) |
 | — claude `@agent-soleur:…` | 8 | attribution |
+| — claude `@agent-<leaf>` (hyphen-absorbed sigil, R9) | 3 | `plan-review/SKILL.md:14` — `@agent-dhh-rails-reviewer @agent-kieran-rails-reviewer @agent-code-simplicity-reviewer`; passed R1–R8 GREEN until the advisor consult |
 | — codex `$soleur:<name>` | 5 | attribution |
 | — grok hyphen stem (`soleur-product-cpo`) | 1 | attribution (`go.md:149`, adapter prose → region) |
-| — unrecognised sigil | 1 | `work/SKILL.md:1359` `"$work"` — a shell variable; the measured false-positive cost of fail-closed |
+| — unrecognised sigil | 2 | `work/SKILL.md:1359` `"$work"` (a shell variable) and `legal-audit/SKILL.md:98` `(#breach-notice-triage)` (a markdown anchor whose hyphen-suffix is the skill name `triage`, R9) — the measured false-positive cost of fail-closed |
 | BARE (permitted) | 4298 | classifier |
 | PATH (permitted) | 520 | classifier |
 | EXEMPT today (inside the 12 `grok-harness-invoke` blocks) | 24 | classifier |
-| Docs with 0 NONCANONICAL | 50 | classifier |
+| Docs with 0 NONCANONICAL | 49 | classifier |
 | Sites inside fenced code | 95 of 557 | fences are **not** stripped (H5) |
 | Sites inside non-exempt marker regions | 51 | `one-shot-anti-bypass-protocol` 16, `lifecycle-handoff-protocol` 8, `plan-anti-bypass-protocol` 8, brainstorm/work anti-bypass 7+7, others 5 — all sentinel-pinned by name only (`workflow-fidelity.test.ts:219-258` `toContain(SENTINEL)`), so their bodies are rewordable |
 | `harness-model-map` / `phase-7-poll-block` regions (byte-pinned by generators) | **0** hits | classifier — no generator edit needed |
@@ -1023,7 +1024,10 @@ is one glob added to `POPULATION_GLOBS` (follow-up issue; residue measured above
 
 A **token** is a maximal run of `[A-Za-z0-9_:-]`. Because `:` and `-` are token characters,
 `soleur:plan`, `deepen-plan`, `agent-soleur:product:cpo` and `--plan` are each one token, so
-`plan` inside `deepen-plan` or `--plan` can never match `plan`.
+`plan` inside `deepen-plan` or `--plan` can never match `plan` by R6–R8 — which is exactly why R9
+exists: in a **sigil** context the hyphen can absorb the name (`@agent-cpo` tokenises as
+`agent-cpo`), so there the token is decomposed. Pinned by `boundary-punctuation.md` (prose side)
+and `claude-agent-leaf-mention.md` (sigil side).
 
 `BOUNDARY` is the **allowlist** of characters permitted immediately before a reference: whitespace,
 line start, and `` ` " ' ( [ { * < > | , ; . = + & ? → — – ``. Every member is there for a
@@ -1043,8 +1047,9 @@ inversion: the set that decides the verdict is the small, documented, permitted 
 | R4 | `t` contains `soleur:` not at its start | **NONCANONICAL** — `@agent-soleur:product:cpo` |
 | R5 | `t ∈ GROK_STEMS` | **NONCANONICAL** — `soleur-product-cpo`; derived from the index by the adapter's own function, not guessed |
 | R6 | `t ∈ BARE_NAMES` and `c ∈ BOUNDARY` | BARE — a name in prose ("the plan file", `` `plan` ``) |
-| R7 | `t ∈ BARE_NAMES`, `c == '/'`, and the character before the `/` matches `[A-Za-z0-9_./]` | PATH — `skills/plan/SKILL.md`, `./plan`, `https://…/plan` |
+| R7 | `t ∈ BARE_NAMES`, `c == '/'`, and the character before the `/` matches `[A-Za-z0-9_./]` | PATH — `skills/plan/SKILL.md`, `./plan`, `https://…/plan`. This class is the **second** verdict-deciding allowlist (after BOUNDARY); widening it by one character (`` ` ``, space, `(`) would turn every backticked `` `/plan` `` into PATH, so it has its own fixture inputs and mutation row (N5b) |
 | R8 | `t ∈ BARE_NAMES`, otherwise | **NONCANONICAL** — `/plan`, `$plan`, `%plan`, … |
+| R9 | `c ∉ BOUNDARY`, not R7, `t ∉ BARE_NAMES`, and some hyphen-suffix of `t` (`t.split('-')[i:]`, i ≥ 1) is in `BARE_NAMES ∪ GROK_STEMS` | **NONCANONICAL** — `@agent-cpo`, `@agent-kieran-rails-reviewer`, `@agent-soleur-product-cpo`, `$x-plan`. Decomposition runs **only** in a sigil context, so prose compounds after whitespace (`post-review`, `re-plan`, `deepen-plan`) stay non-references. Found by the advisor consult against a live site (`plan-review/SKILL.md:14`) that R1–R8 passed |
 | — | anything else | not a reference |
 
 Fenced code is classified like prose (H5). Marker regions are handled by the two region rules
@@ -1073,28 +1078,43 @@ dispatch in a skill is impossible by construction; in a command it is visible in
 `plugins/soleur/test/harness-parity.baseline.tsv`, one row per population member, sorted by path:
 
 ```
-# path<TAB>canonical<TAB>exempt
-plugins/soleur/commands/go.md	23	<n>
-plugins/soleur/skills/ship/SKILL.md	<n>	2
+# path<TAB>exempt<TAB>forms_region_sha256   (sha empty when the doc carries no harness-forms region)
+plugins/soleur/commands/go.md	<n>	<hex>
+plugins/soleur/skills/ship/SKILL.md	2	
 …
 ```
 
-The tree test asserts (i) `NONCANONICAL == 0` for every doc — no pin, this is the property; (ii)
-the set of paths equals the population exactly — a new doc without a row, or a stale row, is RED;
-(iii) each row's `canonical` and `exempt` equal the classifier's counts. `bare` and `path` are
-reported but never pinned (pinning them would turn every prose edit into a baseline regen).
+The tree test asserts (i) `NONCANONICAL == 0` for every doc — no pin, this is the property and it
+is absolute; (ii) the set of paths equals the population exactly — a new doc without a row, or a
+stale row, is RED; (iii) each row's `exempt` count equals the classifier's; (iv) each row's hash
+equals the SHA-256 of the concatenated `harness-forms` region bodies in that doc — a marker move
+that keeps the count (enclose one dispatch line, un-enclose one table row) changes the hash.
 
-What the vector buys that a scalar could not: a compensating swap (doc A +1, doc B −1) moves two
-rows; an index that stops resolving zeroes `canonical` in 45 rows; a population glob that narrows
-drops rows. It is the L142 *committed inventory*, not a number. What it costs: a PR that adds or
-removes a canonical reference regenerates the baseline with one command, which the failure message
-prints. `sync-grok-agent-compat.ts --check` (`grok-inspect-contract.test.ts:54`) is the precedent.
+**Not pinned, deliberately:** `canonical`, `bare`, `path`. The advisor consult refuted the
+`canonical` column: the gated property is absolute, so a compensating swap of canonical references
+attacks nothing, and the column's only value — detecting an index that resolves nothing — is
+bought more cheaply by the **index invariant** below, without taxing every PR that adds a
+`soleur:x` cross-reference with a baseline regen. Only a change to an exemption (new preamble
+carrier, new/moved/edited `harness-forms` region) regenerates the baseline, which is what an
+exemption change should cost.
+
+**Index invariant (list-free, computed in the test from an independent `git ls-files`):** for every
+`skills/*/SKILL.md`, `soleur:<dir>` ∈ `CANONICAL_IDS`; for every `commands/*.md`, `soleur:<base>` ∈
+`CANONICAL_IDS`; for every `agents/**/*.md`, `pathToAgentId(p)` ∈ `CANONICAL_IDS`, its leaf ∈
+`BARE_NAMES`, its stem ∈ `GROK_STEMS`; and `|CANONICAL_IDS|` equals the independently counted
+distinct total. `readIndex() → []`, a broken `pathToAgentId`, or a population glob that reads only
+part of the tree each fail this with a named missing id, before any doc is examined.
+
+What the vector buys that a scalar could not: population membership is an inventory (L142), not a
+count; exemptions are pinned by carrier and by content. What it costs: one `--update` when an
+exemption changes, printed in the failure. `sync-grok-agent-compat.ts --check`
+(`grok-inspect-contract.test.ts:54`) is the precedent.
 
 ### What v3 deliberately does not gate (and the measured residue)
 
 | Not gated | Why | Residue | Disposition |
 | --- | --- | --- | --- |
-| **NG-M** Mechanism words (`Skill tool`, `Task tool`, `subagent_type`, `spawn_subagent`, …) | a mechanism has no canonical word to allowlist against; a mechanism check is necessarily a blocklist, and a born-blocking gate on a blocklist is the v2 defect. The **name** is what the adapter resolves (go.md `:147`), so `ship:504`'s `soleur:preflight` resolves on Grok with "Skill tool" as ignorable noise — the originating #8299 defect was a *name* with no canonical form, which v3 catches | 82 lines / 29 docs | follow-up issue; the skill-creator line (W6) teaches the canonical phrasing so new sites stop appearing |
+| **NG-M** Mechanism words (`Skill tool`, `Task tool`, `subagent_type`, `spawn_subagent`, …) that do **not** carry a name through a sigil | a mechanism word that carries the name through a sigil (`@agent-…`, `$…`, `/…`) **is a name form and is in scope** (R1/R4/R8/R9); only the bare tool noun is out. A mechanism has no canonical word to allowlist against; a mechanism check is necessarily a blocklist, and a born-blocking gate on a blocklist is the v2 defect. The **name** is what the adapter resolves (go.md `:147`), so `ship:504`'s `soleur:preflight` resolves on Grok with "Skill tool" as ignorable noise — the originating #8299 defect was a *name* with no canonical form, which v3 catches | 82 lines / 29 docs | follow-up issue; the skill-creator line (W6) teaches the canonical phrasing so new sites stop appearing |
 | Bare agent names in pseudo-code (`Task cpo(…)`) | R6 permits bare names because skill names are English words; distinguishing "Task cpo(" from "the cpo agent" is role classification (G1's trap) | 44 lines / 8 docs | same follow-up issue |
 | `soleur:<unknown>` (R3) | a typo'd name is a different defect; gating it needs an allowlist of non-skill `soleur:` directives (`followthrough`) | 21 sites | reported in `--report`; not a follow-up |
 | Other doc populations | one glob each; bounded diff for this PR | 99 sites / 40 docs | follow-up issue, measured above |
@@ -1140,8 +1160,8 @@ dedup — are retained. F20 (`go.md:122` two-harness enumeration) is fixed by de
   asserts each expected verdict (table in Phase 2). It runs on every CI pass, so the blindness rows
   of the mutation matrix are executed continuously rather than once by hand.
 - **W3 Tree census.** The same file's second `describe` runs `census(readPopulation(), readIndex())`
-  and asserts: zero NONCANONICAL per doc, path set == population, per-doc `canonical`/`exempt` ==
-  `harness-parity.baseline.tsv`. On any failure it prints, per site: `path:line: <token> — <harness
+  and asserts: zero NONCANONICAL per doc, path set == population, per-doc `exempt` and
+  `harness-forms` region hash == `harness-parity.baseline.tsv`, and the index invariant. On any failure it prints, per site: `path:line: <token> — <harness
   attribution>; write soleur:<name>` and, on a vector mismatch, the regen command.
 - **W4 CLI.** `plugins/soleur/scripts/harness-parity-census.ts` with `--report` (human-readable
   violation list + UNKNOWN-NS report), `--check` (exit 1 on vector drift) and `--update` (rewrite
@@ -1197,7 +1217,7 @@ dedup — are retained. F20 (`go.md:122` two-harness enumeration) is fixed by de
 | `plugins/soleur/commands/go.md` | W7 regions (Step 2.0 `:128-157`; the Devin/Grok lines of Step 2.1; Sharp Edge `:207`); W8 sentence at `:147`; `:122-124` canonical dispatch; remaining 43 sites |
 | `plugins/soleur/commands/help.md` | one `harness-forms` region spanning Step 2.5 + Step 3 (`:30-146`); 34 sites |
 | `plugins/soleur/commands/sync.md` | 15 sites (`/sync` → `soleur:sync`, `/soleur:sync c4` → `soleur:sync c4`) |
-| 48 `plugins/soleur/skills/*/SKILL.md` | 465 sites; list = `--report` output, top: plan 67, ship 61, work 57, one-shot 41, review 37, brainstorm 20, gdpr-gate 17, postmerge 15, product-roadmap 13, deepen-plan 12, kb-search 11 |
+| 49 `plugins/soleur/skills/*/SKILL.md` | 469 sites (incl. `plan-review:14`'s three `@agent-<leaf>` mentions → `soleur:engineering:review:<leaf>`, and the `legal-audit:98` anchor rename); list = `--report` output, top: plan 67, ship 61, work 57, one-shot 41, review 37, brainstorm 20, gdpr-gate 17, postmerge 15, product-roadmap 13, deepen-plan 12, kb-search 11 |
 | `plugins/soleur/skills/one-shot/SKILL.md` | preamble aligned to template |
 | `plugins/soleur/skills/skill-creator/SKILL.md` | W6 |
 | `plugins/soleur/skills/{drain-labeled-backlog,product-roadmap}/SKILL.md:3` | `description:` one-token substitution (W10) |
@@ -1222,7 +1242,7 @@ any staged `.ts` (F30). The RED census is a local checkpoint recorded in the PR 
    `describe`'s sentinel string (ADR-224 §Verification precedent), so deleting the tree census is
    caught from outside it.
 5. **Local RED checkpoint:** `bun plugins/soleur/scripts/harness-parity-census.ts --report` must
-   print **557 sites / 51 docs** with the attribution split above. A different number means the
+   print **561 sites / 52 docs** with the attribution split above. A different number means the
    port diverged from the measured predicate — stop and reconcile before touching a doc.
 
 ### Phase 2 — Fixture table (written first, in Phase 1 step 2; listed here for review)
@@ -1232,11 +1252,12 @@ any staged `.ts` (F30). The RED census is a local checkpoint recorded in the PR 
 | `canonical.md` | `` `soleur:plan` ``, `Skill(soleur:go)`, `skill: soleur:preflight`, `` `soleur:product:cpo` `` | 4 CANONICAL, 0 NONCANONICAL — must-PASS |
 | `bare-prose.md` | "the plan file", `` `plan` ``, "(review)", "**work**" | BARE only — must-PASS, the permitted non-canonical input |
 | `path.md` | `plugins/soleur/skills/plan/SKILL.md`, `./plan/x`, `https://a/b/plan` | PATH only — must-PASS |
-| `boundary-punctuation.md` | `KEY=plan`, `plan+work`, `plan→work`, `` `.go` ``, `?plan` | BARE only — must-PASS; pins each BOUNDARY member |
-| `grok-slash.md` | `/plan` | 1 NONCANONICAL, attribution grok |
+| `boundary-punctuation.md` | `KEY=plan`, `plan+work`, `plan→work`, `` `.go` ``, `?plan`, and the compounds `--plan`, `deepen-plan`, `re-plan`, `post-review` after whitespace | BARE / not-a-reference only — must-PASS; pins each BOUNDARY member and the `-` token class |
+| `grok-slash.md` | `` `/plan` ``, `(/plan)`, `"/plan"`, and `/plan` at line start | 4 NONCANONICAL, attribution grok — the backticked form is the shape of most of the 334 real sites, so it must be here, not only the line-start form |
 | `claude-devin-slash.md` | `/soleur:plan` | 1 NONCANONICAL, attribution claude/devin |
 | `codex-dollar.md` | `$soleur:plan` | 1 NONCANONICAL, codex |
 | `claude-agent-mention.md` | `@agent-soleur:product:cpo` | 1 NONCANONICAL, claude |
+| `claude-agent-leaf-mention.md` | `@agent-cpo`, `@agent-kieran-rails-reviewer`, `@agent-soleur-product-cpo` | 3 NONCANONICAL, claude (R9) |
 | `grok-stem.md` | `soleur-product-cpo` | 1 NONCANONICAL, grok |
 | `metavariable.md` | `soleur:<skill>` and `/soleur:<skill>` | 1 UNKNOWN-NS (not gated), 1 NONCANONICAL (R1) |
 | `novel-sigil.md` | `%plan`, `!plan`, `~plan` | 3 NONCANONICAL, "unrecognised sigil" — the allowlist shape |
@@ -1244,7 +1265,7 @@ any staged `.ts` (F30). The RED census is a local checkpoint recorded in the PR 
 | `fenced.md` | `/soleur:work` inside a ``` fence | 1 NONCANONICAL (H5) |
 | `region-preamble.md` | template body for `<name>=plan` inside `grok-harness-invoke` | EXEMPT 2, NONCANONICAL 0 — must-PASS |
 | `region-preamble-drifted.md` | same block, one word changed | RED: template mismatch |
-| `region-forms-in-command.md` (path under `commands/`) | `/go` inside `harness-forms` | EXEMPT 1 — must-PASS |
+| `region-forms-in-command.md` (path under `commands/`) | `/go` inside `harness-forms` | EXEMPT 1, region hash = sha256 of the body — must-PASS |
 | `region-forms-in-skill.md` (path under `skills/`) | same | 1 NONCANONICAL — `harness-forms` exempts nothing in a skill |
 | `region-unknown.md` | `/plan` inside `<!-- not-an-allowed-region:start -->` | 1 NONCANONICAL (H6) |
 | `region-unterminated.md` | start marker, no end | RED: unterminated |
@@ -1262,6 +1283,8 @@ Substitution table, applied per site and verified by re-running `--report` after
 | `/X`, X ∈ index | `soleur:X` | add the namespace |
 | `$soleur:X` | `soleur:X` | |
 | `@agent-soleur:a:b` | `soleur:a:b` | |
+| `@agent-<leaf>` | `soleur:<dir>:…:<leaf>` (the registry id) | R9 |
+| a markdown anchor whose hyphen-suffix is a skill name (`#breach-notice-triage`) | rename the heading/anchor | the second measured false positive |
 | `soleur-a-b` (grok stem) in prose | `soleur:a:b` | outside regions |
 | `/soleur:<metavar>` | `soleur:<metavar>` | R3 permits it at a boundary |
 | "**Claude:** Skill tool (`soleur:x`) … **Grok:** Read …" dispatch prose | "invoke `soleur:x`" | delete the enumeration; the adapter resolves (F20) |
@@ -1310,14 +1333,18 @@ every CI pass; N-rows are hand-run once against a pristine copy and recorded.
 | N3 | Add a **second** violating doc after a compliant first (a new `skills/zz-fixture/SKILL.md` with `/plan`) | RED naming the new path **and** "no baseline row for …" — two reasons, both printed |
 | N4 | Empty `POPULATION_GLOBS` | `harness-parity: 0 docs examined` — the guard's own dispatch |
 | N5 | Add `/` to BOUNDARY | fixture `grok-slash.md` RED: expected NONCANONICAL, got BARE |
+| N5b | Add `` ` `` to R7's pre-slash class | fixture `grok-slash.md` RED: expected NONCANONICAL, got PATH — the second verdict allowlist has its own row |
+| N5c | Remove `-` from the token class | fixture `boundary-punctuation.md` RED: `deepen-plan` reports a reference |
+| N5d | Delete R9 | fixture `claude-agent-leaf-mention.md` RED — and reintroducing `plan-review:14`'s line on the tree is RED with three sites |
 | N6 | Add `not-an-allowed-region` to the region allowlist | fixture `region-unknown.md` RED |
 | N7 | Delete `plan/SKILL.md`'s `grok-harness-invoke` block | vector RED: `plan/SKILL.md exempt 2 → 0; run --update` (G3) |
 | N8 | Reword one word inside `ship/SKILL.md`'s preamble | template RED naming `ship` |
-| N9 | Move go.md's Step 2.0 `harness-forms` markers to enclose Step 1's dispatch line | vector RED: `go.md exempt <n> → <n+1>` — and the diff shows the marker move |
+| N9 | Move go.md's Step 2.0 `harness-forms` markers to enclose Step 1's dispatch line | vector RED: `go.md exempt <n> → <n+1>` |
+| N9b | Same move but also un-enclose one table row, keeping `exempt` equal | vector RED on the region **hash** — the count-blind move |
 | N10 | Wrap a `/plan` in `harness-forms` inside a skill | RED as NONCANONICAL — the region is not honoured under `skills/` |
-| N11 | Make `readIndex()` return `[]` | vector RED on every `canonical>0` row (45 rows) — index blindness is loud |
+| N11 | Make `readIndex()` return `[]` (and, separately, break `pathToAgentId` to drop one segment) | index invariant RED naming the first missing id — before any doc is examined |
 | N12 | Delete the tree `describe` | fixture suite RED: cross-file sentinel missing |
-| N13 | Swap: doc A gains one canonical reference, doc B loses one | vector RED on two rows (H7's compensation) |
+| N13 | Point `POPULATION_GLOBS` at `skills/[a-m]*/SKILL.md` only | vector RED: rows for the missing docs — a partial population is loud (replaces the earlier N13 swap row, which the advisor showed tested only the dropped `canonical` pin) |
 
 **Harness rows.**
 
@@ -1448,15 +1475,16 @@ never bless a `:-` plugin-root form — is honoured (V-AC9 retained).
 ### Pre-merge (PR)
 
 - [ ] **AC1** Phase 1 RED checkpoint reproduced: `bun plugins/soleur/scripts/harness-parity-census.ts --report`
-      on the pre-remediation tree prints `557 sites in 51 docs` with attribution grok 334 /
-      claude-devin 208 / claude-agent 8 / codex 5 / grok-stem 1 / unrecognised 1. Output pasted in
+      on the pre-remediation tree prints `561 sites in 52 docs` with attribution grok 334 /
+      claude-devin 208 / claude-agent 8 / claude-agent-leaf 3 / codex 5 / grok-stem 1 / unrecognised 2. Output pasted in
       the PR body.
 - [ ] **AC2** Post-remediation: the same command prints `0 sites`; `--check` exits 0; the baseline
-      has exactly 101 rows and `awk -F'\t' '$3>0' plugins/soleur/test/harness-parity.baseline.tsv | wc -l`
-      equals 12 (preambles) + the count of `commands/*.md` carrying `harness-forms` (3).
+      has exactly 101 rows; `awk -F'\t' '$2>0' plugins/soleur/test/harness-parity.baseline.tsv | wc -l`
+      equals 12 (preambles) + the count of `commands/*.md` carrying `harness-forms` (3); and
+      `awk -F'\t' '$3!=""' … | wc -l` equals 3.
 - [ ] **AC3** Every fixture row in the Phase 2 table asserts its stated verdict; the fixture
-      `describe` has ≥ 22 tests. `bun test plugins/soleur/test/harness-parity.test.ts` GREEN.
-- [ ] **AC4** N1–N13 each observed RED with the stated message (not merely non-zero) against a
+      `describe` has ≥ 24 tests, and the index-invariant test is present. `bun test plugins/soleur/test/harness-parity.test.ts` GREEN.
+- [ ] **AC4** N1–N13 (incl. N5b/N5c/N5d/N9b) each observed RED with the stated message (not merely non-zero) against a
       pristine copy; H1–H5 as stated; the observed messages recorded in the PR body.
 - [ ] **AC5** `git grep -nE '(^|[^A-Za-z0-9_:./-])/(soleur:)?(plan|work|ship|review|go|kb-search|trigger-cron)\b' -- 'plugins/soleur/skills/*/SKILL.md' 'plugins/soleur/commands/*.md'`
       returns only lines inside `harness-forms` or `grok-harness-invoke` regions (spot-check
@@ -1512,3 +1540,16 @@ never bless a `:-` plugin-root form — is honoured (V-AC9 retained).
 `#4133` (follow-through #4116: Observability schema parity test) names `plugins/soleur/skills/plan/SKILL.md`
 — **Acknowledge**: it concerns the `## Observability` template shape, not this plan's edits to that
 file (which are reference-form substitutions). Remains open.
+
+## v3 Advisor consult (Phase 4.5, `advisor` tier) — applied
+
+Six findings, all applied above before the review panel. **Finding 1 (P0) was a real hole:**
+R1–R8 tokenise `@agent-kieran-rails-reviewer` as one hyphenated token, which is neither a bare name
+nor a `soleur:` carrier, so `plan-review/SKILL.md:14` — three Claude-only agent mentions in the
+population — passed GREEN. R9 (hyphen decomposition in sigil context only) closes it; measured
++3 true sites and one anchor false positive. Findings 2/5 added the realistic `` `/plan` `` and
+compound-word fixtures and rows N5b/N5c/N5d (R7's pre-slash class and the token class were
+verdict-deciding sets with no row). Finding 3 dropped the `canonical` column for the index
+invariant — the pin taxed every cross-reference edit and bought only N11. Finding 4 added the
+`harness-forms` region hash (N9b). Finding 6 fixed the NG-M boundary: a mechanism word that carries
+a name through a sigil is a name form and is in scope.
