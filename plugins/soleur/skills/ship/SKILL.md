@@ -1469,7 +1469,7 @@ done
    with `Tracks #NNNN` companions. Re-run detection. **Attempt-evidence precondition:** a browser/portal step may be filed `deferred-automation` ONLY if the issue body carries a `playwright-attempt:` line (per work Phase 4 Playwright-First Audit) proving a real attempt reached a true human gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token). An a-priori "MFA-gated", "dashboard-only", or "no API path" assertion — or an `api-probe-403` from a narrowly-scoped token — does NOT satisfy this; if no attempt was made, STOP and run the Playwright attempt first. If the attempt reached an automatable gate that the tool could not complete (browser crash, MCP down), it is `attempted-blocked-on-tool`, NOT operator-only: file a `tooling`/`flaky` `type/chore` issue with the resume recipe instead, and remove the bullet from the operator section.
 2. **Cite an existing OPEN issue.** Operator pastes `#NNNN` per undeferred match. Skill verifies state/labels/sentinel and updates the PR body with `Tracks #NNNN`.
 3. **Override with operator-attestation.** Operator pastes a 1-paragraph justification (rare; e.g., first non-Soleur tenant onboarding triggers a one-off K-bis upload). Skill appends a `<!-- gate-override: wg-block-pr-ready-on-undeferred-operator-steps -->` HTML comment followed by the attestation text to the PR body, then proceeds.
-4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated — so it is the only place the artifact that rule mandates can actually be produced. **Invoke the skill; do not paraphrase it inline** (`skill: soleur:operator-bootstrap`), pass the undeferred matches as its stage list, and let it emit the `<feature>/bootstrap.sh` the rule names. This is also what discharges `hr-ship-message-no-operator-checklist`: with a script to point at, the tracked follow-through issue's `auto_command:` block is `bash <feature>/bootstrap.sh` rather than a prose checklist. Then fold any remaining non-scriptable matches — the true human gates (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token) — back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
+4. **Generate a runnable script instead — invoke `skill: soleur:operator-bootstrap`.** Precondition: **≥2 of the undeferred matches are scriptable and blocked on the same credential the agent cannot mint.** That is the literal trigger of `hr-multi-step-post-merge-bootstrap-script`, and this gate is the only point in the pipeline where those steps are enumerated — so it is the only place the artifact that rule mandates can actually be produced. **Invoke the skill; do not paraphrase it inline** (`skill: soleur:operator-bootstrap`), pass the undeferred matches as its stage list, and let it emit the `knowledge-base/project/specs/<feature>/bootstrap.sh` the rule names (tracked, so it survives Phase 7's worktree reaping; the skill's §Where states why). This is also what discharges `hr-ship-message-no-operator-checklist`: with a script to point at, the tracked follow-through issue's `auto_command:` block is `bash knowledge-base/project/specs/<feature>/bootstrap.sh` rather than a prose checklist. Then fold any remaining non-scriptable matches — the true human gates (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware-token) — back through option 1, replace the scripted bullets with the single `Tracks #NNNN` companion for the ONE post-merge issue the rule requires (one issue, not N), and re-run detection. **If the precondition does not hold** (a single step, or steps blocked on different credentials), say so and fall through to options 1-3 — do not generate a one-stage script to satisfy the gate.
 
 **Headless mode.** Abort with the same structured error. No auto-file / auto-override in headless — operator must run interactively to make the choice. The abort message MUST state whether option 4's precondition holds, naming `soleur:operator-bootstrap` when it does: a headless abort that lists only "file, cite or attest" hands the operator three ways to record the step and none to remove it.
 
@@ -1817,42 +1817,41 @@ Replace `BRANCH_NAME` with the actual branch name.
    Do not quote flag names -- write `--title` not `"--title"`.
 
    **The `## Merge Danger` block — TWO fields, both mandatory, placed ABOVE `## Changelog`.**
-   `.github/workflows/reusable-release.yml` truncates the release note at the next `##` heading
-   after `## Changelog`, so the block is silently dropped from every release note if it drifts
-   below. It also sits AFTER the `Filed:` line, which must stay line-initial for
-   `net-issue-flow.sh`'s declared-filing arm (the whole-line
+   It sits above the changelog so the founder reads the undo before the list of changes — nothing
+   more. `.github/workflows/reusable-release.yml` extracts ONLY the lines between `## Changelog`
+   and the next `##` heading, so the block is excluded from release notes wherever it sits; placement
+   is a reading-order choice, not a release-note one. It also sits AFTER the `Filed:` line, which
+   must stay line-initial for `net-issue-flow.sh`'s declared-filing arm (the whole-line
    `^[ \t\r]*([-*+][ \t]+)?[*_]*[Ff][Ii][Ll][Ee][Dd][*_]*:` assertion it calls the gate's ONLY
    counted attribution source) — nothing in this section precedes, wraps or indents that line.
 
-   **`Undo:` is quoted, not judged.** Quote `deployment-verification-agent`'s rollback line
-   verbatim when `/review` produced one. That agent runs only on PRs touching production data,
-   migrations, or record-discarding behaviour (`plugins/soleur/skills/review/workflows/review.workflow.js`,
-   the "Go/No-Go deploy checklist with SQL verification queries and rollback procedure" lens), so on
-   a plugin-only or docs-only PR it never runs and there is nothing to quote. Write `none known`
-   then — that is the **single** sentinel; there is no second "none produced" value. `/ship` never
-   judges reversibility independently of that agent, because two uncorrelated reversibility claims
-   in one pipeline is the defect below, reproduced structurally.
+   **`Undo:` is AUTHOR-WRITTEN by `/ship`, from what `/ship` actually knows at Phase 6**, keyed on
+   the blast radius it is about to write:
+
+   - `docs` or `plugin`: `git revert <squash-merge-sha>` — the literal form; the SHA is known once
+     the merge lands and the follow-through can quote it. Nothing else is needed: the plugin is
+     delivered by the source commit advancing, so the revert IS the redeploy.
+   - `web-platform`: the same revert **plus** the redeploy step that ships it (name the workflow or
+     the `soleur:deploy` invocation), because a reverted commit that never deploys undoes nothing.
+   - `user-data` or `money`: quote a rollback procedure ONLY if one exists in this PR's review
+     artifacts — a `deployment-verification-agent` finding (it runs only on migration / record-
+     discarding PRs, via `plugins/soleur/skills/review/workflows/review.workflow.js`) or a
+     migration `down.sql`. Otherwise write `none known — <what is permanently lost>` on the same
+     line (the deleted rows, the charged card, the published tag). Do not invent a procedure the
+     artifacts do not contain.
 
    **`Blast Radius:` is one value** from `docs | plugin | web-platform | user-data | money`.
 
    **The rule is directionless: name the undo; if you cannot name one, say so and name what is
-   permanently lost.** Adopt no default in either direction.
-   ADR-119 (`knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`,
-   the section headed *"Rollback is the retained plaintext volume — and the one-way-door framing
-   is wrong"*) records a one-way-door ruling that was **wrong** — an undo path existed the whole
-   time — and the ADR's own words are that stating it that way *"will make an operator refuse a
-   rollback they should take."* So a blanket "assume irreversible" default is precisely the direction that caused
-   the defect. A blanket reversible default is not the fix either: it under-claims on a live charge,
-   a deleted volume, a published tag. The defect was never the direction — it was a **label with no
-   mechanism attached**. A named command is checkable by founder and reviewer alike; a one-word
-   verdict is unfalsifiable. When no undo exists, `none known` is followed on the same line by what
-   is permanently lost.
+   permanently lost.** Adopt no default in either direction. ADR-119
+   (`knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md`,
+   §"Rollback is the retained plaintext volume") records a one-way-door ruling that was wrong: the
+   defect was a **label with no mechanism attached**, so a named command is the fix, not a verdict.
 
    **Do NOT add a `Door:` (one-way / two-way) field.** It is derived — it cannot be written without
-   `Undo:` — so on the majority path, where `deployment-verification-agent` never runs, it is either
-   left unconstrained (which reopens the ADR-119 defect the undo line exists to close) or forced to
-   `one-way` on every docs-only PR. Two fields, no third. There is also no merge hold on this block
-   today: it renders, and nothing blocks on it.
+   `Undo:` — and a one-word verdict is exactly the unfalsifiable label ADR-119 warns against. Two
+   fields, no third. There is also no merge hold on this block today: it renders, and nothing blocks
+   on it.
 
    **Gate safety for this section — check the text you are about to write, not the text you wrote.**
    `.claude/hooks/ship-operator-step-gate.sh`'s `DETECT_RE` anchors on a **list-bullet marker**
