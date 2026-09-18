@@ -153,6 +153,7 @@ adr-166
 adr-181
 adr-193
 adr-194
+adr-217
 adr-corpus
 adr-drift
 adr-hygiene
@@ -245,6 +246,7 @@ anon-key
 ansi
 anthropic
 anthropic-api
+anthropic-credits
 anti-priming
 anti-slop
 anti-sycophancy
@@ -547,6 +549,7 @@ build
 build-assertions
 build-context
 build-errors
+build-sha
 build-time-inlining
 build-time-interpolation
 bulk-redirects
@@ -1151,6 +1154,7 @@ dependency-resolution
 dependency-review
 dependency-sequencing
 deploy
+deploy-arm
 deploy-churn
 deploy-docs
 deploy-docs workflow fails on redirect pages lacking seo metadata
@@ -2432,6 +2436,7 @@ not-rest-mutable
 notification not sent
 notification-channel
 notification-migration
+notification-vs-verdict
 notifications
 npm
 npm-packaged-binary
@@ -2975,6 +2980,7 @@ pure-ts
 purity
 purity-test
 push
+push-arm
 push-notifications
 push-protection
 pwa
@@ -3541,6 +3547,7 @@ ship-phase-7
 ship-skill
 shipped
 shipping
+short-sha
 show-full-output
 showdownload
 sibling-call-discovery
