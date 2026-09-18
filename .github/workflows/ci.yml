@@ -807,6 +807,15 @@ jobs:
           DEST="apps/web-platform/_plugin-vendored"
           rm -rf "$DEST"
           cp -a --no-dereference plugins/soleur "$DEST"
+          # The plugin-root .mcp.json (#8156) is the Claude-Code-plugin
+          # registration surface only: the hosted agent-runner loads this
+          # vendored tree via plugins:[{type:"local"}] on a prod image with
+          # no python3 and no @playwright/mcp@0.0.78 — vendoring the file
+          # registers a guaranteed-failed playwright server on every hosted
+          # session. The plugin's manifest mcpServers (plugin.json) are
+          # unaffected. Pinned by the Guard-3 row in
+          # plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh.
+          rm -f "$DEST/.mcp.json"
           DEST_ABS="$(readlink -f "$DEST")"
           while IFS= read -r link; do
             target="$(readlink -f "$link" || true)"
