@@ -281,6 +281,8 @@ copy are structurally equal; no commit can change one without the others.
 A **census** over `grep -rn "phase-surface-map\|declaredTransitions"`, with
 test files classified explicitly as non-readers, not a pinned list.
 
+**Mutation matrix.**
+
 | # | Mutation | Must |
 |---|---|---|
 | 1 | Add an edge to the TS const only | RED |
@@ -305,6 +307,8 @@ can only be lowered.
 **Assembly.** The seven keys of `declaredTransitions()` resolved to
 `plugins/soleur/skills/<name>/SKILL.md`, **plus a red unclassified bucket** for
 a lifecycle skill with no row. `MIN_CASES` = 7.
+
+**Mutation matrix.**
 
 | # | Mutation | Must |
 |---|---|---|

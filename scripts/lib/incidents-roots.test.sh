@@ -183,6 +183,11 @@ fi
 # Counts REAL cases (total passes minus the one self-test pass). Reported with
 # printf + exit rather than through fail(), so an edit that guts fail() cannot
 # suppress the floor itself.
+# SELFTEST_PASSES is a LITERAL here, not the variable bound after the self-test:
+# guard-vacuity-floor.test.sh slices the floor plus its CONTIGUOUS assignments into
+# a mutant, and a binding 130 lines up is unbound there (measured: CONSTRUCTION, not
+# FIRES). The self-test above asserts passes == 1, so the literal is proven, not chosen.
+SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
 MIN_CASES=9
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then

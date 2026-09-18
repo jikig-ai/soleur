@@ -520,8 +520,10 @@ jobs:
           git fetch --no-tags --quiet origin main
           BASE="$(git merge-base origin/main HEAD)"
           python3 scripts/lint-skill-body-budget.py --base "$BASE"
-      - name: Guard's own suite
-        run: bash scripts/lint-skill-body-budget.test.sh
+      # The guard's OWN suite (scripts/lint-skill-body-budget.test.sh) is registered in
+      # scripts/test-all.sh under the scripts shard, not here: lint-orphan-test-suites.sh
+      # refuses double registration because a union of surfaces makes de-registering
+      # from any one of them a silent no-op. Only the LINT needs this job's depth-0 base.
 
   # Regenerates apps/web-platform/package-lock.json under a pinned npm
   # major and diffs against the committed file. Catches the `bun add`
