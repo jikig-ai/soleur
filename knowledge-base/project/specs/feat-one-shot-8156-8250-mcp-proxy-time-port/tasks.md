@@ -77,13 +77,19 @@ CPO sign-off required before `/work` begins (`single-user incident` threshold).
 
 ## Verification gates
 
-- [x] `python3 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` green — 316/316 cases, 63/63 mutants
+- [x] `python3 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh` green — 316/316 cases, 63/63 mutants; re-run post-review-fixes **323/323, 65/65 mutants**
 - [x] `bun test plugins/soleur/test/codex-plugin.test.ts plugins/soleur/test/devin-plugin.test.ts` green unmodified — 14 pass
 - [x] `bun test apps/web-platform/test/plugin-root-anchoring.test.ts` green — 26/26 (EXPECTED_GATE_REFS unchanged)
 - [x] `bash scripts/lint-credential-path-literals.test.sh` green — 41/41; lint-legal-registers 11/11; c4 gates 4/4; cron-ux-audit 30/30; components+skill-security-scan 1353 pass
-- [x] AC1–AC11 verified (AC12 lands with the PR body); AC11 diff-scope clean
-- [ ] PR body: `Closes #8156`, `## Changelog` (MINOR — new plugin MCP
+- [x] AC1–AC11 verified (AC12 lands with the PR body); AC11 diff-scope clean (Files-to-Edit updated for the review-driven additions)
+- [x] PR body: `Closes #8156`, `## Changelog` (MINOR — new plugin MCP
       surface), Option-C issue referenced
+- [x] Review dispositions (2026-09-18): architecture P1 resolved by
+      vendored-tree exclusion (`rm -f "$DEST/.mcp.json"` in both vendor steps,
+      Guard-3-pinned; reach (c) by exclusion recorded in ADR/audit/register/C4);
+      P1-2 stored-profile prose scoped (cf-token-scope, work, plan); compound
+      stale literal fixed; simplicity P2s fixed (dup/dash refusals, dead
+      assert, README table, alternatives row) — `dd085a96a`
 
 ## Out of scope
 
