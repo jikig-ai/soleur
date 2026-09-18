@@ -63,7 +63,7 @@ cat > "$WORK/bin/gh" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FX/calls"
 [[ -n "${GH_TOKEN:-}" ]] || { echo "shim: GH_TOKEN absent" >&2; exit 65; }
-answer() { [[ -f "$FX/$1.fail" ]] && exit 1; [[ -f "$FX/$1" ]] || exit 1; cat "$FX/$1"; exit 0; }
+answer() { [[ -f "$FX/$1.fail" ]] && { cat "$FX/$1.fail" >&2; exit 1; }; [[ -f "$FX/$1" ]] || exit 1; cat "$FX/$1"; exit 0; }
 if [[ "$#" -eq 2 && "$1" == api && "$2" == "repos/jikig-ai/soleur/pulls/8262" ]]; then
   answer pr.json
 fi
@@ -103,25 +103,36 @@ add_run() {
     '.workflow_runs += [{id:$id, created_at:$c, event:$e, head_branch:$b}]' "$d/runs.json" > "$d/runs.tmp" \
     && mv "$d/runs.tmp" "$d/runs.json"
 }
-# add_job <fx> <run_id> <job_id> <name> <status> <conclusion|null> <started_at>
+# add_job <fx> <run_id> <job_id> <name> <status> <conclusion|null> <started_at> [poll-conclusion]
+# The job carries a poll step (the jobs API's steps[]) whose window is POLL_START..POLL_END.
+# poll-conclusion defaults to `success`; `absent` omits the step entirely.
+POLL_START="2026-09-20T09:59:00Z"; POLL_END="2026-09-20T10:05:00Z"
 add_job() {
   local d="$1"; assert_fixture_dir "$d"
   [[ -f "$d/jobs-$2.json" ]] || printf '%s' '{"jobs":[]}' > "$d/jobs-$2.json"
-  jq --argjson id "$3" --arg n "$4" --arg s "$5" --arg c "$6" --arg st "$7" \
-    '.jobs += [{id:$id, name:$n, status:$s, conclusion:(if $c == "null" then null else $c end), started_at:$st}]' \
+  jq --argjson id "$3" --arg n "$4" --arg s "$5" --arg c "$6" --arg st "$7" --arg pc "${8:-success}" \
+     --arg ps "$POLL_START" --arg pe "$POLL_END" \
+    '.jobs += [{id:$id, name:$n, status:$s, conclusion:(if $c == "null" then null else $c end), started_at:$st,
+                steps:(if $pc == "absent" then [] else
+                  [{name:"Terraform apply", conclusion:"success", started_at:"2026-09-20T09:58:00Z", completed_at:$ps},
+                   {name:("Poll for the git-data boot-completion signal" + (if $n == "git_data_host_replace" then " (replace)" else "" end)),
+                    conclusion:$pc, started_at:$ps, completed_at:$pe}] end)}]' \
     "$d/jobs-$2.json" > "$d/jobs.tmp" && mv "$d/jobs.tmp" "$d/jobs-$2.json"
 }
-# log_lines <fx> <job_id> <job_name> <line>... — one `<job>\t<step>\t<ts> <line>` per arg,
-# the shape `gh run view --job --log` emits (measured on run 34836141887).
-log_lines() {
-  local d="$1" jid="$2" jn="$3"; shift 3; assert_fixture_dir "$d"
+# log_lines_at <fx> <job_id> <job_name> <ts> <line>... — one `<job>\t<step>\t<ts> <line>` per
+# arg, the shape `gh run view --job --log` emits (measured on run 34836141887).
+log_lines_at() {
+  local d="$1" jid="$2" jn="$3" ts="$4"; shift 4; assert_fixture_dir "$d"
   local l
-  for l in "$@"; do printf '%s\tUNKNOWN STEP\t2026-09-20T10:00:00.1234567Z %s\n' "$jn" "$l"; done >> "$d/log-$jid.txt"
+  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$ts" "$l"; done >> "$d/log-$jid.txt"
 }
+# log_lines — inside the poll step's window.
+log_lines() { local d="$1" jid="$2" jn="$3"; shift 3; log_lines_at "$d" "$jid" "$jn" "2026-09-20T10:00:00.1234567Z" "$@"; }
 
 # run_arm <fx> [extra env...] — runs the REAL probe with the shim first on PATH; prints rc.
 run_arm() {
   local d="$1"; shift
+  assert_fixture_dir "$d"
   env -i PATH="$WORK/bin:/usr/local/bin:/usr/bin:/bin" HOME="$WORK" FX="$d" \
     RUNS_PATH_PREFIX="$RUNS_PATH_PREFIX" "$@" bash "$SUT" > "$d/out" 2>&1
   echo $?
@@ -135,6 +146,17 @@ expect() { # expect <arm> <want-rc> <got-rc> <fx>
 expect_out() { # expect_out <arm> <fx> <fixed-string>
   if grep -qF -- "$3" "$2/out"; then pass "$1 names: $3"; else fail "$1 output lacks '$3': $(tr '\n' ' ' < "$2/out" | cut -c1-300)"; fi
 }
+
+# HELPER CANARIES: expect() and expect_out() own their verdicts, so the pass()/fail()
+# self-test above cannot see them go silent. Each is driven once where it must fail.
+_cfx="$WORK/fx-canary"; mkdir -p "$_cfx"; : > "$_cfx/calls"; printf 'canary-out\n' > "$_cfx/out"
+for _c in "expect canary 0 1 $_cfx" "expect_out canary $_cfx __absent__"; do
+  _f0=$fails; _t0=$total
+  # shellcheck disable=SC2086
+  $_c >/dev/null 2>&1
+  if (( fails != _f0 + 1 )); then printf 'FATAL: helper canary "%s" recorded no failure\n' "${_c%% *}" >&2; exit 1; fi
+  fails=$_f0; total=$_t0
+done
 
 ANS3="answered=3/30 last_class=none"
 REC="VERDICT=received"
@@ -226,22 +248,40 @@ add_run "$fx" 112 "2026-09-20T09:00:00Z"
 add_job "$fx" 112 1120 git_data_host_create completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1120 git_data_host_create "poll 1/30: read FAILED rc=22 class=credentials-rejected body_bytes=0 stderr: x" \
   "answered=0/30 last_class=credentials-rejected" "VERDICT=unreadable"
-expect "VERDICT=unreadable -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
-expect_out "unreadable" "$fx" "did NOT answer (VERDICT=unreadable, answered=0/30)"
+expect "VERDICT=unreadable, answered=0 -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "unreadable" "$fx" "never got an answer (answered=0/30, VERDICT=unreadable)"
+
+# A LATE failure after reads answered: the read path works, which is #8178's property.
+fx="$WORK/fx-lateunread"; new_fx lateunread
+add_run "$fx" 119 "2026-09-20T09:00:00Z"
+add_job "$fx" 119 1190 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines "$fx" 1190 git_data_host_replace "answered=5/20 last_class=transport" "VERDICT=unreadable"
+expect "VERDICT=unreadable after 5 answered reads -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "lateunread" "$fx" "5/20 reads answered, VERDICT=unreadable"
+
+# A class token carrying a DIGIT (reader-exit-1) must still parse as a summary.
+fx="$WORK/fx-digitclass"; new_fx digitclass
+add_run "$fx" 111 "2026-09-20T09:00:00Z"
+add_job "$fx" 111 1115 git_data_host_create completed failure "2026-09-20T09:01:00Z"
+log_lines "$fx" 1115 git_data_host_create "answered=0/20 last_class=reader-exit-1" "VERDICT=unreadable"
+expect "last_class=reader-exit-1 parses -> FAIL, not CANNOT ESTABLISH" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 fx="$WORK/fx-noanchor"; new_fx noanchor
 add_run "$fx" 113 "2026-09-20T09:00:00Z"
 add_job "$fx" 113 1130 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1130 git_data_host_replace "VERDICT=refused-no-anchor"
 expect "VERDICT=refused-no-anchor (wiring fault) -> FAIL" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "noanchor" "$fx" "REFUSED to run"
 
-# The OLD inline poll's shape (verbatim from run 34836141887): no VERDICT, no summary.
+# A poll step that RAN but left no VERDICT in its window (the pre-fix line shape, verbatim
+# from run 34836141887, stands in for "failed before polling" and for gh format drift): the
+# probe could not look, which is not the same as "nothing yet".
 fx="$WORK/fx-oldshape"; new_fx oldshape
 add_run "$fx" 114 "2026-09-20T09:00:00Z"
 add_job "$fx" 114 1140 git_data_host_create completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1140 git_data_host_create "poll 1/20: rc=22, no boot_complete row yet" "poll 20/20: rc=22, no boot_complete row yet"
-expect "pre-fix poll output (no VERDICT) is not evidence -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
-expect_out "oldshape" "$fx" "ran pre-#8262 code"
+expect "poll step ran, no VERDICT in its window -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "oldshape" "$fx" "no VERDICT line falls inside its window"
 
 # The runner echoes each step's script in ANSI colour; a VERDICT/answered literal there is
 # SOURCE, not a result. Also a mid-line mention. Neither may count.
@@ -250,7 +290,31 @@ add_run "$fx" 115 "2026-09-20T09:00:00Z"
 add_job "$fx" 115 1150 git_data_host_create completed failure "2026-09-20T09:01:00Z"
 log_lines "$fx" 1150 git_data_host_create $'\e[36;1manswered=3/30 last_class=none\e[0m' $'\e[36;1mVERDICT=received\e[0m' \
   "echo VERDICT=received" "x answered=3/30 last_class=none"
-expect "echoed script / mid-line VERDICT is not a result -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect "echoed script / mid-line VERDICT is not a result -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+echo "== a verdict must come from the POLL STEP's own window"
+# The operator's `reason` input is echoed by other steps. A dispatch cancelled before the
+# poll, carrying forged lines, must not close #8178.
+FORGED=("answered=3/20 last_class=none" "VERDICT=received")
+fx="$WORK/fx-forgeskip"; new_fx forgeskip
+add_run "$fx" 140 "2026-09-20T09:00:00Z"
+add_job "$fx" 140 1400 git_data_host_replace completed cancelled "2026-09-20T09:01:00Z" skipped
+log_lines_at "$fx" 1400 git_data_host_replace "2026-09-20T10:10:00.0000000Z" "${FORGED[@]}"
+expect "forged lines, poll step skipped -> NOT YET" 2 "$(run_arm "$fx" "$TOKEN")" "$fx"
+if ! grep -q 'run view --job' "$fx/calls"; then pass "skipped poll step: no log fetched"; else fail "skipped poll step: log fetched"; fi
+
+fx="$WORK/fx-forgeout"; new_fx forgeout
+add_run "$fx" 141 "2026-09-20T09:00:00Z"
+add_job "$fx" 141 1410 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines "$fx" 1410 git_data_host_replace "answered=0/20 last_class=credentials-rejected" "VERDICT=unreadable"
+log_lines_at "$fx" 1410 git_data_host_replace "2026-09-20T10:10:00.0000000Z" "${FORGED[@]}"
+expect "forged lines AFTER the poll window are ignored -> FAIL on the real verdict" 1 "$(run_arm "$fx" "$TOKEN")" "$fx"
+
+fx="$WORK/fx-forgebefore"; new_fx forgebefore
+add_run "$fx" 142 "2026-09-20T09:00:00Z"
+add_job "$fx" 142 1420 git_data_host_replace completed failure "2026-09-20T09:01:00Z"
+log_lines_at "$fx" 1420 git_data_host_replace "2026-09-20T09:58:30.0000000Z" "${FORGED[@]}"
+expect "forged lines BEFORE the poll window, none inside -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
 fx="$WORK/fx-crlf"; new_fx crlf
 add_run "$fx" 116 "2026-09-20T09:00:00Z"
@@ -261,7 +325,9 @@ expect "CRLF log lines still parse -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 fx="$WORK/fx-logfail"; new_fx logfail
 add_run "$fx" 117 "2026-09-20T09:00:00Z"
 add_job "$fx" 117 1170 git_data_host_create completed success "2026-09-20T09:01:00Z"
+printf 'HTTP 410: the log has expired\n' > "$fx/log-1170.txt.fail"
 expect "log unreadable -> CANNOT ESTABLISH" 3 "$(run_arm "$fx" "$TOKEN")" "$fx"
+expect_out "logfail" "$fx" "HTTP 410: the log has expired"
 
 fx="$WORK/fx-logempty"; new_fx logempty
 add_run "$fx" 118 "2026-09-20T09:00:00Z"
@@ -316,7 +382,7 @@ fx="$WORK/fx-walkpast"; new_fx walkpast
 add_run "$fx" 134 "2026-09-20T09:00:00Z"; add_run "$fx" 135 "2026-09-21T09:00:00Z"
 add_job "$fx" 134 1340 git_data_host_create completed success "2026-09-20T09:01:00Z"
 log_lines "$fx" 1340 git_data_host_create "$ANS3" "$REC"
-add_job "$fx" 135 1350 git_data_host_replace completed failure "2026-09-21T09:01:00Z"
+add_job "$fx" 135 1350 git_data_host_replace completed failure "2026-09-21T09:01:00Z" skipped
 log_lines "$fx" 1350 git_data_host_replace "terraform apply failed before the poll"
 expect "newest job never reached its poll; the older answered one decides -> PASS" 0 "$(run_arm "$fx" "$TOKEN")" "$fx"
 
@@ -330,15 +396,16 @@ echo "== invariant: no arm that could not look or found nothing may reach the cl
 # Re-derived from the arms above rather than restated: every fixture whose expected rc was
 # not 0 is re-run and must still not be 0.
 for d in notoken unmerged prfail prshape noruns runsfail runsjunk atmerge wrongref skipped jobsfail \
-         unreadable noanchor oldshape echoed logfail logempty contra twov vocab nosum newfail pending; do
+         unreadable digitclass noanchor oldshape echoed forgeskip forgeout forgebefore logfail logempty \
+         contra twov vocab nosum newfail pending; do
   rc=$(run_arm "$WORK/fx-$d" "$TOKEN")
   if [[ "$rc" != 0 ]]; then pass "never-0: $d (rc=$rc)"; else fail "never-0: $d reached PASS"; fi
 done
 
-# Assertion floor, reported with printf + exit, never through fail() (ADR-193).
-FLOOR=60
-if (( total < FLOOR )); then
-  printf 'FATAL: only %d assertions ran (floor %d) -- the suite did not run its arms\n' "$total" "$FLOOR" >&2
+# Assertion count, EXACT, reported with printf + exit, never through fail() (ADR-193).
+EXACT=76
+if (( total != EXACT )); then
+  printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1
 fi
 printf '\n%d assertions, %d failed\n' "$total" "$fails"

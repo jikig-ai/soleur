@@ -56,6 +56,29 @@ consult, and a four-agent plan-review panel), plus this deepen pass.
   than calling it, and the hermetic suite must stub `doppler` as well as the query
   script — otherwise every row grades rc=127.
 
+## Review corrections (2026-09-18) — these supersede statements below
+
+A twelve-agent review panel falsified several of this plan's premises. They are corrected
+here rather than rewritten in place, so the plan still shows what was believed at the time.
+
+1. **"The 10-minute budget was too short" is false.** The `boot_complete` at `15:27:24` came
+   from replace run 34861860722 (apply ended `15:27:06`), not from the birth host, which died
+   at `gitdata_doppler_dl`. The budget stays 20 x 30 s. The job `timeout-minutes` is 40 and
+   each read is capped at 45 s, so the poll always reaches a verdict.
+2. **`CLUSTER_DOESNT_EXIST` is the reader's connection scope, not "the producer never stored
+   a row"** (#7867, resolved 2026-09-09). The stale repository secrets hold a connection that
+   does not cover the git-data source; that IS #8178's cause, not a rival to it. The class is
+   `source-not-in-connection`, not `table-missing`.
+3. **The 120 s anchor back-skew is removed.** `dt` is Better Stack's ingest time, and the
+   slack let a replace queued behind another replace accept the previous generation's row.
+4. **The client-side anchor re-check is removed.** The server predicate does the bounding,
+   `LIMIT 1` exports one row, and the re-check's UTC/fraction parsing could itself produce a
+   false `silent`.
+5. **The step logic moved into the library** (`git_data_boot_verify`), because the two
+   workflow copies had already drifted (FR10/FR11 and task 4.6 were unmet in the replace job).
+6. **The follow-through** reads verdict lines only inside the poll step's own time window,
+   and passes on any answered read.
+
 ## Overview
 
 The git-data host's boot-signal poll is the only in-job evidence that a newly born or
@@ -757,7 +780,7 @@ at review time.
 ```yaml
 liveness_signal:
   what:            "stage:boot_complete row from host_name=soleur-git-data in Better Stack Logs source 2734275 (table t520508_soleur_git_data_prd_logs), read by the git-data create/replace job's poll step"
-  cadence:         "per git-data create or replace dispatch; 20 reads at 30 s over a 10-minute budget"
+  cadence:         "per git-data create or replace dispatch; 20 reads at 30 s over a 10-minute budget, each read capped at 45 s; job timeout-minutes 40"
   alert_target:    "the dispatching run itself — the job exits non-zero and the ::error:: names the outcome arm; Sentry's git-data fatal-stage rule is the independent second channel"
   configured_in:   ".github/workflows/apply-web-platform-infra.yml, steps 'Poll for the git-data boot-completion signal' in jobs git_data_host_create and git_data_host_replace, sourcing scripts/lib/git-data-boot-signal-poll.sh"
 
@@ -778,12 +801,12 @@ failure_modes:
   - mode:          "the host booted dark (no boot_complete emitted)"
     detection:     "the final read answers and matches nothing after the run anchor -> silent"
     alert_route:   "::error:: routing to Sentry's git-data fatal stages and the partial-birth decision tree"
-  - mode:          "the source's ClickHouse table does not exist (no row ever stored — ADR-192's CLUSTER_DOESNT_EXIST)"
-    detection:     "bs_read_classify returns table-missing on the vendor code; rc=22 alone cannot distinguish it from an auth failure"
-    alert_route:   "::error:: naming the producer rather than the reader, so the operator is not sent to rotate a working credential"
+  - mode:          "the SQL API connection in use does not cover the source (CLUSTER_DOESNT_EXIST, #7867)"
+    detection:     "bs_read_classify returns source-not-in-connection on the vendor code; rc=22 alone cannot distinguish it from an auth failure"
+    alert_route:   "::error:: on the unreadable arm naming the class: a read-path (connection scope) fault, not a host verdict"
   - mode:          "the poll silently stops being exercised (the guard goes vacuous again)"
     detection:     "scripts/followthroughs/git-data-boot-poll-8178.sh asserts a post-merge dispatch's poll answered"
-    alert_route:   "the follow-through sweeper's comment on #8178"
+    alert_route:   "workflow run log (layer 6): the scheduled-followthrough-sweeper.yml run and the FAIL / CANNOT ESTABLISH comment it posts on #8178"
 
 logs:
   where:           "GitHub Actions run log for the step; Better Stack Logs source 2734275 for the host's own emits; Sentry for the boot fatal stages"
@@ -844,11 +867,12 @@ learning names.
 
 ### Observability layer citation
 
-Layer 7 (the CI execution surface) for the poll's own diagnostics — the step runs on a
+Layer 6 (the workflow run log) for the poll's own diagnostics — the step runs on a
 GitHub-hosted runner and the run log is the only surface, which is precisely why
 `2>/dev/null` was fatal. Layer 3 (host telemetry, Better Stack Logs source 2734275)
-for the signal being read. Layer 2 (Sentry, project web-platform) for the host's boot
-fatal stages, which is the independent channel the `silent` arm routes to. No arm is
+for the signal being read. The host's boot events also reach Sentry by a DIRECT send from
+`git-data-emit` (not the Pino-to-Sentry mirror of layer 2); that is the independent
+channel the `silent` arm routes to. No arm is
 reachable only by SSH (`hr-no-ssh-fallback-in-runbooks`).
 
 ## Encryption Posture
@@ -1007,7 +1031,8 @@ editing a file the suite reads.
   cutover suites pass without modification.
 - **NFR2** — No credential, and no fragment of one, reaches a public run log.
 - **NFR3** — The hermetic suite runs in seconds: `max_polls` and `interval_s` are
-  parameters, and the workflow passes `20 30`.
+  parameters, and the workflow passes `20 30` (restored at review: an interim `30 30` rested
+  on a misattributed measurement; see "Review corrections" below).
 
 ### Quality Gates
 

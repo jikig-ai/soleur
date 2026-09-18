@@ -19,33 +19,37 @@
 #     STRICTLY AFTER that merge (re-checked client-side, not trusted to the API filter);
 #   - a git_data_host_create or git_data_host_replace job in it that actually ran
 #     (conclusion != skipped) and completed;
-#   - that job's log carries the poll LIBRARY's own runtime summary lines
-#     (`answered=N/M last_class=…` and `VERDICT=…`, emitted by
-#     scripts/lib/git-data-boot-signal-poll.sh). The old inline poll printed neither, so a
-#     job running pre-fix code cannot satisfy this even if the date filter were wrong.
-# The NEWEST such job decides. A job whose log has no VERDICT line either never reached
-# the poll (apply failed before it, the run was cancelled) or ran the pre-fix inline poll —
-# it proves nothing either way, and the probe looks at the next-older one.
+#   - that job's POLL STEP ran (its own conclusion, from the jobs API, is success or
+#     failure), and the log lines timestamped INSIDE that step's window carry the poll
+#     library's summary (`answered=N/M last_class=…`) and `VERDICT=…`. Lines outside the
+#     window are ignored, so free text echoed by another step (the operator's `reason`
+#     input, for one) cannot supply or add a verdict.
+# The NEWEST job whose poll step ran decides. A job whose poll step did not run (apply
+# failed first, or the run was cancelled) proves nothing either way, and the probe looks at
+# the next-older one.
 #
 # Exit semantics (sweep-followthroughs.sh contract; followthrough-convention.md):
-#   0 = PASS              the newest evaluated post-merge poll ANSWERED (verdict received
-#                         or silent, answered >= 1). `silent` still passes: the read path
-#                         worked and the verdict is then a true statement about the host,
-#                         which is the property #8178 was missing.
-#   1 = FAIL              the newest evaluated post-merge poll did NOT answer
-#                         (verdict unreadable, or refused-no-anchor = a wiring fault).
+#   0 = PASS              the newest evaluated post-merge poll had at least one read
+#                         ANSWER (answered >= 1), whatever its verdict. That is the
+#                         property #8178 lacked: the post-fix read path can read. A
+#                         `silent` or a late `unreadable` is then a separate fault the job
+#                         already reported.
+#   1 = FAIL              the newest evaluated post-merge poll never answered
+#                         (answered=0, or refused-no-anchor = a wiring fault).
 #   2 = NOT YET           measured: PR not merged, or no post-merge dispatch has reached a
 #                         poll step yet. The normal state for weeks — births are once-ever
 #                         and replaces are operator-initiated.
-#   3 = CANNOT ESTABLISH  could not look: no token, an API/log read failed, or a log's
-#                         shape did not match the library's contract. Kept distinct from 2
+#   3 = CANNOT ESTABLISH  could not look: no token, an API/log read failed, a poll step
+#                         ran but left no VERDICT in its window (it failed before polling,
+#                         or gh's log format changed), or a log's shape did not match the
+#                         library's contract. Kept distinct from 2
 #                         on purpose — the sweeper renders 2 as "NOT YET", and "could not
 #                         look" reported as "nothing yet" is the inversion #8178 itself was.
 #   78 = refused to run under xtrace with GH_TOKEN set (#7797).
 #
 # CREDENTIAL POSTURE. The workflow token only, declared as `secrets=GH_TOKEN` (the sweeper
-# runs probes under `env -i` and forwards only declared names). Deliberately NOT
-# DOPPLER_TOKEN (it would hand every probe in the sweeper a prd_terraform read token) and
+# runs probes under `env -i` and forwards only declared names). Deliberately NOT the
+# Doppler service token (it would hand every probe in the sweeper a prd_terraform read token) and
 # NOT the BETTERSTACK_QUERY_* secrets (the credential store #8178 moves the poll OFF — a
 # close criterion bound to it would measure the old path). The run log is the evidence, so
 # no warehouse credential is needed at all.
@@ -55,6 +59,9 @@
 # carries terminal escape sequences (the runner echoes each step's script in ANSI colour).
 # `gh run view` is also what scripts/followthroughs/monitor-streak-cache-roundtrip-7574.sh
 # used to reach its PASS from inside the sweeper.
+#
+# KNOWN RESIDUAL: `head_branch == "main"` is also satisfied by a TAG named `main`. Pushing
+# one needs repository write access, which already exceeds what this probe defends against.
 #
 # RETIREMENT: delete this file and its companion git-data-boot-poll-8178.test.sh, and the
 # `run_suite "scripts/git-data-boot-poll-8178"` line in scripts/test-all.sh, once #8178
@@ -85,8 +92,15 @@ if [[ -z "${GH_TOKEN:-}" ]]; then
 fi
 command -v jq >/dev/null 2>&1 || _cannot "jq is not installed"
 
+# gh's stderr is KEPT (its first line goes into each CANNOT ESTABLISH message), so "the log
+# has expired" and "rate limited" are distinguishable in the sweeper's comment. Discarding
+# a reader's stderr is the defect #8178 fixes.
+ERRF="$(mktemp -t gdbp8178.XXXXXXXX)" || _cannot "could not create a temp file"
+trap 'rm -f "$ERRF"' EXIT
+gh_err() { local l; l="$(head -1 "$ERRF" 2>/dev/null | tr -d '\r' | cut -c1-200)"; printf '%s' "${l:-<no stderr>}"; }
+
 # --- The anchor: PR #8262's merge time -----------------------------------------------
-pr_json=$(gh api "repos/${REPO}/pulls/${PR}" 2>/dev/null) || _cannot "could not read PR #${PR}"
+pr_json=$(gh api "repos/${REPO}/pulls/${PR}" 2>"$ERRF") || _cannot "could not read PR #${PR}: $(gh_err)"
 merged_at=$(jq -r '.merged_at // ""' <<<"$pr_json" 2>/dev/null) || _cannot "PR #${PR} response is not JSON"
 if [[ -z "$merged_at" ]]; then
   pr_state=$(jq -r '.state // "?"' <<<"$pr_json" 2>/dev/null || echo '?')
@@ -100,7 +114,7 @@ fi
 # --- Candidate runs: dispatches on main created strictly after the merge -------------
 runs_json=$(gh api --paginate \
   "repos/${REPO}/actions/workflows/${WF}/runs?event=workflow_dispatch&branch=main&created=%3E%3D${merged_at}&per_page=100" \
-  2>/dev/null) || _cannot "could not list ${WF} runs"
+  2>"$ERRF") || _cannot "could not list ${WF} runs: $(gh_err)"
 # Re-checked client-side: the API's `created` filter is inclusive and is trusted for
 # nothing — a run created AT the merge second may still be on the pre-fix tree.
 mapfile -t run_ids < <(jq -rn --arg m "$merged_at" '
@@ -114,77 +128,94 @@ if [[ "${#run_ids[@]}" -eq 0 ]]; then
   _not_yet "no ${WF} dispatch on main since PR #${PR} merged at ${merged_at}"
 fi
 
-# --- Walk newest-first; the first job that reached its poll decides ------------------
+# --- Walk newest-first; the first job whose poll step ran decides --------------------
 ts_re='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
 tab=$'\t'
 pending=0
 unevaluable=0
+# in_window <line-ts> <step-start> <step-end> — all compared at one-second resolution.
+in_window() { local t="${1:0:19}"; [[ ! "$t" < "${2:0:19}" && ! "$t" > "${3:0:19}" ]]; }
 for run_id in "${run_ids[@]}"; do
   [[ "$run_id" =~ ^[0-9]+$ ]] || _cannot "run id is not numeric: ${run_id}"
-  jobs_json=$(gh api --paginate "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) \
-    || _cannot "could not list the jobs of run ${run_id}"
+  jobs_json=$(gh api --paginate "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>"$ERRF") \
+    || _cannot "could not list the jobs of run ${run_id}: $(gh_err)"
   jq -en 'inputs' <<<"$jobs_json" >/dev/null 2>&1 || _cannot "jobs of run ${run_id} are not JSON"
-  # "\(.id) \(.name) \(.status)" — names are the job ids here (the git-data jobs carry no
-  # `name:` key), so an exact match is the right comparison.
+  # One line per git-data job: id, name, status, and its POLL STEP's conclusion and window.
+  # Names are the job ids (the git-data jobs carry no `name:` key), so exact match is right.
   mapfile -t jobs < <(jq -rn '
     [inputs | .jobs[]?
      | select((.name == "git_data_host_create" or .name == "git_data_host_replace")
               and .conclusion != "skipped")]
-    | sort_by(.started_at // "") | reverse | .[] | "\(.id) \(.name) \(.status)"' <<<"$jobs_json" 2>/dev/null)
+    | sort_by(.started_at // "") | reverse | .[]
+    | ([.steps[]? | select((.name // "") | startswith("Poll for the git-data boot-completion signal"))] | first) as $p
+    | "\(.id) \(.name) \(.status) \($p.conclusion // "none") \($p.started_at // "-") \($p.completed_at // "-")"' <<<"$jobs_json" 2>/dev/null)
   for j in "${jobs[@]}"; do
-    read -r job_id job_name job_status <<<"$j"
+    read -r job_id job_name job_status poll_concl poll_start poll_end <<<"$j"
     [[ "$job_id" =~ ^[0-9]+$ ]] || _cannot "job id is not numeric in run ${run_id}: ${job_id}"
     if [[ "$job_status" != "completed" ]]; then
       pending=$((pending + 1))
       echo "run ${run_id} ${job_name} (job ${job_id}) is ${job_status} — not yet evaluable"
       continue
     fi
-    log=$(gh run view --job "$job_id" --repo "$REPO" --log 2>/dev/null) \
-      || _cannot "could not read the log of ${job_name} (job ${job_id}, run ${run_id})"
+    if [[ "$poll_concl" != "success" && "$poll_concl" != "failure" ]]; then
+      unevaluable=$((unevaluable + 1))
+      echo "run ${run_id} ${job_name} (job ${job_id}): its poll step did not run (conclusion ${poll_concl}) — not evidence either way"
+      continue
+    fi
+    [[ "$poll_start" =~ ^${ts_re}$ && "$poll_end" =~ ^${ts_re}$ ]] \
+      || _cannot "${job_name} (job ${job_id}): the poll step's window is unreadable (${poll_start} .. ${poll_end})"
+    log=$(gh run view --job "$job_id" --repo "$REPO" --log 2>"$ERRF") \
+      || _cannot "could not read the log of ${job_name} (job ${job_id}, run ${run_id}): $(gh_err)"
     [[ -n "$log" ]] || _cannot "the log of ${job_name} (job ${job_id}, run ${run_id}) is empty"
     # Runtime lines only: `<job>\t<step>\t<ts> VERDICT=…`. The step's own script is echoed
     # into the log too, but each echoed line starts with an ANSI colour code after the
-    # timestamp, so anchoring the marker directly after `<ts> ` excludes it.
+    # timestamp, so anchoring the marker directly after `<ts> ` excludes it. Each hit is then
+    # kept only if its timestamp falls inside the poll step's window.
     log=${log//$'\r'/}
-    mapfile -t verdicts < <(grep -oE "(^|${tab})${ts_re} VERDICT=[a-z-]+$" <<<"$log" | sed -E 's/.*VERDICT=//')
-    mapfile -t summaries < <(grep -oE "(^|${tab})${ts_re} answered=[0-9]+/[0-9]+ last_class=[a-z_-]*$" <<<"$log" \
-                             | sed -E 's/.* answered=([0-9]+)\/([0-9]+) .*/\1 \2/')
+    verdicts=(); summaries=()
+    while IFS= read -r hit; do
+      [[ -n "$hit" ]] || continue
+      hit="${hit#"$tab"}"
+      in_window "${hit%% *}" "$poll_start" "$poll_end" && verdicts+=("${hit#*VERDICT=}")
+    done < <(grep -oE "(^|${tab})${ts_re} VERDICT=[a-z-]+$" <<<"$log" || true)
+    while IFS= read -r hit; do
+      [[ -n "$hit" ]] || continue
+      hit="${hit#"$tab"}"
+      in_window "${hit%% *}" "$poll_start" "$poll_end" \
+        && summaries+=("$(sed -E 's/.* answered=([0-9]+)\/([0-9]+) .*/\1 \2/' <<<"$hit")")
+    done < <(grep -oE "(^|${tab})${ts_re} answered=[0-9]+/[0-9]+ last_class=[a-z0-9_-]*$" <<<"$log" || true)
     if [[ "${#verdicts[@]}" -eq 0 ]]; then
-      unevaluable=$((unevaluable + 1))
-      echo "run ${run_id} ${job_name} (job ${job_id}): no VERDICT from the poll library in its log — its poll step did not run (apply failed first, or the run was cancelled) or ran pre-#8262 code; not evidence either way"
-      continue
+      _cannot "${job_name} (job ${job_id}, run ${run_id}): the poll step ran (conclusion ${poll_concl}) but no VERDICT line falls inside its window — it failed before polling (read its log: a missing-token or anchor refusal) or gh's log format changed"
     fi
-    [[ "${#verdicts[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#verdicts[@]} VERDICT lines; the library emits exactly one per poll"
+    [[ "${#verdicts[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#verdicts[@]} VERDICT lines inside its poll window; the library emits exactly one"
     verdict="${verdicts[0]}"
     case "$verdict" in
       received|silent|unreadable|refused-no-anchor) : ;;
       *) _cannot "${job_name} (job ${job_id}) logged a VERDICT outside the library's vocabulary: ${verdict}" ;;
     esac
-    answered=""
-    if [[ "$verdict" != "refused-no-anchor" ]]; then
-      # refused-no-anchor returns before polling, so it prints no summary; every other
-      # verdict must carry exactly one, and it must agree with the verdict.
-      [[ "${#summaries[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#summaries[@]} answered= summaries alongside VERDICT=${verdict}"
-      read -r answered max_polls <<<"${summaries[0]}"
-    fi
     where="${job_name} (job ${job_id}, run ${run_id}, https://github.com/${REPO}/actions/runs/${run_id})"
-    case "$verdict" in
-      received|silent)
-        (( answered >= 1 )) || _cannot "${where}: VERDICT=${verdict} with answered=0 — the log contradicts the library's contract"
-        echo "PASS: ${where} — the boot poll ANSWERED (${answered}/${max_polls} reads answered, VERDICT=${verdict})."
-        [[ "$verdict" == "silent" ]] && echo "      Note: the host itself did not report boot_complete in the budget; that is a separate host fault the job already failed on, not #8178."
-        exit 0
-        ;;
-      *)
-        echo "FAIL: ${where} — the boot poll did NOT answer (VERDICT=${verdict}${answered:+, answered=${answered}/${max_polls}})." >&2
-        echo "      The post-fix read path still cannot read the git-data boot signal. Read that job's per-poll lines: each names rc and class (credentials-rejected / table-missing / transport / reader-refusal)." >&2
-        exit 1
-        ;;
-    esac
+    if [[ "$verdict" == "refused-no-anchor" ]]; then
+      echo "FAIL: ${where} — the boot poll REFUSED to run (no usable run anchor), so it never read. That is a workflow wiring fault in the post-fix code." >&2
+      exit 1
+    fi
+    # Every other verdict carries exactly one summary line.
+    [[ "${#summaries[@]}" -eq 1 ]] || _cannot "${job_name} (job ${job_id}) logged ${#summaries[@]} answered= summaries alongside VERDICT=${verdict}"
+    read -r answered max_polls <<<"${summaries[0]}"
+    if [[ "$verdict" == "received" ]] && (( answered < 1 )); then
+      _cannot "${where}: VERDICT=received with answered=0 — the log contradicts the library's contract"
+    fi
+    if (( answered >= 1 )); then
+      echo "PASS: ${where} — the boot poll's read path ANSWERED (${answered}/${max_polls} reads answered, VERDICT=${verdict})."
+      [[ "$verdict" != "received" ]] && echo "      Note: VERDICT=${verdict} is a separate fault (host or a late read) that the job already reported; it is not #8178."
+      exit 0
+    fi
+    echo "FAIL: ${where} — the boot poll never got an answer (answered=0/${max_polls}, VERDICT=${verdict})." >&2
+    echo "      The post-fix read path still cannot read the git-data boot signal. Read that job's per-poll lines: each names rc and class (credentials-rejected / source-not-in-connection / transport / reader-refusal / credentials-absent / reader-exit-1)." >&2
+    exit 1
   done
 done
 
 if (( pending > 0 )); then
-  _not_yet "${pending} post-merge git-data job(s) still running; ${unevaluable} completed without reaching the poll"
+  _not_yet "${pending} post-merge git-data job(s) still running; ${unevaluable} completed without their poll step running"
 fi
-_not_yet "${#run_ids[@]} post-merge dispatch(es) since ${merged_at}, none with a git-data job whose log carries the poll library's VERDICT (${unevaluable} git-data job(s) without one)"
+_not_yet "${#run_ids[@]} post-merge dispatch(es) since ${merged_at}, none with a git-data job whose poll step ran (${unevaluable} git-data job(s) without one)"

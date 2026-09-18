@@ -139,11 +139,11 @@ _bs_read_remedy() {
         # it. This function's OUTPUT and ARITY are unchanged — only the two inline greps
         # became a call. `bs_read_classify` returns 0 unconditionally, which is what makes
         # it safe under this script's `set -e`.
-        # `table-missing` is a token this arm did not previously have; it falls to the
-        # `*)` default below and prints the generic HTTP-error remedy, which is correct
-        # for the cutover (re-dispatch later) and is where an unclassified body already
-        # went. The birth poll, which needs to say something different about it, reads
-        # the token directly rather than through this printer.
+        # `source-not-in-connection` (a CLUSTER_DOESNT_EXIST body: the SQL API connection
+        # does not cover the source, #7867) is a token this arm did not previously have. It
+        # falls to the `*)` default below, where an unclassified body already went. The
+        # git-data boot poll, which needs to say something different about it, reads the
+        # token directly rather than through this printer.
         body_class="$(bs_read_classify "$rc" "$rowsfile")"
         case "$body_class" in
           credentials-rejected) echo "::error::2.0 $label read: the ClickHouse read path REJECTED the credentials (HTTP error under --fail-with-body, rc=22; body ${body_len:-?} bytes, not printed — it names the username). Rotate/verify BETTERSTACK_QUERY_{USERNAME,PASSWORD} in prd_terraform against the Better Stack query endpoint; re-dispatching without that will not clear it." ;;

@@ -1,52 +1,49 @@
 #!/usr/bin/env bash
-# git-data boot-signal poll — the read path for the birth and replace interlocks (#8178).
+# git-data boot-signal poll — the read path AND the step logic for the birth and replace
+# interlocks (#8178). ADR-149 `## Amendment — 2026-09-17 (#8178)` is the canonical account
+# of why; this header only says what each part is for.
 #
-# WHY THIS IS A LIBRARY AND NOT A `run:` BLOCK. If the loop stays inline in the
-# workflow, the per-poll line and the whole answered/found accounting sit outside any
-# assembly, and the highest-value mutations — feeding the match buffer from stderr,
-# suppressing stderr, unconditionalising the per-poll line — have no detector at all.
-# That is the "check that cannot fail" class this change exists to end. Here they are
-# drivable by tests/scripts/test-git-data-boot-signal-poll.sh, and `max_polls` /
-# `interval_s` are parameters so the hermetic suite runs in seconds rather than the ten
-# minutes twenty real sleeps would cost.
+# WHY THE STEP LOGIC LIVES HERE AND NOT IN THE WORKFLOW. Both git-data jobs run the same
+# poll, verdict branching and invariant checks. Inline, they had already drifted inside the
+# PR that added them (the replace copy lacked two arms), and nothing could test either copy.
+# The workflow now calls git_data_boot_verify, so tests/scripts/test-git-data-boot-signal-poll.sh
+# drives exactly what a job runs. The ::error:: text stays under scripts/, which is where
+# scripts/lint-diagnosis-claims.sh (AP-021) looks.
 #
-# WHY scripts/lib/ AND NOT tests/scripts/lib/. Two blocking CI hooks are path-scoped:
-# scripts/lint-diagnosis-claims.sh (AP-021 — the diagnostic-honesty gate this whole
-# change exists to satisfy) walks scripts/ and SKIPS any path matching /tests?/, and
-# scripts/lint-workflow-errexit-capture.py (AP-022) scans only .github/workflows. Putting
-# the ::error:: arms under tests/ would move them out of both detectors' reach, and
-# ADR-149 records that this very poll has already shipped the errexit-capture defect once.
-# The `rc=$?` capture stays in the workflow's run: block so AP-022 still sees it; this
-# library takes rc as a parameter.
-#
-# THE STDOUT/STDERR SPLIT IS STRUCTURAL, NOT CONVENTIONAL. git_data_boot_read writes
-# stdout and stderr to SEPARATE files, and the row match runs on the stdout file only,
-# and only when the read answered. The match buffer therefore cannot receive the
-# reader's own error echo — the failure the previous inline comment warned about, where
-# betterstack-query.sh echoes the failing query back, that query contains the literal
-# `boot_complete`, and a `2>&1` capture reports the boot signal as received on poll 1/20
-# over a host that never booted. Because `--fail-with-body` puts an HTTP error's body on
-# STDOUT, that buffer is also never echoed on a failed read: it is read only by `wc -c`
-# and by bs_read_classify's fixed greps, then dropped.
+# THE STDOUT/STDERR SPLIT IS STRUCTURAL. git_data_boot_read writes the reader's stdout and
+# stderr to SEPARATE files, and the row match runs on the stdout file only, and only when
+# the read answered. `--fail-with-body` puts an HTTP error's body on STDOUT, so that buffer
+# is also never echoed on a failed read: it is measured by `wc -c`, classified by
+# bs_read_classify's fixed greps, and dropped. The body can carry the query username.
 
 _gdbsp_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
+# shellcheck source=scripts/lib/betterstack-absence.sh
 . "$_gdbsp_dir/betterstack-absence.sh"
-# shellcheck source=/dev/null
+# shellcheck source=scripts/lib/betterstack-read-classify.sh
 . "$_gdbsp_dir/betterstack-read-classify.sh"
+# shellcheck source=scripts/lib/betterstack-sources.sh
+. "$_gdbsp_dir/betterstack-sources.sh"
+
+# Per-read wall-clock cap, seconds. A read is `doppler run` + one curl (--max-time 60 in
+# betterstack-query.sh). Without a cap a slow read path can eat the job's timeout and the
+# job is cancelled BEFORE it prints a verdict, which is the "could not tell" state this
+# change exists to remove. `timeout` exits 124 (137 if it had to kill), classified
+# `transport` by bs_read_classify.
+GIT_DATA_BOOT_READ_TIMEOUT_S="${GIT_DATA_BOOT_READ_TIMEOUT_S:-45}"
 
 # git_data_boot_sql <anchor>
 # The field-isolated read. A bare-substring --grep would match the shared source's
-# inngest rows quoting issue bodies, so the discrimination is on a PARSED FIELD.
+# inngest rows quoting issue bodies, so the discrimination is on PARSED FIELDS.
 #
-# THE ANCHOR REPLACES `now() - INTERVAL 2 HOUR`. `host_name` pins the host, not the host
-# GENERATION: a replace re-dispatched within the old window would match the DESTROYED
-# host's boot_complete and report the new one verified. `dt` is DateTime64(6) and
-# emitter-assigned, so the conversion and a skew allowance are both load-bearing.
+# `dt > fromUnixTimestamp(<anchor>)` bounds the read to THIS host generation (AP-027).
+# `dt` is assigned by Better Stack at ingest (the emitter's POST body carries none), so the
+# anchor is compared against Better Stack's clock, not the host's.
 #
-# The s3Cluster arm is REQUIRED, not belt-and-braces: remote() alone is the ~40-minute
-# hot window and a once-per-boot marker falls out of it immediately (measured: remote()
-# alone rc=0/0 rows against a two-day-old marker; s3Cluster alone rc=0/4 rows).
+# LIMIT 1, newest first: the caller's invariant checks read exactly one row, so an older
+# row can never lend a missing field to a newer one.
+#
+# The s3Cluster arm is REQUIRED: remote() alone is the ~40-minute hot window, and a
+# once-per-boot marker falls out of it quickly.
 git_data_boot_sql() {
   local anchor="$1"
   cat <<SQL
@@ -63,37 +60,40 @@ git_data_boot_sql() {
               WHERE dt > fromUnixTimestamp($anchor)
                 AND JSONExtractString(raw,'stage') = 'boot_complete'
                 AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
-              ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow
+              ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
 SQL
 }
 
 # git_data_boot_read <outfile> <errfile> <anchor_epoch>
 # Runs one read. stdout -> outfile, stderr -> errfile, NEVER merged. Returns the
-# reader's rc. The caller captures it with `rc=$?` as the first command after the call.
+# reader's rc.
+#
+# THE TABLE IS PINNED HERE, from betterstack-sources.sh, for every caller. git-data ships
+# to its own source (#7772); the reader's default is the shared one, which answers with zero
+# rows from this host and would report a perfect boot as `silent`.
+#
+# `--only-secrets` hands the reader the three query credentials and nothing else from
+# prd_terraform. Without it, every secret in that config reaches the reader's environment,
+# and a Doppler key named BS_TABLE would silently override the pin above.
 git_data_boot_read() {
   local outfile="$1" errfile="$2" anchor="$3" reader
-  # FAIL CLOSED ON A RELATIVE TARGET. Both operands are redirect destinations, so a relative
-  # path writes into the CALLER's working directory — inside a workflow that is the repo
-  # checkout, which would scatter scratch files into a tree later steps read. The caller
-  # always passes mktemp-rooted absolutes; this refuses anything else rather than trusting it.
-  # The P1b relative-operand ratchet still counts this site (a static reading cannot prove a
-  # positional absolute), and it is baselined with that itemisation rather than silently.
+  # FAIL CLOSED ON A RELATIVE TARGET: both operands are redirect destinations, and a relative
+  # path would write into the CALLER's working directory (a workflow's repo checkout).
   case "$outfile" in /*) : ;; *) printf 'git_data_boot_read: refusing a relative stdout target: %s\n' "$outfile" >&2; return 78 ;; esac
   case "$errfile" in /*) : ;; *) printf 'git_data_boot_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
-  reader="${BETTERSTACK_QUERY_SCRIPT:-scripts/betterstack-query.sh}"
-  doppler run -p soleur -c prd_terraform -- bash "$reader" "$(git_data_boot_sql "$anchor")" \
+  reader="$(bs_absence_query_script)"
+  BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
+    doppler run -p soleur -c prd_terraform \
+      --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
+      -- timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" bash "$reader" "$(git_data_boot_sql "$anchor")" \
     >"$outfile" 2>"$errfile"
 }
 
 # git_data_boot_answered <rowsfile> <rc>
-# 0 iff the read ANSWERED: rc=0 AND the body is shaped like an answer.
-#
-# The second conjunct is not redundant. ClickHouse returns HTTP 200 with a mid-stream
-# exception and curl reports success, so a body carrying an error alongside its rows is
-# a PARTIAL answer — and a partial answer is not an answer. bs_absence_response_is_answer
-# decides that on SHAPE (every non-blank line must start `{"dt":`), never on content:
-# a content grep for `exception|Code: [0-9]+` would misread an ordinary application log
-# line inside `raw` as a transport fault.
+# 0 iff the read ANSWERED: rc=0 AND the body is shaped like an answer. ClickHouse returns
+# HTTP 200 with a mid-stream exception and curl reports success, so a body carrying an
+# error alongside its rows is a PARTIAL answer, and a partial answer is not an answer.
+# bs_absence_response_is_answer decides on SHAPE (every non-blank line starts `{"dt":`).
 git_data_boot_answered() {
   local rowsfile="$1" rc="$2" body
   [[ "$rc" -eq 0 ]] || return 1
@@ -101,49 +101,13 @@ git_data_boot_answered() {
   bs_absence_response_is_answer "$body"
 }
 
-# git_data_boot_row_after_anchor <rowsfile> <anchor_epoch>
-# 0 iff the file carries a boot_complete row whose `dt` is STRICTLY AFTER the anchor.
-#
-# WHY THIS RE-CHECKS WHAT THE SQL ALREADY FILTERS. The `WHERE dt > fromUnixTimestamp(…)`
-# clause makes the server do this, so client-side it is defence in depth — and that is
-# the point. The anchor is the only thing separating THIS host generation from the
-# destroyed one, and delegating it entirely to a string-interpolated SQL predicate means
-# a single unsubstituted variable silently widens the window to everything. The whole
-# subject of #8178 is a check that could not fail; a guard whose correctness rests on an
-# interpolation nobody asserts is the same shape. Cheap, and it makes the property
-# testable hermetically instead of only against a live warehouse.
-#
-# Parsed with a fixed-offset cut rather than a JSON parser: the rows are JSONEachRow and
-# `dt` is always the first key, and this must not acquire a `jq` dependency inside a
-# workflow step that already has enough moving parts.
-git_data_boot_row_after_anchor() {
-  local rowsfile="$1" anchor="$2" line dt epoch
-  while IFS= read -r line; do
-    [[ "$line" == *'"stage":"boot_complete"'* ]] || continue
-    dt="${line#*\"dt\":\"}"; dt="${dt%%\"*}"
-    [[ -n "$dt" ]] || continue
-    # `date` is the only conversion available without adding a dependency; a row whose
-    # dt cannot be parsed is NOT counted as qualifying — fail closed, never open.
-    epoch="$(date -u -d "${dt%.*} UTC" +%s 2>/dev/null || true)"
-    [[ -n "$epoch" ]] || continue
-    (( epoch > anchor )) && return 0
-  done < "$rowsfile"
-  return 1
-}
-
 # git_data_boot_poll_decide <found> <final_answered>   (yes/no, yes/no)
-# The verdict, as a pure function so a suite can drive every arm.
-#
-# ANCHORED ON THE FINAL READ, DELIBERATELY. Each read queries the whole window, so
-# demanding N clean reads would let a single late 5xx abort an otherwise-verified birth.
-# The three outcomes are distinct FACTS with distinct remediations, which is the
-# collapse #8178 is about one layer down:
-#   received   — the host reported. Proceed.
-#   silent     — we could read, and the host has not reported. A HOST fault; the
-#                operator goes to the boot chain, not the credentials.
-#   unreadable — we could not read at all. A READ-PATH fault; nothing about the host
-#                was measured, and saying "the host never reported" here is the
-#                misattribution this change removes.
+# The verdict, as a pure function so a suite can drive every arm. It rests on the FINAL
+# read, and the caller also reports how many reads answered, so "the final read failed after
+# 19 answered reads" is never reported as "every read failed".
+#   received   — the host reported.
+#   silent     — the final read answered and no row from this generation was present.
+#   unreadable — the final read did not answer.
 git_data_boot_poll_decide() {
   local found="$1" final_answered="$2"
   if [[ "$found" == "yes" ]]; then printf '%s\n' 'received'; return 0; fi
@@ -153,102 +117,181 @@ git_data_boot_poll_decide() {
 }
 
 # git_data_boot_poll <max_polls> <interval_s> <anchor_epoch>
-# The loop. Prints one line per poll plus a terminal VERDICT= line. Returns 0 on a
-# verdict, non-zero when it refuses to form one.
+# The loop. Prints one line per poll, a summary line and a terminal VERDICT= line. Returns 0
+# on a verdict and 2 when it refuses to form one. Exports, for git_data_boot_verify:
+#   GIT_DATA_BOOT_ROW       the matched row (one line), empty unless received
+#   GIT_DATA_BOOT_VERDICT   received | silent | unreadable | refused-no-anchor
+#   GIT_DATA_BOOT_CLASS     the last failed read's class, `none` if the final read answered
+#   GIT_DATA_BOOT_ANSWERED  how many reads answered
+#
+# It never changes the caller's shell options: the rc of each read is captured with
+# `|| rc=$?`, not with `set +e` / `set -e`, which would leave errexit armed in the caller.
 git_data_boot_poll() {
   local max_polls="$1" interval_s="$2" anchor="$3"
   local i rc out err found="no" answered_n=0 final_answered="no" last_class="none" verdict
-  # EXPORTED for the caller. The verdict is printed for humans AND exported for the
-  # workflow, which must branch on `silent` vs `unreadable` to choose between two
-  # different remediations — parsing its own log back for a VERDICT= line would be a
-  # second, undetectable coupling.
-  GIT_DATA_BOOT_ROW=""; GIT_DATA_BOOT_VERDICT=""; GIT_DATA_BOOT_CLASS=""
+  local scratch body_len err1
+  GIT_DATA_BOOT_ROW=""; GIT_DATA_BOOT_VERDICT=""; GIT_DATA_BOOT_CLASS=""; GIT_DATA_BOOT_ANSWERED=0
 
-  # FAIL CLOSED ON AN ABSENT ANCHOR. Without it the predicate would fall back to a
-  # wall-clock window, and a replace re-dispatched inside that window matches the
-  # DESTROYED host's row — reporting the new host verified on the old one's evidence.
-  # That is worse than no check, so it is refused rather than defaulted.
-  if [[ -z "${anchor//[[:space:]]/}" ]]; then
-    printf '::error::git-data boot poll: BOOT_TRAIL_SINCE is empty — refusing to poll. An unanchored query can match a DESTROYED host generation and report this boot verified on the previous host'"'"'s row. This is a workflow wiring fault, not a host state.\n' >&2
+  # FAIL CLOSED ON A MISSING OR MALFORMED ANCHOR. The anchor is interpolated into SQL, so
+  # anything but a 10-digit epoch is a wiring fault. Refusing names it; polling would turn it
+  # into a SQL error on every read and report `unreadable`, pointing at the credentials.
+  if ! [[ "$anchor" =~ ^[1-9][0-9]{9}$ ]]; then
+    printf '::error::git-data boot poll: the run anchor is missing or malformed (got %q) — refusing to poll. An unanchored read can match a DESTROYED host generation and report this boot verified on the previous host'"'"'s row. This is a workflow wiring fault, not a host state.\n' "$anchor" >&2
+    GIT_DATA_BOOT_VERDICT="refused-no-anchor"
     printf 'VERDICT=refused-no-anchor\n'
     return 2
   fi
 
-  # ONE scratch directory for the whole loop, two fixed names inside it, truncated per
-  # iteration. The earlier shape made a fresh mktemp pair per poll and `rm -f`d them, which
-  # is 60 create/unlink pairs over a 30-poll budget AND leaves two operands the P1b
-  # relative-operand guard cannot prove safe (they are command-substitution results, so no
-  # static reading shows them absolute). Truncation removes both the churn and the
-  # unprovable operands rather than asserting around them.
-  # SOURCED, so it cannot own a trap: this file is SOURCED into the caller's shell (the workflow
-  # step and the suite both `source` it), so a `trap ... EXIT` here would REPLACE the
-  # caller's own trap rather than add to one — silently disarming whatever cleanup the
-  # caller registered. The leak is bounded by construction: exactly ONE directory per
-  # git_data_boot_poll call, under TMPDIR, on an ephemeral Actions runner that is
-  # destroyed with the job. Explicit `rm -rf "$scratch"` was the other candidate and is
-  # rejected: it reintroduces a variable-rooted rm the P1b relative-operand guard cannot
-  # prove safe, trading a bounded leak for an unprovable destructive operand. (ADR-129)
-  local scratch
+  # ONE scratch directory per call, truncated per iteration. This file is SOURCED, so it
+  # cannot own a trap (a `trap … EXIT` here would REPLACE the caller's). The leak is one
+  # small directory per call, on an ephemeral runner in the workflow. (ADR-129)
   # lint-trap-ownership: ok sourced library — a trap here would REPLACE the caller's; leak is one dir per call on an ephemeral runner (see above, ADR-129)
-  scratch="$(mktemp -d -t gdboot.XXXXXXXX)"
+  scratch="$(mktemp -d -t gdboot.XXXXXXXX)" || scratch=""
+  if [[ -z "$scratch" || ! -d "$scratch" ]]; then
+    printf '::error::git-data boot poll: could not create a scratch directory under TMPDIR=%s — refusing to poll. This is a runner fault, not a host state.\n' "${TMPDIR:-/tmp}" >&2
+    return 2
+  fi
   out="$scratch/rows"; err="$scratch/err"
 
   for (( i = 1; i <= max_polls; i++ )); do
     : > "$out"; : > "$err"
-    # `rc=$?` MUST be the first command after the read: `$?` binds to the immediately
-    # preceding command, and any convenience line between them silently takes its place.
-    set +e
-    git_data_boot_read "$out" "$err" "$anchor"
-    rc=$?
-    set -e
+    rc=0
+    git_data_boot_read "$out" "$err" "$anchor" || rc=$?
 
     if git_data_boot_answered "$out" "$rc"; then
       answered_n=$((answered_n + 1)); final_answered="yes"; last_class="none"
-      # The match runs on the STDOUT file only, and only on an answered read — this is
-      # the structural half of the match-buffer fix.
-      if git_data_boot_row_after_anchor "$out" "$anchor"; then
+      if grep -q '"stage":"boot_complete"' "$out" 2>/dev/null; then
         found="yes"
-        # EXPORTED for the caller's per-field invariant assertions (luks_mounted,
-        # repo_root, hooks_path, provision, nft_metadata_drop). A global rather than
-        # stdout because stdout carries the human-readable poll transcript, and the
-        # caller must not have to parse its own log back to find the row.
-        GIT_DATA_BOOT_ROW="$(cat "$out" 2>/dev/null || true)"
-        printf 'poll %d/%d: answered, boot_complete row present (dt after the run anchor)\n' "$i" "$max_polls"
+        GIT_DATA_BOOT_ROW="$(head -1 "$out" 2>/dev/null || true)"
+        printf 'poll %d/%d: answered, boot_complete row present (after the run anchor)\n' "$i" "$max_polls"
         break
       fi
-      # A boot_complete row that is NOT after the anchor belongs to a PREVIOUS host
-      # generation, and saying so is the point — "no row yet" would read as a slow boot
-      # when the truth is that the only row present is the destroyed host's.
-      if grep -q '"stage":"boot_complete"' "$out" 2>/dev/null; then
-        printf 'poll %d/%d: answered, boot_complete row present but NOT after the run anchor — previous host generation, not this boot\n' "$i" "$max_polls"
-      else
-        printf 'poll %d/%d: answered, no boot_complete row yet\n' "$i" "$max_polls"
-      fi
+      printf 'poll %d/%d: answered, no boot_complete row yet\n' "$i" "$max_polls"
     else
       final_answered="no"
       last_class="$(bs_read_classify "$rc" "$out")"
-      # WHAT THE LOG GETS, AND WHAT IT NEVER GETS. rc, the classification, the body's
-      # LENGTH and a scrubbed first stderr line — never the body. This repository is
-      # PUBLIC and its Actions logs are world-readable, and a ClickHouse auth failure
-      # body reads `Code: 516 … <username>: Authentication failed`, i.e. half of a
-      # Basic-auth pair. The brief asked for "the response body/status"; the status,
-      # the classification and the length deliver the property it wanted — the next
-      # occurrence names its own cause from `gh run view` alone — without putting a
-      # credential fragment in a public log.
-      local body_len err1
+      # rc, the class, the body's LENGTH and a scrubbed first stderr line. Never the body:
+      # this repository is public, and a ClickHouse auth failure body names the username.
       body_len="$(wc -c < "$out" 2>/dev/null | tr -d '[:space:]' || true)"
-      err1="$(head -1 "$err" 2>/dev/null | tr -d '\r\n' \
-        | sed -E "s/'[^']*'/'<redacted>'/g; s/[A-Za-z0-9.-]*betterstackdata\.com/<host>/g" \
-        | cut -c1-200 || true)"
+      err1="$(bs_read_scrub_err1 "$err")"
       printf 'poll %d/%d: read FAILED rc=%s class=%s body_bytes=%s stderr: %s\n' \
-        "$i" "$max_polls" "$rc" "$last_class" "${body_len:-?}" "${err1:-<none>}"
+        "$i" "$max_polls" "$rc" "$last_class" "${body_len:-?}" "$err1"
     fi
-    (( i < max_polls )) && [[ "$interval_s" != "0" ]] && sleep "$interval_s"
+    if (( i < max_polls )) && [[ "$interval_s" != "0" ]]; then sleep "$interval_s"; fi
   done
 
   verdict="$(git_data_boot_poll_decide "$found" "$final_answered")"
-  GIT_DATA_BOOT_VERDICT="$verdict"; GIT_DATA_BOOT_CLASS="$last_class"
+  GIT_DATA_BOOT_VERDICT="$verdict"; GIT_DATA_BOOT_CLASS="$last_class"; GIT_DATA_BOOT_ANSWERED="$answered_n"
   printf 'answered=%d/%d last_class=%s\n' "$answered_n" "$max_polls" "$last_class"
   printf 'VERDICT=%s\n' "$verdict"
+  return 0
+}
+
+# git_data_boot_check_invariants <birth|replace> <row>
+# Per-field assertions on the ONE matched row. A boot_complete carrying a FALSE assertion is
+# worse than none: the bootstrap reached its final stage with an invariant unmet. Checked
+# per NAMED FIELD; a bare `\bno\b` would match the word anywhere in the payload.
+# nft_metadata_drop is REPORTED, never terminal: an unarmed egress drop is a hardening
+# regression, not a dark host, and failing on it would route the operator to destroy a
+# healthy host holding every connected user's repositories.
+# Returns 1 when a required invariant fails, 0 otherwise.
+git_data_boot_check_invariants() {
+  local kind="$1" row="$2" f
+  for f in luks_mounted repo_root hooks_path provision; do
+    if grep -q "\"${f}\":\"no\"" <<<"$row"; then
+      echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat this ${kind} as failed."
+      return 1
+    fi
+    if ! grep -q "\"${f}\":\"yes\"" <<<"$row"; then
+      echo "::error::boot_complete arrived WITHOUT a ${f} assertion. The emit contract and this reader have drifted; do not treat this ${kind} as verified."
+      return 1
+    fi
+  done
+  if grep -q '"nft_metadata_drop":"no"' <<<"$row"; then
+    echo "::warning::git-data booted with nft_metadata_drop=no — the metadata-endpoint egress drop did NOT arm. The host is healthy and this ${kind} stands; the hardening control is absent. Check stage:gitdata_nftables_metadata_warn in Sentry for the cause. Re-arming needs a host replace (user_data is ForceNew), which destroys and recreates the host: schedule it, do not run it as a reflex."
+  elif ! grep -q '"nft_metadata_drop":"yes"' <<<"$row"; then
+    echo "::warning::boot_complete carried no nft_metadata_drop assertion — the emit contract and this reader have drifted. This ${kind} stands; the hardening control's state is UNKNOWN, which is not the same as absent."
+  fi
+  return 0
+}
+
+# _gdb_sentry_order — where a `silent` verdict sends the operator, in order. Every name here
+# is a stage tag the host emits (cloud-init-git-data.yml); the query is Sentry, issue search
+# host_name:soleur-git-data, since this run's apply.
+_gdb_sentry_order() {
+  printf '%s' "Read Sentry for host_name:soleur-git-data since this run's apply, in this order: (1) a stage:boot_complete event or a stage:betterstack_ingest warning means the host IS UP and only its Better Stack upload failed — do not replace it; (2) a level:fatal event names the stage that failed; (3) stage:bootcmd_start with no stage:gitdata_runcmd_ok means it died in package or file setup, before any fatal handler runs; (4) no event at all means it died before its network came up, or it has no Sentry DSN."
+}
+
+# git_data_boot_verify <birth|replace> <max_polls> <interval_s> <anchor> <apply_outcome>
+# The whole step: precondition, poll, verdict, invariants, remediation. Returns 0 only when
+# the boot signal was received with every required invariant positive.
+#
+# THE TWO KINDS DIFFER IN ONE WAY THAT MATTERS: re-dispatch. A birth after a green apply
+# cannot be re-dispatched (the gate refuses a zero-create plan). A replace CAN, but every
+# replace destroys and recreates the host holding every connected user's repositories, so it
+# is never the way to get a second reading. Neither kind's remediation says "re-dispatch" for
+# a read-path fault or a silent host.
+git_data_boot_verify() {
+  local kind="$1" max_polls="$2" interval_s="$3" anchor="$4" apply="${5:-}"
+  local prc=0 answered read_note tail
+  case "$kind" in
+    birth|replace) : ;;
+    *) echo "::error::git_data_boot_verify: unknown kind '${kind}' — this is a workflow wiring fault."; return 2 ;;
+  esac
+  [[ -n "$apply" ]] || apply="unknown"
+
+  if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+    if [[ "$kind" == "birth" ]]; then
+      tail="on success do NOT re-dispatch (the gate refuses a zero-create plan) — verify with the runbook's 'After the birth' query; on failure re-dispatch is the normal remedy (the birth is additive)."
+    else
+      tail="do NOT re-dispatch the replace to get a reading (it destroys and recreates the host) — verify with the runbook's 'After the birth' query and the web-host git ls-remote check."
+    fi
+    echo "::error::DOPPLER_TOKEN is not present — the boot signal cannot be read, so this ${kind} CANNOT be verified. Refusing to report success. Fix the repo secret; then, apply outcome ${apply}: ${tail}"
+    return 1
+  fi
+
+  git_data_boot_poll "$max_polls" "$interval_s" "$anchor" || prc=$?
+  if (( prc != 0 )); then
+    echo "::error::The boot poll refused to run (rc=${prc}) — see the line above. This says NOTHING about whether the ${kind} host booted; it is a wiring or runner fault. The ${kind} is UNVERIFIED (apply outcome ${apply})."
+    return 1
+  fi
+
+  answered="${GIT_DATA_BOOT_ANSWERED:-0}"
+  case "${GIT_DATA_BOOT_VERDICT:-}" in
+    received) : ;;
+    silent)
+      if [[ "$kind" == "birth" ]]; then
+        tail="The apply step's outcome was ${apply}: on success this is the green-apply/dark-host state this interlock exists to catch; on failure, if the server was created this is a partial birth whose host never came up, and if it was not there is no host to check. Do NOT treat this birth as complete; see the runbook's partial-birth decision tree."
+      elif [[ "$apply" == "success" ]]; then
+        tail="The replace's apply succeeded, so the previous host was destroyed and this one has not reported. Do NOT re-dispatch the replace to get another reading: each replace destroys and recreates the host."
+      else
+        tail="The apply outcome was ${apply}, so whether the previous host was destroyed is NOT measured here: read the apply step's own error and the Hetzner project before any action."
+      fi
+      echo "::error::No stage:boot_complete from soleur-git-data within the poll budget, and the final read ANSWERED (answered=${answered}/${max_polls}), so this is a statement about the host or its upload path, not the read path. $(_gdb_sentry_order) ${tail}"
+      return 1
+      ;;
+    unreadable)
+      if (( answered > 0 )); then
+        read_note="The FINAL read failed after ${answered}/${max_polls} earlier reads answered with no boot_complete row"
+      else
+        read_note="Every read failed (answered=0/${max_polls})"
+      fi
+      if [[ "$kind" == "birth" ]]; then
+        tail="The birth is UNVERIFIED (apply outcome ${apply}): on success do NOT re-dispatch (the gate refuses a zero-create plan) — run the runbook's 'After the birth' query once the read works; on failure re-dispatch once it works."
+      else
+        tail="The replace is UNVERIFIED (apply outcome ${apply}). Do NOT re-dispatch the replace to get a reading: once the read works, run the runbook's 'After the birth' query (read-only) and the web-host git ls-remote check."
+      fi
+      echo "::error::${read_note}; last class=${GIT_DATA_BOOT_CLASS:-unknown}. The verdict on the final window is unmeasured, so this says NOTHING about whether the ${kind} host booted — fix the read path the class names, not the host. ${tail}"
+      return 1
+      ;;
+    *)
+      echo "::error::The boot poll ended with an unexpected verdict '${GIT_DATA_BOOT_VERDICT:-}' — failing closed; the ${kind} is UNVERIFIED (apply outcome ${apply})."
+      return 1
+      ;;
+  esac
+
+  printf '%s\n' "$GIT_DATA_BOOT_ROW"
+  git_data_boot_check_invariants "$kind" "$GIT_DATA_BOOT_ROW" || return 1
+  echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive (${kind}, apply outcome: ${apply})."
   return 0
 }

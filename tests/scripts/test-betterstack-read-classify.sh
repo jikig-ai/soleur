@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests for scripts/lib/betterstack-read-classify.sh (#8178).
 #
-# bs_read_classify partitions betterstack-query.sh's rc space into ONE token, so the
-# birth poll and the inngest cutover classify a failed read identically instead of
-# each re-deriving the partition. Hermetic: no network, no doppler, no live table.
+# bs_read_classify maps a failed betterstack-query.sh read to ONE token, and
+# bs_read_scrub_err1 makes its first stderr line safe for a public run log. Hermetic: no
+# network, no doppler, no live table.
 #
 # THE FUNCTION MUST RETURN 0 UNCONDITIONALLY. Its callers run under `set -e`, and a
 # trailing `grep -q … && printf` would return non-zero on the common path and abort
@@ -81,6 +81,8 @@ want "T3  rc=6  -> transport (DNS)"           transport                6  ""
 want "T4  rc=7  -> transport (connect)"       transport                7  ""
 want "T5  rc=28 -> transport (timeout)"       transport               28  ""
 want "T6  rc=35 -> transport (TLS)"           transport               35  ""
+want "T6b rc=124 -> transport (timeout expired)" transport            124  ""
+want "T6c rc=137 -> transport (timeout killed)"  transport            137  ""
 want "T7  rc=2  -> reader-refusal"            reader-refusal           2  ""
 want "T8  rc=64 -> reader-refusal"            reader-refusal          64  ""
 want "T9  rc=78 -> reader-refusal"            reader-refusal          78  ""
@@ -93,12 +95,16 @@ want "T12b rc=22 auth (password is incorrect)" credentials-rejected   22  'passw
 want "T12c rc=22 maintenance"                 source-under-maintenance 22 'the cluster is under maintenance'
 want "T12d rc=22 unmatched body -> other"     other                   22  'Code: 241. Memory limit exceeded'
 want "T12e rc=22 empty body -> other"         other                   22  ''
+# Each marker ALONE, and in the other letter case: the greps are case-insensitive by
+# design, and a fixture carrying two markers at once cannot show either one is needed.
+want "T12g rc=22 Code: 516 alone"             credentials-rejected    22  'Code: 516. DB::Exception'
+want "T12h rc=22 Maintenance (capital M)"     source-under-maintenance 22 'Service under Maintenance'
 
-# table-missing (ADR-192): a source that has never stored a row answers HTTP 500
-# CLUSTER_DOESNT_EXIST, which --fail-with-body reports as the SAME rc=22 as an auth
-# failure while meaning the opposite — the producer is at fault, not the reader.
-# This is the distinction the failing run log could not make.
-want "T12f rc=22 CLUSTER_DOESNT_EXIST -> table-missing" table-missing 22 'Code: 170. DB::Exception: Requested cluster not found. CLUSTER_DOESNT_EXIST'
+# source-not-in-connection (#7867): Better Stack answers HTTP 500 CLUSTER_DOESNT_EXIST
+# when the SQL API connection does not cover the source, which --fail-with-body reports
+# as the SAME rc=22 as an auth failure. It names the reader's connection scope.
+want "T12f rc=22 CLUSTER_DOESNT_EXIST -> source-not-in-connection" source-not-in-connection 22 'Code: 701. DB::Exception: Requested cluster not found. (CLUSTER_DOESNT_EXIST)'
+want "T12i rc=22 cluster_doesnt_exist (lower case)" source-not-in-connection 22 'cluster_doesnt_exist'
 
 # ── PRECEDENCE, pinned deliberately ──────────────────────────────────────────
 # Today's arms are SEQUENTIAL ASSIGNMENTS, so a body carrying BOTH markers ends as
@@ -107,15 +113,13 @@ want "T12f rc=22 CLUSTER_DOESNT_EXIST -> table-missing" table-missing 22 'Code: 
 # is pinned here rather than left to chance.
 want "T13 rc=22 BOTH markers -> maintenance wins" source-under-maintenance 22 'Authentication failed ... under maintenance'
 
-# table-missing greps LAST, so it outranks both inherited markers. That is a NEW
-# precedence this change introduces, and it is pinned rather than left implicit: a
-# definitive vendor code (CLUSTER_DOESNT_EXIST names the producer) should beat a bare
-# 'maintenance' substring, which can appear in unrelated prose. Both directions are
-# asserted so a later reorder cannot pass silently.
-want "T13b rc=22 maintenance + CLUSTER_DOESNT_EXIST -> table-missing" \
-  table-missing 22 'under maintenance; Code: 170 CLUSTER_DOESNT_EXIST'
-want "T13c rc=22 auth + CLUSTER_DOESNT_EXIST -> table-missing" \
-  table-missing 22 'Authentication failed; CLUSTER_DOESNT_EXIST'
+# source-not-in-connection greps LAST, so it outranks both inherited markers: a
+# definitive vendor code should beat a bare 'maintenance' substring, which can appear in
+# unrelated prose. Both directions are asserted so a later reorder cannot pass silently.
+want "T13b rc=22 maintenance + CLUSTER_DOESNT_EXIST -> source-not-in-connection" \
+  source-not-in-connection 22 'under maintenance; Code: 701 CLUSTER_DOESNT_EXIST'
+want "T13c rc=22 auth + CLUSTER_DOESNT_EXIST -> source-not-in-connection" \
+  source-not-in-connection 22 'Authentication failed; CLUSTER_DOESNT_EXIST'
 
 # ── return-code contract ─────────────────────────────────────────────────────
 # Asserted directly: every caller runs under `set -e`.
@@ -138,12 +142,30 @@ _lines() { local bf n; bf="$(_body 'Authentication failed')"; n="$(bs_read_class
 if [[ "$(_lines)" == "1" ]]; then _report "T17 emits exactly one line" ok
 else _report "T17 emits exactly one line" bad "got $(_lines) lines"; fi
 
-# ── Assertion floor (printf + exit, never through the helper it backstops) ──
+# ── bs_read_scrub_err1: what reaches the public log from stderr ─────────────
+declare -F bs_read_scrub_err1 >/dev/null \
+  || { printf 'FAIL: bs_read_scrub_err1 not defined after sourcing %s\n' "$LIB" >&2; exit 1; }
+_scrub() { local bf; bf="$(_body "$1")"; bs_read_scrub_err1 "$bf"; rm -f "$bf"; }
+_s="$(_scrub "curl: (6) Could not resolve host: S123.EU-Central-1a.BetterStackData.com")"
+if [[ "$_s" == "curl: (6) Could not resolve host: <host>" ]]; then _report "T18 host scrubbed case-insensitively, rest RETAINED" ok
+else _report "T18 host scrubbed case-insensitively, rest RETAINED" bad "got '$_s'"; fi
+_s="$(_scrub "refusing table 'secret-ish-value' for this read")"
+if [[ "$_s" == "refusing table '<redacted>' for this read" ]]; then _report "T19 quoted value redacted, rest RETAINED" ok
+else _report "T19 quoted value redacted, rest RETAINED" bad "got '$_s'"; fi
+_s="$(_scrub "")"
+if [[ "$_s" == "<none>" ]]; then _report "T20 empty stderr -> <none>" ok
+else _report "T20 empty stderr -> <none>" bad "got '$_s'"; fi
+_s="$(bs_read_scrub_err1 "/nonexistent/err-$$")"; _src=$?
+if [[ "$_s" == "<none>" && "$_src" == 0 ]]; then _report "T21 missing errfile -> <none>, rc 0" ok
+else _report "T21 missing errfile -> <none>, rc 0" bad "got '$_s' rc=$_src"; fi
+
+# ── Assertion count: EXACT, printf + exit, never through the helper it backstops.
+# A floor below the count lets that many assertions vanish silently.
 _total=$((pass + fail))
-_FLOOR=20
-if (( _total < _FLOOR )); then
-  printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
-    "$_total" "$_FLOOR" >&2
+_EXACT=33
+if (( _total != _EXACT )); then
+  printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' \
+    "$_total" "$_EXACT" >&2
   exit 1
 fi
 if (( ${#FAILURES[@]} != fail )); then

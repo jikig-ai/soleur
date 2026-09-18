@@ -365,30 +365,17 @@ for now. Second, and more usefully: an instrument that reports `INGEST_ACKNOWLED
 is reporting a 2xx from an endpoint that demonstrably discards the row. That is exactly the reading
 this amendment narrows the token to, and it is no longer hypothetical.
 
-## Addendum — 2026-09-18 (#8178): the git-data table now exists
+## Addendum — 2026-09-18 (#8178): `CLUSTER_DOESNT_EXIST` was the connection, not the source
 
-The two present-tense clauses above — the git-data source *"has never stored one"*
-(`### Consequence: the round trip creates a permanent table`) and the create-the-table
-consequence *"has not yet occurred"* (`### Measured 2026-09-06`) — are **retired**. Both were
-true when written and are left in place as dated readings.
+Two readings above are **superseded**, and they are left in place as dated text:
+- *"The git-data source (2734275) has never stored one, which is why reads … answer HTTP 500 `CLUSTER_DOESNT_EXIST`"* (`### Consequence: the round trip creates a permanent table`).
+- *"the round trip was not successful, so the table was not created"* (`### Measured 2026-09-06`).
 
-**Measured 2026-09-18** under `doppler run -p soleur -c prd_terraform`, the UNION of both arms
-(`remote(t520508_soleur_git_data_prd_logs)` + `s3Cluster(primary, t520508_soleur_git_data_prd_s3)`):
-the query answers `rc=0`, and **31 rows carry a `dt` before 2026-09-15**, oldest
-`2026-09-04 15:15:56.073385`, newest `2026-09-14 21:10:33.330216`. So the table exists, and a
-read against it answers with rows or with an empty result, never `CLUSTER_DOESNT_EXIST`.
+Better Stack resolved #7867 on 2026-09-09. Our SQL API connection was created 2026-06-01 and source 2734275 was created 2026-09-03, and **a connection does not cover sources created after it**. `CLUSTER_DOESNT_EXIST` meant "this connection does not know that cluster". The source had stored its rows all along. The fix was a new connection, written only to Doppler `prd_terraform`. So the "acknowledged and stored nothing" verdict above was a read-side artifact, and so was the `remote(…)` row in its table.
 
-`dt` is emitter-assigned, so the oldest `dt` dates the EVENT, not its storage. It does not
-contradict the 2026-09-06 reading that the table did not exist yet: a row can be delivered and
-stored after the moment it describes. What this addendum establishes is only the present
-state, not when the table was created.
+**Measured 2026-09-18** under `doppler run -p soleur -c prd_terraform` (the new connection), UNION of both arms: `rc=0`, 31 rows with `dt` before 2026-09-15, oldest `2026-09-04 15:15:56.073385`. That is consistent with #7867: the rows predate the 2026-09-06 reading that could not see them.
 
-**Consequences.** The rung-2 capture's `CLUSTER_DOESNT_EXIST` → zero-rows transition that
-`### Consequence` predicted **has now happened** for this source. The state stays in the read
-classifiers (`scripts/lib/betterstack-read-classify.sh` → `table-missing`) because any NEW
-source starts there. #8178 had to rule out that state as the cause of the git-data boot poll's
-`rc=22`, and this measurement is what refuted it. The rest of that story is in ADR-149's
-`## Amendment — 2026-09-17 (#8178)` and is not repeated here.
+**Consequence for readers.** A `CLUSTER_DOESNT_EXIST` body names the **reader's connection scope**, not the producer. The read classifier (`scripts/lib/betterstack-read-classify.sh`) therefore reports it as `source-not-in-connection`, a read-path fault. The three repository secrets `BETTERSTACK_QUERY_*` still hold the pre-#7867 connection, which is why #8178's poll failed against this source. ADR-149 `## Amendment — 2026-09-17 (#8178)` records that story; it is not repeated here.
 
 ## Related
 
