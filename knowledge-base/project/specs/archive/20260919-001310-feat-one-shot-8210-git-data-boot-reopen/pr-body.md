@@ -4,6 +4,26 @@
 and is delivered by PM4's guarded replace, so the issue is closed by a follow-through probe once
 the reboot evidence really lands on `main`. `Ref #8010`, `Ref #8211`.
 
+Plan: knowledge-base/project/plans/archive/20260919-001310-2026-09-18-fix-git-data-luks-mapper-reopen-at-boot-plan.md
+(archived by compound; its `## User-Brand Impact` and `## Observability` sections carry the dated
+review addenda). Learning:
+knowledge-base/project/learnings/2026-09-19-every-systemd-claim-i-reasoned-was-inverted-by-a-thirty-second-measurement.md
+
+## User-Brand Impact
+
+- **Brand-survival threshold:** `single-user incident` — the store will hold every user's source.
+- **Artifact at risk:** a user's `<user_id>.git` (objects, refs, hooks) on the git-data volume.
+- **Vector this PR closes:** a post-cutover reboot left the encrypted store absent and no signal
+  emitted, so a push could land in an empty root-disk directory and vanish when the store was later
+  mounted (until #8101), and every `Settings → Delete Account` hit a fail-closed erasure refusal
+  that was swallowed (#8094, not closed here).
+- **Vector this PR must not open:** formatting the store. The reopen never formats, never runs
+  `mkfs`, never calls `mount(8)`; the birth heredoc's `mkfs` guard is now keyed on the run having
+  `luksFormat`'d the device itself; every runbook lever that could reach a replace says so.
+- **Passphrase surface:** the unit's process environment under `doppler run` for the seconds it
+  runs; `--no-fallback`, `--only-secrets`, tmpfs `TMPDIR`, `PrivateTmp`, `LimitCORE=0` on the reopen
+  pair AND (review) the gc pair, which had been caching the resolved config on the root disk.
+
 ## The defect
 
 The git-data host opened its LUKS mapper exactly once in its life. `cryptsetup luksOpen` runs
@@ -167,7 +187,20 @@ under `apps/web-platform` outside `infra/`; the git-history seat found that fals
 string-assertion contract test over the Sentry rules, not a happy-dom component test, so the
 conclusion stands on the reproduction, not on the false proof.)
 
-## The full gate, HEAD-frozen
+## The full gate, HEAD-frozen — final run on the merged tree
+
+`TEST_GROUP=all bash scripts/test-all.sh` (unsharded, detached, rc-file watched) on `ad67cbdf7`,
+the tree that merges: **440/444 suites, 2 skipped (declined, not relevant), 1 `[FAIL]`** —
+the nested infra runner, 122/124, whose two reds are environment with inputs identical to
+`origin/main`: `canary-bundle-claim-check` (`python3 -m http.server` not answering on
+`localhost` within 4 s on this box; reproduced in isolation) and `zot-config-deadlines` (docker
+unavailable; fails closed). Both `apps/web-platform` groups are green (the 18 happy-dom files
+were fixed on `main` by #8270), and the five pre-existing scripts reds from the earlier run are
+green for the same reason. Every suite this PR touches passed.
+
+The earlier (pre-merge) run, kept for the record:
+
+### The full gate, HEAD-frozen (before the main sync)
 
 `bash scripts/test-all.sh` in all three shards (`scripts`, `webplat`, `infra`) against
 `b06dad3dd`, queued inside the ADR-133 advisory lock behind another worktree's run rather than
@@ -191,12 +224,25 @@ Two commits followed that run: `8fe66160f` (reporter `TimeoutStartSec` 120→150
 sharp edge; Guard 1, strip-parity and doppler-injection-bound re-run green) and the
 `ci-deploy` pin above (ci-deploy 305/305). Neither touches a file another suite reads.
 
+## Changelog
+
+### Web Platform (infra)
+
+- git-data: the LUKS mapper is reopened on every boot by a Doppler-fed systemd oneshot; a failure is reported off-host once per exhausted restart ladder with the phase that failed; a 15-minute timer re-runs the ladder hourly on a broken host.
+- git-data: `boot_complete` gains a measured, terminal `luks_reopen_unit` boolean; the rung-2 rehearsal hard-resets its throwaway host and proves the reopen before the payload may reach the live host; the replace route joins that interlock (with a full-history checkout so it can release).
+- git-data: the birth heredoc no longer formats an existing LUKS container whose ext4 superblock blkid cannot read; the gc unit pair no longer caches the resolved Doppler config on the root disk.
+- sentry-issue.sh: `--stage` filter; newest-first sort restored.
+
+### Plugin
+
+- review/work/one-shot skills: three sharp-edge bullets from this session (measure runtime semantics before writing the directive; stub-on-PATH shadowing; a gate reads the live tree).
+
 ## Post-merge (all `gh`-driven)
 
 - **PM1** dispatch the rehearsal from `main` (dry-run, then real); the environment approval is the
   one human gate, granted via `gh api … pending_deployments`.
 - **PM2** commit the evidence ALONE in an evidence-only PR (Guard 4).
-- **PM3** the follow-through closes #8210 once PM2 lands.
+- **PM3** the follow-through probe is what retires the tracking issue once PM2 lands — the issue stays open at merge (see the `Ref`, not `Closes`, at the top).
 - **PM4** `git-data-host-replace` — the replace route is HELD until PM2, which is the intended
   safe state. Record as an #8211 prerequisite with contract clauses (a)–(j).
 - **PM5** file the follow-on for `--only-secrets … --no-fallback` on the two untouched (the gc

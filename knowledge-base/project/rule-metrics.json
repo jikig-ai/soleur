@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-18T22:16:00Z",
+  "generated_at": "2026-09-18T23:19:31Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1138,11 +1138,11 @@
       "section": "Workflow Gates",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 35,
+      "applied_count": 36,
       "warn_count": 0,
-      "fire_count": 35,
+      "fire_count": 36,
       "prevented_errors": 0,
-      "last_hit": "2026-09-18T21:03:57Z",
+      "last_hit": "2026-09-18T23:08:59Z",
       "first_seen": "2026-07-17T14:26:30Z",
       "rule_text_prefix": ""
     },
@@ -1229,11 +1229,11 @@
       "section": "Workflow Gates",
       "hit_count": 99,
       "bypass_count": 0,
-      "applied_count": 24,
+      "applied_count": 25,
       "warn_count": 0,
-      "fire_count": 123,
+      "fire_count": 124,
       "prevented_errors": 99,
-      "last_hit": "2026-09-18T21:26:58Z",
+      "last_hit": "2026-09-18T22:22:28Z",
       "first_seen": "2026-05-21T21:08:12Z",
       "rule_text_prefix": ""
     },
@@ -1283,8 +1283,8 @@
     "rules_bypassed_over_baseline": 2,
     "orphan_rule_ids": [],
     "non_corpus_counts": {
-      "monitor-supersede": 356,
-      "net-issue-flow": 546,
+      "net-issue-flow": 547,
+      "monitor-supersede": 374,
       "post-dispatch-watch-gate": 5099,
       "guardrails-block-recursive-delete": 359,
       "kb-domain-allowlist-guard": 176,

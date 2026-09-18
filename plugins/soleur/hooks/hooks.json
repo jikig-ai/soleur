@@ -39,6 +39,15 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/welcome-hook.sh"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/compaction-state.sh\""
+          }
+        ]
       }
     ],
     "Stop": [
@@ -63,6 +72,17 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/unkept-promise-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/compaction-state.sh\""
           }
         ]
       }
