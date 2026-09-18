@@ -52,13 +52,14 @@ Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No edits
       `count == 1`, RETURNS 2 on a missing/duplicate anchor or zero-byte edit → `LANDING-FAILED`
       row), `expect_red` (rc ≠ 0, named `(fail)` arm, no summary error line, `Ran N` == pristine;
       optional output-file arg), `expect_green` (rc 0, `Ran N` == pristine, expect-calls ≥ 130).
-- [x] **3.3** Control precondition (exit 2 on failure): pristine copy green, `Ran 57`,
-      `expect() calls` ≥ 130, walker arm title in the pass list.
+- [x] **3.3** Control precondition (exit 2 on failure): pristine copy green, `Ran N` measured (≥ 47),
+      `expect() calls` ≥ 130, walker arm green in a `-t` run, fixture describe ≥ 10 arms all passing
+      *(amended at review from a `Ran 57` literal)*.
 - [x] **3.4** Rows R1, R2, R3, R4, R6 and H1, H1b, H2, H3, H4 exactly as the plan's Guard Contract;
       kb-index accounting (`PASS`/`FAIL`/`RESULTS`, `EXPECTED_ROWS=10`, `FLOOR:` on mismatch,
       summary `N ok, M problem(s)`); exit 1 on any problem.
 - [x] **3.5** `bash plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh` → exit 0,
-      summary `10 ok, 0 problem(s)`.
+      summary `16 ok, 0 problem(s)` *(amended at review from 10)*.
 - [x] **3.6** `git add` the suite, then `bash scripts/lint-orphan-test-suites.sh` exits 0 and
       `bash scripts/test-all.sh --print-suite-globs` expands over it.
 

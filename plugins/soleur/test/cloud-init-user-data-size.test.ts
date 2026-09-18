@@ -495,22 +495,77 @@ function assertNoExoticLineBreaks(src: string, label: string): void {
     );
   }
 }
-// (#7278) Line-leading HCL comment removal, so an assertion about the RENDER cannot be satisfied
-// by the prose ABOVE it. `local.registry_rationale_strip`'s own rationale block names
-// `replace(...)` in English, so a bare grep for the call would match the comment explaining the
-// guard rather than the guard — the recurring "the comment I wrote to explain it satisfied it"
-// class. Only LINE-LEADING comments are removed: the strip expression itself contains a `#`
-// inside a quoted string, and a naive to-end-of-line stripper would mangle it.
+// (#7278) HCL comment removal, so an assertion about the RENDER cannot be satisfied by the prose
+// ABOVE or BESIDE it. `local.registry_rationale_strip`'s own rationale block names `replace(...)`
+// in English, so a bare grep for the call would match the comment explaining the guard rather
+// than the guard — the recurring "the comment I wrote to explain it satisfied it" class.
+//
+// (#7968) Widened from line-leading `#`/`//` only to the three HCL comment forms: line-leading,
+// TRAILING (`x = 1 # why`), and `/* block */`. Measured on this branch: with only the line-leading
+// form stripped, `stripIsApplied` returned `true` for a render whose live `replace()` had been
+// commented out with `/* */`, and for an inline literal carrying `# was local.x_rationale_strip`
+// as a trailing note — the #7965 fail-open through the two comment syntaxes the old stripper did
+// not see. The scanner is STRING-AWARE and LINE-SCOPED: the strip expression itself contains a
+// `#` inside a quoted string, so `#` and `//` open a comment only outside `"…"`, and quote parity
+// resets on every line (HCL strings never span lines; a heredoc line with an odd quote count can
+// therefore mis-see only its own line). A `/*` outside a string opens a block that runs until
+// `*/` — possibly across lines — which is loud rather than silent when a heredoc carries a bare
+// glob: the extractor then throws `not found`, never mis-captures.
 function stripHclLineComments(src: string): string {
-  return src
-    .split("\n")
-    .filter((l) => !/^[ \t]*(#|\/\/)/.test(l))
-    .join("\n");
+  const out: string[] = [];
+  let inBlock = false;
+  for (const line of src.split("\n")) {
+    if (!inBlock && /^[ \t]*(#|\/\/)/.test(line)) continue;
+    let kept = "";
+    let inStr = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inBlock) {
+        if (c === "*" && line[i + 1] === "/") {
+          inBlock = false;
+          i++;
+        }
+        continue;
+      }
+      if (inStr) {
+        if (c === "\\") {
+          kept += c + (line[i + 1] ?? "");
+          i++;
+          continue;
+        }
+        if (c === '"') inStr = false;
+        kept += c;
+        continue;
+      }
+      if (c === '"') {
+        inStr = true;
+        kept += c;
+        continue;
+      }
+      if (c === "#" || (c === "/" && line[i + 1] === "/")) break;
+      if (c === "/" && line[i + 1] === "*") {
+        inBlock = true;
+        i++;
+        continue;
+      }
+      kept += c;
+    }
+    out.push(kept.replace(/[ \t]+$/, ""));
+  }
+  return out.join("\n");
 }
 
 // The HCL string body of a strip local, backslash-pair aware. Kept as a LITERAL (not a template
 // string) so the pattern reads as it did in the three per-host copies it replaced.
 const STRIP_LITERAL_RE = /\s*=\s*"((?:[^"\\]|\\.)*)"/;
+
+// `localName` is interpolated into two `new RegExp` sources below; a wrapper passing anything but
+// a bare HCL identifier would change the pattern's meaning silently, so refuse it loudly.
+function assertLocalName(localName: string): void {
+  if (!/^[a-z0-9_]+$/.test(localName)) {
+    throw new Error(`localName must be a bare lowercase HCL identifier, got: ${localName}`);
+  }
+}
 
 // (#7968) Reads `local.<localName> = "/(?m).../"` out of COMMENT-STRIPPED `.tf` source and returns
 // the JS model of that terraform regex. Every base64gzip'd host reaches its strip through THIS
@@ -520,22 +575,28 @@ const STRIP_LITERAL_RE = /\s*=\s*"((?:[^"\\]|\\.)*)"/;
 //     the FIRST occurrence, so a `#`-commented historical note carrying the good expression would
 //     shadow a live local carrying a boot-bricking one — the extractor would read the comment, the
 //     host would boot the local, and the suite would be green. Demonstrated: that exact mutation
-//     survived the first version of these tests (#7278), and the third copy (#7458) shipped
-//     without the strip at all — a green suite certified a 42,360 B tree against the 32,768 B cap
-//     (#7965).
+//     survived the first version of these tests (#7278). The third copy — the inngest pair, in
+//     #7965's FIRST commit, caught in review before merge — read the raw source; mutation-verified
+//     there (#7968): unwire `replace()`, orphan the local, leave one comment naming the chain, and
+//     a green suite certified a 42,360 B tree against the 32,768 B cap. No merged copy ever read
+//     raw source; the class is that a fourth copy could.
 //   * REFUSE an HCL-escaped literal rather than mis-parse it. The captured string is never
 //     HCL-unescaped, so `\\+` means a LITERAL `+` to Go RE2 (what production strips with) and
 //     one-or-more-backslashes to `new RegExp` (what this model strips with) — the model then
 //     measures a document production never ships, and no arm can see it because every arm tests
-//     the model's own regex. Measured divergence on such a mutation: 24 bytes / 2 lines. Universal
-//     now (was inngest-only): the engines disagree for ANY host, and no live body needs `\\`.
+//     the model's own regex. Measured divergence on such a mutation: 24 bytes / 2 lines. Refusing
+//     is correct rather than unescaping: no live body has a legitimate need for `\\`, so a `\\` is
+//     a signal the two engines have diverged. Universal now (was inngest-only): the engines
+//     disagree for ANY host.
 //
-// The pattern is left-anchored on the local name so `x_<localName>` cannot satisfy `<localName>`
-// (`main.tf` already carries `git_data_rationale_strip` beside `git_data_template_rationale_strip`).
+// The pattern is left-anchored on the local name so `y_<localName>` cannot satisfy `<localName>`
+// (no live file carries such a suffix-sibling today — `main.tf`'s `git_data_rationale_strip` is
+// not one, since `template` is infixed — so the lookbehind is defensive; A3 pins the shape).
 function extractStripRegex(tfSrc: string, localName: string, fileLabel: string): RegExp {
+  assertLocalName(localName);
   const src = stripHclLineComments(tfSrc);
   const all = [
-    ...src.matchAll(new RegExp(`(?<![a-z0-9_])${localName}${STRIP_LITERAL_RE.source}`, "g")),
+    ...src.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${localName}${STRIP_LITERAL_RE.source}`, "g")),
   ];
   if (all.length === 0) {
     throw new Error(`local.${localName} not found in ${fileLabel}`);
@@ -580,55 +641,116 @@ function extractStripRegex(tfSrc: string, localName: string, fileLabel: string):
 // Three properties, each closing a mutation that survived an earlier per-host copy:
 //   * comment-STRIPPED first — the raw-source form passed with the wrapper dropped and one
 //     comment naming the local left inside the map (M3; the #7965 fail-open);
-//   * requires `replace(templatefile(` STRUCTURALLY, inside the anchor's balanced call — passing
-//     the local as a templatefile VAR (`strip_pattern = local.inngest_rationale_strip`) satisfied a
-//     mere mention with real code rather than a comment, so comment-stripping alone would not
-//     have closed it (M14); and a mention in some LATER resource cannot satisfy it either;
+//   * requires the local to be the SECOND ARGUMENT of a `replace(` call inside the anchor's
+//     balanced span — a mere MENTION inside the span was satisfiable by passing the local as a
+//     templatefile VAR (`strip_pattern = local.inngest_rationale_strip`) with real code rather
+//     than a comment, so comment-stripping alone would not have closed it (M14; the per-host
+//     copies checked mention-in-span only); a mention in some LATER or EARLIER resource, in the
+//     replacement (third) argument, or inside a quoted string cannot satisfy it either;
 //   * requires the anchor to be UNIQUE — a non-global `.exec` takes the FIRST match, so a decoy
 //     resource or a second local earlier in the file certified something other than this host
 //     (M4b). Zero anchors → `false` (unwired — the size arm then models the unstripped payload
 //     and reds at the cap). More than one → THROW with the count: an ambiguous input is a test
 //     defect, not an unwired strip, and must not surface as a misleading cap failure.
 //
-// `anchorRe` must be /g (matchAll throws otherwise). The anchor's FIRST `(` must belong to the
-// OUTERMOST call whose balanced span should contain the local (`base64gzip(` / `replace(`) — see
-// the wrappers below. `chain` is every further link the render must take to reach the resource
-// (inngest hoists the render into locals); either link broken = unstripped payload.
+// `anchorRe` must be /g (matchAll throws otherwise). The anchor's FIRST `(` opens the span the
+// `replace(` is looked for in, so it must belong to the OUTERMOST call (`base64gzip(` /
+// `replace(`) — an anchor that starts INSIDE the render (`templatefile\(`) bounds a span with no
+// `replace(` and returns `false`, fail-closed. `chain` is every further link the render must take
+// to reach the resource (inngest hoists the render into locals); either link broken = unstripped
+// payload. The span walk and the argument split are string-aware: a `(`, `)` or `,` inside a
+// quoted templatefile value (`"( umask 0137 && …"` exists in server.tf) must not move either.
 function stripIsApplied(
   tfSrc: string,
   anchorRe: RegExp,
   localName: string,
   chain: readonly RegExp[] = [],
 ): boolean {
+  assertLocalName(localName);
   const src = stripHclLineComments(tfSrc);
   const anchors = [...src.matchAll(anchorRe)];
   if (anchors.length === 0) return false;
   if (anchors.length > 1) {
-    throw new Error(`${anchorRe.source} must match exactly once, found ${anchors.length}`);
+    throw new Error(
+      `${anchorRe.source} (the anchor for local.${localName}) must match exactly once, found ${anchors.length}`,
+    );
   }
-  const open = src.indexOf("(", anchors[0].index!);
-  let depth = 0;
-  let end = -1;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === "(") depth++;
-    else if (src[i] === ")") {
-      depth--;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
+  const start = anchors[0].index!;
+  const open = src.indexOf("(", start);
+  const end = balancedCloseParen(src, open);
   if (end === -1) return false;
-  if (!new RegExp(`local\\.${localName}\\b`).test(src.slice(open, end + 1))) return false;
+  // The region is anchor-start..span-end, so the anchor's own `replace(` token is inside it.
+  const region = src.slice(start, end + 1);
+  const rep = /replace\s*\(/.exec(region);
+  if (rep === null) return false;
+  const repOpen = rep.index + rep[0].length - 1;
+  const repEnd = balancedCloseParen(region, repOpen);
+  if (repEnd === -1) return false;
+  const args = splitTopLevelArgs(region.slice(repOpen + 1, repEnd));
+  if (args[1] !== `local.${localName}`) return false;
   return chain.every((re) => re.test(src));
 }
 
-// The per-host wrappers. Each carries ONLY constants; a fourth base64gzip'd host adds two lines
-// here (plus the `<HOST>_GZIP_BUDGET` constant the walker arm requires), never a fourth body.
+// Index of the `)` closing the `(` at `open`, or -1. Parens inside `"…"` do not count.
+function balancedCloseParen(text: string, open: number): number {
+  let depth = 0;
+  let inStr = false;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+// Splits a call's argument text at depth-0 commas (parens/braces/brackets and `"…"` respected),
+// trimming each argument, so `replace(templatefile(…, { a = "b,c" }), local.x, "")` yields three.
+function splitTopLevelArgs(argText: string): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let inStr = false;
+  let cur = "";
+  for (let i = 0; i < argText.length; i++) {
+    const c = argText[i];
+    if (inStr) {
+      if (c === "\\") {
+        cur += c + (argText[i + 1] ?? "");
+        i++;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      cur += c;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "(" || c === "{" || c === "[") depth++;
+    else if (c === ")" || c === "}" || c === "]") depth--;
+    else if (c === "," && depth === 0) {
+      args.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  if (cur.trim() !== "") args.push(cur.trim());
+  return args;
+}
+
+// The per-host wrappers. Each carries ONLY constants. Three of today's five base64gzip'd hosts
+// strip their render (web and grok-dogfood ship an unstripped `base64gzip(templatefile(…))` and
+// are modelled without a strip); a fourth STRIPPED host adds two wrapper lines here, never a
+// fourth body, and the `render-time strip locals` arm below refuses a `.tf` that wires a strip
+// this file has no wrapper for. The walker arm separately requires a budget script or a
+// `<HOST>_GZIP_BUDGET` constant for every gzip'd host.
 //
-// Anchor contract: the first `(` in each anchor is the OUTERMOST call whose span must contain the
-// local — the registry anchor starts its span at `base64gzip(`, the other two at `replace(`.
+// Anchor contract: see `stripIsApplied` — the first `(` in each anchor is the OUTERMOST call
+// (`base64gzip(` for the registry, `replace(` for the other two).
 //
 // (#7264) git-data: the render lives in the module both roots call, not in a root, and is
 // assigned to `rendered` rather than `user_data` (the roots wrap
@@ -739,6 +861,19 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(gitDataStripIsApplied(gitDataTf)).toBe(true);
   });
 
+  test("git-data template strip preserves #cloud-config (#7968)", () => {
+    // Mirror of the registry and inngest arms. main.tf declares TWO strip locals side by side —
+    // `git_data_rationale_strip` (payload: eats every `#` line but `#!`, so it eats `#cloud-config`)
+    // and `git_data_template_rationale_strip` (template: keeps it). With the wrappers reduced to
+    // one-token constants, pointing the git-data extractor at the sibling local models a strip
+    // that boot-bricks the host, and the budget arm cannot see it (the size stays in range).
+    // Measured on this branch: that wrapper drift left the suite fully green until this arm.
+    const strip = gitDataStripRegex(gitDataTf);
+    const src = readFileSync(join(INFRA, "cloud-init-git-data.yml"), "utf8");
+    expect(src.startsWith("#cloud-config\n")).toBe(true); // precondition, not an assumption
+    expect(src.replace(strip, "").startsWith("#cloud-config\n")).toBe(true);
+  });
+
   test("registry host base64gzip'd user_data is under the Hetzner cap (#7278)", () => {
     // Pre-#7278 this rendered 34,628 B (terraform's own base64gzip) against a 32,768 B cap, so EVERY registry provisioning
     // event failed at the Hetzner API — including the `registry-luks-recut` that is this lever's
@@ -796,6 +931,22 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     // orphan the local, or keep `replace()` with an INLINE literal and leave the local as
     // decoration. Either leaves the payload unstripped and the host un-creatable.
     expect(inngestStripIsApplied(inngestTf)).toBe(true);
+  });
+
+  test("inngest user_data is unstripped when the first chain link bypasses the render (#7968)", () => {
+    // The chain has two links and the fixture arms below break each in isolation; this is the
+    // real-tree direction: re-render `_b64gz` straight from `templatefile()` (strip bypassed)
+    // and the predicate must say so. Measured on this branch: with `chain.every` weakened to
+    // `chain.slice(1).every`, or the wrapper's first link dropped, the pristine suite stayed
+    // 57/57 while this exact revert modelled a stripped payload the host never boots.
+    const link1 = /inngest_user_data_b64gz\s*=\s*base64gzip\(\s*local\.inngest_user_data_plain\s*\)/;
+    expect(link1.test(stripHclLineComments(inngestTf))).toBe(true); // precondition
+    const bypassed = inngestTf.replace(
+      link1,
+      'inngest_user_data_b64gz = base64gzip(templatefile("cloud-init-inngest.yml", {}))',
+    );
+    expect(bypassed).not.toBe(inngestTf);
+    expect(inngestStripIsApplied(bypassed)).toBe(false);
   });
 
   test("inngest strip preserves #cloud-config and eats no YAML (#7695)", () => {
@@ -1053,6 +1204,42 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
       return !new RegExp(`^const ${name.toUpperCase()}_GZIP_BUDGET\\s*=`, "m").test(thisFile);
     });
 
+    expect(uncovered).toEqual([]);
+  });
+
+  test("every render-time strip local wired into a replace(templatefile()) has a wrapper pair (#7968)", () => {
+    // The wrapper convention is otherwise prose: a fourth host could wire `local.<x>_rationale_strip`
+    // into its render and model its size with a literal (or with `null`), never touching the
+    // shared helpers. This walks every `.tf` under infra/ (modules included), finds each
+    // `replace(templatefile(…), local.<strip>, …)` by the same string-aware argument split the
+    // predicate uses, and requires this file to name that local in BOTH wrappers.
+    const tfFiles = (readdirSync(INFRA, { recursive: true }) as string[]).filter((f) =>
+      f.endsWith(".tf"),
+    );
+    const wired: string[] = [];
+    for (const f of tfFiles) {
+      const src = stripHclLineComments(readFileSync(join(INFRA, f), "utf8"));
+      for (const m of src.matchAll(/replace\s*\(/g)) {
+        const open = m.index! + m[0].length - 1;
+        const end = balancedCloseParen(src, open);
+        if (end === -1) continue;
+        const args = splitTopLevelArgs(src.slice(open + 1, end));
+        if (!/^\s*templatefile\s*\(/.test(args[0] ?? "")) continue;
+        const local = /^local\.([a-z0-9_]+_rationale_strip)$/.exec(args[1] ?? "");
+        if (local) wired.push(`${f}:${local[1]}`);
+      }
+    }
+    // Non-vacuity: the three stripped hosts must be found, or the walk is reading nothing.
+    expect(wired.length).toBeGreaterThanOrEqual(3);
+    expect(wired).toContain("zot-registry.tf:registry_rationale_strip");
+
+    const thisFile = readFileSync(join(import.meta.dir, "cloud-init-user-data-size.test.ts"), "utf8");
+    const uncovered = wired.filter((entry) => {
+      const local = entry.slice(entry.indexOf(":") + 1);
+      const extractor = thisFile.includes(`extractStripRegex(tf, "${local}"`);
+      const predicate = new RegExp(`stripIsApplied\\(tf, /[^\\n]*/g, "${local}"`).test(thisFile);
+      return !(extractor && predicate);
+    });
     expect(uncovered).toEqual([]);
   });
 });
@@ -1485,11 +1672,13 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
 // (#7968) The two shared helpers above are the chokepoint every per-host wrapper delegates to.
 // These arms drive them over SYNTHETIC `x_`-host HCL (a host name that exists nowhere under
 // infra/, so no arm can pass by reading a real file). They exist because the real-tree arms
-// cannot see the #7965 fail-open: with `stripHclLineComments` removed from every helper, the
-// suite stayed 47/47 green against the real .tf files (measured 2026-09-18). A5 and A10 are the
-// must-PASS controls; A6–A9 are each ONE `.replace` on a control's string, so the diff from the
-// passing shape is exactly the property under test. The sibling battery
-// `cloud-init-strip-helpers-mutation.test.sh` reds these arms by mutating a copy of the helpers.
+// cannot see the raw-source fail-open mutation-found inside #7965 (M3): with
+// `stripHclLineComments` removed from every helper, the suite stayed 47/47 green against the real
+// .tf files (measured 2026-09-18). A5 and A10 are the must-PASS controls; A6/A6b/A6c/A8/A9/A9b/A11
+// are each ONE `.replace` on a control's string (A7 is the control concatenated with a renamed
+// copy), so the diff from the passing shape is exactly the property under test. The sibling
+// battery `cloud-init-strip-helpers-mutation.test.sh` reds these arms by mutating a copy of the
+// helpers.
 describe("shared strip helpers are structural (#7968)", () => {
   const X_LOCAL = "x_rationale_strip";
   // inngest-shaped: hoisted locals chain, render assigned to a local, resource reads the gz local.
@@ -1531,6 +1720,19 @@ resource "hcloud_server" "x" {
     const src = `
 locals {
   # historical: x_rationale_strip = "/(?m)^# decoy$/"
+  x_rationale_strip = "/(?m)^# live$/"
+}
+`;
+    const re = extractStripRegex(src, X_LOCAL, "x.tf");
+    expect(re.source).toContain("live");
+    expect(re.source).not.toContain("decoy");
+  });
+
+  // A1b — the same decoy as a TRAILING comment on an unrelated line
+  test("extractor ignores a trailing-comment decoy definition", () => {
+    const src = `
+locals {
+  other = 1 # historical: x_rationale_strip = "/(?m)^# decoy$/"
   x_rationale_strip = "/(?m)^# live$/"
 }
 `;
@@ -1586,17 +1788,41 @@ locals {
     expect(stripIsApplied(src, X_INNGEST_ANCHOR, X_LOCAL, X_INNGEST_CHAIN)).toBe(false);
   });
 
+  // A6b — the same fail-open through a `/* */` block comment
+  test("predicate is not satisfied by a block-commented render", () => {
+    const src = X_INNGEST_SHAPE.replace(
+      X_INNGEST_RENDER_LINE,
+      `  /*\n${X_INNGEST_RENDER_LINE}\n  */\n  x_plain = templatefile("cloud-init-x.yml", { a = "b" })`,
+    );
+    expect(src).not.toBe(X_INNGEST_SHAPE);
+    expect(stripIsApplied(src, X_INNGEST_ANCHOR, X_LOCAL, X_INNGEST_CHAIN)).toBe(false);
+  });
+
+  // A6c — the same fail-open through a TRAILING comment beside an inline literal
+  test("predicate is not satisfied by a trailing comment naming the local", () => {
+    const src = X_REGISTRY_SHAPE.replace(
+      'local.x_rationale_strip, ""))',
+      '"/(?m)^# .*$/", "")) # was local.x_rationale_strip',
+    );
+    expect(src).not.toBe(X_REGISTRY_SHAPE);
+    expect(stripIsApplied(src, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(false);
+  });
+
   // A7
   test("predicate refuses a second anchor", () => {
     const src = X_INNGEST_SHAPE + X_INNGEST_SHAPE.replace('"hcloud_server" "x"', '"hcloud_server" "x2"');
+    expect(src).not.toBe(X_INNGEST_SHAPE);
     expect(() => stripIsApplied(src, X_INNGEST_ANCHOR, X_LOCAL, X_INNGEST_CHAIN)).toThrow(
       /exactly once/,
     );
   });
 
-  // A8
-  test("predicate requires every chain link", () => {
-    const src = X_INNGEST_SHAPE.replace("user_data = local.x_b64gz", 'user_data = ""');
+  // A8 — one arm per link, so `chain.slice(1)`-style weakenings red
+  test.each([
+    ["first", "x_b64gz = base64gzip(local.x_plain)", 'x_b64gz = base64gzip(templatefile("cloud-init-x.yml", { a = "b" }))'],
+    ["last", "user_data = local.x_b64gz", 'user_data = ""'],
+  ])("predicate requires every chain link (%s)", (_which, from, to) => {
+    const src = X_INNGEST_SHAPE.replace(from, to);
     expect(src).not.toBe(X_INNGEST_SHAPE);
     expect(stripIsApplied(src, X_INNGEST_ANCHOR, X_LOCAL, X_INNGEST_CHAIN)).toBe(false);
   });
@@ -1614,8 +1840,53 @@ resource "null_resource" "later" {
     expect(stripIsApplied(src, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(false);
   });
 
-  // A10 — must-PASS control for A9
+  // A9b — the bound holds on the EARLIER side too
+  test("predicate bounds the local to the balanced call (mention before the anchor)", () => {
+    const src =
+      `
+resource "null_resource" "earlier" {
+  triggers = { s = local.x_rationale_strip }
+}
+` + X_REGISTRY_SHAPE.replace("local.x_rationale_strip, \"\"", '"/(?m)^# .*$/", ""');
+    expect(src).not.toBe(X_REGISTRY_SHAPE);
+    expect(stripIsApplied(src, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(false);
+  });
+
+  // A9c — the bound is the ANCHOR's own call: an earlier, unrelated replace() that does use the
+  // local cannot certify a render that does not. (A9/A9b pin mentions; this pins a real call.)
+  test("predicate bounds the local to the anchor's own replace() call", () => {
+    const src =
+      `
+locals {
+  unrelated = replace(templatefile("other.yml", { a = "b" }), local.x_rationale_strip, "")
+}
+` + X_REGISTRY_SHAPE.replace("local.x_rationale_strip, \"\"", '"/(?m)^# .*$/", ""');
+    expect(src).not.toBe(X_REGISTRY_SHAPE);
+    expect(stripIsApplied(src, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(false);
+  });
+
+  // A10 — must-PASS control for A9/A9b/A9c/A11
   test("predicate accepts the canonical registry-shaped render", () => {
     expect(stripIsApplied(X_REGISTRY_SHAPE, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(true);
+  });
+
+  // A11 — the M14 shape with the wrapper kept: the local is passed as a templatefile VAR and
+  // `replace()` strips something else. A mention-in-span predicate returns true here.
+  test.each([
+    ["templatefile var", '{ a = "b" }), local.x_rationale_strip, ""', '{ a = "b", s = local.x_rationale_strip }), "/(?m)^# .*$/", ""'],
+    ["third argument", 'local.x_rationale_strip, ""', '"ZZZ", local.x_rationale_strip'],
+    ["quoted string", '{ a = "b" }), local.x_rationale_strip, ""', '{ a = "see local.x_rationale_strip, please" }), "/(?m)^# .*$/", ""'],
+  ])("predicate requires the local as replace()'s second argument (%s)", (_which, from, to) => {
+    const src = X_REGISTRY_SHAPE.replace(from, to);
+    expect(src).not.toBe(X_REGISTRY_SHAPE);
+    expect(stripIsApplied(src, X_REGISTRY_ANCHOR, X_LOCAL)).toBe(false);
+  });
+
+  // A12
+  test("helpers refuse a localName that is not a bare identifier", () => {
+    expect(() => extractStripRegex(X_REGISTRY_SHAPE, "x.rationale_strip", "x.tf")).toThrow(/identifier/);
+    expect(() => stripIsApplied(X_REGISTRY_SHAPE, X_REGISTRY_ANCHOR, "x-rationale_strip")).toThrow(
+      /identifier/,
+    );
   });
 });
