@@ -179,7 +179,7 @@ export const SENTRY_PROJECT_RE = /^\d+$/;
 export const SENTRY_PUBLIC_KEY_RE = /^[a-f0-9]{32}$/;
 
 export interface HandlerArgs {
-  event?: { data?: Record<string, unknown> };
+  event?: { name?: string; data?: Record<string, unknown> };
   step: { run<T>(name: string, cb: () => Promise<T>): Promise<T> };
   logger: {
     info: (...a: unknown[]) => void;
