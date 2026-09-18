@@ -823,6 +823,7 @@ community/github-community.sh
 community/github-stats
 community/scripts
 community/x-setup
+compaction
 compaction-boundary
 companion-pr
 comparedocumentposition
@@ -2768,6 +2769,7 @@ post-apply-verification
 post-deploy
 post-implementation-review
 post-merge
+postcompact
 postcss
 postgres
 postgres-partial-index
@@ -3454,6 +3456,7 @@ session-error
 session-errors
 session-key
 session-management
+session-manifest
 session-persistence
 session-resume
 session-rules-loader
@@ -3978,6 +3981,7 @@ trace-tests
 trace/breakpoint trap
 trailers
 transaction-safety
+transcript
 transcript-judging
 transition
 transparency

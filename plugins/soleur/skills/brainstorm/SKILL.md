@@ -555,7 +555,7 @@ Do NOT record a "skipped" outcome and proceed — the only terminal states are `
    gh issue create --title "feat: <deferred item>" --milestone "Post-MVP / Later" --body "Deferred from #<parent-issue> during brainstorm on <date>.\n\n## What was deferred\n<description>\n\n## Why deferred\n<rationale from brainstorm>\n\n## Re-evaluation criteria\n<when to revisit>"
    ```
 
-   The body must satisfy the issue-filing gate: add `Mandated-By: wg-when-deferring-a-capability-create-a` on its own line (or `User-Impact:`/`Fix-Size:` lines, or `--label meta/machinery` for machinery findings). Prefer `--body-file <tracked-relative-or-absolute-repo-path>` over inline `--body` — the gate cannot read `/tmp` and inline quoting can fail tokenization.
+   The body must satisfy the issue-filing gate: add `Mandated-By: wg-when-deferring-a-capability-create-a` on its own line (or `User-Impact:`/`Fix-Size:` lines, or `--label meta/machinery` for machinery findings). Prefer `--body-file <tracked-relative-or-absolute-repo-path>` over inline `--body` — the gate cannot read `/tmp` and inline quoting can fail tokenization. **Write the body file in its own tool call (Write, or a separate Bash), never `cat > body.md <<EOF … && gh issue create --body-file body.md` in one command** — the gate reads the file at PreToolUse time, before the heredoc has run, and its block aborts the whole command so the file is never written either (2026-09-18, #8323). `User-Impact:` must name a surface (route/page/CLI command); `Fix-Size:` must be a measured `N lines / M files`.
 
    After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies. If no items were deferred, skip silently.
 
