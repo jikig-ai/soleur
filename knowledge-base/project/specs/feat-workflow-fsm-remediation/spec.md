@@ -74,11 +74,18 @@ nothing that can refuse an action.
   stranded (35,228 total). **Count rotated `.rule-incidents-*.jsonl.gz`
   archives, not just live `.jsonl`** — they hold the majority of history and
   omitting them understates the readable set and overstates the residual.
-- **FR2** — Aggregation cadence restored (scheduled, or attached to an existing
-  scheduled job), with the `SOLEUR_RULE_METRICS_NO_INCIDENTS` null-reading
-  marker preserved so absence stays loud.
-- **FR3** — Investigate and record **why** the April skill-emit arm (#2866 /
-  PR #2876) stalled at 4 of 10 planned skills before extending coverage.
+- ~~**FR2** — Aggregation cadence restored.~~ **SUPERSEDED at plan time
+  (Cut C1).** Already bought by the ADR-091 local-producer model; the weekly
+  `schedule:` was removed deliberately under #6042 because fresh CI checkouts
+  committed all-zero snapshots that clobbered the real local aggregate.
+  Implementing this would regress. The `SOLEUR_RULE_METRICS_NO_INCIDENTS`
+  null-reading marker is already present and is preserved.
+- ~~**FR3** — Investigate why the April skill-emit arm stalled.~~
+  **SUPERSEDED at plan time (Cut C5).** One grep answers it:
+  `grep -rn 'emit_incident' plugins/soleur/skills/*/SKILL.md` returns **zero**
+  call sites across 98 skills — prose instructing an agent to source a bash
+  library never became a call site in five months. The finding stands; it needed
+  no phase, and it also refutes raising coverage the same way.
 - **FR4** — Edge set moves into a declarative source (`transitions` key in
   `phase-surface-map.json` or a sibling file); `workflow-fidelity.ts` reads it
   rather than hard-coding the `switch`.
@@ -86,14 +93,27 @@ nothing that can refuse an action.
   diverge, mirroring the existing `phase-surface-map-parity.test.ts` pattern.
 - **FR6** — Declare back-edges `review→work`, `ship→work`, `work→plan`.
   `postmerge→work` is explicitly NOT declared.
-- **FR7** — Transition gate ships as a **second entry** in the existing `Skill`
-  `PreToolUse` array, in a new `workflow-transition-gate.sh` — NOT inside
-  `skill-invocation-logger.sh` (which is fail-soft with a kill-switch, so a
-  verdict there dies silently whenever telemetry does).
-- **FR8** — The gate's own record path emits, so the gate cannot become the 99th
-  uninstrumented rule.
-- **FR9** — Body extraction from `review`/`work`/`plan`/`ship` `SKILL.md` into
-  `references/`, loaded on demand. No behavioural change.
+- ~~**FR7** — Transition gate as a second `Skill` `PreToolUse` entry.~~
+  **SUPERSEDED at plan time (Cut C3, operator-confirmed).** A record-mode
+  event reaches no consumer: it carries no corpus rule-id prefix, so the
+  aggregator files it under `summary.non_corpus_counts` (nothing reads that
+  field), and compound's Deviation Analyst filters to
+  `event_type ∈ {deny, bypass}` or `kind == "hook_self_fault"` — none of which
+  record-mode can emit. The transition sequence it would record **already
+  exists** in `.claude/.skill-invocations.jsonl`.
+- ~~**FR8** — The gate's own record path emits.~~ **SUPERSEDED with FR7.**
+- **FR7′ (replaces FR7/FR8)** — An **offline** classifier reads the existing
+  `.claude/.skill-invocations.jsonl`, groups by `session_id`, and reports
+  transitions absent from the declared edge set. No hook, no `settings.json`
+  entry, no `PreToolUse` surface.
+- **FR9** — Body extraction into `references/`, loaded on demand, **narrowed at
+  plan time (Cut C4, operator-confirmed) to `plan`'s `## Sharp Edges` only.**
+  `work`'s `## Execution Workflow` (lines 122–1281 of 1392) and `review`'s
+  `## Code Review Complete` are core-path: extracting them behind a load
+  directive buys two reads for identical bytes plus a new drift surface. The
+  proven `references/` pattern operates at ~5% extraction, not 80%. The
+  directive for `plan` must be **conditional**, matching the 7 gated directives
+  in the repo rather than the 5 unconditional ones.
 - **FR10** — Per-file SKILL.md byte ceiling, **monotonically non-increasing**,
   enforced in CI.
 
