@@ -869,5 +869,12 @@ What this does NOT change, stated rather than implied:
   and `npx` on `PATH`, server not disabled in `/mcp`). The PA-31 fleet overlay remains
   unwrapped and untouched — its per-fire `.mcp.json` is what PA-31 §(g) records and the
   plugin manifest does not bind it (PA-31 §(g) 2026-09-18 assessment).
+- Reach (c) — "the hosted agent-runner registers no Playwright server" — stays
+  literally true, but its basis changed on architecture review: the hosted runner
+  loads the vendored plugin tree via `plugins: [{ type: "local" }]`, which WOULD
+  discover a vendored `.mcp.json`. Both vendor steps (`ci.yml`,
+  `reusable-release.yml`) now delete `_plugin-vendored/.mcp.json` after `cp -a`,
+  so the hosted plugin tree carries no `.mcp.json`; the manifest `mcpServers`
+  are unaffected. Pinned by two Guard-3 rows in the proxy suite.
 
 **Disposition: DISCHARGED, unchanged.**

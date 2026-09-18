@@ -606,3 +606,19 @@ EOF), a SIGKILLed `playwright-mcp` leaves Chrome reaped by the same group
 teardown, and a stale `SingletonLock` is stolen by the next launch on a
 dead-pid check — the playbook names the live-lock-holder check for the shape
 that remains.
+
+**Hosted agent-runner: reach (c) now holds by exclusion, not by absence.**
+Architecture review found that the hosted agent-runner loads the vendored
+plugin tree via `plugins: [{ type: "local" }]` on `@anthropic-ai/claude-code`
+2.1.219 — above the discovery floor — so a vendored `plugins/soleur/.mcp.json`
+would register `plugin:soleur:playwright` on the prod image, where `python3`
+does not exist and `@playwright/mcp@0.0.78` cannot resolve under firewalled
+egress: a guaranteed-failed server on every hosted session. Rather than
+suppress MCP discovery on the query path (`SdkPluginConfig.skipMcpDiscovery`
+would also unregister the plugin's sanctioned HTTP `mcpServers`), both vendor
+steps (`.github/workflows/ci.yml`, `reusable-release.yml`) now `rm -f
+"$DEST/.mcp.json"` after `cp -a`, so the hosted image's plugin tree carries no
+`.mcp.json` at all — the manifest `mcpServers` in `plugin.json` are unaffected.
+Reach (c) stays literally true, restated: **the hosted agent-runner registers
+no Playwright server, because the vendored plugin tree excludes the file.**
+The exclusion is pinned by two Guard-3 rows in the proxy suite.

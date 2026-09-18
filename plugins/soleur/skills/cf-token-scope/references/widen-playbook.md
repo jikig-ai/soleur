@@ -5,7 +5,10 @@ Rare, lazy-loaded reference. The everyday probe path lives in
 
 The widen is a **Playwright MCP** (`mcp__plugin_soleur_playwright__*`) operation, not
 `soleur:agent-browser` (Vercel's CLI daemon — the surface that wedges on a stale
-socket, per #6755). Editing a token's permissions does **not** rotate the token
+socket, per #6755). The plugin registration is headed with a dedicated
+persistent profile, so it can carry the operator's login/MFA handoff; if the
+stored Cloudflare session lives in a different registration's profile, drive
+that registration instead. Editing a token's permissions does **not** rotate the token
 value (learning `2026-03-21-cloudflare-api-token-permission-editing.md`, #992),
 so no Doppler write and no dependent-infra re-run follow the widen.
 

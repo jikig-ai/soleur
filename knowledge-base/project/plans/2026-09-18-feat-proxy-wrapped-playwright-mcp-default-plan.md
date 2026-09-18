@@ -510,8 +510,11 @@ Evidence lands in `knowledge-base/project/specs/feat-one-shot-8156-8250-mcp-prox
 - `plugins/soleur/skills/cf-token-scope/references/widen-playbook.md` — 1 literal + preference clause.
 - `plugins/soleur/skills/qa/SKILL.md` — preference clause beside the S2 paragraph.
 - `plugins/soleur/skills/ux-audit/SKILL.md` — preference clause beside the S2 paragraph.
-- `plugins/soleur/skills/plan/SKILL.md` — 1 literal (`mcp__playwright__*` routing note).
-- `plugins/soleur/skills/work/SKILL.md` — 1 literal (same routing note).
+- `plugins/soleur/skills/plan/SKILL.md` — 1 literal (`mcp__playwright__*` routing note) + stored-profile scoping clause (review P1-2).
+- `plugins/soleur/skills/work/SKILL.md` — 1 literal (same routing note) + stored-profile scoping clause (review P1-2).
+- `plugins/soleur/skills/compound/SKILL.md` — stale `mcp__plugin_playwright_playwright__*` literal → any-registration `browser_navigate` evidence check (review finding).
+- `plugins/soleur/README.md` — MCP Servers table: `playwright` row + missing `cloudflare`/`stripe` rows + count (review nit).
+- `.github/workflows/ci.yml` + `.github/workflows/reusable-release.yml` — `rm -f "$DEST/.mcp.json"` vendored-tree exclusion (architecture-review P1: keeps hosted reach (c) true; see ADR-213 addendum).
 - `apps/web-platform/test/plugin-root-anchoring.test.ts` — `EXPECTED_GATE_REFS` only if a new anchored reference lands (conditional).
 - `knowledge-base/engineering/architecture/decisions/ADR-213-browser-snapshot-credential-guard-split.md` — #8156 addendum.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` + `model.likec4.json` — description updates + regen.
@@ -536,6 +539,7 @@ entry and its own profile dir); `.codex-plugin/plugin.json` /
 | **A-inline — register inside `plugin.json` `mcpServers`** | P1–P4 | Forces the codex deep-equality and devin `.url`-parity tests to carry a stdio entry on harnesses that cannot run it. Reshaped into the dedicated `.mcp.json` — same property, smaller blast radius. |
 | **Do nothing — keep documenting the manual shape** | None | The issue exists because documentation is not P7. Rejected by the CPO ruling on #7980. |
 | **`bash -c` launch inside the plugin entry** (mirrors repo `.mcp.json`) | P5 without a proxy code change | Trades a testable argv-management flag for an unauditable shell string inside a JSON manifest; the flag is ~15 lines in the file that already owns child argv. The flag also fixes the same problem for any future wrapped registration. |
+| **Inject `--user-data-dir` unconditionally whenever the child argv lacks one** (no proxy flag) | Zero argv vocabulary; every wrapped launch gets a profile | The proxy would silently impose a profile on EVERY caller — including the repo dogfood registration, which deliberately keeps its own headed credential-handoff profile — with no per-registration opt-out. An explicit `--user-data-dir-name` keeps injection opt-in, names the profile in the manifest (auditable), and gives the refusal semantics a place to live (duplicate/conflict/traversal all refuse rather than guess). |
 | **Name the server something other than `playwright`** (e.g. `soleur-browser`) | Same, plus zero prefix sweep | Breaks the issue's expected `mcp__plugin_soleur_playwright__*` shape and makes the skills' story harder ("use playwright, but not the one named playwright"). The `plugin_soleur` namespace already disambiguates. |
 
 **Option C re-evaluation criteria** (for the deferral issue): the agent-side

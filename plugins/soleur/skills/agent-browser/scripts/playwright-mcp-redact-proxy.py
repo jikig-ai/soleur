@@ -112,7 +112,7 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
     """Resolve `--user-data-dir-name <basename>` to an absolute dir under the cache root.
 
     XDG semantics mirror scripts/lib/scratch-root.sh: $XDG_CACHE_HOME wins when
-    set, otherwise `~/.cache` via expanduser; a relative root or an
+    set, otherwise `$HOME/.cache`; a relative root or an
     unresolvable `~` refuses rather than resolving against the caller's CWD.
     Returns None when the flag is absent (the child argv stays untouched).
     """
@@ -120,14 +120,17 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--user-data-dir-name":
-            if i + 1 >= len(args):
-                refuse_start("--user-data-dir-name needs a basename argument")
-            name = args[i + 1]
-            i += 2
-        elif a.startswith("--user-data-dir-name="):
-            name = a.split("=", 1)[1]
-            i += 1
+        if a == "--user-data-dir-name" or a.startswith("--user-data-dir-name="):
+            if name is not None:
+                refuse_start("--user-data-dir-name given twice")
+            if a == "--user-data-dir-name":
+                if i + 1 >= len(args):
+                    refuse_start("--user-data-dir-name needs a basename argument")
+                name = args[i + 1]
+                i += 2
+            else:
+                name = a.split("=", 1)[1]
+                i += 1
         else:
             refuse_start(f"unrecognised proxy flag before `--`: {a}")
     if name is None:
@@ -136,6 +139,8 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
         refuse_start("--user-data-dir-name must be a basename (empty, '.' or '..' refuses)")
     if "/" in name or "\\" in name:
         refuse_start("--user-data-dir-name must be a basename (a path separator refuses)")
+    if name.startswith("-"):
+        refuse_start("--user-data-dir-name must be a basename (a leading '-' refuses)")
     xdg = env.get("XDG_CACHE_HOME")
     if xdg:
         root = xdg
@@ -143,7 +148,7 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
         home = env.get("HOME")
         if not home:
             refuse_start("cannot resolve the profile root: neither XDG_CACHE_HOME nor HOME is set")
-        root = os.path.join(os.path.expanduser("~"), ".cache")
+        root = os.path.join(home, ".cache")
     if not os.path.isabs(root):
         refuse_start("the profile root is not absolute (a relative XDG_CACHE_HOME is ignored per the XDG spec)")
     return os.path.join(root, name)
@@ -363,7 +368,7 @@ class Proxy:
         signal.signal(signal.SIGTERM, self.on_signal)
         signal.signal(signal.SIGINT, self.on_signal)
         argv = list(server)
-        if profile_dir is not None and not any(a == "--user-data-dir" or a.startswith("--user-data-dir=") for a in argv):
+        if profile_dir is not None:
             argv.append("--user-data-dir=" + profile_dir)
         argv += ["--snapshot-mode", "none"]
         self.child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, bufsize=0, start_new_session=True)

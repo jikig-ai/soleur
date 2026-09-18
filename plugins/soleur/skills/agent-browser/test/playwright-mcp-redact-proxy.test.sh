@@ -379,6 +379,10 @@ r="$(session udd-missing "$PROXY" --proxy-arg --user-data-dir-name --send "$INIT
 assert_refused_start 'FR15: --user-data-dir-name with no argument refuses to start' "$r" 'basename argument'
 r="$(session udd-unknown "$PROXY" --proxy-arg --bogus-flag --send "$INIT" --end eof --timeout 3)"
 assert_refused_start 'FR15: an unrecognised proxy flag refuses to start' "$r" 'unrecognised'
+r="$(session udd-dup "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: the flag given twice refuses to start' "$r" 'twice'
+r="$(session udd-dash "$PROXY" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --timeout 3)"
+assert_refused_start 'FR15: a basename beginning with - refuses to start' "$r" "leading '-'"
 
 # ---------------------------------------------------------------------------
 # FR5 — refuse to start (no child spawned)
@@ -810,7 +814,7 @@ mutant 55-any-id-plain plain_id '        return isinstance(value, str) and not s
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m55 "$MUTANT_PATH" --env FAKE_PW_CANCEL=1 --send "$INIT" --send "$SNAP" --end eof)"; red 'row 55: requestId not vetted → a tree row rides a cancellation to the client' bash -c 'started "$1" && stdout_has "$1" ZZQP-SENTINEL-7980' _ "$r"; fi
 mutant 56-escaped-needs-newline escaped_tree_in '            if any(self.looks_like_a11y_tree(s) for s in json_strings(parsed)):' '            if any("\n" in s and self.looks_like_a11y_tree(s) for s in json_strings(parsed)):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m56 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/run-code-escaped-one-row.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 56: escaped check requires a newline → a one-row tree leaks' leaks "$r" 3; fi
-mutant 57-udd-no-inject __init__ '        if profile_dir is not None and not any(a == "--user-data-dir" or a.startswith("--user-data-dir=") for a in argv):' '        if False:'
+mutant 57-udd-no-inject __init__ '        if profile_dir is not None:' '        if False:'
 if [[ -n "$MUTANT_PATH" ]]; then session m57 "$MUTANT_PATH" "${UDD[@]}" --env "XDG_CACHE_HOME=$WORK/xdg" --env FAKE_PW_ARGV_OUT="$WORK/m57-argv" --send "$INIT" --end eof >/dev/null; red 'row 57: profile flag parsed but never injected → stub argv lacks --user-data-dir' bash -c 'test -f "$1" && ! grep -q -- "--user-data-dir" "$1"' _ "$WORK/m57-argv"; fi
 mutant 58-udd-dotdot-ok profile_dir_from_args '    if not name or name == "." or ".." in name:' '    if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m58 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg '..' --send "$INIT" --end eof --timeout 3)"; red 'row 58: the .. check removed → a traversal basename starts the proxy' started "$r"; fi
@@ -821,11 +825,15 @@ if [[ -n "$MUTANT_PATH" ]]; then r="$(session m60 "$MUTANT_PATH" "${UDD[@]}" --e
 mutant 61-udd-conflict-ok refuse_argv_and_env '    if profile_dir is not None and (argv_values(server, "--user-data-dir") or "--user-data-dir" in server):' '    if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m61 "$MUTANT_PATH" "${UDD[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --user-data-dir=/x)"; red 'row 61: the conflict check removed → flag + explicit --user-data-dir starts the proxy' started "$r"; fi
 mutant 62-udd-nohome-ok profile_dir_from_args '        if not home:' '        if False:'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m62 "$MUTANT_PATH" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"; red 'row 62: the HOME check removed → the pwd fallback resolves ~ and the proxy starts' started "$r"; fi
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m62 "$MUTANT_PATH" "${UDD[@]}" --env XDG_CACHE_HOME= --env HOME= --send "$INIT" --end eof --timeout 3)"; red 'row 62: the HOME check removed → the refusal no longer names the setting' bash -c 'started "$1" || ! stderr_has "$1" "HOME is set"' _ "$r"; fi
 mutant 63-udd-missing-ok profile_dir_from_args '            if i + 1 >= len(args):' '            if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m63 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --send "$INIT" --end eof --timeout 3)"; red 'row 63: the missing-argument check removed → a bare flag crashes instead of refusing cleanly' bash -c '[[ "$(rcof "$1")" != "2" ]] || ! stderr_has "$1" "refusing to start"' _ "$r"; fi
-EXPECTED_MUTANTS=63   # rows 1-56 without row 4, with 22a/22b; plus 57-63 for --user-data-dir-name; exactly one mutation row each
-EXPECTED_RED_ROWS=63
+mutant 64-udd-dup-ok profile_dir_from_args '            if name is not None:' '            if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m64 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg a --proxy-arg --user-data-dir-name=b --send "$INIT" --end eof --timeout 3)"; red 'row 64: the duplicate-flag check removed → the second value silently wins' started "$r"; fi
+mutant 65-udd-dash-ok profile_dir_from_args '    if name.startswith("-"):' '    if False:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m65 "$MUTANT_PATH" --proxy-arg --user-data-dir-name --proxy-arg '--bogus' --send "$INIT" --end eof --timeout 3)"; red 'row 65: the leading-dash check removed → a flag-like value becomes a profile name' started "$r"; fi
+EXPECTED_MUTANTS=65   # rows 1-56 without row 4, with 22a/22b; plus 57-65 for --user-data-dir-name; exactly one mutation row each
+EXPECTED_RED_ROWS=65
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)
@@ -937,13 +945,16 @@ sys.exit(0 if e["command"] == "python3" and e["args"] == expected else 1)
 PY
 }
 assert_true 'Guard 3: plugins/soleur/.mcp.json playwright entry is the wrapped registration (python3, ${CLAUDE_PLUGIN_ROOT} proxy, profile flag, pin parity)' g3_shape "$PLUGIN_MCP"
-assert_true 'Guard 3: the plugin entry carries no bash, no --config, no literal --user-data-dir' python3 - "$PLUGIN_MCP" <<'PY'
-import json, sys
-e = json.load(open(sys.argv[1]))["mcpServers"]["playwright"]
-args = e["args"]
-sys.exit(0 if e["command"] != "bash" and not any(a == "--config" or a.startswith("--config=") for a in args)
-             and not any(a == "--user-data-dir" or a.startswith("--user-data-dir=") for a in args) else 1)
-PY
+# The rest of the manifest contract — never `bash`, never `--config`, never a
+# literal `--user-data-dir` — is carried by g3_shape's exact argv equality; a
+# separate literal grep cannot fail while it passes, so it is not an assertion.
+# The vendored plugin tree must NOT carry .mcp.json at all: the hosted
+# agent-runner loads the vendored root via plugins:[{type:"local"}] and the
+# prod image has no python3 and no @playwright/mcp@0.0.78 — a vendored
+# registration is a guaranteed-failed server every session. Both vendor steps
+# exclude the file; these two rows pin the exclusion.
+assert_true 'Guard 3: ci.yml vendored plugin tree excludes plugins/soleur/.mcp.json' grep -qF 'rm -f "$DEST/.mcp.json"' "$REPO_ROOT/.github/workflows/ci.yml"
+assert_true 'Guard 3: reusable-release.yml vendored plugin tree excludes plugins/soleur/.mcp.json' grep -qF 'rm -f "$DEST/.mcp.json"' "$REPO_ROOT/.github/workflows/reusable-release.yml"
 g3_mut() {  # <label> <python-mutation-src> — the mutated manifest must fail g3_shape
   cases=$((cases + 1))
   local f="$WORK/g3-mut.json"
@@ -977,7 +988,7 @@ if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROW
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=316
+MIN_ASSERTIONS=323
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1

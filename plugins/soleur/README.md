@@ -76,7 +76,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 | Agents | 68 |
 | Commands | 3 |
 | Skills | 98 |
-| MCP Servers | 3 |
+| MCP Servers | 5 |
 
 ## Agents
 
@@ -322,7 +322,10 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Server | Description |
 |--------|-------------|
 | `context7` | Framework documentation lookup via Context7 |
+| `cloudflare` | Cloudflare platform access (DNS, Workers, Zero Trust) via OAuth |
 | `vercel` | Vercel platform access (deployments, projects, logs, domains) via OAuth |
+| `stripe` | Stripe platform access (payments, customers, subscriptions) via OAuth |
+| `playwright` | Browser automation via `@playwright/mcp`, routed through `playwright-mcp-redact-proxy.py` (accessibility snapshots redacted in flight; dedicated persistent `soleur-playwright-mcp-profile` browser profile under the XDG cache root). Registered via plugin-root `.mcp.json` on Claude Code ≥2.1.139; requires `python3` and `npx` |
 
 ### Context7
 
