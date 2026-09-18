@@ -147,7 +147,7 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
   const name = normalizeSkillName(skill);
   const trimmedArgs = args?.trim();
 
-  const pipelineSuffix = pipelineInvocationSuffix(name);
+  const pipelineSuffix = pipelineInvocationSuffix(name, harness);
 
   if (harness === "codex") {
     return {
@@ -436,7 +436,7 @@ export function routingInstructions(harness: Harness): string {
     case "grok":
       return [
         "**Harness: Grok Build**",
-        "- Skills: Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
+        "- Skills: any `soleur:<name>` in any Soleur doc names a skill — Read `plugins/soleur/skills/<name>/SKILL.md` in this process and run it to completion. Slash `/<skill>` names the skill; it is not a nested tool_use.",
         "- Agents: **spawn_subagent** (not Task). Use `spawnAgent()` so registry colon ids map to hyphen filename stems (`soleur:product:cpo` → `soleur-product-cpo`).",
         "- Commands: `/go`, `/sync`, `/help` — **not** `/soleur:go`.",
         "- **Never improvise** — Read the registered SKILL.md or spawn the subagent; do not invent a nested Skill tool.",

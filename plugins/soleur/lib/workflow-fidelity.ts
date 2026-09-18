@@ -128,17 +128,27 @@ export function mandatorySuccessors(skill: string): readonly string[] {
   }
 }
 
+/**
+ * The operator-typed / adapter-rendered form of one skill on one harness — the same four
+ * branches as `formatSkillInvocation` in harness.ts. Docs name skills as `soleur:<name>` and
+ * leave THIS to the adapter (ADR-226); every fidelity string below goes through it so no
+ * harness receives another harness's form (arch F3, #8299).
+ */
+export function formatSkillRef(skill: string, harness: Harness): string {
+  switch (harness) {
+    case "codex":
+      return `$soleur:${skill}`;
+    case "grok":
+      return `/${skill}`;
+    case "devin":
+      return `/soleur:${skill}`;
+    default:
+      return `soleur:${skill}`;
+  }
+}
+
 function formatSkillList(skills: readonly string[], harness: Harness): string {
-  if (harness === "codex") {
-    return skills.map((skill) => `\`$soleur:${skill}\``).join(", ");
-  }
-  if (harness === "grok") {
-    return skills.map((s) => `\`/${s}\``).join(", ");
-  }
-  if (harness === "claude") {
-    return skills.map((s) => `\`soleur:${s}\``).join(", ");
-  }
-  return skills.join(", ");
+  return skills.map((s) => `\`${formatSkillRef(s, harness)}\``).join(", ");
 }
 
 /**
@@ -161,21 +171,24 @@ export function workflowFidelityInstructions(harness: Harness): string {
     harness,
   );
 
+  const ref = (skill: string): string => `\`${formatSkillRef(skill, harness)}\``;
+  const go = ref("go");
+
   const nextActionLine =
     harness === "grok"
       ? "- After `/go` routes to a pipeline skill (`one-shot`, `brainstorm`, `drain-*`), your **next action** MUST be to Read that skill's SKILL.md in this process and run it to completion (Grok has no nested Skill tool). Forbidden is executing a subset or writing product code before the child skill finishes — not the Read itself."
-      : `- After \`/go\` routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`;
+      : `- After ${go} routes to a pipeline skill (\`one-shot\`, \`brainstorm\`, \`drain-*\`), your **next action** MUST be that skill's ${invokeSurface} — not reading SKILL.md and executing steps selectively.`;
 
   const lines = [
     "**Workflow fidelity (never bypass)**",
     nextActionLine,
     `- **FORBIDDEN after routing to \`brainstorm\`:** product code (Write/Edit/Shell); ending after spec/brainstorm doc without handoff. **REQUIRED next:** ${brainstormNext}.`,
     `- **FORBIDDEN after routing to \`one-shot\`:** inline implementation before Steps 1–8 complete; ending after push/draft PR; reporting "done" without \`${ONE_SHOT_DONE_MARKER}\`.`,
-    `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → \`/work\`; \`work\` → ${workTail}.`,
-    `- **Merge → deploy (never ask the operator):** after \`/ship\` queues merge, YOU poll through release workflows and invoke \`/postmerge\` — do not ask "want me to monitor?" or end the turn at MERGED.`,
-    `- **Parking finished work is not a hand-off:** a stop is legitimate only for something you cannot clear — an in-flight CI run or agent, authorization for an irreversible production action (\`hr-menu-option-ack-not-prod-write-auth\`), cost/scope, an outward-facing effect, or a genuine requirements fork. Handing a reviewed, green PR back for a merge/review/ship is none of those: \`rf-never-skip-qa-review-before-merging\` requires carrying it to MERGED in-session, and "review-gated" means \`/soleur:review\` RAN and its findings were fixed, never that a person approves. Claude Code blocks this at its Stop hook; you have no hook, so this line is your copy of the rule.`,
-    `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + \`/postmerge\` verification complete — not at draft PR, not at merge alone.`,
-    `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + \`/work\`; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
+    `- **FORBIDDEN on standalone \`plan\` / \`work\`:** implementing or pushing without the mandated successor chain. \`plan\` → ${ref("work")}; \`work\` → ${workTail}.`,
+    `- **Merge → deploy (never ask the operator):** after ${ref("ship")} queues merge, YOU poll through release workflows and invoke ${ref("postmerge")} — do not ask "want me to monitor?" or end the turn at MERGED.`,
+    `- **Parking finished work is not a hand-off:** a stop is legitimate only for something you cannot clear — an in-flight CI run or agent, authorization for an irreversible production action (\`hr-menu-option-ack-not-prod-write-auth\`), cost/scope, an outward-facing effect, or a genuine requirements fork. Handing a reviewed, green PR back for a merge/review/ship is none of those: \`rf-never-skip-qa-review-before-merging\` requires carrying it to MERGED in-session, and "review-gated" means ${ref("review")} RAN and its findings were fixed, never that a person approves. Claude Code blocks this at its Stop hook; you have no hook, so this line is your copy of the rule.`,
+    `- **\`${ONE_SHOT_DONE_MARKER}\` gate:** emit ONLY after merge + release workflows + ${ref("postmerge")} verification complete — not at draft PR, not at merge alone.`,
+    `- **Deliverables:** brainstorm = artifacts + handoff; plan = plan file + ${ref("work")}; work/one-shot = **merged PR + healthy deploy**. Draft PRs are checkpoints only.`,
     "- Skill exit summaries (`## Work Phase Complete`, `## Review Phase Complete`) are **continuation gates**, not turn boundaries.",
   ];
 
@@ -188,13 +201,18 @@ export function workflowFidelityInstructions(harness: Harness): string {
   return lines.join("\n");
 }
 
-/** Strengthen skill invocation text for pipeline and handoff skills. */
-export function pipelineInvocationSuffix(skill: string): string {
+/**
+ * Strengthen skill invocation text for pipeline and handoff skills. Every skill named in the
+ * suffix is rendered in the ACTIVE harness's form — the grok arm reads exactly as before, and
+ * `invokeSkill("ship")` on Codex names `$soleur:postmerge`, never `/postmerge` (arch F3).
+ */
+export function pipelineInvocationSuffix(skill: string, harness: Harness = "grok"): string {
+  const ref = (s: string): string => formatSkillRef(s, harness);
   if (skill === "one-shot") {
     return (
       ` Run **all** Steps 0–8 to completion. ` +
       `Do NOT implement product code inline. ` +
-      `Poll merge→deploy yourself; invoke /postmerge after /ship. ` +
+      `Poll merge→deploy yourself; invoke ${ref("postmerge")} after ${ref("ship")}. ` +
       `Emit \`${ONE_SHOT_DONE_MARKER}\` only after postmerge completes.`
     );
   }
@@ -202,24 +220,24 @@ export function pipelineInvocationSuffix(skill: string): string {
     return (
       " Run the full brainstorm pipeline to completion. " +
       "Do NOT write product code. " +
-      "Hand off via /plan or /one-shot when exploration is done."
+      `Hand off via ${ref("plan")} or ${ref("one-shot")} when exploration is done.`
     );
   }
   if (skill === "plan") {
     return (
       " Run the full plan pipeline. " +
-      "Do NOT implement product code inline — invoke /work when the plan artifact is ready."
+      `Do NOT implement product code inline — invoke ${ref("work")} when the plan artifact is ready.`
     );
   }
   if (skill === "work") {
     return (
-      " Run implementation then the post-work tail (/review → /compound → /ship → /postmerge). " +
+      ` Run implementation then the post-work tail (${ref("review")} → ${ref("compound")} → ${ref("ship")} → ${ref("postmerge")}). ` +
       "Do NOT stop after push — merged PR + deploy verification is the deliverable."
     );
   }
   if (skill === "ship") {
     return (
-      " Poll merge and release workflows to completion; invoke /postmerge before cleanup. " +
+      ` Poll merge and release workflows to completion; invoke ${ref("postmerge")} before cleanup. ` +
       "Do NOT ask the operator to monitor — you own the wait."
     );
   }
@@ -232,7 +250,7 @@ export function pipelineInvocationSuffix(skill: string): string {
   if (isHandoffSkill(skill)) {
     const next = mandatorySuccessors(skill);
     if (next.length > 0) {
-      return ` When standalone, invoke next: /${next.join(", /")} — do not end the turn at artifacts.`;
+      return ` When standalone, invoke next: ${next.map(ref).join(", ")} — do not end the turn at artifacts.`;
     }
   }
   return "";

@@ -8,7 +8,7 @@ description: "This skill should be used when running the full autonomous enginee
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/one-shot` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:one-shot`). Forbidden is executing a subset of these steps, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Any `soleur:<name>` in this document names a skill — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:<name>`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 Run these steps in order. Do not do anything else.

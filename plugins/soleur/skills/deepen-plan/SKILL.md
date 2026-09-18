@@ -8,7 +8,7 @@ description: "This skill should be used when enhancing an existing plan with par
 <!-- soleur-cloud-mode:end -->
 
 <!-- grok-harness-invoke:start -->
-**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Slash `/deepen-plan` names the skill; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:deepen-plan`). Forbidden is executing a subset, not the Read.
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. Any `soleur:<name>` in this document names a skill — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. **Claude Code:** Skill tool (`soleur:<name>`). Forbidden is executing a subset, not the Read.
 <!-- grok-harness-invoke:end -->
 
 > **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/deepen-plan.workflow.js`](./workflows/deepen-plan.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).

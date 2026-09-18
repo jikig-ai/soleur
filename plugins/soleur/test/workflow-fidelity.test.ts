@@ -39,6 +39,7 @@ const HARNESS_ENV_KEYS = [
   "GROK_AGENT",
   "GROK_DEFAULT_MODEL",
   "GROK_SUBAGENTS",
+  "CODEX_THREAD_ID",
 ] as const;
 
 let savedHarnessEnv: Record<string, string | undefined>;
@@ -166,6 +167,33 @@ describe("workflow-fidelity contract", () => {
     expect(inv.instruction).toContain("Do NOT ask the operator");
   });
 
+  // arch F3 (#8299): the fidelity suffix used to emit the grok slash on EVERY harness, so
+  // `invokeSkill("ship")` on Codex said "invoke /postmerge" — the #8299 class emitted by the
+  // module ADR-226 names as the renderer. Each harness now receives its own form.
+  test("ship invokeSkill on Codex names $soleur:postmerge, never the grok slash", () => {
+    process.env.CODEX_THREAD_ID = "thread-1";
+    const inv = invokeSkill("ship", "");
+    expect(inv.harness).toBe("codex");
+    expect(inv.instruction).toContain("$soleur:postmerge");
+    expect(inv.instruction).not.toContain("/postmerge");
+  });
+
+  test("work invokeSkill on Claude names the canonical tail, never the grok slash", () => {
+    process.env.CLAUDECODE = "1";
+    const inv = invokeSkill("work", "");
+    expect(inv.harness).toBe("claude");
+    expect(inv.instruction).toContain("soleur:review → soleur:compound → soleur:ship → soleur:postmerge");
+    expect(inv.instruction).not.toContain("/review");
+  });
+
+  test("fidelity instructions render the successor chain per harness", () => {
+    expect(workflowFidelityInstructions("codex")).toContain("`plan` → `$soleur:work`");
+    expect(workflowFidelityInstructions("devin")).toContain("`plan` → `/soleur:work`");
+    expect(workflowFidelityInstructions("claude")).toContain("`plan` → `soleur:work`");
+    expect(workflowFidelityInstructions("grok")).toContain("`plan` → `/work`");
+    expect(workflowFidelityInstructions("codex")).not.toContain("`/postmerge`");
+  });
+
   test("brainstorm invokeSkill stresses handoff on Grok", () => {
     process.env.GROK_HOME = "/home/user/.grok";
     const inv = invokeSkill("brainstorm", "explore auth redesign");
@@ -232,7 +260,10 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   test("plan SKILL.md contains anti-bypass protocol", () => {
     const skill = readFileSync(resolve(PLUGIN_ROOT, "skills/plan/SKILL.md"), "utf-8");
     expect(skill).toContain(PLAN_ANTI_BYPASS_SENTINEL);
-    expect(skill).toContain("/work");
+    // The canonical id, not the grok slash: plugin docs name skills as `soleur:<name>` and the
+    // adapter renders the harness form (ADR-226). The old `/work` pin would have survived
+    // remediation only because the doc names `work/SKILL.md` inside a path (CTO #6a).
+    expect(skill).toContain("soleur:work");
   });
 
   test("work SKILL.md contains anti-bypass protocol", () => {
@@ -385,6 +416,9 @@ describe("workflow-fidelity sentinel markers in skills", () => {
 
 const IN_PROCESS_READ = /in this process/i;
 const ADAPTER_CITE = /harness\.ts|invokeSkill/;
+// ADR-226: the preamble carries the general rule, because a skill entered directly on Grok has
+// only its preamble in context (spec-flow #1). Pinned here, where the carriers already are.
+const CANONICAL_NAME_RULE = /any `soleur:<name>` in this document names a skill/i;
 const LOCKED_PIPELINE_SKILLS = [
   "one-shot",
   "brainstorm",
@@ -415,6 +449,7 @@ describe("Guard 1 — locked skills cite adapter and Grok in-process Read", () =
       expect(body).toMatch(ADAPTER_CITE);
       expect(body).toMatch(IN_PROCESS_READ);
       expect(body).toContain("SKILL.md");
+      expect(body).toMatch(CANONICAL_NAME_RULE);
     },
   );
 
