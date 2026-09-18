@@ -100,7 +100,7 @@ ok "$((n != 0))" "S12 no 'doppler run --project soleur ' literal anywhere in the
 PHASES=$(grep -oE '^\s*phase [a-z-]+' "$SCRIPT_BODY" | awk '{print $2}')
 PHASE_COUNT=$(printf '%s\n' "$PHASES" | grep -c . || true)
 ok "$((PHASE_COUNT < 9))" "S13 the script declares >= 9 phases (found $PHASE_COUNT)"
-EXPECTED_ORDER="config key device header open identity target mount identity-mount"
+EXPECTED_ORDER="config key device header open identity target mount identity-mount emit"
 ok "$([ "$(printf '%s\n' "$PHASES" | tr '\n' ' ' | sed 's/ $//')" = "$EXPECTED_ORDER" ]; echo $?)" \
   "S14 phase order is exactly: $EXPECTED_ORDER" "got: $(printf '%s\n' "$PHASES" | tr '\n' ' ')"
 # The success stage: the script's only info emit.
@@ -190,6 +190,29 @@ ok "$((n != 6))" "C10 env file has exactly the 4 existing lines + 2 new (got $n)
 # runcmd arm item: exactly one enable --now, after LUKSEOF, before nftables and bootstrap
 n=$(grep -c 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" || true)
 ok "$((n != 1))" "C11 exactly one 'systemctl enable --now git-data-luks-reopen.service' in runcmd (got $n) (M1)"
+# THE TIMER, which had no arm at all: deleting its enable line left this suite green while the
+# host shipped a timer it never armed, silently reverting recovery to the 5-attempts-in-an-hour
+# bound (review). Every claim about it is pinned here: armed, in the SAME runcmd item as the
+# unit, and shaped as the standing retry it is documented to be.
+n=$(grep -c 'systemctl enable --now git-data-luks-reopen.timer' "$CLOUD_INIT" || true)
+ok "$((n != 1))" "C11t exactly one 'systemctl enable --now git-data-luks-reopen.timer' in runcmd (got $n)"
+L_ARM_T=$(grep -n 'systemctl enable --now git-data-luks-reopen.timer' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+L_ARM_S=$(grep -n 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
+ok "$([ -n "$L_ARM_T" ] && [ -n "$L_ARM_S" ] && [ "$L_ARM_T" -gt "$L_ARM_S" ] && [ $((L_ARM_T - L_ARM_S)) -le 8 ]; echo $?)" "C11u the timer is armed right after the unit, in the same item (service@$L_ARM_S timer@$L_ARM_T)"
+TIMER="$DIR/git-data-luks-reopen.timer"
+ok "$([ -s "$TIMER" ]; echo $?)" "T1 the timer unit file exists and is non-empty"
+TIMER_BODY="$SCRATCH/timer.body"; strip "$TIMER" > "$TIMER_BODY"
+ok "$(unit_has "$TIMER_BODY" 'OnUnitActiveSec=15min')" "T2 OnUnitActiveSec=15min — the standing retry cadence ADR-198 cites"
+ok "$(unit_has "$TIMER_BODY" 'OnBootSec=15min')" "T3 OnBootSec=15min — the post-boot tick"
+ok "$(unit_has "$TIMER_BODY" 'WantedBy=timers.target')" "T4 installed under timers.target"
+n=$(grep -c '^Persistent=' "$TIMER_BODY" || true)
+ok "$((n != 0))" "T5 NO Persistent= — systemd.timer(5): it only has an effect with OnCalendar=, which this timer does not use (got $n)"
+n=$(grep -c '^OnCalendar=' "$TIMER_BODY" || true)
+ok "$((n != 0))" "T6 NO OnCalendar= — monotonic so a long outage does not fire a burst (got $n)"
+n=$(grep -c '^Unit=' "$TIMER_BODY" || true)
+ok "$((n != 0))" "T7 no explicit Unit= — the timer triggers its namesake service by default (got $n)"
+n=$(grep -c 'git-data-luks-reopen.timer' "$CLOUD_INIT" || true)
+ok "$((n < 2))" "T8 the timer is both WRITTEN and ARMED by cloud-init (>=2 mentions, got $n)"
 L_ARM=$(grep -n 'systemctl enable --now git-data-luks-reopen.service' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 L_EOF=$(grep -nE '^    LUKSEOF$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
 L_NFT=$(grep -n 'STAGE=gitdata_nftables_metadata$' "$CLOUD_INIT" | head -1 | cut -d: -f1)
@@ -257,10 +280,39 @@ ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -q 'validation
 ok "$(var_block "$MODULE/variables.tf" doppler_config_name | grep -qF '^[a-z0-9_]+$'; echo $?)" "V1b …pinning ^[a-z0-9_]+\$"
 ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -q 'validation'; echo $?)" "V2 git_data_luks_volume_id carries a validation block (M23)"
 ok "$(var_block "$MODULE/variables.tf" git_data_luks_volume_id | grep -qF '^[0-9]+$'; echo $?)" "V2b …pinning ^[0-9]+\$"
-# Module map roster: the three payloads are file()-bound on one line each.
-for e in git_data_luks_reopen git_data_luks_reopen_service git_data_luks_reopen_failure_service; do
+# Module map roster: the FOUR payloads are file()-bound on one line each (the timer was the
+# fourth, and was missing from this roster — review).
+for e in git_data_luks_reopen git_data_luks_reopen_service git_data_luks_reopen_failure_service git_data_luks_reopen_timer; do
   ok "$(grep -qE "^\s*${e}\s*=\s*replace\(file\(\"\\$\{path\.module\}/\.\./\.\./git-data-luks-reopen[^\"]*\"\), local\.git_data_rationale_strip, \"\"\)" "$MODULE/main.tf"; echo $?)" "V3 module map binds $e"
 done
+
+# =====================================================================================
+# CROSS-HOST: the per-instance-luksOpen class, ratcheted across EVERY cloud-init
+# =====================================================================================
+# The git-history seat found this defect — `cryptsetup luksOpen` in cloud-init's per-instance
+# `runcmd:` with a `nofail` fstab line, so the store is silently absent on every later boot —
+# solved independently THREE times in this tree (registry #6895, inngest #7695, git-data
+# #8210) with no importable helper and no gate, so each host re-derived it. This arm is the
+# gate: for every cloud-init under infra/ that opens a LUKS mapper in runcmd, a systemd unit
+# whose name carries `luks` and `open` must be WRITTEN by that same file and ENABLED by it.
+# It does not prescribe the ordering shape (inngest's pre-network keyfile and git-data's
+# network-online `doppler run` are both legitimate — ADR-115 records why); it prescribes only
+# that a reopen exists. A host added tomorrow with the runcmd `luksOpen` and nothing else REDs
+# here, with the three existing hosts named as the precedents to copy.
+_ci_luks_hosts=0
+for _ci in "$DIR"/cloud-init*.yml; do
+  _n=$(grep -acE 'cryptsetup (luksOpen|open) ' "$_ci" || true)
+  [ "${_n:-0}" -gt 0 ] || continue
+  _ci_luks_hosts=$((_ci_luks_hosts + 1))
+  _b=$(basename "$_ci")
+  _unit=$(grep -aoE 'path: /etc/systemd/system/[a-z-]*luks[a-z-]*open[a-z-]*\.service' "$_ci" | head -1 | sed 's#.*/##')
+  ok "$([ -n "$_unit" ]; echo $?)" "X1 $_b opens a LUKS mapper in runcmd and WRITES a boot-reopen unit (got '${_unit:-none}')" "precedents: git-data-luks-reopen.service, inngest-luks-open.service, registry-luks-open.service"
+  if [ -n "$_unit" ]; then
+    ok "$(grep -aqE "systemctl enable( --now)? ${_unit}" "$_ci"; echo $?)" "X2 $_b ENABLES $_unit (a written unit nobody enables is the git-data defect in a new coat)"
+    ok "$(grep -aqE '^[[:space:]]*WantedBy=(multi-user|sysinit|local-fs)\.target' "$_ci"; echo $?)" "X3 $_b's units carry an [Install] target (the unit can be enabled at all)"
+  fi
+done
+ok "$((_ci_luks_hosts < 3))" "X4 the census found the three LUKS hosts this arm exists for (git-data, inngest, registry), got $_ci_luks_hosts — fewer means the grep drifted and X1-X3 ran over a NARROWER set"
 
 # =====================================================================================
 # systemd-analyze verify (present on every systemd host; skipped, not failed, elsewhere)
@@ -270,9 +322,9 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   mkdir -p "$SCRATCH/units"
   # EVERY operand guarded, sources included. All four are rooted at DIR, which is bound by
   # command substitution, so an empty one turns each into a read from the filesystem root.
-  cp "${UNIT:?}" "${REPORTER:?}" "${GC_UNIT:?}" "${DIR:?}/git-data-gc-failure.service" "${SCRATCH:?}/units/"
-  out=$(systemd-analyze verify "$SCRATCH/units/git-data-luks-reopen.service" "$SCRATCH/units/git-data-luks-reopen-failure.service" "$SCRATCH/units/git-data-gc.service" "$SCRATCH/units/git-data-gc-failure.service" 2>&1 || true)
-  n=$(printf '%s\n' "$out" | grep -cE 'git-data-(gc|luks-reopen)[^:]*\.service:' || true)
+  cp "${UNIT:?}" "${REPORTER:?}" "${GC_UNIT:?}" "${DIR:?}/git-data-gc-failure.service" "${DIR:?}/git-data-luks-reopen.timer" "${SCRATCH:?}/units/"
+  out=$(systemd-analyze verify "$SCRATCH/units/git-data-luks-reopen.service" "$SCRATCH/units/git-data-luks-reopen-failure.service" "$SCRATCH/units/git-data-luks-reopen.timer" "$SCRATCH/units/git-data-gc.service" "$SCRATCH/units/git-data-gc-failure.service" 2>&1 || true)
+  n=$(printf '%s\n' "$out" | grep -cE 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' || true)
   ok "$((n != 0))" "Y1 systemd-analyze verify is clean over the four units" "$out"
 fi
 
@@ -352,6 +404,9 @@ m="${1:-}"; st="${2:-}"; lv="${3:-}"; d="${4:-}"
 if [ -n "$d" ] && [ -r "$d" ] && [ -s "$d" ]; then d=$(tr '\n' ' ' < "$d"); fi
 if [ "$#" -ge 4 ]; then shift 4; else shift "$#"; fi
 printf '%s\n' "$m $st $lv ${d} $*" >> "$FX/emit.log"
+# `emit_rc` in the fixture: the emitter's own exit code (1 = transient POST failure, 2 =
+# structural), so the script's tolerate-vs-refuse split can be driven from both sides.
+[ -r "$FX/emit_rc" ] && exit "$(cat "$FX/emit_rc")"
 exit 0
 EOF
 mkstub sleep <<'EOF'
@@ -441,6 +496,18 @@ ok "$(grep -q '^open|cryptsetup|luksOpen' "$FX/calls.log"; echo $?)" "S1 luksOpe
 ok "$(grep -q '^mount|systemctl|start' "$FX/calls.log"; echo $?)" "S1 systemctl start runs under tag mount (H5)"
 ok "$(grep -q '^identity-mount|findmnt|-n -o SOURCE' "$FX/calls.log"; echo $?)" "S1 findmnt SOURCE runs under tag identity-mount (M5)"
 
+# --- Scenario 1e: the success emit FAILS after a real reopen → still exit 0 -----------------
+# The emit is the last thing the script does and it is best-effort: a transient Sentry/DNS blip
+# on the info row must not turn a healthy reopen into a failed unit (review finding: without
+# `|| true` the phase file still read identity-mount, the ladder re-ran into the silent noop
+# branch, and an exhausted ladder shipped a false action=identity-mount fatal).
+new_fixture s1e; echo 1 > "$FX/emit_rc"
+run_script; rc=$?
+ok "$((rc != 0))" "S1e emit rc=1 after a real reopen still exits 0 (rc=$rc)" "$(cat "$FX/stderr")"
+ok "$(grep -q 'action=reopened' "$FX/emit.log"; echo $?)" "S1e the emit was attempted (action=reopened reached the emitter)"
+ok "$([ ! -e "$RUNDIR/action" ] && [ ! -e "$RUNDIR/log" ]; echo $?)" "S1e phase/log files still removed on success"
+ok "$(grep -q 'luksOpen' "$FX/calls.log"; echo $?)" "S1e the fixture really reopened (luksOpen called)"
+
 # --- Scenario 2: open + mounted (birth noop) → silent ----------------------------------------
 new_fixture s2; touch "$FX/mapper_open" "$FX/mounted"
 run_script; rc=$?
@@ -497,6 +564,7 @@ target-two|printf '/mnt/a\n/mnt/b\n' > "$FX/fstab_target"|target|fstab
 target-rogue|printf '/mnt/rogue\n' > "$FX/fstab_target"|target|neither
 mount|echo 1 > "$FX/mount_start_rc"; printf 'wrong fs type, bad option, bad superblock\n' > "$FX/journal"|mount|bad superblock
 identity-mount|touch "$FX/mounted"; echo /dev/sdb1 > "$FX/mount_source"|identity-mount|/dev/sdb1
+emit|echo 2 > "$FX/emit_rc"|emit|structural
 EOF
 )
 COVERED_PHASES=""
@@ -510,7 +578,13 @@ while IFS='|' read -r name setup phase needle; do
   ok "$((rc == 0))" "F[$name] exits non-zero (rc=$rc)"
   ok "$([ "$(action_file)" = "$phase" ]; echo $?)" "F[$name] action file names phase '$phase'" "got '$(action_file)'; calls: $(tr '\n' ';' < "$FX/calls.log")"
   ok "$([ "$(grep -c '|luksFormat' "$FX/calls.log")" -eq 0 ]; echo $?)" "F[$name] luksFormat never called"
-  ok "$([ ! -s "$FX/emit.log" ]; echo $?)" "F[$name] the script emits nothing on failure (the reporter does)"
+  if [ "$phase" = emit ]; then
+    # The one phase whose failure IS an emit: the script attempted exactly its info row and the
+    # emitter refused it structurally. Anything else in the log (a fatal, a second row) is wrong.
+    ok "$([ "$(grep -c . "$FX/emit.log")" -eq 1 ] && grep -q 'luks_reopen_ok info' "$FX/emit.log"; echo $?)" "F[$name] the script attempted exactly its ONE info row and nothing else" "$(cat "$FX/emit.log")"
+  else
+    ok "$([ ! -s "$FX/emit.log" ]; echo $?)" "F[$name] the script emits nothing on failure (the reporter does)"
+  fi
   if [ -n "$needle" ]; then
     ok "$(grep -qF -- "$needle" "$RUNDIR/log"; echo $?)" "F[$name] log carries '$needle'" "log: $(cat "$RUNDIR/log")"
   fi
@@ -521,7 +595,8 @@ while IFS='|' read -r name setup phase needle; do
   COVERED_PHASES="$COVERED_PHASES $phase"
 
   # Composition: feed the reporter the files this fixture left. It must emit ONE fatal naming P.
-  : > "$FX/emit.log"; echo ok > "$FX/doppler_mode"
+  # The reporter's emitter must not inherit the script fixture's forced rc (the `emit` row).
+  : > "$FX/emit.log"; rm -f "$FX/emit_rc"; echo ok > "$FX/doppler_mode"
   echo exit-code > "$FX/result"; echo 1 > "$FX/exec_status"; echo 1 > "$FX/exec_code"; echo 2 > "$FX/nrestarts"
   rep_body; rep_run
   ok "$([ "$(grep -c 'luks_reopen fatal' "$FX/emit.log")" -eq 1 ]; echo $?)" "F[$name] reporter emitted exactly one luks_reopen fatal" "$(cat "$FX/emit.log" "$FX/rep.out")"
@@ -575,6 +650,7 @@ ok "$([ ! -e "$RUNDIR/action" ] && [ ! -e "$RUNDIR/log" ]; echo $?)" "M20 ExecSt
 new_fixture h2; chmod -x "$SCRATCH/bin/git-data-emit"
 run_script; rc=$?; chmod +x "$SCRATCH/bin/git-data-emit"
 ok "$((rc == 0))" "H2 a success path whose emitter cannot run is NOT silent-green (rc=$rc)"
+ok "$([ "$(action_file)" = emit ]; echo $?)" "H2 …and the phase file names emit, not the last real phase (was identity-mount)"
 
 # =====================================================================================
 # Instrument self-test + floor
@@ -588,7 +664,7 @@ if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
 fi
 passes=$_can_p0; fails=$_can_f0
 
-MIN_ASSERTIONS=226
+MIN_ASSERTIONS=440
 total=$((passes + fails))
 if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertions (floor %s) — suite did not execute fully\n' "$total" "$MIN_ASSERTIONS" >&2

@@ -221,9 +221,15 @@ git_data_boot_poll() {
 # store at the next reboot, silently — which is the defect #8210 exists to close, so a
 # replace that delivers it unarmed must not report success.
 # Returns 1 when a required invariant fails, 0 otherwise.
+# THE TERMINAL ROSTER, DECLARED ONCE. The invariant loop and the success message both derive
+# from it (the message used to re-spell the five names, so a sixth would have made it lie).
+# git-data-emit.test.sh's consumer-roster guard reads THIS declaration (anchored on
+# `GIT_DATA_BOOT_TERMINAL=`), so a name added here without a producer change REDs that suite.
+GIT_DATA_BOOT_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
 git_data_boot_check_invariants() {
   local kind="$1" row="$2" f
-  for f in luks_mounted repo_root hooks_path provision luks_reopen_unit; do
+  # shellcheck disable=SC2086
+  for f in $GIT_DATA_BOOT_TERMINAL; do
     if grep -q "\"${f}\":\"no\"" <<<"$row"; then
       echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat this ${kind} as failed."
       return 1
@@ -318,6 +324,6 @@ git_data_boot_verify() {
 
   printf '%s\n' "$GIT_DATA_BOOT_ROW"
   git_data_boot_check_invariants "$kind" "$GIT_DATA_BOOT_ROW" || return 1
-  echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit all positive (${kind}, apply outcome: ${apply})."
+  echo "boot signal received: git-data reported boot_complete with ${GIT_DATA_BOOT_TERMINAL// //} all positive (${kind}, apply outcome: ${apply})."
   return 0
 }

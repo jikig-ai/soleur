@@ -84,6 +84,7 @@ Checked: #8210 OPEN, no closing PR; #8189 CLOSED (by #8206 — where the issue w
 - **P5** The first-boot path proves the unit's WIRING (unit enabled, Doppler reachable from the unit's context with the templated config, device pin resolves, fstab target found) so a broken unit surfaces at birth, off-box. It does NOT exercise the open/mount branch — that is P6.
 - **P6** The rung-2 rehearsal proves P1 end-to-end on a real reset host before the payload can be attested.
 - **P7** `git-data-gc.timer` (`Persistent=true`) orders after the reopen and re-runs it weekly.
+  > **Superseded 2026-09-18 (#8210):** gc only ORDERS after the reopen (`After=`, no `Wants=`); the standing retry is the dedicated `git-data-luks-reopen.timer` at 15 min. See the User-Brand Impact addendum, item 4.
 
 ### Cut List (Phase 0.6b, updated at plan-review)
 
@@ -351,6 +352,42 @@ See the Cut List — each row is an alternative with its property and the reason
 **Brand-survival threshold:** single-user incident — the store will hold every user's source; #8262 on the same queue was raised to this threshold at its plan boundary; this plan sits upstream of the first real cutover.
 
 `requires_cpo_signoff: true`; CPO signed off with conditions at Phase 2.5 (applied). `user-impact-reviewer` runs at review time.
+
+> **Superseded 2026-09-18 (#8210, user-impact seat at review) — the section above is kept as
+> written; these corrections are what the review found it did not say.**
+>
+> 1. **"Nothing changes for users today (the store is not live)" is false for one path.**
+>    `GIT_DATA_STORE_ENABLED` gates every WRITE path but not erasure: `removeGitDataRepo`
+>    (`apps/web-platform/server/git-data-replication.ts`) is deliberately keyed on
+>    `GIT_REMOVE_SSH_PRIVATE_KEY`, not the flag, so it runs on every `Settings → Delete Account`
+>    today. With the store closed (a post-reboot host before this fix, or any reopen failure
+>    after it) `git-data-remove.sh`'s fail-closed `mountpoint -q` refuses, the throw is caught
+>    in `account-delete.ts` and downgraded to a `reportSilentFallback` event, and the auth user
+>    is deleted while whatever the store held for them persists. Today the store holds no user
+>    repository, so the user-visible cost is a delete that waits up to the 30 s `execFile`
+>    timeout plus a spurious Art. 17 erasure-failure event; after the first cutover it is an
+>    un-erased repository. Swallowing that refusal is #8094's subject and is NOT closed here.
+> 2. **The hold window has a user-visible cost the section did not name.** The rung-2 interlock
+>    this plan adds to `git_data_host_replace`, together with the Phase 4.5 evidence deletion,
+>    HOLDs both birth and replace from merge until a `main` rehearsal lands fresh evidence. In
+>    that window the live host runs the OLD payload with no replace lever, and every
+>    Delete Account inside it pays the cost in (1). The bound that ends it is PM1+PM2 (one
+>    dispatched rehearsal plus one evidence-only PR); the break-glass for an emergency replace
+>    inside it is in `git-data-luks-cutover-5274.md` (dispatch from the last evidence-matching
+>    ref).
+> 3. **`luks_reopen_unit` is fail-closed with a bounded false-negative window.** The bootstrap
+>    waits at most 420 s for the unit to leave `activating`; the unit's own worst case is
+>    5 × `TimeoutStartSec=300` + 4 × `RestartSec=60` ≈ 1740 s. A birth whose Doppler is slow
+>    for longer than 420 s therefore reads `luks_reopen_unit=no` and FAILs the poll even if
+>    the ladder later succeeds. The wait is not raised to 1740 s because that exceeds the birth
+>    capture window; the runbook instead says the response to `luks_reopen_unit=no` is a Sentry
+>    read (`luks_reopen_ok` / `luks_reopen`) BEFORE any replace, never a replace first.
+> 4. **The standing retry is `git-data-luks-reopen.timer` (15 min), not `git-data-gc.timer`.**
+>    Every mention below of gc's `Wants=` as the retry (P7, the gc.service row, the
+>    Observability `liveness_signal` (2)) describes the first draft; the `Wants=` was cut at
+>    review and the dedicated timer replaced it. The timer recovers a FAILED unit only — a
+>    mapper closed AFTER a healthy boot under a still-active unit is the residual the
+>    failure-modes row "host up, mapper closed later" scope-outs, and it stays open.
 
 ## Observability
 

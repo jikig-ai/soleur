@@ -27,6 +27,7 @@
 #   target          exactly one fstab entry names the mapper (cutover-agnostic: #8211 repoints it)
 #   mount           PID-1 mount via `systemctl start <target>.mount` if not mounted (ACTION=mounted)
 #   identity-mount  findmnt SOURCE of the target is the mapper (mountedness is not identity)
+#   emit            the success row's emitter is structurally sound (rc 0/1 pass; 2/126/127 refuse)
 # Success: ACTION=reopened|mounted emits ONE info row at stage luks_reopen_ok (deliberately absent
 # from every Sentry rule — git_data_boot_fatal has no level condition); ACTION=noop is silent.
 #
@@ -70,7 +71,7 @@ case "$DEVICE_WAIT" in
 esac
 readonly DEVICE_WAIT
 MAPPER_NAME=git-data
-MAPPER=/dev/mapper/git-data
+MAPPER="/dev/mapper/$MAPPER_NAME"
 UNIT=git-data-luks-reopen.service
 LOG="$RUNDIR/log"
 
@@ -162,10 +163,27 @@ phase identity-mount
 _src=$(findmnt -n -o SOURCE "$TARGET" 2>>"$LOG" || true)
 [ "$_src" = "$MAPPER" ] || die "$TARGET is mounted from '${_src:-nothing}', not $MAPPER"
 
+# THE SUCCESS EMIT IS BEST-EFFORT FOR A TRANSIENT, AND LOUD FOR A STRUCTURAL FAULT. Everything
+# above has already succeeded — the mapper is open and the store is mounted from it — so the
+# emitter's rc=1 (its "transient: the POST failed" arm; a DNS or Sentry blip seconds after
+# network-online) must not fail the UNIT. Under plain `set -e` it did: the script died with the
+# phase file still reading `identity-mount`, the restart ladder re-ran it into the silent noop
+# branch (so the reopen was never evidenced and the rung-2 reboot probe read TRANSIENT), and
+# an exhausted ladder shipped a FALSE `action=identity-mount` fatal — whose runbook row points
+# at the ADR-068 backup/rebuild path — for a healthy host. But an emitter that CANNOT RUN
+# (rc 126/127: absent, not executable) or that reports its own structural fault (rc=2) is a
+# payload defect that would make every LATER failure on this host silent too, and that one is
+# reported, under its own phase, so the tag names what actually broke.
+phase emit
 if [ "$ACTION" != noop ]; then
   _restarts=$(systemctl show --value -p NRestarts "$UNIT" 2>/dev/null || echo unknown)
+  _erc=0
   git-data-emit "git-data LUKS mapper reopened at boot" luks_reopen_ok info "" \
-    "action=$ACTION" "target=$TARGET" "restarts=${_restarts:-unknown}"
+    "action=$ACTION" "target=$TARGET" "restarts=${_restarts:-unknown}" || _erc=$?
+  case "$_erc" in
+    0|1) : ;;
+    *) die "git-data-emit rc=$_erc after a successful reopen: a structural emitter fault, not a transient POST failure — every later failure on this host would be silent" ;;
+  esac
 fi
 # Both files go on success so a later same-boot failure inside `doppler run` cannot ship a
 # stale phase tag through the reporter.

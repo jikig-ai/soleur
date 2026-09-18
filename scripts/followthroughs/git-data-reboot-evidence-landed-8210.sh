@@ -19,13 +19,29 @@
 #   1 = FAIL      — the evidence exists and records a reboot verdict that is NOT PASS. That is a
 #                   real finding: a rehearsal ran the reset arm and the mapper did not reopen.
 #   2 = TRANSIENT — no evidence file yet, or the file carries no reboot key at all (the pre-#8210
-#                   shape), or the gate could not be read. The rehearsal simply has not run yet,
-#                   or has not been landed yet. A FAIL here would post a daily false alarm for
-#                   however long the operator takes to schedule the dispatch.
+#                   shape), or the gate could not be read, or this checkout is not main. The
+#                   rehearsal simply has not run yet, or has not been landed yet. A FAIL here
+#                   would post a daily false alarm for however long the operator takes to
+#                   schedule the dispatch.
 #
-# THE READ IS OF `origin/main`, NEVER THE WORKING TREE. A probe that read the checkout would
-# report PASS from inside the very PR that adds the evidence, which is the one state where the
-# claim is not yet true for anybody else.
+# THE READ IS OF `main`, AND THE ONLY WAY TO READ MAIN CORRECTLY HERE IS TO BE ON IT. Three
+# revisions of this file each tried to read `origin/main` from an arbitrary checkout and each
+# was wrong in a different place, because the gate it calls derives its operands from the
+# TEMPLATE'S DIRECTORY: the evidence file beside it, the render module under it, every payload
+# that module binds, and — the one no export can satisfy — the evidence's PROVENANCE, read as
+# `git log -1 -- <evidence>` + `diff-tree` against the checkout's own history (Guard 4: the
+# evidence must never be MODIFIED in a commit that also touches a bound file). Measured:
+#   * working-tree template + origin/main evidence  -> compares main's evidence to THIS branch's payload;
+#   * a lone `mktemp` copy of main's template        -> "HOLD — no rung-2 boot evidence at /tmp/…",
+#                                                       so the probe printed a WRONG cause forever
+#                                                       and #8210 could never auto-close;
+#   * `git archive origin/main` into a scratch dir   -> hash-valid, then "HOLD — not inside a git
+#                                                       work tree, so the evidence has no readable
+#                                                       provenance".
+# The sweeper (scheduled-followthrough-sweeper.yml) checks out `main` at fetch-depth 0, which is
+# exactly the shape the gate wants. So this probe reads the checkout it is standing in and
+# REFUSES, as TRANSIENT, when that checkout is not `origin/main` — a branch cannot produce a PASS
+# about main from inside the very PR that adds the evidence, and it cannot produce a wrong one.
 set -uo pipefail
 # (#7797) No credential is bound here, but xtrace would still echo the gate's internals; keep
 # the refusal so the file matches its siblings' shape.
@@ -34,30 +50,42 @@ case "$-" in
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TEMPLATE=apps/web-platform/infra/cloud-init-git-data.yml
 EVIDENCE=apps/web-platform/infra/git-data-rung2-boot-evidence.env
-TEMPLATE_PATH=apps/web-platform/infra/cloud-init-git-data.yml
 
 cd "$ROOT" || { echo "TRANSIENT: cannot enter the repo root"; exit 2; }
 
 git fetch -q origin main 2>/dev/null || true
+head_sha="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+main_sha="$(git rev-parse --verify origin/main 2>/dev/null || true)"
+if [[ -z "$main_sha" ]]; then
+  echo "TRANSIENT: origin/main is not resolvable in this checkout (no remote, or the fetch failed)."
+  echo "The probe reads main by standing on it; nothing was measured."
+  exit 2
+fi
+if [[ "$head_sha" != "$main_sha" ]]; then
+  echo "TRANSIENT: this checkout is ${head_sha:0:12}, not origin/main (${main_sha:0:12}). The probe"
+  echo "reads main's evidence WITH main's git history, which only a main checkout carries; on a"
+  echo "branch it refuses rather than grade this branch's payload as if it were main's."
+  exit 2
+fi
 
-body="$(git show "origin/main:${EVIDENCE}" 2>/dev/null)" || body=""
-if [[ -z "$body" ]]; then
-  echo "TRANSIENT: ${EVIDENCE} does not exist on origin/main — the rung-2 rehearsal has not been"
+if [[ ! -s "$EVIDENCE" ]]; then
+  echo "TRANSIENT: ${EVIDENCE} does not exist on main — the rung-2 rehearsal has not been"
   echo "dispatched from main (or its evidence has not been landed). The birth and replace routes"
   echo "are HELD until it is, which is the intended safe state, not a defect."
   exit 2
 fi
 
-verdict="$(printf '%s\n' "$body" | sed -n 's/^RUNG2_REBOOT_REOPEN=\(.*\)$/\1/p' | head -1)"
+verdict="$(sed -n 's/^RUNG2_REBOOT_REOPEN=\(.*\)$/\1/p' "$EVIDENCE" | head -1)"
 if [[ -z "$verdict" ]]; then
-  echo "TRANSIENT: origin/main's evidence carries no RUNG2_REBOOT_REOPEN key — it predates the"
-  echo "#8210 reset arm. A rehearsal run from main after that merge writes it; nothing to read yet."
+  echo "TRANSIENT: main's evidence carries no RUNG2_REBOOT_REOPEN key — it predates the #8210"
+  echo "reset arm. A rehearsal run from main after that merge writes it; nothing to read yet."
   exit 2
 fi
 
 if [[ "$verdict" != "PASS" ]]; then
-  echo "FAIL: origin/main's evidence records RUNG2_REBOOT_REOPEN=${verdict}."
+  echo "FAIL: main's evidence records RUNG2_REBOOT_REOPEN=${verdict}."
   echo "A rehearsal ran the reset arm and the mapper did not reopen unattended. Read the run's"
   echo "reboot-probe step: its action= tag names the phase that failed."
   exit 1
@@ -65,32 +93,14 @@ fi
 
 # The verdict is only worth anything for the template it was captured against. The gate derives
 # that binding itself (a hash of the cloud-init template plus every file() the userdata module
-# binds), so asking it is strictly better than re-deriving the hash here — a second
-# implementation of the same derivation is a second thing to drift.
-# BOTH OPERANDS FROM `origin/main`, and the template is the one that used to leak. An earlier
-# revision read the evidence from origin/main and the TEMPLATE from the working tree, so on any
-# branch checkout it compared main's evidence against that branch's payload -- while this file's
-# own header asserted "THE READ IS OF origin/main, NEVER THE WORKING TREE". Correct under the
-# daily sweeper (which runs on main) and wrong everywhere else, which is the shape that survives
-# review: the sweeper is the only caller anyone pictures. Materialised to a temp file because the
-# gate takes a path.
+# binds, plus Guard 4's provenance read), so asking it is strictly better than re-deriving any of
+# it here — a second implementation of the same derivation is a second thing to drift.
 gate_lib="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
-tmpl="$(mktemp -t rung2-tmpl.XXXXXXXX.yml)" || {
-  echo "TRANSIENT: could not allocate a temp file for the template read."
-  exit 2
-}
-trap 'rm -f "${tmpl:-}"' EXIT INT TERM HUP
-if ! git show "origin/main:${TEMPLATE_PATH}" > "$tmpl" 2>/dev/null || [[ ! -s "$tmpl" ]]; then
-  echo "TRANSIENT: could not read ${TEMPLATE_PATH} from origin/main, so the evidence's validity"
-  echo "for the CURRENT payload is unverified. Not a verdict about the host."
-  exit 2
-fi
 if [[ ! -r "$gate_lib" ]]; then
   echo "TRANSIENT: the evidence says PASS but the rung-2 gate library could not be read, so its"
   echo "validity for the CURRENT payload is unverified. Not a verdict about the host."
   exit 2
 fi
-
 # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
 source "$gate_lib" 2>/dev/null || {
   echo "TRANSIENT: could not source the rung-2 gate library."
@@ -101,14 +111,17 @@ if ! declare -F git_data_rung2_rehearsal_gate >/dev/null; then
   exit 2
 fi
 
-if git_data_rung2_rehearsal_gate "$tmpl" >/dev/null 2>&1; then
-  echo "PASS: origin/main carries RUNG2_REBOOT_REOPEN=PASS and the rung-2 gate RELEASES against"
-  echo "the current template — the boot-time LUKS reopen (#8210) is proven on a real reset host,"
-  echo "and the birth and replace routes are no longer held by this precondition."
+gate_out="$(git_data_rung2_rehearsal_gate "$TEMPLATE" 2>&1)"; gate_rc=$?
+if [[ "$gate_rc" -eq 0 ]]; then
+  echo "PASS: main carries RUNG2_REBOOT_REOPEN=PASS and the rung-2 gate RELEASES against the"
+  echo "current template — the boot-time LUKS reopen (#8210) is proven on a real reset host, and"
+  echo "the birth and replace routes are no longer held by this precondition."
   exit 0
 fi
 
 echo "TRANSIENT: the evidence records RUNG2_REBOOT_REOPEN=PASS, but the rung-2 gate does NOT"
-echo "release against main's current template — the payload has been edited since that rehearsal,"
-echo "so the reboot that was proven is not the boot that would happen. A fresh rehearsal is owed."
+echo "release against main's current template (rc=${gate_rc}). Either the payload has been edited"
+echo "since that rehearsal, so the reboot that was proven is not the boot that would happen, or"
+echo "the evidence's provenance was refused. The gate's own first line:"
+printf '  %s\n' "$(printf '%s\n' "$gate_out" | head -1)"
 exit 2

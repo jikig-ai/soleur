@@ -85,12 +85,15 @@ jobs:
     # the dry_run default — and recorded in ADR-149 with the alternative (a dedicated
     # environment) and its DP-11 F8 cost, rather than left as an unstated trade.
     environment: web-platform-infra-apply
-    # Budget, summed from the bounded polls this job actually contains rather than estimated:
-    # apply ~25 (Hetzner provisioning the server plus two volumes, boot, emit) + capture poll 16
-    # + settle 2 + reset 2 + reboot probe 10 = 55 min of worst case, plus teardown. The reset arm
-    # (#8210) is what pushed this past 30: a job ceiling reached INSIDE a step means the teardown
-    # gets only the runner's cancellation grace to destroy a server, two volumes and a config.
-    timeout-minutes: 45
+    # Budget, summed from the bounds this job actually contains rather than estimated: apply 25
+    # (a STEP-LEVEL timeout-minutes on the apply step, so it is a bound and not a guess) +
+    # capture poll 16 + settle 2 + reset 2 (24 x 5 s) + reboot probe 10 = 55 min of worst case,
+    # plus teardown grace. The reset arm (#8210) is what pushed this past 30. Review caught the
+    # first revision setting 45 under a comment whose own arithmetic reached 55: a job ceiling
+    # reached INSIDE a step means the teardown gets only the runner's cancellation grace to
+    # destroy a server, two volumes and a config. git-data-rung2-rehearsal.test.sh derives the
+    # sum from these bounds and REDs a ceiling below it.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -258,6 +261,10 @@ jobs:
       - name: Terraform apply (creates the throwaway rehearsal host)
         id: apply
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        # The one wait in this job with no deadline of its own (Hetzner provisioning a server and
+        # two volumes, first boot, the emit). Bounded here so the job budget above is a sum of
+        # bounds rather than a sum containing an estimate; the always() teardown still runs.
+        timeout-minutes: 25
         working-directory: ${{ env.REHEARSAL_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -333,7 +340,7 @@ jobs:
           # Consecutive wrapper (doppler) failures — see the fast-fail below the sentinel.
           wrapper_fails=0
           # DEADLINE, NOT AN ATTEMPT COUNT. Each attempt is up to 2 x `curl --max-time 60`
-          # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 30-minute job
+          # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 60-minute job
           # ceiling -- and the worst case is the DARK BOOT, i.e. exactly the failure this route
           # exists to detect. Blowing the job ceiling inside this step means the TRANSIENT
           # summary below is never written and the `if: always()` teardown gets only the

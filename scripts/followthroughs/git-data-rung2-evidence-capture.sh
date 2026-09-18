@@ -906,8 +906,11 @@ if [[ -n "$REBOOT_SINCE" ]]; then
 
   _sentry_reopen=""; _sentry_reopen_rc=1
   if [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" && -r "$SENTRY_READER" ]] && command -v jq >/dev/null 2>&1; then
+    # The window comes from the ONE helper every other Sentry read here uses (`--reboot-since`
+    # assigns SENTRY_SINCE, so it emits the same --start/--end this line used to re-type).
+    mapfile -t _rw < <(_sentry_window_args)
     _sentry_reopen="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" --stage luks_reopen_ok \
-      --start "$REBOOT_SINCE" --end "$(date -u +%Y-%m-%dT%H:%M:%S)" 2>/dev/null)"; _sentry_reopen_rc=$?
+      "${_rw[@]}" 2>/dev/null)"; _sentry_reopen_rc=$?
   fi
   _sentry_reopened=0; _sentry_rows=0
   if [[ "$_sentry_reopen_rc" -eq 0 && -n "$_sentry_reopen" ]]; then
@@ -1016,13 +1019,33 @@ _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
 # (#8210) luks_reopen_unit joins the terminal set. Unlike its four siblings it is MEASURED
 # (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
 # against real telemetry — see the PASS wording below, which says so.
-if grep -qE '"(luks_mounted|repo_root|hooks_path|provision|luks_reopen_unit)":"no"' <<<"$_bc_rows"; then
+#
+# THE TERMINAL ROSTER IS DECLARED ONCE, HERE. The FALSE-assertion alternation and the presence
+# loop both derive from it, and git-data-emit.test.sh's consumer-roster guard reads THIS line
+# (anchored on `_TERMINAL=`), so a name added here without a producer change REDs that suite.
+_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit"
+_alt="${_TERMINAL// /|}"
+if grep -qE "\"(${_alt})\":\"no\"" <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
   printf '%s\n' "$_bc_rows" | head -5
   echo
   echo "NO EVIDENCE FILE WRITTEN."
   exit 1
 fi
+# ABSENCE IS NOT A PASS. Review found the two readers of this contract disagreed: the poll
+# (git-data-boot-signal-poll.sh) requires each field PRESENT and "yes", while this arm rejected
+# only an explicit "no" — so a bootstrap edit that dropped the `luks_reopen_unit=` kwarg from the
+# emit would fail the poll and, here, print "all five assertions positive" and write
+# gate-releasing evidence over a boolean nobody measured. Same rule as the poll now.
+for _f in $_TERMINAL; do
+  if ! grep -q "\"${_f}\":\"yes\"" <<<"$_bc_rows"; then
+    echo "FAIL: ${HOST_NAME} reported boot_complete WITHOUT a ${_f}=yes assertion — the emit contract and this reader have drifted, or a measured invariant went unasserted. Not verified."
+    printf '%s\n' "$_bc_rows" | head -5
+    echo
+    echo "NO EVIDENCE FILE WRITTEN."
+    exit 1
+  fi
+done
 
 # ── THE PASS PATH CONSULTS SENTRY TOO (#7481 §4.5b) ────────────────────────────────
 #

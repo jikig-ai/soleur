@@ -260,6 +260,7 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
             --data-urlencode "field=host_name" --data-urlencode "field=stage"
             --data-urlencode "field=rc" --data-urlencode "field=detail"
             --data-urlencode "field=action"
+            --data-urlencode "sort=-timestamp"
             --data-urlencode "query=host_name:${EVENT_HOST} ${_SENTRY_EVENT_TERM}")
   else
     # LIVENESS: "is this source answering at all", and it must be independent of the host

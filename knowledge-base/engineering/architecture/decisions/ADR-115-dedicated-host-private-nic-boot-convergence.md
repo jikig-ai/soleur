@@ -238,8 +238,19 @@ unit after `network-online.target` that runs `git-data-luks-reopen.sh` under
 `doppler run --only-secrets GIT_DATA_LUKS_KEY --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback`,
 opens the mapper if it is closed, asserts its backing device is the pinned volume, and hands
 the mount to PID 1 through the fstab-generated `.mount` unit. Every failure is reported once,
-off-host, at `fatal` by an `OnFailure=` reporter carrying `action=<phase>`; the weekly
-`git-data-gc.timer` is ordered after it and pulls it in, so a failed reopen is retried weekly.
+off-host, at `fatal` by an `OnFailure=` reporter carrying `action=<phase>`. The standing retry is
+`git-data-luks-reopen.timer` at `OnUnitActiveSec=15min`, once the unit's own five-attempt
+`Restart=on-failure` budget is spent.
+
+> **Corrected 2026-09-18 (#8210), before merge.** An earlier revision of this paragraph read
+> "the weekly `git-data-gc.timer` is ordered after it **and pulls it in**, so a failed reopen is
+> retried weekly". That was the first draft's mechanism and it is **not what ships**:
+> `git-data-gc.service` carries `After=git-data-luks-reopen.service` and NO `Wants=` — the
+> `Wants=` was cut at review, because it turned a weekly maintenance timer into an implicit
+> retry driver for a boot-critical unit and bounded recovery at seven days. So the sentence
+> cleared a normative blocker by citing a mechanism this same change had deleted. The
+> replacement is the dedicated timer named above; ADR-198's copy of the claim was corrected in
+> the same sweep and this one was missed.
 The blocker named "`crypttab` or a keyscript" as the shape; neither was adopted, for measured
 reasons recorded in the plan's Cut List: `systemd-cryptsetup` implements no `keyscript=`
 (Debian `crypttab(5)`), and a `crypttab` keyfile on the root disk is the passphrase baked, which
@@ -271,6 +282,16 @@ posture ADR-198 mandates for THIS passphrase forces the network-online ordering 
 pre-network position forbids. git-data's shape is the intended target for the web hosts (#6931) —
 their volumes carry no comparable pre-network constraint — and inngest's ordering is the reason the
 fleet keeps two answers rather than a defect to close.
+
+**The split is 2–1, not 1–1, and the majority shape already solves the ordering limb git-data
+does not.** `registry-luks-open.service` (`cloud-init-registry.yml`, #6895/D2) has run the
+network-online oneshot shape since before this change — `After=`/`Wants=network-online.target`,
+`Type=oneshot`, `RemainAfterExit=yes` — and it additionally carries
+`Before=docker.service cron.service`, which orders its consumers on the store BY CONSTRUCTION,
+the property the paragraph above says git-data cannot express. git-data's consumers are the
+fstab `.mount` and `git-data-gc.service` rather than a daemon, so the same limb is bought there
+by contract clauses (h) and (i) instead; but a future consumer that IS a unit should take
+registry's `Before=` rather than re-deriving the problem.
 
 **What the rung-2 gate does and does not check, recorded so the next reader does not over-read it.**
 `git_data_rung2_rehearsal_gate` binds landed evidence to a hash of the payload, and #8210 added the

@@ -233,7 +233,7 @@ fi
 n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$TF")
 CASES=$((CASES + 1))
 if [[ "$n_entries" -eq 13 ]]; then
-  pass "all 9 stripped map entries are each on ONE physical line"
+  pass "all 13 stripped map entries are each on ONE physical line"
 else
   fail "expected 13 single-line stripped map entries in the render module, found ${n_entries}" \
     "a wrapped entry defeats the line-based var parser in cloud-init-user-data-size.test.ts"
@@ -269,11 +269,27 @@ fi
 #
 # Latent today (0 hits) across ~20 continuation sites. Guarded because ADR-152 tells
 # maintainers comments are now free, which is exactly the belief that trips it.
+# THE FILE LIST IS DERIVED FROM THE RENDER MODULE, NOT HAND-TYPED. The first revision listed ten
+# files by name and the four #8210 payloads joined the strip map (9 -> 13 entries, asserted
+# just above) without joining this list — so the one unit whose ExecStart is a ten-line
+# `\`-continued `sh -c` body (the reopen reporter, the sole emitter for every reopen failure)
+# sat outside the guard that exists for exactly that shape. Every `replace(file("…"))` operand
+# in the module, plus the template itself, is what the strip is applied to; read them.
+_stripped_files="$(grep -oE 'replace\(file\("\$\{path\.module\}/\.\./\.\./[^"]+"\)' "$TF" \
+  | sed -E 's#^replace\(file\("\$\{path\.module\}/\.\./\.\./##; s#"\)$##')"
+_stripped_n="$(printf '%s\n' "$_stripped_files" | grep -c .)"
+CASES=$((CASES + 1))
+if [[ "$_stripped_n" -eq "$n_entries" ]]; then
+  pass "the continuation guard's file list is derived from the module and covers all ${n_entries} stripped payloads"
+else
+  fail "derived ${_stripped_n} stripped payload paths from the module but counted ${n_entries} map entries" \
+    "the derivation and the count disagree, so the guard below would scan a NARROWER set than ships"
+fi
+_cont_files=()
+while IFS= read -r _f; do [[ -n "$_f" ]] && _cont_files+=("$DIR/$_f"); done <<<"$_stripped_files"
+_cont_files+=("$DIR/cloud-init-git-data.yml")
 _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
-  "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \
-  "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
-  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer \
-  "$DIR"/cloud-init-git-data.yml 2>/dev/null || true)"
+  "${_cont_files[@]}" 2>/dev/null || true)"
 CASES=$((CASES + 1))
 if [[ -z "$_cont_hits" ]]; then
   pass "no comment sits directly after a line continuation in any injected payload"

@@ -23,7 +23,7 @@ One script, one unit, one reporter, two env lines, one runcmd arm, one measured 
 rehearsal reset arm, two ADR amendments, one C4 edge.
 
 - **`git-data-luks-reopen.sh`** — straight-line, no traps, never formats, never calls `mount(8)`.
-  Phases: `config → key → device → header → open → identity → target → mount → identity-mount`,
+  Phases: `config → key → device → header → open → identity → target → mount → identity-mount → emit`,
   each written to a phase file *before* it runs so the tag names the phase that was executing
   when the script died, including on SIGTERM.
 - **`git-data-luks-reopen.service`** — the `git-data-gc.service` shape under
@@ -77,6 +77,39 @@ state the plan itself calls the intended safe one. Recorded in `decision-challen
    by construction. Generalised to all, mutation-verified.
 5. **The capture's FAIL alternation gained a name with no fixture driving it** — a guard nobody
    had seen fire. Now 107/0 → 2 failed when the name is removed.
+6. **`NON_TERMINAL` was DEAD** — the consumer-roster guard declared
+   `NON_TERMINAL="nft_metadata_drop disk_pct inode_pct"` under a comment reading "declared ONCE,
+   here", then re-typed the same three names on the next line in
+   `grep -vxF -e nft_metadata_drop -e disk_pct -e inode_pct`. Measured against the PRE-FIX file:
+   adding a fourth name to the declared single source left the suite **64/0, rc=0** — a mutation of
+   the single source that no assertion could see. Post-fix that mutation REDs 2 arms and dropping
+   `inode_pct` REDs 4. Found by `shellcheck SC2034`, run because semgrep cannot match rules on bash.
+
+## Static analysis, with the coverage stated honestly
+
+`semgrep` returned **0 findings** on all 45 scannable changed files (133 rules from
+`p/security-audit` + `p/secrets` + `p/terraform` + this repo's custom rules; plus `p/typescript`
+on the 2 `.ts` and `p/terraform` on the 3 `.tf`). That number is not coverage of this diff, and
+saying otherwise would misrepresent it:
+
+- Across all 339 rules in those packs, the count declaring `bash`, `sh` or `shell` is **zero**. A
+  `.sh` file draws 40 applicable rules; a `.md` file from the same diff draws 38 — shell-awareness
+  is a delta of two text-matching rules.
+- Canary: a synthetic bash file carrying a hardcoded AWS secret key, a `ghp_` token, `curl … | bash`,
+  `eval "$1"`, `rm -rf /$USERDIR`, `ssh -o StrictHostKeyChecking=no`, `chmod 777 /etc/shadow` and
+  `echo "$PASSWORD" | sudo -S` produced **one** hit — a text regex on an unrelated
+  `wget --no-check-certificate` line. Everything else passed silently.
+
+So semgrep genuinely analysed **5 of 45 files**: the 3 `.tf` (103 applicable hcl/terraform rules,
+full parse, clean) and the 2 `.ts` (74 + 66 rules, full parse, clean — both test files, a low-yield
+SAST surface). The 17 `.sh` files that carry the substance of this change were **grepped, not
+scanned**, and the 3 `.service`, 1 `.timer` and 4 `.yml` — where the `doppler run` invocation and
+the unit hardening actually live — drew the same file-type-agnostic rules a Markdown file draws.
+
+The load-bearing static analysis for this diff is therefore **`shellcheck -S error` across all 17
+`.sh` files: 0 error-level findings**. At warning level: 33 `SC2319` (this repo's
+`ok "$([ … ]; echo $?)"` idiom) and 6 `SC2034`, of which 5 are pre-existing on `origin/main`. The
+sixth was a real defect and is fixed above.
 
 ## Pre-existing failures, confirmed not mine
 
@@ -84,7 +117,11 @@ state the plan itself calls the intended safe one. Recorded in `decision-challen
 `guardrails`, both `notice-frontmatter`, `lint-legal-scope-block-placement`) and 18 web-platform
 component files (happy-dom 20.8.9 not providing `localStorage`). Each was confirmed by
 reproduction in a **sibling worktree on an unrelated branch**, or by this diff provably not
-touching the files — it changes **zero** files under `apps/web-platform` outside `infra/`.
+touching the files. (An earlier revision of this paragraph said the diff changes zero files
+under `apps/web-platform` outside `infra/`; the git-history seat found that false — it changes
+`apps/web-platform/test/sentry-git-data-warning-stages-op-contract.test.ts`. That file is a
+string-assertion contract test over the Sentry rules, not a happy-dom component test, so the
+conclusion stands on the reproduction, not on the false proof.)
 
 ## Post-merge (all `gh`-driven)
 

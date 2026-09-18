@@ -984,7 +984,7 @@ resource "sentry_alert" "gh_pages_cert_reissue_failed" {
 # reporter with action=<phase>) plus the runcmd arm item's fatal (`gitdata_luks_reopen_arm`)
 # are the two values that join the set below.
 #
-# PII: the payload is five booleans, a df percentage, an rc, and a `detail` that passes the
+# PII: the payload is six booleans, a df percentage, an rc, and a `detail` that passes the
 # emitter's internal redactor on EVERY path — a bare-UUID rule and a repo-path rule run BEFORE
 # the 180-byte cap, because on this host the repo identifier IS the user identifier
 # (<workspace_id>.git, workspace_id === user_id). No repo path and no raw UUID can reach here.

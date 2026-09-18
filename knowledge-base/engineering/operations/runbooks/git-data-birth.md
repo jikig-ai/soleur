@@ -129,7 +129,15 @@ whose rule was flushed reads `no`. The second is `luks_reopen_unit` (#8210): `sy
 is-enabled` AND `Result=success` on `git-data-luks-reopen.service`, the boot-time LUKS reopen
 armed by the runcmd item one stage earlier. Unlike `nft_metadata_drop` it is TERMINAL for both
 readers — a birth or replace that delivers an unarmed reopen unit FAILS rather than warning,
-because a replace is the only route by which that unit reaches the live host. It is **not** in `git-data-rung2-boot-evidence.env` —
+because a replace is the only route by which that unit reaches the live host. **On
+`luks_reopen_unit=no`, read Sentry BEFORE you replace.** The measurement is fail-closed with a
+bounded false-negative window: the bootstrap waits at most 420 s for the unit to leave
+`activating`, while the unit's own restart ladder can legitimately run ~1740 s against a slow
+Doppler. So a `no` means either a real reopen failure (a `stage:luks_reopen level:fatal` row
+with an `action=`; follow its runbook row) or a ladder that finished AFTER the measurement (a
+`stage:luks_reopen_ok` info row later in the same boot: the host is healthy, the boolean was
+early). `bash scripts/sentry-issue.sh --host-events <host> --stage luks_reopen_ok …` and
+`--stage luks_reopen` distinguish them; a replace on the second reading destroys a healthy host. It is **not** in `git-data-rung2-boot-evidence.env` —
 that file records the queries, and the capture projects only the four hardcoded booleans —
 so it has to be read from Better Stack separately. For the rehearsal that cleared the banner
 (run 34768256297, host `soleur-git-data-rehearsal-34768256297`) it read `yes` on the

@@ -1938,7 +1938,21 @@ _tmo=$(awk '/^    timeout-minutes:/{print $2; exit}' "$WF")
 _capture_budget=$(grep -oE 'deadline=\$\(\( SECONDS \+ [0-9]+ \* 60 \)\)' "$WF" \
   | grep -oE '\+ [0-9]+' | grep -oE '[0-9]+' | awk '{t+=$1} END{print t+0}')
 _settle_budget=$(( ${_settle_s:-0} / 60 ))
-_bounded=$(( _capture_budget + _settle_budget ))
+# The apply step's OWN timeout-minutes (indented under `steps:`, deeper than the job's) and the
+# reset loop (`seq 1 N` x `sleep S`). Review found the first revision of this arm summed only the
+# poll deadlines (28) and certified a 45-minute ceiling under a comment whose own worst case was
+# 55 — the apply, the largest term, was an estimate in prose that no arm read.
+_apply_tmo=$(awk '/^        timeout-minutes:/{print $2; exit}' "$WF")
+_reset_n=$(grep -oE 'for i in \$\(seq 1 [0-9]+\); do' "$WF" | grep -oE '[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+_reset_s=$(awk '/for i in \$\(seq 1 [0-9]+\); do/{f=1} f && /^\s*sleep [0-9]+$/{print $2; exit}' "$WF")
+_reset_budget=$(( ${_reset_n:-0} * ${_reset_s:-0} / 60 ))
+if [[ "${_apply_tmo:-0}" -lt 10 ]]; then
+  fail "the apply step carries no step-level timeout-minutes (or under 10) — the largest term in the job budget is unbounded" "got '${_apply_tmo:-none}'"
+fi
+if [[ "${_reset_budget:-0}" -lt 1 ]]; then
+  fail "the reset loop's bound could not be derived (n=${_reset_n:-?} s=${_reset_s:-?})" "the budget arm would sum a NARROWER set than the job contains"
+fi
+_bounded=$(( _capture_budget + _settle_budget + ${_apply_tmo:-0} + _reset_budget ))
 # Non-vacuity: if the poll-deadline extraction found nothing, this arm has no budget to compare
 # against and must say so rather than certify the ceiling.
 if [[ "${_capture_budget:-0}" -lt 20 ]]; then

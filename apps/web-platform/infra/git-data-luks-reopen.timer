@@ -12,9 +12,16 @@
 # waiting, and it bounds recovery at 7 days. A dedicated timer answers both objections: the
 # retry lives with the unit it retries, at a cadence matched to the outage it absorbs.
 #
-# The unit is idempotent by construction — its `open` phase is a no-op when the mapper is
-# already present and its success path is SILENT on `ACTION=noop` — so a tick against a healthy
-# host costs one `cryptsetup status` and emits nothing.
+# WHAT A TICK RECOVERS, PRECISELY: A FAILED UNIT, AND ONLY THAT. The service is Type=oneshot
+# with RemainAfterExit=yes, so after a healthy boot it sits active(exited) and a timer tick's
+# `start` job is a NO-OP — ExecStart does not re-run, so a tick against a healthy host costs
+# NOTHING, not even a `cryptsetup status` (an earlier revision of this comment said otherwise).
+# Once the unit has FAILED — the restart budget spent against a Doppler or DNS outage — the
+# tick's start re-runs ExecStart, and that is the recovery this timer buys. The case it does
+# NOT cover is a mapper closed AFTER a healthy boot under a still-active unit (a luksClose, a
+# volume detach): nothing re-attempts the reopen there and git-data-gc's weekly mountpoint
+# FATAL is what notices, up to seven days later. That residual is scope-outed in the plan's
+# failure-modes table as the "host up, mapper closed later" row; it is not closed here.
 Description=Standing retry for the git-data LUKS mapper reopen (#8210)
 Documentation=https://github.com/jikig-ai/soleur/issues/8210
 
@@ -26,9 +33,11 @@ Documentation=https://github.com/jikig-ai/soleur/issues/8210
 OnUnitActiveSec=15min
 OnBootSec=15min
 RandomizedDelaySec=120
-# Persistent=true so a host that was DOWN across several intervals takes one catch-up tick on
-# boot rather than none — the same reasoning as git-data-gc.timer.
-Persistent=true
+# NO Persistent=. It was here, copied from git-data-gc.timer with its "catch-up tick after a
+# long outage" reasoning — and systemd.timer(5) says the directive "only has an effect on
+# timers configured with OnCalendar=", which gc's is and this one is not. It was inert, and
+# its comment was a load-bearing falsehood waiting to be cited. OnBootSec= above is what
+# actually provides the post-boot tick.
 # ACCEPTED COST, recorded here so it is not read later as a defect: on a host that stays broken,
 # a tick inside the unit's still-open StartLimitIntervalSec=1h window is REFUSED with
 # Result=start-limit-hit, which is itself a failed start, so OnFailure= fires and the reporter

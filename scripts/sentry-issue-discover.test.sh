@@ -67,13 +67,24 @@ if argv | grep -qF -- "query=host_name:${H} level:fatal"; then
 else
   fail "host-events filters on level:fatal AT THE EVENT LEVEL (#7481 defect 1)" "$(argv | head -1)"
 fi
-for f in timestamp level host_name stage rc detail; do
+for f in timestamp level host_name stage rc detail action; do
   if argv | grep -qF -- "field=$f"; then
     pass "host-events projects field=$f"
   else
     fail "host-events projects field=$f" "dropping field=detail restores the verdict-without-a-cause incident"
   fi
 done
+# (#8210) NEWEST-FIRST IS PART OF THE CONTRACT, and it was lost once already: the edit that added
+# `field=action` REPLACED the `sort=-timestamp` line instead of sitting beside it, and no arm
+# here noticed. Every consumer prints `.data[] | head -20`, so on a host with more than 20
+# fatals Sentry's default order decides which 20 the operator reads — a stale cause shown, the
+# current one hidden. Pinned by exact spelling because `-timestamp` vs `timestamp` is the
+# whole difference.
+if argv | grep -qF -- 'sort=-timestamp'; then
+  pass "host-events sorts NEWEST-FIRST (sort=-timestamp)"
+else
+  fail "host-events sorts NEWEST-FIRST (sort=-timestamp)" "$(argv | head -1)"
+fi
 
 # ── the pins — defect 2, on all three operands ────────────────────────────────────
 if argv | grep -qF -- 'project=4511404943671376'; then pass "the project id is PINNED into the request"; else

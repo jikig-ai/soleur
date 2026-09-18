@@ -676,7 +676,7 @@ NON_TERMINAL="nft_metadata_drop disk_pct inode_pct"
 # changed nothing while the comment said otherwise. Word-splitting is the point, so the
 # expansion is deliberately unquoted; the non-vacuity floor below catches a derivation that
 # collapses.
-# shellcheck disable=SC2086
+# shellcheck disable=SC2086,SC2046
 _terminal="$(printf '%s\n' $_producer_keys \
   | grep -vxF $(for _nt in $NON_TERMINAL; do printf -- '-e\n%s\n' "$_nt"; done) \
   | sort -u | tr '\n' ' ')"
@@ -691,18 +691,36 @@ else
 fi
 
 # (a) the poll's per-field loop
-_poll_loop="$(grep -oE '^[[:space:]]*for f in [a-z0-9_ ]+; do' "$_poll" | head -1 \
-  | sed -E 's/^[[:space:]]*for f in //; s/; do$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+# EXACTLY ONE roster site per consumer, never `head -1` of however many there are: the first
+# revision took `head -1`, which is blind to a second loop by construction — the identical
+# first-match defect 414748b74 fixed in the Sentry op-contract test, reintroduced here in the
+# same PR (review, git-history seat).
+_poll_n="$(grep -cE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" || true)"
+if [ "${_poll_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE GIT_DATA_BOOT_TERMINAL= declaration in the poll, found ${_poll_n:-0}"
+fi
+_poll_loop="$(grep -oE '^GIT_DATA_BOOT_TERMINAL="[a-z0-9_ ]+"$' "$_poll" \
+  | sed -E 's/^GIT_DATA_BOOT_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+# …and the loop consumes THAT variable, not a second literal list (the single-source-that-isn't
+# shape, again).
+if grep -qE '^[[:space:]]*for f in \$GIT_DATA_BOOT_TERMINAL; do' "$_poll"; then pass; else
+  fail "consumer-roster: the poll's invariant loop does not iterate \$GIT_DATA_BOOT_TERMINAL"
+fi
 if [ "$_poll_loop" = "$_terminal" ]; then pass; else
   fail "consumer-roster: the boot-signal poll's terminal loop drifted from the producer" \
     "poll: ${_poll_loop}| terminal: ${_terminal}"
 fi
 
-# (b) the capture's FAIL alternation
-_cap_fail="$(grep -oE '"\(([a-z0-9_|]+)\)":"no"' "$_cap" | head -1 \
-  | sed -E 's/^"\(//; s/\)":"no"$//' | tr '|' '\n' | sort -u | tr '\n' ' ')"
+# (b) the capture's terminal roster — the ONE `_TERMINAL=` declaration both of its checks
+# derive from (the FALSE-assertion alternation and the presence loop). Exactly one, as for (a).
+_cap_n="$(grep -cE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" || true)"
+if [ "${_cap_n:-0}" -eq 1 ]; then pass; else
+  fail "consumer-roster: expected exactly ONE _TERMINAL= declaration in the capture, found ${_cap_n:-0}"
+fi
+_cap_fail="$(grep -oE '^_TERMINAL="[a-z0-9_ ]+"$' "$_cap" \
+  | sed -E 's/^_TERMINAL="//; s/"$//' | tr ' ' '\n' | sort -u | tr '\n' ' ')"
 if [ "$_cap_fail" = "$_terminal" ]; then pass; else
-  fail "consumer-roster: the rung-2 capture's FAIL alternation drifted from the producer" \
+  fail "consumer-roster: the rung-2 capture's terminal roster drifted from the producer" \
     "capture: ${_cap_fail}| terminal: ${_terminal}"
 fi
 
