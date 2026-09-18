@@ -910,6 +910,12 @@ runcmd:
   # so landing the admission early is free and removes the ordering hazard entirely — the same
   # argument the INNGEST_CONFIG_DIGEST note below makes.
   #
+  # INNGEST_LUKS_CUTOVER and INNGEST_LUKS_ACTIVE_VOLUME_ID (#6894, ADR-142 additive blue-green) are the
+  # fourth and fifth instances. op=luks-cutover writes the trigger and the pointer into THIS project,
+  # and the pointer then persists for the life of the store — so an unadmitted name bricks the replace
+  # that must follow the cutover, which is the only delivery path this host has. Admitted ahead of the
+  # write for the same no-op reason as the two notes around this one; the floor does not move.
+  #
   # ITS PLACEMENT INSIDE THE GROUP IS NOT ARBITRARY: it sits BEFORE HEARTBEAT_URL so the
   # `HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)` anchor in inngest-host.test.sh — which proves
   # BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL sibling rather than a nested member — still reads. A new
@@ -938,7 +944,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
