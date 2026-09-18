@@ -342,6 +342,21 @@ assert "G1-s exactly ONE degrade branch funnels all three RC=1 paths" \
 assert "G1-s the degrade path does NOT re-tag the tier" \
   "! grep -qE 'ZOT_ERR_SRC=.*redact_failed' '$RAW'"
 
+# --- Guard 2 (#7960): the delivery-proof field -------------------------------------------------
+# err_redact_rev is what the #7960 follow-through probe keys delivery on, so it must be on EVERY
+# row and in the TRUSTED region (before the first ` zot_last_err=`, the attacker-influenceable
+# free-text tail). The probe's fixtures read the token from this same LINE= assignment.
+_LINE_ASSIGN="$(grep -F 'LINE="SOLEUR_ZOT_DISK' "$RAW")"
+assert "G2-s exactly ONE SOLEUR_ZOT_DISK LINE= assignment carries err_redact_rev (>=1) before zot_last_err=" \
+  "[[ \$(grep -cF 'LINE=\"SOLEUR_ZOT_DISK' '$RAW') -eq 1 ]] && grep -qE ' err_redact_rev=[1-9][0-9]* ' <<<\"\${_LINE_ASSIGN%% zot_last_err=*}\""
+# Emit-level, on the suppressed (no-jq) path. Asserted on the row's HEAD, not via assert_emit,
+# which matches the whole body and so could be satisfied by a token in the free-text tail.
+_G2_OUT="$(run_hb "$TIER4_HEADERS" PATH="$NOJQ:/usr/bin:/bin")"
+assert "G2-e the POSTed row carries err_redact_rev in its trusted region (suppressed path)" \
+  "[[ -n \"\$_G2_OUT\" ]] && grep -qE ' err_redact_rev=[1-9][0-9]* ' <<<\"\${_G2_OUT%% zot_last_err=*}\""
+# Must-PASS, non-canonical path: the tier-1 panic sample carries the field too.
+assert_emit "G2-p the tier-1 panic row carries err_redact_rev" "$PANIC_LINE" present "err_redact_rev="
+
 # --- Row 8 / harness (a): the guard's own dispatch ------------------------------------------
 for _w in assert assert_emit; do
   _u="USED_${_w}"
@@ -359,7 +374,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=33
+EXPECTED_MIN=36
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1
